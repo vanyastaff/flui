@@ -343,6 +343,119 @@ fn dropping_the_last_owner_from_its_own_listener_mid_frame() {
     }
 }
 
+fn disposal_registry_custody(failure: &str) {
+    use std::cell::Cell;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::rc::Rc;
+
+    struct Capture {
+        controller: AnimationController,
+        drops: Rc<Cell<usize>>,
+        refused: Rc<Cell<bool>>,
+        panics: bool,
+    }
+    impl Drop for Capture {
+        fn drop(&mut self) {
+            self.drops.set(self.drops.get() + 1);
+            self.refused.set(self.controller.forward().is_err());
+            assert!(!self.panics, "registry retirement");
+        }
+    }
+
+    let registry = Vsync::new();
+    let mut owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
+    let controller = owner.controller().clone();
+    let drops = Rc::new(Cell::new(0));
+    let refused = Rc::new(Cell::new(false));
+    let capture = Capture {
+        controller: controller.clone(),
+        drops: drops.clone(),
+        refused: refused.clone(),
+        panics: failure != "none",
+    };
+    registry.set_frame_requester(Some(Rc::new(move || {
+        let _ = &capture;
+    })));
+    let mut run = controller.forward().expect("bound run");
+    let deliveries = Rc::new(Cell::new(0));
+    if failure == "cancellation" {
+        run.when_complete_or_cancel(|_| panic!("run cancellation"));
+    }
+    let healthy = deliveries.clone();
+    run.when_complete_or_cancel(move |result| {
+        assert!(result.is_err());
+        healthy.set(healthy.get() + 1);
+    });
+    drop(registry);
+
+    let result = catch_unwind(AssertUnwindSafe(|| owner.dispose()));
+    if failure == "none" {
+        assert!(result.is_ok());
+    } else {
+        let payload = result.expect_err("the first failure resumes after cleanup");
+        assert_eq!(
+            payload.downcast_ref::<&str>(),
+            Some(&if failure == "registry" {
+                "registry retirement"
+            } else {
+                "run cancellation"
+            })
+        );
+    }
+    assert!(!owner.is_bound());
+    assert!(controller.forward().is_err(), "the kernel stays closed");
+    assert_eq!(
+        deliveries.get(),
+        1,
+        "healthy cancellation delivery finishes"
+    );
+    assert!(matches!(
+        Pin::new(&mut run).poll(&mut Context::from_waker(Waker::noop())),
+        Poll::Ready(Err(_))
+    ));
+    if failure == "cancellation" {
+        assert_eq!(
+            drops.get(),
+            0,
+            "outgoing registry retains first-failure custody"
+        );
+    } else {
+        assert_eq!(drops.get(), 1);
+        assert!(refused.get(), "retirement observes the closed kernel");
+    }
+    owner.dispose();
+    assert_eq!(deliveries.get(), 1, "the next disposal is inert");
+}
+
+fn healthy_disposal_commits_before_registry_retirement() {
+    disposal_registry_custody("none");
+}
+
+fn failing_registry_retirement_observes_the_disposed_kernel() {
+    disposal_registry_custody("registry");
+}
+
+fn cancellation_failure_retains_the_outgoing_registry() {
+    disposal_registry_custody("cancellation");
+}
+
+fn disposal_closes_the_kernel_before_retiring_the_registry() {
+    crate::run_table(&[
+        (
+            "healthy retirement",
+            healthy_disposal_commits_before_registry_retirement,
+        ),
+        (
+            "registry retirement failure",
+            failing_registry_retirement_observes_the_disposed_kernel,
+        ),
+        (
+            "cancellation and retirement competition",
+            cancellation_failure_retains_the_outgoing_registry,
+        ),
+    ]);
+}
+
 fn an_unbound_infinite_repeat_parks_then_resumes_on_a_registry() {
     let mut owner = AnimationController::builder(Duration::from_secs(1)).build_on(None);
     let run = owner.controller().repeat(false).expect("infinite repeat");
@@ -413,6 +526,10 @@ fn an_unbound_controller_settles_every_run_kind_at_once() {
 #[test]
 fn driven_controller_owns_its_seat_and_run() {
     crate::run_table(&[
+        (
+            "disposal closes the kernel before registry retirement",
+            disposal_closes_the_kernel_before_retiring_the_registry,
+        ),
         (
             "rebind preserves delivery failure before outgoing retirement",
             rebinding_preserves_delivery_failure_before_outgoing_retirement,

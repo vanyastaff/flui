@@ -2246,6 +2246,12 @@ impl AnimationController {
     /// changes `status` and so fires no status listener (they are already
     /// cleared by the time delivery runs).
     pub fn dispose(&self) {
+        let mut retirement = Retirement::new();
+        self.dispose_with_retirement(&mut retirement);
+        retirement.finish();
+    }
+
+    pub(crate) fn dispose_with_retirement(&self, retirement: &mut Retirement) {
         let mut retired = RetiredSources::new();
         let mut inner = self.inner.borrow_mut();
         if inner.disposed {
@@ -2267,7 +2273,14 @@ impl AnimationController {
                 .map(Opaque::new),
         );
         let status = inner.status;
-        self.finish(status, ValueChange::Unchanged, delivery, retired, inner);
+        self.finish_with_retirement(
+            status,
+            ValueChange::Unchanged,
+            delivery,
+            retired,
+            inner,
+            retirement,
+        );
     }
 
     fn check_disposed(inner: &AnimationControllerInner) -> Result<(), AnimationError> {
