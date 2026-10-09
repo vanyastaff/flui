@@ -37,9 +37,10 @@
 //! range — public tracker constructors publish a finite estimate whose speed is
 //! at most [`DEFAULT_MAX_FLING_VELOCITY`]. Gesture producers retain finite measured
 //! components independently of fling policy; terminal details derive their
-//! separate fling velocity from the profile admitted by the gesture. An estimate
-//! whose components are not representable is refused as zero, rather than
-//! publishing a saturated stand-in measurement.
+//! separate fling velocity from the profile admitted by the gesture. An estimated
+//! component that is not representable is refused as zero while the finite
+//! orthogonal component survives, rather than publishing a saturated stand-in
+//! measurement.
 //!
 //! # Stop detection
 //!
@@ -151,8 +152,18 @@ impl VelocityOutput {
     fn publish(self, velocity: Offset<f64>) -> Offset<f64> {
         match self {
             Self::DefaultBounded => bounded(velocity),
-            Self::Measurement if !velocity.is_finite() => Offset::ZERO,
-            Self::Measurement => velocity,
+            Self::Measurement => Offset::new(
+                if velocity.dx.is_finite() {
+                    velocity.dx
+                } else {
+                    0.0
+                },
+                if velocity.dy.is_finite() {
+                    velocity.dy
+                } else {
+                    0.0
+                },
+            ),
         }
     }
 
