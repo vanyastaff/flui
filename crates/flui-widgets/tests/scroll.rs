@@ -38,6 +38,81 @@ impl flui_view::StatelessView for FlingProfile {
     }
 }
 
+pub(crate) fn scrollable_accessibility_ranges_follow_the_actual_axis() {
+    use flui_foundation::geometry::Axis;
+
+    for axis in [Axis::Vertical, Axis::Horizontal] {
+        let controller = ScrollController::new();
+        let mut laid = lay_out(
+            Scrollable::new()
+                .scroll_direction(axis)
+                .controller(controller.clone())
+                .child(SizedBox::new(1000.0, 1000.0)),
+            tight(200.0, 200.0),
+        );
+        laid.enable_semantics();
+        laid.tick();
+        assert_eq!(controller.max_scroll_extent(), 800.0, "measured viewport");
+        controller.jump_to(120.0);
+        laid.tick();
+        let tree = laid
+            .a11y_tree()
+            .expect("mounted scrollable publishes actual AccessKit tree");
+        let sources: Vec<_> = tree
+            .raw()
+            .nodes
+            .iter()
+            .filter(|(_, node)| node.scroll_x().is_some() || node.scroll_y().is_some())
+            .collect();
+        assert!(
+            !sources.is_empty(),
+            "native accessibility receives scroll range"
+        );
+        for (_, node) in sources {
+            let (position, min, max, other_position, other_min, other_max) = match axis {
+                Axis::Vertical => (
+                    node.scroll_y(),
+                    node.scroll_y_min(),
+                    node.scroll_y_max(),
+                    node.scroll_x(),
+                    node.scroll_x_min(),
+                    node.scroll_x_max(),
+                ),
+                Axis::Horizontal => (
+                    node.scroll_x(),
+                    node.scroll_x_min(),
+                    node.scroll_x_max(),
+                    node.scroll_y(),
+                    node.scroll_y_min(),
+                    node.scroll_y_max(),
+                ),
+            };
+            assert_eq!(
+                position,
+                Some(120.0),
+                "{axis:?}: native offset follows actual axis"
+            );
+            assert_eq!(min, Some(0.0), "{axis:?}: native minimum");
+            assert_eq!(max, Some(800.0), "{axis:?}: native maximum");
+            assert_eq!(
+                (other_position, other_min, other_max),
+                (None, None, None),
+                "{axis:?}: orthogonal axis has no invented scroll range"
+            );
+        }
+        controller.jump_to(240.0);
+        laid.tick();
+        let tree = laid.a11y_tree().expect("changed native offset republished");
+        assert!(
+            tree.raw().nodes.iter().any(|(_, node)| match axis {
+                Axis::Vertical => node.scroll_y() == Some(240.0),
+                Axis::Horizontal => node.scroll_x() == Some(240.0),
+            }),
+            "{axis:?}: later scrolling remains observable on the same native axis"
+        );
+    }
+}
+
 pub(crate) fn terminal_scroll_motion_uses_the_admitted_fling_profile() {
     terminal_motion_uses_the_admitted_fling_profile(false);
 }
