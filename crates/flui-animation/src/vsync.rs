@@ -509,86 +509,30 @@ impl Vsync {
         mine || children.iter().any(Vsync::has_running)
     }
 
-    /// Advance every registered, running controller to virtual instant
-    /// `now_secs` (elapsed seconds on the driver's virtual clock).
+    /// Advance live controller registrations using a presentation's typed tick.
     ///
-    /// For each controller: if its `run_generation` advanced since the last
-    /// observation (a fresh run was just established) or it has no anchor yet,
-    /// re-anchor `t = 0` to `now_secs`; then, if the controller reports running,
-    /// tick it with the raw seconds elapsed since that anchor. A non-running
-    /// controller is skipped (its anchor is set on the frame it next starts) —
-    /// folding in `disposed` (see the controller's crate-private
-    /// `walk_probe`), so a disposed-but-not-unregistered controller is
-    /// skipped too, not just one that settled normally.
+    /// A fresh run anchors on its first observed frame. Registration migration
+    /// preserves its last sampled elapsed time. Older ticks hold at this
+    /// registry's last accepted time; stopped and disposed kernels are skipped.
     ///
-    /// `now_secs` is expected to be a **non-decreasing** virtual clock across
-    /// calls. There is no clamp here: [`tick_at`](AnimationController::tick_at)
-    /// already clamps its own run-relative elapsed time at 0, so a backwards
-    /// step re-samples the controller's pure time function — never below that
-    /// run's `t = 0` — rather than "holding" the run; a `.max(0.0)` in this
-    /// method would change no observed value.
+    /// State borrows end before sampling user curves or delivering callbacks.
+    /// A listener may release or dispose its [owning controller](crate::DrivenController)
+    /// during the walk. A later registration withdrawn by that listener is
+    /// skipped, while other live controllers remain deliverable.
     ///
-    /// # The registry lock is **not** held while ticking
+    /// Admissions made during this call first tick on the next call. Restarting
+    /// an already visited controller also waits for the next call; starting a
+    /// resident controller that has not yet been visited can sample this frame.
+    /// Registration identities are never reused, so withdrawing and re-admitting
+    /// a kernel cannot give the replacement an earlier turn in the current walk.
     ///
-    /// `tick_at` fires the controller's status and value listeners, and a listener
-    /// may legitimately [`unregister`](Self::unregister): a route whose exit
-    /// transition reaches `dismissed` disposes itself from that very listener, and
-    /// disposal unregisters its controller. Holding the lock across `tick_at` made
-    /// that re-entrant — and `parking_lot::Mutex` is not reentrant, so it
-    /// deadlocked rather than panicked.
+    /// Child registries admitted at entry tick before this registry's controllers.
+    /// Muting is rechecked between controller samples, so muting during delivery
+    /// stops the remaining samples. Ancestor mute gates apply to nested registries.
     ///
-    /// So the registry is walked one entry at a time: each controller is looked
-    /// up, its bookkeeping updated, and the lock dropped *before* it is ticked.
-    /// Walking one entry at a time — rather than snapshotting every due
-    /// controller up front — preserves the property the original loop had: a
-    /// controller that an **earlier** controller's listener starts during this
-    /// same call (a `Scrollable` handing off to its fling controller) is
-    /// anchored and ticked in this frame, not the next.
-    ///
-    /// # An indexed cursor walk, not a per-frame id snapshot
-    ///
-    /// `controllers` is a [`BTreeMap`] keyed by registration id, and ids are
-    /// `next_id` post-increments that are never reused — so ascending key
-    /// order *is* registration order. `tick_all` reads `fence = next_id` once
-    /// at entry, then walks `controllers.range_mut(cursor..fence)` one entry
-    /// at a time, advancing `cursor` past each id it visits. That range bound
-    /// — not a captured id list — is what gives the walk the same reentrancy
-    /// guarantees the old snapshot-then-`find` scan had:
-    ///
-    /// - A controller *registered* during this call gets an id ≥ `fence`
-    ///   (`next_id` only grows), so the walk's upper bound excludes it —
-    ///   ticked next frame.
-    /// - A controller *unregistered* during this call (by an earlier
-    ///   listener) is removed from the map outright, so the walk simply never
-    ///   reaches its key — skipped, with no lookup-miss branch to write.
-    /// - Unregistering a later controller and re-registering the same
-    ///   controller from an earlier listener gives the new registration an id
-    ///   that is also ≥ `fence`: not ticked this call, and its anchor starts
-    ///   fresh (`run_start_secs: None`) rather than inheriting the old
-    ///   registration's — no aliasing between the two ids.
-    /// - A listener that restarts an **earlier**, already-visited controller
-    ///   does not get it re-ticked this call: the cursor only moves forward,
-    ///   never back. Same as the old snapshot's behavior.
-    ///
-    /// `muted` is **re-read under the per-iteration lock**, not only at
-    /// entry: a listener that mutes the registry mid-walk stops the remaining
-    /// entries of *this* frame from ticking. Nested `children` registries are
-    /// still sampled **once at entry** and ticked before the cursor walk
-    /// starts, exactly as before: a child attached via
-    /// [`attach_child`](Self::attach_child) from a listener mid-walk is first
-    /// ticked on the *next* call — a ticker started mid-frame schedules for
-    /// the next frame.
-    ///
-    /// Cost: **O(log N)** per register/unregister/lookup — each
-    /// `range_mut(cursor..fence).next()` is its own fresh seek, since the
-    /// lock (and so the map borrow) is dropped between steps; one such seek
-    /// per resident controller per pump, so **O(N log N)** per pump.
-    /// [`has_running`](Self::has_running) stays O(N) — see its doc for why.
-    ///
-    /// Time is typed. A tick older than this registry's last accepted time holds
-    /// at that time, including when a new run or child has just been admitted.
-    /// A child registry or controller failure leaves the remaining admitted frame peers
-    /// deliverable; the walk resumes its first failure after those peers tick.
+    /// A controller or child-registry failure leaves healthy frame peers
+    /// deliverable. The walk resumes its first failure after those peers tick,
+    /// preserving that failure through callback and capture retirement.
     pub fn tick_all(&self, tick: &FrameTick) {
         let mut retirement = Retirement::new();
         retirement.run_with(|retirement| self.tick_all_with_retirement(tick.now(), retirement));
