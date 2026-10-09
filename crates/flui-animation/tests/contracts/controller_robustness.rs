@@ -12,8 +12,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use flui_animation::{
-    Animation, AnimationController, AnimationStatus, CurvedAnimation, ProxyAnimation,
-    ReverseAnimation, Vsync,
+    Animation, AnimationController, AnimationStatus, CurvedAnimation, DrivenController,
+    ProxyAnimation, ReverseAnimation, Vsync,
     curve::{Curve, Linear},
 };
 use flui_foundation::Listenable;
@@ -245,16 +245,16 @@ fn disposed_controller_drops_a_late_value_listener() {
 
 // --- frame time edges ------------------------------------------------------------------
 
-fn registered_run() -> (Vsync, AnimationController) {
+fn registered_run() -> (Vsync, DrivenController) {
     let vsync = Vsync::new();
-    let controller = controller();
-    let _registration = vsync.register(controller.clone());
-    let _run = controller.forward().expect("run starts");
-    (vsync, controller)
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
+    let _run = owner.controller().forward().expect("run starts");
+    (vsync, owner)
 }
 
 fn finite_clock_time_anchors_a_run() {
-    let (vsync, controller) = registered_run();
+    let (vsync, owner) = registered_run();
+    let controller = owner.controller();
     assert!(controller.value().is_finite());
     vsync.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)),
@@ -278,7 +278,8 @@ fn finite_clock_time_anchors_a_run() {
 }
 
 fn backwards_frame_time_resumes_the_run() {
-    let (vsync, controller) = registered_run();
+    let (vsync, owner) = registered_run();
+    let controller = owner.controller();
     vsync.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(10.0)),
     );
@@ -301,7 +302,8 @@ fn backwards_frame_time_resumes_the_run() {
 }
 
 fn repeated_frame_time_announces_completion_once() {
-    let (vsync, controller) = registered_run();
+    let (vsync, owner) = registered_run();
+    let controller = owner.controller();
     let statuses = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&statuses);
     controller.add_status_listener(std::rc::Rc::new(move |status| {
