@@ -134,6 +134,136 @@ fn geometric_focus_navigation_pins_ranking_and_admission() {
     }
 }
 
+type CommitDiagnosticAction = (bool, Rc<dyn Fn()>);
+thread_local! {
+    static COMMIT_DIAGNOSTIC: RefCell<Option<CommitDiagnosticAction>> = const { RefCell::new(None) };
+}
+
+struct CommitFocusDiagnostic;
+
+impl tracing::Subscriber for CommitFocusDiagnostic {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        metadata.target().ends_with("::focus") && *metadata.level() == tracing::Level::TRACE
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        struct Message(bool);
+        impl tracing::field::Visit for Message {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "message" {
+                    self.0 = format!("{value:?}").contains("focus changed");
+                }
+            }
+        }
+        let mut message = Message(false);
+        event.record(&mut message);
+        if message.0
+            && let Some((fails, action)) = COMMIT_DIAGNOSTIC.with(|slot| slot.borrow_mut().take())
+        {
+            action();
+            assert!(!fails, "focus commit diagnostic failure");
+        }
+    }
+}
+
+fn commit_diagnostics_preserve_focus_round_and_queued_requests() {
+    for (diagnostic_fails, observer_fails, reenter) in [
+        (true, false, false),
+        (true, true, true),
+        (false, true, true),
+        (false, false, true),
+    ] {
+        let manager = FocusManager::new();
+        let first = FocusNode::new();
+        let next = FocusNode::new();
+        let attachments = [
+            manager.root_scope().attach_node(&first).expect("first"),
+            manager.root_scope().attach_node(&next).expect("next"),
+        ];
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let callback_log = Rc::clone(&log);
+        let first_probe = Rc::downgrade(&first);
+        let fail = Rc::new(Cell::new(observer_fails));
+        let callback_fail = Rc::clone(&fail);
+        let subscription = first.subscribe(Rc::new(move || {
+            let focused = first_probe.upgrade().expect("first").has_primary_focus();
+            callback_log.borrow_mut().push(("node", focused));
+            assert!(
+                !(focused && callback_fail.get()),
+                "focus observer second failure"
+            );
+        }));
+        let manager_log = Rc::clone(&log);
+        let first_id = first.id();
+        manager.add_listener(Rc::new(move |_, new| {
+            manager_log
+                .borrow_mut()
+                .push(("manager", new.is_some_and(|node| node.id() == first_id)))
+        }));
+        let next_probe = Rc::downgrade(&next);
+        COMMIT_DIAGNOSTIC.with(|slot| {
+            *slot.borrow_mut() = Some((
+                diagnostic_fails,
+                Rc::new(move || {
+                    if reenter {
+                        let _ = next_probe.upgrade().expect("next").request_focus();
+                    }
+                }),
+            ))
+        });
+        let result = tracing::subscriber::with_default(CommitFocusDiagnostic, || {
+            catch_unwind(AssertUnwindSafe(|| first.request_focus()))
+        });
+        COMMIT_DIAGNOSTIC.with(|slot| *slot.borrow_mut() = None);
+        if diagnostic_fails || observer_fails {
+            let payload = result.expect_err("failure resumes after committed rounds");
+            assert_eq!(
+                payload.downcast_ref::<&str>(),
+                Some(&if diagnostic_fails {
+                    "focus commit diagnostic failure"
+                } else {
+                    "focus observer second failure"
+                })
+            );
+        } else {
+            assert!(result.is_ok());
+        }
+        let expected = if reenter {
+            vec![
+                ("node", true),
+                ("manager", true),
+                ("node", false),
+                ("manager", false),
+            ]
+        } else {
+            vec![("node", true), ("manager", true)]
+        };
+        assert_eq!(
+            *log.borrow(),
+            expected,
+            "diagnostic reentry must queue after the committed first round"
+        );
+        assert!(if reenter {
+            next.has_primary_focus()
+        } else {
+            first.has_primary_focus()
+        });
+        fail.set(false);
+        manager.unfocus();
+        log.borrow_mut().clear();
+        let _ = first.request_focus();
+        assert_eq!(*log.borrow(), [("node", true), ("manager", true)]);
+        drop(subscription);
+        drop(attachments);
+    }
+}
+
 fn directional_edges_match_linear_scope_outcomes() {
     use flui_foundation::geometry::Rect;
     use flui_interaction::{FocusDirection, TraversalEdgeBehavior};
@@ -1334,6 +1464,10 @@ fn assert_queued_focus_recovery(from_node: bool, competing: bool) {
 #[test]
 fn caught_callback_failures_leave_captures_with_their_owner() {
     let cases: &[(&str, fn())] = &[
+        (
+            "commit diagnostics, competing observers and reentrant FIFO",
+            commit_diagnostics_preserve_focus_round_and_queued_requests,
+        ),
         (
             "directional geometry snapshots and reentrant focus",
             directional_geometry_snapshots_run_once_and_respect_reentrant_focus,

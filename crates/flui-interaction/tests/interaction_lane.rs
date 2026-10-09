@@ -12,6 +12,153 @@ fn hit_entry(target: PointerTarget) -> HitTestEntry {
     HitTestEntry::new(RenderId::new(1)).pointer_target(target)
 }
 
+fn router_registration_reentry_keeps_fresh_work_for_the_next_event() {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::events::{PointerKind, make_move_event_for_id};
+    use flui_interaction::{PointerId, PointerRouteHandler, PointerRouter};
+    use std::{
+        cell::{Cell, RefCell},
+        panic::{AssertUnwindSafe, catch_unwind},
+        rc::Rc,
+    };
+    for global in [false, true] {
+        for fails in [false, true] {
+            let router = Rc::new(PointerRouter::new());
+            let pointer = PointerId::try_from(1_u64).expect("pointer");
+            let log = Rc::new(RefCell::new(Vec::new()));
+            let later_log = Rc::clone(&log);
+            let later: PointerRouteHandler = Rc::new(move |_| later_log.borrow_mut().push("later"));
+            let weak_router = Rc::downgrade(&router);
+            let later_registration = Rc::clone(&later);
+            let first_log = Rc::clone(&log);
+            let changed = Cell::new(false);
+            let first: PointerRouteHandler = Rc::new(move |_| {
+                first_log.borrow_mut().push("first");
+                if !changed.replace(true) {
+                    let router = weak_router.upgrade().expect("router");
+                    if global {
+                        assert!(router.remove_global_handler(&later_registration));
+                        router.add_global_handler(Rc::clone(&later_registration));
+                        router.add_global_handler(Rc::clone(&later_registration));
+                    } else {
+                        assert!(router.remove_route(pointer, &later_registration));
+                        router.add_route(pointer, Rc::clone(&later_registration));
+                        router.add_route(pointer, Rc::clone(&later_registration));
+                    }
+                    assert!(!fails, "router replacement first failure");
+                }
+            });
+            let healthy_log = Rc::clone(&log);
+            let healthy: PointerRouteHandler =
+                Rc::new(move |_| healthy_log.borrow_mut().push("healthy"));
+            for handler in [first, Rc::clone(&later), later, healthy] {
+                if global {
+                    router.add_global_handler(handler);
+                } else {
+                    router.add_route(pointer, handler);
+                }
+            }
+            let event =
+                make_move_event_for_id(pointer, Offset::ZERO, PointerKind::Touch).expect("motion");
+            let result = catch_unwind(AssertUnwindSafe(|| router.route(&event)));
+            if fails {
+                assert_eq!(
+                    result
+                        .expect_err("first callback failure")
+                        .downcast_ref::<&str>(),
+                    Some(&"router replacement first failure")
+                );
+            } else {
+                assert!(result.is_ok());
+            }
+            assert_eq!(
+                *log.borrow(),
+                ["first", "healthy"],
+                "old duplicate registrations were removed, not revived"
+            );
+            log.borrow_mut().clear();
+            router.route(&event);
+            assert_eq!(
+                *log.borrow(),
+                ["first", "healthy", "later", "later"],
+                "new duplicates are independent admitted registrations"
+            );
+        }
+    }
+}
+
+thread_local! {
+    static ROUTER_DIAGNOSTIC: std::cell::RefCell<Option<std::rc::Rc<flui_interaction::PointerRouter>>> = const { std::cell::RefCell::new(None) };
+}
+
+struct RouterDiagnosticRead;
+
+impl tracing::Subscriber for RouterDiagnosticRead {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        metadata.target().ends_with("::pointer_router")
+            && *metadata.level() == tracing::Level::TRACE
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+    fn event(&self, _: &tracing::Event<'_>) {
+        let router = ROUTER_DIAGNOSTIC.with(|slot| slot.borrow().as_ref().cloned());
+        if let Some(router) = router {
+            let pointer = flui_interaction::PointerId::try_from(1_u64).expect("pointer");
+            let _ = router.pointer_count();
+            router.route(
+                &flui_interaction::events::make_move_event_for_id(
+                    pointer,
+                    flui_foundation::geometry::Offset::ZERO,
+                    flui_interaction::events::PointerKind::Touch,
+                )
+                .expect("motion"),
+            );
+        }
+    }
+}
+
+fn router_mutation_diagnostics_observe_committed_unborrowed_state() {
+    use flui_interaction::{PointerId, PointerRouteHandler, PointerRouter};
+    use std::{
+        panic::{AssertUnwindSafe, catch_unwind},
+        rc::Rc,
+    };
+    for global in [false, true] {
+        let router = Rc::new(PointerRouter::new());
+        let pointer = PointerId::try_from(1_u64).expect("pointer");
+        let handler: PointerRouteHandler = Rc::new(|_| {});
+        ROUTER_DIAGNOSTIC.with(|slot| *slot.borrow_mut() = Some(Rc::clone(&router)));
+        let result = tracing::subscriber::with_default(RouterDiagnosticRead, || {
+            catch_unwind(AssertUnwindSafe(|| {
+                if global {
+                    router.add_global_handler(Rc::clone(&handler));
+                    assert!(router.remove_global_handler(&handler));
+                } else {
+                    router.add_route(pointer, Rc::clone(&handler));
+                    assert!(router.remove_route(pointer, &handler));
+                }
+            }))
+        });
+        ROUTER_DIAGNOSTIC.with(|slot| *slot.borrow_mut() = None);
+        assert!(
+            result.is_ok(),
+            "diagnostic reentry cannot meet a mutation borrow"
+        );
+        assert_eq!(router.route_count(pointer), 0);
+        router.add_route(pointer, handler);
+        assert_eq!(
+            router.route_count(pointer),
+            1,
+            "later admission recovers normally"
+        );
+    }
+}
+
 #[test]
 fn explicit_pointer_capture_contract() {
     let rows: &[(&str, fn())] = &[
@@ -723,6 +870,14 @@ fn binding_input_contract_matrix() {
         return;
     }
     let cases: &[(&str, fn())] = &[
+        (
+            "router_registration_reentry",
+            router_registration_reentry_keeps_fresh_work_for_the_next_event,
+        ),
+        (
+            "router_diagnostic_reentry",
+            router_mutation_diagnostics_observe_committed_unborrowed_state,
+        ),
         (
             "queued_hover_healthy_retirement",
             queued_hover_healthy_retirement,
