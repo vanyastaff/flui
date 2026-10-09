@@ -1055,6 +1055,10 @@ fn binding_input_contract_matrix() {
             "native_close_retirement_failure",
             native_close_preserves_retirement_ownership,
         ),
+        (
+            "native_same_actor_terminal_reentry",
+            native_same_actor_terminal_reentry_preserves_new_generation,
+        ),
         ("native_focus_loss", native_focus_loss_releases_lease),
         (
             "native_claim_retirement",
@@ -2993,6 +2997,112 @@ fn native_staged_retirement_preserves_delivery_and_failure() {
                 assert_eq!(ends.get(), 1);
                 assert_eq!(retired.get(), if replacement { 2 } else { 1 });
             });
+        }
+    }
+}
+
+fn native_same_actor_terminal_reentry_preserves_new_generation() {
+    use flui_foundation::geometry::{Offset, Point};
+    use flui_interaction::recognizers::scale::{PanZoomDisposition, ScaleGestureRecognizer};
+    use flui_interaction::routing::EventPropagation;
+    use flui_interaction::{GestureBinding, HitTestResult};
+    use flui_platform_api::{
+        EventTime,
+        pointer::{
+            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerInfo,
+            PointerKind, PointerPosition,
+        },
+    };
+    use std::{
+        cell::{Cell, RefCell},
+        panic::{AssertUnwindSafe, catch_unwind},
+        rc::Rc,
+    };
+    for terminal in [PanZoomPhase::End, PanZoomPhase::Cancelled] {
+        for observer_reentry in [false, true] {
+            for fail in [false, true] {
+                let lane = InteractionLane::try_new().expect("lane");
+                let handle = lane.dispatch_handle();
+                let binding = Rc::new(GestureBinding::new());
+                let path = Rc::new(RefCell::new(HitTestResult::new()));
+                let starts = Rc::new(Cell::new(0));
+                let updates = Rc::new(Cell::new(0));
+                let ends = Rc::new(Cell::new(0));
+                let cancelled = Rc::new(Cell::new(0));
+                let (started, updated, ended, cancels) = (
+                    starts.clone(),
+                    updates.clone(),
+                    ends.clone(),
+                    cancelled.clone(),
+                );
+                let actor = ScaleGestureRecognizer::builder(binding.arena().clone())
+                    .on_start(move |_| started.set(started.get() + 1))
+                    .on_update(move |_| updated.set(updated.get() + 1))
+                    .on_end(move |_| ended.set(ended.get() + 1))
+                    .on_cancel(move || cancels.set(cancels.get() + 1))
+                    .build();
+                let source = PointerInfo::new(
+                    PointerId::try_from(850_u64).expect("source"),
+                    PointerKind::Trackpad,
+                );
+                let packet = move |phase| {
+                    PointerEvent::PanZoom(PanZoomEvent::new(
+                        source,
+                        EventTime::from_nanos(0),
+                        PointerPosition::try_new(Point::ZERO).expect("position"),
+                        phase,
+                    ))
+                };
+                let update = || {
+                    packet(PanZoomPhase::Update(
+                        PanZoomTransform::try_new(Offset::ZERO, 1.2, 0.0).expect("scale"),
+                    ))
+                };
+                let armed = Rc::new(Cell::new(true));
+                lane.enter(|| {
+                    let owner = actor.clone();
+                    let native = handle.register_pan_zoom(move |dispatch| {
+                        if owner.handle_pan_zoom(dispatch) == PanZoomDisposition::Handled {
+                            EventPropagation::Stop
+                        } else { EventPropagation::Continue }
+                    }).expect("same Scale actor");
+                    let weak = Rc::downgrade(&binding);
+                    let fresh = path.clone();
+                    let once = armed.clone();
+                    let observer = handle.register_pointer(move |dispatch| {
+                        if observer_reentry && matches!(dispatch.local,
+                            PointerEvent::PanZoom(event) if event.phase == terminal) && once.replace(false) {
+                            weak.upgrade().expect("binding").handle_pointer_event(
+                                &packet(PanZoomPhase::Start), |_| fresh.borrow().clone());
+                            assert!(!fail, "native terminal reentry failure");
+                        }
+                    }).expect("raw terminal observer");
+                    let mut geometry = HitTestResult::new();
+                    geometry.add(HitTestEntry::new(RenderId::new(1)).pan_zoom_target(native).pointer_target(observer));
+                    *path.borrow_mut() = geometry.clone();
+                    binding.handle_pointer_event(&packet(PanZoomPhase::Start), |_| geometry.clone());
+                    binding.handle_pointer_event(&update(), |_| geometry.clone());
+                    let result = catch_unwind(AssertUnwindSafe(||
+                        binding.handle_pointer_event(&packet(terminal), |_| {
+                            if !observer_reentry && armed.replace(false) {
+                                binding.handle_pointer_event(&packet(PanZoomPhase::Start), |_| geometry.clone());
+                                assert!(!fail, "native terminal reentry failure");
+                            }
+                            geometry.clone()
+                        })));
+                    if fail {
+                        assert_eq!(result.expect_err("reentry failure").downcast_ref::<&str>(),
+                            Some(&"native terminal reentry failure"));
+                    } else { result.expect("terminal reentry"); }
+                    assert_eq!((starts.get(), updates.get(), ends.get(), cancelled.get()), (1, 1, 0, 1),
+                        "new Start retires the original recognized session exactly once");
+                    binding.handle_pointer_event(&update(), |_| geometry.clone());
+                    assert_eq!((starts.get(), updates.get(), ends.get(), cancelled.get()), (2, 2, 0, 1),
+                        "outer old terminal must not consume the newer same-source, same-time actor generation");
+                    binding.handle_pointer_event(&packet(PanZoomPhase::End), |_| HitTestResult::new());
+                    assert_eq!((starts.get(), updates.get(), ends.get(), cancelled.get()), (2, 2, 1, 1));
+                });
+            }
         }
     }
 }
