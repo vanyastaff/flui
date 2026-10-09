@@ -2902,7 +2902,7 @@ fn native_staged_retirement_preserves_delivery_and_failure() {
 
     for replacement in [false, true] {
         for competing in [false, true] {
-            let lane = InteractionLane::new();
+            let lane = InteractionLane::try_new().expect("lane");
             let handle = lane.dispatch_handle();
             let binding = GestureBinding::new();
             let starts = Rc::new(Cell::new(0));
@@ -3002,7 +3002,7 @@ fn native_staged_owner_cleanup_is_exact() {
     };
     use std::{cell::Cell, rc::Rc};
     for close in [false, true] {
-        let lane = InteractionLane::new();
+        let lane = InteractionLane::try_new().expect("lane");
         let handle = lane.dispatch_handle();
         let binding = GestureBinding::new();
         let first = Rc::new(Cell::new(0));
@@ -3092,7 +3092,7 @@ fn native_staged_generation_survives_geometry_and_reentry() {
 
     for reenter in [false, true] {
         for fail in [false, true] {
-            let lane = InteractionLane::new();
+            let lane = InteractionLane::try_new().expect("lane");
             let handle = lane.dispatch_handle();
             let binding = Rc::new(GestureBinding::new());
             let replacement_path = Rc::new(RefCell::new(HitTestResult::new()));
