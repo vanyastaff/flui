@@ -1937,6 +1937,7 @@ impl AnimationController {
                     SettleReason::ReducedMotion => {
                         inner.behavior != crate::AnimationBehavior::Normal
                     }
+                    SettleReason::ExhaustedClock => false,
                 }
             {
                 return false;
@@ -1983,7 +1984,10 @@ impl AnimationController {
                     inner.local_elapsed = Duration::ZERO;
                     inner.rate_epoch_elapsed = Duration::ZERO;
                     inner.rate_epoch_local = Duration::ZERO;
-                    if matches!(reason, SettleReason::ReducedMotion) {
+                    if matches!(
+                        reason,
+                        SettleReason::ReducedMotion | SettleReason::ExhaustedClock
+                    ) {
                         inner.motion_state = MotionRunState::Parked;
                         inner.run_start = RunStart::Fresh;
                     }

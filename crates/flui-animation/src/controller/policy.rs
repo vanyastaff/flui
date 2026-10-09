@@ -11,6 +11,7 @@ pub(super) enum MotionRunState {
 pub(crate) enum SettleReason {
     Clock,
     ReducedMotion,
+    ExhaustedClock,
 }
 
 impl AnimationController {

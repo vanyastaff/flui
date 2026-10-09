@@ -334,7 +334,7 @@ fn reduced_settle_preserves_peer_delivery_and_reentrant_runs() {
         let mut clock = MotionClock::new();
         clock.set_system_motion(MotionPreference::Reduce);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            registry.tick_all(&clock.frame(Duration::ZERO))
+            registry.tick_all(&clock.frame(Duration::ZERO));
         }));
         assert_eq!(result.is_err(), panic_first || panic_peer);
         if let Err(payload) = &result {
@@ -496,10 +496,20 @@ fn reduced_motion_admission_wakes_a_paused_run() {
 
 #[test]
 fn tiny_scale_saturates_and_completes_once() {
-    use std::{cell::Cell, rc::Rc};
+    use std::{
+        cell::Cell,
+        future::Future,
+        pin::Pin,
+        rc::Rc,
+        task::{Context, Poll, Waker},
+    };
     for scale in [1e-300, f64::from_bits(1)] {
         let registry = flui_animation::Vsync::new();
         let owner = AnimationController::builder(ms(1000)).build_on(Some(&registry));
+        let preserve = AnimationController::builder(ms(1000))
+            .behavior(flui_animation::AnimationBehavior::Preserve)
+            .build_on(Some(&registry));
+        preserve.controller().forward().expect("preserved run");
         let delivered = Rc::new(Cell::new(0));
         let count = Rc::clone(&delivered);
         let _subscription = owner.controller().subscribe_status(Rc::new(move |status| {
@@ -518,7 +528,41 @@ fn tiny_scale_saturates_and_completes_once() {
         assert_eq!(owner.controller().value(), 1.0);
         registry.tick_all(&clock.frame(ms(2)));
         assert_eq!(delivered.get(), 1);
-        assert!(!registry.has_running());
+        owner
+            .controller()
+            .forward_from(Some(0.0))
+            .expect("next finite run after saturation");
+        registry.tick_all(&clock.frame(ms(3)));
+        assert_eq!(
+            owner.controller().value(),
+            1.0,
+            "newly accepted work remains deliverable after clock saturation"
+        );
+        assert_eq!(delivered.get(), 2, "each run completes once");
+        assert!(
+            (preserve.controller().value() - 0.003).abs() < 1e-9,
+            "normal saturation cannot exhaust preserve time"
+        );
+        preserve.controller().stop().expect("stop preserved run");
+        let mut repeating = owner
+            .controller()
+            .repeat(false)
+            .expect("infinite work at exhausted time");
+        registry.tick_all(&clock.frame(ms(4)));
+        assert_eq!(owner.controller().value(), 0.0);
+        assert!(
+            !registry.has_running(),
+            "an exhausted timeline parks infinite work"
+        );
+        registry.tick_all(&clock.frame(ms(5)));
+        assert!(
+            !registry.has_running(),
+            "Full alone does not resume an exhausted clock"
+        );
+        assert_eq!(
+            Pin::new(&mut repeating).poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Pending
+        );
     }
 }
 

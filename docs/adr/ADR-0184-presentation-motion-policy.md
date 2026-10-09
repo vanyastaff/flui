@@ -22,6 +22,14 @@ still honoring debug playback. Changes rebase at the last accepted frame, withou
 sampling controllers or invoking user callbacks. Time remains monotonic and
 saturates at `Duration::MAX`.
 
+An exhausted timeline cannot deliver another positive interval. Its registry
+therefore settles finite work, including later admissions, and parks infinite
+work without continuation. Parking resumes only on a Full timeline that still
+has time available, such as after rebinding to a fresh presentation registry.
+This applies to the selected timeline: exhausting Normal leaves Preserve's
+independent clock available. `tiny_scale_saturates_and_completes_once` verifies
+both the original finite run and a later admission.
+
 Every `FrameTick` carries both timelines and resolved policy. The Vsync traversal
 forwards the same tick through nested registries. Under Reduce it settles Normal
 work outside the registry borrow: finite runs complete at their terminal value;

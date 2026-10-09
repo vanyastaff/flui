@@ -54,14 +54,15 @@ impl PartialEq for VsyncRegistration {
 impl Eq for VsyncRegistration {}
 
 impl VsyncRegistration {
-    pub(crate) fn reduces_motion(&self) -> bool {
+    pub(crate) fn requires_settlement(&self, behavior: crate::AnimationBehavior) -> bool {
         let Some(owner) = self.owner.upgrade() else {
             return false;
         };
-        owner
-            .borrow()
-            .last_tick
-            .is_some_and(|tick| tick.policy() == crate::MotionPolicy::Reduce)
+        owner.borrow().last_tick.is_some_and(|tick| {
+            tick.time(behavior).as_duration() == Duration::MAX
+                || (behavior == crate::AnimationBehavior::Normal
+                    && tick.policy() == crate::MotionPolicy::Reduce)
+        })
     }
 
     pub(crate) fn owner_is_alive(&self) -> bool {
@@ -570,6 +571,7 @@ impl Vsync {
                     // controller lock.
                     let probe = registered.controller.walk_probe();
                     let now = tick.time(probe.behavior);
+                    let exhausted = now.as_duration() == Duration::MAX;
                     if probe.generation != registered.last_gen {
                         registered.last_gen = probe.generation;
                         registered.anchor = match (probe.start, registered.last_tick) {
@@ -595,6 +597,7 @@ impl Vsync {
                     }
                     let resumed = probe.parked
                         && tick.policy() == crate::MotionPolicy::Full
+                        && !exhausted
                         && registered.controller.resume_motion_run(probe.generation);
                     if resumed {
                         registered.anchor = RunAnchor::Fresh;
@@ -602,10 +605,19 @@ impl Vsync {
                     }
                     if probe.has_run
                         && !probe.parked
-                        && probe.behavior == crate::AnimationBehavior::Normal
-                        && tick.policy() == crate::MotionPolicy::Reduce
+                        && (exhausted
+                            || (probe.behavior == crate::AnimationBehavior::Normal
+                                && tick.policy() == crate::MotionPolicy::Reduce))
                     {
-                        RegistryWalkStep::Settling(registered.controller.clone(), probe.generation)
+                        RegistryWalkStep::Settling(
+                            registered.controller.clone(),
+                            probe.generation,
+                            if exhausted {
+                                crate::controller::SettleReason::ExhaustedClock
+                            } else {
+                                crate::controller::SettleReason::ReducedMotion
+                            },
+                        )
                     } else if probe.live_running || resumed {
                         // `run_start_secs` is `Some` here — set in the branch
                         // above on this same call if it was `None`.
@@ -628,14 +640,10 @@ impl Vsync {
             match step {
                 RegistryWalkStep::Finished => break,
                 RegistryWalkStep::NotRunning => {}
-                RegistryWalkStep::Settling(controller, generation) => {
+                RegistryWalkStep::Settling(controller, generation, reason) => {
                     let controller = Terminal::new(controller);
                     retirement.run_with(|retirement| {
-                        controller.settle_run(
-                            generation,
-                            crate::controller::SettleReason::ReducedMotion,
-                            retirement,
-                        );
+                        controller.settle_run(generation, reason, retirement);
                     });
                     retirement.retire(controller);
                 }
@@ -661,7 +669,7 @@ enum RegistryWalkStep {
     /// The controller is running; tick it with the given elapsed seconds
     /// once the registry lock guarding this step is released.
     Running(AnimationController, Duration),
-    Settling(AnimationController, u64),
+    Settling(AnimationController, u64, crate::controller::SettleReason),
 }
 
 impl std::fmt::Debug for Vsync {

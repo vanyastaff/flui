@@ -79,10 +79,7 @@ impl AnimationController {
                     if probe.has_run && !probe.parked {
                         let routes = self.inner.borrow().frame_routes.clone();
                         for route in routes {
-                            if probe.live_running
-                                || (probe.behavior == crate::AnimationBehavior::Normal
-                                    && route.reduces_motion())
-                            {
+                            if probe.live_running || route.requires_settlement(probe.behavior) {
                                 route.request_frame(retirement);
                             }
                         }
