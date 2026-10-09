@@ -4849,10 +4849,7 @@ fn non_pointer_invocation_retains_its_snapshot_across_a_reentrant_close() {
                     );
                     let _ = owner.invoke_pan_zoom_target(
                         target,
-                        flui_interaction::routing::PanZoomDispatch {
-                            local: &event,
-                            global: &event,
-                        },
+                        flui_interaction::routing::PanZoomDispatch::at_root(&event),
                     );
                 }
                 "path clip" => {

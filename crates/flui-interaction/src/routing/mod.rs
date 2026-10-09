@@ -39,6 +39,7 @@ pub(crate) use hit_test::{PanZoomRoute, ScrollRoute};
 #[doc(hidden)]
 pub use interaction_lane::DispatchCustody;
 pub(crate) use interaction_lane::OwnerLatch;
+pub(crate) use interaction_lane::{PanZoomAdmissionAuthority, PanZoomRetirement};
 pub(crate) use interaction_lane::active_dispatch_handle;
 pub use interaction_lane::{
     HitTestHandle, HitTestProbe, HitTestSnapshot, InteractionDispatchError,
