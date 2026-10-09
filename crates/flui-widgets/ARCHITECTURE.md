@@ -11,6 +11,10 @@ the controller retains a weak route to that source. Collapse remains a layout
 phase with its own rebuilds. `dismissible_slides_without_rebuilding_per_frame`
 uses public frame reports for drag and return frames on both axes and signs,
 and verifies that update events continue on each moving frame.
+`dismissal_updates_follow_owner_lifetime` queues several pointer updates before
+one frame and verifies ordered delivery through writable event contexts,
+callback replacement, cancellation on unmount, and accepted tail delivery
+after a callback panic.
 
 Dismissible preserves the dragged side while a reverse release moves back
 toward the origin. Physical velocity uses `AnimationController::fling_across`
@@ -184,8 +188,9 @@ navigation outcome delivery and the existing observer ordering.
 
 Animation listeners accept owner-local captures. `AnimatedSize` observes
 completion counts during build but invokes `on_end` after the frame.
-`Dismissible` likewise calculates transitions with layout constraints, then
-queues the event payloads on the owner-local post-frame lane; its fully-slid
+`Dismissible` snapshots movement payloads from its controller listener and
+collapse transitions from committed layout geometry, then queues events on
+the owner-local post-frame lane; its fully-slid
 input-time completion bypass remains synchronous. Animation-listener
 notifications are never delivered synchronously to user code: user effects must
 not execute during a FLUI build. Deferred events use the latest configured

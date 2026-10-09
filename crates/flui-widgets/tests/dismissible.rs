@@ -9,6 +9,118 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
+#[derive(Clone, Copy)]
+enum UpdateDelivery {
+    Ordered,
+    Replaced,
+    Unmounted,
+    Panicking,
+}
+
+pub(crate) fn dismissal_updates_follow_owner_lifetime() {
+    use crate::common::{ProbeSignals, SignalProbe};
+    use flui_view::{SignalWriteExt, ViewExt};
+    use flui_widgets::SizedBox;
+    use std::cell::RefCell;
+
+    for delivery in [
+        UpdateDelivery::Ordered,
+        UpdateDelivery::Replaced,
+        UpdateDelivery::Unmounted,
+        UpdateDelivery::Panicking,
+    ] {
+        let generation = Rc::new(Cell::new(1_u32));
+        let show = Rc::new(Cell::new(true));
+        let delivered = Rc::new(RefCell::new(Vec::new()));
+        let first = Rc::new(Cell::new(true));
+        let probe = {
+            let generation = Rc::clone(&generation);
+            let show = Rc::clone(&show);
+            let delivered = Rc::clone(&delivered);
+            let first = Rc::clone(&first);
+            SignalProbe::new(move |ProbeSignals { count, .. }| {
+                if !show.get() {
+                    return SizedBox::shrink().boxed();
+                }
+                let generation = generation.get();
+                let delivered = Rc::clone(&delivered);
+                let first = Rc::clone(&first);
+                Dismissible::new(ColoredBox::new(Color::rgb(10, 20, 30)))
+                    .direction(DismissDirection::Horizontal)
+                    .on_update(move |cx, details| {
+                        assert!(
+                            !first.replace(false) || !matches!(delivery, UpdateDelivery::Panicking),
+                            "intentional dismissal update panic"
+                        );
+                        delivered.borrow_mut().push((generation, details.progress));
+                        count
+                            .update(cx, |value| *value += 1)
+                            .expect("update callback has a live writable signal");
+                    })
+                    .boxed()
+            })
+        };
+        let vsync = Vsync::new();
+        let mut app = lay_out_animated(
+            VsyncScope::new(vsync.clone(), probe.view()),
+            tight(200.0, 200.0),
+            vsync,
+        );
+        app.dispatch_pointer_down(20.0, 20.0);
+        for x in [40.0, 60.0, 80.0, 100.0] {
+            app.dispatch_pointer_move_after(x, 20.0, Duration::from_millis(10));
+        }
+        assert!(delivered.borrow().is_empty(), "updates wait for the frame");
+        assert_eq!(probe.value(), Ok(0));
+        match delivery {
+            UpdateDelivery::Ordered => app.tick(),
+            UpdateDelivery::Replaced => {
+                generation.set(2);
+                app.pump();
+            }
+            UpdateDelivery::Unmounted => {
+                show.set(false);
+                app.pump();
+            }
+            UpdateDelivery::Panicking => {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| app.tick()));
+                assert!(result.is_err(), "the first callback's panic propagates");
+                app.tick();
+            }
+        }
+        let expected: &[f64] = match delivery {
+            UpdateDelivery::Unmounted => &[],
+            UpdateDelivery::Panicking => &[0.2, 0.3, 0.4],
+            _ => &[0.1, 0.2, 0.3, 0.4],
+        };
+        let actual = delivered.borrow();
+        assert_eq!(
+            actual.len(),
+            expected.len(),
+            "accepted updates remain ordered: {actual:?}"
+        );
+        for ((callback, progress), expected) in actual.iter().zip(expected) {
+            assert_eq!(
+                *callback,
+                if matches!(delivery, UpdateDelivery::Replaced) {
+                    2
+                } else {
+                    1
+                }
+            );
+            assert!(
+                (progress - expected).abs() < 1e-9,
+                "progress {progress}, expected {expected}"
+            );
+        }
+        assert_eq!(
+            probe.value(),
+            Ok(expected.len() as u32),
+            "each update has a writable EventCx"
+        );
+    }
+}
+
 pub(crate) fn dismissible_slides_without_rebuilding_per_frame() {
     use flui_testing::{HeadlessBinding, MountOptions, MountOwners, PointerScript};
     use flui_widgets::{FocusRoot, GestureArenaScope, SizedBox};
