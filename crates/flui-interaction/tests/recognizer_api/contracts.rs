@@ -16,12 +16,12 @@ use flui_foundation::geometry::Offset;
 use flui_interaction::{
     ArenaMembership, BeginContactError, CancelOutcome, DoubleTapGestureRecognizer, GestureArena,
     GestureArenaMember, GestureRecognizer, GestureSettings, MultiTapGestureRecognizer, PointerId,
-    PrimaryContact, RecognizerSet,
+    PrimaryContact, RecognizerSet, ScaleGestureRecognizer,
     arena::run_pointer_lifecycle,
     cancel_all,
     events::{
         PointerButton, PointerEvent, PointerKind, make_down_event_for_id_with_button,
-        make_up_event_for_id,
+        make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
     },
     routing::PointerDispatch,
 };
@@ -31,6 +31,7 @@ type Log = Rc<RefCell<Vec<&'static str>>>;
 thread_local! {
     // A Send clock can reenter owner-local state on its calling thread.
     static CLOCK_CONTACT: RefCell<Option<Weak<Extension>>> = const { RefCell::new(None) };
+    static CLOCK_SCALE: RefCell<Option<Weak<ScaleGestureRecognizer>>> = const { RefCell::new(None) };
 }
 
 #[derive(Debug)]
@@ -447,6 +448,85 @@ fn clock_reentry_cannot_arm_a_replacement_contact() {
     assert!(owner.contact.arm_deadline(Duration::from_secs(1)).is_some());
 }
 
+fn scale_clock_can_cancel_admission_and_preserve_reentrant_replacements() {
+    #[derive(Debug)]
+    struct ScaleClock {
+        now: web_time::Instant,
+        armed: AtomicBool,
+        replace: bool,
+        fail: bool,
+    }
+    impl MonotonicClock for ScaleClock {
+        fn now(&self) -> web_time::Instant {
+            if self.armed.swap(false, Ordering::Relaxed) {
+                let owner = CLOCK_SCALE.with(|slot| slot.borrow().as_ref().and_then(Weak::upgrade));
+                if let Some(owner) = owner {
+                    assert_eq!(owner.cancel(), CancelOutcome::Cancelled, "Down commits admission before user clock");
+                    if self.replace {
+                        for (raw, x) in [(301, 10.0), (302, 110.0)] {
+                            let event = make_down_event_for_id(pointer(raw), Offset::new(x, 0.0), PointerKind::Touch)
+                                .expect("finite replacement Down");
+                            owner.add_pointer(PointerDispatch::at_root(&event));
+                        }
+                    }
+                    assert!(!self.fail, "scale clock failure");
+                }
+            }
+            self.now
+        }
+    }
+    struct ClearScaleClock;
+    impl Drop for ClearScaleClock {
+        fn drop(&mut self) {
+            CLOCK_SCALE.with(|slot| slot.borrow_mut().take());
+        }
+    }
+    for (replace, fail) in [(false, false), (true, false), (true, true)] {
+        let clock = Arc::new(ScaleClock {
+            now: web_time::Instant::now(),
+            armed: AtomicBool::new(false),
+            replace,
+            fail,
+        });
+        let arena = GestureArena::with_clock(clock.clone());
+        let updates = Rc::new(RefCell::new(Vec::new()));
+        let observed = updates.clone();
+        let scale = ScaleGestureRecognizer::builder(arena.clone())
+            .on_update(move |details| observed.borrow_mut().push(details.scale))
+            .build();
+        CLOCK_SCALE.with(|slot| *slot.borrow_mut() = Some(Rc::downgrade(&scale)));
+        let _clear = ClearScaleClock;
+        clock.armed.store(true, Ordering::Relaxed);
+        let original = make_down_event_for_id(pointer(301), Offset::new(-200.0, 0.0), PointerKind::Touch)
+            .expect("finite original Down");
+        let result = catch_unwind(AssertUnwindSafe(|| scale.add_pointer(PointerDispatch::at_root(&original))));
+        if fail {
+            let payload = result.expect_err("the original clock failure propagates");
+            assert_eq!(payload.downcast_ref::<&str>(), Some(&"scale clock failure"));
+        } else {
+            result.expect("the clock can cancel through the public owner without a RefCell panic");
+        }
+        if !replace {
+            assert_eq!(scale.cancel(), CancelOutcome::Idle, "cancelled Down must not be restored by outer admission");
+            for (raw, x) in [(301, 10.0), (302, 110.0)] {
+                let event = make_down_event_for_id(pointer(raw), Offset::new(x, 0.0), PointerKind::Touch)
+                    .expect("finite recovery Down");
+                scale.add_pointer(PointerDispatch::at_root(&event));
+            }
+        }
+        for raw in [301, 302] {
+            arena.close(pointer(raw));
+        }
+        arena.drain_deferred_resolutions();
+        let movement = make_move_event_for_id(pointer(302), Offset::new(210.0, 0.0), PointerKind::Touch)
+            .expect("finite replacement Move");
+        scale.handle_event(PointerDispatch::at_root(&movement));
+        assert_eq!(updates.borrow().last(), Some(&2.0), "same-ID replacement keeps its own 100px baseline after reentry or caught clock failure");
+        scale.cancel();
+        assert!(arena.is_empty(), "replacement retires its exact arena generations");
+    }
+}
+
 fn diagnostic_panic_cannot_replace_first_delivery_failure_or_skip_a_peer() {
     struct DiagnosticPanic(Arc<AtomicUsize>);
     impl tracing::Subscriber for DiagnosticPanic {
@@ -608,6 +688,10 @@ fn public_recognizer_extension_contracts() {
         (
             "clock_reentry_cannot_arm_a_replacement_contact",
             clock_reentry_cannot_arm_a_replacement_contact,
+        ),
+        (
+            "scale_clock_can_cancel_admission_and_preserve_reentrant_replacements",
+            scale_clock_can_cancel_admission_and_preserve_reentrant_replacements,
         ),
         (
             "diagnostic_panic_cannot_replace_first_delivery_failure_or_skip_a_peer",
