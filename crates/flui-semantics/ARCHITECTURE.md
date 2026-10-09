@@ -12,6 +12,13 @@ shape.
 
 ## Mapping decisions
 
+### System settings belong to the host
+
+Semantics collection and platform delivery remain presentation-owned. System
+preferences are observations from the host's `SystemPreferences` source
+(ADR-0172), not a constant-backed flag set in this crate. Consumer fallback
+and policy belong to the runtime and widgets that apply each observation.
+
 ### Descendant reveal snapshots retain current ownership and geometry
 
 [ADR-0168](../../docs/adr/ADR-0168-descendant-reveal-through-scroll-ancestors.md)
