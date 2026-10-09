@@ -71,7 +71,7 @@ event or frame boundary.
 
 ## Benchmarks
 
-Five Criterion benches in `benches/` (`harness = false`, stable toolchain).
+Six Criterion benches in `benches/` (`harness = false`, stable toolchain).
 Each needs the `testing` feature, which the dev-dependency enables.
 
 | Bench | Cases |
@@ -81,9 +81,10 @@ Each needs the `testing` feature, which the dev-dependency enables.
 | `tap_detector_bench` | live tap sequences without callbacks and with primary/secondary callbacks; fresh fixtures keep setup and retirement outside measured invocation; `add_pointer` |
 | `pointer_resampler_bench` | owned source-time admission; complete 60/240 Hz source traces sampled at 60 Hz with Up/Cancel flush; measured plus interpolated sample delivery; separate Up/Cancel tail flush; overflow with scalar and saturated history |
 | `pointer_route_bench` | `InteractionLane::resolve_pointer_route` plus route release, scalar cached-route Move invocation, and direct scalar Down `HitTestResult::dispatch`, each for 1, 4 and 16 targets |
+| `interaction_delivery_bench` | registered `PointerRouter` Move with 1/4 callbacks; two physical or ambient cursor changes; two attached focus transitions |
 
 ```bash
-cargo bench -p flui-interaction                                 # all five
+cargo bench -p flui-interaction                                 # all six
 cargo bench -p flui-interaction --bench gesture_arena_bench     # one
 ```
 
@@ -305,6 +306,169 @@ The historical resampler timing filter is
 `up|source_time|measured_and_interpolated|overflow`; current timing includes all
 ten rows. Preserve the unsupported historical Cancel preflight failure rather
 than weakening its timestamp and reason assertions to manufacture a baseline.
+
+## Recovery delivery measurement
+
+Measured on 2026-10-09 against production baseline
+`c97217c0a2998dcefa2bef077622ff7dba2ca97d` and changed production
+`babf737a5b7853fc4578e54a233a704b551fcd9b` in separate checkouts with
+separate target directories. The five existing benchmark sources are identical
+between these commits. The additional `interaction_delivery_bench` source and
+its manifest registration were copied unchanged into the baseline checkout;
+baseline production source was unchanged. Its source SHA-256 in both checkouts
+is `F3CC6FEF4A59E5EF4384FDAEA8CFB35BE05F8B98288516905F50F5E217613590`.
+
+Host: Windows 11 Pro 10.0.26200, Intel Core i9-13900K, 32 logical processors;
+rustc 1.99.0 (`b940084d7`), LLVM 23.1.1. Both builds use the default release
+profile: optimization level 3, thin LTO, one codegen unit. Build parallelism
+was six jobs. Measurements run sequentially under the repository's host-wide
+build lock, pinned to logical CPU 0 with normal process priority. No tracing
+subscriber is installed by the fixtures.
+
+The initial run alternates baseline then changed executable for each of the
+six targets, with 20 samples, one second of warmup and two seconds of measured
+time per case. All 44 cases on each side pass their functional preflights.
+The table uses Criterion arithmetic means and their 95% bootstrap confidence
+intervals from `estimates.json`, in nanoseconds; change is
+`100 * (after / before - 1)`. These are independent estimates, not a paired
+significance test. Overlap or separation of their intervals alone does not
+establish significance. The saved baseline names are
+`recovery_main_c97217c0a_20261009` and
+`recovery_pr_babf737a5_20261009`.
+
+| Case | Before mean [95% CI], ns | After mean [95% CI], ns | Change |
+|---|---:|---:|---:|
+| `GestureArena::add (busy, 4 prior members)` | 49.09 [48.08, 50.22] | 47.94 [47.17, 48.88] | -2.34% |
+| `GestureArena::add (empty, 1 member)` | 81.98 [81.13, 83.01] | 80.38 [79.84, 81.02] | -1.95% |
+| `GestureArena::add + accept (eager vs competitor)` | 365.67 [359.25, 373.44] | 359.88 [356.19, 364.73] | -1.58% |
+| `GestureArena::add+close+sweep (full lifecycle)` | 336.50 [332.33, 342.24] | 333.72 [328.89, 341.40] | -0.82% |
+| `GestureArena::sweep (1-member arena)` | 81.53 [80.21, 83.23] | 80.17 [79.36, 81.15] | -1.67% |
+| `HitTestResult::dispatch/direct/1` | 195.05 [193.37, 196.67] | 187.50 [186.62, 188.35] | -3.87% |
+| `HitTestResult::dispatch/direct/16` | 1010.18 [947.33, 1090.05] | 948.76 [943.33, 954.53] | -6.08% |
+| `HitTestResult::dispatch/direct/4` | 315.72 [311.71, 320.62] | 310.63 [306.63, 315.43] | -1.61% |
+| `InteractionLane::invoke_pointer_route/common_move/1` | 36.35 [35.85, 37.00] | 35.96 [35.54, 36.47] | -1.06% |
+| `InteractionLane::invoke_pointer_route/common_move/16` | 134.73 [133.89, 135.58] | 139.01 [136.72, 142.07] | +3.18% |
+| `InteractionLane::invoke_pointer_route/common_move/4` | 54.94 [54.49, 55.46] | 54.92 [54.57, 55.39] | -0.03% |
+| `InteractionLane::resolve_pointer_route/1` | 144.91 [143.92, 145.80] | 153.56 [148.75, 161.42] | +5.97% |
+| `InteractionLane::resolve_pointer_route/16` | 747.19 [742.53, 752.21] | 759.73 [749.08, 771.93] | +1.68% |
+| `InteractionLane::resolve_pointer_route/4` | 239.13 [237.10, 241.59] | 239.53 [237.16, 242.81] | +0.17% |
+| `OneEuroFilter2D::filter (per move)` | 15.28 [15.19, 15.38] | 15.17 [15.09, 15.25] | -0.76% |
+| `VelocityTracker::add_position (push)` | 33.17 [32.85, 33.59] | 32.49 [32.37, 32.64] | -2.05% |
+| `VelocityTracker::estimate (LSQ, 20 samples)` | 522.21 [518.27, 526.50] | 528.61 [519.52, 541.13] | +1.23% |
+| `VelocityTracker::estimate (LSQ, 3 samples)` | 202.68 [199.99, 205.31] | 203.54 [200.27, 206.74] | +0.42% |
+| `VelocityTracker::estimate (LSQ, 4 repeated queries)` | 542.56 [536.04, 549.13] | 533.73 [528.41, 539.63] | -1.63% |
+| `VelocityTracker::estimate Impulse (20 samples)` | 395.69 [387.62, 408.05] | 382.75 [381.50, 383.98] | -3.27% |
+| `VelocityTracker::estimate Ios (20 samples)` | 330.83 [325.20, 337.31] | 324.53 [320.77, 328.91] | -1.90% |
+| `add_pointer/static` | 231.92 [218.39, 246.16] | 215.66 [204.09, 227.55] | -7.01% |
+| `delivery/FocusManager/two_attached_focus_transitions` | 534.38 [531.54, 537.41] | 524.09 [520.67, 528.57] | -1.92% |
+| `delivery/MouseTracker/ambient_two_cursor_changes_owned_hit_paths` | 307.12 [300.48, 314.99] | 359.20 [355.63, 364.44] | +16.96% |
+| `delivery/MouseTracker/physical_two_cursor_changes` | 82.66 [82.16, 83.26] | 100.64 [100.09, 101.23] | +21.75% |
+| `delivery/PointerRouter/registered_move/1` | 25.33 [25.05, 25.69] | 29.63 [29.43, 29.86] | +16.96% |
+| `delivery/PointerRouter/registered_move/4` | 57.30 [56.79, 57.89] | 64.29 [63.87, 64.75] | +12.21% |
+| `handle_event/dyn/no_callbacks` | 381.92 [372.88, 391.40] | 401.12 [389.27, 412.84] | +5.03% |
+| `handle_event/dyn/primary_callbacks` | 399.91 [391.83, 408.50] | 418.11 [399.21, 441.66] | +4.55% |
+| `handle_event/dyn/secondary_callbacks` | 402.85 [393.61, 413.15] | 418.41 [404.37, 432.44] | +3.86% |
+| `handle_event/static/no_callbacks` | 409.41 [394.81, 424.12] | 396.45 [384.63, 409.06] | -3.17% |
+| `handle_event/static/primary_callbacks` | 366.66 [359.54, 374.17] | 374.26 [362.29, 386.68] | +2.07% |
+| `handle_event/static/secondary_callbacks` | 382.17 [368.11, 396.34] | 380.18 [369.08, 391.02] | -0.52% |
+| `resampler/add_event/source_time` | 54.82 [52.86, 56.86] | 57.65 [55.53, 60.41] | +5.15% |
+| `resampler/frame_trace/240_to_60/cancel` | 12613.95 [12535.85, 12695.01] | 12868.11 [12617.11, 13265.18] | +2.01% |
+| `resampler/frame_trace/240_to_60/up` | 12674.82 [12534.35, 12841.54] | 12787.37 [12606.77, 13007.50] | +0.89% |
+| `resampler/frame_trace/60_to_60/cancel` | 4709.22 [4664.85, 4752.71] | 4743.09 [4713.66, 4768.36] | +0.72% |
+| `resampler/frame_trace/60_to_60/up` | 4815.35 [4712.31, 4946.93] | 4860.29 [4767.61, 4970.34] | +0.93% |
+| `resampler/overflow/saturated_history` | 351.02 [316.04, 387.12] | 338.65 [301.92, 376.34] | -3.52% |
+| `resampler/overflow/scalar_history` | 140.02 [118.66, 163.46] | 152.08 [126.73, 178.55] | +8.62% |
+| `resampler/sample/measured_and_interpolated` | 1364.93 [1278.49, 1489.91] | 1217.74 [1185.06, 1250.77] | -10.78% |
+| `resampler/stop/cancel` | 87.41 [78.59, 96.06] | 103.47 [90.42, 116.69] | +18.37% |
+| `resampler/stop/up` | 91.74 [82.58, 101.05] | 92.82 [83.49, 102.08] | +1.18% |
+| `resolve/weak` | 82.78 [79.93, 85.64] | 81.75 [77.90, 85.87] | -1.24% |
+
+These fixtures cover synthetic API calls rather than full frames. Cursor and
+focus rows measure **two transitions**. The ambient cursor fixture includes
+owned hit-path clones; physical cursor fixtures borrow prebuilt paths. Setup,
+owner installation and retirement are outside the timed loops. Live callback
+counts and final output are checked before timing and observed during timing.
+The existing 39 cases are predominantly controls for unchanged paths; the five
+additional cases exercise healthy routing, cursor and focus delivery affected
+by recovery changes. Native Scale admission, failure/reentry recovery, mounted
+widgets, OS preference transport and physical hardware input are not timed here.
+
+To reproduce, use the same benchmark source on both checkouts and separate
+Criterion output directories, then run each target sequentially:
+
+```bash
+cargo bench --locked -p flui-interaction --bench interaction_delivery_bench -- \
+  --save-baseline recovery_main_c97217c0a_20261009 \
+  --sample-size 20 --warm-up-time 1 --measurement-time 2 --noplot
+```
+
+Repeat for every target listed above and use the changed baseline name in the
+changed checkout. Set `CRITERION_HOME` to each checkout's `target/criterion`.
+The command itself does not pin CPU affinity or acquire the host lock; those
+were applied by the measurement process launcher. Match rows by
+`benchmark.json`'s `full_id`, and extract `.mean.point_estimate` and
+`.mean.confidence_interval` with `jq` rather than treating console slope
+estimates as arithmetic means.
+
+
+### Reverse-order repeat
+
+The three targets `interaction_delivery_bench`, `pointer_resampler_bench`
+and `pointer_route_bench` were repeated with the changed executable first,
+then baseline, 40 samples, one second of warmup and four seconds of measured
+time. All 24 matched cases completed successfully. Build, CPU affinity, priority
+and production commits are unchanged. Saved names:
+`recovery_pr_babf737a5_repeat_20261009` and
+`recovery_main_c97217c0a_repeat_20261009`.
+For reproduction, replace the initial command's sample size with 40,
+measurement time with 4 and saved names with these repeat names.
+
+| Case | Before mean [95% CI], ns | After mean [95% CI], ns | Change |
+|---|---:|---:|---:|
+| `HitTestResult::dispatch/direct/1` | 191.60 [188.97, 195.85] | 186.69 [185.88, 187.61] | -2.56% |
+| `HitTestResult::dispatch/direct/16` | 960.91 [949.20, 974.16] | 939.17 [933.31, 946.10] | -2.26% |
+| `HitTestResult::dispatch/direct/4` | 319.84 [315.34, 325.29] | 307.10 [305.02, 309.78] | -3.98% |
+| `InteractionLane::invoke_pointer_route/common_move/1` | 35.86 [35.60, 36.22] | 36.07 [35.79, 36.36] | +0.57% |
+| `InteractionLane::invoke_pointer_route/common_move/16` | 140.42 [138.90, 142.24] | 133.32 [132.23, 134.42] | -5.06% |
+| `InteractionLane::invoke_pointer_route/common_move/4` | 56.80 [56.20, 57.41] | 54.62 [54.34, 54.93] | -3.83% |
+| `InteractionLane::resolve_pointer_route/1` | 144.04 [143.09, 145.28] | 143.76 [142.65, 145.06] | -0.19% |
+| `InteractionLane::resolve_pointer_route/16` | 721.08 [717.74, 724.62] | 753.81 [737.65, 773.92] | +4.54% |
+| `InteractionLane::resolve_pointer_route/4` | 238.68 [234.08, 244.80] | 235.22 [233.56, 237.32] | -1.45% |
+| `delivery/FocusManager/two_attached_focus_transitions` | 533.53 [531.24, 535.97] | 559.29 [548.67, 572.17] | +4.83% |
+| `delivery/MouseTracker/ambient_two_cursor_changes_owned_hit_paths` | 287.07 [285.00, 289.46] | 368.47 [364.87, 372.56] | +28.35% |
+| `delivery/MouseTracker/physical_two_cursor_changes` | 83.37 [82.91, 83.87] | 101.67 [101.26, 102.08] | +21.96% |
+| `delivery/PointerRouter/registered_move/1` | 25.16 [25.00, 25.37] | 30.12 [29.96, 30.30] | +19.73% |
+| `delivery/PointerRouter/registered_move/4` | 57.53 [57.25, 57.84] | 65.68 [65.12, 66.38] | +14.18% |
+| `resampler/add_event/source_time` | 52.90 [51.65, 54.12] | 51.61 [50.71, 52.49] | -2.44% |
+| `resampler/frame_trace/240_to_60/cancel` | 12690.73 [12626.90, 12757.39] | 12602.71 [12534.83, 12673.06] | -0.69% |
+| `resampler/frame_trace/240_to_60/up` | 12815.27 [12709.04, 12933.92] | 12573.36 [12511.30, 12642.67] | -1.89% |
+| `resampler/frame_trace/60_to_60/cancel` | 4728.41 [4685.98, 4773.75] | 4697.65 [4663.49, 4732.16] | -0.65% |
+| `resampler/frame_trace/60_to_60/up` | 4720.15 [4679.21, 4760.40] | 4742.47 [4685.98, 4808.49] | +0.47% |
+| `resampler/overflow/saturated_history` | 390.81 [340.87, 445.88] | 346.25 [314.78, 378.47] | -11.40% |
+| `resampler/overflow/scalar_history` | 160.21 [144.53, 176.31] | 139.36 [121.61, 157.74] | -13.01% |
+| `resampler/sample/measured_and_interpolated` | 1352.86 [1314.56, 1393.92] | 1221.73 [1199.66, 1243.17] | -9.69% |
+| `resampler/stop/cancel` | 140.05 [123.94, 156.13] | 90.85 [84.05, 97.68] | -35.13% |
+| `resampler/stop/up` | 148.14 [135.76, 159.77] | 89.39 [82.92, 95.82] | -39.66% |
+
+Registered routing is consistently more expensive across both run orders:
+one callback adds 4.30–4.96 ns per Move (17–20%); four callbacks add
+7.00–8.16 ns (12–14%). Physical cursor delivery adds 17.98–18.30 ns
+per two transitions (about 22%). Ambient cursor delivery adds
+52.08–81.40 ns per two transitions (17–28%). These are measurable healthy-path
+costs, not evidence that recovery is free. The implementation now checks exact
+registration identity and tracks cursor observations, publication debt and
+in-flight callbacks; these measurements do not isolate the cost of each check.
+
+Focus changes sign between runs (−1.92% then +4.83%), so there is no consistent
+speedup. Complete resampler traces stay within roughly 2% of their matching
+baseline in both orders. Measured/interpolated sample delivery is about 10%
+lower in both runs, while isolated stop and overflow rows vary substantially
+between runs; do not interpret their individual deltas as stable improvements.
+Cached route resolution with 16 targets increases in both runs (+1.68%,
++4.54%); the one-target increase and 16-target invocation increase from the
+initial run do not persist in the repeat. This comparison establishes fixture
+costs on this host, not a performance budget for an entire interaction layer.
+
 
 ## See also
 
