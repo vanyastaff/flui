@@ -335,7 +335,7 @@ pub(crate) fn n_ticks_under_backpressure_wake_the_platform_exactly_once_then_rea
 
     let (wake, wake_count) = super::counting_wake();
     let ui_runtime = super::new_runtime(wake).expect("runtime");
-    let owner =
+    let mut owner =
         AnimationController::builder(Duration::from_secs(1)).build_on(Some(&ui_runtime.vsync()));
     let controller = owner.controller();
     controller.forward().expect("fresh controller forwards");
@@ -374,7 +374,7 @@ pub(crate) fn n_ticks_under_backpressure_wake_the_platform_exactly_once_then_rea
          poll() already reset the latch"
     );
 
-    controller.dispose();
+    owner.dispose();
 }
 
 // ================================================================

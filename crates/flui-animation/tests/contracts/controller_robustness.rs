@@ -194,14 +194,16 @@ fn max_duration_animate_to() {
 // --- dispose ----------------------------------------------------------------------------
 
 fn disposed_controller_ignores_set_value() {
-    let controller = controller();
+    let mut owner =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = owner.controller().clone();
     controller.set_value(0.3);
     let notified = Arc::new(Mutex::new(0_usize));
     let sink = Arc::clone(&notified);
     controller.add_listener(std::rc::Rc::new(move || {
         *sink.lock().expect("notification count") += 1;
     }));
-    controller.dispose();
+    owner.dispose();
 
     controller.set_value(0.8);
 
@@ -214,8 +216,10 @@ fn disposed_controller_ignores_set_value() {
 }
 
 fn disposed_controller_drops_a_late_status_listener() {
-    let controller = controller();
-    controller.dispose();
+    let mut owner =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = owner.controller().clone();
+    owner.dispose();
     let probe = Arc::new(());
     let capture = Arc::clone(&probe);
     let _id = controller.add_status_listener(std::rc::Rc::new(move |_| {
@@ -229,8 +233,10 @@ fn disposed_controller_drops_a_late_status_listener() {
 }
 
 fn disposed_controller_drops_a_late_value_listener() {
-    let controller = controller();
-    controller.dispose();
+    let mut owner =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = owner.controller().clone();
+    owner.dispose();
     let probe = Arc::new(());
     let capture = Arc::clone(&probe);
     let _id = controller.add_listener(std::rc::Rc::new(move || {

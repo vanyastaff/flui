@@ -366,18 +366,20 @@ fn status_listener_removed_by_an_earlier_listener_is_skipped() {
 }
 
 fn controller_disposed_mid_fan_out_calls_no_further_listener() {
-    let controller = controller();
-    let slot: std::rc::Rc<Mutex<Option<AnimationController>>> = std::rc::Rc::default();
+    let vsync = Vsync::new();
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
+    let controller = owner.controller().clone();
+    let slot: std::rc::Rc<Mutex<Option<DrivenController>>> = std::rc::Rc::default();
     let pending = std::rc::Rc::clone(&slot);
     controller.add_status_listener(std::rc::Rc::new(move |_| {
         let owner = pending.lock().expect("dispose slot").take();
-        if let Some(controller) = owner {
-            controller.dispose();
+        if let Some(mut owner) = owner {
+            owner.dispose();
         }
     }));
     let (later, listener) = recorder();
     controller.add_status_listener(listener);
-    *slot.lock().expect("dispose slot") = Some(controller.clone());
+    *slot.lock().expect("dispose slot") = Some(owner);
 
     let _run = controller.forward().expect("run starts");
 
@@ -386,6 +388,14 @@ fn controller_disposed_mid_fan_out_calls_no_further_listener() {
         [],
         "no listener of a disposed controller is called"
     );
+    assert!(
+        vsync.is_empty(),
+        "callback disposal withdraws the owning seat"
+    );
+    assert!(matches!(
+        controller.forward(),
+        Err(flui_animation::AnimationError::Disposed)
+    ));
 }
 
 // --- reentrant ordering --------------------------------------------------------

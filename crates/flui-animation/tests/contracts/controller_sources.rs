@@ -3,7 +3,7 @@
 use crate::child_process;
 use flui_animation::{
     Animation, AnimationController, AnimationStatus, AnimationSwitch, ConstantAnimation,
-    CurvedAnimation, ProxyAnimation, StatusCallback, Vsync,
+    CurvedAnimation, DrivenController, ProxyAnimation, StatusCallback, Vsync,
     curve::{Curve, Split},
     simulation::Simulation,
 };
@@ -241,8 +241,10 @@ impl Simulation for SourceDrop {
         time >= 1.0
     }
 }
-fn source_retirement(operation: fn(&AnimationController)) {
-    let controller = AnimationController::builder(Duration::from_secs(1)).build();
+fn source_retirement(operation: fn(&mut DrivenController)) {
+    let mut owner =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = owner.controller().clone();
     let drops = Rc::new(AtomicUsize::new(0));
     let _future = controller
         .animate_with(SourceDrop {
@@ -250,27 +252,31 @@ fn source_retirement(operation: fn(&AnimationController)) {
             drops: drops.clone(),
         })
         .expect("owned source");
-    operation(&controller);
+    operation(&mut owner);
     assert_eq!(
         drops.load(Ordering::SeqCst),
         1,
         "controller retires its source outside the lock"
     );
-    controller.dispose();
+    owner.dispose();
 }
 fn stop_retires_source() {
-    source_retirement(|controller| controller.stop().expect("stop"));
+    source_retirement(|owner| owner.controller().stop().expect("stop"));
 }
 fn replacement_retires_source() {
-    source_retirement(|controller| {
-        let _future = controller.forward().expect("forward");
+    source_retirement(|owner| {
+        let _future = owner.controller().forward().expect("forward");
     });
 }
 fn completion_retires_source() {
-    source_retirement(|controller| controller.tick_at(std::time::Duration::from_secs_f64(1.0)));
+    source_retirement(|owner| {
+        owner
+            .controller()
+            .tick_at(std::time::Duration::from_secs_f64(1.0));
+    });
 }
 fn dispose_retires_source() {
-    source_retirement(AnimationController::dispose);
+    source_retirement(DrivenController::dispose);
 }
 
 struct Bomb(Rc<AtomicUsize>);
@@ -501,7 +507,9 @@ fn ordinary_retirement_failure_preserves_new_run() {
     controller.dispose();
 }
 fn retirement_failure_retains_later_callback_envelope() {
-    let controller = AnimationController::builder(Duration::from_secs(1)).build();
+    let mut owner =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = owner.controller().clone();
     let _future = controller
         .animate_with(FailingRetirement)
         .expect("retiring source");
@@ -511,7 +519,7 @@ fn retirement_failure_retains_later_callback_envelope() {
     controller.add_status_listener(std::rc::Rc::new(move |_| {
         let _opaque = (&first, &second);
     }));
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| controller.dispose()));
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| owner.dispose()));
     let payload = outcome.expect_err("source retirement fails");
     assert_eq!(
         payload.downcast_ref::<&str>().copied(),
@@ -523,7 +531,7 @@ fn retirement_failure_retains_later_callback_envelope() {
         0,
         "remaining callback envelope retained after first retirement failure"
     );
-    controller.dispose();
+    owner.dispose();
     assert!(controller.value().is_finite());
     assert!(matches!(
         controller.forward(),
