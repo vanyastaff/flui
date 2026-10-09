@@ -128,6 +128,13 @@ fn build_test_event_loop() -> EventLoop<()> {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn build_test_event_loop() -> EventLoop<()> {
+    EventLoop::builder()
+        .build()
+        .expect("build a real winit event loop (main-thread only on macOS)")
+}
+
 /// A paint-capable native window outside the virtual desktop, without activation.
 #[cfg(target_os = "windows")]
 #[allow(
@@ -168,6 +175,35 @@ fn make_unactivated_offscreen(window: &dyn HostWindow) -> anyhow::Result<()> {
 }
 
 /// Native ingress needs the real event-loop owner; no test changes OS settings.
+#[cfg(target_os = "windows")]
+fn wake_after_native_drain(
+    recovered: Arc<AtomicBool>,
+    drained: Arc<AtomicBool>,
+    done: Arc<AtomicBool>,
+    wake: impl FnOnce() + Send + 'static,
+    quit: impl FnOnce() + Send + 'static,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut drain_at = None;
+        let mut wake = Some(wake);
+        while !done.load(Ordering::Acquire) && Instant::now() < deadline {
+            if recovered.load(Ordering::Acquire) {
+                let after =
+                    *drain_at.get_or_insert_with(|| Instant::now() + Duration::from_millis(50));
+                if Instant::now() >= after
+                    && let Some(wake) = wake.take()
+                {
+                    drained.store(true, Ordering::Release);
+                    wake();
+                }
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        quit();
+    })
+}
+
 #[test]
 #[cfg(target_os = "windows")]
 #[allow(
@@ -271,7 +307,7 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
                 message: error.to_string(),
             })
     }));
-    *platform.owner_signal.lock() = Some(signal);
+    *platform.owner_signal.lock() = Some(signal.clone());
     let (control, receiver) = control_lane(Arc::new(move || {
         let _ = proxy.send_event(());
     }));
@@ -284,15 +320,18 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
     let deferred_frame = Arc::new(Mutex::new(None));
     let recovered = Arc::new(AtomicBool::new(false));
     let done = Arc::new(AtomicBool::new(false));
-    let timeout_done = done.clone();
+    let drained = Arc::new(AtomicBool::new(false));
+    let healthy_frame = Arc::new(Mutex::new(None));
     let timeout_control = control.clone();
-    let timeout = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while !timeout_done.load(Ordering::Acquire) && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(5));
-        }
-        timeout_control.request_quit();
-    });
+    let timeout = wake_after_native_drain(
+        recovered.clone(),
+        drained.clone(),
+        done.clone(),
+        move || {
+            let _ = signal.wake();
+        },
+        move || timeout_control.request_quit(),
+    );
     let sink = scrolls.clone();
     let observed = observations.clone();
     let callback_done = done.clone();
@@ -301,6 +340,9 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
     let wake_frames = frames.clone();
     let wake_deferred = deferred_frame.clone();
     let wake_recovered = recovered.clone();
+    let wake_drained = drained.clone();
+    let wake_healthy = healthy_frame.clone();
+    let frame_healthy = healthy_frame;
     let frame_sink = frames.clone();
     let mut app = WinitApp {
         platform: platform.clone(),
@@ -330,6 +372,10 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
             };
             let snapshot = owner.preferences()?;
             *observed.lock() = Some((snapshot.wheel().clone(), expected, characters));
+            let window = owner
+                .open_window(options("winit-wheel-policy"))?
+                .try_ready()?;
+            let redraw_window = window.clone();
             owner.on_wake(Box::new(move || match wake_platform.preferences() {
                 Err(crate::PlatformError::PreferencesDeferred) => {
                     let _ = wake_deferred.lock().get_or_insert(*wake_frames.lock());
@@ -337,28 +383,52 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
                 Ok(snapshot) => {
                     let before = *wake_deferred.lock();
                     if let Some(before) = before {
-                        assert_eq!(
-                            *wake_frames.lock(),
-                            before,
-                            "idle preference retry must not redraw"
-                        );
                         assert_eq!(snapshot.wheel().vertical(), Some(expected));
                         assert_eq!(snapshot.wheel().horizontal_characters(), Some(characters));
                         wake_recovered.store(true, Ordering::Release);
-                        callback_done.store(true, Ordering::Release);
-                        quit.quit();
+                        if wake_drained.load(Ordering::Acquire) {
+                            assert_eq!(
+                                *wake_frames.lock(),
+                                before,
+                                "idle preference retry must not redraw after native drain"
+                            );
+                            let should_request = {
+                                let mut healthy = wake_healthy.lock();
+                                if healthy.is_none() {
+                                    *healthy = Some(before + 1);
+                                    true
+                                } else {
+                                    false
+                                }
+                            };
+                            if should_request {
+                                redraw_window.request_redraw();
+                            }
+                        }
                     }
                 }
                 Err(error) => panic!("unexpected owner preference result: {error}"),
             }))?;
-            let window = owner
-                .open_window(options("winit-wheel-policy"))?
-                .try_ready()?;
             let RawWindowHandle::Win32(handle) = window.window_handle()?.as_raw() else {
                 panic!("Windows event loop must create a Win32 window");
             };
             let hwnd = HWND(handle.hwnd.get() as *mut std::ffi::c_void);
-            window.on_request_frame(Box::new(move || *frame_sink.lock() += 1));
+            window.on_request_frame(Box::new(move || {
+                let count = {
+                    let mut frames = frame_sink.lock();
+                    *frames += 1;
+                    *frames
+                };
+                let expected = *frame_healthy.lock();
+                if let Some(expected) = expected {
+                    assert_eq!(
+                        count, expected,
+                        "healthy native redraw is observable after retry"
+                    );
+                    callback_done.store(true, Ordering::Release);
+                    quit.quit();
+                }
+            }));
             make_unactivated_offscreen(window.as_ref())?;
             window.request_redraw();
             window.on_input(Box::new(move |input| {
@@ -404,7 +474,6 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
     };
     let result = event_loop.run_app(&mut observer);
     app = observer.inner;
-    done.store(true, Ordering::Release);
     timeout.join().expect("bounded exit worker");
     result.expect("real event loop completes");
     assert!(
@@ -415,6 +484,10 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
     assert!(
         recovered.load(Ordering::Acquire),
         "failed native read recovers through an idle owner wake"
+    );
+    assert!(
+        done.load(Ordering::Acquire),
+        "drain and healthy redraw both complete"
     );
     assert!(
         platform.preferences().is_err(),
@@ -533,7 +606,7 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
                 message: error.to_string(),
             })
     }));
-    *platform.owner_signal.lock() = Some(signal);
+    *platform.owner_signal.lock() = Some(signal.clone());
     let (control, receiver) = control_lane(Arc::new(move || {
         let _ = proxy.send_event(());
     }));
@@ -544,19 +617,28 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
     let baseline = Arc::new(Mutex::new(None));
     let deferred = Arc::new(AtomicBool::new(false));
     let recovered = Arc::new(AtomicBool::new(false));
-    let timeout_recovered = recovered.clone();
-    let timeout = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while !timeout_recovered.load(Ordering::Acquire) && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(5));
-        }
-        control.request_quit();
-    });
+    let done = Arc::new(AtomicBool::new(false));
+    let drained = Arc::new(AtomicBool::new(false));
+    let healthy_frame = Arc::new(Mutex::new(None));
+    let timeout = wake_after_native_drain(
+        recovered.clone(),
+        drained.clone(),
+        done.clone(),
+        move || {
+            let _ = signal.wake();
+        },
+        move || control.request_quit(),
+    );
     let bootstrap_deferred = deferred.clone();
     let wake_platform = platform.clone();
     let wake_frames = frames.clone();
     let wake_baseline = baseline.clone();
     let wake_recovered = recovered.clone();
+    let wake_drained = drained;
+    let wake_healthy = healthy_frame.clone();
+    let frame_healthy = healthy_frame;
+    let frame_done = done.clone();
+    let frame_quit = platform.clone();
     let frame_sink = frames.clone();
     let app = WinitApp {
         platform: platform.clone(),
@@ -567,22 +649,55 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
                 Err(crate::PlatformError::PreferencesDeferred)
             ));
             bootstrap_deferred.store(true, Ordering::Release);
+            let window = owner
+                .open_window(options("cold-winit-preferences"))?
+                .try_ready()?;
+            let redraw_window = window.clone();
             owner.on_wake(Box::new(move || match wake_platform.preferences() {
                 Err(crate::PlatformError::PreferencesDeferred) => {}
                 Ok(snapshot) => {
                     assert!(snapshot.wheel().vertical().is_some());
                     assert!(snapshot.wheel().horizontal_characters().is_some());
                     let before = (*wake_baseline.lock()).expect("initial frame completed");
-                    assert_eq!(*wake_frames.lock(), before, "cold retry does not redraw");
                     wake_recovered.store(true, Ordering::Release);
-                    wake_platform.quit();
+                    if wake_drained.load(Ordering::Acquire) {
+                        assert_eq!(
+                            *wake_frames.lock(),
+                            before,
+                            "cold retry does not redraw after native drain"
+                        );
+                        let should_request = {
+                            let mut healthy = wake_healthy.lock();
+                            if healthy.is_none() {
+                                *healthy = Some(before + 1);
+                                true
+                            } else {
+                                false
+                            }
+                        };
+                        if should_request {
+                            redraw_window.request_redraw();
+                        }
+                    }
                 }
                 Err(error) => panic!("unexpected recovery result: {error}"),
             }))?;
-            let window = owner
-                .open_window(options("cold-winit-preferences"))?
-                .try_ready()?;
-            window.on_request_frame(Box::new(move || *frame_sink.lock() += 1));
+            window.on_request_frame(Box::new(move || {
+                let count = {
+                    let mut frames = frame_sink.lock();
+                    *frames += 1;
+                    *frames
+                };
+                let expected = *frame_healthy.lock();
+                if let Some(expected) = expected {
+                    assert_eq!(
+                        count, expected,
+                        "healthy native redraw remains observable after cold recovery"
+                    );
+                    frame_done.store(true, Ordering::Release);
+                    frame_quit.quit();
+                }
+            }));
             make_unactivated_offscreen(window.as_ref())?;
             window.request_redraw();
             Ok(())
@@ -612,16 +727,13 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
         "first failed read remains deliverable"
     );
     assert!(
+        done.load(Ordering::Acquire),
+        "cold drain and healthy redraw both complete"
+    );
+    assert!(
         platform.preferences().is_err(),
         "retired owner refuses reads"
     );
-}
-
-#[cfg(target_os = "macos")]
-fn build_test_event_loop() -> EventLoop<()> {
-    EventLoop::builder()
-        .build()
-        .expect("build a real winit event loop (main-thread only on macOS)")
 }
 
 /// Drives a REAL winit event loop (this sandbox has a live X11/Wayland
