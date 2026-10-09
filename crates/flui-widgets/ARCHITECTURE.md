@@ -235,6 +235,25 @@ find one with `rg <name> tests/`.
 
 ## Mapping decisions
 
+### Implicit retarget captures the displayed sample before changing easing
+
+When a target changes, implicit animations read their current value or eased
+progress before configuring the new curve. The replacement tween starts at that
+sample. Container and alignment properties share an optional restart progress,
+so unchanged properties are re-anchored at the same instant as changed ones.
+A curve-only update keeps the existing run timeline.
+
+The public rows `opacity_retarget_with_a_new_curve_keeps_the_displayed_sample`,
+`padding_retarget_with_a_new_curve_keeps_the_displayed_sample`,
+`container_retarget_with_a_new_curve_keeps_the_displayed_sample`,
+`align_retarget_with_a_new_curve_keeps_the_displayed_sample` and
+`rotation_retarget_with_a_new_curve_keeps_the_displayed_sample` pin continuity
+through rendered opacity, layout and a transform layer. The container row also
+keeps an unchanged height continuous. The separate row
+`changing_only_the_curve_keeps_the_existing_run_timeline` pins re-easing without
+restarting. This contract concerns position continuity; transferring velocity
+into replacement motion remains part of the retarget design.
+
 ### Focused document selection uses the normal action chain
 
 `DefaultFocusTraversal` binds `SelectAllTextIntent` to Cmd+A on macOS/iOS and

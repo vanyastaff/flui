@@ -170,12 +170,11 @@ impl ViewState<AnimatedRotation> for AnimatedRotationState {
 
     fn did_update_view(&mut self, _old_view: &AnimatedRotation, new_view: &AnimatedRotation) {
         self.child = new_view.child.clone();
-        self.controller.set_duration(new_view.duration);
-        // The curve swaps first, so the angle shown now is read on the new curve.
-        let curve_changed = self.controller.set_curve(new_view.curve.clone());
         let target_changed = new_view.angle != self.target || new_view.path != self.path;
-        if target_changed {
-            let from = self.tween.transform(self.controller.value());
+        let from = target_changed.then(|| self.tween.transform(self.controller.value()));
+        self.controller.set_duration(new_view.duration);
+        let curve_changed = self.controller.set_curve(new_view.curve.clone());
+        if let Some(from) = from {
             let to = match new_view.path {
                 RotationPath::Numeric => new_view.angle,
                 // Measured from the angle shown now, so a retarget mid-turn never adds a
