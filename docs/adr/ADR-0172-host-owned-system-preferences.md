@@ -176,6 +176,16 @@ or assert native typography parity from a scalar or sparse samples. Resolving
 that policy and exercising native producers remain part of implementation
 acceptance; repairing existing linear consumers does not complete it.
 
+Editable caret defaults follow the shaped single-line height, shared by paint
+and collapsed-range/IME geometry. An explicit logical caret height stays fixed;
+removing the override restores the default. Widget composition retains that
+distinction instead of converting the default to an explicit fixed length.
+
+Presentation DPR is accepted before publication: direct updates reject invalid
+ratios without changing render or inherited state; native metrics discard an
+invalid ratio before coalescing or resizing the surface. Initial inherited data
+uses the ratio accepted by the pipeline, including its fallback on rejection.
+
 `MediaQuery` exposes widget-facing values with field-specific dependencies.
 Its contrast projection uses normal contrast when the observation is unavailable;
 the raw snapshot retains `None`. A failed native refresh preserves the prior

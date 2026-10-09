@@ -11,6 +11,14 @@ host.
 
 ## Invariants
 
+- **Inherited DPR agrees with the render pipeline.** Initial media data uses
+  the pipeline's accepted ratio. Direct updates reject non-positive and
+  non-finite ratios before mutation. Native metrics reject these observations
+  before coalescing, preserving an earlier accepted resize and independent
+  appearance observations. `initial_inherited_scale_matches_the_renderer`,
+  `resize_and_surface_restore_reach_the_product_frame` and
+  `queued_state_bursts_coalesce_between_observing_frames` pin these paths.
+
 - **Preference projection is updated with the accepted snapshot.** Root media
   publication derives text scale, text-weight adjustment, contrast and ordered
   preferred locales together. Unknown text weight leaves authored weights

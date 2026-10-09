@@ -69,7 +69,7 @@ pub struct RawTextField {
     /// the field's mounted lifetime.
     external_focus_node: Option<Rc<FocusNode>>,
     /// Height of the caret bar, forwarded to [`EditableText`].
-    caret_height: f64,
+    caret_height: Option<f64>,
     /// Color of the caret bar when focused, forwarded to [`EditableText`].
     caret_color: Color,
     /// Inner padding between the decoration border and the text.
@@ -111,7 +111,7 @@ impl RawTextField {
         Self {
             controller,
             external_focus_node: None,
-            caret_height: 18.0,
+            caret_height: None,
             caret_color: Color::BLACK,
             content_padding: EdgeInsets::symmetric(8.0, 12.0),
             obscure_text: false,
@@ -129,10 +129,11 @@ impl RawTextField {
         self
     }
 
-    /// Override the caret bar height (default 18 logical pixels).
+    /// Override the caret bar height in logical pixels; otherwise it follows
+    /// the laid-out text line, including inherited text scaling.
     #[must_use]
     pub fn caret_height(mut self, height: f64) -> Self {
-        self.caret_height = height;
+        self.caret_height = Some(height);
         self
     }
 
@@ -234,10 +235,12 @@ impl std::fmt::Debug for RawTextFieldState {
 impl ViewState<RawTextField> for RawTextFieldState {
     fn build(&self, view: &RawTextField, _ctx: &dyn BuildContext) -> impl IntoView {
         let mut editable = EditableText::new(view.controller.clone(), Rc::clone(&self.focus_node))
-            .caret_height(view.caret_height)
             .caret_color(view.caret_color)
             .obscure_text(view.obscure_text)
             .enabled(view.enabled);
+        if let Some(height) = view.caret_height {
+            editable = editable.caret_height(height);
+        }
         if let Some(on_submitted) = view.on_submitted.clone() {
             editable = editable.on_submitted(move |cx, text| on_submitted(cx, text));
         }

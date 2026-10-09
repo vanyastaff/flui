@@ -188,6 +188,10 @@ impl OwnerEffects for Effects {
                         size: Size::new(width, 100.0),
                         scale_factor: 2.0,
                     },
+                    WindowObservation::Metrics {
+                        size: Size::new(999.0, 999.0),
+                        scale_factor: f64::NAN,
+                    },
                 ] {
                     target.observe(observation, self).expect("queued state");
                 }
@@ -231,6 +235,67 @@ impl OwnerEffects for Effects {
     }
     fn request_continuation(&self) -> bool {
         true
+    }
+}
+
+fn initial_inherited_scale_matches_the_renderer() {
+    use flui_runtime::ui_runtime::RuntimeHostServices;
+    use std::sync::{Arc, atomic::AtomicBool};
+
+    #[derive(Clone, StatelessView)]
+    struct Reader(Rc<Cell<f64>>);
+    impl StatelessView for Reader {
+        fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+            self.0
+                .set(flui_widgets::MediaQuery::of(ctx).device_pixel_ratio);
+            flui_widgets::SizedBox::new(20.0, 20.0)
+        }
+    }
+    for (supplied, accepted) in [
+        (2.0, 2.0),
+        (0.0, 1.0),
+        (-1.0, 1.0),
+        (f64::NAN, 1.0),
+        (f64::INFINITY, 1.0),
+    ] {
+        let mut runtime = UiRuntime::new(
+            crate::owner_publication::window(),
+            supplied,
+            RuntimeHostServices::new(
+                Arc::new(|| {}),
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(flui_platform_api::InMemoryClipboard::new()),
+                &flui_painting::FontCollection::new(),
+                flui_scheduler::ClockSource::Platform,
+            ),
+        )
+        .expect("runtime");
+        let observed = Rc::new(Cell::new(0.0));
+        runtime
+            .attach_root_widget_with_size(&Reader(Rc::clone(&observed)), 800.0, 600.0)
+            .expect("root");
+        let mut sink = Sink {
+            size: Rc::new(Cell::new((1600, 1200))),
+            submitted: 0,
+            paragraphs: Vec::new(),
+        };
+        assert!(
+            runtime
+                .pump(
+                    &mut flui_runtime::pump::SampledClock(web_time::Instant::now()),
+                    &mut sink
+                )
+                .presented()
+        );
+        assert_eq!(
+            runtime.presentation_device_pixel_ratio_for_test(runtime.presentation_id()),
+            Some(accepted)
+        );
+        assert_eq!(
+            observed.get(),
+            accepted,
+            "initial renderer and inherited scale must agree"
+        );
     }
 }
 
@@ -334,6 +399,47 @@ fn resize_and_surface_restore_reach_the_product_frame() {
         Some(&(Size::new(200.0, 100.0), 1.0)),
         "the host scale entry updates the real inherited consumer",
     );
+    for invalid in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        owner
+            .presentation_dispatcher(address)
+            .expect("window authority")
+            .test_callback(
+                Box::new(move |runtime| {
+                    assert!(!runtime.set_device_pixel_ratio_for(address.presentation_id, invalid));
+                    assert_eq!(
+                        runtime.presentation_device_pixel_ratio_for_test(address.presentation_id),
+                        Some(1.0),
+                    );
+                }),
+                &effects,
+            )
+            .expect("reject invalid direct scale");
+        frames.deliver(&effects).expect("frame after rejection");
+        assert_eq!(
+            observed.borrow().last(),
+            Some(&(Size::new(200.0, 100.0), 1.0))
+        );
+        let native_calls = effects.native_sizes.borrow().len();
+        owner
+            .presentation_dispatcher(address)
+            .expect("window authority")
+            .observe(
+                WindowObservation::Metrics {
+                    size: Size::new(999.0, 999.0),
+                    scale_factor: invalid,
+                },
+                &effects,
+            )
+            .expect("discard invalid metrics");
+        frames
+            .deliver(&effects)
+            .expect("frame after invalid metrics");
+        assert_eq!(effects.native_sizes.borrow().len(), native_calls);
+        assert_eq!(
+            observed.borrow().last(),
+            Some(&(Size::new(200.0, 100.0), 1.0))
+        );
+    }
     assert!(
         owner.next_wake().is_ok(),
         "deadline snapshot resumes after the frame"
@@ -510,6 +616,10 @@ fn owner_metrics_contract() {
     crate::table_test::run_table(
         "owner_metrics_contract",
         &[
+            (
+                "initial_inherited_scale_matches_the_renderer",
+                initial_inherited_scale_matches_the_renderer as fn(),
+            ),
             (
                 "bold_text_changes_the_painted_glyphs",
                 bold_text_changes_the_painted_glyphs as fn(),
