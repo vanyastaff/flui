@@ -481,6 +481,13 @@ grant ordering, gate changes and the next operation;
 store whose destructor panics twice after a failed callback and under an
 unwinding owner drop, each in its own process.
 
+Allocating a `ClientToken` reserves identity; committing an active client admits
+the replacement. Supersession follows the last successful admission, so failed
+nested gate installation does not reject a valid outer client. The same public
+retirement table covers this failure alone, competing outgoing retirement and
+later healthy IME delivery. Successful nested replacement still supersedes its
+outer operation even if subsequently detached.
+
 ### Presentation-scoped terminal withdrawal
 
 Closing a presentation closes its focus, text-input, gesture, mouse-tracker and

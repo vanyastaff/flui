@@ -12,6 +12,16 @@ shape.
 
 ## Mapping decisions
 
+### Scroll ranges retain their actual axis
+
+[ADR-0157](../../docs/adr/ADR-0157-native-scroll-range-actions.md) carries the
+foundation `Axis` beside offset and bounds through configuration, snapshots and
+export. AccessKit emits X for horizontal sources and Y for vertical sources.
+Axis-neutral authored scalar metadata retains the vertical fallback; merging a
+child's range takes its axis together with the values. The mounted widget row
+`scrollable_accessibility_ranges_follow_the_actual_axis` checks both axes,
+absence of orthogonal metadata and later offset republication.
+
 ### System settings belong to the host
 
 Semantics collection and platform delivery remain presentation-owned. System

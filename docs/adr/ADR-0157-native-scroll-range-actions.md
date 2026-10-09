@@ -14,6 +14,15 @@ and invalidate semantics, without rebuilding the viewport or its children.
 At a boundary it withdraws only the directions that cannot move; a later offset
 or dimensions notification republishes them.
 
+The range retains its foundation `Axis` through render configuration, owned
+semantics snapshots and exported node data. AccessKit writes horizontal ranges
+to X and vertical ranges to Y; it publishes no orthogonal range. Existing authored
+scalar metadata without an axis keeps its vertical fallback. Merging a child's
+range inherits its axis with the range values instead of relabelling an existing
+parent range. `scrollable_accessibility_ranges_follow_the_actual_axis` checks
+both axes and subsequent offset publication through the mounted widget's native
+accessibility payload.
+
 Directional requests, native increment/decrement and native numeric SetValue
 all enter the same owner-local movement path. Movement interrupts the old
 trajectory, raises scroll activity and its direction, and applies the offset.

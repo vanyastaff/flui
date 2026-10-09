@@ -24,7 +24,7 @@ span and rotation without restarting the sequence or introducing a visual jump.
 actor. Weak listener attachments do not extend the actor's lifetime.
 
 Native input reaches that same actor through borrowed
-`PanZoomDispatch { local, global }`. Local coordinates and the original root-space
+`PanZoomDispatch::new(local, global)`. Local coordinates and the original root-space
 source remain distinct. Native observers still receive fresh hit-tested input;
 the detector's built-in recognizer attachment selects contact events only so raw
 observation cannot mutate the native actor before arbitration.
@@ -45,6 +45,15 @@ observers and callbacks. A repeated exact Start retires the actor's previous
 generation while preserving the selected consumer for the replacement. Reentrant
 replacement cannot be retired by old terminal work. Callbacks run outside borrows
 and containment preserves the first failure.
+
+Binding-owned Start dispatch supplies borrowed admission authority. Each staged
+actor registers retirement for its exact generation; the selected Update commits
+the delivery owner before recognized callbacks. Losing actors retire even when
+the current hit path no longer contains them. Withdrawal, replacement and closure
+retire outstanding admissions outside borrows. A stale retirement cannot clear a
+reentrant replacement that reuses its source and timestamp.
+`nested_native_scale_loser_recovers_touch_after_winner_terminal` checks winner
+continuity, both terminal reasons and the losing ancestor's next touch gesture.
 
 Started native scale and rotation are cumulative. Independent Updates without
 Start remain relative one-step interactions. Native localization follows
