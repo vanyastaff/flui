@@ -390,9 +390,10 @@ pub struct PanZoomDispatch<'a> {
 pub(crate) struct PanZoomAdmissionAuthority<'a> {
     pub stage: &'a dyn Fn(PanZoomRetirement),
     pub claim: &'a dyn Fn(),
+    pub terminal: Option<&'a dyn Fn() -> bool>,
 }
 
-pub(crate) struct PanZoomRetirement(pub Rc<dyn Fn()>);
+pub(crate) struct PanZoomRetirement(pub Rc<dyn Fn()>, pub Option<Rc<dyn Fn() -> bool>>);
 
 impl std::fmt::Debug for PanZoomDispatch<'_> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -442,8 +443,26 @@ impl<'a> PanZoomDispatch<'a> {
         let Some(admission) = self.admission else {
             return false;
         };
-        (admission.stage)(PanZoomRetirement(Rc::new(retire)));
+        (admission.stage)(PanZoomRetirement(Rc::new(retire), None));
         true
+    }
+
+    pub(crate) fn on_generation_retirement(
+        self,
+        current: impl Fn() -> bool + 'static,
+        retire: impl Fn() + 'static,
+    ) {
+        if matches!(self.global.phase, crate::PanZoomPhase::Start)
+            && let Some(admission) = self.admission
+        {
+            (admission.stage)(PanZoomRetirement(Rc::new(retire), Some(Rc::new(current))));
+        }
+    }
+
+    pub(crate) fn native_terminal_is_current(self) -> bool {
+        self.admission
+            .and_then(|admission| admission.terminal)
+            .is_none_or(|current| current())
     }
 
     /// Commit this recognized Update's delivery owner before publishing callbacks.

@@ -839,18 +839,30 @@ impl ScaleGestureRecognizer {
                     .add_position(time, Offset::new(1.0, 0.0));
                 let retired = self.native.replace(Some(incoming));
                 let owner = self.owner.clone();
-                let _ = dispatch.on_retirement(move || {
-                    if let Some(owner) = owner.upgrade() {
-                        let mut native = owner.native.borrow_mut();
-                        let retired = if native.as_ref().is_some_and(|native| native.id == id) {
-                            native.take()
-                        } else {
-                            None
-                        };
-                        drop(native);
-                        drop(retired);
-                    }
-                });
+                let current_owner = owner.clone();
+                dispatch.on_generation_retirement(
+                    move || {
+                        current_owner.upgrade().is_some_and(|owner| {
+                            owner
+                                .native
+                                .borrow()
+                                .as_ref()
+                                .is_some_and(|native| native.id == id)
+                        })
+                    },
+                    move || {
+                        if let Some(owner) = owner.upgrade() {
+                            let mut native = owner.native.borrow_mut();
+                            let retired = if native.as_ref().is_some_and(|native| native.id == id) {
+                                native.take()
+                            } else {
+                                None
+                            };
+                            drop(native);
+                            drop(retired);
+                        }
+                    },
+                );
                 if retired.is_some_and(|state| state.started) {
                     self.deliver(Outcome::Cancel);
                 }
@@ -959,6 +971,9 @@ impl ScaleGestureRecognizer {
                 PanZoomDisposition::Handled
             }
             PanZoomPhase::End | PanZoomPhase::Cancelled => {
+                if !dispatch.native_terminal_is_current() {
+                    return PanZoomDisposition::Ignored;
+                }
                 let mut state = self.native.borrow_mut();
                 if state.as_ref().is_none_or(|state| !state.matches(source)) {
                     return PanZoomDisposition::Ignored;

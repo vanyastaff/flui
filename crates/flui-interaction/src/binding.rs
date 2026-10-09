@@ -1534,6 +1534,22 @@ impl GestureBinding {
             .collect()
     }
 
+    fn native_terminal_is_current(sequence: &PanZoomSequence, route: PanZoomRoute) -> bool {
+        // Repeated Start appends the newest actor generation to its retained route.
+        let current = sequence
+            .staged
+            .borrow()
+            .iter()
+            .rev()
+            .find_map(|(target, ticket)| {
+                target
+                    .same_target(route)
+                    .then(|| ticket.1.clone())
+                    .flatten()
+            });
+        current.is_some_and(|current| current())
+    }
+
     fn is_current_pan_zoom_sequence(
         &self,
         pointer: PointerInfo,
@@ -1925,8 +1941,35 @@ impl GestureBinding {
                             let mut handled = false;
                             let mut first = RoutePanic::capture(|| {
                                 handled = sequence.route.get().map_or_else(
-                                    || path.dispatch_pan_zoom(gesture),
-                                    |route| route.dispatch(gesture, || {}),
+                                    || {
+                                        path.dispatch_pan_zoom_admitted(
+                                            gesture,
+                                            &|_| {},
+                                            &|route, ticket| {
+                                                Self::retire_pan_zoom_tickets(vec![(route, ticket)])
+                                            },
+                                            Some(&|route| {
+                                                Self::native_terminal_is_current(sequence, route)
+                                            }),
+                                        )
+                                    },
+                                    |route| {
+                                        let current =
+                                            || Self::native_terminal_is_current(sequence, route);
+                                        route.dispatch_admitted(
+                                            gesture,
+                                            || {},
+                                            Some(PanZoomAdmissionAuthority {
+                                                stage: &|ticket| {
+                                                    Self::retire_pan_zoom_tickets(vec![(
+                                                        route, ticket,
+                                                    )])
+                                                },
+                                                claim: &|| {},
+                                                terminal: Some(&current),
+                                            }),
+                                        )
+                                    },
                                 );
                             });
                             RoutePanic::preserve_first(
@@ -1939,7 +1982,12 @@ impl GestureBinding {
                             }
                             handled
                         }
-                        PanZoomAdmission::Terminal(None) => path.dispatch_pan_zoom(gesture),
+                        PanZoomAdmission::Terminal(None) => path.dispatch_pan_zoom_admitted(
+                            gesture,
+                            &|_| {},
+                            &|route, ticket| Self::retire_pan_zoom_tickets(vec![(route, ticket)]),
+                            Some(&|_| false),
+                        ),
                         PanZoomAdmission::Refused => false,
                         PanZoomAdmission::Active(sequence) => {
                             if let Some(route) = sequence.route.get() {
@@ -1954,6 +2002,7 @@ impl GestureBinding {
                                     Some(PanZoomAdmissionAuthority {
                                         stage: &stage,
                                         claim: &claim,
+                                        terminal: None,
                                     }),
                                 )
                             } else if self
@@ -1972,6 +2021,7 @@ impl GestureBinding {
                                             ticket,
                                         )
                                     },
+                                    None,
                                 )
                             } else {
                                 false

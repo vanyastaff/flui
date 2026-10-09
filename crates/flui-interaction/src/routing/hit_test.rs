@@ -863,6 +863,7 @@ impl HitTestResult {
         event: &PanZoomEvent,
         claimed: &dyn Fn(PanZoomRoute),
         staged: &dyn Fn(PanZoomRoute, super::PanZoomRetirement),
+        terminal: Option<&dyn Fn(PanZoomRoute) -> bool>,
     ) -> bool {
         for entry in &self.path {
             if let Some(target) = entry.pan_zoom_target {
@@ -872,12 +873,14 @@ impl HitTestResult {
                 };
                 let stage = |retirement| staged(route, retirement);
                 let claim = || claimed(route);
+                let current = || terminal.is_some_and(|current| current(route));
                 if route.dispatch_admitted(
                     event,
                     claim,
                     Some(super::PanZoomAdmissionAuthority {
                         stage: &stage,
                         claim: &claim,
+                        terminal: terminal.map(|_| &current as &dyn Fn() -> bool),
                     }),
                 ) {
                     return true;
