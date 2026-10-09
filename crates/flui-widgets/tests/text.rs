@@ -6,6 +6,107 @@ use crate::common::{lay_out, loose};
 use flui_painting::typography::TextStyle;
 use flui_widgets::{DefaultTextStyle, MediaQuery, MediaQueryData, Text};
 
+/// An icon's authored sizing policy applies to its box and painted glyph once.
+pub(crate) fn icon_text_sizing_keeps_box_and_glyph_together() {
+    use flui_painting::display_list::DrawOp;
+    use flui_painting::glyphs::FontRegistry;
+    use flui_view::ViewExt;
+    use flui_widgets::{Icon, IconData, IconTheme, IconThemeData};
+
+    for (code, theme_size, explicit_size, scaling, side) in [
+        (Some(0xe88a), None, None, None, 24.0),
+        (Some(0xe88a), Some(18.0), None, Some(false), 18.0),
+        (Some(0xe88a), Some(18.0), Some(27.5), Some(false), 27.5),
+        (Some(0xe88a), Some(18.0), None, Some(true), 18.0),
+        (Some(0xe88a), Some(18.0), Some(27.5), Some(true), 27.5),
+        (None, Some(18.0), None, Some(false), 18.0),
+        (None, Some(18.0), None, Some(true), 18.0),
+        (Some(0xd800), Some(18.0), None, Some(true), 18.0),
+    ] {
+        let content = || {
+            let icon = match code {
+                Some(code) => Icon::new(IconData::new(code).with_font_family("Material Icons")),
+                None => Icon::none(),
+            };
+            let icon = match explicit_size {
+                Some(size) => icon.size(size),
+                None => icon,
+            };
+            IconTheme::new(
+                IconThemeData {
+                    size: theme_size,
+                    apply_text_scaling: scaling,
+                    ..IconThemeData::default()
+                },
+                crate::media_query_fields::StaticChild {
+                    inner: icon.boxed(),
+                },
+            )
+        };
+        let view = |scale| {
+            MediaQuery::new(
+                MediaQueryData {
+                    text_scale_factor: scale,
+                    ..MediaQueryData::default()
+                },
+                content(),
+            )
+        };
+        let mut laid = lay_out(view(1.0), loose(10000.0));
+        let paragraph_id = laid.try_find_by_render_type("RenderParagraph");
+        for scale in [1.0, 2.0, 0.75, 1.0 / 64.0, 64.0, 1.0] {
+            laid.pump_widget(view(scale));
+            let expected = if scaling == Some(true) {
+                side * scale
+            } else {
+                side
+            };
+            let box_size = laid.pipeline_owner().with(|owner| {
+                owner
+                    .render_tree()
+                    .get(laid.root())
+                    .expect("icon box")
+                    .size()
+                    .expect("laid out box")
+            });
+            // BoxProtocol normalizes constraints to hundredths. The actual
+            // raster size must retain the authored fractional value below.
+            assert_eq!(box_size.width, box_size.height, "an icon reserves a square");
+            assert!(
+                (box_size.width - expected).abs() <= 0.005 + f64::EPSILON,
+                "icon square must follow the selected size: actual={box_size:?}, expected={expected}"
+            );
+            assert_eq!(
+                laid.try_find_by_render_type("RenderParagraph"),
+                paragraph_id
+            );
+            let mut registry = FontRegistry::new();
+            let mut painted = 0;
+            for command in laid.draw_ops() {
+                if let DrawOp::Paragraph { paragraph, .. } = command.op {
+                    for run in paragraph.runs() {
+                        let key = registry.prepare_run(&run).expect("real icon face");
+                        for glyph in run.placed_glyphs(key, (0.0, 0.0), 1.0) {
+                            assert_ne!(glyph.key.glyph_id(), 0, "the icon must not be tofu");
+                            assert_eq!(
+                                f64::from(glyph.key.size()),
+                                expected,
+                                "painted icon size must agree with its box: theme={theme_size:?}, explicit={explicit_size:?}, scaling={scaling:?}, scale={scale}"
+                            );
+                            painted += 1;
+                        }
+                    }
+                }
+            }
+            assert_eq!(
+                painted,
+                usize::from(code.is_some_and(|point| char::from_u32(point).is_some())),
+                "one actual glyph must reach paint; absent or invalid icons only reserve space"
+            );
+        }
+    }
+}
+
 /// A preference must reach paragraph layout, not merely a data-reader widget.
 pub(crate) fn media_text_scaling_changes_the_laid_out_text() {
     for scale in [

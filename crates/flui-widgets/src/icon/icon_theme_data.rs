@@ -54,8 +54,8 @@ pub struct IconThemeData {
     /// Whether to scale `size` by the ambient `MediaQuery` text-scale
     /// factor.
     ///
-    /// **Deferred:** [`Icon::build`](crate::Icon) does not yet read this
-    /// field (no `MediaQuery` text-scaling hookup in this slice).
+    /// Applies to the square's side and the glyph size together, including an
+    /// explicit [`Icon::size`](crate::Icon::size) override. Defaults to false.
     pub apply_text_scaling: Option<bool>,
 }
 

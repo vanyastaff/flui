@@ -137,6 +137,7 @@ fn text_editing() {
             ("text_field::unfocused_field_does_not_receive_key_events", crate::text_field::unfocused_field_does_not_receive_key_events),
             ("text::an_enclosing_default_text_style_styles_a_bare_run", crate::text::an_enclosing_default_text_style_styles_a_bare_run),
             ("text::media_text_scaling_changes_the_laid_out_text", crate::text::media_text_scaling_changes_the_laid_out_text),
+            ("text::icon_text_sizing_keeps_box_and_glyph_together", crate::text::icon_text_sizing_keeps_box_and_glyph_together),
         ],
     );
 }
