@@ -1,34 +1,14 @@
 //! `AppRuntime` — the loop-scoped composition root.
 //!
-//! # Thesis
+//! Owns the installed logical/native host bridge, platform-loop capabilities,
+//! application services and host fonts. The runtime's `OwnerHost` owns logical
+//! membership, ordered delivery and checkout; runner entry points route native
+//! callbacks through the installed host. Active callbacks retain that host
+//! independently of replacement in the thread-local slot.
 //!
-//! This module creates the composition root and the constructor-injection
-//! seams while every service it names is still singleton-*backed*. The
-//! honest claim: `UiRuntime` performs zero `::instance()` calls; the services
-//! it consumes are resolved once, here, in [`SharedEngineServices::resolve`].
-//! Other ambient reaches (`renderer_binding.rs`, `binding.rs`,
-//! `hot_reload.rs`, `config.rs`) are untouched — they remain until the
-//! change that retires each singleton they reach for.
-//! `flui-engine/src/wgpu/text.rs`'s ambient reach for painting has since
-//! closed: the engine's glyph atlas owns a `SwashRasterizer` over the faces
-//! each paragraph carries, instead of calling `PaintingBinding::instance()`. This
-//! is not a forwarding shim: no old API is preserved-but-deprecated here,
-//! and no ambient access point this change does not touch is claimed as
-//! closed.
-//!
-//! # What lives here vs. in `runner.rs`
-//!
-//! `AppRuntime` absorbs the transitional `RuntimeHost`'s fields (UI runtime slot,
-//! queue, draining flag, owner thread, address cache, window registry,
-//! native frame drivers) plus the loop-scoped
-//! `OwnerPlatform` capability (formerly a second, separate thread-local) and
-//! [`SharedEngineServices`]. The single-threaded dispatch machinery that
-//! operates on this struct — `install_platform_ui_runtime`,
-//! `dispatch_platform_ui_runtime`, `teardown_platform_ui_runtime`,
-//! `install_owner_platform`, `with_owner_platform`, the TLS declaration
-//! itself — stays in `runner.rs`, unchanged in behavior: this change moves
-//! *ownership* (one struct, one thread-local slot instead of two), not the
-//! dispatch/teardown semantics those functions implement.
+//! [`SharedEngineServices`] supplies the shared font collection and its host
+//! feed. System preferences belong to the installed host's observation source
+//! (ADR-0172); semantics collection belongs to each presentation.
 
 use std::sync::atomic::Ordering;
 
@@ -44,8 +24,7 @@ use flui_platform::OwnerPlatform;
 #[cfg(target_os = "android")]
 use flui_platform::traits::WindowExecutionState;
 use flui_platform::traits::{Clipboard, PlatformWindow};
-use flui_semantics::AccessibilityFeatures;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 
 #[cfg(not(target_arch = "wasm32"))]
 use super::lifecycle::{
@@ -56,12 +35,11 @@ use super::runner::{FontRegistrationError, InstalledHost};
 use flui_runtime::execution::SpawnError;
 use flui_runtime::execution::{ExecutionServices, HostExecutors};
 
-/// Process-level engine services, each resolved **once** per owner thread in
+/// Host font services, resolved **once** per owner thread in
 /// [`SharedEngineServices::resolve`] — never re-resolved on every access, and
 /// never reached ambiently from inside `UiRuntime`.
 ///
-/// Owns the process-level accessibility flags and the app's one
-/// [`FontCollection`] (ADR-0092 §2), which every UI runtime builds its own
+/// Owns the app's one [`FontCollection`] (ADR-0092 §2), which every UI runtime builds its own
 /// `TextContext` from. The collection holds the bundled faces from the
 /// start; the host's are added off the owner thread by the feed it was
 /// built with ([`FontCollection::with_host_feed`], ADR-0092 §7), so text
@@ -69,26 +47,10 @@ use flui_runtime::execution::{ExecutionServices, HostExecutors};
 /// bundled ones lack a family once that feed lands. "Per owner thread" is per app while
 /// ADR-0091 fixes one owner thread per process. Semantics state belongs
 /// to each presentation's `SemanticsHost`; scheduling belongs to each UI runtime
-/// (see `flui_runtime`'s `RuntimeServices::construct`). The retired `SemanticsBinding`
-/// singleton no longer exists at all (its enablement/announce/event state
-/// moved to the per-presentation `SemanticsHost` instead — see
-/// `flui_runtime::semantics_host` — since that half of the old binding was a
-/// per-window platform seam, not process-global state); only the OS-level,
-/// read-mostly accessibility flags stayed process-scoped, and this struct
-/// now owns that value directly. There is no `scheduler` field here any
-/// more: each UI runtime now owns its own `UpdateScheduler` strong root (see
-/// `RuntimeServices::construct` in `flui_runtime`), so there is no process-level scheduler
-/// left for this struct to resolve.
+/// (see `flui_runtime`'s `RuntimeServices::construct`). System settings belong
+/// to the installed host's `SystemPreferences` source (ADR-0172), independently
+/// of the semantics tree's collection and platform delivery.
 pub(crate) struct SharedEngineServices {
-    /// OS-level accessibility flags (reduced motion, high contrast, ...).
-    /// Process-scoped and read-mostly — re-homed here from the retired
-    /// `SemanticsBinding` singleton (see this struct's own doc comment).
-    #[expect(
-        dead_code,
-        reason = "this change only creates the resolution seam; a later \
-                      change wires the first real consumer"
-    )]
-    pub(super) accessibility_features: RwLock<AccessibilityFeatures>,
     /// The app's font collection, fed from one host scan. Every UI runtime
     /// built on this thread gets a clone (`UiRuntime::new`'s `fonts`) and owns
     /// a `TextContext` over it, so a face registered here reaches every
@@ -118,7 +80,6 @@ impl SharedEngineServices {
         let (fonts, feed) = FontCollection::with_host_feed();
 
         Self {
-            accessibility_features: RwLock::new(AccessibilityFeatures::default()),
             fonts,
             host_feed: Cell::new(Some(feed)),
         }
@@ -294,8 +255,8 @@ pub(super) enum QuitNotification {
     Notified,
 }
 
-/// The loop-scoped composition root: platform event-loop demux, the single
-/// UI runtime slot, and the once-resolved [`SharedEngineServices`].
+/// The loop-scoped composition root: installed host, platform event-loop
+/// capabilities and the once-resolved [`SharedEngineServices`].
 ///
 /// Holds loop-scoped platform capabilities and services plus the current
 /// installed host. OwnerHost owns runtime membership, delivery and checkout;

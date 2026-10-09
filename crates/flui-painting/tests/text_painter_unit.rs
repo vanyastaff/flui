@@ -113,6 +113,13 @@ pub(crate) fn invalid_font_features_do_not_replace_valid_settings() {
 }
 
 fn variation_coords(variations: Vec<FontVariation>) -> Vec<i16> {
+    weighted_variation_coords(variations, None)
+}
+
+fn weighted_variation_coords(
+    variations: Vec<FontVariation>,
+    weight: Option<flui_painting::typography::FontWeight>,
+) -> Vec<i16> {
     let fonts = FontCollection::new();
     fonts
         .register_font(include_bytes!("../assets/fonts/probe-variable-wght.ttf"))
@@ -122,6 +129,7 @@ fn variation_coords(variations: Vec<FontVariation>) -> Vec<i16> {
         "AA",
         TextStyle {
             font_family: Some("FLUI Probe Variable".to_owned()),
+            font_weight: weight,
             font_variations: variations,
             ..TextStyle::default()
         },
@@ -147,6 +155,36 @@ pub(crate) fn font_variations_select_the_painted_run_instance() {
         low[0] < 0 && high[0] > 0,
         "opposite sides of the default instance: {low:?}/{high:?}"
     );
+    assert_eq!(
+        weighted_variation_coords(
+            vec![FontVariation::new("wght", 100.0)],
+            Some(flui_painting::typography::FontWeight::W900),
+        ),
+        low,
+        "the explicit axis wins over the requested font weight"
+    );
+    for (settings, expected) in [
+        (
+            vec![
+                FontVariation::new("wght", 100.0),
+                FontVariation::new("wght", 900.0),
+            ],
+            high,
+        ),
+        (
+            vec![
+                FontVariation::new("wght", 900.0),
+                FontVariation::new("wght", 100.0),
+            ],
+            low,
+        ),
+    ] {
+        assert_eq!(
+            variation_coords(settings),
+            expected,
+            "the last valid duplicate axis selects the painted instance"
+        );
+    }
 }
 
 pub(crate) fn invalid_font_variations_do_not_replace_valid_settings() {
@@ -165,6 +203,287 @@ pub(crate) fn invalid_font_variations_do_not_replace_valid_settings() {
         filtered[0] < 0,
         "the valid low-weight instance still reaches paint"
     );
+}
+
+pub(crate) fn text_weight_adjustment_shapes_once_and_restores_authored_weights() {
+    use flui_painting::typography::{FontWeight, TextPosition};
+    use flui_painting::{GlyphContent, GlyphRasterizer, glyphs::SwashRasterizer};
+
+    const ROBOTO: &[u8] = include_bytes!("../assets/fonts/Roboto-Regular.ttf");
+    let real_fonts = FontCollection::new();
+    real_fonts
+        .register_font(ROBOTO)
+        .expect("vendored Roboto loads");
+    let mut real_text = styled_probe(
+        &real_fonts,
+        "HH",
+        TextStyle::default()
+            .with_font_family("Roboto")
+            .with_font_size(32.0)
+            .with_font_weight(FontWeight::W400),
+    );
+    let raster = |painter: &TextPainter| {
+        let paragraph = painted_style_paragraph(painter);
+        let mut rasterizer = SwashRasterizer::new();
+        let mut images = Vec::new();
+        for run in paragraph.runs() {
+            assert_eq!(run.face().blob().bytes().as_ref().as_ref(), ROBOTO);
+            let key = rasterizer
+                .fonts_mut()
+                .prepare_run(&run)
+                .expect("the submitted font face registers for rasterization");
+            for glyph in run.placed_glyphs(key, (0.0, 0.0), 1.0) {
+                let image = rasterizer
+                    .rasterize(glyph.key)
+                    .expect("Roboto glyph rasterizes");
+                assert_eq!(image.content(), GlyphContent::Mask);
+                assert!(image.data().iter().any(|coverage| *coverage != 0));
+                images.push(image);
+            }
+        }
+        assert_eq!(images.len(), 2, "both H outlines are rasterized");
+        images
+    };
+    let mut context = TextContext::new(&real_fonts);
+    let mut authored = None;
+    for adjustment in [0, 300, 0, 300, 0] {
+        real_text.set_font_weight_adjustment(adjustment);
+        real_text.layout(&mut context, 0.0, 400.0);
+        let images = raster(&real_text);
+        if adjustment == 0 {
+            if let Some(authored) = &authored {
+                assert_eq!(
+                    &images, authored,
+                    "off restores the exact authored glyph masks"
+                );
+            } else {
+                authored = Some(images);
+            }
+        } else {
+            let authored = authored.as_ref().expect("baseline rasterized first");
+            let coverage = |images: &[flui_painting::GlyphImage]| {
+                images
+                    .iter()
+                    .flat_map(flui_painting::GlyphImage::data)
+                    .map(|value| u64::from(*value))
+                    .sum::<u64>()
+            };
+            assert!(
+                coverage(&images) > coverage(authored),
+                "accepted weight adjustment must increase real rasterized ink coverage"
+            );
+        }
+    }
+
+    let fonts = FontCollection::new();
+    fonts
+        .register_font(include_bytes!("../assets/fonts/probe-variable-wght.ttf"))
+        .expect("the generated variable face loads");
+    let coords = |painter: &TextPainter| {
+        let paragraph = painted_style_paragraph(painter);
+        let runs: Vec<_> = paragraph.runs().collect();
+        assert_eq!(runs.len(), 1);
+        match runs[0].coords() {
+            [] => vec![0],
+            values => values.to_vec(),
+        }
+    };
+    let default_style = TextStyle::default()
+        .with_font_family("FLUI Probe Variable")
+        .with_font_variation(FontVariation::new("wght", 100.0));
+    let color_only = TextStyle::default().with_color(flui_painting::styling::Color::BLACK);
+    let spans = [("AA".to_owned(), Some(color_only))];
+    let inherited = TextContext::new(&fonts).shape(&flui_painting::parley_text::ParagraphSpec {
+        spans: &spans,
+        default_style: Some(&default_style),
+        font_size: 16.0,
+        font_weight_adjustment: 237,
+        max_width: None,
+        min_width: 0.0,
+        text_align: flui_painting::typography::TextAlign::Start,
+        line_height: None,
+        direction: TextDirection::Ltr,
+        max_lines: None,
+        ellipsis: None,
+    });
+    assert_eq!(
+        inherited
+            .to_shaped(None)
+            .runs()
+            .next()
+            .expect("default-style run")
+            .coords(),
+        variation_coords(vec![FontVariation::new("wght", 337.0)]),
+        "a color-only span resolves the default authored axis before adjustment"
+    );
+    let ellipsis_style = TextStyle::default()
+        .with_font_family("FLUI Probe Variable")
+        .with_font_weight(FontWeight::W400);
+    let mut truncated = TextPainter::new()
+        .with_text(TextSpan::styled("AA\nAA", ellipsis_style.clone()))
+        .with_text_direction(TextDirection::Ltr)
+        .with_max_lines(Some(1))
+        .with_ellipsis(Some("A".to_owned()));
+    truncated.set_font_weight_adjustment(237);
+    let mut reference = TextPainter::new()
+        .with_text(TextSpan::styled(
+            "AA\nAA",
+            ellipsis_style.with_font_variation(FontVariation::new("wght", 637.0)),
+        ))
+        .with_text_direction(TextDirection::Ltr)
+        .with_max_lines(Some(1))
+        .with_ellipsis(Some("A".to_owned()));
+    truncated.layout(&mut TextContext::new(&fonts), 0.0, 100.0);
+    reference.layout(&mut TextContext::new(&fonts), 0.0, 100.0);
+    assert_eq!(painted_style_paragraph(&truncated).text(), "AAA");
+    assert_eq!(coords(&truncated), coords(&reference));
+    assert_eq!(truncated.size(), reference.size());
+    let boxes = |painter: &TextPainter| {
+        painter
+            .get_boxes_for_selection(0, 5)
+            .into_iter()
+            .map(|text_box| (text_box.rect, text_box.direction))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(boxes(&truncated), boxes(&reference));
+    for position in [0, 1, 2, 5] {
+        let position = TextPosition::downstream(position);
+        let offset = reference.get_offset_for_caret(position);
+        assert_eq!(truncated.get_offset_for_caret(position), offset);
+        assert_eq!(
+            truncated.get_position_for_offset(offset),
+            reference.get_position_for_offset(offset),
+        );
+    }
+    for (weight, axes, adjustment, expected) in [
+        (FontWeight::W100, vec![], 300, 400.0),
+        (FontWeight::W400, vec![], 237, 637.0),
+        (FontWeight::W700, vec![], 300, 1000.0),
+        (FontWeight::W900, vec![], 300, 1000.0),
+        (FontWeight::W400, vec![], -137, 263.0),
+        (FontWeight::W400, vec![], i32::MIN, 1.0),
+        (FontWeight::W400, vec![], i32::MAX, 1000.0),
+        (
+            FontWeight::W900,
+            vec![FontVariation::new("wght", 233.25)],
+            100,
+            333.25,
+        ),
+        (
+            FontWeight::W900,
+            vec![
+                FontVariation::new("wght", 900.0),
+                FontVariation::new("wght", 100.0),
+                FontVariation::new("wght", f64::NAN),
+            ],
+            137,
+            237.0,
+        ),
+    ] {
+        let mut painter = styled_probe(
+            &fonts,
+            "AA",
+            TextStyle {
+                font_family: Some("FLUI Probe Variable".to_owned()),
+                font_weight: Some(weight),
+                font_variations: axes,
+                ..TextStyle::default()
+            },
+        );
+        let authored = coords(&painter);
+        let mut resolved = variation_coords(vec![FontVariation::new("wght", expected)]);
+        if resolved.is_empty() {
+            resolved.push(0);
+        }
+        for current in [adjustment, 0, adjustment, 0] {
+            painter.set_font_weight_adjustment(current);
+            let mut context = TextContext::new(&fonts);
+            let intrinsic = painter.max_intrinsic_width(&mut context);
+            painter.layout(&mut context, 0.0, 400.0);
+            assert_eq!(
+                &coords(&painter),
+                if current == 0 { &authored } else { &resolved }
+            );
+            if current != 0 {
+                let expected_weight = format!("weight={expected}");
+                let paragraph = painted_style_paragraph(&painter);
+                let description = paragraph
+                    .describe_spans()
+                    .first()
+                    .expect("the shaped span is described");
+                assert!(
+                    description
+                        .split_whitespace()
+                        .any(|part| part == expected_weight),
+                    "diagnostics must retain the exact resolved shaping weight {expected}"
+                );
+            }
+            assert!(painter.width().is_finite() && painter.height().is_finite());
+            assert!((intrinsic - painter.width()).abs() < 1e-3);
+            assert!(
+                (painter.get_offset_for_caret(TextPosition::downstream(2)).dx - painter.width())
+                    .abs()
+                    < 1e-3
+            );
+        }
+    }
+    let root = TextSpan::styled(
+        "A",
+        TextStyle::default()
+            .with_font_family("FLUI Probe Variable")
+            .with_font_weight(FontWeight::W100),
+    )
+    .with_child(TextSpan::new("A"))
+    .with_child(TextSpan::styled(
+        "A",
+        TextStyle::default().with_font_weight(FontWeight::W400),
+    ))
+    .with_child(TextSpan::styled(
+        "A",
+        TextStyle::default().with_font_weight(FontWeight::W900),
+    ));
+    let mut mixed = TextPainter::new()
+        .with_text(root)
+        .with_text_direction(TextDirection::Ltr);
+    let mut baseline = None;
+    for adjustment in [0, 300, 0, 300, 0] {
+        mixed.set_font_weight_adjustment(adjustment);
+        mixed.layout(&mut TextContext::new(&fonts), 0.0, 400.0);
+        let paragraph = painted_style_paragraph(&mixed);
+        assert_eq!(paragraph.text(), "AAAA");
+        let actual: Vec<_> = paragraph
+            .runs()
+            .map(|run| {
+                if run.coords().is_empty() {
+                    vec![0]
+                } else {
+                    run.coords().to_vec()
+                }
+            })
+            .collect();
+        if adjustment == 0 {
+            if let Some(baseline) = &baseline {
+                assert_eq!(&actual, baseline);
+            } else {
+                baseline = Some(actual);
+            }
+        } else {
+            let expected: Vec<_> = [400.0, 700.0, 1000.0]
+                .into_iter()
+                .map(|weight| {
+                    let mut coords = variation_coords(vec![FontVariation::new("wght", weight)]);
+                    if coords.is_empty() {
+                        coords.push(0);
+                    }
+                    coords
+                })
+                .collect();
+            assert_eq!(
+                actual, expected,
+                "unstyled child inherits authored weight before one adjustment"
+            );
+        }
+    }
 }
 
 /// A text context over a fresh collection, lent to each measurement.
@@ -383,6 +702,7 @@ pub(crate) mod parley_measurement {
         )]
         let shaped = a
             .shape(&ParagraphSpec {
+                font_weight_adjustment: 0,
                 spans: &spans,
                 default_style: None,
                 font_size: SIZE as f32,

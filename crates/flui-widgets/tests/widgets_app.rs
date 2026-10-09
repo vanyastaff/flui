@@ -55,6 +55,60 @@ fn captured_value<T: Clone>(cell: &Arc<Mutex<Option<T>>>) -> Option<T> {
     cell.lock().expect("test mutex poisoned").clone()
 }
 
+pub(crate) fn locale_override_removal_uses_the_nearest_current_preferences() {
+    use flui_platform_api::Locale;
+    use flui_widgets::localization::Localizations;
+    use flui_widgets::{MediaQuery, MediaQueryData};
+
+    let arabic = Locale::new("ar", None::<&str>).expect("valid Arabic locale");
+    let (probe, captured) = capture(Localizations::locale_of);
+    let tree = |preferred: Option<Vec<Locale>>, explicit: Option<Locale>| {
+        let app =
+            WidgetsApp::new(probe.clone()).supported_locales(vec![Locale::en_us(), arabic.clone()]);
+        let app = match explicit {
+            Some(locale) => app.locale(locale),
+            None => app,
+        };
+        MediaQuery::new(
+            MediaQueryData {
+                preferred_locales: Some(vec![arabic.clone()].into()),
+                ..MediaQueryData::default()
+            },
+            MediaQuery::new(
+                MediaQueryData {
+                    preferred_locales: preferred.map(Into::into),
+                    ..MediaQueryData::default()
+                },
+                app,
+            ),
+        )
+    };
+    let mut harness = mount(tree(Some(vec![arabic.clone()]), Some(Locale::en_us())));
+    assert_eq!(captured_value(&captured), Some(Locale::en_us()));
+    for (preferred, explicit, expected) in [
+        (
+            Some(vec![Locale::en_us()]),
+            Some(Locale::en_us()),
+            Locale::en_us(),
+        ),
+        (
+            Some(vec![arabic.clone()]),
+            Some(Locale::en_us()),
+            Locale::en_us(),
+        ),
+        (Some(vec![arabic.clone()]), None, arabic.clone()),
+        (Some(vec![Locale::en_us()]), None, Locale::en_us()),
+        (None, None, Locale::en_us()),
+    ] {
+        harness.swap_root(tree(preferred, explicit));
+        assert_eq!(
+            captured_value(&captured),
+            Some(expected),
+            "removing an override reads the latest nearest provider; unknown does not fall through to an outer provider"
+        );
+    }
+}
+
 pub(crate) fn home_is_seeded_once_as_the_root_route() {
     let handle = NavigatorHandle::new();
     let (probe, captured) = capture(|_ctx| true);

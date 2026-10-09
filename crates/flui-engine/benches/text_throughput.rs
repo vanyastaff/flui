@@ -84,6 +84,7 @@ fn shape(text_cx: &mut TextContext, text: &str) -> Arc<ShapedParagraph> {
     Arc::new(
         text_cx
             .shape(&ParagraphSpec {
+                font_weight_adjustment: 0,
                 spans: &spans,
                 default_style: None,
                 font_size: FONT_SIZE,

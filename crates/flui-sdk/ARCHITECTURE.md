@@ -43,6 +43,11 @@ topology is not part of any package manifest.
 
 ## The measured surface
 
+`platform::InvalidLocale` names the error returned by the validated `Locale`
+constructors and parser (ADR-0173). Package authors can handle malformed authored
+language tags without depending on an internal crate. The surface and identity
+tests pin this export alongside the locale value.
+
 `interaction::FocusSubscription` exposes the existing owner-affine RAII token
 for Material TextField's effective-node observer. The package acquires it with
 `Rc<FocusNode>::subscribe`, publishes replacement ownership before retiring the

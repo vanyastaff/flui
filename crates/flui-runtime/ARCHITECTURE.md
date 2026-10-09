@@ -11,11 +11,29 @@ host.
 
 ## Invariants
 
+- **Inherited DPR agrees with the render pipeline.** Initial media data uses
+  the pipeline's accepted ratio. Direct updates reject non-positive and
+  non-finite ratios before mutation. Native metrics reject these observations
+  before coalescing, preserving an earlier accepted resize and independent
+  appearance observations. `initial_inherited_scale_matches_the_renderer`,
+  `resize_and_surface_restore_reach_the_product_frame` and
+  `queued_state_bursts_coalesce_between_observing_frames` pin these paths.
+
 - **Preference projection is updated with the accepted snapshot.** Root media
-  publication derives text scale and contrast together. Unknown contrast uses
+  publication derives text scale, text-weight adjustment, contrast and ordered
+  preferred locales together. Unknown text weight leaves authored weights
+  unchanged; categorical Bold projects to a deliberate +300 adjustment, and
+  numeric observations preserve their signed value (ADR-0174).
+  Unknown contrast uses
   normal contrast without altering the raw host observation. The mounted row
   `resize_and_surface_restore_reach_the_product_frame` checks contrast changes,
   unknown fallback and the seed seen by a later runtime's first build.
+  `preferred_locales_select_resources_and_direction` checks actual localized
+  resources and direction after publication and on a late runtime's first build
+  (ADR-0173).
+  `bold_text_changes_the_painted_glyphs` checks actual painted font instances for
+  Text, RichText and EditableText, live restoration, subtree overrides and late
+  runtime seeds.
 
 - **Rebuild delivery is assembled before mount.** Every presentation connects
   its build owner and widgets binding to the scheduler and its own weak window

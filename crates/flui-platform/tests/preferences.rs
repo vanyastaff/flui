@@ -6,6 +6,7 @@ fn unavailable_observations_do_not_claim_system_defaults() {
     assert!(observed.text_scale().is_none());
     assert!(observed.motion().is_none());
     assert!(observed.high_contrast().is_none());
+    assert!(observed.locales().is_none());
     assert!(observed.gestures().double_click_interval().is_none());
     assert!(observed.wheel().vertical().is_none());
     assert!(observed.wheel().horizontal_characters().is_none());
@@ -49,6 +50,12 @@ fn windows_reads_preferences_before_a_user_window_exists() {
         );
         assert!(observed.motion().is_some());
         assert!(observed.high_contrast().is_some());
+        assert!(
+            observed
+                .locales()
+                .is_some_and(|languages| !languages.is_empty()),
+            "Windows must observe its ordered UI languages before a user window exists"
+        );
         assert!(observed.gestures().double_click_interval().is_some());
         assert!(observed.gestures().double_tap_interval().is_none());
         assert!(observed.gestures().native_mouse_geometry().is_some());

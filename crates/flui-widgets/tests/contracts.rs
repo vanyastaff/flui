@@ -455,6 +455,7 @@ fn router_and_widgets_app() {
     run_cases(
         "router_and_widgets_app",
         &[
+            ("widgets_app::locale_override_removal_uses_the_nearest_current_preferences", crate::widgets_app::locale_override_removal_uses_the_nearest_current_preferences as fn()),
             ("router::popup_routes_are_admitted_and_leave_the_location_alone", crate::router::popup_routes_are_admitted_and_leave_the_location_alone as fn()),
             ("router::router_never_pops_its_last_page", crate::router::router_never_pops_its_last_page),
             ("router::router_opens_at_a_location_with_its_back_stack", crate::router::router_opens_at_a_location_with_its_back_stack),

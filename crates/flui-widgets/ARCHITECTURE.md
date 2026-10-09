@@ -8,12 +8,24 @@ owns the shell and `SafeArea`, not the source of inherited presentation data.
 The module DAG enforces this direction. Field-specific dependency behavior is
 pinned by `a_size_only_change_rebuilds_size_and_whole_readers_only`.
 
-`RichText` reads inherited text sizing during its stateless build and passes
-the value with its unchanged authored spans to a private render view. Native
-settings and inherited lookups do not enter `RenderObjectContext`. The paragraph
+`WidgetsApp` resolves supported resources from ordered `preferred_locales`,
+subscribing only to that media field when no explicit locale is authored.
+Complete locale identity determines exact matches before the established
+script/region/language fallback (ADR-0173). A nested `MediaQuery` remains a whole
+replacement; it does not fall through to an ancestor for an unavailable field.
+`locale_override_removal_uses_the_nearest_current_preferences` pins override
+removal and nested-provider precedence. The runtime's
+`preferred_locales_select_resources_and_direction` exercises loaded resources.
+
+`RichText` reads inherited text sizing and weight adjustment during its stateless
+build and passes them with its unchanged authored spans to a private render view.
+Native settings and inherited lookups do not enter `RenderObjectContext`. The paragraph
 update reports layout and semantics invalidation when sizing changes, so the same
-render object produces updated geometry. `Text` composes this path after merging
-its ambient style. The shared text-scale accessor resolves out-of-range
+render object produces updated geometry. Weight changes likewise invalidate layout
+and semantics; EditableText forwards the same inherited adjustment to its painter.
+The common shaping policy runs after authored span inheritance (ADR-0174).
+`Text` composes this path after merging its ambient style. The shared text-scale
+accessor resolves out-of-range
 authored values (including zero, negative, subnormal and non-finite values) to
 `1.0` before either text consumer creates or updates a render object; the
 supported range matches system preferences, `1/64..=64`. Initial sizing is pinned by
@@ -24,7 +36,10 @@ authored size and nested override retention by
 `EditableText` subscribes during its own build and carries sizing through its
 appearance value to `RenderEditable`. The editor retains authored styles and
 document offsets; selection and caret position use the newly laid-out paragraph.
-An explicitly configured caret height remains a logical length. Mount/update
+The default caret follows the laid-out line height, including empty text and
+authored font sizes, through `RenderEditable`'s automatic-height policy.
+`RawTextField` preserves that default. An explicitly configured caret height
+remains a logical length; removing the override restores automatic height. Mount/update
 equivalence and restoration of glyph/caret geometry are pinned by
 `inherited_text_sizing_updates_editable_glyphs_and_caret`.
 

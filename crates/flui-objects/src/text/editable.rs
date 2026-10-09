@@ -80,7 +80,7 @@ pub struct RenderEditable {
     caret_byte_offset: usize,
     show_caret: bool,
     caret_width: f64,
-    caret_height: f64,
+    caret_height: Option<f64>,
     caret_color: Color,
     force_line: bool,
     caret_offset: Offset,
@@ -127,7 +127,7 @@ impl RenderEditable {
             caret_byte_offset: 0,
             show_caret: false,
             caret_width: DEFAULT_CARET_WIDTH,
-            caret_height: DEFAULT_CARET_HEIGHT,
+            caret_height: Some(DEFAULT_CARET_HEIGHT),
             caret_color: Color::BLACK,
             force_line: true,
             caret_offset: Offset::ZERO,
@@ -164,6 +164,28 @@ impl RenderEditable {
         }
     }
 
+    /// Applies a signed weight adjustment without modifying the document style.
+    #[must_use]
+    pub fn with_font_weight_adjustment(mut self, adjustment: i32) -> Self {
+        self.painter.set_font_weight_adjustment(adjustment);
+        self
+    }
+
+    /// Updates weight resolution and invalidates glyph, selection and caret geometry.
+    pub fn set_font_weight_adjustment(
+        &mut self,
+        adjustment: i32,
+    ) -> flui_rendering::RenderUpdateImpact {
+        let previous = self.painter.font_weight_adjustment();
+        self.painter.set_font_weight_adjustment(adjustment);
+        if previous == adjustment {
+            flui_rendering::RenderUpdateImpact::NONE
+        } else {
+            flui_rendering::RenderUpdateImpact::LAYOUT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS
+        }
+    }
+
     /// Sets the collapsed caret byte offset into the plain text (builder form).
     #[must_use]
     pub fn with_caret_byte_offset(mut self, offset: usize) -> Self {
@@ -185,10 +207,13 @@ impl RenderEditable {
         self
     }
 
-    /// Sets the caret height in logical pixels (builder form).
+    /// Sets the caret height in logical pixels. `None` follows the laid-out
+    /// single line, including text scaling and font metrics.
     #[must_use]
-    pub fn with_caret_height(mut self, height: f64) -> Self {
-        self.caret_height = non_negative_finite(height, DEFAULT_CARET_HEIGHT);
+    pub fn with_caret_height(mut self, height: impl Into<Option<f64>>) -> Self {
+        self.caret_height = height
+            .into()
+            .map(|height| non_negative_finite(height, DEFAULT_CARET_HEIGHT));
         self
     }
 
@@ -328,12 +353,16 @@ impl RenderEditable {
         flui_rendering::RenderUpdateImpact::PAINT
     }
 
-    /// Updates caret dimensions.
+    /// Updates caret dimensions. `None` height follows the laid-out line.
     pub fn set_caret_size(
         &mut self,
         width: f64,
-        height: f64,
+        height: impl Into<Option<f64>>,
     ) -> flui_rendering::RenderUpdateImpact {
+        let width = non_negative_finite(width, DEFAULT_CARET_WIDTH);
+        let height = height
+            .into()
+            .map(|height| non_negative_finite(height, DEFAULT_CARET_HEIGHT));
         if self.caret_width == width && self.caret_height == height {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
@@ -391,7 +420,7 @@ impl RenderEditable {
                 .get_offset_for_caret(TextPosition::new(range.start, TextAffinity::Downstream));
             return Some(Rect::from_origin_size(
                 Point::new(caret.dx - self.scroll_x, caret.dy),
-                Size::new(self.caret_width, self.caret_height),
+                Size::new(self.caret_width, self.resolved_caret_height()),
             ));
         }
         self.painter
@@ -453,7 +482,7 @@ impl RenderEditable {
     pub fn caret_local_rect(&self) -> Rect {
         Rect::from_origin_size(
             Point::new(self.caret_offset.dx, self.caret_offset.dy),
-            Size::new(self.caret_width, self.caret_height),
+            Size::new(self.caret_width, self.resolved_caret_height()),
         )
     }
 
@@ -534,6 +563,16 @@ impl RenderEditable {
         (min_width, f64::INFINITY)
     }
 
+    fn resolved_caret_height(&self) -> f64 {
+        self.caret_height.unwrap_or_else(|| {
+            if self.painter.has_layout() {
+                self.painter.height()
+            } else {
+                0.0
+            }
+        })
+    }
+
     fn size_for_text(&self, constraints: &BoxConstraints, text_size: Size) -> Size {
         let natural_width = text_size.width + self.caret_margin();
         let width = if self.force_line && constraints.max_width.is_finite() {
@@ -541,7 +580,7 @@ impl RenderEditable {
         } else {
             natural_width
         };
-        let height = text_size.height.max(self.caret_height);
+        let height = text_size.height.max(self.caret_height.unwrap_or(0.0));
         constraints.constrain(Size::new(width, height))
     }
 
@@ -634,7 +673,7 @@ impl Diagnosticable for RenderEditable {
         properties.add("caret_byte_offset", self.caret_byte_offset);
         properties.add_flag("show_caret", self.show_caret, "show caret");
         properties.add("caret_width", self.caret_width);
-        properties.add("caret_height", self.caret_height);
+        properties.add("caret_height", self.resolved_caret_height());
         properties.add("caret_color", format!("{:?}", self.caret_color));
         properties.add_flag("force_line", self.force_line, "force line");
         properties.add(
@@ -716,13 +755,13 @@ impl RenderBox for RenderEditable {
     fn compute_min_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.painter
             .intrinsic_height(&mut ctx.text(), self.intrinsic_text_width(width))
-            .max(self.caret_height)
+            .max(self.caret_height.unwrap_or(0.0))
     }
 
     fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.painter
             .intrinsic_height(&mut ctx.text(), self.intrinsic_text_width(width))
-            .max(self.caret_height)
+            .max(self.caret_height.unwrap_or(0.0))
     }
 
     fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f64> {
@@ -775,7 +814,7 @@ impl RenderEditable {
             }
         }
 
-        if self.show_caret && self.caret_width > 0.0 && self.caret_height > 0.0 {
+        if self.show_caret && self.caret_width > 0.0 && self.resolved_caret_height() > 0.0 {
             ctx.canvas()
                 .draw_rect(self.caret_local_rect(), &Paint::fill(self.caret_color));
         }

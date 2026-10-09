@@ -372,8 +372,8 @@ pub struct EditableText {
     /// Focus ownership is explicit and presentation-local. The caller owns
     /// the node.
     pub(super) focus_node: Rc<FocusNode>,
-    /// Height of the rendered caret bar in logical pixels.
-    pub(super) caret_height: f64,
+    /// Explicit logical height, or the laid-out line height when absent.
+    pub(super) caret_height: Option<f64>,
     /// Color of the caret bar when the field is focused.
     pub(super) caret_color: Color,
     pub(super) selection_color: Color,
@@ -424,7 +424,7 @@ impl EditableText {
         Self {
             controller,
             focus_node,
-            caret_height: 18.0,
+            caret_height: None,
             caret_color: Color::BLACK,
             // Transparent by default, so the primitive paints no highlight
             // until a caller (a decorated `TextField`, a theme) chooses one.
@@ -438,10 +438,11 @@ impl EditableText {
         }
     }
 
-    /// Override the caret bar height (default 18 logical pixels).
+    /// Override the caret bar height in logical pixels. By default it follows
+    /// the laid-out text line; an override is independent of text scaling.
     #[must_use]
     pub fn caret_height(mut self, height: f64) -> Self {
-        self.caret_height = height;
+        self.caret_height = Some(height);
         self
     }
 
@@ -1878,6 +1879,7 @@ impl ViewState<EditableText> for EditableTextState {
         let enabled = view.enabled;
         let appearance = FieldAppearance {
             text_scale_factor: crate::MediaQuery::text_scale_factor_of(ctx).unwrap_or(1.0),
+            font_weight_adjustment: crate::MediaQuery::font_weight_adjustment_of(ctx).unwrap_or(0),
             caret_height: view.caret_height,
             caret_color: view.caret_color,
             selection_color: view.selection_color,
@@ -2447,6 +2449,7 @@ fn build_key_handler(
 struct EditableTextRenderView {
     text: String,
     text_scale_factor: f64,
+    font_weight_adjustment: i32,
     caret_byte_offset: usize,
     show_caret: bool,
     /// The IME composing region to underline, gated on `enabled &&
@@ -2458,7 +2461,7 @@ struct EditableTextRenderView {
     /// field is obscured, because [`build_field_view`] masks before this point
     /// and the render object never sees the source characters.
     selection: Option<Range<usize>>,
-    caret_height: f64,
+    caret_height: Option<f64>,
     caret_color: Color,
     selection_color: Color,
     text_style: Option<TextStyle>,
@@ -2472,6 +2475,7 @@ impl EditableTextRenderView {
         }
         RenderEditable::new(span, TextDirection::Ltr)
             .with_text_scale_factor(self.text_scale_factor)
+            .with_font_weight_adjustment(self.font_weight_adjustment)
             .with_caret_byte_offset(self.caret_byte_offset)
             .with_show_caret(self.show_caret)
             .with_caret_width(2.0)
@@ -2505,6 +2509,7 @@ impl RenderView for EditableTextRenderView {
         }
         let mut impact = render_object.set_text(span);
         impact |= render_object.set_text_scale_factor(self.text_scale_factor);
+        impact |= render_object.set_font_weight_adjustment(self.font_weight_adjustment);
         impact |= render_object.set_caret_byte_offset(self.caret_byte_offset);
         impact |= render_object.set_show_caret(self.show_caret);
         impact |= render_object.set_caret_size(2.0, self.caret_height);
@@ -2537,7 +2542,8 @@ impl_render_view!(EditableTextRenderView);
 #[derive(Clone, Debug)]
 struct FieldAppearance {
     text_scale_factor: f64,
-    caret_height: f64,
+    font_weight_adjustment: i32,
+    caret_height: Option<f64>,
     caret_color: Color,
     selection_color: Color,
     text_style: Option<TextStyle>,
@@ -2608,6 +2614,7 @@ fn build_field_view(
         EditableTextRenderView {
             text,
             text_scale_factor: appearance.text_scale_factor,
+            font_weight_adjustment: appearance.font_weight_adjustment,
             caret_byte_offset,
             show_caret: focused && !controller.caret_hidden_by_ime(),
             // Composing-region underline gated on the same `focused` check
