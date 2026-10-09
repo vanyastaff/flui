@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::common::{LaidOut, lay_out, tight};
-use flui_animation::{Curves, Vsync};
+use flui_animation::{ArcCurve, Curves, Vsync};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::view::ScrollDirection;
 use flui_view::{IntoView, ViewExt};
@@ -458,17 +458,54 @@ pub(crate) fn bouncing_physics_fling_springs_back_after_overscroll() {
 // Scrollable — animate_to (ADR-0037)
 // ============================================================================
 
-/// `jump_to` called while an `animate_to` is in flight must cancel it
-/// SYNCHRONOUSLY — a subsequent frame must not resume driving toward the
-/// original target, and must not even transiently show a stale fling-tick
-/// value before the cancellation "catches up" (see `ScrollController`'s
-/// `stop_hook` field docs for the one-frame race a merely QUEUED
-/// cancellation would otherwise leave open, since `flui-testing::pump_frame`
-/// ticks registered controllers before draining the rebuild queue that
-/// services a queued command).
-///
-/// `jump_to` first cancels whatever activity currently owns the position
-/// (goes idle) before touching the pixel offset.
+pub(crate) fn scrollable_retarget_preserves_the_position_velocity() {
+    assert_scroll_retarget_preserves_velocity(|_| 100.0);
+}
+
+pub(crate) fn scrollable_retarget_at_the_current_position_brakes_continuously() {
+    assert_scroll_retarget_preserves_velocity(std::convert::identity);
+}
+
+fn assert_scroll_retarget_preserves_velocity(target: fn(f64) -> f64) {
+    let controller = ScrollController::new();
+    let registry = Vsync::new();
+    let widget = Scrollable::new()
+        .controller(controller.clone())
+        .child(SizedBox::new(300.0, 5000.0));
+    let mut laid = fling_scoped(widget, registry, tight(300.0, 300.0));
+    controller.animate_to(
+        1000.0,
+        Duration::from_secs(1),
+        ArcCurve::new(Curves::Linear),
+    );
+    laid.pump_for(Duration::from_millis(1));
+    laid.pump_for(Duration::from_millis(250));
+    let h = Duration::from_micros(100);
+    let previous = controller.pixels();
+    laid.pump_for(h);
+    let seam = controller.pixels();
+    let arriving = (seam - previous) / h.as_secs_f64();
+    assert!(arriving > 100.0, "the mounted position was moving");
+    let target = target(seam);
+    controller.animate_to(
+        target,
+        Duration::from_secs(1),
+        ArcCurve::new(Curves::EaseIn),
+    );
+    assert!((controller.pixels() - seam).abs() < 1e-12);
+    assert!(controller.position().is_scrolling());
+    laid.pump_for(h);
+    let departing = (controller.pixels() - seam) / h.as_secs_f64();
+    assert!(
+        (departing - arriving).abs() < 1.0,
+        "scroll retarget must inherit velocity: before {arriving}, after {departing}"
+    );
+    laid.pump_for(Duration::from_secs(2));
+    assert_eq!(controller.pixels(), target);
+    assert!(!controller.position().is_scrolling());
+}
+
+/// Jumping cancels before another frame can publish the displaced run's value.
 pub(crate) fn scrollable_jump_to_during_animate_to_cancels_it_synchronously() {
     let controller = ScrollController::new();
     controller.update_dimensions(300.0, 0.0, 4700.0);
@@ -483,7 +520,7 @@ pub(crate) fn scrollable_jump_to_during_animate_to_cancels_it_synchronously() {
     controller.animate_to(
         1000.0,
         Duration::from_millis(300),
-        std::rc::Rc::new(Curves::Linear),
+        ArcCurve::new(Curves::Linear),
     );
     // Three pumps of warm-up, one more than a direct `animate_with` fling:
     // `animate_to` queues a command, and pump 1's rebuild services it after
@@ -622,7 +659,7 @@ pub(crate) fn dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_ti
     scroll.animate_to(
         1000.0,
         Duration::from_millis(300),
-        std::rc::Rc::new(Curves::Linear),
+        ArcCurve::new(Curves::Linear),
     );
     advance_scroll_run(&mut laid);
     assert!(scroll.pixels() > 0.0 && scroll.pixels() < 1000.0);
@@ -658,7 +695,7 @@ pub(crate) fn dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_ti
     scroll.animate_to(
         4000.0,
         Duration::from_millis(300),
-        std::rc::Rc::new(Curves::Linear),
+        ArcCurve::new(Curves::Linear),
     );
     advance_scroll_run(&mut laid);
     assert!(
@@ -2303,7 +2340,7 @@ pub(crate) fn a_scrollable_swap_stops_old_motion_and_retires_its_jump_hook() {
     old.animate_to(
         1000.0,
         Duration::from_millis(300),
-        std::rc::Rc::new(Curves::Linear),
+        ArcCurve::new(Curves::Linear),
     );
     advance_scroll_run(&mut laid);
     assert!(old.pixels() > 0.0);
@@ -2319,7 +2356,7 @@ pub(crate) fn a_scrollable_swap_stops_old_motion_and_retires_its_jump_hook() {
     new.animate_to(
         900.0,
         Duration::from_millis(300),
-        std::rc::Rc::new(Curves::Linear),
+        ArcCurve::new(Curves::Linear),
     );
     advance_scroll_run(&mut laid);
     let before = new.pixels();
@@ -2344,7 +2381,7 @@ pub(crate) fn a_same_position_scrollable_rebuild_preserves_motion() {
     scroll.animate_to(
         1000.0,
         Duration::from_millis(300),
-        std::rc::Rc::new(Curves::Linear),
+        ArcCurve::new(Curves::Linear),
     );
     advance_scroll_run(&mut laid);
     let before = scroll.pixels();
@@ -2396,7 +2433,7 @@ pub(crate) fn retiring_one_scrollable_preserves_a_later_owners_jump_hook() {
     scroll.animate_to(
         900.0,
         Duration::from_millis(300),
-        std::rc::Rc::new(Curves::Linear),
+        ArcCurve::new(Curves::Linear),
     );
     advance_scroll_run(&mut second);
     assert!(scroll.pixels() > before, "next command still progresses");

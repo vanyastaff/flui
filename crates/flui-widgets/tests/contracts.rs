@@ -383,6 +383,14 @@ fn scroll_physics_and_activity() {
                 crate::scroll::scrollable_jump_to_during_animate_to_cancels_it_synchronously,
             ),
             (
+                "scroll::scrollable_retarget_preserves_the_position_velocity",
+                crate::scroll::scrollable_retarget_preserves_the_position_velocity,
+            ),
+            (
+                "scroll::scrollable_retarget_at_the_current_position_brakes_continuously",
+                crate::scroll::scrollable_retarget_at_the_current_position_brakes_continuously,
+            ),
+            (
                 "scroll::scroll_fling_rest_scales_with_device_pixel_ratio",
                 crate::scroll::scroll_fling_rest_scales_with_device_pixel_ratio,
             ),

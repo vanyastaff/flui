@@ -11,6 +11,9 @@
 
 - Replace manual `AnimatedValue::advance` and owner cloning with frame-driven
   ownership. Component vectors are fixed arrays; observer views remain cloneable.
+- Scroll and page animation methods accept `ArcCurve`. Replacing programmatic
+  scroll motion retains its published velocity, including when braking at the
+  current position.
 
 ### Fixed
 

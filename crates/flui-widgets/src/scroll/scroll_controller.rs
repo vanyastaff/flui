@@ -57,7 +57,7 @@ use std::rc::Rc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use flui_animation::{AnimationController, Curve};
+use flui_animation::{Animation, AnimationController, ArcCurve, MotionSpec};
 use flui_foundation::Listenable;
 use flui_rendering::view::{ScrollPosition, ViewportOffset};
 
@@ -84,7 +84,7 @@ pub(super) enum PendingScrollCommand {
     AnimateTo {
         target_pixels: f64,
         duration: Duration,
-        curve: Rc<dyn Curve + Send + Sync>, // see PopPacing's doc (navigator/binding.rs) — same erased easing-curve boundary
+        curve: ArcCurve,
     },
     /// Stop whatever is currently driving the fling controller — `jump_to`
     /// supersedes any pending or in-flight `animate_to`.
@@ -303,29 +303,25 @@ impl ScrollController {
     ///
     /// `ScrollController` is deliberately physics-agnostic (see this module's
     /// docs), so there is no physics-derived tolerance for "close enough to
-    /// jump instead". The call short-circuits on EXACT equality only (below),
+    /// jump instead". Exact equality short-circuits only while at rest,
     /// which skips the queued-command round-trip's one-frame delay for the
     /// common "already there" case, but still queues (and pays that one frame)
     /// for a target merely *close* to, but not exactly at, the current
     /// position.
     ///
     /// See this module's docs for why this returns no completion future.
-    pub fn animate_to(
-        &self,
-        target_pixels: f64,
-        duration: Duration,
-        curve: Rc<dyn Curve + Send + Sync>, // see PopPacing's doc (navigator/binding.rs) — same erased easing-curve boundary
-    ) {
+    pub fn animate_to(&self, target_pixels: f64, duration: Duration, curve: ArcCurve) {
         if duration.is_zero() {
             self.jump_to(target_pixels);
             return;
         }
         let target = target_pixels.clamp(self.min_scroll_extent(), self.max_scroll_extent());
-        if target == self.pixels() {
-            // Already there: jump (a no-op write, since the value doesn't
+        if target == self.pixels() && !self.position.is_scrolling() {
+            // Already resting there: jump (a no-op write, since the value doesn't
             // change) rather than queuing a command whose own servicing
-            // would just reach `AnimationController::drive_to`'s identical
-            // "already at target" fast path one frame later.
+            // would just reach `AnimationController::retarget`'s identical
+            // "already at target" fast path one frame later. A moving position
+            // instead retains its velocity and brakes through retarget.
             self.jump_to(target);
             return;
         }
@@ -480,14 +476,16 @@ impl ScrollController {
                 duration,
                 curve,
             } => {
-                // Sync `fling`'s own value to the true current pixel position
-                // first: its value listener only pushes FROM the controller
-                // INTO this position, so if pixels moved without ticking it (a
-                // `jump_to`, or this being the very first animation `fling`
-                // has ever driven), its value is stale and animating from it
-                // would visibly jump instead of starting from where the
-                // position actually sits.
-                fling.set_value(self.pixels());
+                if !target_pixels.is_finite() {
+                    return;
+                }
+                // External position writes can leave the driver behind. Sync
+                // those writes, but keep a current driver's published velocity
+                // and frame origin when interrupting its existing motion.
+                let pixels = self.pixels();
+                if fling.value() != pixels {
+                    fling.set_value(pixels);
+                }
                 // `animate_to` runs inside a driven scroll activity, so
                 // the scrolling notifier holds true for the run — while the
                 // USER direction stays idle, because nobody's finger is down. The
@@ -495,21 +493,10 @@ impl ScrollController {
                 // `ScrollableState`) ends the activity when the run settles,
                 // exactly as it does for a ballistic fling.
                 //
-                // #1183: raise the activity only after the run start
-                // returned `Ok`, and only if it's still actually running.
-                // `target_pixels` reaching here NaN (`f64::clamp` passes NaN
-                // through unchanged, since every NaN comparison is `false`
-                // -- `ScrollController::animate_to`'s own pre-clamp does not
-                // filter it) must not park the scrollable in "scrolling"
-                // forever; and a start that settles SYNCHRONOUSLY (target ==
-                // the just-synced current value) already reported its own
-                // end through the status listener above -- checking
-                // `is_running()` after the call, rather than unconditionally
-                // on `Ok`, keeps that already-correct settle from being
-                // clobbered back to `true`.
-                use flui_animation::Animation;
+                // Rejected or synchronously settled motion must not raise an
+                // activity that has no running driver to end it.
                 if fling
-                    .animate_to_curved(target_pixels, Some(duration), curve)
+                    .retarget(target_pixels, &MotionSpec::Curve { duration, curve })
                     .is_ok()
                     && fling.status().is_running()
                 {

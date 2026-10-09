@@ -37,6 +37,12 @@ requested during source evaluation remains pending for a subsequent sample.
 Reserving a sample identity before source evaluation still invalidates an outer
 sample when the same controller is ticked reentrantly.
 
+Retargeting prepares replacement motion from the last published position and
+velocity. Admission commits the new run before cancelling the displaced future.
+Curve segments correct both endpoints with Hermite terms: inherited velocity at
+the interruption and zero velocity at exact arrival. Replacement continues from
+the published frame origin, so its first frame advances without a new hold.
+
 An interruptible spring run completes at the exact target at rest, independent
 of the frame that observes completion. Its native trajectory lasts until the
 physical rest threshold, followed by a cubic Hermite transition preserving
@@ -48,6 +54,19 @@ after completion would require frames for a run already reported as stopped.
 The finite transition keeps completion, frame demand and published values
 consistent. This applies to interruptible motion; standalone simulation rest
 semantics remain those of the physics contract.
+
+Typed `AnimatedValue` motion shares the controller's admission, sample identity
+and delivery machinery. One owner registers all components; cloneable observers
+retain the published value without prolonging motion. Generated components stage
+outside controller borrows and commit one vector with the accepted clock. Identity
+checks between position and velocity callouts stop displaced sampling. Exact
+target representation survives settling even when its vector loses information.
+
+Implicit opacity, padding and rotation consume that observed motion directly.
+Programmatic scroll commands retarget their existing driver, synchronizing only
+external position writes. A moving position asked to stop where it currently is
+retains its incoming velocity and brakes; equality is an immediate fast path only
+at rest. Scroll and page methods use `ArcCurve`, matching the motion contract.
 
 The runtime's exact window agent port admits `MotionRequest` through the same
 owner inbox and close fence as semantics operations. The owner validates the
@@ -110,6 +129,12 @@ after a rejected frame with an independently driven controller whose time starts
 at the last published seam.
 `closed_presentation_animation_cannot_wake_a_surviving_window` proves that a
 saved clock cannot schedule a sibling after owner teardown.
+
+`owning_animated_value_contract` covers atomic components, owner release during
+sampling, exact-target delivery, reentrant conversion and retained deadlines.
+The mounted widget velocity rows exercise opacity, padding and rotation through
+their render, layout and transform producers. The two mounted scroll replacement
+rows assert pixel velocity continuity, exact settlement and activity completion.
 
 The wire schema golden and additivity gate cover published protocol shapes.
 Required fields on a newly introduced response type do not change older
