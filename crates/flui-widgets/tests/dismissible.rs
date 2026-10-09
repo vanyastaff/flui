@@ -9,6 +9,83 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
+pub(crate) fn dismissible_slides_without_rebuilding_per_frame() {
+    use flui_testing::{HeadlessBinding, MountOptions, MountOwners, PointerScript};
+    use flui_widgets::{FocusRoot, GestureArenaScope, SizedBox};
+    for (vertical, sign) in [(false, 1.0), (false, -1.0), (true, 1.0), (true, -1.0)] {
+        let mut binding = HeadlessBinding::new();
+        let progress = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let updates = Rc::clone(&progress);
+        let mut card = Dismissible::new(
+            SizedBox::new(200.0, 200.0).child(ColoredBox::new(Color::rgb(10, 20, 30))),
+        )
+        .direction(if vertical {
+            DismissDirection::Vertical
+        } else {
+            DismissDirection::Horizontal
+        })
+        .background(ColoredBox::new(Color::rgb(80, 90, 100)))
+        .movement_duration(Duration::from_secs(1))
+        .on_update(move |_, details| updates.borrow_mut().push(details.progress));
+        for direction in [
+            DismissDirection::StartToEnd,
+            DismissDirection::EndToStart,
+            DismissDirection::Up,
+            DismissDirection::Down,
+        ] {
+            card = card.dismiss_threshold(direction, 1.0);
+        }
+        let root = GestureArenaScope::new(
+            binding.arena().clone(),
+            FocusRoot::new(VsyncScope::new(binding.vsync().clone(), card)),
+        );
+        let _ = binding.mount_root(
+            &root,
+            MountOwners::fresh(),
+            MountOptions::tight(200.0, 200.0),
+        );
+        binding.pump_frame(Duration::ZERO);
+        binding.replay(&PointerScript::drag(
+            Offset::new(100.0, 100.0),
+            if vertical {
+                Offset::new(100.0, 100.0 + sign * 80.0)
+            } else {
+                Offset::new(100.0 + sign * 80.0, 100.0)
+            },
+            5,
+            Duration::from_millis(10),
+        ));
+        binding.pump_frame(Duration::from_millis(16));
+        assert!(
+            binding.vsync().has_running(),
+            "release must start a return animation"
+        );
+        let mut previous = *progress.borrow().last().expect("drag update delivered");
+        for _ in 0..4 {
+            let delivered = progress.borrow().len();
+            binding.pump_frame(Duration::from_millis(16));
+            assert_eq!(
+                binding.last_frame_report().build.elements_built,
+                0,
+                "vertical {vertical}, sign {sign}: movement rebuilt {:?}",
+                binding.last_frame_report().build
+            );
+            let values = progress.borrow();
+            assert_eq!(
+                values.len(),
+                delivered + 1,
+                "on_update still follows each moving frame"
+            );
+            let current = *values.last().expect("moving frame delivered");
+            assert!(
+                current < previous && current > 0.0,
+                "card returns toward its origin"
+            );
+            previous = current;
+        }
+    }
+}
+
 pub(crate) fn dismissal_release_uses_its_captured_fling_profile() {
     dismissal_release_uses_profile(DismissDirection::Horizontal);
 }
