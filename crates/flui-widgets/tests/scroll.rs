@@ -1268,6 +1268,75 @@ pub(crate) fn replacing_vsync_retires_old_motion_and_drives_fresh_contacts() {
     assert!(failures.is_empty(), "{}", failures.join("; "));
 }
 
+pub(crate) fn replacing_a_scroll_position_cancels_its_contact_and_recovers() {
+    use std::sync::Mutex;
+
+    let mut failures = Vec::new();
+    for cancelled in [false, true] {
+        let old = ScrollController::new();
+        let new = ScrollController::new();
+        let vsync = Vsync::new();
+        let incoming = new.position();
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let sink = observed.clone();
+        let watched = incoming.clone();
+        let subscription = incoming.add_activity_listener(Arc::new(move || {
+            sink.lock().expect("activity observer lock").push((
+                watched.is_scrolling(),
+                watched.user_scroll_direction(),
+            ));
+        }));
+        let mut laid = crate::common::lay_out_animated(
+            animated_scroll_content(&old, &vsync),
+            tight(300.0, 300.0),
+            vsync.clone(),
+        );
+        laid.dispatch_pointer_down(150.0, 250.0);
+        laid.dispatch_pointer_move_after(150.0, 200.0, Duration::from_millis(10));
+        laid.dispatch_pointer_move_after(150.0, 180.0, Duration::from_millis(10));
+        assert!(old.pixels() > 0.0);
+        assert!(old.position().is_scrolling());
+        let same = old.pixels();
+        laid.pump_widget(animated_scroll_content(&old, &vsync));
+        laid.dispatch_pointer_move_after(150.0, 160.0, Duration::from_millis(10));
+        assert!(old.pixels() > same, "same position preserves the admitted contact");
+
+        laid.pump_widget(animated_scroll_content(&new, &vsync));
+        let retired = old.pixels();
+        let before = new.pixels();
+        laid.dispatch_pointer_move_after(150.0, 140.0, Duration::from_millis(10));
+        if new.pixels() != before {
+            failures.push("replacement position consumed the retired contact");
+        }
+        assert_eq!(old.pixels(), retired);
+        assert!(!old.position().is_scrolling());
+        if cancelled {
+            laid.dispatch_pointer_cancel();
+        } else {
+            laid.dispatch_pointer_up(150.0, 140.0);
+        }
+        advance_scroll_run(&mut laid);
+        if new.pixels() != before || incoming.is_scrolling() {
+            failures.push("retired terminal started replacement motion or activity");
+        }
+        observed.lock().expect("activity observer lock").clear();
+        let fresh = new.pixels();
+        laid.dispatch_pointer_down(150.0, 250.0);
+        laid.dispatch_pointer_move_after(150.0, 200.0, Duration::from_millis(10));
+        laid.dispatch_pointer_move_after(150.0, 180.0, Duration::from_millis(10));
+        assert!(new.pixels() > fresh, "fresh contact drives replacement content");
+        assert!(
+            observed.lock().expect("activity observer lock")
+                .contains(&(true, ScrollDirection::Reverse)),
+            "fresh movement reaches the real activity consumer"
+        );
+        laid.dispatch_pointer_cancel();
+        assert!(!incoming.is_scrolling());
+        incoming.remove_activity_listener(subscription);
+    }
+    assert!(failures.is_empty(), "{}", failures.join("; "));
+}
+
 fn dispatch_typed_wheel(
     laid: &LaidOut,
     precision: flui_platform_api::pointer::ScrollPrecision,
