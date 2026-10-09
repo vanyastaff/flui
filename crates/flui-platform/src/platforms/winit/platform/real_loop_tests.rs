@@ -293,7 +293,7 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
             *observed.lock() = Some((snapshot.wheel().clone(), expected, characters));
             owner.on_wake(Box::new(move || match wake_platform.preferences() {
                 Err(crate::PlatformError::PreferencesDeferred) => {
-                    wake_deferred.lock().get_or_insert(*wake_frames.lock());
+                    let _ = wake_deferred.lock().get_or_insert(*wake_frames.lock());
                 }
                 Ok(snapshot) => {
                     let before = *wake_deferred.lock();
