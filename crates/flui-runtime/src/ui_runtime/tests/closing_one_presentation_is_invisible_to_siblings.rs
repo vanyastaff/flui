@@ -43,7 +43,7 @@ fn close_painted_scene(
         match UiRuntime::draw_frame_for_presentation(presentation, constraints, &ui_runtime.text) {
             Ok(FramePaintOutcome::Painted(scene)) => format!("{:?}", scene.tree()),
             Ok(FramePaintOutcome::Idle) => panic!("{id:?} must produce a Painted scene"),
-            Ok(FramePaintOutcome::Errored) => panic!("{id:?} producer returned Errored"),
+            Ok(FramePaintOutcome::Errored { .. }) => panic!("{id:?} producer returned Errored"),
             Err(error) => panic!("{id:?} producer failed: {error}"),
         }
     })
@@ -1677,7 +1677,7 @@ pub(crate) fn closing_presentation_a_leaves_sibling_layer_tree_identical() {
         match UiRuntime::draw_frame_for_presentation(b, constraints, &ui_runtime.text) {
             Ok(FramePaintOutcome::Painted(scene)) => format!("{:?}", scene.tree()),
             Ok(FramePaintOutcome::Idle) => panic!("B's first frame must paint, got Idle"),
-            Ok(FramePaintOutcome::Errored) => {
+            Ok(FramePaintOutcome::Errored { .. }) => {
                 panic!("draw_frame_for_presentation never returns Ok(Errored)")
             }
             Err(error) => panic!("B's first frame failed: {error}"),
@@ -1713,7 +1713,7 @@ pub(crate) fn closing_presentation_a_leaves_sibling_layer_tree_identical() {
             Ok(FramePaintOutcome::Idle) => {
                 panic!("B's post-A-close frame must still paint, got Idle")
             }
-            Ok(FramePaintOutcome::Errored) => {
+            Ok(FramePaintOutcome::Errored { .. }) => {
                 panic!("draw_frame_for_presentation never returns Ok(Errored)")
             }
             Err(error) => panic!("B's post-A-close frame failed: {error}"),

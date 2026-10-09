@@ -408,14 +408,13 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewA
                 "RenderViewAdapter",
             ));
         }
-        self.view.size = size;
-
         let child_constraints = crate::constraints::BoxConstraints::tight(size);
         for i in 0..layout_ctx.child_count() {
-            let _ = layout_ctx.layout_child(i, child_constraints);
+            layout_ctx.layout_child(i, child_constraints)?;
             layout_ctx.position_child(i, flui_foundation::geometry::Offset::ZERO);
         }
 
+        self.view.size = size;
         Ok(size)
     }
 

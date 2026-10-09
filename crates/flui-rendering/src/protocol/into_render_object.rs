@@ -60,8 +60,8 @@
 //!     type Arity = Leaf;
 //!     type ParentData = BoxParentData;
 //!
-//!     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<Leaf, BoxParentData>) -> Size {
-//!         ctx.constraints().constrain(self.size)
+//!     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<Leaf, BoxParentData>) -> flui_rendering::RenderResult<Size> {
+//!         Ok(ctx.constraints().constrain(self.size))
 //!     }
 //!
 //!     fn paint(&self, ctx: &mut PaintCx<'_, Leaf>) {
@@ -74,8 +74,6 @@
 //!         ctx.is_within_size(self.size.width, self.size.height)
 //!     }
 //!
-//!     fn size(&self) -> &Size { &self.size }
-//!     fn size_mut(&mut self) -> &mut Size { &mut self.size }
 //! }
 //!
 //! // Create and insert into tree

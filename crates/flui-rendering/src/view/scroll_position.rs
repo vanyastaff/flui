@@ -32,6 +32,7 @@ use super::viewport_offset::{ScrollDirection, ViewportOffset};
 
 /// The `ViewportOffset` fields today's `ScrollableViewportOffset` tracks —
 /// pixel position plus the viewport/content extents layout reports.
+#[derive(Debug, Clone, Copy)]
 struct State {
     pixels: f64,
     min_scroll_extent: f64,
@@ -61,6 +62,39 @@ struct State {
 }
 
 impl State {
+    // Compare the admitted representation, not mathematical float equality:
+    // an unchanged NaN must not masquerade as input arriving during layout.
+    fn same_input(&self, other: &Self) -> bool {
+        let policy_matches = match (self.dimension_policy, other.dimension_policy) {
+            (DimensionChangePolicy::KeepPixels, DimensionChangePolicy::KeepPixels) => true,
+            (
+                DimensionChangePolicy::KeepFractionalPage {
+                    viewport_fraction: a,
+                    initial_page: ap,
+                },
+                DimensionChangePolicy::KeepFractionalPage {
+                    viewport_fraction: b,
+                    initial_page: bp,
+                },
+            ) => a.to_bits() == b.to_bits() && ap.map(f64::to_bits) == bp.map(f64::to_bits),
+            _ => false,
+        };
+        policy_matches
+            && [
+                self.pixels.to_bits(),
+                self.min_scroll_extent.to_bits(),
+                self.max_scroll_extent.to_bits(),
+                self.viewport_dimension.to_bits(),
+            ] == [
+                other.pixels.to_bits(),
+                other.min_scroll_extent.to_bits(),
+                other.max_scroll_extent.to_bits(),
+                other.viewport_dimension.to_bits(),
+            ]
+            && self.has_applied_viewport_dimension == other.has_applied_viewport_dimension
+            && self.cached_page.map(f64::to_bits) == other.cached_page.map(f64::to_bits)
+    }
+
     const fn zero() -> Self {
         Self {
             pixels: 0.0,
@@ -71,6 +105,147 @@ impl State {
             has_applied_viewport_dimension: false,
             cached_page: None,
         }
+    }
+}
+
+impl State {
+    fn apply_viewport_dimension(&mut self, viewport_dimension: f64) -> bool {
+        // The equality short-circuit only applies once a REAL prior
+        // dimension is on record (`has_applied_viewport_dimension`).
+        // A first-ever call is NEVER treated as a no-op — even when
+        // it happens to carry `0.0` (a `PageView` mounted inside a
+        // currently-zero-size ancestor). Comparing raw `f64` values alone
+        // conflates "never established" with "established at literal
+        // `0.0`": a first call of exactly `0.0` would match
+        // `State::zero()`'s own default and silently short-circuit, so
+        // `has_applied_viewport_dimension` would never flip true and
+        // `KeepFractionalPage`'s first-establishment branch would never
+        // run for that call.
+        if self.has_applied_viewport_dimension
+            && (self.viewport_dimension - viewport_dimension).abs() < f64::EPSILON
+        {
+            false
+        } else {
+            // Pure recompute, also used by detached layout proposals. The
+            // accepting owner schedules metrics delivery after publication.
+            if let DimensionChangePolicy::KeepFractionalPage {
+                viewport_fraction,
+                initial_page,
+            } = self.dimension_policy
+            {
+                debug_assert!(
+                    viewport_fraction > 0.0,
+                    "BUG: DimensionChangePolicy::KeepFractionalPage.viewport_fraction \
+                     must be > 0.0"
+                );
+                // The three-way branch on the *old* dimension:
+                // never established (null) is handled entirely by this
+                // `if`'s absence below (see the comment after it); `0.0`
+                // (a collapsed viewport) reads `cached_page` instead of
+                // re-deriving it from `pixels`, which by then reads 0.0
+                // and which a concurrent `apply_content_dimensions` clamp
+                // could otherwise have stomped; anything else recomputes
+                // via the pixels/dimension ratio.
+                if self.has_applied_viewport_dimension {
+                    let old_dimension = self.viewport_dimension;
+                    let page = if old_dimension == 0.0 {
+                        self.cached_page.unwrap_or(0.0)
+                    } else {
+                        // Numerator clamp: an overscrolled `pixels` below
+                        // `min_scroll_extent` (allowed by
+                        // `BouncingScrollPhysics`) must not encode as a
+                        // negative page.
+                        let raw_page = self.pixels.max(0.0) / (old_dimension * viewport_fraction);
+                        round_snap_page(raw_page)
+                    };
+
+                    if viewport_dimension == 0.0 {
+                        // Collapsing to zero: cache the page instead of
+                        // encoding it in `pixels` — `pixels` becomes
+                        // `0.0`, matching `getPixelsFromPage` evaluated at
+                        // a zero dimension, and the real state survives
+                        // in `cached_page` where a concurrent extent
+                        // clamp cannot reach it.
+                        self.cached_page = Some(page);
+                        self.pixels = 0.0;
+                    } else {
+                        self.cached_page = None;
+                        self.pixels = page * (viewport_dimension * viewport_fraction);
+                    }
+                } else if let Some(start_page) = initial_page {
+                    // First-ever dimension establishment WITH a
+                    // controller-driven startup page: mirrors
+                    // `_pageToUseOnStartup`. Same zero-dimension collapse
+                    // handling as the steady-state branch above — a
+                    // `PageView` that never gets a real layout pass must
+                    // still not divide by zero.
+                    if viewport_dimension == 0.0 {
+                        self.cached_page = Some(start_page);
+                        self.pixels = 0.0;
+                    } else {
+                        self.cached_page = None;
+                        self.pixels = start_page * (viewport_dimension * viewport_fraction);
+                    }
+                }
+                // else: first-ever dimension establishment with no
+                // controller-driven startup page (a bare `ScrollPosition`
+                // opted into `KeepFractionalPage` directly). Behaves like
+                // `KeepPixels` for this one call — the seeded `pixels`
+                // value (e.g. from `ScrollPosition::new`) is left
+                // untouched rather than reinterpreted as a page count
+                // against a never-established prior dimension.
+            }
+            self.has_applied_viewport_dimension = true;
+            self.viewport_dimension = viewport_dimension;
+            true
+        }
+    }
+
+    fn apply_content_dimensions(
+        &mut self,
+        min_scroll_extent: f64,
+        max_scroll_extent: f64,
+    ) -> (bool, bool) {
+        if (self.min_scroll_extent - min_scroll_extent).abs() < f64::EPSILON
+            && (self.max_scroll_extent - max_scroll_extent).abs() < f64::EPSILON
+        {
+            (false, true)
+        } else {
+            self.min_scroll_extent = min_scroll_extent;
+            self.max_scroll_extent = max_scroll_extent;
+            let clamped = self.pixels.clamp(min_scroll_extent, max_scroll_extent);
+            if (self.pixels - clamped).abs() > f64::EPSILON {
+                self.pixels = clamped;
+                (true, false)
+            } else {
+                (true, true)
+            }
+        }
+    }
+}
+
+/// Detached scroll-position layout proposal, including fractional-page state.
+/// It owns no callbacks; acceptance compares the original state before publication.
+#[derive(Debug)]
+pub struct ScrollPositionLayout {
+    original: State,
+    proposed: State,
+}
+
+impl super::viewport_offset::ViewportLayout for ScrollPositionLayout {
+    fn pixels(&self) -> f64 {
+        self.proposed.pixels
+    }
+    fn apply_viewport_dimension(&mut self, dimension: f64) -> bool {
+        let pixels = self.proposed.pixels.to_bits();
+        self.proposed.apply_viewport_dimension(dimension);
+        self.proposed.pixels.to_bits() == pixels
+    }
+    fn apply_content_dimensions(&mut self, min: f64, max: f64) -> bool {
+        self.proposed.apply_content_dimensions(min, max).1
+    }
+    fn correct_by(&mut self, correction: f64) {
+        self.proposed.pixels += correction;
     }
 }
 
@@ -722,6 +897,32 @@ impl ScrollPosition {
 }
 
 impl ViewportOffset for ScrollPosition {
+    type Layout = ScrollPositionLayout;
+
+    fn begin_layout(&self) -> Self::Layout {
+        let original = *self.inner.state.borrow();
+        ScrollPositionLayout {
+            original,
+            proposed: original,
+        }
+    }
+
+    fn accept_layout(&mut self, layout: Self::Layout) -> crate::RenderResult<()> {
+        let changed = {
+            let mut state = self.inner.state.borrow_mut();
+            if !state.same_input(&layout.original) {
+                return Err(crate::RenderError::ViewportOffsetChanged);
+            }
+            let changed = !state.same_input(&layout.proposed);
+            *state = layout.proposed;
+            changed
+        };
+        if changed {
+            self.inner.mark_metrics_dirty_and_maybe_schedule_flush();
+        }
+        Ok(())
+    }
+
     fn pixels(&self) -> f64 {
         self.inner.state.borrow_mut().pixels
     }
@@ -731,126 +932,24 @@ impl ViewportOffset for ScrollPosition {
     }
 
     fn apply_viewport_dimension(&mut self, viewport_dimension: f64) -> bool {
-        let changed = {
+        let (changed, accepted) = {
             let mut state = self.inner.state.borrow_mut();
-            // The equality short-circuit only applies once a REAL prior
-            // dimension is on record (`has_applied_viewport_dimension`).
-            // A first-ever call is NEVER treated as a no-op — even when
-            // it happens to carry `0.0` (a `PageView` mounted inside a
-            // currently-zero-size ancestor). Comparing raw `f64` values alone
-            // conflates "never established" with "established at literal
-            // `0.0`": a first call of exactly `0.0` would match
-            // `State::zero()`'s own default and silently short-circuit, so
-            // `has_applied_viewport_dimension` would never flip true and
-            // `KeepFractionalPage`'s first-establishment branch would never
-            // run for that call.
-            if state.has_applied_viewport_dimension
-                && (state.viewport_dimension - viewport_dimension).abs() < f64::EPSILON
-            {
-                false
-            } else {
-                // Pure recompute
-                // under the lock already held here — no notify, no
-                // scheduling; the dirty-flag + coalesced flush below carries
-                // the observable change.
-                if let DimensionChangePolicy::KeepFractionalPage {
-                    viewport_fraction,
-                    initial_page,
-                } = state.dimension_policy
-                {
-                    debug_assert!(
-                        viewport_fraction > 0.0,
-                        "BUG: DimensionChangePolicy::KeepFractionalPage.viewport_fraction \
-                         must be > 0.0"
-                    );
-                    // The three-way branch on the *old* dimension:
-                    // never established (null) is handled entirely by this
-                    // `if`'s absence below (see the comment after it); `0.0`
-                    // (a collapsed viewport) reads `cached_page` instead of
-                    // re-deriving it from `pixels`, which by then reads 0.0
-                    // and which a concurrent `apply_content_dimensions` clamp
-                    // could otherwise have stomped; anything else recomputes
-                    // via the pixels/dimension ratio.
-                    if state.has_applied_viewport_dimension {
-                        let old_dimension = state.viewport_dimension;
-                        let page = if old_dimension == 0.0 {
-                            state.cached_page.unwrap_or(0.0)
-                        } else {
-                            // Numerator clamp: an overscrolled `pixels` below
-                            // `min_scroll_extent` (allowed by
-                            // `BouncingScrollPhysics`) must not encode as a
-                            // negative page.
-                            let raw_page =
-                                state.pixels.max(0.0) / (old_dimension * viewport_fraction);
-                            round_snap_page(raw_page)
-                        };
-
-                        if viewport_dimension == 0.0 {
-                            // Collapsing to zero: cache the page instead of
-                            // encoding it in `pixels` — `pixels` becomes
-                            // `0.0`, matching `getPixelsFromPage` evaluated at
-                            // a zero dimension, and the real state survives
-                            // in `cached_page` where a concurrent extent
-                            // clamp cannot reach it.
-                            state.cached_page = Some(page);
-                            state.pixels = 0.0;
-                        } else {
-                            state.cached_page = None;
-                            state.pixels = page * (viewport_dimension * viewport_fraction);
-                        }
-                    } else if let Some(start_page) = initial_page {
-                        // First-ever dimension establishment WITH a
-                        // controller-driven startup page: mirrors
-                        // `_pageToUseOnStartup`. Same zero-dimension collapse
-                        // handling as the steady-state branch above — a
-                        // `PageView` that never gets a real layout pass must
-                        // still not divide by zero.
-                        if viewport_dimension == 0.0 {
-                            state.cached_page = Some(start_page);
-                            state.pixels = 0.0;
-                        } else {
-                            state.cached_page = None;
-                            state.pixels = start_page * (viewport_dimension * viewport_fraction);
-                        }
-                    }
-                    // else: first-ever dimension establishment with no
-                    // controller-driven startup page (a bare `ScrollPosition`
-                    // opted into `KeepFractionalPage` directly). Behaves like
-                    // `KeepPixels` for this one call — the seeded `pixels`
-                    // value (e.g. from `ScrollPosition::new`) is left
-                    // untouched rather than reinterpreted as a page count
-                    // against a never-established prior dimension.
-                }
-                state.has_applied_viewport_dimension = true;
-                state.viewport_dimension = viewport_dimension;
-                true
-            }
+            let pixels = state.pixels.to_bits();
+            let changed = state.apply_viewport_dimension(viewport_dimension);
+            (changed, state.pixels.to_bits() == pixels)
         };
         if changed {
             self.inner.mark_metrics_dirty_and_maybe_schedule_flush();
         }
-        true
+        accepted
     }
 
     fn apply_content_dimensions(&mut self, min_scroll_extent: f64, max_scroll_extent: f64) -> bool {
-        let (changed, accepted) = {
-            let mut state = self.inner.state.borrow_mut();
-            if (state.min_scroll_extent - min_scroll_extent).abs() < f64::EPSILON
-                && (state.max_scroll_extent - max_scroll_extent).abs() < f64::EPSILON
-            {
-                (false, true)
-            } else {
-                state.min_scroll_extent = min_scroll_extent;
-                state.max_scroll_extent = max_scroll_extent;
-                let clamped = state.pixels.clamp(min_scroll_extent, max_scroll_extent);
-                if (state.pixels - clamped).abs() > f64::EPSILON {
-                    state.pixels = clamped;
-                    (true, false)
-                } else {
-                    (true, true)
-                }
-            }
-        };
+        let (changed, accepted) = self
+            .inner
+            .state
+            .borrow_mut()
+            .apply_content_dimensions(min_scroll_extent, max_scroll_extent);
         if changed {
             self.inner.mark_metrics_dirty_and_maybe_schedule_flush();
         }

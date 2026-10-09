@@ -353,11 +353,15 @@ impl RenderFlex {
         &self,
         ctx: &mut BoxIntrinsicsCtx<'_>,
         cross_extent: f64,
-        mut child_size: impl FnMut(&mut BoxIntrinsicsCtx<'_>, usize, f64) -> f64,
-    ) -> f64 {
+        mut child_size: impl FnMut(
+            &mut BoxIntrinsicsCtx<'_>,
+            usize,
+            f64,
+        ) -> flui_rendering::RenderResult<f64>,
+    ) -> flui_rendering::RenderResult<f64> {
         let child_count = ctx.child_count();
         if child_count == 0 {
-            return 0.0;
+            return Ok(0.0);
         }
 
         let spacing_total = self.spacing * (child_count.saturating_sub(1)) as f64;
@@ -369,31 +373,35 @@ impl RenderFlex {
             let flex = ctx.child_flex(i);
             total_flex += flex;
             if flex > 0 {
-                let size = child_size(ctx, i, cross_extent);
+                let size = child_size(ctx, i, cross_extent)?;
                 max_flex_fraction = max_flex_fraction.max(size / flex as f64);
             } else {
-                inflexible_space += child_size(ctx, i, cross_extent);
+                inflexible_space += child_size(ctx, i, cross_extent)?;
             }
         }
 
-        max_flex_fraction * total_flex as f64 + inflexible_space
+        Ok(max_flex_fraction * total_flex as f64 + inflexible_space)
     }
 
     /// Folds child intrinsics along the cross axis (max of child cross sizes).
     fn intrinsic_cross(
         ctx: &mut BoxIntrinsicsCtx<'_>,
         main_extent: f64,
-        mut child_cross: impl FnMut(&mut BoxIntrinsicsCtx<'_>, usize, f64) -> f64,
-    ) -> f64 {
+        mut child_cross: impl FnMut(
+            &mut BoxIntrinsicsCtx<'_>,
+            usize,
+            f64,
+        ) -> flui_rendering::RenderResult<f64>,
+    ) -> flui_rendering::RenderResult<f64> {
         let child_count = ctx.child_count();
         if child_count == 0 {
-            return 0.0;
+            return Ok(0.0);
         }
         let mut max = 0.0_f64;
         for i in 0..child_count {
-            max = max.max(child_cross(ctx, i, main_extent));
+            max = max.max(child_cross(ctx, i, main_extent)?);
         }
-        max
+        Ok(max)
     }
 
     /// Whether children are positioned by their baselines — only ever true for
@@ -425,8 +433,11 @@ impl RenderFlex {
         constraints: BoxConstraints,
         flex_factors: &[Option<i32>],
         flex_fits: &[FlexFit],
-        mut measure: impl FnMut(usize, BoxConstraints) -> (Size, Option<f64>),
-    ) -> FlexSizes {
+        mut measure: impl FnMut(
+            usize,
+            BoxConstraints,
+        ) -> flui_rendering::RenderResult<(Size, Option<f64>)>,
+    ) -> flui_rendering::RenderResult<FlexSizes> {
         let child_count = flex_factors.len();
 
         // ── Zero-child fast path ──────────────────────────────────────────────
@@ -446,13 +457,13 @@ impl RenderFlex {
                 FlexDirection::Horizontal => Size::new(ideal_main, 0.0),
                 FlexDirection::Vertical => Size::new(0.0, ideal_main),
             };
-            return FlexSizes {
+            return Ok(FlexSizes {
                 size: constraints.constrain(size),
                 child_sizes: Vec::new(),
                 total_main: 0.0,
                 child_constraints: Vec::new(),
                 alignment_baselines: Vec::new(),
-            };
+            });
         }
 
         // ── Cross-axis policy ─────────────────────────────────────────────────
@@ -515,7 +526,7 @@ impl RenderFlex {
 
         for i in 0..child_count {
             if flex_factors[i].is_none() || flex_factors[i] == Some(0) {
-                let (child_size, baseline) = measure(i, non_flex_constraints);
+                let (child_size, baseline) = measure(i, non_flex_constraints)?;
                 child_sizes[i] = Some(child_size);
                 alignment_baselines[i] = baseline;
                 inflexible_main += self.main_size(child_size);
@@ -537,7 +548,7 @@ impl RenderFlex {
         if !can_flex && total_flex > 0 {
             for i in 0..child_count {
                 if matches!(flex_factors[i], Some(f) if f > 0) {
-                    let (child_size, baseline) = measure(i, non_flex_constraints);
+                    let (child_size, baseline) = measure(i, non_flex_constraints)?;
                     child_sizes[i] = Some(child_size);
                     alignment_baselines[i] = baseline;
                     inflexible_main += self.main_size(child_size);
@@ -580,7 +591,7 @@ impl RenderFlex {
                         }
                     };
                     child_constraints[i] = allocated_constraints;
-                    let (child_size, baseline) = measure(i, allocated_constraints);
+                    let (child_size, baseline) = measure(i, allocated_constraints)?;
                     child_sizes[i] = Some(child_size);
                     alignment_baselines[i] = baseline;
                     accumulate_cross(child_size, baseline, &mut max_cross, &mut ascent_descent);
@@ -622,13 +633,13 @@ impl RenderFlex {
             FlexDirection::Vertical => constraints.constrain_width(max_cross),
         };
 
-        FlexSizes {
+        Ok(FlexSizes {
             size: self.size_from_main_cross(main_extent, cross_extent),
             child_sizes,
             total_main,
             child_constraints,
             alignment_baselines,
-        }
+        })
     }
 
     /// Compute each child's absolute `Offset` within the flex box.
@@ -783,7 +794,10 @@ impl RenderBox for RenderFlex {
     type Arity = Variable;
     type ParentData = FlexParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, FlexParentData>) -> Size {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Variable, FlexParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
         let constraints = *ctx.constraints();
         let child_count = ctx.child_count();
         self.child_count = child_count;
@@ -804,17 +818,18 @@ impl RenderBox for RenderFlex {
         let baseline_aligned = self.is_baseline_aligned();
         let text_baseline = self.text_baseline;
         let flex_sizes = self.compute_sizes(constraints, &flex_factors, &flex_fits, |i, c| {
-            let child_size = ctx.layout_child(i, c);
+            let child_size = ctx.layout_child(i, c)?;
             let baseline = baseline_aligned
                 .then(|| ctx.child_distance_to_actual_baseline(i, text_baseline))
+                .transpose()?
                 .flatten();
-            (child_size, baseline)
-        });
+            Ok((child_size, baseline))
+        })?;
 
         // Zero-child case: no positioning loop needed.
         if child_count == 0 {
             self.reported_baselines = [None; 2];
-            return flex_sizes.size;
+            return Ok(flex_sizes.size);
         }
 
         // ── Positioning pass ─────────────────────────────────────────────────
@@ -843,7 +858,7 @@ impl RenderBox for RenderFlex {
                 {
                     alignment_baselines[i]
                 } else {
-                    ctx.child_distance_to_actual_baseline(i, kind)
+                    ctx.child_distance_to_actual_baseline(i, kind)?
                 };
 
                 if let Some(baseline_distance) = child_baseline {
@@ -863,14 +878,14 @@ impl RenderBox for RenderFlex {
             }
         }
 
-        flex_sizes.size
+        Ok(flex_sizes.size)
     }
 
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
         ctx: &mut BoxDryLayoutCtx<'_>,
-    ) -> Size {
+    ) -> flui_rendering::RenderResult<Size> {
         let child_count = ctx.child_count();
 
         // Read per-child flex factors/fits via the erased parent-data accessor.
@@ -888,14 +903,16 @@ impl RenderBox for RenderFlex {
 
         let baseline_aligned = self.is_baseline_aligned();
         let text_baseline = self.text_baseline;
-        self.compute_sizes(constraints, &flex_factors, &flex_fits, |i, c| {
-            let child_size = ctx.child_dry_layout(i, c);
-            let baseline = baseline_aligned
-                .then(|| ctx.child_dry_baseline(i, c, text_baseline))
-                .flatten();
-            (child_size, baseline)
-        })
-        .size
+        Ok(self
+            .compute_sizes(constraints, &flex_factors, &flex_fits, |i, c| {
+                let child_size = ctx.child_dry_layout(i, c)?;
+                let baseline = baseline_aligned
+                    .then(|| ctx.child_dry_baseline(i, c, text_baseline))
+                    .transpose()?
+                    .flatten();
+                Ok((child_size, baseline))
+            })?
+            .size)
     }
 
     /// Returns the flex's own baseline recorded during `perform_layout`.
@@ -907,8 +924,11 @@ impl RenderBox for RenderFlex {
     ///
     /// Both kinds are recorded eagerly so the querying parent can choose;
     /// this mirrors `AligningShiftedBox::actual_baseline` (`shifted_box.rs:154`).
-    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f64> {
-        self.reported_baselines[baseline_kind_index(baseline)]
+    fn compute_distance_to_actual_baseline(
+        &self,
+        baseline: TextBaseline,
+    ) -> flui_rendering::RenderResult<Option<f64>> {
+        Ok(self.reported_baselines[baseline_kind_index(baseline)])
     }
 
     /// Dry-baseline equivalent of `compute_distance_to_actual_baseline`.
@@ -922,10 +942,10 @@ impl RenderBox for RenderFlex {
         constraints: BoxConstraints,
         baseline: TextBaseline,
         ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f64> {
+    ) -> flui_rendering::RenderResult<Option<f64>> {
         let child_count = ctx.child_count();
         if child_count == 0 {
-            return None;
+            return Ok(None);
         }
 
         let mut flex_factors: Vec<Option<i32>> = Vec::with_capacity(child_count);
@@ -941,12 +961,13 @@ impl RenderBox for RenderFlex {
         let baseline_aligned = self.is_baseline_aligned();
         let text_baseline = self.text_baseline;
         let flex_sizes = self.compute_sizes(constraints, &flex_factors, &flex_fits, |i, c| {
-            let child_size = ctx.child_dry_layout(i, c);
+            let child_size = ctx.child_dry_layout(i, c)?;
             let baseline = baseline_aligned
                 .then(|| ctx.child_dry_baseline(i, c, text_baseline))
+                .transpose()?
                 .flatten();
-            (child_size, baseline)
-        });
+            Ok((child_size, baseline))
+        })?;
 
         let alignment_baselines = &flex_sizes.alignment_baselines;
         let child_offsets = self.compute_child_offsets(&flex_sizes, alignment_baselines);
@@ -963,7 +984,7 @@ impl RenderBox for RenderFlex {
             {
                 alignment_baselines[i]
             } else {
-                ctx.child_dry_baseline(i, flex_sizes.child_constraints[i], baseline)
+                ctx.child_dry_baseline(i, flex_sizes.child_constraints[i], baseline)?
             };
 
             if let Some(b) = child_baseline {
@@ -982,14 +1003,18 @@ impl RenderBox for RenderFlex {
             }
         }
 
-        reported
+        Ok(reported)
     }
 
     // Closure is load-bearing: a `BoxIntrinsicsCtx::child_*` method path is rejected
     // ("implementation of `FnMut` is not general enough" -- the fn item's ctx lifetime
     // is not higher-ranked), so the closure cannot be replaced by a method reference.
     #[expect(clippy::redundant_closure_for_method_calls)]
-    fn compute_min_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_min_intrinsic_width(
+        &self,
+        height: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         match self.direction {
             FlexDirection::Horizontal => {
                 self.fold_main_axis_intrinsics(ctx, height, |ctx, i, e| {
@@ -1006,7 +1031,11 @@ impl RenderBox for RenderFlex {
     // ("implementation of `FnMut` is not general enough" -- the fn item's ctx lifetime
     // is not higher-ranked), so the closure cannot be replaced by a method reference.
     #[expect(clippy::redundant_closure_for_method_calls)]
-    fn compute_max_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_max_intrinsic_width(
+        &self,
+        height: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         match self.direction {
             FlexDirection::Horizontal => {
                 self.fold_main_axis_intrinsics(ctx, height, |ctx, i, e| {
@@ -1023,7 +1052,11 @@ impl RenderBox for RenderFlex {
     // ("implementation of `FnMut` is not general enough" -- the fn item's ctx lifetime
     // is not higher-ranked), so the closure cannot be replaced by a method reference.
     #[expect(clippy::redundant_closure_for_method_calls)]
-    fn compute_min_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_min_intrinsic_height(
+        &self,
+        width: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         match self.direction {
             FlexDirection::Vertical => self.fold_main_axis_intrinsics(ctx, width, |ctx, i, e| {
                 ctx.child_min_intrinsic_height(i, e)
@@ -1038,7 +1071,11 @@ impl RenderBox for RenderFlex {
     // ("implementation of `FnMut` is not general enough" -- the fn item's ctx lifetime
     // is not higher-ranked), so the closure cannot be replaced by a method reference.
     #[expect(clippy::redundant_closure_for_method_calls)]
-    fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_max_intrinsic_height(
+        &self,
+        width: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         match self.direction {
             FlexDirection::Vertical => self.fold_main_axis_intrinsics(ctx, width, |ctx, i, e| {
                 ctx.child_max_intrinsic_height(i, e)

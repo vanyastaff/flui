@@ -589,7 +589,9 @@ fn placement_paragraph(
     let mut painter = TextPainter::new()
         .with_text(TextSpan::styled("AA", style))
         .with_text_direction(TextDirection::Ltr);
-    painter.layout(&mut context, 0.0, f64::INFINITY);
+    painter
+        .layout(&mut context, 0.0, f64::INFINITY)
+        .expect("valid fixture lays out");
     let baseline = painter.compute_distance_to_actual_baseline(TextBaseline::Alphabetic);
     let mut canvas = Canvas::new();
     painter.paint(&mut canvas, flui_foundation::geometry::Offset::ZERO);

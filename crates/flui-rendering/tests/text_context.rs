@@ -39,7 +39,10 @@ impl RenderBox for PanicsWithTheTextContextLent {
     type Arity = Leaf;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
         let _lent = ctx.text();
         panic!("layout panics while the text context is lent");
     }
@@ -245,9 +248,14 @@ impl RenderBox for MeasuresThroughTheContext {
     type Arity = Leaf;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-        let _lent = ctx.text();
-        Size::new(10.0, 10.0)
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok({
+            let _lent = ctx.text();
+            Size::new(10.0, 10.0)
+        })
     }
 
     fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Leaf, BoxParentData>) -> bool {
@@ -275,6 +283,827 @@ fn needs_paint(owner: &PipelineOwner, id: flui_foundation::RenderId) -> bool {
         .get(id)
         .expect("the node is live")
         .needs_paint()
+}
+
+fn rejected_text_scale_recovers(scale: f64) {
+    let text = ui_runtime_text();
+    let (owner, labels) = mount(
+        &text,
+        box_node(flui_objects::RenderPadding::all(5.0)).child(paragraph("measured")),
+    );
+    let paragraph = labels.get("paragraph").expect("labelled");
+    let root = owner.root_id().expect("mounted root");
+    let (mut owner, result) = owner.run_frame();
+    result.expect("the initial text frame succeeds");
+    let committed = inspect::box_geometry(&owner, root).expect("committed root size");
+
+    let impact = flui_rendering::testing::edit_render_object::<RenderParagraph, _, _>(
+        &mut owner,
+        paragraph,
+        |paragraph| paragraph.set_text_scale_factor(scale),
+    );
+    owner.apply_render_update_impact(paragraph, impact);
+
+    let queries = [
+        owner
+            .box_intrinsic_dimension(root, IntrinsicDimension::MaxWidth, f64::INFINITY)
+            .map(|_| ()),
+        owner.box_dry_layout(root, loose()).map(|_| ()),
+        owner
+            .box_dry_baseline(root, loose(), TextBaseline::Alphabetic)
+            .map(|_| ()),
+    ];
+    for query in queries {
+        assert!(
+            matches!(query, Err(RenderError::TextLayout(_))),
+            "query: {query:?}"
+        );
+    }
+
+    for attempt in 0..4 {
+        let (next, result) = owner.run_frame();
+        owner = next;
+        assert!(
+            matches!(result, Err(RenderError::TextLayout(_))),
+            "attempt {attempt}: {result:?}"
+        );
+        assert!(
+            !owner.is_layout_poisoned(root),
+            "authored input must not poison the root"
+        );
+        assert!(
+            !owner.is_layout_poisoned(paragraph),
+            "authored input must not poison its consumer"
+        );
+        assert_eq!(inspect::box_geometry(&owner, root), Some(committed));
+    }
+
+    let impact = flui_rendering::testing::edit_render_object::<RenderParagraph, _, _>(
+        &mut owner,
+        paragraph,
+        |paragraph| paragraph.set_text_scale_factor(1.0),
+    );
+    owner.apply_render_update_impact(paragraph, impact);
+    let (owner, result) = owner.run_frame();
+    result.expect("corrected text succeeds in the existing tree");
+    assert_eq!(inspect::box_geometry(&owner, root), Some(committed));
+    assert!(!owner.has_dirty_nodes(), "recovery consumes retained work");
+}
+
+fn zero_text_scale_recovers() {
+    rejected_text_scale_recovers(0.0);
+}
+
+fn non_finite_text_scale_recovers() {
+    rejected_text_scale_recovers(f64::NAN);
+}
+
+fn overflowing_text_scale_recovers() {
+    rejected_text_scale_recovers(f64::MAX);
+}
+
+fn rejected_viewport_text_preserves_committed_metrics(shrink_wrap: bool) {
+    use flui_objects::{RenderShrinkWrappingViewport, RenderSliverToBoxAdapter, RenderViewport};
+    use flui_rendering::{constraints::AxisDirection, testing::sliver_node};
+
+    let child = sliver_node(RenderSliverToBoxAdapter::new()).child(paragraph("measured"));
+    let viewport = if shrink_wrap {
+        box_node(RenderShrinkWrappingViewport::new(
+            AxisDirection::TopToBottom,
+        ))
+        .child(child)
+    } else {
+        box_node(RenderViewport::new(AxisDirection::TopToBottom)).child(child)
+    };
+    let (owner, labels) = mount(&ui_runtime_text(), viewport);
+    let paragraph = labels.get("paragraph").expect("labelled paragraph");
+    let root = owner.root_id().expect("mounted viewport");
+    let (mut owner, result) = owner.run_frame();
+    result.expect("valid viewport text lays out");
+    let metrics = |owner: &PipelineOwner| {
+        let node = owner.render_tree().get(root).expect("live viewport");
+        if shrink_wrap {
+            let viewport = node
+                .downcast_render_object::<RenderShrinkWrappingViewport>()
+                .expect("shrink-wrapping viewport");
+            (viewport.max_scroll_extent(), viewport.has_visual_overflow())
+        } else {
+            let viewport = node
+                .downcast_render_object::<RenderViewport>()
+                .expect("viewport");
+            (viewport.max_scroll_extent(), viewport.has_visual_overflow())
+        }
+    };
+    let committed = metrics(&owner);
+    assert!(committed.0 > 0.0, "real text contributes a scroll extent");
+    let impact = flui_rendering::testing::edit_render_object::<RenderParagraph, _, _>(
+        &mut owner,
+        paragraph,
+        |paragraph| paragraph.set_text_scale_factor(f64::MAX),
+    );
+    owner.apply_render_update_impact(paragraph, impact);
+    let (mut owner, result) = owner.run_frame();
+    assert!(matches!(result, Err(RenderError::TextLayout(_))));
+    assert_eq!(
+        metrics(&owner),
+        committed,
+        "a rejected pass publishes no metrics"
+    );
+    let impact = flui_rendering::testing::edit_render_object::<RenderParagraph, _, _>(
+        &mut owner,
+        paragraph,
+        |paragraph| paragraph.set_text_scale_factor(1.0),
+    );
+    owner.apply_render_update_impact(paragraph, impact);
+    let (owner, result) = owner.run_frame();
+    result.expect("corrected text recovers in the mounted viewport");
+    assert_eq!(metrics(&owner), committed);
+}
+
+fn rejected_viewport_text_preserves_metrics() {
+    rejected_viewport_text_preserves_committed_metrics(false);
+}
+
+fn rejected_shrink_wrapping_viewport_text_preserves_metrics() {
+    rejected_viewport_text_preserves_committed_metrics(true);
+}
+
+fn rejected_root_text_preserves_the_published_view_size() {
+    use flui_rendering::view::{RenderView, RenderViewAdapter};
+
+    let (owner, labels) = mount(
+        &ui_runtime_text(),
+        box_node(RenderViewAdapter::new(RenderView::new())).child(paragraph("measured")),
+    );
+    let root = owner.root_id().expect("mounted view");
+    let paragraph = labels.get("paragraph").expect("labelled paragraph");
+    let (mut owner, result) = owner.run_frame();
+    result.expect("initial view lays out");
+    let published_size = |owner: &PipelineOwner| {
+        owner
+            .render_tree()
+            .get(root)
+            .expect("live view")
+            .downcast_render_object::<RenderViewAdapter>()
+            .expect("view adapter")
+            .view
+            .size()
+    };
+    let committed = published_size(&owner);
+    let resized = Size::new(600.0, 500.0);
+    owner.set_root_constraints(Some(BoxConstraints::tight(resized)));
+    let impact = flui_rendering::testing::edit_render_object::<RenderParagraph, _, _>(
+        &mut owner,
+        paragraph,
+        |paragraph| paragraph.set_text_scale_factor(f64::MAX),
+    );
+    owner.apply_render_update_impact(paragraph, impact);
+    let (mut owner, result) = owner.run_frame();
+    assert!(matches!(result, Err(RenderError::TextLayout(_))));
+    assert_eq!(published_size(&owner), committed);
+    assert_eq!(inspect::box_geometry(&owner, root), Some(committed));
+    let impact = flui_rendering::testing::edit_render_object::<RenderParagraph, _, _>(
+        &mut owner,
+        paragraph,
+        |paragraph| paragraph.set_text_scale_factor(1.0),
+    );
+    owner.apply_render_update_impact(paragraph, impact);
+    let (owner, result) = owner.run_frame();
+    result.expect("corrected text completes the pending resize");
+    assert_eq!(published_size(&owner), resized);
+    assert_eq!(inspect::box_geometry(&owner, root), Some(resized));
+}
+
+fn page_resize_survives_text_failure(resize_cross_axis: bool) {
+    use flui_objects::{RenderConstrainedBox, RenderSliverToBoxAdapter, RenderViewport};
+    use flui_rendering::{
+        constraints::AxisDirection,
+        testing::sliver_node,
+        view::{DimensionChangePolicy, ScrollPosition, ViewportOffset},
+    };
+
+    let position = ScrollPosition::new(100.0);
+    position.set_dimension_policy(DimensionChangePolicy::KeepFractionalPage {
+        viewport_fraction: 1.0,
+        initial_page: None,
+    });
+    let (owner, labels) = mount(
+        &ui_runtime_text(),
+        box_node(RenderViewport::with_offset(
+            AxisDirection::TopToBottom,
+            AxisDirection::LeftToRight,
+            position.clone(),
+        ))
+        .child(
+            sliver_node(RenderSliverToBoxAdapter::new()).child(
+                box_node(RenderConstrainedBox::new(BoxConstraints::new(
+                    0.0,
+                    f64::INFINITY,
+                    1000.0,
+                    1000.0,
+                )))
+                .child(paragraph("measured")),
+            ),
+        ),
+    );
+    let paragraph = labels.get("paragraph").expect("labelled paragraph");
+    let (mut owner, result) = owner.run_frame();
+    result.expect("initial page lays out");
+    let committed = position.extents_snapshot();
+    assert_eq!(committed.pixels, 100.0);
+    assert_eq!(committed.viewport_dimension, 400.0);
+    let width = if resize_cross_axis { 500.0 } else { 400.0 };
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(width, 600.0))));
+    let impact = flui_rendering::testing::edit_render_object::<RenderParagraph, _, _>(
+        &mut owner,
+        paragraph,
+        |paragraph| paragraph.set_text_scale_factor(f64::MAX),
+    );
+    owner.apply_render_update_impact(paragraph, impact);
+    let (mut owner, result) = owner.run_frame();
+    assert!(matches!(result, Err(RenderError::TextLayout(_))));
+    assert_eq!(position.viewport_dimension(), 600.0);
+    assert_eq!(
+        position.pixels(),
+        150.0,
+        "the accepted resize keeps the fractional page"
+    );
+    assert_eq!(
+        position.max_scroll_extent(),
+        if resize_cross_axis {
+            committed.max_scroll_extent
+        } else {
+            400.0
+        },
+        "only a successful viewport layout publishes content dimensions"
+    );
+    let impact = flui_rendering::testing::edit_render_object::<RenderParagraph, _, _>(
+        &mut owner,
+        paragraph,
+        |paragraph| paragraph.set_text_scale_factor(1.0),
+    );
+    owner.apply_render_update_impact(paragraph, impact);
+    let (_, result) = owner.run_frame();
+    result.expect("valid text completes the pending page resize");
+    assert_eq!(position.viewport_dimension(), 600.0);
+    assert_eq!(
+        position.pixels(),
+        150.0,
+        "the fractional page survives recovery"
+    );
+}
+
+fn independent_viewport_resize_survives_text_failure() {
+    page_resize_survives_text_failure(false);
+}
+
+fn rejected_viewport_resize_preserves_the_fractional_page() {
+    page_resize_survives_text_failure(true);
+}
+
+fn rejected_tight_text_layout_does_not_stop_the_size_controller() {
+    use flui_animation::{Animation as _, AnimationController, Curves, curve::ArcCurve};
+    use flui_objects::RenderAnimatedSize;
+    use flui_painting::{Alignment, paint::Clip};
+
+    let controller = AnimationController::builder(std::time::Duration::from_secs(1)).build();
+    let (owner, labels) = mount(
+        &ui_runtime_text(),
+        box_node(RenderAnimatedSize::new(
+            controller.clone(),
+            ArcCurve::new(Curves::Linear),
+            Alignment::CENTER,
+            Clip::HardEdge,
+        ))
+        .child(paragraph("measured")),
+    );
+    let paragraph = labels.get("paragraph").expect("labelled paragraph");
+    let root = owner.root_id().expect("mounted size animation");
+    let (mut owner, result) = owner.run_frame();
+    result.expect("initial text lays out");
+    let committed = inspect::box_geometry(&owner, root);
+    controller.forward().expect("controller starts");
+    controller.tick_at(std::time::Duration::ZERO);
+    controller.tick_at(std::time::Duration::from_millis(20));
+    let before = controller.value();
+    assert!(before > 0.0);
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(400.0, 400.0))));
+    let impact = flui_rendering::testing::edit_render_object::<RenderParagraph, _, _>(
+        &mut owner,
+        paragraph,
+        |paragraph| paragraph.set_text_scale_factor(f64::MAX),
+    );
+    owner.apply_render_update_impact(paragraph, impact);
+    let (mut owner, result) = owner.run_frame();
+    assert!(matches!(result, Err(RenderError::TextLayout(_))));
+    assert_eq!(inspect::box_geometry(&owner, root), committed);
+    controller.tick_at(std::time::Duration::from_millis(40));
+    assert!(
+        controller.value() > before,
+        "rejected child layout cannot stop accepted animation"
+    );
+    let impact = flui_rendering::testing::edit_render_object::<RenderParagraph, _, _>(
+        &mut owner,
+        paragraph,
+        |paragraph| paragraph.set_text_scale_factor(1.0),
+    );
+    owner.apply_render_update_impact(paragraph, impact);
+    let (owner, result) = owner.run_frame();
+    result.expect("valid text accepts the tight size");
+    assert_eq!(
+        inspect::box_geometry(&owner, root),
+        Some(Size::new(400.0, 400.0))
+    );
+}
+
+#[test]
+fn rejected_text_layout_is_fallible_through_queries_and_frames() {
+    crate::run_table(&[
+        ("zero_text_scale_recovers", zero_text_scale_recovers),
+        (
+            "non_finite_text_scale_recovers",
+            non_finite_text_scale_recovers,
+        ),
+        (
+            "overflowing_text_scale_recovers",
+            overflowing_text_scale_recovers,
+        ),
+        (
+            "rejected_viewport_text_preserves_metrics",
+            rejected_viewport_text_preserves_metrics,
+        ),
+        (
+            "rejected_shrink_wrapping_viewport_text_preserves_metrics",
+            rejected_shrink_wrapping_viewport_text_preserves_metrics,
+        ),
+        (
+            "rejected_root_text_preserves_the_published_view_size",
+            rejected_root_text_preserves_the_published_view_size,
+        ),
+        (
+            "independent_viewport_resize_survives_text_failure",
+            independent_viewport_resize_survives_text_failure,
+        ),
+        (
+            "rejected_viewport_resize_preserves_the_fractional_page",
+            rejected_viewport_resize_preserves_the_fractional_page,
+        ),
+        (
+            "rejected_tight_text_layout_does_not_stop_the_size_controller",
+            rejected_tight_text_layout_does_not_stop_the_size_controller,
+        ),
+        (
+            "rejected_viewport_correction_preserves_scroll_metrics",
+            rejected_viewport_correction_preserves_scroll_metrics,
+        ),
+        (
+            "rejected_shrink_wrapping_correction_preserves_scroll_metrics",
+            rejected_shrink_wrapping_correction_preserves_scroll_metrics,
+        ),
+        (
+            "rejected_shrink_wrapping_correction_preserves_viewport_dimension",
+            rejected_shrink_wrapping_correction_preserves_viewport_dimension,
+        ),
+        (
+            "scroll_input_during_layout_survives_rejection",
+            scroll_input_during_layout_survives_rejection,
+        ),
+        (
+            "scroll_input_during_shrink_wrapping_layout_survives_rejection",
+            scroll_input_during_shrink_wrapping_layout_survives_rejection,
+        ),
+        (
+            "text_failure_retains_independent_pending_layout",
+            text_failure_retains_independent_pending_layout,
+        ),
+        (
+            "fixed_offset_refuses_a_stale_proposal",
+            fixed_offset_refuses_a_stale_proposal,
+        ),
+        (
+            "scrollable_offset_refuses_a_stale_proposal",
+            scrollable_offset_refuses_a_stale_proposal,
+        ),
+        (
+            "scroll_position_refuses_a_stale_proposal",
+            scroll_position_refuses_a_stale_proposal,
+        ),
+        (
+            "unchanged_nonfinite_offset_is_not_new_input",
+            unchanged_nonfinite_offset_is_not_new_input,
+        ),
+        (
+            "shrink_wrapped_page_resize_measures_the_mapped_position",
+            shrink_wrapped_page_resize_measures_the_mapped_position,
+        ),
+    ]);
+}
+
+/// Real text measurement fails only on the correction pass, after the first
+/// pass discovers that the previous scroll position exceeds the new content.
+#[derive(Debug)]
+struct CorrectionTextSliver {
+    shrink: bool,
+    shrunk_extent: f64,
+    reject: bool,
+    text: TextContextHandle,
+    input_during_measurement: Option<flui_rendering::view::ScrollPosition>,
+}
+
+impl flui_foundation::Diagnosticable for CorrectionTextSliver {}
+
+impl flui_rendering::traits::RenderSliver for CorrectionTextSliver {
+    type Arity = Leaf;
+    type ParentData = flui_rendering::parent_data::SliverPhysicalParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::SliverLayoutContext<'_, Leaf, Self::ParentData>,
+    ) -> flui_rendering::RenderResult<flui_rendering::constraints::SliverGeometry> {
+        let constraints = *ctx.constraints();
+        if let Some(position) = self.input_during_measurement.take() {
+            position.set_pixels(200.0);
+        }
+        let mut painter = flui_painting::TextPainter::new();
+        painter.set_text(Some(
+            TextSpan::new("measured on the correction pass").into(),
+        ));
+        painter.set_text_direction(Some(TextDirection::Ltr));
+        if self.shrink && self.reject && constraints.scroll_offset < 100.0 {
+            painter.set_text_scale_factor(f64::MAX);
+        }
+        self.text
+            .with(|text| painter.layout(text, 0.0, constraints.cross_axis_extent))?;
+        let extent: f64 = if self.shrink {
+            self.shrunk_extent
+        } else {
+            1000.0
+        };
+        let paint_extent =
+            (extent - constraints.scroll_offset).clamp(0.0, constraints.remaining_paint_extent);
+        Ok(
+            flui_rendering::constraints::SliverGeometry::new(extent, paint_extent, 0.0)
+                .with_max_paint_extent(extent),
+        )
+    }
+}
+
+fn rejected_correction_preserves_scroll_metrics(shrink_wrap: bool, shrunk_extent: f64) {
+    use flui_objects::{RenderShrinkWrappingViewport, RenderViewport};
+    use flui_rendering::{
+        constraints::AxisDirection,
+        testing::sliver_node,
+        view::{ScrollPosition, ViewportOffset},
+    };
+
+    let position = ScrollPosition::new(100.0);
+    let text = ui_runtime_text();
+    let child = sliver_node(CorrectionTextSliver {
+        shrink: false,
+        shrunk_extent,
+        reject: true,
+        text: text.clone(),
+        input_during_measurement: None,
+    })
+    .label("content");
+    let viewport = if shrink_wrap {
+        box_node(RenderShrinkWrappingViewport::with_offset(
+            AxisDirection::TopToBottom,
+            AxisDirection::LeftToRight,
+            position.clone(),
+        ))
+        .child(child)
+    } else {
+        box_node(RenderViewport::with_offset(
+            AxisDirection::TopToBottom,
+            AxisDirection::LeftToRight,
+            position.clone(),
+        ))
+        .child(child)
+    };
+    let (mut owner, labels) = mount(&text, viewport);
+    owner.set_root_constraints(Some(BoxConstraints::new(100.0, 100.0, 0.0, 100.0)));
+    let content = labels.get("content").expect("labelled content");
+    let (mut owner, result) = owner.run_frame();
+    result.expect("initial text and scroll metrics are accepted");
+    let committed = position.extents_snapshot();
+    assert_eq!(committed.max_scroll_extent, 900.0);
+    assert_eq!(committed.pixels, 100.0);
+    flui_rendering::testing::edit_render_object::<CorrectionTextSliver, _, _>(
+        &mut owner,
+        content,
+        |sliver| sliver.shrink = true,
+    );
+    owner.mark_needs_layout(content);
+    let (mut owner, result) = owner.run_frame();
+    assert!(
+        matches!(result, Err(RenderError::TextLayout(_))),
+        "the second pass must reach rejected text measurement: {result:?}"
+    );
+    assert_eq!(
+        position.extents_snapshot(),
+        committed,
+        "rejected content dimensions must not reach scroll consumers"
+    );
+    flui_rendering::testing::edit_render_object::<CorrectionTextSliver, _, _>(
+        &mut owner,
+        content,
+        |sliver| sliver.reject = false,
+    );
+    owner.mark_needs_layout(content);
+    let (_, result) = owner.run_frame();
+    result.expect("corrected text completes the pending content change");
+    let max = (shrunk_extent - 100.0).max(0.0);
+    assert_eq!(position.max_scroll_extent(), max);
+    assert_eq!(position.pixels(), max);
+    assert_eq!(
+        position.viewport_dimension(),
+        if shrink_wrap {
+            shrunk_extent.min(100.0)
+        } else {
+            100.0
+        }
+    );
+}
+
+fn rejected_viewport_correction_preserves_scroll_metrics() {
+    rejected_correction_preserves_scroll_metrics(false, 150.0);
+}
+
+fn rejected_shrink_wrapping_correction_preserves_scroll_metrics() {
+    rejected_correction_preserves_scroll_metrics(true, 150.0);
+}
+
+fn rejected_shrink_wrapping_correction_preserves_viewport_dimension() {
+    rejected_correction_preserves_scroll_metrics(true, 50.0);
+}
+
+fn scroll_input_during_layout_is_retried(shrink_wrap: bool) {
+    use flui_objects::{RenderShrinkWrappingViewport, RenderViewport};
+    use flui_rendering::{
+        constraints::AxisDirection,
+        testing::sliver_node,
+        view::{ScrollPosition, ViewportOffset},
+    };
+
+    let text = ui_runtime_text();
+    let position = ScrollPosition::new(100.0);
+    let child = sliver_node(CorrectionTextSliver {
+        shrink: false,
+        shrunk_extent: 150.0,
+        reject: false,
+        text: text.clone(),
+        input_during_measurement: None,
+    })
+    .label("content");
+    let viewport = if shrink_wrap {
+        box_node(RenderShrinkWrappingViewport::with_offset(
+            AxisDirection::TopToBottom,
+            AxisDirection::LeftToRight,
+            position.clone(),
+        ))
+        .child(child)
+    } else {
+        box_node(RenderViewport::with_offset(
+            AxisDirection::TopToBottom,
+            AxisDirection::LeftToRight,
+            position.clone(),
+        ))
+        .child(child)
+    };
+    let (mut owner, labels) = mount(&text, viewport);
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(100.0, 100.0))));
+    let content = labels.get("content").expect("labelled content");
+    let (mut owner, result) = owner.run_frame();
+    result.expect("initial content is accepted");
+    flui_rendering::testing::edit_render_object::<CorrectionTextSliver, _, _>(
+        &mut owner,
+        content,
+        |sliver| sliver.input_during_measurement = Some(position.clone()),
+    );
+    owner.mark_needs_layout(content);
+    let (owner, result) = owner.run_frame();
+    assert!(
+        matches!(result, Err(RenderError::ViewportOffsetChanged)),
+        "stale layout must be refused: {result:?}"
+    );
+    assert_eq!(
+        position.pixels(),
+        200.0,
+        "the latest accepted input remains authoritative"
+    );
+    assert!(
+        !owner.layout_waits_for_input(),
+        "new input already exists and must remain runnable"
+    );
+    let (_, result) = owner.run_frame();
+    result.expect("the next frame measures against the latest input without another invalidation");
+    assert_eq!(position.pixels(), 200.0);
+    assert_eq!(position.max_scroll_extent(), 900.0);
+}
+
+fn scroll_input_during_layout_survives_rejection() {
+    scroll_input_during_layout_is_retried(false);
+}
+
+fn scroll_input_during_shrink_wrapping_layout_survives_rejection() {
+    scroll_input_during_layout_is_retried(true);
+}
+
+fn text_failure_retains_independent_pending_layout() {
+    use flui_objects::{RenderConstrainedBox, RenderSliverToBoxAdapter, RenderViewport};
+    use flui_rendering::{constraints::AxisDirection, testing::sliver_node, view::ScrollPosition};
+
+    let text = ui_runtime_text();
+    let position = ScrollPosition::new(100.0);
+    let viewport = |offset| {
+        RenderViewport::with_offset(
+            AxisDirection::TopToBottom,
+            AxisDirection::LeftToRight,
+            offset,
+        )
+    };
+    let (owner, labels) = mount(
+        &text,
+        box_node(RenderFlex::column())
+            .child(
+                box_node(RenderConstrainedBox::new(BoxConstraints::tight(Size::new(
+                    100.0, 100.0,
+                ))))
+                .child(box_node(viewport(ScrollPosition::new(0.0))).child(
+                    sliver_node(RenderSliverToBoxAdapter::new()).child(paragraph("first boundary")),
+                )),
+            )
+            .child(
+                box_node(RenderConstrainedBox::new(BoxConstraints::tight(Size::new(
+                    100.0, 100.0,
+                ))))
+                .child(
+                    box_node(viewport(position.clone())).child(
+                        sliver_node(CorrectionTextSliver {
+                            shrink: false,
+                            shrunk_extent: 150.0,
+                            reject: false,
+                            text: text.clone(),
+                            input_during_measurement: None,
+                        })
+                        .label("pending content"),
+                    ),
+                ),
+            ),
+    );
+    let paragraph = labels.get("paragraph").expect("labelled paragraph");
+    let content = labels
+        .get("pending content")
+        .expect("labelled pending content");
+    let (mut owner, result) = owner.run_frame();
+    result.expect("both independent boundaries lay out");
+    assert_eq!(position.max_scroll_extent(), 900.0);
+    let impact = flui_rendering::testing::edit_render_object::<RenderParagraph, _, _>(
+        &mut owner,
+        paragraph,
+        |paragraph| paragraph.set_text_scale_factor(f64::MAX),
+    );
+    owner.apply_render_update_impact(paragraph, impact);
+    flui_rendering::testing::edit_render_object::<CorrectionTextSliver, _, _>(
+        &mut owner,
+        content,
+        |sliver| sliver.shrink = true,
+    );
+    owner.mark_needs_layout(content);
+    assert!(
+        owner.nodes_needing_layout().len() >= 2,
+        "the failure and pending content must occupy independent queued boundaries"
+    );
+    let (mut owner, result) = owner.run_frame();
+    assert!(matches!(result, Err(RenderError::TextLayout(_))));
+    assert_eq!(
+        position.max_scroll_extent(),
+        900.0,
+        "later boundary has not run yet"
+    );
+    let impact = flui_rendering::testing::edit_render_object::<RenderParagraph, _, _>(
+        &mut owner,
+        paragraph,
+        |paragraph| paragraph.set_text_scale_factor(1.0),
+    );
+    owner.apply_render_update_impact(paragraph, impact);
+    let (_, result) = owner.run_frame();
+    result.expect("correcting only the first boundary resumes the accepted tail");
+    assert_eq!(
+        position.max_scroll_extent(),
+        50.0,
+        "pending content was laid out without another invalidation"
+    );
+}
+
+fn stale_proposal_preserves_input<O: flui_rendering::view::ViewportOffset>(mut offset: O) {
+    use flui_rendering::view::ViewportLayout as _;
+
+    let mut proposal = offset.begin_layout();
+    proposal.correct_by(5.0);
+    offset.correct_by(20.0);
+    assert!(matches!(
+        offset.accept_layout(proposal),
+        Err(RenderError::ViewportOffsetChanged)
+    ));
+    assert_eq!(
+        offset.pixels(),
+        20.0,
+        "stale proposals cannot overwrite accepted input"
+    );
+    let mut proposal = offset.begin_layout();
+    proposal.correct_by(5.0);
+    offset
+        .accept_layout(proposal)
+        .expect("a fresh proposal remains acceptable");
+    assert_eq!(offset.pixels(), 25.0);
+}
+
+fn fixed_offset_refuses_a_stale_proposal() {
+    stale_proposal_preserves_input(flui_rendering::view::FixedViewportOffset::zero());
+}
+
+fn scrollable_offset_refuses_a_stale_proposal() {
+    stale_proposal_preserves_input(flui_rendering::view::ScrollableViewportOffset::zero());
+}
+
+fn scroll_position_refuses_a_stale_proposal() {
+    stale_proposal_preserves_input(flui_rendering::view::ScrollPosition::new(0.0));
+}
+
+fn unchanged_nonfinite_offset_is_not_new_input() {
+    use flui_rendering::view::{
+        FixedViewportOffset, ScrollPosition, ScrollableViewportOffset, ViewportOffset,
+    };
+    fn unchanged<O: ViewportOffset>(mut offset: O) {
+        let proposal = offset.begin_layout();
+        offset
+            .accept_layout(proposal)
+            .expect("unchanged admitted input is not a transient change");
+    }
+    unchanged(FixedViewportOffset::new(f64::NAN));
+    unchanged(ScrollableViewportOffset::new(f64::NAN));
+    unchanged(ScrollPosition::new(f64::NAN));
+}
+
+fn shrink_wrapped_page_resize_measures_the_mapped_position() {
+    use flui_objects::{
+        RenderConstrainedBox, RenderShrinkWrappingViewport, RenderSliverToBoxAdapter,
+    };
+    use flui_rendering::{
+        constraints::AxisDirection,
+        testing::sliver_node,
+        view::{DimensionChangePolicy, ScrollPosition, ViewportOffset},
+    };
+
+    let position = ScrollPosition::new(100.0);
+    position.set_dimension_policy(DimensionChangePolicy::KeepFractionalPage {
+        viewport_fraction: 1.0,
+        initial_page: None,
+    });
+    let (mut owner, labels) = mount(
+        &ui_runtime_text(),
+        box_node(RenderShrinkWrappingViewport::with_offset(
+            AxisDirection::TopToBottom,
+            AxisDirection::LeftToRight,
+            position.clone(),
+        ))
+        .child(
+            sliver_node(RenderSliverToBoxAdapter::new()).child(
+                box_node(RenderConstrainedBox::new(BoxConstraints::new(
+                    0.0,
+                    f64::INFINITY,
+                    1000.0,
+                    1000.0,
+                )))
+                .label("page content")
+                .child(paragraph("page text")),
+            ),
+        ),
+    );
+    let content = labels.get("page content").expect("labelled page content");
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(100.0, 200.0))));
+    let (mut owner, result) = owner.run_frame();
+    result.expect("initial fractional page is measured");
+    assert_eq!(position.pixels(), 100.0);
+    assert_eq!(
+        inspect::render_offset(&owner, content)
+            .expect("measured content")
+            .dy,
+        -100.0
+    );
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(100.0, 400.0))));
+    let (owner, result) = owner.run_frame();
+    result.expect("resized fractional page is measured");
+    assert_eq!(position.pixels(), 200.0);
+    assert_eq!(
+        inspect::render_offset(&owner, content)
+            .expect("resized content")
+            .dy,
+        -200.0,
+        "accepted page mapping and committed child geometry must describe the same position"
+    );
 }
 
 /// A column of a paragraph and a leaf that measures nothing, laid out once.

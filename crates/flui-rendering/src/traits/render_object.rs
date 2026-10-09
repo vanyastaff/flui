@@ -346,10 +346,14 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
         _extent: f64,
         _child_count: usize,
         _child_parent_data: &[Option<&dyn ParentData>],
-        _child_query: &mut dyn FnMut(usize, crate::storage::IntrinsicDimension, f64) -> f64,
+        _child_query: &mut dyn FnMut(
+            usize,
+            crate::storage::IntrinsicDimension,
+            f64,
+        ) -> crate::error::RenderResult<f64>,
         _text: crate::pipeline::TextSource<'_>,
-    ) -> f64 {
-        0.0
+    ) -> crate::error::RenderResult<f64> {
+        Ok(0.0)
     }
 
     /// Computes the dry-layout geometry for `constraints` — the
@@ -369,10 +373,12 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
         _child_query: &mut dyn FnMut(
             usize,
             crate::context::DryLayoutChildRequest,
-        ) -> crate::context::DryLayoutChildResponse,
+        ) -> crate::error::RenderResult<
+            crate::context::DryLayoutChildResponse,
+        >,
         _text: crate::pipeline::TextSource<'_>,
-    ) -> ProtocolGeometry<P> {
-        P::default_geometry()
+    ) -> crate::error::RenderResult<ProtocolGeometry<P>> {
+        Ok(P::default_geometry())
     }
 
     /// Computes the dry baseline for `constraints` — where the first
@@ -391,10 +397,12 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
         _child_query: &mut dyn FnMut(
             usize,
             crate::context::DryBaselineChildRequest,
-        ) -> crate::context::DryBaselineChildResponse,
+        ) -> crate::error::RenderResult<
+            crate::context::DryBaselineChildResponse,
+        >,
         _text: crate::pipeline::TextSource<'_>,
-    ) -> Option<f64> {
-        None
+    ) -> crate::error::RenderResult<Option<f64>> {
+        Ok(None)
     }
 
     /// Distance from the top of this box to its first baseline of `baseline`
@@ -403,8 +411,11 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     ///
     /// Default: `None` (no baseline). Box objects override via
     /// [`RenderBox::compute_distance_to_actual_baseline`](crate::traits::RenderBox::compute_distance_to_actual_baseline).
-    fn actual_baseline_raw(&self, _baseline: crate::traits::TextBaseline) -> Option<f64> {
-        None
+    fn actual_baseline_raw(
+        &self,
+        _baseline: crate::traits::TextBaseline,
+    ) -> crate::error::RenderResult<Option<f64>> {
+        Ok(None)
     }
 
     /// Whether this object has no baseline of its own and answers a live

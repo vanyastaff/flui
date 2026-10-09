@@ -36,8 +36,99 @@ fn plain(text: &str) -> Vec<(String, Option<TextStyle>)> {
     vec![(text.to_owned(), None)]
 }
 
+fn invalid_direct_shape_size_does_not_unwind(font_size: f32) {
+    let mut context = TextContext::new(&FontCollection::new());
+    let spans = plain("AAA");
+    let mut paragraph = spec(&spans, Some(400.0));
+    paragraph.font_size = font_size;
+    let result =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| context.shape(&paragraph)));
+    let result = result.expect("an invalid public shape request must not panic");
+    assert!(matches!(
+        result,
+        Err(flui_painting::TextLayoutError::InvalidFontSize { .. })
+    ));
+}
+
+pub(crate) fn direct_shape_zero_size_is_an_ordinary_error() {
+    invalid_direct_shape_size_does_not_unwind(0.0);
+}
+
+pub(crate) fn direct_shape_negative_size_is_an_ordinary_error() {
+    invalid_direct_shape_size_does_not_unwind(-1.0);
+}
+
+pub(crate) fn direct_shape_nonfinite_size_is_an_ordinary_error() {
+    invalid_direct_shape_size_does_not_unwind(f32::INFINITY);
+}
+
+pub(crate) fn direct_shape_finite_size_cannot_publish_nonfinite_metrics() {
+    let fonts = FontCollection::new();
+    fonts
+        .register_font(include_bytes!("../assets/fonts/Roboto-Regular.ttf"))
+        .expect("the fixture font loads");
+    let mut context = TextContext::new(&fonts);
+    let spans = plain("");
+    let mut paragraph = spec(&spans, Some(400.0));
+    paragraph.font_size = f32::MAX;
+    let result =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| context.shape(&paragraph)));
+    let result = result.expect("derived metric overflow must be an ordinary error, not panic");
+    assert!(matches!(
+        result,
+        Err(flui_painting::TextLayoutError::InvalidLineHeight { .. })
+    ));
+
+    let spans = plain("\n\n");
+    let mut paragraph = spec(&spans, Some(400.0));
+    paragraph.line_height = Some(f32::MAX);
+    let result =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| context.shape(&paragraph)))
+            .expect("derived metric overflow must not panic");
+    assert!(matches!(
+        result,
+        Err(flui_painting::TextLayoutError::NonFiniteGeometry)
+    ));
+}
+
 fn shape(context: &mut TextContext, text: &str, max_width: Option<f32>) -> ParagraphLayout {
-    context.shape(&spec(&plain(text), max_width))
+    context
+        .shape(&spec(&plain(text), max_width))
+        .expect("valid fixture shapes")
+}
+
+pub(crate) fn aligned_extreme_text_keeps_finite_paint_bounds() {
+    let fonts = FontCollection::new();
+    fonts
+        .register_font(include_bytes!("../assets/fonts/Roboto-Regular.ttf"))
+        .expect("the fixture font loads");
+    let mut context = TextContext::new(&fonts);
+    let spans = plain("A");
+    let width = f32::MAX * 0.9;
+    let mut paragraph = spec(&spans, Some(width));
+    let style = TextStyle {
+        font_family: Some("Roboto".to_owned()),
+        ..Default::default()
+    };
+    paragraph.default_style = Some(&style);
+    paragraph.font_size = f32::MAX / 4.0;
+    paragraph.min_width = width;
+    paragraph.text_align = flui_painting::typography::TextAlign::Right;
+    let layout = context
+        .shape(&paragraph)
+        .expect("the line geometry is finite");
+    let shaped = layout.to_shaped(None);
+    assert!(
+        shaped.runs().any(|run| !run.glyphs().is_empty()),
+        "the fixture must paint an actual glyph"
+    );
+    let ink = shaped
+        .ink_bounds()
+        .expect("the registered face has outline bounds");
+    assert!(
+        ink.is_finite(),
+        "aligned glyph ink must remain finite: {ink:?}"
+    );
 }
 
 /// The fields a shaped paragraph reports, as one comparable tuple.
@@ -114,6 +205,7 @@ pub(crate) fn a_face_registered_after_the_fork_shapes_in_every_ui_runtime() {
                 font_size: SIZE,
                 ..spec(&spans, None)
             })
+            .expect("valid fixture shapes")
             .metrics()
             .width
     };

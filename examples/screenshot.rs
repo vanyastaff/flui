@@ -74,7 +74,7 @@ use flui_testing::bootstrap::{MountOptions, MountOwners};
 use flui_view::IntoView;
 use flui_widgets::{FocusRoot, GestureArenaScope, VsyncScope};
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let demo = args.next().unwrap_or_else(|| "material".to_string());
     let width: u32 = args.next().and_then(|s| s.parse().ok()).unwrap_or(900);
@@ -129,7 +129,7 @@ fn main() {
         "animated-box" => capture(animated_box_app::App::new(), width, height, &raster),
         "colored-box" => capture(colored_box_app::App, width, height, &raster),
         "text" => capture(text_app::App, width, height, &raster),
-        "telemetry-overlay" => raster(&telemetry_overlay_layers()),
+        "telemetry-overlay" => raster(&telemetry_overlay_layers()?),
         // The collapsing-sliver scene at three scroll depths — a visual
         // check on the SliverAppBar / FlexibleSpaceBar / pinned-header
         // pipeline (expanded, mid-collapse with the background fading and
@@ -156,9 +156,10 @@ fn main() {
     .expect("encode the captured pixels as PNG");
 
     println!("wrote {out_path} ({demo}, {width}x{height})");
+    Ok(())
 }
 
-fn telemetry_overlay_layers() -> LayerTree {
+fn telemetry_overlay_layers() -> Result<LayerTree, flui_painting::TextLayoutError> {
     let overlay = PerformanceOverlayLayer::record(
         &mut flui_painting::TextContext::new(&flui_painting::FontCollection::new()),
         PerformanceOverlayLayer::default_bounds(),
@@ -170,9 +171,9 @@ fn telemetry_overlay_layers() -> LayerTree {
                 "present_p99=16ms input_p99=24ms deferred=3 dropped=1 input_truncated=false",
             ),
         },
-    );
+    )?;
 
-    LayerTree::new(Layer::from(overlay))
+    Ok(LayerTree::new(Layer::from(overlay)))
 }
 
 /// Mount `root_view` headlessly at `width`×`height`, drive its bootstrap frame,

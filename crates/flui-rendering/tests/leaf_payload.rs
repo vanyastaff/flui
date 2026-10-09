@@ -41,8 +41,11 @@ impl Diagnosticable for Source {}
 impl RenderBox for Source {
     type Arity = Leaf;
     type ParentData = BoxParentData;
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-        match self.failure {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok(match self.failure {
             1 => std::panic::panic_any(Bomb(Arc::clone(&self.drops))),
             2 => std::panic::panic_any(CompetingBombs {
                 _first: Bomb(Arc::clone(&self.drops)),
@@ -50,7 +53,7 @@ impl RenderBox for Source {
             }),
             3 => panic!("ordinary source failure"),
             _ => ctx.constraints().constrain(Size::new(10.0, 20.0)),
-        }
+        })
     }
     fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Leaf, BoxParentData>) -> bool {
         false
@@ -108,9 +111,11 @@ impl RenderBox for BoxParent {
     fn perform_layout(
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
-    ) -> Size {
-        throw_source_failure(&self.0);
-        ctx.layout_child(0, *ctx.constraints())
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok({
+            throw_source_failure(&self.0);
+            ctx.layout_child(0, *ctx.constraints())?
+        })
     }
 }
 
@@ -123,10 +128,12 @@ impl flui_rendering::traits::RenderSliver for SliverParent {
     fn perform_layout(
         &mut self,
         ctx: &mut flui_rendering::context::SliverLayoutContext<'_, Self::Arity, Self::ParentData>,
-    ) -> flui_rendering::constraints::SliverGeometry {
-        throw_source_failure(&self.0);
-        let size = ctx.layout_box_child(0, BoxConstraints::tight(Size::new(10.0, 20.0)));
-        flui_rendering::constraints::SliverGeometry::new(size.height, size.height, 0.0)
+    ) -> flui_rendering::RenderResult<flui_rendering::constraints::SliverGeometry> {
+        Ok({
+            throw_source_failure(&self.0);
+            let size = ctx.layout_box_child(0, BoxConstraints::tight(Size::new(10.0, 20.0)))?;
+            flui_rendering::constraints::SliverGeometry::new(size.height, size.height, 0.0)
+        })
     }
 }
 fn throw_source_failure(source: &Source) {
@@ -150,10 +157,12 @@ impl RenderBox for SliverHost {
     fn perform_layout(
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
-    ) -> Size {
-        self.0
-            .set(ctx.layout_sliver_child(0, crate::common::vertical_constraints(0.0)));
-        ctx.constraints().biggest()
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok({
+            self.0
+                .set(ctx.layout_sliver_child(0, crate::common::vertical_constraints(0.0))?);
+            ctx.constraints().biggest()
+        })
     }
 }
 

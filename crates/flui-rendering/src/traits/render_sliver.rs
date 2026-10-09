@@ -27,7 +27,7 @@ use crate::{
 ///
 /// 1. Parent (viewport) calls `perform_layout()` with context
 /// 2. Sliver determines visible portion based on scroll offset
-/// 3. Sliver returns the computed `SliverGeometry` as the return value
+/// 3. Sliver returns the computed `SliverGeometry` or a typed layout error
 /// 4. Viewport composes geometries to build scrollable view
 ///
 /// # Key Concepts
@@ -44,10 +44,10 @@ use crate::{
 ///     type Arity = Variable;
 ///     type ParentData = SliverMultiBoxAdaptorParentData;
 ///
-///     fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<Variable, Self::ParentData>) -> SliverGeometry {
+///     fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<Variable, Self::ParentData>) -> RenderResult<SliverGeometry> {
 ///         let scroll_offset = ctx.constraints().scroll_offset;
 ///         // ... compute visible items ...
-///         SliverGeometry { ... }
+///         Ok(SliverGeometry { ... })
 ///     }
 /// }
 /// ```
@@ -78,7 +78,7 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     fn perform_layout(
         &mut self,
         ctx: &mut SliverLayoutContext<'_, Self::Arity, Self::ParentData>,
-    ) -> SliverGeometry;
+    ) -> crate::error::RenderResult<SliverGeometry>;
 
     // 2B field dedup: `SliverGeometry` and `SliverConstraints` live
     // **only** on `RenderState<SliverProtocol>` (committed from the
@@ -524,7 +524,7 @@ where
             crate::protocol::SliverLayoutCtx::<T::Arity, T::ParentData>::from_erased(ctx);
         let mut layout_ctx =
             crate::context::SliverLayoutContext::<T::Arity, T::ParentData>::new(typed_inner);
-        Ok(T::perform_layout(self, &mut layout_ctx))
+        T::perform_layout(self, &mut layout_ctx)
     }
 
     fn paint_raw(

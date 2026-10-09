@@ -771,7 +771,11 @@ struct ScaffoldLayoutDelegate {
 }
 
 impl MultiChildLayoutDelegate for ScaffoldLayoutDelegate {
-    fn perform_layout(&self, ctx: &mut dyn MultiChildLayoutContext, size: Size) {
+    fn perform_layout(
+        &self,
+        ctx: &mut dyn MultiChildLayoutContext,
+        size: Size,
+    ) -> flui_sdk::rendering::RenderResult<()> {
         // Tight width, loose height (0..size.height) — the app bar reports
         // its own preferred height within that loose band. Oracle:
         // `fullWidthConstraints = looseConstraints.tighten(width: size.width)`
@@ -780,7 +784,7 @@ impl MultiChildLayoutDelegate for ScaffoldLayoutDelegate {
 
         let mut content_top = 0.0;
         if ctx.has_child(SLOT_APP_BAR) {
-            let app_bar_size = ctx.layout_child(SLOT_APP_BAR, full_width_loose_height);
+            let app_bar_size = ctx.layout_child(SLOT_APP_BAR, full_width_loose_height)?;
             // `content_top` is the app bar's MEASURED height — already
             // includes whatever top inset the app bar consumed internally
             // (see the module docs). Adding `min_insets.top` again here
@@ -797,7 +801,7 @@ impl MultiChildLayoutDelegate for ScaffoldLayoutDelegate {
         // `content_bottom` itself depends on this height (below).
         let mut bottom_widgets_height = 0.0;
         if ctx.has_child(SLOT_BOTTOM_NAV) {
-            let bottom_nav_size = ctx.layout_child(SLOT_BOTTOM_NAV, full_width_loose_height);
+            let bottom_nav_size = ctx.layout_child(SLOT_BOTTOM_NAV, full_width_loose_height)?;
             bottom_widgets_height += bottom_nav_size.height;
             let bottom_nav_top = (size.height - bottom_widgets_height).max(0.0);
             ctx.position_child(SLOT_BOTTOM_NAV, Offset::new(0.0, bottom_nav_top));
@@ -815,7 +819,7 @@ impl MultiChildLayoutDelegate for ScaffoldLayoutDelegate {
             // Loose constraints, not tight-width — see the module docs.
             let body_max_height = (content_bottom - content_top).max(0.0);
             let body_constraints = BoxConstraints::new(0.0, size.width, 0.0, body_max_height);
-            ctx.layout_child(SLOT_BODY, body_constraints);
+            ctx.layout_child(SLOT_BODY, body_constraints)?;
             ctx.position_child(SLOT_BODY, Offset::new(0.0, content_top));
         }
 
@@ -830,7 +834,7 @@ impl MultiChildLayoutDelegate for ScaffoldLayoutDelegate {
         // exactly like any other child-size change).
         let mut snack_bar_size = Size::ZERO;
         if ctx.has_child(SLOT_SNACK_BAR) {
-            snack_bar_size = ctx.layout_child(SLOT_SNACK_BAR, full_width_loose_height);
+            snack_bar_size = ctx.layout_child(SLOT_SNACK_BAR, full_width_loose_height)?;
             ctx.position_child(
                 SLOT_SNACK_BAR,
                 Offset::new(0.0, content_bottom - snack_bar_size.height),
@@ -842,7 +846,7 @@ impl MultiChildLayoutDelegate for ScaffoldLayoutDelegate {
             // size, never forced from `size` (oracle: `layoutChild(...,
             // looseConstraints)`, `:1160`).
             let fab_size =
-                ctx.layout_child(SLOT_FLOATING_ACTION_BUTTON, BoxConstraints::loose(size));
+                ctx.layout_child(SLOT_FLOATING_ACTION_BUTTON, BoxConstraints::loose(size))?;
 
             // `FloatingActionButtonLocation.endFloat` (`FabEndOffsetX` +
             // `FabFloatOffsetY`, `floating_action_button_location.dart:517-528,
@@ -889,13 +893,14 @@ impl MultiChildLayoutDelegate for ScaffoldLayoutDelegate {
         // internal open/closed sizing (an edge strip when closed, the full
         // area when open).
         if ctx.has_child(SLOT_DRAWER) {
-            ctx.layout_child(SLOT_DRAWER, BoxConstraints::tight(size));
+            ctx.layout_child(SLOT_DRAWER, BoxConstraints::tight(size))?;
             ctx.position_child(SLOT_DRAWER, Offset::ZERO);
         }
         if ctx.has_child(SLOT_END_DRAWER) {
-            ctx.layout_child(SLOT_END_DRAWER, BoxConstraints::tight(size));
+            ctx.layout_child(SLOT_END_DRAWER, BoxConstraints::tight(size))?;
             ctx.position_child(SLOT_END_DRAWER, Offset::ZERO);
         }
+        Ok(())
     }
 
     fn get_size(&self, constraints: BoxConstraints) -> Size {

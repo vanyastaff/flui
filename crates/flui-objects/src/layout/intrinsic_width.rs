@@ -174,8 +174,8 @@ impl RenderIntrinsicWidth {
     fn child_constraints(
         &self,
         constraints: BoxConstraints,
-        mut intrinsic: impl FnMut(IntrinsicDimension, f64) -> f64,
-    ) -> BoxConstraints {
+        mut intrinsic: impl FnMut(IntrinsicDimension, f64) -> flui_rendering::RenderResult<f64>,
+    ) -> flui_rendering::RenderResult<BoxConstraints> {
         // Width axis.
         let width = if constraints.has_tight_width() {
             // Parent already determined width; skip the intrinsic query.
@@ -183,7 +183,7 @@ impl RenderIntrinsicWidth {
         } else {
             // Always force to intrinsic (apply_step with None ≡ identity).
             // Raw query arg: constraints.max_height, not step-snapped.
-            let raw = intrinsic(IntrinsicDimension::MaxWidth, constraints.max_height);
+            let raw = intrinsic(IntrinsicDimension::MaxWidth, constraints.max_height)?;
             Some(apply_step(raw, self.step_width))
         };
 
@@ -193,12 +193,12 @@ impl RenderIntrinsicWidth {
             None
         } else {
             // Raw query arg: constraints.max_width (NOT the computed width above).
-            let raw = intrinsic(IntrinsicDimension::MaxHeight, constraints.max_width);
+            let raw = intrinsic(IntrinsicDimension::MaxHeight, constraints.max_width)?;
             Some(apply_step(raw, self.step_height))
         };
 
         // tighten clamps to [min, max]: step-then-clamp.
-        constraints.tighten(width, height)
+        Ok(constraints.tighten(width, height))
     }
 }
 
@@ -217,12 +217,15 @@ impl RenderBox for RenderIntrinsicWidth {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
         let constraints = *ctx.constraints();
 
         if ctx.child_count() == 0 {
             self.has_child = false;
-            return constraints.smallest();
+            return Ok(constraints.smallest());
         }
         self.has_child = true;
 
@@ -232,10 +235,10 @@ impl RenderBox for RenderIntrinsicWidth {
         // identical here.
         let child_constraints = self.child_constraints(constraints, |dim, extent| {
             ctx.child_intrinsic(0, dim, extent)
-        });
-        let child_size = ctx.layout_child(0, child_constraints);
+        })?;
+        let child_size = ctx.layout_child(0, child_constraints)?;
         ctx.position_child(0, Offset::ZERO);
-        constraints.constrain(child_size)
+        Ok(constraints.constrain(child_size))
     }
 
     flui_rendering::forward_single_child_box_hit_test!();
@@ -255,51 +258,67 @@ impl RenderBox for RenderIntrinsicWidth {
     //   width at infinity), then query the child's
     //   min/max intrinsic height at that resolved width and apply `step_height`.
 
-    fn compute_min_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_min_intrinsic_width(
+        &self,
+        height: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         self.compute_max_intrinsic_width(height, ctx)
     }
 
-    fn compute_max_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_max_intrinsic_width(
+        &self,
+        height: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         if ctx.child_count() == 0 {
-            return 0.0;
+            return Ok(0.0);
         }
-        let child_max = ctx.child_max_intrinsic_width(0, height);
-        apply_step(child_max, self.step_width)
+        let child_max = ctx.child_max_intrinsic_width(0, height)?;
+        Ok(apply_step(child_max, self.step_width))
     }
 
-    fn compute_min_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_min_intrinsic_height(
+        &self,
+        width: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         if ctx.child_count() == 0 {
-            return 0.0;
+            return Ok(0.0);
         }
         let width = if width.is_finite() {
             width
         } else {
-            self.compute_max_intrinsic_width(f64::INFINITY, ctx)
+            self.compute_max_intrinsic_width(f64::INFINITY, ctx)?
         };
-        let child_min = ctx.child_min_intrinsic_height(0, width);
-        apply_step(child_min, self.step_height)
+        let child_min = ctx.child_min_intrinsic_height(0, width)?;
+        Ok(apply_step(child_min, self.step_height))
     }
 
-    fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_max_intrinsic_height(
+        &self,
+        width: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         if ctx.child_count() == 0 {
-            return 0.0;
+            return Ok(0.0);
         }
         let width = if width.is_finite() {
             width
         } else {
-            self.compute_max_intrinsic_width(f64::INFINITY, ctx)
+            self.compute_max_intrinsic_width(f64::INFINITY, ctx)?
         };
-        let child_max = ctx.child_max_intrinsic_height(0, width);
-        apply_step(child_max, self.step_height)
+        let child_max = ctx.child_max_intrinsic_height(0, width)?;
+        Ok(apply_step(child_max, self.step_height))
     }
 
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
         ctx: &mut BoxDryLayoutCtx<'_>,
-    ) -> Size {
+    ) -> flui_rendering::RenderResult<Size> {
         if ctx.child_count() == 0 {
-            return constraints.smallest();
+            return Ok(constraints.smallest());
         }
         // Structurally identical to perform_layout: child_constraints issues
         // intrinsic sub-queries through the new DryLayoutChildRequest::Intrinsic
@@ -307,9 +326,9 @@ impl RenderBox for RenderIntrinsicWidth {
         // intrinsic_query — dry ≡ committed.
         let child_constraints = self.child_constraints(constraints, |dim, extent| {
             ctx.child_intrinsic(0, dim, extent)
-        });
-        let child_size = ctx.child_dry_layout(0, child_constraints);
-        constraints.constrain(child_size)
+        })?;
+        let child_size = ctx.child_dry_layout(0, child_constraints)?;
+        Ok(constraints.constrain(child_size))
     }
 
     fn compute_dry_baseline(
@@ -317,15 +336,15 @@ impl RenderBox for RenderIntrinsicWidth {
         constraints: BoxConstraints,
         baseline: flui_rendering::traits::TextBaseline,
         ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f64> {
+    ) -> flui_rendering::RenderResult<Option<f64>> {
         if ctx.child_count() == 0 {
-            return None;
+            return Ok(None);
         }
         // Same child_constraints helper; the intrinsic closure routes through
         // BoxDryBaselineCtx's intrinsic channel.
         let child_constraints = self.child_constraints(constraints, |dim, extent| {
             ctx.child_intrinsic(0, dim, extent)
-        });
+        })?;
         ctx.child_dry_baseline(0, child_constraints, baseline)
     }
 }

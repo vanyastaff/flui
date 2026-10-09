@@ -17,8 +17,8 @@ struct ProbeLeaf { protected: bool }
 impl RenderBox for ProbeLeaf {
     type Arity = Leaf;
     type ParentData = BoxParentData;
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_,Leaf,BoxParentData>) -> Size { ctx.constraints().biggest() }
-    fn compute_dry_layout(&self, constraints: BoxConstraints, _: &mut BoxDryLayoutCtx<'_>) -> Size { constraints.biggest() }
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_,Leaf,BoxParentData>) -> flui::rendering::RenderResult<Size> { Ok(ctx.constraints().biggest()) }
+    fn compute_dry_layout(&self, constraints: BoxConstraints, _: &mut BoxDryLayoutCtx<'_>) -> flui::rendering::RenderResult<Size> { Ok(constraints.biggest()) }
     fn paint(&self, ctx: &mut PaintCx<'_,Leaf>) {
         let size = ctx.size();
         let color = if self.protected { Color::rgb(60,100,180) } else { Color::rgb(180,40,40) };

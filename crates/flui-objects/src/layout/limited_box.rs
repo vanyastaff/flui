@@ -166,21 +166,24 @@ impl RenderBox for RenderLimitedBox {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
         let incoming = *ctx.constraints();
         let limited = self.limit_constraints(incoming);
 
         if ctx.child_count() > 0 {
             self.has_child = true;
-            let child_size = ctx.layout_child(0, limited);
+            let child_size = ctx.layout_child(0, limited)?;
             ctx.position_child(0, Offset::ZERO);
-            incoming.constrain(child_size)
+            Ok(incoming.constrain(child_size))
         } else {
             self.has_child = false;
             // With no child, take the minimum of (incoming.min,
             // limited.max) for each axis — i.e. become as small as possible
             // without violating the parent's lower bound.
-            incoming.constrain(Size::new(limited.min_width, limited.min_height))
+            Ok(incoming.constrain(Size::new(limited.min_width, limited.min_height)))
         }
     }
 
@@ -192,15 +195,15 @@ impl RenderBox for RenderLimitedBox {
         &self,
         constraints: BoxConstraints,
         ctx: &mut flui_rendering::context::BoxDryLayoutCtx<'_>,
-    ) -> Size {
+    ) -> flui_rendering::RenderResult<Size> {
         // With a child, its dry size under the limited constraints,
         // re-constrained by the incoming set; without one, the smallest
         // size satisfying the limited constraints.
         let limited = self.limit_constraints(constraints);
         if ctx.child_count() > 0 {
-            constraints.constrain(ctx.child_dry_layout(0, limited))
+            Ok(constraints.constrain(ctx.child_dry_layout(0, limited)?))
         } else {
-            constraints.constrain(Size::new(limited.min_width, limited.min_height))
+            Ok(constraints.constrain(Size::new(limited.min_width, limited.min_height)))
         }
     }
 
@@ -209,7 +212,7 @@ impl RenderBox for RenderLimitedBox {
         constraints: BoxConstraints,
         baseline: flui_rendering::traits::TextBaseline,
         ctx: &mut flui_rendering::context::BoxDryBaselineCtx<'_>,
-    ) -> Option<f64> {
+    ) -> flui_rendering::RenderResult<Option<f64>> {
         flui_rendering::context::proxy_queries::forward_dry_baseline(constraints, baseline, ctx)
     }
 }

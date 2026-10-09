@@ -1753,6 +1753,14 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         self.scheduler.has_dirty_nodes()
     }
 
+    /// Whether retained layout work needs a fresh layout invalidation before
+    /// an automatic frame retry can make progress. Explicit `run_frame` calls
+    /// may still inspect the rejection; a changed input resumes ordinary scheduling.
+    #[must_use]
+    pub fn layout_waits_for_input(&self) -> bool {
+        self.scheduler.layout_waits_for_input()
+    }
+
     /// Clears all dirty node lists without processing them.
     ///
     /// Use with caution — this discards pending work.

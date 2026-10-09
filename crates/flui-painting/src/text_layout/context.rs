@@ -759,6 +759,7 @@ mod tests {
                     max_lines: None,
                     ellipsis: None,
                 })
+                .expect("valid fixture shapes")
                 .metrics()
                 .width
         }
@@ -990,6 +991,7 @@ mod tests {
                 max_lines: None,
                 ellipsis: None,
             })
+            .expect("valid fixture shapes")
             .metrics()
             .width;
         assert!(width > 1.0, "a context still shapes, got {width}");
@@ -1045,6 +1047,7 @@ mod tests {
                     max_lines: None,
                     ellipsis: None,
                 })
+                .expect("valid fixture shapes")
                 .metrics()
                 .width
         };
@@ -1117,6 +1120,7 @@ mod tests {
                     max_lines: None,
                     ellipsis: None,
                 })
+                .expect("valid fixture shapes")
                 .to_shaped(None);
             let run = paragraph.runs().next().expect("Roboto shapes a run");
             if let Some(registry) = registry {
@@ -1415,6 +1419,7 @@ mod tests {
                     max_lines: None,
                     ellipsis: None,
                 })
+                .expect("valid fixture shapes")
                 .to_shaped(None);
             let glyphs: Vec<_> = paragraph
                 .runs()

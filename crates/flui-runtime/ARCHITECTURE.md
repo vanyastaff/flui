@@ -11,6 +11,13 @@ host.
 
 ## Invariants
 
+- **Invalid authored text waits for changed input.** A typed text-layout error
+  withholds scene submission and retains layout debt. The failure handler receives
+  the ordinary error; unchanged invalid input does not request a continuous frame
+  retry. A pending build or live layout invalidation resumes work. The public
+  `invalid_authored_text_waits_for_changed_input_and_then_presents` drives the real
+  pump, rebuild handle and sink through rejection and recovery (ADR-0180).
+
 - **Inherited DPR agrees with the render pipeline.** Initial media data uses
   the pipeline's accepted ratio. Direct updates reject non-positive and
   non-finite ratios before mutation. Native metrics reject these observations

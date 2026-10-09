@@ -2585,7 +2585,8 @@ fn extreme_glyph_bearings_do_not_overflow_before_clipping(
             TextStyle::new().with_font_size(24.0).with_height(0.0),
         ))
         .with_text_direction(TextDirection::Ltr);
-    text.layout(&mut TextContext::new(&fonts), 0.0, f64::INFINITY);
+    text.layout(&mut TextContext::new(&fonts), 0.0, f64::INFINITY)
+        .expect("glyph bearing fixture has valid text geometry");
     let mut canvas = Canvas::new();
     text.paint(&mut canvas, Offset::ZERO);
     let list = canvas.finish();

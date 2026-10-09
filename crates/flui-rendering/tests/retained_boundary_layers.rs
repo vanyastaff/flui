@@ -156,8 +156,11 @@ pub(crate) fn the_content_of_a_clean_boundary_is_not_repainted() {
         type Arity = Leaf;
         type ParentData = BoxParentData;
 
-        fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-            ctx.constrain(Size::new(10.0, 10.0))
+        fn perform_layout(
+            &mut self,
+            ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+        ) -> flui_rendering::RenderResult<Size> {
+            Ok(ctx.constrain(Size::new(10.0, 10.0)))
         }
 
         fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {
@@ -255,8 +258,8 @@ impl flui_rendering::traits::RenderBox for PaintCounter {
             flui_foundation::Leaf,
             flui_rendering::parent_data::BoxParentData,
         >,
-    ) -> Size {
-        ctx.constrain(Size::new(10.0, 10.0))
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok(ctx.constrain(Size::new(10.0, 10.0)))
     }
 
     fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, flui_foundation::Leaf>) {
@@ -393,8 +396,8 @@ pub(crate) fn a_failed_pass_does_not_downgrade_a_real_repaint_to_an_update() {
                 flui_foundation::Leaf,
                 flui_rendering::parent_data::BoxParentData,
             >,
-        ) -> Size {
-            ctx.constrain(Size::new(10.0, 10.0))
+        ) -> flui_rendering::RenderResult<Size> {
+            Ok(ctx.constrain(Size::new(10.0, 10.0)))
         }
 
         fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, flui_foundation::Leaf>) {

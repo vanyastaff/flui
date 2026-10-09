@@ -265,7 +265,10 @@ impl RenderBox for RenderAspectRatio {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
         let incoming = *ctx.constraints();
         let target_size = self.apply_aspect_ratio(incoming);
 
@@ -274,13 +277,13 @@ impl RenderBox for RenderAspectRatio {
             // The child gets tight constraints so it can't escape the
             // aspect-ratio sizing decision.
             let child_constraints = BoxConstraints::tight(target_size);
-            let _child_size = ctx.layout_child(0, child_constraints);
+            ctx.layout_child(0, child_constraints)?;
             ctx.position_child(0, Offset::ZERO);
         } else {
             self.has_child = false;
         }
 
-        target_size
+        Ok(target_size)
     }
 
     flui_rendering::forward_single_child_box_hit_test!();
@@ -294,14 +297,14 @@ impl RenderBox for RenderAspectRatio {
         &self,
         height: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
+    ) -> flui_rendering::RenderResult<f64> {
         if height.is_finite() {
-            return height * self.aspect_ratio.value();
+            return Ok(height * self.aspect_ratio.value());
         }
         if ctx.child_count() > 0 {
             ctx.child_min_intrinsic_width(0, height)
         } else {
-            0.0
+            Ok(0.0)
         }
     }
 
@@ -309,14 +312,14 @@ impl RenderBox for RenderAspectRatio {
         &self,
         height: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
+    ) -> flui_rendering::RenderResult<f64> {
         if height.is_finite() {
-            return height * self.aspect_ratio.value();
+            return Ok(height * self.aspect_ratio.value());
         }
         if ctx.child_count() > 0 {
             ctx.child_max_intrinsic_width(0, height)
         } else {
-            0.0
+            Ok(0.0)
         }
     }
 
@@ -324,14 +327,14 @@ impl RenderBox for RenderAspectRatio {
         &self,
         width: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
+    ) -> flui_rendering::RenderResult<f64> {
         if width.is_finite() {
-            return width / self.aspect_ratio.value();
+            return Ok(width / self.aspect_ratio.value());
         }
         if ctx.child_count() > 0 {
             ctx.child_min_intrinsic_height(0, width)
         } else {
-            0.0
+            Ok(0.0)
         }
     }
 
@@ -339,14 +342,14 @@ impl RenderBox for RenderAspectRatio {
         &self,
         width: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
+    ) -> flui_rendering::RenderResult<f64> {
         if width.is_finite() {
-            return width / self.aspect_ratio.value();
+            return Ok(width / self.aspect_ratio.value());
         }
         if ctx.child_count() > 0 {
             ctx.child_max_intrinsic_height(0, width)
         } else {
-            0.0
+            Ok(0.0)
         }
     }
 
@@ -354,10 +357,10 @@ impl RenderBox for RenderAspectRatio {
         &self,
         constraints: BoxConstraints,
         _ctx: &mut flui_rendering::context::BoxDryLayoutCtx<'_>,
-    ) -> Size {
+    ) -> flui_rendering::RenderResult<Size> {
         // Sizing is fully determined by the ratio + constraints; the
         // child is laid out tight to this size and never consulted.
-        self.apply_aspect_ratio(constraints)
+        Ok(self.apply_aspect_ratio(constraints))
     }
 
     fn compute_dry_baseline(
@@ -365,9 +368,9 @@ impl RenderBox for RenderAspectRatio {
         constraints: BoxConstraints,
         baseline: flui_rendering::traits::TextBaseline,
         ctx: &mut flui_rendering::context::BoxDryBaselineCtx<'_>,
-    ) -> Option<f64> {
+    ) -> flui_rendering::RenderResult<Option<f64>> {
         if ctx.child_count() == 0 {
-            return None;
+            return Ok(None);
         }
         let tight = BoxConstraints::tight(self.apply_aspect_ratio(constraints));
         ctx.child_dry_baseline(0, tight, baseline)

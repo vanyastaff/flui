@@ -220,7 +220,10 @@ impl RenderBox for RenderFlow {
     type Arity = Variable;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>) -> Size {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
         let constraints = *ctx.constraints();
         let size = self.get_size(constraints);
         let n = ctx.child_count();
@@ -228,38 +231,54 @@ impl RenderBox for RenderFlow {
         self.child_sizes.reserve(n);
         for i in 0..n {
             let inner = self.delegate.get_constraints_for_child(i, constraints);
-            let child_size = ctx.layout_child(i, inner);
+            let child_size = ctx.layout_child(i, inner)?;
             // Children are NEVER positioned by layout, only by the
             // paint-time transform `FlowDelegate::paint_children` chooses.
             ctx.position_child(i, Offset::ZERO);
             self.child_sizes.push(child_size);
         }
-        size
+        Ok(size)
     }
 
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
         _ctx: &mut BoxDryLayoutCtx<'_>,
-    ) -> Size {
+    ) -> flui_rendering::RenderResult<Size> {
         // Children are never touched for dry layout either.
-        self.get_size(constraints)
+        Ok(self.get_size(constraints))
     }
 
-    fn compute_min_intrinsic_width(&self, height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.intrinsic_width(height)
+    fn compute_min_intrinsic_width(
+        &self,
+        height: f64,
+        _ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(self.intrinsic_width(height))
     }
 
-    fn compute_max_intrinsic_width(&self, height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.intrinsic_width(height)
+    fn compute_max_intrinsic_width(
+        &self,
+        height: f64,
+        _ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(self.intrinsic_width(height))
     }
 
-    fn compute_min_intrinsic_height(&self, width: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.intrinsic_height(width)
+    fn compute_min_intrinsic_height(
+        &self,
+        width: f64,
+        _ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(self.intrinsic_height(width))
     }
 
-    fn compute_max_intrinsic_height(&self, width: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.intrinsic_height(width)
+    fn compute_max_intrinsic_height(
+        &self,
+        width: f64,
+        _ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(self.intrinsic_height(width))
     }
 
     fn is_repaint_boundary(&self) -> bool {

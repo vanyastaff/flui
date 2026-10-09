@@ -51,11 +51,16 @@ impl RenderBox for SliverHitHost {
     type Arity = Variable;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>) -> Size {
-        if ctx.child_count() > 0 {
-            let _ = ctx.layout_sliver_child(0, self.constraints);
-        }
-        ctx.constraints().biggest()
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok({
+            if ctx.child_count() > 0 {
+                let _ = ctx.layout_sliver_child(0, self.constraints)?;
+            }
+            ctx.constraints().biggest()
+        })
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Variable, BoxParentData>) -> bool {
@@ -93,20 +98,22 @@ impl RenderSliver for MainAxisBandSliver {
     fn perform_layout(
         &mut self,
         ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
-    ) -> SliverGeometry {
-        let constraints = *ctx.constraints();
-        self.cross_axis_extent = constraints.cross_axis_extent;
-        let paint_extent = self.calculate_paint_offset(&constraints, 0.0, self.extent);
-        SliverGeometry {
-            scroll_extent: self.extent,
-            paint_extent,
-            layout_extent: paint_extent,
-            max_paint_extent: self.extent,
-            hit_test_extent: paint_extent,
-            cache_extent: self.calculate_cache_offset(&constraints, 0.0, self.extent),
-            visible: paint_extent > 0.0,
-            ..SliverGeometry::ZERO
-        }
+    ) -> flui_rendering::RenderResult<SliverGeometry> {
+        Ok({
+            let constraints = *ctx.constraints();
+            self.cross_axis_extent = constraints.cross_axis_extent;
+            let paint_extent = self.calculate_paint_offset(&constraints, 0.0, self.extent);
+            SliverGeometry {
+                scroll_extent: self.extent,
+                paint_extent,
+                layout_extent: paint_extent,
+                max_paint_extent: self.extent,
+                hit_test_extent: paint_extent,
+                cache_extent: self.calculate_cache_offset(&constraints, 0.0, self.extent),
+                visible: paint_extent > 0.0,
+                ..SliverGeometry::ZERO
+            }
+        })
     }
 
     fn hit_test_self(&self, main: f64, cross: f64) -> bool {

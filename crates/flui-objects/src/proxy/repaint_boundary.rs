@@ -72,7 +72,10 @@ impl RenderBox for RenderRepaintBoundary {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
         let constraints = *ctx.constraints();
         if ctx.child_count() > 0 {
             self.has_child = true;
@@ -81,7 +84,7 @@ impl RenderBox for RenderRepaintBoundary {
         } else {
             self.has_child = false;
             // No child — take minimum size.
-            constraints.smallest()
+            Ok(constraints.smallest())
         }
     }
 

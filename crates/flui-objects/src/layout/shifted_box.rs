@@ -15,16 +15,16 @@
 //! calls:
 //!
 //! ```ignore
-//! fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
-//!     let child_size = ctx.layout_single_child_loose();
+//! fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> flui_rendering::RenderResult<Size> {
+//!     let child_size = ctx.layout_single_child_loose()?;
 //!     let parent_size = positioned_box_size(&constraints, child_size, wf, hf);
 //!     self.inner.align_child(ctx, parent_size, child_size);
-//!     parent_size
+//!     Ok(parent_size)
 //! }
-//! fn compute_dry_baseline(...) -> Option<f64> {
+//! fn compute_dry_baseline(...) -> flui_rendering::RenderResult<Option<f64>> {
 //!     // ...
 //!     let dy = self.inner.dry_child_offset(parent_size, child_size).dy;
-//!     Some(child_baseline + dy)
+//!     Ok(Some(child_baseline + dy))
 //! }
 //! ```
 
@@ -152,11 +152,12 @@ impl AligningShiftedBox {
     pub(crate) fn record_child_baselines(
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
-    ) {
+    ) -> flui_rendering::RenderResult<()> {
         self.child_baselines = [
-            ctx.child_distance_to_actual_baseline(0, TextBaseline::Alphabetic),
-            ctx.child_distance_to_actual_baseline(0, TextBaseline::Ideographic),
+            ctx.child_distance_to_actual_baseline(0, TextBaseline::Alphabetic)?,
+            ctx.child_distance_to_actual_baseline(0, TextBaseline::Ideographic)?,
         ];
+        Ok(())
     }
 
     /// Returns the live actual baseline of this box for the given kind.

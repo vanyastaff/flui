@@ -310,8 +310,8 @@ impl LayoutCapability for BoxLayout {
 /// use flui_rendering::protocol::box_protocol::LayoutChildCallback;
 /// use flui_foundation::geometry::Size;
 ///
-/// fn callback(_id: RenderId, _constraints: BoxConstraints) -> Size {
-///     Size::ZERO
+/// fn callback(_id: RenderId, _constraints: BoxConstraints) -> flui_rendering::RenderResult<Size> {
+///     Ok(Size::ZERO)
 /// }
 ///
 /// let cb: LayoutChildCallback<'_> = &callback;
@@ -326,21 +326,24 @@ impl LayoutCapability for BoxLayout {
 /// use flui_rendering::protocol::box_protocol::LayoutChildCallback;
 /// use flui_foundation::geometry::Size;
 ///
-/// fn callback(_id: RenderId, _constraints: BoxConstraints) -> Size {
-///     Size::ZERO
+/// fn callback(_id: RenderId, _constraints: BoxConstraints) -> flui_rendering::RenderResult<Size> {
+///     Ok(Size::ZERO)
 /// }
 ///
 /// let cb: LayoutChildCallback<'_> = &callback;
 /// (move || { let _ = cb(RenderId::new(1), BoxConstraints::tight(Size::ZERO)); })();
 /// ```
-pub type LayoutChildCallback<'a> = &'a dyn Fn(flui_foundation::RenderId, BoxConstraints) -> Size;
+pub type LayoutChildCallback<'a> =
+    &'a dyn Fn(flui_foundation::RenderId, BoxConstraints) -> crate::error::RenderResult<Size>;
 
 /// Callback for reading a laid-out child's actual baseline distance.
 ///
 /// Called after `layout_child` when a parent needs the post-layout baseline
 /// position (e.g. `RenderBaseline`, flex baseline cross-axis alignment).
-pub type ActualBaselineChildCallback<'a> =
-    &'a dyn Fn(flui_foundation::RenderId, crate::traits::TextBaseline) -> Option<f64>;
+pub type ActualBaselineChildCallback<'a> = &'a dyn Fn(
+    flui_foundation::RenderId,
+    crate::traits::TextBaseline,
+) -> crate::error::RenderResult<Option<f64>>;
 
 /// Callback type for cross-protocol sliver child layout driven by a Box parent.
 ///
@@ -352,8 +355,10 @@ pub type ActualBaselineChildCallback<'a> =
 ///
 /// Mirrors [`LayoutChildCallback`] in contract; distinct because the input and
 /// output types differ (sliver protocol vs. box protocol).
-pub type SliverLayoutChildCallback<'a> =
-    &'a dyn Fn(flui_foundation::RenderId, SliverConstraints) -> SliverGeometry;
+pub type SliverLayoutChildCallback<'a> = &'a dyn Fn(
+    flui_foundation::RenderId,
+    SliverConstraints,
+) -> crate::error::RenderResult<SliverGeometry>;
 
 /// Callback for querying a Box child's intrinsic dimensions from within a Box
 /// parent's `perform_layout`.
@@ -369,8 +374,11 @@ pub type SliverLayoutChildCallback<'a> =
 ///
 /// Returns `0.0` when the callback cannot route the query (out-of-bounds index,
 /// error in child layout, or no callback wired on the Direct-storage path).
-pub type BoxChildIntrinsicCallback<'a> =
-    &'a dyn Fn(flui_foundation::RenderId, crate::storage::IntrinsicDimension, f64) -> f64;
+pub type BoxChildIntrinsicCallback<'a> = &'a dyn Fn(
+    flui_foundation::RenderId,
+    crate::storage::IntrinsicDimension,
+    f64,
+) -> crate::error::RenderResult<f64>;
 
 /// Per-child geometry storage owned by the typed wrapper when bridging
 /// from an erased context.
@@ -626,9 +634,9 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
         &self,
         index: usize,
         baseline: crate::traits::TextBaseline,
-    ) -> Option<f64> {
+    ) -> crate::error::RenderResult<Option<f64>> {
         match &self.storage {
-            BoxLayoutCtxStorage::Direct { .. } => None,
+            BoxLayoutCtxStorage::Direct { .. } => Ok(None),
             BoxLayoutCtxStorage::Proxy { erased, .. } => {
                 erased.child_distance_to_actual_baseline(index, baseline)
             }
@@ -655,7 +663,11 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
         }
     }
 
-    fn layout_child(&mut self, index: usize, constraints: BoxConstraints) -> Size {
+    fn layout_child(
+        &mut self,
+        index: usize,
+        constraints: BoxConstraints,
+    ) -> crate::error::RenderResult<Size> {
         match &mut self.storage {
             BoxLayoutCtxStorage::Direct {
                 children,
@@ -669,7 +681,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
                     && let Some(&child_id) = child_ids.get(index)
                 {
                     // Perform synchronous layout through RenderTree
-                    let size = callback(child_id, constraints);
+                    let size = callback(child_id, constraints)?;
 
                     // Update cached size in children state
                     if let Some(children) = children.as_mut()
@@ -679,23 +691,23 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
                         child.size = size;
                     }
 
-                    return size;
+                    return Ok(size);
                 }
 
                 // Fallback: return cached size if available
                 if let Some(children) = children.as_ref()
                     && let Some(child) = children.get(index)
                 {
-                    return child.size;
+                    return Ok(child.size);
                 }
-                Size::ZERO
+                Ok(Size::ZERO)
             }
             BoxLayoutCtxStorage::Proxy {
                 erased,
                 child_sizes,
                 ..
             } => {
-                let size = erased.layout_child(index, constraints);
+                let size = erased.layout_child(index, constraints)?;
                 // Indexed write — `child_sizes` is pre-sized to
                 // `erased.child_count()` at `from_erased` time. An
                 // out-of-bounds index (caller passed an `index >=
@@ -706,7 +718,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
                 if let Some(slot) = child_sizes.get_mut(index) {
                     *slot = Some(size);
                 }
-                size
+                Ok(size)
             }
         }
     }
@@ -852,7 +864,11 @@ pub trait BoxLayoutCtxErased {
 
     /// Performs synchronous layout on child at `index` with the given
     /// constraints; returns the child's computed `Size`.
-    fn layout_child(&mut self, index: usize, constraints: BoxConstraints) -> Size;
+    fn layout_child(
+        &mut self,
+        index: usize,
+        constraints: BoxConstraints,
+    ) -> crate::error::RenderResult<Size>;
 
     /// Lays out a **sliver** child at `index` with the given
     /// [`SliverConstraints`]; returns the child's [`SliverGeometry`].
@@ -868,7 +884,7 @@ pub trait BoxLayoutCtxErased {
         &mut self,
         index: usize,
         constraints: SliverConstraints,
-    ) -> SliverGeometry;
+    ) -> crate::error::RenderResult<SliverGeometry>;
 
     /// Returns the last known sliver constraints and geometry for child
     /// `index`, when this context is backed by pipeline storage.
@@ -906,8 +922,8 @@ pub trait BoxLayoutCtxErased {
         &self,
         _index: usize,
         _baseline: crate::traits::TextBaseline,
-    ) -> Option<f64> {
-        None
+    ) -> crate::error::RenderResult<Option<f64>> {
+        Ok(None)
     }
 
     /// Reads child `index`'s parent data as `&dyn ParentData`. Returns
@@ -986,8 +1002,8 @@ pub trait BoxLayoutCtxErased {
         _index: usize,
         _dimension: crate::storage::IntrinsicDimension,
         _extent: f64,
-    ) -> f64 {
-        0.0
+    ) -> crate::error::RenderResult<f64> {
+        Ok(0.0)
     }
 }
 
@@ -1023,7 +1039,11 @@ impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, 
     }
 
     #[inline]
-    fn layout_child(&mut self, index: usize, constraints: BoxConstraints) -> Size {
+    fn layout_child(
+        &mut self,
+        index: usize,
+        constraints: BoxConstraints,
+    ) -> crate::error::RenderResult<Size> {
         <Self as LayoutContextApi<'_, BoxLayout, A, P>>::layout_child(self, index, constraints)
     }
 
@@ -1032,7 +1052,7 @@ impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, 
         &mut self,
         index: usize,
         constraints: SliverConstraints,
-    ) -> SliverGeometry {
+    ) -> crate::error::RenderResult<SliverGeometry> {
         // Direct-storage `BoxLayoutCtx` does not carry a sliver callback
         // (it is used by leaf-only paths and unit tests that never wire
         // cross-protocol layout). Return `ZERO` — the same conservative
@@ -1040,7 +1060,7 @@ impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, 
         // no-callback Direct path. Proxy storage delegates to the
         // underlying erased ctx which IS wired by the pipeline.
         match &mut self.storage {
-            BoxLayoutCtxStorage::Direct { .. } => SliverGeometry::ZERO,
+            BoxLayoutCtxStorage::Direct { .. } => Ok(SliverGeometry::ZERO),
             BoxLayoutCtxStorage::Proxy { erased, .. } => {
                 erased.layout_sliver_child(index, constraints)
             }
@@ -1086,9 +1106,9 @@ impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, 
         &self,
         index: usize,
         baseline: crate::traits::TextBaseline,
-    ) -> Option<f64> {
+    ) -> crate::error::RenderResult<Option<f64>> {
         match &self.storage {
-            BoxLayoutCtxStorage::Direct { .. } => None,
+            BoxLayoutCtxStorage::Direct { .. } => Ok(None),
             BoxLayoutCtxStorage::Proxy { erased, .. } => {
                 erased.child_distance_to_actual_baseline(index, baseline)
             }
@@ -1144,11 +1164,11 @@ impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, 
         index: usize,
         dimension: crate::storage::IntrinsicDimension,
         extent: f64,
-    ) -> f64 {
+    ) -> crate::error::RenderResult<f64> {
         match &mut self.storage {
             // Direct-storage contexts have no intrinsics callback; return the
             // same conservative 0.0 that the default trait body produces.
-            BoxLayoutCtxStorage::Direct { .. } => 0.0,
+            BoxLayoutCtxStorage::Direct { .. } => Ok(0.0),
             // Proxy delegates to the pipeline-wired ErasedBoxLayoutCtx, which
             // holds the `BoxChildIntrinsicCallback` set by `layout_dirty_root`.
             BoxLayoutCtxStorage::Proxy { erased, .. } => {
@@ -1363,24 +1383,30 @@ impl BoxLayoutCtxErased for ErasedBoxLayoutCtx<'_> {
         self.child_ids.len()
     }
 
-    fn layout_child(&mut self, index: usize, constraints: BoxConstraints) -> Size {
+    fn layout_child(
+        &mut self,
+        index: usize,
+        constraints: BoxConstraints,
+    ) -> crate::error::RenderResult<Size> {
         let Some(&child_id) = self.child_ids.get(index) else {
-            return Size::ZERO;
+            return Ok(Size::ZERO);
         };
-        let size = (self.layout_child_callback)(child_id, constraints);
+        let size = (self.layout_child_callback)(child_id, constraints)?;
         if let Some(slot) = self.children.get_mut(index) {
             slot.laid_out_this_pass = true;
             slot.size = size;
         }
-        size
+        Ok(size)
     }
 
     fn child_distance_to_actual_baseline(
         &self,
         index: usize,
         baseline: crate::traits::TextBaseline,
-    ) -> Option<f64> {
-        let &child_id = self.child_ids.get(index)?;
+    ) -> crate::error::RenderResult<Option<f64>> {
+        let Some(&child_id) = self.child_ids.get(index) else {
+            return Ok(None);
+        };
         (self.actual_baseline_callback)(child_id, baseline)
     }
 
@@ -1388,12 +1414,12 @@ impl BoxLayoutCtxErased for ErasedBoxLayoutCtx<'_> {
         &mut self,
         index: usize,
         constraints: SliverConstraints,
-    ) -> SliverGeometry {
+    ) -> crate::error::RenderResult<SliverGeometry> {
         let Some(&child_id) = self.child_ids.get(index) else {
-            return SliverGeometry::ZERO;
+            return Ok(SliverGeometry::ZERO);
         };
         let geometry = match self.sliver_layout_child_callback {
-            Some(cb) => (cb)(child_id, constraints),
+            Some(cb) => (cb)(child_id, constraints)?,
             None => SliverGeometry::ZERO,
         };
         if let Some(slot) = self.children.get_mut(index) {
@@ -1402,7 +1428,7 @@ impl BoxLayoutCtxErased for ErasedBoxLayoutCtx<'_> {
             slot.sliver_geometry = Some(geometry);
             slot.needs_layout = false;
         }
-        geometry
+        Ok(geometry)
     }
 
     fn cached_sliver_child_layout(
@@ -1467,12 +1493,12 @@ impl BoxLayoutCtxErased for ErasedBoxLayoutCtx<'_> {
         index: usize,
         dimension: crate::storage::IntrinsicDimension,
         extent: f64,
-    ) -> f64 {
+    ) -> crate::error::RenderResult<f64> {
         let Some(callback) = self.intrinsics_child_callback else {
-            return 0.0;
+            return Ok(0.0);
         };
         let Some(&child_id) = self.child_ids.get(index) else {
-            return 0.0;
+            return Ok(0.0);
         };
         callback(child_id, dimension, extent)
     }

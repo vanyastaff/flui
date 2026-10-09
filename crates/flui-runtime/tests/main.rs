@@ -14,3 +14,5 @@ mod owner_publication;
 mod owner_registry;
 #[path = "../src/table_test.rs"]
 mod table_test;
+#[path = "contracts/text_frame.rs"]
+mod text_frame;

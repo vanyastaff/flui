@@ -354,22 +354,22 @@ impl RenderSliver for RenderSliverPadding {
     fn perform_layout(
         &mut self,
         ctx: &mut SliverLayoutContext<'_, Single, SliverPhysicalParentData>,
-    ) -> SliverGeometry {
+    ) -> flui_rendering::RenderResult<SliverGeometry> {
         let constraints = *ctx.constraints();
 
         // No-child fast path — sliver still consumes its own padded
         // scroll extent so subsequent slivers compose correctly.
         if ctx.child_count() == 0 {
-            return self.empty_geometry(&constraints);
+            return Ok(self.empty_geometry(&constraints));
         }
 
         let child_constraints = self.child_constraints(&constraints);
-        let child_geometry = ctx.layout_child(0, child_constraints);
+        let child_geometry = ctx.layout_child(0, child_constraints)?;
 
         // Scroll-offset correction propagates upward unchanged — the
         // viewport reruns layout next frame with the corrected offset.
         if let Some(correction) = child_geometry.scroll_offset_correction {
-            return SliverGeometry::scroll_offset_correction(correction);
+            return Ok(SliverGeometry::scroll_offset_correction(correction));
         }
 
         let (geometry, child_paint_offset) = self.padded_geometry(&constraints, &child_geometry);
@@ -378,7 +378,7 @@ impl RenderSliver for RenderSliverPadding {
         // layout walk commits this into the child's RenderState so
         // later paint and hit-test phases use the same placement.
         ctx.position_child(0, child_paint_offset);
-        geometry
+        Ok(geometry)
     }
 
     fn child_main_axis_position(

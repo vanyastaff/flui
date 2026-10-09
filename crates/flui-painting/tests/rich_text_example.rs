@@ -61,7 +61,9 @@ pub(crate) fn example_bidirectional_text() {
         .with_text(InlineSpan::new(span))
         .with_text_direction(TextDirection::Ltr); // Base direction LTR
 
-    painter.layout(&mut text_cx(), 0.0, 400.0);
+    painter
+        .layout(&mut text_cx(), 0.0, 400.0)
+        .expect("valid fixture lays out");
 
     // Should layout successfully
     assert!(painter.width() > 0.0);

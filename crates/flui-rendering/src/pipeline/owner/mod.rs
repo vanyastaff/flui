@@ -497,8 +497,11 @@ mod tests {
         type Arity = Leaf;
         type ParentData = BoxParentData;
 
-        fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-            ctx.constraints().constrain(Size::new(10.0, 10.0))
+        fn perform_layout(
+            &mut self,
+            ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+        ) -> crate::RenderResult<Size> {
+            Ok(ctx.constraints().constrain(Size::new(10.0, 10.0)))
         }
 
         fn describe_semantics_configuration(
@@ -519,8 +522,11 @@ mod tests {
         type Arity = Leaf;
         type ParentData = BoxParentData;
 
-        fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-            ctx.constraints().constrain(self.size)
+        fn perform_layout(
+            &mut self,
+            ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+        ) -> crate::RenderResult<Size> {
+            Ok(ctx.constraints().constrain(self.size))
         }
 
         fn describe_semantics_configuration(
@@ -904,9 +910,11 @@ mod tests {
         fn perform_layout(
             &mut self,
             ctx: &mut BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
-        ) -> Size {
-            self.0.fail();
-            ctx.layout_child(0, *ctx.constraints())
+        ) -> crate::RenderResult<Size> {
+            Ok({
+                self.0.fail();
+                ctx.layout_child(0, *ctx.constraints())?
+            })
         }
     }
 
@@ -922,10 +930,12 @@ mod tests {
         fn perform_layout(
             &mut self,
             ctx: &mut crate::context::SliverLayoutContext<'_, Self::Arity, Self::ParentData>,
-        ) -> crate::constraints::SliverGeometry {
-            self.0.fail();
-            let size = ctx.layout_box_child(0, BoxConstraints::tight(Size::new(10.0, 20.0)));
-            crate::constraints::SliverGeometry::new(size.height, size.height, 0.0)
+        ) -> crate::RenderResult<crate::constraints::SliverGeometry> {
+            Ok({
+                self.0.fail();
+                let size = ctx.layout_box_child(0, BoxConstraints::tight(Size::new(10.0, 20.0)))?;
+                crate::constraints::SliverGeometry::new(size.height, size.height, 0.0)
+            })
         }
     }
 
@@ -941,20 +951,22 @@ mod tests {
         fn perform_layout(
             &mut self,
             ctx: &mut BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
-        ) -> Size {
-            self.0.set(
-                ctx.layout_sliver_child(
-                    0,
-                    crate::testing::sliver::vertical()
-                        .remaining_paint_extent(100.0)
-                        .cross_axis_extent(300.0)
-                        .viewport_main_axis_extent(100.0)
-                        .remaining_cache_extent(120.0)
-                        .cache_origin(-20.0)
-                        .build(),
-                ),
-            );
-            ctx.constraints().biggest()
+        ) -> crate::RenderResult<Size> {
+            Ok({
+                self.0.set(
+                    ctx.layout_sliver_child(
+                        0,
+                        crate::testing::sliver::vertical()
+                            .remaining_paint_extent(100.0)
+                            .cross_axis_extent(300.0)
+                            .viewport_main_axis_extent(100.0)
+                            .remaining_cache_extent(120.0)
+                            .cache_origin(-20.0)
+                            .build(),
+                    )?,
+                );
+                ctx.constraints().biggest()
+            })
         }
     }
 

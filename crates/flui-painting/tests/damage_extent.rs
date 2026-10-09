@@ -110,11 +110,13 @@ pub(crate) fn paragraph_extent_covers_every_rasterized_glyph() {
         let mut painter = TextPainter::new()
             .with_text(TextSpan::new(text).with_style(style))
             .with_text_direction(TextDirection::Ltr);
-        painter.layout(
-            &mut flui_painting::TextContext::new(if on_host { &host } else { &bundled }),
-            0.0,
-            f64::INFINITY,
-        );
+        painter
+            .layout(
+                &mut flui_painting::TextContext::new(if on_host { &host } else { &bundled }),
+                0.0,
+                f64::INFINITY,
+            )
+            .expect("valid fixture lays out");
         let origin = Offset::new(40.0, 50.0);
         let mut canvas = Canvas::new();
         painter.paint(&mut canvas, origin);

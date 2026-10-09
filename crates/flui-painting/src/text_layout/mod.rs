@@ -15,6 +15,7 @@ use flui_foundation::geometry::Size;
 use crate::typography::TextStyle;
 
 mod context;
+pub(crate) mod error;
 pub(crate) mod fallback_chain;
 #[cfg(test)]
 mod fallback_recorded;
@@ -24,6 +25,7 @@ mod host;
 
 pub(crate) use context::FontsKey;
 pub use context::{FontCollection, HostFontFeed, TextContext};
+pub use error::TextLayoutError;
 pub use host::HostFonts;
 
 /// The colour a style paints its glyphs with: `foreground` wins over

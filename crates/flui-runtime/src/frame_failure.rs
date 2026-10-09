@@ -14,8 +14,9 @@
 //! The report deliberately carries the presentation's own
 //! [`PresentationAddress`] — ownership identity, per issue #561's
 //! diagnostics criterion — so a multi-window embedder can tell *which*
-//! window produced the report and decide its own response. A terminal drop
-//! arms the framework retry; a contained recovery does not. Repeated
+//! window produced the report and decide its own response. A transient drop
+//! arms the framework retry; rejected text input retains work until a layout
+//! invalidation, and a contained recovery needs no retry. Repeated
 //! deterministic recoveries produce one report per occurrence and frame, so
 //! embedders that forward them own any throttling policy.
 
@@ -198,7 +199,8 @@ impl FrameFailureDetail {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum FailureDisposition {
-    /// The presentation produced no frame and must retry.
+    /// The presentation produced no frame. Transient failures retry;
+    /// rejected text input waits for a layout invalidation.
     FrameDropped,
     /// A narrower lifecycle boundary recovered and the frame may continue.
     Contained,

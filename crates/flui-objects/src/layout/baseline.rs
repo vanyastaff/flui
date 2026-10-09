@@ -71,18 +71,21 @@ impl RenderBox for RenderBaseline {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
         let constraints = *ctx.constraints();
 
         if ctx.child_count() == 0 {
             self.has_child = false;
-            return constraints.smallest();
+            return Ok(constraints.smallest());
         }
 
         self.has_child = true;
         // The child is laid out under *loosened* constraints, so a tight
         // incoming axis does not force the child to fill it.
-        let child_size = ctx.layout_child(0, constraints.loosen());
+        let child_size = ctx.layout_child(0, constraints.loosen())?;
 
         // The effective baseline is the child's real baseline distance, or —
         // when the child reports none (e.g. a plain box) — the child's full
@@ -90,21 +93,24 @@ impl RenderBox for RenderBaseline {
         // `baseline_offset` below the top; the box's height becomes `top +
         // child.height` (= `baseline_offset` plus any descent below the baseline).
         let baseline_distance = ctx
-            .child_distance_to_actual_baseline(0, self.baseline)
+            .child_distance_to_actual_baseline(0, self.baseline)?
             .unwrap_or(child_size.height);
         let top = self.baseline_offset - baseline_distance;
         self.child_offset = Offset::new(0.0, top);
         let size = Size::new(child_size.width, top + child_size.height);
 
         ctx.position_child(0, self.child_offset);
-        constraints.constrain(size)
+        Ok(constraints.constrain(size))
     }
 
-    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f64> {
+    fn compute_distance_to_actual_baseline(
+        &self,
+        baseline: TextBaseline,
+    ) -> flui_rendering::RenderResult<Option<f64>> {
         if baseline == self.baseline {
-            Some(self.baseline_offset)
+            Ok(Some(self.baseline_offset))
         } else {
-            None
+            Ok(None)
         }
     }
 
@@ -113,9 +119,9 @@ impl RenderBox for RenderBaseline {
         constraints: BoxConstraints,
         baseline: TextBaseline,
         ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f64> {
+    ) -> flui_rendering::RenderResult<Option<f64>> {
         if ctx.child_count() == 0 {
-            return None;
+            return Ok(None);
         }
         // Probe the child under *loosened* constraints (consistent with the
         // live path) for BOTH the requested baseline kind and the box's own
@@ -123,9 +129,13 @@ impl RenderBox for RenderBaseline {
         // same-kind query the two terms cancel to `baseline_offset`; a
         // cross-kind query still resolves through the child's actual values.
         let loosened = constraints.loosen();
-        let requested = ctx.child_dry_baseline(0, loosened, baseline)?;
-        let own = ctx.child_dry_baseline(0, loosened, self.baseline)?;
-        Some(self.baseline_offset + requested - own)
+        let Some(requested) = ctx.child_dry_baseline(0, loosened, baseline)? else {
+            return Ok(None);
+        };
+        let Some(own) = ctx.child_dry_baseline(0, loosened, self.baseline)? else {
+            return Ok(None);
+        };
+        Ok(Some(self.baseline_offset + requested - own))
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {

@@ -45,6 +45,27 @@ The public widget row
 checks render notification after a value failure, live ancestor reveal and a
 fresh request after recovery.
 
+### Ordinary text rejection remains a layout error
+
+Typed and erased child layout, intrinsic, dry-layout and baseline queries
+propagate `RenderResult`; an ordinary text failure supplies no stand-in geometry
+and does not poison the node. The failing dirty root and unprocessed batch remain
+queued until changed input resumes them. Independent successful relayouts are not
+rolled back. `rejected_text_layout_is_fallible_through_queries_and_frames` pins
+queries, repeated errors, viewport metrics, page resize mapping and recovery in
+the same mounted tree. [ADR-0180](../../docs/adr/ADR-0180-fallible-text-and-layout-measurement.md)
+records the cross-crate contract.
+
+Viewport corrections are detached `ViewportLayout` proposals. A regular
+viewport accepts native constraint-derived page mapping before measurement;
+content-derived extents and shrink-wrapped dimensions are published only after
+the proposal succeeds. `ScrollPosition` refuses a proposal if accepted input
+changed during measurement. That ordinary refusal retains runnable layout work,
+whereas unchanged rejected text waits for new input. The correction, reentrant
+input and independent pending-boundary rows in
+`rejected_text_layout_is_fallible_through_queries_and_frames` pin publication
+and recovery through mounted viewports.
+
 The `trybuild_ui` test in `tests/compile_fail.rs` pins pipeline constructor
 admission and phase boundaries: E0061 for construction without a text context,
 E0277 for `Default` construction and downstream phase implementations, and

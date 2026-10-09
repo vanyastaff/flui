@@ -540,6 +540,22 @@ fn text_contract() {
     run_cases(
         "text",
         &[
+            (
+                "changing_to_an_invalid_scale_cannot_reuse_successful_geometry",
+                text_layout_pipeline::changing_to_an_invalid_scale_cannot_reuse_successful_geometry,
+            ),
+            (
+                "authored_font_size_overflow_is_an_ordinary_error",
+                text_layout_pipeline::authored_font_size_overflow_is_an_ordinary_error,
+            ),
+            (
+                "scaled_font_size_overflow_is_an_ordinary_error",
+                text_layout_pipeline::scaled_font_size_overflow_is_an_ordinary_error,
+            ),
+            (
+                "font_size_narrowing_to_zero_is_an_ordinary_error",
+                text_layout_pipeline::font_size_narrowing_to_zero_is_an_ordinary_error,
+            ),
             ("root_word_spacing_reaches_measurement_paint_and_carets", text_painter_unit::root_word_spacing_reaches_measurement_paint_and_carets),
             ("span_word_spacing_reaches_measurement_paint_and_carets", text_painter_unit::span_word_spacing_reaches_measurement_paint_and_carets),
             ("font_features_change_the_measured_and_painted_glyphs", text_painter_unit::font_features_change_the_measured_and_painted_glyphs),
@@ -589,6 +605,26 @@ fn text_context_contract() {
     run_cases(
         "text_context",
         &[
+            (
+                "aligned_extreme_text_keeps_finite_paint_bounds",
+                text_context::aligned_extreme_text_keeps_finite_paint_bounds,
+            ),
+            (
+                "direct_shape_zero_size_is_an_ordinary_error",
+                text_context::direct_shape_zero_size_is_an_ordinary_error,
+            ),
+            (
+                "direct_shape_negative_size_is_an_ordinary_error",
+                text_context::direct_shape_negative_size_is_an_ordinary_error,
+            ),
+            (
+                "direct_shape_nonfinite_size_is_an_ordinary_error",
+                text_context::direct_shape_nonfinite_size_is_an_ordinary_error,
+            ),
+            (
+                "direct_shape_finite_size_cannot_publish_nonfinite_metrics",
+                text_context::direct_shape_finite_size_cannot_publish_nonfinite_metrics,
+            ),
             (
                 "measurement_follows_the_context_it_is_given",
                 pm::measurement_follows_the_context_it_is_given,

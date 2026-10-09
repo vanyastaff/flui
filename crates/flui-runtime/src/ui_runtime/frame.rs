@@ -29,11 +29,11 @@ impl UiRuntime {
             .enter(|ui_runtime| ui_runtime.draw_frame_entered(constraints))
             .1
         {
-            // (the third tuple element, `any_failed`, is a retry-arming
+            // (the third tuple element, `any_retry_needed`, is a retry-arming
             // concern for `render_frame`; this test helper only
             // reports what was painted)
             FramePaintOutcome::Painted(scene) => Some(scene),
-            FramePaintOutcome::Idle | FramePaintOutcome::Errored => None,
+            FramePaintOutcome::Idle | FramePaintOutcome::Errored { .. } => None,
         }
     }
 
@@ -64,9 +64,9 @@ impl UiRuntime {
     /// The clock never inspects the tree itself (ownership rule: it never
     /// knows phases, callbacks, or element trees), so the exact union the
     /// old predicate read is marked as `Dirty` demand and the clock's
-    /// `poll` makes the call: `PollDecision::should_run_segment` is
-    /// EXACTLY that same `woken || has_pending_work()` union (hidden/
-    /// backpressure aside — unwired in production today), independent of
+    /// `poll` makes the call. A rejected text layout retains dirty work but
+    /// withholds its automatic retry until a layout invalidation; a wake alone
+    /// cannot retry unchanged rejected input. This is independent of
     /// first-frame deferral, which never gates the segment (see
     /// `FrameClock`'s own module doc — deferral
     /// withholds only the submit). Production can host multiple
@@ -155,15 +155,14 @@ impl UiRuntime {
 
         let mut last_outcome = FramePaintOutcome::Idle;
         let mut producer = self.presentations.primary().id();
-        // Whether ANY presentation's segment failed THIS pump (a pipeline
-        // error or a boundary-caught panic) — returned separately from
+        // Whether ANY presentation needs a failure retry THIS pump — returned separately from
         // `last_outcome`, which only ever describes the LAST segment that
         // ran: with more than one presentation mounted, an earlier
         // presentation's failure followed by a sibling's clean `Painted`
         // must still arm the caller's retry instead of letting the pump
         // settle as rendered (`mark_rendered()` would clear the wake the
         // failure needs).
-        let mut any_failed = false;
+        let mut any_retry_needed = false;
         for presentation in self.presentations.iter() {
             // Platform-driven semantics enablement lands here, BEFORE dirty
             // sampling: the activation listener could only flip the host
@@ -177,7 +176,12 @@ impl UiRuntime {
             // The union is fed into the clock as `Dirty` demand rather than
             // gating directly — the clock decides, the ui_runtime only reports.
             let woken = presentation.take_redraw_pending();
-            if woken || presentation.has_pending_work() {
+            let pending = presentation.has_pending_work();
+            let blocked = presentation
+                .renderer()
+                .root_pipeline_owner()
+                .with(PipelineOwner::layout_waits_for_input);
+            if (woken && !blocked) || pending {
                 presentation.clock().mark_demand(DemandKind::Dirty);
             }
 
@@ -205,6 +209,13 @@ impl UiRuntime {
                 // segment, so a deferred-but-demanded
                 // presentation always reaches `should_run_segment() ==
                 // true` (`PollDecision::ProduceWithheld`) below.
+                continue;
+            }
+
+            // Animation and input clocks still advance while authored text is
+            // rejected. Consume their frame demand without remeasuring unchanged
+            // input; a build or live layout invalidation resumes the pipeline.
+            if blocked && !pending {
                 continue;
             }
 
@@ -251,8 +262,12 @@ impl UiRuntime {
                     outcome
                 }
                 Ok(Err(error)) => {
+                    let rejected_input =
+                        matches!(error, flui_rendering::RenderError::TextLayout(_));
                     self.report_frame_failure(presentation, FrameFailureKind::Pipeline { error });
-                    FramePaintOutcome::Errored
+                    FramePaintOutcome::Errored {
+                        retry: !rejected_input || presentation.has_pending_work(),
+                    }
                 }
                 Err(payload) => {
                     let failed_phase = presentation.segment_phase();
@@ -277,12 +292,12 @@ impl UiRuntime {
                             internal_invariant,
                         },
                     );
-                    FramePaintOutcome::Errored
+                    FramePaintOutcome::Errored { retry: true }
                 }
             };
             if matches!(
                 &result,
-                FramePaintOutcome::Painted(_) | FramePaintOutcome::Errored
+                FramePaintOutcome::Painted(_) | FramePaintOutcome::Errored { .. }
             ) {
                 let tree_revision = presentation.advance_tree_revision();
                 tracing::trace!(
@@ -314,16 +329,16 @@ impl UiRuntime {
             // later `defer_first_frame` call. `render_frame` below
             // separately re-checks `is_deferred()` at its own submit point
             // before honoring whatever this segment produced.
-            if decision.is_produce() && !matches!(result, FramePaintOutcome::Errored) {
+            if decision.is_produce() && !matches!(result, FramePaintOutcome::Errored { .. }) {
                 presentation.clock().mark_first_frame_sent();
             }
-            if matches!(result, FramePaintOutcome::Errored) {
-                any_failed = true;
+            if matches!(result, FramePaintOutcome::Errored { retry: true }) {
+                any_retry_needed = true;
             }
             last_outcome = result;
             producer = presentation.id();
         }
-        (producer, last_outcome, any_failed)
+        (producer, last_outcome, any_retry_needed)
     }
 
     /// Drive one frame on this UI runtime's scheduler — begin frame, persistent
@@ -584,7 +599,7 @@ impl UiRuntime {
             .root_pipeline_owner()
             .with(PipelineOwner::device_pixel_ratio);
         let constraints = BoxConstraints::tight(Size::new(width as f64 / dpr, height as f64 / dpr));
-        let (producer_id, outcome, any_failed) = self.draw_frame_entered(constraints);
+        let (producer_id, outcome, any_retry_needed) = self.draw_frame_entered(constraints);
         // The presentation whose segment produced `outcome` above is never
         // inferred as `primary()`: test scaffolding can attach content to a
         // secondary and exercises this attribution. Production secondary
@@ -606,14 +621,14 @@ impl UiRuntime {
         let should_send = !producer.clock().is_deferred();
 
         let mut presented = false;
-        // `any_failed`, not "the producer's outcome was Errored": with more
+        // `any_retry_needed`, not "the producer's outcome was Errored": with more
         // than one presentation mounted, an earlier presentation's failed
         // segment followed by a clean sibling `Painted` must still arm the
         // retry — keying this off the LAST outcome alone would end such a
         // pump in `mark_rendered()`, clearing the very wake the failed
         // presentation's retry needs (and on a pump whose failure consumed
         // its build-dirty state, nothing else would ever reopen the gate).
-        let mut retry_needed = any_failed;
+        let mut retry_needed = any_retry_needed;
         // Tracks a NARROWER condition than `retry_needed`: whether a SUBMIT
         // failure consumed the scene and therefore needs
         // [`Self::mark_needs_full_repaint_for`] before a later retry. A
@@ -891,7 +906,7 @@ impl UiRuntime {
             target: "flui.pace",
             event = "frame_tail",
             presented,
-            any_failed,
+            any_retry_needed,
             retry_needed,
             retry_needs_repaint,
             "frame tail resolved"
@@ -941,7 +956,7 @@ impl UiRuntime {
                 self.mark_needs_full_repaint_for(producer);
             }
             // Still called unconditionally for every `retry_needed` cause,
-            // pipeline `Errored` included: unlike the pre-frame success arm
+            // retryable pipeline `Errored` included: unlike the pre-frame success arm
             // (which runs synchronously right before this same call's own
             // `render_frame`, so nothing external needs poking),
             // every cause here fails INSIDE this call — the retry can only

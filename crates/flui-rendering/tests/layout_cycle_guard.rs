@@ -126,13 +126,15 @@ pub(crate) fn drop_guard_clears_id_on_perform_layout_panic() {
         fn perform_layout(
             &mut self,
             ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
-        ) -> Size {
-            if !self.already_panicked {
-                self.already_panicked = true;
-                panic!("PanicOnceWidget intentional first-call panic");
-            }
-            let constraints = *ctx.constraints();
-            ctx.layout_child(0, constraints)
+        ) -> flui_rendering::RenderResult<Size> {
+            Ok({
+                if !self.already_panicked {
+                    self.already_panicked = true;
+                    panic!("PanicOnceWidget intentional first-call panic");
+                }
+                let constraints = *ctx.constraints();
+                ctx.layout_child(0, constraints)?
+            })
         }
 
         fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {

@@ -386,7 +386,7 @@ impl PersistentHeaderCore {
         scroll_offset: f64,
         overlaps_content: bool,
         update_child: impl FnOnce(f64, bool),
-    ) -> f64 {
+    ) -> flui_rendering::RenderResult<f64> {
         let shrink_offset = scroll_offset.min(self.max_extent);
         if self.needs_update_child
             || self.last_shrink_offset != shrink_offset
@@ -439,7 +439,7 @@ impl PersistentHeaderCore {
             let child_size = ctx.layout_box_child(
                 0,
                 constraints.as_box_constraints(0.0, max_child_extent, None),
-            );
+            )?;
             match constraints.axis() {
                 Axis::Horizontal => child_size.width,
                 Axis::Vertical => child_size.height,
@@ -457,7 +457,7 @@ impl PersistentHeaderCore {
         }
         self.last_stretch_offset = stretch_offset;
 
-        child_extent
+        Ok(child_extent)
     }
 }
 
@@ -635,7 +635,7 @@ impl RenderSliver for RenderSliverScrollingPersistentHeader {
     fn perform_layout(
         &mut self,
         ctx: &mut SliverLayoutContext<'_, Single, Self::ParentData>,
-    ) -> SliverGeometry {
+    ) -> flui_rendering::RenderResult<SliverGeometry> {
         let constraints = *ctx.constraints();
         // No `overlaps_content` arg, defaults to `false`.
         let child_extent = self.core.layout_child(
@@ -644,7 +644,7 @@ impl RenderSliver for RenderSliverScrollingPersistentHeader {
             constraints.scroll_offset,
             false,
             |_, _| {},
-        );
+        )?;
         let (geometry, child_position) = self.update_geometry(&constraints, child_extent);
         self.child_position = child_position;
         position_persistent_header_child(
@@ -654,7 +654,7 @@ impl RenderSliver for RenderSliverScrollingPersistentHeader {
             child_position,
             child_extent,
         );
-        geometry
+        Ok(geometry)
     }
 
     fn child_main_axis_position(
@@ -712,7 +712,7 @@ impl RenderSliver for RenderSliverPinnedPersistentHeader {
     fn perform_layout(
         &mut self,
         ctx: &mut SliverLayoutContext<'_, Single, Self::ParentData>,
-    ) -> SliverGeometry {
+    ) -> flui_rendering::RenderResult<SliverGeometry> {
         let constraints = *ctx.constraints();
         let max_extent = self.core.max_extent;
         let min_extent = self.core.min_extent;
@@ -724,7 +724,7 @@ impl RenderSliver for RenderSliverPinnedPersistentHeader {
             constraints.scroll_offset,
             overlaps_content,
             |_, _| {},
-        );
+        )?;
 
         let effective_remaining_paint_extent =
             (constraints.remaining_paint_extent - constraints.overlap).max(0.0);
@@ -753,7 +753,7 @@ impl RenderSliver for RenderSliverPinnedPersistentHeader {
             .with_visual_overflow();
 
         position_persistent_header_child(ctx, &constraints, &geometry, 0.0, child_extent);
-        geometry
+        Ok(geometry)
     }
 
     fn child_main_axis_position(
@@ -1207,7 +1207,7 @@ impl<M: FloatingHeaderMode> RenderSliver for RenderSliverFloatingHeaderBase<M> {
     fn perform_layout(
         &mut self,
         ctx: &mut SliverLayoutContext<'_, Single, Self::ParentData>,
-    ) -> SliverGeometry {
+    ) -> flui_rendering::RenderResult<SliverGeometry> {
         let constraints = *ctx.constraints();
         let max_extent = self.core.max_extent;
 
@@ -1269,7 +1269,7 @@ impl<M: FloatingHeaderMode> RenderSliver for RenderSliverFloatingHeaderBase<M> {
             effective_scroll_offset,
             overlaps_content,
             |_, _| {},
-        );
+        )?;
         let core_view = PersistentHeaderCoreView { core: &self.core };
         let (geometry, child_position) = M::update_geometry(
             &core_view,
@@ -1287,7 +1287,7 @@ impl<M: FloatingHeaderMode> RenderSliver for RenderSliverFloatingHeaderBase<M> {
             child_position,
             child_extent,
         );
-        geometry
+        Ok(geometry)
     }
 
     fn child_main_axis_position(
