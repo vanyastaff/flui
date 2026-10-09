@@ -14,6 +14,7 @@
 //! policy [`is_internal_invariant`] mechanizes.
 
 use std::any::Any;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The text of a panic payload, when it has any.
 ///
@@ -76,6 +77,29 @@ pub struct PanicRecovery {
     first: Option<Box<dyn Any + Send>>,
 }
 
+/// Borrowed failure custody during synchronous framework delivery.
+///
+/// A scope cannot finish or own the enclosing failure. Channel links live on
+/// the call stack, so composing relays does not allocate at any depth.
+#[doc(hidden)]
+pub struct RecoveryScope<'scope> {
+    owner: &'scope mut PanicRecovery,
+    channels: Option<&'scope FailureLatch<'scope>>,
+}
+
+impl std::fmt::Debug for RecoveryScope<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RecoveryScope")
+            .field("has_failure", &self.has_failure())
+            .finish_non_exhaustive()
+    }
+}
+
+struct FailureLatch<'scope> {
+    signal: &'scope AtomicBool,
+    parent: Option<&'scope Self>,
+}
+
 impl std::fmt::Debug for PanicRecovery {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PanicRecovery")
@@ -103,11 +127,85 @@ impl PanicRecovery {
         self.incoming = true;
     }
 
+    /// Lend custody without transferring the first failure or its completion.
+    pub fn scope(&mut self) -> RecoveryScope<'_> {
+        RecoveryScope {
+            owner: self,
+            channels: None,
+        }
+    }
+
+    pub fn run(&mut self, action: impl FnOnce()) {
+        self.scope().run(action);
+    }
+
+    pub fn run_with(&mut self, action: impl FnOnce(&mut RecoveryScope<'_>)) {
+        self.scope().run_with(action);
+    }
+
+    #[must_use]
+    pub fn has_failure(&self) -> bool {
+        self.incoming || self.first.is_some()
+    }
+
+    pub fn retire<T>(&mut self, value: T) {
+        self.scope().retire(value);
+    }
+
+    pub fn finish(mut self) {
+        if let Some(payload) = self.first.take() {
+            std::panic::resume_unwind(payload);
+        }
+    }
+}
+
+impl RecoveryScope<'_> {
+    pub(crate) fn inherit_failure(&mut self) {
+        self.owner.inherit_failure();
+        self.mark_active_channels();
+    }
+
+    /// Keep channel retirement aware of failures caught by nested relays.
+    /// Only the failure signal is shared, never callback storage or an owner.
+    pub(crate) fn with_failure_latch(
+        &mut self,
+        signal: &AtomicBool,
+        action: impl FnOnce(&mut RecoveryScope<'_>),
+    ) {
+        if signal.load(Ordering::Relaxed) {
+            self.inherit_failure();
+        }
+        signal.store(self.has_failure(), Ordering::Relaxed);
+        let latch = FailureLatch {
+            signal,
+            parent: self.channels,
+        };
+        let mut child = RecoveryScope {
+            owner: self.owner,
+            channels: Some(&latch),
+        };
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| action(&mut child)));
+        if outcome.is_err() {
+            child.mark_active_channels();
+        }
+        if let Err(payload) = outcome {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
+    fn mark_active_channels(&self) {
+        let mut channel = self.channels;
+        while let Some(latch) = channel {
+            latch.signal.store(true, Ordering::Relaxed);
+            channel = latch.parent;
+        }
+    }
+
     pub fn run(&mut self, action: impl FnOnce()) {
         self.run_with(|_| action());
     }
 
-    pub fn run_with(&mut self, action: impl FnOnce(&mut Self)) {
+    pub fn run_with(&mut self, action: impl FnOnce(&mut RecoveryScope<'_>)) {
         if let Err(payload) =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| action(self)))
         {
@@ -119,13 +217,14 @@ impl PanicRecovery {
         if self.has_failure() {
             retain_opaque_payload(payload);
         } else {
-            self.first = Some(payload);
+            self.owner.first = Some(payload);
         }
+        self.mark_active_channels();
     }
 
     #[must_use]
     pub fn has_failure(&self) -> bool {
-        self.incoming || self.first.is_some()
+        self.owner.has_failure()
     }
 
     pub fn retire<T>(&mut self, value: T) {
@@ -133,12 +232,6 @@ impl PanicRecovery {
             std::mem::forget(value);
         } else {
             self.run(|| drop(value));
-        }
-    }
-
-    pub fn finish(mut self) {
-        if let Some(payload) = self.first.take() {
-            std::panic::resume_unwind(payload);
         }
     }
 }

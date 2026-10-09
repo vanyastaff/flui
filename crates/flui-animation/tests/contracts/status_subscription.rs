@@ -113,7 +113,7 @@ fn custom_sources_can_construct_removal_authority() {
     fn remove(
         source: &Notifier<AnimationStatus>,
         token: ListenerId,
-        recovery: &mut flui_foundation::panic::PanicRecovery,
+        recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
     ) -> Option<Rc<flui_foundation::notifier_generic::NotificationCallback<AnimationStatus>>> {
         source.inherit_failure(recovery);
         source.take_callback(token)
@@ -396,7 +396,7 @@ fn enclosing_cleanup_preserves_its_first_failure() {
     });
     let mut recovery = flui_foundation::panic::PanicRecovery::new();
     recovery.run(|| panic!("enclosing cleanup failure"));
-    subscription.cancel_with_recovery(&mut recovery);
+    subscription.cancel_with_recovery(&mut recovery.scope());
     assert_eq!(drops.get(), 0, "a failed cleanup retains opaque captures");
     drop(subscription);
     let calls = Rc::new(Cell::new(0));

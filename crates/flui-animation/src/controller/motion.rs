@@ -1,5 +1,6 @@
 //! Interruptible runs owned by the controller.
 
+use flui_foundation::panic::RecoveryScope;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -101,7 +102,7 @@ impl Seam {
 }
 
 impl AnimationController {
-    pub(crate) fn publish_value_metadata(&self, recovery: &mut Retirement) {
+    pub(crate) fn publish_value_metadata(&self, recovery: &mut RecoveryScope<'_>) {
         let inner = self.inner.borrow_mut();
         let status = inner.status;
         self.finish_with_retirement(
@@ -140,7 +141,7 @@ impl AnimationController {
         source: Rc<dyn crate::spring::ValueMotion>,
         immediate: bool,
         commit: impl FnOnce() -> R,
-        recovery: &mut Retirement,
+        recovery: &mut RecoveryScope<'_>,
     ) -> Result<(AnimationRunFuture, R), AnimationError> {
         let mut source = Opaque::new(source);
         let mut inner = self.inner.borrow_mut();
@@ -270,7 +271,7 @@ impl AnimationController {
         &self,
         target: f64,
         motion: &MotionSpec,
-        recovery: &mut Retirement,
+        recovery: &mut RecoveryScope<'_>,
     ) -> Result<AnimationRunFuture, AnimationError> {
         for _ in 0..2 {
             let (seam, target) = {

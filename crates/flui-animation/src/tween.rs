@@ -53,7 +53,7 @@ where
 {
     fn drop(&mut self) {
         let mut recovery = Retirement::new();
-        self.links.inherit_failure(&mut recovery);
+        self.links.inherit_failure(&mut recovery.scope());
         let links = self.links.withdraw();
         let tween = self.tween.withdraw();
         recovery.run(|| drop(links.into_inner()));

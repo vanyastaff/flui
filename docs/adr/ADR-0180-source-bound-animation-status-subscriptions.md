@@ -49,7 +49,9 @@ remain subscribed across parent replacement and active-parent hops. The last
 wrapper clone closes its channels even when a guard survives. A temporary relay
 reference to a notifier does not count as a surviving wrapper owner.
 
-Framework status relays borrow the enclosing delivery's `PanicRecovery`.
+Framework status relays borrow the enclosing delivery's `RecoveryScope`.
+Only the enclosing `PanicRecovery` owns completion of the first failure;
+subscription removal cannot finish its borrowed scope.
 Internal parent guards and higher-layer cleanup use `cancel_with_recovery` when
 they belong to an existing retirement round. Removal commits membership changes
 before callback destruction. Controller and proxy removal during delivery use

@@ -1,22 +1,23 @@
 //! Removal authority bound to the source that admitted a status callback.
 
+use flui_foundation::panic::RecoveryScope;
 use std::fmt;
 use std::rc::{Rc, Weak};
 
 use crate::animation::{Retirement, Terminal};
 
 trait Cancellation {
-    fn cancel(&self, recovery: &mut Retirement);
+    fn cancel(&self, recovery: &mut RecoveryScope<'_>);
 }
 
 struct Registration<S: ?Sized, Token, Outgoing> {
     source: Weak<S>,
     token: Token,
-    remove: fn(&S, Token, &mut Retirement) -> Outgoing,
+    remove: fn(&S, Token, &mut RecoveryScope<'_>) -> Outgoing,
 }
 
 impl<S: ?Sized, Token: Copy, Outgoing> Cancellation for Registration<S, Token, Outgoing> {
-    fn cancel(&self, recovery: &mut Retirement) {
+    fn cancel(&self, recovery: &mut RecoveryScope<'_>) {
         let Some(source) = self.source.upgrade() else {
             return;
         };
@@ -56,7 +57,7 @@ impl StatusSubscription {
     pub fn new<S: ?Sized + 'static, Token: Copy + 'static, Outgoing: 'static>(
         source: &Rc<S>,
         token: Token,
-        remove: fn(&S, Token, &mut flui_foundation::panic::PanicRecovery) -> Outgoing,
+        remove: fn(&S, Token, &mut RecoveryScope<'_>) -> Outgoing,
     ) -> Self {
         Self {
             cancellation: Some(Box::new(Registration {
@@ -77,7 +78,7 @@ impl StatusSubscription {
     /// Withdraw this registration within an enclosing framework cleanup round.
     /// Captures retire through its existing first-failure context.
     #[doc(hidden)]
-    pub fn cancel_with_recovery(&mut self, recovery: &mut Retirement) {
+    pub fn cancel_with_recovery(&mut self, recovery: &mut RecoveryScope<'_>) {
         if let Some(cancellation) = self.cancellation.take() {
             recovery.run_with(|recovery| cancellation.cancel(recovery));
             // The private cancellation envelope owns only Weak, Copy and a
@@ -98,7 +99,7 @@ impl fmt::Debug for StatusSubscription {
 impl Drop for StatusSubscription {
     fn drop(&mut self) {
         let mut recovery = Retirement::new();
-        self.cancel_with_recovery(&mut recovery);
+        self.cancel_with_recovery(&mut recovery.scope());
         recovery.finish();
     }
 }

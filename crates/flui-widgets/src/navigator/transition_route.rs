@@ -164,7 +164,7 @@ impl Drop for TransitionInner {
         let completed = self.completed.withdraw();
         let mut recovery = flui_foundation::panic::PanicRecovery::new();
         if let Some(subscription) = &mut subscription {
-            subscription.cancel_with_recovery(&mut recovery);
+            subscription.cancel_with_recovery(&mut recovery.scope());
         }
         recovery.run(|| drop(controller));
         recovery.retire((binding, wake, secondary, parent, completed));
@@ -676,7 +676,7 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
             .replace(subscription);
         let mut recovery = flui_foundation::panic::PanicRecovery::new();
         if let Some(subscription) = &mut outgoing_subscription {
-            subscription.cancel_with_recovery(&mut recovery);
+            subscription.cancel_with_recovery(&mut recovery.scope());
         }
 
         // Publish the primary animation so the route below can coordinate.
@@ -789,7 +789,7 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
         let mut subscription = self.inner.status_subscription.borrow_mut().take();
         let mut recovery = flui_foundation::panic::PanicRecovery::new();
         if let Some(subscription) = &mut subscription {
-            subscription.cancel_with_recovery(&mut recovery);
+            subscription.cancel_with_recovery(&mut recovery.scope());
         }
         recovery.run(|| drop(outgoing));
         recovery.finish();

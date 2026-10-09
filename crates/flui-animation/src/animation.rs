@@ -1,6 +1,7 @@
 //! Core animation trait and types.
 
 use crate::status::AnimationStatus;
+use flui_foundation::panic::RecoveryScope;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerId};
 use std::fmt;
 use std::rc::Rc;
@@ -12,7 +13,7 @@ pub type StatusCallback = Rc<dyn Fn(AnimationStatus)>;
 
 /// Internal status relay borrowing the enclosing delivery's recovery context.
 #[doc(hidden)]
-pub type StatusObserver = Rc<dyn Fn(AnimationStatus, &mut Retirement)>;
+pub type StatusObserver = Rc<dyn Fn(AnimationStatus, &mut RecoveryScope<'_>)>;
 
 /// The direction an animation is running.
 ///
@@ -154,13 +155,13 @@ impl fmt::Debug for ParentSubscription {
 impl Drop for ParentSubscription {
     fn drop(&mut self) {
         let mut retirement = Retirement::new();
-        self.detach(&mut retirement);
+        self.detach(&mut retirement.scope());
         retirement.finish();
     }
 }
 
 impl ParentSubscription {
-    pub(crate) fn detach(&self, retirement: &mut Retirement) {
+    pub(crate) fn detach(&self, retirement: &mut RecoveryScope<'_>) {
         let teardown = self.teardown.borrow_mut().take();
         if let Some(teardown) = teardown {
             let mut teardown = Terminal::new(teardown);
@@ -264,7 +265,7 @@ impl ParentLinks {
         })
     }
 
-    pub(crate) fn inherit_failure(&self, recovery: &mut Retirement) {
+    pub(crate) fn inherit_failure(&self, recovery: &mut RecoveryScope<'_>) {
         self.notifier.inherit_failure(recovery);
         self.status_notifier.inherit_failure(recovery);
     }
@@ -292,7 +293,7 @@ impl ParentLinks {
     fn withdraw_status(
         &self,
         id: ListenerId,
-        recovery: &mut Retirement,
+        recovery: &mut RecoveryScope<'_>,
     ) -> Option<Rc<flui_foundation::notifier_generic::NotificationCallback<AnimationStatus>>> {
         self.inherit_failure(recovery);
         self.status_notifier.take_callback(id)
@@ -302,7 +303,7 @@ impl ParentLinks {
 impl Drop for ParentLinks {
     fn drop(&mut self) {
         let mut recovery = Retirement::new();
-        self.inherit_failure(&mut recovery);
+        self.inherit_failure(&mut recovery.scope());
         let parent = self.parent.withdraw();
         let notifier = self.notifier.withdraw();
         let statuses = self.status_notifier.withdraw();
@@ -310,8 +311,10 @@ impl Drop for ParentLinks {
         let mut status_sub = self.status_sub.withdraw();
         let values = notifier.dispose_and_take_listeners();
         let callbacks = statuses.dispose_and_take_callbacks();
-        value_sub.detach(&mut recovery);
-        status_sub.get_mut().cancel_with_recovery(&mut recovery);
+        value_sub.detach(&mut recovery.scope());
+        status_sub
+            .get_mut()
+            .cancel_with_recovery(&mut recovery.scope());
         for callback in values {
             recovery.retire(Terminal::new(callback));
         }

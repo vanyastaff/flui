@@ -559,6 +559,10 @@ fn driven_controller_owns_its_seat_and_run() {
             wake_replacement_retires_captures_outside_borrows,
         ),
         (
+            "last driven owner release revokes its driver after wake failure",
+            last_driven_owner_release_revokes_its_driver,
+        ),
+        (
             "drop unregisters before cancel",
             dropping_a_driven_controller_unregisters_then_cancels_its_run,
         ),
@@ -722,6 +726,87 @@ fn nested_mute_and_rebind_address_the_live_driver() {
         (1, 2),
         "retired observer clones cannot wake either driver"
     );
+}
+
+fn last_driven_owner_release_revokes_its_driver() {
+    use std::cell::{Cell, RefCell};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::rc::Rc;
+
+    for fail in [false, true] {
+        let registry = Vsync::new();
+        let driven = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
+        let controller = driven.controller().clone();
+        let mut run = controller.forward().expect("run before wake installation");
+        let outcomes = Rc::new(Cell::new(0));
+        let delivered = outcomes.clone();
+        run.when_complete_or_cancel(move |result| {
+            assert!(result.is_err(), "owner release cancels the admitted run");
+            delivered.set(delivered.get() + 1);
+        });
+        let owner = Rc::new(RefCell::new(Some(driven)));
+        let released = owner.clone();
+        let armed = Rc::new(Cell::new(false));
+        let callback_armed = armed.clone();
+        let wakes = Rc::new(Cell::new(0));
+        let observed = wakes.clone();
+        registry.set_frame_requester(Some(Rc::new(move || {
+            if !callback_armed.get() {
+                return;
+            }
+            observed.set(observed.get() + 1);
+            let outgoing = released.borrow_mut().take();
+            drop(outgoing);
+            assert!(!fail, "wake failure after owner release");
+        })));
+        drop(registry);
+        armed.set(true);
+
+        let first = catch_unwind(AssertUnwindSafe(|| {
+            controller.set_playback_rate(
+                flui_animation::PlaybackRate::new(2.0).expect("valid playback rate"),
+            );
+        }));
+        assert_eq!(first.is_err(), fail);
+        if let Err(payload) = first {
+            assert_eq!(
+                flui_foundation::panic::payload_text(&*payload),
+                Some("wake failure after owner release")
+            );
+        }
+        assert!(owner.borrow().is_none());
+        assert_eq!(wakes.get(), 1);
+        assert_eq!(outcomes.get(), 1, "cancellation is delivered once");
+        assert!(matches!(
+            Pin::new(&mut run).poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Ready(Err(_))
+        ));
+        assert!(matches!(
+            controller.forward(),
+            Err(flui_animation::AnimationError::Disposed)
+        ));
+        assert_eq!(
+            wakes.get(),
+            1,
+            "temporary storage custody cannot revive a driver"
+        );
+
+        let (replacement, replacement_wakes) = counted_registry();
+        let replacement_owner =
+            AnimationController::builder(Duration::from_secs(1)).build_on(Some(&replacement));
+        let mut replacement_run = replacement_owner
+            .controller()
+            .forward()
+            .expect("replacement owner starts");
+        assert_eq!(replacement_wakes.get(), 1);
+        let mut clock = flui_animation::MotionClock::new();
+        replacement.tick_all(&clock.frame(Duration::ZERO));
+        replacement.tick_all(&clock.frame(Duration::from_secs(1)));
+        assert!(matches!(
+            Pin::new(&mut replacement_run).poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Ready(Ok(()))
+        ));
+    }
 }
 
 fn wake_failure_preserves_delivery_and_recovery() {

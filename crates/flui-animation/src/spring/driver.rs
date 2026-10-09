@@ -5,6 +5,7 @@ use std::fmt;
 use std::rc::Rc;
 use std::time::Duration;
 
+use flui_foundation::panic::RecoveryScope;
 use flui_foundation::{Listenable, ListenerCallback, ListenerId};
 use smallvec::SmallVec;
 
@@ -326,7 +327,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
         target: &mut Terminal<Rc<T>>,
         motion: &mut Terminal<MotionSpec>,
         change: Change,
-        recovery: &mut Retirement,
+        recovery: &mut RecoveryScope<'_>,
     ) -> Result<AnimationRunFuture, AnimationError> {
         for _ in 0..2 {
             let controller = self.driven.controller().clone();
