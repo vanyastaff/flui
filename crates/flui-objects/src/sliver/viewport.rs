@@ -31,7 +31,7 @@ use flui_rendering::{
 const MAX_LAYOUT_CYCLES_PER_CHILD: usize = 10;
 const DEFAULT_CACHE_EXTENT: f64 = 250.0;
 
-/// A registered [`ViewportOffset`] listener [`Arc`], wrapped so
+/// A registered [`ViewportOffset`] listener [`Rc`](std::rc::Rc), wrapped so
 /// [`RenderViewport`]/[`RenderShrinkWrappingViewport`]'s `#[derive(Debug)]`
 /// doesn't need a hand-written `Debug` impl for a value that is fundamentally
 /// an opaque closure — `Debug` just reports that a listener is registered,
