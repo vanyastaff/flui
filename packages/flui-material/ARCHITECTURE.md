@@ -419,3 +419,22 @@ reopen it. Actual material geometry pins the constrained panel width.
 `retained_drawer_recomputes_its_extent_after_a_collapsed_resize` keeps a contact
 across a zero-width resize, then uses the retained handle and a new contact
 after resizing to 100 pixels.
+
+### A drawer threshold changes scaffold structure only when two slots reorder
+
+Drawer callbacks commit the handle's opened state and forward the application
+callback independently of rebuilding Scaffold. Its child order depends only
+on the end drawer's opened state when both drawer slots exist. Only a change
+to that ordering schedules a scaffold rebuild; a single drawer crossing its
+halfway threshold updates render-owned slide and scrim geometry directly.
+DrawerController's status subscription still mounts and removes its panel.
+
+`drawer_slides_without_rebuilding_per_frame` observes captured pointer moves
+and virtual settling frames through the mounted tree. It asserts no builds
+for single-drawer movement across halfway, sixteen pixels of panel movement
+per input sample and matching scrim opacity, followed by panel and scrim taps.
+`incoming_end_drawer_scrim_covers_the_outgoing_start_panel` keeps the old
+panel visibly covering a tested point while the new drawer enters. Its tap
+must reach the incoming scrim and close that drawer, without reaching the
+outgoing panel's callback. Disabling the ordering update makes that callback
+receive the tap instead.

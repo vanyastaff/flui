@@ -333,6 +333,7 @@ fn scroll_physics_and_activity() {
             ("scroll::a_failed_refresh_notification_releases_activity_and_recovers", crate::scroll::a_failed_refresh_notification_releases_activity_and_recovers),
             ("scroll::a_repeated_frame_does_not_cancel_viewer_inertia", crate::scroll::a_repeated_frame_does_not_cancel_viewer_inertia),
             ("scroll::refresh_indicator_rebuilds_only_on_a_phase_change", crate::scroll::refresh_indicator_rebuilds_only_on_a_phase_change),
+            ("scroll::refresh_controller_replacement_rebinds_the_retained_indicator", crate::scroll::refresh_controller_replacement_rebinds_the_retained_indicator),
             ("scroll::cancelling_bouncing_overscroll_settles_without_release_velocity", crate::scroll::cancelling_bouncing_overscroll_settles_without_release_velocity as fn()),
             ("scroll::cancelling_a_threshold_refresh_pull_does_not_refresh", crate::scroll::cancelling_a_threshold_refresh_pull_does_not_refresh as fn()),
             ("scroll::bouncing_lower_edge_preserves_outward_direction", crate::scroll::bouncing_lower_edge_preserves_outward_direction as fn()),
@@ -345,7 +346,7 @@ fn scroll_physics_and_activity() {
             ("scroll::a_fast_gesture_while_refreshing_does_not_start_a_fling", crate::scroll::a_fast_gesture_while_refreshing_does_not_start_a_fling as fn()),
             ("scroll::incremental_pulls_refresh_once_and_finish_allows_the_next_gesture", crate::scroll::incremental_pulls_refresh_once_and_finish_allows_the_next_gesture as fn()),
             ("scroll::reversing_a_pull_consumes_it_before_scrolling_content", crate::scroll::reversing_a_pull_consumes_it_before_scrolling_content as fn()),
-            ("scroll::a_refresh_controller_swap_retires_the_old_fling_and_drives_the_new_position", crate::scroll::a_refresh_controller_swap_retires_the_old_fling_and_drives_the_new_position as fn()),
+            ("scroll::a_refresh_scroll_controller_swap_retires_the_old_fling_and_drives_the_new_position", crate::scroll::a_refresh_scroll_controller_swap_retires_the_old_fling_and_drives_the_new_position as fn()),
             ("scroll::rebuilding_refresh_content_with_the_same_position_preserves_its_fling", crate::scroll::rebuilding_refresh_content_with_the_same_position_preserves_its_fling as fn()),
             (
                 "scroll::shift_wheel_scrolls_the_horizontal_axis",

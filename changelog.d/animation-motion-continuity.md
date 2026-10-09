@@ -107,3 +107,5 @@
   presentation, including a registry that has not received its first tick.
 - Resume Preserve repeats on a fresh registry under Reduce after their previous
   clock is absent or exhausted; resumption honors the selected timeline's capacity.
+- Keep single-drawer drag geometry in the render path when crossing halfway;
+  update scaffold structure only when its two drawer slots must change order.

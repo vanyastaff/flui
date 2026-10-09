@@ -1176,7 +1176,7 @@ pub(crate) fn a_fast_gesture_while_refreshing_does_not_start_a_fling() {
     );
 }
 
-pub(crate) fn a_refresh_controller_swap_retires_the_old_fling_and_drives_the_new_position() {
+pub(crate) fn a_refresh_scroll_controller_swap_retires_the_old_fling_and_drives_the_new_position() {
     let a = ScrollController::new();
     let b = ScrollController::new();
     for scroll in [&a, &b] {
@@ -2697,6 +2697,7 @@ pub(crate) fn bouncing_fling_into_the_edge_overscrolls_and_returns() {
 /// the build phase every frame, driven by pointer events between frames.
 struct RefreshHarness {
     binding: flui_testing::HeadlessBinding,
+    mounted: flui_testing::Mounted,
     scroll: ScrollController,
     refresh: RefreshController,
     content_builds: Rc<Cell<usize>>,
@@ -2732,7 +2733,7 @@ impl RefreshHarness {
                 }),
             )),
         );
-        let _ = binding.mount_root(
+        let mounted = binding.mount_root(
             &root,
             flui_testing::MountOwners::fresh(),
             flui_testing::MountOptions::tight(300.0, 300.0),
@@ -2740,6 +2741,7 @@ impl RefreshHarness {
         binding.pump_frame(REFRESH_FRAME);
         Self {
             binding,
+            mounted,
             scroll,
             refresh,
             content_builds,
@@ -2756,6 +2758,24 @@ impl RefreshHarness {
         .to_event();
         let binding = &self.binding;
         binding.dispatch_pointer(&event, |position| binding.hit_test(position));
+    }
+
+    fn replace_refresh(&mut self, refresh: RefreshController) {
+        let root = flui_widgets::GestureArenaScope::new(
+            self.binding.arena().clone(),
+            flui_widgets::FocusRoot::new(VsyncScope::new(
+                self.binding.vsync().clone(),
+                refresh_content(&self.scroll, &refresh).child(RefreshContent {
+                    builds: Rc::clone(&self.content_builds),
+                }),
+            )),
+        );
+        self.binding.swap_root_view(
+            self.mounted.root_element,
+            &flui_view::RootRenderView::new(root, 300.0, 300.0),
+        );
+        self.refresh = refresh;
+        self.frame();
     }
 
     /// Pumps one frame and returns how many elements it rebuilt.
@@ -2834,6 +2854,68 @@ pub(crate) fn refresh_indicator_drag_scrolls_without_rebuilding() {
             "the fling coasts forward"
         );
         assert!((harness.content_top() + harness.scroll.pixels()).abs() < 1e-9);
+    }
+}
+
+/// A retained overlay follows its replacement refresh source and withdraws
+/// delivery from the previous source, without rebuilding scroll content.
+pub(crate) fn refresh_controller_replacement_rebinds_the_retained_indicator() {
+    use flui_testing::PointerPhase::{Down, Move, Up};
+
+    for initially_refreshing in [false, true] {
+        let mut harness = RefreshHarness::mount();
+        if initially_refreshing {
+            harness.pointer(Down, 40.0);
+            harness.pointer(Move, 140.0);
+            harness.pointer(Up, 140.0);
+            harness.frame();
+            assert!(harness.paints_indicator());
+        }
+        let retired = harness.refresh.clone();
+        harness.replace_refresh(RefreshController::new());
+        assert!(!harness.paints_indicator(), "the replacement starts idle");
+        assert_eq!(harness.frame(), 0, "configuration replacement settles");
+        let content_builds = harness.content_builds.get();
+
+        retired.finish();
+        assert_eq!(
+            harness.frame(),
+            0,
+            "the old source cannot rebuild the overlay"
+        );
+        assert!(!harness.paints_indicator());
+
+        harness.pointer(Down, 40.0);
+        harness.pointer(Move, 140.0);
+        assert_eq!(harness.frame(), 0, "new pull distance does not rebuild");
+        harness.pointer(Up, 140.0);
+        assert!(
+            harness.refresh.is_refreshing(),
+            "the gesture uses the new source"
+        );
+        harness.frame();
+        assert!(
+            harness.paints_indicator(),
+            "new phase delivery paints its arc"
+        );
+        assert_eq!(harness.frame(), 0);
+        assert_eq!(harness.content_builds.get(), content_builds);
+
+        retired.finish();
+        assert_eq!(
+            harness.frame(),
+            0,
+            "old completion cannot hide the new indicator"
+        );
+        assert!(harness.paints_indicator());
+        harness.refresh.finish();
+        harness.frame();
+        assert!(
+            !harness.paints_indicator(),
+            "new completion removes the arc"
+        );
+        assert_eq!(harness.frame(), 0);
+        assert_eq!(harness.content_builds.get(), content_builds);
     }
 }
 

@@ -2289,7 +2289,7 @@ position's metrics and replaces the fling listener's target. Reconfiguration
 with the same position preserves the active run. The listener is removed and
 replaced outside any controller or position guard; its captured handles can
 retire without holding those locks. The rows
-`a_refresh_controller_swap_retires_the_old_fling_and_drives_the_new_position`
+`a_refresh_scroll_controller_swap_retires_the_old_fling_and_drives_the_new_position`
 and `rebuilding_refresh_content_with_the_same_position_preserves_its_fling`
 use virtual frames to observe actual position changes.
 
@@ -2299,6 +2299,13 @@ content or gesture handlers. `refresh_indicator_rebuilds_only_on_a_phase_change`
 counts builds in the actual content and observes the loading arc's appearance
 and removal in the committed scene; scroll and pull frames remain free of
 element rebuilds.
+
+`refresh_controller_replacement_rebinds_the_retained_indicator` changes the
+refresh source while idle or refreshing. The old source's completion cannot
+invalidate the retained overlay; a new real pull and release must show its
+loading arc, and only completion on the replacement removes it. The row also
+observes content build counts and unchanged pull frames. Removing the overlay's
+replacement subscription makes the new refreshing phase lose its painted arc.
 
 The design follows this widget's synchronous completion and logical-pixel
 threshold contract. As a comparison after choosing it, Flutter's
