@@ -725,13 +725,15 @@ mod tests {
             Rc::new(RefCell::new(Some(registration)));
         let vsync_for_listener = vsync.clone();
         let slot_for_listener = Rc::clone(&slot);
-        controller.add_status_listener(Rc::new(move |status| {
-            if status == AnimationStatus::Completed
-                && let Some(registration) = slot_for_listener.borrow_mut().take()
-            {
-                vsync_for_listener.unregister(&registration);
-            }
-        }));
+        controller
+            .subscribe_status(Rc::new(move |status| {
+                if status == AnimationStatus::Completed
+                    && let Some(registration) = slot_for_listener.borrow_mut().take()
+                {
+                    vsync_for_listener.unregister(&registration);
+                }
+            }))
+            .detach();
 
         controller.forward().expect("fresh controller forwards");
         vsync.tick_all(&crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)));
@@ -847,9 +849,12 @@ mod tests {
             let drops = Rc::new(std::sync::atomic::AtomicUsize::new(0));
             let mut rejected = AnimationController::builder(Duration::from_secs(1)).build_on(None);
             let probe = RejectedCapture(drops.clone());
-            rejected.controller().add_status_listener(Rc::new(move |_| {
-                let _capture = &probe;
-            }));
+            rejected
+                .controller()
+                .subscribe_status(Rc::new(move |_| {
+                    let _capture = &probe;
+                }))
+                .detach();
             assert_eq!(
                 rejected.rebind(Some(&registry)),
                 Err(VsyncRegistrationError::Exhausted)

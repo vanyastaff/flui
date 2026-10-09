@@ -151,7 +151,6 @@ pub use proxy::ProxyAnimation;
 pub use retarget::MotionSpec;
 pub use reverse::ReverseAnimation;
 pub use run_future::{AnimationRunFuture, RunCanceled};
-pub use status_subscription::StatusSubscription;
 pub use simulation::{
     BouncingScrollSimulation, BoundedFrictionSimulation, FrictionSimulation, Simulation,
     SimulationBounds, SimulationError, SimulationParameter, SpringDescription, SpringSimulation,
@@ -159,6 +158,7 @@ pub use simulation::{
 };
 pub use spring::{AnimatedValue, AnimatedValueView, AnimationVector, TwoWayConverter};
 pub use stagger::{Stagger, StaggerOrigin};
+pub use status_subscription::StatusSubscription;
 // `#[derive(TwoWayConverter)]` generates `TwoWayConverter` and `Lerp` impls. It
 // shares the trait's name but lives in the macro namespace (the serde
 // `Serialize` trait+derive pattern), so one `use flui_animation::TwoWayConverter`

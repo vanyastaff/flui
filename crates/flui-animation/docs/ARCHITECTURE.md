@@ -162,9 +162,12 @@ run-start negative control verifies that the allocation counter is live.
 `StatusSubscription` holds weak source ownership, a `Copy` registration token and
 a removal function pointer. Dropping it withdraws that registration; `detach`
 disables removal without touching the source's callback. Custom sources construct
-the same guard and receive the borrowed recovery context during withdrawal. Their
-callback captures retire through that context, while the guard's private envelope
-contains no user captures and can always retire normally.
+the same guard and receive the borrowed recovery context during withdrawal. The
+remover returns outgoing callback custody after committing membership changes.
+The guard releases its temporary source reference before retiring that custody
+through the context. Capture destruction can therefore release the last owner
+and reenter only after its channels close. Deferred delivery custody stays in
+the source's existing queue. The private guard envelope contains no user captures.
 
 `Animation<T>::subscribe_status` exposes that ownership contract through the
 common observation surface. Its framework relay variant borrows the current
@@ -234,8 +237,7 @@ where
     fn status(&self) -> AnimationStatus;
     
     /// Listen to status changes
-    fn add_status_listener(&self, callback: StatusCallback) -> ListenerId;
-    fn remove_status_listener(&self, id: ListenerId);
+    fn subscribe_status(&self, callback: StatusCallback) -> StatusSubscription;
 }
 ```
 

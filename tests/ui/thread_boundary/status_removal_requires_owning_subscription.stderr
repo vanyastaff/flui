@@ -1,0 +1,23 @@
+error[E0599]: no method named `add_status_listener` found for struct `AnimationController` in the current scope
+  --> tests/ui/thread_boundary/status_removal_requires_owning_subscription.rs:10:24
+   |
+10 |     let token = source.add_status_listener(Rc::new(|_| {}));
+   |                        ^^^^^^^^^^^^^^^^^^^
+   |
+help: there is a method `add_listener` with a similar name
+   |
+10 -     let token = source.add_status_listener(Rc::new(|_| {}));
+10 +     let token = source.add_listener(Rc::new(|_| {}));
+   |
+
+error[E0599]: no method named `remove_status_listener` found for struct `AnimationController` in the current scope
+  --> tests/ui/thread_boundary/status_removal_requires_owning_subscription.rs:11:11
+   |
+11 |     other.remove_status_listener(token);
+   |           ^^^^^^^^^^^^^^^^^^^^^^
+   |
+help: there is a method `remove_listener` with a similar name
+   |
+11 -     other.remove_status_listener(token);
+11 +     other.remove_listener(token);
+   |

@@ -125,11 +125,12 @@ fn exercise_with_secondary(
     handle
         .shared
         .entry_controller
-        .add_status_listener(std::rc::Rc::new(move |status| {
+        .subscribe_status(std::rc::Rc::new(move |status| {
             if status == AnimationStatus::Forward {
                 forward_handle.schedule(flui_sdk::view::RebuildReason::AnimationTick);
             }
-        }));
+        }))
+        .detach();
     let mut fanout = Vec::new();
     for _ in 0..2 {
         let armed = Arc::clone(&armed);

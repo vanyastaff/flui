@@ -489,20 +489,12 @@ impl<T: TwoWayConverter + 'static> Animation<T> for AnimatedValueView<T> {
     fn is_animating(&self) -> bool {
         self.controller.is_animating()
     }
-    fn add_status_listener(&self, callback: StatusCallback) -> ListenerId {
-        self.controller.add_status_listener(callback)
-    }
+
     fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription {
         self.controller.subscribe_status(callback)
     }
     fn subscribe_status_observer(&self, observer: StatusObserver) -> crate::StatusSubscription {
         self.controller.subscribe_status_observer(observer)
-    }
-    fn add_status_observer(&self, observer: StatusObserver) -> ListenerId {
-        self.controller.add_status_observer(observer)
-    }
-    fn remove_status_listener(&self, id: ListenerId) {
-        self.controller.remove_status_listener(id);
     }
 }
 

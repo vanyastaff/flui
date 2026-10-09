@@ -67,21 +67,15 @@ impl Animation<f64> for ReentrantParent {
         }
         AnimationStatus::Forward
     }
-    fn add_status_listener(&self, _callback: StatusCallback) -> ListenerId {
-        self.statuses.add_listener(std::rc::Rc::new(|| {}))
-    }
+
     fn subscribe_status(&self, callback: StatusCallback) -> flui_animation::StatusSubscription {
         let id = self.statuses.add_listener(Rc::new(move || {
             let _keep = &callback;
         }));
         flui_animation::StatusSubscription::new(&self.statuses, id, |source, id, recovery| {
             source.inherit_failure(recovery);
-            let callback = source.take_listener(id);
-            recovery.retire(callback);
+            source.take_listener(id)
         })
-    }
-    fn remove_status_listener(&self, id: ListenerId) {
-        self.statuses.remove_listener(id);
     }
 }
 
@@ -173,9 +167,11 @@ fn old_parent_removal_keeps_committed_notification_order() {
     let (proxy, changes) = fixture(Reentry::Removal);
     let statuses = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let observed = statuses.clone();
-    proxy.add_status_listener(std::rc::Rc::new(move |status| {
-        observed.borrow_mut().push(status);
-    }));
+    proxy
+        .subscribe_status(std::rc::Rc::new(move |status| {
+            observed.borrow_mut().push(status);
+        }))
+        .detach();
     proxy.set_parent(std::rc::Rc::new(ConstantAnimation::completed(1.0)));
     assert_eq!(
         proxy.value(),

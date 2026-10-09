@@ -16,6 +16,12 @@
   ownership. Component vectors are fixed arrays; observer views remain cloneable.
 - Custom `Animation<T>` implementations provide `subscribe_status`, returning
   source-bound removal authority; framework relays share delivery recovery.
+
+### Removed
+
+- Manual animation status listener IDs and source-selected status removal.
+  Retain the returned subscription to control its lifetime, or detach it to
+  leave the callback registered until source closure.
 - Scroll and page animation methods accept `ArcCurve`. Replacing programmatic
   scroll motion retains its published velocity, including when braking at the
   current position.

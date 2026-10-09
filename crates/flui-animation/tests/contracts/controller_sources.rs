@@ -379,9 +379,8 @@ fn slope_failure_keeps_custody(status_fails: bool, retarget: bool) {
             },
         )
         .expect("live curve");
-    let callback = status_fails.then(|| {
-        controller.add_status_listener(Rc::new(|_| panic!("authoritative status failure")))
-    });
+    let callback = status_fails
+        .then(|| controller.subscribe_status(Rc::new(|_| panic!("authoritative status failure"))));
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if retarget {
             let _run = controller
@@ -414,7 +413,7 @@ fn slope_failure_keeps_custody(status_fails: bool, retarget: bool) {
     );
     assert!(matches!(poll(&mut original), Poll::Ready(Err(_))));
     if let Some(callback) = callback {
-        controller.remove_status_listener(callback);
+        drop(callback);
     }
     let mut next = controller.forward().expect("recovery run");
     controller.tick_at(Duration::from_secs(1));
@@ -542,18 +541,20 @@ fn callback_retirement_may_reenter() {
         controller: controller.clone(),
         drops: drops.clone(),
     };
-    let id = controller.add_status_listener(std::rc::Rc::new(move |_| {
+    let id = controller.subscribe_status(std::rc::Rc::new(move |_| {
         let _owned = &probe;
     }));
-    controller.remove_status_listener(id);
+    drop(id);
     assert_eq!(drops.load(Ordering::SeqCst), 1);
     let probe = SourceDrop {
         controller: controller.clone(),
         drops: drops.clone(),
     };
-    controller.add_status_listener(std::rc::Rc::new(move |_| {
-        let _owned = &probe;
-    }));
+    controller
+        .subscribe_status(std::rc::Rc::new(move |_| {
+            let _owned = &probe;
+        }))
+        .detach();
     lifecycle.dispose();
     assert_eq!(drops.load(Ordering::SeqCst), 2);
 }
@@ -576,17 +577,16 @@ fn status_failure_retains_retired_source_and_callback() {
     let mut original = controller.animate_with(source).expect("source installed");
     let callback_id = Rc::new(Mutex::new(None));
     let callback_id_read = callback_id.clone();
-    let callback_controller = controller.clone();
     let first = Bomb(drops.clone());
     let second = Bomb(drops.clone());
-    let id = controller.add_status_listener(std::rc::Rc::new(move |_| {
+    let id = controller.subscribe_status(std::rc::Rc::new(move |_| {
         let _opaque = (&first, &second);
         let id = callback_id_read
             .lock()
             .expect("callback id")
             .take()
             .expect("registered id");
-        callback_controller.remove_status_listener(id);
+        drop(id);
         panic!("authoritative status failure");
     }));
     *callback_id.lock().expect("install callback id") = Some(id);
@@ -672,9 +672,11 @@ fn retirement_failure_retains_later_callback_envelope() {
     let drops = Rc::new(AtomicUsize::new(0));
     let first = Bomb(drops.clone());
     let second = Bomb(drops.clone());
-    controller.add_status_listener(std::rc::Rc::new(move |_| {
-        let _opaque = (&first, &second);
-    }));
+    controller
+        .subscribe_status(std::rc::Rc::new(move |_| {
+            let _opaque = (&first, &second);
+        }))
+        .detach();
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| owner.dispose()));
     let payload = outcome.expect_err("source retirement fails");
     assert_eq!(
@@ -739,22 +741,30 @@ fn terminal_fixture(
     match kind {
         TerminalOwner::Controller => {
             let controller = AnimationController::builder(Duration::from_secs(1)).build();
-            controller.add_status_listener(std::rc::Rc::new(move |_| {
-                let _capture = &first;
-            }));
-            controller.add_status_listener(std::rc::Rc::new(move |_| {
-                let _capture = &second;
-            }));
+            controller
+                .subscribe_status(std::rc::Rc::new(move |_| {
+                    let _capture = &first;
+                }))
+                .detach();
+            controller
+                .subscribe_status(std::rc::Rc::new(move |_| {
+                    let _capture = &second;
+                }))
+                .detach();
             Box::new(controller)
         }
         TerminalOwner::Proxy => {
             let proxy = ProxyAnimation::new(std::rc::Rc::new(ConstantAnimation::completed(0.5)));
-            proxy.add_status_listener(std::rc::Rc::new(move |_| {
-                let _capture = &first;
-            }));
-            proxy.add_status_listener(std::rc::Rc::new(move |_| {
-                let _capture = &second;
-            }));
+            proxy
+                .subscribe_status(std::rc::Rc::new(move |_| {
+                    let _capture = &first;
+                }))
+                .detach();
+            proxy
+                .subscribe_status(std::rc::Rc::new(move |_| {
+                    let _capture = &second;
+                }))
+                .detach();
             Box::new(proxy)
         }
         TerminalOwner::Curved => Box::new(
@@ -769,12 +779,16 @@ fn terminal_fixture(
                 std::rc::Rc::new(ConstantAnimation::completed(0.75)),
                 Some(std::rc::Rc::new(ConstantAnimation::completed(0.25))),
             );
-            switch.add_status_listener(std::rc::Rc::new(move |_| {
-                let _capture = &first;
-            }));
-            switch.add_status_listener(std::rc::Rc::new(move |_| {
-                let _capture = &second;
-            }));
+            switch
+                .subscribe_status(std::rc::Rc::new(move |_| {
+                    let _capture = &first;
+                }))
+                .detach();
+            switch
+                .subscribe_status(std::rc::Rc::new(move |_| {
+                    let _capture = &second;
+                }))
+                .detach();
             Box::new(switch)
         }
     }
@@ -861,9 +875,11 @@ fn shared_terminal_owners_keep_independent_aliases_live() {
         drops: drops.clone(),
         panics: false,
     };
-    controller.add_status_listener(std::rc::Rc::new(move |_| {
-        let _capture = &probe;
-    }));
+    controller
+        .subscribe_status(std::rc::Rc::new(move |_| {
+            let _capture = &probe;
+        }))
+        .detach();
     drop(controller);
     assert!(drops.lock().expect("alias observations").is_empty());
     alias.forward().expect("surviving controller");
@@ -880,9 +896,11 @@ fn shared_terminal_owners_keep_independent_aliases_live() {
     let alias = proxy.clone();
     let observed = Rc::new(AtomicUsize::new(0));
     let callback_observed = observed.clone();
-    alias.add_status_listener(std::rc::Rc::new(move |_| {
-        callback_observed.fetch_add(1, Ordering::SeqCst);
-    }));
+    alias
+        .subscribe_status(std::rc::Rc::new(move |_| {
+            callback_observed.fetch_add(1, Ordering::SeqCst);
+        }))
+        .detach();
     drop(proxy);
     let _run = parent.forward().expect("parent run");
     assert_eq!(observed.load(Ordering::SeqCst), 1);
@@ -906,9 +924,10 @@ fn driven_terminal_cancels_before_retiring_callback() {
     let driven = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
     driven
         .controller()
-        .add_status_listener(std::rc::Rc::new(move |_| {
+        .subscribe_status(std::rc::Rc::new(move |_| {
             let _capture = &probe;
-        }));
+        }))
+        .detach();
     let observer = driven.controller().clone();
     let run = observer.forward().expect("live driven run");
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(driven)))
@@ -937,9 +956,10 @@ fn driven_terminal_cancels_before_retiring_callback() {
     let driven = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
     driven
         .controller()
-        .add_status_listener(std::rc::Rc::new(move |_| {
+        .subscribe_status(std::rc::Rc::new(move |_| {
             let _capture = &probe;
-        }));
+        }))
+        .detach();
     let run = driven.controller().forward().expect("live driven run");
     run.when_complete_or_cancel(|outcome| {
         assert!(outcome.is_err());
@@ -1072,7 +1092,13 @@ impl Listenable for TerminalParent {
 }
 impl Animation<f64> for TerminalParent {
     fn subscribe_status(&self, callback: StatusCallback) -> flui_animation::StatusSubscription {
-        let id = self.add_status_listener(callback);
+        self.register();
+        let id = {
+            let mut statuses = self.statuses.lock().expect("parent statuses");
+            let id = ListenerId::new(statuses.len() + 1);
+            statuses.push((id, callback));
+            id
+        };
         flui_animation::StatusSubscription::new(&self.state, id, |source, id, recovery| {
             let removed = {
                 let mut statuses = source.statuses.lock().expect("parent statuses");
@@ -1081,8 +1107,8 @@ impl Animation<f64> for TerminalParent {
                     .position(|(candidate, _)| *candidate == id)
                     .map(|i| statuses.remove(i))
             };
-            recovery.retire(removed);
             recovery.run(|| source.removed("status removal"));
+            removed
         })
     }
     fn value(&self) -> f64 {
@@ -1095,24 +1121,6 @@ impl Animation<f64> for TerminalParent {
             "parent status failure"
         );
         AnimationStatus::Completed
-    }
-    fn add_status_listener(&self, callback: StatusCallback) -> ListenerId {
-        self.register();
-        let mut statuses = self.statuses.lock().expect("parent statuses");
-        let id = ListenerId::new(statuses.len() + 1);
-        statuses.push((id, callback));
-        id
-    }
-    fn remove_status_listener(&self, id: ListenerId) {
-        let removed = {
-            let mut statuses = self.statuses.lock().expect("parent statuses");
-            statuses
-                .iter()
-                .position(|(candidate, _)| *candidate == id)
-                .map(|i| statuses.remove(i))
-        };
-        drop(removed);
-        self.removed("status removal");
     }
 }
 fn terminal_parent(fail_removal: bool) -> std::rc::Rc<TerminalParent> {

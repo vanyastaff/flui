@@ -166,12 +166,12 @@ let id = controller.add_listener(Rc::new(|| println!("value changed")));
 controller.remove_listener(id);
 
 // Status changes
-let id = controller.add_status_listener(Rc::new(|status| {
+let subscription = controller.subscribe_status(Rc::new(|status| {
     if status == AnimationStatus::Completed {
         println!("done");
     }
 }));
-controller.remove_status_listener(id);
+drop(subscription);
 # drop(controller);
 ```
 

@@ -171,14 +171,14 @@ let id = controller.add_listener(Rc::new(move || {
 controller.remove_listener(id);
 
 // Status changes
-let id = controller.add_status_listener(Rc::new(|status| {
+let subscription = controller.subscribe_status(Rc::new(|status| {
     match status {
         AnimationStatus::Completed => println!("done"),
         AnimationStatus::Dismissed => println!("reset"),
         _ => {}
     }
 }));
-controller.remove_status_listener(id);
+drop(subscription);
 # drop(controller);
 ```
 
@@ -657,7 +657,7 @@ controller.forward()?;
 if controller.status() == AnimationStatus::Completed { /* ... */ }
 
 // Good: react to changes
-controller.add_status_listener(Rc::new(|status| {
+let _subscription = controller.subscribe_status(Rc::new(|status| {
     if status == AnimationStatus::Completed { /* ... */ }
 }));
 # drop(controller);

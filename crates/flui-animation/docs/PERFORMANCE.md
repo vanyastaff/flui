@@ -322,7 +322,7 @@ controller.forward()?;
 # let scheduler = UpdateScheduler::new();
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 // React to the transition once instead of reading status every frame
-controller.add_status_listener(Rc::new(|status| {
+let _subscription = controller.subscribe_status(Rc::new(|status| {
     if status == AnimationStatus::Completed { /* ... */ }
 }));
 # drop(controller);

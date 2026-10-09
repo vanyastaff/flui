@@ -114,10 +114,9 @@ fn custom_sources_can_construct_removal_authority() {
         source: &Notifier<AnimationStatus>,
         token: ListenerId,
         recovery: &mut flui_foundation::panic::PanicRecovery,
-    ) {
+    ) -> Option<Rc<flui_foundation::notifier_generic::NotificationCallback<AnimationStatus>>> {
         source.inherit_failure(recovery);
-        let callback = source.take_callback(token);
-        recovery.retire(callback);
+        source.take_callback(token)
     }
     let source = Rc::new(Notifier::new());
     let calls = Rc::new(Cell::new(0));
@@ -297,6 +296,63 @@ fn admission_after_disposal_retires_captures_outside_the_state_borrow() {
     assert!(registry.is_empty());
 }
 
+fn capture_retirement_releasing_the_last_wrapper_silences_reentry() {
+    struct ReleaseAndNotify {
+        owner: Rc<RefCell<Option<Rc<dyn Animation<f64>>>>>,
+        parent: Rc<AnimationController>,
+    }
+    impl Drop for ReleaseAndNotify {
+        fn drop(&mut self) {
+            let owner = self.owner.borrow_mut().take();
+            drop(owner);
+            let _run = self.parent.forward().unwrap();
+        }
+    }
+    type Wrap = fn(Rc<dyn Animation<f64>>) -> Rc<dyn Animation<f64>>;
+    let wrappers: &[(&str, Wrap)] = &[
+        ("reverse", |parent| Rc::new(ReverseAnimation::new(parent))),
+        ("curved", |parent| {
+            Rc::new(CurvedAnimation::new(parent, Curves::Linear))
+        }),
+        ("tween", |parent| {
+            Rc::new(TweenAnimation::new(FloatTween::new(0.0, 1.0), parent))
+        }),
+        ("proxy", |parent| Rc::new(ProxyAnimation::new(parent))),
+        ("switch", |parent| {
+            Rc::new(AnimationSwitch::new(parent, None))
+        }),
+    ];
+    for (name, wrap) in wrappers {
+        let parent = Rc::new(AnimationController::builder(Duration::from_secs(1)).build());
+        let adapter = wrap(parent.clone());
+        let owner = Rc::new(RefCell::new(Some(adapter.clone())));
+        let subscription = adapter.subscribe_status({
+            let capture = ReleaseAndNotify {
+                owner: Rc::clone(&owner),
+                parent: Rc::clone(&parent),
+            };
+            Rc::new(move |_| {
+                let _keep = &capture;
+            })
+        });
+        let calls = Rc::new(Cell::new(0));
+        adapter
+            .subscribe_status({
+                let calls = Rc::clone(&calls);
+                Rc::new(move |_| calls.set(calls.get() + 1))
+            })
+            .detach();
+        drop(adapter);
+        drop(subscription);
+        assert!(owner.borrow().is_none());
+        assert_eq!(
+            calls.get(),
+            0,
+            "{name}: the retired wrapper must silence reentrant notifications"
+        );
+    }
+}
+
 fn enclosing_cleanup_preserves_its_first_failure() {
     let controller = AnimationController::builder(Duration::from_secs(1)).build();
     let drops = Rc::new(Cell::new(0));
@@ -442,6 +498,10 @@ fn adapter_subscriptions_follow_the_shared_owner() {
 #[test]
 fn owning_status_subscription_contract() {
     let cases: &[(&str, fn())] = &[
+        (
+            "last wrapper released by capture retirement",
+            capture_retirement_releasing_the_last_wrapper_silences_reentry,
+        ),
         (
             "enclosing cleanup failure",
             enclosing_cleanup_preserves_its_first_failure,

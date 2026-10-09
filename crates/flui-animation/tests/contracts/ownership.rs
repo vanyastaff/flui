@@ -39,17 +39,19 @@ fn reentrant_settles_leave_the_next_run_for_a_later_entry() {
     let callback_controller = controller.clone();
     let completions = std::rc::Rc::new(std::cell::Cell::new(0));
     let observed = completions.clone();
-    controller.add_status_listener(std::rc::Rc::new(move |status| match status {
-        AnimationStatus::Completed => {
-            observed.set(observed.get() + 1);
-            let _next = callback_controller.reverse().expect("reentrant reverse");
-        }
-        AnimationStatus::Dismissed => {
-            observed.set(observed.get() + 1);
-            let _next = callback_controller.forward().expect("reentrant forward");
-        }
-        _ => {}
-    }));
+    controller
+        .subscribe_status(std::rc::Rc::new(move |status| match status {
+            AnimationStatus::Completed => {
+                observed.set(observed.get() + 1);
+                let _next = callback_controller.reverse().expect("reentrant reverse");
+            }
+            AnimationStatus::Dismissed => {
+                observed.set(observed.get() + 1);
+                let _next = callback_controller.forward().expect("reentrant forward");
+            }
+            _ => {}
+        }))
+        .detach();
     let _run = if case == "zero repeat" {
         controller.repeat(false).expect("initial repeat")
     } else {
@@ -305,11 +307,13 @@ fn dropping_the_last_owner_from_its_own_listener_mid_frame() {
         peer_controller.add_listener(Rc::new(move || observed.set(observed.get() + 1)));
         if channel == "status" {
             let retire = retire.clone();
-            first_controller.add_status_listener(Rc::new(move |status| {
-                if status == AnimationStatus::Completed {
-                    retire();
-                }
-            }));
+            first_controller
+                .subscribe_status(Rc::new(move |status| {
+                    if status == AnimationStatus::Completed {
+                        retire();
+                    }
+                }))
+                .detach();
         } else if channel == "value" {
             let retire = retire.clone();
             let controller = first_controller.clone();
@@ -735,17 +739,19 @@ fn wake_failure_preserves_delivery_and_recovery() {
         })));
         owner
             .controller()
-            .add_status_listener(Rc::new(move |status| {
+            .subscribe_status(Rc::new(move |status| {
                 assert!(
                     !(competing && status == AnimationStatus::Forward),
                     "listener failure"
                 );
-            }));
+            }))
+            .detach();
         let delivered = Rc::new(Cell::new(0));
         let observed = delivered.clone();
         owner
             .controller()
-            .add_status_listener(Rc::new(move |_| observed.set(observed.get() + 1)));
+            .subscribe_status(Rc::new(move |_| observed.set(observed.get() + 1)))
+            .detach();
         let failure = catch_unwind(AssertUnwindSafe(|| owner.controller().forward()));
         let payload = failure.expect_err("wake failure propagates after delivery");
         assert_eq!(payload.downcast_ref::<&str>(), Some(&"wake failure"));
@@ -814,9 +820,11 @@ fn dispose_releases_value_listeners() {
 fn last_handle_drop_releases_a_running_controller() {
     let (drops, probe) = drop_probe();
     let controller = AnimationController::builder(Duration::from_secs(1)).build();
-    controller.add_status_listener(std::rc::Rc::new(move |_| {
-        let _ = &probe;
-    }));
+    controller
+        .subscribe_status(std::rc::Rc::new(move |_| {
+            let _ = &probe;
+        }))
+        .detach();
     let mut run = controller.forward().expect("run starts");
 
     drop(controller);
@@ -852,10 +860,12 @@ fn wrapper_over_a_disposed_source(wrap: fn(AnimationHandle) -> AnimationHandle) 
         let _ = &value_probe;
         panic!("a disposed source cannot notify a new wrapper");
     }));
-    wrapper.add_status_listener(std::rc::Rc::new(move |_| {
-        let _ = &status_probe;
-        panic!("a disposed source cannot send a new status");
-    }));
+    wrapper
+        .subscribe_status(std::rc::Rc::new(move |_| {
+            let _ = &status_probe;
+            panic!("a disposed source cannot send a new status");
+        }))
+        .detach();
     parent.set_value(1.0);
     drop(wrapper);
     assert_eq!(
@@ -907,9 +917,11 @@ where
     {
         let wrapper = wrap(std::rc::Rc::new(parent.clone()));
         let capture = Arc::clone(&probe);
-        let _id = wrapper.add_status_listener(std::rc::Rc::new(move |_| {
-            let _ = &capture;
-        }));
+        wrapper
+            .subscribe_status(std::rc::Rc::new(move |_| {
+                let _ = &capture;
+            }))
+            .detach();
     }
     assert_eq!(
         Arc::strong_count(&probe),
@@ -955,9 +967,11 @@ fn switch_dispose_releases_callbacks() {
         let _ = &switched_capture;
     });
     let listened_capture = Arc::clone(&listened);
-    let _id = switch.add_status_listener(std::rc::Rc::new(move |_| {
-        let _ = &listened_capture;
-    }));
+    switch
+        .subscribe_status(std::rc::Rc::new(move |_| {
+            let _ = &listened_capture;
+        }))
+        .detach();
 
     switch.dispose();
 

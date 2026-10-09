@@ -348,9 +348,10 @@ pub(crate) fn dispose_releases_the_controller_slot_before_disposing_it() {
         animation
             .controller()
             .expect("install created the controller")
-            .add_status_listener(std::rc::Rc::new(move |_| {
+            .subscribe_status(std::rc::Rc::new(move |_| {
                 let _ = &probe;
-            }));
+            }))
+            .detach();
         REENTRANT_HANDLE.with(|slot| *slot.borrow_mut() = Some(animation.clone()));
 
         navigator_handle.pop();

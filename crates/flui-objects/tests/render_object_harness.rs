@@ -2466,15 +2466,6 @@ impl Animation<f64> for ScriptedAnimation {
     fn status(&self) -> flui_animation::AnimationStatus {
         self.controller.status()
     }
-    fn add_status_listener(
-        &self,
-        callback: flui_animation::StatusCallback,
-    ) -> flui_foundation::ListenerId {
-        self.controller.add_status_listener(callback)
-    }
-    fn remove_status_listener(&self, id: flui_foundation::ListenerId) {
-        self.controller.remove_status_listener(id);
-    }
 }
 
 fn harness_animated_transform_non_finite_sample_keeps_the_last_matrix() {
@@ -2583,15 +2574,6 @@ impl Animation<f64> for CountingAnimation {
     }
     fn status(&self) -> flui_animation::AnimationStatus {
         self.controller.status()
-    }
-    fn add_status_listener(
-        &self,
-        callback: flui_animation::StatusCallback,
-    ) -> flui_foundation::ListenerId {
-        self.controller.add_status_listener(callback)
-    }
-    fn remove_status_listener(&self, id: flui_foundation::ListenerId) {
-        self.controller.remove_status_listener(id);
     }
 }
 

@@ -9,20 +9,26 @@ trait Cancellation {
     fn cancel(&self, recovery: &mut Retirement);
 }
 
-struct Registration<S: ?Sized, Token> {
+struct Registration<S: ?Sized, Token, Outgoing> {
     source: Weak<S>,
     token: Token,
-    remove: fn(&S, Token, &mut Retirement),
+    remove: fn(&S, Token, &mut Retirement) -> Outgoing,
 }
 
-impl<S: ?Sized, Token: Copy> Cancellation for Registration<S, Token> {
+impl<S: ?Sized, Token: Copy, Outgoing> Cancellation for Registration<S, Token, Outgoing> {
     fn cancel(&self, recovery: &mut Retirement) {
         let Some(source) = self.source.upgrade() else {
             return;
         };
         let source = Terminal::new(source);
-        recovery.run_with(|recovery| (self.remove)(&source, self.token, recovery));
+        let mut outgoing = None;
+        recovery.run_with(|recovery| {
+            outgoing = Some(Terminal::new((self.remove)(&source, self.token, recovery)));
+        });
+        // Temporary removal access must end before capture destruction can
+        // release the last logical owner and reenter its notification channel.
         recovery.retire(source);
+        recovery.retire(outgoing);
     }
 }
 
@@ -41,14 +47,16 @@ impl StatusSubscription {
     /// Construct removal authority for a custom animation's admitted callback.
     ///
     /// `token` must identify that registration for its entire lifetime; the
-    /// source must reject stale tokens if it reuses storage. `remove` withdraws
-    /// the callback outside state guards and retires its captures through the
-    /// borrowed recovery context, preserving any earlier delivery failure.
+    /// source must reject stale tokens if it reuses storage. `remove` commits
+    /// withdrawal outside state guards and returns outgoing callback custody.
+    /// The guard releases temporary source ownership before retiring that
+    /// custody through the borrowed recovery context. Deferred delivery custody
+    /// may stay in the source's queue; return an empty value in that case.
     /// A function pointer and a `Copy` token keep the guard free of user captures.
-    pub fn new<S: ?Sized + 'static, Token: Copy + 'static>(
+    pub fn new<S: ?Sized + 'static, Token: Copy + 'static, Outgoing: 'static>(
         source: &Rc<S>,
         token: Token,
-        remove: fn(&S, Token, &mut flui_foundation::panic::PanicRecovery),
+        remove: fn(&S, Token, &mut flui_foundation::panic::PanicRecovery) -> Outgoing,
     ) -> Self {
         Self {
             cancellation: Some(Box::new(Registration {

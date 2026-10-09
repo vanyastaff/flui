@@ -94,24 +94,6 @@ where
         }))
     }
 
-    /// Add a status listener (called when animation starts, completes, etc.).
-    ///
-    /// Returns a listener ID that can be used to remove the listener later.
-    fn add_status_listener(&self, callback: StatusCallback) -> ListenerId;
-
-    /// Register a framework relay in this animation's status channel.
-    #[doc(hidden)]
-    fn add_status_observer(&self, observer: StatusObserver) -> ListenerId {
-        self.add_status_listener(Rc::new(move |status| {
-            let mut recovery = Retirement::new();
-            recovery.run_with(|recovery| observer(status, recovery));
-            recovery.finish();
-        }))
-    }
-
-    /// Remove a status listener.
-    fn remove_status_listener(&self, id: ListenerId);
-
     /// Whether the animation is currently running.
     #[inline]
     fn is_animating(&self) -> bool {
@@ -307,10 +289,13 @@ impl ParentLinks {
         crate::StatusSubscription::new(self, id, Self::withdraw_status)
     }
 
-    fn withdraw_status(&self, id: ListenerId, recovery: &mut Retirement) {
+    fn withdraw_status(
+        &self,
+        id: ListenerId,
+        recovery: &mut Retirement,
+    ) -> Option<Rc<flui_foundation::notifier_generic::NotificationCallback<AnimationStatus>>> {
         self.inherit_failure(recovery);
-        let callback = self.status_notifier.take_callback(id);
-        recovery.retire(Terminal::new(callback));
+        self.status_notifier.take_callback(id)
     }
 }
 

@@ -298,7 +298,7 @@ fn status_callback_can_reenter_controller_without_deadlock() {
     let reentered = Arc::new(AtomicUsize::new(0));
     let c2 = c.clone();
     let r2 = Arc::clone(&reentered);
-    c.add_status_listener(std::rc::Rc::new(move |status| {
+    c.subscribe_status(std::rc::Rc::new(move |status| {
         if status == AnimationStatus::Completed {
             // Re-enter: read + mutate the controller from within the status
             // callback. Under the old notify-under-lock code this deadlocked.
@@ -306,7 +306,8 @@ fn status_callback_can_reenter_controller_without_deadlock() {
             let _ = c2.reverse();
             r2.fetch_add(1, Ordering::SeqCst);
         }
-    }));
+    }))
+    .detach();
     c.forward().unwrap();
     c.tick_at(std::time::Duration::from_secs_f64(0.10)); // complete -> fires Completed -> callback re-enters
     assert_eq!(reentered.load(Ordering::SeqCst), 1);
@@ -545,9 +546,10 @@ fn a_zero_duration_run_cancels_the_displaced_run_after_its_own_status_is_observa
 
     let order: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
     let order_for_status = Arc::clone(&order);
-    c.add_status_listener(std::rc::Rc::new(move |_status| {
+    c.subscribe_status(std::rc::Rc::new(move |_status| {
         order_for_status.lock().push("new_run_status");
-    }));
+    }))
+    .detach();
     let order_for_cancel = Arc::clone(&order);
     first.when_complete_or_cancel(move |_outcome| {
         order_for_cancel.lock().push("displaced_run_canceled");
@@ -646,12 +648,13 @@ fn a_panicking_status_listener_leaves_the_finished_run_ok() {
         *seen2.lock() = Some(outcome);
     });
 
-    c.add_status_listener(std::rc::Rc::new(|status| {
+    c.subscribe_status(std::rc::Rc::new(|status| {
         assert!(
             status != AnimationStatus::Completed,
             "a status listener panics on completion"
         );
-    }));
+    }))
+    .detach();
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         c.tick_at(std::time::Duration::from_secs_f64(0.1));

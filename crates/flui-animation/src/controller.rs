@@ -2845,10 +2845,6 @@ impl Animation<f64> for AnimationController {
         self.inner.borrow_mut().status
     }
 
-    fn add_status_listener(&self, callback: StatusCallback) -> ListenerId {
-        self.register_status_listener(StatusListener::User(callback))
-    }
-
     fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription {
         let id = self.register_status_listener(StatusListener::User(callback));
         if self.inner.borrow().disposed {
@@ -2865,14 +2861,6 @@ impl Animation<f64> for AnimationController {
         } else {
             crate::StatusSubscription::new(&self.inner, id, Self::withdraw_status_listener)
         }
-    }
-
-    fn add_status_observer(&self, observer: StatusObserver) -> ListenerId {
-        self.register_status_listener(StatusListener::Relay(observer))
-    }
-
-    fn remove_status_listener(&self, id: ListenerId) {
-        self.unregister_status_listener(id);
     }
 
     /// Whether the controller is currently driving a run.
@@ -2909,17 +2897,11 @@ impl AnimationController {
         id
     }
 
-    fn unregister_status_listener(&self, id: ListenerId) {
-        let mut recovery = Retirement::new();
-        Self::withdraw_status_listener(&self.inner, id, &mut recovery);
-        recovery.finish();
-    }
-
     fn withdraw_status_listener(
         source: &RefCell<AnimationControllerInner>,
         id: ListenerId,
-        recovery: &mut Retirement,
-    ) {
+        _recovery: &mut Retirement,
+    ) -> Option<Opaque<StatusListener>> {
         let mut retired;
         {
             let mut inner = source.borrow_mut();
@@ -2938,7 +2920,7 @@ impl AnimationController {
                     .push_back(ControllerDelivery::Retire(sources));
             }
         }
-        recovery.retire(retired);
+        retired
     }
 }
 

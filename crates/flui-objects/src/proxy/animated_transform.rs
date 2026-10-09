@@ -987,10 +987,7 @@ mod tests {
             self.0.store(true, Ordering::SeqCst);
             flui_animation::AnimationStatus::Dismissed
         }
-        fn add_status_listener(&self, _: flui_animation::StatusCallback) -> ListenerId {
-            self.1.add_listener(std::rc::Rc::new(|| {}))
-        }
-        fn remove_status_listener(&self, _: ListenerId) {}
+
         fn subscribe_status(
             &self,
             callback: flui_animation::StatusCallback,

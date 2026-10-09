@@ -108,19 +108,9 @@ where
         self.status
     }
 
-    fn add_status_listener(&self, _callback: StatusCallback) -> ListenerId {
-        // Status never changes, so we don't need to store the listener.
-        // Return a unique ID anyway for API consistency.
-        ListenerId::new(LISTENER_ID_COUNTER.fetch_add(1, Ordering::Relaxed))
-    }
-
     fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription {
         drop(callback);
         crate::StatusSubscription::default()
-    }
-
-    fn remove_status_listener(&self, _id: ListenerId) {
-        // No-op since we don't store listeners.
     }
 }
 

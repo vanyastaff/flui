@@ -635,9 +635,11 @@ mod tests {
             // fires synchronously from inside `fling.stop()` (called by the
             // installed hook), on whichever thread calls it.
             let reentrant_controller = controller.clone();
-            fling.add_status_listener(std::rc::Rc::new(move |_status| {
-                reentrant_controller.jump_to(0.0);
-            }));
+            fling
+                .subscribe_status(std::rc::Rc::new(move |_status| {
+                    reentrant_controller.jump_to(0.0);
+                }))
+                .detach();
 
             let hook_target = fling;
             controller.set_stop_hook(Rc::new(move || {

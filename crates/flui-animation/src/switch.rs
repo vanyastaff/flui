@@ -64,12 +64,16 @@ struct SwitchOwner {
 }
 
 impl SwitchOwner {
-    fn withdraw_status(&self, id: ListenerId, recovery: &mut Retirement) {
+    fn withdraw_status(
+        &self,
+        id: ListenerId,
+        recovery: &mut Retirement,
+    ) -> Option<Rc<flui_foundation::notifier_generic::NotificationCallback<AnimationStatus>>> {
         let listeners = Rc::clone(&self.inner.borrow().status_listeners);
         let callback = listeners.take_callback(id);
         listeners.inherit_failure(recovery);
         self.notifier.inherit_failure(recovery);
-        recovery.retire(Terminal::new(callback));
+        callback
     }
 }
 
@@ -529,24 +533,9 @@ impl Animation<f64> for AnimationSwitch {
     /// `current` changes on a train-hop, so a delegated id would later be
     /// removed against the wrong animation. The internal per-current
     /// forwarder re-emits the active animation's transitions here.
-    fn add_status_listener(&self, callback: StatusCallback) -> ListenerId {
-        let listeners = Rc::clone(&self.owner.inner.borrow().status_listeners);
-        listeners.add(Rc::new(move |status| callback(*status)))
-    }
-
-    fn add_status_observer(&self, observer: crate::animation::StatusObserver) -> ListenerId {
-        let listeners = Rc::clone(&self.owner.inner.borrow().status_listeners);
-        listeners.add_with_recovery(Rc::new(move |status, recovery| observer(*status, recovery)))
-    }
-
-    fn remove_status_listener(&self, id: ListenerId) {
-        let mut recovery = Retirement::new();
-        self.owner.withdraw_status(id, &mut recovery);
-        recovery.finish();
-    }
-
     fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription {
-        let id = self.add_status_listener(callback);
+        let listeners = Rc::clone(&self.owner.inner.borrow().status_listeners);
+        let id = listeners.add(Rc::new(move |status| callback(*status)));
         crate::StatusSubscription::new(&self.owner, id, SwitchOwner::withdraw_status)
     }
 
@@ -554,7 +543,9 @@ impl Animation<f64> for AnimationSwitch {
         &self,
         observer: crate::animation::StatusObserver,
     ) -> crate::StatusSubscription {
-        let id = self.add_status_observer(observer);
+        let listeners = Rc::clone(&self.owner.inner.borrow().status_listeners);
+        let id = listeners
+            .add_with_recovery(Rc::new(move |status, recovery| observer(*status, recovery)));
         crate::StatusSubscription::new(&self.owner, id, SwitchOwner::withdraw_status)
     }
 }

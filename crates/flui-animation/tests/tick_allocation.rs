@@ -88,9 +88,11 @@ fn a_steady_state_frame_allocates_nothing() {
             black_box(());
         }));
     }
-    controller.add_status_listener(std::rc::Rc::new(|status| {
-        black_box(status);
-    }));
+    controller
+        .subscribe_status(std::rc::Rc::new(|status| {
+            black_box(status);
+        }))
+        .detach();
     let _run = controller.forward().expect("forward on a live controller");
     let mut vector = AnimatedValue::new(
         EdgeInsets::ZERO,
