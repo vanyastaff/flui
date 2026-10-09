@@ -48,6 +48,15 @@ before disposing the kernel, including during unwind. Moving between registry
 identities preserves the last sampled elapsed time. Missing clocks settle
 finite runs and park infinite repeats without producing frame demand.
 
+Rebinding commits the new seat and withdraws the old registration before clock
+transition delivery. The outgoing registry remains owned until the kernel has
+installed its new clock binding and finished settlement or frame demand. Clock
+delivery and outgoing registry retirement borrow one first-failure context;
+an outgoing capture cannot interrupt installation of the accepted binding.
+After a delivery failure, opaque outgoing ownership follows ADR-0178's retention
+policy. `driven_controller_owns_its_seat_and_run` covers outgoing retirement,
+competing delivery failures, healthy settlement tails and subsequent runs.
+
 `FrameWaker` and task `Waker` remain the cross-thread capabilities. A frame waker
 holds a weak reference to wake infrastructure containing the phase, enablement,
 request latch, delivery debt and platform hook. It contains no strong reference

@@ -77,7 +77,9 @@ const FRAME: f64 = 1.0 / 60.0;
 ///    pass claim 1. It runs after the measured loop, so it cannot taint it.
 #[test]
 fn a_steady_state_frame_allocates_nothing() {
-    let controller = AnimationController::builder(NEVER_ENDING).build();
+    let vsync = Vsync::new();
+    let owner = AnimationController::builder(NEVER_ENDING).build_on(Some(&vsync));
+    let controller = owner.controller();
     for _ in 0..4 {
         controller.add_listener(std::rc::Rc::new(|| {
             black_box(());
@@ -86,8 +88,6 @@ fn a_steady_state_frame_allocates_nothing() {
     controller.add_status_listener(std::rc::Rc::new(|status| {
         black_box(status);
     }));
-    let vsync = Vsync::new();
-    let _registration = vsync.register(controller.clone());
     let _run = controller.forward().expect("forward on a live controller");
 
     // Warmup: the first frame anchors the run; later ones settle any

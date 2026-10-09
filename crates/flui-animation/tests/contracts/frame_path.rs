@@ -12,9 +12,7 @@ use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
 use crate::child_process;
-use flui_animation::{
-    Animation, AnimationController, AnimationRunFuture, AnimationStatus, Vsync, VsyncRegistration,
-};
+use flui_animation::{Animation, AnimationController, AnimationRunFuture, AnimationStatus, Vsync};
 use flui_foundation::Listenable;
 
 /// A one-second `[0, 1]` controller advanced only by explicit times.
@@ -100,18 +98,19 @@ fn nested_commit_is_not_overwritten() {
 
 fn dispose_from_a_value_listener_mid_walk() {
     let vsync = Vsync::new();
-    let disposed = controller();
-    let sibling = controller();
-    let _registrations = [
-        vsync.register(disposed.clone()),
-        vsync.register(sibling.clone()),
-    ];
+    let disposed_owner =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
+    let disposed = disposed_owner.controller().clone();
+    let sibling_owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
+    let sibling = sibling_owner.controller();
     let mut run = disposed.forward().expect("run starts");
     let _sibling_run = sibling.forward().expect("run starts");
     let reader = disposed.clone();
+    let owner = std::rc::Rc::new(std::cell::RefCell::new(Some(disposed_owner)));
     disposed.add_listener(std::rc::Rc::new(move || {
         if reader.value() >= 0.5 {
-            reader.dispose();
+            let released = owner.borrow_mut().take();
+            drop(released);
         }
     }));
 
@@ -143,33 +142,23 @@ fn dispose_from_a_value_listener_mid_walk() {
 
 fn last_owner_released_from_its_own_listener_mid_walk() {
     let vsync = Vsync::new();
-    let first = AnimationController::builder(Duration::from_millis(500)).build();
-    let second = controller();
-    let registrations: Vec<VsyncRegistration> = vec![
-        vsync.register(first.clone()),
-        vsync.register(second.clone()),
-    ];
+    let first_owner =
+        AnimationController::builder(Duration::from_millis(500)).build_on(Some(&vsync));
+    let second_owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
+    let first = first_owner.controller().clone();
+    let second = second_owner.controller();
     let _first_run = first.forward().expect("run starts");
     let _second_run = second.forward().expect("run starts");
     let (second_ticks, count) = counter();
     second.add_listener(std::rc::Rc::new(count));
 
-    let owners = std::rc::Rc::new(Mutex::new(Some((
-        vec![first.clone(), second],
-        registrations,
-    ))));
-    let registry = vsync.clone();
+    let owners = std::rc::Rc::new(Mutex::new(Some(vec![first_owner, second_owner])));
     first.add_status_listener(std::rc::Rc::new(move |status| {
         if status != AnimationStatus::Completed {
             return;
         }
         let released = owners.lock().expect("owners").take();
-        if let Some((controllers, registrations)) = released {
-            for registration in &registrations {
-                registry.unregister(registration);
-            }
-            drop(controllers);
-        }
+        drop(released);
     }));
     drop(first);
 

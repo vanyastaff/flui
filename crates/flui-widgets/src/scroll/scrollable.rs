@@ -558,8 +558,6 @@ pub struct ScrollableState {
     /// consumed the pixel write, so the viewport's layout still observes
     /// the user direction.
     post_frame: Option<PostFrameHandle>,
-    /// Vsync handle kept for `unregister` in `dispose`.
-    /// Registration handle returned by `vsync.register(fling_controller)`.
     /// The presentation's pipeline, acquired in `init_state`/
     /// `did_change_dependencies`; a release reads its device pixel ratio so
     /// the ballistic run rests within half a device pixel.

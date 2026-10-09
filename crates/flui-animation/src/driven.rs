@@ -74,14 +74,22 @@ impl DrivenController {
             None => (Seat::Unbound, Ok(())),
         };
         let outgoing = std::mem::replace(&mut self.seat, next);
-        if let Seat::Bound {
-            vsync,
-            registration,
-        } = outgoing
-        {
-            vsync.unregister(&registration);
-        }
-        self.controller.set_clock_bound(self.is_bound());
+        let mut retirement = Retirement::new();
+        let outgoing_registry = match outgoing {
+            Seat::Bound {
+                vsync,
+                registration,
+            } => {
+                retirement.run(|| vsync.unregister(&registration));
+                Some(vsync)
+            }
+            Seat::Unbound | Seat::Retired => None,
+        };
+        retirement.run_with(|retirement| {
+            self.controller.set_clock_bound(self.is_bound(), retirement);
+        });
+        retirement.retire(outgoing_registry);
+        retirement.finish();
         result
     }
 
