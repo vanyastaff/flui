@@ -250,9 +250,10 @@ The public rows `opacity_retarget_with_a_new_curve_keeps_the_displayed_sample`,
 `rotation_retarget_with_a_new_curve_keeps_the_displayed_sample` pin continuity
 through rendered opacity, layout and a transform layer. The container row also
 keeps an unchanged height continuous. The separate row
-`changing_only_the_curve_keeps_the_existing_run_timeline` pins re-easing without
-restarting. This contract concerns position continuity; transferring velocity
-into replacement motion remains part of the retarget design.
+`changing_only_the_curve_keeps_the_existing_deadline` pins the original completion
+deadline. It does not prove position or velocity continuity for curve-only
+changes. Transferring velocity into replacement motion remains part of the
+retarget design.
 
 ### Focused document selection uses the normal action chain
 

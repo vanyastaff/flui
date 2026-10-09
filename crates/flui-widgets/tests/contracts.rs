@@ -533,7 +533,7 @@ fn animation_and_visibility() {
             ("implicit_animations::container_retarget_with_a_new_curve_keeps_the_displayed_sample", crate::implicit_animations::container_retarget_with_a_new_curve_keeps_the_displayed_sample),
             ("implicit_animations::align_retarget_with_a_new_curve_keeps_the_displayed_sample", crate::implicit_animations::align_retarget_with_a_new_curve_keeps_the_displayed_sample),
             ("implicit_animations::rotation_retarget_with_a_new_curve_keeps_the_displayed_sample", crate::implicit_animations::rotation_retarget_with_a_new_curve_keeps_the_displayed_sample),
-            ("implicit_animations::changing_only_the_curve_keeps_the_existing_run_timeline", crate::implicit_animations::changing_only_the_curve_keeps_the_existing_run_timeline),
+            ("implicit_animations::changing_only_the_curve_keeps_the_existing_deadline", crate::implicit_animations::changing_only_the_curve_keeps_the_existing_deadline),
             ("implicit_animations::overshooting_padding_stays_non_negative", crate::implicit_animations::overshooting_padding_stays_non_negative),
             ("implicit_animations::overshooting_margin_stays_non_negative", crate::implicit_animations::overshooting_margin_stays_non_negative),
             ("implicit_animations::overshooting_size_stays_non_negative", crate::implicit_animations::overshooting_size_stays_non_negative),

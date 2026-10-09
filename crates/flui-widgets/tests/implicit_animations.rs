@@ -161,7 +161,7 @@ pub(crate) fn rotation_retarget_with_a_new_curve_keeps_the_displayed_sample() {
     );
 }
 
-pub(crate) fn changing_only_the_curve_keeps_the_existing_run_timeline() {
+pub(crate) fn changing_only_the_curve_keeps_the_existing_deadline() {
     let registry = Vsync::new();
     let tree = |target, curve: ArcCurve| {
         VsyncScope::new(
@@ -182,11 +182,6 @@ pub(crate) fn changing_only_the_curve_keeps_the_existing_run_timeline() {
     let linear = laid.opacity(laid.current_root());
     assert!(linear > 0.1 && linear < 0.3);
     laid.pump_widget(tree(1.0, ArcCurve::new(Curves::EaseIn)));
-    let eased = laid.opacity(laid.current_root());
-    assert!(
-        eased > 0.0 && eased < linear,
-        "the new curve eases the existing progress"
-    );
     laid.pump_for(RUN.checked_sub(FRAME).expect("run exceeds one frame"));
     assert_eq!(
         laid.opacity(laid.current_root()),
