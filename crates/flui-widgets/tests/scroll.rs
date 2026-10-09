@@ -681,6 +681,62 @@ pub(crate) fn refresh_motion_notifies_activity_through_release_and_recovery() {
     assert!(failures.is_empty(), "refresh activity delivery failed: {failures:?}");
 }
 
+pub(crate) fn a_failed_refresh_notification_releases_activity_and_recovers() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let scroll = ScrollController::new();
+    let refresh = RefreshController::new();
+    let fail = Arc::new(AtomicBool::new(true));
+    let failed = Arc::new(AtomicBool::new(false));
+    let watched = refresh.clone();
+    let fail_callback = fail.clone();
+    let failed_callback = failed.clone();
+    let listenable = refresh.as_listenable();
+    let listener = listenable.add_listener(Arc::new(move || {
+        if watched.is_refreshing() && fail_callback.swap(false, Ordering::SeqCst) {
+            failed_callback.store(true, Ordering::SeqCst);
+            panic!("refresh phase subscriber failed");
+        }
+    }));
+    let calls = Rc::new(Cell::new(0));
+    let calls_callback = calls.clone();
+    let content = refresh_content(&scroll, &refresh).on_refresh(move |_| {
+        calls_callback.set(calls_callback.get() + 1);
+    });
+    let vsync = Vsync::new();
+    let mut laid = crate::common::lay_out_animated(
+        VsyncScope::new(vsync.clone(), content),
+        tight(300.0, 300.0),
+        vsync,
+    );
+    let pull = |laid: &LaidOut| {
+        laid.dispatch_pointer_down(150.0, 100.0);
+        for y in [130.0, 160.0, 190.0, 220.0, 250.0] {
+            laid.dispatch_pointer_move_after(150.0, y, Duration::from_millis(10));
+        }
+    };
+    pull(&laid);
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        laid.dispatch_pointer_up(150.0, 250.0);
+    }));
+    if let Err(payload) = failure {
+        assert_eq!(flui_foundation::panic::payload_text(payload.as_ref()),
+            Some("refresh phase subscriber failed"));
+    }
+    assert!(failed.load(Ordering::SeqCst), "the real phase subscriber was invoked");
+    assert!(refresh.is_refreshing(), "accepted refresh phase survives its observer");
+    let stranded = scroll.position().is_scrolling();
+    refresh.finish();
+    laid.pump_for(Duration::from_millis(16));
+    pull(&laid);
+    laid.dispatch_pointer_up(150.0, 250.0);
+    assert_eq!(calls.get(), 1, "next healthy refresh callback remains deliverable");
+    refresh.finish();
+    assert!(!scroll.position().is_scrolling());
+    listenable.remove_listener(listener);
+    assert!(!stranded, "a failed phase observer stranded terminal scroll activity");
+}
+
 pub(crate) fn scroll_activity_tracks_the_whole_gesture_lifecycle() {
     let controller = ScrollController::new();
     controller.update_dimensions(300.0, 0.0, 4700.0);
