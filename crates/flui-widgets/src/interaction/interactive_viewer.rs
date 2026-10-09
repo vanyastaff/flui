@@ -1102,9 +1102,9 @@ impl InteractiveViewerState {
         if unchanged {
             return;
         }
-        self.clock = incoming.clone();
+        self.clock = incoming;
         self.fling.stop();
-        if let Err(error) = self.controller.rebind(incoming.as_ref()) {
+        if let Err(error) = self.controller.rebind(self.clock.as_ref()) {
             tracing::error!(%error, "InteractiveViewer lost its frame registry");
         }
     }
