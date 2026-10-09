@@ -482,7 +482,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
                 .visible_target
                 .replace(Terminal::new(Rc::clone(&self.target)));
             // Equal vectors preserve the run while replacing the exact target.
-            controller.publish_value_metadata(recovery);
+            controller.admit_value_metadata().publish(recovery);
             recovery.retire(old_visible);
             recovery.retire(old_target);
             recovery.retire(old_motion);
@@ -509,7 +509,8 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
             recovery,
         );
         match admission {
-            Ok((future, (old_target, old_motion, old_visible))) => {
+            Ok((future, (old_target, old_motion, old_visible), publication)) => {
+                publication.publish(recovery);
                 recovery.retire(old_visible);
                 recovery.retire(old_motion);
                 recovery.retire(old_target);

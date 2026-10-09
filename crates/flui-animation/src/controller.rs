@@ -2536,9 +2536,21 @@ impl AnimationController {
         value_change: ValueChange,
         delivery: Option<RunDelivery>,
         retired: RetiredSources,
-        mut inner: std::cell::RefMut<'_, AnimationControllerInner>,
+        inner: std::cell::RefMut<'_, AnimationControllerInner>,
         retirement: &mut RecoveryScope<'_>,
     ) {
+        let drain = Self::enqueue_delivery(status, delivery, retired, inner);
+        self.publish_delivery(value_change, drain, retirement);
+    }
+
+    /// Commit delivery debt without invoking or retiring user code. Grouped
+    /// admissions publish only after every participating owner is installed.
+    fn enqueue_delivery(
+        status: AnimationStatus,
+        delivery: Option<RunDelivery>,
+        retired: RetiredSources,
+        mut inner: std::cell::RefMut<'_, AnimationControllerInner>,
+    ) -> bool {
         inner.enqueue_status_change(status);
         if let Some(delivery) = delivery {
             inner
@@ -2558,6 +2570,15 @@ impl AnimationController {
         let drain = !inner.delivering;
         inner.delivering = true;
         drop(inner);
+        drain
+    }
+
+    fn publish_delivery(
+        &self,
+        value_change: ValueChange,
+        drain: bool,
+        retirement: &mut RecoveryScope<'_>,
+    ) {
         if value_change == ValueChange::Notify {
             retirement
                 .run_with(|retirement| self.notifier.notify_listeners_with_recovery(retirement));

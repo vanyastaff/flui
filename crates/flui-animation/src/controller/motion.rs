@@ -32,6 +32,21 @@ pub(crate) struct ValueSeam {
     origin: RunStart,
 }
 
+/// Delivery committed by typed motion admission. Publishing is deliberately
+/// separate so several owners can be installed before the first callout.
+#[must_use = "admitted motion must publish its delivery"]
+pub(crate) struct ValuePublication {
+    controller: AnimationController,
+    drain: bool,
+}
+
+impl ValuePublication {
+    pub(crate) fn publish(self, recovery: &mut RecoveryScope<'_>) {
+        self.controller
+            .publish_delivery(ValueChange::Notify, self.drain, recovery);
+    }
+}
+
 impl ValueSeam {
     fn matches(&self, inner: &AnimationControllerInner) -> bool {
         !inner.disposed
@@ -102,17 +117,14 @@ impl Seam {
 }
 
 impl AnimationController {
-    pub(crate) fn publish_value_metadata(&self, recovery: &mut RecoveryScope<'_>) {
+    pub(crate) fn admit_value_metadata(&self) -> ValuePublication {
         let inner = self.inner.borrow_mut();
         let status = inner.status;
-        self.finish_with_retirement(
-            status,
-            ValueChange::Notify,
-            None,
-            RetiredSources::new(),
-            inner,
-            recovery,
-        );
+        let drain = Self::enqueue_delivery(status, None, RetiredSources::new(), inner);
+        ValuePublication {
+            controller: self.clone(),
+            drain,
+        }
     }
 
     pub(crate) fn value_run_future(&self) -> AnimationRunFuture {
@@ -152,7 +164,7 @@ impl AnimationController {
         immediate: bool,
         commit: impl FnOnce() -> R,
         recovery: &mut RecoveryScope<'_>,
-    ) -> Result<(AnimationRunFuture, R), AnimationError> {
+    ) -> Result<(AnimationRunFuture, R, ValuePublication), AnimationError> {
         let mut source = Opaque::new(source);
         let mut inner = self.inner.borrow_mut();
         Self::check_run_admission(&inner)?;
@@ -182,15 +194,15 @@ impl AnimationController {
             .replace(completer)
             .map(RunCompleter::cancel);
         let status = inner.status;
-        self.finish_with_retirement(
-            status,
-            ValueChange::Notify,
-            displaced,
-            retired,
-            inner,
-            recovery,
-        );
-        Ok((future, outgoing))
+        let drain = Self::enqueue_delivery(status, displaced, retired, inner);
+        Ok((
+            future,
+            outgoing,
+            ValuePublication {
+                controller: self.clone(),
+                drain,
+            },
+        ))
     }
 
     /// Velocity at the last sampled run time, in value units per second.
