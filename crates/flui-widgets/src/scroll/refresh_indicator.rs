@@ -526,7 +526,10 @@ impl RefreshIndicatorState {
         let position = self.scroll_controller.position();
         self.fling_status_listener_id = Some(self.fling_controller.add_status_listener(Arc::new(
             move |status| {
-                if matches!(status, AnimationStatus::Completed | AnimationStatus::Dismissed) {
+                if matches!(
+                    status,
+                    AnimationStatus::Completed | AnimationStatus::Dismissed
+                ) {
                     position.set_is_scrolling(false);
                 }
             },
@@ -638,11 +641,13 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
                 // scroll offset (reveals content above).
                 let raw_delta_y = details.delta.dy;
                 if raw_delta_y != 0.0 {
-                    sc_update.position().set_user_scroll_direction(if raw_delta_y > 0.0 {
-                        flui_rendering::view::ScrollDirection::Forward
-                    } else {
-                        flui_rendering::view::ScrollDirection::Reverse
-                    });
+                    sc_update
+                        .position()
+                        .set_user_scroll_direction(if raw_delta_y > 0.0 {
+                            flui_rendering::view::ScrollDirection::Forward
+                        } else {
+                            flui_rendering::view::ScrollDirection::Reverse
+                        });
                 }
                 // Pull remains outside the clamped scroll position. Consume
                 // it first when the finger reverses toward ordinary scrolling.

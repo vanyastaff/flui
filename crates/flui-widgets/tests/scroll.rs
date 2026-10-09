@@ -641,10 +641,14 @@ pub(crate) fn refresh_motion_notifies_activity_through_release_and_recovery() {
         }
         let released = scroll.pixels();
         assert!(released > 0.0, "refresh wrapper actually scrolls");
-        if !observations.lock().expect("activity observer")
+        if !observations
+            .lock()
+            .expect("activity observer")
             .contains(&(true, ScrollDirection::Reverse))
         {
-            failures.push(format!("cancelled={cancelled}: no active-direction delivery during drag"));
+            failures.push(format!(
+                "cancelled={cancelled}: no active-direction delivery during drag"
+            ));
         }
         if cancelled {
             laid.dispatch_pointer_cancel();
@@ -654,9 +658,16 @@ pub(crate) fn refresh_motion_notifies_activity_through_release_and_recovery() {
         laid.pump_for(Duration::from_millis(16));
         laid.pump_for(Duration::from_millis(16));
         if cancelled {
-            assert_eq!(scroll.pixels(), released, "cancelled in-range drag does not coast");
+            assert_eq!(
+                scroll.pixels(),
+                released,
+                "cancelled in-range drag does not coast"
+            );
         } else {
-            assert!(scroll.pixels() > released, "completed refresh drag actually coasts");
+            assert!(
+                scroll.pixels() > released,
+                "completed refresh drag actually coasts"
+            );
             if !position.is_scrolling() {
                 failures.push("ballistic pixels move while activity is idle".into());
             }
@@ -669,16 +680,26 @@ pub(crate) fn refresh_motion_notifies_activity_through_release_and_recovery() {
         laid.dispatch_pointer_down(150.0, 250.0);
         laid.dispatch_pointer_move_after(150.0, 210.0, Duration::from_millis(10));
         laid.dispatch_pointer_move_after(150.0, 190.0, Duration::from_millis(10));
-        assert!(scroll.pixels() > before, "next healthy contact drives content");
-        if !observations.lock().expect("activity observer")
+        assert!(
+            scroll.pixels() > before,
+            "next healthy contact drives content"
+        );
+        if !observations
+            .lock()
+            .expect("activity observer")
             .contains(&(true, ScrollDirection::Reverse))
         {
-            failures.push(format!("cancelled={cancelled}: next contact has no activity delivery"));
+            failures.push(format!(
+                "cancelled={cancelled}: next contact has no activity delivery"
+            ));
         }
         laid.dispatch_pointer_cancel();
         position.remove_activity_listener(listener);
     }
-    assert!(failures.is_empty(), "refresh activity delivery failed: {failures:?}");
+    assert!(
+        failures.is_empty(),
+        "refresh activity delivery failed: {failures:?}"
+    );
 }
 
 pub(crate) fn a_failed_refresh_notification_releases_activity_and_recovers() {
@@ -686,84 +707,99 @@ pub(crate) fn a_failed_refresh_notification_releases_activity_and_recovers() {
 
     let mut failures = Vec::new();
     for (phase_fault, activity_fault) in [(true, false), (false, true), (true, true)] {
-    let scroll = ScrollController::new();
-    let refresh = RefreshController::new();
-    let fail = Arc::new(AtomicBool::new(phase_fault));
-    let failed = Arc::new(AtomicBool::new(false));
-    let watched = refresh.clone();
-    let fail_callback = fail.clone();
-    let failed_callback = failed.clone();
-    let listenable = refresh.as_listenable();
-    let listener = listenable.add_listener(Arc::new(move || {
-        if watched.is_refreshing() && fail_callback.swap(false, Ordering::SeqCst) {
-            failed_callback.store(true, Ordering::SeqCst);
-            panic!("refresh phase subscriber failed");
-        }
-    }));
-    let activity_fail = Arc::new(AtomicBool::new(activity_fault));
-    let activity_failed = Arc::new(AtomicBool::new(false));
-    let activity_flag = activity_fail.clone();
-    let activity_observed = activity_failed.clone();
-    let phase = refresh.clone();
-    let position = scroll.position();
-    let watched_position = position.clone();
-    let activity_listener = position.add_activity_listener(Arc::new(move || {
-        if phase.is_refreshing() && !watched_position.is_scrolling()
-            && activity_flag.swap(false, Ordering::SeqCst)
-        {
-            activity_observed.store(true, Ordering::SeqCst);
-            panic!("refresh activity subscriber failed");
-        }
-    }));
-    let calls = Rc::new(Cell::new(0));
-    let calls_callback = calls.clone();
-    let content = refresh_content(&scroll, &refresh).on_refresh(move |_| {
-        calls_callback.set(calls_callback.get() + 1);
-    });
-    let vsync = Vsync::new();
-    let mut laid = crate::common::lay_out_animated(
-        VsyncScope::new(vsync.clone(), content),
-        tight(300.0, 300.0),
-        vsync,
-    );
-    let pull = |laid: &LaidOut| {
-        laid.dispatch_pointer_down(150.0, 100.0);
-        for y in [130.0, 160.0, 190.0, 220.0, 250.0] {
-            laid.dispatch_pointer_move_after(150.0, y, Duration::from_millis(10));
-        }
-    };
-    pull(&laid);
-    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        laid.dispatch_pointer_up(150.0, 250.0);
-    }));
-    if let Err(payload) = failure {
-        assert_eq!(flui_foundation::panic::payload_text(payload.as_ref()), Some(if phase_fault {
-            "refresh phase subscriber failed"
-        } else {
-            "refresh activity subscriber failed"
+        let scroll = ScrollController::new();
+        let refresh = RefreshController::new();
+        let fail = Arc::new(AtomicBool::new(phase_fault));
+        let failed = Arc::new(AtomicBool::new(false));
+        let watched = refresh.clone();
+        let fail_callback = fail.clone();
+        let failed_callback = failed.clone();
+        let listenable = refresh.as_listenable();
+        let listener = listenable.add_listener(Arc::new(move || {
+            if watched.is_refreshing() && fail_callback.swap(false, Ordering::SeqCst) {
+                failed_callback.store(true, Ordering::SeqCst);
+                panic!("refresh phase subscriber failed");
+            }
         }));
-    }
-    assert_eq!(failed.load(Ordering::SeqCst), phase_fault);
-    let attempted_cleanup = activity_failed.load(Ordering::SeqCst);
-    activity_fail.store(false, Ordering::SeqCst);
-    assert!(refresh.is_refreshing(), "accepted refresh phase survives its observer");
-    let stranded = scroll.position().is_scrolling();
-    let before_recovery = calls.get();
-    refresh.finish();
-    laid.pump_for(Duration::from_millis(16));
-    pull(&laid);
-    laid.dispatch_pointer_up(150.0, 250.0);
-    assert_eq!(calls.get(), before_recovery + 1, "next healthy refresh callback remains deliverable");
-    refresh.finish();
-    assert!(!scroll.position().is_scrolling());
-    listenable.remove_listener(listener);
-    position.remove_activity_listener(activity_listener);
-    if attempted_cleanup != activity_fault {
-        failures.push(format!("phase={phase_fault}, activity={activity_fault}: mandatory cleanup not attempted"));
-    }
-    if stranded {
-        failures.push(format!("phase={phase_fault}, activity={activity_fault}: terminal activity stranded"));
-    }
+        let activity_fail = Arc::new(AtomicBool::new(activity_fault));
+        let activity_failed = Arc::new(AtomicBool::new(false));
+        let activity_flag = activity_fail.clone();
+        let activity_observed = activity_failed.clone();
+        let phase = refresh.clone();
+        let position = scroll.position();
+        let watched_position = position.clone();
+        let activity_listener = position.add_activity_listener(Arc::new(move || {
+            if phase.is_refreshing()
+                && !watched_position.is_scrolling()
+                && activity_flag.swap(false, Ordering::SeqCst)
+            {
+                activity_observed.store(true, Ordering::SeqCst);
+                panic!("refresh activity subscriber failed");
+            }
+        }));
+        let calls = Rc::new(Cell::new(0));
+        let calls_callback = calls.clone();
+        let content = refresh_content(&scroll, &refresh).on_refresh(move |_| {
+            calls_callback.set(calls_callback.get() + 1);
+        });
+        let vsync = Vsync::new();
+        let mut laid = crate::common::lay_out_animated(
+            VsyncScope::new(vsync.clone(), content),
+            tight(300.0, 300.0),
+            vsync,
+        );
+        let pull = |laid: &LaidOut| {
+            laid.dispatch_pointer_down(150.0, 100.0);
+            for y in [130.0, 160.0, 190.0, 220.0, 250.0] {
+                laid.dispatch_pointer_move_after(150.0, y, Duration::from_millis(10));
+            }
+        };
+        pull(&laid);
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            laid.dispatch_pointer_up(150.0, 250.0);
+        }));
+        if let Err(payload) = failure {
+            assert_eq!(
+                flui_foundation::panic::payload_text(payload.as_ref()),
+                Some(if phase_fault {
+                    "refresh phase subscriber failed"
+                } else {
+                    "refresh activity subscriber failed"
+                })
+            );
+        }
+        assert_eq!(failed.load(Ordering::SeqCst), phase_fault);
+        let attempted_cleanup = activity_failed.load(Ordering::SeqCst);
+        activity_fail.store(false, Ordering::SeqCst);
+        assert!(
+            refresh.is_refreshing(),
+            "accepted refresh phase survives its observer"
+        );
+        let stranded = scroll.position().is_scrolling();
+        let before_recovery = calls.get();
+        refresh.finish();
+        laid.pump_for(Duration::from_millis(16));
+        pull(&laid);
+        laid.dispatch_pointer_up(150.0, 250.0);
+        assert_eq!(
+            calls.get(),
+            before_recovery + 1,
+            "next healthy refresh callback remains deliverable"
+        );
+        refresh.finish();
+        assert!(!scroll.position().is_scrolling());
+        listenable.remove_listener(listener);
+        position.remove_activity_listener(activity_listener);
+        if attempted_cleanup != activity_fault {
+            failures.push(format!(
+                "phase={phase_fault}, activity={activity_fault}: mandatory cleanup not attempted"
+            ));
+        }
+        if stranded {
+            failures.push(format!(
+                "phase={phase_fault}, activity={activity_fault}: terminal activity stranded"
+            ));
+        }
     }
     assert!(failures.is_empty(), "{}", failures.join("; "));
 }
@@ -1332,7 +1368,10 @@ pub(crate) fn replacing_vsync_retires_old_motion_and_drives_fresh_contacts() {
         fling(&laid);
         let released = pixels();
         advance_scroll_run(&mut laid);
-        assert!(pixels() > released, "{family}: initial owner drives real inertia");
+        assert!(
+            pixels() > released,
+            "{family}: initial owner drives real inertia"
+        );
         let before_same = pixels();
         laid.pump_widget(VsyncScope::new(first.clone(), child.clone()));
         laid.pump_for(Duration::from_millis(16));
@@ -1354,7 +1393,9 @@ pub(crate) fn replacing_vsync_retires_old_motion_and_drives_fresh_contacts() {
         second.tick_all(1.0);
         second.tick_all(1.032);
         if pixels() <= fresh_release {
-            failures.push(format!("{family}: replacement Vsync cannot drive fresh inertia"));
+            failures.push(format!(
+                "{family}: replacement Vsync cannot drive fresh inertia"
+            ));
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("; "));
@@ -1389,14 +1430,24 @@ pub(crate) fn a_repeated_frame_does_not_cancel_viewer_inertia() {
     assert!(pixels() > released, "real viewer inertia was admitted");
     let before_repeat = pixels();
     laid.pump_for(Duration::ZERO);
-    assert_eq!(pixels(), before_repeat, "an equal-time frame publishes no extra motion");
+    assert_eq!(
+        pixels(),
+        before_repeat,
+        "an equal-time frame publishes no extra motion"
+    );
     laid.pump_for(Duration::from_millis(16));
     let continued = pixels() > before_repeat;
     fling(&laid);
     let fresh_release = pixels();
     advance_scroll_run(&mut laid);
-    assert!(pixels() > fresh_release, "fresh contact recovers real inertia");
-    assert!(continued, "an equal-time frame cancelled the accepted viewer trajectory");
+    assert!(
+        pixels() > fresh_release,
+        "fresh contact recovers real inertia"
+    );
+    assert!(
+        continued,
+        "an equal-time frame cancelled the accepted viewer trajectory"
+    );
 }
 
 pub(crate) fn replacing_a_scroll_position_cancels_its_contact_and_recovers() {
@@ -1417,10 +1468,9 @@ pub(crate) fn replacing_a_scroll_position_cancels_its_contact_and_recovers() {
         let sink = observed.clone();
         let watched = incoming.clone();
         let subscription = incoming.add_activity_listener(Arc::new(move || {
-            sink.lock().expect("activity observer lock").push((
-                watched.is_scrolling(),
-                watched.user_scroll_direction(),
-            ));
+            sink.lock()
+                .expect("activity observer lock")
+                .push((watched.is_scrolling(), watched.user_scroll_direction()));
         }));
         let refresh = RefreshController::new();
         let content = |controller: &ScrollController| {
@@ -1434,11 +1484,8 @@ pub(crate) fn replacing_a_scroll_position_cancels_its_contact_and_recovers() {
             };
             VsyncScope::new(vsync.clone(), child)
         };
-        let mut laid = crate::common::lay_out_animated(
-            content(&old),
-            tight(300.0, 300.0),
-            vsync.clone(),
-        );
+        let mut laid =
+            crate::common::lay_out_animated(content(&old), tight(300.0, 300.0), vsync.clone());
         laid.dispatch_pointer_down(150.0, 250.0);
         laid.dispatch_pointer_move_after(150.0, 200.0, Duration::from_millis(10));
         laid.dispatch_pointer_move_after(150.0, 180.0, Duration::from_millis(10));
@@ -1449,14 +1496,19 @@ pub(crate) fn replacing_a_scroll_position_cancels_its_contact_and_recovers() {
         let same = old.pixels();
         laid.pump_widget(content(&old));
         laid.dispatch_pointer_move_after(150.0, 160.0, Duration::from_millis(10));
-        assert!(old.pixels() > same, "same position preserves the admitted contact");
+        assert!(
+            old.pixels() > same,
+            "same position preserves the admitted contact"
+        );
 
         laid.pump_widget(content(&new));
         let retired = old.pixels();
         let before = new.pixels();
         laid.dispatch_pointer_move_after(150.0, 140.0, Duration::from_millis(10));
         if new.pixels() != before {
-            failures.push(format!("{family}: replacement position consumed the retired contact"));
+            failures.push(format!(
+                "{family}: replacement position consumed the retired contact"
+            ));
         }
         assert_eq!(old.pixels(), retired);
         assert!(!old.position().is_scrolling());
@@ -1467,17 +1519,24 @@ pub(crate) fn replacing_a_scroll_position_cancels_its_contact_and_recovers() {
         }
         advance_scroll_run(&mut laid);
         if new.pixels() != before || incoming.is_scrolling() {
-            failures.push(format!("{family}: retired terminal started replacement motion or activity"));
+            failures.push(format!(
+                "{family}: retired terminal started replacement motion or activity"
+            ));
         }
         observed.lock().expect("activity observer lock").clear();
         let fresh = new.pixels();
         laid.dispatch_pointer_down(150.0, 250.0);
         laid.dispatch_pointer_move_after(150.0, 200.0, Duration::from_millis(10));
         laid.dispatch_pointer_move_after(150.0, 180.0, Duration::from_millis(10));
-        assert!(new.pixels() > fresh, "fresh contact drives replacement content");
+        assert!(
+            new.pixels() > fresh,
+            "fresh contact drives replacement content"
+        );
         assert!(
             family == "refresh"
-                || observed.lock().expect("activity observer lock")
+                || observed
+                    .lock()
+                    .expect("activity observer lock")
                     .contains(&(true, ScrollDirection::Reverse)),
             "fresh movement reaches the real activity consumer"
         );
