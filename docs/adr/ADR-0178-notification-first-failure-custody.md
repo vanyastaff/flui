@@ -39,7 +39,13 @@ context. Animation controller delivery and Vsync borrow it through their actual
 call paths. A notifier entered during an earlier frame failure inherits that
 custody. Channel-local delivery depth and a failure latch cover nested calls
 through independent handles to the same channel; no production ambient recovery
-registry or process-global failure flag is introduced.
+registry or process-global failure flag is introduced. Each active channel lends
+its failure signal to the enclosing recovery for its whole notification and
+retirement scope. Capturing or inheriting a failure marks every active signal
+immediately, before diagnostics or another callback can reenter ancestor cleanup.
+Only the outermost delivery of a channel clears its signal. The scoped signals
+retain neither channel storage nor owners and preserve the recovery's `Send`
+capability; four scopes fit inline, with deeper nesting allowed to allocate.
 
 Framework relays borrow this same context through `Listenable::add_observer`
 and `Animation::add_status_observer`. User listeners retain their ordinary
@@ -90,10 +96,14 @@ withdraws resources and cancels the run before retiring captures.
 The public `notifier_ownership_and_recovery` family checks failure propagation,
 healthy tails, disposed snapshots, late capture removal, borrowed arguments,
 non-Clone values, hostile payloads, diagnostic competition and terminal recovery.
+Its recursive relay case checks that nested completion cannot clear the outer
+channel's failure before a newly admitted capture is withdrawn and retired.
 `status_delivery_failure_custody` includes value capture retirement after a
 status, value or earlier peer failure and verifies the next frame still delivers.
 It also covers value and status forwarding through reverse, curved, tween,
 proxy and switch wrappers, and an independently nested wrapper chain.
+Late parent capture retirement is checked both after a child relay returns and
+inside the child's healthy tail, with single and competing callback failures.
 The same family verifies last-owner release from both notification channels,
 healthy and failed tails, and the next parent notification.
 The tests fail when the production behavior is reverted.

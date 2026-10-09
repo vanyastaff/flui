@@ -21,6 +21,10 @@ use std::{
 
 use crate::id::ListenerId;
 use crate::panic::PanicRecovery;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 /// A listener callback that borrows its argument for the duration of the call.
 pub type ArgCallback<Arg> = Rc<dyn Fn(&Arg) + 'static>;
@@ -70,7 +74,7 @@ impl<Arg> fmt::Debug for NotificationCallback<Arg> {
 struct ListenerStorage<Arg> {
     entries: RefCell<HashMap<ListenerId, OwnedCallback<Arg>>>,
     delivery_depth: Cell<usize>,
-    failed: Cell<bool>,
+    failed: Arc<AtomicBool>,
     retired: RefCell<Vec<(ListenerId, OwnedCallback<Arg>)>>,
 }
 
@@ -172,7 +176,7 @@ impl<Arg> Notifier<Arg> {
             listeners: Rc::new(ListenerStorage {
                 entries: RefCell::new(HashMap::new()),
                 delivery_depth: Cell::new(0),
-                failed: Cell::new(false),
+                failed: Arc::new(AtomicBool::new(false)),
                 retired: RefCell::new(Vec::new()),
             }),
             next_id: Rc::new(Cell::new(1)),
@@ -362,7 +366,8 @@ impl<Arg> Notifier<Arg> {
     /// Carry this active channel's enclosing failure into reentrant owner cleanup.
     #[doc(hidden)]
     pub fn inherit_failure(&self, recovery: &mut PanicRecovery) {
-        if self.listeners.delivery_depth.get() != 0 && self.listeners.failed.get() {
+        if self.listeners.delivery_depth.get() != 0 && self.listeners.failed.load(Ordering::Relaxed)
+        {
             recovery.inherit_failure();
         }
     }
@@ -426,7 +431,7 @@ impl<Arg> Notifier<Arg> {
     /// snapshot entries, and a disposed listener map yields an empty snapshot.
     pub(crate) fn notify_unchecked(&self, arg: &Arg) {
         let mut recovery = PanicRecovery::new();
-        if self.listeners.failed.get() {
+        if self.listeners.failed.load(Ordering::Relaxed) {
             recovery.inherit_failure();
         }
         self.notify_unchecked_with_recovery(arg, &mut recovery);
@@ -464,78 +469,71 @@ impl<Arg> Notifier<Arg> {
         ids: Option<&[ListenerId]>,
         recovery: &mut PanicRecovery,
     ) {
-        self.listeners
-            .delivery_depth
-            .set(self.listeners.delivery_depth.get() + 1);
-        self.listeners
-            .failed
-            .set(self.listeners.failed.get() || recovery.has_failure());
-        // Stack-allocate the snapshot for the common case (1-4 listeners);
-        // ≥5 spills to the heap. `SmallVec` over `tinyvec::ArrayVec`
-        // deliberately: the callbacks are `Rc<dyn Fn(..)>`, which does not
-        // implement `Default`, and `tinyvec` requires `T: Default`.
-        let mut snapshot: smallvec::SmallVec<[(ListenerId, OwnedCallback<Arg>); 4]> = self
-            .listeners
-            .entries
-            .borrow_mut()
-            .iter()
-            .filter(|(id, _)| ids.is_none_or(|ids| ids.binary_search(id).is_ok()))
-            .map(|(&id, cb)| (id, Rc::clone(cb)))
-            .collect();
-        snapshot.sort_unstable_by_key(|(id, _)| *id);
-        let mut snapshot = std::mem::ManuallyDrop::new(snapshot);
-        for (id, callback) in snapshot.iter() {
-            // Skip a listener individually removed mid-notify (by an earlier
-            // callback), and skip the tail once the channel is disposed.
-            if self.is_disposed.get() || !self.listeners.entries.borrow().contains_key(id) {
-                continue;
-            }
-            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| callback.invoke(arg, recovery)))
-            {
-                let failure_text = crate::panic::payload_text(payload.as_ref())
-                    .unwrap_or("<non-string panic payload>")
-                    .to_owned();
-                // Own the failure before diagnostics or nested retirement.
-                recovery.capture(payload);
-                self.listeners.failed.set(true);
-                recovery.run(|| {
-                    tracing::error!(
-                        listener_id = ?id,
-                        panic_payload = failure_text,
-                        "Notifier listener panicked; continuing with remaining listeners"
-                    );
-                });
-            }
-        }
-        // Retire separate envelopes one at a time. If one destructor fails,
-        // the remaining snapshot must not add another failure during unwind.
-        snapshot.reverse();
-        while let Some((_, callback)) = snapshot.pop() {
-            recovery.retire(callback);
+        recovery.with_failure_latch(Arc::clone(&self.listeners.failed), |recovery| {
             self.listeners
-                .failed
-                .set(self.listeners.failed.get() || recovery.has_failure());
-        }
-        drop(std::mem::ManuallyDrop::into_inner(snapshot));
-        if self.listeners.delivery_depth.get() == 1 {
-            loop {
-                let mut retired = std::mem::take(&mut *self.listeners.retired.borrow_mut());
-                if retired.is_empty() {
-                    break;
+                .delivery_depth
+                .set(self.listeners.delivery_depth.get() + 1);
+            // Stack-allocate the snapshot for the common case (1-4 listeners);
+            // ≥5 spills to the heap. `SmallVec` over `tinyvec::ArrayVec`
+            // deliberately: the callbacks are `Rc<dyn Fn(..)>`, which does not
+            // implement `Default`, and `tinyvec` requires `T: Default`.
+            let mut snapshot: smallvec::SmallVec<[(ListenerId, OwnedCallback<Arg>); 4]> = self
+                .listeners
+                .entries
+                .borrow_mut()
+                .iter()
+                .filter(|(id, _)| ids.is_none_or(|ids| ids.binary_search(id).is_ok()))
+                .map(|(&id, cb)| (id, Rc::clone(cb)))
+                .collect();
+            snapshot.sort_unstable_by_key(|(id, _)| *id);
+            let mut snapshot = std::mem::ManuallyDrop::new(snapshot);
+            for (id, callback) in snapshot.iter() {
+                // Skip a listener individually removed mid-notify (by an earlier
+                // callback), and skip the tail once the channel is disposed.
+                if self.is_disposed.get() || !self.listeners.entries.borrow().contains_key(id) {
+                    continue;
                 }
-                retired.sort_unstable_by_key(|(id, _)| *id);
-                for (_, callback) in retired {
-                    recovery.retire(callback);
-                    self.listeners
-                        .failed
-                        .set(self.listeners.failed.get() || recovery.has_failure());
+                if let Err(payload) =
+                    catch_unwind(AssertUnwindSafe(|| callback.invoke(arg, recovery)))
+                {
+                    let failure_text = crate::panic::payload_text(payload.as_ref())
+                        .unwrap_or("<non-string panic payload>")
+                        .to_owned();
+                    // Own the failure before diagnostics or nested retirement.
+                    recovery.capture(payload);
+                    recovery.run(|| {
+                        tracing::error!(
+                            listener_id = ?id,
+                            panic_payload = failure_text,
+                            "Notifier listener panicked; continuing with remaining listeners"
+                        );
+                    });
                 }
             }
-            self.listeners.failed.set(false);
-        }
-        self.listeners
-            .delivery_depth
-            .set(self.listeners.delivery_depth.get() - 1);
+            // Retire separate envelopes one at a time. If one destructor fails,
+            // the remaining snapshot must not add another failure during unwind.
+            snapshot.reverse();
+            while let Some((_, callback)) = snapshot.pop() {
+                recovery.retire(callback);
+            }
+            drop(std::mem::ManuallyDrop::into_inner(snapshot));
+            if self.listeners.delivery_depth.get() == 1 {
+                loop {
+                    let mut retired = std::mem::take(&mut *self.listeners.retired.borrow_mut());
+                    if retired.is_empty() {
+                        break;
+                    }
+                    retired.sort_unstable_by_key(|(id, _)| *id);
+                    for (_, callback) in retired {
+                        recovery.retire(callback);
+                    }
+                }
+                self.listeners.failed.store(false, Ordering::Relaxed);
+            }
+            self.listeners
+                .delivery_depth
+                .set(self.listeners.delivery_depth.get() - 1);
+        });
     }
 }
 

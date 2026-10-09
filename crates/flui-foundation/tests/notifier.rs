@@ -673,11 +673,74 @@ fn caught_failure_preserves_reentrant_retirement() {
     assert_eq!(calls.get(), 2);
 }
 
+fn recursive_relay_retirement_preserves_failure() {
+    use flui_foundation::panic::PanicRecovery;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let parent = Rc::new(ChangeNotifier::new());
+    let child = ChangeNotifier::new();
+    let armed = Rc::new(Cell::new(false));
+    let fail = Rc::clone(&armed);
+    child.add_listener(Rc::new(move || {
+        assert!(!fail.get(), "first recursive relay failure");
+    }));
+    parent.add_observer(Rc::new(move |recovery| {
+        child.notify_listeners_with_recovery(recovery);
+    }));
+    let nested = Cell::new(false);
+    let owner = Rc::downgrade(&parent);
+    let drops = Arc::new(AtomicUsize::new(0));
+    let captures = Arc::clone(&drops);
+    parent.add_listener(Rc::new(move || {
+        let owner = owner.upgrade().expect("parent remains alive");
+        if !nested.replace(true) {
+            owner.notify_listeners();
+            nested.set(false);
+        }
+        let capture = Counted(Arc::clone(&captures));
+        let id = owner.add_listener(Rc::new(move || {
+            let _capture = &capture;
+        }));
+        let callback = owner.take_listener(id).expect("fresh callback");
+        let mut recovery = PanicRecovery::new();
+        owner.inherit_failure(&mut recovery);
+        recovery.retire(callback);
+        recovery.finish();
+    }));
+    parent.notify_listeners();
+    assert_eq!(drops.load(Ordering::SeqCst), 2);
+    armed.set(true);
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        parent.notify_listeners();
+    }))
+    .expect_err("relay failure remains authoritative");
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*failure),
+        Some("first recursive relay failure")
+    );
+    assert_eq!(
+        drops.load(Ordering::SeqCst),
+        2,
+        "nested completion must not clear outer failure custody"
+    );
+    armed.set(false);
+    parent.notify_listeners();
+    assert_eq!(
+        drops.load(Ordering::SeqCst),
+        4,
+        "next healthy delivery resumes destruction"
+    );
+}
+
 #[test]
 fn notifier_ownership_and_recovery() {
     const CHILD: &str = "FLUI_NOTIFIER_RECOVERY_CASE";
     if let Ok(case) = std::env::var(CHILD) {
         match case.as_str() {
+            "recursive_relay_retirement_preserves_failure" => {
+                recursive_relay_retirement_preserves_failure();
+            }
             "failure_propagates_after_healthy_tail" => failure_propagates_after_healthy_tail(),
             "disposal_silences_the_snapshot_tail" => disposal_silences_the_snapshot_tail(),
             "caught_failure_preserves_reentrant_retirement" => {
@@ -721,6 +784,7 @@ fn notifier_ownership_and_recovery() {
     }
     let mut failures = Vec::new();
     for case in [
+        "recursive_relay_retirement_preserves_failure",
         "failure_propagates_after_healthy_tail",
         "disposal_silences_the_snapshot_tail",
         "caught_failure_preserves_reentrant_retirement",

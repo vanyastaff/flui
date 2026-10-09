@@ -14,6 +14,10 @@
 //! policy [`is_internal_invariant`] mechanizes.
 
 use std::any::Any;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 /// The text of a panic payload, when it has any.
 ///
@@ -74,6 +78,7 @@ pub fn retain_opaque_payload(payload: Box<dyn Any + Send>) {
 pub struct PanicRecovery {
     incoming: bool,
     first: Option<Box<dyn Any + Send>>,
+    active_channels: smallvec::SmallVec<[Arc<AtomicBool>; 4]>,
 }
 
 impl std::fmt::Debug for PanicRecovery {
@@ -96,11 +101,43 @@ impl PanicRecovery {
         Self {
             incoming: std::thread::panicking(),
             first: None,
+            active_channels: smallvec::SmallVec::new(),
         }
     }
 
     pub(crate) fn inherit_failure(&mut self) {
         self.incoming = true;
+        self.mark_active_channels();
+    }
+
+    /// Keep channel retirement aware of failures caught by nested relays.
+    /// Only the failure signal is shared, never callback storage or an owner.
+    pub(crate) fn with_failure_latch(
+        &mut self,
+        latch: Arc<AtomicBool>,
+        action: impl FnOnce(&mut Self),
+    ) {
+        if latch.load(Ordering::Relaxed) {
+            self.inherit_failure();
+        }
+        latch.store(self.has_failure(), Ordering::Relaxed);
+        self.active_channels.push(latch);
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| action(self)));
+        if outcome.is_err() {
+            self.mark_active_channels();
+        }
+        self.active_channels
+            .pop()
+            .expect("BUG: channel recovery scope lost its failure latch");
+        if let Err(payload) = outcome {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
+    fn mark_active_channels(&self) {
+        for latch in &self.active_channels {
+            latch.store(true, Ordering::Relaxed);
+        }
     }
 
     pub fn run(&mut self, action: impl FnOnce()) {
@@ -121,6 +158,7 @@ impl PanicRecovery {
         } else {
             self.first = Some(payload);
         }
+        self.mark_active_channels();
     }
 
     #[must_use]

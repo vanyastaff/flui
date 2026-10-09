@@ -611,6 +611,11 @@ fn status_delivery_failure_custody() {
         ("switch_value", switch_value_keeps_parent_failure_custody),
         ("nested_status", nested_status_keeps_parent_failure_custody),
         ("nested_value", nested_value_keeps_parent_failure_custody),
+        ("relay_value", relay_value_failure_reaches_parent_retirement),
+        (
+            "nested_relay_value",
+            nested_relay_value_failure_reaches_parent_retirement,
+        ),
         ("drop_reverse", dropping_reverse_silences_its_tail),
         ("drop_curved", dropping_curved_silences_its_tail),
         ("drop_tween", dropping_tween_silences_its_tail),
@@ -894,6 +899,118 @@ fn wrapper_keeps_parent_failure_custody(status: bool, kind: &str) {
     }
     assert_eq!(calls.get(), 2, "next notification still arrives");
     parent.dispose();
+}
+
+fn relay_value_failure_reaches_parent_retirement() {
+    relay_failure_reaches_parent_retirement(false);
+}
+
+fn nested_relay_value_failure_reaches_parent_retirement() {
+    relay_failure_reaches_parent_retirement(true);
+}
+
+fn relay_failure_reaches_parent_retirement(inside_child: bool) {
+    for kind in ["reverse", "curved", "tween", "proxy", "switch", "nested"] {
+        for status in [false, true] {
+            for competing in [false, true] {
+                relay_retirement_case(inside_child, kind, status, competing);
+            }
+        }
+    }
+}
+
+fn relay_retirement_case(inside_child: bool, kind: &str, status: bool, competing: bool) {
+    struct CountDrop(Arc<AtomicUsize>);
+    impl Drop for CountDrop {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    let source = controller();
+    let parent = std::rc::Rc::new(ProxyAnimation::new(std::rc::Rc::new(source.clone())));
+    let child = make_wrapper(parent.clone(), kind);
+    let armed = std::rc::Rc::new(std::cell::Cell::new(false));
+    let fail = armed.clone();
+    let fail = std::rc::Rc::new(move || {
+        if fail.get() {
+            panic_any("first child relay failure");
+        }
+    });
+    if status {
+        child.add_status_listener(std::rc::Rc::new(move |_| fail()));
+    } else {
+        child.add_listener(fail);
+    }
+    let weak = std::rc::Rc::downgrade(&parent);
+    let drops = Arc::new(AtomicUsize::new(0));
+    let captures = drops.clone();
+    let removal_source: std::rc::Rc<dyn Animation<f64>> = if inside_child {
+        child.clone()
+    } else {
+        parent.clone()
+    };
+    let retire = std::rc::Rc::new(move || {
+        let parent = weak.upgrade().expect("live parent");
+        let capture = CountDrop(captures.clone());
+        let id = parent.add_listener(std::rc::Rc::new(move || {
+            let _ = &capture;
+        }));
+        parent.remove_listener(id);
+    });
+    if status {
+        removal_source.add_status_listener(std::rc::Rc::new(move |_| retire()));
+    } else {
+        removal_source.add_listener(retire);
+    }
+    if competing {
+        let fail = armed.clone();
+        let second_failure = std::rc::Rc::new(move || {
+            if fail.get() {
+                panic_any("second parent failure");
+            }
+        });
+        if status {
+            parent.add_status_listener(std::rc::Rc::new(move |_| second_failure()));
+        } else {
+            parent.add_listener(second_failure);
+        }
+    }
+    let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+    let observed = calls.clone();
+    let tail = std::rc::Rc::new(move || observed.set(observed.get() + 1));
+    if status {
+        parent.add_status_listener(std::rc::Rc::new(move |_| tail()));
+    } else {
+        parent.add_listener(tail);
+    }
+
+    let values = if status {
+        [1.0, 0.0, 1.0]
+    } else {
+        [0.25, 0.5, 0.75]
+    };
+    source.set_value(values[0]);
+    assert_eq!(drops.load(Ordering::SeqCst), 1, "healthy capture retires");
+    armed.set(true);
+    let failure = catch_unwind(AssertUnwindSafe(|| source.set_value(values[1])))
+        .expect_err("child relay failure resumes after parent tail");
+    assert_eq!(payload_text(&*failure), Some("first child relay failure"));
+    assert_eq!(calls.get(), 2, "healthy parent tail still runs");
+    assert_eq!(
+        drops.load(Ordering::SeqCst),
+        1,
+        "parent retirement inherits failure caught by its child relay"
+    );
+    armed.set(false);
+    source.set_value(values[2]);
+    assert_eq!(calls.get(), 3, "next notification still arrives");
+    assert_eq!(
+        drops.load(Ordering::SeqCst),
+        2,
+        "healthy retirement resumes"
+    );
+    source.dispose();
 }
 
 fn value_failure_retains_removed_value_captures() {
