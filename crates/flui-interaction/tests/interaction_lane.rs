@@ -1051,6 +1051,7 @@ fn binding_input_contract_matrix() {
             "native_terminal_observation_failure",
             native_terminal_observation_failure_keeps_owned_delivery,
         ),
+        ("native_close_retirement_failure", native_close_preserves_retirement_ownership),
         ("native_focus_loss", native_focus_loss_releases_lease),
         (
             "native_claim_retirement",
@@ -2990,6 +2991,94 @@ fn native_staged_retirement_preserves_delivery_and_failure() {
                 assert_eq!(retired.get(), if replacement { 2 } else { 1 });
             });
         }
+    }
+}
+
+fn native_close_preserves_retirement_ownership() {
+    use flui_foundation::geometry::{Offset, Point};
+    use flui_interaction::{GestureBinding, HitTestResult};
+    use flui_interaction::routing::EventPropagation;
+    use flui_interaction::events::make_down_event;
+    use flui_platform_api::{EventTime, pointer::{PanZoomEvent, PanZoomPhase, PointerEvent,
+        PointerId, PointerInfo, PointerKind, PointerPosition}};
+    use std::{cell::{Cell, RefCell}, panic::{catch_unwind, AssertUnwindSafe}, rc::Rc};
+
+    struct Capture {
+        drops: Rc<Cell<usize>>,
+        fails: bool,
+    }
+    impl Drop for Capture {
+        fn drop(&mut self) {
+            self.drops.set(self.drops.get() + 1);
+            assert!(!self.fails, "native close capture failure");
+        }
+    }
+    for (preserving, prior_failure, callback_failure, hostile_tail) in [
+        (false, false, false, false), (false, false, true, false),
+        (false, false, true, true), (false, true, false, true), (true, false, false, true),
+    ] {
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let binding = GestureBinding::new();
+        let first_drops = Rc::new(Cell::new(0));
+        let tail_drops = Rc::new(Cell::new(0));
+        let calls = Rc::new(Cell::new(0));
+        lane.enter(|| {
+            if prior_failure {
+                let tokens = Rc::new(RefCell::new(Vec::new()));
+                let held = tokens.clone();
+                let pointer = handle.register_pointer(move |dispatch| {
+                    match dispatch.local {
+                        PointerEvent::Down(_) => held.borrow_mut().push(dispatch.capture().expect("capture")),
+                        PointerEvent::Cancel(_) => panic!("pre-native close failure"),
+                        _ => {}
+                    }
+                }).expect("captured pointer");
+                let mut path = HitTestResult::new();
+                path.add(hit_entry(pointer));
+                binding.handle_pointer_event(&make_down_event(Offset::ZERO, PointerKind::Touch).expect("Down"),
+                    |_| path.clone());
+                tokens.borrow_mut().clear();
+            }
+            let (first, tail, called) = (first_drops.clone(), tail_drops.clone(), calls.clone());
+            let target = handle.register_pan_zoom(move |dispatch| {
+                if dispatch.local.phase == PanZoomPhase::Start {
+                    let first = Capture { drops: first.clone(), fails: false };
+                    let called = called.clone();
+                    assert!(dispatch.on_retirement(move || {
+                        let _keep = &first;
+                        called.set(called.get() + 1);
+                        assert!(!callback_failure, "native close body failure");
+                    }));
+                    let tail = Capture { drops: tail.clone(), fails: hostile_tail };
+                    assert!(dispatch.on_retirement(move || { let _keep = &tail; }));
+                }
+                EventPropagation::Continue
+            }).expect("staged native target");
+            let mut path = HitTestResult::new();
+            path.add(HitTestEntry::new(RenderId::new(2)).pan_zoom_target(target));
+            binding.handle_pointer_event(&PointerEvent::PanZoom(PanZoomEvent::new(
+                PointerInfo::new(PointerId::try_from(840_u64).expect("source"), PointerKind::Trackpad),
+                EventTime::from_nanos(0), PointerPosition::try_new(Point::ZERO).expect("position"), PanZoomPhase::Start,
+            )), |_| path.clone());
+            if preserving {
+                let original = catch_unwind(|| panic!("original caller failure")).expect_err("caller failed");
+                flui_interaction::__runtime::close_gestures(&binding, flui_interaction::__runtime::CloseMode::PreservingFailure);
+                assert_eq!(original.downcast_ref::<&str>(), Some(&"original caller failure"));
+            } else {
+                let result = catch_unwind(AssertUnwindSafe(|| flui_interaction::__runtime::close_gestures(
+                    &binding, flui_interaction::__runtime::CloseMode::Ordinary)));
+                if prior_failure || callback_failure {
+                    assert_eq!(result.expect_err("close failure").downcast_ref::<&str>(), Some(&if prior_failure {
+                        "pre-native close failure"
+                    } else { "native close body failure" }));
+                } else { result.expect("healthy close"); }
+            }
+            assert_eq!((first_drops.get(), tail_drops.get()), if preserving || prior_failure || callback_failure {
+                (0, 0)
+            } else { (1, 1) }, "opaque captures retain the close's first failure ownership policy after containment");
+            if preserving { assert_eq!(calls.get(), 0, "preserving close does not invoke opaque retirement hooks"); }
+        });
     }
 }
 
