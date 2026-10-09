@@ -160,16 +160,19 @@ impl RenderBox for RenderMouseRegion {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
         let constraints = *ctx.constraints();
         if ctx.child_count() > 0 {
             self.has_child = true;
-            let child_size = ctx.layout_child(0, constraints);
+            let child_size = ctx.layout_child(0, constraints)?;
             ctx.position_child(0, Offset::ZERO);
-            child_size
+            Ok(child_size)
         } else {
             self.has_child = false;
-            constraints.biggest()
+            Ok(constraints.biggest())
         }
     }
 
@@ -179,11 +182,11 @@ impl RenderBox for RenderMouseRegion {
         &self,
         constraints: BoxConstraints,
         ctx: &mut BoxDryLayoutCtx<'_>,
-    ) -> Size {
+    ) -> flui_rendering::RenderResult<Size> {
         if ctx.child_count() > 0 {
             ctx.child_dry_layout(0, constraints)
         } else {
-            constraints.biggest()
+            Ok(constraints.biggest())
         }
     }
 

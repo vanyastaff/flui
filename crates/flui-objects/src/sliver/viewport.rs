@@ -25,7 +25,10 @@ use flui_rendering::{
     parent_data::BoxParentData,
     pipeline::{DirtySendError, RenderInvalidationHandle},
     traits::{RenderBox, SemanticsClip},
-    view::{CacheExtentStyle, ScrollableViewportOffset, SliverPaintOrder, ViewportOffset},
+    view::{
+        CacheExtentStyle, ScrollableViewportOffset, SliverPaintOrder, ViewportLayout as _,
+        ViewportOffset,
+    },
 };
 
 const MAX_LAYOUT_CYCLES_PER_CHILD: usize = 10;
@@ -247,12 +250,8 @@ pub struct RenderViewport<O = ScrollableViewportOffset> {
     invalid_center_warned: bool,
     /// Latches the out-of-range `anchor` warning, cleared by a usable value.
     invalid_anchor_warned: bool,
-    child_count: usize,
-    min_scroll_extent: f64,
-    max_scroll_extent: f64,
-    max_scroll_obstruction_extent: f64,
-    sliver_obstruction_extents: Vec<f64>,
-    has_visual_overflow: bool,
+    layout: ViewportLayout,
+    spare_layout: ViewportLayout,
     /// The repaint handle this node was bound to in [`attach`](RenderBox::attach),
     /// `None` before attach / after [`detach`](RenderBox::detach). `set_offset`
     /// clones it to re-register `offset_listener` on a swapped-in offset while
@@ -262,9 +261,6 @@ pub struct RenderViewport<O = ScrollableViewportOffset> {
     /// retained so `detach`/`set_offset` can remove the SAME `Arc` via
     /// [`ViewportOffset::remove_listener`]'s ptr-eq contract.
     offset_listener: Option<OffsetListener>,
-    /// The child positions the current pass decided; committed by
-    /// `commit_positions` once the pass is accepted.
-    staged_positions: Vec<StagedPosition>,
     /// How content that overflows this viewport is clipped when it paints.
     /// `Clip::None` clips nothing at all, so a child may paint outside the
     /// viewport's bounds (default hard-edge).
@@ -278,6 +274,19 @@ pub struct RenderViewport<O = ScrollableViewportOffset> {
     /// descendant stand-in can move, so unlike the scroll dimensions they are
     /// written on every pass rather than only on an accepted one.
     committed_clips: CommittedClipGeometry,
+}
+
+/// One pass's metrics and positions. The viewport keeps two reusable buffers:
+/// a rejected pass cannot replace the metrics of the last published geometry.
+#[derive(Debug, Default)]
+struct ViewportLayout {
+    child_count: usize,
+    min_scroll_extent: f64,
+    max_scroll_extent: f64,
+    max_scroll_obstruction_extent: f64,
+    sliver_obstruction_extents: Vec<f64>,
+    has_visual_overflow: bool,
+    staged_positions: Vec<StagedPosition>,
 }
 
 /// What the accepted pass left for [`RenderViewport::describe_semantics_clip`]
@@ -340,15 +349,10 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             anchor: 0.0,
             invalid_center_warned: false,
             invalid_anchor_warned: false,
-            child_count: 0,
-            min_scroll_extent: 0.0,
-            max_scroll_extent: 0.0,
-            max_scroll_obstruction_extent: 0.0,
-            sliver_obstruction_extents: Vec::new(),
-            has_visual_overflow: false,
+            layout: ViewportLayout::default(),
+            spare_layout: ViewportLayout::default(),
             render_invalidation_handle: None,
             offset_listener: None,
-            staged_positions: Vec::new(),
             clip_behavior: Clip::HardEdge,
             committed_clips: CommittedClipGeometry::default(),
         }
@@ -571,21 +575,21 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
     #[inline]
     #[must_use]
     pub const fn max_scroll_extent(&self) -> f64 {
-        self.max_scroll_extent
+        self.layout.max_scroll_extent
     }
 
     /// Last total reverse scroll extent reported by the reverse sliver sequence.
     #[inline]
     #[must_use]
     pub const fn min_scroll_extent(&self) -> f64 {
-        self.min_scroll_extent
+        self.layout.min_scroll_extent
     }
 
     /// Last total pinned obstruction extent reported by the sliver sequence.
     #[inline]
     #[must_use]
     pub const fn max_scroll_obstruction_extent(&self) -> f64 {
-        self.max_scroll_obstruction_extent
+        self.layout.max_scroll_obstruction_extent
     }
 
     /// Total obstruction extent contributed by the slivers between `center`
@@ -602,18 +606,18 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
     #[inline]
     #[must_use]
     pub fn max_scroll_obstruction_extent_before(&self, child_index: usize) -> Option<f64> {
-        let len = self.sliver_obstruction_extents.len();
+        let len = self.layout.sliver_obstruction_extents.len();
         if child_index >= len {
             return None;
         }
 
         let center = self.center.unwrap_or(0).min(len.saturating_sub(1));
         Some(if child_index >= center {
-            self.sliver_obstruction_extents[center..child_index]
+            self.layout.sliver_obstruction_extents[center..child_index]
                 .iter()
                 .sum()
         } else {
-            self.sliver_obstruction_extents[child_index + 1..center]
+            self.layout.sliver_obstruction_extents[child_index + 1..center]
                 .iter()
                 .sum()
         })
@@ -623,7 +627,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
     #[inline]
     #[must_use]
     pub const fn has_visual_overflow(&self) -> bool {
-        self.has_visual_overflow
+        self.layout.has_visual_overflow
     }
 
     fn calculated_cache_extent(&self, main_axis_extent: f64) -> f64 {
@@ -676,20 +680,22 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
         main_axis_extent: f64,
         cross_axis_extent: f64,
         corrected_offset: f64,
-    ) -> f64 {
-        self.staged_positions.clear();
-        self.min_scroll_extent = 0.0;
-        self.max_scroll_extent = 0.0;
-        self.max_scroll_obstruction_extent = 0.0;
-        self.has_visual_overflow = false;
+    ) -> flui_rendering::RenderResult<f64> {
+        self.layout.staged_positions.clear();
+        self.layout.min_scroll_extent = 0.0;
+        self.layout.max_scroll_extent = 0.0;
+        self.layout.max_scroll_obstruction_extent = 0.0;
+        self.layout.has_visual_overflow = false;
 
         let child_count = ctx.child_count();
         // Slot-indexed (not layout-walk order): `update_out_of_band_data`
         // writes `sliver_obstruction_extents[index]` directly, so
         // `max_scroll_obstruction_extent_before` reads correctly regardless
         // of which group — forward or reverse — this pass visits first.
-        self.sliver_obstruction_extents.clear();
-        self.sliver_obstruction_extents.resize(child_count, 0.0);
+        self.layout.sliver_obstruction_extents.clear();
+        self.layout
+            .sliver_obstruction_extents
+            .resize(child_count, 0.0);
 
         let center = self.clamp_center(child_count);
 
@@ -733,9 +739,9 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
                     child_end: center,
                     reversed: true,
                 },
-            );
+            )?;
             if result != 0.0 {
-                return -result;
+                return Ok(-result);
             }
         }
 
@@ -774,7 +780,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>,
         params: LayoutChildSequenceParams,
-    ) -> f64 {
+    ) -> flui_rendering::RenderResult<f64> {
         let LayoutChildSequenceParams {
             mut scroll_offset,
             overlap,
@@ -825,18 +831,20 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
                 },
             );
 
-            let geometry = try_cached_sliver_geometry(
+            let geometry = match try_cached_sliver_geometry(
                 ctx,
                 index,
                 constraints,
                 child_remaining_paint_extent,
                 child_remaining_cache_extent,
                 sliver_scroll_offset,
-            )
-            .unwrap_or_else(|| ctx.layout_sliver_child(index, constraints));
+            ) {
+                Some(geometry) => geometry,
+                None => ctx.layout_sliver_child(index, constraints)?,
+            };
 
             if let Some(correction) = geometry.scroll_offset_correction {
-                return correction;
+                return Ok(correction);
             }
 
             let effective_layout_offset = layout_offset + geometry.paint_origin;
@@ -855,7 +863,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             } else {
                 (main_axis_extent - child_remaining_paint_extent) + child_overlap
             };
-            self.staged_positions.push(StagedPosition {
+            self.layout.staged_positions.push(StagedPosition {
                 slot: index,
                 layout_offset: child_layout_offset,
                 growth_direction,
@@ -877,7 +885,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             self.update_out_of_band_data(growth_direction, index, &geometry);
         }
 
-        0.0
+        Ok(0.0)
     }
 
     fn update_out_of_band_data(
@@ -888,22 +896,22 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
     ) {
         match growth_direction {
             GrowthDirection::Forward => {
-                self.max_scroll_extent += geometry.scroll_extent;
+                self.layout.max_scroll_extent += geometry.scroll_extent;
             }
             GrowthDirection::Reverse => {
-                self.min_scroll_extent -= geometry.scroll_extent;
+                self.layout.min_scroll_extent -= geometry.scroll_extent;
             }
         }
-        self.max_scroll_obstruction_extent += geometry.max_scroll_obstruction_extent;
+        self.layout.max_scroll_obstruction_extent += geometry.max_scroll_obstruction_extent;
         // Slot-indexed (see `max_scroll_obstruction_extent_before`): each
         // child is visited exactly once per accepted pass, so writing by its
         // absolute index is equivalent to the old push-in-visit-order when
         // that order was ascending, and correct when it isn't.
-        if let Some(slot) = self.sliver_obstruction_extents.get_mut(index) {
+        if let Some(slot) = self.layout.sliver_obstruction_extents.get_mut(index) {
             *slot = geometry.max_scroll_obstruction_extent;
         }
         if geometry.has_visual_overflow {
-            self.has_visual_overflow = true;
+            self.layout.has_visual_overflow = true;
         }
     }
 
@@ -925,13 +933,13 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
         self.committed_clips.cache_extent = cache_extent;
         // Taken out and put back so the vector keeps its capacity across
         // frames: this runs on every scroll pixel.
-        let mut staged = std::mem::take(&mut self.staged_positions);
+        let mut staged = std::mem::take(&mut self.layout.staged_positions);
         // Slot-indexed, like `sliver_obstruction_extents`: the walk may visit
         // the reverse group first, so write by absolute slot rather than in
         // visit order.
         self.committed_clips
             .child_clips
-            .resize(self.child_count, CommittedChildClip::default());
+            .resize(self.layout.child_count, CommittedChildClip::default());
         self.committed_clips
             .child_clips
             .fill(CommittedChildClip::default());
@@ -954,7 +962,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
                 ),
             );
         }
-        self.staged_positions = staged;
+        self.layout.staged_positions = staged;
     }
 
     fn compute_absolute_paint_offset(
@@ -1013,107 +1021,114 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
     fn perform_layout(
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Variable, Self::ParentData>,
-    ) -> Size {
-        let size = ctx.constraints().biggest();
-        let main_axis_extent = self.main_axis_extent(size);
-        let cross_axis_extent = self.cross_axis_extent(size);
-        self.child_count = ctx.child_count();
-        // The viewport dimension is published before laying anything
-        // out, and a `ScrollPosition` may move `pixels` to answer it (a page
-        // position keeps its fractional page across a resize). That is
-        // correct for a healthy pass; for a degraded one it would move the
-        // user's offset in a frame that is supposed to publish nothing, so
-        // the offset is restored below if the pass turns out degraded. The
-        // dimension itself is kept: it comes from this viewport's
-        // constraints, which no stand-in touched.
-        let pixels_before_pass = self.offset.pixels();
-        let _ = self.offset.apply_viewport_dimension(main_axis_extent);
+    ) -> flui_rendering::RenderResult<Size> {
+        std::mem::swap(&mut self.layout, &mut self.spare_layout);
+        let result = (|| {
+            let size = ctx.constraints().biggest();
+            let main_axis_extent = self.main_axis_extent(size);
+            let cross_axis_extent = self.cross_axis_extent(size);
+            self.layout.child_count = ctx.child_count();
+            // Native constraints are accepted independently of descendant measurement.
+            // Their fractional-page mapping survives a rejected content proposal.
+            let pixels_before_pass = self.offset.pixels();
+            let _ = self.offset.apply_viewport_dimension(main_axis_extent);
+            let mut layout_offset = self.offset.begin_layout();
 
-        if ctx.child_count() == 0 {
-            self.min_scroll_extent = 0.0;
-            self.max_scroll_extent = 0.0;
-            self.max_scroll_obstruction_extent = 0.0;
-            self.sliver_obstruction_extents.clear();
-            self.has_visual_overflow = false;
-            let _ = self.offset.apply_content_dimensions(0.0, 0.0);
-            return size;
+            if ctx.child_count() == 0 {
+                self.layout.min_scroll_extent = 0.0;
+                self.layout.max_scroll_extent = 0.0;
+                self.layout.max_scroll_obstruction_extent = 0.0;
+                self.layout.sliver_obstruction_extents.clear();
+                self.layout.has_visual_overflow = false;
+                let _ = layout_offset.apply_content_dimensions(0.0, 0.0);
+                self.offset.accept_layout(layout_offset)?;
+                return Ok(size);
+            }
+
+            let max_layout_cycles = MAX_LAYOUT_CYCLES_PER_CHILD * ctx.child_count();
+            let mut accepted = false;
+            let mut degraded = false;
+            for _ in 0..max_layout_cycles {
+                let correction = self.attempt_layout(
+                    ctx,
+                    main_axis_extent,
+                    cross_axis_extent,
+                    layout_offset.pixels(),
+                )?;
+                // A descendant's layout failed, or a poisoned one served its
+                // stand-in, somewhere in this pass: the extents it accumulated
+                // describe geometry this frame did not compute. Position what the
+                // pass staged — the tree stays internally consistent, since every
+                // offset and every child geometry come from one pass — but
+                // publish nothing to the scroll position. A correction or a
+                // content extent taken from a stand-in would move the user's
+                // offset to a place the real content never had, and the frame
+                // after the child recovers would have to move it back.
+                if ctx.descendant_layout_degraded() {
+                    degraded = true;
+                    break;
+                }
+                if correction != 0.0 {
+                    layout_offset.correct_by(correction);
+                    continue;
+                }
+
+                // The anchor shifts both ends of the published scroll range by the room it opens
+                // on each side of the zero-scroll line — an anchor > 0 lets the
+                // reverse group scroll `main_axis_extent * anchor` further
+                // before `min_scroll_extent` clamps, and symmetrically shrinks
+                // how far the forward group can scroll before `max_scroll_extent`
+                // clamps.
+                if layout_offset.apply_content_dimensions(
+                    (self.layout.min_scroll_extent + main_axis_extent * self.anchor).min(0.0),
+                    (self.layout.max_scroll_extent - main_axis_extent * (1.0 - self.anchor))
+                        .max(0.0),
+                ) {
+                    accepted = true;
+                    break;
+                }
+            }
+            if degraded {
+                // Undo any offset movement `apply_viewport_dimension` made above.
+                let drift = pixels_before_pass - self.offset.pixels();
+                if drift != 0.0 {
+                    self.offset.correct_by(drift);
+                }
+                tracing::warn!(
+                    child_count = ctx.child_count(),
+                    "RenderViewport laid out over a degraded descendant; scroll \
+         dimensions were not published this frame, so the offset \
+         survives until the child recovers"
+                );
+            } else if !accepted {
+                // Pathological non-convergence: a sliver child kept requesting
+                // scroll corrections past the bounded budget. The scroll offset
+                // is already clamped to a valid range by the loop's
+                // `apply_content_dimensions`, so the committed geometry is sound
+                // — only child positions reflect the last attempted offset and
+                // self-correct on the next frame. Surface it in RELEASE: the
+                // prior `debug_assert!` was silent in release (shipped the
+                // non-converged frame unobserved) and crashed the app in debug on
+                // a third-party widget bug. A warn is the right level — this is a
+                // content bug, not a framework-invariant violation.
+                tracing::warn!(
+                    child_count = ctx.child_count(),
+                    max_layout_cycles,
+                    "RenderViewport exceeded its bounded layout correction loop; \
+         committed the clamped offset, children self-correct next frame"
+                );
+            }
+
+            if !degraded {
+                self.offset.accept_layout(layout_offset)?;
+            }
+            self.commit_positions(ctx, size, self.calculated_cache_extent(main_axis_extent));
+            Ok(size)
+        })();
+        if result.is_err() {
+            std::mem::swap(&mut self.layout, &mut self.spare_layout);
         }
-
-        let max_layout_cycles = MAX_LAYOUT_CYCLES_PER_CHILD * ctx.child_count();
-        let mut accepted = false;
-        let mut degraded = false;
-        for _ in 0..max_layout_cycles {
-            let correction = self.attempt_layout(
-                ctx,
-                main_axis_extent,
-                cross_axis_extent,
-                self.offset.pixels(),
-            );
-            // A descendant's layout failed, or a poisoned one served its
-            // stand-in, somewhere in this pass: the extents it accumulated
-            // describe geometry this frame did not compute. Position what the
-            // pass staged — the tree stays internally consistent, since every
-            // offset and every child geometry come from one pass — but
-            // publish nothing to the scroll position. A correction or a
-            // content extent taken from a stand-in would move the user's
-            // offset to a place the real content never had, and the frame
-            // after the child recovers would have to move it back.
-            if ctx.descendant_layout_degraded() {
-                degraded = true;
-                break;
-            }
-            if correction != 0.0 {
-                self.offset.correct_by(correction);
-                continue;
-            }
-
-            // The anchor shifts both ends of the published scroll range by the room it opens
-            // on each side of the zero-scroll line — an anchor > 0 lets the
-            // reverse group scroll `main_axis_extent * anchor` further
-            // before `min_scroll_extent` clamps, and symmetrically shrinks
-            // how far the forward group can scroll before `max_scroll_extent`
-            // clamps.
-            if self.offset.apply_content_dimensions(
-                (self.min_scroll_extent + main_axis_extent * self.anchor).min(0.0),
-                (self.max_scroll_extent - main_axis_extent * (1.0 - self.anchor)).max(0.0),
-            ) {
-                accepted = true;
-                break;
-            }
-        }
-        if degraded {
-            // Undo any offset movement `apply_viewport_dimension` made above.
-            let drift = pixels_before_pass - self.offset.pixels();
-            if drift != 0.0 {
-                self.offset.correct_by(drift);
-            }
-            tracing::warn!(
-                child_count = ctx.child_count(),
-                "RenderViewport laid out over a degraded descendant; scroll \
-                 dimensions were not published this frame, so the offset \
-                 survives until the child recovers"
-            );
-        } else if !accepted {
-            // Pathological non-convergence: a sliver child kept requesting
-            // scroll corrections past the bounded budget. The scroll offset
-            // is already clamped to a valid range by the loop's
-            // `apply_content_dimensions`, so the committed geometry is sound
-            // — only child positions reflect the last attempted offset and
-            // self-correct on the next frame. Surface it in RELEASE: the
-            // prior `debug_assert!` was silent in release (shipped the
-            // non-converged frame unobserved) and crashed the app in debug on
-            // a third-party widget bug. A warn is the right level — this is a
-            // content bug, not a framework-invariant violation.
-            tracing::warn!(
-                child_count = ctx.child_count(),
-                max_layout_cycles,
-                "RenderViewport exceeded its bounded layout correction loop; \
-                 committed the clamped offset, children self-correct next frame"
-            );
-        }
-
-        self.commit_positions(ctx, size, self.calculated_cache_extent(main_axis_extent));
-        size
+        result
     }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {
@@ -1122,7 +1137,7 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
             SliverPaintOrder::LastIsTop => ctx.paint_children(),
         };
 
-        if self.has_visual_overflow && self.clip_behavior != Clip::None {
+        if self.layout.has_visual_overflow && self.clip_behavior != Clip::None {
             let clip_rect = Rect::from_origin_size(Point::ZERO, ctx.size());
             ctx.with_clip_rect(clip_rect, self.clip_behavior, paint_children);
         } else {
@@ -1184,14 +1199,14 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
 
         match self.paint_order {
             SliverPaintOrder::FirstIsTop => {
-                for index in 0..self.child_count {
+                for index in 0..self.layout.child_count {
                     if ctx.hit_test_child_at_layout_offset(index) {
                         return true;
                     }
                 }
             }
             SliverPaintOrder::LastIsTop => {
-                for index in (0..self.child_count).rev() {
+                for index in (0..self.layout.child_count).rev() {
                     if ctx.hit_test_child_at_layout_offset(index) {
                         return true;
                     }
@@ -1217,23 +1232,28 @@ pub struct RenderShrinkWrappingViewport<O = ScrollableViewportOffset> {
     cache_extent: f64,
     cache_extent_style: CacheExtentStyle,
     paint_order: SliverPaintOrder,
-    child_count: usize,
-    max_scroll_extent: f64,
-    shrink_wrap_extent: f64,
-    has_visual_overflow: bool,
+    layout: ShrinkWrappingLayout,
+    spare_layout: ShrinkWrappingLayout,
     /// See [`RenderViewport::render_invalidation_handle`]'s matching field docs.
     render_invalidation_handle: Option<RenderInvalidationHandle>,
     /// See [`RenderViewport::offset_listener`]'s matching field docs.
     offset_listener: Option<OffsetListener>,
-    /// The child positions the current pass decided; committed by
-    /// `commit_positions` once the pass is accepted.
-    staged_positions: Vec<StagedPosition>,
     /// How content that overflows this viewport is clipped when it paints.
     /// `Clip::None` clips nothing at all, so a child may paint outside the
     /// viewport's bounds (default hard-edge).
     clip_behavior: Clip,
     /// See [`RenderViewport::committed_clips`]'s matching field docs.
     committed_clips: CommittedClipGeometry,
+}
+
+/// Reusable committed and candidate geometry for a shrink-wrapping viewport.
+#[derive(Debug, Default)]
+struct ShrinkWrappingLayout {
+    child_count: usize,
+    max_scroll_extent: f64,
+    shrink_wrap_extent: f64,
+    has_visual_overflow: bool,
+    staged_positions: Vec<StagedPosition>,
 }
 
 impl RenderShrinkWrappingViewport<ScrollableViewportOffset> {
@@ -1265,13 +1285,10 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
             cache_extent: DEFAULT_CACHE_EXTENT,
             cache_extent_style: CacheExtentStyle::Pixel,
             paint_order: SliverPaintOrder::FirstIsTop,
-            child_count: 0,
-            max_scroll_extent: 0.0,
-            shrink_wrap_extent: 0.0,
-            has_visual_overflow: false,
+            layout: ShrinkWrappingLayout::default(),
+            spare_layout: ShrinkWrappingLayout::default(),
             render_invalidation_handle: None,
             offset_listener: None,
-            staged_positions: Vec::new(),
             clip_behavior: Clip::HardEdge,
             committed_clips: CommittedClipGeometry::default(),
         }
@@ -1377,21 +1394,21 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
     #[inline]
     #[must_use]
     pub const fn max_scroll_extent(&self) -> f64 {
-        self.max_scroll_extent
+        self.layout.max_scroll_extent
     }
 
     /// Last unconstrained main-axis extent accumulated from child slivers.
     #[inline]
     #[must_use]
     pub const fn shrink_wrap_extent(&self) -> f64 {
-        self.shrink_wrap_extent
+        self.layout.shrink_wrap_extent
     }
 
     /// Whether the last layout pass reported visual overflow.
     #[inline]
     #[must_use]
     pub const fn has_visual_overflow(&self) -> bool {
-        self.has_visual_overflow
+        self.layout.has_visual_overflow
     }
 
     fn calculated_cache_extent(&self, main_axis_extent: f64) -> f64 {
@@ -1481,11 +1498,11 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
         main_axis_extent: f64,
         cross_axis_extent: f64,
         corrected_offset: f64,
-    ) -> f64 {
-        self.staged_positions.clear();
-        self.max_scroll_extent = 0.0;
-        self.shrink_wrap_extent = 0.0;
-        self.has_visual_overflow = corrected_offset < 0.0;
+    ) -> flui_rendering::RenderResult<f64> {
+        self.layout.staged_positions.clear();
+        self.layout.max_scroll_extent = 0.0;
+        self.layout.shrink_wrap_extent = 0.0;
+        self.layout.has_visual_overflow = corrected_offset < 0.0;
 
         let cache_extent = self.calculated_cache_extent(main_axis_extent);
         let remaining_paint_extent = (main_axis_extent + corrected_offset.min(0.0)).max(0.0);
@@ -1515,7 +1532,7 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>,
         params: LayoutChildSequenceParams,
-    ) -> f64 {
+    ) -> flui_rendering::RenderResult<f64> {
         let LayoutChildSequenceParams {
             mut scroll_offset,
             overlap,
@@ -1571,18 +1588,20 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
                 },
             );
 
-            let geometry = try_cached_sliver_geometry(
+            let geometry = match try_cached_sliver_geometry(
                 ctx,
                 index,
                 constraints,
                 child_remaining_paint_extent,
                 child_remaining_cache_extent,
                 sliver_scroll_offset,
-            )
-            .unwrap_or_else(|| ctx.layout_sliver_child(index, constraints));
+            ) {
+                Some(geometry) => geometry,
+                None => ctx.layout_sliver_child(index, constraints)?,
+            };
 
             if let Some(correction) = geometry.scroll_offset_correction {
-                return correction;
+                return Ok(correction);
             }
 
             let effective_layout_offset = layout_offset + geometry.paint_origin;
@@ -1601,7 +1620,7 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
             } else {
                 (main_axis_extent - child_remaining_paint_extent) + child_overlap
             };
-            self.staged_positions.push(StagedPosition {
+            self.layout.staged_positions.push(StagedPosition {
                 slot: index,
                 layout_offset: child_layout_offset,
                 growth_direction,
@@ -1623,14 +1642,14 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
             self.update_out_of_band_data(&geometry);
         }
 
-        0.0
+        Ok(0.0)
     }
 
     fn update_out_of_band_data(&mut self, geometry: &SliverGeometry) {
-        self.max_scroll_extent += geometry.scroll_extent;
-        self.shrink_wrap_extent += geometry.max_paint_extent;
+        self.layout.max_scroll_extent += geometry.scroll_extent;
+        self.layout.shrink_wrap_extent += geometry.max_paint_extent;
         if geometry.has_visual_overflow {
-            self.has_visual_overflow = true;
+            self.layout.has_visual_overflow = true;
         }
     }
 
@@ -1652,13 +1671,13 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
         self.committed_clips.cache_extent = cache_extent;
         // Taken out and put back so the vector keeps its capacity across
         // frames: this runs on every scroll pixel.
-        let mut staged = std::mem::take(&mut self.staged_positions);
+        let mut staged = std::mem::take(&mut self.layout.staged_positions);
         // Slot-indexed, like `sliver_obstruction_extents`: the walk may visit
         // the reverse group first, so write by absolute slot rather than in
         // visit order.
         self.committed_clips
             .child_clips
-            .resize(self.child_count, CommittedChildClip::default());
+            .resize(self.layout.child_count, CommittedChildClip::default());
         self.committed_clips
             .child_clips
             .fill(CommittedChildClip::default());
@@ -1681,7 +1700,7 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
                 ),
             );
         }
-        self.staged_positions = staged;
+        self.layout.staged_positions = staged;
     }
 
     fn compute_absolute_paint_offset(
@@ -1714,7 +1733,11 @@ impl<O: ViewportOffset + 'static> Diagnosticable for RenderShrinkWrappingViewpor
         properties.add_double("cache_extent", self.cache_extent, Some("px"));
         properties.add_enum("cache_extent_style", self.cache_extent_style);
         properties.add_enum("paint_order", self.paint_order);
-        properties.add_double("shrink_wrap_extent", self.shrink_wrap_extent, Some("px"));
+        properties.add_double(
+            "shrink_wrap_extent",
+            self.layout.shrink_wrap_extent,
+            Some("px"),
+        );
     }
 }
 
@@ -1737,87 +1760,99 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderShrinkWrappingViewport<O> 
     fn perform_layout(
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Variable, Self::ParentData>,
-    ) -> Size {
-        let constraints = *ctx.constraints();
-        self.debug_check_has_bounded_cross_axis(&constraints);
-        self.child_count = ctx.child_count();
+    ) -> flui_rendering::RenderResult<Size> {
+        std::mem::swap(&mut self.layout, &mut self.spare_layout);
+        let result = (|| {
+            let constraints = *ctx.constraints();
+            self.debug_check_has_bounded_cross_axis(&constraints);
+            self.layout.child_count = ctx.child_count();
+            let mut layout_offset = self.offset.begin_layout();
 
-        if ctx.child_count() == 0 {
-            let size = self.empty_size(&constraints);
-            self.max_scroll_extent = 0.0;
-            self.shrink_wrap_extent = 0.0;
-            self.has_visual_overflow = false;
-            let _ = self.offset.apply_viewport_dimension(0.0);
-            let _ = self.offset.apply_content_dimensions(0.0, 0.0);
-            return size;
-        }
+            if ctx.child_count() == 0 {
+                let size = self.empty_size(&constraints);
+                self.layout.max_scroll_extent = 0.0;
+                self.layout.shrink_wrap_extent = 0.0;
+                self.layout.has_visual_overflow = false;
+                let _ = layout_offset.apply_viewport_dimension(0.0);
+                let _ = layout_offset.apply_content_dimensions(0.0, 0.0);
+                self.offset.accept_layout(layout_offset)?;
+                return Ok(size);
+            }
 
-        let main_axis_extent = self.main_axis_extent_from_constraints(&constraints);
-        let cross_axis_extent = self.cross_axis_extent_from_constraints(&constraints);
+            let main_axis_extent = self.main_axis_extent_from_constraints(&constraints);
+            let cross_axis_extent = self.cross_axis_extent_from_constraints(&constraints);
 
-        let max_layout_cycles = MAX_LAYOUT_CYCLES_PER_CHILD * ctx.child_count();
-        let mut accepted = false;
-        let mut degraded = false;
-        let mut effective_extent = 0.0;
-        for _ in 0..max_layout_cycles {
-            let correction = self.attempt_layout(
-                ctx,
-                main_axis_extent,
-                cross_axis_extent,
-                self.offset.pixels(),
-            );
-            // See `RenderViewport::perform_layout`: a pass that read a
-            // stand-in publishes nothing. The size still comes from what the
-            // pass measured — a viewport must return one — but the scroll
-            // position keeps the dimensions it has.
-            if ctx.descendant_layout_degraded() {
-                degraded = true;
+            let max_layout_cycles = MAX_LAYOUT_CYCLES_PER_CHILD * ctx.child_count();
+            let mut accepted = false;
+            let mut degraded = false;
+            let mut effective_extent = 0.0;
+            for _ in 0..max_layout_cycles {
+                let correction = self.attempt_layout(
+                    ctx,
+                    main_axis_extent,
+                    cross_axis_extent,
+                    layout_offset.pixels(),
+                )?;
+                // See `RenderViewport::perform_layout`: a pass that read a
+                // stand-in publishes nothing. The size still comes from what the
+                // pass measured — a viewport must return one — but the scroll
+                // position keeps the dimensions it has.
+                if ctx.descendant_layout_degraded() {
+                    degraded = true;
+                    effective_extent = self
+                        .constrain_main_axis_extent(&constraints, self.layout.shrink_wrap_extent);
+                    break;
+                }
+                if correction != 0.0 {
+                    layout_offset.correct_by(correction);
+                    continue;
+                }
+
                 effective_extent =
-                    self.constrain_main_axis_extent(&constraints, self.shrink_wrap_extent);
-                break;
+                    self.constrain_main_axis_extent(&constraints, self.layout.shrink_wrap_extent);
+                let did_accept_viewport_dimension =
+                    layout_offset.apply_viewport_dimension(effective_extent);
+                let did_accept_content_dimension = layout_offset.apply_content_dimensions(
+                    0.0,
+                    (self.layout.max_scroll_extent - effective_extent).max(0.0),
+                );
+                if did_accept_viewport_dimension && did_accept_content_dimension {
+                    accepted = true;
+                    break;
+                }
             }
-            if correction != 0.0 {
-                self.offset.correct_by(correction);
-                continue;
+            if degraded {
+                tracing::warn!(
+                    child_count = ctx.child_count(),
+                    "RenderShrinkWrappingViewport laid out over a degraded \
+         descendant; scroll dimensions were not published this frame"
+                );
+            } else if !accepted {
+                tracing::warn!(
+                    child_count = ctx.child_count(),
+                    max_layout_cycles,
+                    "RenderShrinkWrappingViewport exceeded its bounded layout correction loop; \
+         committed the last computed extent"
+                );
             }
 
-            effective_extent =
-                self.constrain_main_axis_extent(&constraints, self.shrink_wrap_extent);
-            let did_accept_viewport_dimension =
-                self.offset.apply_viewport_dimension(effective_extent);
-            let did_accept_content_dimension = self.offset.apply_content_dimensions(
-                0.0,
-                (self.max_scroll_extent - effective_extent).max(0.0),
-            );
-            if did_accept_viewport_dimension && did_accept_content_dimension {
-                accepted = true;
-                break;
+            // The accepted pass laid every child out against constraints that do
+            // not depend on this viewport's final size; only the physical offsets
+            // do (a reverse axis measures from the far edge), and they are
+            // resolved here, once, from what that pass staged. Storing logical
+            // offsets in parent data and resolving them at paint would need a
+            // second layout of every child; resolving them at commit does not.
+            let size = self.size_from_extents(cross_axis_extent, effective_extent);
+            if !degraded {
+                self.offset.accept_layout(layout_offset)?;
             }
+            self.commit_positions(ctx, size, self.calculated_cache_extent(main_axis_extent));
+            Ok(size)
+        })();
+        if result.is_err() {
+            std::mem::swap(&mut self.layout, &mut self.spare_layout);
         }
-        if degraded {
-            tracing::warn!(
-                child_count = ctx.child_count(),
-                "RenderShrinkWrappingViewport laid out over a degraded \
-                 descendant; scroll dimensions were not published this frame"
-            );
-        } else if !accepted {
-            tracing::warn!(
-                child_count = ctx.child_count(),
-                max_layout_cycles,
-                "RenderShrinkWrappingViewport exceeded its bounded layout correction loop; \
-                 committed the last computed extent"
-            );
-        }
-
-        // The accepted pass laid every child out against constraints that do
-        // not depend on this viewport's final size; only the physical offsets
-        // do (a reverse axis measures from the far edge), and they are
-        // resolved here, once, from what that pass staged. Storing logical
-        // offsets in parent data and resolving them at paint would need a
-        // second layout of every child; resolving them at commit does not.
-        let size = self.size_from_extents(cross_axis_extent, effective_extent);
-        self.commit_positions(ctx, size, self.calculated_cache_extent(main_axis_extent));
-        size
+        result
     }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {
@@ -1826,7 +1861,7 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderShrinkWrappingViewport<O> 
             SliverPaintOrder::LastIsTop => ctx.paint_children(),
         };
 
-        if self.has_visual_overflow && self.clip_behavior != Clip::None {
+        if self.layout.has_visual_overflow && self.clip_behavior != Clip::None {
             let clip_rect = Rect::from_origin_size(Point::ZERO, ctx.size());
             ctx.with_clip_rect(clip_rect, self.clip_behavior, paint_children);
         } else {
@@ -1888,14 +1923,14 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderShrinkWrappingViewport<O> 
 
         match self.paint_order {
             SliverPaintOrder::FirstIsTop => {
-                for index in 0..self.child_count {
+                for index in 0..self.layout.child_count {
                     if ctx.hit_test_child_at_layout_offset(index) {
                         return true;
                     }
                 }
             }
             SliverPaintOrder::LastIsTop => {
-                for index in (0..self.child_count).rev() {
+                for index in (0..self.layout.child_count).rev() {
                     if ctx.hit_test_child_at_layout_offset(index) {
                         return true;
                     }

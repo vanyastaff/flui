@@ -82,15 +82,20 @@ impl RenderBox for IntrinsicQueryingDriver {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
-        // Triggers box_intrinsic_query_borrowed on child 0 (the RenderFlex),
-        // which calls build_intrinsic_child_parent_data for its N children.
-        // black_box prevents the compiler from eliding the query or sinking it
-        // past the layout call.
-        let _max_width = black_box(ctx.child_max_intrinsic_width(0, black_box(f64::INFINITY)));
-        let constraints = *ctx.constraints();
-        ctx.layout_child(0, constraints);
-        constraints.smallest()
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok({
+            // Triggers box_intrinsic_query_borrowed on child 0 (the RenderFlex),
+            // which calls build_intrinsic_child_parent_data for its N children.
+            // black_box prevents the compiler from eliding the query or sinking it
+            // past the layout call.
+            let _max_width = black_box(ctx.child_max_intrinsic_width(0, black_box(f64::INFINITY))?);
+            let constraints = *ctx.constraints();
+            ctx.layout_child(0, constraints)?;
+            constraints.smallest()
+        })
     }
 
     fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {

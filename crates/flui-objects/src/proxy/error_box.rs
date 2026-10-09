@@ -121,11 +121,14 @@ impl RenderBox for RenderErrorBox {
     type Arity = Leaf;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
         let size = Self::size_for(ctx.constraints());
         // The message is developer-facing and may name private state; it is
         // shaped and painted in debug builds only.
-        self.painted = cfg!(debug_assertions).then(|| {
+        self.painted = if cfg!(debug_assertions) {
             let style = TextStyle::new()
                 .with_color(DEBUG_TEXT)
                 .with_font_size(DEBUG_FONT_SIZE)
@@ -147,50 +150,52 @@ impl RenderBox for RenderErrorBox {
                 direction: TextDirection::Ltr,
                 max_lines: None,
                 ellipsis: None,
-            });
-            Arc::new(paragraph.to_shaped(Some(DEBUG_TEXT)))
-        });
-        size
+            })?;
+            Some(Arc::new(paragraph.to_shaped(Some(DEBUG_TEXT))))
+        } else {
+            None
+        };
+        Ok(size)
     }
 
     fn compute_min_intrinsic_width(
         &self,
         _height: f64,
         _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
-        0.0
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(0.0)
     }
 
     fn compute_max_intrinsic_width(
         &self,
         _height: f64,
         _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
-        ERROR_BOX_FALLBACK_EXTENT
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(ERROR_BOX_FALLBACK_EXTENT)
     }
 
     fn compute_min_intrinsic_height(
         &self,
         _width: f64,
         _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
-        0.0
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(0.0)
     }
 
     fn compute_max_intrinsic_height(
         &self,
         _width: f64,
         _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
-        ERROR_BOX_FALLBACK_EXTENT
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(ERROR_BOX_FALLBACK_EXTENT)
     }
 
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
         _ctx: &mut flui_rendering::context::BoxDryLayoutCtx<'_>,
-    ) -> Size {
-        Self::size_for(&constraints)
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok(Self::size_for(&constraints))
     }
 
     fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Leaf>) {

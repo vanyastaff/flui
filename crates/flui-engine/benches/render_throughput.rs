@@ -204,6 +204,7 @@ fn render_throughput(c: &mut Criterion) {
                 max_lines: None,
                 ellipsis: None,
             })
+            .expect("benchmark text has valid shaping inputs")
             .to_shaped(None),
     );
     let mut painter = WgpuPainter::with_shared_device(

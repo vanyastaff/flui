@@ -35,14 +35,14 @@ use crate::constraints::BoxConstraints;
 /// }
 ///
 /// impl MultiChildLayoutDelegate for DialogLayoutDelegate {
-///     fn perform_layout(&self, context: &mut dyn MultiChildLayoutContext, size: Size) {
+///     fn perform_layout(&self, context: &mut dyn MultiChildLayoutContext, size: Size) -> flui_rendering::RenderResult<()> {
 ///         let inner_width = size.width - 2.0 * self.padding;
 ///         let mut y = self.padding;
 ///
 ///         // Layout title
 ///         if context.has_child("title") {
 ///             let title_constraints = BoxConstraints::tight_for(Some(inner_width), None);
-///             let title_size = context.layout_child("title", title_constraints);
+///             let title_size = context.layout_child("title", title_constraints)?;
 ///             context.position_child("title", Offset::new(self.padding, y));
 ///             y += title_size.height + self.padding;
 ///         }
@@ -50,9 +50,10 @@ use crate::constraints::BoxConstraints;
 ///         // Layout content
 ///         if context.has_child("content") {
 ///             let content_constraints = BoxConstraints::tight_for(Some(inner_width), None);
-///             let content_size = context.layout_child("content", content_constraints);
+///             let content_size = context.layout_child("content", content_constraints)?;
 ///             context.position_child("content", Offset::new(self.padding, y));
 ///         }
+///         Ok(())
 ///     }
 ///
 ///     fn get_size(&self, constraints: BoxConstraints) -> Size {
@@ -78,7 +79,11 @@ pub trait MultiChildLayoutDelegate: Debug {
     ///
     /// * `context` - The layout context providing child operations
     /// * `size` - The size of this render object
-    fn perform_layout(&self, context: &mut dyn MultiChildLayoutContext, size: Size);
+    fn perform_layout(
+        &self,
+        context: &mut dyn MultiChildLayoutContext,
+        size: Size,
+    ) -> crate::RenderResult<()>;
 
     /// Get the size of the parent for the given constraints.
     ///
@@ -121,7 +126,11 @@ pub trait MultiChildLayoutContext {
     /// # Panics
     ///
     /// Panics if the child doesn't exist or has already been laid out.
-    fn layout_child(&mut self, child_id: &str, constraints: BoxConstraints) -> Size;
+    fn layout_child(
+        &mut self,
+        child_id: &str,
+        constraints: BoxConstraints,
+    ) -> crate::RenderResult<Size>;
 
     /// Position a child at the given offset.
     ///

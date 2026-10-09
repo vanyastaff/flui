@@ -261,11 +261,14 @@ impl RefreshController {
     #[cfg(test)]
     fn begin_refresh(&self) {
         let mut recovery = flui_foundation::panic::PanicRecovery::new();
-        self.begin_refresh_with_recovery(&mut recovery);
+        recovery.run_with(|recovery| self.begin_refresh_with_recovery(recovery));
         recovery.finish();
     }
 
-    fn begin_refresh_with_recovery(&self, recovery: &mut flui_foundation::panic::PanicRecovery) {
+    fn begin_refresh_with_recovery(
+        &self,
+        recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
+    ) {
         {
             let mut refreshing = self
                 .inner

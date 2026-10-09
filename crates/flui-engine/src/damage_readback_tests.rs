@@ -940,11 +940,13 @@ fn partial_equals_full_inside_damage() {
                     ),
                 )
                 .with_text_direction(TextDirection::Ltr);
-            painter.layout(
-                &mut flui_painting::TextContext::new(&flui_painting::FontCollection::new()),
-                0.0,
-                100.0,
-            );
+            painter
+                .layout(
+                    &mut flui_painting::TextContext::new(&flui_painting::FontCollection::new()),
+                    0.0,
+                    100.0,
+                )
+                .expect("readback fixture has valid layout inputs");
             let shadow = Path::rectangle(Rect::from_xywh(0.0, 20.0, 30.0, 8.0));
             canvas.draw_shadow(&shadow, Color::BLACK, 3.0);
             painter.paint(canvas, Offset::ZERO);
@@ -1287,11 +1289,13 @@ fn removed_text_under_a_tight_line_height_leaves_no_ink() {
                 ),
             )
             .with_text_direction(TextDirection::Ltr);
-        painter.layout(
-            &mut flui_painting::TextContext::new(&flui_painting::FontCollection::new()),
-            0.0,
-            100.0,
-        );
+        painter
+            .layout(
+                &mut flui_painting::TextContext::new(&flui_painting::FontCollection::new()),
+                0.0,
+                100.0,
+            )
+            .expect("readback fixture has valid layout inputs");
         painter.paint(canvas, Offset::ZERO);
     };
     let before = scene(
@@ -2528,7 +2532,8 @@ fn a_changed_undersized_performance_overlay_matches_a_full_frame() {
                     frame_time_ms,
                     diagnostic_line: None,
                 },
-            );
+            )
+            .expect("overlay fixture has valid shaping inputs");
             tree.push_child(root_id, Layer::from(overlay));
         })
     };

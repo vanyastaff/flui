@@ -217,24 +217,27 @@ impl RenderBox for RenderConstrainedOverflowBox {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
         let constraints = *ctx.constraints();
 
         if ctx.child_count() == 0 {
             self.inner.clear_child_baselines();
-            return match self.fit {
+            return Ok(match self.fit {
                 OverflowBoxFit::Max => constraints.biggest(),
                 OverflowBoxFit::DeferToChild => constraints.smallest(),
-            };
+            });
         }
 
         let inner_constraints = self.inner_constraints(constraints);
-        let child_size = ctx.layout_child(0, inner_constraints);
+        let child_size = ctx.layout_child(0, inner_constraints)?;
         let our_size = self.parent_size(constraints, child_size);
 
         self.inner.align_child(ctx, our_size, child_size);
-        self.inner.record_child_baselines(ctx);
-        our_size
+        self.inner.record_child_baselines(ctx)?;
+        Ok(our_size)
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
@@ -247,30 +250,46 @@ impl RenderBox for RenderConstrainedOverflowBox {
     // No constraint override is applied — intrinsics are a property of the
     // child's content, independent of what constraints we pass during layout.
 
-    fn compute_min_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_min_intrinsic_width(
+        &self,
+        height: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         if ctx.child_count() == 0 {
-            return 0.0;
+            return Ok(0.0);
         }
         ctx.child_min_intrinsic_width(0, height)
     }
 
-    fn compute_max_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_max_intrinsic_width(
+        &self,
+        height: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         if ctx.child_count() == 0 {
-            return 0.0;
+            return Ok(0.0);
         }
         ctx.child_max_intrinsic_width(0, height)
     }
 
-    fn compute_min_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_min_intrinsic_height(
+        &self,
+        width: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         if ctx.child_count() == 0 {
-            return 0.0;
+            return Ok(0.0);
         }
         ctx.child_min_intrinsic_height(0, width)
     }
 
-    fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_max_intrinsic_height(
+        &self,
+        width: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         if ctx.child_count() == 0 {
-            return 0.0;
+            return Ok(0.0);
         }
         ctx.child_max_intrinsic_height(0, width)
     }
@@ -284,16 +303,16 @@ impl RenderBox for RenderConstrainedOverflowBox {
         &self,
         constraints: BoxConstraints,
         ctx: &mut BoxDryLayoutCtx<'_>,
-    ) -> Size {
+    ) -> flui_rendering::RenderResult<Size> {
         if ctx.child_count() == 0 {
-            return match self.fit {
+            return Ok(match self.fit {
                 OverflowBoxFit::Max => constraints.biggest(),
                 OverflowBoxFit::DeferToChild => constraints.smallest(),
-            };
+            });
         }
         let inner_constraints = self.inner_constraints(constraints);
-        let child_size = ctx.child_dry_layout(0, inner_constraints);
-        self.parent_size(constraints, child_size)
+        let child_size = ctx.child_dry_layout(0, inner_constraints)?;
+        Ok(self.parent_size(constraints, child_size))
     }
 
     fn compute_dry_baseline(
@@ -301,16 +320,18 @@ impl RenderBox for RenderConstrainedOverflowBox {
         constraints: BoxConstraints,
         baseline: flui_rendering::traits::TextBaseline,
         ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f64> {
+    ) -> flui_rendering::RenderResult<Option<f64>> {
         if ctx.child_count() == 0 {
-            return None;
+            return Ok(None);
         }
         let inner_constraints = self.inner_constraints(constraints);
-        let child_size = ctx.child_dry_layout(0, inner_constraints);
+        let child_size = ctx.child_dry_layout(0, inner_constraints)?;
         let our_size = self.parent_size(constraints, child_size);
-        let child_baseline = ctx.child_dry_baseline(0, inner_constraints, baseline)?;
+        let Some(child_baseline) = ctx.child_dry_baseline(0, inner_constraints, baseline)? else {
+            return Ok(None);
+        };
         let child_offset = self.inner.dry_child_offset(our_size, child_size);
-        Some(child_baseline + child_offset.dy)
+        Ok(Some(child_baseline + child_offset.dy))
     }
 }
 
@@ -389,21 +410,24 @@ impl RenderBox for RenderSizedOverflowBox {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
         let constraints = *ctx.constraints();
         let our_size = constraints.constrain(self.requested_size);
 
         if ctx.child_count() == 0 {
             self.inner.clear_child_baselines();
-            return our_size;
+            return Ok(our_size);
         }
 
         // Child uses incoming (parent) constraints, NOT the requested size.
         // This is the key contract: we claim one size, child lives in another.
-        let child_size = ctx.layout_child(0, constraints);
+        let child_size = ctx.layout_child(0, constraints)?;
         self.inner.align_child(ctx, our_size, child_size);
-        self.inner.record_child_baselines(ctx);
-        our_size
+        self.inner.record_child_baselines(ctx)?;
+        Ok(our_size)
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
@@ -417,29 +441,45 @@ impl RenderBox for RenderSizedOverflowBox {
     // (The child is laid out under the incoming constraints and may overflow, so
     // the child's intrinsics do not describe this box's size.)
 
-    fn compute_min_intrinsic_width(&self, _height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.requested_size.width
+    fn compute_min_intrinsic_width(
+        &self,
+        _height: f64,
+        _ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(self.requested_size.width)
     }
 
-    fn compute_max_intrinsic_width(&self, _height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.requested_size.width
+    fn compute_max_intrinsic_width(
+        &self,
+        _height: f64,
+        _ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(self.requested_size.width)
     }
 
-    fn compute_min_intrinsic_height(&self, _width: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.requested_size.height
+    fn compute_min_intrinsic_height(
+        &self,
+        _width: f64,
+        _ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(self.requested_size.height)
     }
 
-    fn compute_max_intrinsic_height(&self, _width: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.requested_size.height
+    fn compute_max_intrinsic_height(
+        &self,
+        _width: f64,
+        _ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(self.requested_size.height)
     }
 
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
         _ctx: &mut BoxDryLayoutCtx<'_>,
-    ) -> Size {
+    ) -> flui_rendering::RenderResult<Size> {
         // Our own size is always `constrain(requested_size)`, regardless of child.
-        constraints.constrain(self.requested_size)
+        Ok(constraints.constrain(self.requested_size))
     }
 
     fn compute_dry_baseline(
@@ -447,18 +487,20 @@ impl RenderBox for RenderSizedOverflowBox {
         constraints: BoxConstraints,
         baseline: flui_rendering::traits::TextBaseline,
         ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f64> {
+    ) -> flui_rendering::RenderResult<Option<f64>> {
         if ctx.child_count() == 0 {
-            return None;
+            return Ok(None);
         }
         let our_size = constraints.constrain(self.requested_size);
         // Child is laid out under incoming constraints (same as perform_layout).
-        let child_size = ctx.child_dry_layout(0, constraints);
-        let child_baseline = ctx.child_dry_baseline(0, constraints, baseline)?;
+        let child_size = ctx.child_dry_layout(0, constraints)?;
+        let Some(child_baseline) = ctx.child_dry_baseline(0, constraints, baseline)? else {
+            return Ok(None);
+        };
         // Use the same alignment as the inner component.
         // We borrow alignment knowledge from a temporary to compute the offset.
         let dry_offset = self.inner.dry_child_offset(our_size, child_size);
-        Some(child_baseline + dry_offset.dy)
+        Ok(Some(child_baseline + dry_offset.dy))
     }
 }
 

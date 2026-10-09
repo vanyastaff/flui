@@ -113,8 +113,8 @@ mod tests {
         fn perform_layout(
             &mut self,
             ctx: &mut BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
-        ) -> Size {
-            ctx.constraints().constrain(self.size)
+        ) -> crate::RenderResult<Size> {
+            Ok(ctx.constraints().constrain(self.size))
         }
     }
 

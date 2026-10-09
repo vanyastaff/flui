@@ -37,8 +37,11 @@ impl RenderBox for SemanticLeaf {
     type Arity = Leaf;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-        Size::new(10.0, 10.0)
+    fn perform_layout(
+        &mut self,
+        _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok(Size::new(10.0, 10.0))
     }
 
     fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}

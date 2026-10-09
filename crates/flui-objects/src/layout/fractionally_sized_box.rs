@@ -298,26 +298,29 @@ impl RenderBox for RenderFractionallySizedBox {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
         let incoming = *ctx.constraints();
 
         if ctx.child_count() > 0 {
             self.has_child = true;
             let child_constraints = self.child_constraints(incoming);
-            let child_size = ctx.layout_child(0, child_constraints);
+            let child_size = ctx.layout_child(0, child_constraints)?;
             // Our box = the parent's tightest acceptable size that wraps
             // the child. With factors set, the child IS that size; without
             // factors, we use the child as-is.
             let size = incoming.constrain(child_size);
             self.child_offset = self.align_child(size, child_size);
             ctx.position_child(0, self.child_offset);
-            size
+            Ok(size)
         } else {
             self.has_child = false;
             // Without a child, our size is determined by the factors alone.
             let computed = self.child_constraints(incoming);
             self.child_offset = Offset::ZERO;
-            incoming.constrain(Size::new(computed.min_width, computed.min_height))
+            Ok(incoming.constrain(Size::new(computed.min_width, computed.min_height)))
         }
     }
 
@@ -336,12 +339,12 @@ impl RenderBox for RenderFractionallySizedBox {
         &self,
         constraints: BoxConstraints,
         ctx: &mut flui_rendering::context::BoxDryLayoutCtx<'_>,
-    ) -> Size {
+    ) -> flui_rendering::RenderResult<Size> {
         let computed = self.child_constraints(constraints);
         if ctx.child_count() > 0 {
-            constraints.constrain(ctx.child_dry_layout(0, computed))
+            Ok(constraints.constrain(ctx.child_dry_layout(0, computed)?))
         } else {
-            constraints.constrain(Size::new(computed.min_width, computed.min_height))
+            Ok(constraints.constrain(Size::new(computed.min_width, computed.min_height)))
         }
     }
 
@@ -353,9 +356,9 @@ impl RenderBox for RenderFractionallySizedBox {
         &self,
         height: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
+    ) -> flui_rendering::RenderResult<f64> {
         let result = if ctx.child_count() > 0 {
-            ctx.child_min_intrinsic_width(0, height * self.height_factor_or_one())
+            ctx.child_min_intrinsic_width(0, height * self.height_factor_or_one())?
         } else {
             0.0
         };
@@ -363,16 +366,16 @@ impl RenderBox for RenderFractionallySizedBox {
             result.is_finite(),
             "child min intrinsic width must be finite"
         );
-        result / self.width_factor_or_one()
+        Ok(result / self.width_factor_or_one())
     }
 
     fn compute_max_intrinsic_width(
         &self,
         height: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
+    ) -> flui_rendering::RenderResult<f64> {
         let result = if ctx.child_count() > 0 {
-            ctx.child_max_intrinsic_width(0, height * self.height_factor_or_one())
+            ctx.child_max_intrinsic_width(0, height * self.height_factor_or_one())?
         } else {
             0.0
         };
@@ -380,16 +383,16 @@ impl RenderBox for RenderFractionallySizedBox {
             result.is_finite(),
             "child max intrinsic width must be finite"
         );
-        result / self.width_factor_or_one()
+        Ok(result / self.width_factor_or_one())
     }
 
     fn compute_min_intrinsic_height(
         &self,
         width: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
+    ) -> flui_rendering::RenderResult<f64> {
         let result = if ctx.child_count() > 0 {
-            ctx.child_min_intrinsic_height(0, width * self.width_factor_or_one())
+            ctx.child_min_intrinsic_height(0, width * self.width_factor_or_one())?
         } else {
             0.0
         };
@@ -397,16 +400,16 @@ impl RenderBox for RenderFractionallySizedBox {
             result.is_finite(),
             "child min intrinsic height must be finite"
         );
-        result / self.height_factor_or_one()
+        Ok(result / self.height_factor_or_one())
     }
 
     fn compute_max_intrinsic_height(
         &self,
         width: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
+    ) -> flui_rendering::RenderResult<f64> {
         let result = if ctx.child_count() > 0 {
-            ctx.child_max_intrinsic_height(0, width * self.width_factor_or_one())
+            ctx.child_max_intrinsic_height(0, width * self.width_factor_or_one())?
         } else {
             0.0
         };
@@ -414,7 +417,7 @@ impl RenderBox for RenderFractionallySizedBox {
             result.is_finite(),
             "child max intrinsic height must be finite"
         );
-        result / self.height_factor_or_one()
+        Ok(result / self.height_factor_or_one())
     }
 
     fn compute_dry_baseline(
@@ -422,16 +425,18 @@ impl RenderBox for RenderFractionallySizedBox {
         constraints: BoxConstraints,
         baseline: flui_rendering::traits::TextBaseline,
         ctx: &mut flui_rendering::context::BoxDryBaselineCtx<'_>,
-    ) -> Option<f64> {
+    ) -> flui_rendering::RenderResult<Option<f64>> {
         if ctx.child_count() == 0 {
-            return None;
+            return Ok(None);
         }
         let child_constraints = self.child_constraints(constraints);
-        let child_baseline = ctx.child_dry_baseline(0, child_constraints, baseline)?;
-        let child_size = ctx.child_dry_layout(0, child_constraints);
+        let Some(child_baseline) = ctx.child_dry_baseline(0, child_constraints, baseline)? else {
+            return Ok(None);
+        };
+        let child_size = ctx.child_dry_layout(0, child_constraints)?;
         let size = constraints.constrain(child_size);
         let offset = self.align_child(size, child_size);
-        Some(child_baseline + offset.dy)
+        Ok(Some(child_baseline + offset.dy))
     }
 }
 

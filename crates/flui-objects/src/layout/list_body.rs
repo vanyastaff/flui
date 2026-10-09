@@ -129,30 +129,34 @@ impl RenderListBody {
         &self,
         constraints: BoxConstraints,
         child_count: usize,
-        mut measure: impl FnMut(usize, BoxConstraints) -> Size,
-    ) -> Size {
+        mut measure: impl FnMut(usize, BoxConstraints) -> flui_rendering::RenderResult<Size>,
+    ) -> flui_rendering::RenderResult<Size> {
         self.debug_check_constraints(constraints);
         let child_constraints = self.child_constraints(constraints);
         let mut main_extent = 0.0;
         for i in 0..child_count {
-            main_extent += self.child_main_extent(measure(i, child_constraints));
+            main_extent += self.child_main_extent(measure(i, child_constraints)?);
         }
-        self.constrain_size(constraints, main_extent)
+        Ok(self.constrain_size(constraints, main_extent))
     }
 
     fn horizontal_intrinsic(
         &self,
         ctx: &mut BoxIntrinsicsCtx<'_>,
         extent: f64,
-        mut child_query: impl FnMut(&mut BoxIntrinsicsCtx<'_>, usize, f64) -> f64,
-    ) -> f64 {
+        mut child_query: impl FnMut(
+            &mut BoxIntrinsicsCtx<'_>,
+            usize,
+            f64,
+        ) -> flui_rendering::RenderResult<f64>,
+    ) -> flui_rendering::RenderResult<f64> {
         match self.main_axis() {
             Axis::Horizontal => (0..ctx.child_count())
                 .map(|i| child_query(ctx, i, extent))
                 .sum(),
             Axis::Vertical => (0..ctx.child_count())
                 .map(|i| child_query(ctx, i, extent))
-                .fold(0.0_f64, f64::max),
+                .try_fold(0.0_f64, |max, value| Ok(max.max(value?))),
         }
     }
 
@@ -160,15 +164,19 @@ impl RenderListBody {
         &self,
         ctx: &mut BoxIntrinsicsCtx<'_>,
         extent: f64,
-        mut child_query: impl FnMut(&mut BoxIntrinsicsCtx<'_>, usize, f64) -> f64,
-    ) -> f64 {
+        mut child_query: impl FnMut(
+            &mut BoxIntrinsicsCtx<'_>,
+            usize,
+            f64,
+        ) -> flui_rendering::RenderResult<f64>,
+    ) -> flui_rendering::RenderResult<f64> {
         match self.main_axis() {
             Axis::Horizontal => (0..ctx.child_count())
                 .map(|i| child_query(ctx, i, extent))
                 .sum(),
             Axis::Vertical => (0..ctx.child_count())
                 .map(|i| child_query(ctx, i, extent))
-                .fold(0.0_f64, f64::max),
+                .try_fold(0.0_f64, |max, value| Ok(max.max(value?))),
         }
     }
 }
@@ -192,7 +200,7 @@ impl RenderBox for RenderListBody {
     fn perform_layout(
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Variable, Self::ParentData>,
-    ) -> Size {
+    ) -> flui_rendering::RenderResult<Size> {
         let constraints = *ctx.constraints();
         self.debug_check_constraints(constraints);
         self.child_count = ctx.child_count();
@@ -203,7 +211,7 @@ impl RenderBox for RenderListBody {
         let mut main_extent = 0.0;
 
         for i in 0..self.child_count {
-            let size = ctx.layout_child(i, child_constraints);
+            let size = ctx.layout_child(i, child_constraints)?;
             main_extent += self.child_main_extent(size);
             child_sizes.push(size);
         }
@@ -225,44 +233,60 @@ impl RenderBox for RenderListBody {
                 let slot = baseline_kind_index(kind);
                 if self.reported_baselines[slot].is_none() {
                     self.reported_baselines[slot] = ctx
-                        .child_distance_to_actual_baseline(i, kind)
+                        .child_distance_to_actual_baseline(i, kind)?
                         .map(|baseline| baseline + offset.dy);
                 }
             }
         }
 
-        size
+        Ok(size)
     }
 
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
         ctx: &mut BoxDryLayoutCtx<'_>,
-    ) -> Size {
+    ) -> flui_rendering::RenderResult<Size> {
         self.dry_size(constraints, ctx.child_count(), |i, c| {
             ctx.child_dry_layout(i, c)
         })
     }
 
-    fn compute_min_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_min_intrinsic_width(
+        &self,
+        height: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         self.horizontal_intrinsic(ctx, height, |ctx, i, extent| {
             ctx.child_min_intrinsic_width(i, extent)
         })
     }
 
-    fn compute_max_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_max_intrinsic_width(
+        &self,
+        height: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         self.horizontal_intrinsic(ctx, height, |ctx, i, extent| {
             ctx.child_max_intrinsic_width(i, extent)
         })
     }
 
-    fn compute_min_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_min_intrinsic_height(
+        &self,
+        width: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         self.vertical_intrinsic(ctx, width, |ctx, i, extent| {
             ctx.child_min_intrinsic_height(i, extent)
         })
     }
 
-    fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_max_intrinsic_height(
+        &self,
+        width: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         self.vertical_intrinsic(ctx, width, |ctx, i, extent| {
             ctx.child_max_intrinsic_height(i, extent)
         })
@@ -273,7 +297,7 @@ impl RenderBox for RenderListBody {
         constraints: BoxConstraints,
         baseline: TextBaseline,
         ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f64> {
+    ) -> flui_rendering::RenderResult<Option<f64>> {
         self.debug_check_constraints(constraints);
         let child_constraints = self.child_constraints(constraints);
         match self.axis_direction {
@@ -281,44 +305,47 @@ impl RenderBox for RenderListBody {
                 let mut result: Option<f64> = None;
                 for i in 0..ctx.child_count() {
                     if let Some(child_baseline) =
-                        ctx.child_dry_baseline(i, child_constraints, baseline)
+                        ctx.child_dry_baseline(i, child_constraints, baseline)?
                     {
                         result = Some(result.map_or(child_baseline, |v| v.min(child_baseline)));
                     }
                 }
-                result
+                Ok(result)
             }
             TopToBottom | BottomToTop => {
                 if self.axis_direction == TopToBottom {
                     let mut main_extent = 0.0;
                     for i in 0..ctx.child_count() {
                         if let Some(child_baseline) =
-                            ctx.child_dry_baseline(i, child_constraints, baseline)
+                            ctx.child_dry_baseline(i, child_constraints, baseline)?
                         {
-                            return Some(child_baseline + main_extent);
+                            return Ok(Some(child_baseline + main_extent));
                         }
                         main_extent +=
-                            self.child_main_extent(ctx.child_dry_layout(i, child_constraints));
+                            self.child_main_extent(ctx.child_dry_layout(i, child_constraints)?);
                     }
                 } else {
                     let mut main_extent = 0.0;
                     for i in (0..ctx.child_count()).rev() {
                         if let Some(child_baseline) =
-                            ctx.child_dry_baseline(i, child_constraints, baseline)
+                            ctx.child_dry_baseline(i, child_constraints, baseline)?
                         {
-                            return Some(child_baseline + main_extent);
+                            return Ok(Some(child_baseline + main_extent));
                         }
                         main_extent +=
-                            self.child_main_extent(ctx.child_dry_layout(i, child_constraints));
+                            self.child_main_extent(ctx.child_dry_layout(i, child_constraints)?);
                     }
                 }
-                None
+                Ok(None)
             }
         }
     }
 
-    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f64> {
-        self.reported_baselines[baseline_kind_index(baseline)]
+    fn compute_distance_to_actual_baseline(
+        &self,
+        baseline: TextBaseline,
+    ) -> flui_rendering::RenderResult<Option<f64>> {
+        Ok(self.reported_baselines[baseline_kind_index(baseline)])
     }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {

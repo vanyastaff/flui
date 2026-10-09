@@ -175,17 +175,20 @@ impl RenderBox for RenderConstraintsTransformBox {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
         let constraints = *ctx.constraints();
 
         if ctx.child_count() == 0 {
             self.inner.clear_child_baselines();
             self.has_visual_overflow = false;
-            return constraints.smallest();
+            return Ok(constraints.smallest());
         }
 
         let child_constraints = self.transform_constraints(constraints);
-        let child_size = ctx.layout_child(0, child_constraints);
+        let child_size = ctx.layout_child(0, child_constraints)?;
         let our_size = constraints.constrain(child_size);
 
         self.inner.align_child(ctx, our_size, child_size);
@@ -197,16 +200,19 @@ impl RenderBox for RenderConstraintsTransformBox {
             || child_offset.dy < 0.0
             || child_offset.dx + child_size.width > our_size.width
             || child_offset.dy + child_size.height > our_size.height;
-        self.inner.record_child_baselines(ctx);
-        our_size
+        self.inner.record_child_baselines(ctx)?;
+        Ok(our_size)
     }
 
     /// Serves the live baseline recorded at the last layout, shifted by the
     /// aligned child offset (`child_baseline + offset.dy`). Without this override the trait
     /// default returns `None` and the `record_child_baselines` call above
     /// would be a dead write.
-    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f64> {
-        self.inner.actual_baseline(baseline)
+    fn compute_distance_to_actual_baseline(
+        &self,
+        baseline: TextBaseline,
+    ) -> flui_rendering::RenderResult<Option<f64>> {
+        Ok(self.inner.actual_baseline(baseline))
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
@@ -236,36 +242,52 @@ impl RenderBox for RenderConstraintsTransformBox {
     // intrinsics doc). A freed axis must probe the child at that axis'
     // infinite extent, exactly as layout would.
 
-    fn compute_min_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_min_intrinsic_width(
+        &self,
+        height: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         if ctx.child_count() == 0 {
-            return 0.0;
+            return Ok(0.0);
         }
         let probe = BoxConstraints::new(0.0, f64::INFINITY, 0.0, height);
         let transformed = self.transform_constraints(probe);
         ctx.child_min_intrinsic_width(0, transformed.max_height)
     }
 
-    fn compute_max_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_max_intrinsic_width(
+        &self,
+        height: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         if ctx.child_count() == 0 {
-            return 0.0;
+            return Ok(0.0);
         }
         let probe = BoxConstraints::new(0.0, f64::INFINITY, 0.0, height);
         let transformed = self.transform_constraints(probe);
         ctx.child_max_intrinsic_width(0, transformed.max_height)
     }
 
-    fn compute_min_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_min_intrinsic_height(
+        &self,
+        width: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         if ctx.child_count() == 0 {
-            return 0.0;
+            return Ok(0.0);
         }
         let probe = BoxConstraints::new(0.0, width, 0.0, f64::INFINITY);
         let transformed = self.transform_constraints(probe);
         ctx.child_min_intrinsic_height(0, transformed.max_width)
     }
 
-    fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_max_intrinsic_height(
+        &self,
+        width: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         if ctx.child_count() == 0 {
-            return 0.0;
+            return Ok(0.0);
         }
         let probe = BoxConstraints::new(0.0, width, 0.0, f64::INFINITY);
         let transformed = self.transform_constraints(probe);
@@ -279,13 +301,13 @@ impl RenderBox for RenderConstraintsTransformBox {
         &self,
         constraints: BoxConstraints,
         ctx: &mut BoxDryLayoutCtx<'_>,
-    ) -> Size {
+    ) -> flui_rendering::RenderResult<Size> {
         if ctx.child_count() == 0 {
-            return constraints.smallest();
+            return Ok(constraints.smallest());
         }
         let child_constraints = self.transform_constraints(constraints);
-        let child_size = ctx.child_dry_layout(0, child_constraints);
-        constraints.constrain(child_size)
+        let child_size = ctx.child_dry_layout(0, child_constraints)?;
+        Ok(constraints.constrain(child_size))
     }
 
     fn compute_dry_baseline(
@@ -293,16 +315,18 @@ impl RenderBox for RenderConstraintsTransformBox {
         constraints: BoxConstraints,
         baseline: TextBaseline,
         ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f64> {
+    ) -> flui_rendering::RenderResult<Option<f64>> {
         if ctx.child_count() == 0 {
-            return None;
+            return Ok(None);
         }
         let child_constraints = self.transform_constraints(constraints);
-        let child_size = ctx.child_dry_layout(0, child_constraints);
+        let child_size = ctx.child_dry_layout(0, child_constraints)?;
         let our_size = constraints.constrain(child_size);
-        let child_baseline = ctx.child_dry_baseline(0, child_constraints, baseline)?;
+        let Some(child_baseline) = ctx.child_dry_baseline(0, child_constraints, baseline)? else {
+            return Ok(None);
+        };
         let child_offset: Offset = self.inner.dry_child_offset(our_size, child_size);
-        Some(child_baseline + child_offset.dy)
+        Ok(Some(child_baseline + child_offset.dy))
     }
 }
 

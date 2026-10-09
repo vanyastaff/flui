@@ -86,11 +86,13 @@ fn paragraph_scene(
     let mut painter = TextPainter::new()
         .with_text(TextSpan::new(text).with_style(style))
         .with_text_direction(TextDirection::Ltr);
-    painter.layout(
-        &mut flui_painting::TextContext::new(&flui_painting::FontCollection::new()),
-        0.0,
-        f64::from(SIDE as f32 * 4.0),
-    );
+    painter
+        .layout(
+            &mut flui_painting::TextContext::new(&flui_painting::FontCollection::new()),
+            0.0,
+            f64::from(SIDE as f32 * 4.0),
+        )
+        .expect("readback fixture has valid layout inputs");
     let mut canvas = Canvas::new();
     decorate(&mut canvas, &mut |canvas| {
         painter.paint(canvas, Offset::ZERO);
@@ -157,7 +159,9 @@ fn laid_out(
     let mut painter = TextPainter::new()
         .with_text(TextSpan::new(text).with_style(style))
         .with_text_direction(direction);
-    painter.layout(&mut flui_painting::TextContext::new(fonts), 0.0, max_width);
+    painter
+        .layout(&mut flui_painting::TextContext::new(fonts), 0.0, max_width)
+        .expect("readback fixture has valid layout inputs");
     painter
 }
 
@@ -403,11 +407,13 @@ fn arabic_rtl_right_aligns_each_line(renderer: &crate::headless::HeadlessRendere
         "the loose and tight boxes differ"
     );
     for (min_width, allocation) in [(0.0, longest), (max_width, max_width)] {
-        painter.layout(
-            &mut flui_painting::TextContext::new(&fonts),
-            min_width,
-            max_width,
-        );
+        painter
+            .layout(
+                &mut flui_painting::TextContext::new(&fonts),
+                min_width,
+                max_width,
+            )
+            .expect("readback fixture has valid layout inputs");
         assert!((painter.width() - allocation).abs() < 0.01);
         let pixels = read_back(renderer, &painter, 1.0);
         let right = ORIGIN.dx + allocation;
@@ -533,6 +539,7 @@ fn colliding_font_scene(text: &str, family: &str) -> flui_layer::Scene {
             max_lines: None,
             ellipsis: None,
         })
+        .expect("readback fixture has valid shaping inputs")
         .to_shaped(None);
     let paragraph = std::sync::Arc::new(
         flui_painting::testing::paragraph_with_font_ids(&paragraph, 1)
@@ -721,6 +728,7 @@ fn overlay(text: &mut flui_painting::TextContext, fps: f64) -> flui_layer::Perfo
             diagnostic_line: Some("present_p99=16ms input_p99=24ms"),
         },
     )
+    .expect("overlay fixture has valid shaping inputs")
 }
 
 /// The channels of a pixel that must each exceed every channel of the
@@ -840,6 +848,7 @@ fn overlay_frames_do_not_grow_the_glyph_registry(renderer: &crate::headless::Hea
             max_lines: None,
             ellipsis: None,
         })
+        .expect("readback fixture has valid shaping inputs")
         .to_shaped(None),
     );
     let app_picture = || {

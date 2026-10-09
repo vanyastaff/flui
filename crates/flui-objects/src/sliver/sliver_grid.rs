@@ -289,14 +289,14 @@ impl RenderSliver for RenderSliverGrid {
     fn perform_layout(
         &mut self,
         ctx: &mut SliverLayoutContext<'_, Variable, Self::ParentData>,
-    ) -> SliverGeometry {
+    ) -> flui_rendering::RenderResult<SliverGeometry> {
         let constraints = *ctx.constraints();
 
         // ── 1. Empty grid ─────────────────────────────────────────────────────
         if self.item_count == 0 {
             self.attached_child_count = 0;
             ctx.emit_retain_band(0, 0);
-            return SliverGeometry::ZERO;
+            return Ok(SliverGeometry::ZERO);
         }
 
         // ── 2. Grid layout from delegate ──────────────────────────────────────
@@ -314,11 +314,11 @@ impl RenderSliver for RenderSliverGrid {
                     item_count = self.item_count,
                     render_object = "RenderSliverGrid",
                     "lazy grid received a NaN or +∞ leading cache/scroll edge; \
-                     emitting an empty retain band so index math cannot saturate to usize::MAX"
+                 emitting an empty retain band so index math cannot saturate to usize::MAX"
                 );
                 self.attached_child_count = ctx.child_count();
                 ctx.emit_retain_band(0, 0);
-                return poison_window_geometry(&tile_layout, self.item_count);
+                return Ok(poison_window_geometry(&tile_layout, self.item_count));
             }
             CacheWindow::PoisonTrailing { .. } => {
                 tracing::error!(
@@ -328,11 +328,11 @@ impl RenderSliver for RenderSliverGrid {
                     item_count = self.item_count,
                     render_object = "RenderSliverGrid",
                     "lazy grid received a non-finite trailing cache edge that is not \
-                     +∞; emitting an empty retain band so index math cannot saturate to usize::MAX"
+                 +∞; emitting an empty retain band so index math cannot saturate to usize::MAX"
                 );
                 self.attached_child_count = ctx.child_count();
                 ctx.emit_retain_band(0, 0);
-                return poison_window_geometry(&tile_layout, self.item_count);
+                return Ok(poison_window_geometry(&tile_layout, self.item_count));
             }
             CacheWindow::Bounded {
                 cache_start,
@@ -384,10 +384,10 @@ impl RenderSliver for RenderSliverGrid {
                             threshold = MAX_UNBOUNDED_WINDOW_CHILDREN,
                             window = UNBOUNDED_SENTINEL_WINDOW,
                             "lazy grid asked to fill an unbounded main axis declares \
-                             more children than any real data source has; reading the \
-                             count as an undefined-count stand-in and serving a small \
-                             bounded window instead, so the committed extent is far \
-                             short of the declared content"
+                         more children than any real data source has; reading the \
+                         count as an undefined-count stand-in and serving a small \
+                         bounded window instead, so the committed extent is far \
+                         short of the declared content"
                         );
                     }
                     (
@@ -409,11 +409,11 @@ impl RenderSliver for RenderSliverGrid {
             self.attached_child_count = ctx.child_count();
             // Empty retain band tells the element tree to evict all off-window children.
             ctx.emit_retain_band(first_in_window, first_in_window);
-            return SliverGeometry {
+            return Ok(SliverGeometry {
                 scroll_extent,
                 max_paint_extent: scroll_extent,
                 ..SliverGeometry::ZERO
-            };
+            });
         }
 
         // ── 4. Reconcile logical-index → dense-slot from parent data ──────────
@@ -428,7 +428,7 @@ impl RenderSliver for RenderSliverGrid {
                 debug_assert!(
                     previous.is_none(),
                     "BUG: lazy grid has two attached children stamped with logical index {} \
-                     (dense slots {:?} and {slot})",
+                 (dense slots {:?} and {slot})",
                     pd.index,
                     previous,
                 );
@@ -449,7 +449,7 @@ impl RenderSliver for RenderSliverGrid {
         // element tree owns construction.
         for logical_index in first_in_window..=last_in_window {
             if let Some(&slot) = self.logical_to_slot.get(&logical_index) {
-                ctx.layout_box_child(slot, tile_constraints);
+                ctx.layout_box_child(slot, tile_constraints)?;
             } else {
                 // Absent — emit a build request.  The element tree's
                 // `SliverAdaptorManager<RenderSliverGrid>::service` builds it between
@@ -537,7 +537,7 @@ impl RenderSliver for RenderSliverGrid {
         // itself, which is what avoids an ABA double-remove between the two.
         ctx.emit_retain_band(first_in_window, last_in_window + 1);
 
-        geometry
+        Ok(geometry)
     }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {

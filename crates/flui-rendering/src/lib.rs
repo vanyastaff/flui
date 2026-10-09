@@ -22,27 +22,31 @@
 //!
 //! # Example
 //!
-//! ```ignore
-//! use flui_rendering::prelude::*;
+//! ```
+//! use flui_foundation::{Leaf, geometry::Size};
+//! use flui_rendering::{
+//!     RenderResult,
+//!     context::{BoxLayoutContext, PaintCx},
+//!     parent_data::BoxParentData,
+//!     traits::RenderBox,
+//! };
 //!
-//! // Implement a simple render object
-//! struct MyRenderBox {
-//!     size: Size,
-//! }
+//! #[derive(Debug)]
+//! struct MyRenderBox { preferred_size: Size }
+//! impl flui_foundation::Diagnosticable for MyRenderBox {}
 //!
 //! impl RenderBox for MyRenderBox {
-//!     fn perform_layout(&mut self, constraints: BoxConstraints) -> Size {
-//!         self.size = constraints.biggest();
-//!         self.size
+//!     type Arity = Leaf;
+//!     type ParentData = BoxParentData;
+//!
+//!     fn perform_layout(
+//!         &mut self,
+//!         ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+//!     ) -> RenderResult<Size> {
+//!         Ok(ctx.constrain(self.preferred_size))
 //!     }
 //!
-//!     fn size(&self) -> Size {
-//!         self.size
-//!     }
-//!
-//!     fn paint(&self, context: &mut CanvasContext, offset: Offset) {
-//!         // Paint implementation
-//!     }
+//!     fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
 //! }
 //! ```
 

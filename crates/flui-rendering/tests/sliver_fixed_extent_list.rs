@@ -50,8 +50,11 @@ impl RenderBox for FixedHitBox {
     type Arity = Leaf;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, Self::ParentData>) -> Size {
-        ctx.constraints().constrain(self.desired)
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Leaf, Self::ParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok(ctx.constraints().constrain(self.desired))
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
@@ -76,11 +79,13 @@ impl RenderBox for SliverHost {
     fn perform_layout(
         &mut self,
         ctx: &mut BoxLayoutContext<'_, flui_foundation::Variable, Self::ParentData>,
-    ) -> Size {
-        if ctx.child_count() > 0 {
-            let _ = ctx.layout_sliver_child(0, self.constraints);
-        }
-        ctx.constraints().biggest()
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok({
+            if ctx.child_count() > 0 {
+                let _ = ctx.layout_sliver_child(0, self.constraints)?;
+            }
+            ctx.constraints().biggest()
+        })
     }
 
     fn hit_test(

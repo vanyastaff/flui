@@ -314,7 +314,10 @@ impl RenderBox for RenderAnimatedSize {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
         self.has_visual_overflow = false;
         let constraints = *ctx.constraints();
 
@@ -323,19 +326,19 @@ impl RenderBox for RenderAnimatedSize {
         // consistent) but `align_child` is deliberately NOT called — the
         // child keeps whatever offset it had, possibly stale.
         if ctx.child_count() == 0 || constraints.is_tight() {
+            if ctx.child_count() > 0 {
+                ctx.layout_single_child()?;
+            }
             let _ = self.controller.stop();
             let snapped = constraints.smallest();
             self.size_tween = SizeTween::new(snapped, snapped);
             self.state = AnimatedSizeState::Start;
-            if ctx.child_count() > 0 {
-                ctx.layout_single_child();
-            }
             self.current_size = snapped;
-            return snapped;
+            return Ok(snapped);
         }
 
         // Full, un-loosened constraints — matching the parent's own.
-        let child_size = ctx.layout_single_child();
+        let child_size = ctx.layout_single_child()?;
         match self.state {
             AnimatedSizeState::Start => self.layout_start(child_size),
             AnimatedSizeState::Stable => self.layout_stable(child_size),
@@ -347,40 +350,59 @@ impl RenderBox for RenderAnimatedSize {
         let size = constraints.constrain(animated_size);
         self.current_size = size;
         self.inner.align_child(ctx, size, child_size);
-        self.inner.record_child_baselines(ctx);
+        self.inner.record_child_baselines(ctx)?;
         self.has_visual_overflow =
             size.width < self.size_tween.end.width || size.height < self.size_tween.end.height;
-        size
+        Ok(size)
     }
 
-    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f64> {
-        self.inner.actual_baseline(baseline)
+    fn compute_distance_to_actual_baseline(
+        &self,
+        baseline: TextBaseline,
+    ) -> flui_rendering::RenderResult<Option<f64>> {
+        Ok(self.inner.actual_baseline(baseline))
     }
 
-    fn compute_min_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_min_intrinsic_width(
+        &self,
+        height: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         if ctx.child_count() == 0 {
-            return 0.0;
+            return Ok(0.0);
         }
         ctx.child_min_intrinsic_width(0, height)
     }
 
-    fn compute_max_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_max_intrinsic_width(
+        &self,
+        height: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         if ctx.child_count() == 0 {
-            return 0.0;
+            return Ok(0.0);
         }
         ctx.child_max_intrinsic_width(0, height)
     }
 
-    fn compute_min_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_min_intrinsic_height(
+        &self,
+        width: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         if ctx.child_count() == 0 {
-            return 0.0;
+            return Ok(0.0);
         }
         ctx.child_min_intrinsic_height(0, width)
     }
 
-    fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_max_intrinsic_height(
+        &self,
+        width: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         if ctx.child_count() == 0 {
-            return 0.0;
+            return Ok(0.0);
         }
         ctx.child_max_intrinsic_height(0, width)
     }
@@ -389,12 +411,12 @@ impl RenderBox for RenderAnimatedSize {
         &self,
         constraints: BoxConstraints,
         ctx: &mut BoxDryLayoutCtx<'_>,
-    ) -> Size {
+    ) -> flui_rendering::RenderResult<Size> {
         if ctx.child_count() == 0 || constraints.is_tight() {
-            return constraints.smallest();
+            return Ok(constraints.smallest());
         }
-        let child_size = ctx.child_dry_layout(0, constraints);
-        self.dry_size_for(constraints, child_size)
+        let child_size = ctx.child_dry_layout(0, constraints)?;
+        Ok(self.dry_size_for(constraints, child_size))
     }
 
     fn compute_dry_baseline(
@@ -402,19 +424,21 @@ impl RenderBox for RenderAnimatedSize {
         constraints: BoxConstraints,
         baseline: TextBaseline,
         ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f64> {
+    ) -> flui_rendering::RenderResult<Option<f64>> {
         if ctx.child_count() == 0 {
-            return None;
+            return Ok(None);
         }
-        let child_baseline = ctx.child_dry_baseline(0, constraints, baseline)?;
-        let child_size = ctx.child_dry_layout(0, constraints);
+        let Some(child_baseline) = ctx.child_dry_baseline(0, constraints, baseline)? else {
+            return Ok(None);
+        };
+        let child_size = ctx.child_dry_layout(0, constraints)?;
         let my_size = if constraints.is_tight() {
             constraints.smallest()
         } else {
             self.dry_size_for(constraints, child_size)
         };
         let offset = self.inner.dry_child_offset(my_size, child_size);
-        Some(child_baseline + offset.dy)
+        Ok(Some(child_baseline + offset.dy))
     }
 
     // Closure is load-bearing: `PaintCx::paint_child` is ambiguous as a method path

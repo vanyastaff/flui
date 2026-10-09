@@ -54,26 +54,37 @@ impl RenderBox for CountingLeaf {
     type Arity = Leaf;
     type ParentData = flui_rendering::parent_data::BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, Self::ParentData>) -> Size {
-        ctx.constraints().constrain(Size::new(40.0, 40.0))
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Leaf, Self::ParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok(ctx.constraints().constrain(Size::new(40.0, 40.0)))
     }
 
     fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
         false
     }
 
-    fn compute_min_intrinsic_width(&self, _height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.intrinsic_runs.fetch_add(1, Ordering::Relaxed);
-        40.0
+    fn compute_min_intrinsic_width(
+        &self,
+        _height: f64,
+        _ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok({
+            self.intrinsic_runs.fetch_add(1, Ordering::Relaxed);
+            40.0
+        })
     }
 
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
         _ctx: &mut BoxDryLayoutCtx<'_>,
-    ) -> Size {
-        self.dry_runs.fetch_add(1, Ordering::Relaxed);
-        constraints.constrain(Size::new(40.0, 40.0))
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok({
+            self.dry_runs.fetch_add(1, Ordering::Relaxed);
+            constraints.constrain(Size::new(40.0, 40.0))
+        })
     }
 }
 
@@ -100,25 +111,33 @@ impl RenderBox for CountingRoot {
     fn perform_layout(
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Variable, Self::ParentData>,
-    ) -> Size {
-        self.layout_runs.fetch_add(1, Ordering::Relaxed);
-        let constraints = *ctx.constraints();
-        for i in 0..ctx.child_count() {
-            ctx.layout_child(i, constraints.loosen());
-        }
-        constraints.biggest()
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok({
+            self.layout_runs.fetch_add(1, Ordering::Relaxed);
+            let constraints = *ctx.constraints();
+            for i in 0..ctx.child_count() {
+                ctx.layout_child(i, constraints.loosen())?;
+            }
+            constraints.biggest()
+        })
     }
 
     fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Variable, Self::ParentData>) -> bool {
         false
     }
 
-    fn compute_min_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        let mut max = 0.0_f64;
-        for i in 0..ctx.child_count() {
-            max = max.max(ctx.child_min_intrinsic_width(i, height));
-        }
-        max
+    fn compute_min_intrinsic_width(
+        &self,
+        height: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok({
+            let mut max = 0.0_f64;
+            for i in 0..ctx.child_count() {
+                max = max.max(ctx.child_min_intrinsic_width(i, height)?);
+            }
+            max
+        })
     }
 }
 

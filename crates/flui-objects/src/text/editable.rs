@@ -46,6 +46,7 @@ use flui_painting::{
 };
 
 use flui_rendering::{
+    RenderResult,
     constraints::BoxConstraints,
     context::{
         BoxDryBaselineCtx, BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext,
@@ -645,9 +646,12 @@ impl RenderEditable {
     /// stay inside `box_rect`'s vertical span. Declared divergence from real
     /// font underline metrics — see the module doc's ADR-0030 note.
     fn underline_rect_for_box(&self, box_rect: Rect) -> Rect {
-        let baseline = self
-            .compute_distance_to_actual_baseline(TextBaseline::Alphabetic)
-            .unwrap_or_else(|| box_rect.height());
+        let baseline = if self.painter.has_layout() {
+            self.painter
+                .compute_distance_to_actual_baseline(PainterBaseline::Alphabetic)
+        } else {
+            box_rect.height()
+        };
         let top = box_rect.top();
         let max_top = (box_rect.bottom() - COMPOSING_UNDERLINE_THICKNESS).max(top);
         let y = (baseline + COMPOSING_UNDERLINE_GAP).clamp(top, max_top);
@@ -696,10 +700,13 @@ impl RenderBox for RenderEditable {
     type Arity = Leaf;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+    ) -> RenderResult<Size> {
         let constraints = *ctx.constraints();
         let (min_width, max_width) = self.text_width_constraints(&constraints);
-        self.painter.layout(&mut ctx.text(), min_width, max_width);
+        self.painter.layout(&mut ctx.text(), min_width, max_width)?;
         let size = self.size_for_text(&constraints, self.painter.size());
         let caret_position =
             TextPosition::downstream(self.safe_caret_offset(self.caret_byte_offset));
@@ -716,17 +723,19 @@ impl RenderBox for RenderEditable {
             self.scroll_x = (self.caret_offset.dx + self.caret_width - size.width).max(0.0);
         }
         self.caret_offset.dx -= self.scroll_x;
-        size
+        Ok(size)
     }
 
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
         ctx: &mut BoxDryLayoutCtx<'_>,
-    ) -> Size {
+    ) -> RenderResult<Size> {
         let (min_width, max_width) = self.text_width_constraints(&constraints);
-        let text_size = self.painter.dry_size(&mut ctx.text(), min_width, max_width);
-        self.size_for_text(&constraints, text_size)
+        let text_size = self
+            .painter
+            .dry_size(&mut ctx.text(), min_width, max_width)?;
+        Ok(self.size_for_text(&constraints, text_size))
     }
 
     fn compute_dry_baseline(
@@ -734,45 +743,67 @@ impl RenderBox for RenderEditable {
         constraints: BoxConstraints,
         baseline: TextBaseline,
         ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f64> {
+    ) -> RenderResult<Option<f64>> {
         let (min_width, max_width) = self.text_width_constraints(&constraints);
         let painter_baseline = match baseline {
             TextBaseline::Alphabetic => PainterBaseline::Alphabetic,
             TextBaseline::Ideographic => PainterBaseline::Ideographic,
         };
-        self.painter
-            .dry_baseline(&mut ctx.text(), min_width, max_width, painter_baseline)
+        Ok(self
+            .painter
+            .dry_baseline(&mut ctx.text(), min_width, max_width, painter_baseline)?)
     }
 
-    fn compute_min_intrinsic_width(&self, _height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.painter.min_intrinsic_width(&mut ctx.text()) + self.caret_margin()
+    fn compute_min_intrinsic_width(
+        &self,
+        _height: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> RenderResult<f64> {
+        Ok(self.painter.min_intrinsic_width(&mut ctx.text())? + self.caret_margin())
     }
 
-    fn compute_max_intrinsic_width(&self, _height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.painter.max_intrinsic_width(&mut ctx.text()) + self.caret_margin()
+    fn compute_max_intrinsic_width(
+        &self,
+        _height: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> RenderResult<f64> {
+        Ok(self.painter.max_intrinsic_width(&mut ctx.text())? + self.caret_margin())
     }
 
-    fn compute_min_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.painter
-            .intrinsic_height(&mut ctx.text(), self.intrinsic_text_width(width))
-            .max(self.caret_height.unwrap_or(0.0))
+    fn compute_min_intrinsic_height(
+        &self,
+        width: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> RenderResult<f64> {
+        Ok(self
+            .painter
+            .intrinsic_height(&mut ctx.text(), self.intrinsic_text_width(width))?
+            .max(self.caret_height.unwrap_or(0.0)))
     }
 
-    fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.painter
-            .intrinsic_height(&mut ctx.text(), self.intrinsic_text_width(width))
-            .max(self.caret_height.unwrap_or(0.0))
+    fn compute_max_intrinsic_height(
+        &self,
+        width: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> RenderResult<f64> {
+        Ok(self
+            .painter
+            .intrinsic_height(&mut ctx.text(), self.intrinsic_text_width(width))?
+            .max(self.caret_height.unwrap_or(0.0)))
     }
 
-    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f64> {
+    fn compute_distance_to_actual_baseline(
+        &self,
+        baseline: TextBaseline,
+    ) -> RenderResult<Option<f64>> {
         let painter_baseline = match baseline {
             TextBaseline::Alphabetic => PainterBaseline::Alphabetic,
             TextBaseline::Ideographic => PainterBaseline::Ideographic,
         };
-        self.painter.has_layout().then(|| {
+        Ok(self.painter.has_layout().then(|| {
             self.painter
                 .compute_distance_to_actual_baseline(painter_baseline)
-        })
+        }))
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Leaf, BoxParentData>) -> bool {

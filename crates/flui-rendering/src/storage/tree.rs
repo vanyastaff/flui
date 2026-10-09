@@ -962,8 +962,11 @@ mod tests {
     impl RenderBox for LeafStub {
         type Arity = Leaf;
         type ParentData = BoxParentData;
-        fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-            Size::new(10.0, 10.0)
+        fn perform_layout(
+            &mut self,
+            _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+        ) -> crate::RenderResult<Size> {
+            Ok(Size::new(10.0, 10.0))
         }
         fn paint(&self, _ctx: &mut crate::context::PaintCx<'_, Leaf>) {}
     }

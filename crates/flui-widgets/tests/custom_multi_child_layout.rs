@@ -22,18 +22,23 @@ impl MultiChildLayoutDelegate for TwoSlotDelegate {
         self.size
     }
 
-    fn perform_layout(&self, context: &mut dyn MultiChildLayoutContext, parent_size: Size) {
+    fn perform_layout(
+        &self,
+        context: &mut dyn MultiChildLayoutContext,
+        parent_size: Size,
+    ) -> flui_rendering::RenderResult<()> {
         if context.has_child("header") {
             context.layout_child(
                 "header",
                 BoxConstraints::tight(Size::new(parent_size.width, size(20.0, 20.0).height)),
-            );
+            )?;
             context.position_child("header", Offset::ZERO);
         }
         if context.has_child("body") {
-            context.layout_child("body", BoxConstraints::tight(size(70.0, 30.0)));
+            context.layout_child("body", BoxConstraints::tight(size(70.0, 30.0)))?;
             context.position_child("body", offset(10.0, 25.0));
         }
+        Ok(())
     }
 
     fn should_relayout(&self, old_delegate: &dyn MultiChildLayoutDelegate) -> bool {

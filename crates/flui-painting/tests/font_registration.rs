@@ -73,7 +73,9 @@ fn a_face_registered_on_the_collection_reaches_measurement_paint_and_carets() {
     let fonts = FontCollection::with_host_fonts(&HostFonts::scan());
     let mut text_cx = TextContext::new(&fonts);
     let mut painter = probe_painter("iiii wwww");
-    painter.layout(&mut text_cx, 0.0, WIDTH);
+    painter
+        .layout(&mut text_cx, 0.0, WIDTH)
+        .expect("valid fixture lays out");
     let measured = painter.size();
     let painted = painted_paragraph(&painter);
     let caret_width = caret_line_width(&painter);
@@ -91,7 +93,9 @@ fn a_face_registered_on_the_collection_reaches_measurement_paint_and_carets() {
              layout it already had"
         );
     }
-    painter.layout(&mut text_cx, 0.0, WIDTH);
+    painter
+        .layout(&mut text_cx, 0.0, WIDTH)
+        .expect("valid fixture lays out");
 
     // In the proportional fallback 'iiii' and 'wwww' differ in width, in the
     // monospace probe they do not, so each side moves by more than rounding.
@@ -133,7 +137,9 @@ fn probe_faces(fonts: &FontCollection, weight: FontWeight) -> Vec<FaceKey> {
     let mut painter = TextPainter::new()
         .with_text(TextSpan::new("AAAA").with_style(style))
         .with_text_direction(TextDirection::Ltr);
-    painter.layout(&mut TextContext::new(fonts), 0.0, WIDTH);
+    painter
+        .layout(&mut TextContext::new(fonts), 0.0, WIDTH)
+        .expect("valid fixture lays out");
     painted_faces(&painted_paragraph(&painter))
 }
 

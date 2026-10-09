@@ -86,14 +86,19 @@ impl RenderBox for SimpleRow {
     type Arity = Variable;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>) -> Size {
-        let constraints = *ctx.constraints();
-        for i in 0..ctx.child_count() {
-            let _ = ctx.layout_child(i, constraints);
-            #[expect(clippy::cast_precision_loss)] // test fixture, i < 3
-            ctx.position_child(i, Offset::new(i as f64 * 50.0, 0.0));
-        }
-        constraints.constrain(Size::new(150.0, 50.0))
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok({
+            let constraints = *ctx.constraints();
+            for i in 0..ctx.child_count() {
+                let _ = ctx.layout_child(i, constraints)?;
+                #[expect(clippy::cast_precision_loss)] // test fixture, i < 3
+                ctx.position_child(i, Offset::new(i as f64 * 50.0, 0.0));
+            }
+            constraints.constrain(Size::new(150.0, 50.0))
+        })
     }
 
     fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Variable, BoxParentData>) -> bool {

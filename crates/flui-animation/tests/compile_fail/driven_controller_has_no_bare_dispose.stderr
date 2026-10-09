@@ -6,5 +6,5 @@ error[E0624]: method `dispose` is private
   |
  ::: crates/flui-animation/src/controller.rs
   |
-  |     pub(crate) fn dispose(&self, retirement: &mut Retirement) {
-  |     --------------------------------------------------------- private method defined here
+  |     pub(crate) fn dispose(&self, retirement: &mut RecoveryScope<'_>) {
+  |     ---------------------------------------------------------------- private method defined here

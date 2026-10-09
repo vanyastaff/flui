@@ -67,8 +67,11 @@ impl RenderBox for DetachCountingBox {
     type Arity = Leaf;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-        Size::new(self.side, self.side)
+    fn perform_layout(
+        &mut self,
+        _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok(Size::new(self.side, self.side))
     }
 
     fn detach(&mut self) {

@@ -171,7 +171,10 @@ impl RenderBox for RenderRotatedBox {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
         // Reads `quarter_turns` only through `is_vertical()` — see that
         // method's doc and `set_quarter_turns`'s fast path.
         let constraints = *ctx.constraints();
@@ -182,7 +185,7 @@ impl RenderBox for RenderRotatedBox {
             // Nothing to rotate: the smallest size the constraints allow,
             // whatever the turn. Flipping first would swap the
             // axes of a non-square constraint and answer a size outside it.
-            return constraints.smallest();
+            return Ok(constraints.smallest());
         }
         self.has_child = true;
 
@@ -193,7 +196,7 @@ impl RenderBox for RenderRotatedBox {
         } else {
             constraints
         };
-        let child_size = ctx.layout_child(0, child_constraints);
+        let child_size = ctx.layout_child(0, child_constraints)?;
         self.child_size = child_size;
 
         // Position child at origin — the paint matrix handles centering.
@@ -201,9 +204,9 @@ impl RenderBox for RenderRotatedBox {
 
         // Our claimed size: swap child dimensions for odd turns.
         if self.is_vertical() {
-            Size::new(child_size.height, child_size.width)
+            Ok(Size::new(child_size.height, child_size.width))
         } else {
-            child_size
+            Ok(child_size)
         }
     }
 
@@ -253,9 +256,13 @@ impl RenderBox for RenderRotatedBox {
     //
     // Odd quarter_turns swap width↔height axes; even turns pass through.
 
-    fn compute_min_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_min_intrinsic_width(
+        &self,
+        height: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         if ctx.child_count() == 0 {
-            return 0.0;
+            return Ok(0.0);
         }
         if self.is_vertical() {
             ctx.child_min_intrinsic_height(0, height)
@@ -264,9 +271,13 @@ impl RenderBox for RenderRotatedBox {
         }
     }
 
-    fn compute_max_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_max_intrinsic_width(
+        &self,
+        height: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         if ctx.child_count() == 0 {
-            return 0.0;
+            return Ok(0.0);
         }
         if self.is_vertical() {
             ctx.child_max_intrinsic_height(0, height)
@@ -275,9 +286,13 @@ impl RenderBox for RenderRotatedBox {
         }
     }
 
-    fn compute_min_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_min_intrinsic_height(
+        &self,
+        width: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         if ctx.child_count() == 0 {
-            return 0.0;
+            return Ok(0.0);
         }
         if self.is_vertical() {
             ctx.child_min_intrinsic_width(0, width)
@@ -286,9 +301,13 @@ impl RenderBox for RenderRotatedBox {
         }
     }
 
-    fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_max_intrinsic_height(
+        &self,
+        width: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         if ctx.child_count() == 0 {
-            return 0.0;
+            return Ok(0.0);
         }
         if self.is_vertical() {
             ctx.child_max_intrinsic_width(0, width)
@@ -301,22 +320,22 @@ impl RenderBox for RenderRotatedBox {
         &self,
         constraints: BoxConstraints,
         ctx: &mut BoxDryLayoutCtx<'_>,
-    ) -> Size {
+    ) -> flui_rendering::RenderResult<Size> {
         if ctx.child_count() == 0 {
             // Same answer as `perform_layout`'s childless branch: the turn
             // does not enter it.
-            return constraints.smallest();
+            return Ok(constraints.smallest());
         }
         let child_constraints = if self.is_vertical() {
             constraints.flipped()
         } else {
             constraints
         };
-        let child_size = ctx.child_dry_layout(0, child_constraints);
+        let child_size = ctx.child_dry_layout(0, child_constraints)?;
         if self.is_vertical() {
-            Size::new(child_size.height, child_size.width)
+            Ok(Size::new(child_size.height, child_size.width))
         } else {
-            child_size
+            Ok(child_size)
         }
     }
 
@@ -349,9 +368,9 @@ impl RenderBox for RenderRotatedBox {
         constraints: BoxConstraints,
         baseline: flui_rendering::traits::TextBaseline,
         ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f64> {
+    ) -> flui_rendering::RenderResult<Option<f64>> {
         if ctx.child_count() == 0 || self.is_vertical() {
-            return None;
+            return Ok(None);
         }
         ctx.child_dry_baseline(0, constraints, baseline)
     }

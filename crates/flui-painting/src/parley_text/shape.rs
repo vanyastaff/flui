@@ -27,7 +27,7 @@ use parley::style::{
 use parley::{Alignment, AlignmentOptions, FontData, Layout};
 
 use crate::text_layout::font_resolve::{Family, resolve_family_name};
-use crate::text_layout::{TextContext, TextLayoutResult, paint_color};
+use crate::text_layout::{TextContext, TextLayoutError, TextLayoutResult, paint_color};
 
 /// What one paragraph is shaped from.
 #[derive(Clone, Copy, Debug)]
@@ -401,20 +401,29 @@ impl InkBounds {
             self.unbounded = true;
             return;
         };
-        let slant = skew_slant(synthesis.skew_degrees) * y_max.abs().max(y_min.abs()) * size;
+        // Logical ink geometry is f64. Widen before arithmetic: finite
+        // backend coordinates can overflow when adding an aligned pen and
+        // the face's overhang in f32.
+        let [x_min, y_min, x_max, y_max] = [x_min, y_min, x_max, y_max].map(f64::from);
+        let logical_size = f64::from(size);
+        let slant = f64::from(skew_slant(synthesis.skew_degrees))
+            * y_max.abs().max(y_min.abs())
+            * logical_size;
         // `fake_bold_width` over two is at most `size / 48` per side at any
         // device scale: its ratio peaks at 1/24 for small sizes.
         let bold = if synthesis.embolden {
-            (fake_bold_width(size) / 2.0).max(size / 48.0)
+            (f64::from(fake_bold_width(size)) / 2.0).max(logical_size / 48.0)
         } else {
             0.0
         };
-        let margin = GLYPH_INK_MARGIN + 0.05 * size + bold;
+        let margin = f64::from(GLYPH_INK_MARGIN) + 0.05 * logical_size + bold;
+        let x = f64::from(x);
+        let y = f64::from(y);
         let rect = Rect::from_ltrb(
-            f64::from(x + x_min * size - slant - margin),
-            f64::from(y - y_max * size - margin),
-            f64::from(x + x_max * size + slant + margin),
-            f64::from(y - y_min * size + margin),
+            x + x_min * logical_size - slant - margin,
+            y - y_max * logical_size - margin,
+            x + x_max * logical_size + slant + margin,
+            y - y_min * logical_size + margin,
         );
         self.rect = Some(self.rect.map_or(rect, |ink| ink.union(&rect)));
     }
@@ -469,23 +478,126 @@ pub(super) fn is_hard_break(c: char) -> bool {
     )
 }
 
+fn validate_request(paragraph: &ParagraphSpec<'_>) -> Result<(), TextLayoutError> {
+    crate::text_layout::error::font_size(f64::from(paragraph.font_size))?;
+    crate::text_layout::error::width(f64::from(paragraph.min_width))?;
+    if let Some(width) = paragraph.max_width {
+        crate::text_layout::error::width(f64::from(width))?;
+    }
+    let default_height = paragraph.line_height.unwrap_or(paragraph.font_size * 1.2);
+    if !default_height.is_finite() || default_height < 0.0 {
+        return Err(TextLayoutError::InvalidLineHeight {
+            height: f64::from(default_height),
+        });
+    }
+    let default_size = paragraph
+        .default_style
+        .and_then(|style| style.font_size)
+        .unwrap_or(f64::from(paragraph.font_size));
+    for style in paragraph.default_style.into_iter().chain(
+        paragraph
+            .spans
+            .iter()
+            .filter_map(|(_, style)| style.as_ref()),
+    ) {
+        let size = crate::text_layout::error::font_size(style.font_size.unwrap_or(default_size))?;
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "check the backend representation"
+        )]
+        if let Some(height) = style.height {
+            let relative = height as f32;
+            let resolved = relative * size;
+            if relative < 0.0 || !relative.is_finite() || !resolved.is_finite() {
+                return Err(TextLayoutError::InvalidLineHeight { height });
+            }
+        } else if paragraph.line_height.is_none() && !(size * 1.2).is_finite() {
+            return Err(TextLayoutError::InvalidLineHeight {
+                height: f64::from(size * 1.2),
+            });
+        }
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "check the backend representation"
+        )]
+        for spacing in [style.letter_spacing, style.word_spacing]
+            .into_iter()
+            .flatten()
+        {
+            if !(spacing as f32).is_finite() {
+                return Err(TextLayoutError::InvalidSpacing { spacing });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_layout(paragraph: &ParagraphLayout) -> Result<(), TextLayoutError> {
+    let metrics = paragraph.metrics();
+    let values = [
+        metrics.width,
+        metrics.height,
+        metrics.max_line_width,
+        metrics.alphabetic_baseline,
+        metrics.ideographic_baseline,
+        paragraph.content_widths.0,
+        paragraph.content_widths.1,
+    ];
+    if values.into_iter().any(|value| !value.is_finite()) {
+        return Err(TextLayoutError::NonFiniteGeometry);
+    }
+    for line in paragraph.layout.lines() {
+        let metrics = line.metrics();
+        if [
+            metrics.ascent,
+            metrics.descent,
+            metrics.leading,
+            metrics.line_height,
+            metrics.baseline,
+            metrics.offset,
+            metrics.advance,
+            metrics.trailing_whitespace,
+            metrics.inline_min_coord,
+            metrics.inline_max_coord,
+            metrics.block_min_coord,
+            metrics.block_max_coord,
+        ]
+        .into_iter()
+        .any(|value| !value.is_finite())
+        {
+            return Err(TextLayoutError::NonFiniteGeometry);
+        }
+        for item in line.items() {
+            if let PositionedLayoutItem::GlyphRun(run) = item
+                && (!run.baseline().is_finite()
+                    || !run.advance().is_finite()
+                    || run.positioned_glyphs().any(|glyph| {
+                        !glyph.x.is_finite() || !glyph.y.is_finite() || !glyph.advance.is_finite()
+                    }))
+            {
+                return Err(TextLayoutError::NonFiniteGeometry);
+            }
+        }
+    }
+    Ok(())
+}
+
 impl TextContext {
     /// Shapes and line-breaks `paragraph` on this context's fonts.
-    pub fn shape(&mut self, paragraph: &ParagraphSpec<'_>) -> ParagraphLayout {
-        debug_assert!(
-            paragraph.font_size > 0.0 && paragraph.font_size.is_finite(),
-            "ParagraphSpec font_size must be positive and finite, got {}",
-            paragraph.font_size
-        );
+    pub fn shape(
+        &mut self,
+        paragraph: &ParagraphSpec<'_>,
+    ) -> Result<ParagraphLayout, TextLayoutError> {
+        validate_request(paragraph)?;
         let max_lines = paragraph.max_lines.filter(|&lines| lines > 0);
-        let mut shaped = self.shape_spans(paragraph, paragraph.spans);
+        let mut shaped = self.shape_spans(paragraph, paragraph.spans)?;
         let mut ellipsized = false;
         let mut kept_text = shaped.text.len();
         if let (Some(max_lines), Some(ellipsis)) =
             (max_lines, paragraph.ellipsis.filter(|e| !e.is_empty()))
             && shaped.layout.len() > max_lines
         {
-            shaped = self.ellipsize(paragraph, &shaped, max_lines, ellipsis);
+            shaped = self.ellipsize(paragraph, &shaped, max_lines, ellipsis)?;
             ellipsized = true;
             kept_text = shaped.text.len() - ellipsis.len();
         } else if let Some(max_lines) = max_lines
@@ -512,7 +624,7 @@ impl TextContext {
         let widths = shaped.layout.calculate_content_widths();
         let content_widths = (f64::from(widths.min), f64::from(widths.max));
         align_allocated_lines(&mut shaped.layout, paragraph, alignment_width);
-        ParagraphLayout {
+        let layout = ParagraphLayout {
             layout: shaped.layout,
             text: shaped.text,
             spans: shaped.spans,
@@ -523,7 +635,9 @@ impl TextContext {
             ellipsized,
             kept_text,
             placed: OnceLock::new(),
-        }
+        };
+        validate_layout(&layout)?;
+        Ok(layout)
     }
 
     /// `shaped` cut after its `max_lines`-th line with `ellipsis` appended,
@@ -539,7 +653,7 @@ impl TextContext {
         shaped: &Shaped,
         max_lines: usize,
         ellipsis: &str,
-    ) -> Shaped {
+    ) -> Result<Shaped, TextLayoutError> {
         let full = &shaped.text;
         let Some(line) = shaped.layout.get(max_lines - 1) else {
             return self.shape_spans(paragraph, paragraph.spans);
@@ -552,7 +666,7 @@ impl TextContext {
                     .last()
                     .and_then(|(_, style)| style.clone());
                 let spans = vec![(ellipsis.to_owned(), style)];
-                self.shape_spans(paragraph, &spans).layout.width()
+                self.shape_spans(paragraph, &spans)?.layout.width()
             };
             // Clusters in logical order: the advance of a logical prefix is
             // its width whatever its visual order.
@@ -590,7 +704,7 @@ impl TextContext {
                 .or(paragraph.spans.first())
                 .and_then(|(_, style)| style.clone());
             spans.push((ellipsis.to_owned(), style));
-            let candidate = self.shape_spans(paragraph, &spans);
+            let candidate = self.shape_spans(paragraph, &spans)?;
             let fits = candidate.layout.len() <= max_lines
                 && paragraph.max_width.is_none_or(|max_width| {
                     candidate.layout.lines().last().is_none_or(|line| {
@@ -601,10 +715,10 @@ impl TextContext {
             let Some((previous, _)) = full[..cut].char_indices().next_back() else {
                 // Only the ellipsis is left: it is kept even if it does not
                 // fit, as nothing narrower can stand for the dropped text.
-                return candidate;
+                return Ok(candidate);
             };
             if fits {
-                return candidate;
+                return Ok(candidate);
             }
             cut = previous;
         }
@@ -615,7 +729,7 @@ impl TextContext {
         &mut self,
         paragraph: &ParagraphSpec<'_>,
         spans: &[(String, Option<TextStyle>)],
-    ) -> Shaped {
+    ) -> Result<Shaped, TextLayoutError> {
         let text: String = spans.iter().map(|(text, _)| text.as_str()).collect();
         let breaks = one_break_per_crlf(&text);
 
@@ -711,12 +825,17 @@ impl TextContext {
             }
         }
         let mut layout = builder.build(&breaks);
+        // Reject overflow before the line breaker consumes derived advances.
+        let widths = layout.calculate_content_widths();
+        if !widths.min.is_finite() || !widths.max.is_finite() {
+            return Err(TextLayoutError::NonFiniteGeometry);
+        }
         layout.break_all_lines(paragraph.max_width);
-        Shaped {
+        Ok(Shaped {
             layout,
             text,
             spans: infos,
-        }
+        })
     }
 }
 
@@ -959,19 +1078,21 @@ mod tests {
 
     fn shaped(text: &str, direction: TextDirection) -> ParagraphLayout {
         let spans: Vec<(String, Option<TextStyle>)> = vec![(text.to_owned(), None)];
-        TextContext::new(&FontCollection::new()).shape(&ParagraphSpec {
-            font_weight_adjustment: 0,
-            spans: &spans,
-            default_style: None,
-            font_size: 16.0,
-            max_width: Some(WIDTH),
-            min_width: WIDTH,
-            text_align: crate::typography::TextAlign::Start,
-            line_height: None,
-            direction,
-            max_lines: None,
-            ellipsis: None,
-        })
+        TextContext::new(&FontCollection::new())
+            .shape(&ParagraphSpec {
+                font_weight_adjustment: 0,
+                spans: &spans,
+                default_style: None,
+                font_size: 16.0,
+                max_width: Some(WIDTH),
+                min_width: WIDTH,
+                text_align: crate::typography::TextAlign::Start,
+                line_height: None,
+                direction,
+                max_lines: None,
+                ellipsis: None,
+            })
+            .expect("valid fixture shapes")
     }
 
     fn first_line_offset(paragraph: &ParagraphLayout) -> f32 {
@@ -1043,6 +1164,7 @@ mod tests {
                     max_lines: None,
                     ellipsis: None,
                 })
+                .expect("valid fixture shapes")
                 .metrics()
                 .width
         };
@@ -1059,19 +1181,21 @@ mod tests {
             "one two three four five six seven eight nine ten".to_owned(),
             None,
         )];
-        TextContext::new(&FontCollection::new()).shape(&ParagraphSpec {
-            font_weight_adjustment: 0,
-            spans: &spans,
-            default_style: None,
-            font_size: 16.0,
-            max_width: Some(60.0),
-            min_width: 0.0,
-            text_align: crate::typography::TextAlign::Start,
-            line_height: Some(20.0),
-            direction: TextDirection::Ltr,
-            max_lines,
-            ellipsis: None,
-        })
+        TextContext::new(&FontCollection::new())
+            .shape(&ParagraphSpec {
+                font_weight_adjustment: 0,
+                spans: &spans,
+                default_style: None,
+                font_size: 16.0,
+                max_width: Some(60.0),
+                min_width: 0.0,
+                text_align: crate::typography::TextAlign::Start,
+                line_height: Some(20.0),
+                direction: TextDirection::Ltr,
+                max_lines,
+                ellipsis: None,
+            })
+            .expect("valid fixture shapes")
     }
 
     /// `max_lines` stops the metrics at the kept lines: the height covers
@@ -1125,6 +1249,7 @@ mod tests {
                 max_lines: None,
                 ellipsis: None,
             })
+            .expect("valid fixture shapes")
             .metrics()
             .width;
         assert!(

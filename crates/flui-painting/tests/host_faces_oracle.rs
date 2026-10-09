@@ -142,7 +142,9 @@ fn measure_and_paint(
     let mut painter = TextPainter::new()
         .with_text(TextSpan::styled(text, style))
         .with_text_direction(TextDirection::Ltr);
-    painter.layout(context, 0.0, f64::INFINITY);
+    painter
+        .layout(context, 0.0, f64::INFINITY)
+        .expect("valid fixture lays out");
     let paragraph = painted(&painter);
     let notdef = paragraph
         .runs()

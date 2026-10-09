@@ -404,19 +404,21 @@ mod tests {
         let mut context = TextContext::new(&fonts);
         for text in corpus {
             let spans: Vec<(String, Option<TextStyle>)> = vec![(text.to_owned(), None)];
-            let paragraph = context.shape(&ParagraphSpec {
-                font_weight_adjustment: 0,
-                spans: &spans,
-                default_style: None,
-                font_size: 16.0,
-                max_width: None,
-                min_width: 0.0,
-                text_align: crate::typography::TextAlign::Start,
-                line_height: None,
-                direction: TextDirection::Ltr,
-                max_lines: None,
-                ellipsis: None,
-            });
+            let paragraph = context
+                .shape(&ParagraphSpec {
+                    font_weight_adjustment: 0,
+                    spans: &spans,
+                    default_style: None,
+                    font_size: 16.0,
+                    max_width: None,
+                    min_width: 0.0,
+                    text_align: crate::typography::TextAlign::Start,
+                    line_height: None,
+                    direction: TextDirection::Ltr,
+                    max_lines: None,
+                    ellipsis: None,
+                })
+                .expect("valid fixture shapes");
             let mut marked = BTreeSet::new();
             for line in paragraph.layout.lines() {
                 for run in line.runs() {

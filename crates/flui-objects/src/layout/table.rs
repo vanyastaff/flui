@@ -353,8 +353,8 @@ impl RenderTable {
         row_count: usize,
         container_width: f64,
         query_kind: WidthQuery,
-        query: &mut impl FnMut(usize, f64, WidthQuery) -> f64,
-    ) -> (f64, Option<f64>) {
+        query: &mut impl FnMut(usize, f64, WidthQuery) -> flui_rendering::RenderResult<f64>,
+    ) -> flui_rendering::RenderResult<(f64, Option<f64>)> {
         let spec = self.column_width_for(x);
         self.extent_for_spec(&spec, x, row_count, container_width, query_kind, query)
     }
@@ -375,9 +375,9 @@ impl RenderTable {
         row_count: usize,
         container_width: f64,
         query_kind: WidthQuery,
-        query: &mut impl FnMut(usize, f64, WidthQuery) -> f64,
-    ) -> (f64, Option<f64>) {
-        match spec {
+        query: &mut impl FnMut(usize, f64, WidthQuery) -> flui_rendering::RenderResult<f64>,
+    ) -> flui_rendering::RenderResult<(f64, Option<f64>)> {
+        Ok(match spec {
             TableColumnWidth::Fixed(value) => ((*value), None),
             TableColumnWidth::Flex(flex) => (0.0, Some(*flex)),
             TableColumnWidth::Fraction(fraction) => {
@@ -394,7 +394,7 @@ impl RenderTable {
                 let mut extent = 0.0_f64;
                 for y in 0..row_count {
                     let idx = x + y * self.column_count;
-                    extent = extent.max(query(idx, f64::INFINITY, query_kind));
+                    extent = extent.max(query(idx, f64::INFINITY, query_kind)?);
                 }
                 // The intrinsic width is the column's floor; `flex` (if any)
                 // lets it also claim leftover space in the grow pass.
@@ -402,19 +402,19 @@ impl RenderTable {
             }
             TableColumnWidth::Max(a, b) => {
                 let (wa, fa) =
-                    self.extent_for_spec(a, x, row_count, container_width, query_kind, query);
+                    self.extent_for_spec(a, x, row_count, container_width, query_kind, query)?;
                 let (wb, fb) =
-                    self.extent_for_spec(b, x, row_count, container_width, query_kind, query);
+                    self.extent_for_spec(b, x, row_count, container_width, query_kind, query)?;
                 (wa.max(wb), combine_flex(fa, fb, f64::max))
             }
             TableColumnWidth::Min(a, b) => {
                 let (wa, fa) =
-                    self.extent_for_spec(a, x, row_count, container_width, query_kind, query);
+                    self.extent_for_spec(a, x, row_count, container_width, query_kind, query)?;
                 let (wb, fb) =
-                    self.extent_for_spec(b, x, row_count, container_width, query_kind, query);
+                    self.extent_for_spec(b, x, row_count, container_width, query_kind, query)?;
                 (wa.min(wb), combine_flex(fa, fb, f64::min))
             }
-        }
+        })
     }
 
     /// The 4-pass column-width algorithm, generic
@@ -443,11 +443,11 @@ impl RenderTable {
         row_count: usize,
         min_width_constraint: f64,
         max_width_constraint: f64,
-        mut query: impl FnMut(usize, f64, WidthQuery) -> f64,
-    ) -> Vec<f64> {
+        mut query: impl FnMut(usize, f64, WidthQuery) -> flui_rendering::RenderResult<f64>,
+    ) -> flui_rendering::RenderResult<Vec<f64>> {
         let column_count = self.column_count;
         if column_count == 0 {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
         // ---- Pass 1: ideal widths, min widths, flex ---------
@@ -462,14 +462,14 @@ impl RenderTable {
                 max_width_constraint,
                 WidthQuery::Max,
                 &mut query,
-            );
+            )?;
             let (min_w, _) = self.column_extent(
                 x,
                 row_count,
                 max_width_constraint,
                 WidthQuery::Min,
                 &mut query,
-            );
+            )?;
             widths[x] = ideal;
             min_widths[x] = min_w;
             flexes[x] = flex;
@@ -483,7 +483,7 @@ impl RenderTable {
             max_width_constraint,
         );
 
-        widths.into_iter().collect()
+        Ok(widths.into_iter().collect())
     }
 
     /// Passes 2 and 3 of the column-width algorithm,
@@ -631,7 +631,7 @@ impl RenderBox for RenderTable {
     fn perform_layout(
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Variable, TableCellParentData>,
-    ) -> Size {
+    ) -> flui_rendering::RenderResult<Size> {
         let constraints = *ctx.constraints();
         let child_count = ctx.child_count();
         let column_count = self.column_count;
@@ -642,7 +642,7 @@ impl RenderBox for RenderTable {
             self.interior_column_lefts = Vec::new();
             self.table_width = 0.0;
             self.baseline_distance = None;
-            return constraints.constrain(Size::ZERO);
+            return Ok(constraints.constrain(Size::ZERO));
         }
 
         let row_count = child_count / column_count;
@@ -661,8 +661,8 @@ impl RenderBox for RenderTable {
                 column_count,
                 laid_out = row_count * column_count,
                 "RenderTable: the child count is not a multiple of the column \
-                 count; the trailing partial row is neither laid out nor \
-                 painted. Supply every row's full complement of cells."
+             count; the trailing partial row is neither laid out nor \
+             painted. Supply every row's full complement of cells."
             );
         }
 
@@ -674,7 +674,7 @@ impl RenderBox for RenderTable {
                 WidthQuery::Min => ctx.child_min_intrinsic_width(i, h),
                 WidthQuery::Max => ctx.child_max_intrinsic_width(i, h),
             },
-        );
+        )?;
 
         // Column positions, indexed BY COLUMN. Two
         // branches: `Ltr` fills forward from the left edge, `Rtl` fills
@@ -739,7 +739,7 @@ impl RenderBox for RenderTable {
                 match alignments[x] {
                     TableCellVerticalAlignment::Baseline => {
                         let cc = BoxConstraints::tight_for(Some(widths[x]), None);
-                        let size = ctx.layout_child(idx, cc);
+                        let size = ctx.layout_child(idx, cc)?;
                         cell_sizes[x] = size;
                         // A cell missing an actual baseline (or the table
                         // missing an explicit `text_baseline`) degrades to a
@@ -748,7 +748,9 @@ impl RenderBox for RenderTable {
                         // (library code must not panic on a config gap).
                         let baseline = self
                             .text_baseline
-                            .and_then(|kind| ctx.child_distance_to_actual_baseline(idx, kind));
+                            .map(|kind| ctx.child_distance_to_actual_baseline(idx, kind))
+                            .transpose()?
+                            .flatten();
                         match baseline {
                             Some(distance) => {
                                 before_baseline = before_baseline.max(distance);
@@ -770,7 +772,7 @@ impl RenderBox for RenderTable {
                     | TableCellVerticalAlignment::Bottom
                     | TableCellVerticalAlignment::IntrinsicHeight => {
                         let cc = BoxConstraints::tight_for(Some(widths[x]), None);
-                        let size = ctx.layout_child(idx, cc);
+                        let size = ctx.layout_child(idx, cc)?;
                         cell_sizes[x] = size;
                         row_height = row_height.max(size.height);
                     }
@@ -809,7 +811,7 @@ impl RenderBox for RenderTable {
                     TableCellVerticalAlignment::Fill
                     | TableCellVerticalAlignment::IntrinsicHeight => {
                         let cc = BoxConstraints::tight_for(Some(widths[x]), Some(row_height));
-                        ctx.layout_child(idx, cc);
+                        ctx.layout_child(idx, cc)?;
                         Offset::new(column_lefts[x], row_top)
                     }
                 };
@@ -825,18 +827,18 @@ impl RenderBox for RenderTable {
         self.interior_column_lefts = interior_column_lefts;
         self.table_width = table_width;
 
-        constraints.constrain(Size::new(table_width, row_top))
+        Ok(constraints.constrain(Size::new(table_width, row_top)))
     }
 
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
         ctx: &mut BoxDryLayoutCtx<'_>,
-    ) -> Size {
+    ) -> flui_rendering::RenderResult<Size> {
         let column_count = self.column_count;
         let child_count = ctx.child_count();
         if column_count == 0 || child_count == 0 {
-            return constraints.constrain(Size::ZERO);
+            return Ok(constraints.constrain(Size::ZERO));
         }
         let row_count = child_count / column_count;
 
@@ -848,7 +850,7 @@ impl RenderBox for RenderTable {
                 WidthQuery::Min => ctx.child_min_intrinsic_width(i, h),
                 WidthQuery::Max => ctx.child_max_intrinsic_width(i, h),
             },
-        );
+        )?;
         let table_width = widths.iter().copied().fold(0.0, |a, b| a + b);
 
         let mut row_top = 0.0_f64;
@@ -864,14 +866,14 @@ impl RenderBox for RenderTable {
                     TableCellVerticalAlignment::Baseline => {
                         // Baseline metrics require a real layout pass, so
                         // this combination is unsupported for dry layout.
-                        return Size::ZERO;
+                        return Ok(Size::ZERO);
                     }
                     TableCellVerticalAlignment::Top
                     | TableCellVerticalAlignment::Middle
                     | TableCellVerticalAlignment::Bottom
                     | TableCellVerticalAlignment::IntrinsicHeight => {
                         let cc = BoxConstraints::tight_for(Some(width), None);
-                        let size = ctx.child_dry_layout(idx, cc);
+                        let size = ctx.child_dry_layout(idx, cc)?;
                         row_height = row_height.max(size.height);
                     }
                     TableCellVerticalAlignment::Fill => {}
@@ -880,14 +882,18 @@ impl RenderBox for RenderTable {
             row_top += row_height;
         }
 
-        constraints.constrain(Size::new(table_width, row_top))
+        Ok(constraints.constrain(Size::new(table_width, row_top)))
     }
 
-    fn compute_min_intrinsic_width(&self, _height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_min_intrinsic_width(
+        &self,
+        _height: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         let column_count = self.column_count;
         let child_count = ctx.child_count();
         if column_count == 0 || child_count == 0 {
-            return 0.0;
+            return Ok(0.0);
         }
         let row_count = child_count / column_count;
         let mut query = |i: usize, h: f64, kind: WidthQuery| match kind {
@@ -897,17 +903,21 @@ impl RenderBox for RenderTable {
         let mut total = 0.0_f64;
         for x in 0..column_count {
             let (min_w, _) =
-                self.column_extent(x, row_count, f64::INFINITY, WidthQuery::Min, &mut query);
+                self.column_extent(x, row_count, f64::INFINITY, WidthQuery::Min, &mut query)?;
             total += min_w;
         }
-        total
+        Ok(total)
     }
 
-    fn compute_max_intrinsic_width(&self, _height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_max_intrinsic_width(
+        &self,
+        _height: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         let column_count = self.column_count;
         let child_count = ctx.child_count();
         if column_count == 0 || child_count == 0 {
-            return 0.0;
+            return Ok(0.0);
         }
         let row_count = child_count / column_count;
         let mut query = |i: usize, h: f64, kind: WidthQuery| match kind {
@@ -917,17 +927,21 @@ impl RenderBox for RenderTable {
         let mut total = 0.0_f64;
         for x in 0..column_count {
             let (max_w, _) =
-                self.column_extent(x, row_count, f64::INFINITY, WidthQuery::Max, &mut query);
+                self.column_extent(x, row_count, f64::INFINITY, WidthQuery::Max, &mut query)?;
             total += max_w;
         }
-        total
+        Ok(total)
     }
 
-    fn compute_min_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_min_intrinsic_height(
+        &self,
+        width: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         let column_count = self.column_count;
         let child_count = ctx.child_count();
         if column_count == 0 || child_count == 0 {
-            return 0.0;
+            return Ok(0.0);
         }
         let row_count = child_count / column_count;
 
@@ -944,7 +958,7 @@ impl RenderBox for RenderTable {
             self.compute_column_widths(row_count, min_width, max_width, |i, h, kind| match kind {
                 WidthQuery::Min => ctx.child_min_intrinsic_width(i, h),
                 WidthQuery::Max => ctx.child_max_intrinsic_width(i, h),
-            });
+            })?;
 
         // The most expensive intrinsic dimension function — note MAX even
         // inside the MIN function, kept deliberately.
@@ -953,21 +967,26 @@ impl RenderBox for RenderTable {
             let mut row_height = 0.0_f64;
             for (x, &width) in widths.iter().enumerate() {
                 let idx = x + y * column_count;
-                row_height = row_height.max(ctx.child_max_intrinsic_height(idx, width));
+                row_height = row_height.max(ctx.child_max_intrinsic_height(idx, width)?);
             }
             total += row_height;
         }
-        total
+        Ok(total)
     }
 
-    fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        // Deliberate: the max intrinsic height is the min intrinsic height,
-        // not a typo.
+    fn compute_max_intrinsic_height(
+        &self,
+        width: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         self.compute_min_intrinsic_height(width, ctx)
     }
 
-    fn compute_distance_to_actual_baseline(&self, _baseline: TextBaseline) -> Option<f64> {
-        self.baseline_distance
+    fn compute_distance_to_actual_baseline(
+        &self,
+        _baseline: TextBaseline,
+    ) -> flui_rendering::RenderResult<Option<f64>> {
+        Ok(self.baseline_distance)
     }
 
     /// Dry equivalent of [`Self::compute_distance_to_actual_baseline`]: the
@@ -986,19 +1005,21 @@ impl RenderBox for RenderTable {
         constraints: BoxConstraints,
         _baseline: TextBaseline,
         ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f64> {
+    ) -> flui_rendering::RenderResult<Option<f64>> {
         let column_count = self.column_count;
         let child_count = ctx.child_count();
         if column_count == 0 || child_count == 0 {
-            return None;
+            return Ok(None);
         }
         let row_count = child_count / column_count;
         if row_count == 0 {
-            return None;
+            return Ok(None);
         }
         // No table text baseline → every `Baseline` cell degrades (the live
         // `childBaseline == null` branch), so the table reports no baseline.
-        let text_baseline = self.text_baseline?;
+        let Some(text_baseline) = self.text_baseline else {
+            return Ok(None);
+        };
 
         // Same dry column-width resolution the live path uses — the dry ctx
         // exposes the identical intrinsic-width probes.
@@ -1010,7 +1031,7 @@ impl RenderBox for RenderTable {
                 WidthQuery::Min => ctx.child_min_intrinsic_width(i, h),
                 WidthQuery::Max => ctx.child_max_intrinsic_width(i, h),
             },
-        );
+        )?;
 
         // First row (indices `0..column_count`): the table baseline is the max
         // dry-baseline over its `Baseline`-aligned cells (the live path's
@@ -1030,7 +1051,7 @@ impl RenderBox for RenderTable {
                 TableCellVerticalAlignment::Baseline => {
                     let cell_constraints = BoxConstraints::tight_for(Some(width), None);
                     if let Some(distance) =
-                        ctx.child_dry_baseline(cell, cell_constraints, text_baseline)
+                        ctx.child_dry_baseline(cell, cell_constraints, text_baseline)?
                     {
                         before_baseline =
                             Some(before_baseline.map_or(distance, |b| b.max(distance)));
@@ -1043,7 +1064,7 @@ impl RenderBox for RenderTable {
                 | TableCellVerticalAlignment::IntrinsicHeight => {}
             }
         }
-        before_baseline
+        Ok(before_baseline)
     }
 
     fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Variable>) {
@@ -1130,7 +1151,7 @@ mod tests {
 
     /// A query closure that panics if called — proves `Fixed`/`Flex`/
     /// `Fraction` columns never touch a cell (only `Intrinsic` may).
-    fn deny_query() -> impl FnMut(usize, f64, WidthQuery) -> f64 {
+    fn deny_query() -> impl FnMut(usize, f64, WidthQuery) -> flui_rendering::RenderResult<f64> {
         |index, extent, kind| {
             panic!(
                 "non-Intrinsic column queried child {index} ({kind:?} @ {extent}) — \
@@ -1145,7 +1166,9 @@ mod tests {
         // clamp (see the module doc's "Fraction clamps" note), so 1.5 must behave as 1.0,
         // not produce a 150px column from a 100px container.
         let table = table_with(&[TableColumnWidth::Fraction(1.5)]);
-        let widths = table.compute_column_widths(1, 0.0, 100.0, deny_query());
+        let widths = table
+            .compute_column_widths(1, 0.0, 100.0, deny_query())
+            .expect("fraction columns require no child measurement");
         assert_eq!(widths, vec![100.0]);
     }
 }

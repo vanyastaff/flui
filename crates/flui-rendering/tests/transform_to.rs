@@ -18,8 +18,11 @@ impl flui_foundation::Diagnosticable for FixedBox {}
 impl RenderBox for FixedBox {
     type Arity = Leaf;
     type ParentData = BoxParentData;
-    fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-        Size::new(20.0, 20.0)
+    fn perform_layout(
+        &mut self,
+        _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok(Size::new(20.0, 20.0))
     }
     fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
 }
@@ -33,11 +36,16 @@ impl flui_foundation::Diagnosticable for OffsetBox {}
 impl RenderBox for OffsetBox {
     type Arity = Single;
     type ParentData = BoxParentData;
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
-        let constraints = *ctx.constraints();
-        ctx.layout_child(0, constraints.loosen());
-        ctx.position_child(0, self.0);
-        constraints.biggest()
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok({
+            let constraints = *ctx.constraints();
+            ctx.layout_child(0, constraints.loosen())?;
+            ctx.position_child(0, self.0);
+            constraints.biggest()
+        })
     }
     fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
         ctx.paint_child();

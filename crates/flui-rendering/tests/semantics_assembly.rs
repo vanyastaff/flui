@@ -77,8 +77,11 @@ impl RenderBox for SemanticsLeaf {
     type Arity = Leaf;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-        ctx.constraints().constrain(Size::new(self.side, self.side))
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok(ctx.constraints().constrain(Size::new(self.side, self.side)))
     }
 
     fn describe_semantics_configuration(&self, config: &mut SemanticsConfiguration) {
@@ -189,16 +192,21 @@ impl RenderBox for SemanticsContainer {
     type Arity = Variable;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>) -> Size {
-        let constraints = *ctx.constraints();
-        for i in 0..ctx.child_count() {
-            ctx.layout_child(i, constraints.loosen());
-            ctx.position_child(i, self.child_offset.unwrap_or(Offset::ZERO));
-        }
-        self.side.map_or_else(
-            || constraints.biggest(),
-            |side| constraints.constrain(Size::new(side, side)),
-        )
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok({
+            let constraints = *ctx.constraints();
+            for i in 0..ctx.child_count() {
+                ctx.layout_child(i, constraints.loosen())?;
+                ctx.position_child(i, self.child_offset.unwrap_or(Offset::ZERO));
+            }
+            self.side.map_or_else(
+                || constraints.biggest(),
+                |side| constraints.constrain(Size::new(side, side)),
+            )
+        })
     }
 
     fn describe_semantics_configuration(&self, config: &mut SemanticsConfiguration) {

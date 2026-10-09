@@ -131,16 +131,19 @@ impl RenderBox for RenderDecoratedBox {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, Self::ParentData>) -> Size {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Single, Self::ParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
         let constraints = *ctx.constraints();
         if ctx.child_count() > 0 {
             self.has_child = true;
-            let child_size = ctx.layout_child(0, constraints);
+            let child_size = ctx.layout_child(0, constraints)?;
             ctx.position_child(0, Offset::ZERO);
-            child_size
+            Ok(child_size)
         } else {
             self.has_child = false;
-            constraints.smallest()
+            Ok(constraints.smallest())
         }
     }
 

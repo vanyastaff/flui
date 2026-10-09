@@ -27,7 +27,9 @@ fn styled_probe(fonts: &FontCollection, text: &str, style: TextStyle) -> TextPai
     let mut painter = TextPainter::new()
         .with_text(TextSpan::styled(text, style))
         .with_text_direction(TextDirection::Ltr);
-    painter.layout(&mut TextContext::new(fonts), 0.0, 400.0);
+    painter
+        .layout(&mut TextContext::new(fonts), 0.0, 400.0)
+        .expect("valid fixture lays out");
     painter
 }
 
@@ -43,7 +45,9 @@ fn word_spacing_changes_geometry(in_child: bool) {
             span
         })
         .with_text_direction(TextDirection::Ltr);
-    spaced.layout(&mut TextContext::new(&fonts), 0.0, 400.0);
+    spaced
+        .layout(&mut TextContext::new(&fonts), 0.0, 400.0)
+        .expect("valid fixture lays out");
     assert!(
         (spaced.width() - baseline.width() - 8.0).abs() < 1e-3,
         "two spaces each grow by four logical pixels"
@@ -248,7 +252,9 @@ pub(crate) fn text_weight_adjustment_shapes_once_and_restores_authored_weights()
     let mut authored = None;
     for adjustment in [0, 300, 0, 300, 0] {
         real_text.set_font_weight_adjustment(adjustment);
-        real_text.layout(&mut context, 0.0, 400.0);
+        real_text
+            .layout(&mut context, 0.0, 400.0)
+            .expect("valid fixture lays out");
         let images = raster(&real_text);
         if adjustment == 0 {
             if let Some(authored) = &authored {
@@ -293,19 +299,21 @@ pub(crate) fn text_weight_adjustment_shapes_once_and_restores_authored_weights()
         .with_font_variation(FontVariation::new("wght", 100.0));
     let color_only = TextStyle::default().with_color(flui_painting::styling::Color::BLACK);
     let spans = [("AA".to_owned(), Some(color_only))];
-    let inherited = TextContext::new(&fonts).shape(&flui_painting::parley_text::ParagraphSpec {
-        spans: &spans,
-        default_style: Some(&default_style),
-        font_size: 16.0,
-        font_weight_adjustment: 237,
-        max_width: None,
-        min_width: 0.0,
-        text_align: flui_painting::typography::TextAlign::Start,
-        line_height: None,
-        direction: TextDirection::Ltr,
-        max_lines: None,
-        ellipsis: None,
-    });
+    let inherited = TextContext::new(&fonts)
+        .shape(&flui_painting::parley_text::ParagraphSpec {
+            spans: &spans,
+            default_style: Some(&default_style),
+            font_size: 16.0,
+            font_weight_adjustment: 237,
+            max_width: None,
+            min_width: 0.0,
+            text_align: flui_painting::typography::TextAlign::Start,
+            line_height: None,
+            direction: TextDirection::Ltr,
+            max_lines: None,
+            ellipsis: None,
+        })
+        .expect("valid fixture shapes");
     assert_eq!(
         inherited
             .to_shaped(None)
@@ -333,8 +341,12 @@ pub(crate) fn text_weight_adjustment_shapes_once_and_restores_authored_weights()
         .with_text_direction(TextDirection::Ltr)
         .with_max_lines(Some(1))
         .with_ellipsis(Some("A".to_owned()));
-    truncated.layout(&mut TextContext::new(&fonts), 0.0, 100.0);
-    reference.layout(&mut TextContext::new(&fonts), 0.0, 100.0);
+    truncated
+        .layout(&mut TextContext::new(&fonts), 0.0, 100.0)
+        .expect("valid fixture lays out");
+    reference
+        .layout(&mut TextContext::new(&fonts), 0.0, 100.0)
+        .expect("valid fixture lays out");
     assert_eq!(painted_style_paragraph(&truncated).text(), "AAA");
     assert_eq!(coords(&truncated), coords(&reference));
     assert_eq!(truncated.size(), reference.size());
@@ -398,8 +410,12 @@ pub(crate) fn text_weight_adjustment_shapes_once_and_restores_authored_weights()
         for current in [adjustment, 0, adjustment, 0] {
             painter.set_font_weight_adjustment(current);
             let mut context = TextContext::new(&fonts);
-            let intrinsic = painter.max_intrinsic_width(&mut context);
-            painter.layout(&mut context, 0.0, 400.0);
+            let intrinsic = painter
+                .max_intrinsic_width(&mut context)
+                .expect("valid fixture measures");
+            painter
+                .layout(&mut context, 0.0, 400.0)
+                .expect("valid fixture lays out");
             assert_eq!(
                 &coords(&painter),
                 if current == 0 { &authored } else { &resolved }
@@ -448,7 +464,9 @@ pub(crate) fn text_weight_adjustment_shapes_once_and_restores_authored_weights()
     let mut baseline = None;
     for adjustment in [0, 300, 0, 300, 0] {
         mixed.set_font_weight_adjustment(adjustment);
-        mixed.layout(&mut TextContext::new(&fonts), 0.0, 400.0);
+        mixed
+            .layout(&mut TextContext::new(&fonts), 0.0, 400.0)
+            .expect("valid fixture lays out");
         let paragraph = painted_style_paragraph(&mixed);
         assert_eq!(paragraph.text(), "AAAA");
         let actual: Vec<_> = paragraph
@@ -508,9 +526,15 @@ pub(crate) fn wide_ellipsis_floors_min_intrinsic_width() {
         .with_max_lines(Some(1))
         .with_ellipsis(Some(ellipsis.to_string()));
 
-    let text_min = text_only.min_intrinsic_width(&mut text_cx());
-    let ellipsis_width = ellipsis_only.max_intrinsic_width(&mut text_cx());
-    let floored = truncated.min_intrinsic_width(&mut text_cx());
+    let text_min = text_only
+        .min_intrinsic_width(&mut text_cx())
+        .expect("valid fixture measures");
+    let ellipsis_width = ellipsis_only
+        .max_intrinsic_width(&mut text_cx())
+        .expect("valid fixture measures");
+    let floored = truncated
+        .min_intrinsic_width(&mut text_cx())
+        .expect("valid fixture measures");
 
     assert!(
         ellipsis_width > text_min + 0.01,
@@ -527,9 +551,16 @@ pub(crate) fn wide_ellipsis_floors_min_intrinsic_width() {
         .with_text_direction(TextDirection::Ltr)
         .with_max_lines(Some(1))
         .with_ellipsis(Some(ellipsis.to_string()));
-    laid_out.layout(&mut text_cx(), 0.0, 200.0);
+    laid_out
+        .layout(&mut text_cx(), 0.0, 200.0)
+        .expect("valid fixture lays out");
     assert!(
-        (laid_out.min_intrinsic_width(&mut text_cx()) - floored).abs() < 0.01,
+        (laid_out
+            .min_intrinsic_width(&mut text_cx())
+            .expect("valid fixture measures")
+            - floored)
+            .abs()
+            < 0.01,
         "cached min must keep the ellipsis floor"
     );
 }
@@ -554,8 +585,12 @@ pub(crate) fn a_rich_span_ellipsis_floors_min_intrinsic_width() {
         .with_max_lines(Some(1))
         .with_ellipsis(Some("…".to_owned()));
 
-    let min = painter.min_intrinsic_width(&mut text_cx());
-    painter.layout(&mut text_cx(), 0.0, min);
+    let min = painter
+        .min_intrinsic_width(&mut text_cx())
+        .expect("valid fixture measures");
+    painter
+        .layout(&mut text_cx(), 0.0, min)
+        .expect("valid fixture lays out");
     let painted = painter.width();
     assert!(
         painted <= min + 0.01,
@@ -611,11 +646,13 @@ pub(crate) fn an_empty_paragraph_measures_a_line_of_its_style() {
             let mut painter = TextPainter::new()
                 .with_text(TextSpan::styled(text, style.clone()))
                 .with_text_direction(TextDirection::Ltr);
-            painter.layout(
-                &mut flui_painting::TextContext::new(&fonts),
-                0.0,
-                f64::INFINITY,
-            );
+            painter
+                .layout(
+                    &mut flui_painting::TextContext::new(&fonts),
+                    0.0,
+                    f64::INFINITY,
+                )
+                .expect("valid fixture lays out");
             (
                 painter.height(),
                 painter.compute_distance_to_actual_baseline(TextBaseline::Alphabetic),
@@ -676,9 +713,13 @@ pub(crate) mod parley_measurement {
         let mut b = TextContext::new(&FontCollection::new());
         let mut painter = probe_painter();
 
-        painter.layout(&mut a, 0.0, WIDTH);
+        painter
+            .layout(&mut a, 0.0, WIDTH)
+            .expect("valid fixture lays out");
         let through_a = painter.size();
-        painter.layout(&mut b, 0.0, WIDTH);
+        painter
+            .layout(&mut b, 0.0, WIDTH)
+            .expect("valid fixture lays out");
         let through_b = painter.size();
 
         assert!(
@@ -714,8 +755,11 @@ pub(crate) mod parley_measurement {
                 max_lines: None,
                 ellipsis: None,
             })
+            .expect("valid fixture shapes")
             .metrics();
-        painter.layout(&mut a, 0.0, WIDTH);
+        painter
+            .layout(&mut a, 0.0, WIDTH)
+            .expect("valid fixture lays out");
         assert!((painter.size().width - shaped.width).abs() < f64::EPSILON);
         assert!((painter.size().height - shaped.height).abs() < f64::EPSILON);
     }
@@ -732,11 +776,21 @@ pub(crate) mod parley_measurement {
         let mut b = TextContext::new(&FontCollection::new());
         let mut painter = probe_painter();
 
-        painter.layout(&mut a, 0.0, WIDTH);
-        let max_through_a = painter.max_intrinsic_width(&mut a);
-        let min_through_a = painter.min_intrinsic_width(&mut a);
-        let max_through_b = painter.max_intrinsic_width(&mut b);
-        let min_through_b = painter.min_intrinsic_width(&mut b);
+        painter
+            .layout(&mut a, 0.0, WIDTH)
+            .expect("valid fixture lays out");
+        let max_through_a = painter
+            .max_intrinsic_width(&mut a)
+            .expect("valid fixture measures");
+        let min_through_a = painter
+            .min_intrinsic_width(&mut a)
+            .expect("valid fixture measures");
+        let max_through_b = painter
+            .max_intrinsic_width(&mut b)
+            .expect("valid fixture measures");
+        let min_through_b = painter
+            .min_intrinsic_width(&mut b)
+            .expect("valid fixture measures");
 
         assert!(
             (max_through_a - 4.0 * SIZE).abs() < 0.01,
@@ -754,12 +808,18 @@ pub(crate) mod parley_measurement {
 
         let later = FontCollection::new();
         let mut c = TextContext::new(&later);
-        painter.layout(&mut c, 0.0, WIDTH);
-        let before = painter.max_intrinsic_width(&mut c);
+        painter
+            .layout(&mut c, 0.0, WIDTH)
+            .expect("valid fixture lays out");
+        let before = painter
+            .max_intrinsic_width(&mut c)
+            .expect("valid fixture measures");
         later
             .register_font(PROBE_MONO)
             .expect("the probe face loads");
-        let after = painter.max_intrinsic_width(&mut c);
+        let after = painter
+            .max_intrinsic_width(&mut c)
+            .expect("valid fixture measures");
         assert!(
             (after - 4.0 * SIZE).abs() < 0.01,
             "a face registered since the layout is measured: before {before}, got {after}"
@@ -773,12 +833,16 @@ pub(crate) mod parley_measurement {
         let mut context = TextContext::new(&fonts);
         let mut painter = probe_painter();
 
-        painter.layout(&mut context, 0.0, WIDTH);
+        painter
+            .layout(&mut context, 0.0, WIDTH)
+            .expect("valid fixture lays out");
         let before = painter.width();
         fonts
             .register_font(PROBE_MONO)
             .expect("the probe face loads");
-        painter.layout(&mut context, 0.0, WIDTH);
+        painter
+            .layout(&mut context, 0.0, WIDTH)
+            .expect("valid fixture lays out");
         let after = painter.width();
 
         assert!(

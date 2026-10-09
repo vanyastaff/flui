@@ -98,21 +98,24 @@ impl RenderBox for RenderConstrainedBox {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
         let incoming = *ctx.constraints();
         let combined = self.additional_constraints.enforce(&incoming);
 
         if ctx.child_count() > 0 {
             self.has_child = true;
-            let child_size = ctx.layout_child(0, combined);
+            let child_size = ctx.layout_child(0, combined)?;
             ctx.position_child(0, Offset::ZERO);
             // Our size = child size, but it MUST satisfy the incoming
             // constraints (the parent ultimately decides the box bounds).
-            incoming.constrain(child_size)
+            Ok(incoming.constrain(child_size))
         } else {
             self.has_child = false;
             // Choose the smallest size that satisfies both constraint sets.
-            incoming.constrain(combined.smallest())
+            Ok(incoming.constrain(combined.smallest()))
         }
     }
 
@@ -128,13 +131,13 @@ impl RenderBox for RenderConstrainedBox {
         &self,
         height: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
+    ) -> flui_rendering::RenderResult<f64> {
         let ac = &self.additional_constraints;
         if ac.has_bounded_width() && ac.has_tight_width() {
-            return ac.min_width;
+            return Ok(ac.min_width);
         }
         let width = if ctx.child_count() > 0 {
-            ctx.child_min_intrinsic_width(0, height)
+            ctx.child_min_intrinsic_width(0, height)?
         } else {
             0.0
         };
@@ -143,9 +146,9 @@ impl RenderBox for RenderConstrainedBox {
             "child min intrinsic width must be finite"
         );
         if ac.has_infinite_width() {
-            width
+            Ok(width)
         } else {
-            ac.constrain_width(width)
+            Ok(ac.constrain_width(width))
         }
     }
 
@@ -153,13 +156,13 @@ impl RenderBox for RenderConstrainedBox {
         &self,
         height: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
+    ) -> flui_rendering::RenderResult<f64> {
         let ac = &self.additional_constraints;
         if ac.has_bounded_width() && ac.has_tight_width() {
-            return ac.min_width;
+            return Ok(ac.min_width);
         }
         let width = if ctx.child_count() > 0 {
-            ctx.child_max_intrinsic_width(0, height)
+            ctx.child_max_intrinsic_width(0, height)?
         } else {
             0.0
         };
@@ -168,9 +171,9 @@ impl RenderBox for RenderConstrainedBox {
             "child max intrinsic width must be finite"
         );
         if ac.has_infinite_width() {
-            width
+            Ok(width)
         } else {
-            ac.constrain_width(width)
+            Ok(ac.constrain_width(width))
         }
     }
 
@@ -178,13 +181,13 @@ impl RenderBox for RenderConstrainedBox {
         &self,
         width: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
+    ) -> flui_rendering::RenderResult<f64> {
         let ac = &self.additional_constraints;
         if ac.has_bounded_height() && ac.has_tight_height() {
-            return ac.min_height;
+            return Ok(ac.min_height);
         }
         let height = if ctx.child_count() > 0 {
-            ctx.child_min_intrinsic_height(0, width)
+            ctx.child_min_intrinsic_height(0, width)?
         } else {
             0.0
         };
@@ -193,9 +196,9 @@ impl RenderBox for RenderConstrainedBox {
             "child min intrinsic height must be finite"
         );
         if ac.has_infinite_height() {
-            height
+            Ok(height)
         } else {
-            ac.constrain_height(height)
+            Ok(ac.constrain_height(height))
         }
     }
 
@@ -203,13 +206,13 @@ impl RenderBox for RenderConstrainedBox {
         &self,
         width: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
+    ) -> flui_rendering::RenderResult<f64> {
         let ac = &self.additional_constraints;
         if ac.has_bounded_height() && ac.has_tight_height() {
-            return ac.min_height;
+            return Ok(ac.min_height);
         }
         let height = if ctx.child_count() > 0 {
-            ctx.child_max_intrinsic_height(0, width)
+            ctx.child_max_intrinsic_height(0, width)?
         } else {
             0.0
         };
@@ -218,9 +221,9 @@ impl RenderBox for RenderConstrainedBox {
             "child max intrinsic height must be finite"
         );
         if ac.has_infinite_height() {
-            height
+            Ok(height)
         } else {
-            ac.constrain_height(height)
+            Ok(ac.constrain_height(height))
         }
     }
 
@@ -228,12 +231,12 @@ impl RenderBox for RenderConstrainedBox {
         &self,
         constraints: BoxConstraints,
         ctx: &mut flui_rendering::context::BoxDryLayoutCtx<'_>,
-    ) -> Size {
+    ) -> flui_rendering::RenderResult<Size> {
         let combined = self.additional_constraints.enforce(&constraints);
         if ctx.child_count() > 0 {
             ctx.child_dry_layout(0, combined)
         } else {
-            combined.constrain(Size::ZERO)
+            Ok(combined.constrain(Size::ZERO))
         }
     }
 
@@ -242,12 +245,12 @@ impl RenderBox for RenderConstrainedBox {
         constraints: BoxConstraints,
         baseline: flui_rendering::traits::TextBaseline,
         ctx: &mut flui_rendering::context::BoxDryBaselineCtx<'_>,
-    ) -> Option<f64> {
+    ) -> flui_rendering::RenderResult<Option<f64>> {
         let combined = self.additional_constraints.enforce(&constraints);
         if ctx.child_count() > 0 {
             ctx.child_dry_baseline(0, combined, baseline)
         } else {
-            None
+            Ok(None)
         }
     }
 }

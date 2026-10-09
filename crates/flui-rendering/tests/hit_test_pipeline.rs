@@ -341,26 +341,28 @@ impl flui_rendering::traits::RenderBox for RecoveringHitParent {
     fn perform_layout(
         &mut self,
         ctx: &mut flui_rendering::context::BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
-    ) -> flui_foundation::geometry::Size {
-        let first_offset = if matches!(self.0, FailedHitScope::ChildOverride) {
-            Offset::ZERO
-        } else {
-            Offset::new(20.0, 0.0)
-        };
-        for (index, offset) in [first_offset, Offset::new(5.0, 0.0)]
-            .into_iter()
-            .enumerate()
-        {
-            ctx.layout_child(
-                index,
-                flui_rendering::constraints::BoxConstraints::tight(
-                    flui_foundation::geometry::Size::new(40.0, 40.0),
-                ),
-            );
-            ctx.position_child(index, offset);
-        }
-        ctx.constraints()
-            .constrain(flui_foundation::geometry::Size::new(100.0, 100.0))
+    ) -> flui_rendering::RenderResult<flui_foundation::geometry::Size> {
+        Ok({
+            let first_offset = if matches!(self.0, FailedHitScope::ChildOverride) {
+                Offset::ZERO
+            } else {
+                Offset::new(20.0, 0.0)
+            };
+            for (index, offset) in [first_offset, Offset::new(5.0, 0.0)]
+                .into_iter()
+                .enumerate()
+            {
+                ctx.layout_child(
+                    index,
+                    flui_rendering::constraints::BoxConstraints::tight(
+                        flui_foundation::geometry::Size::new(40.0, 40.0),
+                    ),
+                )?;
+                ctx.position_child(index, offset);
+            }
+            ctx.constraints()
+                .constrain(flui_foundation::geometry::Size::new(100.0, 100.0))
+        })
     }
 
     fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, Self::Arity>) {}
@@ -410,9 +412,11 @@ impl flui_rendering::traits::RenderBox for PanickingHitLeaf {
     fn perform_layout(
         &mut self,
         ctx: &mut flui_rendering::context::BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
-    ) -> flui_foundation::geometry::Size {
-        ctx.constraints()
-            .constrain(flui_foundation::geometry::Size::new(40.0, 40.0))
+    ) -> flui_rendering::RenderResult<flui_foundation::geometry::Size> {
+        Ok({
+            ctx.constraints()
+                .constrain(flui_foundation::geometry::Size::new(40.0, 40.0))
+        })
     }
 
     fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, Self::Arity>) {}
@@ -522,25 +526,27 @@ impl flui_rendering::traits::RenderBox for RefusalHitParent {
     fn perform_layout(
         &mut self,
         ctx: &mut flui_rendering::context::BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
-    ) -> flui_foundation::geometry::Size {
-        for index in 0..2 {
-            ctx.layout_child(
-                index,
-                flui_rendering::constraints::BoxConstraints::tight(
-                    flui_foundation::geometry::Size::new(40.0, 40.0),
-                ),
-            );
-            ctx.position_child(
-                index,
-                if index == 0 {
-                    Offset::ZERO
-                } else {
-                    Offset::new(5.0, 0.0)
-                },
-            );
-        }
-        ctx.constraints()
-            .constrain(flui_foundation::geometry::Size::new(100.0, 100.0))
+    ) -> flui_rendering::RenderResult<flui_foundation::geometry::Size> {
+        Ok({
+            for index in 0..2 {
+                ctx.layout_child(
+                    index,
+                    flui_rendering::constraints::BoxConstraints::tight(
+                        flui_foundation::geometry::Size::new(40.0, 40.0),
+                    ),
+                )?;
+                ctx.position_child(
+                    index,
+                    if index == 0 {
+                        Offset::ZERO
+                    } else {
+                        Offset::new(5.0, 0.0)
+                    },
+                );
+            }
+            ctx.constraints()
+                .constrain(flui_foundation::geometry::Size::new(100.0, 100.0))
+        })
     }
     fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, Self::Arity>) {}
     fn hit_test(
@@ -569,9 +575,11 @@ impl flui_rendering::traits::RenderBox for RefusedHitLeaf {
     fn perform_layout(
         &mut self,
         ctx: &mut flui_rendering::context::BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
-    ) -> flui_foundation::geometry::Size {
-        ctx.constraints()
-            .constrain(flui_foundation::geometry::Size::new(40.0, 40.0))
+    ) -> flui_rendering::RenderResult<flui_foundation::geometry::Size> {
+        Ok({
+            ctx.constraints()
+                .constrain(flui_foundation::geometry::Size::new(40.0, 40.0))
+        })
     }
     fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, Self::Arity>) {}
     fn hit_test_transform(

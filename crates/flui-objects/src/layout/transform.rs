@@ -347,7 +347,10 @@ impl RenderBox for RenderTransform {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
         let constraints = *ctx.constraints();
 
         // A transform takes its child's size (or the smallest size when
@@ -359,7 +362,7 @@ impl RenderBox for RenderTransform {
             ctx.layout_child(0, constraints)
         } else {
             self.has_child = false;
-            constraints.smallest()
+            Ok(constraints.smallest())
         }
     }
 
