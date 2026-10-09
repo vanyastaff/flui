@@ -84,13 +84,24 @@ impl StatelessView for MetricsReader {
 struct Sink {
     size: Rc<Cell<(u32, u32)>>,
     submitted: usize,
+    paragraphs: Vec<std::sync::Arc<flui_painting::ShapedParagraph>>,
 }
 
 impl FrameSink for Sink {
     fn surface_size(&mut self) -> (u32, u32) {
         self.size.get()
     }
-    fn submit(&mut self, _: flui_layer::Scene) -> SubmitVerdict {
+    fn submit(&mut self, scene: flui_layer::Scene) -> SubmitVerdict {
+        self.paragraphs.clear();
+        for (_, node) in scene.tree().iter() {
+            if let flui_layer::Layer::Picture(picture) = node.layer() {
+                for command in picture.picture() {
+                    if let flui_painting::DrawOp::Paragraph { paragraph, .. } = &command.op {
+                        self.paragraphs.push(std::sync::Arc::clone(paragraph));
+                    }
+                }
+            }
+        }
         self.submitted += 1;
         SubmitVerdict::Presented
     }
@@ -253,6 +264,7 @@ fn initial_inherited_scale_matches_the_renderer() {
         let mut sink = Sink {
             size: Rc::new(Cell::new((1600, 1200))),
             submitted: 0,
+            paragraphs: Vec::new(),
         };
         assert!(
             runtime
@@ -304,6 +316,7 @@ fn resize_and_surface_restore_reach_the_product_frame() {
         sink: RefCell::new(Sink {
             size: Rc::clone(&size),
             submitted: 0,
+            paragraphs: Vec::new(),
         }),
         size,
         frame_time: Cell::new(web_time::Instant::now()),
@@ -495,6 +508,7 @@ fn resize_and_surface_restore_reach_the_product_frame() {
     let mut sink = Sink {
         size: Rc::new(Cell::new((800, 600))),
         submitted: 0,
+        paragraphs: Vec::new(),
     };
     assert!(
         late.pump(
@@ -549,6 +563,7 @@ fn a_secondary_window_observation_does_not_present_the_primary() {
         sink: RefCell::new(Sink {
             size: Rc::clone(&size),
             submitted: 0,
+            paragraphs: Vec::new(),
         }),
         size,
         frame_time: Cell::new(web_time::Instant::now()),
@@ -591,6 +606,10 @@ fn owner_metrics_contract() {
                 initial_inherited_scale_matches_the_renderer as fn(),
             ),
             (
+                "bold_text_changes_the_painted_glyphs",
+                bold_text_changes_the_painted_glyphs as fn(),
+            ),
+            (
                 "preferred_locales_select_resources_and_direction",
                 preferred_locales_select_resources_and_direction as fn(),
             ),
@@ -620,6 +639,332 @@ fn owner_metrics_contract() {
             ),
         ],
     );
+}
+
+fn bold_text_changes_the_painted_glyphs() {
+    use flui_painting::typography::{
+        FontVariation, FontWeight, TextDirection, TextSpan, TextStyle,
+    };
+    use flui_platform_api::{SystemPreferences, TextWeightPreference};
+    use flui_runtime::ui_runtime::RuntimeHostServices;
+    use std::sync::{Arc, atomic::AtomicBool};
+
+    let fonts = flui_painting::FontCollection::new();
+    fonts
+        .register_font(include_bytes!(
+            "../../../flui-painting/assets/fonts/probe-variable-wght.ttf"
+        ))
+        .expect("the generated variable face loads");
+    for (kind, override_weight) in [
+        ("Text", None),
+        ("RichText", None),
+        ("EditableText", None),
+        ("Text", Some(0)),
+        ("RichText", Some(0)),
+        ("EditableText", Some(0)),
+        ("Text", Some(100)),
+        ("RichText", Some(100)),
+        ("EditableText", Some(100)),
+    ] {
+        let runtime = UiRuntime::new(
+            crate::owner_publication::window(),
+            1.0,
+            RuntimeHostServices::new(
+                Arc::new(|| {}),
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(flui_platform_api::InMemoryClipboard::new()),
+                &fonts,
+                flui_scheduler::ClockSource::Platform,
+            ),
+        )
+        .expect("text runtime");
+        let style = TextStyle::default()
+            .with_font_family("FLUI Probe Variable")
+            .with_font_weight(FontWeight::W400)
+            .with_font_size(24.0);
+        let text_root = |text: &str| match kind {
+            "Text" => flui_widgets::Text::new(text).style(style.clone()).boxed(),
+            "RichText" => {
+                flui_widgets::RichText::new(TextSpan::styled(text, style.clone())).boxed()
+            }
+            "EditableText" => flui_widgets::EditableText::new(
+                flui_widgets::TextEditingController::with_text(text),
+                flui_interaction::routing::FocusNode::new(),
+            )
+            .text_style(style.clone())
+            .boxed(),
+            _ => unreachable!(),
+        };
+        let root = text_root("AA");
+        let root = if let Some(adjustment) = override_weight {
+            flui_widgets::MediaQuery::new(
+                flui_widgets::MediaQueryData {
+                    font_weight_adjustment: adjustment,
+                    ..flui_widgets::MediaQueryData::default()
+                },
+                root,
+            )
+            .boxed()
+        } else {
+            root
+        };
+        runtime
+            .attach_root_widget_with_size(&root, 800.0, 600.0)
+            .expect("mount real text consumer");
+        let owner = OwnerHost::new();
+        let address = owner
+            .publication(owner.prepare_runtime(runtime))
+            .expect("publish text runtime")
+            .commit();
+        let size = Rc::new(Cell::new((800, 600)));
+        let effects = Effects {
+            address,
+            sink: RefCell::new(Sink {
+                size: Rc::clone(&size),
+                submitted: 0,
+                paragraphs: Vec::new(),
+            }),
+            size,
+            frame_time: Cell::new(web_time::Instant::now()),
+            trace: RefCell::new(Vec::new()),
+            expects_present: Cell::new(None),
+            owner: owner.clone(),
+            burst: Cell::new(false),
+            native_sizes: RefCell::new(Vec::new()),
+            fail_resize: Cell::new(false),
+            fail_tail: Cell::new(false),
+        };
+        let frames = owner
+            .frame_dispatcher(address)
+            .expect("text frame authority");
+        let coordinates = || {
+            let sink = effects.sink.borrow();
+            assert_eq!(
+                sink.paragraphs.len(),
+                1,
+                "one paragraph reaches the submitted frame"
+            );
+            let paragraph = &sink.paragraphs[0];
+            assert_eq!(paragraph.text(), "AA");
+            let runs: Vec<_> = paragraph.runs().collect();
+            assert_eq!(runs.len(), 1, "the generated family shapes one run");
+            assert_eq!(
+                runs[0].face().blob().bytes().as_ref().as_ref(),
+                include_bytes!("../../../flui-painting/assets/fonts/probe-variable-wght.ttf"),
+                "the submitted frame carries the registered variable face"
+            );
+            match runs[0].coords() {
+                [] => vec![0], // A default variable instance may omit its zero coordinates.
+                [weight] => vec![*weight],
+                coords => panic!("the generated face has one weight axis, got {coords:?}"),
+            }
+        };
+        frames.deliver(&effects).expect("initial text frame");
+        let authored = coordinates();
+        for (preference, expected) in [
+            (Some(TextWeightPreference::NoPreference), 400.0),
+            (Some(TextWeightPreference::Bold), 700.0),
+            (Some(TextWeightPreference::from_adjustment(237)), 637.0),
+            (Some(TextWeightPreference::from_adjustment(-137)), 263.0),
+            (
+                Some(TextWeightPreference::from_adjustment(i32::MAX)),
+                1000.0,
+            ),
+            (Some(TextWeightPreference::from_adjustment(i32::MIN)), 1.0),
+            (Some(TextWeightPreference::NoPreference), 400.0),
+            (None, 400.0),
+        ] {
+            let values = preference.map_or_else(SystemPreferences::default, |value| {
+                SystemPreferences::default().with_text_weight(value)
+            });
+            owner
+                .update_preferences(values, &effects)
+                .expect("accept text-weight observation");
+            frames.deliver(&effects).expect("text-weight frame");
+            let resolved = coordinates();
+            if preference == Some(TextWeightPreference::Bold) && override_weight.is_none() {
+                assert!(
+                    resolved[0] > authored[0],
+                    "accepted Bold Text must select a heavier painted font instance: authored={authored:?}, resolved={resolved:?}"
+                );
+            }
+            if (preference.is_none() || preference == Some(TextWeightPreference::NoPreference))
+                && override_weight.is_none()
+            {
+                assert_eq!(
+                    resolved, authored,
+                    "off or unknown restores authored weight"
+                );
+            }
+            let expected = match override_weight {
+                Some(0) => 400.0,
+                Some(_) => 500.0,
+                None => expected,
+            };
+            let mut reference = flui_painting::TextPainter::new()
+                .with_text(TextSpan::styled(
+                    "AA",
+                    TextStyle {
+                        font_variations: vec![FontVariation::new("wght", expected)],
+                        ..style.clone()
+                    },
+                ))
+                .with_text_direction(TextDirection::Ltr);
+            reference.layout(&mut flui_painting::TextContext::new(&fonts), 0.0, 800.0);
+            let mut canvas = flui_painting::Canvas::new();
+            reference.paint(&mut canvas, flui_foundation::geometry::Offset::ZERO);
+            let mut expected_coords = canvas
+                .finish()
+                .iter()
+                .find_map(|command| {
+                    if let flui_painting::DrawOp::Paragraph { paragraph, .. } = &command.op {
+                        Some(
+                            paragraph
+                                .runs()
+                                .next()
+                                .expect("reference run")
+                                .coords()
+                                .to_vec(),
+                        )
+                    } else {
+                        None
+                    }
+                })
+                .expect("reference paragraph");
+            if expected_coords.is_empty() {
+                expected_coords.push(0);
+            }
+            assert_eq!(
+                resolved, expected_coords,
+                "{kind} must paint the exact projected weight"
+            );
+        }
+        if override_weight.is_none() {
+            owner
+                .update_preferences(
+                    SystemPreferences::default().with_text_weight(TextWeightPreference::Bold),
+                    &effects,
+                )
+                .expect("seed a late text runtime");
+            let mut late = UiRuntime::new(
+                crate::owner_publication::window(),
+                1.0,
+                RuntimeHostServices::new(
+                    Arc::new(|| {}),
+                    Arc::new(AtomicBool::new(false)),
+                    Arc::new(flui_platform_api::InMemoryClipboard::new()),
+                    &fonts,
+                    flui_scheduler::ClockSource::Platform,
+                )
+                .with_preferences(
+                    owner
+                        .preferences()
+                        .expect("live text owner")
+                        .expect("accepted text-weight observation"),
+                ),
+            )
+            .expect("late text runtime");
+            let late_root = text_root("AA");
+            late.attach_root_widget_with_size(&late_root, 800.0, 600.0)
+                .expect("mount late text consumer");
+            let mut sink = Sink {
+                size: Rc::new(Cell::new((800, 600))),
+                submitted: 0,
+                paragraphs: Vec::new(),
+            };
+            assert!(
+                late.pump(
+                    &mut flui_runtime::pump::SampledClock(web_time::Instant::now()),
+                    &mut sink,
+                )
+                .presented()
+            );
+            let late_paragraph = sink.paragraphs.first().expect("late painted paragraph");
+            assert_eq!(late_paragraph.text(), "AA");
+            let late_run = late_paragraph.runs().next().expect("late painted run");
+            assert_eq!(
+                late_run.face().blob().bytes().as_ref().as_ref(),
+                include_bytes!("../../../flui-painting/assets/fonts/probe-variable-wght.ttf"),
+            );
+            assert!(
+                late_run.coords().first().copied().unwrap_or(0) > authored[0],
+                "{kind}'s first painted frame must use the accepted heavier instance"
+            );
+            let accepted_coords = late_run.coords().to_vec();
+            let primary = late.presentation_id();
+            let secondary = late.install_presentation(
+                late.assemble_presentation(crate::owner_publication::window()),
+            );
+            late.attach_root_widget_with_size_to(secondary, &text_root("AAA"), 800.0, 600.0)
+                .expect("mount a late presentation's real text consumer");
+            assert!(
+                late.pump(
+                    &mut flui_runtime::pump::SampledClock(web_time::Instant::now()),
+                    &mut sink,
+                )
+                .presented()
+            );
+            let paragraph = sink.paragraphs.first().expect("late presentation frame");
+            assert_eq!(
+                paragraph.text(),
+                "AAA",
+                "the new presentation produced this frame"
+            );
+            let run = paragraph.runs().next().expect("late presentation run");
+            assert_eq!(
+                run.face().blob().bytes().as_ref().as_ref(),
+                include_bytes!("../../../flui-painting/assets/fonts/probe-variable-wght.ttf"),
+            );
+            assert_eq!(
+                run.coords(),
+                accepted_coords,
+                "{kind}'s first late-presentation frame must retain the accepted weight"
+            );
+            // Only one presentation needs content after this seed proof;
+            // simultaneous presentation submit routing is a separate contract.
+            assert!(late.close_presentation_entered(primary));
+            let late_address = owner
+                .publication(owner.prepare_runtime(late))
+                .expect("publish late text runtime")
+                .commit();
+            let late_effects = Effects {
+                address: late_address,
+                size: Rc::clone(&sink.size),
+                sink: RefCell::new(sink),
+                frame_time: Cell::new(web_time::Instant::now()),
+                trace: RefCell::new(Vec::new()),
+                expects_present: Cell::new(None),
+                owner: owner.clone(),
+                burst: Cell::new(false),
+                native_sizes: RefCell::new(Vec::new()),
+                fail_resize: Cell::new(false),
+                fail_tail: Cell::new(false),
+            };
+            owner
+                .update_preferences(
+                    SystemPreferences::default()
+                        .with_text_weight(TextWeightPreference::NoPreference),
+                    &effects,
+                )
+                .expect("restore both text runtimes");
+            owner
+                .frame_dispatcher(late_address)
+                .expect("late frame authority")
+                .deliver(&late_effects)
+                .expect("late text-weight frame");
+            let sink = late_effects.sink.borrow();
+            let restored = sink.paragraphs[0].runs().next().expect("restored run");
+            let restored = match restored.coords() {
+                [] => vec![0],
+                coords => coords.to_vec(),
+            };
+            assert_eq!(
+                restored, authored,
+                "{kind} restores its authored late-runtime weight"
+            );
+        }
+        owner.shutdown(&effects);
+    }
 }
 
 fn preferred_locales_select_resources_and_direction() {
@@ -714,6 +1059,7 @@ fn preferred_locales_select_resources_and_direction() {
             sink: RefCell::new(Sink {
                 size: Rc::clone(&size),
                 submitted: 0,
+                paragraphs: Vec::new(),
             }),
             size,
             frame_time: Cell::new(web_time::Instant::now()),
@@ -836,6 +1182,7 @@ fn preferred_locales_select_resources_and_direction() {
             let mut sink = Sink {
                 size: Rc::new(Cell::new((800, 600))),
                 submitted: 0,
+                paragraphs: Vec::new(),
             };
             assert!(
                 late.pump(
@@ -924,6 +1271,7 @@ fn preference_fanout_survives_a_failing_runtime() {
                 sink: RefCell::new(Sink {
                     size: Rc::clone(&size),
                     submitted: 0,
+                    paragraphs: Vec::new(),
                 }),
                 size,
                 frame_time: Cell::new(web_time::Instant::now()),
@@ -1037,6 +1385,7 @@ fn queued_state_bursts_coalesce_between_observing_frames() {
         sink: RefCell::new(Sink {
             size: Rc::clone(&size),
             submitted: 0,
+            paragraphs: Vec::new(),
         }),
         size,
         frame_time: Cell::new(web_time::Instant::now()),
@@ -1139,6 +1488,7 @@ fn resize_failure_preserves_other_batched_window_state() {
             sink: RefCell::new(Sink {
                 size: Rc::clone(&size),
                 submitted: 0,
+                paragraphs: Vec::new(),
             }),
             size,
             frame_time: Cell::new(web_time::Instant::now()),
@@ -1334,6 +1684,7 @@ fn pointer_stream_and_keyboard_survive_interleaved_resize() {
                 sink: RefCell::new(Sink {
                     size: Rc::clone(&size),
                     submitted: 0,
+                    paragraphs: Vec::new(),
                 }),
                 size,
                 frame_time: Cell::new(web_time::Instant::now()),

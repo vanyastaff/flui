@@ -136,6 +136,7 @@ impl RenderBox for RenderErrorBox {
                 reason = "logical sizes narrow to the shaper's f32 layout space"
             )]
             let paragraph = ctx.text().shape(&ParagraphSpec {
+                font_weight_adjustment: 0,
                 spans: &spans,
                 default_style: Some(&style),
                 font_size: DEBUG_FONT_SIZE as f32,

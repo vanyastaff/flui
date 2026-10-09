@@ -261,6 +261,7 @@ fn the_overlay_shapes_through_the_ui_runtime_text_context() {
         let spans = [("GPU FPS Frame ms 0123456789.=_ ".to_owned(), None)];
         let shaped = text
             .shape(&flui_painting::parley_text::ParagraphSpec {
+                font_weight_adjustment: 0,
                 spans: &spans,
                 default_style: None,
                 font_size: 11.0,

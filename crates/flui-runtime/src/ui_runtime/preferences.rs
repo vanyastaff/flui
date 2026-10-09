@@ -9,6 +9,11 @@ use crate::{owner::SystemPreferencesSnapshot, presentation::PresentationState};
 pub(super) fn publish(presentation: &PresentationState, snapshot: &SystemPreferencesSnapshot) {
     presentation.media_query.update(|data| {
         data.text_scale_factor = snapshot.values.text_scale().unwrap_or(1.0);
+        data.font_weight_adjustment = match snapshot.values.text_weight() {
+            Some(flui_platform_api::TextWeightPreference::Bold) => 300,
+            Some(flui_platform_api::TextWeightPreference::Adjustment(value)) => value.get(),
+            _ => 0,
+        };
         data.high_contrast = snapshot.values.high_contrast().unwrap_or(false);
         data.preferred_locales = snapshot.values.locales().map(Into::into);
     });
