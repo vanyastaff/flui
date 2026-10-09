@@ -1,8 +1,6 @@
 //! Viewport offset for scroll position tracking.
 
-use std::{fmt::Debug, sync::Arc};
-
-use parking_lot::{Mutex, RwLock};
+use std::{cell::RefCell, fmt::Debug, rc::Rc};
 
 /// The direction of a scroll, relative to the positive scroll offset axis.
 ///
@@ -46,7 +44,7 @@ impl ScrollDirection {
 ///
 /// This trait is a `ChangeNotifier`-like that notifies its listeners when
 /// `pixels` changes.
-pub trait ViewportOffset: Debug + Send + Sync {
+pub trait ViewportOffset: Debug {
     /// The number of pixels to offset the children in the opposite of the axis
     /// direction.
     ///
@@ -106,10 +104,10 @@ pub trait ViewportOffset: Debug + Send + Sync {
     fn allow_implicit_scrolling(&self) -> bool;
 
     /// Adds a listener that will be called when `pixels` changes.
-    fn add_listener(&self, listener: Arc<dyn Fn() + Send + Sync>);
+    fn add_listener(&self, listener: Rc<dyn Fn()>);
 
     /// Removes a listener.
-    fn remove_listener(&self, listener: &Arc<dyn Fn() + Send + Sync>);
+    fn remove_listener(&self, listener: &Rc<dyn Fn()>);
 }
 
 /// A simple fixed viewport offset that doesn't change.
@@ -197,14 +195,14 @@ impl ViewportOffset for FixedViewportOffset {
         false
     }
 
-    fn add_listener(&self, _listener: Arc<dyn Fn() + Send + Sync>) {
+    fn add_listener(&self, _listener: Rc<dyn Fn()>) {
         // No-op: FixedViewportOffset's `pixels` value never changes
         // (`jump_to` / `animate_to` are no-ops by design), so no
         // listener could ever fire. The trait requires the method,
         // so we keep it but drop the storage that would back it.
     }
 
-    fn remove_listener(&self, _listener: &Arc<dyn Fn() + Send + Sync>) {
+    fn remove_listener(&self, _listener: &Rc<dyn Fn()>) {
         // No-op for the same reason as `add_listener`.
     }
 }
@@ -235,10 +233,10 @@ pub struct ScrollableViewportOffset {
     allow_implicit_scrolling: bool,
 
     /// Listeners for change notifications.
-    listeners: RwLock<Vec<Arc<dyn Fn() + Send + Sync>>>,
+    listeners: RefCell<Vec<Rc<dyn Fn()>>>,
 
     /// Reentrant notification bookkeeping.
-    notification_state: Mutex<NotificationState>,
+    notification_state: RefCell<NotificationState>,
 }
 
 #[derive(Debug, Default)]
@@ -257,7 +255,7 @@ impl Debug for ScrollableViewportOffset {
             .field("viewport_dimension", &self.viewport_dimension)
             .field("user_scroll_direction", &self.user_scroll_direction)
             .field("allow_implicit_scrolling", &self.allow_implicit_scrolling)
-            .field("listeners_count", &self.listeners.read().len())
+            .field("listeners_count", &self.listeners.borrow().len())
             .finish_non_exhaustive()
     }
 }
@@ -273,8 +271,8 @@ impl ScrollableViewportOffset {
             viewport_dimension: 0.0,
             user_scroll_direction: ScrollDirection::Idle,
             allow_implicit_scrolling: true,
-            listeners: RwLock::new(Vec::new()),
-            notification_state: Mutex::new(NotificationState::default()),
+            listeners: RefCell::new(Vec::new()),
+            notification_state: RefCell::new(NotificationState::default()),
         }
     }
 
@@ -343,7 +341,7 @@ impl ScrollableViewportOffset {
 
     fn notify_listeners(&self) {
         {
-            let mut state = self.notification_state.lock();
+            let mut state = self.notification_state.borrow_mut();
             if state.notifying {
                 state.pending_passes = state.pending_passes.saturating_add(1);
                 return;
@@ -352,14 +350,14 @@ impl ScrollableViewportOffset {
         }
 
         loop {
-            let listeners = self.listeners.read().clone();
+            let listeners = self.listeners.borrow().clone();
             for listener in listeners {
                 if self.is_listener_registered(&listener) {
                     listener();
                 }
             }
 
-            let mut state = self.notification_state.lock();
+            let mut state = self.notification_state.borrow_mut();
             if state.pending_passes > 0 {
                 state.pending_passes -= 1;
                 continue;
@@ -369,11 +367,11 @@ impl ScrollableViewportOffset {
         }
     }
 
-    fn is_listener_registered(&self, listener: &Arc<dyn Fn() + Send + Sync>) -> bool {
+    fn is_listener_registered(&self, listener: &Rc<dyn Fn()>) -> bool {
         self.listeners
-            .read()
+            .borrow()
             .iter()
-            .any(|registered| Arc::ptr_eq(registered, listener))
+            .any(|registered| Rc::ptr_eq(registered, listener))
     }
 }
 
@@ -444,13 +442,13 @@ impl ViewportOffset for ScrollableViewportOffset {
         self.allow_implicit_scrolling
     }
 
-    fn add_listener(&self, listener: Arc<dyn Fn() + Send + Sync>) {
-        self.listeners.write().push(listener);
+    fn add_listener(&self, listener: Rc<dyn Fn()>) {
+        self.listeners.borrow_mut().push(listener);
     }
 
-    fn remove_listener(&self, listener: &Arc<dyn Fn() + Send + Sync>) {
-        let mut listeners = self.listeners.write();
-        if let Some(pos) = listeners.iter().position(|l| Arc::ptr_eq(l, listener)) {
+    fn remove_listener(&self, listener: &Rc<dyn Fn()>) {
+        let mut listeners = self.listeners.borrow_mut();
+        if let Some(pos) = listeners.iter().position(|l| Rc::ptr_eq(l, listener)) {
             listeners.remove(pos);
         }
     }

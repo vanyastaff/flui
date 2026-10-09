@@ -235,7 +235,7 @@ impl ViewState<Switch> for SwitchState {
         // The handle is consumed directly by the listener closure; nothing
         // else needs to re-read it later, so it is not stored on `self`.
         let rebuild = ctx.rebuild_handle();
-        self.states_listener = Some(self.states.add_listener(std::sync::Arc::new(move || {
+        self.states_listener = Some(self.states.add_listener(std::rc::Rc::new(move || {
             rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
         })));
     }
@@ -282,7 +282,7 @@ impl ViewState<Switch> for SwitchState {
                 .or_else(|| switch_default_overlay_color(&colors, *live_states))
         });
 
-        let painter: std::sync::Arc<dyn CustomPainter> = std::sync::Arc::new(SwitchPainter {
+        let painter: std::rc::Rc<dyn CustomPainter> = std::rc::Rc::new(SwitchPainter {
             thumb_color,
             track_color,
             track_outline_color,

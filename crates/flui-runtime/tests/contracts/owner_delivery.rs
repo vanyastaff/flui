@@ -216,8 +216,8 @@ fn shutdown_withdraws_admission_before_leased_runtime_retires() {
     let capture = Capture(Rc::clone(&retired));
     runtime
         .owner_frame()
-        .local_post_frame_handle()
-        .schedule_local(move |_| drop(capture))
+        .post_frame_handle()
+        .schedule(move |_| drop(capture))
         .expect("capture admitted");
     let address = install(&owner, runtime);
     let dispatcher = owner.frame_dispatcher(address).expect("frame authority");

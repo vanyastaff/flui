@@ -34,14 +34,12 @@
 //!
 //! # It invents nothing
 //!
-//! Both types are thin: a shared cell for the value plus a shared,
-//! optionally-populated [`RebuildHandle`] slot. Everything about *when* a
-//! scheduled rebuild actually runs, how bursts of `schedule` calls coalesce,
-//! and why a call from a build already in progress joins that same drain
-//! instead of waiting a frame is [`RebuildHandle::schedule`]'s contract,
-//! unchanged — see `owner/rebuild_handle.rs` (its module doc and the tests
-//! around lines 296-410 exercise that contract directly). These types only
-//! decide *whether* to call it.
+//! Both types share their value and an optional binding containing the
+//! element's [`RebuildHandle`] and [`crate::WriterSource`]. Bound writes use
+//! the presentation's writer admission before changing the value or invoking
+//! an update closure. A write during `build`, or after the writer closes,
+//! leaves the value unchanged and emits a diagnostic. Accepted writes use
+//! [`RebuildHandle::schedule`], which coalesces rebuild requests.
 //!
 //! # Binding
 //!
@@ -63,11 +61,10 @@
 //!   before the element exists to rebuild. Mirrors
 //!   `RebuildHandle::inert`'s "no scheduler yet" window (a crate-private
 //!   constructor, hence not linked).
-//! - **Mutation after the element is gone** is a silent no-op for the same
-//!   reason a stale [`RebuildHandle`] is: `schedule` writes to the owner's
-//!   inbox, and `BuildOwner::build_scope`'s drain looks the element id up and
-//!   skips it if the node is gone. Nothing here re-implements that check;
-//!   it falls out of delegating straight to `RebuildHandle::schedule`.
+//! - **Mutation after the element is gone** can still change shared storage
+//!   while its presentation's writer remains open. The stale rebuild request
+//!   is skipped when the owner drains its inbox. Once the writer closes,
+//!   writes are refused before changing storage.
 //!
 //! # Cloning and thread affinity
 //!
@@ -86,6 +83,27 @@ use flui_foundation::RebuildReason;
 
 use crate::context::LifecycleContext;
 use crate::owner::RebuildHandle;
+
+#[derive(Clone)]
+struct LocalStateBinding {
+    rebuild: RebuildHandle,
+    writer: crate::WriterSource,
+}
+
+fn mutation_rebuild(
+    binding: &RefCell<Option<LocalStateBinding>>,
+) -> Result<Option<RebuildHandle>, crate::EventContextError> {
+    let binding = binding.borrow().clone();
+    let Some(binding) = binding else {
+        return Ok(None);
+    };
+    let admission = binding.writer.write(|cx| binding.writer.check_context(cx));
+    if let Err(error) = admission {
+        tracing::warn!(target: "flui::signals", %error, "a local state write was refused");
+        return Err(error);
+    }
+    Ok(Some(binding.rebuild))
+}
 
 /// `Rc`-backed, `Copy`-typed local state bound to one element's rebuild
 /// trigger.
@@ -140,7 +158,7 @@ use crate::owner::RebuildHandle;
 #[derive(Clone)]
 pub struct StateCell<T: Copy> {
     value: Rc<Cell<T>>,
-    rebuild: Rc<RefCell<Option<RebuildHandle>>>,
+    rebuild: Rc<RefCell<Option<LocalStateBinding>>>,
 }
 
 impl<T: Copy> StateCell<T> {
@@ -191,7 +209,10 @@ impl<T: Copy> StateCell<T> {
         // stored handle drop only after the borrow has fallen: a
         // `RebuildHandle` carries `Arc`s whose destructors must never run
         // under this slot's `RefMut`.
-        let handle = ctx.rebuild_handle();
+        let handle = LocalStateBinding {
+            rebuild: ctx.rebuild_handle(),
+            writer: ctx.writer_source(),
+        };
         let previous = self.rebuild.borrow_mut().replace(handle);
         drop(previous);
     }
@@ -226,8 +247,13 @@ impl<T: Copy> StateCell<T> {
     /// assert_eq!(count.get(), 5);
     /// ```
     pub fn set(&self, value: T) {
+        let Ok(handle) = mutation_rebuild(&self.rebuild) else {
+            return;
+        };
         self.value.set(value);
-        self.schedule();
+        if let Some(handle) = handle {
+            handle.schedule(RebuildReason::StateChange);
+        }
     }
 
     /// Replace the value with `f(current)` and, if bound, schedule a
@@ -243,17 +269,11 @@ impl<T: Copy> StateCell<T> {
     /// assert_eq!(count.get(), 10);
     /// ```
     pub fn update(&self, f: impl FnOnce(T) -> T) {
+        if mutation_rebuild(&self.rebuild).is_err() {
+            return;
+        }
         let next = f(self.value.get());
         self.set(next);
-    }
-
-    /// Schedule a [`RebuildReason::StateChange`] rebuild if bound; a no-op
-    /// otherwise (unbound, or the element has since been unmounted — see the
-    /// [module docs](self)).
-    fn schedule(&self) {
-        if let Some(handle) = self.rebuild.borrow().as_ref() {
-            handle.schedule(RebuildReason::StateChange);
-        }
     }
 }
 
@@ -281,8 +301,8 @@ impl<T: Copy + fmt::Debug> fmt::Debug for StateCell<T> {
 /// mean cloning a `Vec` just to check its length.
 ///
 /// See the [module docs](self) for the full contract shared with
-/// [`StateCell`]: unbound mutation is silent, mutation after unmount is a
-/// no-op, and clones share storage.
+/// [`StateCell`]: unbound mutation schedules nothing, bound writes require
+/// writer admission, stale rebuild requests are skipped, and clones share storage.
 ///
 /// # Example
 ///
@@ -310,7 +330,7 @@ impl<T: Copy + fmt::Debug> fmt::Debug for StateCell<T> {
 #[derive(Clone)]
 pub struct StateHandle<T> {
     value: Rc<RefCell<T>>,
-    rebuild: Rc<RefCell<Option<RebuildHandle>>>,
+    rebuild: Rc<RefCell<Option<LocalStateBinding>>>,
 }
 
 impl<T> StateHandle<T> {
@@ -359,7 +379,10 @@ impl<T> StateHandle<T> {
         // stored handle drop only after the borrow has fallen: a
         // `RebuildHandle` carries `Arc`s whose destructors must never run
         // under this slot's `RefMut`.
-        let handle = ctx.rebuild_handle();
+        let handle = LocalStateBinding {
+            rebuild: ctx.rebuild_handle(),
+            writer: ctx.writer_source(),
+        };
         let previous = self.rebuild.borrow_mut().replace(handle);
         drop(previous);
     }
@@ -423,18 +446,19 @@ impl<T> StateHandle<T> {
     /// items.update(|v| v.push(3));
     /// assert_eq!(items.with(|v| v.clone()), vec![1, 2, 3]);
     /// ```
+    /// If `f` panics after modifying the value, the committed edit still
+    /// schedules a rebuild before the original panic resumes. The value
+    /// borrow is released before invoking the frame-request hook.
     pub fn update(&self, f: impl FnOnce(&mut T)) {
-        f(&mut self.value.borrow_mut());
-        self.schedule();
-    }
-
-    /// Schedule a [`RebuildReason::StateChange`] rebuild if bound; a no-op
-    /// otherwise (unbound, or the element has since been unmounted — see the
-    /// [module docs](self)).
-    fn schedule(&self) {
-        if let Some(handle) = self.rebuild.borrow().as_ref() {
-            handle.schedule(RebuildReason::StateChange);
+        let Ok(handle) = mutation_rebuild(&self.rebuild) else {
+            return;
+        };
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        recovery.run(|| f(&mut self.value.borrow_mut()));
+        if let Some(handle) = handle {
+            recovery.run(|| handle.schedule(RebuildReason::StateChange));
         }
+        recovery.finish();
     }
 }
 

@@ -99,6 +99,8 @@ impl UiRuntime {
         for presentation in self.presentations.iter() {
             let vsync = presentation.vsync();
             let tick = presentation.motion_tick(raw);
+            let animation_enabled =
+                self.scheduler.frames_enabled() && !presentation.clock().is_hidden();
             // Sampled BEFORE `tick_all`, not after: the tick that completes
             // a controller still delivers that controller's final value and
             // status change (a ticker's tick calls its callback
@@ -121,8 +123,11 @@ impl UiRuntime {
             // for a controller with no other tree-visible effect, since
             // nothing else keeps `needs_redraw`/`has_pending_work()` true
             // once that clobber happens.
-            let was_running = vsync.has_running();
-            vsync.tick_all(tick.now().as_duration().as_secs_f64());
+            let was_running =
+                animation_enabled && vsync.has_running() && !presentation.motion_is_paused();
+            if animation_enabled {
+                vsync.tick_all(&tick);
+            }
 
             if was_running {
                 // A running controller with no OTHER tree-visible effect
@@ -980,7 +985,11 @@ impl UiRuntime {
         // under backpressure into one wake, same as before this move) —
         // only the ordering relative to `mark_rendered()` changed.
         for presentation in self.presentations.iter() {
-            if presentation.vsync().has_running() {
+            if self.scheduler.frames_enabled()
+                && !presentation.clock().is_hidden()
+                && presentation.vsync().has_running()
+                && !presentation.motion_is_paused()
+            {
                 presentation.clock().mark_demand(DemandKind::Animation);
                 if presentation.clock().try_arm_redraw_request() {
                     self.wake_frame();

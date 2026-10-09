@@ -1,0 +1,10 @@
+error[E0624]: method `dispose` is private
+ --> crates/flui-animation/tests/compile_fail/driven_controller_has_no_bare_dispose.rs:9:14
+  |
+9 |     observer.dispose();
+  |              ^^^^^^^ private method
+  |
+ ::: crates/flui-animation/src/controller.rs
+  |
+  |     pub(crate) fn dispose(&self, retirement: &mut Retirement) {
+  |     --------------------------------------------------------- private method defined here

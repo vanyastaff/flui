@@ -450,17 +450,33 @@ Each presentation maps that one raw time through its own
 `flui_animation::MotionClock` before ticking its registry, so the time a
 registry sees is finite and never runs backwards: an override that is not a
 duration, or a raw time earlier than the last, holds the animation
-(`an_invalid_or_backwards_frame_time_holds_the_animation`). The clock runs at
-its default rate while `AnimationController` still applies the scheduler's
-process-wide time dilation, so slow motion has one source.
+(`an_invalid_or_backwards_frame_time_holds_the_animation`). Each presentation
+can change its own rate, pause or step through its exact agent window's owner
+inbox ([ADR-0176](../../docs/adr/ADR-0176-presentation-animation-playback.md)).
+There is no process-wide time multiplier or scheduler ticker controller path.
 
-This covers the UI runtime's `Vsync` registry only. A controller built on the
-scheduler (`AnimationController::new(d, UI runtime.scheduler())`) is ticked by a
-`flui_scheduler::Ticker`, which ignores the timestamp it is handed and
-measures elapsed time on the wall clock, so a pump driven on a manual clock
-does not advance it. That behaviour is recorded and pinned in
-`flui-scheduler`'s `ARCHITECTURE.md` ("A ticker's elapsed time is wall-clock
-time, not the frame timestamp").
+The presentation keeps one driver-bound registry for its lifetime. A bound
+controller requests its first frame through its live seat, including a restart
+whose directional status is unchanged. The frame capability holds only the
+scheduler's weak wake edge, a weak window and the presentation's revocable
+lifetime. A retained registry cannot wake surviving windows after its owner
+closes (`closed_presentation_animation_cannot_wake_a_surviving_window`).
+Registry callbacks and outgoing
+capture retirement occur outside borrows. The public pump row
+`starting_an_idle_presentation_animation_requests_its_first_frame` asserts
+the request before pumping and then observes completion through that driver.
+
+`agent_playback_drives_independent_windows_and_one_paused_step_frame` drives
+two real runtime presentation registries at different rates, then observes
+paused frame production and one addressed step frame without sibling demand.
+`agent_motion_sets_rate_and_steps_a_paused_window` pins whole-request validation
+and closed-window refusal through the public agent handle.
+
+Hidden presentations and disabled frames do not invoke controllers or create
+animation continuation demand. Their clocks still observe raw time, so the
+first visible frame catches up instead of replaying hidden frames.
+`gated_presentations_hold_samples_then_catch_up_when_visible` pins both gates
+through the runtime frame producer.
 
 ### `Vsync` ticks in the persistent phase, not among the transient callbacks
 

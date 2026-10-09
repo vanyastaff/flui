@@ -64,6 +64,7 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
     // here until it is classified below, exactly like a field added to any
     // of the three state structs.
     let SchedulerInner {
+        wake,
         frame,
         callbacks,
         binding,
@@ -72,12 +73,9 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
     } = &*scheduler.inner;
 
     let FrameState {
-        scheduler_phase: _,
         current_frame,
         current_vsync_time,
         budget,
-        frame_scheduled: _,
-        wake_delivery,
         frame_count: _,
         janky_frame_count: _,
         warm_up_done: _,
@@ -85,16 +83,25 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
         completion_waiters,
         frame_thread,
     } = frame;
+    let WakeShared {
+        scheduler_phase: _,
+        frames_enabled: _,
+        frame_thread: _,
+        frame_scheduled: _,
+        wake_delivery,
+        on_frame_scheduled,
+        closed: _,
+    } = &**wake;
     assert!(
-        current_frame.try_lock().is_some(),
+        current_frame.try_borrow_mut().is_ok(),
         "current_frame is locked during a callback"
     );
     assert!(
-        current_vsync_time.try_lock().is_some(),
+        current_vsync_time.try_borrow_mut().is_ok(),
         "current_vsync_time is locked during a callback"
     );
     assert!(
-        budget.try_lock().is_some(),
+        budget.try_borrow_mut().is_ok(),
         "budget is locked during a callback"
     );
     assert!(
@@ -102,11 +109,11 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
         "frame_thread is locked during a callback"
     );
     assert!(
-        idle_deadline.try_lock().is_some(),
+        idle_deadline.try_borrow_mut().is_ok(),
         "idle_deadline is locked during a callback"
     );
     assert!(
-        completion_waiters.try_lock().is_some(),
+        completion_waiters.try_borrow_mut().is_ok(),
         "completion_waiters is locked during a callback"
     );
 
@@ -116,7 +123,6 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
     );
 
     let CallbackState {
-        post_frame_registration,
         transient,
         cancelled: _,
         id_gen: _,
@@ -127,63 +133,52 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
         lifecycle_listeners,
     } = callbacks;
     assert!(
-        post_frame_registration.try_lock().is_some(),
-        "post_frame_registration is locked during a callback"
-    );
-    assert!(
-        transient.try_lock().is_some(),
+        transient.try_borrow_mut().is_ok(),
         "transient is locked during a callback"
     );
     assert!(
-        persistent.try_lock().is_some(),
+        persistent.try_borrow_mut().is_ok(),
         "persistent is locked during a callback"
     );
     assert!(
-        post_frame.try_lock().is_some(),
+        post_frame.try_borrow_mut().is_ok(),
         "post_frame is locked during a callback"
     );
     assert!(
-        microtasks.try_lock().is_some(),
+        microtasks.try_borrow_mut().is_ok(),
         "microtasks is locked during a callback"
     );
     assert!(
-        idle.try_lock().is_some(),
+        idle.try_borrow_mut().is_ok(),
         "idle is locked during a callback"
     );
     assert!(
-        lifecycle_listeners.try_lock().is_some(),
+        lifecycle_listeners.try_borrow_mut().is_ok(),
         "lifecycle_listeners is locked during a callback"
     );
 
     let BindingState {
-        frames_enabled: _,
         lifecycle_state: _,
-        epoch_start,
         timings_callbacks,
         pending_timings,
         last_timings_report,
         performance_mode_requests: _,
         current_performance_mode,
-        on_frame_scheduled,
     } = binding;
     assert!(
-        epoch_start.try_lock().is_some(),
-        "epoch_start is locked during a callback"
-    );
-    assert!(
-        timings_callbacks.try_lock().is_some(),
+        timings_callbacks.try_borrow_mut().is_ok(),
         "timings_callbacks is locked during a callback"
     );
     assert!(
-        pending_timings.try_lock().is_some(),
+        pending_timings.try_borrow_mut().is_ok(),
         "pending_timings is locked during a callback"
     );
     assert!(
-        last_timings_report.try_lock().is_some(),
+        last_timings_report.try_borrow_mut().is_ok(),
         "last_timings_report is locked during a callback"
     );
     assert!(
-        current_performance_mode.try_lock().is_some(),
+        current_performance_mode.try_borrow_mut().is_ok(),
         "current_performance_mode is locked during a callback"
     );
     assert!(
@@ -233,8 +228,11 @@ fn transient_callback_runs_with_no_scheduler_lock_held() {
 /// lock-discipline test, while `notify_frame_completion` is exactly where a
 /// lock-across-`wake()` regression would land.
 fn completion_waker_runs_with_no_scheduler_lock_held() {
+    thread_local! {
+        static PROBE: RefCell<Option<WeakUpdateScheduler>> = const { RefCell::new(None) };
+    }
     struct ProbingWaker {
-        probe: UpdateScheduler,
+        owner_thread: std::thread::ThreadId,
         ran: Arc<AtomicBool>,
     }
 
@@ -244,16 +242,25 @@ fn completion_waker_runs_with_no_scheduler_lock_held() {
         }
 
         fn wake_by_ref(self: &Arc<Self>) {
-            assert_no_scheduler_lock_held(&self.probe);
+            assert_eq!(self.owner_thread, std::thread::current().id());
+            let probe = PROBE
+                .with(|slot| {
+                    slot.borrow()
+                        .as_ref()
+                        .and_then(WeakUpdateScheduler::upgrade)
+                })
+                .expect("live owner probe");
+            assert_no_scheduler_lock_held(&probe);
             self.ran.store(true, Ordering::Release);
         }
     }
 
     let scheduler = UpdateScheduler::new();
+    PROBE.with(|slot| *slot.borrow_mut() = Some(scheduler.downgrade()));
     let ran = Arc::new(AtomicBool::new(false));
     let mut future = scheduler.end_of_frame();
     let waker = Waker::from(Arc::new(ProbingWaker {
-        probe: scheduler.clone(),
+        owner_thread: std::thread::current().id(),
         ran: Arc::clone(&ran),
     }));
     let mut cx = Context::from_waker(&waker);

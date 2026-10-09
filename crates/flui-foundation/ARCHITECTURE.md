@@ -206,8 +206,8 @@ typed protocol tree rather than this diagnostics representation (ADR-0095).
 | Site | Primitive | Where | Why |
 |------|-----------|-------|-----|
 | `GlobalKey` ID counter | `AtomicU64` (static) | `key.rs:140, 462` | Monotonic key allocator. `fetch_add` only, no contention pattern. Off any hot path. |
-| `ChangeNotifier::listeners` / `Notifier::listeners` | `Arc<parking_lot::Mutex<HashMap<ListenerId, …Callback>>>` | `notifier.rs` / `notifier_generic.rs` (struct fields) | Listener registry held during register/unregister/notify. Notifier callbacks are invoked outside the lock (clone-then-iterate pattern from [`docs/plans/2026-03-31-core-crates-hardening.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/plans/2026-03-31-core-crates-hardening.md) Task 3). Not on the render hot path; consumed by the build phase. |
-| `ChangeNotifier::next_id` / `Notifier::next_id` | `Arc<AtomicUsize>` | `notifier.rs` / `notifier_generic.rs` (struct fields) | Listener-ID allocator. `fetch_add` only. |
+| `Notifier::listeners` | `Rc<ListenerStorage>` with `RefCell<HashMap<ListenerId, …>>` | `notifier_generic.rs` | Owner-local membership. Delivery snapshots registration order and releases every borrow before invocation or retirement. `ChangeNotifier` adapts this same storage. |
+| `Notifier::next_id` | `Rc<Cell<usize>>` | `notifier_generic.rs` | Monotonic owner-local identities. Exhaustion refuses permanently before an identity can be reissued. |
 
 No `RwLock` in `flui-foundation`. No primitive listed here sits inside `perform_layout` / `paint` / `View::build`.
 
@@ -215,11 +215,10 @@ No `RwLock` in `flui-foundation`. No primitive listed here sits inside `perform_
 
 ## Friction log
 
-No active friction at the time of the graft (2026-05-19). The crate's surface is mature and the established patterns (`Id<T: Marker>` typed IDs, `thiserror` for errors, `parking_lot::Mutex` + clone-then-iterate for `Notifier`) match the strategy clauses without compromise.
-
-Latent question worth tracking — not a violation:
-
-- `Notifier`'s `Mutex<HashMap<ListenerId, ListenerCallback>>` works correctly today, but a re-entrant listener that calls `add_listener` from inside a notify callback would have to take the same lock while the notify path is iterating a clone. The clone-then-iterate pattern prevents deadlock but allows a registration in round N to surface only in round N+1. Documented behaviour; not broken.
+Notification state is owner-local. A round owns its snapshot while reentrant
+registration changes live membership; new listeners join the next round.
+Framework relays borrow enclosing failure custody rather than create another
+notification path. Worker replies and wakes retain their separate Send edges.
 
 ---
 
@@ -228,7 +227,7 @@ Latent question worth tracking — not a violation:
 Items below are concrete cleanups visible from `flui-foundation` outward. Each is sized for an `/aif-implement` dispatch without out-of-band clarification.
 
 - **`Notifier` re-entrancy semantics — DONE.** Both `ChangeNotifier::notify_listeners` and `Notifier::notify` now document the round-N-vs-round-N+1 behaviour (snapshot-then-fire, mid-notify removals skipped, post-snapshot additions deferred to the next round, `catch_unwind` isolation).
-- **State-notification surface decided** — `Notifier`/`ChangeNotifier` in this crate is the listener-notification mechanism. The signals crate that the summary table once pointed at (`flui-reactivity`) was removed 2026-07-28. Runtime-scoped signals (ADR-0074) are not a crate: their read contract is this crate's `read_scope` module and their graph lives in `flui-view` (ADR-0085). The `Arc<Mutex<…>>` notifier stays for `Send + Sync` users until the UI callback surface loses `Send` (ADR-0091 §1), when a `Listenable` adapter over a signal replaces it.
+- **State notification** — `Notifier`/`ChangeNotifier` is the owner-local listener channel (ADR-0178). Runtime-scoped signals retain their separate graph and dependency tracking in `flui-view`; their read contract lives in `read_scope` (ADR-0085).
 
 ---
 
@@ -282,7 +281,7 @@ reply after failure. Each scenario also checks the next request.
 ### Borrow arguments and retain exceptional notification obligations
 
 Clearing, disposal and final-owner destruction take the listener map out of
-its lock, then drop callbacks one at a time in registration order; surviving
+its borrow, then drop callbacks one at a time in registration order; surviving
 notifier clones keep the map alive. `ValueNotifier` drops its value, then its
 channel; `into_value` disposes the channel before returning the value. After
 the first destructor panic in one of these operations, or when one starts while
@@ -293,6 +292,11 @@ it is released even then; the last owner's storage retains the captures. A failu
 `notifier_ownership_and_recovery`.
 
 Typed notification callbacks borrow their argument and do not require Clone.
+The first callback failure resumes after the healthy tail; removing a listener
+or disposing the channel immediately silences its remaining snapshot entries.
+Active delivery defers outgoing callbacks until the outermost round retires
+them. Framework relays borrow `panic::PanicRecovery`; reentrant owner cleanup
+inherits active channel failure custody without an ambient registry (ADR-0178).
 The notifier's owned snapshot prevents a removed callback from disappearing
 while it runs. After a caught listener failure, the payload and snapshot remain
 retained: opaque capture or panic-payload aggregates can double-panic during

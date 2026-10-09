@@ -27,7 +27,7 @@ use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_scheduler::{
-    AsyncDriver, ClockSource, FrameClock, LocalPostFrameHandle, PostFrameHandle, UpdateScheduler,
+    AsyncDriver, ClockSource, FrameClock, PostFrameHandle, UpdateScheduler,
     input_to_present_histogram, produce_to_present_histogram,
 };
 use flui_semantics::platform::PlatformAccessibility;
@@ -68,7 +68,7 @@ pub(crate) struct RuntimeCapabilities<'a> {
     /// The UI runtime's owner-local post-frame callback capability — addresses
     /// the UI runtime's [`flui_scheduler::OwnerFrame`] directly, so it can
     /// capture `Rc`/`RefCell` widget state.
-    pub(crate) local_post_frame_handle: LocalPostFrameHandle,
+    pub(crate) post_frame_handle: PostFrameHandle,
     /// The UI runtime's interaction dispatch lane.
     pub(crate) interaction_dispatch_handle: InteractionDispatchHandle,
     /// The UI runtime's own scheduler — borrowed only for the duration of
@@ -400,15 +400,9 @@ pub struct PresentationState {
     /// (`Self::has_pending_work`) — see `UiRuntime::draw_frame_entered`'s
     /// per-presentation loop.
     redraw_pending: Cell<bool>,
-    /// This presentation's own controller registry for implicit animations
-    /// (moved from the UI runtime-level `UiRuntime::vsync_slot`, issue #556: each
-    /// surface paces its own animations independently). `RefCell`, not a
-    /// plain field — mirrors `UiRuntime::vsync_slot`'s old `Mutex`: `Self::
-    /// set_vsync` replaces the whole handle through `&self`, and the
-    /// per-frame `tick_all`/`has_running` calls operate on a cloned `Vsync`
-    /// handle (sharing the inner `Arc<Mutex<VsyncInner>>`), so this cell is
-    /// only ever borrowed for the length of a clone or a swap.
-    vsync: RefCell<Vsync>,
+    /// This presentation's controller registry. Handles share owner-local state;
+    /// the presentation keeps its driver binding for its whole lifetime.
+    vsync: Vsync,
     /// This presentation's animation clock: maps the UI runtime's raw frame time
     /// to the monotonic animation time [`Self::vsync`] is ticked with.
     /// Borrowed only inside [`Self::motion_tick`], never across user code.
@@ -669,8 +663,7 @@ impl PresentationState {
         widgets.with_build_owner_mut(|owner| {
             owner.set_global_key_scope(capabilities.global_key_scope);
             owner.set_async_driver(capabilities.async_driver);
-            owner.set_post_frame_handle(PostFrameHandle::new(capabilities.scheduler));
-            owner.set_local_post_frame_handle(capabilities.local_post_frame_handle);
+            owner.set_post_frame_handle(capabilities.post_frame_handle);
             owner.set_interaction_dispatch_handle(interaction_dispatch.clone());
             owner.set_text_input_handle(text_input.handle());
             owner.set_clipboard_handle(flui_interaction::ClipboardHandle::new(
@@ -725,16 +718,23 @@ impl PresentationState {
         // window poked when IT dirties — never a sibling's. The poke is gated
         // on `ensure_visual_update`'s return so it fires only when the
         // scheduler actually accepted the demand.
-        let scheduler = capabilities.scheduler.downgrade();
+        let scheduler = capabilities.scheduler.frame_waker();
         let redraw_window = Arc::downgrade(&window);
         let request_frame = Arc::new(move || {
-            if let Some(scheduler) = scheduler.upgrade()
-                && scheduler.ensure_visual_update()
+            if scheduler.ensure_visual_update()
                 && let Some(window) = redraw_window.upgrade()
             {
                 window.request_redraw();
             }
         });
+        let vsync = Vsync::new();
+        let request_animation_frame = Arc::clone(&request_frame);
+        let animation_owner = Rc::downgrade(&alive);
+        vsync.set_frame_requester(Some(Rc::new(move || {
+            if animation_owner.upgrade().is_some() {
+                request_animation_frame();
+            }
+        })));
         // Install before mounting any element: rebuild handles capture this
         // hook at creation. Every presentation needs the same scheduling edge,
         // including those assembled without a desktop runner.
@@ -806,7 +806,7 @@ impl PresentationState {
             not_shown_streak: Cell::new(0),
             performance_overlay: RefCell::new(None),
             redraw_pending: Cell::new(false),
-            vsync: RefCell::new(Vsync::new()),
+            vsync,
             motion_clock: RefCell::new(MotionClock::new()),
             clock: frame_clock,
             last_segment_span: Cell::new(None),
@@ -900,7 +900,7 @@ impl PresentationState {
             not_shown_streak: Cell::new(0),
             performance_overlay: RefCell::new(None),
             redraw_pending: Cell::new(false),
-            vsync: RefCell::new(Vsync::new()),
+            vsync: Vsync::new(),
             motion_clock: RefCell::new(MotionClock::new()),
             clock: FrameClock::new(),
             last_segment_span: Cell::new(None),
@@ -975,7 +975,7 @@ impl PresentationState {
     /// (issue #556: the registry moved here, one per presentation).
     #[must_use]
     pub(crate) fn vsync(&self) -> Vsync {
-        self.vsync.borrow().clone()
+        self.vsync.clone()
     }
 
     /// This frame's animation tick for the UI runtime's raw frame time `raw`
@@ -985,25 +985,40 @@ impl PresentationState {
     /// The clock's borrow ends inside this call, before the caller hands the
     /// tick to [`Vsync::tick_all`], which runs controller and listener code.
     ///
-    /// The clock runs at its default rate while
-    /// [`AnimationController`](flui_animation::AnimationController) still
-    /// applies the scheduler's process-wide time dilation, so slow motion has
-    /// exactly one source.
+    /// The borrow ends before registry delivery invokes user code.
     pub(crate) fn motion_tick(&self, raw: Duration) -> FrameTick {
         self.motion_clock.borrow_mut().frame(raw)
     }
 
-    /// Replace this presentation's registry with a pre-existing shared
-    /// `Vsync` — see `UiRuntime::set_vsync`'s doc for the one legitimate use
-    /// (a `VsyncScope` built before this presentation's own registry was
-    /// acquired).
-    #[expect(
-        dead_code,
-        reason = "no production caller yet -- forwards from UiRuntime::set_vsync, \
-                  itself also uncalled in production (see that method's own doc)"
-    )]
-    pub(crate) fn set_vsync(&self, vsync: Vsync) {
-        let _prev = std::mem::replace(&mut *self.vsync.borrow_mut(), vsync);
+    pub(crate) fn motion_is_paused(&self) -> bool {
+        self.motion_clock.borrow().is_paused()
+    }
+
+    pub(crate) fn apply_motion(
+        &self,
+        request: flui_protocol::MotionRequest,
+    ) -> Result<(flui_protocol::MotionState, bool), flui_animation::InvalidPlaybackRate> {
+        let rate = request
+            .rate
+            .map(flui_animation::PlaybackRate::new)
+            .transpose()?;
+        let mut clock = self.motion_clock.borrow_mut();
+        let old_rate = clock.rate();
+        let old_time = clock.now();
+        if let Some(rate) = rate {
+            clock.set_rate(rate);
+        }
+        if let Some(step_ms) = request.step_ms {
+            clock.step(Duration::from_millis(step_ms));
+        }
+        let demand = clock.now() != old_time || (clock.rate() != old_rate && !clock.is_paused());
+        Ok((
+            flui_protocol::MotionState::new(
+                clock.rate().get(),
+                clock.now().as_duration().as_secs_f64() * 1000.0,
+            ),
+            demand,
+        ))
     }
 
     /// This presentation's own physical-time produce-gate state machine

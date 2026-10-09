@@ -50,8 +50,9 @@
 //! a proxy â†’ listener â†’ proxy cycle that outlives the tree.
 
 use std::f64::consts::TAU;
+use std::rc::{Rc, Weak};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering, fence};
-use std::sync::{Arc, Weak};
 
 use flui_animation::{Animation, ProxyAnimation};
 use flui_foundation::geometry::{Matrix4, Offset, Size};
@@ -363,8 +364,8 @@ fn scalar_sample(value: &f64) -> (f64, f64) {
 /// listener can capture a `Weak` to it.
 #[derive(Debug)]
 enum Source {
-    Fraction(Arc<ProxyAnimation<TranslationFraction>>),
-    Scalar(Arc<ProxyAnimation<f64>>),
+    Fraction(Rc<ProxyAnimation<TranslationFraction>>),
+    Scalar(Rc<ProxyAnimation<f64>>),
 }
 
 impl Source {
@@ -382,7 +383,7 @@ impl Source {
         handle: &RenderInvalidationHandle,
     ) -> ListenerId {
         fn listen<T>(
-            proxy: &Arc<ProxyAnimation<T>>,
+            proxy: &Rc<ProxyAnimation<T>>,
             read: fn(&T) -> (f64, f64),
             cell: &Arc<SampleCell>,
             kind: Kind,
@@ -391,10 +392,10 @@ impl Source {
         where
             T: Clone + Send + Sync + std::fmt::Debug + 'static,
         {
-            let weak: Weak<ProxyAnimation<T>> = Arc::downgrade(proxy);
+            let weak: Weak<ProxyAnimation<T>> = Rc::downgrade(proxy);
             let cell = Arc::clone(cell);
             let handle = handle.clone();
-            proxy.add_listener(Arc::new(move || {
+            proxy.add_listener(std::rc::Rc::new(move || {
                 if let Some(proxy) = weak.upgrade() {
                     // The ticket precedes the read: see `SampleCell`.
                     let generation = cell.ticket();
@@ -512,15 +513,15 @@ impl RenderAnimatedTransform {
                 offset,
                 text_direction,
             } => (
-                Source::Fraction(Arc::new(offset)),
+                Source::Fraction(Rc::new(offset)),
                 Kind::Slide(text_direction),
                 (0.0, 0.0),
             ),
             TransformMotion::Scale { scale } => {
-                (Source::Scalar(Arc::new(scale)), Kind::Scale, (1.0, 0.0))
+                (Source::Scalar(Rc::new(scale)), Kind::Scale, (1.0, 0.0))
             }
             TransformMotion::Rotation { turns } => {
-                (Source::Scalar(Arc::new(turns)), Kind::Rotation, (0.0, 0.0))
+                (Source::Scalar(Rc::new(turns)), Kind::Rotation, (0.0, 0.0))
             }
         };
         let seed = finite(source.read()).unwrap_or(identity);
@@ -757,9 +758,10 @@ mod tests {
     fn owner_with_handle(
         wake: impl Fn() + Send + Sync + 'static,
     ) -> (PipelineOwner, RenderInvalidationHandle) {
-        let controller = AnimationController::without_ticker(Duration::from_millis(100));
+        let controller = AnimationController::builder(Duration::from_millis(100)).build();
         controller.set_value(1.0);
-        let proxy = ProxyAnimation::new(Arc::new(controller) as Arc<dyn Animation<f64>>);
+        let proxy =
+            ProxyAnimation::new(std::rc::Rc::new(controller) as std::rc::Rc<dyn Animation<f64>>);
         let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
         owner.set_on_need_visual_update(wake);
         let anchor = owner.insert(
@@ -887,10 +889,14 @@ mod tests {
     }
 
     fn rotation_node(turns: f64) -> RenderAnimatedTransform {
-        let controller = AnimationController::unbounded_without_ticker(Duration::from_millis(1));
+        let controller = AnimationController::builder(Duration::from_millis(1))
+            .unbounded()
+            .build();
         controller.set_value(turns);
         RenderAnimatedTransform::new(TransformMotion::Rotation {
-            turns: ProxyAnimation::new(Arc::new(controller) as Arc<dyn Animation<f64>>),
+            turns: ProxyAnimation::new(
+                std::rc::Rc::new(controller) as std::rc::Rc<dyn Animation<f64>>
+            ),
         })
     }
 
@@ -912,10 +918,14 @@ mod tests {
     // sample.
     #[test]
     fn one_sample_per_hit_test_visit() {
-        let controller = AnimationController::unbounded_without_ticker(Duration::from_millis(1));
+        let controller = AnimationController::builder(Duration::from_millis(1))
+            .unbounded()
+            .build();
         controller.set_value(0.25);
         let node = RenderAnimatedTransform::new(TransformMotion::Rotation {
-            turns: ProxyAnimation::new(Arc::new(controller.clone()) as Arc<dyn Animation<f64>>),
+            turns: ProxyAnimation::new(
+                std::rc::Rc::new(controller.clone()) as std::rc::Rc<dyn Animation<f64>>
+            ),
         });
         let (_owner, handle) = owner_with_handle(|| {});
         let mut node = node;
@@ -978,7 +988,7 @@ mod tests {
             flui_animation::AnimationStatus::Dismissed
         }
         fn add_status_listener(&self, _: flui_animation::StatusCallback) -> ListenerId {
-            self.1.add_listener(Arc::new(|| {}))
+            self.1.add_listener(std::rc::Rc::new(|| {}))
         }
         fn remove_status_listener(&self, _: ListenerId) {}
     }
@@ -988,10 +998,10 @@ mod tests {
     fn debug_does_not_read_the_animation() {
         let called = Arc::new(AtomicBool::new(false));
         let node = RenderAnimatedTransform::new(TransformMotion::Scale {
-            scale: ProxyAnimation::new(Arc::new(Probe(
+            scale: ProxyAnimation::new(std::rc::Rc::new(Probe(
                 Arc::clone(&called),
                 flui_foundation::ChangeNotifier::default(),
-            )) as Arc<dyn Animation<f64>>),
+            )) as std::rc::Rc<dyn Animation<f64>>),
         });
         called.store(false, Ordering::SeqCst);
         let text = format!("{node:?}");

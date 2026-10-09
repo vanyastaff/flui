@@ -60,6 +60,15 @@ pub trait AgentPort: Send + Sync {
     ///
     /// When the request cannot be enqueued.
     fn act(&self, request: ActionRequest) -> Result<AgentAnswer<()>, AgentFault>;
+
+    /// Enqueue a playback request for this exact window's animation clock.
+    ///
+    /// # Errors
+    /// Returns the same admission faults as [`Self::read`].
+    fn motion(
+        &self,
+        request: flui_protocol::MotionRequest,
+    ) -> Result<AgentAnswer<flui_protocol::MotionState>, AgentFault>;
 }
 
 /// The pending half of an [`AgentAnswer`].

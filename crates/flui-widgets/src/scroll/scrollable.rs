@@ -60,7 +60,7 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use flui_animation::{
-    Animation, AnimationController, AnimationStatus, Curves, Vsync, VsyncRegistration,
+    Animation, AnimationController, AnimationStatus, Curves, DrivenController, Vsync,
 };
 use flui_foundation::geometry::Axis;
 use flui_foundation::{Listenable, ListenerId};
@@ -523,7 +523,10 @@ pub struct ScrollableState {
     ///
     /// Created once in `create_state`; registered with the ambient
     /// `VsyncScope` in `init_state`; disposed in `dispose`.
-    fling_controller: AnimationController,
+    fling_controller: DrivenController,
+    /// Registry identity for the scroll-specific cancel-on-clock-change policy.
+    /// The driven controller alone owns its registration.
+    fling_clock: Option<Vsync>,
     /// Owner-local accepted wheel work, independent of the displayed pixels.
     wheel_motion: Rc<RefCell<Option<Rc<WheelMotion>>>>,
     fling_endpoint: RefCell<Option<Arc<FlingEndpoint>>>,
@@ -553,7 +556,7 @@ pub struct ScrollableState {
     /// `did_update_view` reassigns `scroll_controller` before the installers
     /// run, so a removal that read the field would detach from the incoming
     /// controller and leave the outgoing one holding the listener forever.
-    command_listener: Option<(Arc<dyn Listenable>, ListenerId)>,
+    command_listener: Option<(std::rc::Rc<dyn Listenable>, ListenerId)>,
     /// Post-frame capability for the wheel-scroll activity pulse — acquired
     /// in `init_state`/`did_change_dependencies` (never from `build`), per
     /// the frame-capability scope rule. A wheel tick raises the scroll
@@ -561,10 +564,6 @@ pub struct ScrollableState {
     /// consumed the pixel write, so the viewport's layout still observes
     /// the user direction.
     post_frame: Option<PostFrameHandle>,
-    /// Vsync handle kept for `unregister` in `dispose`.
-    vsync: Option<Vsync>,
-    /// Registration handle returned by `vsync.register(fling_controller)`.
-    vsync_registration: Option<VsyncRegistration>,
     /// The presentation's pipeline, acquired in `init_state`/
     /// `did_change_dependencies`; a release reads its device pixel ratio so
     /// the ballistic run rests within half a device pixel.
@@ -585,7 +584,7 @@ impl std::fmt::Debug for ScrollableState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScrollableState")
             .field("scroll_controller", &self.scroll_controller)
-            .field("fling_registered", &self.vsync_registration.is_some())
+            .field("fling_registered", &self.fling_controller.is_bound())
             .finish_non_exhaustive()
     }
 }
@@ -599,8 +598,9 @@ impl StatefulView for Scrollable {
         // Unboundedness is a constructor fact (#1183), not a bound value —
         // `without_ticker_bounds` now REJECTS a wide-open pair. No ticker:
         // `Vsync` drives this controller once registered below.
-        let fling_controller =
-            AnimationController::unbounded_without_ticker(Duration::from_millis(1));
+        let fling_controller = AnimationController::builder(Duration::from_millis(1))
+            .unbounded()
+            .build_on(None);
 
         ScrollableState {
             recognizer_owner: Rc::new(()),
@@ -608,14 +608,13 @@ impl StatefulView for Scrollable {
             scroll_controller: self.controller.clone(),
             stop_hook: None,
             fling_controller,
+            fling_clock: None,
             wheel_motion: Rc::new(RefCell::new(None)),
             fling_endpoint: RefCell::new(None),
             fling_listener_id: None,
             fling_status_listener_id: None,
             post_frame: None,
             command_listener: None,
-            vsync: None,
-            vsync_registration: None,
             pipeline: None,
         }
     }
@@ -623,8 +622,8 @@ impl StatefulView for Scrollable {
 
 impl ScrollableState {
     fn bind_vsync(&mut self, ctx: &dyn LifecycleContext) {
-        let incoming = ctx.depend_on::<VsyncScope, _>(|scope| scope.vsync().clone());
-        let unchanged = match (&self.vsync, &incoming) {
+        let incoming = VsyncScope::maybe_of(ctx);
+        let unchanged = match (&self.fling_clock, &incoming) {
             (None, None) => true,
             (Some(current), Some(incoming)) => current.is_same(incoming),
             _ => false,
@@ -632,18 +631,14 @@ impl ScrollableState {
         if unchanged {
             return;
         }
-        let registration = incoming
-            .as_ref()
-            .map(|vsync| vsync.register(self.fling_controller.clone()));
-        let outgoing = self.vsync.take().zip(self.vsync_registration.take());
-        self.vsync = incoming;
-        self.vsync_registration = registration;
-        if let Some((vsync, registration)) = outgoing {
-            vsync.unregister(&registration);
+        self.fling_clock = incoming.clone();
+        self.wheel_motion.borrow_mut().take();
+        // Cancel at the sampled pixels before a missing clock can settle the
+        // finite run. Gesture contacts remain owned by their admitted position.
+        let _ = self.fling_controller.controller().stop();
+        if let Err(error) = self.fling_controller.rebind(incoming.as_ref()) {
+            tracing::error!(%error, "Scrollable lost its frame registry");
         }
-        // A different clock cannot inherit an elapsed simulation anchor.
-        // Publish its attachment before stop can notify user listeners.
-        let _ = self.fling_controller.stop();
     }
 
     fn endpoint(
@@ -676,7 +671,7 @@ impl ScrollableState {
         }
         let endpoint = Arc::new(FlingEndpoint {
             controller: view.controller.clone(),
-            fling: self.fling_controller.clone(),
+            fling: self.fling_controller.controller().clone(),
             physics: physics.clone(),
             axis: view.scroll_direction,
             reversed: axis_direction.is_reversed(),
@@ -721,8 +716,8 @@ impl ScrollableState {
     /// NEW controller — see `scroll_controller`'s field doc), always against
     /// whatever `self.scroll_controller` currently is.
     fn install_stop_hook(&mut self) {
-        let fling = self.fling_controller.clone();
-        let hook: super::scroll_controller::StopHook = Arc::new(move || {
+        let fling = self.fling_controller.controller().clone();
+        let hook: super::scroll_controller::StopHook = Rc::new(move || {
             let _ = fling.stop();
         });
         self.scroll_controller.set_stop_hook(hook.clone());
@@ -751,13 +746,16 @@ impl ScrollableState {
     /// `pixels()` never moved.
     fn install_fling_listener(&mut self) {
         if let Some(id) = self.fling_listener_id.take() {
-            self.fling_controller.remove_listener(id);
+            self.fling_controller.controller().remove_listener(id);
         }
-        let fling_ref = self.fling_controller.clone();
+        let fling_ref = self.fling_controller.controller().clone();
         let scroll_ref = self.scroll_controller.clone();
-        let listener_id = self.fling_controller.add_listener(Arc::new(move || {
-            scroll_ref.set_pixels(fling_ref.value());
-        }));
+        let listener_id = self
+            .fling_controller
+            .controller()
+            .add_listener(std::rc::Rc::new(move || {
+                scroll_ref.set_pixels(fling_ref.value());
+            }));
         self.fling_listener_id = Some(listener_id);
     }
 
@@ -776,9 +774,9 @@ impl ScrollableState {
     fn install_command_listener(&mut self) {
         self.remove_command_listener();
         let scroll_ref = self.scroll_controller.clone();
-        let fling_ref = self.fling_controller.clone();
+        let fling_ref = self.fling_controller.controller().clone();
         let listenable = self.scroll_controller.as_listenable();
-        let listener_id = listenable.add_listener(Arc::new(move || {
+        let listener_id = listenable.add_listener(std::rc::Rc::new(move || {
             scroll_ref.service_pending_command(&fling_ref);
         }));
         self.command_listener = Some((listenable, listener_id));
@@ -791,7 +789,7 @@ impl ScrollableState {
         // forever. The `AnimatedBuilder` this replaced serviced the queue on
         // its initial build, which covered the same case implicitly.
         self.scroll_controller
-            .service_pending_command(&self.fling_controller);
+            .service_pending_command(self.fling_controller.controller());
     }
 
     /// Detach the command listener from whichever listenable it was installed
@@ -809,12 +807,15 @@ impl ScrollableState {
     /// fling would leave `is_scrolling` stuck true forever.
     fn install_fling_status_listener(&mut self) {
         if let Some(id) = self.fling_status_listener_id.take() {
-            self.fling_controller.remove_status_listener(id);
+            self.fling_controller
+                .controller()
+                .remove_status_listener(id);
         }
         let position = self.scroll_controller.position();
         let listener_id = self
             .fling_controller
-            .add_status_listener(Arc::new(move |status| {
+            .controller()
+            .add_status_listener(std::rc::Rc::new(move |status| {
                 if matches!(
                     status,
                     AnimationStatus::Completed | AnimationStatus::Dismissed
@@ -836,13 +837,7 @@ impl ViewState<Scrollable> for ScrollableState {
         self.install_fling_status_listener();
         self.install_command_listener();
 
-        // Register with the ambient VsyncScope so the binding ticks the fling
-        // controller on each virtual frame — the same pattern used by
-        // `ImplicitController::register`.
-        self.bind_vsync(ctx);
-        // If no VsyncScope is present, the fling controller has no ticker at
-        // all (built via `unbounded_without_ticker`) and simply never
-        // advances — there is no wall-clock fallback.
+        self.did_change_dependencies(ctx);
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
@@ -875,7 +870,7 @@ impl ViewState<Scrollable> for ScrollableState {
         let endpoint = self.endpoint(view, &physics, axis_direction, ctx);
         let child = view.child.clone();
         let viewport_builder = view.viewport_builder.clone();
-        let fling_controller = self.fling_controller.clone();
+        let fling_controller = self.fling_controller.controller().clone();
         let post_frame = self.post_frame.clone();
 
         // The viewport re-lays itself out from the render side:
@@ -1115,7 +1110,7 @@ impl ViewState<Scrollable> for ScrollableState {
                         let started = fling_wheel.animate_to_curved(
                             target,
                             Some(Duration::from_millis(150)),
-                            Arc::new(Curves::EaseOut),
+                            Rc::new(Curves::EaseOut),
                         );
                         if is_current() {
                             if started.is_ok() && fling_wheel.status().is_running() {
@@ -1156,15 +1151,20 @@ impl ViewState<Scrollable> for ScrollableState {
                     wheel_motion.borrow_mut().take();
                     match &post_frame_wheel {
                         Some(post_frame) => {
-                            let pulse_end = position;
+                            let pulse_end = position.clone();
                             let motion_end = fling_wheel.clone();
-                            post_frame.schedule(move |_timing| {
-                                // A subsequent notch may have started after
-                                // this immediate tick but before the frame.
-                                if !motion_end.status().is_running() {
-                                    pulse_end.set_is_scrolling(false);
-                                }
-                            });
+                            if post_frame
+                                .schedule(move |_timing| {
+                                    // A subsequent notch may have started after
+                                    // this immediate tick but before the frame.
+                                    if !motion_end.status().is_running() {
+                                        pulse_end.set_is_scrolling(false);
+                                    }
+                                })
+                                .is_err()
+                            {
+                                position.set_is_scrolling(false);
+                            }
                         }
                         // No post-frame capability (a bare harness without
                         // the binding wiring): end the pulse synchronously
@@ -1207,7 +1207,7 @@ impl ViewState<Scrollable> for ScrollableState {
         // old position; its metrics must never drive the incoming position.
         self.retire_endpoint();
         self.wheel_motion.borrow_mut().take();
-        let _ = self.fling_controller.stop();
+        let _ = self.fling_controller.controller().stop();
         self.scroll_controller.position().set_is_scrolling(false);
         self.remove_command_listener();
         self.detach_stop_hook();
@@ -1231,19 +1231,16 @@ impl ViewState<Scrollable> for ScrollableState {
         // Remove the value listener before disposing the controller so the
         // listener closure cannot fire after the state is gone.
         if let Some(id) = self.fling_listener_id.take() {
-            self.fling_controller.remove_listener(id);
+            self.fling_controller.controller().remove_listener(id);
         }
         if let Some(id) = self.fling_status_listener_id.take() {
-            self.fling_controller.remove_status_listener(id);
+            self.fling_controller
+                .controller()
+                .remove_status_listener(id);
         }
         self.remove_command_listener();
         // Release the vsync registration so the binding does not hold a
         // reference to the disposed controller.
-        if let (Some(vsync), Some(registration)) =
-            (self.vsync.take(), self.vsync_registration.take())
-        {
-            vsync.unregister(&registration);
-        }
         // Detach the ADR-0037 stop hook and drop any not-yet-serviced
         // pending command — without this, the user-held `ScrollController`
         // would keep an `Arc` closing over this about-to-be-disposed
@@ -1306,7 +1303,13 @@ fn scroll_semantics(
         if let Some(simulation) = physics.create_ballistic_simulation(&metrics, 0.0) {
             let _ = fling.animate_with(simulation);
         } else if let Some(post_frame) = &post_frame {
-            post_frame.schedule(move |_| position.set_is_scrolling(false));
+            let pulse_end = position.clone();
+            if post_frame
+                .schedule(move |_| pulse_end.set_is_scrolling(false))
+                .is_err()
+            {
+                position.set_is_scrolling(false);
+            }
         } else {
             position.set_is_scrolling(false);
         }

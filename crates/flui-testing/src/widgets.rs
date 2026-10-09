@@ -30,7 +30,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_animation::{AnimationController, Vsync};
+use flui_animation::Vsync;
 use flui_foundation::RenderId;
 use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::Matrix4;
@@ -531,15 +531,14 @@ impl LaidOut {
     }
 
     /// The owner-local post-frame handle the UI runtime installed on this tree's
-    /// `BuildOwner`, so a test can `schedule_local` a callback that captures
-    /// the (`!Send`) [`PipelineCell`] — `PostFrameHandle::schedule`'s `Send`
-    /// bound cannot carry it.
-    pub fn local_post_frame_handle(&mut self) -> flui_scheduler::LocalPostFrameHandle {
+    /// `BuildOwner`, so a test can `schedule` a callback that captures
+    /// the (`!Send`) [`PipelineCell`] on its owning thread.
+    pub fn post_frame_handle(&mut self) -> flui_scheduler::PostFrameHandle {
         self.host
             .ui_runtime()
             .ui_runtime()
             .widgets()
-            .with_build_owner(|owner| owner.local_post_frame_handle().cloned())
+            .with_build_owner(|owner| owner.post_frame_handle().cloned())
             .expect("the ui_runtime installs an owner-local post-frame handle")
     }
 
@@ -824,19 +823,6 @@ impl LaidOut {
     pub fn reassemble_render_tree(&self) {
         self.pipeline_owner
             .with_mut(flui_rendering::pipeline::PipelineOwner::reassemble);
-    }
-
-    /// Register `controller` with the UI runtime's registry so each
-    /// [`pump`](Self::pump) / [`tick`](Self::tick) / [`pump_for`](Self::pump_for)
-    /// advances it at the frame's time (restart-aware). Register before
-    /// starting the controller.
-    pub fn register_controller(&mut self, controller: AnimationController) {
-        let _registration = self
-            .host
-            .ui_runtime()
-            .ui_runtime()
-            .vsync()
-            .register(controller);
     }
 
     /// Adopt `vsync`: every frame ticks it at the frame's time, beside the

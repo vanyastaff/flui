@@ -3,13 +3,15 @@
 //! `crates/flui-widgets/src/interaction/visibility.rs`.
 
 use crate::common::{lay_out, lay_out_animated, loose, size};
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use flui_animation::{Animation, AnimationController, Vsync, VsyncRegistration};
+use flui_animation::{Animation, AnimationController, DrivenController, Vsync};
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView, StatelessView};
-use flui_view::{BoxedView, BuildContextExt, IntoView, ViewExt, ViewState};
+use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
 // Only the `#[cfg(debug_assertions)]` invalid-configuration tests drive a tree
 // by hand and assert on the ErrorView substitution, which is debug-only.
 use flui_widgets::{SizedBox, Visibility, VsyncScope};
@@ -19,18 +21,18 @@ const FRAME: Duration = Duration::from_millis(20);
 
 #[derive(Clone, StatefulView)]
 struct AnimationProbe {
-    controller: AnimationController,
+    observer: Rc<RefCell<Option<AnimationController>>>,
     found_ambient: Arc<Mutex<Option<bool>>>,
     init_count: Arc<AtomicUsize>,
     dispose_count: Arc<AtomicUsize>,
 }
 
 struct AnimationProbeState {
-    controller: AnimationController,
+    observer: Rc<RefCell<Option<AnimationController>>>,
     found_ambient: Arc<Mutex<Option<bool>>>,
     init_count: Arc<AtomicUsize>,
     dispose_count: Arc<AtomicUsize>,
-    registration: Option<(Vsync, VsyncRegistration)>,
+    owner: Option<DrivenController>,
 }
 
 impl StatefulView for AnimationProbe {
@@ -38,11 +40,11 @@ impl StatefulView for AnimationProbe {
 
     fn create_state(&self) -> Self::State {
         AnimationProbeState {
-            controller: self.controller.clone(),
+            observer: self.observer.clone(),
             found_ambient: Arc::clone(&self.found_ambient),
             init_count: Arc::clone(&self.init_count),
             dispose_count: Arc::clone(&self.dispose_count),
-            registration: None,
+            owner: None,
         }
     }
 }
@@ -57,28 +59,21 @@ impl std::fmt::Debug for AnimationProbeState {
 impl ViewState<AnimationProbe> for AnimationProbeState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.init_count.fetch_add(1, Ordering::Relaxed);
-        let ambient = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone());
+        let ambient = VsyncScope::maybe_of(ctx);
         *self.found_ambient.lock() = Some(ambient.is_some());
-        if let Some(vsync) = ambient {
-            let registration = vsync.register(self.controller.clone());
-            self.registration = Some((vsync, registration));
-        }
+        let owner = AnimationController::builder(Duration::from_secs(1)).build_on(ambient.as_ref());
+        *self.observer.borrow_mut() = Some(owner.controller().clone());
+        self.owner = Some(owner);
     }
 
     fn dispose(&mut self) {
         self.dispose_count.fetch_add(1, Ordering::Relaxed);
-        if let Some((vsync, registration)) = self.registration.take() {
-            vsync.unregister(&registration);
-        }
+        drop(self.owner.take());
     }
 
     fn build(&self, _view: &AnimationProbe, _ctx: &dyn BuildContext) -> impl IntoView {
         SizedBox::new(10.0, 10.0)
     }
-}
-
-fn animation_controller() -> AnimationController {
-    AnimationController::without_ticker(Duration::from_secs(1))
 }
 
 type AnimationProbeFixture = (
@@ -88,13 +83,13 @@ type AnimationProbeFixture = (
     Arc<AtomicUsize>,
 );
 
-fn animation_probe(controller: &AnimationController) -> AnimationProbeFixture {
+fn animation_probe(observer: &Rc<RefCell<Option<AnimationController>>>) -> AnimationProbeFixture {
     let found_ambient = Arc::new(Mutex::new(None));
     let init_count = Arc::new(AtomicUsize::new(0));
     let dispose_count = Arc::new(AtomicUsize::new(0));
     (
         AnimationProbe {
-            controller: controller.clone(),
+            observer: observer.clone(),
             found_ambient: Arc::clone(&found_ambient),
             init_count: Arc::clone(&init_count),
             dispose_count: Arc::clone(&dispose_count),
@@ -128,8 +123,8 @@ impl StatelessView for VisibilityToggleHost {
 
 pub(crate) fn maintained_child_mutes_and_resumes_without_remounting_as_visibility_changes() {
     let vsync = Vsync::new();
-    let controller = animation_controller();
-    let (probe, found_ambient, init_count, dispose_count) = animation_probe(&controller);
+    let observer = Rc::new(RefCell::new(None));
+    let (probe, found_ambient, init_count, dispose_count) = animation_probe(&observer);
     let visible = Arc::new(AtomicBool::new(true));
     let mounted = Arc::new(AtomicBool::new(true));
     let host = VisibilityToggleHost {
@@ -144,6 +139,10 @@ pub(crate) fn maintained_child_mutes_and_resumes_without_remounting_as_visibilit
     assert_eq!(init_count.load(Ordering::Relaxed), 1);
     assert_eq!(dispose_count.load(Ordering::Relaxed), 0);
 
+    let controller = observer
+        .borrow()
+        .clone()
+        .expect("mounted controller observer");
     controller.forward().expect("animation should start");
     laid.pump_for(FRAME);
     laid.pump_for(FRAME);
@@ -184,7 +183,6 @@ pub(crate) fn maintained_child_mutes_and_resumes_without_remounting_as_visibilit
         unmounted_value,
         "disposing the probe should unregister it from ambient Vsync"
     );
-    controller.dispose();
 }
 
 pub(crate) fn hidden_without_maintain_state_shows_the_default_replacement() {

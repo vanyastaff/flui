@@ -297,17 +297,17 @@ fn binding_for(
     id: RouteId,
 ) -> (
     RouteBinding,
-    Arc<super::binding::RouteRegistries>,
+    Rc<super::binding::RouteRegistries>,
     super::binding::RouteVsync,
 ) {
-    let registries = Arc::new(super::binding::RouteRegistries::new());
-    let vsync = Arc::new(Mutex::new(None));
+    let registries = Rc::new(super::binding::RouteRegistries::new());
+    let vsync = Rc::new(Mutex::new(None));
     let binding = RouteBinding::new(
         id,
         history.command_queue(),
         inert_wake(),
-        Arc::clone(&vsync),
-        Arc::clone(&registries),
+        Rc::clone(&vsync),
+        Rc::clone(&registries),
     );
     (binding, registries, vsync)
 }

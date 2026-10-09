@@ -62,3 +62,91 @@ pub fn retain_opaque_payload(payload: Box<dyn Any + Send>) {
         std::mem::forget(payload);
     }
 }
+
+/// Carries the first failure across nested callback delivery and retirement.
+///
+/// Framework delivery seams borrow this context from their enclosing owner.
+/// Opaque ownership retires normally until a failure is caught; afterwards it
+/// is retained. Call [`Self::finish`] only once all accepted work is delivered.
+/// An aggregate that double-panics before containment regains control still
+/// follows Rust's abort semantics.
+#[doc(hidden)]
+pub struct PanicRecovery {
+    incoming: bool,
+    first: Option<Box<dyn Any + Send>>,
+}
+
+impl std::fmt::Debug for PanicRecovery {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PanicRecovery")
+            .field("has_failure", &self.has_failure())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Default for PanicRecovery {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PanicRecovery {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            incoming: std::thread::panicking(),
+            first: None,
+        }
+    }
+
+    pub(crate) fn inherit_failure(&mut self) {
+        self.incoming = true;
+    }
+
+    pub fn run(&mut self, action: impl FnOnce()) {
+        self.run_with(|_| action());
+    }
+
+    pub fn run_with(&mut self, action: impl FnOnce(&mut Self)) {
+        if let Err(payload) =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| action(self)))
+        {
+            self.capture(payload);
+        }
+    }
+
+    pub(crate) fn capture(&mut self, payload: Box<dyn Any + Send>) {
+        if self.has_failure() {
+            retain_opaque_payload(payload);
+        } else {
+            self.first = Some(payload);
+        }
+    }
+
+    #[must_use]
+    pub fn has_failure(&self) -> bool {
+        self.incoming || self.first.is_some()
+    }
+
+    pub fn retire<T>(&mut self, value: T) {
+        if self.has_failure() {
+            std::mem::forget(value);
+        } else {
+            self.run(|| drop(value));
+        }
+    }
+
+    pub fn finish(mut self) {
+        if let Some(payload) = self.first.take() {
+            std::panic::resume_unwind(payload);
+        }
+    }
+}
+
+impl Drop for PanicRecovery {
+    fn drop(&mut self) {
+        if let Some(payload) = self.first.take() {
+            retain_opaque_payload(payload);
+        }
+    }
+}

@@ -2,6 +2,9 @@
 
 - **Status:** Accepted (§2; the other sections are not decisions until adopted)
 - **Date:** 2026-10-06
+- **Superseded-by:** [ADR-0175](ADR-0175-owner-local-scheduling-and-animation.md)
+  for the transitional scheduler ownership and split post-frame queues;
+  [ADR-0178](ADR-0178-notification-first-failure-custody.md) for listener failure custody.
 - **Supersedes:** [ADR-0018](ADR-0018-async-builder-seam.md) D3 and D5 (where the driver's
   tasks live and what may be spawned), [ADR-0027](ADR-0027-owner-affine-ui-realms.md) §2
   (which UI capabilities are `!Send`), [ADR-0035](ADR-0035-lifecycle-consolidation-and-frames-enabled.md)
@@ -35,8 +38,9 @@ waker, and `AsyncDriver` was an `Arc` clone of that state. Three consequences fo
   draining only the shared post-frame queue, and the async poll lived in the scheduler, so a
   frame could be driven that polled or drained "nothing" of the UI runtime's owner-local work.
 
-`UpdateScheduler` itself stays `Send` for now (its registrations still take `Send` closures),
-and the repository allows no `unsafe impl Send`, so owner-local state cannot live inside it.
+The initial implementation kept `UpdateScheduler` `Send`. ADR-0175 moves its UI
+state to the owner thread and preserves only the independent wake capability
+across threads.
 
 ## Decision
 

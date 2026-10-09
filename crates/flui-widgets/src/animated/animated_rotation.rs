@@ -1,13 +1,13 @@
 //! [`AnimatedRotation`] — rotates its child, animating to each new [`Angle`].
 
-use std::sync::Arc;
+use std::rc::Rc;
 use std::time::Duration;
 
 use flui_animation::curve::{ArcCurve, Curve};
 use flui_animation::{Animatable, AnimatableExt, Animation, ProxyAnimation, Tween};
 use flui_foundation::geometry::Angle;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
-use flui_view::{BoxedView, BuildContextExt, IntoView, ViewExt, ViewState};
+use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
 
 use crate::RotationTransition;
 use crate::animated::implicitly_animated::{DEFAULT_DURATION, ImplicitController, default_curve};
@@ -130,9 +130,9 @@ pub struct AnimatedRotationState {
 impl AnimatedRotationState {
     /// The tween over the curved controller, in turns; swapped into the proxy on a
     /// retarget or a curve change.
-    fn compose(&self) -> Arc<dyn Animation<f64>> {
-        let curved: Arc<dyn Animation<f64>> = Arc::new(self.controller.curved());
-        Arc::new(Turns(self.tween).animate(curved))
+    fn compose(&self) -> std::rc::Rc<dyn Animation<f64>> {
+        let curved: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(self.controller.curved());
+        Rc::new(Turns(self.tween).animate(curved))
     }
 }
 
@@ -142,8 +142,8 @@ impl StatefulView for AnimatedRotation {
     fn create_state(&self) -> Self::State {
         let controller = ImplicitController::new(self.duration, self.curve.clone());
         let tween = Tween::new(self.angle, self.angle);
-        let curved: Arc<dyn Animation<f64>> = Arc::new(controller.curved());
-        let proxy = ProxyAnimation::new(Arc::new(Turns(tween).animate(curved)));
+        let curved: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(controller.curved());
+        let proxy = ProxyAnimation::new(Rc::new(Turns(tween).animate(curved)));
         AnimatedRotationState {
             controller,
             target: self.angle,
@@ -157,23 +157,24 @@ impl StatefulView for AnimatedRotation {
 
 impl ViewState<AnimatedRotation> for AnimatedRotationState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        if let Some(vsync) = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()) {
-            self.controller.register(vsync);
-        }
+        self.controller.rebind(VsyncScope::maybe_of(ctx).as_ref());
+    }
+
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        self.controller.rebind(VsyncScope::maybe_of(ctx).as_ref());
     }
 
     fn build(&self, _view: &AnimatedRotation, _ctx: &dyn BuildContext) -> impl IntoView {
-        RotationTransition::new(Arc::new(self.proxy.clone()), self.child.clone())
+        RotationTransition::new(Rc::new(self.proxy.clone()), self.child.clone())
     }
 
     fn did_update_view(&mut self, _old_view: &AnimatedRotation, new_view: &AnimatedRotation) {
         self.child = new_view.child.clone();
-        self.controller.set_duration(new_view.duration);
-        // The curve swaps first, so the angle shown now is read on the new curve.
-        let curve_changed = self.controller.set_curve(new_view.curve.clone());
         let target_changed = new_view.angle != self.target || new_view.path != self.path;
-        if target_changed {
-            let from = self.tween.transform(self.controller.value());
+        let from = target_changed.then(|| self.tween.transform(self.controller.value()));
+        self.controller.set_duration(new_view.duration);
+        let curve_changed = self.controller.set_curve(new_view.curve.clone());
+        if let Some(from) = from {
             let to = match new_view.path {
                 RotationPath::Numeric => new_view.angle,
                 // Measured from the angle shown now, so a retarget mid-turn never adds a

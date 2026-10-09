@@ -27,7 +27,6 @@
 
 use std::fmt;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use flui_animation::Animation;
 use flui_view::{BoxedView, BuildContext};
@@ -47,7 +46,7 @@ pub type RouteContentBuilder = Rc<dyn Fn(&dyn BuildContext) -> BoxedView>;
 /// The **primary** animation runs 0 → 1 as the route enters and 1 → 0 as it
 /// leaves. The **secondary** animation is the primary animation of the route
 /// *above* this one, when the two coordinate.
-pub type RouteAnimation = Arc<dyn Animation<f64>>;
+pub type RouteAnimation = std::rc::Rc<dyn Animation<f64>>;
 
 /// Builds a route's page.
 pub type RoutePageBuilder =

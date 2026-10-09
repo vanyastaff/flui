@@ -198,7 +198,7 @@ pub(crate) fn navigator_of_then_push_from_a_route_build_does_not_deadlock() {
 // ============================================================================
 
 // ============================================================================
-// #1161 — the navigator awaits the controller-owned `TickerFuture`
+// #1161 — the navigator awaits the controller-owned `AnimationRunFuture`
 // ============================================================================
 
 /// `PopScope` — ADR-0019's deferred veto, landed via the route's `PopEntry`

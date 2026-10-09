@@ -22,11 +22,11 @@
 //! notifies immediately, epsilon-guarded against no-op writes.
 
 use std::fmt;
-use std::sync::Arc;
+use std::rc::Rc;
 
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
 use flui_scheduler::PostFrameHandle;
-use parking_lot::Mutex;
+use std::cell::RefCell;
 
 use super::viewport_offset::{ScrollDirection, ViewportOffset};
 
@@ -216,22 +216,23 @@ impl FlushState {
 
 /// The heap-allocated state shared by every clone of a [`ScrollPosition`].
 struct Inner {
-    state: Mutex<State>,
+    state: RefCell<State>,
     /// `Listenable` sink — what `ScrollController::as_listenable()` and
     /// `AnimatedBuilder` subscribe to.
     notifier: ChangeNotifier,
     /// The `ViewportOffset` trait's own ptr-eq listener list, kept separate
     /// from `notifier` because it has a different identity contract
     /// (`Arc::ptr_eq` removal, not a `ListenerId`).
-    offset_listeners: Mutex<Vec<Arc<dyn Fn() + Send + Sync>>>,
-    flush: Mutex<FlushState>,
+    offset_listeners: RefCell<Vec<(flui_foundation::ListenerId, std::rc::Weak<dyn Fn()>)>>,
+    offset_notifier: ChangeNotifier,
+    flush: RefCell<FlushState>,
     /// Scroll-activity state — whether a user drag or ballistic fling is
     /// underway, and which way the user last scrolled. Kept apart from
     /// `state` (which is pixel geometry) and notified through its own
     /// sink: activity subscribers (a floating header's snap trigger) must
     /// not be woken by every pixel change, and pixel subscribers must not
     /// be woken by drag start/stop.
-    activity: Mutex<ActivityState>,
+    activity: RefCell<ActivityState>,
     /// Notified on every [`ActivityState`] transition — the is-scrolling
     /// and user-scroll-direction changes fused into one
     /// sink because every known consumer (snap) wants both.
@@ -250,30 +251,21 @@ impl Inner {
     /// path and the coalesced post-frame flush — routes through here so
     /// there is exactly one place that decides who gets told.
     fn notify(&self) {
-        self.notifier.notify_listeners();
-        // Snapshot-then-fire: a listener that calls `add_listener`/
-        // `remove_listener` on this same position must not deadlock on
-        // `offset_listeners`. This list has a real, load-bearing consumer:
-        // `RenderViewport`/`RenderShrinkWrappingViewport` (`flui-objects`)
-        // register their render-side relayout listener here in `attach`
-        // (and re-register it on `set_offset` while attached). That listener
-        // only sends a cross-thread `RenderInvalidationHandle::mark_needs_layout()`
-        // request — it never calls back into `notify()`/`add_listener`/
-        // `remove_listener` synchronously — so unlike `ScrollableViewportOffset`,
-        // this list still doesn't need `ScrollableViewportOffset`-style
-        // pending-pass bookkeeping for a REENTRANT notify pass; the snapshot
-        // above is only guarding the add/remove-during-iteration case.
-        let listeners = self.offset_listeners.lock().clone();
-        for listener in &listeners {
-            listener();
-        }
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        self.notifier.notify_listeners_with_recovery(&mut recovery);
+        // Accepted pixel geometry must reach render invalidation even when a
+        // widget listener failed. Both channels share the first failure and
+        // the existing notifier's live-membership and retirement rules.
+        self.offset_notifier
+            .notify_listeners_with_recovery(&mut recovery);
+        recovery.finish();
     }
 
     /// Mark the extents dirty and, if a flush handle is installed and no
     /// flush is already queued, schedule one coalesced post-frame callback
     /// that clears the flag and calls `notify()` exactly once.
-    fn mark_metrics_dirty_and_maybe_schedule_flush(self: &Arc<Self>) {
-        let mut flush = self.flush.lock();
+    fn mark_metrics_dirty_and_maybe_schedule_flush(self: &Rc<Self>) {
+        let mut flush = self.flush.borrow_mut();
         flush.metrics_dirty = true;
         if flush.flush_pending {
             return;
@@ -287,17 +279,22 @@ impl Inner {
         flush.flush_pending = true;
         drop(flush);
 
-        let inner = Arc::clone(self);
-        handle.schedule(move |_timing| {
-            let was_dirty = {
-                let mut flush = inner.flush.lock();
-                flush.flush_pending = false;
-                std::mem::take(&mut flush.metrics_dirty)
-            };
-            if was_dirty {
-                inner.notify();
-            }
-        });
+        let inner = Rc::clone(self);
+        if handle
+            .schedule(move |_timing| {
+                let was_dirty = {
+                    let mut flush = inner.flush.borrow_mut();
+                    flush.flush_pending = false;
+                    std::mem::take(&mut flush.metrics_dirty)
+                };
+                if was_dirty {
+                    inner.notify();
+                }
+            })
+            .is_err()
+        {
+            self.flush.borrow_mut().flush_pending = false;
+        }
     }
 }
 
@@ -327,7 +324,7 @@ impl Listenable for Inner {
 /// See the module docs for the content-dimension feedback contract.
 #[derive(Clone)]
 pub struct ScrollPosition {
-    inner: Arc<Inner>,
+    inner: Rc<Inner>,
 }
 
 impl fmt::Debug for ScrollPosition {
@@ -337,7 +334,7 @@ impl fmt::Debug for ScrollPosition {
     // never block or recurse into the same mutex.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut d = f.debug_struct("ScrollPosition");
-        match self.inner.state.try_lock() {
+        match self.inner.state.try_borrow().ok() {
             Some(state) => {
                 d.field("pixels", &state.pixels)
                     .field("min_scroll_extent", &state.min_scroll_extent)
@@ -370,15 +367,16 @@ impl ScrollPosition {
     #[must_use]
     pub fn new(initial_pixels: f64) -> Self {
         Self {
-            inner: Arc::new(Inner {
-                state: Mutex::new(State {
+            inner: Rc::new(Inner {
+                state: RefCell::new(State {
                     pixels: initial_pixels,
                     ..State::zero()
                 }),
                 notifier: ChangeNotifier::new(),
-                offset_listeners: Mutex::new(Vec::new()),
-                flush: Mutex::new(FlushState::new()),
-                activity: Mutex::new(ActivityState::default()),
+                offset_listeners: RefCell::new(Vec::new()),
+                offset_notifier: ChangeNotifier::new(),
+                flush: RefCell::new(FlushState::new()),
+                activity: RefCell::new(ActivityState::default()),
                 activity_notifier: ChangeNotifier::new(),
             }),
         }
@@ -393,20 +391,20 @@ impl ScrollPosition {
     /// The smallest pixel value reachable without overscroll.
     #[must_use]
     pub fn min_scroll_extent(&self) -> f64 {
-        self.inner.state.lock().min_scroll_extent
+        self.inner.state.borrow_mut().min_scroll_extent
     }
 
     /// The largest pixel value reachable without overscroll.
     #[must_use]
     pub fn max_scroll_extent(&self) -> f64 {
-        self.inner.state.lock().max_scroll_extent
+        self.inner.state.borrow_mut().max_scroll_extent
     }
 
     /// The viewport's length along the scroll axis, as last committed by
     /// `apply_viewport_dimension`.
     #[must_use]
     pub fn viewport_dimension(&self) -> f64 {
-        self.inner.state.lock().viewport_dimension
+        self.inner.state.borrow_mut().viewport_dimension
     }
 
     /// Whether `apply_viewport_dimension` has ever committed a real
@@ -418,7 +416,7 @@ impl ScrollPosition {
     /// pending startup page.
     #[must_use]
     pub fn has_applied_viewport_dimension(&self) -> bool {
-        self.inner.state.lock().has_applied_viewport_dimension
+        self.inner.state.borrow_mut().has_applied_viewport_dimension
     }
 
     /// The page a [`DimensionChangePolicy::KeepFractionalPage`] policy is
@@ -432,7 +430,7 @@ impl ScrollPosition {
     /// dimension clears it in the same lock acquisition.
     #[must_use]
     pub fn cached_page(&self) -> Option<f64> {
-        self.inner.state.lock().cached_page
+        self.inner.state.borrow_mut().cached_page
     }
 
     /// Snapshots `pixels`, `min_scroll_extent`, `max_scroll_extent`, and
@@ -440,7 +438,7 @@ impl ScrollPosition {
     /// [`ScrollPositionSnapshot`].
     #[must_use]
     pub fn extents_snapshot(&self) -> ScrollPositionSnapshot {
-        let state = self.inner.state.lock();
+        let state = self.inner.state.borrow_mut();
         ScrollPositionSnapshot {
             pixels: state.pixels,
             min_scroll_extent: state.min_scroll_extent,
@@ -452,7 +450,7 @@ impl ScrollPosition {
     /// Sets how a future `apply_viewport_dimension` call reconciles `pixels`
     /// when the viewport's dimension changes. See [`DimensionChangePolicy`].
     pub fn set_dimension_policy(&self, policy: DimensionChangePolicy) {
-        self.inner.state.lock().dimension_policy = policy;
+        self.inner.state.borrow_mut().dimension_policy = policy;
     }
 
     /// Overwrites the page a [`DimensionChangePolicy::KeepFractionalPage`]
@@ -486,7 +484,7 @@ impl ScrollPosition {
     /// case.
     #[must_use]
     pub fn set_cached_page_while_collapsed(&self, page: f64) -> bool {
-        let mut state = self.inner.state.lock();
+        let mut state = self.inner.state.borrow_mut();
         if !matches!(
             state.dimension_policy,
             DimensionChangePolicy::KeepFractionalPage { .. }
@@ -515,7 +513,7 @@ impl ScrollPosition {
     /// calling this.
     pub fn set_pixels(&self, value: f64) {
         let changed = {
-            let mut state = self.inner.state.lock();
+            let mut state = self.inner.state.borrow_mut();
             if (state.pixels - value).abs() > f64::EPSILON {
                 state.pixels = value;
                 true
@@ -534,7 +532,7 @@ impl ScrollPosition {
     /// from `ViewState::init_state`/`did_change_dependencies` (ADR-0021) —
     /// never from `build`/`perform_layout`.
     pub fn set_flush_handle(&self, handle: PostFrameHandle) {
-        self.inner.flush.lock().flush_handle = Some(handle);
+        self.inner.flush.borrow_mut().flush_handle = Some(handle);
     }
 
     /// Fires every registered listener (both the `Listenable` notifier and
@@ -556,7 +554,7 @@ impl ScrollPosition {
     /// Whether a user drag or ballistic fling is currently underway.
     #[must_use]
     pub fn is_scrolling(&self) -> bool {
-        self.inner.activity.lock().is_scrolling
+        self.inner.activity.borrow_mut().is_scrolling
     }
 
     /// Records that scrolling started or stopped. Activity listeners fire on
@@ -566,8 +564,20 @@ impl ScrollPosition {
     /// Stopping also resets [`Self::user_scroll_direction`] to `Idle`,
     /// since no drag or fling remains to have a direction.
     pub fn set_is_scrolling(&self, is_scrolling: bool) {
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        self.set_is_scrolling_with_recovery(is_scrolling, &mut recovery);
+        recovery.finish();
+    }
+
+    /// Publish activity within an enclosing framework delivery's failure custody.
+    #[doc(hidden)]
+    pub fn set_is_scrolling_with_recovery(
+        &self,
+        is_scrolling: bool,
+        recovery: &mut flui_foundation::panic::PanicRecovery,
+    ) {
         let changed = {
-            let mut activity = self.inner.activity.lock();
+            let mut activity = self.inner.activity.borrow_mut();
             let changed = activity.is_scrolling != is_scrolling;
             activity.is_scrolling = is_scrolling;
             if changed && !is_scrolling {
@@ -578,7 +588,9 @@ impl ScrollPosition {
         // Lock released before listeners run — a subscriber reading the
         // activity back must not deadlock.
         if changed {
-            self.inner.activity_notifier.notify_listeners();
+            self.inner
+                .activity_notifier
+                .notify_listeners_with_recovery(recovery);
         }
     }
 
@@ -586,7 +598,7 @@ impl ScrollPosition {
     /// underway.
     #[must_use]
     pub fn user_scroll_direction(&self) -> super::ScrollDirection {
-        self.inner.activity.lock().user_scroll_direction
+        self.inner.activity.borrow_mut().user_scroll_direction
     }
 
     /// Records the user's scroll direction. Listeners fire on change only.
@@ -597,7 +609,7 @@ impl ScrollPosition {
     /// underway") true by construction instead of by caller discipline.
     pub fn set_user_scroll_direction(&self, direction: super::ScrollDirection) {
         let changed = {
-            let mut activity = self.inner.activity.lock();
+            let mut activity = self.inner.activity.borrow_mut();
             if !activity.is_scrolling && direction != super::ScrollDirection::Idle {
                 return;
             }
@@ -639,7 +651,7 @@ impl ScrollPosition {
     /// marked the position dirty and scheduled a flush.
     pub fn flush_now(&self) {
         {
-            let mut flush = self.inner.flush.lock();
+            let mut flush = self.inner.flush.borrow_mut();
             flush.metrics_dirty = false;
             flush.flush_pending = false;
         }
@@ -649,8 +661,8 @@ impl ScrollPosition {
     /// Returns an `Arc<dyn Listenable>` pointing at the same shared state —
     /// the upcast `ScrollController::as_listenable()` hands to `AnimatedBuilder`.
     #[must_use]
-    pub fn as_listenable(&self) -> Arc<dyn Listenable> {
-        Arc::clone(&self.inner) as Arc<dyn Listenable>
+    pub fn as_listenable(&self) -> Rc<dyn Listenable> {
+        Rc::clone(&self.inner) as Rc<dyn Listenable>
     }
 
     /// Whether any listeners are currently registered on this position's
@@ -690,7 +702,7 @@ impl ScrollPosition {
     /// discard layout-committed extents for no reason.
     #[must_use]
     pub fn ptr_eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.inner, &other.inner)
+        Rc::ptr_eq(&self.inner, &other.inner)
     }
 
     /// Whether `self` is the only live handle to its underlying position —
@@ -705,13 +717,13 @@ impl ScrollPosition {
     /// must swap in a fresh, privately-owned one first.
     #[must_use]
     pub fn is_uniquely_held(&self) -> bool {
-        Arc::strong_count(&self.inner) == 1
+        Rc::strong_count(&self.inner) == 1
     }
 }
 
 impl ViewportOffset for ScrollPosition {
     fn pixels(&self) -> f64 {
-        self.inner.state.lock().pixels
+        self.inner.state.borrow_mut().pixels
     }
 
     fn has_pixels(&self) -> bool {
@@ -720,7 +732,7 @@ impl ViewportOffset for ScrollPosition {
 
     fn apply_viewport_dimension(&mut self, viewport_dimension: f64) -> bool {
         let changed = {
-            let mut state = self.inner.state.lock();
+            let mut state = self.inner.state.borrow_mut();
             // The equality short-circuit only applies once a REAL prior
             // dimension is on record (`has_applied_viewport_dimension`).
             // A first-ever call is NEVER treated as a no-op — even when
@@ -822,7 +834,7 @@ impl ViewportOffset for ScrollPosition {
 
     fn apply_content_dimensions(&mut self, min_scroll_extent: f64, max_scroll_extent: f64) -> bool {
         let (changed, accepted) = {
-            let mut state = self.inner.state.lock();
+            let mut state = self.inner.state.borrow_mut();
             if (state.min_scroll_extent - min_scroll_extent).abs() < f64::EPSILON
                 && (state.max_scroll_extent - max_scroll_extent).abs() < f64::EPSILON
             {
@@ -848,7 +860,7 @@ impl ViewportOffset for ScrollPosition {
     fn correct_by(&mut self, correction: f64) {
         // No notification: a layout-time correction must not fire
         // listeners (same contract as `ScrollableViewportOffset`).
-        self.inner.state.lock().pixels += correction;
+        self.inner.state.borrow_mut().pixels += correction;
     }
 
     fn jump_to(&mut self, pixels: f64) {
@@ -876,14 +888,30 @@ impl ViewportOffset for ScrollPosition {
         true
     }
 
-    fn add_listener(&self, listener: Arc<dyn Fn() + Send + Sync>) {
-        self.inner.offset_listeners.lock().push(listener);
+    fn add_listener(&self, listener: Rc<dyn Fn()>) {
+        let identity = Rc::downgrade(&listener);
+        let id = self.inner.offset_notifier.add_listener(listener);
+        self.inner
+            .offset_listeners
+            .borrow_mut()
+            .push((id, identity));
     }
 
-    fn remove_listener(&self, listener: &Arc<dyn Fn() + Send + Sync>) {
-        let mut listeners = self.inner.offset_listeners.lock();
-        if let Some(pos) = listeners.iter().position(|l| Arc::ptr_eq(l, listener)) {
-            listeners.remove(pos);
+    fn remove_listener(&self, listener: &Rc<dyn Fn()>) {
+        let removed = {
+            let mut listeners = self.inner.offset_listeners.borrow_mut();
+            listeners
+                .iter()
+                .position(|(_, identity)| identity.ptr_eq(&Rc::downgrade(listener)))
+                .map(|index| listeners.remove(index).0)
+        };
+        if let Some(id) = removed {
+            let callback = self.inner.offset_notifier.take_listener(id);
+            let mut recovery = flui_foundation::panic::PanicRecovery::new();
+            self.inner.notifier.inherit_failure(&mut recovery);
+            self.inner.offset_notifier.inherit_failure(&mut recovery);
+            recovery.retire(callback);
+            recovery.finish();
         }
     }
 }
@@ -905,9 +933,9 @@ mod tests {
         let mut position = ScrollPosition::zero();
         position.set_flush_handle(handle);
 
-        let notified = Arc::new(AtomicUsize::new(0));
-        let counter = Arc::clone(&notified);
-        position.add_listener(Arc::new(move || {
+        let notified = Rc::new(AtomicUsize::new(0));
+        let counter = Rc::clone(&notified);
+        position.add_listener(Rc::new(move || {
             counter.fetch_add(1, Ordering::SeqCst);
         }));
 

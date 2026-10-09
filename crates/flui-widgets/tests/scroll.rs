@@ -480,7 +480,11 @@ pub(crate) fn scrollable_jump_to_during_animate_to_cancels_it_synchronously() {
 
     let mut scoped = fling_scoped(widget, vsync, tight(300.0, 300.0));
 
-    controller.animate_to(1000.0, Duration::from_millis(300), Arc::new(Curves::Linear));
+    controller.animate_to(
+        1000.0,
+        Duration::from_millis(300),
+        std::rc::Rc::new(Curves::Linear),
+    );
     // Three pumps of warm-up, one more than a direct `animate_with` fling:
     // `animate_to` queues a command, and pump 1's rebuild services it after
     // pump 1's own controller tick; pump 2 anchors the new run at `t = 0`;
@@ -615,7 +619,11 @@ pub(crate) fn dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_ti
         tight(300.0, 300.0),
         vsync,
     );
-    scroll.animate_to(1000.0, Duration::from_millis(300), Arc::new(Curves::Linear));
+    scroll.animate_to(
+        1000.0,
+        Duration::from_millis(300),
+        std::rc::Rc::new(Curves::Linear),
+    );
     advance_scroll_run(&mut laid);
     assert!(scroll.pixels() > 0.0 && scroll.pixels() < 1000.0);
     assert!(scroll.position().is_scrolling());
@@ -647,7 +655,11 @@ pub(crate) fn dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_ti
         "retired animation must stay stopped"
     );
     assert!(!scroll.position().is_scrolling());
-    scroll.animate_to(4000.0, Duration::from_millis(300), Arc::new(Curves::Linear));
+    scroll.animate_to(
+        4000.0,
+        Duration::from_millis(300),
+        std::rc::Rc::new(Curves::Linear),
+    );
     advance_scroll_run(&mut laid);
     assert!(
         scroll.pixels() > dragged,
@@ -699,7 +711,7 @@ pub(crate) fn refresh_motion_notifies_activity_through_release_and_recovery() {
         let observations = Arc::new(std::sync::Mutex::new(Vec::new()));
         let observed = Arc::clone(&observations);
         let observed_position = position.clone();
-        let listener = position.add_activity_listener(Arc::new(move || {
+        let listener = position.add_activity_listener(std::rc::Rc::new(move || {
             observed.lock().expect("activity observer").push((
                 observed_position.is_scrolling(),
                 observed_position.user_scroll_direction(),
@@ -860,7 +872,7 @@ pub(crate) fn a_failed_refresh_notification_releases_activity_and_recovers() {
         let fail_callback = fail.clone();
         let failed_callback = failed.clone();
         let listenable = refresh.as_listenable();
-        let listener = listenable.add_listener(Arc::new(move || {
+        let listener = listenable.add_listener(std::rc::Rc::new(move || {
             if watched.is_refreshing() && fail_callback.swap(false, Ordering::SeqCst) {
                 failed_callback.store(true, Ordering::SeqCst);
                 panic!("refresh phase subscriber failed");
@@ -873,7 +885,7 @@ pub(crate) fn a_failed_refresh_notification_releases_activity_and_recovers() {
         let phase = refresh.clone();
         let position = scroll.position();
         let watched_position = position.clone();
-        let activity_listener = position.add_activity_listener(Arc::new(move || {
+        let activity_listener = position.add_activity_listener(std::rc::Rc::new(move || {
             if phase.is_refreshing()
                 && !watched_position.is_scrolling()
                 && activity_flag.swap(false, Ordering::SeqCst)
@@ -919,6 +931,11 @@ pub(crate) fn a_failed_refresh_notification_releases_activity_and_recovers() {
         assert!(
             refresh.is_refreshing(),
             "accepted refresh phase survives its observer"
+        );
+        assert_eq!(
+            calls.get(),
+            1,
+            "accepted refresh callback remains deliverable"
         );
         let stranded = scroll.position().is_scrolling();
         let before_recovery = calls.get();
@@ -1535,8 +1552,9 @@ pub(crate) fn replacing_vsync_retires_old_motion_and_drives_fresh_contacts() {
         }
         fling(&laid);
         let fresh_release = pixels();
-        second.tick_all(1.0);
-        second.tick_all(1.032);
+        let mut clock = flui_animation::MotionClock::new();
+        second.tick_all(&clock.frame(Duration::from_secs(1)));
+        second.tick_all(&clock.frame(Duration::from_millis(1032)));
         if pixels() <= fresh_release {
             failures.push(format!(
                 "{family}: replacement Vsync cannot drive fresh inertia"
@@ -1614,7 +1632,7 @@ pub(crate) fn replacing_a_scroll_position_cancels_its_contact_and_recovers() {
         let observed = Arc::new(Mutex::new(Vec::new()));
         let sink = observed.clone();
         let watched = incoming.clone();
-        let subscription = incoming.add_activity_listener(Arc::new(move || {
+        let subscription = incoming.add_activity_listener(std::rc::Rc::new(move || {
             sink.lock()
                 .expect("activity observer lock")
                 .push((watched.is_scrolling(), watched.user_scroll_direction()));
@@ -2242,7 +2260,11 @@ pub(crate) fn a_scrollable_swap_stops_old_motion_and_retires_its_jump_hook() {
         tight(300.0, 300.0),
         vsync.clone(),
     );
-    old.animate_to(1000.0, Duration::from_millis(300), Arc::new(Curves::Linear));
+    old.animate_to(
+        1000.0,
+        Duration::from_millis(300),
+        std::rc::Rc::new(Curves::Linear),
+    );
     advance_scroll_run(&mut laid);
     assert!(old.pixels() > 0.0);
     let retired = old.pixels();
@@ -2254,7 +2276,11 @@ pub(crate) fn a_scrollable_swap_stops_old_motion_and_retires_its_jump_hook() {
         "old trajectory must not drive the new position"
     );
     assert_eq!(old.pixels(), retired);
-    new.animate_to(900.0, Duration::from_millis(300), Arc::new(Curves::Linear));
+    new.animate_to(
+        900.0,
+        Duration::from_millis(300),
+        std::rc::Rc::new(Curves::Linear),
+    );
     advance_scroll_run(&mut laid);
     let before = new.pixels();
     assert!(before > 0.0);
@@ -2275,7 +2301,11 @@ pub(crate) fn a_same_position_scrollable_rebuild_preserves_motion() {
         tight(300.0, 300.0),
         vsync.clone(),
     );
-    scroll.animate_to(1000.0, Duration::from_millis(300), Arc::new(Curves::Linear));
+    scroll.animate_to(
+        1000.0,
+        Duration::from_millis(300),
+        std::rc::Rc::new(Curves::Linear),
+    );
     advance_scroll_run(&mut laid);
     let before = scroll.pixels();
     assert!(before > 0.0);
@@ -2323,7 +2353,11 @@ pub(crate) fn retiring_one_scrollable_preserves_a_later_owners_jump_hook() {
         before,
         "detaching a different owner must preserve cancellation"
     );
-    scroll.animate_to(900.0, Duration::from_millis(300), Arc::new(Curves::Linear));
+    scroll.animate_to(
+        900.0,
+        Duration::from_millis(300),
+        std::rc::Rc::new(Curves::Linear),
+    );
     advance_scroll_run(&mut second);
     assert!(scroll.pixels() > before, "next command still progresses");
 }
@@ -2702,7 +2736,7 @@ pub(crate) fn refresh_indicator_rebuilds_only_on_a_phase_change() {
     let _subscription = harness
         .refresh
         .as_listenable()
-        .add_listener(Arc::new(move || {
+        .add_listener(std::rc::Rc::new(move || {
             counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }));
 
@@ -3150,7 +3184,7 @@ pub(crate) fn nested_fling_failure_keeps_first_panic_and_a_new_gesture_makes_pro
         let listenable = outer.as_listenable();
         let first = Arc::new(AtomicBool::new(true));
         let fail = Arc::clone(&first);
-        let first_id = listenable.add_listener(Arc::new(move || {
+        let first_id = listenable.add_listener(std::rc::Rc::new(move || {
             assert!(
                 !fail.swap(false, Ordering::SeqCst),
                 "first parent handoff notification"
@@ -3158,18 +3192,29 @@ pub(crate) fn nested_fling_failure_keeps_first_panic_and_a_new_gesture_makes_pro
         }));
         let second = Arc::new(AtomicBool::new(competing));
         let fail = Arc::clone(&second);
-        let second_id = listenable.add_listener(Arc::new(move || {
+        let second_id = listenable.add_listener(std::rc::Rc::new(move || {
             assert!(
                 !fail.swap(false, Ordering::SeqCst),
                 "second parent handoff notification"
             );
         }));
         release_inner_fling(&laid, Vertical, false);
-        let ((), log) = flui_testing::log_capture::capture(|| {
+        let (failure, log) = flui_testing::log_capture::capture(|| {
+            let mut first_failure = None;
             for _ in 0..15 {
-                laid.pump_for(Duration::from_millis(16));
+                if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    laid.pump_for(Duration::from_millis(16));
+                })) {
+                    assert!(
+                        first_failure.is_none(),
+                        "one accepted handoff reports one failure"
+                    );
+                    first_failure = Some(payload);
+                }
             }
+            first_failure.expect("the parent notification failure propagates after frame recovery")
         });
+        assert_scroll_failure(&failure, "first parent handoff notification");
         let expected = if competing {
             vec![
                 "first parent handoff notification",
@@ -3208,12 +3253,25 @@ fn assert_notification_failures(log: &flui_testing::log_capture::CapturedLog, ex
     let reported: Vec<_> = log
         .records()
         .iter()
+        .filter(|record| record.target == "flui_foundation::notifier_generic")
         .filter_map(|record| record.field("panic_payload"))
         .collect();
-    assert_eq!(
-        reported, expected,
+    assert!(
+        reported.starts_with(expected)
+            && reported[expected.len()..]
+                .iter()
+                .all(|message| *message == expected[0]),
         "the actual notifier reports the first failure before competing failures: {log}"
     );
+}
+
+fn assert_scroll_failure(payload: &Box<dyn std::any::Any + Send>, expected: &str) {
+    let text = payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .expect("the scroll boundary preserves the first failure text");
+    assert!(text.contains(expected), "first failure: {text}");
 }
 
 pub(crate) fn nested_fling_equal_edge_jump_cancels_old_handoff_and_next_gesture_recovers() {
@@ -3236,7 +3294,7 @@ pub(crate) fn nested_fling_equal_edge_jump_cancels_old_handoff_and_next_gesture_
     let jump = Arc::clone(&pending_jump);
     let controller = inner.clone();
     let listenable = inner.as_listenable();
-    let listener = listenable.add_listener(Arc::new(move || {
+    let listener = listenable.add_listener(std::rc::Rc::new(move || {
         if controller.pixels() == 800.0 && jump.swap(false, Ordering::SeqCst) {
             // Explicit programmatic cancellation must win even when it leaves
             // the already-committed edge pixels unchanged.
@@ -3335,7 +3393,7 @@ pub(crate) fn nested_fling_skips_saturated_parent_and_reentrant_jump_retires_tra
     let entered = Arc::clone(&once);
     let reentrant = outer.clone();
     let listenable = outer.as_listenable();
-    let listener = listenable.add_listener(Arc::new(move || {
+    let listener = listenable.add_listener(std::rc::Rc::new(move || {
         if entered.swap(false, std::sync::atomic::Ordering::SeqCst) {
             reentrant.jump_to(123.0);
         }
@@ -3685,10 +3743,18 @@ pub(crate) fn show_on_screen_failure_continues_live_ancestors_and_fresh_requests
         let mut laid = lay_out(nested_reveal_content(&outer, &inner), tight(200.0, 200.0));
         laid.enable_semantics();
         laid.tick();
+        let layout_notifications = Rc::new(Cell::new(0));
+        let observed = layout_notifications.clone();
+        flui_rendering::view::ViewportOffset::add_listener(
+            &inner.position(),
+            Rc::new(move || {
+                observed.set(observed.get() + 1);
+            }),
+        );
         let first = Arc::new(AtomicBool::new(true));
         let failed = Arc::clone(&first);
         let inner_listenable = inner.as_listenable();
-        let first_id = inner_listenable.add_listener(Arc::new(move || {
+        let first_id = inner_listenable.add_listener(std::rc::Rc::new(move || {
             assert!(
                 !failed.swap(false, Ordering::SeqCst),
                 "first inner reveal notification"
@@ -3697,15 +3763,24 @@ pub(crate) fn show_on_screen_failure_continues_live_ancestors_and_fresh_requests
         let second = Arc::new(AtomicBool::new(competing));
         let failed = Arc::clone(&second);
         let outer_listenable = outer.as_listenable();
-        let second_id = outer_listenable.add_listener(Arc::new(move || {
+        let second_id = outer_listenable.add_listener(std::rc::Rc::new(move || {
             assert!(
                 !failed.swap(false, Ordering::SeqCst),
                 "second outer reveal notification"
             );
         }));
-        let ((), log) = flui_testing::log_capture::capture(|| {
-            request_reveal_target(&laid);
+        let (failure, log) = flui_testing::log_capture::capture(|| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                request_reveal_target(&laid);
+            }))
+            .expect_err("reveal reports its first failure after delivering live ancestors")
         });
+        assert_scroll_failure(&failure, "first inner reveal notification");
+        assert_eq!(
+            layout_notifications.get(),
+            1,
+            "an accepted offset still reaches the render listener after a value listener failure"
+        );
         let expected = if competing {
             vec![
                 "first inner reveal notification",
@@ -3776,7 +3851,7 @@ pub(crate) fn show_on_screen_same_pipeline_reentry_keeps_one_reveal_and_recovers
         .expect("actual automatic ancestor reveal");
     let _scope = RestoreScope(PENDING_REVEAL.with(|slot| slot.replace(Some(invocation))));
     let listenable = inner.as_listenable();
-    let listener = listenable.add_listener(Arc::new(|| {
+    let listener = listenable.add_listener(std::rc::Rc::new(|| {
         // The notification runs on the same owner thread. Resolve its local
         // pending request without making that request cross-thread ownership.
         let invocation = PENDING_REVEAL.with(|slot| slot.borrow_mut().take());
@@ -3891,7 +3966,7 @@ pub(crate) fn show_on_screen_sibling_reentry_delivers_last_target_without_stale_
         let notifications = Arc::new(AtomicUsize::new(0));
         let seen = Arc::clone(&notifications);
         let listenable = controller.as_listenable();
-        let listener = listenable.add_listener(Arc::new(move || {
+        let listener = listenable.add_listener(std::rc::Rc::new(move || {
             seen.fetch_add(1, Ordering::SeqCst);
             let invocation = PENDING_SIBLING.with(|slot| slot.borrow_mut().take());
             if let Some(invocation) = invocation {

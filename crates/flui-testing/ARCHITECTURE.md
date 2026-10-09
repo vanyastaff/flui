@@ -9,6 +9,15 @@ substrate driver over raw owners, which the raw-owner suites still use.
 
 ## Invariants
 
+- **Extra presentation motion clocks remain independent.** An owning controller
+  registers through `build_on` and remains alive for the scripted run. The
+  harness has no manual controller-registration shortcut. Editing an extra
+  presentation clock stays within its borrow; a step marks that presentation's
+  demand after the borrow is released. A paused clock contributes no continuous
+  animation demand. `presentation_rates_pause_and_step_are_independent` pins
+  distinct rates, sibling progress, no paused produce and exactly one step
+  produce. The runtime and development-agent projection is still separate.
+
 - **A harness frame is `UiRuntime::pump`.** `host::HeadlessHost::pump` is the
   only way the widget harness (`widgets::lay_out`, `widgets::harness::mount`)
   draws a frame, the mount included: apply commands, begin frame, the
@@ -76,6 +85,23 @@ substrate driver over raw owners, which the raw-owner suites still use.
   feature.
 
 ## Mapping decisions
+
+### Registry drivers revoke their frame authority on replacement
+
+Default, adopted and extra presentation registries request samples through the
+binding's weak scheduler wake capability. Each driver also carries weak authority
+owned by its binding or clock entry. Replacement commits the new registry and
+revokes the old authority before invoking callbacks or retiring outgoing state.
+Installation failure still finishes outgoing retirement, retaining the first
+failure when both compete. A standalone old registry remains manually drivable;
+its observer clones cannot wake the binding that replaced it.
+
+`starting_an_idle_bound_controller_requests_its_first_frame`,
+`adopting_a_registry_revokes_the_previous_driver_binding` and
+`driver_replacement_preserves_first_failure_and_recovers` exercise public handles
+in `headless_frame_driver_matrix`. The public
+`extra_registry_drivers_request_frames_and_retire_on_replacement` row checks
+extra clock installation and replacement while preserving a sibling's driver.
 
 ### Unique accessibility queries materialize only failure diagnostics
 

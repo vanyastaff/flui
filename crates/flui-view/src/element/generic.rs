@@ -257,7 +257,7 @@ impl CoreState {
     fn create_mark_dirty_callback(&self, reason: crate::RebuildReason) -> ListenerCallback {
         let dirty = Arc::clone(&self.dirty);
         let handle = self.rebuild_handle();
-        Arc::new(move || {
+        std::rc::Rc::new(move || {
             dirty.store(true, Ordering::Relaxed);
             handle.schedule(reason);
         })

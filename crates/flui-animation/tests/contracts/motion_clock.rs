@@ -5,7 +5,9 @@
 
 use std::time::Duration;
 
-use flui_animation::{InvalidPlaybackRate, MotionClock, PlaybackRate};
+use flui_animation::{
+    Animation, AnimationController, InvalidPlaybackRate, MotionClock, PlaybackRate,
+};
 use proptest::prelude::*;
 
 use crate::run_table;
@@ -20,6 +22,30 @@ fn rate(value: f64) -> PlaybackRate {
 
 fn now_after(clock: &mut MotionClock, raw: Duration) -> Duration {
     clock.frame(raw).now().as_duration()
+}
+
+#[test]
+fn a_registry_ticked_by_two_clocks_never_regresses() {
+    for nested in [false, true] {
+        let registry = flui_animation::Vsync::new();
+        let mut primary = MotionClock::new();
+        registry.tick_all(&primary.frame(ms(1000)));
+        let child = flui_animation::Vsync::new();
+        let _child_seat = nested.then(|| registry.attach_child(&child).expect("child admitted"));
+        let owner = AnimationController::builder(Duration::from_secs(1))
+            .build_on(Some(if nested { &child } else { &registry }));
+        owner.controller().forward().expect("new run");
+
+        let mut stale = MotionClock::new();
+        registry.tick_all(&stale.frame(ms(100)));
+        assert_eq!(owner.controller().value(), 0.0);
+        registry.tick_all(&primary.frame(ms(1100)));
+        assert_eq!(
+            owner.controller().value(),
+            0.1,
+            "an older clock anchors the new run at the last accepted registry time"
+        );
+    }
 }
 
 /// Run at 1 for 500 ms, switch to `to`, then frame at 600 ms.
@@ -157,12 +183,65 @@ fn repeated_raw_time_is_the_same_tick() {
     assert_eq!(clock.frame(ms(48)), first);
 }
 
+fn stale_manual_sample_holds_the_run() {
+    let controller = AnimationController::builder(Duration::from_secs(1)).build();
+    let _run = controller.forward().expect("live manual controller");
+    controller.tick_at(std::time::Duration::from_secs_f64(0.6));
+    let displayed = controller.value();
+    controller.tick_at(std::time::Duration::from_secs_f64(0.2));
+    assert_eq!(
+        controller.value(),
+        displayed,
+        "a stale sample cannot rewind a run"
+    );
+    controller.tick_at(std::time::Duration::from_secs_f64(0.7));
+    assert!((controller.value() - 0.7).abs() < 1e-12);
+}
+
+#[test]
+fn controller_rate_preserves_elapsed_and_paused_delivery() {
+    let controller = AnimationController::builder(Duration::from_secs(1)).build();
+    let _run = controller.forward().expect("live controller");
+    controller.tick_at(ms(400));
+    controller.set_playback_rate(PlaybackRate::PAUSED);
+    controller.tick_at(ms(500));
+    assert_eq!(
+        controller.value(),
+        0.5,
+        "pending rate preserves the next sample"
+    );
+    assert_eq!(controller.velocity(), 0.0);
+    controller.tick_at(Duration::from_secs(20));
+    assert_eq!(controller.value(), 0.5);
+    controller.set_playback_rate(rate(2.0));
+    controller.tick_at(Duration::from_secs(21));
+    assert_eq!(
+        controller.value(),
+        0.5,
+        "resume cannot count the paused gap"
+    );
+    controller.tick_at(ms(21_100));
+    assert!((controller.value() - 0.7).abs() < 1e-12);
+    assert_eq!(controller.velocity(), 2.0);
+    controller.reverse().expect("fresh reverse run");
+    controller.tick_at(ms(100));
+    assert!(
+        (controller.value() - 0.5).abs() < 1e-12,
+        "rate survives restart"
+    );
+    assert_eq!(controller.velocity(), -2.0);
+}
+
 #[test]
 fn backwards_raw_time_holds_the_timeline() {
     run_table(&[
         ("back_by_one_nanosecond", back_by_one_nanosecond),
         ("back_by_ten_seconds", back_by_ten_seconds),
         ("back_to_zero", back_to_zero),
+        (
+            "stale_manual_sample_holds_the_run",
+            stale_manual_sample_holds_the_run,
+        ),
         (
             "repeated_raw_time_is_the_same_tick",
             repeated_raw_time_is_the_same_tick,

@@ -8,9 +8,6 @@ mod async_driver_waker;
 #[path = "async_driver_unwind.rs"]
 mod async_driver_unwind;
 
-#[path = "ticker_future_recovery.rs"]
-mod ticker_future_recovery;
-
 #[path = "wake_delivery.rs"]
 mod wake_delivery;
 
@@ -31,6 +28,9 @@ mod post_frame_callback_ordering;
 
 #[path = "update_scheduler_reshape.rs"]
 mod update_scheduler_reshape;
+
+#[path = "owner_callbacks.rs"]
+mod owner_callbacks;
 
 /// Runs every case even after one fails, then panics listing the failing case names.
 pub(crate) fn run_table(table: &str, cases: &[(&str, fn())]) {

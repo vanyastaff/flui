@@ -312,9 +312,9 @@ impl UiRuntime {
     /// segment is running. Nested entry is stack-shaped and panic unwinding
     /// restores the previously active ui_runtime.
     ///
-    /// Does NOT activate the owner frame: `LocalPostFrameHandle`
+    /// Does NOT activate the owner frame: `PostFrameHandle`
     /// addresses its lane directly (a `Weak` pointer minted once per
-    /// presentation), so `schedule_local` needs no ambient "active lane"
+    /// presentation), so `schedule` needs no ambient "active lane"
     /// scope to succeed. The frame drive drains that lane by passing it
     /// explicitly to `UpdateScheduler::drive_frame`/
     /// `end_frame`, not by anything entered here.

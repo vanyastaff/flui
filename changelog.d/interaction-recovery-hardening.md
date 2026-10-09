@@ -5,6 +5,7 @@
 - Refuse overflowing tap-drag displacement and preserve Scale contact generations when user clocks reenter admission.
 - Cancel retired scroll contacts on position replacement, publish refresh scroll activity, rebind gesture inertia to the current Vsync owner and preserve repeated Viewer frame samples.
 - End refresh scroll activity when no Vsync is attached, and prevent retired bouncing contacts from starting a trajectory through replacement-position listeners.
+- Complete terminal refresh activity and the accepted callback after observer failure, preserving the first panic across both notifications.
 - Retire losing native-scale admissions so subsequent touch gestures remain usable, and preserve valid text clients after failed nested gate installation.
 - Publish horizontal accessibility scroll ranges on their actual axis.
 - Preserve accepted native replacement Start and cached owner terminal delivery after older cleanup or fresh hit-test failure, retaining the earliest failure and exact admission generation.

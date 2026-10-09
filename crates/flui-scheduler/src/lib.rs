@@ -16,7 +16,6 @@
 //!     ↓
 //! UpdateScheduler (orchestrates frames)
 //!     ├─ TaskQueue (priority-based execution)
-//!     ├─ TickerProvider (animation tickers)
 //!     └─ FrameBudget (phase-duration stats)
 //!
 //! Frame Timeline:
@@ -37,17 +36,6 @@
 //! - **Priority::Animation** - High (smooth 60fps)
 //! - **Priority::Build** - Normal (widget rebuilds)
 //! - **Priority::Idle** - Low (background work)
-//!
-//! ### Ticker
-//! Drives animations with frame-perfect timing:
-//! ```rust
-//! use flui_scheduler::Ticker;
-//!
-//! let mut ticker = Ticker::new();
-//! ticker.start(|elapsed| {
-//!     // Update animation
-//! });
-//! ```
 //!
 //! ### FrameBudget
 //! Per-phase timing statistics against a caller-chosen target framerate:
@@ -124,11 +112,11 @@
 //! - Native platforms (Windows, macOS, Linux) via `std::time`
 //! - WebAssembly via `performance.now()`
 //!
-//! Cross-thread scheduler capabilities are [`Send`] + [`Sync`]; the one a
-//! worker uses to ask for a frame is [`FrameWaker`]. What runs on the owner
-//! thread — owner-local post-frame callbacks and async tasks, which may
-//! capture `Rc`/`RefCell` state — lives in the binding's [`OwnerFrame`],
-//! reached through `!Send` handles ([`AsyncDriver`], [`LocalPostFrameHandle`]).
+//! [`UpdateScheduler`] and callback storage belong to one UI owner. Callbacks
+//! and async tasks can capture `Rc`/`RefCell` state. [`FrameWaker`] and task
+//! wakers provide separate [`Send`] + [`Sync`] wake capabilities without
+//! retaining UI callback storage. [`AsyncDriver`] and [`PostFrameHandle`]
+//! address the exact owner lifetime.
 //!
 //! ## Prelude
 //!
@@ -154,7 +142,6 @@ pub mod frame_histogram;
 pub mod frame_telemetry;
 pub mod scheduler;
 pub mod task;
-pub mod ticker;
 
 // Type-safe primitives
 pub mod async_driver;
@@ -166,10 +153,7 @@ pub use async_driver::{AsyncDriver, BoxedTask, TaskToken};
 pub use budget::{
     AllPhaseStats, BudgetPolicy, FrameBudget, FrameBudgetBuilder, PhaseStats, SharedBudget,
 };
-pub use config::{
-    PerformanceMode, PerformanceModeRequestHandle, SERVICE_EXT_TIME_DILATION, TimingsCallback,
-    set_time_dilation, time_dilation,
-};
+pub use config::{PerformanceMode, PerformanceModeRequestHandle, TimingsCallback};
 /// [`FrameSnapshot::presentation`]'s type — re-exported so a consumer of
 /// this crate's frame telemetry (e.g. `flui-devtools`' `timeline` feature)
 /// can name it without an extra, redundant direct dependency on
@@ -185,9 +169,7 @@ pub use frame_telemetry::{
     FRAME_HISTORY_CAPACITY, FrameSnapshot, InputEpoch, InputEpochId, InputEpochs,
     MAX_COALESCED_INPUT_EPOCHS, PresentOutcome,
 };
-pub use post_frame::{
-    LocalPostFrameHandle, LocalPostFrameScheduleError, OwnerFrame, OwnerFrameError, PostFrameHandle,
-};
+pub use post_frame::{OwnerFrame, OwnerFrameError, PostFrameHandle, PostFrameScheduleError};
 /// The instant type the frame clock is stamped with. `std::time::Instant` on
 /// native, a `performance.now()` shim on wasm32 — re-exported so a binding can
 /// name `UpdateScheduler::drive_frame`'s `vsync_time` without depending on `web_time`.
@@ -214,17 +196,12 @@ pub use scheduler::{
     SchedulerBuilder, SchedulerClosed, UpdateScheduler, WeakUpdateScheduler,
 };
 pub use task::{Priority, PriorityCount, Task, TaskId, TaskQueue};
-pub use ticker::{
-    Ticker, TickerCallback, TickerCanceled, TickerCompleter, TickerDelivery, TickerFuture,
-    TickerGroup, TickerId, TickerProvider, TickerState,
-};
 
 /// Prelude for common scheduler types
 pub mod prelude {
     pub use crate::{
         BudgetPolicy, FrameBudget, FrameId, FramePhase, FrameTiming, OneShotFrameCallback,
-        Priority, SchedulerPhase, Task, TaskId, TaskQueue, Ticker, TickerProvider, TickerState,
-        UpdateScheduler,
+        Priority, SchedulerPhase, Task, TaskId, TaskQueue, UpdateScheduler,
         duration::{BudgetPercentage, FrameDuration, Milliseconds, Seconds},
     };
 }

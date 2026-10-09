@@ -1,0 +1,219 @@
+error[E0277]: `Rc<flui_scheduler::scheduler::SchedulerInner>` cannot be sent between threads safely
+  --> tests/ui/thread_boundary/owner_state_stays_on_its_thread.rs:15:30
+   |
+15 |     require_thread_spawnable(binding.scheduler().clone());
+   |     ------------------------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Rc<flui_scheduler::scheduler::SchedulerInner>` cannot be sent between threads safely
+   |     |
+   |     required by a bound introduced by this call
+   |
+   = help: within `UpdateScheduler`, the trait `Send` is not implemented for `Rc<flui_scheduler::scheduler::SchedulerInner>`
+note: required because it appears within the type `UpdateScheduler`
+  --> crates/flui-scheduler/src/scheduler.rs
+   |
+   | pub struct UpdateScheduler {
+   |            ^^^^^^^^^^^^^^^
+note: required by a bound in `require_thread_spawnable`
+  --> tests/ui/thread_boundary/owner_state_stays_on_its_thread.rs:5:32
+   |
+ 5 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+   |                                ^^^^ required by this bound in `require_thread_spawnable`
+
+error[E0277]: `std::rc::Weak<flui_scheduler::post_frame::PostFrameQueue>` cannot be sent between threads safely
+  --> tests/ui/thread_boundary/owner_state_stays_on_its_thread.rs:16:30
+   |
+16 |     require_thread_spawnable(post_frame);
+   |     ------------------------ ^^^^^^^^^^ `std::rc::Weak<flui_scheduler::post_frame::PostFrameQueue>` cannot be sent between threads safely
+   |     |
+   |     required by a bound introduced by this call
+   |
+   = help: within `PostFrameHandle`, the trait `Send` is not implemented for `std::rc::Weak<flui_scheduler::post_frame::PostFrameQueue>`
+note: required because it appears within the type `PostFrameHandle`
+  --> crates/flui-scheduler/src/post_frame.rs
+   |
+   | pub struct PostFrameHandle {
+   |            ^^^^^^^^^^^^^^^
+note: required by a bound in `require_thread_spawnable`
+  --> tests/ui/thread_boundary/owner_state_stays_on_its_thread.rs:5:32
+   |
+ 5 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+   |                                ^^^^ required by this bound in `require_thread_spawnable`
+
+error[E0277]: `std::rc::Weak<flui_scheduler::scheduler::SchedulerInner>` cannot be sent between threads safely
+  --> tests/ui/thread_boundary/owner_state_stays_on_its_thread.rs:16:30
+   |
+16 |     require_thread_spawnable(post_frame);
+   |     ------------------------ ^^^^^^^^^^ `std::rc::Weak<flui_scheduler::scheduler::SchedulerInner>` cannot be sent between threads safely
+   |     |
+   |     required by a bound introduced by this call
+   |
+   = help: within `PostFrameHandle`, the trait `Send` is not implemented for `std::rc::Weak<flui_scheduler::scheduler::SchedulerInner>`
+note: required because it appears within the type `flui_scheduler::scheduler::WeakUpdateScheduler`
+  --> crates/flui-scheduler/src/scheduler.rs
+   |
+   | pub struct WeakUpdateScheduler {
+   |            ^^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `PostFrameHandle`
+  --> crates/flui-scheduler/src/post_frame.rs
+   |
+   | pub struct PostFrameHandle {
+   |            ^^^^^^^^^^^^^^^
+note: required by a bound in `require_thread_spawnable`
+  --> tests/ui/thread_boundary/owner_state_stays_on_its_thread.rs:5:32
+   |
+ 5 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+   |                                ^^^^ required by this bound in `require_thread_spawnable`
+
+error[E0277]: `Rc<flui::flui_animation::run_future::AnimationRunFutureInner>` cannot be sent between threads safely
+  --> tests/ui/thread_boundary/owner_state_stays_on_its_thread.rs:17:30
+   |
+17 |     require_thread_spawnable(run);
+   |     ------------------------ ^^^ `Rc<flui::flui_animation::run_future::AnimationRunFutureInner>` cannot be sent between threads safely
+   |     |
+   |     required by a bound introduced by this call
+   |
+   = help: within `AnimationRunFuture`, the trait `Send` is not implemented for `Rc<flui::flui_animation::run_future::AnimationRunFutureInner>`
+note: required because it appears within the type `AnimationRunFuture`
+  --> crates/flui-animation/src/run_future.rs
+   |
+   | pub struct AnimationRunFuture {
+   |            ^^^^^^^^^^^^^^^^^^
+note: required by a bound in `require_thread_spawnable`
+  --> tests/ui/thread_boundary/owner_state_stays_on_its_thread.rs:5:32
+   |
+ 5 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+   |                                ^^^^ required by this bound in `require_thread_spawnable`
+
+error[E0277]: `Rc<RefCell<flui::flui_animation::controller::AnimationControllerInner>>` cannot be sent between threads safely
+  --> tests/ui/thread_boundary/owner_state_stays_on_its_thread.rs:18:30
+   |
+18 |     require_thread_spawnable(controller);
+   |     ------------------------ ^^^^^^^^^^ `Rc<RefCell<flui::flui_animation::controller::AnimationControllerInner>>` cannot be sent between threads safely
+   |     |
+   |     required by a bound introduced by this call
+   |
+   = help: within `AnimationController`, the trait `Send` is not implemented for `Rc<RefCell<flui::flui_animation::controller::AnimationControllerInner>>`
+note: required because it appears within the type `AnimationController`
+  --> crates/flui-animation/src/controller.rs
+   |
+   | pub struct AnimationController {
+   |            ^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `require_thread_spawnable`
+  --> tests/ui/thread_boundary/owner_state_stays_on_its_thread.rs:5:32
+   |
+ 5 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+   |                                ^^^^ required by this bound in `require_thread_spawnable`
+
+error[E0277]: `Rc<ChangeNotifier>` cannot be sent between threads safely
+  --> tests/ui/thread_boundary/owner_state_stays_on_its_thread.rs:18:30
+   |
+18 |     require_thread_spawnable(controller);
+   |     ------------------------ ^^^^^^^^^^ `Rc<ChangeNotifier>` cannot be sent between threads safely
+   |     |
+   |     required by a bound introduced by this call
+   |
+   = help: within `AnimationController`, the trait `Send` is not implemented for `Rc<ChangeNotifier>`
+note: required because it appears within the type `AnimationController`
+  --> crates/flui-animation/src/controller.rs
+   |
+   | pub struct AnimationController {
+   |            ^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `require_thread_spawnable`
+  --> tests/ui/thread_boundary/owner_state_stays_on_its_thread.rs:5:32
+   |
+ 5 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+   |                                ^^^^ required by this bound in `require_thread_spawnable`
+
+error[E0277]: `Rc<RefCell<vsync::VsyncInner>>` cannot be sent between threads safely
+  --> tests/ui/thread_boundary/owner_state_stays_on_its_thread.rs:19:30
+   |
+19 |     require_thread_spawnable(vsync);
+   |     ------------------------ ^^^^^ `Rc<RefCell<vsync::VsyncInner>>` cannot be sent between threads safely
+   |     |
+   |     required by a bound introduced by this call
+   |
+   = help: within `Vsync`, the trait `Send` is not implemented for `Rc<RefCell<vsync::VsyncInner>>`
+note: required because it appears within the type `Vsync`
+  --> crates/flui-animation/src/vsync.rs
+   |
+   | pub struct Vsync {
+   |            ^^^^^
+note: required by a bound in `require_thread_spawnable`
+  --> tests/ui/thread_boundary/owner_state_stays_on_its_thread.rs:5:32
+   |
+ 5 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+   |                                ^^^^ required by this bound in `require_thread_spawnable`
+
+error[E0277]: `Rc<notifier_generic::ListenerStorage<()>>` cannot be sent between threads safely
+  --> tests/ui/thread_boundary/owner_state_stays_on_its_thread.rs:20:30
+   |
+20 |     require_thread_spawnable(notifier);
+   |     ------------------------ ^^^^^^^^ `Rc<notifier_generic::ListenerStorage<()>>` cannot be sent between threads safely
+   |     |
+   |     required by a bound introduced by this call
+   |
+   = help: within `ChangeNotifier`, the trait `Send` is not implemented for `Rc<notifier_generic::ListenerStorage<()>>`
+note: required because it appears within the type `Notifier<()>`
+  --> crates/flui-foundation/src/notifier_generic.rs
+   |
+   | pub struct Notifier<Arg> {
+   |            ^^^^^^^^
+note: required because it appears within the type `ChangeNotifier`
+  --> crates/flui-foundation/src/notifier.rs
+   |
+   | pub struct ChangeNotifier {
+   |            ^^^^^^^^^^^^^^
+note: required by a bound in `require_thread_spawnable`
+  --> tests/ui/thread_boundary/owner_state_stays_on_its_thread.rs:5:32
+   |
+ 5 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+   |                                ^^^^ required by this bound in `require_thread_spawnable`
+
+error[E0277]: `Rc<std::cell::Cell<usize>>` cannot be sent between threads safely
+  --> tests/ui/thread_boundary/owner_state_stays_on_its_thread.rs:20:30
+   |
+20 |     require_thread_spawnable(notifier);
+   |     ------------------------ ^^^^^^^^ `Rc<std::cell::Cell<usize>>` cannot be sent between threads safely
+   |     |
+   |     required by a bound introduced by this call
+   |
+   = help: within `ChangeNotifier`, the trait `Send` is not implemented for `Rc<std::cell::Cell<usize>>`
+note: required because it appears within the type `Notifier<()>`
+  --> crates/flui-foundation/src/notifier_generic.rs
+   |
+   | pub struct Notifier<Arg> {
+   |            ^^^^^^^^
+note: required because it appears within the type `ChangeNotifier`
+  --> crates/flui-foundation/src/notifier.rs
+   |
+   | pub struct ChangeNotifier {
+   |            ^^^^^^^^^^^^^^
+note: required by a bound in `require_thread_spawnable`
+  --> tests/ui/thread_boundary/owner_state_stays_on_its_thread.rs:5:32
+   |
+ 5 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+   |                                ^^^^ required by this bound in `require_thread_spawnable`
+
+error[E0277]: `Rc<std::cell::Cell<bool>>` cannot be sent between threads safely
+  --> tests/ui/thread_boundary/owner_state_stays_on_its_thread.rs:20:30
+   |
+20 |     require_thread_spawnable(notifier);
+   |     ------------------------ ^^^^^^^^ `Rc<std::cell::Cell<bool>>` cannot be sent between threads safely
+   |     |
+   |     required by a bound introduced by this call
+   |
+   = help: within `ChangeNotifier`, the trait `Send` is not implemented for `Rc<std::cell::Cell<bool>>`
+note: required because it appears within the type `Notifier<()>`
+  --> crates/flui-foundation/src/notifier_generic.rs
+   |
+   | pub struct Notifier<Arg> {
+   |            ^^^^^^^^
+note: required because it appears within the type `ChangeNotifier`
+  --> crates/flui-foundation/src/notifier.rs
+   |
+   | pub struct ChangeNotifier {
+   |            ^^^^^^^^^^^^^^
+note: required by a bound in `require_thread_spawnable`
+  --> tests/ui/thread_boundary/owner_state_stays_on_its_thread.rs:5:32
+   |
+ 5 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+   |                                ^^^^ required by this bound in `require_thread_spawnable`

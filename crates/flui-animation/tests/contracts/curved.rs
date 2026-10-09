@@ -1,10 +1,8 @@
 //! `CurvedAnimation` over a running parent.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController, Cubic, Curve, CurvedAnimation, Curves};
-use flui_scheduler::UpdateScheduler;
 
 #[test]
 fn reverse_curve_locked_to_run_entry_direction() {
@@ -13,15 +11,12 @@ fn reverse_curve_locked_to_run_entry_direction() {
     // mid-run; the reverse curve only applies to a run entered in
     // Reverse. Without the lock, a mid-run `reverse()` would swap curves
     // underneath the value and cause a visual jump.
-    let scheduler = UpdateScheduler::new();
-    let controller = Arc::new(AnimationController::new(
-        Duration::from_millis(100),
-        &scheduler,
-    ));
+    let controller =
+        std::rc::Rc::new(AnimationController::builder(Duration::from_millis(100)).build());
     // Forward curve is the identity cubic; the reverse curve is strongly
     // sub-linear at t=0.5, so any curve swap is observable there.
     let curved = CurvedAnimation::new(
-        controller.clone() as Arc<dyn Animation<f64>>,
+        controller.clone() as std::rc::Rc<dyn Animation<f64>>,
         Cubic::new(0.0, 0.0, 1.0, 1.0), // y(x) = x
     )
     .with_reverse_curve(Curves::EaseInQuint);
@@ -51,5 +46,5 @@ fn reverse_curve_locked_to_run_entry_direction() {
         "a run entered in Reverse must use the reverse curve ({reverse_run} vs {expected})"
     );
 
-    controller.dispose();
+    drop(controller);
 }

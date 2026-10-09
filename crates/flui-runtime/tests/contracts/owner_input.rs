@@ -386,7 +386,7 @@ fn window_observations_update_only_the_target_runtime_lifecycle() {
         let callback_observed = Arc::clone(&observed);
         runtime
             .scheduler()
-            .add_lifecycle_state_listener(Arc::new(move |state| {
+            .add_lifecycle_state_listener(std::rc::Rc::new(move |state| {
                 callback_observed
                     .lock()
                     .expect("observation lock")

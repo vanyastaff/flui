@@ -2,17 +2,17 @@
 //! [`InteractiveViewer`](super::InteractiveViewer)'s transform.
 
 use std::fmt;
-use std::sync::Arc;
+use std::rc::Rc;
 
 use flui_foundation::geometry::Matrix4;
 use flui_foundation::geometry::Offset;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
-use parking_lot::Mutex;
+use std::cell::RefCell;
 
 /// The heap-allocated state shared by every clone of a
 /// [`TransformationController`].
 struct Inner {
-    value: Mutex<Matrix4>,
+    value: RefCell<Matrix4>,
     notifier: ChangeNotifier,
 }
 
@@ -45,13 +45,13 @@ impl Listenable for Inner {
 /// The value defaults to [`Matrix4::identity`] — no transformation.
 #[derive(Clone)]
 pub struct TransformationController {
-    inner: Arc<Inner>,
+    inner: Rc<Inner>,
 }
 
 impl fmt::Debug for TransformationController {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TransformationController")
-            .field("value", &*self.inner.value.lock())
+            .field("value", &*self.inner.value.borrow_mut())
             .finish_non_exhaustive()
     }
 }
@@ -64,7 +64,7 @@ impl Default for TransformationController {
 
 impl TransformationController {
     pub(crate) fn ptr_eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.inner, &other.inner)
+        Rc::ptr_eq(&self.inner, &other.inner)
     }
     /// A controller starting at the identity matrix (no transformation).
     #[must_use]
@@ -76,8 +76,8 @@ impl TransformationController {
     #[must_use]
     pub fn with_value(value: Matrix4) -> Self {
         Self {
-            inner: Arc::new(Inner {
-                value: Mutex::new(value),
+            inner: Rc::new(Inner {
+                value: RefCell::new(value),
                 notifier: ChangeNotifier::new(),
             }),
         }
@@ -86,7 +86,7 @@ impl TransformationController {
     /// The current transform.
     #[must_use]
     pub fn value(&self) -> Matrix4 {
-        *self.inner.value.lock()
+        *self.inner.value.borrow_mut()
     }
 
     /// Replaces the transform and notifies listeners if it actually changed.
@@ -97,7 +97,7 @@ impl TransformationController {
     /// writing it through this setter; a direct `set_value` call (from a
     /// test, or an external animation) bypasses those clamps entirely.
     pub fn set_value(&self, value: Matrix4) {
-        let mut guard = self.inner.value.lock();
+        let mut guard = self.inner.value.borrow_mut();
         if guard.m == value.m {
             return;
         }
@@ -135,8 +135,8 @@ impl TransformationController {
     /// "same controller, just a different clone" instead of resubscribing on
     /// every rebuild.
     #[must_use]
-    pub fn as_listenable(&self) -> Arc<dyn Listenable> {
-        Arc::clone(&self.inner) as Arc<dyn Listenable>
+    pub fn as_listenable(&self) -> std::rc::Rc<dyn Listenable> {
+        Rc::clone(&self.inner) as std::rc::Rc<dyn Listenable>
     }
 
     /// The number of listeners currently registered.

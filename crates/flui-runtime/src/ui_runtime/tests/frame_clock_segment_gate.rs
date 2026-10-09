@@ -1,5 +1,241 @@
 use super::*;
 
+pub(crate) fn closed_presentation_animation_cannot_wake_a_surviving_window() {
+    use crate::pump::SampledClock;
+    use flui_animation::AnimationController;
+    use std::time::Duration;
+
+    let mut runtime = mount_root_here();
+    let closed = runtime.install_second_presentation_for_test();
+    let retired_clock = runtime
+        .presentations
+        .get(closed)
+        .expect("second presentation")
+        .vsync();
+    assert!(runtime.close_presentation_entered(closed));
+    let mut sink = ScriptedSink::always_presents();
+    let origin = web_time::Instant::now();
+    runtime.set_now_secs_for_test(0.0);
+    let _ = runtime.pump(&mut SampledClock(origin), &mut sink);
+    assert!(
+        !runtime.scheduler().has_scheduled_frame(),
+        "survivor quiesces"
+    );
+
+    let retired_owner =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&retired_clock));
+    retired_owner
+        .controller()
+        .forward()
+        .expect("retained clock run");
+    assert!(
+        !runtime.scheduler().has_scheduled_frame(),
+        "a closed presentation cannot request a sibling's frame"
+    );
+    let live_owner =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&runtime.vsync()));
+    live_owner.controller().forward().expect("survivor run");
+    assert!(
+        runtime.scheduler().has_scheduled_frame(),
+        "live driver still wakes"
+    );
+}
+
+pub(crate) fn starting_an_idle_presentation_animation_requests_its_first_frame() {
+    use crate::pump::SampledClock;
+    use flui_animation::{Animation as _, AnimationController};
+    use std::time::Duration;
+
+    let mut runtime = mount_root_here();
+    let mut sink = ScriptedSink::always_presents();
+    let origin = web_time::Instant::now();
+    runtime.set_now_secs_for_test(0.0);
+    assert!(
+        runtime
+            .pump(&mut SampledClock(origin), &mut sink)
+            .presented(),
+        "mount frame presents"
+    );
+    assert!(
+        !runtime.scheduler().has_scheduled_frame(),
+        "presentation quiesces"
+    );
+
+    let owner =
+        AnimationController::builder(Duration::from_millis(100)).build_on(Some(&runtime.vsync()));
+    assert!(
+        !runtime.scheduler().has_scheduled_frame(),
+        "an idle seat needs no frame"
+    );
+    owner.controller().forward().expect("fresh run");
+    assert!(
+        runtime.scheduler().has_scheduled_frame(),
+        "accepted run wakes the driver before a pump"
+    );
+
+    runtime.set_now_secs_for_test(0.02);
+    let _ = runtime.pump(
+        &mut SampledClock(origin + Duration::from_millis(20)),
+        &mut sink,
+    );
+    assert!(
+        owner.controller().is_animating(),
+        "first sample preserves the run"
+    );
+    assert!(
+        runtime.needs_redraw(),
+        "the running animation requests continuation"
+    );
+    runtime.set_now_secs_for_test(0.12);
+    let _ = runtime.pump(
+        &mut SampledClock(origin + Duration::from_millis(120)),
+        &mut sink,
+    );
+    assert_eq!(owner.controller().value(), 1.0);
+    assert!(
+        !runtime.vsync().has_running(),
+        "completed run releases frame demand"
+    );
+}
+
+pub(crate) fn agent_playback_drives_independent_windows_and_one_paused_step_frame() {
+    use flui_animation::{Animation as _, AnimationController};
+    use flui_protocol::MotionRequest;
+    use std::time::Duration;
+
+    let mut runtime = mount_root_here();
+    let a = runtime.presentation_id();
+    let b = runtime.install_second_presentation_for_test();
+    runtime
+        .attach_root_widget_to_for_test(b, &flui_widgets::SizedBox::square(10.0))
+        .expect("second root");
+    let a_window = runtime.dev_agent_window(a).expect("A agent");
+    let b_window = runtime.dev_agent_window(b).expect("B agent");
+    let edit = |window: &flui_view::dev_agent::AgentWindow, request| {
+        let mut answer = window.motion(request).expect("admitted");
+        assert_eq!(runtime.drain_commands().invoked, 1);
+        answer.try_take().expect("answered").expect("valid request")
+    };
+    let a_owner =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&runtime.vsync()));
+    let b_owner = AnimationController::builder(Duration::from_secs(1))
+        .build_on(Some(&runtime.presentations.get(b).expect("B").vsync()));
+    a_owner.controller().forward().expect("A run");
+    b_owner.controller().forward().expect("B run");
+    edit(&a_window, MotionRequest::new().with_rate(2.0));
+    edit(&b_window, MotionRequest::new().with_rate(0.5));
+    let mut sink = ScriptedSink::always_presents();
+    runtime.set_now_secs_for_test(0.0);
+    let _ = runtime.render_frame(&mut sink);
+    runtime.set_now_secs_for_test(0.25);
+    let _ = runtime.render_frame(&mut sink);
+    assert!((a_owner.controller().value() - 0.5).abs() < 1e-9);
+    assert!((b_owner.controller().value() - 0.125).abs() < 1e-9);
+
+    edit(&a_window, MotionRequest::new().with_rate(0.0));
+    runtime.set_now_secs_for_test(10.0);
+    let _ = runtime.render_frame(&mut sink);
+    assert_eq!(a_owner.controller().value(), 0.5);
+    assert_eq!(b_owner.controller().value(), 1.0);
+    edit(&b_window, MotionRequest::new().with_rate(0.0));
+    runtime.set_now_secs_for_test(11.0);
+    let _ = runtime.render_frame(&mut sink);
+    let a_frames = runtime
+        .presentations
+        .get(a)
+        .expect("A")
+        .clock()
+        .produced_count();
+    let b_frames = runtime
+        .presentations
+        .get(b)
+        .expect("B")
+        .clock()
+        .produced_count();
+    edit(&a_window, MotionRequest::new().with_step_ms(100));
+    let _ = runtime.render_frame(&mut sink);
+    assert!((a_owner.controller().value() - 0.6).abs() < 1e-9);
+    assert_eq!(
+        runtime
+            .presentations
+            .get(a)
+            .expect("A")
+            .clock()
+            .produced_count(),
+        a_frames + 1
+    );
+    assert_eq!(
+        runtime
+            .presentations
+            .get(b)
+            .expect("B")
+            .clock()
+            .produced_count(),
+        b_frames
+    );
+    runtime.set_now_secs_for_test(12.0);
+    let _ = runtime.render_frame(&mut sink);
+    assert_eq!(
+        runtime
+            .presentations
+            .get(a)
+            .expect("A")
+            .clock()
+            .produced_count(),
+        a_frames + 1,
+        "a paused run cannot keep producing after its explicit step"
+    );
+}
+
+pub(crate) fn gated_presentations_hold_samples_then_catch_up_when_visible() {
+    use flui_animation::{Animation as _, AnimationController};
+    use std::time::Duration;
+
+    for hidden in [true, false] {
+        let runtime = mount_root_here();
+        let owner =
+            AnimationController::builder(Duration::from_secs(1)).build_on(Some(&runtime.vsync()));
+        let controller = owner.controller();
+        controller.forward().expect("fresh run");
+        let mut sink = ScriptedSink::always_presents();
+        runtime.set_now_secs_for_test(0.0);
+        let _ = runtime.render_frame(&mut sink);
+        runtime.set_now_secs_for_test(0.25);
+        let _ = runtime.render_frame(&mut sink);
+        assert!((controller.value() - 0.25).abs() < 1e-9);
+
+        let mut scheduler = runtime.scheduler().clone();
+        if hidden {
+            runtime.set_presentation_hidden(runtime.presentation_id(), true);
+        } else {
+            scheduler.set_frames_enabled(false);
+        }
+        for time in [0.5, 1.0, 2.0] {
+            runtime.set_now_secs_for_test(time);
+            let _ = runtime.render_frame(&mut sink);
+            assert!(
+                (controller.value() - 0.25).abs() < 1e-9,
+                "hidden={hidden}: gated frames cannot invoke the controller"
+            );
+            assert!(controller.is_animating());
+        }
+
+        if hidden {
+            runtime.set_presentation_hidden(runtime.presentation_id(), false);
+        } else {
+            scheduler.set_frames_enabled(true);
+        }
+        runtime.set_now_secs_for_test(2.1);
+        let _ = runtime.render_frame(&mut sink);
+        assert_eq!(
+            controller.value(),
+            1.0,
+            "visibility resumes at current timeline time"
+        );
+        assert!(!controller.is_animating());
+    }
+}
+
 fn table_constraints() -> BoxConstraints {
     BoxConstraints::tight(flui_foundation::geometry::Size::new(800.0, 600.0))
 }
@@ -99,11 +335,9 @@ pub(crate) fn n_ticks_under_backpressure_wake_the_platform_exactly_once_then_rea
 
     let (wake, wake_count) = super::counting_wake();
     let ui_runtime = super::new_runtime(wake).expect("runtime");
-    let controller = AnimationController::new(
-        Duration::from_secs(1),
-        &flui_scheduler::UpdateScheduler::new(),
-    );
-    ui_runtime.vsync().register(controller.clone());
+    let mut owner =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&ui_runtime.vsync()));
+    let controller = owner.controller();
     controller.forward().expect("fresh controller forwards");
 
     let clock = ui_runtime.presentations.primary().clock();
@@ -140,7 +374,7 @@ pub(crate) fn n_ticks_under_backpressure_wake_the_platform_exactly_once_then_rea
          poll() already reset the latch"
     );
 
-    controller.dispose();
+    owner.dispose();
 }
 
 // ================================================================

@@ -15,8 +15,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_sdk::animation::{
-    Animation, AnimationController, JumpAt, Keyframes, Stagger, StaggerOrigin, Steps, Vsync,
-    VsyncRegistration,
+    Animation, AnimationController, DrivenController, JumpAt, Keyframes, Stagger, StaggerOrigin,
+    Steps,
 };
 use flui_sdk::foundation::Listenable;
 use flui_sdk::geometry::{RRect, Rect, Size};
@@ -98,17 +98,16 @@ impl Phases {
 }
 
 /// Persistent state for [`CupertinoActivityIndicator`]: the repeating
-/// controller and its registration with the ambient [`Vsync`].
+/// controller and its registration with the ambient [`Vsync`](flui_sdk::animation::Vsync).
 pub struct CupertinoActivityIndicatorState {
-    controller: AnimationController,
+    controller: DrivenController,
     phases: Arc<Phases>,
-    registration: Option<(Vsync, VsyncRegistration)>,
 }
 
 impl std::fmt::Debug for CupertinoActivityIndicatorState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CupertinoActivityIndicatorState")
-            .field("registered", &self.registration.is_some())
+            .field("registered", &self.controller.is_bound())
             .finish_non_exhaustive()
     }
 }
@@ -118,9 +117,8 @@ impl StatefulView for CupertinoActivityIndicator {
 
     fn create_state(&self) -> Self::State {
         CupertinoActivityIndicatorState {
-            controller: AnimationController::without_ticker(CYCLE),
+            controller: AnimationController::builder(CYCLE).build_on(None),
             phases: Arc::new(Phases::new()),
-            registration: None,
         }
     }
 }
@@ -131,32 +129,17 @@ impl ViewState<CupertinoActivityIndicator> for CupertinoActivityIndicatorState {
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
-        let next = ctx.depend_on::<VsyncScope, _>(|scope| scope.vsync().clone());
-        if self
-            .registration
-            .as_ref()
-            .map(|(vsync, _)| vsync)
-            .zip(next.as_ref())
-            .is_some_and(|(old, new)| old.is_same(new))
-        {
-            return;
+        if let Err(error) = self.controller.rebind(VsyncScope::maybe_of(ctx).as_ref()) {
+            tracing::error!(%error, "activity indicator lost its frame registry");
         }
-        if let Some((vsync, token)) = self.registration.take() {
-            vsync.unregister(&token);
-        }
-        if let Some(vsync) = next {
-            let token = vsync.register(self.controller.clone());
-            self.registration = Some((vsync, token));
-            // Re-anchor the new registry's clock at the current phase.
-            let _ = self.controller.repeat(false);
-        } else {
-            let _ = self.controller.stop();
+        if !self.controller.controller().is_animating() {
+            let _ = self.controller.controller().repeat(false);
         }
     }
 
     fn build(&self, _view: &CupertinoActivityIndicator, ctx: &dyn BuildContext) -> impl IntoView {
         let painter = TickPainter {
-            controller: self.controller.clone(),
+            controller: self.controller.controller().clone(),
             phases: Arc::clone(&self.phases),
             color: TICK_COLOR.resolve_from(ctx),
         };
@@ -166,14 +149,11 @@ impl ViewState<CupertinoActivityIndicator> for CupertinoActivityIndicatorState {
             .child(
                 CustomPaint::new()
                     .size(Size::new(RADIUS * 2.0, RADIUS * 2.0))
-                    .painter(Arc::new(painter)),
+                    .painter(std::rc::Rc::new(painter)),
             )
     }
 
     fn dispose(&mut self) {
-        if let Some((vsync, registration)) = self.registration.take() {
-            vsync.unregister(&registration);
-        }
         self.controller.dispose();
     }
 }
@@ -217,8 +197,8 @@ impl CustomPainter for TickPainter {
             .is_none_or(|old| old.color != self.color)
     }
 
-    fn repaint(&self) -> Option<Arc<dyn Listenable>> {
-        Some(Arc::new(self.controller.clone()))
+    fn repaint(&self) -> Option<std::rc::Rc<dyn Listenable>> {
+        Some(std::rc::Rc::new(self.controller.clone()))
     }
 
     fn as_any(&self) -> &dyn Any {

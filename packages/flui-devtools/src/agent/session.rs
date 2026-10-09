@@ -251,12 +251,13 @@ fn handle(line: &[u8], shared: &Shared) -> Value {
     let op = request
         .get("op")
         .and_then(Value::as_str)
-        .filter(|op| matches!(*op, "windows" | "read" | "act"))
+        .filter(|op| matches!(*op, "windows" | "read" | "act" | "motion"))
         .unwrap_or("unknown");
     let outcome = match op {
         "windows" => Ok(json!({ "windows": shared.registry.list() })),
         "read" => read(&request, shared),
         "act" => act(&request, shared),
+        "motion" => motion(&request, shared),
         _ => Err((invalid("unknown op"), None)),
     };
     let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -336,6 +337,39 @@ fn act(request: &Value, shared: &Shared) -> Result<Value, Failure> {
                 "the window did not answer in time; the action is still queued",
             )
             .with_may_have_run(true),
+        )),
+    }
+}
+
+fn motion(request: &Value, shared: &Shared) -> Result<Value, Failure> {
+    let window = window(request, shared)?;
+    let motion: flui_protocol::MotionRequest = match request.get("request") {
+        None | Some(Value::Null) => flui_protocol::MotionRequest::new(),
+        Some(request) => serde_json::from_value(request.clone())
+            .map_err(|_| (invalid("the motion request is malformed"), None))?,
+    };
+    let mutates = motion.rate.is_some() || motion.step_ms.is_some();
+    let fail = |fault: AgentFault| name_handle(fault, window.id(), None);
+    let answer = window.motion(motion).map_err(fail)?;
+    match wait(answer, shared) {
+        Some(Ok(state)) => serde_json::to_value(state).map_err(|_| {
+            (
+                AgentFault::new(
+                    ErrorCode::Platform,
+                    Retry::Never,
+                    "the clock did not serialize",
+                ),
+                None,
+            )
+        }),
+        Some(Err(fault)) => Err(fail(fault)),
+        None => Err(fail(
+            AgentFault::new(
+                ErrorCode::Timeout,
+                if mutates { Retry::Never } else { Retry::Soon },
+                "the window did not answer in time; the motion request is still queued",
+            )
+            .with_may_have_run(mutates),
         )),
     }
 }

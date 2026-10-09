@@ -30,22 +30,20 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use flui_animation::curve::{ArcCurve, Curve};
 use flui_animation::{
-    Animation, AnimationController, AnimationStatus, CurvedAnimation, Curves, Vsync,
-    VsyncRegistration,
+    Animation, AnimationController, AnimationStatus, CurvedAnimation, Curves, DrivenController,
+    Vsync,
 };
 use flui_foundation::{ListenerId, ViewKey};
 use flui_painting::Alignment;
 use flui_view::element::ElementKind;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
 use flui_view::{
-    BoxedView, BuildContextExt, IntoView, RebuildHandle, StatelessView, ValueKey, View, ViewExt,
-    ViewState,
+    BoxedView, IntoView, RebuildHandle, StatelessView, ValueKey, View, ViewExt, ViewState,
 };
 
 use crate::animated::vsync_scope::VsyncScope;
@@ -55,7 +53,7 @@ use crate::{FadeTransition, Stack};
 /// `child` with a widget driven by `animation` (`0.0` = fully switched out,
 /// `1.0` = fully switched in).
 pub type AnimatedSwitcherTransitionBuilder =
-    Rc<dyn Fn(BoxedView, Arc<dyn Animation<f64>>) -> BoxedView>;
+    Rc<dyn Fn(BoxedView, std::rc::Rc<dyn Animation<f64>>) -> BoxedView>;
 
 /// A custom layout for [`AnimatedSwitcher`]: arranges the incoming
 /// `current_child` (if any) alongside the still-animating-out
@@ -160,7 +158,7 @@ impl AnimatedSwitcher {
     #[must_use]
     pub fn transition_builder(
         mut self,
-        builder: impl Fn(BoxedView, Arc<dyn Animation<f64>>) -> BoxedView + 'static,
+        builder: impl Fn(BoxedView, std::rc::Rc<dyn Animation<f64>>) -> BoxedView + 'static,
     ) -> Self {
         self.transition_builder = Rc::new(builder);
         self
@@ -187,7 +185,7 @@ impl AnimatedSwitcher {
     /// caller wraps the result in a per-entry key) is what carries the slot.
     pub fn default_transition_builder(
         child: BoxedView,
-        animation: Arc<dyn Animation<f64>>,
+        animation: std::rc::Rc<dyn Animation<f64>>,
     ) -> BoxedView {
         FadeTransition::new(animation, child).boxed()
     }
@@ -269,22 +267,17 @@ struct ChildEntry {
     child_number: u64,
     /// The transition's driver. Runs forward while incoming, reverse once
     /// demoted to outgoing.
-    controller: AnimationController,
+    controller: DrivenController,
     /// `controller`, eased by `switch_in_curve` going forward and
     /// `switch_out_curve` going backward — what `transition_builder`
     /// actually animates against.
     curved: CurvedAnimation<ArcCurve>,
-    /// The `Vsync` this entry registered with, kept alongside the
-    /// registration so [`ChildEntry::dispose`] can unregister (mirrors
-    /// `ImplicitController::dispose`).
-    vsync: Option<Vsync>,
-    vsync_registration: Option<VsyncRegistration>,
     status_listener_id: Option<ListenerId>,
     /// Flipped by the status-listener callback when `controller` reaches
     /// [`AnimationStatus::Dismissed`] (a completed reverse run). Read — and
     /// acted on — by [`AnimatedSwitcherState::build`]'s sweep; see the
     /// module docs for why the listener cannot dispose the entry itself.
-    dismissed: Arc<AtomicBool>,
+    dismissed: Rc<AtomicBool>,
     /// The child widget this entry was built from, used to detect a
     /// same-entry rebuild (`View::can_update`) and to re-run
     /// `transition_builder` on demand.
@@ -311,24 +304,28 @@ impl ChildEntry {
         switch_out_curve: ArcCurve,
         transition_builder: &AnimatedSwitcherTransitionBuilder,
         animate: bool,
+        vsync: Option<&Vsync>,
     ) -> Self {
         // No ticker: `Vsync` drives this controller once registered (see
         // `ChildEntry::register`).
-        let controller = AnimationController::without_ticker(duration);
+        let controller = AnimationController::builder(duration).build_on(vsync);
         if let Some(reverse_duration) = reverse_duration {
-            controller.set_reverse_duration(reverse_duration);
+            controller
+                .controller()
+                .set_reverse_duration(reverse_duration);
         }
-        let parent: Arc<dyn Animation<f64>> = Arc::new(controller.clone());
+        let parent: std::rc::Rc<dyn Animation<f64>> =
+            std::rc::Rc::new(controller.controller().clone());
         let curved =
             CurvedAnimation::new(parent, switch_in_curve).with_reverse_curve(switch_out_curve);
 
         if animate {
             // A new entry animates in.
-            let _ = controller.forward();
+            let _ = controller.controller().forward();
         } else {
             // The very first entry sits
             // at rest, fully switched in, no motion.
-            controller.set_value(1.0);
+            controller.controller().set_value(1.0);
         }
 
         let transition = Self::build_transition(child_number, &child, &curved, transition_builder);
@@ -337,10 +334,8 @@ impl ChildEntry {
             child_number,
             controller,
             curved,
-            vsync: None,
-            vsync_registration: None,
             status_listener_id: None,
-            dismissed: Arc::new(AtomicBool::new(false)),
+            dismissed: Rc::new(AtomicBool::new(false)),
             widget_child: child,
             transition,
         }
@@ -351,25 +346,29 @@ impl ChildEntry {
     /// `rebuild` when `controller` reaches
     /// [`AnimationStatus::Dismissed`].
     fn register(&mut self, vsync: Option<Vsync>, rebuild: RebuildHandle) {
-        if let Some(vsync) = &vsync {
-            self.vsync_registration = Some(vsync.register(self.controller.clone()));
-        }
-        self.vsync = vsync;
+        self.rebind(vsync.as_ref());
 
-        let dismissed = Arc::clone(&self.dismissed);
-        self.status_listener_id =
-            Some(self.controller.add_status_listener(Arc::new(move |status| {
+        let dismissed = Rc::clone(&self.dismissed);
+        self.status_listener_id = Some(self.controller.controller().add_status_listener(
+            std::rc::Rc::new(move |status| {
                 if status == AnimationStatus::Dismissed {
                     dismissed.store(true, Ordering::Release);
                     rebuild.schedule(flui_view::RebuildReason::AnimationTick);
                 }
-            })));
+            }),
+        ));
     }
 
     /// Re-run `transition_builder` over the current `widget_child`/`curved`,
     /// preserving this entry's key. Called both when
     /// `transition_builder` itself changes and when a `can_update`-compatible
     /// child rebuilds the current entry in place.
+    fn rebind(&mut self, vsync: Option<&Vsync>) {
+        if let Err(error) = self.controller.rebind(vsync) {
+            tracing::error!(%error, "AnimatedSwitcher lost its frame registry");
+        }
+    }
+
     fn update_transition(&mut self, transition_builder: &AnimatedSwitcherTransitionBuilder) {
         self.transition = Self::build_transition(
             self.child_number,
@@ -385,7 +384,7 @@ impl ChildEntry {
         curved: &CurvedAnimation<ArcCurve>,
         transition_builder: &AnimatedSwitcherTransitionBuilder,
     ) -> BoxedView {
-        let animation: Arc<dyn Animation<f64>> = Arc::new(curved.clone());
+        let animation: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(curved.clone());
         let content = transition_builder(widget_child.clone(), animation);
         KeyedEntry::new(child_number, content).boxed()
     }
@@ -394,12 +393,7 @@ impl ChildEntry {
     /// controller.
     fn dispose(&mut self) {
         if let Some(id) = self.status_listener_id.take() {
-            self.controller.remove_status_listener(id);
-        }
-        if let (Some(vsync), Some(registration)) =
-            (self.vsync.take(), self.vsync_registration.take())
-        {
-            vsync.unregister(&registration);
+            self.controller.controller().remove_status_listener(id);
         }
         self.controller.dispose();
     }
@@ -409,7 +403,7 @@ impl std::fmt::Debug for ChildEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ChildEntry")
             .field("child_number", &self.child_number)
-            .field("status", &self.controller.status())
+            .field("status", &self.controller.controller().status())
             .field("dismissed", &self.dismissed.load(Ordering::Acquire))
             .finish_non_exhaustive()
     }
@@ -456,6 +450,7 @@ impl StatefulView for AnimatedSwitcher {
                 self.switch_out_curve.clone(),
                 &self.transition_builder,
                 false,
+                None,
             )
         });
         AnimatedSwitcherState {
@@ -479,7 +474,7 @@ impl AnimatedSwitcherState {
         );
         if let Some(old_entry) = self.current_entry.take() {
             debug_assert!(animate, "BUG: demoting a current entry always animates");
-            let _ = old_entry.controller.reverse();
+            let _ = old_entry.controller.controller().reverse();
             self.outgoing_entries.get_mut().push(old_entry);
         }
         let Some(child) = view.child.clone() else {
@@ -494,6 +489,7 @@ impl AnimatedSwitcherState {
             view.switch_out_curve.clone(),
             &view.transition_builder,
             animate,
+            self.vsync.as_ref(),
         );
         if let Some(rebuild) = self.rebuild.clone() {
             entry.register(self.vsync.clone(), rebuild);
@@ -505,12 +501,22 @@ impl AnimatedSwitcherState {
 impl ViewState<AnimatedSwitcher> for AnimatedSwitcherState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let rebuild = ctx.rebuild_handle();
-        let vsync = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone());
+        let vsync = VsyncScope::maybe_of(ctx);
         if let Some(entry) = self.current_entry.as_mut() {
             entry.register(vsync.clone(), rebuild.clone());
         }
         self.rebuild = Some(rebuild);
         self.vsync = vsync;
+    }
+
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        self.vsync = VsyncScope::maybe_of(ctx);
+        if let Some(entry) = self.current_entry.as_mut() {
+            entry.rebind(self.vsync.as_ref());
+        }
+        for entry in self.outgoing_entries.get_mut() {
+            entry.rebind(self.vsync.as_ref());
+        }
     }
 
     fn build(&self, view: &AnimatedSwitcher, _ctx: &dyn BuildContext) -> impl IntoView {

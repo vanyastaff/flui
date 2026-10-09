@@ -986,6 +986,7 @@ pub struct RenderSliverFloatingHeaderBase<M: FloatingHeaderMode> {
     child_position: Option<f64>,
     /// Value-change subscription on `controller`, torn down in `detach`.
     listener_id: Option<ListenerId>,
+    invalidation: Option<RenderInvalidationHandle>,
     _mode: PhantomData<M>,
 }
 
@@ -1009,6 +1010,7 @@ impl<M: FloatingHeaderMode> RenderSliverFloatingHeaderBase<M> {
             last_snap_epoch: 0,
             child_position: None,
             listener_id: None,
+            invalidation: None,
             _mode: PhantomData,
         }
     }
@@ -1065,7 +1067,25 @@ impl<M: FloatingHeaderMode> RenderSliverFloatingHeaderBase<M> {
     /// any in-flight animation keeps its own already-cloned controller and
     /// settles normally.
     pub fn set_snap_controller(&mut self, controller: Option<AnimationController>) {
-        self.controller = controller;
+        let outgoing = std::mem::replace(&mut self.controller, controller);
+        let listener = self.listener_id.take();
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        if let (Some(old), Some(listener)) = (outgoing.as_ref(), listener) {
+            recovery.run(|| old.remove_listener(listener));
+        }
+        recovery.run(|| self.subscribe_snap_controller());
+        recovery.retire(outgoing);
+        recovery.finish();
+    }
+
+    fn subscribe_snap_controller(&mut self) {
+        if let (Some(controller), Some(handle)) =
+            (self.controller.as_ref(), self.invalidation.clone())
+        {
+            self.listener_id = Some(controller.add_listener(std::rc::Rc::new(move || {
+                let _ = handle.mark_needs_layout();
+            })));
+        }
     }
 
     /// The scroll offset currently driving the header's shrink/reveal state
@@ -1134,7 +1154,7 @@ impl<M: FloatingHeaderMode> RenderSliverFloatingHeaderBase<M> {
         controller.set_duration(duration);
         let begin = self.effective_scroll_offset.unwrap_or(0.0);
         self.float_tween = FloatTween::new(begin, end_value);
-        let parent: Arc<dyn Animation<f64>> = Arc::new(controller.clone());
+        let parent: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(controller.clone());
         self.animation = Some(CurvedAnimation::new(parent, curve));
         // The freshly-built tween's value AT the controller's pre-reset
         // position may not equal `begin` (the controller hasn't been driven
@@ -1287,14 +1307,12 @@ impl<M: FloatingHeaderMode> RenderSliver for RenderSliverFloatingHeaderBase<M> {
     }
 
     fn attach(&mut self, handle: RenderInvalidationHandle) {
-        if let Some(controller) = self.controller.as_ref() {
-            self.listener_id = Some(controller.add_listener(Arc::new(move || {
-                let _ = handle.mark_needs_layout();
-            })));
-        }
+        self.invalidation = Some(handle);
+        self.set_snap_controller(self.controller.clone());
     }
 
     fn detach(&mut self) {
+        self.invalidation = None;
         // Deliberately does NOT stop/dispose `self.controller` — the same
         // as `RenderAnimatedSize::detach`: `detach` fires only on structural
         // tree removal (not on offstage/onstage toggling), and controller

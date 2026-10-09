@@ -1,0 +1,1039 @@
+{
+  "ActionRequest": {
+    "$defs": {
+      "ActionName": {
+        "oneOf": [
+          {
+            "const": "invoke",
+            "type": "string"
+          },
+          {
+            "const": "toggle",
+            "type": "string"
+          },
+          {
+            "const": "set_value",
+            "type": "string"
+          },
+          {
+            "const": "select",
+            "type": "string"
+          },
+          {
+            "const": "focus",
+            "type": "string"
+          },
+          {
+            "const": "expand",
+            "type": "string"
+          },
+          {
+            "const": "collapse",
+            "type": "string"
+          },
+          {
+            "const": "scroll_into_view",
+            "type": "string"
+          }
+        ]
+      },
+      "ElementId": {
+        "pattern": "^e[1-9][0-9]*$",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "action": {
+        "$ref": "#/$defs/ActionName"
+      },
+      "element": {
+        "$ref": "#/$defs/ElementId"
+      },
+      "value": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "element",
+      "action"
+    ],
+    "title": "ActionRequest",
+    "type": "object"
+  },
+  "ErrorCode": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "oneOf": [
+      {
+        "const": "invalid_argument",
+        "type": "string"
+      },
+      {
+        "const": "not_supported",
+        "type": "string"
+      },
+      {
+        "const": "busy",
+        "type": "string"
+      },
+      {
+        "const": "not_found",
+        "type": "string"
+      },
+      {
+        "const": "unknown_handle",
+        "type": "string"
+      },
+      {
+        "const": "gone",
+        "type": "string"
+      },
+      {
+        "const": "disabled",
+        "type": "string"
+      },
+      {
+        "const": "action_unsupported",
+        "type": "string"
+      },
+      {
+        "const": "not_foreground",
+        "type": "string"
+      },
+      {
+        "const": "focus_elsewhere",
+        "type": "string"
+      },
+      {
+        "const": "outside_target",
+        "type": "string"
+      },
+      {
+        "const": "timeout",
+        "type": "string"
+      },
+      {
+        "const": "input_held",
+        "type": "string"
+      },
+      {
+        "const": "shutting_down",
+        "type": "string"
+      },
+      {
+        "const": "platform",
+        "type": "string"
+      }
+    ],
+    "title": "ErrorCode"
+  },
+  "MotionRequest": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "rate": {
+        "format": "double",
+        "type": [
+          "number",
+          "null"
+        ]
+      },
+      "step_ms": {
+        "format": "uint64",
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      }
+    },
+    "title": "MotionRequest",
+    "type": "object"
+  },
+  "MotionState": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "rate": {
+        "format": "double",
+        "type": "number"
+      },
+      "time_ms": {
+        "format": "double",
+        "type": "number"
+      }
+    },
+    "required": [
+      "rate",
+      "time_ms"
+    ],
+    "title": "MotionState",
+    "type": "object"
+  },
+  "Node": {
+    "$defs": {
+      "ActionName": {
+        "oneOf": [
+          {
+            "const": "invoke",
+            "type": "string"
+          },
+          {
+            "const": "toggle",
+            "type": "string"
+          },
+          {
+            "const": "set_value",
+            "type": "string"
+          },
+          {
+            "const": "select",
+            "type": "string"
+          },
+          {
+            "const": "focus",
+            "type": "string"
+          },
+          {
+            "const": "expand",
+            "type": "string"
+          },
+          {
+            "const": "collapse",
+            "type": "string"
+          },
+          {
+            "const": "scroll_into_view",
+            "type": "string"
+          }
+        ]
+      },
+      "Checked": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "const": "mixed"
+          }
+        ]
+      },
+      "ElementId": {
+        "pattern": "^e[1-9][0-9]*$",
+        "type": "string"
+      },
+      "Rect": {
+        "properties": {
+          "height": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "width": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "x": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "y": {
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "x",
+          "y",
+          "width",
+          "height"
+        ],
+        "type": "object"
+      },
+      "Role": {
+        "oneOf": [
+          {
+            "const": "button",
+            "type": "string"
+          },
+          {
+            "const": "check_box",
+            "type": "string"
+          },
+          {
+            "const": "radio_button",
+            "type": "string"
+          },
+          {
+            "const": "switch",
+            "type": "string"
+          },
+          {
+            "const": "combo_box",
+            "type": "string"
+          },
+          {
+            "const": "text_input",
+            "type": "string"
+          },
+          {
+            "const": "password_input",
+            "type": "string"
+          },
+          {
+            "const": "link",
+            "type": "string"
+          },
+          {
+            "const": "image",
+            "type": "string"
+          },
+          {
+            "const": "label",
+            "type": "string"
+          },
+          {
+            "const": "list",
+            "type": "string"
+          },
+          {
+            "const": "list_item",
+            "type": "string"
+          },
+          {
+            "const": "menu",
+            "type": "string"
+          },
+          {
+            "const": "menu_bar",
+            "type": "string"
+          },
+          {
+            "const": "menu_item",
+            "type": "string"
+          },
+          {
+            "const": "progress_indicator",
+            "type": "string"
+          },
+          {
+            "const": "scroll_bar",
+            "type": "string"
+          },
+          {
+            "const": "slider",
+            "type": "string"
+          },
+          {
+            "const": "spin_button",
+            "type": "string"
+          },
+          {
+            "const": "status",
+            "type": "string"
+          },
+          {
+            "const": "tab_list",
+            "type": "string"
+          },
+          {
+            "const": "tab",
+            "type": "string"
+          },
+          {
+            "const": "toolbar",
+            "type": "string"
+          },
+          {
+            "const": "tooltip",
+            "type": "string"
+          },
+          {
+            "const": "tree",
+            "type": "string"
+          },
+          {
+            "const": "tree_item",
+            "type": "string"
+          },
+          {
+            "const": "group",
+            "type": "string"
+          },
+          {
+            "const": "grid",
+            "type": "string"
+          },
+          {
+            "const": "row",
+            "type": "string"
+          },
+          {
+            "const": "cell",
+            "type": "string"
+          },
+          {
+            "const": "grid_cell",
+            "type": "string"
+          },
+          {
+            "const": "column_header",
+            "type": "string"
+          },
+          {
+            "const": "row_header",
+            "type": "string"
+          },
+          {
+            "const": "table",
+            "type": "string"
+          },
+          {
+            "const": "document",
+            "type": "string"
+          },
+          {
+            "const": "window",
+            "type": "string"
+          },
+          {
+            "const": "dialog",
+            "type": "string"
+          },
+          {
+            "const": "pane",
+            "type": "string"
+          },
+          {
+            "const": "title_bar",
+            "type": "string"
+          },
+          {
+            "const": "splitter",
+            "type": "string"
+          },
+          {
+            "const": "unknown",
+            "type": "string"
+          }
+        ]
+      },
+      "WindowId": {
+        "pattern": "^w[1-9][0-9]*$",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "actions": {
+        "items": {
+          "$ref": "#/$defs/ActionName"
+        },
+        "type": "array"
+      },
+      "automation_id": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "checked": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Checked"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "children": {
+        "items": {
+          "$ref": "#"
+        },
+        "type": "array"
+      },
+      "children_unread": {
+        "type": "boolean"
+      },
+      "class_name": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "disabled": {
+        "type": "boolean"
+      },
+      "expanded": {
+        "type": [
+          "boolean",
+          "null"
+        ]
+      },
+      "focusable": {
+        "type": "boolean"
+      },
+      "focused": {
+        "type": "boolean"
+      },
+      "gone": {
+        "type": "boolean"
+      },
+      "id": {
+        "$ref": "#/$defs/ElementId"
+      },
+      "name": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "native_role": {
+        "type": "string"
+      },
+      "omitted_children": {
+        "format": "uint",
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "rect": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Rect"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "role": {
+        "$ref": "#/$defs/Role"
+      },
+      "selected": {
+        "type": [
+          "boolean",
+          "null"
+        ]
+      },
+      "surface_rect": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Rect"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "value": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "window": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/WindowId"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "id",
+      "role",
+      "native_role"
+    ],
+    "title": "Node",
+    "type": "object"
+  },
+  "ReadQuery": {
+    "$defs": {
+      "ElementId": {
+        "pattern": "^e[1-9][0-9]*$",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "max_depth": {
+        "format": "uint",
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "max_nodes": {
+        "format": "uint",
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "root": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ElementId"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "title": "ReadQuery",
+    "type": "object"
+  },
+  "Retry": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "oneOf": [
+      {
+        "const": "never",
+        "type": "string"
+      },
+      {
+        "const": "soon",
+        "type": "string"
+      },
+      {
+        "const": "when_appears",
+        "type": "string"
+      }
+    ],
+    "title": "Retry"
+  },
+  "Tree": {
+    "$defs": {
+      "ActionName": {
+        "oneOf": [
+          {
+            "const": "invoke",
+            "type": "string"
+          },
+          {
+            "const": "toggle",
+            "type": "string"
+          },
+          {
+            "const": "set_value",
+            "type": "string"
+          },
+          {
+            "const": "select",
+            "type": "string"
+          },
+          {
+            "const": "focus",
+            "type": "string"
+          },
+          {
+            "const": "expand",
+            "type": "string"
+          },
+          {
+            "const": "collapse",
+            "type": "string"
+          },
+          {
+            "const": "scroll_into_view",
+            "type": "string"
+          }
+        ]
+      },
+      "Checked": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "const": "mixed"
+          }
+        ]
+      },
+      "ElementId": {
+        "pattern": "^e[1-9][0-9]*$",
+        "type": "string"
+      },
+      "Node": {
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/$defs/ActionName"
+            },
+            "type": "array"
+          },
+          "automation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "checked": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Checked"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "children": {
+            "items": {
+              "$ref": "#/$defs/Node"
+            },
+            "type": "array"
+          },
+          "children_unread": {
+            "type": "boolean"
+          },
+          "class_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "disabled": {
+            "type": "boolean"
+          },
+          "expanded": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "focusable": {
+            "type": "boolean"
+          },
+          "focused": {
+            "type": "boolean"
+          },
+          "gone": {
+            "type": "boolean"
+          },
+          "id": {
+            "$ref": "#/$defs/ElementId"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "native_role": {
+            "type": "string"
+          },
+          "omitted_children": {
+            "format": "uint",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "rect": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Rect"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "role": {
+            "$ref": "#/$defs/Role"
+          },
+          "selected": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "surface_rect": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Rect"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "window": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/WindowId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "role",
+          "native_role"
+        ],
+        "type": "object"
+      },
+      "ProtocolVersion": {
+        "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+        "type": "string"
+      },
+      "Rect": {
+        "properties": {
+          "height": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "width": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "x": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "y": {
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "x",
+          "y",
+          "width",
+          "height"
+        ],
+        "type": "object"
+      },
+      "Role": {
+        "oneOf": [
+          {
+            "const": "button",
+            "type": "string"
+          },
+          {
+            "const": "check_box",
+            "type": "string"
+          },
+          {
+            "const": "radio_button",
+            "type": "string"
+          },
+          {
+            "const": "switch",
+            "type": "string"
+          },
+          {
+            "const": "combo_box",
+            "type": "string"
+          },
+          {
+            "const": "text_input",
+            "type": "string"
+          },
+          {
+            "const": "password_input",
+            "type": "string"
+          },
+          {
+            "const": "link",
+            "type": "string"
+          },
+          {
+            "const": "image",
+            "type": "string"
+          },
+          {
+            "const": "label",
+            "type": "string"
+          },
+          {
+            "const": "list",
+            "type": "string"
+          },
+          {
+            "const": "list_item",
+            "type": "string"
+          },
+          {
+            "const": "menu",
+            "type": "string"
+          },
+          {
+            "const": "menu_bar",
+            "type": "string"
+          },
+          {
+            "const": "menu_item",
+            "type": "string"
+          },
+          {
+            "const": "progress_indicator",
+            "type": "string"
+          },
+          {
+            "const": "scroll_bar",
+            "type": "string"
+          },
+          {
+            "const": "slider",
+            "type": "string"
+          },
+          {
+            "const": "spin_button",
+            "type": "string"
+          },
+          {
+            "const": "status",
+            "type": "string"
+          },
+          {
+            "const": "tab_list",
+            "type": "string"
+          },
+          {
+            "const": "tab",
+            "type": "string"
+          },
+          {
+            "const": "toolbar",
+            "type": "string"
+          },
+          {
+            "const": "tooltip",
+            "type": "string"
+          },
+          {
+            "const": "tree",
+            "type": "string"
+          },
+          {
+            "const": "tree_item",
+            "type": "string"
+          },
+          {
+            "const": "group",
+            "type": "string"
+          },
+          {
+            "const": "grid",
+            "type": "string"
+          },
+          {
+            "const": "row",
+            "type": "string"
+          },
+          {
+            "const": "cell",
+            "type": "string"
+          },
+          {
+            "const": "grid_cell",
+            "type": "string"
+          },
+          {
+            "const": "column_header",
+            "type": "string"
+          },
+          {
+            "const": "row_header",
+            "type": "string"
+          },
+          {
+            "const": "table",
+            "type": "string"
+          },
+          {
+            "const": "document",
+            "type": "string"
+          },
+          {
+            "const": "window",
+            "type": "string"
+          },
+          {
+            "const": "dialog",
+            "type": "string"
+          },
+          {
+            "const": "pane",
+            "type": "string"
+          },
+          {
+            "const": "title_bar",
+            "type": "string"
+          },
+          {
+            "const": "splitter",
+            "type": "string"
+          },
+          {
+            "const": "unknown",
+            "type": "string"
+          }
+        ]
+      },
+      "WindowId": {
+        "pattern": "^w[1-9][0-9]*$",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "count": {
+        "format": "uint",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "protocol": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ProtocolVersion"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "roots": {
+        "items": {
+          "$ref": "#/$defs/Node"
+        },
+        "type": "array"
+      },
+      "truncated": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "roots",
+      "count",
+      "truncated"
+    ],
+    "title": "Tree",
+    "type": "object"
+  }
+}

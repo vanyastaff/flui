@@ -220,7 +220,7 @@ pub(crate) fn complete_release_pops_to_the_destination_route_and_the_flight_land
     // Drive the release's own pacing run (350ms) to completion, then report
     // the gesture stopped — mirrors `BackGestureDetectorState::poll_settle`
     // once `!controller.is_animating()`.
-    from_controller.tick_at(0.35);
+    from_controller.tick_at(std::time::Duration::from_secs_f64(0.35));
     if still_settling {
         navigator.did_stop_user_gesture();
     }

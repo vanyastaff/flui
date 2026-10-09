@@ -33,7 +33,7 @@ impl UiRuntime {
     /// A clone of the PRIMARY presentation's own controller registry for
     /// implicit animations.
     ///
-    /// `Vsync` is `Arc`-backed; cloning is two atomic increments — cheap. App
+    /// `Vsync` shares its owner-local registry through `Rc`. App
     /// code constructs a `VsyncScope` from this clone so every
     /// implicitly-animated widget below registers its controller here. The
     /// production frame driver (`Self::draw_frame_entered`) ticks EVERY
@@ -50,26 +50,6 @@ impl UiRuntime {
     #[must_use]
     pub fn vsync(&self) -> Vsync {
         self.presentations.primary().vsync()
-    }
-
-    /// Replace the PRIMARY presentation's registry with a pre-existing
-    /// shared `Vsync`.
-    ///
-    /// Use when a `VsyncScope` was built before this presentation's registry
-    /// was acquired (the scope needs the handle to pass to descendants, and
-    /// this presentation must drive that same registry). Call before any
-    /// controller is registered so no registration is stranded on the
-    /// discarded registry. Never mount a second `VsyncScope` at the root
-    /// with a *different* registry — this presentation ticks its own while
-    /// descendants register into the other, leaving them frozen.
-    #[expect(
-        dead_code,
-        reason = "no production caller yet, and no test exercises the \
-                  custom-registry substitution path -- an app-author escape \
-                  hatch that has no wiring point: the ui_runtime is internal to its host"
-    )]
-    pub(crate) fn set_vsync(&self, vsync: Vsync) {
-        self.presentations.primary().set_vsync(vsync);
     }
 
     /// The raw frame time, relative to this UI runtime's `start`, that every

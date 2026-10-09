@@ -12,6 +12,23 @@ recorded so far.
 
 ## Mapping decisions
 
+### SnackBar hover pauses only the addressed display timer
+
+Each mounted presenter holds a hover lease for its exact queued entry.
+The lease counts hovered presenters, so one scaffold's exit cannot resume a
+timer another scaffold still holds. The entry and messenger are weakly
+addressed; an old entry's callbacks cannot change the next entry's timer.
+Hover uses the controller's playback rate and retains the display run and its
+completion. Replacing or disposing a presenter withdraws its hover admission
+before retiring its captures; retired callbacks cannot acquire it again.
+Playback-rate changes request their sample through the timer's registry seat;
+hover does not rebuild the tree merely to wake that sample.
+
+`snack_bar_display_timer_pauses_while_hovered` drives real pointer hover and
+observes the preserved remainder and one Timeout completion.
+`unmounting_a_hovered_snack_bar_releases_its_timer_pause` keeps the messenger
+and timer mounted while removing the Scaffold, then observes completion.
+
 ### Contrast selects authored palettes within the effective brightness family
 
 `MaterialApp` selects light/dark using `ThemeMode` and, for System mode, the

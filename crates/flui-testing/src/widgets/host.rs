@@ -13,15 +13,13 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_animation::Vsync;
+use flui_animation::{Vsync, VsyncRegistration};
 use flui_foundation::{ElementId, ManualClock};
 use flui_interaction::events::PointerEvent;
 use flui_platform_api::PlatformInput;
 use flui_rendering::pipeline::PipelineCell;
-use flui_scheduler::FrameTiming;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, ElementTree};
-use parking_lot::Mutex;
 
 use crate::host::{HeadlessHost, HeadlessWindow};
 
@@ -44,7 +42,7 @@ pub(super) struct WidgetHost {
     pipeline: PipelineCell,
     /// A registry the caller built its own `VsyncScope` over, ticked at each
     /// frame's time alongside the UI runtime's.
-    adopted_vsync: Arc<Mutex<Option<Vsync>>>,
+    adopted_vsync: RefCell<Option<VsyncRegistration>>,
     /// Scenes the sink held before the last pump, to tell whether it painted.
     submits_before_last_pump: u64,
 }
@@ -68,8 +66,7 @@ impl WidgetHost {
             .widgets()
             .pipeline_owner()
             .expect("BUG: a ui_runtime's presentation installs its pipeline");
-        let adopted_vsync = Arc::new(Mutex::new(None::<Vsync>));
-        tick_adopted_vsync(&ui_runtime, &adopted_vsync);
+        let adopted_vsync = RefCell::new(None);
         let mut host = Self {
             ui_runtime,
             slot,
@@ -161,7 +158,12 @@ impl WidgetHost {
 
     /// Replace the adopted registry.
     pub(super) fn adopt_vsync(&self, vsync: Vsync) {
-        *self.adopted_vsync.lock() = Some(vsync);
+        let parent = self.ui_runtime.ui_runtime().vsync();
+        let registration = parent.attach_child(&vsync);
+        let outgoing = self.adopted_vsync.replace(registration);
+        if let Some(outgoing) = outgoing {
+            parent.detach_child(&outgoing);
+        }
     }
 
     pub(super) fn ui_runtime(&self) -> &HeadlessHost {
@@ -180,24 +182,6 @@ impl WidgetHost {
     pub(super) fn did_paint_last_frame(&self) -> bool {
         self.ui_runtime.sink().submits() > self.submits_before_last_pump
     }
-}
-
-/// Tick `adopted` at every frame's time, relative to the UI runtime's start, in
-/// the persistent phase the UI runtime ticks its own registry in.
-fn tick_adopted_vsync(ui_runtime: &HeadlessHost, adopted: &Arc<Mutex<Option<Vsync>>>) {
-    let clock = ui_runtime.clock().clone();
-    let start = flui_foundation::MonotonicClock::now(&clock);
-    let adopted = Arc::clone(adopted);
-    ui_runtime
-        .ui_runtime()
-        .scheduler()
-        .add_persistent_frame_callback(Arc::new(move |_timing: &FrameTiming| {
-            let vsync = adopted.lock().clone();
-            if let Some(vsync) = vsync {
-                let now = flui_foundation::MonotonicClock::now(&clock);
-                vsync.tick_all(now.saturating_duration_since(start).as_secs_f64());
-            }
-        }));
 }
 
 /// The shallowest element of `view_type`, within `under`'s subtree when given.

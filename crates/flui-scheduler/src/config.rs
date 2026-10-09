@@ -3,15 +3,11 @@
 //! This module provides standalone types used by the
 //! [`UpdateScheduler`](crate::scheduler::UpdateScheduler):
 //!
-//! - **Time dilation**: Slow down animations for debugging
 //! - **Performance mode**: Hint to the runtime about expected workload
 //! - **Service extensions**: Debug/dev tool integration points
 //! - **Timings callbacks**: Frame performance reporting
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
-};
+use std::rc::Rc;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -26,73 +22,7 @@ use crate::frame::FrameTiming;
 ///
 /// Callbacks receive batched `FrameTiming` data approximately once per second
 /// in release mode, or every ~100ms in debug/profile builds.
-pub type TimingsCallback = Arc<dyn Fn(&[FrameTiming]) + Send + Sync>;
-
-// ============================================================================
-// Time Dilation
-// ============================================================================
-
-/// Global time dilation factor for animations.
-///
-/// This slows down animations by the given factor to help with development.
-/// A value of 1.0 means normal speed, 2.0 means half speed, etc.
-///
-/// # Thread Safety
-///
-/// This uses atomic operations and is safe to access from any thread.
-static TIME_DILATION: AtomicU64 = AtomicU64::new(0x3FF0_0000_0000_0000); // 1.0 as f64 bits
-
-/// Get the current time dilation factor.
-///
-/// # Example
-///
-/// ```rust
-/// use flui_scheduler::config::time_dilation;
-///
-/// let dilation = time_dilation();
-/// assert_eq!(dilation, 1.0); // Default is normal speed
-/// ```
-#[inline]
-pub fn time_dilation() -> f64 {
-    f64::from_bits(TIME_DILATION.load(Ordering::Relaxed))
-}
-
-/// Configuration error for [`set_time_dilation`].
-#[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
-#[non_exhaustive]
-pub enum InvalidTimeDilation {
-    /// `value <= 0.0` rejected — non-positive scaling is undefined.
-    #[error("time dilation must be positive (got {0})")]
-    NonPositive(f64),
-    /// `value` is NaN or infinite — undefined math.
-    #[error("time dilation must be finite (got {0})")]
-    NonFinite(f64),
-}
-
-/// Set the time dilation scaling factor.
-///
-/// Validates and stores the process-wide dilation factor only — it has no
-/// reach into any particular [`UpdateScheduler`](crate::scheduler::UpdateScheduler)'s
-/// epoch. A caller that also holds a live scheduler and wants its epoch
-/// reset on a dilation change should use
-/// [`UpdateScheduler::set_time_dilation`](crate::scheduler::UpdateScheduler::set_time_dilation)
-/// instead, which delegates here and then resets its own epoch.
-///
-/// # Errors
-///
-/// Returns [`InvalidTimeDilation::NonPositive`] if `value <= 0.0` and
-/// [`InvalidTimeDilation::NonFinite`] if `value` is NaN or infinite.
-pub fn set_time_dilation(value: f64) -> Result<(), InvalidTimeDilation> {
-    if !value.is_finite() {
-        return Err(InvalidTimeDilation::NonFinite(value));
-    }
-    if value <= 0.0 {
-        return Err(InvalidTimeDilation::NonPositive(value));
-    }
-
-    TIME_DILATION.store(value.to_bits(), Ordering::Relaxed);
-    Ok(())
-}
+pub type TimingsCallback = Rc<dyn Fn(&[FrameTiming])>;
 
 // ============================================================================
 // Performance Mode
@@ -151,7 +81,7 @@ pub enum PerformanceMode {
 /// drop(handle);
 /// ```
 pub struct PerformanceModeRequestHandle {
-    cleanup: Option<Box<dyn FnOnce() + Send>>,
+    cleanup: Option<Box<dyn FnOnce()>>,
 }
 
 impl std::fmt::Debug for PerformanceModeRequestHandle {
@@ -166,7 +96,7 @@ impl std::fmt::Debug for PerformanceModeRequestHandle {
 
 impl PerformanceModeRequestHandle {
     /// Create a new handle with a cleanup callback.
-    pub(crate) fn new(cleanup: impl FnOnce() + Send + 'static) -> Self {
+    pub(crate) fn new(cleanup: impl FnOnce() + 'static) -> Self {
         Self {
             cleanup: Some(Box::new(cleanup)),
         }
@@ -187,41 +117,5 @@ impl Drop for PerformanceModeRequestHandle {
         if let Some(cleanup) = self.cleanup.take() {
             cleanup();
         }
-    }
-}
-
-// ============================================================================
-// Service Extensions
-// ============================================================================
-
-/// Service extension name for time dilation dev tools.
-///
-/// Used when registering service extensions for debugging and development.
-///
-/// # Example
-///
-/// ```rust
-/// use flui_scheduler::config::SERVICE_EXT_TIME_DILATION;
-///
-/// assert_eq!(SERVICE_EXT_TIME_DILATION, "timeDilation");
-/// ```
-pub const SERVICE_EXT_TIME_DILATION: &str = "timeDilation";
-
-// ============================================================================
-// Internal Helper
-// ============================================================================
-
-/// Adjust a duration for the epoch and time dilation.
-pub(crate) fn adjust_duration_for_epoch(
-    raw: web_time::Duration,
-    epoch_start: web_time::Duration,
-) -> web_time::Duration {
-    let since_epoch = raw.saturating_sub(epoch_start);
-    let dilation = time_dilation();
-
-    if (dilation - 1.0).abs() < f64::EPSILON {
-        since_epoch
-    } else {
-        web_time::Duration::from_secs_f64(since_epoch.as_secs_f64() / dilation)
     }
 }

@@ -39,7 +39,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use flui_scheduler::TickerFuture;
+use flui_animation::AnimationRunFuture;
 
 use super::result::{Completer, RouteResult};
 
@@ -328,7 +328,7 @@ pub(crate) enum RoutePopDisposition {
 
 /// What [`Route::did_push`] reports about its entrance transition.
 ///
-/// An animating push hands the navigator a `TickerFuture`, and the entry parks in
+/// An animating push hands the navigator a `AnimationRunFuture`, and the entry parks in
 /// `Pushing` until it resolves. `AnimationController`'s run-starting methods
 /// return that kind of future (ADR-0064), so a route passes theirs straight on.
 #[derive(Debug, Clone)]
@@ -351,7 +351,7 @@ pub enum PushCompletion {
     /// the very flush it was returned from). Settles the entry the same way
     /// whether the run completes or is canceled — there is no separate
     /// "canceled" outcome at this layer.
-    Animating(TickerFuture),
+    Animating(AnimationRunFuture),
 }
 
 /// A route: something the navigator can push, show and pop with a result.

@@ -320,8 +320,8 @@ fn callback_retirement_closes_task_admission() {
         assert!(token.expect("refused task token").is_cancelled());
     })));
     frame
-        .local_post_frame_handle()
-        .schedule_local(move |_| {
+        .post_frame_handle()
+        .schedule(move |_| {
             drop(capture);
         })
         .expect("queued callback");

@@ -108,7 +108,7 @@ mod harness_snapshot;
 use std::{any::Any, cell::Cell, collections::HashMap, rc::Rc, sync::Arc, time::Duration};
 
 use flui_animation::curve::ArcCurve;
-use flui_animation::{Animation, AnimationController, Curves, ProxyAnimation, UpdateScheduler};
+use flui_animation::{Animation, AnimationController, Curves, ProxyAnimation};
 use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Point, Rect, Size};
 use flui_interaction::InteractionLane;
@@ -354,8 +354,8 @@ impl CustomPainter for HarnessPainter {
     }
 }
 
-fn custom_painter(color: Color) -> Arc<dyn CustomPainter> {
-    Arc::new(HarnessPainter::new(color))
+fn custom_painter(color: Color) -> std::rc::Rc<dyn CustomPainter> {
+    std::rc::Rc::new(HarnessPainter::new(color))
 }
 
 #[derive(Debug)]
@@ -718,7 +718,7 @@ fn harness_custom_paint_unbalanced_save_poisons_the_paint_phase() {
     }
 
     let result = RenderTester::mount(box_node(RenderCustomPaint::new(
-        Some(Arc::new(UnbalancedSavePainter)),
+        Some(std::rc::Rc::new(UnbalancedSavePainter)),
         None,
         Size::new(10.0, 10.0),
     )))
@@ -2220,7 +2220,7 @@ fn harness_opacity_paints_with_alpha_layer() {
 // ── RenderAnimatedOpacity ────────────────────────────────────────────────
 
 fn ticking_controller(ms: u64, value: f64) -> AnimationController {
-    let controller = AnimationController::new(Duration::from_millis(ms), &UpdateScheduler::new());
+    let controller = AnimationController::builder(Duration::from_millis(ms)).build();
     controller.set_value(value);
     controller
 }
@@ -2231,7 +2231,7 @@ fn ticking_controller(ms: u64, value: f64) -> AnimationController {
 /// SAME underlying state the proxy wraps (`controller.set_value` after this
 /// call is still observed).
 fn animation_from(controller: &AnimationController) -> ProxyAnimation<f64> {
-    let parent: Arc<dyn Animation<f64>> = Arc::new(controller.clone());
+    let parent: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(controller.clone());
     ProxyAnimation::new(parent)
 }
 
@@ -2342,13 +2342,15 @@ fn harness_animated_transform_tick_dirty_marking() {
 
     // The same rule for a pure translation: it is layered too.
     let slide = ticking_controller(100, 0.0);
-    let offset = ProxyAnimation::new(Arc::new(flui_animation::ext::AnimatableExt::animate(
-        flui_animation::Tween::new(
-            TranslationFraction::ZERO,
-            TranslationFraction::new(1.0, 0.0),
-        ),
-        Arc::new(slide.clone()) as Arc<dyn Animation<f64>>,
-    )) as Arc<dyn Animation<TranslationFraction>>);
+    let offset = ProxyAnimation::new(
+        std::rc::Rc::new(flui_animation::ext::AnimatableExt::animate(
+            flui_animation::Tween::new(
+                TranslationFraction::ZERO,
+                TranslationFraction::new(1.0, 0.0),
+            ),
+            std::rc::Rc::new(slide.clone()) as std::rc::Rc<dyn Animation<f64>>,
+        )) as std::rc::Rc<dyn Animation<TranslationFraction>>,
+    );
     let mut run = RenderTester::mount(
         box_node(RenderFlex::row()).child(
             box_node(RenderRepaintBoundary::new()).child(
@@ -2474,7 +2476,9 @@ fn harness_animated_transform_non_finite_sample_keeps_the_last_matrix() {
     let mut run = RenderTester::mount(
         box_node(RenderRepaintBoundary::new()).child(
             box_node(RenderAnimatedTransform::new(TransformMotion::Scale {
-                scale: ProxyAnimation::new(Arc::new(controller.clone()) as Arc<dyn Animation<f64>>),
+                scale: ProxyAnimation::new(
+                    std::rc::Rc::new(controller.clone()) as std::rc::Rc<dyn Animation<f64>>
+                ),
             }))
             .label("transform")
             .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
@@ -2511,13 +2515,15 @@ fn harness_animated_transform_non_finite_sample_keeps_the_last_matrix() {
     // coordinate conversion falls back to the untransformed position instead
     // of publishing infinities.
     let slide = ticking_controller(100, 1.0);
-    let offset = ProxyAnimation::new(Arc::new(flui_animation::ext::AnimatableExt::animate(
-        flui_animation::Tween::new(
-            TranslationFraction::ZERO,
-            TranslationFraction::new(f64::MAX, 0.0),
-        ),
-        Arc::new(slide) as Arc<dyn Animation<f64>>,
-    )) as Arc<dyn Animation<TranslationFraction>>);
+    let offset = ProxyAnimation::new(
+        std::rc::Rc::new(flui_animation::ext::AnimatableExt::animate(
+            flui_animation::Tween::new(
+                TranslationFraction::ZERO,
+                TranslationFraction::new(f64::MAX, 0.0),
+            ),
+            std::rc::Rc::new(slide) as std::rc::Rc<dyn Animation<f64>>,
+        )) as std::rc::Rc<dyn Animation<TranslationFraction>>,
+    );
     let run = RenderTester::mount(
         box_node(RenderAnimatedTransform::new(TransformMotion::Slide {
             offset,
@@ -2586,7 +2592,9 @@ fn harness_animated_transform_reads_only_its_cached_sample() {
     };
     let mut run = RenderTester::mount(
         box_node(RenderAnimatedTransform::new(TransformMotion::Rotation {
-            turns: ProxyAnimation::new(Arc::new(counting) as Arc<dyn Animation<f64>>),
+            turns: ProxyAnimation::new(
+                std::rc::Rc::new(counting) as std::rc::Rc<dyn Animation<f64>>
+            ),
         }))
         .label("transform")
         .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
@@ -2616,8 +2624,8 @@ fn harness_animated_transform_reads_only_its_cached_sample() {
 
 fn harness_animated_transform_releases_proxy_after_tree_drop() {
     let controller = ticking_controller(100, 0.5);
-    let parent: Arc<dyn Animation<f64>> = Arc::new(controller);
-    let weak = Arc::downgrade(&parent);
+    let parent: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(controller);
+    let weak = std::rc::Rc::downgrade(&parent);
     let run = RenderTester::mount(
         box_node(RenderAnimatedTransform::new(TransformMotion::Scale {
             scale: ProxyAnimation::new(parent),
@@ -4962,7 +4970,7 @@ fn harness_table_baseline_alignment_lines_up_cells_on_their_shared_baseline() {
 // `attach`) is drained on the very next `pump()`/`run_frame()` after a tick.
 
 fn animated_size_controller(ms: u64) -> (AnimationController, AnimationController) {
-    let controller = AnimationController::new(Duration::from_millis(ms), &UpdateScheduler::new());
+    let controller = AnimationController::builder(Duration::from_millis(ms)).build();
     let driver = controller.clone();
     (controller, driver)
 }
@@ -5010,7 +5018,7 @@ fn harness_render_animated_size_interpolates_over_several_frames_not_snap() {
     // Tick the controller to known fractions of the 100ms run and confirm the
     // reported size actually interpolates (hand-computed against
     // Tween::transform), not just holds or jumps straight to the target.
-    driver.tick_at(0.025); // 25ms of 100ms => t=0.25
+    driver.tick_at(std::time::Duration::from_secs_f64(0.025)); // 25ms of 100ms => t=0.25
     run.pump();
     assert_size_approx(
         run.box_geometry(run.root()),
@@ -5019,7 +5027,7 @@ fn harness_render_animated_size_interpolates_over_several_frames_not_snap() {
         "t=0.25",
     );
 
-    driver.tick_at(0.05); // t=0.5
+    driver.tick_at(std::time::Duration::from_secs_f64(0.05)); // t=0.5
     run.pump();
     assert_size_approx(
         run.box_geometry(run.root()),
@@ -5028,7 +5036,7 @@ fn harness_render_animated_size_interpolates_over_several_frames_not_snap() {
         "t=0.5",
     );
 
-    driver.tick_at(0.075); // t=0.75
+    driver.tick_at(std::time::Duration::from_secs_f64(0.075)); // t=0.75
     run.pump();
     assert_size_approx(
         run.box_geometry(run.root()),
@@ -5037,7 +5045,7 @@ fn harness_render_animated_size_interpolates_over_several_frames_not_snap() {
         "t=0.75",
     );
 
-    driver.tick_at(0.1); // t=1.0, run completes
+    driver.tick_at(std::time::Duration::from_secs_f64(0.1)); // t=1.0, run completes
     run.pump();
     assert_eq!(
         run.box_geometry(run.root()),
@@ -5095,7 +5103,7 @@ fn harness_render_animated_size_retarget_mid_flight_has_no_discontinuous_jump() 
         );
     });
     run.pump();
-    driver.tick_at(0.05); // t=0.5 of the 10->50 span
+    driver.tick_at(std::time::Duration::from_secs_f64(0.05)); // t=0.5 of the 10->50 span
     run.pump();
     let mid_flight_size = run.box_geometry(run.root());
     assert_size_approx(
@@ -5308,6 +5316,69 @@ fn harness_sliver_persistent_header_pinned_stays_at_zero_and_reports_max_scroll_
         "the pinned header's max_scroll_obstruction_extent must accumulate into \
          the viewport's max_scroll_obstruction_extent_before for slivers after it",
     );
+}
+
+fn harness_swapping_the_snap_controller_moves_the_layout_listener() {
+    macro_rules! check {
+        ($header:ty, $initially_bound:expr) => {{
+            let initially_bound = $initially_bound;
+            let old = AnimationController::builder(Duration::from_millis(100)).build();
+            let new = AnimationController::builder(Duration::from_millis(100)).build();
+            let header = <$header>::new(40.0, 120.0, initially_bound.then(|| old.clone()));
+            let mut run = RenderTester::mount(viewport_multi_with_scroll(
+                0.0,
+                [
+                    sliver_node(header)
+                        .label("header")
+                        .child(box_node(RenderColoredBox::red(300.0, 1000.0))),
+                    filler_sliver(),
+                ],
+            ))
+            .with_size(Size::new(300.0, 400.0))
+            .run_frame();
+            let id = run.id("header");
+            run.update::<$header>(id, |header| header.set_snap_controller(Some(new.clone())));
+            run.pump();
+            let clean = run.owner().layout_roots_total();
+            old.set_value(0.25);
+            run.pump();
+            assert_eq!(
+                run.owner().layout_roots_total(),
+                clean,
+                "the outgoing controller no longer requests header layout"
+            );
+            new.set_value(0.25);
+            run.pump();
+            assert!(
+                run.owner().layout_roots_total() > clean,
+                "the attached replacement requests header layout"
+            );
+            run.update::<$header>(id, |header| header.set_snap_controller(None));
+            run.pump();
+            let clean = run.owner().layout_roots_total();
+            new.set_value(0.5);
+            run.pump();
+            assert_eq!(
+                run.owner().layout_roots_total(),
+                clean,
+                "withdrawing the controller withdraws its layout subscription"
+            );
+            run.update::<$header>(id, |header| header.set_snap_controller(Some(new.clone())));
+            run.pump();
+            run.owner_mut().remove_render_object(id);
+            run.pump();
+            new.set_value(0.75);
+            assert_eq!(
+                run.owner_mut().drain_pending_dirty(),
+                0,
+                "detach removes the current subscription before the node is retired"
+            );
+        }};
+    }
+    for initially_bound in [false, true] {
+        check!(RenderSliverFloatingPersistentHeader, initially_bound);
+        check!(RenderSliverFloatingPinnedPersistentHeader, initially_bound);
+    }
 }
 
 fn harness_sliver_persistent_header_floating_reveals_on_reverse_scroll_and_pointer_scroll_start_direction_permits_reveal()
@@ -6617,6 +6688,7 @@ fn family_viewport() {
 #[test]
 fn family_persistent_header() {
     run_family("persistent_header", &[
+        ("swapping_the_snap_controller_moves_the_layout_listener", harness_swapping_the_snap_controller_moves_the_layout_listener),
         ("sliver_persistent_header_scrolling_shrinks_then_scrolls_off", harness_sliver_persistent_header_scrolling_shrinks_then_scrolls_off),
         ("sliver_persistent_header_pinned_stays_at_zero_and_reports_max_scroll_obstruction_extent", harness_sliver_persistent_header_pinned_stays_at_zero_and_reports_max_scroll_obstruction_extent),
         ("sliver_persistent_header_floating_reveals_on_reverse_scroll_and_pointer_scroll_start_direction_permits_reveal", harness_sliver_persistent_header_floating_reveals_on_reverse_scroll_and_pointer_scroll_start_direction_permits_reveal),

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::{
-    Animatable, Animation, AnimationController, Cubic, Keyframes, Linear, Vsync, VsyncRegistration,
+    Animatable, Animation, AnimationController, Cubic, DrivenController, Keyframes, Linear,
 };
 use flui_foundation::Listenable;
 use flui_foundation::geometry::{Rect, Size};
@@ -133,17 +133,16 @@ impl Motion {
 }
 
 /// Persistent state for [`ActivityIndicator`]: the repeating controller and
-/// its registration with the ambient [`Vsync`].
+/// its registration with the ambient [`Vsync`](flui_animation::Vsync).
 pub struct ActivityIndicatorState {
-    controller: AnimationController,
+    controller: DrivenController,
     motion: Arc<Motion>,
-    registration: Option<(Vsync, VsyncRegistration)>,
 }
 
 impl std::fmt::Debug for ActivityIndicatorState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ActivityIndicatorState")
-            .field("registered", &self.registration.is_some())
+            .field("registered", &self.controller.is_bound())
             .finish_non_exhaustive()
     }
 }
@@ -153,9 +152,8 @@ impl StatefulView for ActivityIndicator {
 
     fn create_state(&self) -> Self::State {
         ActivityIndicatorState {
-            controller: AnimationController::without_ticker(CYCLE),
+            controller: AnimationController::builder(CYCLE).build_on(None),
             motion: Arc::new(Motion::new()),
-            registration: None,
         }
     }
 }
@@ -166,32 +164,17 @@ impl ViewState<ActivityIndicator> for ActivityIndicatorState {
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
-        let next = ctx.depend_on::<VsyncScope, _>(|scope| scope.vsync().clone());
-        if self
-            .registration
-            .as_ref()
-            .map(|(vsync, _)| vsync)
-            .zip(next.as_ref())
-            .is_some_and(|(old, new)| old.is_same(new))
-        {
-            return;
+        if let Err(error) = self.controller.rebind(VsyncScope::maybe_of(ctx).as_ref()) {
+            tracing::error!(%error, "activity indicator lost its frame registry");
         }
-        if let Some((vsync, token)) = self.registration.take() {
-            vsync.unregister(&token);
-        }
-        if let Some(vsync) = next {
-            let token = vsync.register(self.controller.clone());
-            self.registration = Some((vsync, token));
-            // Re-anchor the new registry's clock at the current phase.
-            let _ = self.controller.repeat(false);
-        } else {
-            let _ = self.controller.stop();
+        if !self.controller.controller().is_animating() {
+            let _ = self.controller.controller().repeat(false);
         }
     }
 
     fn build(&self, view: &ActivityIndicator, _ctx: &dyn BuildContext) -> impl IntoView {
         let painter = ArcPainter {
-            controller: self.controller.clone(),
+            controller: self.controller.controller().clone(),
             motion: Arc::clone(&self.motion),
             color: view.color,
         };
@@ -201,14 +184,11 @@ impl ViewState<ActivityIndicator> for ActivityIndicatorState {
             .child(
                 CustomPaint::new()
                     .size(Size::new(SIDE, SIDE))
-                    .painter(Arc::new(painter)),
+                    .painter(std::rc::Rc::new(painter)),
             )
     }
 
     fn dispose(&mut self) {
-        if let Some((vsync, registration)) = self.registration.take() {
-            vsync.unregister(&registration);
-        }
         self.controller.dispose();
     }
 }
@@ -249,8 +229,8 @@ impl CustomPainter for ArcPainter {
             .is_none_or(|old| old.color != self.color || !Arc::ptr_eq(&old.motion, &self.motion))
     }
 
-    fn repaint(&self) -> Option<Arc<dyn Listenable>> {
-        Some(Arc::new(self.controller.clone()))
+    fn repaint(&self) -> Option<std::rc::Rc<dyn Listenable>> {
+        Some(std::rc::Rc::new(self.controller.clone()))
     }
 
     fn as_any(&self) -> &dyn Any {

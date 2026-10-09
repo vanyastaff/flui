@@ -137,13 +137,22 @@ server every window that mounts a root view; Android and web drive no agent.
 
 **Framing.** Newline-delimited JSON, one request per line, at most 1 MiB. The
 first line is `{"hello":{"token":"…"}}`, answered with
-`{"hello":{"protocol":"0.1"}}`; then:
+`{"hello":{"protocol":"0.2"}}`; then:
 
 | Request | Reply |
 |---|---|
 | `{"id":1,"op":"windows"}` | `{"id":1,"result":{"windows":["w3"]}}` |
 | `{"id":2,"op":"read","window":"w3","query":{"max_depth":4}}` | `{"id":2,"result":{"roots":[…]}}` |
 | `{"id":3,"op":"act","window":"w3","request":{"element":"e7","action":"invoke"}}` | `{"id":3,"result":{}}` |
+| `{"id":4,"op":"motion","window":"w3","request":{"rate":0,"step_ms":100}}` | `{"id":4,"result":{"rate":0,"time_ms":100}}` |
+
+`motion` addresses that window's animation clock. A finite non-negative rate
+sets animation seconds per raw second; zero pauses. `step_ms` advances the clock
+even while paused. Omit `request` to read the current rate and monotonic time.
+The reply reports the accepted total time, so its `time_ms` depends on prior
+frames and steps. Invalid rates refuse the whole request with `invalid_argument`.
+A timed-out rate or step request can still run and answers `may_have_run` with
+retry `never`; read the clock before deciding what to do next.
 
 Element handles are scoped to their window, so every read and action names
 one. A failure is ADR-0080's error object,

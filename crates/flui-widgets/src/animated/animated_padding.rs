@@ -6,7 +6,7 @@ use flui_animation::curve::{ArcCurve, Curve};
 use flui_animation::{Animatable, Animation};
 use flui_foundation::geometry::EdgeInsets;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
-use flui_view::{BoxedView, BuildContextExt, IntoView, ViewExt, ViewState};
+use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
 
 use crate::animated::implicitly_animated::{DEFAULT_DURATION, ImplicitAnimation, default_curve};
 use crate::animated::vsync_scope::VsyncScope;
@@ -84,9 +84,11 @@ impl StatefulView for AnimatedPadding {
 
 impl ViewState<AnimatedPadding> for AnimatedPaddingState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        if let Some(vsync) = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()) {
-            self.animation.register(vsync);
-        }
+        self.animation.rebind(VsyncScope::maybe_of(ctx).as_ref());
+    }
+
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        self.animation.rebind(VsyncScope::maybe_of(ctx).as_ref());
     }
 
     fn build(&self, _view: &AnimatedPadding, _ctx: &dyn BuildContext) -> impl IntoView {

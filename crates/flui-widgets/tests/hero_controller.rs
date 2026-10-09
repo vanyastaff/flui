@@ -2,7 +2,7 @@
 //!
 //! These tests prove that the seams built for measurement — `box_size` / `transform_to`,
 //! post-frame after layout, observer attachment, `RouteSubtree`,
-//! `LocalPostFrameHandle`, notification outside the history lock, and the
+//! `PostFrameHandle`, notification outside the history lock, and the
 //! offstage animation proxies — **compose** into a destination rect.
 //!
 //! They do not prove the flight overlay itself; `hero_flight.rs` owns that layer.

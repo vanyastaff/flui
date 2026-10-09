@@ -1,286 +1,145 @@
-//! Builder pattern for `AnimationController`.
-//!
-//! This module provides a fluent builder API for constructing [`AnimationController`]
-//! instances with various configuration options.
+//! Configuration and ownership of an animation controller.
 
-use crate::controller::AnimationController;
-use crate::error::AnimationError;
-use flui_scheduler::UpdateScheduler;
 use std::time::Duration;
 
-/// Builder for creating [`AnimationController`] instances.
-///
-/// Provides a fluent API for configuring animation controllers with
-/// custom bounds, durations, and initial values.
-///
-/// # Examples
+use crate::{AnimationController, AnimationError, DrivenController, Vsync};
+
+/// Finite controller bounds with a finite, positive span.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ValueRange {
+    lower: f64,
+    upper: f64,
+}
+
+impl ValueRange {
+    /// The usual normalized animation range.
+    pub const UNIT: Self = Self {
+        lower: 0.0,
+        upper: 1.0,
+    };
+
+    /// Validate endpoints and their difference before constructing a range.
+    ///
+    /// # Errors
+    /// Returns `AnimationError::InvalidBounds` for non-finite endpoints or span,
+    /// or when `lower >= upper`.
+    pub fn new(lower: f64, upper: f64) -> Result<Self, AnimationError> {
+        if !lower.is_finite()
+            || !upper.is_finite()
+            || lower >= upper
+            || !(upper - lower).is_finite()
+        {
+            return Err(AnimationError::InvalidBounds(format!(
+                "bounds ({lower}, {upper}) must have finite endpoints and a finite positive span"
+            )));
+        }
+        Ok(Self { lower, upper })
+    }
+
+    /// Lower endpoint.
+    #[must_use]
+    pub const fn lower(self) -> f64 {
+        self.lower
+    }
+
+    /// Upper endpoint.
+    #[must_use]
+    pub const fn upper(self) -> f64 {
+        self.upper
+    }
+}
+
+impl Default for ValueRange {
+    fn default() -> Self {
+        Self::UNIT
+    }
+}
+
+/// Configure a manually sampled controller or an owning controller on a Vsync.
 ///
 /// ```
-/// # fn main() -> Result<(), flui_animation::AnimationError> {
-/// use flui_animation::builder::AnimationControllerBuilder;
-/// use flui_animation::Animation;
-/// use flui_scheduler::UpdateScheduler;
+/// use flui_animation::{AnimationController, Animation, ValueRange};
 /// use std::time::Duration;
 ///
-/// let scheduler = UpdateScheduler::new();
-///
-/// let controller = AnimationControllerBuilder::new(
-///     Duration::from_millis(300),
-///     &scheduler,
-/// )
-/// .bounds(0.0, 100.0)?
-/// .reverse_duration(Duration::from_millis(500))
-/// .initial_value(50.0)
-/// .build()?;
-///
-/// assert_eq!(controller.value(), 50.0);
-/// # Ok(())
-/// # }
+/// let controller = AnimationController::builder(Duration::from_millis(300))
+///     .bounds(ValueRange::new(10.0, 20.0).expect("finite range"))
+///     .initial_value(15.0)
+///     .build();
+/// assert_eq!(controller.value(), 15.0);
 /// ```
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AnimationControllerBuilder {
     duration: Duration,
-    scheduler: UpdateScheduler,
-    lower_bound: f64,
-    upper_bound: f64,
+    bounds: Option<ValueRange>,
     reverse_duration: Option<Duration>,
     initial_value: Option<f64>,
 }
 
-impl std::fmt::Debug for AnimationControllerBuilder {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AnimationControllerBuilder")
-            .field("duration", &self.duration)
-            .field("lower_bound", &self.lower_bound)
-            .field("upper_bound", &self.upper_bound)
-            .field("reverse_duration", &self.reverse_duration)
-            .field("initial_value", &self.initial_value)
-            .finish_non_exhaustive()
-    }
-}
-
 impl AnimationControllerBuilder {
-    /// Create a new builder with required parameters.
-    ///
-    /// # Arguments
-    ///
-    /// * `duration` - Duration of the forward animation
-    /// * `scheduler` - UpdateScheduler for frame coordination
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_animation::builder::AnimationControllerBuilder;
-    /// use flui_scheduler::UpdateScheduler;
-    /// use std::time::Duration;
-    ///
-    /// let scheduler = UpdateScheduler::new();
-    /// let builder = AnimationControllerBuilder::new(
-    ///     Duration::from_millis(300),
-    ///     &scheduler,
-    /// );
-    /// ```
+    /// Start with normalized bounds and the given forward duration.
     #[must_use]
-    pub fn new(duration: Duration, scheduler: &UpdateScheduler) -> Self {
+    pub fn new(duration: Duration) -> Self {
         Self {
             duration,
-            scheduler: scheduler.clone(),
-            lower_bound: 0.0,
-            upper_bound: 1.0,
+            bounds: Some(ValueRange::UNIT),
             reverse_duration: None,
             initial_value: None,
         }
     }
 
-    /// Set custom bounds for the animation.
-    ///
-    /// # Arguments
-    ///
-    /// * `lower` - Minimum value (default 0.0)
-    /// * `upper` - Maximum value (default 1.0)
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AnimationError::InvalidBounds`] unless both bounds are
-    /// finite, `lower < upper`, AND `upper - lower` itself fits in `f64` —
-    /// bounded means finite endpoints AND a finite span
-    /// (`(-f64::MAX, f64::MAX)` has finite endpoints but a span of
-    /// `f64::INFINITY`). An [`AnimationController::unbounded`] controller
-    /// is not reachable through this builder (it has no bound to
-    /// configure).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # fn main() -> Result<(), flui_animation::AnimationError> {
-    /// use flui_animation::builder::AnimationControllerBuilder;
-    /// use flui_scheduler::UpdateScheduler;
-    /// use std::time::Duration;
-    ///
-    /// let scheduler = UpdateScheduler::new();
-    /// let builder = AnimationControllerBuilder::new(
-    ///     Duration::from_millis(300),
-    ///     &scheduler,
-    /// )
-    /// .bounds(10.0, 20.0)?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn bounds(mut self, lower: f64, upper: f64) -> Result<Self, AnimationError> {
-        // `lower >= upper` (not the negated `!(lower < upper)`, which
-        // clippy's `neg_cmp_op_on_partial_ord` flags on a `PartialOrd`-only
-        // type): NaN makes the two diverge, but NaN is caught by the
-        // `is_finite` clauses below regardless of which form this takes.
-        // The span check mirrors `AnimationController::with_bounds_inner`'s
-        // own rule: two finite endpoints do not make a finite range.
-        if lower >= upper
-            || !lower.is_finite()
-            || !upper.is_finite()
-            || !(upper - lower).is_finite()
-        {
-            return Err(AnimationError::InvalidBounds(format!(
-                "lower_bound ({lower}) and upper_bound ({upper}) must both be finite, with \
-                 lower_bound < upper_bound, and the range (upper_bound - lower_bound) must fit \
-                 in f64"
-            )));
-        }
-        self.lower_bound = lower;
-        self.upper_bound = upper;
-        Ok(self)
+    /// Use a validated finite value range.
+    #[must_use]
+    pub fn bounds(mut self, bounds: ValueRange) -> Self {
+        self.bounds = Some(bounds);
+        self
     }
 
-    /// Set a different duration for reverse animation.
-    ///
-    /// If not set, the reverse animation uses the same duration as forward.
-    ///
-    /// # Arguments
-    ///
-    /// * `duration` - Duration of the reverse animation
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_animation::builder::AnimationControllerBuilder;
-    /// use flui_scheduler::UpdateScheduler;
-    /// use std::time::Duration;
-    ///
-    /// let scheduler = UpdateScheduler::new();
-    /// let builder = AnimationControllerBuilder::new(
-    ///     Duration::from_millis(300),
-    ///     &scheduler,
-    /// )
-    /// .reverse_duration(Duration::from_millis(500));
-    /// ```
+    /// Admit finite pixel-space values without a finite endpoint.
+    #[must_use]
+    pub fn unbounded(mut self) -> Self {
+        self.bounds = None;
+        self
+    }
+
+    /// Configure the duration used by reverse runs.
     #[must_use]
     pub fn reverse_duration(mut self, duration: Duration) -> Self {
         self.reverse_duration = Some(duration);
         self
     }
 
-    /// Set the initial value of the animation.
-    ///
-    /// The value will be clamped to the configured bounds.
-    /// If not set, defaults to `lower_bound`.
-    ///
-    /// # Arguments
-    ///
-    /// * `value` - Initial value (will be clamped to bounds)
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_animation::builder::AnimationControllerBuilder;
-    /// use flui_scheduler::UpdateScheduler;
-    /// use std::time::Duration;
-    ///
-    /// let scheduler = UpdateScheduler::new();
-    /// let builder = AnimationControllerBuilder::new(
-    ///     Duration::from_millis(300),
-    ///     &scheduler,
-    /// )
-    /// .initial_value(0.5);
-    /// ```
+    /// Initial value, clamped to the range. Non-finite values use the lower
+    /// endpoint for bounded controllers or zero for unbounded controllers.
     #[must_use]
     pub fn initial_value(mut self, value: f64) -> Self {
         self.initial_value = Some(value);
         self
     }
 
-    /// Build the [`AnimationController`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AnimationError::InvalidBounds`] if bounds are invalid.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # fn main() -> Result<(), flui_animation::AnimationError> {
-    /// use flui_animation::builder::AnimationControllerBuilder;
-    /// use flui_scheduler::UpdateScheduler;
-    /// use std::time::Duration;
-    ///
-    /// let scheduler = UpdateScheduler::new();
-    /// let controller = AnimationControllerBuilder::new(
-    ///     Duration::from_millis(300),
-    ///     &scheduler,
-    /// )
-    /// .build()?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn build(self) -> Result<AnimationController, AnimationError> {
-        let controller = AnimationController::with_bounds(
-            self.duration,
-            &self.scheduler,
-            self.lower_bound,
-            self.upper_bound,
-        )?;
-
-        if let Some(rev_dur) = self.reverse_duration {
-            controller.set_reverse_duration(rev_dur);
+    /// Build a controller sampled explicitly through `tick_at(Duration)`.
+    #[must_use]
+    pub fn build(self) -> AnimationController {
+        let controller =
+            AnimationController::from_config(self.duration, self.bounds, self.initial_value);
+        if let Some(duration) = self.reverse_duration {
+            controller.set_reverse_duration(duration);
         }
+        controller
+    }
 
-        if let Some(value) = self.initial_value {
-            controller.set_value(value);
-        }
-
-        Ok(controller)
+    /// Build the owner of a controller and its registry seat.
+    ///
+    /// An exhausted registry leaves the controller unbound and reports the
+    /// refusal through diagnostics.
+    pub fn build_on(self, vsync: Option<&Vsync>) -> DrivenController {
+        DrivenController::new(self.build(), vsync)
     }
 }
 
-// Add builder() method to AnimationController
 impl AnimationController {
-    /// Create a builder for configuring an [`AnimationController`].
-    ///
-    /// This provides a fluent API for creating controllers with custom settings.
-    ///
-    /// # Arguments
-    ///
-    /// * `duration` - Duration of the forward animation
-    /// * `scheduler` - UpdateScheduler for frame coordination
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # fn main() -> Result<(), flui_animation::AnimationError> {
-    /// use flui_animation::AnimationController;
-    /// use flui_scheduler::UpdateScheduler;
-    /// use std::time::Duration;
-    ///
-    /// let scheduler = UpdateScheduler::new();
-    /// let controller = AnimationController::builder(
-    ///     Duration::from_millis(300),
-    ///     &scheduler,
-    /// )
-    /// .reverse_duration(Duration::from_millis(500))
-    /// .initial_value(0.5)
-    /// .build()?;
-    /// # Ok(())
-    /// # }
-    /// ```
+    /// Configure an animation without acquiring a scheduler or clock.
     #[must_use]
-    pub fn builder(duration: Duration, scheduler: &UpdateScheduler) -> AnimationControllerBuilder {
-        AnimationControllerBuilder::new(duration, scheduler)
+    pub fn builder(duration: Duration) -> AnimationControllerBuilder {
+        AnimationControllerBuilder::new(duration)
     }
 }

@@ -1,6 +1,8 @@
 # ADR-0125: Vsync registration authority and permanent capacity refusal
 
 - **Status:** Accepted
+- **Superseded-by:** [ADR-0179](ADR-0179-controller-registration-ownership.md),
+  public controller admission and explicit caller-managed controller removal only.
 - **Date:** 2026-10-05
 - **Supersedes:** ADR-0020 §1, registration token identity and removal signatures only
 
@@ -40,10 +42,10 @@ Pass `&registration` to removal methods, and take stored `Option` tokens before
 removal when retiring their lifecycle owner. Code requiring recoverable admission
 uses `try_register(&controller)`.
 
-`controller_sources_allow_reentry_and_preserve_run_ownership` exercises actual
+`registration_identity_and_retirement` exercises actual
 foreign, stale, expired and wrong-kind tokens and subsequent virtual-clock ticks.
 `vsync_nesting_and_reentrancy` seeds only the private counter boundary and then
-uses public admission, refusal, removal and tick methods, including mixed final
+uses private admission/removal and public tick methods, including mixed final
 controller and child admissions and competing rejected-owner retirement.
 Whole-registry destruction and a user capture's internal aggregate destructors
 remain separate ownership boundaries.

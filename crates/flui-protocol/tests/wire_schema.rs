@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 
 use flui_protocol::version::BREAKING;
 use flui_protocol::{
-    ActionRequest, ErrorCode, Node, PROTOCOL_VERSION, ProtocolVersion, ReadQuery, Retry, Tree,
+    ActionRequest, ErrorCode, MotionRequest, MotionState, Node, PROTOCOL_VERSION, ProtocolVersion,
+    ReadQuery, Retry, Tree,
 };
 use serde_json::Value;
 
@@ -45,6 +46,8 @@ fn current_schema() -> Value {
     serde_json::json!({
         "ActionRequest": of(schemars::schema_for!(ActionRequest)),
         "ErrorCode": of(schemars::schema_for!(ErrorCode)),
+        "MotionRequest": of(schemars::schema_for!(MotionRequest)),
+        "MotionState": of(schemars::schema_for!(MotionState)),
         "Node": of(schemars::schema_for!(Node)),
         "ReadQuery": of(schemars::schema_for!(ReadQuery)),
         "Retry": of(schemars::schema_for!(Retry)),
@@ -150,6 +153,13 @@ fn additivity_violations(older: &Value, newer: &Value) -> Vec<String> {
     out.extend(
         new.required
             .difference(&old.required)
+            .filter(|path| {
+                let root = path
+                    .split('/')
+                    .nth(1)
+                    .expect("schema paths have a type root");
+                older.get(root).is_some()
+            })
             .map(|item| format!("field made required: {item}")),
     );
     out
@@ -205,6 +215,17 @@ fn the_additivity_check_refuses_a_removed_field_a_respelled_name_and_a_new_requi
     assert!(
         additivity_violations(&older, &added).is_empty(),
         "a new optional field is additive"
+    );
+
+    let mut added_type = older.clone();
+    added_type["NewResponse"] = serde_json::json!({
+        "type": "object",
+        "properties": {"result": {"type": "number"}},
+        "required": ["result"],
+    });
+    assert!(
+        additivity_violations(&older, &added_type).is_empty(),
+        "a new response type does not change existing requests or replies"
     );
 
     let mut removed = older.clone();

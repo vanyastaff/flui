@@ -9,21 +9,18 @@
 //! # Example
 //!
 //! ```rust
-//! use std::sync::{
-//!     Arc,
-//!     atomic::{AtomicU32, Ordering},
-//! };
+//! use std::{cell::Cell, rc::Rc};
 //!
 //! use flui_foundation::notifier::{ChangeNotifier, Listenable};
 //!
 //! let notifier = ChangeNotifier::new();
-//! let count = Arc::new(AtomicU32::new(0));
-//! let count2 = Arc::clone(&count);
-//! let _id = notifier.add_listener(Arc::new(move || {
-//!     count2.fetch_add(1, Ordering::Relaxed);
+//! let count = Rc::new(Cell::new(0));
+//! let count2 = Rc::clone(&count);
+//! let _id = notifier.add_listener(Rc::new(move || {
+//!     count2.set(count2.get() + 1);
 //! }));
 //! notifier.notify_listeners();
-//! assert_eq!(count.load(Ordering::Relaxed), 1);
+//! assert_eq!(count.get(), 1);
 //! ```
 //!
 //! # Note
@@ -32,21 +29,21 @@
 //! `flui-view` which provides the `Notification` trait that integrates with
 //! `BuildContext`.
 
-use std::{fmt, ops::Deref, sync::Arc};
+use std::{fmt, ops::Deref, rc::Rc};
 
 use crate::{id::ListenerId, notifier_generic::Notifier};
 
 /// A listener callback function.
-// Audit I-16: explicit `+ 'static` bound on the listener callback —
-// pre-cycle the implicit `'static` was confusing (callback types
-// stored long-term must be static, but the trait-object syntax
-// elided it). Explicit doc avoids ambiguity for callers
-// constructing the Arc.
-pub type ListenerCallback = Arc<dyn Fn() + Send + Sync + 'static>;
+// Stored callbacks own their captures for the subscription's lifetime.
+pub type ListenerCallback = Rc<dyn Fn() + 'static>;
+
+/// Framework listener borrowing the enclosing notification's failure custody.
+#[doc(hidden)]
+pub type ListenerObserver = Rc<dyn Fn(&mut crate::panic::PanicRecovery)>;
 
 /// An object that maintains a list of listeners.
 ///
-/// Uses interior mutability for thread-safe listener management.
+/// Listener state belongs to the UI owner thread.
 ///
 /// There are two variants of this interface:
 ///
@@ -56,26 +53,34 @@ pub type ListenerCallback = Arc<dyn Fn() + Send + Sync + 'static>;
 /// # Example
 ///
 /// ```rust
-/// use std::sync::{
-///     Arc,
-///     atomic::{AtomicU32, Ordering},
-/// };
+/// use std::{cell::Cell, rc::Rc};
 ///
 /// use flui_foundation::notifier::{ChangeNotifier, Listenable};
 ///
 /// let notifier = ChangeNotifier::new();
-/// let count = Arc::new(AtomicU32::new(0));
-/// let count2 = Arc::clone(&count);
-/// let id = notifier.add_listener(Arc::new(move || {
-///     count2.fetch_add(1, Ordering::Relaxed);
+/// let count = Rc::new(Cell::new(0));
+/// let count2 = Rc::clone(&count);
+/// let id = notifier.add_listener(Rc::new(move || {
+///     count2.set(count2.get() + 1);
 /// }));
 /// notifier.notify_listeners();
-/// assert_eq!(count.load(Ordering::Relaxed), 1);
+/// assert_eq!(count.get(), 1);
 /// notifier.remove_listener(id);
 /// ```
-pub trait Listenable: Send + Sync {
+pub trait Listenable {
     /// Register a listener callback.
     fn add_listener(&self, listener: ListenerCallback) -> ListenerId;
+
+    /// Register an internal framework relay. Notification-channel implementations
+    /// override this to pass their enclosing delivery context through the relay.
+    #[doc(hidden)]
+    fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
+        self.add_listener(Rc::new(move || {
+            let mut recovery = crate::panic::PanicRecovery::new();
+            recovery.run_with(|recovery| observer(recovery));
+            recovery.finish();
+        }))
+    }
 
     /// Remove a previously registered listener.
     ///
@@ -96,11 +101,9 @@ pub trait Listenable: Send + Sync {
 /// # Example
 ///
 /// ```rust
-/// use std::sync::Arc;
-///
 /// use flui_foundation::notifier::{Listenable, ValueListenable, ValueNotifier};
 ///
-/// fn current<T: std::fmt::Debug + Clone + Send + Sync>(
+/// fn current<T: std::fmt::Debug>(
 ///     listenable: &impl ValueListenable<T>,
 /// ) -> String {
 ///     format!("{:?}", listenable.value())
@@ -131,7 +134,7 @@ pub trait ValueListenable<T>: Listenable {
 /// already-disposed listenable. It is always a silent no-op
 /// once disposed (the listener map is already empty).
 ///
-/// `is_disposed` is shared across clones via `Arc<AtomicBool>` so that a
+/// `is_disposed` is shared across clones via `Rc<Cell<bool>>` so that a
 /// listener-callback holding its own clone sees disposal performed elsewhere.
 ///
 /// [`dispose`]: ChangeNotifier::dispose
@@ -163,6 +166,11 @@ impl fmt::Debug for ChangeNotifier {
 }
 
 impl ChangeNotifier {
+    /// Carry an active notification's failure into reentrant owner cleanup.
+    #[doc(hidden)]
+    pub fn inherit_failure(&self, recovery: &mut crate::panic::PanicRecovery) {
+        self.inner.inherit_failure(recovery);
+    }
     /// Create a new change notifier.
     #[must_use]
     #[inline]
@@ -194,7 +202,7 @@ impl ChangeNotifier {
     ///
     /// This method is **idempotent**: calling it again is a no-op (no panic).
     /// Takes `&self` rather than `&mut self` because the notifier is
-    /// internally `Clone` over `Arc<...>` and a listener-callback may need
+    /// internally `Clone` over `Rc<...>` and a listener-callback may need
     /// to call `dispose` on its own clone (the snapshot-then-fire path in
     /// [`notify_listeners`] makes this reentrancy-safe).
     ///
@@ -203,6 +211,32 @@ impl ChangeNotifier {
     /// [`remove_listener`]: Listenable::remove_listener
     pub fn dispose(&self) {
         self.inner.dispose();
+    }
+
+    /// Withdraw a subscription, transferring its outgoing capture custody.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn take_listener(
+        &self,
+        id: ListenerId,
+    ) -> Option<Rc<crate::notifier_generic::NotificationCallback<()>>> {
+        self.inner.take_callback(id)
+    }
+
+    /// Withdraw all subscriptions, transferring outgoing capture custody.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn take_listeners(&self) -> Vec<Rc<crate::notifier_generic::NotificationCallback<()>>> {
+        self.inner.take_all_callbacks()
+    }
+
+    /// Dispose and withdraw subscriptions before their captures retire.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn dispose_and_take_listeners(
+        &self,
+    ) -> Vec<Rc<crate::notifier_generic::NotificationCallback<()>>> {
+        self.inner.dispose_and_take_callbacks()
     }
 
     /// Debug-asserts that this notifier has not been disposed.
@@ -245,10 +279,8 @@ impl ChangeNotifier {
     ///
     /// Snapshot semantics:
     ///
-    /// - A snapshot of `(id, callback)` pairs is taken under lock before any
-    ///   callback fires. The lock is released before iteration, preventing
-    ///   deadlocks when a callback calls `add_listener` or `remove_listener`
-    ///   on the same notifier (re-entrancy).
+    /// - A registration-ordered snapshot is taken before callbacks run. No
+    ///   state borrow is held across invocation or capture retirement.
     /// - Before each callback fires, the listener's registration is re-checked.
     ///   If the listener was removed during notify (e.g. a previous callback
     ///   called `remove_listener`), the callback is silently skipped. A
@@ -257,6 +289,7 @@ impl ChangeNotifier {
     ///   If a callback panics, the panic payload is logged via
     ///   `tracing::error!` and iteration continues with the next listener.
     ///   One panicking listener does NOT abort the rest.
+    ///   The first failure resumes after the healthy tail and retirement.
     ///
     /// Listeners fire in registration order (`ListenerId` ascending); the backing `HashMap` does not preserve
     /// insertion order, so the snapshot is sorted by id before firing.
@@ -269,10 +302,8 @@ impl ChangeNotifier {
     ///
     /// Panics in debug builds (no-ops in release) if called after
     /// [`dispose`](Self::dispose). The disposed-state check runs at the
-    /// entry to this method; once past it, the in-flight snapshot is
-    /// immune to subsequent disposal until iteration completes — a
-    /// listener-callback calling `dispose` mid-notify does NOT break the
-    /// current iteration.
+    /// entry to this method. Disposal during notification withdraws all
+    /// remaining subscriptions; their callbacks are skipped in that round.
     pub fn notify_listeners(&self) {
         if self.check_disposed() {
             return;
@@ -285,6 +316,14 @@ impl ChangeNotifier {
         // did under the single-check semantics (the in-flight call proceeds)
         // rather than trip the inner channel's generically-worded gate.
         self.inner.notify_unchecked(&());
+    }
+
+    /// Notify within an enclosing framework delivery's failure custody.
+    #[doc(hidden)]
+    pub fn notify_listeners_with_recovery(&self, recovery: &mut crate::panic::PanicRecovery) {
+        if !self.check_disposed() {
+            self.inner.notify_with_recovery(&(), recovery);
+        }
     }
 
     /// Whether any listeners are currently registered
@@ -310,6 +349,10 @@ impl ChangeNotifier {
 }
 
 impl Listenable for ChangeNotifier {
+    fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
+        self.inner
+            .add_with_recovery(Rc::new(move |&(), recovery| observer(recovery)))
+    }
     fn add_listener(&self, listener: ListenerCallback) -> ListenerId {
         if self.check_disposed() {
             // Release-mode no-op: return a fresh id that is not registered.
@@ -318,7 +361,7 @@ impl Listenable for ChangeNotifier {
         // Unchecked for the same reason as `notify_listeners`: the branded
         // check above is the one entry check; a racing `dispose` must not
         // produce the inner channel's generically-worded failure.
-        self.inner.add_unchecked(Arc::new(move |&()| listener()))
+        self.inner.add_unchecked(Rc::new(move |&()| listener()))
     }
 
     fn remove_listener(&self, id: ListenerId) {
@@ -629,7 +672,10 @@ impl<T> AsRef<T> for ValueNotifier<T> {
     }
 }
 
-impl<T: Send + Sync> Listenable for ValueNotifier<T> {
+impl<T> Listenable for ValueNotifier<T> {
+    fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
+        self.notifier().add_observer(observer)
+    }
     fn add_listener(&self, listener: ListenerCallback) -> ListenerId {
         self.notifier().add_listener(listener)
     }
@@ -643,7 +689,7 @@ impl<T: Send + Sync> Listenable for ValueNotifier<T> {
     }
 }
 
-impl<T: Send + Sync> ValueListenable<T> for ValueNotifier<T> {
+impl<T> ValueListenable<T> for ValueNotifier<T> {
     fn value(&self) -> &T {
         self.value()
     }
@@ -657,10 +703,10 @@ mod tests {
 
     fn test_change_notifier() {
         let notifier = ChangeNotifier::new();
-        let counter = Arc::new(AtomicUsize::new(0));
+        let counter = Rc::new(AtomicUsize::new(0));
 
-        let counter_clone = Arc::clone(&counter);
-        let _id = notifier.add_listener(Arc::new(move || {
+        let counter_clone = Rc::clone(&counter);
+        let _id = notifier.add_listener(Rc::new(move || {
             counter_clone.fetch_add(1, Ordering::SeqCst);
         }));
 
@@ -682,19 +728,25 @@ mod tests {
         use std::sync::atomic::AtomicBool;
 
         let notifier = ChangeNotifier::new();
-        let fired_2 = Arc::new(AtomicBool::new(false));
-        let fired_3 = Arc::new(AtomicBool::new(false));
-        let (fired_2c, fired_3c) = (Arc::clone(&fired_2), Arc::clone(&fired_3));
+        let fired_2 = Rc::new(AtomicBool::new(false));
+        let fired_3 = Rc::new(AtomicBool::new(false));
+        let (fired_2c, fired_3c) = (Rc::clone(&fired_2), Rc::clone(&fired_3));
 
-        let _ = notifier.add_listener(Arc::new(|| panic!("intentional test panic")));
-        let _ = notifier.add_listener(Arc::new(move || {
+        let _ = notifier.add_listener(Rc::new(|| panic!("intentional test panic")));
+        let _ = notifier.add_listener(Rc::new(move || {
             fired_2c.store(true, Ordering::SeqCst);
         }));
-        let _ = notifier.add_listener(Arc::new(move || {
+        let _ = notifier.add_listener(Rc::new(move || {
             fired_3c.store(true, Ordering::SeqCst);
         }));
 
-        notifier.notify_listeners(); // must not abort
+        let failure =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| notifier.notify_listeners()))
+                .expect_err("first failure propagates after the healthy tail");
+        assert_eq!(
+            crate::panic::payload_text(&*failure),
+            Some("intentional test panic")
+        );
 
         assert!(
             fired_2.load(Ordering::SeqCst),
@@ -719,16 +771,16 @@ mod tests {
         // subsequent outside calls.
         let notifier = ChangeNotifier::new();
         let notifier_for_callback = notifier.clone();
-        let other_ran = Arc::new(AtomicUsize::new(0));
-        let other_ran_clone = Arc::clone(&other_ran);
+        let other_ran = Rc::new(AtomicUsize::new(0));
+        let other_ran_clone = Rc::clone(&other_ran);
 
         // Listener #1: disposes the notifier mid-iteration.
-        let _ = notifier.add_listener(Arc::new(move || {
+        let _ = notifier.add_listener(Rc::new(move || {
             notifier_for_callback.dispose();
         }));
         // Listener #2: increments counter — proves iteration completes after
         // mid-flight dispose (snapshot was already taken).
-        let _ = notifier.add_listener(Arc::new(move || {
+        let _ = notifier.add_listener(Rc::new(move || {
             other_ran_clone.fetch_add(1, Ordering::SeqCst);
         }));
 
@@ -737,12 +789,11 @@ mod tests {
         // ran at entry to notify_listeners, before the snapshot.
         notifier.notify_listeners();
 
-        // Listener #2 must have run (it was in the snapshot taken before
-        // listener #1 fired).
+        // Disposal withdraws all subscriptions, including snapshot members.
         assert_eq!(
             other_ran.load(Ordering::SeqCst),
-            1,
-            "snapshot-then-fire must complete iteration even if dispose called mid-flight"
+            0,
+            "disposed subscriptions must be silent even in an older snapshot"
         );
 
         // After the iteration, the notifier is disposed.

@@ -16,7 +16,6 @@ use std::{
     any::Any,
     cell::{Cell, RefCell},
     rc::Rc,
-    sync::Arc,
 };
 
 /// A controlled horizontal slider. Input proposes a value through `on_changed`;
@@ -265,7 +264,9 @@ impl ViewState<Slider> for SliderState {
                 enabled,
                 focused: live.focus.has_focus(),
             };
-            let paint = CustomPaint::new().size(size).painter(Arc::new(painter));
+            let paint = CustomPaint::new()
+                .size(size)
+                .painter(std::rc::Rc::new(painter));
             let child = if enabled {
                 let detector = GestureDetector::new()
                     .behavior(HitTestBehavior::Opaque)

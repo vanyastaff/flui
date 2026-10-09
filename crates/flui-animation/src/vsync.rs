@@ -8,14 +8,10 @@
 //! and an implicitly-animated widget registers its controller in `init_state`.
 //! It is not a process-wide singleton.
 //!
-//! ## Why the binding drives controllers here, not via each controller's own
-//! scheduler-ticker
-//!
-//! [`AnimationController`] also carries an auto-scheduling `Ticker` that
-//! advances it off wall-clock `Instant::now()` — correct for a real display, but
-//! non-deterministic. `Vsync` bypasses that ticker entirely: it calls
-//! [`AnimationController::tick_at`] with *virtual* seconds, so a headless frame
-//! driver can step animations frame-by-frame with no `thread::sleep`.
+//! Both runtime and headless presentations use this registry. A presentation
+//! owns its [`MotionClock`](crate::MotionClock) and supplies a typed
+//! [`FrameTick`] to [`Vsync::tick_all`]. Controllers have no
+//! scheduler ticker or wall-clock sampling path.
 //!
 //! ## Restart-awareness
 //!
@@ -28,21 +24,22 @@
 
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
-use std::sync::{Arc, Weak};
+use std::rc::{Rc, Weak};
 
-use parking_lot::Mutex;
+use std::cell::RefCell;
 
 use crate::AnimationController;
-use crate::animation::Terminal;
+use crate::animation::{Retirement, Terminal};
+use crate::{AnimationTime, FrameTick};
+use std::time::Duration;
 
-/// Opaque handle identifying one controller registered with a [`Vsync`].
+/// Opaque identity for one admission to a [`Vsync`] registry.
 ///
-/// Returned by [`Vsync::register`]; pass it to [`Vsync::unregister`] when the
-/// owner (typically an implicitly-animated widget's state in `dispose`) is torn
-/// down, so the registry does not pin the controller alive past its widget.
+/// [`Vsync::attach_child`] returns a token for [`Vsync::detach_child`]. Controller
+/// admissions belong to [`crate::DrivenController`] and expose no removal token.
 #[derive(Debug, Clone)]
 pub struct VsyncRegistration {
-    owner: Weak<Mutex<VsyncInner>>,
+    owner: Weak<RefCell<VsyncInner>>,
     slot: u64,
 }
 
@@ -53,6 +50,27 @@ impl PartialEq for VsyncRegistration {
 }
 
 impl Eq for VsyncRegistration {}
+
+impl VsyncRegistration {
+    pub(crate) fn owner_is_alive(&self) -> bool {
+        self.owner.strong_count() != 0
+    }
+
+    pub(crate) fn request_frame(&self, retirement: &mut Retirement) {
+        let Some(owner) = self.owner.upgrade() else {
+            return;
+        };
+        let live = {
+            let inner = owner.borrow();
+            inner.controllers.contains_key(&self.slot)
+                || inner.children.iter().any(|child| child.slot == self.slot)
+        };
+        if live {
+            Vsync::request_frame_from(&owner, retirement);
+        }
+        retirement.retire(owner);
+    }
+}
 
 impl Hash for VsyncRegistration {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -78,12 +96,6 @@ pub enum VsyncRegistrationError {
 /// `0.09999999999999999`), so a 100 ms run anchored at 20 ms would stop one ulp
 /// short of its end and never complete. Measuring elapsed time in integer
 /// nanoseconds avoids the trap.
-fn elapsed_since(start: f64, now: f64) -> f64 {
-    const NANOS_PER_SEC: f64 = 1e9;
-    let nanos = (now * NANOS_PER_SEC).round() - (start * NANOS_PER_SEC).round();
-    nanos / NANOS_PER_SEC
-}
-
 /// One registered controller plus the registry's per-run anchor.
 ///
 /// `run_start_secs` is the virtual instant treated as the current run's
@@ -96,8 +108,38 @@ fn elapsed_since(start: f64, now: f64) -> f64 {
 /// *is* the identity.
 struct RegisteredController {
     controller: AnimationController,
-    run_start_secs: Option<f64>,
+    anchor: RunAnchor,
     last_gen: u64,
+}
+
+enum RunAnchor {
+    Fresh,
+    Resume(Duration),
+    Established {
+        at: AnimationTime,
+        elapsed: Duration,
+    },
+}
+
+impl RunAnchor {
+    fn elapsed(&mut self, now: AnimationTime) -> Duration {
+        match *self {
+            Self::Fresh => {
+                *self = Self::Established {
+                    at: now,
+                    elapsed: Duration::ZERO,
+                };
+                Duration::ZERO
+            }
+            Self::Resume(elapsed) => {
+                *self = Self::Established { at: now, elapsed };
+                elapsed
+            }
+            Self::Established { at, elapsed } => {
+                elapsed.saturating_add(now.saturating_duration_since(at))
+            }
+        }
+    }
 }
 
 /// A nested registry: a `TickerMode`'s subtree registry, ticked through its
@@ -121,8 +163,11 @@ struct VsyncInner {
     /// children's. A nested unmuted registry cannot re-enable a muted
     /// ancestor, because the ancestor never forwards the tick.
     children: Vec<RegisteredChild>,
+    parents: Vec<VsyncRegistration>,
+    request_frame: Option<Rc<dyn Fn()>>,
     next_id: u64,
     muted: bool,
+    last_time: crate::AnimationTime,
 }
 
 impl VsyncInner {
@@ -134,12 +179,12 @@ impl VsyncInner {
 
 /// A shared, restart-aware controller registry driven once per frame.
 ///
-/// Cloning a `Vsync` clones an `Arc`-backed handle: every clone observes the
+/// Cloning a `Vsync` clones an `Rc`-backed handle: every clone observes the
 /// same registry, so the handle a `VsyncScope` hands to a subtree and the one a
 /// binding ticks are the same registry.
 #[derive(Clone, Default)]
 pub struct Vsync {
-    inner: Arc<Mutex<VsyncInner>>,
+    inner: Rc<RefCell<VsyncInner>>,
 }
 
 impl Vsync {
@@ -149,39 +194,56 @@ impl Vsync {
         Self::default()
     }
 
-    /// Register `controller` so each [`tick_all`](Self::tick_all) advances it on
-    /// the virtual timeline.
+    /// Bind this registry's frame demand to its presentation's frame driver.
     ///
-    /// The controller is `Clone` (`Arc`-backed); register a clone and keep your
-    /// own handle to drive it (`forward`, `reverse`, …). The current run is
-    /// anchored lazily on the first tick (or whenever a fresh run bumps
-    /// `run_generation`), so this needs no clock reading and the common
-    /// register-then-`forward` order anchors `t = 0` cleanly on the first frame
-    /// the new run is observed.
+    /// Existing running controllers request a sample from the new driver.
+    /// Invocation and outgoing capture retirement occur outside registry borrows.
     ///
     /// # Panics
-    ///
-    /// Panics permanently after all available registration identities have been
-    /// consumed. Use [`try_register`](Self::try_register) for typed refusal.
-    pub fn register(&self, controller: AnimationController) -> VsyncRegistration {
-        let controller = Terminal::new(controller);
-        match self.try_register(controller.get()) {
-            Ok(registration) => registration,
-            Err(VsyncRegistrationError::Exhausted) => {
-                panic!("Vsync registration capacity exhausted");
+    /// Propagates the first callback or capture-retirement failure after recovery.
+    pub fn set_frame_requester(&self, request_frame: Option<Rc<dyn Fn()>>) {
+        let outgoing = std::mem::replace(&mut self.inner.borrow_mut().request_frame, request_frame);
+        let mut retirement = Retirement::new();
+        if self.has_running() {
+            Self::request_frame_from(&self.inner, &mut retirement);
+        }
+        retirement.retire(outgoing);
+        retirement.finish();
+    }
+
+    fn request_frame_from(owner: &Rc<RefCell<VsyncInner>>, retirement: &mut Retirement) {
+        let (request, parents) = {
+            let mut inner = owner.borrow_mut();
+            if inner.muted {
+                return;
             }
+            inner.parents.retain(VsyncRegistration::owner_is_alive);
+            (inner.request_frame.clone(), inner.parents.clone())
+        };
+        if let Some(request) = request {
+            retirement.run(|| request());
+            retirement.retire(request);
+        }
+        for parent in parents {
+            parent.request_frame(retirement);
         }
     }
 
-    /// Register a borrowed controller, reporting permanent identity exhaustion.
-    ///
-    /// A refusal leaves the controller and every admitted registration intact.
-    pub fn try_register(
+    pub(crate) fn try_register_resuming(
         &self,
         controller: &AnimationController,
+        elapsed: Duration,
+    ) -> Result<VsyncRegistration, VsyncRegistrationError> {
+        self.try_register_with_anchor(controller, RunAnchor::Resume(elapsed))
+    }
+
+    fn try_register_with_anchor(
+        &self,
+        controller: &AnimationController,
+        anchor: RunAnchor,
     ) -> Result<VsyncRegistration, VsyncRegistrationError> {
         let last_gen = controller.run_generation();
-        let mut inner = self.inner.lock();
+        let mut inner = self.inner.borrow_mut();
         let id = inner
             .reserve_slot()
             .ok_or(VsyncRegistrationError::Exhausted)?;
@@ -189,29 +251,35 @@ impl Vsync {
             id,
             RegisteredController {
                 controller: controller.clone(),
-                run_start_secs: None,
+                anchor,
                 last_gen,
             },
         );
-        Ok(VsyncRegistration {
-            owner: Arc::downgrade(&self.inner),
+        let registration = VsyncRegistration {
+            owner: Rc::downgrade(&self.inner),
             slot: id,
-        })
+        };
+        drop(inner);
+        controller.add_frame_route(registration.clone());
+        Ok(registration)
     }
 
     /// Remove the controller previously registered under `id`. Idempotent: an
     /// unknown or already-removed id is a no-op.
-    pub fn unregister(&self, id: &VsyncRegistration) {
-        if !Weak::ptr_eq(&id.owner, &Arc::downgrade(&self.inner)) {
+    pub(crate) fn unregister(&self, id: &VsyncRegistration) {
+        if !Weak::ptr_eq(&id.owner, &Rc::downgrade(&self.inner)) {
             return;
         }
         let removed = {
-            let mut inner = self.inner.lock();
+            let mut inner = self.inner.borrow_mut();
             inner.controllers.remove(&id.slot)
         };
         // The last controller owner can retire user captures that reenter this
         // registry. Its registration is absent and the guard is released first.
-        drop(removed);
+        if let Some(removed) = removed {
+            removed.controller.remove_frame_route(id);
+            drop(removed);
+        }
     }
 
     /// Nest `child` under this registry: [`tick_all`](Self::tick_all) forwards
@@ -229,25 +297,36 @@ impl Vsync {
             );
             return None;
         }
-        let mut inner = self.inner.lock();
+        let mut inner = self.inner.borrow_mut();
         let slot = inner.reserve_slot()?;
         inner.children.push(RegisteredChild {
             slot,
             child: child.clone(),
         });
-        Some(VsyncRegistration {
-            owner: Arc::downgrade(&self.inner),
+        let registration = VsyncRegistration {
+            owner: Rc::downgrade(&self.inner),
             slot,
-        })
+        };
+        drop(inner);
+        child.inner.borrow_mut().parents.push(registration.clone());
+        let mut retirement = Retirement::new();
+        if child.has_running() {
+            registration.request_frame(&mut retirement);
+        }
+        if retirement.has_failure() {
+            retirement.run(|| self.detach_child(&registration));
+        }
+        retirement.finish();
+        Some(registration)
     }
 
     /// Detach the child registry previously attached under `id`. Idempotent.
     pub fn detach_child(&self, id: &VsyncRegistration) {
-        if !Weak::ptr_eq(&id.owner, &Arc::downgrade(&self.inner)) {
+        if !Weak::ptr_eq(&id.owner, &Rc::downgrade(&self.inner)) {
             return;
         }
         let removed = {
-            let mut inner = self.inner.lock();
+            let mut inner = self.inner.borrow_mut();
             inner
                 .children
                 .iter()
@@ -256,25 +335,33 @@ impl Vsync {
         };
         // Removing one child preserves the remaining registration order. Its
         // last controller captures must retire after releasing the parent guard.
-        drop(removed);
+        if let Some(removed) = removed {
+            removed
+                .child
+                .inner
+                .borrow_mut()
+                .parents
+                .retain(|parent| parent != id);
+            drop(removed);
+        }
     }
 
-    /// Whether both handles name the **same** registry (`Arc` identity) — how a
+    /// Whether both handles name the **same** registry (`Rc` identity) — how a
     /// consumer tells "the ambient registry changed" from "same registry, fresh
     /// clone".
     #[must_use]
     pub fn is_same(&self, other: &Vsync) -> bool {
-        Arc::ptr_eq(&self.inner, &other.inner)
+        Rc::ptr_eq(&self.inner, &other.inner)
     }
 
     /// Whether `other` is this registry or one of its (transitive) children.
     fn contains(&self, other: &Vsync) -> bool {
-        if Arc::ptr_eq(&self.inner, &other.inner) {
+        if Rc::ptr_eq(&self.inner, &other.inner) {
             return true;
         }
         let children: Vec<Vsync> = self
             .inner
-            .lock()
+            .borrow_mut()
             .children
             .iter()
             .map(|registered| registered.child.clone())
@@ -286,7 +373,7 @@ impl Vsync {
     /// registry stop advancing.
     #[must_use]
     pub fn is_muted(&self) -> bool {
-        self.inner.lock().muted
+        self.inner.borrow_mut().muted
     }
 
     /// Mute or unmute this registry: while muted it delivers no ticks, to its
@@ -297,20 +384,30 @@ impl Vsync {
     /// resume from where it stopped: a muted clock still runs, only the
     /// callback is withheld.
     pub fn set_muted(&self, muted: bool) {
-        self.inner.lock().muted = muted;
+        let changed = {
+            let mut inner = self.inner.borrow_mut();
+            let changed = inner.muted != muted;
+            inner.muted = muted;
+            changed
+        };
+        if changed && !muted && self.has_running() {
+            let mut retirement = Retirement::new();
+            Self::request_frame_from(&self.inner, &mut retirement);
+            retirement.finish();
+        }
     }
 
     /// The number of controllers registered **with this registry**, not
     /// counting nested ones (see [`attach_child`](Self::attach_child)).
     #[must_use]
     pub fn len(&self) -> usize {
-        self.inner.lock().controllers.len()
+        self.inner.borrow_mut().controllers.len()
     }
 
     /// Whether no controllers are registered.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.inner.lock().controllers.is_empty()
+        self.inner.borrow_mut().controllers.is_empty()
     }
 
     /// Whether at least one registered controller is currently running.
@@ -337,7 +434,7 @@ impl Vsync {
     #[must_use]
     pub fn has_running(&self) -> bool {
         let (mine, children) = {
-            let inner = self.inner.lock();
+            let inner = self.inner.borrow_mut();
             // A muted registry advances nothing — not its own controllers, not a
             // nested registry's — so nothing under it can hold the frame loop
             // open.
@@ -362,84 +459,40 @@ impl Vsync {
         mine || children.iter().any(Vsync::has_running)
     }
 
-    /// Advance every registered, running controller to virtual instant
-    /// `now_secs` (elapsed seconds on the driver's virtual clock).
+    /// Advance live controller registrations using a presentation's typed tick.
     ///
-    /// For each controller: if its `run_generation` advanced since the last
-    /// observation (a fresh run was just established) or it has no anchor yet,
-    /// re-anchor `t = 0` to `now_secs`; then, if the controller reports running,
-    /// tick it with the raw seconds elapsed since that anchor. A non-running
-    /// controller is skipped (its anchor is set on the frame it next starts) —
-    /// folding in `disposed` (see the controller's crate-private
-    /// `walk_probe`), so a disposed-but-not-unregistered controller is
-    /// skipped too, not just one that settled normally.
+    /// A fresh run anchors on its first observed frame. Registration migration
+    /// preserves its last sampled elapsed time. Older ticks hold at this
+    /// registry's last accepted time; stopped and disposed kernels are skipped.
     ///
-    /// `now_secs` is expected to be a **non-decreasing** virtual clock across
-    /// calls. There is no clamp here: [`tick_at`](AnimationController::tick_at)
-    /// already clamps its own run-relative elapsed time at 0, so a backwards
-    /// step re-samples the controller's pure time function — never below that
-    /// run's `t = 0` — rather than "holding" the run; a `.max(0.0)` in this
-    /// method would change no observed value.
+    /// State borrows end before sampling user curves or delivering callbacks.
+    /// A listener may release or dispose its [owning controller](crate::DrivenController)
+    /// during the walk. A later registration withdrawn by that listener is
+    /// skipped, while other live controllers remain deliverable.
     ///
-    /// # The registry lock is **not** held while ticking
+    /// Admissions made during this call first tick on the next call. Restarting
+    /// an already visited controller also waits for the next call; starting a
+    /// resident controller that has not yet been visited can sample this frame.
+    /// Registration identities are never reused, so withdrawing and re-admitting
+    /// a kernel cannot give the replacement an earlier turn in the current walk.
     ///
-    /// `tick_at` fires the controller's status and value listeners, and a listener
-    /// may legitimately [`unregister`](Self::unregister): a route whose exit
-    /// transition reaches `dismissed` disposes itself from that very listener, and
-    /// disposal unregisters its controller. Holding the lock across `tick_at` made
-    /// that re-entrant — and `parking_lot::Mutex` is not reentrant, so it
-    /// deadlocked rather than panicked.
+    /// Child registries admitted at entry tick before this registry's controllers.
+    /// Muting is rechecked between controller samples, so muting during delivery
+    /// stops the remaining samples. Ancestor mute gates apply to nested registries.
     ///
-    /// So the registry is walked one entry at a time: each controller is looked
-    /// up, its bookkeeping updated, and the lock dropped *before* it is ticked.
-    /// Walking one entry at a time — rather than snapshotting every due
-    /// controller up front — preserves the property the original loop had: a
-    /// controller that an **earlier** controller's listener starts during this
-    /// same call (a `Scrollable` handing off to its fling controller) is
-    /// anchored and ticked in this frame, not the next.
-    ///
-    /// # An indexed cursor walk, not a per-frame id snapshot
-    ///
-    /// `controllers` is a [`BTreeMap`] keyed by registration id, and ids are
-    /// `next_id` post-increments that are never reused — so ascending key
-    /// order *is* registration order. `tick_all` reads `fence = next_id` once
-    /// at entry, then walks `controllers.range_mut(cursor..fence)` one entry
-    /// at a time, advancing `cursor` past each id it visits. That range bound
-    /// — not a captured id list — is what gives the walk the same reentrancy
-    /// guarantees the old snapshot-then-`find` scan had:
-    ///
-    /// - A controller *registered* during this call gets an id ≥ `fence`
-    ///   (`next_id` only grows), so the walk's upper bound excludes it —
-    ///   ticked next frame.
-    /// - A controller *unregistered* during this call (by an earlier
-    ///   listener) is removed from the map outright, so the walk simply never
-    ///   reaches its key — skipped, with no lookup-miss branch to write.
-    /// - Unregistering a later controller and re-registering the same
-    ///   controller from an earlier listener gives the new registration an id
-    ///   that is also ≥ `fence`: not ticked this call, and its anchor starts
-    ///   fresh (`run_start_secs: None`) rather than inheriting the old
-    ///   registration's — no aliasing between the two ids.
-    /// - A listener that restarts an **earlier**, already-visited controller
-    ///   does not get it re-ticked this call: the cursor only moves forward,
-    ///   never back. Same as the old snapshot's behavior.
-    ///
-    /// `muted` is **re-read under the per-iteration lock**, not only at
-    /// entry: a listener that mutes the registry mid-walk stops the remaining
-    /// entries of *this* frame from ticking. Nested `children` registries are
-    /// still sampled **once at entry** and ticked before the cursor walk
-    /// starts, exactly as before: a child attached via
-    /// [`attach_child`](Self::attach_child) from a listener mid-walk is first
-    /// ticked on the *next* call — a ticker started mid-frame schedules for
-    /// the next frame.
-    ///
-    /// Cost: **O(log N)** per register/unregister/lookup — each
-    /// `range_mut(cursor..fence).next()` is its own fresh seek, since the
-    /// lock (and so the map borrow) is dropped between steps; one such seek
-    /// per resident controller per pump, so **O(N log N)** per pump.
-    /// [`has_running`](Self::has_running) stays O(N) — see its doc for why.
-    pub fn tick_all(&self, now_secs: f64) {
+    /// A controller or child-registry failure leaves healthy frame peers
+    /// deliverable. The walk resumes its first failure after those peers tick,
+    /// preserving that failure through callback and capture retirement.
+    pub fn tick_all(&self, tick: &FrameTick) {
+        let mut retirement = Retirement::new();
+        retirement.run_with(|retirement| self.tick_all_with_retirement(tick.now(), retirement));
+        retirement.finish();
+    }
+
+    fn tick_all_with_retirement(&self, now: crate::AnimationTime, retirement: &mut Retirement) {
         let (fence, children, muted) = {
-            let inner = self.inner.lock();
+            let mut inner = self.inner.borrow_mut();
+            inner.last_time = inner.last_time.max(now);
             (
                 inner.next_id,
                 inner
@@ -460,13 +513,17 @@ impl Vsync {
         }
 
         for child in children {
-            child.tick_all(now_secs);
+            let child = Terminal::new(child);
+            let now = self.inner.borrow().last_time;
+            retirement.run_with(|retirement| child.tick_all_with_retirement(now, retirement));
+            retirement.retire(child);
         }
 
         let mut cursor = 0u64;
         loop {
             let step = {
-                let mut inner = self.inner.lock();
+                let mut inner = self.inner.borrow_mut();
+                let now = inner.last_time;
                 // Re-read per iteration, not only captured at entry above: a
                 // listener that mutes the registry mid-walk must stop the
                 // rest of this frame's entries from ticking.
@@ -481,20 +538,15 @@ impl Vsync {
                     // `disposed` — see its own doc) under a single
                     // controller lock.
                     let probe = registered.controller.walk_probe();
-                    if probe.generation != registered.last_gen
-                        || registered.run_start_secs.is_none()
-                    {
+                    if probe.generation != registered.last_gen {
                         registered.last_gen = probe.generation;
-                        registered.run_start_secs = Some(now_secs);
+                        registered.anchor = RunAnchor::Fresh;
                     }
                     if probe.live_running {
                         // `run_start_secs` is `Some` here — set in the branch
                         // above on this same call if it was `None`.
-                        let run_start = registered.run_start_secs.unwrap_or(now_secs);
-                        RegistryWalkStep::Running(
-                            registered.controller.clone(),
-                            elapsed_since(run_start, now_secs),
-                        )
+                        let elapsed = registered.anchor.elapsed(now);
+                        RegistryWalkStep::Running(registered.controller.clone(), elapsed)
                     } else {
                         RegistryWalkStep::NotRunning
                     }
@@ -506,7 +558,13 @@ impl Vsync {
             match step {
                 RegistryWalkStep::Finished => break,
                 RegistryWalkStep::NotRunning => {}
-                RegistryWalkStep::Running(controller, elapsed) => controller.tick_at(elapsed),
+                RegistryWalkStep::Running(controller, elapsed) => {
+                    let controller = Terminal::new(controller);
+                    retirement.run_with(|retirement| {
+                        controller.tick_at_with_retirement(elapsed, retirement);
+                    });
+                    retirement.retire(controller);
+                }
             }
         }
     }
@@ -521,7 +579,7 @@ enum RegistryWalkStep {
     NotRunning,
     /// The controller is running; tick it with the given elapsed seconds
     /// once the registry lock guarding this step is released.
-    Running(AnimationController, f64),
+    Running(AnimationController, Duration),
 }
 
 impl std::fmt::Debug for Vsync {
@@ -533,16 +591,17 @@ impl std::fmt::Debug for Vsync {
 }
 
 #[cfg(test)]
+mod retirement_tests;
+
+#[cfg(test)]
 mod tests {
     use std::time::Duration;
-
-    use flui_scheduler::UpdateScheduler;
 
     use super::*;
     use crate::{Animation, AnimationStatus};
 
     fn controller(ms: u64) -> AnimationController {
-        AnimationController::new(Duration::from_millis(ms), &UpdateScheduler::new())
+        AnimationController::builder(Duration::from_millis(ms)).build()
     }
 
     /// Muting is **structural**, so nesting composes as a logical AND: an inner
@@ -557,14 +616,16 @@ mod tests {
         middle.attach_child(&inner).expect("nested");
 
         let animation = controller(1000);
-        inner.register(animation.clone());
+        inner
+            .try_register_resuming(&animation, Duration::ZERO)
+            .expect("private token admission");
         let _ = animation.forward();
 
         middle.set_muted(true);
         assert!(!inner.is_muted(), "the innermost registry is enabled");
 
-        outer.tick_all(0.0);
-        outer.tick_all(0.5);
+        outer.tick_all(&crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)));
+        outer.tick_all(&crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.5)));
         assert_eq!(
             animation.value(),
             0.0,
@@ -575,14 +636,14 @@ mod tests {
         // controller that has never been ticked has no anchor yet), the next
         // one advances it.
         middle.set_muted(false);
-        outer.tick_all(1.0);
-        outer.tick_all(1.4);
+        outer.tick_all(&crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(1.0)));
+        outer.tick_all(&crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(1.4)));
         assert!(
             animation.value() > 0.0,
             "the tick flows through the unmuted ancestor"
         );
 
-        animation.dispose();
+        crate::test_cases::dispose_controller(&animation);
     }
 
     /// A cycle would hang the tick walk, so nesting a registry inside itself
@@ -602,7 +663,7 @@ mod tests {
         );
 
         // The tick walk still terminates.
-        outer.tick_all(0.0);
+        outer.tick_all(&crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)));
     }
 
     /// A status listener that unregisters its own controller — what a route does
@@ -616,44 +677,50 @@ mod tests {
     /// pop").
     fn a_listener_may_unregister_from_inside_tick_all() {
         let vsync = Vsync::new();
-        let controller =
-            AnimationController::new(Duration::from_millis(100), &UpdateScheduler::new());
-        let registration = vsync.register(controller.clone());
+        let controller = AnimationController::builder(Duration::from_millis(100)).build();
+        let registration = vsync
+            .try_register_resuming(&controller, Duration::ZERO)
+            .expect("private token admission");
 
-        let slot: Arc<Mutex<Option<VsyncRegistration>>> = Arc::new(Mutex::new(Some(registration)));
+        let slot: Rc<RefCell<Option<VsyncRegistration>>> =
+            Rc::new(RefCell::new(Some(registration)));
         let vsync_for_listener = vsync.clone();
-        let slot_for_listener = Arc::clone(&slot);
-        controller.add_status_listener(Arc::new(move |status| {
+        let slot_for_listener = Rc::clone(&slot);
+        controller.add_status_listener(Rc::new(move |status| {
             if status == AnimationStatus::Completed
-                && let Some(registration) = slot_for_listener.lock().take()
+                && let Some(registration) = slot_for_listener.borrow_mut().take()
             {
                 vsync_for_listener.unregister(&registration);
             }
         }));
 
         controller.forward().expect("fresh controller forwards");
-        vsync.tick_all(0.0);
-        vsync.tick_all(0.2); // past the 100 ms duration → Completed → unregisters
+        vsync.tick_all(&crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)));
+        vsync.tick_all(&crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.2))); // past the 100 ms duration → Completed → unregisters
 
-        assert!(slot.lock().is_none(), "the listener ran and unregistered");
+        assert!(slot.borrow().is_none(), "the listener ran and unregistered");
         assert_eq!(vsync.len(), 0, "and the registry dropped the controller");
 
-        controller.dispose();
+        crate::test_cases::dispose_controller(&controller);
     }
 
     fn registration_exhaustion_preserves_admitted_work() {
         for (remaining, child_last) in [(1, false), (1, true), (2, false), (2, true)] {
             let registry = Vsync::new();
-            // Only the counter boundary requires private setup. Every admission,
-            // refusal, removal and tick below uses the production public API.
-            registry.inner.lock().next_id = u64::MAX - remaining;
-            let preceding = AnimationController::without_ticker(Duration::from_secs(1));
+            // Seed the private counter boundary, then use the production admission
+            // seam and public owning-handle refusal and retirement.
+            registry.inner.borrow_mut().next_id = u64::MAX - remaining;
+            let preceding = AnimationController::builder(Duration::from_secs(1)).build();
             let preceding_child = Vsync::new();
             let preceding_id = if remaining == 2 {
                 let id = if child_last {
-                    registry.register(preceding.clone())
+                    registry
+                        .try_register_resuming(&preceding, Duration::ZERO)
+                        .expect("private token admission")
                 } else {
-                    preceding_child.register(preceding.clone());
+                    preceding_child
+                        .try_register_resuming(&preceding, Duration::ZERO)
+                        .expect("private token admission");
                     registry
                         .attach_child(&preceding_child)
                         .expect("penultimate child identity admitted")
@@ -666,28 +733,34 @@ mod tests {
                 None
             };
             let child = Vsync::new();
-            let animation = AnimationController::without_ticker(Duration::from_secs(1));
+            let animation = AnimationController::builder(Duration::from_secs(1)).build();
             let last = if child_last {
-                child.register(animation.clone());
+                child
+                    .try_register_resuming(&animation, Duration::ZERO)
+                    .expect("private token admission");
                 registry
                     .attach_child(&child)
                     .expect("last child identity admitted")
             } else {
                 registry
-                    .try_register(&animation)
+                    .try_register_resuming(&animation, Duration::ZERO)
                     .expect("last controller identity admitted")
             };
             animation.forward().expect("last admitted run starts");
-            let refused = AnimationController::without_ticker(Duration::from_secs(1));
+            let refused = AnimationController::builder(Duration::from_secs(1)).build();
             for handle in [&registry, &registry.clone()] {
                 assert_eq!(
-                    handle.try_register(&refused),
+                    handle.try_register_resuming(&refused, Duration::ZERO),
                     Err(VsyncRegistrationError::Exhausted)
                 );
                 assert!(handle.attach_child(&Vsync::new()).is_none());
             }
-            registry.tick_all(0.0);
-            registry.tick_all(0.5);
+            registry.tick_all(
+                &crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)),
+            );
+            registry.tick_all(
+                &crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.5)),
+            );
             assert_eq!(
                 animation.value(),
                 0.5,
@@ -700,7 +773,9 @@ mod tests {
                     "mixed preceding admission remains deliverable"
                 );
             }
-            registry.tick_all(1.0);
+            registry.tick_all(
+                &crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(1.0)),
+            );
             assert_eq!(
                 animation.value(),
                 1.0,
@@ -715,7 +790,7 @@ mod tests {
             registry.unregister(&last);
             registry.detach_child(&last);
             assert_eq!(
-                registry.try_register(&refused),
+                registry.try_register_resuming(&refused, Duration::ZERO),
                 Err(VsyncRegistrationError::Exhausted)
             );
             assert!(
@@ -723,44 +798,54 @@ mod tests {
                 "removal cannot reset exhaustion"
             );
 
-            struct RejectedCapture(Arc<std::sync::atomic::AtomicUsize>);
+            struct RejectedCapture(Rc<std::sync::atomic::AtomicUsize>);
             impl Drop for RejectedCapture {
                 fn drop(&mut self) {
                     self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     panic!("rejected controller capture");
                 }
             }
-            let drops = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-            let rejected = AnimationController::without_ticker(Duration::from_secs(1));
+            let drops = Rc::new(std::sync::atomic::AtomicUsize::new(0));
+            let mut rejected = AnimationController::builder(Duration::from_secs(1)).build_on(None);
             let probe = RejectedCapture(drops.clone());
-            rejected.add_status_listener(Arc::new(move |_| {
+            rejected.controller().add_status_listener(Rc::new(move |_| {
                 let _capture = &probe;
             }));
-            let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                registry.register(rejected)
-            }))
-            .expect_err("owned wrapper preserves intentional exhaustion panic");
             assert_eq!(
-                flui_foundation::panic::payload_text(failure.as_ref()),
-                Some("Vsync registration capacity exhausted")
+                rejected.rebind(Some(&registry)),
+                Err(VsyncRegistrationError::Exhausted)
             );
-            flui_foundation::panic::retain_opaque_payload(failure);
+            assert!(!rejected.is_bound());
             assert_eq!(
                 drops.load(std::sync::atomic::Ordering::SeqCst),
                 0,
-                "rejected opaque owner retained during exhaustion unwind"
+                "refusal preserves the owning handle's captures"
             );
+            let failure =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rejected.dispose()))
+                    .expect_err("explicit owner retirement fails");
             assert_eq!(
-                registry.try_register(&refused),
+                flui_foundation::panic::payload_text(failure.as_ref()),
+                Some("rejected controller capture")
+            );
+            flui_foundation::panic::retain_opaque_payload(failure);
+            assert_eq!(drops.load(std::sync::atomic::Ordering::SeqCst), 1);
+            rejected.dispose();
+            assert_eq!(
+                registry.try_register_resuming(&refused, Duration::ZERO),
                 Err(VsyncRegistrationError::Exhausted)
             );
             let fresh = Vsync::new();
             let fresh_id = fresh
-                .try_register(&refused)
+                .try_register_resuming(&refused, Duration::ZERO)
                 .expect("independent registry still admits");
             refused.forward().expect("fresh run");
-            fresh.tick_all(0.0);
-            fresh.tick_all(1.0);
+            fresh.tick_all(
+                &crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)),
+            );
+            fresh.tick_all(
+                &crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(1.0)),
+            );
             assert_eq!(
                 refused.value(),
                 1.0,
@@ -770,9 +855,61 @@ mod tests {
         }
     }
 
+    fn rebind_refused_by_an_exhausted_registry_settles_unbound() {
+        for repeat in [false, true] {
+            let old = Vsync::new();
+            let exhausted = Vsync::new();
+            exhausted.inner.borrow_mut().next_id = u64::MAX;
+            let mut owner =
+                AnimationController::builder(Duration::from_secs(1)).build_on(Some(&old));
+            let observer = owner.controller().clone();
+            let run = if repeat {
+                observer.repeat(false)
+            } else {
+                observer.forward()
+            }
+            .expect("admitted run");
+            let mut clock = crate::MotionClock::new();
+            old.tick_all(&clock.frame(Duration::ZERO));
+            old.tick_all(&clock.frame(Duration::from_millis(400)));
+            assert_eq!(observer.value(), 0.4);
+            assert_eq!(
+                owner.rebind(Some(&exhausted)),
+                Err(VsyncRegistrationError::Exhausted)
+            );
+            assert!(old.is_empty(), "refusal withdraws the preceding seat");
+            assert!(exhausted.is_empty());
+            assert!(!owner.is_bound());
+            assert_eq!(
+                owner.rebind(Some(&exhausted)),
+                Err(VsyncRegistrationError::Exhausted)
+            );
+            if repeat {
+                assert_eq!(observer.value(), 0.0);
+                assert!(run.is_pending(), "an infinite repeat parks on refusal");
+                owner
+                    .rebind(Some(&old))
+                    .expect("independent registry still admits");
+                old.tick_all(&clock.frame(Duration::from_secs(1)));
+                old.tick_all(&clock.frame(Duration::from_millis(1200)));
+                assert_eq!(observer.value(), 0.2);
+                drop(owner);
+                assert!(run.is_canceled());
+            } else {
+                assert_eq!(observer.value(), 1.0);
+                assert!(run.is_complete(), "a finite run lands without a clock");
+                assert!(!observer.is_animating());
+            }
+        }
+    }
+
     #[test]
     fn vsync_nesting_and_reentrancy() {
         crate::test_cases::run_cases(&[
+            (
+                "exhausted registry leaves an owner unbound",
+                rebind_refused_by_an_exhausted_registry_settles_unbound,
+            ),
             (
                 "registration exhaustion preserves admitted work",
                 registration_exhaustion_preserves_admitted_work,

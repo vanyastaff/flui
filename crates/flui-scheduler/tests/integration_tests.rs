@@ -34,7 +34,7 @@ fn test_full_frame_lifecycle() {
     }));
 
     let p = Arc::clone(&persistent_called);
-    scheduler.add_persistent_frame_callback(Arc::new(move |_timing| {
+    scheduler.add_persistent_frame_callback(std::rc::Rc::new(move |_timing| {
         p.fetch_add(1, Ordering::SeqCst);
     }));
 

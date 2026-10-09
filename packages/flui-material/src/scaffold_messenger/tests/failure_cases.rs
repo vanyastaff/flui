@@ -1,6 +1,7 @@
 //! Distinct mounted owner inboxes expose each fanout delivery failure. They are
 //! a private fault seam, not supported cross-UI runtime Messenger registration.
 use super::*;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 #[derive(Clone, StatefulView)]
@@ -124,7 +125,7 @@ fn exercise_with_secondary(
     handle
         .shared
         .entry_controller
-        .add_status_listener(Arc::new(move |status| {
+        .add_status_listener(std::rc::Rc::new(move |status| {
             if status == AnimationStatus::Forward {
                 forward_handle.schedule(flui_sdk::view::RebuildReason::AnimationTick);
             }

@@ -2,7 +2,7 @@
 //! fire exactly once per completed frame — the load-bearing mechanism the IME
 //! cursor-area tracking loop (`flui-widgets::EditableText`, ADR-0030) builds
 //! on. This is the design's scheduler-level precondition: if a
-//! self-rescheduling `LocalPostFrameHandle::schedule_local` callback cannot be
+//! self-rescheduling `PostFrameHandle::schedule` callback cannot be
 //! driven cleanly through the binding's own frame pump, the loop has no
 //! foundation to stand on.
 //!
@@ -10,7 +10,7 @@
 //! `scheduler.execute_frame(&owner_frame)`
 //!
 //! `flui-scheduler`'s own unit tests already prove the primitive
-//! (`LocalPostFrameHandle::schedule_local` nests and defers correctly against a
+//! (`PostFrameHandle::schedule` nests and defers correctly against a
 //! bare `UpdateScheduler`). The production question this test answers is different:
 //! does the *binding's* frame-pump entry point (`pump_frame`, which every
 //! runner and this crate's `UiRuntime`-analog calls) drain the SAME owner frame the
@@ -22,17 +22,17 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use flui_scheduler::LocalPostFrameHandle;
+use flui_scheduler::PostFrameHandle;
 use flui_testing::HeadlessBinding;
 use flui_view::BuildOwner;
 
 /// Schedule one tick that increments `fire_count` and immediately reschedules
 /// itself for the next completed frame. Mirrors `CursorAreaLoop::schedule` /
 /// `fire`'s self-rescheduling shape one to one, minus the geometry payload.
-fn schedule_self_rescheduling_tick(handle: LocalPostFrameHandle, fire_count: Rc<Cell<usize>>) {
+fn schedule_self_rescheduling_tick(handle: PostFrameHandle, fire_count: Rc<Cell<usize>>) {
     let handle_for_reschedule = handle.clone();
     handle
-        .schedule_local(move |_timing| {
+        .schedule(move |_timing| {
             fire_count.set(fire_count.get() + 1);
             schedule_self_rescheduling_tick(handle_for_reschedule, fire_count);
         })
@@ -50,7 +50,7 @@ pub(crate) fn self_rescheduling_local_post_frame_callback_fires_exactly_once_per
     let mut build_owner = BuildOwner::new();
     binding.install_build_capabilities(&mut build_owner);
     let handle = build_owner
-        .local_post_frame_handle()
+        .post_frame_handle()
         .cloned()
         .expect("install_build_capabilities always installs a local post-frame handle");
 

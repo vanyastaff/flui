@@ -147,12 +147,12 @@ fn add_listeners(
     status_listeners: usize,
 ) {
     for _ in 0..value_listeners {
-        controller.add_listener(Arc::new(|| {
+        controller.add_listener(std::rc::Rc::new(|| {
             black_box(());
         }));
     }
     for _ in 0..status_listeners {
-        controller.add_status_listener(Arc::new(|status| {
+        controller.add_status_listener(std::rc::Rc::new(|status| {
             black_box(status);
         }));
     }
@@ -168,7 +168,7 @@ fn bench_live_tick(
     group.bench_function(BenchmarkId::new("tick_at", variant), |b| {
         b.iter(|| {
             t += FRAME;
-            controller.tick_at(black_box(t));
+            controller.tick_at(std::time::Duration::from_secs_f64(black_box(t)));
         });
     });
     assert!(
@@ -181,23 +181,23 @@ fn controller_tick(c: &mut Criterion) {
     let mut group = c.benchmark_group("controller");
 
     // Linear time-based run, no listeners.
-    let linear = AnimationController::without_ticker(NEVER_ENDING);
+    let linear = AnimationController::builder(NEVER_ENDING).build();
     linear.forward().unwrap();
     bench_live_tick(&mut group, "linear", &linear);
-    linear.dispose();
+    drop(linear);
 
     // The same run eased through a cubic Bézier.
-    let eased = AnimationController::without_ticker(NEVER_ENDING);
+    let eased = AnimationController::builder(NEVER_ENDING).build();
     eased
         .animate_to_curved(1.0, None, Arc::new(Curves::EaseInOut))
         .unwrap();
     bench_live_tick(&mut group, "ease_in_out", &eased);
-    eased.dispose();
+    drop(eased);
 
     // Value fan-out: every tick notifies the value listeners; the status
     // listener is registered but no tick changes the status.
     for value_listeners in [1, 4] {
-        let controller = AnimationController::without_ticker(NEVER_ENDING);
+        let controller = AnimationController::builder(NEVER_ENDING).build();
         add_listeners(&controller, value_listeners, 1);
         controller.forward().unwrap();
         bench_live_tick(
@@ -205,20 +205,24 @@ fn controller_tick(c: &mut Criterion) {
             &format!("{value_listeners}_value_1_status_listeners"),
             &controller,
         );
-        controller.dispose();
+        drop(controller);
     }
 
     // Simulation runs: a near-unit drag that takes ~2e10 s to slow below the
     // default velocity tolerance, and a barely damped spring that rests only
     // after millions of seconds.
-    let friction = AnimationController::unbounded_without_ticker(NEVER_ENDING);
+    let friction = AnimationController::builder(NEVER_ENDING)
+        .unbounded()
+        .build();
     friction
         .animate_with(FrictionSimulation::new(1.0 - 1e-9, 0.0, 1000.0, Tolerance::DEFAULT).unwrap())
         .unwrap();
     bench_live_tick(&mut group, "simulation_friction", &friction);
-    friction.dispose();
+    drop(friction);
 
-    let spring = AnimationController::unbounded_without_ticker(NEVER_ENDING);
+    let spring = AnimationController::builder(NEVER_ENDING)
+        .unbounded()
+        .build();
     spring
         .animate_with(
             SpringSimulation::try_new(
@@ -232,21 +236,21 @@ fn controller_tick(c: &mut Criterion) {
         )
         .unwrap();
     bench_live_tick(&mut group, "simulation_spring", &spring);
-    spring.dispose();
+    drop(spring);
 
     // Reading a curved combinator's value goes through one Arc<dyn> hop and
     // the curve; the parent sits mid-run so the curve is actually evaluated.
-    let parent_controller = AnimationController::without_ticker(Duration::from_secs(1));
+    let parent_controller = AnimationController::builder(Duration::from_secs(1)).build();
     parent_controller.forward().unwrap();
-    parent_controller.tick_at(0.37);
-    let parent: Arc<dyn Animation<f64>> = Arc::new(parent_controller.clone());
+    parent_controller.tick_at(std::time::Duration::from_secs_f64(0.37));
+    let parent: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(parent_controller.clone());
     let curved = CurvedAnimation::new(parent, Curves::EaseInOut);
     group.bench_function("curved_value", |b| {
         b.iter(|| black_box(curved.value()));
     });
     assert!(parent_controller.status().is_running());
     drop(curved);
-    parent_controller.dispose();
+    drop(parent_controller);
 
     group.finish();
 }
@@ -258,15 +262,15 @@ fn controller_status(c: &mut Criterion) {
     // listener: `forward_from(0)` (Completed -> Forward) and a tick past the
     // end (Forward -> Completed).
     for status_listeners in [1, 4, 8] {
-        let controller = AnimationController::without_ticker(Duration::from_secs(1));
+        let controller = AnimationController::builder(Duration::from_secs(1)).build();
         add_listeners(&controller, 0, status_listeners);
         group.bench_function(BenchmarkId::new("status_fan_out", status_listeners), |b| {
             b.iter(|| {
                 black_box(controller.forward_from(Some(0.0)).unwrap());
-                controller.tick_at(black_box(2.0));
+                controller.tick_at(std::time::Duration::from_secs_f64(black_box(2.0)));
             });
         });
-        controller.dispose();
+        drop(controller);
     }
 
     // Starting a run from rest on a fresh controller with a detached ticker
@@ -274,7 +278,7 @@ fn controller_status(c: &mut Criterion) {
     // returned future's drop sit outside the timed region.
     group.bench_function("forward", |b| {
         b.iter_batched(
-            || AnimationController::with_detached_ticker(NEVER_ENDING),
+            || AnimationController::builder(NEVER_ENDING).build(),
             |controller| {
                 let run = controller.forward().unwrap();
                 (controller, run)

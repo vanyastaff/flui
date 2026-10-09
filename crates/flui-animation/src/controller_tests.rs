@@ -6,44 +6,106 @@
 //! "the tests" and "the implementation" as two separate, right-sized files.
 
 use super::*;
-use flui_scheduler::UpdateScheduler;
+use parking_lot::Mutex;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-// Several tests assert exact per-tick progress, which the process-global
-// `time_dilation` scales. Serialize all controller tests so a dilation change
-// can never corrupt a sibling's progress assertions under a parallel
-// `cargo test` run.
-static SERIAL: Mutex<()> = Mutex::new(());
-
-fn serial() -> parking_lot::MutexGuard<'static, ()> {
-    SERIAL.lock()
+fn controller(ms: u64) -> AnimationController {
+    AnimationController::builder(Duration::from_millis(ms)).build()
 }
 
-fn controller(ms: u64) -> AnimationController {
-    let scheduler = UpdateScheduler::new();
-    AnimationController::new(Duration::from_millis(ms), &scheduler)
+// Counter injection is private because reaching this boundary through the
+// public API would require u64::MAX admissions or samples. All observations
+// below use the controller and its actual run outcome.
+fn exhausted_run_identities_refuse_without_displacing_the_last_run() {
+    for (name, start) in [
+        (
+            "forward",
+            (|c: &AnimationController| c.forward_from(Some(0.1)))
+                as fn(&AnimationController) -> Result<AnimationRunFuture, AnimationError>,
+        ),
+        ("reverse", |c: &AnimationController| {
+            c.reverse_from(Some(0.9))
+        }),
+        ("target", |c: &AnimationController| c.animate_to(0.9, None)),
+        ("repeat", |c: &AnimationController| c.repeat(false)),
+        ("fling", |c: &AnimationController| c.fling(1.0)),
+        ("simulation", |c: &AnimationController| {
+            c.animate_with(Box::new(InstantSimulation { value: 0.9 }))
+        }),
+    ] {
+        let c = controller(100);
+        c.inner.borrow_mut().run_generation = u64::MAX - 1;
+        let last = c.forward().expect("last identity is available");
+        c.tick_at(Duration::from_millis(25));
+        let held = c.value();
+        assert!(
+            matches!(start(&c), Err(AnimationError::IdentityExhausted)),
+            "{name}: terminal identity refuses a new run"
+        );
+        assert_eq!(c.value(), held, "{name}: refusal commits no input value");
+        assert_eq!(c.run_generation(), u64::MAX);
+        assert!(
+            last.is_pending(),
+            "{name}: refusal does not cancel accepted work"
+        );
+        c.tick_at(Duration::from_millis(100));
+        assert!(last.is_complete());
+        c.reset()
+            .expect("reset still works after run identity exhaustion");
+        assert!(
+            matches!(start(&c), Err(AnimationError::IdentityExhausted)),
+            "{name}: refusal is permanent"
+        );
+    }
+}
+
+fn exhausted_sample_identities_cancel_without_reissuing_a_stale_sample() {
+    let c = controller(100);
+    let run = c.forward().expect("run");
+    c.inner.borrow_mut().sample_epoch = u64::MAX - 1;
+    c.tick_at(Duration::from_millis(25));
+    assert_eq!(c.value(), 0.25);
+    c.tick_at(Duration::from_millis(50));
+    assert_eq!(
+        c.value(),
+        0.25,
+        "no sample identity can wrap to an older one"
+    );
+    assert!(
+        run.is_canceled(),
+        "accepted work receives a terminal outcome"
+    );
+    assert!(!c.is_animating());
+    assert!(
+        matches!(c.forward(), Err(AnimationError::IdentityExhausted)),
+        "new runs cannot reuse exhausted sample identities"
+    );
+    c.reset().expect("healthy state edits remain available");
+    assert!(
+        matches!(c.forward(), Err(AnimationError::IdentityExhausted)),
+        "refusal survives reset"
+    );
 }
 
 // ---- remaining-fraction duration scaling ----
 
 fn forward_from_mid_scales_run_duration() {
-    let _serial = serial();
     let c = controller(100);
     c.forward_from(Some(0.5)).unwrap();
     // Half the range remains -> 50ms run. 25ms in = halfway -> 0.75.
-    c.tick_at(0.025);
+    c.tick_at(std::time::Duration::from_secs_f64(0.025));
     assert!(
         (c.value() - 0.75).abs() < 1e-3,
         "constant velocity from 0.5: got {}",
         c.value()
     );
-    c.tick_at(0.05);
+    c.tick_at(std::time::Duration::from_secs_f64(0.05));
     assert_eq!(c.status(), AnimationStatus::Completed);
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 }
 
 fn set_value_nan_is_canonicalized() {
-    let _serial = serial();
     let c = controller(100);
     c.set_value(0.5);
     c.set_value(f64::NAN);
@@ -53,7 +115,7 @@ fn set_value_nan_is_canonicalized() {
         "NaN must canonicalize to the lower bound, not poison the value"
     );
     assert_eq!(c.status(), AnimationStatus::Dismissed);
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 }
 
 /// `without_ticker_bounds` is a BOUNDED constructor: bounded means
@@ -65,34 +127,38 @@ fn set_value_nan_is_canonicalized() {
 /// value, so the same wide-open pair this test used to accept must now
 /// be rejected, and the unbounded shape starts at `0.0`, never `-inf`.
 fn without_ticker_bounds_rejects_wide_open_ones() {
-    let _serial = serial();
-    let rejected = AnimationController::without_ticker_bounds(Duration::from_millis(1), 20.0, 10.0);
+    let rejected = crate::ValueRange::new(20.0, 10.0).map(|bounds| {
+        AnimationController::builder(Duration::from_millis(1))
+            .bounds(bounds)
+            .build()
+    });
     assert!(matches!(rejected, Err(AnimationError::InvalidBounds(_))));
 
-    let wide_open = AnimationController::without_ticker_bounds(
-        Duration::from_millis(1),
-        f64::NEG_INFINITY,
-        f64::INFINITY,
-    );
+    let wide_open = crate::ValueRange::new(f64::NEG_INFINITY, f64::INFINITY).map(|bounds| {
+        AnimationController::builder(Duration::from_millis(1))
+            .bounds(bounds)
+            .build()
+    });
     assert!(
         matches!(wide_open, Err(AnimationError::InvalidBounds(_))),
         "a wide-open pair is unboundedness spelled as bounds -- reject it; \
          use unbounded_without_ticker instead"
     );
 
-    let c = AnimationController::unbounded_without_ticker(Duration::from_millis(1));
+    let c = AnimationController::builder(Duration::from_millis(1))
+        .unbounded()
+        .build();
     assert_eq!(
         c.value(),
         0.0,
         "unbounded_without_ticker starts at 0.0, never -inf"
     );
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 }
 
 fn disposed_controller_rejects_forward() {
-    let _serial = serial();
     let c = controller(100);
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
     assert!(matches!(c.forward(), Err(AnimationError::Disposed)));
 }
 
@@ -101,21 +167,19 @@ fn disposed_controller_rejects_forward() {
 /// `+-inf` still CLAMPS on a bounded controller (the "go to
 /// the end" idiom) -- only a bound-less direction refuses.
 fn bounded_controller_clamps_infinite_target_and_from_to_the_pointed_at_bound() {
-    let _serial = serial();
-
     // `target` clamps to the finite upper bound and the run proceeds
     // normally from there (clamping the target does not mean an
     // instant settle: `value` still starts at the entry value and
     // reaches `1.0` only once the run completes).
     let c = controller(100);
     c.animate_to(f64::INFINITY, None).unwrap();
-    c.tick_at(0.1);
+    c.tick_at(std::time::Duration::from_secs_f64(0.1));
     assert_eq!(
         c.value(),
         1.0,
         "animate_to(+inf) clamps to the finite upper bound"
     );
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 
     // `from` clamping to the upper bound makes `forward_from`'s own
     // target (also `upper_bound`) already reached -- this settles
@@ -127,7 +191,7 @@ fn bounded_controller_clamps_infinite_target_and_from_to_the_pointed_at_bound() 
         1.0,
         "forward_from(Some(+inf)) clamps to the finite upper bound"
     );
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 
     // Mirror case: `reverse_from`'s `from` clamps to the LOWER bound,
     // which is also `reverse`'s own target -- settles SYNCHRONOUSLY at
@@ -139,7 +203,7 @@ fn bounded_controller_clamps_infinite_target_and_from_to_the_pointed_at_bound() 
         0.0,
         "reverse_from(Some(-inf)) clamps to the finite lower bound"
     );
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 }
 
 // ---- #1183: fling_with's ordering and non-finite refusals ---------------
@@ -149,7 +213,6 @@ fn bounded_controller_clamps_infinite_target_and_from_to_the_pointed_at_bound() 
 /// Forward branch and built a spring whose `SpringSimulation` never
 /// reaches `is_done` for a NaN target.
 fn fling_refuses_a_non_finite_velocity() {
-    let _serial = serial();
     let c = controller(100);
     let r = c.fling(f64::NAN);
     assert!(matches!(r, Err(AnimationError::NonFiniteTarget(_))));
@@ -185,18 +248,19 @@ impl Simulation for GoesNanMidRun {
 /// registration's `has_running()`). NOT "value unchanged, run
 /// continues": that would leave `active_run` installed forever.
 fn a_simulation_that_turns_non_finite_mid_run_ends_the_run_at_the_last_finite_value() {
-    let _serial = serial();
-    let c = AnimationController::unbounded_without_ticker(Duration::from_millis(100));
     let vsync = crate::vsync::Vsync::new();
-    let _reg = vsync.register(c.clone());
+    let owner = AnimationController::builder(Duration::from_millis(100))
+        .unbounded()
+        .build_on(Some(&vsync));
+    let c = owner.controller();
 
     let mut future = c.animate_with(GoesNanMidRun { nan_at: 1.0 }).unwrap();
     // `Vsync` anchors a run's `t = 0` on the FIRST `tick_all` it sees
     // after the run starts (registration alone reads no clock) -- so
     // the first call establishes the anchor at elapsed 0, exactly like
     // a real frame loop's first pumped frame after `animate_with`.
-    vsync.tick_all(0.0);
-    vsync.tick_all(0.5);
+    vsync.tick_all(&crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)));
+    vsync.tick_all(&crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.5)));
     assert_eq!(
         c.value(),
         0.5,
@@ -204,7 +268,7 @@ fn a_simulation_that_turns_non_finite_mid_run_ends_the_run_at_the_last_finite_va
     );
     assert!(vsync.has_running());
 
-    vsync.tick_all(1.0); // sim.x(1.0) is NaN
+    vsync.tick_all(&crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(1.0))); // sim.x(1.0) is NaN
     assert_eq!(
         c.value(),
         0.5,
@@ -224,18 +288,17 @@ fn a_simulation_that_turns_non_finite_mid_run_ends_the_run_at_the_last_finite_va
         std::task::Poll::Ready(Ok(())),
         "the future must resolve Ok -- the run ended on its own terms, not by cancellation"
     );
-    c.dispose();
+    crate::test_cases::dispose_controller(c);
 }
 
 // ---- B1c: status listener may re-enter the controller without deadlock ----
 
 fn status_callback_can_reenter_controller_without_deadlock() {
-    let _serial = serial();
     let c = controller(100);
     let reentered = Arc::new(AtomicUsize::new(0));
     let c2 = c.clone();
     let r2 = Arc::clone(&reentered);
-    c.add_status_listener(Arc::new(move |status| {
+    c.add_status_listener(std::rc::Rc::new(move |status| {
         if status == AnimationStatus::Completed {
             // Re-enter: read + mutate the controller from within the status
             // callback. Under the old notify-under-lock code this deadlocked.
@@ -245,15 +308,14 @@ fn status_callback_can_reenter_controller_without_deadlock() {
         }
     }));
     c.forward().unwrap();
-    c.tick_at(0.10); // complete -> fires Completed -> callback re-enters
+    c.tick_at(std::time::Duration::from_secs_f64(0.10)); // complete -> fires Completed -> callback re-enters
     assert_eq!(reentered.load(Ordering::SeqCst), 1);
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 }
 
 // ---- repeat with a finite count stops + completes ----
 
 fn repeat_consumes_all_cycles_in_one_long_frame() {
-    let _serial = serial();
     let c = controller(100);
     // count = 4, period = 10ms. A single 45ms frame (a dropped-frame
     // catch-up) spans 4 whole cycles, so the repeat must already be
@@ -262,23 +324,22 @@ fn repeat_consumes_all_cycles_in_one_long_frame() {
     c.repeat_with(None, None, false, Some(Duration::from_millis(10)), Some(4))
         .unwrap();
     assert_eq!(c.status(), AnimationStatus::Forward);
-    c.tick_at(0.045); // 4.5 cycles elapsed in one frame
+    c.tick_at(std::time::Duration::from_secs_f64(0.045)); // 4.5 cycles elapsed in one frame
     assert_eq!(
         c.status(),
         AnimationStatus::Completed,
         "all four cycles retired in one long frame -> exhausted"
     );
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 }
 
 /// The `min == max` equality case. A degenerate `min == max` range is
 /// rejected; the mapping entry gives the rationale.
 fn repeat_with_rejects_equal_min_and_max() {
-    let _serial = serial();
     let c = controller(100);
     let r = c.repeat_with(Some(0.5), Some(0.5), false, None, None);
     assert!(matches!(r, Err(AnimationError::InvalidBounds(_))));
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 }
 
 // ---- repeat sampling is a pure function of elapsed time (#1078) ----
@@ -289,20 +350,18 @@ fn repeat_with_rejects_equal_min_and_max() {
 /// `tick_at(1.25)` must equal `tick_at(1.0); tick_at(1.25)`, for both
 /// restart and bounce.
 fn repeat_value_is_partition_invariant_across_a_skipped_cycle() {
-    let _serial = serial();
-
     // Restart mode: skip cycle 0's boundary tick entirely.
-    let direct = AnimationController::without_ticker(Duration::from_secs(1));
+    let direct = AnimationController::builder(Duration::from_secs(1)).build();
     direct
         .repeat_with(None, None, false, Some(Duration::from_secs(1)), None)
         .unwrap();
-    direct.tick_at(1.25);
-    let partitioned = AnimationController::without_ticker(Duration::from_secs(1));
+    direct.tick_at(std::time::Duration::from_secs_f64(1.25));
+    let partitioned = AnimationController::builder(Duration::from_secs(1)).build();
     partitioned
         .repeat_with(None, None, false, Some(Duration::from_secs(1)), None)
         .unwrap();
-    partitioned.tick_at(1.0);
-    partitioned.tick_at(1.25);
+    partitioned.tick_at(std::time::Duration::from_secs_f64(1.0));
+    partitioned.tick_at(std::time::Duration::from_secs_f64(1.25));
     assert!(
         (direct.value() - 0.25).abs() < 1e-6,
         "value={}",
@@ -310,22 +369,22 @@ fn repeat_value_is_partition_invariant_across_a_skipped_cycle() {
     );
     assert_eq!(direct.value(), partitioned.value());
     assert_eq!(direct.status(), partitioned.status());
-    direct.dispose();
-    partitioned.dispose();
+    crate::test_cases::dispose_controller(&direct);
+    crate::test_cases::dispose_controller(&partitioned);
 
     // Bounce mode: same elapsed time, opposite leg (cycle index 1 is
     // the reverse leg).
-    let direct = AnimationController::without_ticker(Duration::from_secs(1));
+    let direct = AnimationController::builder(Duration::from_secs(1)).build();
     direct
         .repeat_with(None, None, true, Some(Duration::from_secs(1)), None)
         .unwrap();
-    direct.tick_at(1.25);
-    let partitioned = AnimationController::without_ticker(Duration::from_secs(1));
+    direct.tick_at(std::time::Duration::from_secs_f64(1.25));
+    let partitioned = AnimationController::builder(Duration::from_secs(1)).build();
     partitioned
         .repeat_with(None, None, true, Some(Duration::from_secs(1)), None)
         .unwrap();
-    partitioned.tick_at(1.0);
-    partitioned.tick_at(1.25);
+    partitioned.tick_at(std::time::Duration::from_secs_f64(1.0));
+    partitioned.tick_at(std::time::Duration::from_secs_f64(1.25));
     assert!(
         (direct.value() - 0.75).abs() < 1e-6,
         "value={}",
@@ -333,67 +392,61 @@ fn repeat_value_is_partition_invariant_across_a_skipped_cycle() {
     );
     assert_eq!(direct.value(), partitioned.value());
     assert_eq!(direct.status(), partitioned.status());
-    direct.dispose();
-    partitioned.dispose();
+    crate::test_cases::dispose_controller(&direct);
+    crate::test_cases::dispose_controller(&partitioned);
 }
 
 /// A finite-count bouncing repeat, ticked with ABSOLUTE frame timestamps:
-/// `tick(100ms)` then `tick(60ms)` REWINDS the clock to 60ms, so the `0.6`
-/// sample is elapsed 60ms, not a cumulative 160ms. Pure sampling makes that
-/// rewind exact, with no rounding needed. The test also ticks past the last
-/// repeat to assert exhaustion.
+/// A stale absolute timestamp holds the displayed sample. A later monotonic
+/// timestamp resumes the repeat; finite counts still exhaust at the endpoint.
 fn repeat_bounce_finite_count_and_absolute_time_rewind() {
-    let _serial = serial();
     let c = controller(100);
     c.repeat_with(None, None, true, None, Some(4)).unwrap();
-    c.tick_at(0.025);
+    c.tick_at(std::time::Duration::from_secs_f64(0.025));
     assert!((c.value() - 0.25).abs() < 1e-6, "value={}", c.value());
-    c.tick_at(0.05);
+    c.tick_at(std::time::Duration::from_secs_f64(0.05));
     assert!((c.value() - 0.5).abs() < 1e-6, "value={}", c.value());
-    c.tick_at(0.099);
+    c.tick_at(std::time::Duration::from_secs_f64(0.099));
     assert!((c.value() - 0.99).abs() < 1e-3, "value={}", c.value());
-    c.tick_at(0.10);
+    c.tick_at(std::time::Duration::from_secs_f64(0.10));
     assert!((c.value() - 1.0).abs() < 1e-6, "value={}", c.value());
-    // The harness's absolute-time rewind: elapsed 60ms, not a
-    // cumulative 160ms.
-    c.tick_at(0.06);
-    assert!((c.value() - 0.6).abs() < 1e-6, "value={}", c.value());
-    c.dispose();
+    // A stale sample cannot rewind the run.
+    c.tick_at(std::time::Duration::from_secs_f64(0.06));
+    assert!((c.value() - 1.0).abs() < 1e-6, "value={}", c.value());
+    crate::test_cases::dispose_controller(&c);
 
     // The non-rewound interpretation, for contrast: elapsed 160ms lands
     // on the reverse leg's 0.4, not the forward leg's 0.6.
     let c2 = controller(100);
     c2.repeat_with(None, None, true, None, Some(4)).unwrap();
-    c2.tick_at(0.16);
+    c2.tick_at(std::time::Duration::from_secs_f64(0.16));
     assert!((c2.value() - 0.4).abs() < 1e-6, "value={}", c2.value());
-    c2.dispose();
+    crate::test_cases::dispose_controller(&c2);
 
     // Exhaustion at exactly 400ms lands on the 4th (odd-indexed)
     // cycle's reverse-leg endpoint.
     let c3 = controller(100);
     c3.repeat_with(None, None, true, None, Some(4)).unwrap();
-    c3.tick_at(0.4);
+    c3.tick_at(std::time::Duration::from_secs_f64(0.4));
     assert!((c3.value() - 0.0).abs() < 1e-6, "value={}", c3.value());
     assert_eq!(c3.status(), AnimationStatus::Dismissed);
-    c3.dispose();
+    crate::test_cases::dispose_controller(&c3);
 }
 
 /// `Duration::try_from_secs_f64` returning `Err` (an out-of-range
-/// `cycle`, e.g. `tick_at(f64::INFINITY)` or an extreme `time_dilation`
-/// overflowing the division) must saturate to a very large elapsed
+/// `cycle` after converting `Duration::MAX`) must saturate to a very large elapsed
 /// time, never to zero — a zero-rewind would let a pathological input
 /// never exhaust a finite repeat while `forward()` on the same input
 /// completes normally. Red-check: `.map_or(0, |d| d.as_nanos())`
 /// instead of `.unwrap_or(Duration::MAX)` — this repeat never exhausts.
 fn repeat_tick_at_infinity_exhausts_a_finite_count_instead_of_rewinding() {
-    let _serial = serial();
     let c = controller(100);
     c.repeat_with(None, None, false, Some(Duration::from_millis(100)), Some(2))
         .unwrap();
-    c.tick_at(f64::INFINITY);
+    c.tick_at(Duration::MAX);
     assert_eq!(c.status(), AnimationStatus::Completed);
     assert!((c.value() - 1.0).abs() < 1e-6, "value={}", c.value());
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 }
 
 /// A zero effective period settles SYNCHRONOUSLY at the call — Android's
@@ -402,8 +455,6 @@ fn repeat_tick_at_infinity_exhausts_a_finite_count_instead_of_rewinding() {
 /// changes nothing (no run was ever installed), and `run_generation` is
 /// untouched.
 fn repeat_with_zero_period_settles_synchronously_at_the_call() {
-    let _serial = serial();
-
     // Finite count: lands on the count-th cycle's end (count=3, bounce,
     // from 0: cycle index 2 is even -> Forward -> max).
     let c = controller(100);
@@ -415,12 +466,12 @@ fn repeat_with_zero_period_settles_synchronously_at_the_call() {
     assert!((c.value() - 1.0).abs() < 1e-6, "value={}", c.value());
     assert_eq!(c.status(), AnimationStatus::Completed);
     assert_eq!(c.run_generation(), generation_before);
-    c.tick_at(1.0);
+    c.tick_at(std::time::Duration::from_secs_f64(1.0));
     assert!(
         (c.value() - 1.0).abs() < 1e-6,
         "a later tick must change nothing"
     );
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 
     // Infinite count: lands on cycle 0's end (Android's skip-to-end) —
     // a documented exception to "an infinite repeat's future resolves
@@ -432,17 +483,16 @@ fn repeat_with_zero_period_settles_synchronously_at_the_call() {
     assert!(future2.is_complete());
     assert!((c2.value() - 1.0).abs() < 1e-6, "value={}", c2.value());
     assert_eq!(c2.status(), AnimationStatus::Completed);
-    c2.dispose();
+    crate::test_cases::dispose_controller(&c2);
 }
 
 /// `velocity()` on a reverse leg is SIGNED (negative while the
 /// value falls) — see `docs/ARCHITECTURE.md`'s "Repeat sampling" mapping entry, (g).
 fn repeat_reverse_leg_velocity_is_negative() {
-    let _serial = serial();
     let c = controller(100);
     c.repeat_with(None, None, true, Some(Duration::from_secs(1)), None)
         .unwrap();
-    c.tick_at(1.5); // cycle index 1 (odd) -> reverse leg, mid-cycle
+    c.tick_at(std::time::Duration::from_secs_f64(1.5)); // cycle index 1 (odd) -> reverse leg, mid-cycle
     assert!(
         (c.value() - 0.5).abs() < 1e-6,
         "sanity: reverse leg mid-cycle value={}",
@@ -453,14 +503,13 @@ fn repeat_reverse_leg_velocity_is_negative() {
         "a reverse leg's velocity must be negative: {}",
         c.velocity()
     );
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 }
 
 // ---- animate_to_curved / animate_back_curved thread a curve through the run ----
 
 fn animate_to_curved_eases_through_the_given_curve() {
     use crate::curve::Curves;
-    let _serial = serial();
     let c = controller(100);
     c.animate_to_curved(
         1.0,
@@ -468,21 +517,21 @@ fn animate_to_curved_eases_through_the_given_curve() {
         Arc::new(Curves::EaseInQuint),
     )
     .unwrap();
-    c.tick_at(0.05); // t=0.5 raw
+    c.tick_at(std::time::Duration::from_secs_f64(0.05)); // t=0.5 raw
     let expected = Curves::EaseInQuint.transform(0.5);
     assert!(
         (c.value() - expected).abs() < 1e-3,
         "expected the curve applied at t=0.5: got {}, want {expected}",
         c.value()
     );
-    c.tick_at(0.10);
+    c.tick_at(std::time::Duration::from_secs_f64(0.10));
     assert_eq!(
         c.value(),
         1.0,
         "the curve must land exactly on the target at t=1.0"
     );
     assert_eq!(c.status(), AnimationStatus::Completed);
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 }
 
 // ---- controller-owned run futures (issue #1161 / ADR-0064) ----
@@ -491,14 +540,12 @@ fn animate_to_curved_eases_through_the_given_curve() {
 /// still be observed BEFORE the displaced run's cancellation, exactly
 /// like a real-duration displacement.
 fn a_zero_duration_run_cancels_the_displaced_run_after_its_own_status_is_observable() {
-    let _serial = serial();
-    let scheduler = UpdateScheduler::new();
-    let c = AnimationController::new(Duration::from_millis(100), &scheduler);
+    let c = AnimationController::builder(Duration::from_millis(100)).build();
     let first = c.forward().unwrap(); // a real, still-pending run
 
     let order: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
     let order_for_status = Arc::clone(&order);
-    c.add_status_listener(Arc::new(move |_status| {
+    c.add_status_listener(std::rc::Rc::new(move |_status| {
         order_for_status.lock().push("new_run_status");
     }));
     let order_for_cancel = Arc::clone(&order);
@@ -516,7 +563,7 @@ fn a_zero_duration_run_cancels_the_displaced_run_after_its_own_status_is_observa
         "even a synchronously-settling run must publish its own status \
          before the run it displaced observes its cancellation"
     );
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 }
 
 /// A trivially-finished [`Simulation`] test double: `is_done` is true
@@ -542,42 +589,39 @@ impl Simulation for InstantSimulation {
 }
 
 fn simulation_run_future_resolves_ok_when_the_simulation_finishes() {
-    let _serial = serial();
-    let c = AnimationController::without_ticker(Duration::from_millis(100));
+    let c = AnimationController::builder(Duration::from_millis(100)).build();
     let future = c.animate_with(InstantSimulation { value: 0.5 }).unwrap();
     assert!(future.is_pending());
 
-    c.tick_at(0.0);
+    c.tick_at(std::time::Duration::from_secs_f64(0.0));
 
     assert!(
         future.is_complete(),
         "tick_simulation's is_done branch must complete the run's future"
     );
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 }
 
 fn stop_cancels_the_active_run() {
-    let _serial = serial();
-    let c = AnimationController::without_ticker(Duration::from_millis(100));
+    let c = AnimationController::builder(Duration::from_millis(100)).build();
     let future = c.forward().unwrap();
     c.stop().unwrap();
     assert!(future.is_canceled(), "stop() must cancel the run in flight");
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 }
 
 fn every_delivery_runs_with_the_controller_lock_free() {
-    let _serial = serial();
-    let c = AnimationController::without_ticker(Duration::from_millis(100));
-    let inner = Arc::clone(&c.inner);
+    let c = AnimationController::builder(Duration::from_millis(100)).build();
+    let inner = Rc::clone(&c.inner);
     let future = c.forward().unwrap();
 
     let observed = Arc::new(Mutex::new(None));
     let observed2 = Arc::clone(&observed);
     future.when_complete_or_cancel(move |_outcome| {
-        *observed2.lock() = Some(inner.try_lock().is_some());
+        *observed2.lock() = Some(inner.try_borrow_mut().is_ok());
     });
 
-    c.tick_at(0.1);
+    c.tick_at(std::time::Duration::from_secs_f64(0.1));
 
     assert_eq!(
         observed.lock().as_ref(),
@@ -585,28 +629,24 @@ fn every_delivery_runs_with_the_controller_lock_free() {
         "a delivery must run with the controller's own lock free — the \
          finish chokepoint drops it before calling deliver()"
     );
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 }
 
 fn a_panicking_status_listener_leaves_the_finished_run_ok() {
-    let _serial = serial();
-    let c = AnimationController::without_ticker(Duration::from_millis(100));
+    let c = AnimationController::builder(Duration::from_millis(100)).build();
     let future = c.forward().unwrap();
 
     // Registered on the FUTURE, not the controller: this only runs if
-    // `TickerDelivery` actually delivers. `future.is_complete()` alone
-    // (the durable state `publish` writes) would stay green even with
-    // `Drop for TickerDelivery` emptied out, since `finish` never
-    // reaches its own `delivery.deliver()` line when `fire_status`
-    // panics — only the unwind dropping the `delivery` parameter runs
-    // it. This continuation proves that drop actually fires.
+    // `RunDelivery` actually delivers. `future.is_complete()` alone
+    // observes publication, so it cannot prove that notification survived
+    // a status-listener failure. The continuation checks actual delivery.
     let seen = Arc::new(Mutex::new(None));
     let seen2 = Arc::clone(&seen);
     future.when_complete_or_cancel(move |outcome| {
         *seen2.lock() = Some(outcome);
     });
 
-    c.add_status_listener(Arc::new(|status| {
+    c.add_status_listener(std::rc::Rc::new(|status| {
         assert!(
             status != AnimationStatus::Completed,
             "a status listener panics on completion"
@@ -614,7 +654,7 @@ fn a_panicking_status_listener_leaves_the_finished_run_ok() {
     }));
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        c.tick_at(0.1);
+        c.tick_at(std::time::Duration::from_secs_f64(0.1));
     }));
 
     assert!(
@@ -624,12 +664,12 @@ fn a_panicking_status_listener_leaves_the_finished_run_ok() {
     assert_eq!(
         *seen.lock(),
         Some(Ok(())),
-        "TickerDelivery must still deliver on drop through the unwind, \
+        "RunDelivery must still run the continuation after listener failure, \
          running the continuation with the outcome published before \
          the panicking listener ran"
     );
     assert!(future.is_complete());
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 }
 
 #[test]
@@ -704,6 +744,14 @@ fn repeat_contract() {
 #[test]
 fn failure_modes_are_contained() {
     crate::test_cases::run_cases(&[
+        (
+            "exhausted run identities refuse without displacing the last run",
+            exhausted_run_identities_refuse_without_displacing_the_last_run,
+        ),
+        (
+            "exhausted sample identities cancel without reissuing a stale sample",
+            exhausted_sample_identities_cancel_without_reissuing_a_stale_sample,
+        ),
         (
             "fling refuses a non finite velocity",
             fling_refuses_a_non_finite_velocity,

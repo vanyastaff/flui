@@ -109,7 +109,6 @@
 //!   `String`-only V1 (see `input_decorator.rs`'s module docs).
 
 use std::rc::Rc;
-use std::sync::Arc;
 
 use flui_sdk::foundation::ListenerId;
 use flui_sdk::foundation::notifier::Listenable;
@@ -337,9 +336,10 @@ impl ViewState<TextField> for MaterialTextFieldState {
         // Rebuild on every edit — `is_empty` (fed to `InputDecorator`) is
         // recomputed fresh in `build`, so a text change must trigger one.
         let rebuild_on_edit = rebuild;
-        self.controller_listener_id = Some(self.controller.add_listener(Arc::new(move || {
-            rebuild_on_edit.schedule(flui_sdk::view::RebuildReason::StateChange);
-        })));
+        self.controller_listener_id =
+            Some(self.controller.add_listener(std::rc::Rc::new(move || {
+                rebuild_on_edit.schedule(flui_sdk::view::RebuildReason::StateChange);
+            })));
 
         // The effective node is the single source of focus truth for the
         // decorated field and its EditableText child.
@@ -360,7 +360,7 @@ impl ViewState<TextField> for MaterialTextFieldState {
             if let Some(rebuild) = self.rebuild.clone() {
                 let rebuild_on_edit = rebuild.clone();
                 self.controller_listener_id =
-                    Some(self.controller.add_listener(Arc::new(move || {
+                    Some(self.controller.add_listener(std::rc::Rc::new(move || {
                         rebuild_on_edit.schedule(flui_sdk::view::RebuildReason::StateChange);
                     })));
                 // `is_empty` feeds the decoration's floating label and is

@@ -1,22 +1,7 @@
-//! Completed-frame callback snapshots and panic-tail recovery.
+//! Completed-frame callbacks and panic-tail recovery in the owner's queue.
 
-use super::{CancellablePostFrameCallback, UpdateScheduler};
-use crate::{CallbackId, FrameTiming, OwnerFrame};
-
-/// Preserve queue provenance so an uninvoked panic tail can return to its owner.
-enum PendingPostFrame {
-    Shared(CancellablePostFrameCallback),
-    Local(CallbackId),
-}
-
-impl PendingPostFrame {
-    fn id(&self) -> CallbackId {
-        match self {
-            Self::Shared(entry) => entry.id,
-            Self::Local(id) => *id,
-        }
-    }
-}
+use super::UpdateScheduler;
+use crate::{FrameTiming, OwnerFrame};
 
 impl UpdateScheduler {
     pub(super) fn dispatch_post_frame_callbacks(
@@ -24,70 +9,30 @@ impl UpdateScheduler {
         owner: &OwnerFrame,
         timing: &FrameTiming,
     ) -> std::thread::Result<()> {
-        let (mut callbacks, shared_callbacks, local_callbacks) = {
-            let _registration = self.inner.callbacks.post_frame_registration.lock();
-            let mut cbs = self.inner.callbacks.post_frame.lock();
-            let mut snapshot: Vec<_> = cbs.drain(..).map(PendingPostFrame::Shared).collect();
-            let shared_callbacks = snapshot.len();
-            let mut local_callbacks = 0;
-            if let Ok(local_entries) = owner.take_post_frame_queue_for(self) {
-                local_callbacks = local_entries.len();
-                snapshot.extend(local_entries.into_iter().map(PendingPostFrame::Local));
-            }
-            (snapshot, shared_callbacks, local_callbacks)
+        let Ok(mut callbacks) = owner.take_post_frame_queue_for(self) else {
+            return Ok(());
         };
-        callbacks.sort_unstable_by_key(|entry| entry.id().get());
-        // Keep the iterator outside the unwind boundary: the panicking
-        // entry is consumed, but its uninvoked siblings remain owned here.
+        callbacks.sort_unstable();
         let mut callbacks = callbacks.into_iter();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            // A subscriber is arbitrary user code and may panic. Keep this
-            // event inside the same recovery boundary as callback delivery so
-            // such a panic restores the still-unconsumed batch instead of
-            // dropping it after the queues have already been drained.
             tracing::debug!(
-                shared_callbacks,
-                local_callbacks,
                 total_callbacks = callbacks.len(),
                 "draining post-frame callback batch"
             );
-            for entry in callbacks.by_ref() {
-                let cancelled = self.inner.callbacks.cancelled.contains_key(&entry.id());
-                match entry {
-                    PendingPostFrame::Shared(entry) => {
-                        if !cancelled {
-                            (entry.callback)(timing);
-                        }
-                    }
-                    PendingPostFrame::Local(id) => {
-                        if let Some(entry) = owner.take_active_post_frame(id)
-                            && !cancelled
-                        {
-                            (entry.callback)(timing);
-                        }
-                    }
+            for id in callbacks.by_ref() {
+                let cancelled = self.inner.callbacks.cancelled.borrow().contains(&id);
+                if let Some(entry) = owner.take_active_post_frame(id)
+                    && !cancelled
+                {
+                    (entry.callback)(timing);
                 }
             }
         }));
-
         if result.is_err() {
-            let mut shared = Vec::new();
-            for entry in callbacks {
-                match entry {
-                    PendingPostFrame::Shared(entry) => shared.push(entry),
-                    PendingPostFrame::Local(_) => {}
-                }
-            }
-            // Move only: no user callback or capture is dropped under a
-            // queue guard. Original IDs put this tail ahead of reentrant
-            // registrations when the next completed frame sorts its batch.
-            let registration = self.inner.callbacks.post_frame_registration.lock();
-            self.inner.callbacks.post_frame.lock().extend(shared);
-            drop(registration);
+            // The uninvoked tail retains its IDs ahead of reentrant admissions.
             owner.restore_post_frame_queue();
-            // Keep cancellations for the restored tail and other queues.
         } else {
-            self.inner.callbacks.cancelled.clear();
+            self.inner.callbacks.cancelled.borrow_mut().clear();
         }
         result
     }

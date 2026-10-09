@@ -51,7 +51,7 @@ use flui_runtime::presentation::PresentationWindow;
 use flui_runtime::pump::FrameOutcome;
 use flui_runtime::sink::{FrameSink, SubmitVerdict};
 use flui_runtime::ui_runtime::{RuntimeHostServices, UiRuntime};
-use flui_scheduler::{ClockSource, LocalPostFrameHandle};
+use flui_scheduler::{ClockSource, PostFrameHandle};
 use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
 };
@@ -682,10 +682,10 @@ impl HeadlessHost {
     /// If the UI runtime installed no owner-local post-frame handle, which a
     /// UI runtime's presentation always does.
     #[must_use]
-    pub fn local_post_frame_handle(&self) -> LocalPostFrameHandle {
+    pub fn post_frame_handle(&self) -> PostFrameHandle {
         self.ui_runtime
             .widgets()
-            .with_build_owner(|owner| owner.local_post_frame_handle().cloned())
+            .with_build_owner(|owner| owner.post_frame_handle().cloned())
             .expect("BUG: a ui_runtime's presentation installs its owner-local post-frame handle")
     }
 

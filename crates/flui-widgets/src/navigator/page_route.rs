@@ -309,7 +309,7 @@ impl<T: Send + Clone + 'static> PageRoute<T> {
 
     /// The animation handle, for driving a transition by hand. Test-facing: a
     /// test drives the transition with `set_value` through this handle
-    /// rather than awaiting the `TickerFuture` `did_push` returns, which needs a
+    /// rather than awaiting the `AnimationRunFuture` `did_push` returns, which needs a
     /// real `Vsync`. Read through `crate::__test_access::RouteProbe`.
     pub(crate) fn transition_handle(&self) -> super::transition_route::TransitionHandle {
         self.modal.transition_handle()

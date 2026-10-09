@@ -375,6 +375,14 @@ fn signal_read_and_write_matrix() {
                 writer_source::writer_source_from_init_state_writes_and_rebuilds_the_reader
                     as fn(),
             ),
+            (
+                "writer_source::bound_local_state_refuses_build_mutation_then_recovers",
+                writer_source::bound_local_state_refuses_build_mutation_then_recovers,
+            ),
+            (
+                "writer_source::a_panicking_local_update_rebuilds_its_committed_value",
+                writer_source::a_panicking_local_update_rebuilds_its_committed_value,
+            ),
         ],
     );
 }

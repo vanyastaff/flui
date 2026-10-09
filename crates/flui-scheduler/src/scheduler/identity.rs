@@ -1,7 +1,7 @@
 //! Scheduler identity, and the single owner-frame slot an [OwnerFrame](crate::OwnerFrame)
 //! claims.
 
-use std::sync::Arc;
+use std::rc::Rc;
 use std::sync::atomic::Ordering;
 
 use super::UpdateScheduler;
@@ -15,7 +15,7 @@ impl UpdateScheduler {
     /// provably pointed at the UI runtime's own scheduler, not some other one.
     #[must_use]
     pub fn is_same_instance(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.inner, &other.inner)
+        Rc::ptr_eq(&self.inner, &other.inner)
     }
 
     /// Claim this scheduler's single owner-frame slot; `false` if a live
@@ -42,6 +42,6 @@ impl UpdateScheduler {
     /// `UpdateScheduler`) can name both sides without printing the whole
     /// internal state the `Debug` impl shows.
     pub(crate) fn debug_ptr(&self) -> usize {
-        Arc::as_ptr(&self.inner) as usize
+        Rc::as_ptr(&self.inner) as usize
     }
 }

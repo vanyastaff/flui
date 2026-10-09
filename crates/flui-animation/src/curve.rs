@@ -2197,7 +2197,21 @@ impl fmt::Debug for ArcCurve {
 /// for that use-case.
 ///
 /// [`CurvedAnimation`]: crate::CurvedAnimation
-impl Curve for Arc<dyn Curve + Send + Sync> {
+impl<C: Curve + ?Sized> Curve for Arc<C> {
+    fn transform(&self, t: f64) -> f64 {
+        (**self).transform(t)
+    }
+
+    fn slope(&self, t: f64) -> f64 {
+        (**self).slope(t)
+    }
+
+    fn builtin(&self) -> Option<BuiltinCurve> {
+        (**self).builtin()
+    }
+}
+
+impl<C: Curve + ?Sized> Curve for std::rc::Rc<C> {
     fn transform(&self, t: f64) -> f64 {
         (**self).transform(t)
     }

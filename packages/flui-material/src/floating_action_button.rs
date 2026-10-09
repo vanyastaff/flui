@@ -71,8 +71,6 @@
 //!   constructor-level `Color?` fields; this V1 always resolves the M3
 //!   defaults.
 
-use std::sync::Arc;
-
 use flui_sdk::foundation::{Listenable, ListenerId};
 use flui_sdk::geometry::Radius;
 use flui_sdk::geometry::Size;
@@ -286,7 +284,7 @@ impl ViewState<FloatingActionButton> for FloatingActionButtonState {
             .update(WidgetState::Disabled, !self.initially_enabled);
 
         let rebuild_for_listener = rebuild.clone();
-        self.states_listener = Some(self.states.add_listener(Arc::new(move || {
+        self.states_listener = Some(self.states.add_listener(std::rc::Rc::new(move || {
             rebuild_for_listener.schedule(flui_sdk::view::RebuildReason::StateChange);
         })));
 

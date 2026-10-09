@@ -68,7 +68,7 @@ use crate::constraints::BoxConstraints;
 ///     }
 /// }
 /// ```
-pub trait MultiChildLayoutDelegate: Send + Sync + Debug {
+pub trait MultiChildLayoutDelegate: Debug {
     /// Perform layout of children.
     ///
     /// Use the context to query, layout, and position children by their IDs.

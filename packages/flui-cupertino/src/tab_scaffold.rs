@@ -215,8 +215,8 @@ impl_animated_view!(CupertinoTabScaffold);
 
 impl AnimatedView for CupertinoTabScaffold {
     /// Rebuilds whenever the controller's index changes.
-    fn listenable(&self) -> Arc<dyn Listenable> {
-        Arc::new(self.controller.clone()) as Arc<dyn Listenable>
+    fn listenable(&self) -> std::rc::Rc<dyn Listenable> {
+        std::rc::Rc::new(self.controller.clone()) as std::rc::Rc<dyn Listenable>
     }
 }
 

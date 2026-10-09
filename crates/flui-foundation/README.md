@@ -31,14 +31,14 @@ Basic usage:
 
 ```rust
 use flui_foundation::{ElementId, Key, ChangeNotifier, Listenable};
-use std::sync::Arc;
+use std::rc::Rc;
 
 // Create a generational element-tree key (1-based ctor → 0-based slab index)
 let element_id = ElementId::new(1); // .index() == 0, .generation() == 1
 
 // Observable values for reactive UI
 let notifier = ChangeNotifier::new();
-let _listener_id = notifier.add_listener(Arc::new(|| {
+let _listener_id = notifier.add_listener(Rc::new(|| {
     println!("Value changed!");
 }));
 
@@ -130,17 +130,17 @@ assert_ne!(unique1, unique2);
 
 ```rust
 use flui_foundation::{ChangeNotifier, ValueNotifier, Listenable};
-use std::sync::Arc;
+use std::rc::Rc;
 
 // Basic change notification
 let notifier = ChangeNotifier::new();
-let id = notifier.add_listener(Arc::new(|| println!("Changed!")));
+let id = notifier.add_listener(Rc::new(|| println!("Changed!")));
 notifier.notify_listeners();
 notifier.remove_listener(id);
 
 // Value-holding notifier
 let mut value = ValueNotifier::new(42);
-value.add_listener(Arc::new(|| println!("Value updated!")));
+value.add_listener(Rc::new(|| println!("Value updated!")));
 
 value.set_value(100);        // Notifies only if value changed
 value.set_value_force(100);  // Always notifies
@@ -286,11 +286,11 @@ Foundation types are optimized for common UI patterns:
 
 ## Thread Safety
 
-All foundation types are designed for multi-threaded use:
+Foundation values and notification channels have distinct thread boundaries:
 
 - **IDs**: `Send + Sync` (Copy types via `WasmNotSendSync`)
 - **Keys**: `Send + Sync` (Copy types with atomic generation)
-- **ChangeNotifier**: `Send + Sync`; clones share one listener list
+- **ChangeNotifier**: owner-local; clones share one listener list through `Rc`
 
 ## Feature Flags
 

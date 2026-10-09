@@ -1,0 +1,151 @@
+# retarget — прерывание с сохранением значения и скорости (требования)
+
+- **Статус:** черновик
+- **Дата:** 2026-10-06
+- **База:** `main` @ `9a4daa3ed`; `file:line` — на этот коммит
+- **Закрывает:** D-08, D-30, D-36; строки рынка M-INT-1, M-INT-2, M-INT-3, M-INT-5, M-INT-6,
+  M-TIME-10 ([../market.md](../market.md)); условие владельца для scope-out M-INT-13 (аддитивные
+  анимации): retarget с сохранением позиции и скорости покрывает прерывание — доказывает R6
+- **Зависит от:** physics (построение и вычисление пружины: `SpringSimulation`, её `x`/`dx`,
+  конечность, допуски покоя), controller-robustness (builder, Vsync — единственные часы),
+  ownership (`DrivenController`, якорь Vsync), listener-delivery (раздача статуса), curves
+  (контракт `Curve`, концы 0/1)
+
+## Проблема
+
+- Implicit-виджеты при новой цели строят `Tween(current, target)` и вызывают
+  `forward_from(Some(0.0))` (`crates/flui-widgets/src/animated/implicitly_animated.rs:246-251`,
+  `:149-153`): позиция непрерывна, скорость сбрасывается в `curve'(0)·Δ/D` (для `EaseInOut` — 0),
+  разворот к исходной точке идёт полную длительность. Это дефект Flutter (market-B I7),
+  перенесённый как есть.
+- `AnimationController::velocity()` (`crates/flui-animation/src/controller.rs:1766-1787`) для
+  curved-run возвращает `(target − start)/duration` — линейное среднее, кривая игнорируется.
+- Новый run анкерится Vsync на следующем `tick_all` (`crates/flui-animation/src/vsync.rs:484-489`):
+  retarget между кадрами «стоит» один кадр в точке шва.
+- `Dismissible` передаёт в `fling` `|v|·1/300` (`crates/flui-widgets/src/interaction/dismissible.rs:107`,
+  `:1175`, `:1180`) — скорость не нормирована на протяжённость карточки; Drawer делит на ширину
+  (`packages/flui-material/src/drawer.rs:617-619`); back gesture использует скорость только как
+  порог (`crates/flui-widgets/src/navigator/back_gesture.rs:148`, `:338-342`).
+- `AnimatedValue<T>` (`crates/flui-animation/src/spring.rs:100-181`) переносит x/dx, но идёт на
+  внешнем `dt`, production-пользователя нет.
+
+## Термины
+
+- **Шов** — момент `T` retarget: последний сэмпл старого сегмента. **C⁰** — значение нового
+  сегмента в `T` равно значению старого (≤ 1e-12·max(1, |x|)). **C¹** — скорость нового сегмента
+  в `T` равна скорости старого (≤ 1e-9·max(1, |v|)), покомпонентно.
+- **Сегмент** — отрезок движения от шва до следующего шва или покоя.
+- Время — виртуальное: явные `Vsync::tick_all(now)`; ряды — `run_table`
+  (`crates/flui-animation/tests/main.rs` после Q0), `run_cases`
+  (`crates/flui-widgets/tests/contracts.rs`, семейство `animation_retarget`). Эталоны — из
+  [../market.md](../market.md) «Эталонные значения» или вычислены в тесте независимым методом
+  (бисекция 200 итераций, конечная разность высокого порядка), никогда production-формулой.
+
+## Требования
+
+### Скорость
+
+- **R1.** КОГДА идёт curved time-based run, СИСТЕМА ДОЛЖНА возвращать из `velocity()`
+  `(target − start)·c'(τ)/D` в единицах значения в секунду, где `τ` — прогресс последнего сэмпла.
+  Тест (property, proptest): `curved_run_velocity_is_the_curve_slope` — кривые
+  ease/ease-in/ease-out/ease-in-out/(0.05,0.7,0.1,1); эталон наклона — `y'(s)/x'(s)` с `s` из
+  бисекции 200 итераций в тесте; допуск 1e-7 отн. Строки: `τ = 0`, `τ = 1⁻`, `D = 0` → 0, после
+  завершения → 0, linear → точное `Δ/D`.
+- **R2.** КОГДА кривая не имеет производной в точке (`Threshold`, `Steps`, разрыв `SawTooth`),
+  СИСТЕМА ДОЛЖНА возвращать наклон 0 вне скачка и конечное значение всегда; никогда NaN/inf.
+  Тест: `slope_of_a_discontinuous_curve_is_finite` (таблица).
+
+### Retarget контроллера
+
+- **R3.** КОГДА вызывается `retarget` на контроллере с идущим run, СИСТЕМА ДОЛЖНА за один
+  захват состояния взять значение и скорость последнего сэмпла и начать новый сегмент из них
+  (C⁰ и C¹ на шве). Тест (property): `retarget_is_c0_and_c1_at_the_seam` — пружина и кривая,
+  случайные ζ ∈ [0.1, 4], ω ∈ [1, 100], цели, момент шва.
+- **R4.** КОГДА новый сегмент начат между кадрами, СИСТЕМА ДОЛЖНА анкерить его `t = 0` на момент
+  шва, а не на следующий `tick_all`: первый кадр после шва сэмплирует `elapsed = now − T`.
+  Тест: `the_frame_after_a_retarget_has_no_hold` — разность `(x(T+dt) − x(T))/dt` против
+  `v(T)` в пределах `a_max·dt`, где `a_max = k·|x − target| + c·|v|` (аналитическая граница).
+- **R5.** КОГДА retarget повторяет ту же цель с той же пружиной, СИСТЕМА ДОЛЖНА давать траекторию
+  без шва (полугрупповое свойство). Тест: `retargeting_to_the_same_target_is_invisible` — ζ = 0.5,
+  ω = 10, x0 = 1, v0 = 0, цель 0, швы в 0.1 s и 0.17 s; значение в 0.25 s =
+  −0.0233595799066923, в 1.0 s = −0.00217011673932620 (market, ≤ 1e-12).
+- **R6.** КОГДА retarget происходит каждый кадр N = 120 кадров подряд к случайным целям (условие
+  владельца для аддитивных анимаций), СИСТЕМА ДОЛЖНА сохранять C⁰ и C¹ на каждом шве, публиковать
+  только конечные значения и после последнего шва успокаиваться не позже огибающей
+  `t_s = ln(A/ε)/(ζω)` (market). Property-тест (proptest, 256 случаев):
+  `repeated_interruption_keeps_position_and_velocity_continuous` — оба режима (`Spring`,
+  `Curve`), `AnimatedValue<f64>` и `AnimatedValue<Offset<f64>>`, dt ∈ {0, 1/240 … 1/30}.
+- **R7.** КОГДА retarget в режиме `Curve` начинает сегмент с ненулевой скоростью, СИСТЕМА ДОЛЖНА
+  прийти в цель ровно через длительность сегмента со скоростью, заданной кривой в конце, а
+  отклонение от кривой ограничено `|r|·D·4/27` (r — избыточная скорость). Тест (property):
+  `a_curve_segment_lands_on_time_and_bounds_its_overshoot`.
+- **R8.** КОГДА retarget в режиме `Curve` разворачивает движение к reversing-adjusted start
+  предыдущего сегмента, СИСТЕМА ДОЛЖНА сократить длительность по CSS Transitions §3.1:
+  `S' = clamp01(|ease_old(t)·S_old + (1 − S_old)|)`, `D' = D·S'`. Тест:
+  `reversal_shortens_by_the_eased_fraction` — linear, D = 200 ms, разворот в 50 ms → D' = 50 ms;
+  ease (0.25,0.1,0.25,1), разворот при прогрессе 0.25 → S' = 0.408510591355396 (market),
+  D' = 81.7021182710792 ms; двойной разворот — S_old из первого.
+- **R9.** КОГДА retarget пружины наследует скорость, СИСТЕМА ДОЛЖНА наследовать её и у пружины,
+  заданной длительностью и bounce (M-INT-3: решение — наследовать, в отличие от Motion).
+  Тест: `a_time_defined_spring_inherits_velocity` — малый диапазон, большая скорость: перелёт
+  совпадает с замкнутой формой из теста, значения конечны.
+
+### Края шва
+
+- **R10.** КОГДА retarget вызван до первого тика run (шов в `t = 0`), СИСТЕМА ДОЛЖНА начать
+  сегмент из стартового значения со стартовой скоростью сегмента (0 для покоя). Тест: строка
+  `seam_at_zero` в таблице R3.
+- **R11.** КОГДА retarget вызван в кадре завершения run, СИСТЕМА ДОЛЖНА взять конечное значение,
+  скорость 0 и анкерить сегмент на момент завершения. Тест: строка `seam_on_the_completing_frame`.
+- **R12.** КОГДА retarget вызван после простоя (сэмпл старше предыдущего кадра), СИСТЕМА ДОЛЖНА
+  анкерить на следующий кадр. Тест: `a_retarget_after_idle_starts_on_the_next_frame`.
+- **R13.** КОГДА dt = 0, время идёт назад или огромно (1e6 s), СИСТЕМА ДОЛЖНА сэмплировать
+  `max(0, now − T)` и публиковать конечные значения. Тест: строки `dt_zero`, `time_backwards`,
+  `huge_dt` в таблице R6.
+
+### Отказы
+
+- **R14.** КОГДА цель или унаследованная скорость неконечна (NaN, ±inf) либо разность цель −
+  значение переполняет `f64`, СИСТЕМА ДОЛЖНА отказать структурной ошибкой controller-robustness
+  (`AnimationError::NonFiniteInput { input: Target | Velocity, .. }` / `SpanOverflow`) до любой
+  мутации; идущий сегмент продолжает тикать. Тест: `a_non_finite_retarget_changes_nothing`.
+- **R15.** КОГДА пользовательская кривая паникует при вычислении наклона на шве, СИСТЕМА ДОЛЖНА
+  распространить panic без удерживаемого lock, оставить старый сегмент установленным, а следующий
+  кадр — тикающим. Тест: `a_panicking_curve_slope_leaves_the_old_segment_running`.
+- **R16.** КОГДА retarget заменяет идущий сегмент, СИСТЕМА ДОЛЖНА отменить future старого
+  (`RunCanceled`) после того, как статус нового наблюдаем, и не отправлять промежуточный
+  `Completed`/`Dismissed`; слушатель, вызывающий `retarget` из status- или value-слушателя этого
+  же контроллера, не получает deadlock. Тест: `a_retarget_from_a_listener_is_ordered_and_lock_free`
+  (раздача — listener-delivery).
+- **R17.** КОГДА retarget вызван у `DrivenController` без часов или у disposed контроллера,
+  СИСТЕМА ДОЛЖНА завершить сегмент синхронно в цели (ownership R12) / вернуть `Disposed`.
+  Тест: строки в таблице R14.
+
+### Жест → settle
+
+- **R18.** КОГДА жест отпускается со скоростью `v` px/s на протяжённости `E` px, СИСТЕМА ДОЛЖНА
+  начинать settle со скоростью `v·(upper − lower)/E` в единицах контроллера (первый кадр — `v`
+  px/s в пределах `a_max·dt`). Тесты: `fling_across_hands_the_gesture_velocity_to_the_spring`
+  (run_table; `E ≤ 0`, NaN → `InvalidExtent`); `a_dismissible_release_keeps_finger_speed_on_any_width`
+  (`run_cases`: 1500 px/s на ширинах 150 и 1200 px, пиксельная скорость первого кадра 1500 ± граница —
+  с откатом на `1/300` падает); `a_drawer_release_keeps_finger_speed`
+  (`packages/flui-material/tests/drawer.rs`).
+- **R19.** КОГДА back-gesture отпущен быстрее порога, СИСТЕМА ДОЛЖНА начать settle со скоростью
+  пальца (решение владельца, design «Открытые вопросы»); иначе — текущий 350 ms
+  `FastEaseInToSlowEaseOut`. Тест: `release_matrix_fling_and_slow_release`
+  (`crates/flui-widgets/tests/back_gesture.rs:48`) расширяется строкой скорости.
+
+### Implicit-виджеты
+
+- **R20.** КОГДА implicit-виджет получает новую цель посреди движения, СИСТЕМА ДОЛЖНА продолжить
+  из отображаемого значения с его скоростью (C⁰ и C¹ для свойств с `TwoWayConverter`; C⁰ для
+  остальных, например `BoxDecoration`). Тест: `animated_opacity_retargets_from_the_current_value_midflight`
+  (`crates/flui-widgets/tests/implicit_animations.rs:61`) ужесточается: шов C⁰ ≤ 1e-12 вместо
+  допуска 0.2 и C¹ через `velocity()`; новые строки для `AnimatedPadding`, `AnimatedAlign`,
+  `AnimatedContainer` (цвет и размер).
+- **R21.** КОГДА меняется только кривая или только пружина, СИСТЕМА ДОЛЖНА начать сегмент с
+  новой спецификацией из текущих значения и скорости (C⁰, C¹), без перезапуска полной
+  длительности. Тест: `changing_only_the_motion_spec_is_c1`.
+- **Прочие отказы.** Drop последнего владельца из слушателя во время тика — ownership R6 и строка
+  `retarget_then_drop_from_listener` в R16; retarget из слушателя другого контроллера того же Vsync —
+  строка `cross_controller_seam` в R4; остановка realm, panic, слушатели — ownership, listener-delivery.
