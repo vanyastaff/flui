@@ -1047,7 +1047,10 @@ fn binding_input_contract_matrix() {
             "native_staged_owner_cleanup",
             native_staged_owner_cleanup_is_exact,
         ),
-        ("native_terminal_observation_failure", native_terminal_observation_failure_keeps_owned_delivery),
+        (
+            "native_terminal_observation_failure",
+            native_terminal_observation_failure_keeps_owned_delivery,
+        ),
         ("native_focus_loss", native_focus_loss_releases_lease),
         (
             "native_claim_retirement",
@@ -2885,7 +2888,7 @@ fn native_repeated_start_keeps_selected_owner() {
 
 fn native_staged_retirement_preserves_delivery_and_failure() {
     use flui_foundation::geometry::{Offset, Point};
-    use flui_interaction::recognizers::{PanZoomDisposition, ScaleGestureRecognizer};
+    use flui_interaction::recognizers::scale::{PanZoomDisposition, ScaleGestureRecognizer};
     use flui_interaction::routing::EventPropagation;
     use flui_interaction::{GestureBinding, HitTestResult};
     use flui_platform_api::{
@@ -2992,12 +2995,21 @@ fn native_staged_retirement_preserves_delivery_and_failure() {
 
 fn native_terminal_observation_failure_keeps_owned_delivery() {
     use flui_foundation::geometry::{Offset, Point};
-    use flui_interaction::{GestureBinding, HitTestResult};
-    use flui_interaction::recognizers::{PanZoomDisposition, ScaleGestureRecognizer};
+    use flui_interaction::recognizers::scale::{PanZoomDisposition, ScaleGestureRecognizer};
     use flui_interaction::routing::EventPropagation;
-    use flui_platform_api::{EventTime, pointer::{PanZoomEvent, PanZoomPhase, PanZoomTransform,
-        PointerEvent, PointerId, PointerInfo, PointerKind, PointerPosition}};
-    use std::{cell::Cell, panic::{catch_unwind, AssertUnwindSafe}, rc::Rc};
+    use flui_interaction::{GestureBinding, HitTestResult};
+    use flui_platform_api::{
+        EventTime,
+        pointer::{
+            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerInfo,
+            PointerKind, PointerPosition,
+        },
+    };
+    use std::{
+        cell::Cell,
+        panic::{AssertUnwindSafe, catch_unwind},
+        rc::Rc,
+    };
     for (body_failure, terminal_failure) in [(false, true), (true, false), (true, true)] {
         let lane = InteractionLane::try_new().expect("lane");
         let handle = lane.dispatch_handle();
@@ -3011,12 +3023,25 @@ fn native_terminal_observation_failure_keeps_owned_delivery() {
             .on_end(move |_| {
                 ended.set(ended.get() + 1);
                 assert!(!fail.replace(false), "native terminal callback failure");
-            }).build();
-        let source = PointerInfo::new(PointerId::try_from(830_u64).expect("source"), PointerKind::Trackpad);
-        let packet = |phase| PointerEvent::PanZoom(PanZoomEvent::new(source,
-            EventTime::from_nanos(0), PointerPosition::try_new(Point::ZERO).expect("position"), phase));
-        let update = || packet(PanZoomPhase::Update(
-            PanZoomTransform::try_new(Offset::ZERO, 1.2, 0.0).expect("scale")));
+            })
+            .build();
+        let source = PointerInfo::new(
+            PointerId::try_from(830_u64).expect("source"),
+            PointerKind::Trackpad,
+        );
+        let packet = |phase| {
+            PointerEvent::PanZoom(PanZoomEvent::new(
+                source,
+                EventTime::from_nanos(0),
+                PointerPosition::try_new(Point::ZERO).expect("position"),
+                phase,
+            ))
+        };
+        let update = || {
+            packet(PanZoomPhase::Update(
+                PanZoomTransform::try_new(Offset::ZERO, 1.2, 0.0).expect("scale"),
+            ))
+        };
         lane.enter(|| {
             let owner = actor.clone();
             let count = retired.clone();
@@ -3136,7 +3161,7 @@ fn native_staged_owner_cleanup_is_exact() {
 fn native_staged_generation_survives_geometry_and_reentry() {
     use flui_foundation::geometry::{Offset, Point};
     use flui_interaction::events::{make_down_event_for_id, make_move_event_for_id};
-    use flui_interaction::recognizers::{PanZoomDisposition, ScaleGestureRecognizer};
+    use flui_interaction::recognizers::scale::{PanZoomDisposition, ScaleGestureRecognizer};
     use flui_interaction::routing::{EventPropagation, PointerDispatch};
     use flui_interaction::{GestureBinding, GestureRecognizer, HitTestResult};
     use flui_platform_api::{
@@ -3178,7 +3203,8 @@ fn native_staged_generation_survives_geometry_and_reentry() {
             let first_start = Rc::new(Cell::new(true));
             let selected_starts = Rc::new(Cell::new(0));
             let selected_ends = Rc::new(Cell::new(0));
-            let (selected_started, selected_ended) = (selected_starts.clone(), selected_ends.clone());
+            let (selected_started, selected_ended) =
+                (selected_starts.clone(), selected_ends.clone());
             let weak = Rc::downgrade(&binding);
             let fresh_path = replacement_path.clone();
             let first = first_start.clone();
@@ -3251,7 +3277,7 @@ fn native_staged_generation_survives_geometry_and_reentry() {
                     staged.add_pointer(PointerDispatch::at_root(&down));
                     binding.arena().close(pointer);
                 }
-                binding.arena().drain();
+                binding.arena().drain_deferred_resolutions();
                 let motion = make_move_event_for_id(PointerId::try_from(802_u64).expect("touch"),
                     Offset::new(200.0, 0.0), PointerKind::Touch).expect("Move");
                 staged.handle_event(PointerDispatch::at_root(&motion));
