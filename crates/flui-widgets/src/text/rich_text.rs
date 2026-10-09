@@ -37,6 +37,13 @@ pub struct RichText {
     align: TextAlign,
     direction: TextDirection,
     max_lines: Option<u32>,
+    scaling: TextScaling,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum TextScaling {
+    Inherited,
+    Fixed,
 }
 
 impl RichText {
@@ -49,6 +56,7 @@ impl RichText {
             align: TextAlign::Start,
             direction: TextDirection::Ltr,
             max_lines: None,
+            scaling: TextScaling::Inherited,
         }
     }
 
@@ -72,6 +80,13 @@ impl RichText {
         self.max_lines = Some(max_lines);
         self
     }
+
+    /// The composing widget has already resolved its logical glyph size.
+    /// Weight preferences still apply; sizing must not be inherited a second time.
+    pub(crate) fn unscaled(mut self) -> Self {
+        self.scaling = TextScaling::Fixed;
+        self
+    }
 }
 
 impl View for RichText {
@@ -84,7 +99,10 @@ impl StatelessView for RichText {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         ResolvedParagraph {
             authored: self.clone(),
-            text_scale_factor: MediaQuery::text_scale_factor_of(ctx).unwrap_or(1.0),
+            text_scale_factor: match self.scaling {
+                TextScaling::Inherited => MediaQuery::text_scale_factor_of(ctx).unwrap_or(1.0),
+                TextScaling::Fixed => 1.0,
+            },
             font_weight_adjustment: MediaQuery::font_weight_adjustment_of(ctx).unwrap_or(0),
         }
     }
