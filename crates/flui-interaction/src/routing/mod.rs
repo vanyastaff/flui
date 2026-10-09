@@ -39,7 +39,6 @@ pub(crate) use hit_test::{PanZoomRoute, ScrollRoute};
 #[doc(hidden)]
 pub use interaction_lane::DispatchCustody;
 pub(crate) use interaction_lane::OwnerLatch;
-pub(crate) use interaction_lane::{PanZoomAdmissionAuthority, PanZoomRetirement};
 pub(crate) use interaction_lane::active_dispatch_handle;
 pub use interaction_lane::{
     HitTestHandle, HitTestProbe, HitTestSnapshot, InteractionDispatchError,
@@ -49,6 +48,7 @@ pub use interaction_lane::{
     ResolvedRouteToken, RoutePanic, RouteResolution, RouteResolutionMiss, ScrollTarget,
     ShaderMaskTarget, resolve_local_payload, resolve_path_clip_target, resolve_shader_mask_target,
 };
+pub(crate) use interaction_lane::{PanZoomAdmissionAuthority, PanZoomRetirement};
 pub use mouse_tracker::{
     CursorChangeCallback, DeviceId, MouseTracker, MouseTrackerAnnotation, PointerMotionKind,
 };

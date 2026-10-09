@@ -396,8 +396,11 @@ pub(crate) struct PanZoomRetirement(pub Rc<dyn Fn()>);
 
 impl std::fmt::Debug for PanZoomDispatch<'_> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.debug_struct("PanZoomDispatch").field("local", self.local)
-            .field("global", self.global).finish_non_exhaustive()
+        formatter
+            .debug_struct("PanZoomDispatch")
+            .field("local", self.local)
+            .field("global", self.global)
+            .finish_non_exhaustive()
     }
 }
 
@@ -405,23 +408,40 @@ impl<'a> PanZoomDispatch<'a> {
     /// Borrow localized and root-space input without binding admission authority.
     #[must_use]
     pub const fn new(local: &'a PanZoomEvent, global: &'a PanZoomEvent) -> Self {
-        Self { local, global, admission: None }
+        Self {
+            local,
+            global,
+            admission: None,
+        }
     }
 
     /// Borrow an input whose local and root coordinate spaces coincide.
     #[must_use]
-    pub const fn at_root(event: &'a PanZoomEvent) -> Self { Self::new(event, event) }
+    pub const fn at_root(event: &'a PanZoomEvent) -> Self {
+        Self::new(event, event)
+    }
 
-    pub(crate) const fn admitted(local: &'a PanZoomEvent, global: &'a PanZoomEvent,
-        admission: PanZoomAdmissionAuthority<'a>) -> Self {
-        Self { local, global, admission: Some(admission) }
+    pub(crate) const fn admitted(
+        local: &'a PanZoomEvent,
+        global: &'a PanZoomEvent,
+        admission: PanZoomAdmissionAuthority<'a>,
+    ) -> Self {
+        Self {
+            local,
+            global,
+            admission: Some(admission),
+        }
     }
 
     /// Associate exact-generation cleanup with this binding-owned native Start.
     /// Synthetic dispatches have no admission authority and return false.
     pub fn on_retirement(self, retire: impl Fn() + 'static) -> bool {
-        if !matches!(self.global.phase, crate::PanZoomPhase::Start) { return false; }
-        let Some(admission) = self.admission else { return false; };
+        if !matches!(self.global.phase, crate::PanZoomPhase::Start) {
+            return false;
+        }
+        let Some(admission) = self.admission else {
+            return false;
+        };
         (admission.stage)(PanZoomRetirement(Rc::new(retire)));
         true
     }
@@ -429,7 +449,8 @@ impl<'a> PanZoomDispatch<'a> {
     /// Commit this recognized Update's delivery owner before publishing callbacks.
     pub fn claim(self) {
         if matches!(self.global.phase, crate::PanZoomPhase::Update(_))
-            && let Some(admission) = self.admission {
+            && let Some(admission) = self.admission
+        {
             (admission.claim)();
         }
     }

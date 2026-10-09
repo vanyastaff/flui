@@ -636,7 +636,8 @@ fn claim_native_scale(
                 let mut route = route.borrow_mut();
                 if route
                     .active
-                    .as_ref().is_some_and(|(active, _)| !same_native_source(active, event.pointer()))
+                    .as_ref()
+                    .is_some_and(|(active, _)| !same_native_source(active, event.pointer()))
                 {
                     return EventPropagation::Continue;
                 }
@@ -653,11 +654,18 @@ fn claim_native_scale(
             let _ = dispatch.on_retirement(move || {
                 if let Some(route) = pending_route.upgrade() {
                     let mut route = route.borrow_mut();
-                    if route.pending.as_ref().is_some_and(|pending|
-                        Rc::ptr_eq(&pending.generation, &generation)) {
+                    if route
+                        .pending
+                        .as_ref()
+                        .is_some_and(|pending| Rc::ptr_eq(&pending.generation, &generation))
+                    {
                         route.pending = None;
                     }
-                    if route.active.as_ref().is_some_and(|(_, active)| Rc::ptr_eq(active, &generation)) {
+                    if route
+                        .active
+                        .as_ref()
+                        .is_some_and(|(_, active)| Rc::ptr_eq(active, &generation))
+                    {
                         route.active = None;
                     }
                 }
@@ -721,7 +729,10 @@ fn claim_native_scale(
                         same_native_source(&pending.source, event.pointer())
                             && pending.time <= event.time
                     }) {
-                        let pending = route.pending.take().expect("BUG: matching pending native admission");
+                        let pending = route
+                            .pending
+                            .take()
+                            .expect("BUG: matching pending native admission");
                         route.active = Some((*event.pointer(), pending.generation));
                     }
                 }
@@ -733,7 +744,8 @@ fn claim_native_scale(
                 let mut route = route.borrow_mut();
                 if route
                     .active
-                    .as_ref().is_some_and(|(active, _)| same_native_source(active, event.pointer()))
+                    .as_ref()
+                    .is_some_and(|(active, _)| same_native_source(active, event.pointer()))
                 {
                     route.active = None;
                 }
@@ -754,7 +766,8 @@ fn claim_native_scale(
                 };
                 let active = route
                     .active
-                    .as_ref().is_some_and(|(active, _)| same_native_source(active, event.pointer()));
+                    .as_ref()
+                    .is_some_and(|(active, _)| same_native_source(active, event.pointer()));
                 if active {
                     route.active = None;
                 }

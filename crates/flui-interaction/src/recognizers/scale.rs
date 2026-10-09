@@ -844,7 +844,9 @@ impl ScaleGestureRecognizer {
                         let mut native = owner.native.borrow_mut();
                         let retired = if native.as_ref().is_some_and(|native| native.id == id) {
                             native.take()
-                        } else { None };
+                        } else {
+                            None
+                        };
                         drop(native);
                         drop(retired);
                     }
@@ -924,10 +926,14 @@ impl ScaleGestureRecognizer {
                         .as_ref()
                         .is_some_and(|state| state.id == id)
                 };
-                if live() && let Some(start) = start {
-                    RoutePanic::preserve_first(&mut first,
+                if live()
+                    && let Some(start) = start
+                {
+                    RoutePanic::preserve_first(
+                        &mut first,
                         RoutePanic::capture(|| self.deliver(Outcome::Start(start))),
-                        "native scale start");
+                        "native scale start",
+                    );
                 }
                 if live() {
                     RoutePanic::preserve_first(

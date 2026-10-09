@@ -1035,7 +1035,10 @@ fn binding_input_contract_matrix() {
             native_terminal_reentry_keeps_new_lease,
         ),
         ("native_claim_reentry", native_claim_reentry_keeps_new_lease),
-        ("native_staged_generation", native_staged_generation_survives_geometry_and_reentry),
+        (
+            "native_staged_generation",
+            native_staged_generation_survives_geometry_and_reentry,
+        ),
         ("native_focus_loss", native_focus_loss_releases_lease),
         (
             "native_claim_retirement",
@@ -2873,12 +2876,22 @@ fn native_repeated_start_keeps_selected_owner() {
 
 fn native_staged_generation_survives_geometry_and_reentry() {
     use flui_foundation::geometry::{Offset, Point};
-    use flui_interaction::{GestureBinding, GestureRecognizer, HitTestResult, ScaleGestureRecognizer};
     use flui_interaction::events::{make_down_event_for_id, make_move_event_for_id};
-    use flui_interaction::routing::{EventPropagation, PanZoomDisposition, PointerDispatch};
-    use flui_platform_api::{EventTime, pointer::{PanZoomEvent, PanZoomPhase, PanZoomTransform,
-        PointerEvent, PointerId, PointerInfo, PointerKind, PointerPosition}};
-    use std::{cell::{Cell, RefCell}, panic::{catch_unwind, AssertUnwindSafe}, rc::Rc};
+    use flui_interaction::routing::{EventPropagation, PointerDispatch};
+    use flui_interaction::{GestureBinding, GestureRecognizer, HitTestResult};
+    use flui_interaction::recognizers::{PanZoomDisposition, ScaleGestureRecognizer};
+    use flui_platform_api::{
+        EventTime,
+        pointer::{
+            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerInfo,
+            PointerKind, PointerPosition,
+        },
+    };
+    use std::{
+        cell::{Cell, RefCell},
+        panic::{AssertUnwindSafe, catch_unwind},
+        rc::Rc,
+    };
 
     for reenter in [false, true] {
         for fail in [false, true] {
@@ -2886,11 +2899,23 @@ fn native_staged_generation_survives_geometry_and_reentry() {
             let handle = lane.dispatch_handle();
             let binding = Rc::new(GestureBinding::new());
             let replacement_path = Rc::new(RefCell::new(HitTestResult::new()));
-            let source = PointerInfo::new(PointerId::try_from(800_u64).expect("source"), PointerKind::Trackpad);
-            let packet = move |phase| PointerEvent::PanZoom(PanZoomEvent::new(source,
-                EventTime::from_nanos(0), PointerPosition::try_new(Point::ZERO).expect("position"), phase));
-            let update = || packet(PanZoomPhase::Update(
-                PanZoomTransform::try_new(Offset::ZERO, 1.2, 0.0).expect("scale")));
+            let source = PointerInfo::new(
+                PointerId::try_from(800_u64).expect("source"),
+                PointerKind::Trackpad,
+            );
+            let packet = move |phase| {
+                PointerEvent::PanZoom(PanZoomEvent::new(
+                    source,
+                    EventTime::from_nanos(0),
+                    PointerPosition::try_new(Point::ZERO).expect("position"),
+                    phase,
+                ))
+            };
+            let update = || {
+                packet(PanZoomPhase::Update(
+                    PanZoomTransform::try_new(Offset::ZERO, 1.2, 0.0).expect("scale"),
+                ))
+            };
             let first_start = Rc::new(Cell::new(true));
             let weak = Rc::downgrade(&binding);
             let fresh_path = replacement_path.clone();
@@ -2899,18 +2924,24 @@ fn native_staged_generation_survives_geometry_and_reentry() {
                 .on_start(move |_| {
                     if first.replace(false) {
                         if reenter {
-                            weak.upgrade().expect("binding").handle_pointer_event(
-                                &packet(PanZoomPhase::Start), |_| fresh_path.borrow().clone());
+                            weak.upgrade()
+                                .expect("binding")
+                                .handle_pointer_event(&packet(PanZoomPhase::Start), |_| {
+                                    fresh_path.borrow().clone()
+                                });
                         }
                         assert!(!fail, "native winner start failure");
                     }
-                }).on_update(|_| {}).build();
+                })
+                .on_update(|_| {})
+                .build();
             let starts = Rc::new(Cell::new(0));
             let ends = Rc::new(Cell::new(0));
             let (started, ended) = (starts.clone(), ends.clone());
             let staged = ScaleGestureRecognizer::builder(binding.arena().clone())
                 .on_start(move |_| started.set(started.get() + 1))
-                .on_end(move |_| ended.set(ended.get() + 1)).build();
+                .on_end(move |_| ended.set(ended.get() + 1))
+                .build();
             lane.enter(|| {
                 let actor = selected.clone();
                 let leaf = handle.register_pan_zoom(move |dispatch| {

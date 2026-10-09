@@ -11,17 +11,19 @@ use flui_painting::styling::Color;
 use flui_widgets::{ColoredBox, GestureDetector};
 
 pub(crate) fn nested_native_scale_loser_recovers_touch_after_winner_terminal() {
-    use std::{cell::RefCell, rc::Rc};
     use flui_foundation::geometry::{Offset, Point};
     use flui_interaction::events::{
         make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
     };
     use flui_platform_api::{
         EventTime,
-        pointer::{PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId,
-            PointerInfo, PointerKind, PointerPosition},
+        pointer::{
+            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerInfo,
+            PointerKind, PointerPosition,
+        },
     };
     use flui_widgets::{Center, HitTestBehavior, SizedBox};
+    use std::{cell::RefCell, rc::Rc};
 
     for terminal in [PanZoomPhase::End, PanZoomPhase::Cancelled] {
         let outer = Rc::new(RefCell::new(Vec::new()));
@@ -37,28 +39,39 @@ pub(crate) fn nested_native_scale_loser_recovers_touch_after_winner_terminal() {
                 .on_scale_update(move |_, _| outer_update.borrow_mut().push("update"))
                 .on_scale_end(move |_, _| outer_end.borrow_mut().push("end"))
                 .on_scale_cancel(move |_| outer_cancel.borrow_mut().push("cancel"))
-                .child(Center::new().child(
-                    SizedBox::new(100.0, 100.0).child(
-                        GestureDetector::new()
-                            .on_scale_start(move |_, _| inner_start.borrow_mut().push("start"))
-                            .on_scale_update(move |_, _| inner_update.borrow_mut().push("update"))
-                            .on_scale_end(move |_, _| inner_end.borrow_mut().push("end"))
-                            .on_scale_cancel(move |_| inner_cancel.borrow_mut().push("cancel"))
-                            .child(ColoredBox::new(Color::RED)),
+                .child(
+                    Center::new().child(
+                        SizedBox::new(100.0, 100.0).child(
+                            GestureDetector::new()
+                                .on_scale_start(move |_, _| inner_start.borrow_mut().push("start"))
+                                .on_scale_update(move |_, _| {
+                                    inner_update.borrow_mut().push("update")
+                                })
+                                .on_scale_end(move |_, _| inner_end.borrow_mut().push("end"))
+                                .on_scale_cancel(move |_| inner_cancel.borrow_mut().push("cancel"))
+                                .child(ColoredBox::new(Color::RED)),
+                        ),
                     ),
-                )),
+                ),
             tight(200.0, 200.0),
         );
         let source = PointerInfo::new(
-            PointerId::try_from(500_u64).expect("nonzero native source"), PointerKind::Mouse,
+            PointerId::try_from(500_u64).expect("nonzero native source"),
+            PointerKind::Mouse,
         );
-        let send = |time, phase| laid.dispatch_pointer_event(&PointerEvent::PanZoom(
-            PanZoomEvent::new(source, EventTime::from_nanos(time),
-                PointerPosition::try_new(Point::new(100.0, 100.0)).expect("finite focal point"), phase),
-        ));
-        let zoom = |scale| PanZoomPhase::Update(
-            PanZoomTransform::try_new(Offset::ZERO, scale, 0.0).expect("finite native scale"),
-        );
+        let send = |time, phase| {
+            laid.dispatch_pointer_event(&PointerEvent::PanZoom(PanZoomEvent::new(
+                source,
+                EventTime::from_nanos(time),
+                PointerPosition::try_new(Point::new(100.0, 100.0)).expect("finite focal point"),
+                phase,
+            )))
+        };
+        let zoom = |scale| {
+            PanZoomPhase::Update(
+                PanZoomTransform::try_new(Offset::ZERO, scale, 0.0).expect("finite native scale"),
+            )
+        };
         for round in 0_u64..2 {
             inner.borrow_mut().clear();
             outer.borrow_mut().clear();
@@ -66,27 +79,61 @@ pub(crate) fn nested_native_scale_loser_recovers_touch_after_winner_terminal() {
             send(round * 100 + 10, zoom(1.2));
             send(round * 100 + 20, zoom(1.5));
             send(round * 100 + 30, terminal);
-            assert_eq!(inner.borrow().as_slice(),
-                ["start", "update", "update", if terminal == PanZoomPhase::End { "end" } else { "cancel" }],
-                "the exact leaf winner owns all updates and its terminal");
-            assert!(outer.borrow().is_empty(), "a dormant losing ancestor publishes no native callbacks");
+            assert_eq!(
+                inner.borrow().as_slice(),
+                [
+                    "start",
+                    "update",
+                    "update",
+                    if terminal == PanZoomPhase::End {
+                        "end"
+                    } else {
+                        "cancel"
+                    }
+                ],
+                "the exact leaf winner owns all updates and its terminal"
+            );
+            assert!(
+                outer.borrow().is_empty(),
+                "a dormant losing ancestor publishes no native callbacks"
+            );
             let first = PointerId::try_from(501_u64).expect("nonzero first touch");
             let second = PointerId::try_from(502_u64).expect("nonzero second touch");
             // Both contacts hit only the ancestor, above the centered leaf.
             for (pointer, x) in [(first, 20.0), (second, 80.0)] {
-                laid.dispatch_pointer_event(&make_down_event_for_id(pointer,
-                    Offset::new(x, 20.0), PointerKind::Touch).expect("finite touch Down"));
+                laid.dispatch_pointer_event(
+                    &make_down_event_for_id(pointer, Offset::new(x, 20.0), PointerKind::Touch)
+                        .expect("finite touch Down"),
+                );
             }
-            laid.dispatch_pointer_event(&make_move_event_for_id(second,
-                Offset::new(180.0, 20.0), PointerKind::Touch).expect("finite touch Move"));
-            assert_eq!(outer.borrow().first().copied(), Some("start"),
-                "losing native admission must not block a later two-contact gesture");
+            laid.dispatch_pointer_event(
+                &make_move_event_for_id(second, Offset::new(180.0, 20.0), PointerKind::Touch)
+                    .expect("finite touch Move"),
+            );
+            assert_eq!(
+                outer.borrow().first().copied(),
+                Some("start"),
+                "losing native admission must not block a later two-contact gesture"
+            );
             for (pointer, x) in [(first, 20.0), (second, 180.0)] {
-                laid.dispatch_pointer_event(&make_up_event_for_id(pointer,
-                    Offset::new(x, 20.0), PointerKind::Touch).expect("finite touch Up"));
+                laid.dispatch_pointer_event(
+                    &make_up_event_for_id(pointer, Offset::new(x, 20.0), PointerKind::Touch)
+                        .expect("finite touch Up"),
+                );
             }
-            assert_eq!(outer.borrow().iter().filter(|event| **event == "end").count(), 1);
-            assert_eq!(inner.borrow().len(), 4, "touch recovery cannot alter the native winner");
+            assert_eq!(
+                outer
+                    .borrow()
+                    .iter()
+                    .filter(|event| **event == "end")
+                    .count(),
+                1
+            );
+            assert_eq!(
+                inner.borrow().len(),
+                4,
+                "touch recovery cannot alter the native winner"
+            );
         }
     }
 }
