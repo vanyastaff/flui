@@ -261,7 +261,14 @@ sampled preference observation before input or wake delivery, preserves deferred
 sampling for its deadline retry and does not dirty user windows merely to retry
 preferences. Shutdown closes the owner signal and releases the source before
 retiring user-window callbacks. Raw wheel input remains signed Detents; consumers
-resolve the current system count once. Actual queued Windows wheel packets and
-the initial preference snapshot have native evidence. Expanded notification,
-retry and shutdown lifecycle execution remains separate acceptance; source wiring
-and initial observation alone do not establish those outcomes.
+resolve the current system count once.
+
+The native Windows winit tests
+`windows_winit_wheels_preserve_raw_units_and_observe_system_policy` and
+`windows_winit_cold_preferences_recover_on_an_idle_owner_turn` executed the actual
+wheel packet pipeline, cold deferred bootstrap followed by idle-owner recovery,
+WM_SETTINGCHANGE refresh failure followed by idle-owner recovery, retry without
+an extra redraw and refusal after shutdown. These witnesses do not change system
+policy. They establish this Windows transport's observed wheel and preference
+delivery, not physical pen or touch input, other operating-system execution or
+broader platform-layer acceptance.

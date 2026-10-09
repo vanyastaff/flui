@@ -26,7 +26,8 @@ actor. Weak listener attachments do not extend the actor's lifetime.
 Native input reaches that same actor through borrowed
 `PanZoomDispatch::new(local, global)`. Local coordinates and the original root-space
 source remain distinct. `at_root` constructs the coincident-space form. The
-dispatch is owner-affine: it implements neither `Send` nor `Sync`, and its private
+dispatch is owner-affine: it implements neither `Send` nor `Sync` and does not
+implement `UnwindSafe` or `RefUnwindSafe`. Its private
 admission authority prevents external struct literals from fabricating a staged
 binding admission. Synthetic constructors carry no admission authority.
 Native observers still receive fresh hit-tested input;
@@ -62,6 +63,12 @@ earliest failure resumes. Likewise, a terminal's fresh hit-test failure cannot
 erase terminal delivery and retirement owed to its cached exact owner. Fresh
 observation and admitted delivery have separate obligations; old cleanup cannot
 withdraw a newer reentrant admission.
+Native admission tickets use the binding owner's close-mode failure fence.
+Healthy close invokes and retires each ticket outside borrows. After the first
+failure, or during preserving close, opaque ticket callbacks and last-owner
+captures are retained rather than starting another user callback or destructor.
+This keeps native cleanup in the same ownership policy as the binding's other
+accepted work; a separate inner containment accumulator cannot weaken that policy.
 `nested_native_scale_loser_recovers_touch_after_winner_terminal` checks winner
 continuity, both terminal reasons and the losing ancestor's next touch gesture.
 
@@ -126,5 +133,7 @@ The interaction `binding_input_contract_matrix` includes
 `native_terminal_observation_failure_keeps_owned_delivery`, and
 `native_staged_generation_survives_geometry_and_reentry`; these cover isolated
 and competing failure, exact same-source replacement and healthy recovery.
+`native_close_preserves_retirement_ownership` covers healthy and preserving close,
+including first-failure capture retention.
 Existing Scale tables retain the default two-contact contract. These owned-event
 witnesses do not claim physical trackpad or touchscreen execution on every backend.
