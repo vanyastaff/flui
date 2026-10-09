@@ -509,7 +509,7 @@ fn scale_clock_can_cancel_admission_and_preserve_reentrant_replacements() {
             make_down_event_for_id(pointer(301), Offset::new(-200.0, 0.0), PointerKind::Touch)
                 .expect("finite original Down");
         let result = catch_unwind(AssertUnwindSafe(|| {
-            scale.add_pointer(PointerDispatch::at_root(&original))
+            scale.add_pointer(PointerDispatch::at_root(&original));
         }));
         if fail {
             let payload = result.expect_err("the original clock failure propagates");

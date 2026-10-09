@@ -960,7 +960,7 @@ fn queue_diagnostic_permits_inspection() {
                 || {
                     resampler.sample(t0 + ms(25.0), t0 + ms(35.0), |_| {
                         panic!("regressed sampling must deliver nothing");
-                    })
+                    });
                 },
             );
         }));
@@ -980,7 +980,7 @@ fn queue_diagnostic_permits_inspection() {
         }
         let mut delivered = Vec::new();
         resampler.sample(t0 + ms(150.0), t0 + ms(160.0), |event| {
-            delivered.push(event)
+            delivered.push(event);
         });
         assert_eq!(
             delivered.len(),

@@ -641,7 +641,7 @@ fn latest_cursor_publication_survives_reentry_replacement_and_failure() {
         let next_observed = Rc::clone(&observed);
         let replacement: flui_interaction::routing::CursorChangeCallback =
             Rc::new(move |pointer, cursor| {
-                next_observed.borrow_mut().push(("new", pointer.id, cursor))
+                next_observed.borrow_mut().push(("new", pointer.id, cursor));
             });
         let failed = Rc::new(Cell::new(matches!(
             case,
@@ -706,16 +706,16 @@ fn latest_cursor_publication_survives_reentry_replacement_and_failure() {
                             );
                         }
                         CursorReentryCase::Replacement => {
-                            enter_tracker.set_cursor_change_callback(Rc::clone(&replacement))
+                            enter_tracker.set_cursor_change_callback(Rc::clone(&replacement));
                         }
                         CursorReentryCase::Close => {
                             flui_interaction::__runtime::close_mouse_tracker(
                                 &enter_tracker,
                                 flui_interaction::__runtime::CloseMode::Ordinary,
-                            )
+                            );
                         }
                         CursorReentryCase::CompetingFailure => {
-                            assert!(!enter_failed.get(), "cursor enter first failure")
+                            assert!(!enter_failed.get(), "cursor enter first failure");
                         }
                         CursorReentryCase::HookReentry
                         | CursorReentryCase::Failure
@@ -736,7 +736,7 @@ fn latest_cursor_publication_survives_reentry_replacement_and_failure() {
         );
         let event = hover(MOUSE, PointerKind::Mouse, Offset::new(5.0, 5.0), 1);
         let result = catch_unwind(AssertUnwindSafe(|| {
-            lane.enter(|| tracker.update_with_motion(&event, PointerMotionKind::Hover, &outer))
+            lane.enter(|| tracker.update_with_motion(&event, PointerMotionKind::Hover, &outer));
         }));
         if failed.get() {
             let payload = result.expect_err("publication resumes after committed work");
@@ -779,7 +779,7 @@ fn latest_cursor_publication_survives_reentry_replacement_and_failure() {
                 "new window observation from another device wins"
             ),
             CursorReentryCase::Replacement => {
-                assert_eq!(*observed.borrow(), [("new", pointer, CursorIcon::Text)])
+                assert_eq!(*observed.borrow(), [("new", pointer, CursorIcon::Text)]);
             }
             CursorReentryCase::HookReentry => assert_eq!(
                 *observed.borrow(),
@@ -803,7 +803,7 @@ fn latest_cursor_publication_survives_reentry_replacement_and_failure() {
                         &event,
                         PointerMotionKind::Hover,
                         &cursor_path(&[Some(CursorIcon::Text)]),
-                    )
+                    );
                 });
                 assert_eq!(
                     *observed.borrow(),
@@ -843,7 +843,7 @@ fn latest_cursor_publication_survives_reentry_replacement_and_failure() {
                     &hover(source, PointerKind::Mouse, Offset::new(7.0, 7.0), 3),
                     PointerMotionKind::Hover,
                     &cursor_path(&[Some(cursor)]),
-                )
+                );
             });
             assert_eq!(
                 observed.borrow().len(),
@@ -860,7 +860,7 @@ fn ambient_refresh_preserves_the_latest_physical_cursor_owner() {
     let observed = Rc::new(RefCell::new(Vec::new()));
     let callback_log = Rc::clone(&observed);
     tracker.set_cursor_change_callback(Rc::new(move |pointer, cursor| {
-        callback_log.borrow_mut().push((pointer.id, cursor))
+        callback_log.borrow_mut().push((pointer.id, cursor));
     }));
     let mouse_at = Offset::new(5.0, 5.0);
     let pen_at = Offset::new(15.0, 15.0);

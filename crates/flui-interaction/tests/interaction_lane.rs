@@ -3254,7 +3254,7 @@ fn native_claim_prior_observation_failure_preserves_captures() {
             path.add(HitTestEntry::new(RenderId::new(2)).pan_zoom_target(loser));
             binding.handle_pointer_event(&packet(PanZoomPhase::Start), |_| path.clone());
             let result = catch_unwind(AssertUnwindSafe(|| {
-                binding.handle_pointer_event(&update(), |_| path.clone())
+                binding.handle_pointer_event(&update(), |_| path.clone());
             }));
             if observer_failure {
                 assert_eq!(

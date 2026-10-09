@@ -45,7 +45,7 @@ pub(crate) fn nested_native_scale_loser_recovers_touch_after_winner_terminal() {
                             GestureDetector::new()
                                 .on_scale_start(move |_, _| inner_start.borrow_mut().push("start"))
                                 .on_scale_update(move |_, _| {
-                                    inner_update.borrow_mut().push("update")
+                                    inner_update.borrow_mut().push("update");
                                 })
                                 .on_scale_end(move |_, _| inner_end.borrow_mut().push("end"))
                                 .on_scale_cancel(move |_| inner_cancel.borrow_mut().push("cancel"))
@@ -65,7 +65,7 @@ pub(crate) fn nested_native_scale_loser_recovers_touch_after_winner_terminal() {
                 EventTime::from_nanos(time),
                 PointerPosition::try_new(Point::new(100.0, 100.0)).expect("finite focal point"),
                 phase,
-            )))
+            )));
         };
         let zoom = |scale| {
             PanZoomPhase::Update(

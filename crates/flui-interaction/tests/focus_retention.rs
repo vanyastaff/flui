@@ -204,7 +204,7 @@ fn commit_diagnostics_preserve_focus_round_and_queued_requests() {
         manager.add_listener(Rc::new(move |_, new| {
             manager_log
                 .borrow_mut()
-                .push(("manager", new.is_some_and(|node| node.id() == first_id)))
+                .push(("manager", new.is_some_and(|node| node.id() == first_id)));
         }));
         let next_probe = Rc::downgrade(&next);
         COMMIT_DIAGNOSTIC.with(|slot| {
@@ -215,7 +215,7 @@ fn commit_diagnostics_preserve_focus_round_and_queued_requests() {
                         let _ = next_probe.upgrade().expect("next").request_focus();
                     }
                 }),
-            ))
+            ));
         });
         let result = tracing::subscriber::with_default(CommitFocusDiagnostic, || {
             catch_unwind(AssertUnwindSafe(|| first.request_focus()))
