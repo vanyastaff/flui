@@ -5,6 +5,7 @@ use flui_painting::typography::{FontVariation, TextDirection, TextSpan, TextStyl
 use flui_view::prelude::StatelessView;
 use flui_view::{BuildContext, IntoView};
 
+use crate::MediaQuery;
 use crate::icon::{IconData, IconTheme, IconThemeData};
 use crate::layout::{Center, SizedBox};
 use crate::text::RichText;
@@ -15,6 +16,9 @@ use crate::text::RichText;
 /// `build` resolves the ambient
 /// [`IconTheme`], picks an effective size, and — when an icon is set —
 /// composes `SizedBox::square(size) → Center → RichText(TextSpan(codepoint))`.
+/// The box and glyph keep that logical size by default. With
+/// [`IconThemeData::apply_text_scaling`] enabled, both use the nearest
+/// [`MediaQuery`]'s text scale once.
 ///
 /// # Glyphs
 ///
@@ -136,6 +140,11 @@ impl StatelessView for Icon {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         let theme = IconTheme::of(ctx);
         let size = self.size.or(theme.size).unwrap_or(24.0);
+        let size = if theme.apply_text_scaling.unwrap_or(false) {
+            size * MediaQuery::text_scale_factor_of(ctx).unwrap_or(1.0)
+        } else {
+            size
+        };
 
         // A missing `icon` renders as empty `size × size`
         // space. Same shape for a codepoint that isn't a valid Unicode scalar
@@ -152,8 +161,9 @@ impl StatelessView for Icon {
 
         // Ambient `Directionality` is not read yet (see type docs) — a
         // faithful port would resolve `Directionality::of(ctx)` here.
-        let rich_text =
-            RichText::new(TextSpan::styled(code_point_string, style)).direction(TextDirection::Ltr);
+        let rich_text = RichText::new(TextSpan::styled(code_point_string, style))
+            .direction(TextDirection::Ltr)
+            .unscaled();
 
         SizedBox::square(size).child(Center::new().child(rich_text))
     }

@@ -101,6 +101,14 @@ supported range matches system preferences, `1/64..=64`. Initial sizing is pinne
 authored size and nested override retention by
 `a_text_scale_change_relayouts_a_preserved_text_subtree`.
 
+`Icon` resolves its square and glyph from one logical size. Its default stays
+fixed; `IconThemeData::apply_text_scaling` opts both into the nearest inherited
+scale, including an explicit icon-size override. The composed `RichText` uses
+that resolved size without applying inheritance again. Ordinary text retains
+its inherited sizing and weight preferences. The public producer row
+`icon_text_sizing_keeps_box_and_glyph_together` checks raster glyph keys and the
+allocated square across live scale changes, fractional sizes and theme policy.
+
 `EditableText` subscribes during its own build and carries sizing through its
 appearance value to `RenderEditable`. The editor retains authored styles and
 document offsets; selection and caret position use the newly laid-out paragraph.
