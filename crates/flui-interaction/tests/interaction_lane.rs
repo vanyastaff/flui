@@ -1035,6 +1035,7 @@ fn binding_input_contract_matrix() {
             native_terminal_reentry_keeps_new_lease,
         ),
         ("native_claim_reentry", native_claim_reentry_keeps_new_lease),
+        ("native_staged_generation", native_staged_generation_survives_geometry_and_reentry),
         ("native_focus_loss", native_focus_loss_releases_lease),
         (
             "native_claim_retirement",
@@ -2868,6 +2869,101 @@ fn native_focus_loss_releases_lease() {
 
 fn native_repeated_start_keeps_selected_owner() {
     assert_signal_lease(ScrollLeaseCase::RepeatedStart, true);
+}
+
+fn native_staged_generation_survives_geometry_and_reentry() {
+    use flui_foundation::geometry::{Offset, Point};
+    use flui_interaction::{GestureBinding, GestureRecognizer, HitTestResult, ScaleGestureRecognizer};
+    use flui_interaction::events::{make_down_event_for_id, make_move_event_for_id};
+    use flui_interaction::routing::{EventPropagation, PanZoomDisposition, PointerDispatch};
+    use flui_platform_api::{EventTime, pointer::{PanZoomEvent, PanZoomPhase, PanZoomTransform,
+        PointerEvent, PointerId, PointerInfo, PointerKind, PointerPosition}};
+    use std::{cell::{Cell, RefCell}, panic::{catch_unwind, AssertUnwindSafe}, rc::Rc};
+
+    for reenter in [false, true] {
+        for fail in [false, true] {
+            let lane = InteractionLane::new();
+            let handle = lane.dispatch_handle();
+            let binding = Rc::new(GestureBinding::new());
+            let replacement_path = Rc::new(RefCell::new(HitTestResult::new()));
+            let source = PointerInfo::new(PointerId::try_from(800_u64).expect("source"), PointerKind::Trackpad);
+            let packet = move |phase| PointerEvent::PanZoom(PanZoomEvent::new(source,
+                EventTime::from_nanos(0), PointerPosition::try_new(Point::ZERO).expect("position"), phase));
+            let update = || packet(PanZoomPhase::Update(
+                PanZoomTransform::try_new(Offset::ZERO, 1.2, 0.0).expect("scale")));
+            let first_start = Rc::new(Cell::new(true));
+            let weak = Rc::downgrade(&binding);
+            let fresh_path = replacement_path.clone();
+            let first = first_start.clone();
+            let selected = ScaleGestureRecognizer::builder(binding.arena().clone())
+                .on_start(move |_| {
+                    if first.replace(false) {
+                        if reenter {
+                            weak.upgrade().expect("binding").handle_pointer_event(
+                                &packet(PanZoomPhase::Start), |_| fresh_path.borrow().clone());
+                        }
+                        assert!(!fail, "native winner start failure");
+                    }
+                }).on_update(|_| {}).build();
+            let starts = Rc::new(Cell::new(0));
+            let ends = Rc::new(Cell::new(0));
+            let (started, ended) = (starts.clone(), ends.clone());
+            let staged = ScaleGestureRecognizer::builder(binding.arena().clone())
+                .on_start(move |_| started.set(started.get() + 1))
+                .on_end(move |_| ended.set(ended.get() + 1)).build();
+            lane.enter(|| {
+                let actor = selected.clone();
+                let leaf = handle.register_pan_zoom(move |dispatch| {
+                    if actor.handle_pan_zoom(dispatch) == PanZoomDisposition::Handled {
+                        EventPropagation::Stop
+                    } else { EventPropagation::Continue }
+                }).expect("leaf target");
+                let actor = staged.clone();
+                let ancestor = handle.register_pan_zoom(move |dispatch| {
+                    if actor.handle_pan_zoom(dispatch) == PanZoomDisposition::Handled {
+                        EventPropagation::Stop
+                    } else { EventPropagation::Continue }
+                }).expect("staged target");
+                let mut start_path = HitTestResult::new();
+                start_path.add(HitTestEntry::new(RenderId::new(1)).pan_zoom_target(leaf));
+                start_path.add(HitTestEntry::new(RenderId::new(2)).pan_zoom_target(ancestor));
+                let mut only_leaf = HitTestResult::new();
+                only_leaf.add(HitTestEntry::new(RenderId::new(1)).pan_zoom_target(leaf));
+                let mut only_ancestor = HitTestResult::new();
+                only_ancestor.add(HitTestEntry::new(RenderId::new(2)).pan_zoom_target(ancestor));
+                *replacement_path.borrow_mut() = only_ancestor.clone();
+                binding.handle_pointer_event(&packet(PanZoomPhase::Start), |_| start_path.clone());
+                let result = catch_unwind(AssertUnwindSafe(||
+                    binding.handle_pointer_event(&update(), |_| only_leaf.clone())));
+                if fail {
+                    assert_eq!(result.expect_err("callback failure").downcast_ref::<&str>(),
+                        Some(&"native winner start failure"));
+                } else { result.expect("healthy recognized update"); }
+                if reenter {
+                    binding.handle_pointer_event(&update(), |_| only_ancestor.clone());
+                    assert_eq!((starts.get(), ends.get()), (1, 0),
+                        "old tickets must not clear the new same-source, same-time native Start");
+                }
+                binding.handle_pointer_event(&packet(PanZoomPhase::End), |_| HitTestResult::new());
+                assert_eq!(ends.get(), usize::from(reenter), "winner terminal survives geometry changes");
+
+                let previous = starts.get();
+                for (id, x) in [(801_u64, 0.0), (802, 100.0)] {
+                    let pointer = PointerId::try_from(id).expect("touch");
+                    let down = make_down_event_for_id(pointer, Offset::new(x, 0.0), PointerKind::Touch).expect("Down");
+                    staged.add_pointer(PointerDispatch::at_root(&down));
+                    binding.arena().close(pointer);
+                }
+                binding.arena().drain();
+                let motion = make_move_event_for_id(PointerId::try_from(802_u64).expect("touch"),
+                    Offset::new(200.0, 0.0), PointerKind::Touch).expect("Move");
+                staged.handle_event(PointerDispatch::at_root(&motion));
+                assert_eq!(starts.get(), previous + 1,
+                    "the Start-geometry loser accepts touch after the winner finishes, even after callback panic");
+                staged.cancel();
+            });
+        }
+    }
 }
 
 fn assert_signal_lease(case: ScrollLeaseCase, native: bool) {
