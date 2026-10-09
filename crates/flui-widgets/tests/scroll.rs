@@ -2699,6 +2699,19 @@ struct RefreshHarness {
     binding: flui_testing::HeadlessBinding,
     scroll: ScrollController,
     refresh: RefreshController,
+    content_builds: Rc<Cell<usize>>,
+}
+
+#[derive(Clone, flui_view::prelude::StatelessView)]
+struct RefreshContent {
+    builds: Rc<Cell<usize>>,
+}
+
+impl flui_view::StatelessView for RefreshContent {
+    fn build(&self, _ctx: &dyn flui_view::BuildContext) -> impl IntoView {
+        self.builds.set(self.builds.get() + 1);
+        SizedBox::new(300.0, 5000.0)
+    }
 }
 
 const REFRESH_FRAME: Duration = Duration::from_nanos(16_666_667);
@@ -2708,12 +2721,15 @@ impl RefreshHarness {
         let scroll = ScrollController::new();
         scroll.update_dimensions(300.0, 0.0, 4700.0);
         let refresh = RefreshController::new();
+        let content_builds = Rc::new(Cell::new(0));
         let mut binding = flui_testing::HeadlessBinding::new();
         let root = flui_widgets::GestureArenaScope::new(
             binding.arena().clone(),
             flui_widgets::FocusRoot::new(VsyncScope::new(
                 binding.vsync().clone(),
-                refresh_content(&scroll, &refresh),
+                refresh_content(&scroll, &refresh).child(RefreshContent {
+                    builds: Rc::clone(&content_builds),
+                }),
             )),
         );
         let _ = binding.mount_root(
@@ -2726,6 +2742,7 @@ impl RefreshHarness {
             binding,
             scroll,
             refresh,
+            content_builds,
         }
     }
 
@@ -2808,6 +2825,7 @@ pub(crate) fn refresh_indicator_drag_scrolls_without_rebuilding() {
 pub(crate) fn refresh_indicator_rebuilds_only_on_a_phase_change() {
     use flui_testing::PointerPhase::{Down, Move, Up};
     let mut harness = RefreshHarness::mount();
+    let content_builds = harness.content_builds.get();
     let heard = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let counter = Arc::clone(&heard);
     let _subscription = harness
@@ -2838,10 +2856,20 @@ pub(crate) fn refresh_indicator_rebuilds_only_on_a_phase_change() {
         "entering the refreshing phase rebuilds"
     );
     assert_eq!(harness.frame(), 0, "and then settles");
+    assert_eq!(
+        harness.content_builds.get(),
+        content_builds,
+        "starting refresh rebuilds only the indicator"
+    );
 
     harness.refresh.finish();
     assert!(harness.frame() > 0, "leaving the refreshing phase rebuilds");
     assert_eq!(harness.frame(), 0, "and then settles");
+    assert_eq!(
+        harness.content_builds.get(),
+        content_builds,
+        "finishing refresh rebuilds only the indicator"
+    );
 }
 fn nested_fling_content(
     outer: &ScrollController,
