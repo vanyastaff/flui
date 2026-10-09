@@ -248,11 +248,11 @@ impl Simulation for GoesNanMidRun {
 /// registration's `has_running()`). NOT "value unchanged, run
 /// continues": that would leave `active_run` installed forever.
 fn a_simulation_that_turns_non_finite_mid_run_ends_the_run_at_the_last_finite_value() {
-    let c = AnimationController::builder(Duration::from_millis(100))
-        .unbounded()
-        .build();
     let vsync = crate::vsync::Vsync::new();
-    let _reg = vsync.register(c.clone());
+    let owner = AnimationController::builder(Duration::from_millis(100))
+        .unbounded()
+        .build_on(Some(&vsync));
+    let c = owner.controller();
 
     let mut future = c.animate_with(GoesNanMidRun { nan_at: 1.0 }).unwrap();
     // `Vsync` anchors a run's `t = 0` on the FIRST `tick_all` it sees

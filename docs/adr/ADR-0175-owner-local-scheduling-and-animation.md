@@ -48,6 +48,12 @@ before disposing the kernel, including during unwind. Moving between registry
 identities preserves the last sampled elapsed time. Missing clocks settle
 finite runs and park infinite repeats without producing frame demand.
 
+Owner disposal commits kernel closure and cancellation before retiring the
+outgoing registry. Cancellation delivery and registry retirement borrow one
+first-failure context. An outgoing capture observes a kernel that refuses new
+runs; an earlier cancellation failure retains that opaque registry instead of
+invoking its destructors. Healthy cancellation continuations still finish.
+
 Rebinding commits the new seat and withdraws the old registration before clock
 transition delivery. The outgoing registry remains owned until the kernel has
 installed its new clock binding and finished settlement or frame demand. Clock

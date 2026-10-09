@@ -101,15 +101,18 @@ impl DrivenController {
             return;
         }
         let mut recovery = Retirement::new();
-        if let Seat::Bound {
-            vsync,
-            registration,
-        } = outgoing
-        {
-            recovery.run(|| vsync.unregister(&registration));
-            recovery.retire(vsync);
-        }
-        recovery.run(|| self.controller.dispose());
+        let outgoing_registry = match outgoing {
+            Seat::Bound {
+                vsync,
+                registration,
+            } => {
+                recovery.run(|| vsync.unregister(&registration));
+                Some(vsync)
+            }
+            Seat::Unbound | Seat::Retired => None,
+        };
+        recovery.run_with(|recovery| self.controller.dispose_with_retirement(recovery));
+        recovery.retire(outgoing_registry);
         recovery.finish();
     }
 }

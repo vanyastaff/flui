@@ -230,55 +230,6 @@ impl Vsync {
         }
     }
 
-    /// Register `controller` so each [`tick_all`](Self::tick_all) advances it on
-    /// the virtual timeline.
-    ///
-    /// The controller is `Clone` (`Rc`-backed); register a clone and keep your
-    /// own handle to drive it (`forward`, `reverse`, …). The current run is
-    /// anchored lazily on the first tick (or whenever a fresh run bumps
-    /// `run_generation`), so this needs no clock reading and the common
-    /// register-then-`forward` order anchors `t = 0` cleanly on the first frame
-    /// the new run is observed.
-    ///
-    /// # Panics
-    ///
-    /// Panics permanently after all available registration identities have been
-    /// consumed. Use [`try_register`](Self::try_register) for typed refusal.
-    #[cfg(test)]
-    pub(crate) fn register(&self, controller: AnimationController) -> VsyncRegistration {
-        let controller = Terminal::new(controller);
-        match self.try_register(controller.get()) {
-            Ok(registration) => registration,
-            Err(VsyncRegistrationError::Exhausted) => {
-                panic!("Vsync registration capacity exhausted");
-            }
-        }
-    }
-
-    /// Register a borrowed controller, reporting permanent identity exhaustion.
-    ///
-    /// A refusal leaves the controller and every admitted registration intact.
-    ///
-    /// # Panics
-    /// If requesting an already running controller's first sample fails, the
-    /// provisional seat is removed before the wake failure propagates.
-    #[cfg(test)]
-    pub(crate) fn try_register(
-        &self,
-        controller: &AnimationController,
-    ) -> Result<VsyncRegistration, VsyncRegistrationError> {
-        let registration = self.try_register_with_anchor(controller, RunAnchor::Fresh)?;
-        let mut retirement = Retirement::new();
-        if controller.walk_probe().live_running {
-            registration.request_frame(&mut retirement.scope());
-        }
-        if retirement.has_failure() {
-            retirement.run(|| self.unregister(&registration));
-        }
-        retirement.finish();
-        Ok(registration)
-    }
-
     pub(crate) fn try_register_resuming(
         &self,
         controller: &AnimationController,
@@ -670,7 +621,9 @@ mod tests {
         middle.attach_child(&inner).expect("nested");
 
         let animation = controller(1000);
-        inner.register(animation.clone());
+        inner
+            .try_register_resuming(&animation, Duration::ZERO)
+            .expect("private token admission");
         let _ = animation.forward();
 
         middle.set_muted(true);
@@ -730,7 +683,9 @@ mod tests {
     fn a_listener_may_unregister_from_inside_tick_all() {
         let vsync = Vsync::new();
         let controller = AnimationController::builder(Duration::from_millis(100)).build();
-        let registration = vsync.register(controller.clone());
+        let registration = vsync
+            .try_register_resuming(&controller, Duration::ZERO)
+            .expect("private token admission");
 
         let slot: Rc<RefCell<Option<VsyncRegistration>>> =
             Rc::new(RefCell::new(Some(registration)));
@@ -757,16 +712,20 @@ mod tests {
     fn registration_exhaustion_preserves_admitted_work() {
         for (remaining, child_last) in [(1, false), (1, true), (2, false), (2, true)] {
             let registry = Vsync::new();
-            // Only the counter boundary requires private setup. Every admission,
-            // refusal, removal and tick below uses the production public API.
+            // Seed the private counter boundary, then use the production admission
+            // seam and public owning-handle refusal and retirement.
             registry.inner.borrow_mut().next_id = u64::MAX - remaining;
             let preceding = AnimationController::builder(Duration::from_secs(1)).build();
             let preceding_child = Vsync::new();
             let preceding_id = if remaining == 2 {
                 let id = if child_last {
-                    registry.register(preceding.clone())
+                    registry
+                        .try_register_resuming(&preceding, Duration::ZERO)
+                        .expect("private token admission")
                 } else {
-                    preceding_child.register(preceding.clone());
+                    preceding_child
+                        .try_register_resuming(&preceding, Duration::ZERO)
+                        .expect("private token admission");
                     registry
                         .attach_child(&preceding_child)
                         .expect("penultimate child identity admitted")
@@ -781,20 +740,22 @@ mod tests {
             let child = Vsync::new();
             let animation = AnimationController::builder(Duration::from_secs(1)).build();
             let last = if child_last {
-                child.register(animation.clone());
+                child
+                    .try_register_resuming(&animation, Duration::ZERO)
+                    .expect("private token admission");
                 registry
                     .attach_child(&child)
                     .expect("last child identity admitted")
             } else {
                 registry
-                    .try_register(&animation)
+                    .try_register_resuming(&animation, Duration::ZERO)
                     .expect("last controller identity admitted")
             };
             animation.forward().expect("last admitted run starts");
             let refused = AnimationController::builder(Duration::from_secs(1)).build();
             for handle in [&registry, &registry.clone()] {
                 assert_eq!(
-                    handle.try_register(&refused),
+                    handle.try_register_resuming(&refused, Duration::ZERO),
                     Err(VsyncRegistrationError::Exhausted)
                 );
                 assert!(handle.attach_child(&Vsync::new()).is_none());
@@ -834,7 +795,7 @@ mod tests {
             registry.unregister(&last);
             registry.detach_child(&last);
             assert_eq!(
-                registry.try_register(&refused),
+                registry.try_register_resuming(&refused, Duration::ZERO),
                 Err(VsyncRegistrationError::Exhausted)
             );
             assert!(
@@ -850,32 +811,38 @@ mod tests {
                 }
             }
             let drops = Rc::new(std::sync::atomic::AtomicUsize::new(0));
-            let rejected = AnimationController::builder(Duration::from_secs(1)).build();
+            let mut rejected = AnimationController::builder(Duration::from_secs(1)).build_on(None);
             let probe = RejectedCapture(drops.clone());
-            rejected.add_status_listener(Rc::new(move |_| {
+            rejected.controller().add_status_listener(Rc::new(move |_| {
                 let _capture = &probe;
             }));
-            let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                registry.register(rejected)
-            }))
-            .expect_err("owned wrapper preserves intentional exhaustion panic");
             assert_eq!(
-                flui_foundation::panic::payload_text(failure.as_ref()),
-                Some("Vsync registration capacity exhausted")
+                rejected.rebind(Some(&registry)),
+                Err(VsyncRegistrationError::Exhausted)
             );
-            flui_foundation::panic::retain_opaque_payload(failure);
+            assert!(!rejected.is_bound());
             assert_eq!(
                 drops.load(std::sync::atomic::Ordering::SeqCst),
                 0,
-                "rejected opaque owner retained during exhaustion unwind"
+                "refusal preserves the owning handle's captures"
             );
+            let failure =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rejected.dispose()))
+                    .expect_err("explicit owner retirement fails");
             assert_eq!(
-                registry.try_register(&refused),
+                flui_foundation::panic::payload_text(failure.as_ref()),
+                Some("rejected controller capture")
+            );
+            flui_foundation::panic::retain_opaque_payload(failure);
+            assert_eq!(drops.load(std::sync::atomic::Ordering::SeqCst), 1);
+            rejected.dispose();
+            assert_eq!(
+                registry.try_register_resuming(&refused, Duration::ZERO),
                 Err(VsyncRegistrationError::Exhausted)
             );
             let fresh = Vsync::new();
             let fresh_id = fresh
-                .try_register(&refused)
+                .try_register_resuming(&refused, Duration::ZERO)
                 .expect("independent registry still admits");
             refused.forward().expect("fresh run");
             fresh.tick_all(
