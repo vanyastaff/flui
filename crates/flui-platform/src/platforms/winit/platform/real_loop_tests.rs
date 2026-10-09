@@ -128,6 +128,45 @@ fn build_test_event_loop() -> EventLoop<()> {
     }
 }
 
+/// A paint-capable native window outside the virtual desktop, without activation.
+#[cfg(target_os = "windows")]
+#[allow(
+    unsafe_code,
+    reason = "the test owns this live HWND and changes only its position and visibility"
+)]
+fn make_unactivated_offscreen(window: &dyn HostWindow) -> anyhow::Result<()> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::{
+        Foundation::HWND,
+        UI::WindowsAndMessaging::{
+            GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+            SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos, ShowWindow,
+        },
+    };
+    let RawWindowHandle::Win32(handle) = window.window_handle()?.as_raw() else {
+        panic!("Windows event loop must create a Win32 window");
+    };
+    let hwnd = HWND(handle.hwnd.get() as *mut std::ffi::c_void);
+    // SAFETY: position outside the virtual desktop before making this owned window
+    // visible. Neither operation activates it; owner shutdown destroys it normally.
+    unsafe {
+        let x = GetSystemMetrics(SM_XVIRTUALSCREEN)
+            .saturating_add(GetSystemMetrics(SM_CXVIRTUALSCREEN))
+            .saturating_add(100);
+        SetWindowPos(
+            hwnd,
+            None,
+            x,
+            GetSystemMetrics(SM_YVIRTUALSCREEN),
+            0,
+            0,
+            SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER,
+        )?;
+        let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    }
+    Ok(())
+}
+
 /// Native ingress needs the real event-loop owner; no test changes OS settings.
 #[test]
 #[cfg(target_os = "windows")]
@@ -320,6 +359,7 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
             };
             let hwnd = HWND(handle.hwnd.get() as *mut std::ffi::c_void);
             window.on_request_frame(Box::new(move || *frame_sink.lock() += 1));
+            make_unactivated_offscreen(window.as_ref())?;
             window.request_redraw();
             window.on_input(Box::new(move |input| {
                 if let flui_platform_api::PlatformInput::Pointer(PointerEvent::Scroll(scroll)) =
@@ -543,6 +583,7 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
                 .open_window(options("cold-winit-preferences"))?
                 .try_ready()?;
             window.on_request_frame(Box::new(move || *frame_sink.lock() += 1));
+            make_unactivated_offscreen(window.as_ref())?;
             window.request_redraw();
             Ok(())
         })),
