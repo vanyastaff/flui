@@ -1412,7 +1412,10 @@ impl GestureBinding {
             .is_some_and(|current| Rc::ptr_eq(current, sequence))
     }
 
-    fn prepare_pan_zoom_sequence(&self, event: &PanZoomEvent) -> PanZoomAdmission {
+    fn prepare_pan_zoom_sequence(
+        &self,
+        event: &PanZoomEvent,
+    ) -> (PanZoomAdmission, Option<RoutePanic>) {
         let pointer = *event.pointer();
         let source = SignalSource::from(pointer);
         let mut sequences = self.pan_zoom_sequences.borrow_mut();
@@ -1420,22 +1423,22 @@ impl GestureBinding {
             && sequence.pointer != pointer.id
             && !matches!(event.phase, PanZoomPhase::Start)
         {
-            return PanZoomAdmission::Refused;
+            return (PanZoomAdmission::Refused, None);
         }
         if matches!(event.phase, PanZoomPhase::End | PanZoomPhase::Cancelled) {
-            return PanZoomAdmission::Terminal(sequences.remove(&source));
+            return (PanZoomAdmission::Terminal(sequences.remove(&source)), None);
         }
         let prior = if matches!(event.phase, PanZoomPhase::Start) {
             // Repeated exact Start replaces the cumulative session, while its
             // admitted consumer receives retirement and the new staged pair.
             sequences.remove(&source)
         } else if let Some(sequence) = sequences.get(&source) {
-            return PanZoomAdmission::Active(Rc::clone(sequence));
+            return (PanZoomAdmission::Active(Rc::clone(sequence)), None);
         } else {
             None
         };
         if sequences.len() >= MAX_SIMULTANEOUS_POINTERS {
-            return PanZoomAdmission::Refused;
+            return (PanZoomAdmission::Refused, None);
         }
         let sequence = Rc::new(PanZoomSequence {
             route: Cell::new(
@@ -1449,7 +1452,7 @@ impl GestureBinding {
         });
         sequences.insert(source, Rc::clone(&sequence));
         drop(sequences);
-        if let Some(prior) = prior {
+        let failure = if let Some(prior) = prior {
             let tickets = std::mem::take(&mut *prior.staged.borrow_mut());
             let (kept, retired): (Vec<_>, Vec<_>) = tickets.into_iter().partition(|(route, _)| {
                 sequence
@@ -1458,9 +1461,11 @@ impl GestureBinding {
                     .is_some_and(|winner| winner.same_target(*route))
             });
             *sequence.staged.borrow_mut() = kept;
-            Self::retire_pan_zoom_tickets(retired);
-        }
-        PanZoomAdmission::Active(sequence)
+            RoutePanic::capture(|| Self::retire_pan_zoom_tickets(retired))
+        } else {
+            None
+        };
+        (PanZoomAdmission::Active(sequence), failure)
     }
 
     fn retire_pan_zoom_tickets(tickets: Vec<(PanZoomRoute, PanZoomRetirement)>) {
@@ -1894,14 +1899,23 @@ impl GestureBinding {
                 }
             }
             PointerEvent::PanZoom(gesture) => {
-                let admission = self.prepare_pan_zoom_sequence(gesture);
+                let (admission, mut first_panic) = self.prepare_pan_zoom_sequence(gesture);
                 let position = event
                     .position()
                     .expect("BUG: PanZoom carries a checked position");
                 // Native gesture observation follows fresh geometry; accepted
                 // consumption stays with its exact owner across rebuilds.
-                let path = hit_test_fn(position);
-                let mut first_panic = self.dispatch_ephemeral(event, &path);
+                let mut path = HitTestResult::new();
+                RoutePanic::preserve_first(
+                    &mut first_panic,
+                    RoutePanic::capture(|| path = hit_test_fn(position)),
+                    "native fresh observation geometry",
+                );
+                RoutePanic::preserve_first(
+                    &mut first_panic,
+                    self.dispatch_ephemeral(event, &path),
+                    "native observers after admission retirement",
+                );
                 let claim = RoutePanic::capture(|| {
                     let claimed = match &admission {
                         PanZoomAdmission::Terminal(Some(sequence)) => {
