@@ -229,6 +229,23 @@ impl CursorPublication {
     }
 }
 
+#[derive(Default)]
+enum CursorOwner {
+    #[default]
+    Unobserved,
+    Physical(PointerInfo),
+    Removed(PointerInfo),
+}
+
+impl CursorOwner {
+    fn physical_source(&self) -> Option<SourceKey> {
+        match self {
+            Self::Physical(pointer) => Some(SourceKey::from_pointer(pointer)),
+            _ => None,
+        }
+    }
+}
+
 struct MouseTrackerInner {
     closed: bool,
     close_mode: crate::__runtime::CloseTombstone,
@@ -245,6 +262,7 @@ struct MouseTrackerInner {
     /// Callback for cursor changes.
     cursor_change_callback: Option<CursorChangeCallback>,
     cursor_publication: CursorPublication,
+    cursor_owner: CursorOwner,
 }
 
 impl MouseTracker {
@@ -259,6 +277,7 @@ impl MouseTracker {
                 mouse_connected: false,
                 cursor_change_callback: None,
                 cursor_publication: CursorPublication::default(),
+                cursor_owner: CursorOwner::Unobserved,
             })),
         }
     }
@@ -304,12 +323,46 @@ impl MouseTracker {
 
     /// Removes a pointing device and all hover state associated with it.
     pub fn remove_device(&self, device_id: DeviceId) {
+        {
+            let mut inner = self.inner.borrow_mut();
+            inner.devices.remove(&SourceKey::KnownDevice(device_id));
+            if inner.cursor_owner.physical_source() == Some(SourceKey::KnownDevice(device_id))
+                && let CursorOwner::Physical(pointer) = inner.cursor_owner
+            {
+                inner.cursor_owner = CursorOwner::Removed(pointer);
+                inner.cursor_publication.pending |=
+                    inner.cursor_publication.published != CursorIcon::Default;
+            }
+            inner.mouse_connected = inner
+                .devices
+                .values()
+                .any(|state| state.pointer.kind == PointerKind::Mouse);
+        }
+        let mut failure = crate::__runtime::ClosePanic::new();
+        if let Some(work) = self.fallback_cursor_work() {
+            work.invoke(&mut failure);
+        }
+        failure.finish();
+    }
+
+    fn fallback_cursor_work(&self) -> Option<DeviceWork> {
         let mut inner = self.inner.borrow_mut();
-        inner.devices.remove(&SourceKey::KnownDevice(device_id));
-        inner.mouse_connected = inner
-            .devices
-            .values()
-            .any(|state| state.pointer.kind == PointerKind::Mouse);
+        let CursorOwner::Removed(pointer) = inner.cursor_owner else {
+            return None;
+        };
+        if inner.closed || !inner.cursor_publication.pending {
+            return None;
+        }
+        Some(DeviceWork {
+            tracker: Rc::clone(&self.inner),
+            pointer,
+            position: Offset::ZERO,
+            enter_callbacks: SmallVec::new(),
+            exit_callbacks: SmallVec::new(),
+            cursor_observation: Some(inner.cursor_publication.observe(CursorIcon::Default)),
+            new_cursor: CursorIcon::Default,
+            retired_annotations: Vec::new(),
+        })
     }
 
     /// Fires exit callbacks for every region every device currently hovers,
@@ -332,6 +385,11 @@ impl MouseTracker {
         let sweeps: Vec<DeviceWork> = {
             let mut inner = self.inner.borrow_mut();
             let inner = &mut *inner;
+            if let CursorOwner::Physical(pointer) = inner.cursor_owner {
+                inner.cursor_owner = CursorOwner::Removed(pointer);
+                inner.cursor_publication.pending |=
+                    inner.cursor_publication.published != CursorIcon::Default;
+            }
             inner
                 .devices
                 .iter_mut()
@@ -361,7 +419,7 @@ impl MouseTracker {
                         position,
                         enter_callbacks: SmallVec::new(),
                         exit_callbacks,
-                        cursor_observation: inner.cursor_publication.observe(CursorIcon::Default),
+                        cursor_observation: None,
                         new_cursor: CursorIcon::Default,
                         retired_annotations: Vec::new(),
                     })
@@ -374,6 +432,9 @@ impl MouseTracker {
         // one device.
         let mut failure = crate::__runtime::ClosePanic::new();
         for work in sweeps {
+            work.invoke(&mut failure);
+        }
+        if let Some(work) = self.fallback_cursor_work() {
             work.invoke(&mut failure);
         }
         failure.finish();
@@ -446,6 +507,7 @@ impl MouseTracker {
             state.active_regions = new_regions;
             state.active_order = resolved.order;
             state.current_cursor = new_cursor;
+            inner.cursor_owner = CursorOwner::Physical(pointer);
 
             let enter_callbacks: SmallVec<[Latched<MouseEnterCallback>; 4]> = entered
                 .iter()
@@ -481,7 +543,7 @@ impl MouseTracker {
                 position,
                 enter_callbacks,
                 exit_callbacks,
-                cursor_observation: inner.cursor_publication.observe(new_cursor),
+                cursor_observation: Some(inner.cursor_publication.observe(new_cursor)),
                 new_cursor,
                 retired_annotations,
             }
@@ -661,7 +723,11 @@ impl MouseTracker {
                     position,
                     enter_callbacks,
                     exit_callbacks,
-                    cursor_observation: inner.cursor_publication.observe(new_cursor),
+                    cursor_observation: if inner.cursor_owner.physical_source() == Some(device_id) {
+                        Some(inner.cursor_publication.observe(new_cursor))
+                    } else {
+                        None
+                    },
                     new_cursor,
                     retired_annotations,
                 }
@@ -670,6 +736,9 @@ impl MouseTracker {
         }
 
         for work in pending {
+            work.invoke(&mut failure);
+        }
+        if let Some(work) = self.fallback_cursor_work() {
             work.invoke(&mut failure);
         }
         failure.finish();
@@ -845,7 +914,7 @@ struct DeviceWork {
     position: Offset<f64>,
     enter_callbacks: SmallVec<[Latched<MouseEnterCallback>; 4]>,
     exit_callbacks: SmallVec<[Latched<MouseExitCallback>; 4]>,
-    cursor_observation: Rc<()>,
+    cursor_observation: Option<Rc<()>>,
     new_cursor: CursorIcon,
     /// Replaced and departed annotations whose captures retire after dispatch.
     retired_annotations: Vec<ResolvedMouseTrackerAnnotation>,
@@ -881,78 +950,74 @@ impl DeviceWork {
                 failure.invoke(|| latch.release(callback));
             }
         }
-        let callback = {
-            let mut inner = self.tracker.borrow_mut();
-            if !inner.closed
-                && inner.cursor_publication.pending
-                && Rc::ptr_eq(
-                    &inner.cursor_publication.observation,
-                    &self.cursor_observation,
-                )
-            {
-                let callback = inner.cursor_change_callback.clone();
-                if let Some(callback) = &callback {
-                    let identity = Rc::downgrade(callback);
-                    if inner.cursor_publication.in_flight.iter().any(|flight| {
-                        flight.cursor == self.new_cursor
-                            && std::rc::Weak::ptr_eq(&flight.callback, &identity)
-                    }) {
-                        // Same-hook, same-state recursion cannot complete the
-                        // in-flight publication. Its latest debt stays pending.
-                        None
+        if let Some(observation) = self.cursor_observation {
+            let callback = {
+                let mut inner = self.tracker.borrow_mut();
+                if !inner.closed
+                    && inner.cursor_publication.pending
+                    && Rc::ptr_eq(&inner.cursor_publication.observation, &observation)
+                {
+                    let callback = inner.cursor_change_callback.clone();
+                    if let Some(callback) = &callback {
+                        let identity = Rc::downgrade(callback);
+                        if inner.cursor_publication.in_flight.iter().any(|flight| {
+                            flight.cursor == self.new_cursor
+                                && std::rc::Weak::ptr_eq(&flight.callback, &identity)
+                        }) {
+                            // Same-hook, same-state recursion cannot complete the
+                            // in-flight publication. Its latest debt stays pending.
+                            None
+                        } else {
+                            inner.cursor_publication.in_flight.push(CursorFlight {
+                                observation: Rc::clone(&observation),
+                                callback: identity,
+                                cursor: self.new_cursor,
+                            });
+                            Some(Rc::clone(callback))
+                        }
                     } else {
-                        inner.cursor_publication.in_flight.push(CursorFlight {
-                            observation: Rc::clone(&self.cursor_observation),
-                            callback: identity,
-                            cursor: self.new_cursor,
-                        });
-                        Some(Rc::clone(callback))
+                        None
                     }
                 } else {
                     None
                 }
-            } else {
-                None
-            }
-        };
-        if let Some(callback) = callback {
-            let delivered = failure.invoke(|| callback(self.pointer, self.new_cursor));
-            {
-                let mut inner = self.tracker.borrow_mut();
-                if let Some(index) = inner
-                    .cursor_publication
-                    .in_flight
-                    .iter()
-                    .position(|flight| Rc::ptr_eq(&flight.observation, &self.cursor_observation))
+            };
+            if let Some(callback) = callback {
+                let delivered = failure.invoke(|| callback(self.pointer, self.new_cursor));
                 {
-                    inner.cursor_publication.in_flight.remove(index);
-                }
-                if Rc::ptr_eq(
-                    &inner.cursor_publication.observation,
-                    &self.cursor_observation,
-                ) {
-                    if delivered.is_some() {
-                        inner.cursor_publication.published = self.new_cursor;
-                        if inner
-                            .cursor_change_callback
-                            .as_ref()
-                            .is_some_and(|current| Rc::ptr_eq(current, &callback))
-                        {
-                            inner.cursor_publication.pending = false;
+                    let mut inner = self.tracker.borrow_mut();
+                    if let Some(index) = inner
+                        .cursor_publication
+                        .in_flight
+                        .iter()
+                        .position(|flight| Rc::ptr_eq(&flight.observation, &observation))
+                    {
+                        inner.cursor_publication.in_flight.remove(index);
+                    }
+                    if Rc::ptr_eq(&inner.cursor_publication.observation, &observation) {
+                        if delivered.is_some() {
+                            inner.cursor_publication.published = self.new_cursor;
+                            if inner
+                                .cursor_change_callback
+                                .as_ref()
+                                .is_some_and(|current| Rc::ptr_eq(current, &callback))
+                            {
+                                inner.cursor_publication.pending = false;
+                            }
+                        } else {
+                            inner.cursor_publication.pending = true;
                         }
-                    } else {
-                        inner.cursor_publication.pending = true;
                     }
                 }
-            }
-            let preserved = {
-                let inner = self.tracker.borrow();
-                inner.closed && inner.close_mode.preserved()
-            };
-            if preserved {
-                callback.retain();
-            } else {
-                failure.retire(callback);
+                let preserved = {
+                    let inner = self.tracker.borrow();
+                    inner.closed && inner.close_mode.preserved()
+                };
+                if preserved {
+                    callback.retain();
+                } else {
+                    failure.retire(callback);
+                }
             }
         }
         for annotation in self.retired_annotations {
