@@ -88,7 +88,6 @@ flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev" }
 flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev" }
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 flui-layer = { path = "../flui-layer", version = "=0.2.0-dev" }
-flui-semantics = { path = "../flui-semantics", version = "=0.2.0-dev" }
 flui-engine = { path = "../flui-engine", version = "=0.2.0-dev" }
 flui-platform = { path = "../flui-platform", version = "=0.2.0-dev" }
 # Widget catalog: provides `VsyncScope`, which `AppBinding::attach_root_widget*`
