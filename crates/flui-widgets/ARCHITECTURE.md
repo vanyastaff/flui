@@ -2279,6 +2279,13 @@ retire without holding those locks. The rows
 and `rebuilding_refresh_content_with_the_same_position_preserves_its_fling`
 use virtual frames to observe actual position changes.
 
+Refresh-phase observation belongs to a private overlay view. Entering and
+leaving refresh invalidates that overlay without rebuilding the viewport,
+content or gesture handlers. `refresh_indicator_rebuilds_only_on_a_phase_change`
+counts builds in the actual content and observes the loading arc's appearance
+and removal in the committed scene; scroll and pull frames remain free of
+element rebuilds.
+
 The design follows this widget's synchronous completion and logical-pixel
 threshold contract. As a comparison after choosing it, Flutter's
 [refresh notification handler](https://github.com/flutter/flutter/blob/main/packages/flutter/lib/src/material/refresh_indicator.dart)

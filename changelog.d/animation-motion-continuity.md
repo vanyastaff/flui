@@ -35,6 +35,9 @@
 
 ### Fixed
 
+- Rebuild only the RefreshIndicator overlay when refresh starts or finishes;
+  retain scroll content and gesture handlers across phase changes.
+
 - Move Dismissible content through a render-owned slide while delivering
   progress updates independently of element rebuilds.
 - Move Drawer panels and fade their scrims through render-owned transitions,

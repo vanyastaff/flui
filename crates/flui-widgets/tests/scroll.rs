@@ -2764,6 +2764,24 @@ impl RefreshHarness {
         self.binding.last_frame_report().build.elements_built
     }
 
+    fn paints_indicator(&self) -> bool {
+        self.binding
+            .layer_tree()
+            .expect("committed refresh scene")
+            .iter()
+            .any(|(_, node)| {
+                if let flui_rendering::layer::Layer::Picture(picture) = node.layer() {
+                    picture.picture().iter().any(|command| {
+                        matches!(&command.op,
+                    flui_painting::display_list::DrawOp::Arc { paint, .. }
+                    if paint.color == flui_painting::styling::Color::rgba(33, 150, 243, 204))
+                    })
+                } else {
+                    false
+                }
+            })
+    }
+
     /// Where the content's top edge is painted, in root coordinates.
     fn content_top(&self) -> f64 {
         self.binding
@@ -2826,6 +2844,10 @@ pub(crate) fn refresh_indicator_rebuilds_only_on_a_phase_change() {
     use flui_testing::PointerPhase::{Down, Move, Up};
     let mut harness = RefreshHarness::mount();
     let content_builds = harness.content_builds.get();
+    assert!(
+        !harness.paints_indicator(),
+        "idle content has no loading arc"
+    );
     let heard = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let counter = Arc::clone(&heard);
     let _subscription = harness
@@ -2856,6 +2878,10 @@ pub(crate) fn refresh_indicator_rebuilds_only_on_a_phase_change() {
         "entering the refreshing phase rebuilds"
     );
     assert_eq!(harness.frame(), 0, "and then settles");
+    assert!(
+        harness.paints_indicator(),
+        "the refreshing frame paints its loading arc"
+    );
     assert_eq!(
         harness.content_builds.get(),
         content_builds,
@@ -2865,6 +2891,10 @@ pub(crate) fn refresh_indicator_rebuilds_only_on_a_phase_change() {
     harness.refresh.finish();
     assert!(harness.frame() > 0, "leaving the refreshing phase rebuilds");
     assert_eq!(harness.frame(), 0, "and then settles");
+    assert!(
+        !harness.paints_indicator(),
+        "completion removes the loading arc"
+    );
     assert_eq!(
         harness.content_builds.get(),
         content_builds,

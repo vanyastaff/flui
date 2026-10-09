@@ -20,9 +20,6 @@
 //!
 //! # Deferred (v1)
 //!
-//! - DEFERRED (v1): animated rotation spinner — current indicator is a static
-//!   `ColoredBox`. A full `RotationTransition`-based spinner requires a
-//!   dedicated vsync-registered `AnimationController`.
 //! - DEFERRED (v1): pull-distance → indicator progress easing curve.
 //! - DEFERRED (v1): overscroll glow effect.
 //! - DEFERRED (v1): nested-scroll coordination and horizontal pull-to-refresh.
@@ -53,7 +50,7 @@ use crate::animated::VsyncScope;
 use crate::scroll::scrollable::presentation_device_pixel_ratio;
 use crate::scroll::single_child_scroll_view::SingleChildScrollView;
 use crate::scroll::{ClampingScrollPhysics, ScrollController, ScrollMetrics, SharedScrollPhysics};
-use crate::{ActivityIndicator, Center, GestureDetector, Positioned, Stack};
+use crate::{ActivityIndicator, Center, GestureDetector, Positioned, SizedBox, Stack};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -444,14 +441,6 @@ pub struct RefreshIndicatorState {
     vsync: Option<Vsync>,
     /// Presentation metrics acquired before event callbacks are installed.
     pipeline: Option<WeakPipelineCell>,
-    /// Schedules this element's rebuild; acquired in `init_state`.
-    rebuild: Option<RebuildHandle>,
-    /// The refresh controller this state listens to for phase changes, and
-    /// the subscription; replaced when the view hands over another one.
-    phase_subscription: Option<(RefreshController, ListenerId)>,
-    /// The controller from the first configuration, subscribed in
-    /// `init_state` once a rebuild handle exists.
-    initial_controller: Option<RefreshController>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -492,9 +481,6 @@ impl StatefulView for RefreshIndicator {
             fling_status_subscription: None,
             vsync: None,
             pipeline: None,
-            rebuild: None,
-            phase_subscription: None,
-            initial_controller: Some(self.controller.clone()),
         }
     }
 }
@@ -579,7 +565,33 @@ impl RefreshIndicatorState {
             }),
         ));
     }
+}
 
+/// Owns refresh-phase invalidation independently of the scrolling subtree.
+#[derive(Clone, StatefulView)]
+struct RefreshOverlay {
+    controller: RefreshController,
+}
+
+struct RefreshOverlayState {
+    rebuild: Option<RebuildHandle>,
+    phase_subscription: Option<(RefreshController, ListenerId)>,
+    initial_controller: Option<RefreshController>,
+}
+
+impl StatefulView for RefreshOverlay {
+    type State = RefreshOverlayState;
+
+    fn create_state(&self) -> Self::State {
+        RefreshOverlayState {
+            rebuild: None,
+            phase_subscription: None,
+            initial_controller: Some(self.controller.clone()),
+        }
+    }
+}
+
+impl RefreshOverlayState {
     /// Listens to `controller` and rebuilds only when its refresh phase
     /// flips: a pull-distance change alone reaches external listeners of
     /// [`RefreshController::as_listenable`] but rebuilds nothing here.
@@ -601,15 +613,46 @@ impl RefreshIndicatorState {
     }
 }
 
-impl ViewState<RefreshIndicator> for RefreshIndicatorState {
+impl ViewState<RefreshOverlay> for RefreshOverlayState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.pipeline = ctx.pipeline_owner().map(|cell| cell.downgrade());
-        self.install_fling_listener();
         self.rebuild = Some(ctx.rebuild_handle());
         if let Some(controller) = self.initial_controller.take() {
             self.subscribe_phase(&controller);
         }
+    }
 
+    fn build(&self, view: &RefreshOverlay, _ctx: &dyn BuildContext) -> impl IntoView {
+        if view.controller.is_refreshing() {
+            Positioned::new(Center::new().child(ActivityIndicator::new().color(INDICATOR_COLOR)))
+                .top(0.0)
+                .left(0.0)
+                .right(0.0)
+                .height(INDICATOR_HEIGHT_PX)
+                .boxed()
+        } else {
+            SizedBox::shrink().boxed()
+        }
+    }
+
+    fn did_update_view(&mut self, _old_view: &RefreshOverlay, new_view: &RefreshOverlay) {
+        if !self
+            .phase_subscription
+            .as_ref()
+            .is_some_and(|(controller, _)| controller.shares_state_with(&new_view.controller))
+        {
+            self.subscribe_phase(&new_view.controller);
+        }
+    }
+
+    fn dispose(&mut self) {
+        self.unsubscribe_phase();
+    }
+}
+
+impl ViewState<RefreshIndicator> for RefreshIndicatorState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.pipeline = ctx.pipeline_owner().map(|cell| cell.downgrade());
+        self.install_fling_listener();
         self.did_change_dependencies(ctx);
     }
 
@@ -620,9 +663,9 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
 
     fn build(&self, view: &RefreshIndicator, _ctx: &dyn BuildContext) -> impl IntoView {
         let pipeline_end = self.pipeline.clone();
-        // Built once per refresh phase, not per scroll pixel: the viewport
-        // follows the shared position itself, and every gesture callback reads
-        // the controllers at event time rather than capturing a snapshot.
+        // The viewport follows the shared position itself. Refresh-phase
+        // invalidation belongs to the overlay, so neither scrolling nor phase
+        // changes rebuild the gesture handlers or content.
         let scroll_view = {
             let mut scroll_view =
                 SingleChildScrollView::new().position(self.scroll_controller.position());
@@ -631,18 +674,13 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
             }
             scroll_view
         };
-        let mut stack_children: Vec<_> = vec![scroll_view.boxed()];
-        if view.controller.is_refreshing() {
-            // Overlay the indicator at the very top of the content area.
-            let indicator = Positioned::new(
-                Center::new().child(ActivityIndicator::new().color(INDICATOR_COLOR)),
-            )
-            .top(0.0)
-            .left(0.0)
-            .right(0.0)
-            .height(INDICATOR_HEIGHT_PX);
-            stack_children.push(indicator.boxed());
-        }
+        let stack_children = vec![
+            scroll_view.boxed(),
+            RefreshOverlay {
+                controller: view.controller.clone(),
+            }
+            .boxed(),
+        ];
 
         let threshold_px = view.threshold_px;
         let fling_stop = self.fling_controller.controller().clone();
@@ -798,18 +836,10 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
             self.recognizer_owner = Rc::new(());
             self.install_fling_listener();
         }
-        if !self
-            .phase_subscription
-            .as_ref()
-            .is_some_and(|(controller, _)| controller.shares_state_with(&new_view.controller))
-        {
-            self.subscribe_phase(&new_view.controller);
-        }
     }
 
     fn dispose(&mut self) {
         self.fling_authority.set(FlingAuthority::Retired);
-        self.unsubscribe_phase();
         if let Some(id) = self.fling_listener_id.take() {
             self.fling_controller.controller().remove_listener(id);
         }
