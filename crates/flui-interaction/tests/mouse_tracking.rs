@@ -942,6 +942,59 @@ fn ambient_refresh_preserves_the_latest_physical_cursor_owner() {
     tracker.clear_cursor_change_callback();
 }
 
+fn removed_cursor_owner_failure_keeps_default_publication_deliverable() {
+    let tracker = MouseTracker::new();
+    let failed = Rc::new(Cell::new(false));
+    let callback_failed = Rc::clone(&failed);
+    let observed = Rc::new(RefCell::new(Vec::new()));
+    let callback_log = Rc::clone(&observed);
+    tracker.set_cursor_change_callback(Rc::new(move |pointer, cursor| {
+        callback_log.borrow_mut().push((pointer.id, cursor));
+        assert!(
+            !(cursor == CursorIcon::Default && callback_failed.get()),
+            "removed owner cursor failure"
+        );
+    }));
+    tracker.update_with_motion(
+        &hover(MOUSE, PointerKind::Mouse, Offset::new(5.0, 5.0), 1),
+        PointerMotionKind::Hover,
+        &cursor_path(&[Some(CursorIcon::Text)]),
+    );
+    failed.set(true);
+    let payload = catch_unwind(AssertUnwindSafe(|| tracker.remove_device(device(MOUSE))))
+        .expect_err("default publication failure resumes after ownership withdrawal");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"removed owner cursor failure")
+    );
+    assert!(tracker.device_position(device(MOUSE)).is_none());
+    failed.set(false);
+    tracker.update_all_devices(|_| panic!("removed source must not be probed"));
+    assert_eq!(
+        *observed.borrow(),
+        [
+            (PointerId::try_from(MOUSE).expect("mouse"), CursorIcon::Text),
+            (
+                PointerId::try_from(MOUSE).expect("mouse"),
+                CursorIcon::Default
+            ),
+            (
+                PointerId::try_from(MOUSE).expect("mouse"),
+                CursorIcon::Default
+            )
+        ],
+        "ownerless default debt survives until successful publication"
+    );
+    let count = observed.borrow().len();
+    tracker.update_all_devices(|_| panic!("removed source must not be probed"));
+    assert_eq!(
+        observed.borrow().len(),
+        count,
+        "successful default has no repeated debt"
+    );
+    tracker.clear_cursor_change_callback();
+}
+
 /// Local of a global point under `translate(100, 50) · rotate(90°) · scale(2)`:
 /// forward maps local `(x, y)` to `(100 - 2y, 50 + 2x)`.
 fn expected_local(global: (f64, f64)) -> (f64, f64) {
@@ -1313,6 +1366,10 @@ fn mouse_tracking_ordering_and_cursor_deferral() {
             (
                 "ambient refresh preserves latest physical cursor owner",
                 ambient_refresh_preserves_the_latest_physical_cursor_owner,
+            ),
+            (
+                "removed cursor owner publication failure and recovery",
+                removed_cursor_owner_failure_keeps_default_publication_deliverable,
             ),
             (
                 "latest cursor observation, replacement and failure recovery",
