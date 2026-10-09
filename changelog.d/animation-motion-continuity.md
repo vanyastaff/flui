@@ -4,12 +4,6 @@
   FollowSystem/Reduce/Full overrides and explicit Normal/Preserve controller
   behavior. Publish resolved policy through `MediaQuery::motion_of`.
 
-### Changed
-
-- `MediaQueryData` gains a `motion` field; exhaustive struct literals must supply
-  it or use `..Default::default()`. Essential timers, physical inertia and loading
-  indicators retain their timing under reduced motion and host duration scales.
-
 - `AnimationController::fling_across` converts physical gesture velocity across
   a validated extent and the authored controller range before admitting motion.
 
@@ -26,6 +20,10 @@
   velocities when retargeted through the render, layout and transform paths.
 
 ### Changed
+
+- `MediaQueryData` gains a `motion` field; exhaustive struct literals must supply
+  it or use `..Default::default()`. Essential timers, physical inertia and loading
+  indicators retain their timing under reduced motion and host duration scales.
 
 - Replace manual `AnimatedValue::advance` and owner cloning with frame-driven
   ownership. Component vectors are fixed arrays; observer views remain cloneable.
