@@ -420,6 +420,162 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
     assert!(failures.is_empty(), "{}", failures.join("; "));
 }
 
+#[test]
+#[cfg(target_os = "windows")]
+fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
+    struct ColdRead {
+        inner: WinitApp,
+        frames: Arc<Mutex<usize>>,
+        baseline: Arc<Mutex<Option<usize>>>,
+    }
+
+    impl ApplicationHandler for ColdRead {
+        fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+            let signal = self
+                .inner
+                .platform
+                .owner_signal
+                .lock()
+                .clone()
+                .expect("live owner signal");
+            let source = crate::platforms::windows::preferences::PreferenceSource::new(&signal)
+                .expect("native source construction");
+            assert!(
+                source
+                    .sample_with(|| Err(crate::PlatformError::Preferences {
+                        message: "injected first getter failure".into(),
+                    }))
+                    .is_err()
+            );
+            self.inner.preference_source = Some(source);
+            self.inner.resumed(event_loop);
+            let _ = signal.wake();
+        }
+
+        fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: winit::event::StartCause) {
+            self.inner.new_events(event_loop, cause);
+        }
+
+        fn window_event(
+            &mut self,
+            event_loop: &ActiveEventLoop,
+            window_id: WinitWindowId,
+            event: WinitWindowEvent,
+        ) {
+            self.inner.window_event(event_loop, window_id, event);
+        }
+
+        fn user_event(&mut self, event_loop: &ActiveEventLoop, (): ()) {
+            self.inner.user_event(event_loop, ());
+        }
+
+        fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+            let frames = *self.frames.lock();
+            if frames > 0 {
+                let _ = self.baseline.lock().get_or_insert(frames);
+            }
+            self.inner.about_to_wait(event_loop);
+        }
+
+        fn exiting(&mut self, event_loop: &ActiveEventLoop) {
+            self.inner.exiting(event_loop);
+        }
+    }
+
+    let platform = Arc::new(WinitPlatform::new());
+    let event_loop = build_test_event_loop();
+    let proxy = event_loop.create_proxy();
+    let owner_proxy = proxy.clone();
+    let signal = crate::shared::owner_signal::OwnerSignal::new(Arc::new(move || {
+        owner_proxy
+            .send_event(())
+            .map_err(|error| crate::PlatformError::EventLoop {
+                message: error.to_string(),
+            })
+    }));
+    *platform.owner_signal.lock() = Some(signal);
+    let (control, receiver) = control_lane(Arc::new(move || {
+        let _ = proxy.send_event(());
+    }));
+    platform
+        .install_control_lane(thread::current().id(), control.clone())
+        .expect("install owner lane");
+    let frames = Arc::new(Mutex::new(0_usize));
+    let baseline = Arc::new(Mutex::new(None));
+    let deferred = Arc::new(AtomicBool::new(false));
+    let recovered = Arc::new(AtomicBool::new(false));
+    let timeout_recovered = recovered.clone();
+    let timeout = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !timeout_recovered.load(Ordering::Acquire) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        control.request_quit();
+    });
+    let bootstrap_deferred = deferred.clone();
+    let wake_platform = platform.clone();
+    let wake_frames = frames.clone();
+    let wake_baseline = baseline.clone();
+    let wake_recovered = recovered.clone();
+    let frame_sink = frames.clone();
+    let app = WinitApp {
+        platform: platform.clone(),
+        preference_source: None,
+        on_ready: Some(Box::new(move |owner| {
+            assert!(matches!(
+                owner.preferences(),
+                Err(crate::PlatformError::PreferencesDeferred)
+            ));
+            bootstrap_deferred.store(true, Ordering::Release);
+            owner.on_wake(Box::new(move || match wake_platform.preferences() {
+                Err(crate::PlatformError::PreferencesDeferred) => {}
+                Ok(snapshot) => {
+                    assert!(snapshot.wheel().vertical().is_some());
+                    assert!(snapshot.wheel().horizontal_characters().is_some());
+                    let before = (*wake_baseline.lock()).expect("initial frame completed");
+                    assert_eq!(*wake_frames.lock(), before, "cold retry does not redraw");
+                    wake_recovered.store(true, Ordering::Release);
+                    wake_platform.quit();
+                }
+                Err(error) => panic!("unexpected recovery result: {error}"),
+            }))?;
+            let window = owner
+                .open_window(options("cold-winit-preferences"))?
+                .try_ready()?;
+            window.on_request_frame(Box::new(move || *frame_sink.lock() += 1));
+            window.request_redraw();
+            Ok(())
+        })),
+        control: receiver,
+        quit_notified: false,
+        in_flight_replies: Vec::new(),
+        bootstrap_error: None,
+        self_close_deadline: None,
+        self_close_route: SelfCloseRoute::default(),
+    };
+    let mut observer = ColdRead {
+        inner: app,
+        frames,
+        baseline,
+    };
+    let result = event_loop.run_app(&mut observer);
+    timeout.join().expect("bounded exit worker");
+    result.expect("real loop completes");
+    assert!(observer.inner.bootstrap_error.is_none());
+    assert!(
+        deferred.load(Ordering::Acquire),
+        "bootstrap remains usable without an observation"
+    );
+    assert!(
+        recovered.load(Ordering::Acquire),
+        "first failed read remains deliverable"
+    );
+    assert!(
+        platform.preferences().is_err(),
+        "retired owner refuses reads"
+    );
+}
+
 #[cfg(target_os = "macos")]
 fn build_test_event_loop() -> EventLoop<()> {
     EventLoop::builder()
