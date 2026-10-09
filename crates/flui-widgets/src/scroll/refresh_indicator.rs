@@ -417,6 +417,7 @@ impl RefreshIndicator {
 /// Owns the fling [`AnimationController`] and its vsync registration,
 /// mirroring the pattern used by [`Scrollable`](super::Scrollable).
 pub struct RefreshIndicatorState {
+    recognizer_owner: Rc<()>,
     /// The scroll controller from the current view configuration.
     /// Updated in `did_update_view` when the caller swaps controllers.
     scroll_controller: ScrollController,
@@ -465,6 +466,7 @@ impl StatefulView for RefreshIndicator {
             AnimationController::unbounded_without_ticker(Duration::from_millis(1));
 
         RefreshIndicatorState {
+            recognizer_owner: Rc::new(()),
             scroll_controller: self.scroll_controller.clone(),
             fling_controller,
             fling_listener_id: None,
@@ -616,6 +618,7 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
         let on_refresh_cb = view.on_refresh.clone();
 
         GestureDetector::new()
+            .recognizer_owner(Rc::clone(&self.recognizer_owner))
             .behavior(HitTestBehavior::Opaque)
             .on_pan_start(move |_cx, _details| {
                 // Halt any in-flight fling when the user grabs the content.
@@ -715,6 +718,7 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
             let _ = self.fling_controller.stop();
             self.scroll_controller.position().set_is_scrolling(false);
             self.scroll_controller = new_view.scroll_controller.clone();
+            self.recognizer_owner = Rc::new(());
             self.install_fling_listener();
         }
         if !self
