@@ -79,8 +79,8 @@ impl RenderSliver for BadGeometrySliver {
     fn perform_layout(
         &mut self,
         _ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
-    ) -> SliverGeometry {
-        self.geometry
+    ) -> flui_rendering::RenderResult<SliverGeometry> {
+        Ok(self.geometry)
     }
 
     fn hit_test(&self, _ctx: &mut SliverHitTestContext<'_, Leaf, Self::ParentData>) -> bool {

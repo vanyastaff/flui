@@ -98,7 +98,7 @@ impl RenderSliver for RenderSliverOffstage {
     fn perform_layout(
         &mut self,
         ctx: &mut SliverLayoutContext<'_, Single, SliverPhysicalParentData>,
-    ) -> SliverGeometry {
+    ) -> flui_rendering::RenderResult<SliverGeometry> {
         let constraints = *ctx.constraints();
 
         if self.offstage {
@@ -106,16 +106,16 @@ impl RenderSliver for RenderSliverOffstage {
             // zero *unconditionally* — a hidden sliver must not forward the
             // child's scroll_offset_correction to the viewport.
             if ctx.child_count() > 0 {
-                let _ = ctx.layout_child(0, constraints);
+                ctx.layout_child(0, constraints)?;
             }
-            return SliverGeometry::ZERO;
+            return Ok(SliverGeometry::ZERO);
         }
 
         // Transparent passthrough.
         if ctx.child_count() > 0 {
             ctx.layout_child(0, constraints)
         } else {
-            SliverGeometry::ZERO
+            Ok(SliverGeometry::ZERO)
         }
     }
 

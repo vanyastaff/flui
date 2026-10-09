@@ -101,7 +101,7 @@ where
         &mut self,
         index: usize,
         constraints: <P::Layout as LayoutCapability>::Constraints,
-    ) -> <P::Layout as LayoutCapability>::Geometry {
+    ) -> crate::error::RenderResult<<P::Layout as LayoutCapability>::Geometry> {
         self.inner.layout_child(index, constraints)
     }
 
@@ -116,10 +116,10 @@ where
         index: usize,
         constraints: <P::Layout as LayoutCapability>::Constraints,
         offset: Offset,
-    ) -> <P::Layout as LayoutCapability>::Geometry {
-        let geometry = self.inner.layout_child(index, constraints);
+    ) -> crate::error::RenderResult<<P::Layout as LayoutCapability>::Geometry> {
+        let geometry = self.inner.layout_child(index, constraints)?;
         self.inner.position_child(index, offset);
-        geometry
+        Ok(geometry)
     }
 
     /// Gets a child's current geometry (after layout).
@@ -155,16 +155,16 @@ where
     pub fn layout_all_children(
         &mut self,
         constraints: <P::Layout as LayoutCapability>::Constraints,
-    ) -> Vec<<P::Layout as LayoutCapability>::Geometry>
+    ) -> crate::error::RenderResult<Vec<<P::Layout as LayoutCapability>::Geometry>>
     where
         <P::Layout as LayoutCapability>::Constraints: Clone,
     {
         let count = self.child_count();
         let mut geometries = Vec::with_capacity(count);
         for i in 0..count {
-            geometries.push(self.inner.layout_child(i, constraints.clone()));
+            geometries.push(self.inner.layout_child(i, constraints.clone())?);
         }
-        geometries
+        Ok(geometries)
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -311,22 +311,22 @@ where
     // ════════════════════════════════════════════════════════════════════════
 
     /// Layouts a single child with parent's constraints and returns size.
-    pub fn layout_single_child(&mut self) -> Size {
+    pub fn layout_single_child(&mut self) -> crate::error::RenderResult<Size> {
         if self.child_count() > 0 {
             let constraints = *self.inner.constraints();
             self.inner.layout_child(0, constraints)
         } else {
-            Size::ZERO
+            Ok(Size::ZERO)
         }
     }
 
     /// Layouts a single child with loosened constraints.
-    pub fn layout_single_child_loose(&mut self) -> Size {
+    pub fn layout_single_child_loose(&mut self) -> crate::error::RenderResult<Size> {
         if self.child_count() > 0 {
             let constraints = self.loosen();
             self.inner.layout_child(0, constraints)
         } else {
-            Size::ZERO
+            Ok(Size::ZERO)
         }
     }
 
@@ -363,12 +363,12 @@ where
     /// pipeline-driven Proxy context the call drives
     /// `layout_sliver_subtree_borrowed` on the pre-acquired sliver-child slot.
     ///
-    /// `RenderViewport::perform_layout` (next PR) is the primary consumer.
+    /// `RenderViewport::perform_layout` is the primary consumer.
     pub fn layout_sliver_child(
         &mut self,
         index: usize,
         constraints: SliverConstraints,
-    ) -> SliverGeometry {
+    ) -> crate::error::RenderResult<SliverGeometry> {
         crate::protocol::box_protocol::BoxLayoutCtxErased::layout_sliver_child(
             &mut self.inner,
             index,
@@ -415,7 +415,7 @@ where
         &self,
         index: usize,
         baseline: crate::traits::TextBaseline,
-    ) -> Option<f64> {
+    ) -> crate::error::RenderResult<Option<f64>> {
         crate::protocol::box_protocol::BoxLayoutCtxErased::child_distance_to_actual_baseline(
             &self.inner,
             index,
@@ -438,7 +438,7 @@ where
         index: usize,
         dimension: IntrinsicDimension,
         extent: f64,
-    ) -> f64 {
+    ) -> crate::error::RenderResult<f64> {
         crate::protocol::box_protocol::BoxLayoutCtxErased::child_intrinsic(
             &mut self.inner,
             index,
@@ -449,25 +449,41 @@ where
 
     /// Convenience: maximum intrinsic width of child `index` for the given
     /// `height` extent.  Returns `0.0` when the intrinsics callback is not wired.
-    pub fn child_max_intrinsic_width(&mut self, index: usize, height: f64) -> f64 {
+    pub fn child_max_intrinsic_width(
+        &mut self,
+        index: usize,
+        height: f64,
+    ) -> crate::error::RenderResult<f64> {
         self.child_intrinsic(index, IntrinsicDimension::MaxWidth, height)
     }
 
     /// Convenience: minimum intrinsic width of child `index` for the given
     /// `height` extent.  Returns `0.0` when the intrinsics callback is not wired.
-    pub fn child_min_intrinsic_width(&mut self, index: usize, height: f64) -> f64 {
+    pub fn child_min_intrinsic_width(
+        &mut self,
+        index: usize,
+        height: f64,
+    ) -> crate::error::RenderResult<f64> {
         self.child_intrinsic(index, IntrinsicDimension::MinWidth, height)
     }
 
     /// Convenience: maximum intrinsic height of child `index` for the given
     /// `width` extent.  Returns `0.0` when the intrinsics callback is not wired.
-    pub fn child_max_intrinsic_height(&mut self, index: usize, width: f64) -> f64 {
+    pub fn child_max_intrinsic_height(
+        &mut self,
+        index: usize,
+        width: f64,
+    ) -> crate::error::RenderResult<f64> {
         self.child_intrinsic(index, IntrinsicDimension::MaxHeight, width)
     }
 
     /// Convenience: minimum intrinsic height of child `index` for the given
     /// `width` extent.  Returns `0.0` when the intrinsics callback is not wired.
-    pub fn child_min_intrinsic_height(&mut self, index: usize, width: f64) -> f64 {
+    pub fn child_min_intrinsic_height(
+        &mut self,
+        index: usize,
+        width: f64,
+    ) -> crate::error::RenderResult<f64> {
         self.child_intrinsic(index, IntrinsicDimension::MinHeight, width)
     }
 }
@@ -488,7 +504,11 @@ where
     /// [`Self::layout_sliver_child`]: Sliver render objects such as
     /// `RenderSliverToBoxAdapter` can host Box children and still drive the
     /// normal Box subtree layout walk through the pipeline.
-    pub fn layout_box_child(&mut self, index: usize, constraints: BoxConstraints) -> Size {
+    pub fn layout_box_child(
+        &mut self,
+        index: usize,
+        constraints: BoxConstraints,
+    ) -> crate::error::RenderResult<Size> {
         crate::protocol::sliver_protocol::SliverLayoutCtxErased::layout_box_child(
             &mut self.inner,
             index,
@@ -502,7 +522,7 @@ where
         index: usize,
         dimension: IntrinsicDimension,
         extent: f64,
-    ) -> f64 {
+    ) -> crate::error::RenderResult<f64> {
         crate::protocol::sliver_protocol::SliverLayoutCtxErased::box_child_intrinsic(
             &mut self.inner,
             index,
@@ -512,12 +532,20 @@ where
     }
 
     /// Convenience wrapper for the child's maximum intrinsic height.
-    pub fn box_child_max_intrinsic_height(&mut self, index: usize, width: f64) -> f64 {
+    pub fn box_child_max_intrinsic_height(
+        &mut self,
+        index: usize,
+        width: f64,
+    ) -> crate::error::RenderResult<f64> {
         self.box_child_intrinsic(index, IntrinsicDimension::MaxHeight, width)
     }
 
     /// Convenience wrapper for the child's maximum intrinsic width.
-    pub fn box_child_max_intrinsic_width(&mut self, index: usize, height: f64) -> f64 {
+    pub fn box_child_max_intrinsic_width(
+        &mut self,
+        index: usize,
+        height: f64,
+    ) -> crate::error::RenderResult<f64> {
         self.box_child_intrinsic(index, IntrinsicDimension::MaxWidth, height)
     }
 

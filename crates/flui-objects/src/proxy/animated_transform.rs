@@ -629,17 +629,20 @@ impl RenderBox for RenderAnimatedTransform {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
         let constraints = *ctx.constraints();
         let size = if ctx.child_count() > 0 {
             self.has_child = true;
-            ctx.layout_child(0, constraints)
+            ctx.layout_child(0, constraints)?
         } else {
             self.has_child = false;
             constraints.smallest()
         };
         self.cell.store_size(size);
-        size
+        Ok(size)
     }
 
     flui_rendering::forward_single_child_box_queries!();

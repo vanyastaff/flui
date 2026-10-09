@@ -94,13 +94,12 @@ impl PerformanceOverlayLayer {
     ///
     /// `options` is carried on the layer and not honoured yet: every row is
     /// recorded whatever it names.
-    #[must_use]
     pub fn record(
         text: &mut TextContext,
         bounds: Rect<f64>,
         options: PerformanceOverlayOption,
         sample: &PerformanceSample<'_>,
-    ) -> Self {
+    ) -> Result<Self, flui_painting::TextLayoutError> {
         let mut canvas = Canvas::new();
         canvas.draw_rrect(
             RRect::from_rect_and_radius(bounds, Radius::circular(4.0)),
@@ -122,9 +121,10 @@ impl PerformanceOverlayLayer {
                     direction: TextDirection::Ltr,
                     max_lines: None,
                     ellipsis: None,
-                })
+                })?
                 .to_shaped(None);
             canvas.draw_paragraph(&Arc::new(paragraph), Offset::new(x, y), color);
+            Ok::<(), flui_painting::TextLayoutError>(())
         };
 
         let fps = sample.fps;
@@ -133,7 +133,7 @@ impl PerformanceOverlayLayer {
         let mut y = bounds.top() + ROW;
         let gray = Color::rgba(130, 130, 130, 255);
 
-        label("GPU", x, y, 11.0, Color::rgba(0, 200, 200, 255));
+        label("GPU", x, y, 11.0, Color::rgba(0, 200, 200, 255))?;
         let fps_color = if fps >= 55.0 {
             Color::rgba(170, 255, 170, 255)
         } else if fps >= 30.0 {
@@ -141,7 +141,7 @@ impl PerformanceOverlayLayer {
         } else {
             Color::rgba(255, 130, 130, 255)
         };
-        label(&format!("{fps:.0}"), x_val, y, 11.0, fps_color);
+        label(&format!("{fps:.0}"), x_val, y, 11.0, fps_color)?;
         let fps_w = if fps >= 100.0 {
             24.0
         } else if fps >= 10.0 {
@@ -149,27 +149,27 @@ impl PerformanceOverlayLayer {
         } else {
             8.0
         };
-        label("FPS", x_val + fps_w, y, 8.0, gray);
+        label("FPS", x_val + fps_w, y, 8.0, gray)?;
         y += ROW;
 
-        label("Frame", x, y, 10.0, Color::rgba(200, 100, 255, 255));
+        label("Frame", x, y, 10.0, Color::rgba(200, 100, 255, 255))?;
         label(
             &format!("{:.1}", sample.frame_time_ms),
             x_val,
             y,
             10.0,
             Color::rgba(220, 220, 220, 255),
-        );
-        label("ms", x_val + 22.0, y, 8.0, gray);
+        )?;
+        label("ms", x_val + 22.0, y, 8.0, gray)?;
 
         if let Some(line) = sample.diagnostic_line {
             y += ROW;
             // The densest row: brighter and larger than the unit suffixes so
             // it stays legible after glyph antialiasing and display scaling.
-            label(line, x, y, 9.0, Color::rgba(205, 205, 210, 255));
+            label(line, x, y, 9.0, Color::rgba(205, 205, 210, 255))?;
         }
 
-        Self::new(bounds, options, canvas.finish())
+        Ok(Self::new(bounds, options, canvas.finish()))
     }
 
     /// The recorded readout, in the layer's coordinates.
@@ -216,6 +216,7 @@ mod tests {
                 diagnostic_line: line,
             },
         )
+        .expect("the overlay fixture has valid label sizes and bounds")
     }
 
     /// Each recorded paragraph as `(text, offset, colour)`, after checking
@@ -339,6 +340,7 @@ mod tests {
                 max_lines: None,
                 ellipsis: None,
             })
+            .expect("the reference paragraph fixture has valid layout inputs")
             .to_shaped(None)
         };
         let mut given = TextContext::new(&FontCollection::new());

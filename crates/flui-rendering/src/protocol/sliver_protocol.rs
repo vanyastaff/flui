@@ -205,14 +205,17 @@ impl<P: ParentData + Default> SliverChildState<P> {
 }
 
 /// Callback type for synchronous sliver child layout.
-pub type SliverChildLayoutCallback<'a> = &'a dyn Fn(RenderId, SliverConstraints) -> SliverGeometry;
+pub type SliverChildLayoutCallback<'a> =
+    &'a dyn Fn(RenderId, SliverConstraints) -> crate::error::RenderResult<SliverGeometry>;
 
 /// Callback type for cross-protocol box child layout driven by a Sliver parent.
-pub type BoxChildLayoutCallback<'a> = &'a dyn Fn(RenderId, BoxConstraints) -> Size;
+pub type BoxChildLayoutCallback<'a> =
+    &'a dyn Fn(RenderId, BoxConstraints) -> crate::error::RenderResult<Size>;
 
 /// Callback type for cross-protocol box child intrinsic queries driven by a
 /// Sliver parent.
-pub type BoxChildIntrinsicCallback<'a> = &'a dyn Fn(RenderId, IntrinsicDimension, f64) -> f64;
+pub type BoxChildIntrinsicCallback<'a> =
+    &'a dyn Fn(RenderId, IntrinsicDimension, f64) -> crate::error::RenderResult<f64>;
 
 /// Dense per-child geometry cache used by Proxy storage.
 type ProxySliverChildGeometryCache = Vec<Option<SliverGeometry>>;
@@ -445,7 +448,11 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
     }
 
     /// Lays out a Box-protocol child of this Sliver parent.
-    pub fn layout_box_child(&mut self, index: usize, constraints: BoxConstraints) -> Size {
+    pub fn layout_box_child(
+        &mut self,
+        index: usize,
+        constraints: BoxConstraints,
+    ) -> crate::error::RenderResult<Size> {
         match &mut self.storage {
             SliverLayoutCtxStorage::Direct {
                 child_ids,
@@ -458,7 +465,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
                 {
                     return callback(child_id, constraints);
                 }
-                Size::ZERO
+                Ok(Size::ZERO)
             }
             SliverLayoutCtxStorage::Proxy { erased, .. } => {
                 erased.layout_box_child(index, constraints)
@@ -472,7 +479,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
         index: usize,
         dimension: IntrinsicDimension,
         extent: f64,
-    ) -> f64 {
+    ) -> crate::error::RenderResult<f64> {
         match &mut self.storage {
             SliverLayoutCtxStorage::Direct {
                 child_ids,
@@ -485,7 +492,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
                 {
                     return callback(child_id, dimension, extent);
                 }
-                0.0
+                Ok(0.0)
             }
             SliverLayoutCtxStorage::Proxy { erased, .. } => {
                 erased.box_child_intrinsic(index, dimension, extent)
@@ -513,7 +520,11 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, SliverLayou
         }
     }
 
-    fn layout_child(&mut self, index: usize, constraints: SliverConstraints) -> SliverGeometry {
+    fn layout_child(
+        &mut self,
+        index: usize,
+        constraints: SliverConstraints,
+    ) -> crate::error::RenderResult<SliverGeometry> {
         match &mut self.storage {
             SliverLayoutCtxStorage::Direct {
                 children,
@@ -525,33 +536,33 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, SliverLayou
                     (*child_ids, layout_child_callback.as_ref())
                     && let Some(&child_id) = child_ids.get(index)
                 {
-                    let geometry = callback(child_id, constraints);
+                    let geometry = callback(child_id, constraints)?;
                     if let Some(children) = children.as_mut()
                         && let Some(child) = children.get_mut(index)
                     {
                         child.laid_out_this_pass = true;
                         child.geometry = geometry;
                     }
-                    return geometry;
+                    return Ok(geometry);
                 }
 
                 if let Some(children) = children.as_ref()
                     && let Some(child) = children.get(index)
                 {
-                    return child.geometry;
+                    return Ok(child.geometry);
                 }
-                SliverGeometry::ZERO
+                Ok(SliverGeometry::ZERO)
             }
             SliverLayoutCtxStorage::Proxy {
                 erased,
                 child_geometries,
                 ..
             } => {
-                let geometry = erased.layout_child(index, constraints);
+                let geometry = erased.layout_child(index, constraints)?;
                 if let Some(slot) = child_geometries.get_mut(index) {
                     *slot = Some(geometry);
                 }
-                geometry
+                Ok(geometry)
             }
         }
     }
@@ -642,10 +653,18 @@ pub trait SliverLayoutCtxErased {
 
     /// Performs synchronous layout on child at `index` with the given
     /// constraints; returns the child's computed [`SliverGeometry`].
-    fn layout_child(&mut self, index: usize, constraints: SliverConstraints) -> SliverGeometry;
+    fn layout_child(
+        &mut self,
+        index: usize,
+        constraints: SliverConstraints,
+    ) -> crate::error::RenderResult<SliverGeometry>;
 
     /// Performs synchronous Box layout on child at `index`.
-    fn layout_box_child(&mut self, index: usize, constraints: BoxConstraints) -> Size;
+    fn layout_box_child(
+        &mut self,
+        index: usize,
+        constraints: BoxConstraints,
+    ) -> crate::error::RenderResult<Size>;
 
     /// Performs a synchronous Box intrinsic query on child at `index`.
     fn box_child_intrinsic(
@@ -653,7 +672,7 @@ pub trait SliverLayoutCtxErased {
         index: usize,
         dimension: IntrinsicDimension,
         extent: f64,
-    ) -> f64;
+    ) -> crate::error::RenderResult<f64>;
 
     /// Records the paint offset for child at `index`.
     fn position_child(&mut self, index: usize, offset: Offset);
@@ -729,12 +748,20 @@ impl<A: Arity, P: ParentData + Default> SliverLayoutCtxErased for SliverLayoutCt
     }
 
     #[inline]
-    fn layout_child(&mut self, index: usize, constraints: SliverConstraints) -> SliverGeometry {
+    fn layout_child(
+        &mut self,
+        index: usize,
+        constraints: SliverConstraints,
+    ) -> crate::error::RenderResult<SliverGeometry> {
         <Self as LayoutContextApi<'_, SliverLayout, A, P>>::layout_child(self, index, constraints)
     }
 
     #[inline]
-    fn layout_box_child(&mut self, index: usize, constraints: BoxConstraints) -> Size {
+    fn layout_box_child(
+        &mut self,
+        index: usize,
+        constraints: BoxConstraints,
+    ) -> crate::error::RenderResult<Size> {
         SliverLayoutCtx::layout_box_child(self, index, constraints)
     }
 
@@ -744,7 +771,7 @@ impl<A: Arity, P: ParentData + Default> SliverLayoutCtxErased for SliverLayoutCt
         index: usize,
         dimension: IntrinsicDimension,
         extent: f64,
-    ) -> f64 {
+    ) -> crate::error::RenderResult<f64> {
         SliverLayoutCtx::box_child_intrinsic(self, index, dimension, extent)
     }
 
@@ -937,30 +964,39 @@ impl SliverLayoutCtxErased for ErasedSliverLayoutCtx<'_> {
         self.child_ids.len()
     }
 
-    fn layout_child(&mut self, index: usize, constraints: SliverConstraints) -> SliverGeometry {
+    fn layout_child(
+        &mut self,
+        index: usize,
+        constraints: SliverConstraints,
+    ) -> crate::error::RenderResult<SliverGeometry> {
         let Some(&child_id) = self.child_ids.get(index) else {
-            return SliverGeometry::ZERO;
+            return Ok(SliverGeometry::ZERO);
         };
-        let geometry = (self.layout_child_callback)(child_id, constraints);
+        let geometry = (self.layout_child_callback)(child_id, constraints)?;
         if let Some(slot) = self.children.get_mut(index) {
             slot.laid_out_this_pass = true;
             slot.geometry = geometry;
         }
-        geometry
+        Ok(geometry)
     }
 
-    fn layout_box_child(&mut self, index: usize, constraints: BoxConstraints) -> Size {
+    fn layout_box_child(
+        &mut self,
+        index: usize,
+        constraints: BoxConstraints,
+    ) -> crate::error::RenderResult<Size> {
         let Some(&child_id) = self.child_ids.get(index) else {
-            return Size::ZERO;
+            return Ok(Size::ZERO);
         };
         // A box child of a sliver — `RenderSliverToBoxAdapter`'s child, a
         // persistent header's. It has no sliver geometry to record, but it was
         // still laid out this pass, and the paint gate cannot tell the two
         // reasons for an unmarked slot apart.
+        let size = (self.layout_box_child_callback)(child_id, constraints)?;
         if let Some(slot) = self.children.get_mut(index) {
             slot.laid_out_this_pass = true;
         }
-        (self.layout_box_child_callback)(child_id, constraints)
+        Ok(size)
     }
 
     fn box_child_intrinsic(
@@ -968,9 +1004,9 @@ impl SliverLayoutCtxErased for ErasedSliverLayoutCtx<'_> {
         index: usize,
         dimension: IntrinsicDimension,
         extent: f64,
-    ) -> f64 {
+    ) -> crate::error::RenderResult<f64> {
         let Some(&child_id) = self.child_ids.get(index) else {
-            return 0.0;
+            return Ok(0.0);
         };
         (self.box_child_intrinsic_callback)(child_id, dimension, extent)
     }

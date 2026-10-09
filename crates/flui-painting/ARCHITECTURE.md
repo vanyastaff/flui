@@ -190,6 +190,18 @@ hold them.
 
 ## Mapping decisions
 
+### Text measurements reject invalid requests without geometry
+
+`TextLayoutError` describes ordinary admission and shaping failures. `shape`,
+painter layout and measurement queries return a result; successful geometry and
+the painter cache are published only after all required measurements succeed.
+Checks cover the actual backend representation and final metrics, rather than
+assuming finite inputs imply finite arithmetic. The `text_contract` and
+`text_context_contract` tables include narrowing boundaries, derived metric
+overflow, real aligned-glyph ink bounds and valid recovery after rejection.
+[ADR-0181](../../docs/adr/ADR-0181-fallible-text-and-layout-measurement.md) records
+the consumer and frame contract.
+
 ### 1. Closed `DrawCommand` enum, matched exhaustively
 
 `DrawCommand` has one variant per paint operation and no `#[non_exhaustive]`:

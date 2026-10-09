@@ -32,8 +32,8 @@ pub(crate) fn pump_post_frame_callback_observes_this_frames_committed_layout() {
         fn perform_layout(
             &mut self,
             _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
-        ) -> flui_foundation::geometry::Size {
-            flui_foundation::geometry::Size::new(40.0, 24.0)
+        ) -> flui_rendering::RenderResult<flui_foundation::geometry::Size> {
+            Ok(flui_foundation::geometry::Size::new(40.0, 24.0))
         }
         fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
     }

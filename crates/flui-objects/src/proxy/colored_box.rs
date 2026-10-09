@@ -84,54 +84,57 @@ impl RenderBox for RenderColoredBox {
     type Arity = Leaf;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
         let constrained = ctx.constrain(self.preferred_size);
         tracing::debug!(
             "RenderColoredBox::perform_layout: preferred={:?}, constrained={:?}",
             self.preferred_size,
             constrained
         );
-        constrained
+        Ok(constrained)
     }
 
     fn compute_min_intrinsic_width(
         &self,
         _height: f64,
         _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
-        self.preferred_size.width
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(self.preferred_size.width)
     }
 
     fn compute_max_intrinsic_width(
         &self,
         _height: f64,
         _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
-        self.preferred_size.width
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(self.preferred_size.width)
     }
 
     fn compute_min_intrinsic_height(
         &self,
         _width: f64,
         _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
-        self.preferred_size.height
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(self.preferred_size.height)
     }
 
     fn compute_max_intrinsic_height(
         &self,
         _width: f64,
         _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
-        self.preferred_size.height
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(self.preferred_size.height)
     }
 
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
         _ctx: &mut flui_rendering::context::BoxDryLayoutCtx<'_>,
-    ) -> Size {
-        constraints.constrain(self.preferred_size)
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok(constraints.constrain(self.preferred_size))
     }
 
     fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Leaf>) {

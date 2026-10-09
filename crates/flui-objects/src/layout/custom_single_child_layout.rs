@@ -105,11 +105,15 @@ impl RenderCustomSingleChildLayoutBox {
         self.child_baselines = [None; 2];
     }
 
-    fn record_child_baselines(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) {
+    fn record_child_baselines(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+    ) -> flui_rendering::RenderResult<()> {
         self.child_baselines = [
-            ctx.child_distance_to_actual_baseline(0, TextBaseline::Alphabetic),
-            ctx.child_distance_to_actual_baseline(0, TextBaseline::Ideographic),
+            ctx.child_distance_to_actual_baseline(0, TextBaseline::Alphabetic)?,
+            ctx.child_distance_to_actual_baseline(0, TextBaseline::Ideographic)?,
         ];
+        Ok(())
     }
 }
 
@@ -123,58 +127,80 @@ impl RenderBox for RenderCustomSingleChildLayoutBox {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
         let constraints = *ctx.constraints();
         let size = self.get_size(constraints);
 
         if ctx.child_count() == 0 {
             self.clear_child_state();
-            return size;
+            return Ok(size);
         }
 
         self.has_child = true;
         let child_constraints = self.child_constraints(constraints);
-        let child_size = ctx.layout_child(0, child_constraints);
+        let child_size = ctx.layout_child(0, child_constraints)?;
         let child_size_for_position = Self::child_size_for_position(child_constraints, child_size);
         self.child_offset = self
             .delegate
             .get_position_for_child(size, child_size_for_position);
         ctx.position_child(0, self.child_offset);
-        self.record_child_baselines(ctx);
+        self.record_child_baselines(ctx)?;
 
-        size
+        Ok(size)
     }
 
-    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f64> {
+    fn compute_distance_to_actual_baseline(
+        &self,
+        baseline: TextBaseline,
+    ) -> flui_rendering::RenderResult<Option<f64>> {
         let index = match baseline {
             TextBaseline::Alphabetic => 0,
             TextBaseline::Ideographic => 1,
         };
-        self.child_baselines[index].map(|raw| raw + self.child_offset.dy)
+        Ok(self.child_baselines[index].map(|raw| raw + self.child_offset.dy))
     }
 
-    fn compute_min_intrinsic_width(&self, height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.intrinsic_width(height)
+    fn compute_min_intrinsic_width(
+        &self,
+        height: f64,
+        _ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(self.intrinsic_width(height))
     }
 
-    fn compute_max_intrinsic_width(&self, height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.intrinsic_width(height)
+    fn compute_max_intrinsic_width(
+        &self,
+        height: f64,
+        _ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(self.intrinsic_width(height))
     }
 
-    fn compute_min_intrinsic_height(&self, width: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.intrinsic_height(width)
+    fn compute_min_intrinsic_height(
+        &self,
+        width: f64,
+        _ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(self.intrinsic_height(width))
     }
 
-    fn compute_max_intrinsic_height(&self, width: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.intrinsic_height(width)
+    fn compute_max_intrinsic_height(
+        &self,
+        width: f64,
+        _ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(self.intrinsic_height(width))
     }
 
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
         _ctx: &mut BoxDryLayoutCtx<'_>,
-    ) -> Size {
-        self.get_size(constraints)
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok(self.get_size(constraints))
     }
 
     fn compute_dry_baseline(
@@ -182,20 +208,22 @@ impl RenderBox for RenderCustomSingleChildLayoutBox {
         constraints: BoxConstraints,
         baseline: TextBaseline,
         ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f64> {
+    ) -> flui_rendering::RenderResult<Option<f64>> {
         if ctx.child_count() == 0 {
-            return None;
+            return Ok(None);
         }
         let child_constraints = self.child_constraints(constraints);
-        let child_baseline = ctx.child_dry_baseline(0, child_constraints, baseline)?;
+        let Some(child_baseline) = ctx.child_dry_baseline(0, child_constraints, baseline)? else {
+            return Ok(None);
+        };
         let child_size = if child_constraints.is_tight() {
             child_constraints.smallest()
         } else {
-            ctx.child_dry_layout(0, child_constraints)
+            ctx.child_dry_layout(0, child_constraints)?
         };
         let size = self.get_size(constraints);
         let child_offset = self.delegate.get_position_for_child(size, child_size);
-        Some(child_baseline + child_offset.dy)
+        Ok(Some(child_baseline + child_offset.dy))
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {

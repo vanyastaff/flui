@@ -6,7 +6,6 @@
 //! GPU compositor remain implementation details outside this authoring module.
 
 pub use flui_foundation::{Arity, AtLeast, Exact, Leaf, Never, Optional, Range, Single, Variable};
-pub use flui_rendering::RenderUpdateImpact;
 pub use flui_rendering::constraints::{BoxConstraints, SliverConstraints, SliverGeometry};
 pub use flui_rendering::context::{
     BoxDryBaselineCtx, BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext,
@@ -32,6 +31,7 @@ pub use flui_rendering::traits::{
     HitTestOutcome, PaintClip, PaintEffects, PaintOpacity, RenderBox, RenderObject, RenderSliver,
     TextBaseline,
 };
+pub use flui_rendering::{RenderError, RenderResult, RenderUpdateImpact};
 pub use flui_rendering::{
     forward_single_child_box_hit_test, forward_single_child_box_layout,
     forward_single_child_box_queries, forward_single_child_intrinsics,

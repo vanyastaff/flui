@@ -94,7 +94,11 @@ pub async fn main() {
         web_sys::console::error_1(&format!("Painter frame error: {error}").into());
         return;
     }
-    draw_all_demos(&mut painter);
+    if let Err(error) = draw_all_demos(&mut painter) {
+        web_sys::console::error_1(&format!("Text layout error: {error}").into());
+        painter.finish_frame();
+        return;
+    }
 
     let view = output
         .texture
@@ -148,7 +152,9 @@ pub async fn main() {
 }
 
 /// Master function that draws all demo sections.
-fn draw_all_demos(painter: &mut flui_engine::WgpuPainter) {
+fn draw_all_demos(
+    painter: &mut flui_engine::WgpuPainter,
+) -> Result<(), flui_painting::TextLayoutError> {
     let text = &mut TextContext::new(&FontCollection::new());
     // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
@@ -166,9 +172,9 @@ fn draw_all_demos(painter: &mut flui_engine::WgpuPainter) {
         pt(30.0, y_offset),
         22.0,
         &label_paint,
-    );
+    )?;
     y_offset += 35.0;
-    draw_basic_shapes(painter, text, y_offset);
+    draw_basic_shapes(painter, text, y_offset)?;
     y_offset += 130.0 + section_gap;
 
     // === Section 2: Rounded Rectangles ===
@@ -179,9 +185,9 @@ fn draw_all_demos(painter: &mut flui_engine::WgpuPainter) {
         pt(30.0, y_offset),
         22.0,
         &label_paint,
-    );
+    )?;
     y_offset += 35.0;
-    draw_rounded_rects(painter, text, y_offset);
+    draw_rounded_rects(painter, text, y_offset)?;
     y_offset += 110.0 + section_gap;
 
     // === Section 3: Circles & Ovals ===
@@ -192,7 +198,7 @@ fn draw_all_demos(painter: &mut flui_engine::WgpuPainter) {
         pt(30.0, y_offset),
         22.0,
         &label_paint,
-    );
+    )?;
     y_offset += 35.0;
     draw_circles_and_ovals(painter, y_offset);
     y_offset += 130.0 + section_gap;
@@ -205,9 +211,9 @@ fn draw_all_demos(painter: &mut flui_engine::WgpuPainter) {
         pt(30.0, y_offset),
         22.0,
         &label_paint,
-    );
+    )?;
     y_offset += 35.0;
-    draw_lines_and_strokes(painter, text, y_offset);
+    draw_lines_and_strokes(painter, text, y_offset)?;
     y_offset += 100.0 + section_gap;
 
     // === Section 5: Dashed Lines ===
@@ -218,9 +224,9 @@ fn draw_all_demos(painter: &mut flui_engine::WgpuPainter) {
         pt(30.0, y_offset),
         22.0,
         &label_paint,
-    );
+    )?;
     y_offset += 35.0;
-    draw_dashed_lines(painter, text, y_offset);
+    draw_dashed_lines(painter, text, y_offset)?;
     y_offset += 80.0 + section_gap;
 
     // === Section 6: Paths & Polygons ===
@@ -231,9 +237,9 @@ fn draw_all_demos(painter: &mut flui_engine::WgpuPainter) {
         pt(30.0, y_offset),
         22.0,
         &label_paint,
-    );
+    )?;
     y_offset += 35.0;
-    draw_paths(painter, text, y_offset);
+    draw_paths(painter, text, y_offset)?;
     y_offset += 150.0 + section_gap;
 
     // === Section 7: Arcs ===
@@ -244,9 +250,9 @@ fn draw_all_demos(painter: &mut flui_engine::WgpuPainter) {
         pt(30.0, y_offset),
         22.0,
         &label_paint,
-    );
+    )?;
     y_offset += 35.0;
-    draw_arcs(painter, text, y_offset);
+    draw_arcs(painter, text, y_offset)?;
     y_offset += 130.0 + section_gap;
 
     // === Section 8: Gradients ===
@@ -257,9 +263,9 @@ fn draw_all_demos(painter: &mut flui_engine::WgpuPainter) {
         pt(30.0, y_offset),
         22.0,
         &label_paint,
-    );
+    )?;
     y_offset += 35.0;
-    draw_gradients(painter, text, y_offset);
+    draw_gradients(painter, text, y_offset)?;
     y_offset += 130.0 + section_gap;
 
     // === Section 9: Transforms ===
@@ -270,9 +276,9 @@ fn draw_all_demos(painter: &mut flui_engine::WgpuPainter) {
         pt(30.0, y_offset),
         22.0,
         &label_paint,
-    );
+    )?;
     y_offset += 35.0;
-    draw_transforms(painter, text, y_offset);
+    draw_transforms(painter, text, y_offset)?;
     y_offset += 160.0 + section_gap;
 
     // === Section 10: Clipping ===
@@ -283,9 +289,9 @@ fn draw_all_demos(painter: &mut flui_engine::WgpuPainter) {
         pt(30.0, y_offset),
         22.0,
         &label_paint,
-    );
+    )?;
     y_offset += 35.0;
-    draw_clipping(painter, text, y_offset);
+    draw_clipping(painter, text, y_offset)?;
     y_offset += 130.0 + section_gap;
 
     // === Section 11: Double Rounded Rect (drrect) ===
@@ -296,9 +302,9 @@ fn draw_all_demos(painter: &mut flui_engine::WgpuPainter) {
         pt(30.0, y_offset),
         22.0,
         &label_paint,
-    );
+    )?;
     y_offset += 35.0;
-    draw_drrect(painter, text, y_offset);
+    draw_drrect(painter, text, y_offset)?;
     y_offset += 130.0 + section_gap;
 
     // === Section 12: Text ===
@@ -309,9 +315,9 @@ fn draw_all_demos(painter: &mut flui_engine::WgpuPainter) {
         pt(30.0, y_offset),
         22.0,
         &label_paint,
-    );
+    )?;
     y_offset += 35.0;
-    draw_text_section(painter, text, y_offset);
+    draw_text_section(painter, text, y_offset)?;
     y_offset += 130.0 + section_gap;
 
     // === Section 13: Opacity & Blending ===
@@ -322,12 +328,13 @@ fn draw_all_demos(painter: &mut flui_engine::WgpuPainter) {
         pt(30.0, y_offset),
         22.0,
         &label_paint,
-    );
+    )?;
     y_offset += 35.0;
-    draw_opacity(painter, text, y_offset);
+    draw_opacity(painter, text, y_offset)?;
     let _ = y_offset;
 
     web_sys::console::log_1(&"All demo sections drawn".into());
+    Ok(())
 }
 
 // ============================================================
@@ -346,7 +353,7 @@ fn label(
     at: Point<f64>,
     font_size: f32,
     paint: &flui_painting::paint::Paint,
-) {
+) -> Result<(), flui_painting::TextLayoutError> {
     let spans = [(label.to_owned(), None)];
     let paragraph = text
         .shape(&ParagraphSpec {
@@ -361,9 +368,10 @@ fn label(
             text_align: flui_painting::typography::TextAlign::Start,
             max_lines: None,
             ellipsis: None,
-        })
+        })?
         .to_shaped(None);
     painter.draw_paragraph(Arc::new(paragraph), at, paint.color);
+    Ok(())
 }
 
 fn pt(x: f64, y: f64) -> Point<f64> {
@@ -383,7 +391,11 @@ fn ofs(dx: f64, dy: f64) -> Offset<f64> {
 // ============================================================
 
 /// 1. Basic filled rectangles
-fn draw_basic_shapes(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext, y: f64) {
+fn draw_basic_shapes(
+    painter: &mut flui_engine::WgpuPainter,
+    text: &mut TextContext,
+    y: f64,
+) -> Result<(), flui_painting::TextLayoutError> {
     // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     let colors = [
@@ -406,12 +418,17 @@ fn draw_basic_shapes(painter: &mut flui_engine::WgpuPainter, text: &mut TextCont
             pt(x + 55.0, y + 100.0),
             14.0,
             &label_paint,
-        );
+        )?;
     }
+    Ok(())
 }
 
 /// 2. Rounded rects with varying radii
-fn draw_rounded_rects(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext, y: f64) {
+fn draw_rounded_rects(
+    painter: &mut flui_engine::WgpuPainter,
+    text: &mut TextContext,
+    y: f64,
+) -> Result<(), flui_painting::TextLayoutError> {
     // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     let radii = [5.0, 15.0, 30.0, 50.0];
@@ -434,8 +451,9 @@ fn draw_rounded_rects(painter: &mut flui_engine::WgpuPainter, text: &mut TextCon
             pt(x + 100.0, y + 90.0),
             13.0,
             &label_paint,
-        );
+        )?;
     }
+    Ok(())
 }
 
 /// 3. Circles and ovals
@@ -473,7 +491,11 @@ fn draw_circles_and_ovals(painter: &mut flui_engine::WgpuPainter, y: f64) {
 }
 
 /// 4. Lines and stroked shapes
-fn draw_lines_and_strokes(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext, y: f64) {
+fn draw_lines_and_strokes(
+    painter: &mut flui_engine::WgpuPainter,
+    text: &mut TextContext,
+    y: f64,
+) -> Result<(), flui_painting::TextLayoutError> {
     // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     // Lines of varying widths
@@ -496,7 +518,7 @@ fn draw_lines_and_strokes(painter: &mut flui_engine::WgpuPainter, text: &mut Tex
             pt(510.0, ly - 6.0),
             12.0,
             &label_paint,
-        );
+        )?;
     }
 
     // Stroked shapes
@@ -511,7 +533,7 @@ fn draw_lines_and_strokes(painter: &mut flui_engine::WgpuPainter, text: &mut Tex
         pt(620.0, y + 85.0),
         12.0,
         &label_paint,
-    );
+    )?;
 
     let rrect = RRect::from_rect_circular(rect(780.0, y, 150.0, 80.0), 15.0);
     painter.draw_rrect(rrect, &Paint::stroke(Color::rgba(100, 200, 255, 255), 3.0));
@@ -522,7 +544,7 @@ fn draw_lines_and_strokes(painter: &mut flui_engine::WgpuPainter, text: &mut Tex
         pt(800.0, y + 85.0),
         12.0,
         &label_paint,
-    );
+    )?;
 
     painter.draw_circle(
         pt(1030.0, y + 40.0),
@@ -536,11 +558,16 @@ fn draw_lines_and_strokes(painter: &mut flui_engine::WgpuPainter, text: &mut Tex
         pt(990.0, y + 85.0),
         12.0,
         &label_paint,
-    );
+    )?;
+    Ok(())
 }
 
 /// 5. Dashed lines
-fn draw_dashed_lines(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext, y: f64) {
+fn draw_dashed_lines(
+    painter: &mut flui_engine::WgpuPainter,
+    text: &mut TextContext,
+    y: f64,
+) -> Result<(), flui_painting::TextLayoutError> {
     // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     let patterns: &[(&[f64], &str)] = &[
@@ -556,12 +583,17 @@ fn draw_dashed_lines(painter: &mut flui_engine::WgpuPainter, text: &mut TextCont
         let dash_paint =
             Paint::stroke(Color::rgba(200, 200, 255, 255), 2.0).with_dash(intervals.to_vec(), 0.0);
         painter.draw_line(pt(30.0, ly), pt(600.0, ly), &dash_paint);
-        label(painter, text, name, pt(620.0, ly - 6.0), 12.0, &label_paint);
+        label(painter, text, name, pt(620.0, ly - 6.0), 12.0, &label_paint)?;
     }
+    Ok(())
 }
 
 /// 6. Paths & polygons (star, triangle, pentagon, custom bezier)
-fn draw_paths(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext, y: f64) {
+fn draw_paths(
+    painter: &mut flui_engine::WgpuPainter,
+    text: &mut TextContext,
+    y: f64,
+) -> Result<(), flui_painting::TextLayoutError> {
     // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     let label_paint = Paint::fill(Color::LIGHT_GRAY);
@@ -576,7 +608,7 @@ fn draw_paths(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext, y:
         pt(50.0, y + 135.0),
         12.0,
         &label_paint,
-    );
+    )?;
 
     // Star (5-pointed)
     let star = make_star(pt(280.0, y + 65.0), 60.0, 25.0, 5);
@@ -588,7 +620,7 @@ fn draw_paths(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext, y:
         pt(260.0, y + 135.0),
         12.0,
         &label_paint,
-    );
+    )?;
 
     // Pentagon
     let pentagon = make_regular_polygon(pt(450.0, y + 65.0), 55.0, 5);
@@ -600,7 +632,7 @@ fn draw_paths(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext, y:
         pt(420.0, y + 135.0),
         12.0,
         &label_paint,
-    );
+    )?;
 
     // Hexagon
     let hexagon = make_regular_polygon(pt(610.0, y + 65.0), 55.0, 6);
@@ -612,7 +644,7 @@ fn draw_paths(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext, y:
         pt(580.0, y + 135.0),
         12.0,
         &label_paint,
-    );
+    )?;
 
     // Octagon (stroked)
     let octagon = make_regular_polygon(pt(770.0, y + 65.0), 55.0, 8);
@@ -627,7 +659,7 @@ fn draw_paths(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext, y:
         pt(740.0, y + 135.0),
         12.0,
         &label_paint,
-    );
+    )?;
 
     // Custom zigzag path
     let mut zigzag = Path::new();
@@ -645,11 +677,16 @@ fn draw_paths(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext, y:
         pt(935.0, y + 135.0),
         12.0,
         &label_paint,
-    );
+    )?;
+    Ok(())
 }
 
 /// 7. Arcs
-fn draw_arcs(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext, y: f64) {
+fn draw_arcs(
+    painter: &mut flui_engine::WgpuPainter,
+    text: &mut TextContext,
+    y: f64,
+) -> Result<(), flui_painting::TextLayoutError> {
     // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
     use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
@@ -680,7 +717,7 @@ fn draw_arcs(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext, y: 
             pt(x - 25.0, y + 110.0),
             12.0,
             &label_paint,
-        );
+        )?;
     }
 
     // Open arcs (use_center = false)
@@ -702,11 +739,16 @@ fn draw_arcs(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext, y: 
         pt(870.0, y + 110.0),
         12.0,
         &label_paint,
-    );
+    )?;
+    Ok(())
 }
 
 /// 8. Gradients
-fn draw_gradients(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext, y: f64) {
+fn draw_gradients(
+    painter: &mut flui_engine::WgpuPainter,
+    text: &mut TextContext,
+    y: f64,
+) -> Result<(), flui_painting::TextLayoutError> {
     // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     let label_paint = Paint::fill(Color::LIGHT_GRAY);
@@ -734,7 +776,7 @@ fn draw_gradients(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext
         pt(100.0, y + 110.0),
         12.0,
         &label_paint,
-    );
+    )?;
 
     // Linear gradient (diagonal)
     let diag = Shader::simple_linear(
@@ -753,7 +795,7 @@ fn draw_gradients(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext
         pt(430.0, y + 110.0),
         12.0,
         &label_paint,
-    );
+    )?;
 
     // Radial gradient
     let radial = Shader::simple_radial(
@@ -777,7 +819,7 @@ fn draw_gradients(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext
         pt(725.0, y + 110.0),
         12.0,
         &label_paint,
-    );
+    )?;
 
     // Sweep gradient
     let sweep = Shader::simple_sweep(
@@ -804,7 +846,7 @@ fn draw_gradients(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext
         pt(900.0, y + 110.0),
         12.0,
         &label_paint,
-    );
+    )?;
 
     // Gradient on rounded rect
     let rrect_grad = Shader::simple_linear(
@@ -824,11 +866,16 @@ fn draw_gradients(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext
         pt(1020.0, y + 110.0),
         12.0,
         &label_paint,
-    );
+    )?;
+    Ok(())
 }
 
 /// 9. Transforms
-fn draw_transforms(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext, y: f64) {
+fn draw_transforms(
+    painter: &mut flui_engine::WgpuPainter,
+    text: &mut TextContext,
+    y: f64,
+) -> Result<(), flui_painting::TextLayoutError> {
     // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     let label_paint = Paint::fill(Color::LIGHT_GRAY);
@@ -848,7 +895,7 @@ fn draw_transforms(painter: &mut flui_engine::WgpuPainter, text: &mut TextContex
         pt(65.0, y + 130.0),
         12.0,
         &label_paint,
-    );
+    )?;
 
     // Rotate (multiple rotated rects fan)
     let center_x = 300.0;
@@ -875,7 +922,7 @@ fn draw_transforms(painter: &mut flui_engine::WgpuPainter, text: &mut TextContex
         pt(275.0, y + 145.0),
         12.0,
         &label_paint,
-    );
+    )?;
 
     // Scale
     painter.save();
@@ -898,7 +945,7 @@ fn draw_transforms(painter: &mut flui_engine::WgpuPainter, text: &mut TextContex
         pt(480.0, y + 145.0),
         12.0,
         &label_paint,
-    );
+    )?;
 
     // Combined: translate + rotate + scale
     painter.save();
@@ -917,7 +964,7 @@ fn draw_transforms(painter: &mut flui_engine::WgpuPainter, text: &mut TextContex
         pt(670.0, y + 145.0),
         12.0,
         &label_paint,
-    );
+    )?;
 
     // Nested transforms
     painter.save();
@@ -948,11 +995,16 @@ fn draw_transforms(painter: &mut flui_engine::WgpuPainter, text: &mut TextContex
         pt(880.0, y + 145.0),
         12.0,
         &label_paint,
-    );
+    )?;
+    Ok(())
 }
 
 /// 10. Clipping
-fn draw_clipping(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext, y: f64) {
+fn draw_clipping(
+    painter: &mut flui_engine::WgpuPainter,
+    text: &mut TextContext,
+    y: f64,
+) -> Result<(), flui_painting::TextLayoutError> {
     // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     let label_paint = Paint::fill(Color::LIGHT_GRAY);
@@ -987,7 +1039,7 @@ fn draw_clipping(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext,
         pt(80.0, y + 110.0),
         12.0,
         &label_paint,
-    );
+    )?;
 
     // Clip rect with circles
     painter.save();
@@ -1017,7 +1069,7 @@ fn draw_clipping(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext,
         pt(340.0, y + 110.0),
         12.0,
         &label_paint,
-    );
+    )?;
 
     // Nested clips
     painter.save();
@@ -1061,11 +1113,16 @@ fn draw_clipping(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext,
         pt(640.0, y + 110.0),
         12.0,
         &label_paint,
-    );
+    )?;
+    Ok(())
 }
 
 /// 11. Double rounded rect
-fn draw_drrect(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext, y: f64) {
+fn draw_drrect(
+    painter: &mut flui_engine::WgpuPainter,
+    text: &mut TextContext,
+    y: f64,
+) -> Result<(), flui_painting::TextLayoutError> {
     // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     let label_paint = Paint::fill(Color::LIGHT_GRAY);
@@ -1081,7 +1138,7 @@ fn draw_drrect(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext, y
         pt(80.0, y + 110.0),
         12.0,
         &label_paint,
-    );
+    )?;
 
     // Gradient frame
     let outer2 = RRect::from_rect_circular(rect(280.0, y, 200.0, 100.0), 30.0);
@@ -1106,7 +1163,7 @@ fn draw_drrect(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext, y
         pt(320.0, y + 110.0),
         12.0,
         &label_paint,
-    );
+    )?;
 
     // Thin outline frame
     let outer3 = RRect::from_rect_circular(rect(530.0, y, 200.0, 100.0), 15.0);
@@ -1123,7 +1180,7 @@ fn draw_drrect(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext, y
         pt(580.0, y + 110.0),
         12.0,
         &label_paint,
-    );
+    )?;
 
     // Asymmetric radii frame
     let outer4 = RRect::from_rect_circular(rect(780.0, y, 200.0, 100.0), 40.0);
@@ -1136,11 +1193,16 @@ fn draw_drrect(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext, y
         pt(835.0, y + 110.0),
         12.0,
         &label_paint,
-    );
+    )?;
+    Ok(())
 }
 
 /// 12. Text rendering
-fn draw_text_section(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext, y: f64) {
+fn draw_text_section(
+    painter: &mut flui_engine::WgpuPainter,
+    text: &mut TextContext,
+    y: f64,
+) -> Result<(), flui_painting::TextLayoutError> {
     // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     let sizes = [12.0, 16.0, 20.0, 28.0, 36.0];
@@ -1154,13 +1216,18 @@ fn draw_text_section(painter: &mut flui_engine::WgpuPainter, text: &mut TextCont
             pt(30.0, text_y),
             size,
             &paint,
-        );
+        )?;
         text_y += f64::from(size + 8.0);
     }
+    Ok(())
 }
 
 /// 13. Opacity & blending
-fn draw_opacity(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext, y: f64) {
+fn draw_opacity(
+    painter: &mut flui_engine::WgpuPainter,
+    text: &mut TextContext,
+    y: f64,
+) -> Result<(), flui_painting::TextLayoutError> {
     // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     let label_paint = Paint::fill(Color::LIGHT_GRAY);
@@ -1179,7 +1246,7 @@ fn draw_opacity(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext, 
         pt(60.0, y + 90.0),
         12.0,
         &label_paint,
-    );
+    )?;
 
     // RGB overlap (additive-like with transparency)
     let overlap_x = 400.0;
@@ -1205,7 +1272,7 @@ fn draw_opacity(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext, 
         pt(overlap_x + 5.0, y + 110.0),
         12.0,
         &label_paint,
-    );
+    )?;
 
     // Alpha gradient bars
     for i in 0..10 {
@@ -1223,7 +1290,8 @@ fn draw_opacity(painter: &mut flui_engine::WgpuPainter, text: &mut TextContext, 
         pt(750.0, y + 90.0),
         12.0,
         &label_paint,
-    );
+    )?;
+    Ok(())
 }
 
 // ============================================================

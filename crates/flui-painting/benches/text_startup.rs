@@ -107,13 +107,17 @@ fn painter(text: &str) -> TextPainter {
 /// [`PAINTERS`] held at once. One painter is laid out first, so the
 /// context's own caches are warm and not counted.
 fn per_painter(context: &mut TextContext, text: &str) -> isize {
-    painter(text).layout(context, 0.0, WIDTH);
+    painter(text)
+        .layout(context, 0.0, WIDTH)
+        .expect("benchmark text has valid layout inputs");
     let before = live();
     let mut held = Vec::with_capacity(PAINTERS);
     let vec_bytes = live() - before;
     for _ in 0..PAINTERS {
         let mut painter = painter(text);
-        painter.layout(context, 0.0, WIDTH);
+        painter
+            .layout(context, 0.0, WIDTH)
+            .expect("benchmark text has valid layout inputs");
         held.push(painter);
     }
     let after = live();

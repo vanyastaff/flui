@@ -177,14 +177,17 @@ impl RenderBox for RenderSubtreeAnchor {
 
     /// Pass-through: the child is laid out under this object's own constraints and
     /// its size adopted, so inserting an anchor changes no geometry.
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
         let constraints = *ctx.constraints();
         if ctx.child_count() > 0 {
             self.has_child = true;
             ctx.layout_child(0, constraints)
         } else {
             self.has_child = false;
-            constraints.smallest()
+            Ok(constraints.smallest())
         }
     }
 

@@ -56,7 +56,8 @@ mod measured {
     };
     use flui_sdk::platform::{Brightness as _, InvalidLocale as _, Locale as _};
     use flui_sdk::rendering::{
-        BoxConstraints as _, BoxProtocol as _, HitTestBehavior as _, RenderUpdateImpact as _,
+        BoxConstraints as _, BoxProtocol as _, HitTestBehavior as _, RenderError as _,
+        RenderResult as _, RenderUpdateImpact as _,
     };
     use flui_sdk::view::dev_agent::{
         AgentAnswer as _, AgentFault as _, AgentWindow as _, DevAgentHook as _, HandleKind as _,
@@ -136,6 +137,8 @@ fn the_re_exports_are_the_facades_types() {
     let _: fn(flui::platform::InvalidLocale) -> flui_sdk::platform::InvalidLocale = |x| x;
     let _: fn(flui::rendering::RenderUpdateImpact) -> flui_sdk::rendering::RenderUpdateImpact =
         |x| x;
+    let _: fn(flui::rendering::RenderError) -> flui_sdk::rendering::RenderError = |x| x;
+    let _: fn(flui::rendering::RenderResult<()>) -> flui_sdk::rendering::RenderResult<()> = |x| x;
     let _: fn(flui::rendering::BoxConstraints) -> flui_sdk::rendering::BoxConstraints = |x| x;
     let _: fn(flui::rendering::HitTestBehavior) -> flui_sdk::rendering::HitTestBehavior = |x| x;
     let _: fn(flui::rendering::BoxProtocol) -> flui_sdk::rendering::BoxProtocol = |x| x;
@@ -198,10 +201,10 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_platform_api::Brightness;",
         "pub use flui_platform_api::InvalidLocale;",
         "pub use flui_platform_api::Locale;",
-        "pub use flui_rendering::RenderUpdateImpact;",
         "pub use flui_rendering::constraints::BoxConstraints;",
         "pub use flui_rendering::hit_testing::HitTestBehavior;",
         "pub use flui_rendering::protocol::BoxProtocol;",
+        "pub use flui_rendering::{RenderError, RenderResult, RenderUpdateImpact};",
         "pub use flui_scheduler::FrameSnapshot;",
         "pub use flui_view::*;",
         "pub use flui_widgets as widgets;",

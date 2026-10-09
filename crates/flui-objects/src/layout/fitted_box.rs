@@ -354,26 +354,29 @@ impl RenderBox for RenderFittedBox {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
         let incoming = *ctx.constraints();
 
         // (1) No child → smallest size, identity transform.
         if ctx.child_count() == 0 {
             self.has_child = false;
             self.reset_transform_cache();
-            return incoming.smallest();
+            return Ok(incoming.smallest());
         }
 
         // (2) Lay out the child unconstrained so it picks its intrinsic size.
         self.has_child = true;
-        let child_size = ctx.layout_child(0, BoxConstraints::UNCONSTRAINED);
+        let child_size = ctx.layout_child(0, BoxConstraints::UNCONSTRAINED)?;
         ctx.position_child(0, Offset::ZERO);
 
         // (3) Degenerate child → smallest size, identity transform.
         if child_size.width <= 0.0 || child_size.height <= 0.0 {
             self.reset_transform_cache();
             self.child_is_empty = true;
-            return incoming.smallest();
+            return Ok(incoming.smallest());
         }
         self.child_is_empty = false;
 
@@ -388,7 +391,7 @@ impl RenderBox for RenderFittedBox {
         // without forcing layout.
         self.update_paint_data(size, child_size);
 
-        size
+        Ok(size)
     }
 
     flui_rendering::forward_single_child_intrinsics!();
@@ -397,15 +400,15 @@ impl RenderBox for RenderFittedBox {
         &self,
         constraints: BoxConstraints,
         ctx: &mut flui_rendering::context::BoxDryLayoutCtx<'_>,
-    ) -> Size {
+    ) -> flui_rendering::RenderResult<Size> {
         if ctx.child_count() == 0 {
-            return constraints.smallest();
+            return Ok(constraints.smallest());
         }
-        let child_size = ctx.child_dry_layout(0, BoxConstraints::UNCONSTRAINED);
+        let child_size = ctx.child_dry_layout(0, BoxConstraints::UNCONSTRAINED)?;
         if child_size.width <= 0.0 || child_size.height <= 0.0 {
-            return constraints.smallest();
+            return Ok(constraints.smallest());
         }
-        self.fitted_size(constraints, child_size)
+        Ok(self.fitted_size(constraints, child_size))
     }
 
     fn compute_dry_baseline(
@@ -413,9 +416,9 @@ impl RenderBox for RenderFittedBox {
         _constraints: BoxConstraints,
         baseline: TextBaseline,
         ctx: &mut flui_rendering::context::BoxDryBaselineCtx<'_>,
-    ) -> Option<f64> {
+    ) -> flui_rendering::RenderResult<Option<f64>> {
         if ctx.child_count() == 0 {
-            None
+            Ok(None)
         } else {
             ctx.child_dry_baseline(0, BoxConstraints::UNCONSTRAINED, baseline)
         }

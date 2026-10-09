@@ -1257,7 +1257,7 @@ impl PresentationState {
                 // here even though `run_frame`'s own segment drains again
                 // immediately after.
                 owner.drain_pending_dirty();
-                owner.has_dirty_nodes()
+                owner.has_dirty_nodes() && !owner.layout_waits_for_input()
             })
     }
 
@@ -1478,6 +1478,14 @@ impl PresentationState {
         }) else {
             tracing::warn!("performance overlay skipped: the ui_runtime's text context is lent");
             return;
+        };
+
+        let overlay = match overlay {
+            Ok(overlay) => overlay,
+            Err(error) => {
+                tracing::warn!(%error, "performance overlay skipped: label layout failed");
+                return;
+            }
         };
 
         let _overlay_id = layer_tree.push_child(root, flui_layer::Layer::from(overlay));

@@ -33,8 +33,8 @@ use crate::{
 ///     type Arity = Leaf;
 ///     type ParentData = BoxParentData;
 ///
-///     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<Leaf, BoxParentData>) -> Size {
-///         ctx.constraints().constrain(self.size)
+///     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<Leaf, BoxParentData>) -> RenderResult<Size> {
+///         Ok(ctx.constraints().constrain(self.size))
 ///     }
 /// }
 ///
@@ -45,7 +45,7 @@ use crate::{
 ///     type Arity = Variable;
 ///     type ParentData = FlexParentData;  // Children get FlexParentData
 ///
-///     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<Variable, FlexParentData>) -> Size {
+///     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<Variable, FlexParentData>) -> RenderResult<Size> {
 ///         for child in ctx.iter_children() {
 ///             // Type-safe access to FlexParentData
 ///             let flex = child.parent_data().flex;
@@ -108,16 +108,16 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     /// # Example
     ///
     /// ```ignore
-    /// fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<Single, BoxParentData>) -> Size {
-    ///     let child_size = ctx.layout_single_child_loose();
+    /// fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<Single, BoxParentData>) -> RenderResult<Size> {
+    ///     let child_size = ctx.layout_single_child_loose()?;
     ///     ctx.position_single_child_at_origin();
-    ///     ctx.constrain(child_size)
+    ///     Ok(ctx.constrain(child_size))
     /// }
     /// ```
     fn perform_layout(
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
-    ) -> Size;
+    ) -> crate::error::RenderResult<Size>;
 
     // 2B field dedup: the box `Size` lives **only** on
     // `RenderState<BoxProtocol>` (committed from the `perform_layout`
@@ -226,8 +226,8 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
         &self,
         _height: f64,
         _ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
-        0.0
+    ) -> crate::error::RenderResult<f64> {
+        Ok(0.0)
     }
 
     /// Computes the maximum intrinsic width for a given height.
@@ -235,8 +235,8 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
         &self,
         _height: f64,
         _ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
-        0.0
+    ) -> crate::error::RenderResult<f64> {
+        Ok(0.0)
     }
 
     /// Computes the minimum intrinsic height for a given width.
@@ -244,8 +244,8 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
         &self,
         _width: f64,
         _ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
-        0.0
+    ) -> crate::error::RenderResult<f64> {
+        Ok(0.0)
     }
 
     /// Computes the maximum intrinsic height for a given width.
@@ -253,8 +253,8 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
         &self,
         _width: f64,
         _ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
-        0.0
+    ) -> crate::error::RenderResult<f64> {
+        Ok(0.0)
     }
 
     // ========================================================================
@@ -269,8 +269,8 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
         &self,
         _constraints: BoxConstraints,
         _ctx: &mut crate::context::BoxDryLayoutCtx<'_>,
-    ) -> Size {
-        Size::ZERO
+    ) -> crate::error::RenderResult<Size> {
+        Ok(Size::ZERO)
     }
 
     // ========================================================================
@@ -278,13 +278,19 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     // ========================================================================
 
     /// Returns the distance from the top of the box to the first baseline.
-    fn get_distance_to_baseline(&self, baseline: TextBaseline) -> Option<f64> {
+    fn get_distance_to_baseline(
+        &self,
+        baseline: TextBaseline,
+    ) -> crate::error::RenderResult<Option<f64>> {
         self.compute_distance_to_actual_baseline(baseline)
     }
 
     /// Computes the distance from the top of the box to its first baseline.
-    fn compute_distance_to_actual_baseline(&self, _baseline: TextBaseline) -> Option<f64> {
-        None
+    fn compute_distance_to_actual_baseline(
+        &self,
+        _baseline: TextBaseline,
+    ) -> crate::error::RenderResult<Option<f64>> {
+        Ok(None)
     }
 
     /// Whether this box answers a live baseline query with its only child's.
@@ -313,8 +319,8 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
         _constraints: BoxConstraints,
         _baseline: TextBaseline,
         _ctx: &mut crate::context::BoxDryBaselineCtx<'_>,
-    ) -> Option<f64> {
-        None
+    ) -> crate::error::RenderResult<Option<f64>> {
+        Ok(None)
     }
 
     // ========================================================================
@@ -626,8 +632,8 @@ pub use flui_painting::TextBaseline;
 /// `BoxLayoutCtx::from_erased` ctor (`pub(crate)` — see
 /// [`crate::protocol::BoxLayoutCtx`]), wraps it in a `BoxLayoutContext`
 /// (the rich ergonomic wrapper), and calls
-/// [`RenderBox::perform_layout`]. The completion size is read back from
-/// the inner context's geometry and returned to the pipeline.
+/// [`RenderBox::perform_layout`]. Its result passes directly to the pipeline;
+/// an error supplies no geometry for this request.
 ///
 /// This method used to return `*self.size()` as a no-op placeholder,
 /// which demonstrably returned `Size::ZERO` for fresh boxes. The real
@@ -660,7 +666,7 @@ where
         // erased trait), wrap it in the ergonomic `BoxLayoutContext` so
         // user widgets get nice helpers, and call `T::perform_layout`.
         //
-        // `T::perform_layout` now returns `Size` directly — a missing
+        // `T::perform_layout` returns `RenderResult<Size>` — a missing
         // completion is a compile error, not a runtime `ContractViolation`.
         //
         // `catch_unwind` in `RenderEntry::layout_leaf_only` is retained
@@ -670,7 +676,7 @@ where
             crate::protocol::BoxLayoutCtx::<T::Arity, T::ParentData>::from_erased(ctx);
         let mut layout_ctx =
             crate::context::BoxLayoutContext::<T::Arity, T::ParentData>::new(typed_inner);
-        Ok(T::perform_layout(self, &mut layout_ctx))
+        T::perform_layout(self, &mut layout_ctx)
     }
 
     fn paint_raw(
@@ -736,9 +742,13 @@ where
         extent: f64,
         child_count: usize,
         child_parent_data: &[Option<&dyn crate::parent_data::ParentData>],
-        child_query: &mut dyn FnMut(usize, crate::storage::IntrinsicDimension, f64) -> f64,
+        child_query: &mut dyn FnMut(
+            usize,
+            crate::storage::IntrinsicDimension,
+            f64,
+        ) -> crate::error::RenderResult<f64>,
         text: crate::pipeline::TextSource<'_>,
-    ) -> f64 {
+    ) -> crate::error::RenderResult<f64> {
         // The intrinsics bridge: wrap the driver's memoizing child
         // recursion in the typed ctx and dispatch the dimension to the
         // matching typed compute_* — same shape as the paint/hit
@@ -766,9 +776,11 @@ where
         child_query: &mut dyn FnMut(
             usize,
             crate::context::DryLayoutChildRequest,
-        ) -> crate::context::DryLayoutChildResponse,
+        ) -> crate::error::RenderResult<
+            crate::context::DryLayoutChildResponse,
+        >,
         text: crate::pipeline::TextSource<'_>,
-    ) -> crate::protocol::ProtocolGeometry<BoxProtocol> {
+    ) -> crate::error::RenderResult<crate::protocol::ProtocolGeometry<BoxProtocol>> {
         let mut ctx =
             crate::context::BoxDryLayoutCtx::new(child_count, child_parent_data, child_query, text);
         T::compute_dry_layout(self, constraints, &mut ctx)
@@ -783,9 +795,11 @@ where
         child_query: &mut dyn FnMut(
             usize,
             crate::context::DryBaselineChildRequest,
-        ) -> crate::context::DryBaselineChildResponse,
+        ) -> crate::error::RenderResult<
+            crate::context::DryBaselineChildResponse,
+        >,
         text: crate::pipeline::TextSource<'_>,
-    ) -> Option<f64> {
+    ) -> crate::error::RenderResult<Option<f64>> {
         let mut ctx = crate::context::BoxDryBaselineCtx::new(
             child_count,
             child_parent_data,
@@ -795,7 +809,10 @@ where
         T::compute_dry_baseline(self, constraints, baseline, &mut ctx)
     }
 
-    fn actual_baseline_raw(&self, baseline: crate::traits::TextBaseline) -> Option<f64> {
+    fn actual_baseline_raw(
+        &self,
+        baseline: crate::traits::TextBaseline,
+    ) -> crate::error::RenderResult<Option<f64>> {
         T::compute_distance_to_actual_baseline(self, baseline)
     }
 

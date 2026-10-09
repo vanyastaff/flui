@@ -282,12 +282,14 @@ impl RenderBox for RenderTestBox {
             flui_foundation::Leaf,
             Self::ParentData,
         >,
-    ) -> Size {
-        let midpoint = Size::new(
-            self.min_width + (self.max_width - self.min_width) / 2.0,
-            self.min_height + (self.max_height - self.min_height) / 2.0,
-        );
-        ctx.constraints().constrain(midpoint)
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok({
+            let midpoint = Size::new(
+                self.min_width + (self.max_width - self.min_width) / 2.0,
+                self.min_height + (self.max_height - self.min_height) / 2.0,
+            );
+            ctx.constraints().constrain(midpoint)
+        })
     }
 
     fn hit_test(
@@ -301,20 +303,36 @@ impl RenderBox for RenderTestBox {
         false
     }
 
-    fn compute_min_intrinsic_width(&self, _height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.min_width
+    fn compute_min_intrinsic_width(
+        &self,
+        _height: f64,
+        _ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(self.min_width)
     }
 
-    fn compute_max_intrinsic_width(&self, _height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.max_width
+    fn compute_max_intrinsic_width(
+        &self,
+        _height: f64,
+        _ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(self.max_width)
     }
 
-    fn compute_min_intrinsic_height(&self, _width: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.min_height
+    fn compute_min_intrinsic_height(
+        &self,
+        _width: f64,
+        _ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(self.min_height)
     }
 
-    fn compute_max_intrinsic_height(&self, _width: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.max_height
+    fn compute_max_intrinsic_height(
+        &self,
+        _width: f64,
+        _ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(self.max_height)
     }
 }
 
@@ -432,15 +450,20 @@ impl MultiChildLayoutDelegate for HarnessMultiChildLayoutDelegate {
         self.size
     }
 
-    fn perform_layout(&self, context: &mut dyn MultiChildLayoutContext, size: Size) {
+    fn perform_layout(
+        &self,
+        context: &mut dyn MultiChildLayoutContext,
+        size: Size,
+    ) -> flui_rendering::RenderResult<()> {
         if context.has_child("header") {
-            context.layout_child("header", BoxConstraints::tight(Size::new(size.width, 20.0)));
+            context.layout_child("header", BoxConstraints::tight(Size::new(size.width, 20.0)))?;
             context.position_child("header", Offset::ZERO);
         }
         if context.has_child("body") {
-            context.layout_child("body", BoxConstraints::tight(Size::new(70.0, 30.0)));
+            context.layout_child("body", BoxConstraints::tight(Size::new(70.0, 30.0)))?;
             context.position_child("body", Offset::new(10.0, 25.0));
         }
+        Ok(())
     }
 
     fn should_relayout(&self, old_delegate: &dyn MultiChildLayoutDelegate) -> bool {
@@ -1051,6 +1074,7 @@ fn harness_editable_composing_underline_paints_at_the_exact_multibyte_box() {
     let expected_box = boxes[0].rect;
     let baseline = editable
         .compute_distance_to_actual_baseline(TextBaseline::Alphabetic)
+        .expect("a successfully laid-out editable has valid baseline geometry")
         .expect("layout ran, so a baseline must be available");
     // Mirrors `RenderEditable`'s own private `underline_rect_for_box` clamp —
     // baseline + 1px gap, clamped inside the box's vertical span.
@@ -1260,23 +1284,29 @@ fn harness_baseline_dry_baseline_recomputes_per_kind_offsets_after_relayout() {
         type Arity = Leaf;
         type ParentData = BoxParentData;
 
-        fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-            ctx.constraints().constrain(self.box_size)
+        fn perform_layout(
+            &mut self,
+            ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+        ) -> flui_rendering::RenderResult<Size> {
+            Ok(ctx.constraints().constrain(self.box_size))
         }
 
         fn compute_dry_layout(
             &self,
             constraints: BoxConstraints,
             _ctx: &mut BoxDryLayoutCtx<'_>,
-        ) -> Size {
-            constraints.constrain(self.box_size)
+        ) -> flui_rendering::RenderResult<Size> {
+            Ok(constraints.constrain(self.box_size))
         }
 
-        fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f64> {
-            match baseline {
+        fn compute_distance_to_actual_baseline(
+            &self,
+            baseline: TextBaseline,
+        ) -> flui_rendering::RenderResult<Option<f64>> {
+            Ok(match baseline {
                 TextBaseline::Alphabetic => self.alphabetic_offset,
                 TextBaseline::Ideographic => self.ideographic_offset,
-            }
+            })
         }
 
         fn compute_dry_baseline(
@@ -1284,11 +1314,11 @@ fn harness_baseline_dry_baseline_recomputes_per_kind_offsets_after_relayout() {
             _constraints: BoxConstraints,
             baseline: TextBaseline,
             _ctx: &mut BoxDryBaselineCtx<'_>,
-        ) -> Option<f64> {
-            match baseline {
+        ) -> flui_rendering::RenderResult<Option<f64>> {
+            Ok(match baseline {
                 TextBaseline::Alphabetic => self.alphabetic_offset,
                 TextBaseline::Ideographic => self.ideographic_offset,
-            }
+            })
         }
     }
 
@@ -1362,23 +1392,26 @@ impl RenderBox for SizedBaselineProbe {
             flui_foundation::Leaf,
             flui_rendering::parent_data::BoxParentData,
         >,
-    ) -> Size {
-        ctx.constraints().constrain(self.box_size)
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok(ctx.constraints().constrain(self.box_size))
     }
 
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
         _ctx: &mut flui_rendering::context::BoxDryLayoutCtx<'_>,
-    ) -> Size {
-        constraints.constrain(self.box_size)
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok(constraints.constrain(self.box_size))
     }
 
-    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f64> {
-        match baseline {
+    fn compute_distance_to_actual_baseline(
+        &self,
+        baseline: TextBaseline,
+    ) -> flui_rendering::RenderResult<Option<f64>> {
+        Ok(match baseline {
             TextBaseline::Alphabetic => self.alphabetic_offset,
             TextBaseline::Ideographic => None,
-        }
+        })
     }
 
     fn compute_dry_baseline(
@@ -1386,11 +1419,11 @@ impl RenderBox for SizedBaselineProbe {
         _constraints: BoxConstraints,
         baseline: TextBaseline,
         _ctx: &mut flui_rendering::context::BoxDryBaselineCtx<'_>,
-    ) -> Option<f64> {
-        match baseline {
+    ) -> flui_rendering::RenderResult<Option<f64>> {
+        Ok(match baseline {
             TextBaseline::Alphabetic => self.alphabetic_offset,
             TextBaseline::Ideographic => None,
-        }
+        })
     }
 }
 
@@ -4080,7 +4113,7 @@ impl flui_rendering::traits::RenderSliver for PanicAfterNLayouts {
             flui_foundation::Leaf,
             Self::ParentData,
         >,
-    ) -> flui_rendering::constraints::SliverGeometry {
+    ) -> flui_rendering::RenderResult<flui_rendering::constraints::SliverGeometry> {
         let nth = self
             .layouts
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
@@ -4091,7 +4124,7 @@ impl flui_rendering::traits::RenderSliver for PanicAfterNLayouts {
         );
         let constraints = *ctx.constraints();
         let paint_extent = self.calculate_paint_offset(&constraints, 0.0, self.extent);
-        flui_rendering::constraints::SliverGeometry {
+        Ok(flui_rendering::constraints::SliverGeometry {
             scroll_extent: self.extent,
             paint_extent,
             layout_extent: paint_extent,
@@ -4100,7 +4133,7 @@ impl flui_rendering::traits::RenderSliver for PanicAfterNLayouts {
             hit_test_extent: paint_extent,
             visible: paint_extent > 0.0,
             ..flui_rendering::constraints::SliverGeometry::ZERO
-        }
+        })
     }
 }
 
@@ -4128,16 +4161,18 @@ impl RenderBox for PanicAfterNBoxLayouts {
             flui_foundation::Leaf,
             Self::ParentData,
         >,
-    ) -> Size {
-        let nth = self
-            .layouts
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-            + 1;
-        assert!(
-            nth <= self.healthy_layouts,
-            "deliberate test failure on box layout {nth}"
-        );
-        ctx.constraints().constrain(self.size)
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok({
+            let nth = self
+                .layouts
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                + 1;
+            assert!(
+                nth <= self.healthy_layouts,
+                "deliberate test failure on box layout {nth}"
+            );
+            ctx.constraints().constrain(self.size)
+        })
     }
 }
 
@@ -4446,31 +4481,35 @@ fn harness_dry_layout_child_intrinsic_channel_matches_standalone_query() {
         fn perform_layout(
             &mut self,
             ctx: &mut flui_rendering::context::BoxLayoutContext<'_, Single, BoxParentData>,
-        ) -> Size {
-            // Pass constraints through to the child and forward the child size.
-            let child_size = ctx.layout_child(0, *ctx.constraints());
-            ctx.position_child(0, Offset::ZERO);
-            child_size
+        ) -> flui_rendering::RenderResult<Size> {
+            Ok({
+                // Pass constraints through to the child and forward the child size.
+                let child_size = ctx.layout_child(0, *ctx.constraints())?;
+                ctx.position_child(0, Offset::ZERO);
+                child_size
+            })
         }
 
         fn compute_max_intrinsic_width(
             &self,
             _height: f64,
             _ctx: &mut BoxIntrinsicsCtx<'_>,
-        ) -> f64 {
-            0.0
+        ) -> flui_rendering::RenderResult<f64> {
+            Ok(0.0)
         }
 
         fn compute_dry_layout(
             &self,
             constraints: BoxConstraints,
             ctx: &mut BoxDryLayoutCtx<'_>,
-        ) -> Size {
-            // Read the child's max intrinsic width through the new channel.
-            let via_channel = ctx.child_max_intrinsic_width(0, f64::INFINITY);
-            *self.captured.lock().unwrap() = via_channel;
-            // Return the child dry size so the tree is structurally valid.
-            ctx.child_dry_layout(0, constraints)
+        ) -> flui_rendering::RenderResult<Size> {
+            Ok({
+                // Read the child's max intrinsic width through the new channel.
+                let via_channel = ctx.child_max_intrinsic_width(0, f64::INFINITY)?;
+                *self.captured.lock().unwrap() = via_channel;
+                // Return the child dry size so the tree is structurally valid.
+                ctx.child_dry_layout(0, constraints)?
+            })
         }
     }
 
@@ -5855,14 +5894,16 @@ impl RenderBox for LaysOutFirstN {
             flui_foundation::Variable,
             flui_rendering::parent_data::BoxParentData,
         >,
-    ) -> Size {
-        let constraints = *ctx.constraints();
-        let count = ctx.child_count().min(self.laid_out);
-        for i in 0..count {
-            let size = ctx.layout_child(i, constraints);
-            ctx.position_child(i, Offset::new(0.0, i as f64 * size.height));
-        }
-        constraints.constrain(Size::new(100.0, 100.0))
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok({
+            let constraints = *ctx.constraints();
+            let count = ctx.child_count().min(self.laid_out);
+            for i in 0..count {
+                let size = ctx.layout_child(i, constraints)?;
+                ctx.position_child(i, Offset::new(0.0, i as f64 * size.height));
+            }
+            constraints.constrain(Size::new(100.0, 100.0))
+        })
     }
 
     fn hit_test(

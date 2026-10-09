@@ -104,7 +104,9 @@ pub use glyphs::{
     GlyphContent, GlyphImage, GlyphImageError, GlyphKey, GlyphRasterizer, PlacedGlyph,
 };
 pub use table_border::paint_table_border;
-pub use text_layout::{FontCollection, HostFontFeed, HostFonts, TextContext, TextLayoutResult};
+pub use text_layout::{
+    FontCollection, HostFontFeed, HostFonts, TextContext, TextLayoutError, TextLayoutResult,
+};
 pub use text_painter::{Invalidation, TextBaseline, TextPainter};
 
 // The paint vocabulary, defined in `crate::paint`.

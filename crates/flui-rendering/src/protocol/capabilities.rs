@@ -108,7 +108,11 @@ pub trait LayoutContextApi<'ctx, L: LayoutCapability + ?Sized, A: Arity, P: Pare
     fn child_count(&self) -> usize;
 
     /// Layouts a child with given constraints.
-    fn layout_child(&mut self, index: usize, constraints: L::Constraints) -> L::Geometry;
+    fn layout_child(
+        &mut self,
+        index: usize,
+        constraints: L::Constraints,
+    ) -> crate::error::RenderResult<L::Geometry>;
 
     /// Positions a child at the given offset.
     fn position_child(&mut self, index: usize, offset: Offset);

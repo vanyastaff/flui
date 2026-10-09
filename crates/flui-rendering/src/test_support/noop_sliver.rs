@@ -22,8 +22,8 @@ impl RenderSliver for NoopSliver {
     fn perform_layout(
         &mut self,
         _ctx: &mut SliverLayoutContext<'_, Self::Arity, Self::ParentData>,
-    ) -> SliverGeometry {
-        SliverGeometry::ZERO
+    ) -> crate::RenderResult<SliverGeometry> {
+        Ok(SliverGeometry::ZERO)
     }
 
     fn hit_test(&self, _: &mut SliverHitTestContext<'_, Self::Arity, Self::ParentData>) -> bool {

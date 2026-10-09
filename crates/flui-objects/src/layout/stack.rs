@@ -342,19 +342,19 @@ impl RenderStack {
         &self,
         incoming: BoxConstraints,
         specs: &[Option<PositionedSpec>],
-        mut measure: impl FnMut(usize, BoxConstraints) -> Size,
-    ) -> StackSizes {
+        mut measure: impl FnMut(usize, BoxConstraints) -> flui_rendering::RenderResult<Size>,
+    ) -> flui_rendering::RenderResult<StackSizes> {
         let child_count = specs.len();
 
         if child_count == 0 {
-            return StackSizes {
+            return Ok(StackSizes {
                 size: if incoming.biggest().is_finite() {
                     incoming.biggest()
                 } else {
                     incoming.smallest()
                 },
                 child_sizes: vec![],
-            };
+            });
         }
 
         let nonpos_constraints = self.non_positioned_constraints(incoming);
@@ -366,7 +366,7 @@ impl RenderStack {
         for i in 0..child_count {
             if specs[i].is_none() {
                 has_non_positioned = true;
-                let s = measure(i, nonpos_constraints);
+                let s = measure(i, nonpos_constraints)?;
                 child_sizes[i] = s;
                 if s.width > content_w {
                     content_w = s.width;
@@ -385,24 +385,28 @@ impl RenderStack {
             incoming.smallest()
         };
 
-        StackSizes { size, child_sizes }
+        Ok(StackSizes { size, child_sizes })
     }
 
     /// Each intrinsic dimension is the max of the children.
     fn max_child_intrinsic(
         ctx: &mut BoxIntrinsicsCtx<'_>,
         extent: f64,
-        mut query: impl FnMut(&mut BoxIntrinsicsCtx<'_>, usize, f64) -> f64,
-    ) -> f64 {
+        mut query: impl FnMut(
+            &mut BoxIntrinsicsCtx<'_>,
+            usize,
+            f64,
+        ) -> flui_rendering::RenderResult<f64>,
+    ) -> flui_rendering::RenderResult<f64> {
         let child_count = ctx.child_count();
         if child_count == 0 {
-            return 0.0;
+            return Ok(0.0);
         }
         let mut max = 0.0_f64;
         for i in 0..child_count {
-            max = max.max(query(ctx, i, extent));
+            max = max.max(query(ctx, i, extent)?);
         }
-        max
+        Ok(max)
     }
 }
 
@@ -430,7 +434,7 @@ impl RenderBox for RenderStack {
     fn perform_layout(
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Variable, StackParentData>,
-    ) -> Size {
+    ) -> flui_rendering::RenderResult<Size> {
         let incoming = *ctx.constraints();
         let child_count = ctx.child_count();
         self.child_count = child_count;
@@ -453,7 +457,7 @@ impl RenderBox for RenderStack {
         // children, resolve the stack's own size. Delegates to compute_size
         // so dry layout can reuse identical logic.
         // -----------------------------------------------------------------
-        let sized = self.compute_size(incoming, &specs, |i, c| ctx.layout_child(i, c));
+        let sized = self.compute_size(incoming, &specs, |i, c| ctx.layout_child(i, c))?;
         let size = sized.size;
         let mut child_sizes = sized.child_sizes;
 
@@ -473,7 +477,7 @@ impl RenderBox for RenderStack {
                 }
                 Some(spec) => {
                     let cc = spec.child_constraints(size);
-                    let child_size = ctx.layout_child(i, cc);
+                    let child_size = ctx.layout_child(i, cc)?;
                     child_sizes[i] = child_size;
                     let offset = spec.child_offset(size, child_size, self.alignment);
                     if Self::child_overflows(size, offset, child_size) {
@@ -484,14 +488,14 @@ impl RenderBox for RenderStack {
             }
         }
 
-        size
+        Ok(size)
     }
 
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
         ctx: &mut BoxDryLayoutCtx<'_>,
-    ) -> Size {
+    ) -> flui_rendering::RenderResult<Size> {
         // Build specs via the erased parent-data accessor: same gate as
         // perform_layout so positioned vs non-positioned classification
         // is identical in both paths.
@@ -505,28 +509,44 @@ impl RenderBox for RenderStack {
         }
         // PositionedSpec is Copy — no reference to ctx survives into the closure.
         self.compute_size(constraints, &specs, |i, c| ctx.child_dry_layout(i, c))
-            .size
+            .map(|sized| sized.size)
     }
 
-    fn compute_min_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_min_intrinsic_width(
+        &self,
+        height: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         Self::max_child_intrinsic(ctx, height, |ctx, i, extent| {
             ctx.child_min_intrinsic_width(i, extent)
         })
     }
 
-    fn compute_max_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_max_intrinsic_width(
+        &self,
+        height: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         Self::max_child_intrinsic(ctx, height, |ctx, i, extent| {
             ctx.child_max_intrinsic_width(i, extent)
         })
     }
 
-    fn compute_min_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_min_intrinsic_height(
+        &self,
+        width: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         Self::max_child_intrinsic(ctx, width, |ctx, i, extent| {
             ctx.child_min_intrinsic_height(i, extent)
         })
     }
 
-    fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_max_intrinsic_height(
+        &self,
+        width: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         Self::max_child_intrinsic(ctx, width, |ctx, i, extent| {
             ctx.child_max_intrinsic_height(i, extent)
         })
@@ -749,7 +769,7 @@ impl RenderBox for RenderIndexedStack {
     fn perform_layout(
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Variable, StackParentData>,
-    ) -> Size {
+    ) -> flui_rendering::RenderResult<Size> {
         let incoming = *ctx.constraints();
         let child_count = ctx.child_count();
         self.stack.child_count = child_count;
@@ -760,7 +780,7 @@ impl RenderBox for RenderIndexedStack {
         let specs = Self::build_specs_from_layout_ctx(ctx);
         let sized = self
             .stack
-            .compute_size(incoming, &specs, |i, c| ctx.layout_child(i, c));
+            .compute_size(incoming, &specs, |i, c| ctx.layout_child(i, c))?;
         let size = sized.size;
         let mut child_sizes = sized.child_sizes;
 
@@ -778,7 +798,7 @@ impl RenderBox for RenderIndexedStack {
                 }
                 Some(spec) => {
                     let cc = spec.child_constraints(size);
-                    let child_size = ctx.layout_child(i, cc);
+                    let child_size = ctx.layout_child(i, cc)?;
                     child_sizes[i] = child_size;
                     let offset = spec.child_offset(size, child_size, self.stack.alignment);
                     if RenderStack::child_overflows(size, offset, child_size) {
@@ -794,45 +814,61 @@ impl RenderBox for RenderIndexedStack {
                 for kind in [TextBaseline::Alphabetic, TextBaseline::Ideographic] {
                     let slot = baseline_kind_index(kind);
                     self.reported_baselines[slot] = ctx
-                        .child_distance_to_actual_baseline(i, kind)
+                        .child_distance_to_actual_baseline(i, kind)?
                         .map(|baseline| baseline + offset.dy);
                 }
             }
         }
 
-        size
+        Ok(size)
     }
 
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
         ctx: &mut BoxDryLayoutCtx<'_>,
-    ) -> Size {
+    ) -> flui_rendering::RenderResult<Size> {
         let specs = Self::build_specs_from_dry_layout_ctx(ctx);
         self.stack
             .compute_size(constraints, &specs, |i, c| ctx.child_dry_layout(i, c))
-            .size
+            .map(|sized| sized.size)
     }
 
-    fn compute_min_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_min_intrinsic_width(
+        &self,
+        height: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         RenderStack::max_child_intrinsic(ctx, height, |ctx, i, extent| {
             ctx.child_min_intrinsic_width(i, extent)
         })
     }
 
-    fn compute_max_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_max_intrinsic_width(
+        &self,
+        height: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         RenderStack::max_child_intrinsic(ctx, height, |ctx, i, extent| {
             ctx.child_max_intrinsic_width(i, extent)
         })
     }
 
-    fn compute_min_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_min_intrinsic_height(
+        &self,
+        width: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         RenderStack::max_child_intrinsic(ctx, width, |ctx, i, extent| {
             ctx.child_min_intrinsic_height(i, extent)
         })
     }
 
-    fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_max_intrinsic_height(
+        &self,
+        width: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         RenderStack::max_child_intrinsic(ctx, width, |ctx, i, extent| {
             ctx.child_max_intrinsic_height(i, extent)
         })
@@ -843,21 +879,26 @@ impl RenderBox for RenderIndexedStack {
         constraints: BoxConstraints,
         baseline: TextBaseline,
         ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f64> {
+    ) -> flui_rendering::RenderResult<Option<f64>> {
         let child_count = ctx.child_count();
-        let displayed_index = self.displayed_index(child_count)?;
+        let Some(displayed_index) = self.displayed_index(child_count) else {
+            return Ok(None);
+        };
         let specs = Self::build_specs_from_dry_baseline_ctx(ctx);
         let size = self
             .stack
-            .compute_size(constraints, &specs, |i, c| ctx.child_dry_layout(i, c))
+            .compute_size(constraints, &specs, |i, c| ctx.child_dry_layout(i, c))?
             .size;
         let child_constraints = match specs[displayed_index] {
             Some(spec) => spec.child_constraints(size),
             None => self.stack.non_positioned_constraints(constraints),
         };
-        let child_baseline =
-            ctx.child_dry_baseline(displayed_index, child_constraints, baseline)?;
-        let child_size = ctx.child_dry_layout(displayed_index, child_constraints);
+        let Some(child_baseline) =
+            ctx.child_dry_baseline(displayed_index, child_constraints, baseline)?
+        else {
+            return Ok(None);
+        };
+        let child_size = ctx.child_dry_layout(displayed_index, child_constraints)?;
         let offset = match specs[displayed_index] {
             Some(spec) => spec.child_offset(size, child_size, self.stack.alignment),
             None => Offset::new(
@@ -865,11 +906,14 @@ impl RenderBox for RenderIndexedStack {
                 alignment_along_axis(self.stack.alignment.y, size.height - child_size.height),
             ),
         };
-        Some(child_baseline + offset.dy)
+        Ok(Some(child_baseline + offset.dy))
     }
 
-    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f64> {
-        self.reported_baselines[baseline_kind_index(baseline)]
+    fn compute_distance_to_actual_baseline(
+        &self,
+        baseline: TextBaseline,
+    ) -> flui_rendering::RenderResult<Option<f64>> {
+        Ok(self.reported_baselines[baseline_kind_index(baseline)])
     }
 
     fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Variable>) {

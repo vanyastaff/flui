@@ -63,27 +63,29 @@ impl RenderSliver for FixedSliver {
     fn perform_layout(
         &mut self,
         ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
-    ) -> SliverGeometry {
-        let constraints = *ctx.constraints();
-        self.cross_axis_extent = constraints.cross_axis_extent;
-        if self.recorded_growth_direction.is_some() {
-            self.recorded_growth_direction = Some(constraints.growth_direction);
-        }
-        let paint_extent = self.calculate_paint_offset(&constraints, 0.0, self.paint_extent);
-        let layout_extent = self.layout_extent.unwrap_or(paint_extent);
-        let cache_extent = self.calculate_cache_offset(&constraints, 0.0, self.paint_extent);
-        SliverGeometry {
-            scroll_extent: self.scroll_extent,
-            paint_extent,
-            layout_extent,
-            max_paint_extent: self.paint_extent,
-            hit_test_extent: paint_extent,
-            cache_extent,
-            visible: paint_extent > 0.0,
-            has_visual_overflow: self.scroll_extent > constraints.remaining_paint_extent
-                || constraints.scroll_offset > 0.0,
-            ..SliverGeometry::ZERO
-        }
+    ) -> flui_rendering::RenderResult<SliverGeometry> {
+        Ok({
+            let constraints = *ctx.constraints();
+            self.cross_axis_extent = constraints.cross_axis_extent;
+            if self.recorded_growth_direction.is_some() {
+                self.recorded_growth_direction = Some(constraints.growth_direction);
+            }
+            let paint_extent = self.calculate_paint_offset(&constraints, 0.0, self.paint_extent);
+            let layout_extent = self.layout_extent.unwrap_or(paint_extent);
+            let cache_extent = self.calculate_cache_offset(&constraints, 0.0, self.paint_extent);
+            SliverGeometry {
+                scroll_extent: self.scroll_extent,
+                paint_extent,
+                layout_extent,
+                max_paint_extent: self.paint_extent,
+                hit_test_extent: paint_extent,
+                cache_extent,
+                visible: paint_extent > 0.0,
+                has_visual_overflow: self.scroll_extent > constraints.remaining_paint_extent
+                    || constraints.scroll_offset > 0.0,
+                ..SliverGeometry::ZERO
+            }
+        })
     }
 
     fn hit_test(&self, ctx: &mut SliverHitTestContext<'_, Leaf, Self::ParentData>) -> bool {

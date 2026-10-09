@@ -96,6 +96,7 @@ fn shape(text_cx: &mut TextContext, text: &str) -> Arc<ShapedParagraph> {
                 max_lines: None,
                 ellipsis: None,
             })
+            .expect("benchmark text has valid shaping inputs")
             .to_shaped(None),
     )
 }

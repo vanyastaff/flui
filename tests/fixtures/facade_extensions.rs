@@ -69,16 +69,16 @@ impl RenderBox for SolidLeaf {
     type Arity = Leaf;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-        ctx.constrain(Size::new(24.0, 16.0))
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> flui::rendering::RenderResult<Size> {
+        Ok(ctx.constrain(Size::new(24.0, 16.0)))
     }
 
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
         _ctx: &mut BoxDryLayoutCtx<'_>,
-    ) -> Size {
-        constraints.constrain(Size::new(24.0, 16.0))
+    ) -> flui::rendering::RenderResult<Size> {
+        Ok(constraints.constrain(Size::new(24.0, 16.0)))
     }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Leaf>) {

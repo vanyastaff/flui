@@ -87,13 +87,13 @@ impl RenderSliver for RenderSliverMainAxisGroup {
     fn perform_layout(
         &mut self,
         ctx: &mut SliverLayoutContext<'_, Variable, SliverPhysicalParentData>,
-    ) -> SliverGeometry {
+    ) -> flui_rendering::RenderResult<SliverGeometry> {
         let constraints = *ctx.constraints();
         let child_count = ctx.child_count();
         self.laid_out_child_count = child_count;
 
         if child_count == 0 {
-            return SliverGeometry::ZERO;
+            return Ok(SliverGeometry::ZERO);
         }
 
         // Growth-direction iteration order: forward walks 0..n, reverse
@@ -137,13 +137,13 @@ impl RenderSliver for RenderSliverMainAxisGroup {
             child_constraints.preceding_scroll_extent =
                 scroll_offset + constraints.preceding_scroll_extent;
 
-            let child_geometry = ctx.layout_child(index, child_constraints);
+            let child_geometry = ctx.layout_child(index, child_constraints)?;
 
             // A correction propagates upward unchanged; the viewport reruns
             // layout with the corrected offset (`RenderSliverPadding` does
             // the same).
             if let Some(correction) = child_geometry.scroll_offset_correction {
-                return SliverGeometry::scroll_offset_correction(correction);
+                return Ok(SliverGeometry::scroll_offset_correction(correction));
             }
 
             let child_paint_offset = layout_offset + child_geometry.paint_origin;
@@ -166,7 +166,7 @@ impl RenderSliver for RenderSliverMainAxisGroup {
             debug_assert!(
                 walked + 1 == order.len() || max_paint_extent.is_finite(),
                 "unreachable sliver: a sliver follows a sliver with an \
-                 infinite max paint extent"
+             infinite max paint extent"
             );
         }
 
@@ -222,7 +222,7 @@ impl RenderSliver for RenderSliverMainAxisGroup {
         // explicitly here, the exact omission class that produced three real header bugs in
         // this workspace (and, unstated, made this group unhittable in its
         // first cut).
-        SliverGeometry {
+        Ok(SliverGeometry {
             scroll_extent: scroll_offset,
             paint_extent,
             max_paint_extent,
@@ -233,7 +233,7 @@ impl RenderSliver for RenderSliverMainAxisGroup {
                 || constraints.scroll_offset > 0.0,
             visible: paint_extent > 0.0,
             ..SliverGeometry::ZERO
-        }
+        })
     }
 
     /// Paint LAST child first so earlier children draw on top — a pinned

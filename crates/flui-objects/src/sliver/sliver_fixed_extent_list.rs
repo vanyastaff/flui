@@ -362,13 +362,13 @@ impl RenderSliver for RenderSliverFixedExtentList {
     fn perform_layout(
         &mut self,
         ctx: &mut SliverLayoutContext<'_, Variable, Self::ParentData>,
-    ) -> SliverGeometry {
+    ) -> flui_rendering::RenderResult<SliverGeometry> {
         let constraints = *ctx.constraints();
 
         if self.item_count == 0 {
             self.attached_child_count = 0;
             ctx.emit_retain_band(0, 0);
-            return SliverGeometry::ZERO;
+            return Ok(SliverGeometry::ZERO);
         }
 
         let Some((first, mut last, effective_count)) = self.window(&constraints) else {
@@ -385,11 +385,11 @@ impl RenderSliver for RenderSliverFixedExtentList {
             let first = finite_leading_cache_edge(&constraints)
                 .map_or(0, |start| self.min_child_index_for_scroll_offset(start));
             ctx.emit_retain_band(first, first);
-            return SliverGeometry {
+            return Ok(SliverGeometry {
                 scroll_extent,
                 max_paint_extent: scroll_extent,
                 ..SliverGeometry::ZERO
-            };
+            });
         };
 
         self.logical_to_slot.clear();
@@ -400,7 +400,7 @@ impl RenderSliver for RenderSliverFixedExtentList {
                 debug_assert!(
                     previous.is_none(),
                     "BUG: fixed-extent list has two attached children stamped with logical \
-                     index {} (dense slots {:?} and {slot})",
+                 index {} (dense slots {:?} and {slot})",
                     pd.index,
                     previous,
                 );
@@ -412,7 +412,7 @@ impl RenderSliver for RenderSliverFixedExtentList {
         let mut effective_count = effective_count;
         for logical_index in first..=last {
             if let Some(&slot) = self.logical_to_slot.get(&logical_index) {
-                ctx.layout_box_child(slot, child_constraints);
+                ctx.layout_box_child(slot, child_constraints)?;
                 if let Some(pd) = ctx.child_parent_data_mut(slot) {
                     pd.layout_offset = self.index_to_layout_offset(logical_index);
                 }
@@ -436,11 +436,11 @@ impl RenderSliver for RenderSliverFixedExtentList {
             self.attached_child_count = ctx.child_count();
             ctx.emit_retain_band(first, first);
             let scroll_extent = self.compute_max_scroll_offset(effective_count);
-            return SliverGeometry {
+            return Ok(SliverGeometry {
                 scroll_extent,
                 max_paint_extent: scroll_extent,
                 ..SliverGeometry::ZERO
-            };
+            });
         }
         ctx.emit_retain_band(first, last + 1);
 
@@ -489,7 +489,7 @@ impl RenderSliver for RenderSliverFixedExtentList {
             }
         }
 
-        geometry
+        Ok(geometry)
     }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {

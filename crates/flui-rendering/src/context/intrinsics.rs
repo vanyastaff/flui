@@ -106,7 +106,10 @@ pub struct BoxDryBaselineCtx<'a> {
     /// (plus harness seeds when `test`/`testing` is active). Container
     /// objects downcast entries via [`Self::child_parent_data_as`].
     child_parent_data: &'a [Option<&'a dyn ParentData>],
-    query: &'a mut dyn FnMut(usize, DryBaselineChildRequest) -> DryBaselineChildResponse,
+    query: &'a mut dyn FnMut(
+        usize,
+        DryBaselineChildRequest,
+    ) -> crate::error::RenderResult<DryBaselineChildResponse>,
     /// The text context this computation measures with.
     text: TextSource<'a>,
 }
@@ -125,7 +128,10 @@ impl<'a> BoxDryBaselineCtx<'a> {
     pub(crate) fn new(
         child_count: usize,
         child_parent_data: &'a [Option<&'a dyn ParentData>],
-        query: &'a mut dyn FnMut(usize, DryBaselineChildRequest) -> DryBaselineChildResponse,
+        query: &'a mut dyn FnMut(
+            usize,
+            DryBaselineChildRequest,
+        ) -> crate::error::RenderResult<DryBaselineChildResponse>,
         text: TextSource<'a>,
     ) -> Self {
         Self {
@@ -176,22 +182,34 @@ impl<'a> BoxDryBaselineCtx<'a> {
         index: usize,
         constraints: BoxConstraints,
         baseline: TextBaseline,
-    ) -> Option<f64> {
+    ) -> crate::error::RenderResult<Option<f64>> {
         match (self.query)(
             index,
             DryBaselineChildRequest::Baseline(constraints, baseline),
-        ) {
-            DryBaselineChildResponse::Baseline(v) => v,
-            DryBaselineChildResponse::DryLayout(_) | DryBaselineChildResponse::Intrinsic(_) => None,
+        )? {
+            DryBaselineChildResponse::Baseline(v) => Ok(v),
+            DryBaselineChildResponse::DryLayout(_) | DryBaselineChildResponse::Intrinsic(_) => {
+                Err(crate::error::RenderError::contract_violation(
+                    "dry baseline query",
+                    "unexpected child response",
+                ))
+            }
         }
     }
 
     /// The size the child would take under `constraints`, without laying it out.
-    pub fn child_dry_layout(&mut self, index: usize, constraints: BoxConstraints) -> Size {
-        match (self.query)(index, DryBaselineChildRequest::DryLayout(constraints)) {
-            DryBaselineChildResponse::DryLayout(size) => size,
+    pub fn child_dry_layout(
+        &mut self,
+        index: usize,
+        constraints: BoxConstraints,
+    ) -> crate::error::RenderResult<Size> {
+        match (self.query)(index, DryBaselineChildRequest::DryLayout(constraints))? {
+            DryBaselineChildResponse::DryLayout(size) => Ok(size),
             DryBaselineChildResponse::Baseline(_) | DryBaselineChildResponse::Intrinsic(_) => {
-                Size::ZERO
+                Err(crate::error::RenderError::contract_violation(
+                    "dry layout query",
+                    "unexpected child response",
+                ))
             }
         }
     }
@@ -205,30 +223,51 @@ impl<'a> BoxDryBaselineCtx<'a> {
         index: usize,
         dimension: IntrinsicDimension,
         extent: f64,
-    ) -> f64 {
-        match (self.query)(index, DryBaselineChildRequest::Intrinsic(dimension, extent)) {
-            DryBaselineChildResponse::Intrinsic(v) => v,
-            DryBaselineChildResponse::Baseline(_) | DryBaselineChildResponse::DryLayout(_) => 0.0,
+    ) -> crate::error::RenderResult<f64> {
+        match (self.query)(index, DryBaselineChildRequest::Intrinsic(dimension, extent))? {
+            DryBaselineChildResponse::Intrinsic(v) => Ok(v),
+            DryBaselineChildResponse::Baseline(_) | DryBaselineChildResponse::DryLayout(_) => {
+                Err(crate::error::RenderError::contract_violation(
+                    "intrinsic query",
+                    "unexpected child response",
+                ))
+            }
         }
     }
 
     /// The child's maximum intrinsic width for the given height.
-    pub fn child_max_intrinsic_width(&mut self, index: usize, height: f64) -> f64 {
+    pub fn child_max_intrinsic_width(
+        &mut self,
+        index: usize,
+        height: f64,
+    ) -> crate::error::RenderResult<f64> {
         self.child_intrinsic(index, IntrinsicDimension::MaxWidth, height)
     }
 
     /// The child's minimum intrinsic width for the given height.
-    pub fn child_min_intrinsic_width(&mut self, index: usize, height: f64) -> f64 {
+    pub fn child_min_intrinsic_width(
+        &mut self,
+        index: usize,
+        height: f64,
+    ) -> crate::error::RenderResult<f64> {
         self.child_intrinsic(index, IntrinsicDimension::MinWidth, height)
     }
 
     /// The child's maximum intrinsic height for the given width.
-    pub fn child_max_intrinsic_height(&mut self, index: usize, width: f64) -> f64 {
+    pub fn child_max_intrinsic_height(
+        &mut self,
+        index: usize,
+        width: f64,
+    ) -> crate::error::RenderResult<f64> {
         self.child_intrinsic(index, IntrinsicDimension::MaxHeight, width)
     }
 
     /// The child's minimum intrinsic height for the given width.
-    pub fn child_min_intrinsic_height(&mut self, index: usize, width: f64) -> f64 {
+    pub fn child_min_intrinsic_height(
+        &mut self,
+        index: usize,
+        width: f64,
+    ) -> crate::error::RenderResult<f64> {
         self.child_intrinsic(index, IntrinsicDimension::MinHeight, width)
     }
 }
@@ -249,7 +288,7 @@ pub struct BoxIntrinsicsCtx<'a> {
     child_count: usize,
     /// Erased per-child parent data; same semantics as [`BoxDryLayoutCtx::child_parent_data`].
     child_parent_data: &'a [Option<&'a dyn ParentData>],
-    query: &'a mut dyn FnMut(usize, IntrinsicDimension, f64) -> f64,
+    query: &'a mut dyn FnMut(usize, IntrinsicDimension, f64) -> crate::error::RenderResult<f64>,
     /// The text context this computation measures with.
     text: TextSource<'a>,
 }
@@ -268,7 +307,7 @@ impl<'a> BoxIntrinsicsCtx<'a> {
     pub(crate) fn new(
         child_count: usize,
         child_parent_data: &'a [Option<&'a dyn ParentData>],
-        query: &'a mut dyn FnMut(usize, IntrinsicDimension, f64) -> f64,
+        query: &'a mut dyn FnMut(usize, IntrinsicDimension, f64) -> crate::error::RenderResult<f64>,
         text: TextSource<'a>,
     ) -> Self {
         Self {
@@ -314,27 +353,43 @@ impl<'a> BoxIntrinsicsCtx<'a> {
         index: usize,
         dimension: IntrinsicDimension,
         extent: f64,
-    ) -> f64 {
+    ) -> crate::error::RenderResult<f64> {
         (self.query)(index, dimension, extent)
     }
 
     /// The child's minimum intrinsic width for the given height.
-    pub fn child_min_intrinsic_width(&mut self, index: usize, height: f64) -> f64 {
+    pub fn child_min_intrinsic_width(
+        &mut self,
+        index: usize,
+        height: f64,
+    ) -> crate::error::RenderResult<f64> {
         self.child_intrinsic(index, IntrinsicDimension::MinWidth, height)
     }
 
     /// The child's maximum intrinsic width for the given height.
-    pub fn child_max_intrinsic_width(&mut self, index: usize, height: f64) -> f64 {
+    pub fn child_max_intrinsic_width(
+        &mut self,
+        index: usize,
+        height: f64,
+    ) -> crate::error::RenderResult<f64> {
         self.child_intrinsic(index, IntrinsicDimension::MaxWidth, height)
     }
 
     /// The child's minimum intrinsic height for the given width.
-    pub fn child_min_intrinsic_height(&mut self, index: usize, width: f64) -> f64 {
+    pub fn child_min_intrinsic_height(
+        &mut self,
+        index: usize,
+        width: f64,
+    ) -> crate::error::RenderResult<f64> {
         self.child_intrinsic(index, IntrinsicDimension::MinHeight, width)
     }
 
     /// The child's maximum intrinsic height for the given width.
-    pub fn child_max_intrinsic_height(&mut self, index: usize, width: f64) -> f64 {
+    pub fn child_max_intrinsic_height(
+        &mut self,
+        index: usize,
+        width: f64,
+    ) -> crate::error::RenderResult<f64> {
         self.child_intrinsic(index, IntrinsicDimension::MaxHeight, width)
     }
 
@@ -381,7 +436,10 @@ pub struct BoxDryLayoutCtx<'a> {
     /// own `<Self as RenderBox>::ParentData` — the type they install on children — so
     /// mismatches are impossible in correctly-constructed trees.
     child_parent_data: &'a [Option<&'a dyn ParentData>],
-    query: &'a mut dyn FnMut(usize, DryLayoutChildRequest) -> DryLayoutChildResponse,
+    query: &'a mut dyn FnMut(
+        usize,
+        DryLayoutChildRequest,
+    ) -> crate::error::RenderResult<DryLayoutChildResponse>,
     /// The text context this computation measures with.
     text: TextSource<'a>,
 }
@@ -400,7 +458,10 @@ impl<'a> BoxDryLayoutCtx<'a> {
     pub(crate) fn new(
         child_count: usize,
         child_parent_data: &'a [Option<&'a dyn ParentData>],
-        query: &'a mut dyn FnMut(usize, DryLayoutChildRequest) -> DryLayoutChildResponse,
+        query: &'a mut dyn FnMut(
+            usize,
+            DryLayoutChildRequest,
+        ) -> crate::error::RenderResult<DryLayoutChildResponse>,
         text: TextSource<'a>,
     ) -> Self {
         Self {
@@ -444,11 +505,18 @@ impl<'a> BoxDryLayoutCtx<'a> {
 
     /// The size the child would take under `constraints`, without
     /// laying it out.
-    pub fn child_dry_layout(&mut self, index: usize, constraints: BoxConstraints) -> Size {
-        match (self.query)(index, DryLayoutChildRequest::DryLayout(constraints)) {
-            DryLayoutChildResponse::DryLayout(size) => size,
+    pub fn child_dry_layout(
+        &mut self,
+        index: usize,
+        constraints: BoxConstraints,
+    ) -> crate::error::RenderResult<Size> {
+        match (self.query)(index, DryLayoutChildRequest::DryLayout(constraints))? {
+            DryLayoutChildResponse::DryLayout(size) => Ok(size),
             DryLayoutChildResponse::Intrinsic(_) | DryLayoutChildResponse::Baseline(_) => {
-                Size::ZERO
+                Err(crate::error::RenderError::contract_violation(
+                    "dry layout query",
+                    "unexpected child response",
+                ))
             }
         }
     }
@@ -462,13 +530,18 @@ impl<'a> BoxDryLayoutCtx<'a> {
         index: usize,
         constraints: BoxConstraints,
         baseline: TextBaseline,
-    ) -> Option<f64> {
+    ) -> crate::error::RenderResult<Option<f64>> {
         match (self.query)(
             index,
             DryLayoutChildRequest::Baseline(constraints, baseline),
-        ) {
-            DryLayoutChildResponse::Baseline(v) => v,
-            DryLayoutChildResponse::DryLayout(_) | DryLayoutChildResponse::Intrinsic(_) => None,
+        )? {
+            DryLayoutChildResponse::Baseline(v) => Ok(v),
+            DryLayoutChildResponse::DryLayout(_) | DryLayoutChildResponse::Intrinsic(_) => {
+                Err(crate::error::RenderError::contract_violation(
+                    "dry baseline query",
+                    "unexpected child response",
+                ))
+            }
         }
     }
 
@@ -482,30 +555,51 @@ impl<'a> BoxDryLayoutCtx<'a> {
         index: usize,
         dimension: IntrinsicDimension,
         extent: f64,
-    ) -> f64 {
-        match (self.query)(index, DryLayoutChildRequest::Intrinsic(dimension, extent)) {
-            DryLayoutChildResponse::Intrinsic(v) => v,
-            DryLayoutChildResponse::DryLayout(_) | DryLayoutChildResponse::Baseline(_) => 0.0,
+    ) -> crate::error::RenderResult<f64> {
+        match (self.query)(index, DryLayoutChildRequest::Intrinsic(dimension, extent))? {
+            DryLayoutChildResponse::Intrinsic(v) => Ok(v),
+            DryLayoutChildResponse::DryLayout(_) | DryLayoutChildResponse::Baseline(_) => {
+                Err(crate::error::RenderError::contract_violation(
+                    "intrinsic query",
+                    "unexpected child response",
+                ))
+            }
         }
     }
 
     /// The child's maximum intrinsic width for the given height.
-    pub fn child_max_intrinsic_width(&mut self, index: usize, height: f64) -> f64 {
+    pub fn child_max_intrinsic_width(
+        &mut self,
+        index: usize,
+        height: f64,
+    ) -> crate::error::RenderResult<f64> {
         self.child_intrinsic(index, IntrinsicDimension::MaxWidth, height)
     }
 
     /// The child's minimum intrinsic width for the given height.
-    pub fn child_min_intrinsic_width(&mut self, index: usize, height: f64) -> f64 {
+    pub fn child_min_intrinsic_width(
+        &mut self,
+        index: usize,
+        height: f64,
+    ) -> crate::error::RenderResult<f64> {
         self.child_intrinsic(index, IntrinsicDimension::MinWidth, height)
     }
 
     /// The child's maximum intrinsic height for the given width.
-    pub fn child_max_intrinsic_height(&mut self, index: usize, width: f64) -> f64 {
+    pub fn child_max_intrinsic_height(
+        &mut self,
+        index: usize,
+        width: f64,
+    ) -> crate::error::RenderResult<f64> {
         self.child_intrinsic(index, IntrinsicDimension::MaxHeight, width)
     }
 
     /// The child's minimum intrinsic height for the given width.
-    pub fn child_min_intrinsic_height(&mut self, index: usize, width: f64) -> f64 {
+    pub fn child_min_intrinsic_height(
+        &mut self,
+        index: usize,
+        width: f64,
+    ) -> crate::error::RenderResult<f64> {
         self.child_intrinsic(index, IntrinsicDimension::MinHeight, width)
     }
 }
@@ -530,12 +624,13 @@ pub mod test_support {
     /// childless objects: any child query is a contract violation and
     /// panics with the probe's coordinates.
     pub fn leaf_intrinsics<R>(f: impl FnOnce(&mut BoxIntrinsicsCtx<'_>) -> R) -> R {
-        let mut deny_query = |index: usize, dim: IntrinsicDimension, extent: f64| -> f64 {
-            panic!(
-                "leaf object queried child {index} ({dim:?} @ {extent}) — \
+        let mut deny_query =
+            |index: usize, dim: IntrinsicDimension, extent: f64| -> crate::RenderResult<f64> {
+                panic!(
+                    "leaf object queried child {index} ({dim:?} @ {extent}) — \
                  a childless compute_* must not consult children"
-            )
-        };
+                )
+            };
         let text = crate::pipeline::TextContextHandle::standalone();
         f(&mut BoxIntrinsicsCtx::new(
             0,
@@ -548,7 +643,9 @@ pub mod test_support {
     /// Leaf context for `compute_dry_layout` tests; panics on any child query
     /// (both `DryLayout` and `Intrinsic` kinds).
     pub fn leaf_dry_layout<R>(f: impl FnOnce(&mut BoxDryLayoutCtx<'_>) -> R) -> R {
-        let mut deny = |index: usize, request: DryLayoutChildRequest| -> DryLayoutChildResponse {
+        let mut deny = |index: usize,
+                        request: DryLayoutChildRequest|
+         -> crate::RenderResult<DryLayoutChildResponse> {
             match request {
                 DryLayoutChildRequest::DryLayout(constraints) => panic!(
                     "leaf object dry-laid-out child {index} ({constraints:?}) — \
@@ -572,7 +669,7 @@ pub mod test_support {
     pub fn leaf_dry_baseline<R>(f: impl FnOnce(&mut BoxDryBaselineCtx<'_>) -> R) -> R {
         let mut deny = |index: usize,
                         request: DryBaselineChildRequest|
-         -> DryBaselineChildResponse {
+         -> crate::RenderResult<DryBaselineChildResponse> {
             match request {
                 DryBaselineChildRequest::Baseline(constraints, baseline) => panic!(
                     "leaf object dry-baselined child {index} ({constraints:?}, {baseline:?}) — \

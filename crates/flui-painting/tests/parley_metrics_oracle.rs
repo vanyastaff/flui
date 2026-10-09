@@ -99,7 +99,9 @@ fn parley_metrics_round_to_todays_baseline() {
         let mut painter = TextPainter::new()
             .with_text(TextSpan::styled(TEXT, style))
             .with_text_direction(TextDirection::Ltr);
-        painter.layout(&mut context, 0.0, f64::INFINITY);
+        painter
+            .layout(&mut context, 0.0, f64::INFINITY)
+            .expect("valid fixture lays out");
         let paragraph = painted(&painter);
         let case = format!("{family:?} {weight:?} {size} px, height {height:?}");
         if (painter.height() - line_box).abs() > 1e-3
@@ -139,7 +141,9 @@ fn assert_measures_what_it_paints(
     max_width: f64,
 ) -> (TextPainter, std::sync::Arc<ShapedParagraph>) {
     let mut context = TextContext::new(&FontCollection::new());
-    painter.layout(&mut context, 0.0, max_width);
+    painter
+        .layout(&mut context, 0.0, max_width)
+        .expect("valid fixture lays out");
     let painted = painted(&painter);
     assert!(
         (painter.height() - painted.size().height).abs() < 1e-3,

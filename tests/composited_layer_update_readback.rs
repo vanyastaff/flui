@@ -410,10 +410,10 @@ impl flui_rendering::traits::RenderBox for RunLocalClipParent {
     fn perform_layout(
         &mut self,
         ctx: &mut flui_rendering::context::BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
-    ) -> Size {
-        let _ = ctx.layout_child(0, BoxConstraints::tight(Size::new(20.0, 20.0)));
+    ) -> flui_rendering::RenderResult<Size> {
+        ctx.layout_child(0, BoxConstraints::tight(Size::new(20.0, 20.0)))?;
         ctx.position_child(0, flui_foundation::geometry::Offset::new(40.0, 0.0));
-        ctx.constraints().biggest()
+        Ok(ctx.constraints().biggest())
     }
 
     fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Self::Arity>) {

@@ -64,9 +64,14 @@ impl RenderBox for LifecycleProbe {
     type Arity = Leaf;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-        self.log.layout_count.fetch_add(1, Ordering::SeqCst);
-        self.size
+    fn perform_layout(
+        &mut self,
+        _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok({
+            self.log.layout_count.fetch_add(1, Ordering::SeqCst);
+            self.size
+        })
     }
 
     fn attach(&mut self, handle: RenderInvalidationHandle) {
