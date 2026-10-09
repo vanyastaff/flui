@@ -505,6 +505,7 @@ struct WheelMotion {
 /// are never clamped. A value listener on the controller pushes the live pixel
 /// position into the [`ScrollController`] each tick.
 pub struct ScrollableState {
+    recognizer_owner: Rc<()>,
     /// Stable policy identity across ordinary default-config rebuilds.
     default_physics: SharedScrollPhysics,
     /// The scroll controller from the current view configuration. Kept in
@@ -602,6 +603,7 @@ impl StatefulView for Scrollable {
             AnimationController::unbounded_without_ticker(Duration::from_millis(1));
 
         ScrollableState {
+            recognizer_owner: Rc::new(()),
             default_physics: Arc::new(ClampingScrollPhysics::new()),
             scroll_controller: self.controller.clone(),
             stop_hook: None,
@@ -908,6 +910,7 @@ impl ViewState<Scrollable> for ScrollableState {
             let position_update = ctrl_update.position();
             let position_end = ctrl_update.position();
             let gestures = GestureDetector::new()
+                .recognizer_owner(Rc::clone(&self.recognizer_owner))
                 .drag_pointer_strategy(flui_interaction::DragPointerStrategy::ContinueWithRemaining)
                 .behavior(HitTestBehavior::Opaque)
                 .on_pan_start(move |_cx, _details| {
@@ -1188,6 +1191,7 @@ impl ViewState<Scrollable> for ScrollableState {
         self.remove_command_listener();
         self.detach_stop_hook();
         self.scroll_controller = new_view.controller.clone();
+        self.recognizer_owner = Rc::new(());
         self.install_fling_listener();
         self.install_fling_status_listener();
         self.install_command_listener();

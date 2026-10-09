@@ -202,6 +202,7 @@ pub struct GestureDetector {
     behavior: HitTestBehavior,
     drag_pointer_strategy: DragPointerStrategy,
     exclusive_drags: bool,
+    recognizer_owner: Option<Rc<()>>,
     child: Child,
 }
 
@@ -230,6 +231,7 @@ impl Default for GestureDetector {
             behavior: HitTestBehavior::DeferToChild,
             drag_pointer_strategy: DragPointerStrategy::PrimaryOnly,
             exclusive_drags: false,
+            recognizer_owner: None,
             child: Child::empty(),
         }
     }
@@ -272,6 +274,13 @@ impl std::fmt::Debug for GestureDetector {
 }
 
 impl GestureDetector {
+    /// Replaces admitted contacts when a consumer's actual owner changes.
+    #[must_use]
+    pub(crate) fn recognizer_owner(mut self, owner: Rc<()>) -> Self {
+        self.recognizer_owner = Some(owner);
+        self
+    }
+
     /// Allow pan and horizontal-drag callbacks to compete for one arena winner.
     ///
     /// The first recognizer to claim the contact wins; the other receives
@@ -1066,6 +1075,23 @@ impl ViewState<GestureDetector> for GestureDetectorState {
     }
 
     fn did_update_view(&mut self, old_view: &GestureDetector, new_view: &GestureDetector) {
+        let owner_changed = match (&old_view.recognizer_owner, &new_view.recognizer_owner) {
+            (None, None) => false,
+            (Some(old), Some(new)) => !Rc::ptr_eq(old, new),
+            _ => true,
+        };
+        if owner_changed {
+            self.drag_pointer_strategy = new_view.drag_pointer_strategy;
+            self.exclusive_drags = new_view.exclusive_drags;
+            self.scale_start_mode = new_view.scale_start_mode;
+            let incoming = self.make_recognizers();
+            self.attach_recognizers(&incoming);
+            *self.native_scale_route.borrow_mut() = NativeScaleRoute::default();
+            if let Some(outgoing) = self.recognizers.replace(incoming) {
+                outgoing.cancel();
+            }
+            return;
+        }
         let replace_drag = old_view.drag_pointer_strategy != new_view.drag_pointer_strategy
             || old_view.exclusive_drags != new_view.exclusive_drags;
         let replace_scale = old_view.scale_start_mode != new_view.scale_start_mode;
