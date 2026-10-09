@@ -47,7 +47,7 @@ impl ValuePublication {
             .publish_delivery(self.value_change, self.drain, recovery);
     }
 
-    pub(super) fn disposal(controller: AnimationController, drain: bool) -> Self {
+    pub(super) fn unchanged(controller: AnimationController, drain: bool) -> Self {
         Self {
             controller,
             drain,

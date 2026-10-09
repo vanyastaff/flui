@@ -1,6 +1,8 @@
 //! One owning frame registration for a vector of interruptible components.
 
+mod binding;
 mod update;
+pub use binding::VsyncUpdate;
 pub use update::MotionUpdate;
 
 use std::cell::{Cell, RefCell};

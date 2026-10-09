@@ -76,6 +76,32 @@ struct Replace<'a, T: TwoWayConverter + 'static> {
     disposal: Option<Terminal<crate::driven::DrivenRetirement>>,
 }
 
+struct Dispose<'a, T: TwoWayConverter + 'static> {
+    owner: &'a mut AnimatedValue<T>,
+    disposal: Option<Terminal<crate::driven::DrivenRetirement>>,
+}
+
+impl<T: TwoWayConverter + 'static> Plan for Dispose<'_, T> {
+    fn validate(&self) -> Result<(), AnimationError> {
+        Ok(())
+    }
+    fn install(&mut self, _recovery: &mut RecoveryScope<'_>) {
+        self.disposal = Some(Terminal::new(self.owner.driven.get_mut().prepare_dispose()));
+    }
+    fn publish(&mut self, recovery: &mut RecoveryScope<'_>) {
+        self.disposal
+            .take()
+            .expect("BUG: a closed owner has retirement custody")
+            .into_inner()
+            .publish(recovery);
+    }
+    fn retire(&mut self, recovery: &mut RecoveryScope<'_>) {
+        if self.disposal.is_some() {
+            self.publish(recovery);
+        }
+    }
+}
+
 impl<T: TwoWayConverter + 'static> Plan for Replace<'_, T> {
     fn validate(&self) -> Result<(), AnimationError> {
         Ok(())
@@ -209,6 +235,15 @@ impl<'owners> MotionUpdate<'owners> {
             owner,
             next: next.map(Terminal::new),
             outgoing: None,
+            disposal: None,
+        })));
+    }
+
+    /// Stage logical closure of a required owner. Its last published value
+    /// stays readable; cancellation runs after every group member is closed.
+    pub fn dispose<T: TwoWayConverter + 'static>(&mut self, owner: &'owners mut AnimatedValue<T>) {
+        self.plans.push(Terminal::new(Box::new(Dispose {
+            owner,
             disposal: None,
         })));
     }

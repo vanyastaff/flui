@@ -4,10 +4,10 @@ use std::{rc::Rc, time::Duration};
 
 use flui_animation::curve::{ArcCurve, Curve};
 use flui_animation::{
-    AnimatedValue, Animation, MotionSpec, MotionUpdate, SpringDescription, TwoWayConverter, Vsync,
+    Animation, MotionSpec, MotionUpdate, SpringDescription, TwoWayConverter, Vsync, VsyncUpdate,
 };
+use flui_foundation::ChangeNotifier;
 use flui_foundation::geometry::{EdgeInsets, Matrix4};
-use flui_foundation::{ChangeNotifier, Listenable};
 use flui_painting::Alignment;
 use flui_painting::styling::Color;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
@@ -169,7 +169,7 @@ pub struct AnimatedContainerState {
     width: PropertyMotion<f64>,
     height: PropertyMotion<f64>,
     margin: PropertyMotion<EdgeInsets>,
-    transform_progress: AnimatedValue<f64>,
+    transform_progress: PropertyMotion<f64>,
     transform: TransformTween,
     notifications: Rc<ChangeNotifier>,
     vsync: Option<Vsync>,
@@ -181,16 +181,14 @@ impl StatefulView for AnimatedContainer {
 
     fn create_state(&self) -> Self::State {
         let notifications = Rc::new(ChangeNotifier::new());
-        let transform_progress = AnimatedValue::new(0.0, self.motion.clone(), None)
-            .expect("BUG: initial transform progress is finite");
-        let weak = Rc::downgrade(&notifications);
-        transform_progress
-            .animation()
-            .add_observer(Rc::new(move |recovery| {
-                if let Some(notifications) = weak.upgrade() {
-                    notifications.notify_listeners_with_recovery(recovery);
-                }
-            }));
+        let transform = self.transform.filter(|m| m.m.iter().all(|v| v.is_finite()));
+        let transform_progress = PropertyMotion::new(
+            transform.map(|_| 1.0),
+            self.motion.clone(),
+            &notifications,
+            None,
+        )
+        .expect("BUG: initial transform progress is finite");
         AnimatedContainerState {
             alignment: PropertyMotion::new(
                 self.alignment.filter(finite),
@@ -229,9 +227,7 @@ impl StatefulView for AnimatedContainer {
                 None,
             )
             .expect("BUG: initial margin was made finite"),
-            transform: TransformTween::at_rest(
-                self.transform.filter(|m| m.m.iter().all(|v| v.is_finite())),
-            ),
+            transform: TransformTween::at_rest(transform),
             transform_progress,
             notifications,
             vsync: None,
@@ -243,18 +239,17 @@ impl StatefulView for AnimatedContainer {
 impl ViewState<AnimatedContainer> for AnimatedContainerState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.vsync = VsyncScope::maybe_of(ctx);
-        for result in [
-            self.alignment.rebind(self.vsync.as_ref()),
-            self.padding.rebind(self.vsync.as_ref()),
-            self.color.rebind(self.vsync.as_ref()),
-            self.width.rebind(self.vsync.as_ref()),
-            self.height.rebind(self.vsync.as_ref()),
-            self.margin.rebind(self.vsync.as_ref()),
-            self.transform_progress.rebind(self.vsync.as_ref()),
-        ] {
-            if let Err(error) = result {
-                tracing::error!(%error, "container animation has no clock");
-            }
+        if let Err(error) = VsyncUpdate::run(|update| {
+            self.alignment.stage_binding(update, self.vsync.as_ref());
+            self.padding.stage_binding(update, self.vsync.as_ref());
+            self.color.stage_binding(update, self.vsync.as_ref());
+            self.width.stage_binding(update, self.vsync.as_ref());
+            self.height.stage_binding(update, self.vsync.as_ref());
+            self.margin.stage_binding(update, self.vsync.as_ref());
+            self.transform_progress
+                .stage_binding(update, self.vsync.as_ref());
+        }) {
+            tracing::error!(%error, "container animation has no clock");
         }
     }
 
@@ -276,7 +271,6 @@ impl ViewState<AnimatedContainer> for AnimatedContainerState {
             // An overshooting curve extrapolates the tweens past their targets; the
             // insets and the size are clamped into their non-negative domain here,
             // where they meet the property (ADR-0149).
-            let t = progress.value();
             let mut container = Container::new();
             if let Some(value) = &alignment {
                 container = container.alignment(value.value());
@@ -296,7 +290,9 @@ impl ViewState<AnimatedContainer> for AnimatedContainerState {
             if let Some(value) = &margin {
                 container = container.margin(value.value().clamp_non_negative());
             }
-            if let Some(value) = transform.current(t) {
+            if let Some(progress) = &progress
+                && let Some(value) = transform.current(progress.value())
+            {
                 container = container.transform(value);
             }
             container.child(child.clone())
@@ -318,7 +314,12 @@ impl ViewState<AnimatedContainer> for AnimatedContainerState {
             return;
         }
         let restart = self.transform.animates_toward(new_view.transform.as_ref());
-        let restart_at = restart.then(|| self.transform_progress.value());
+        let restart_at = restart.then(|| {
+            self.transform_progress
+                .animation()
+                .expect("BUG: an existing matrix has a progress owner")
+                .value()
+        });
         let result = MotionUpdate::run_with(
             |update| {
                 self.alignment.stage(
@@ -364,18 +365,15 @@ impl ViewState<AnimatedContainer> for AnimatedContainerState {
                     self.vsync.as_ref(),
                 )?;
                 if restart {
-                    update.restart(
-                        &mut self.transform_progress,
-                        0.0,
-                        1.0,
-                        new_view.motion.clone(),
-                    )
+                    self.transform_progress
+                        .stage_restart(update, 0.0, 1.0, new_view.motion.clone())
                 } else {
-                    let target = *self.transform_progress.target();
-                    update.retarget(
-                        &mut self.transform_progress,
-                        target,
+                    self.transform_progress.stage(
+                        update,
+                        new_view.transform.map(|_| 1.0),
                         new_view.motion.clone(),
+                        &self.notifications,
+                        self.vsync.as_ref(),
                     )
                 }
             },
@@ -387,13 +385,17 @@ impl ViewState<AnimatedContainer> for AnimatedContainerState {
     }
 
     fn dispose(&mut self) {
-        self.alignment.dispose();
-        self.padding.dispose();
-        self.color.dispose();
-        self.width.dispose();
-        self.height.dispose();
-        self.margin.dispose();
-        self.transform_progress.dispose();
+        MotionUpdate::run(|update| {
+            self.alignment.stage_disposal(update);
+            self.padding.stage_disposal(update);
+            self.color.stage_disposal(update);
+            self.width.stage_disposal(update);
+            self.height.stage_disposal(update);
+            self.margin.stage_disposal(update);
+            self.transform_progress.stage_disposal(update);
+            Ok(())
+        })
+        .expect("BUG: retiring motion owners has no preparation refusal");
     }
 }
 

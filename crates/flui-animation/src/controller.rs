@@ -518,7 +518,7 @@ impl AnimationController {
             .retain(|candidate| candidate != route);
     }
 
-    pub(crate) fn set_clock_bound(&self, bound: bool, retirement: &mut RecoveryScope<'_>) {
+    pub(crate) fn prepare_clock_bound(&self, bound: bool) -> ValuePublication {
         let mut inner = self.inner.borrow_mut();
         inner.clock_binding = if bound {
             ClockBinding::Bound
@@ -532,14 +532,8 @@ impl AnimationController {
                 .push_back(ControllerDelivery::RequestFrame);
         }
         let status = inner.status;
-        self.finish_with_retirement(
-            status,
-            ValueChange::Unchanged,
-            None,
-            RetiredSources::new(),
-            inner,
-            retirement,
-        );
+        let drain = Self::enqueue_delivery(status, None, RetiredSources::new(), inner);
+        ValuePublication::unchanged(self.clone(), drain)
     }
 
     /// The one place every constructor builds the inner state: `value`,
@@ -2278,7 +2272,7 @@ impl AnimationController {
         );
         let status = inner.status;
         let drain = Self::enqueue_delivery(status, delivery, retired, inner);
-        Some(ValuePublication::disposal(self.clone(), drain))
+        Some(ValuePublication::unchanged(self.clone(), drain))
     }
 
     fn check_disposed(inner: &AnimationControllerInner) -> Result<(), AnimationError> {

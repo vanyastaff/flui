@@ -40,6 +40,10 @@ Optional properties stage owner insertion or removal in the same update.
 Present-to-present motion preserves incoming velocity; appearing and disappearing
 properties have no interpolation endpoint and snap. Removal commits all affected
 controller closures before cancellation callbacks can observe the group.
+Required owners stage closure without replacing their storage; their last value
+remains readable. Align stores its required alignment owner directly, while its
+factors are optional. Align and Container teardown stage every owner in one
+update before delivering cancellations.
 
 Matrix interpolation keeps its decomposition tween and guarantees position
 continuity. It stages scalar progress from a resting origin in one admission,
@@ -47,6 +51,16 @@ then publishes the reanchored matrix before motion delivery. It does not promise
 matrix velocity continuity. Numeric and color properties keep independent
 trajectories and deadlines. This coordination applies to admission; individual
 owners retain the presentation's existing frame sampling order.
+Absent matrix endpoints have no progress owner or registration. Appearance
+starts at its exact endpoint; disappearance removes progress in the same update
+as the matrix representation.
+
+`VsyncUpdate` coordinates clock migration separately from target admission.
+Every owner commits its new seat and clock state before the first wake or
+unbound settlement callout. Registration exhaustion releases the failed owner's
+old seat and settles it unbound while other owners still migrate. Delivery
+failures propagate after the accepted tail drains through the same recovery
+scope. Align and Container use this contract when their Vsync scope changes.
 
 A single composite property vector would couple optional endpoints and deadlines.
 Per-property rollback would expose transient runs and irrevocable callouts.
@@ -66,3 +80,9 @@ removal with cancellation failure and accepted tail delivery.
 `container_refused_transform_motion_preserves_the_admitted_matrix`, including
 refusal after numeric preparation succeeds. They inspect actual laid-out size
 and transform layers, subsequent recovery and unmount registration cleanup.
+`an_absent_container_transform_owns_no_frame_registration` covers appearance,
+in-flight disappearance, reappearance, visible transforms and final unmount.
+The Container and Align registry migration cases inspect every old seat from
+inside a failing wake hook and check lifecycle recovery. The owning-value table
+checks migration, unbound settlement, competing callback failures and resumed
+delivery; the registry exhaustion table checks mixed refusal and admission.

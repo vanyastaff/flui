@@ -68,13 +68,36 @@ impl DrivenController {
     /// # Errors
     /// Returns permanent registration exhaustion after releasing the old seat.
     pub fn rebind(&mut self, vsync: Option<&Vsync>) -> Result<(), VsyncRegistrationError> {
+        let mut recovery = Retirement::new();
+        let (publication, result) = self.prepare_rebind(vsync);
+        publication.publish(&mut recovery.scope());
+        recovery.finish();
+        result
+    }
+
+    pub(crate) fn prepare_rebind(
+        &mut self,
+        vsync: Option<&Vsync>,
+    ) -> (DrivenRetirement, Result<(), VsyncRegistrationError>) {
         if matches!(self.seat, Seat::Retired) {
-            return Ok(());
+            return (
+                DrivenRetirement {
+                    publication: None,
+                    registry: Terminal::new(None),
+                },
+                Ok(()),
+            );
         }
         if let (Seat::Bound { vsync: old, .. }, Some(new)) = (&self.seat, vsync)
             && old.is_same(new)
         {
-            return Ok(());
+            return (
+                DrivenRetirement {
+                    publication: None,
+                    registry: Terminal::new(None),
+                },
+                Ok(()),
+            );
         }
         let admission = vsync.map(|vsync| {
             vsync
@@ -90,23 +113,23 @@ impl DrivenController {
             None => (Seat::Unbound, Ok(())),
         };
         let outgoing = std::mem::replace(&mut self.seat, next);
-        let mut retirement = Retirement::new();
         let outgoing_registry = match outgoing {
             Seat::Bound {
                 vsync,
                 registration,
             } => {
-                retirement.run(|| vsync.unregister(&registration));
+                vsync.unregister(&registration);
                 Some(vsync)
             }
             Seat::Unbound | Seat::Retired => None,
         };
-        retirement.run_with(|retirement| {
-            self.controller.set_clock_bound(self.is_bound(), retirement);
-        });
-        retirement.retire(outgoing_registry);
-        retirement.finish();
-        result
+        (
+            DrivenRetirement {
+                publication: Some(self.controller.prepare_clock_bound(self.is_bound())),
+                registry: Terminal::new(outgoing_registry),
+            },
+            result,
+        )
     }
 
     /// Release the registry seat, then dispose the controller. Idempotent.

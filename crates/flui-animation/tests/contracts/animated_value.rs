@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use flui_animation::{
     AnimatedValue, Animation, AnimationError, AnimationStatus, ArcCurve, Curves, MotionClock,
-    MotionSpec, MotionUpdate, SpringDescription, TwoWayConverter, Vsync,
+    MotionSpec, MotionUpdate, SpringDescription, TwoWayConverter, Vsync, VsyncUpdate,
 };
 use flui_foundation::geometry::Offset;
 
@@ -439,7 +439,86 @@ fn owning_animated_value_contract() {
             "grouped removal commits every seat before cancellation",
             grouped_removal_commits_every_seat_before_cancellation,
         ),
+        (
+            "registry migration commits every seat before delivery",
+            grouped_registry_migration_commits_before_delivery,
+        ),
     ]);
+}
+
+fn grouped_registry_migration_commits_before_delivery() {
+    for (unbound, fails) in [(false, false), (false, true), (true, false), (true, true)] {
+        let old = Vsync::new();
+        let next = Vsync::new();
+        let mut left = AnimatedValue::new(0.0, curve(Curves::Linear), Some(&old)).unwrap();
+        let mut right = AnimatedValue::new(0.0, curve(Curves::Linear), Some(&old)).unwrap();
+        let left_run = left.animate_to(1.0).unwrap();
+        let right_run = right.animate_to(2.0).unwrap();
+        let mut clock = MotionClock::new();
+        old.tick_all(&clock.frame(Duration::ZERO));
+        old.tick_all(&clock.frame(Duration::from_millis(250)));
+        let seam = (left.value(), right.value());
+        let delivered = Rc::new(Cell::new(0));
+        let check = {
+            let old = old.clone();
+            let delivered = Rc::clone(&delivered);
+            move || {
+                assert!(old.is_empty(), "every old seat leaves before any callout");
+                delivered.set(delivered.get() + 1);
+                assert!(!fails, "first migration delivery failure");
+            }
+        };
+        if unbound {
+            left_run.when_complete_or_cancel({
+                let check = check.clone();
+                move |result| {
+                    assert!(result.is_ok());
+                    check();
+                }
+            });
+            right_run.when_complete_or_cancel(move |result| {
+                assert!(result.is_ok());
+                check();
+            });
+        } else {
+            next.set_frame_requester(Some(Rc::new(check)));
+        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            VsyncUpdate::run(|update| {
+                update.rebind(&mut left, (!unbound).then_some(&next));
+                update.rebind(&mut right, (!unbound).then_some(&next));
+            })
+        }));
+        if fails {
+            let payload = result.unwrap_err();
+            assert_eq!(
+                flui_foundation::panic::payload_text(payload.as_ref()),
+                Some("first migration delivery failure")
+            );
+        } else {
+            result.unwrap().unwrap();
+        }
+        assert!(old.is_empty());
+        assert!(delivered.get() > 0);
+        next.set_frame_requester(None);
+        if unbound {
+            assert_eq!(
+                delivered.get(),
+                2,
+                "settlement tail survives callback failure"
+            );
+            assert!(left_run.is_complete() && right_run.is_complete());
+        } else {
+            assert_eq!((left.value(), right.value()), seam);
+            assert!(!left_run.is_canceled() && !right_run.is_canceled());
+            next.tick_all(&clock.frame(Duration::from_secs(2)));
+            next.tick_all(&clock.frame(Duration::from_secs(3)));
+        }
+        assert_eq!((left.value(), right.value()), (1.0, 2.0));
+        assert!(!left.animation().is_animating() && !right.animation().is_animating());
+        drop((left, right));
+        assert!(next.is_empty());
+    }
 }
 
 fn grouped_motion_publishes_all_owners_before_delivery() {
@@ -643,7 +722,7 @@ fn a_refused_optional_owner_releases_its_registry_seat() {
 }
 
 fn grouped_removal_commits_every_seat_before_cancellation() {
-    for fails in [false, true] {
+    for (keep_owners, fails) in [(false, false), (false, true), (true, false), (true, true)] {
         let registry = Vsync::new();
         let mut left =
             Some(AnimatedValue::new(0.0, curve(Curves::Linear), Some(&registry)).unwrap());
@@ -683,8 +762,13 @@ fn grouped_removal_commits_every_seat_before_cancellation() {
         });
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             MotionUpdate::run(|update| {
-                update.replace(&mut left, None);
-                update.replace(&mut right, None);
+                if keep_owners {
+                    update.dispose(left.as_mut().unwrap());
+                    update.dispose(right.as_mut().unwrap());
+                } else {
+                    update.replace(&mut left, None);
+                    update.replace(&mut right, None);
+                }
                 Ok(())
             })
         }));
@@ -697,7 +781,22 @@ fn grouped_removal_commits_every_seat_before_cancellation() {
         } else {
             result.unwrap().unwrap();
         }
-        assert!(left.is_none() && right.is_none() && registry.is_empty());
+        assert!(registry.is_empty());
+        if keep_owners {
+            let left = left.as_mut().unwrap();
+            let right = right.as_mut().unwrap();
+            assert_eq!((left.value(), right.value()), (0.0, 0.0));
+            assert_eq!((left.velocity(), right.velocity()), ([0.0], [0.0]));
+            MotionUpdate::run(|update| {
+                update.dispose(left);
+                update.dispose(right);
+                Ok(())
+            })
+            .unwrap();
+            assert!(registry.is_empty());
+        } else {
+            assert!(left.is_none() && right.is_none());
+        }
         assert_eq!(
             observed.get(),
             2,

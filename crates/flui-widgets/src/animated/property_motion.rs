@@ -4,9 +4,25 @@ use std::rc::Rc;
 
 use flui_animation::{
     AnimatedValue, AnimatedValueView, AnimationError, MotionSpec, MotionUpdate, TwoWayConverter,
-    Vsync, VsyncRegistrationError,
+    Vsync, VsyncUpdate,
 };
 use flui_foundation::{ChangeNotifier, Listenable};
+
+pub(super) fn observed_property<T: TwoWayConverter + 'static>(
+    initial: T,
+    motion: MotionSpec,
+    notifications: &Rc<ChangeNotifier>,
+    vsync: Option<&Vsync>,
+) -> Result<AnimatedValue<T>, AnimationError> {
+    let owner = AnimatedValue::new(initial, motion, vsync)?;
+    let weak = Rc::downgrade(notifications);
+    owner.animation().add_observer(Rc::new(move |recovery| {
+        if let Some(notifications) = weak.upgrade() {
+            notifications.notify_listeners_with_recovery(recovery);
+        }
+    }));
+    Ok(owner)
+}
 
 #[derive(Debug)]
 pub(super) struct PropertyMotion<T: TwoWayConverter + 'static> {
@@ -21,25 +37,19 @@ impl<T: TwoWayConverter + 'static> PropertyMotion<T> {
         vsync: Option<&Vsync>,
     ) -> Result<Self, AnimationError> {
         let owner = initial
-            .map(|initial| {
-                let owner = AnimatedValue::new(initial, motion, vsync)?;
-                let weak = Rc::downgrade(notifications);
-                owner.animation().add_observer(Rc::new(move |recovery| {
-                    if let Some(notifications) = weak.upgrade() {
-                        notifications.notify_listeners_with_recovery(recovery);
-                    }
-                }));
-                Ok(owner)
-            })
+            .map(|initial| observed_property(initial, motion, notifications, vsync))
             .transpose()?;
         Ok(Self { owner })
     }
 
-    pub(super) fn rebind(&mut self, vsync: Option<&Vsync>) -> Result<(), VsyncRegistrationError> {
+    pub(super) fn stage_binding<'owners>(
+        &'owners mut self,
+        update: &mut VsyncUpdate<'owners>,
+        vsync: Option<&Vsync>,
+    ) {
         if let Some(owner) = &mut self.owner {
-            owner.rebind(vsync)?;
+            update.rebind(owner, vsync);
         }
-        Ok(())
     }
 
     pub(super) fn stage<'owners>(
@@ -72,9 +82,23 @@ impl<T: TwoWayConverter + 'static> PropertyMotion<T> {
         self.owner.as_ref().map(AnimatedValue::animation)
     }
 
-    pub(super) fn dispose(&mut self) {
-        if let Some(owner) = &mut self.owner {
-            owner.dispose();
+    pub(super) fn stage_restart<'owners>(
+        &'owners mut self,
+        update: &mut MotionUpdate<'owners>,
+        origin: T,
+        target: T,
+        motion: MotionSpec,
+    ) -> Result<(), AnimationError> {
+        let owner = self
+            .owner
+            .as_mut()
+            .expect("BUG: restarting motion has an existing endpoint");
+        update.restart(owner, origin, target, motion)
+    }
+
+    pub(super) fn stage_disposal<'owners>(&'owners mut self, update: &mut MotionUpdate<'owners>) {
+        if self.owner.is_some() {
+            update.replace(&mut self.owner, None);
         }
     }
 }

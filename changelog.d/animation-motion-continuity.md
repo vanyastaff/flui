@@ -36,6 +36,8 @@
   preserve prior matrix progress when replacement motion cannot be prepared.
 - Release rejected optional-owner registrations after preparation panic and
   close every removed owner before grouped cancellation delivery.
+- Register Container transform progress only while its matrix is present;
+  withdraw disappearing motion and coordinate Align/Container teardown.
 - Retain container size and color motion through interruption; independent
   properties keep their own deadlines, and non-finite targets preserve live motion.
 - Keep AnimatedAlign factors on their own motion deadlines when alignment changes;

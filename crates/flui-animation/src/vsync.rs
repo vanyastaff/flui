@@ -905,6 +905,58 @@ mod tests {
     }
 
     fn rebind_refused_by_an_exhausted_registry_settles_unbound() {
+        for fails in [false, true] {
+            let old = Vsync::new();
+            let exhausted = Vsync::new();
+            let healthy = Vsync::new();
+            exhausted.inner.borrow_mut().next_id = u64::MAX;
+            let motion = crate::MotionSpec::Curve {
+                duration: Duration::from_secs(1),
+                curve: crate::ArcCurve::new(crate::Curves::Linear),
+            };
+            let mut refused = crate::AnimatedValue::new(0.0, motion.clone(), Some(&old)).unwrap();
+            let mut accepted = crate::AnimatedValue::new(0.0, motion, Some(&old)).unwrap();
+            let refused_run = refused.animate_to(1.0).unwrap();
+            let accepted_run = accepted.animate_to(2.0).unwrap();
+            refused_run.when_complete_or_cancel({
+                let old = old.clone();
+                let healthy = healthy.clone();
+                move |result| {
+                    assert!(result.is_ok());
+                    assert!(old.is_empty());
+                    assert_eq!(
+                        healthy.len(),
+                        1,
+                        "accepted tail binds before refusal delivery"
+                    );
+                    assert!(!fails, "refused migration delivery failure");
+                }
+            });
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                crate::VsyncUpdate::run(|update| {
+                    update.rebind(&mut refused, Some(&exhausted));
+                    update.rebind(&mut accepted, Some(&healthy));
+                })
+            }));
+            if fails {
+                assert_eq!(
+                    flui_foundation::panic::payload_text(result.unwrap_err().as_ref()),
+                    Some("refused migration delivery failure")
+                );
+            } else {
+                assert_eq!(result.unwrap(), Err(VsyncRegistrationError::Exhausted));
+            }
+            assert!(old.is_empty() && exhausted.is_empty());
+            assert_eq!(refused.value(), 1.0);
+            assert!(refused_run.is_complete() && accepted_run.is_pending());
+            let mut clock = crate::MotionClock::new();
+            healthy.tick_all(&clock.frame(Duration::ZERO));
+            healthy.tick_all(&clock.frame(Duration::from_secs(1)));
+            assert_eq!(accepted.value(), 2.0);
+            assert!(accepted_run.is_complete());
+            drop((refused, accepted));
+            assert!(healthy.is_empty());
+        }
         for repeat in [false, true] {
             let old = Vsync::new();
             let exhausted = Vsync::new();

@@ -458,6 +458,134 @@ pub(crate) fn container_refused_transform_motion_preserves_the_admitted_matrix()
     assert_refused_container_motion_preserves_the_admitted_run(4);
 }
 
+pub(crate) fn an_absent_container_transform_owns_no_frame_registration() {
+    let registry = Vsync::new();
+    let tree = |transform: Option<Matrix4>| {
+        let mut container = AnimatedContainer::new(SizedBox::new(20.0, 20.0))
+            .duration(RUN)
+            .curve(Curves::Linear);
+        if let Some(transform) = transform {
+            container = container.transform(transform);
+        }
+        VsyncScope::new(registry.clone(), container)
+    };
+    let mut laid = lay_out_animated(tree(None), loose(200.0), registry.clone());
+    assert!(
+        registry.is_empty(),
+        "absent properties have no motion owner to register"
+    );
+    laid.pump_widget(tree(Some(Matrix4::scaling(2.0, 2.0, 1.0))));
+    assert_eq!(
+        layer_scale(&mut laid),
+        2.0,
+        "appearance snaps to its only endpoint"
+    );
+    assert!(!registry.is_empty());
+    laid.pump_widget(tree(Some(Matrix4::scaling(4.0, 4.0, 1.0))));
+    laid.pump_for(Duration::from_millis(1));
+    laid.pump_for(Duration::from_millis(40));
+    assert!(layer_scale(&mut laid) > 2.0 && layer_scale(&mut laid) < 4.0);
+    laid.pump_widget(tree(None));
+    assert!(
+        registry.is_empty(),
+        "disappearance withdraws the moving transform owner"
+    );
+    assert_eq!(laid.transform_layer_matrices(), [] as [Matrix4; 0]);
+    laid.pump_widget(tree(Some(Matrix4::scaling(3.0, 3.0, 1.0))));
+    assert_eq!(layer_scale(&mut laid), 3.0);
+    laid.pump_widget(SizedBox::shrink());
+    assert!(registry.is_empty());
+}
+
+fn assert_registry_migration_survives_a_wake_failure<V: flui_view::View>(
+    tree: impl Fn(Vsync, bool) -> V,
+) {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let outer = Vsync::new();
+    let old = Vsync::new();
+    let next = Vsync::new();
+    outer.attach_child(&old).unwrap();
+    outer.attach_child(&next).unwrap();
+    let mut laid = lay_out_animated(tree(old.clone(), false), loose(300.0), outer);
+    laid.pump_widget(tree(old.clone(), true));
+    laid.pump_for(Duration::from_millis(1));
+    laid.pump_for(Duration::from_millis(40));
+    assert!(old.has_running());
+    let woke = Rc::new(Cell::new(false));
+    let migrated = Rc::new(Cell::new(false));
+    next.set_frame_requester(Some(Rc::new({
+        let woke = Rc::clone(&woke);
+        let migrated = Rc::clone(&migrated);
+        let old = old.clone();
+        move || {
+            woke.set(true);
+            migrated.set(old.is_empty());
+            panic!("migration wake failed");
+        }
+    })));
+    // The owner-call boundary may contain the callback failure. In either
+    // case every property belongs to the new scope before it can wake.
+    let _outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        laid.pump_widget(tree(next.clone(), true));
+    }));
+    assert!(
+        woke.get(),
+        "the new registry must encounter the failing wake hook"
+    );
+    assert!(
+        old.is_empty(),
+        "a wake failure must not leave any property on its previous clock"
+    );
+    assert!(
+        migrated.get(),
+        "all properties must leave the old registry before the wake callback"
+    );
+    next.set_frame_requester(None);
+    laid.pump_widget(SizedBox::shrink());
+    laid.pump_widget(tree(next.clone(), false));
+    laid.pump_widget(tree(next.clone(), true));
+    laid.pump_for(Duration::from_millis(1));
+    laid.pump_for(Duration::from_secs(1));
+    assert!(!next.has_running());
+    laid.pump_widget(SizedBox::shrink());
+    assert!(old.is_empty() && next.is_empty());
+}
+
+pub(crate) fn container_registry_migration_finishes_before_a_wake_failure() {
+    assert_registry_migration_survives_a_wake_failure(|registry, changed| {
+        let size = if changed { 100.0 } else { 20.0 };
+        let scale = if changed { 2.0 } else { 1.0 };
+        VsyncScope::new(
+            registry,
+            AnimatedContainer::new(SizedBox::shrink())
+                .width(size)
+                .height(size)
+                .transform(Matrix4::scaling(scale, scale, 1.0))
+                .duration(RUN)
+                .curve(Curves::Linear),
+        )
+    });
+}
+
+pub(crate) fn align_registry_migration_finishes_before_a_wake_failure() {
+    assert_registry_migration_survives_a_wake_failure(|registry, changed| {
+        let (alignment, factor) = if changed {
+            (Alignment::BOTTOM_RIGHT, 2.0)
+        } else {
+            (Alignment::TOP_LEFT, 1.0)
+        };
+        VsyncScope::new(
+            registry,
+            AnimatedAlign::new(alignment, SizedBox::new(20.0, 20.0))
+                .width_factor(factor)
+                .height_factor(factor)
+                .duration(RUN)
+                .curve(Curves::Linear),
+        )
+    });
+}
+
 pub(crate) fn align_retarget_with_a_new_curve_keeps_the_displayed_sample() {
     assert_target_and_curve_retarget_preserves_sample(
         |registry, target, curve| {

@@ -4,7 +4,8 @@ use std::{rc::Rc, time::Duration};
 
 use flui_animation::curve::{ArcCurve, Curve};
 use flui_animation::{
-    Animation, MotionSpec, MotionUpdate, SpringDescription, TwoWayConverter, Vsync,
+    AnimatedValue, Animation, MotionSpec, MotionUpdate, SpringDescription, TwoWayConverter, Vsync,
+    VsyncUpdate,
 };
 use flui_foundation::ChangeNotifier;
 use flui_painting::Alignment;
@@ -12,7 +13,7 @@ use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
 use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
 
 use crate::animated::implicitly_animated::{DEFAULT_DURATION, default_curve};
-use crate::animated::property_motion::PropertyMotion;
+use crate::animated::property_motion::{PropertyMotion, observed_property};
 use crate::animated::vsync_scope::VsyncScope;
 use crate::{Align, AnimatedBuilder};
 
@@ -115,7 +116,7 @@ impl std::fmt::Debug for AnimatedAlign {
 /// State for [`AnimatedAlign`] — owns the persistent alignment animation.
 #[derive(Debug)]
 pub struct AnimatedAlignState {
-    alignment: PropertyMotion<Alignment>,
+    alignment: AnimatedValue<Alignment>,
     width_factor: PropertyMotion<f64>,
     height_factor: PropertyMotion<f64>,
     notifications: Rc<ChangeNotifier>,
@@ -134,13 +135,8 @@ impl StatefulView for AnimatedAlign {
             Alignment::CENTER
         };
         AnimatedAlignState {
-            alignment: PropertyMotion::new(
-                Some(alignment),
-                self.motion.clone(),
-                &notifications,
-                None,
-            )
-            .expect("BUG: initial alignment was made finite"),
+            alignment: observed_property(alignment, self.motion.clone(), &notifications, None)
+                .expect("BUG: initial alignment was made finite"),
             width_factor: PropertyMotion::new(
                 self.width_factor.filter(|v| v.is_finite()),
                 self.motion.clone(),
@@ -165,14 +161,13 @@ impl StatefulView for AnimatedAlign {
 impl ViewState<AnimatedAlign> for AnimatedAlignState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.vsync = VsyncScope::maybe_of(ctx);
-        for result in [
-            self.alignment.rebind(self.vsync.as_ref()),
-            self.width_factor.rebind(self.vsync.as_ref()),
-            self.height_factor.rebind(self.vsync.as_ref()),
-        ] {
-            if let Err(error) = result {
-                tracing::error!(%error, "alignment animation has no clock");
-            }
+        if let Err(error) = VsyncUpdate::run(|update| {
+            update.rebind(&mut self.alignment, self.vsync.as_ref());
+            self.width_factor.stage_binding(update, self.vsync.as_ref());
+            self.height_factor
+                .stage_binding(update, self.vsync.as_ref());
+        }) {
+            tracing::error!(%error, "alignment animation has no clock");
         }
     }
 
@@ -181,10 +176,7 @@ impl ViewState<AnimatedAlign> for AnimatedAlignState {
     }
 
     fn build(&self, _view: &AnimatedAlign, _ctx: &dyn BuildContext) -> impl IntoView {
-        let alignment = self
-            .alignment
-            .animation()
-            .expect("BUG: alignment is always present");
+        let alignment = self.alignment.animation();
         let width_factor = self.width_factor.animation();
         let height_factor = self.height_factor.animation();
         let child = self.child.clone();
@@ -211,12 +203,10 @@ impl ViewState<AnimatedAlign> for AnimatedAlignState {
             return;
         }
         let result = MotionUpdate::run(|update| {
-            self.alignment.stage(
-                update,
-                Some(new_view.alignment),
+            update.retarget(
+                &mut self.alignment,
+                new_view.alignment,
                 new_view.motion.clone(),
-                &self.notifications,
-                self.vsync.as_ref(),
             )?;
             self.width_factor.stage(
                 update,
@@ -239,8 +229,12 @@ impl ViewState<AnimatedAlign> for AnimatedAlignState {
     }
 
     fn dispose(&mut self) {
-        self.alignment.dispose();
-        self.width_factor.dispose();
-        self.height_factor.dispose();
+        MotionUpdate::run(|update| {
+            update.dispose(&mut self.alignment);
+            self.width_factor.stage_disposal(update);
+            self.height_factor.stage_disposal(update);
+            Ok(())
+        })
+        .expect("BUG: retiring motion owners has no preparation refusal");
     }
 }

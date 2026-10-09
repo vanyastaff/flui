@@ -157,7 +157,7 @@ pub use simulation::{
     SpringType, Tolerance,
 };
 pub use spring::{
-    AnimatedValue, AnimatedValueView, AnimationVector, MotionUpdate, TwoWayConverter,
+    AnimatedValue, AnimatedValueView, AnimationVector, MotionUpdate, TwoWayConverter, VsyncUpdate,
 };
 pub use stagger::{Stagger, StaggerOrigin};
 pub use status_subscription::StatusSubscription;
