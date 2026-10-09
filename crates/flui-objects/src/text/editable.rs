@@ -164,6 +164,28 @@ impl RenderEditable {
         }
     }
 
+    /// Applies a signed weight adjustment without modifying the document style.
+    #[must_use]
+    pub fn with_font_weight_adjustment(mut self, adjustment: i32) -> Self {
+        self.painter.set_font_weight_adjustment(adjustment);
+        self
+    }
+
+    /// Updates weight resolution and invalidates glyph, selection and caret geometry.
+    pub fn set_font_weight_adjustment(
+        &mut self,
+        adjustment: i32,
+    ) -> flui_rendering::RenderUpdateImpact {
+        let previous = self.painter.font_weight_adjustment();
+        self.painter.set_font_weight_adjustment(adjustment);
+        if previous == adjustment {
+            flui_rendering::RenderUpdateImpact::NONE
+        } else {
+            flui_rendering::RenderUpdateImpact::LAYOUT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS
+        }
+    }
+
     /// Sets the collapsed caret byte offset into the plain text (builder form).
     #[must_use]
     pub fn with_caret_byte_offset(mut self, offset: usize) -> Self {

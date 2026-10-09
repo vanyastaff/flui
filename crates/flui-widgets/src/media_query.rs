@@ -2,23 +2,25 @@
 //!
 //! ## Implemented subset
 //!
-//! `size`, `device_pixel_ratio`, `text_scale_factor`, `padding`,
-//! `view_insets`, `platform_brightness`, `high_contrast` — presentation and
+//! `size`, `device_pixel_ratio`, `text_scale_factor`, `font_weight_adjustment`, `padding`,
+//! `view_insets`, `platform_brightness`, `high_contrast`, `preferred_locales` — presentation and
 //! preference fields for layout and theming.
 //!
 //! ## Deferred (not yet implemented)
 //!
 //! View padding, system gesture insets, 24-hour-format preference,
 //! accessible navigation, inverted colors, disabled
-//! animations, bold text, display features, and navigation mode.
+//! animations, display features, and navigation mode. Text-weight observation
+//! is implemented by the UIKit backend; other backends leave it unavailable.
 //! These require platform event plumbing (accessibility bridge, IME state)
 //! that lives above this layer.
 
 use flui_foundation::geometry::EdgeInsets;
 use flui_foundation::geometry::Size;
-use flui_platform_api::Brightness;
+use flui_platform_api::{Brightness, Locale};
 use flui_view::prelude::*;
 use flui_view::{BoxedView, FieldMask, InheritedData, InheritedView, impl_inherited_view};
+use std::sync::Arc;
 
 /// Ambient logical-screen data provided to descendants by a [`MediaQuery`]
 /// ancestor.
@@ -40,10 +42,12 @@ use flui_view::{BoxedView, FieldMask, InheritedData, InheritedView, impl_inherit
 /// - [`size`](Self::size)
 /// - [`device_pixel_ratio`](Self::device_pixel_ratio)
 /// - [`text_scale_factor`](Self::text_scale_factor) (a flat `f64`, not a scaler object)
+/// - [`font_weight_adjustment`](Self::font_weight_adjustment)
 /// - [`padding`](Self::padding)
 /// - [`view_insets`](Self::view_insets)
 /// - [`platform_brightness`](Self::platform_brightness)
 /// - [`high_contrast`](Self::high_contrast)
+/// - [`preferred_locales`](Self::preferred_locales)
 #[derive(Debug, Clone, PartialEq, flui_view::prelude::InheritedData)]
 pub struct MediaQueryData {
     /// Logical size of the current display surface (window or full screen).
@@ -61,6 +65,11 @@ pub struct MediaQueryData {
     /// Text consumers resolve values outside `1/64..=64` to `1.0` through
     /// [`MediaQuery::text_scale_factor_of`], including NaN and infinities.
     pub text_scale_factor: f64,
+
+    /// Signed adjustment applied after authored text-style inheritance. Zero
+    /// preserves authored weights. Text shaping bounds adjusted weights to
+    /// `1..=1000`, including for explicitly authored nested providers.
+    pub font_weight_adjustment: i32,
 
     /// Safe-area insets from the window edges reserved by the OS (notch,
     /// home indicator, status bar). App content should avoid rendering
@@ -80,6 +89,14 @@ pub struct MediaQueryData {
     /// Whether the user requests a higher-contrast palette. An unavailable
     /// platform observation projects to `false`; nested providers may override it.
     pub high_contrast: bool,
+
+    /// Ordered preferred UI languages observed by the host. `None` means
+    /// unavailable; an empty list is an observed empty preference list.
+    /// Application locale overrides and resource fallback belong to
+    /// [`WidgetsApp`](crate::WidgetsApp). Like the other fields, a nested
+    /// `MediaQuery` replaces this value; copy parent data to preserve it when
+    /// overriding another field.
+    pub preferred_locales: Option<Arc<[Locale]>>,
 }
 
 impl Default for MediaQueryData {
@@ -88,10 +105,12 @@ impl Default for MediaQueryData {
             size: Size::new(800.0, 600.0),
             device_pixel_ratio: 1.0,
             text_scale_factor: 1.0,
+            font_weight_adjustment: 0,
             padding: EdgeInsets::ZERO,
             view_insets: EdgeInsets::ZERO,
             platform_brightness: Brightness::Light,
             high_contrast: false,
+            preferred_locales: None,
         }
     }
 }
@@ -195,6 +214,14 @@ impl MediaQuery {
             } else {
                 1.0
             }
+        })
+    }
+
+    /// The signed weight adjustment, depending only on that media field.
+    #[must_use]
+    pub fn font_weight_adjustment_of(ctx: &dyn BuildContext) -> Option<i32> {
+        Self::depend_on_fields(ctx, MediaQueryData::FIELD_FONT_WEIGHT_ADJUSTMENT, |d| {
+            d.font_weight_adjustment
         })
     }
 

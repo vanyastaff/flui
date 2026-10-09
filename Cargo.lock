@@ -2230,6 +2230,7 @@ version = "0.2.0-dev"
 dependencies = [
  "cursor-icon",
  "flui-foundation",
+ "language-tags",
  "parking_lot",
  "proptest",
  "raw-window-handle",
@@ -3458,6 +3459,12 @@ dependencies = [
  "polycool",
  "smallvec",
 ]
+
+[[package]]
+name = "language-tags"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4345964bb142484797b161f473a503a434de77149dd8c7427788c6e13379388"
 
 [[package]]
 name = "lazy_static"

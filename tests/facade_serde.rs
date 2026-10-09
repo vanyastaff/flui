@@ -27,7 +27,7 @@ fn every_owner_crate_serializes_through_the_facade_feature() {
     let color = Color::rgb(10, 20, 30);
     assert_eq!(round_trip(&color), color);
 
-    let locale = Locale::new("en", Some("US"));
+    let locale = Locale::new("en", Some("US")).expect("valid locale");
     assert_eq!(round_trip(&locale), locale);
 
     let velocity = Velocity::new(Offset::new(12.5, -3.0));

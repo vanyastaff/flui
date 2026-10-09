@@ -39,6 +39,9 @@ pub struct ParagraphSpec<'a> {
     pub default_style: Option<&'a TextStyle>,
     /// The paragraph's font size, in logical pixels.
     pub font_size: f32,
+    /// Signed adjustment after style inheritance; zero preserves authored
+    /// weights and axes. Adjusted requested weights are bounded to 1..1000.
+    pub font_weight_adjustment: i32,
     /// The width lines break at; `None` breaks only at hard breaks.
     pub max_width: Option<f32>,
     /// Minimum allocated width, independent of the line-breaking cap.
@@ -98,7 +101,7 @@ const _: () = {
 struct SpanInfo {
     len: usize,
     family: String,
-    weight: u16,
+    weight: f32,
     italic: bool,
     size: Option<f32>,
     color: Option<Color>,
@@ -622,9 +625,15 @@ impl TextContext {
         let (default_family, default_family_name) = family(collection, None);
         let default_properties = paragraph
             .default_style
-            .map(|style| properties(collection, style))
+            .map(|style| properties(collection, style, None, paragraph.font_weight_adjustment))
             .unwrap_or_default();
-        let default_info = span_info(0, default_family_name, paragraph.default_style);
+        let default_info = span_info(
+            0,
+            default_family_name,
+            paragraph.default_style,
+            None,
+            paragraph.font_weight_adjustment,
+        );
         let mut start = 0;
         let mut infos = Vec::with_capacity(spans.len());
         let span_properties: Vec<_> = spans
@@ -634,12 +643,25 @@ impl TextContext {
                 start = range.end;
                 let properties = style
                     .as_ref()
-                    .map(|style| properties(collection, style))
+                    .map(|style| {
+                        properties(
+                            collection,
+                            style,
+                            paragraph.default_style,
+                            paragraph.font_weight_adjustment,
+                        )
+                    })
                     .unwrap_or_default();
                 infos.push(match style {
                     Some(style) => {
                         let (_, name) = family(collection, Some(style));
-                        span_info(span.len(), name, Some(style))
+                        span_info(
+                            span.len(),
+                            name,
+                            Some(style),
+                            paragraph.default_style,
+                            paragraph.font_weight_adjustment,
+                        )
                     }
                     None => SpanInfo {
                         len: span.len(),
@@ -661,6 +683,13 @@ impl TextContext {
             .ranged_builder(&mut self.font_cx, &breaks, 1.0, false);
         builder.push_default(default_family);
         builder.push_default(StyleProperty::FontSize(paragraph.font_size));
+        if let Some(weight) = adjusted_weight(
+            paragraph.default_style,
+            None,
+            paragraph.font_weight_adjustment,
+        ) {
+            builder.push_default(StyleProperty::FontWeight(FontWeight::new(weight)));
+        }
         // A word wider than the line breaks between its glyphs instead of
         // overflowing the line. `BreakWord` rather than `Anywhere`: the
         // min-content width stays the widest word (flui-painting
@@ -730,7 +759,13 @@ fn sliced_spans(
 }
 
 /// What a span of `len` bytes styled `style` in `family` was shaped with.
-fn span_info(len: usize, family: String, style: Option<&TextStyle>) -> SpanInfo {
+fn span_info(
+    len: usize,
+    family: String,
+    style: Option<&TextStyle>,
+    default: Option<&TextStyle>,
+    adjustment: i32,
+) -> SpanInfo {
     #[expect(
         clippy::cast_possible_truncation,
         reason = "a style's f64 size narrows to the f32 it is shaped at"
@@ -738,9 +773,11 @@ fn span_info(len: usize, family: String, style: Option<&TextStyle>) -> SpanInfo 
     SpanInfo {
         len,
         family,
-        weight: style
-            .and_then(|style| style.font_weight)
-            .map_or(400, |weight| weight.value()),
+        weight: adjusted_weight(style, default, adjustment).unwrap_or_else(|| {
+            style
+                .and_then(|style| style.font_weight)
+                .map_or(400.0, |weight| f32::from(weight.value()))
+        }),
         italic: style
             .and_then(|style| style.font_style)
             .is_some_and(|font_style| font_style == FontStyle::Italic),
@@ -791,7 +828,43 @@ pub(crate) fn holds_exactly(collection: &mut Collection, name: &str) -> bool {
         .is_some_and(|held| held == name)
 }
 
-/// The Parley properties `style` sets; a field left unset adds nothing.
+/// One resolved request for both family matching and the variable weight axis.
+/// Zero deliberately keeps the existing authored matching/axis behavior.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "valid axes use shaping f32; the adjusted result is bounded to 1..1000"
+)]
+fn adjusted_weight(
+    style: Option<&TextStyle>,
+    default: Option<&TextStyle>,
+    adjustment: i32,
+) -> Option<f32> {
+    if adjustment == 0 {
+        return None;
+    }
+    let variations = style
+        .filter(|style| {
+            style.font_variations.iter().any(|variation| {
+                Tag::parse(&variation.axis).is_some() && (variation.value as f32).is_finite()
+            })
+        })
+        .or(default);
+    let axis = variations.and_then(|style| {
+        style.font_variations.iter().rev().find_map(|variation| {
+            let value = variation.value as f32;
+            (variation.axis == "wght" && value.is_finite()).then_some(f64::from(value))
+        })
+    });
+    let authored = axis.unwrap_or_else(|| {
+        style
+            .and_then(|style| style.font_weight)
+            .or_else(|| default.and_then(|style| style.font_weight))
+            .map_or(400.0, |weight| f64::from(weight.value()))
+    });
+    Some((authored + f64::from(adjustment)).clamp(1.0, 1000.0) as f32)
+}
+
+/// The Parley properties `style` sets, with a resolved weight adjustment.
 #[expect(
     clippy::cast_possible_truncation,
     reason = "f64 style values narrow to Parley's f32 layout space"
@@ -799,12 +872,17 @@ pub(crate) fn holds_exactly(collection: &mut Collection, name: &str) -> bool {
 fn properties(
     collection: &mut Collection,
     style: &TextStyle,
+    default: Option<&TextStyle>,
+    adjustment: i32,
 ) -> Vec<StyleProperty<'static, SpanBrush>> {
     let mut properties = Vec::new();
+    let adjusted = adjusted_weight(Some(style), default, adjustment);
     if style.font_family.is_some() {
         properties.push(family(collection, Some(style)).0);
     }
-    if let Some(weight) = style.font_weight {
+    if let Some(weight) = adjusted {
+        properties.push(StyleProperty::FontWeight(FontWeight::new(weight)));
+    } else if let Some(weight) = style.font_weight {
         properties.push(StyleProperty::FontWeight(FontWeight::new(f32::from(
             weight.value(),
         ))));
@@ -844,6 +922,11 @@ fn properties(
         .iter()
         .filter_map(|variation| {
             let value = variation.value as f32;
+            let value = if variation.axis == "wght" && value.is_finite() {
+                adjusted.unwrap_or(value)
+            } else {
+                value
+            };
             value
                 .is_finite()
                 .then_some(FontVariation::new(Tag::parse(&variation.axis)?, value))
@@ -877,6 +960,7 @@ mod tests {
     fn shaped(text: &str, direction: TextDirection) -> ParagraphLayout {
         let spans: Vec<(String, Option<TextStyle>)> = vec![(text.to_owned(), None)];
         TextContext::new(&FontCollection::new()).shape(&ParagraphSpec {
+            font_weight_adjustment: 0,
             spans: &spans,
             default_style: None,
             font_size: 16.0,
@@ -947,6 +1031,7 @@ mod tests {
             let spans: Vec<(String, Option<TextStyle>)> = vec![("Привет".to_owned(), Some(style))];
             TextContext::new(&fonts)
                 .shape(&ParagraphSpec {
+                    font_weight_adjustment: 0,
                     spans: &spans,
                     default_style: None,
                     font_size: 16.0,
@@ -975,6 +1060,7 @@ mod tests {
             None,
         )];
         TextContext::new(&FontCollection::new()).shape(&ParagraphSpec {
+            font_weight_adjustment: 0,
             spans: &spans,
             default_style: None,
             font_size: 16.0,
@@ -1027,6 +1113,7 @@ mod tests {
         let spans: Vec<(String, Option<TextStyle>)> = vec![("seven".to_owned(), None)];
         let seven = TextContext::new(&FontCollection::new())
             .shape(&ParagraphSpec {
+                font_weight_adjustment: 0,
                 spans: &spans,
                 default_style: None,
                 font_size: 16.0,

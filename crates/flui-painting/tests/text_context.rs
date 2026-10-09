@@ -18,6 +18,7 @@ const LATIN: &str = "The quick brown fox jumps over the lazy dog and runs back h
 
 fn spec(spans: &[(String, Option<TextStyle>)], max_width: Option<f32>) -> ParagraphSpec<'_> {
     ParagraphSpec {
+        font_weight_adjustment: 0,
         spans,
         default_style: None,
         font_size: 16.0,
@@ -109,6 +110,7 @@ pub(crate) fn a_face_registered_after_the_fork_shapes_in_every_ui_runtime() {
     let width = |context: &mut TextContext| {
         context
             .shape(&ParagraphSpec {
+                font_weight_adjustment: 0,
                 font_size: SIZE,
                 ..spec(&spans, None)
             })

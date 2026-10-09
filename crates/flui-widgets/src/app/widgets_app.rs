@@ -30,13 +30,11 @@
 //!   platform needs a widget-to-window-title capability. FLUI has none yet (`PlatformWindow::set_title`
 //!   exists, but no `BuildContext` capability reaches it); adding one is a
 //!   new `LifecycleContext` capability and a change of its own.
-//! - **Platform locale plumbing and the locale-resolution callbacks.** FLUI
-//!   does not yet deliver preferred locales from the platform, so resolution
-//!   runs with no preferred list (resolving to the first supported locale
-//!   unless [`locale`](WidgetsApp::locale) is set) and resolution callbacks
-//!   are not exposed — a callback that only ever receives an empty platform list
-//!   would be dead API. Both arrive together when the platform layer
-//!   delivers locales.
+//! - **Custom locale-resolution callbacks.** Resolution uses
+//!   [`basic_locale_list_resolution`] against the nearest `MediaQuery`'s
+//!   preferred languages, unless [`locale`](WidgetsApp::locale) is set.
+//!   An unavailable host observation falls back to the first supported locale.
+//!   Native observation availability depends on the backend.
 //! - **Named-route table, at the *app* level.** The mechanism
 //!   itself exists — [`route`](NavigatorHandle::route),
 //!   [`on_generate_route`](NavigatorHandle::on_generate_route) and
@@ -84,7 +82,6 @@ use flui_platform_api::Locale;
 use flui_view::BoxedView;
 use flui_view::prelude::*;
 
-use crate::FocusScope;
 use crate::localization::{
     BoxedLocalizationsDelegate, DefaultWidgetsLocalizationsDelegate, Localizations,
     basic_locale_list_resolution,
@@ -92,6 +89,7 @@ use crate::localization::{
 use crate::navigator::{Navigator, NavigatorHandle, NavigatorObserver, RouteId, SimpleRoute};
 use crate::router::{Routable, Router};
 use crate::text::DefaultTextStyle;
+use crate::{FocusScope, MediaQuery, MediaQueryData};
 
 /// The app-level wrapping hook: receives the routing subtree
 /// (`Some` when the app has a router or a navigator, `None` otherwise) and returns the
@@ -372,19 +370,23 @@ impl<F: AppForm> WidgetsApp<F> {
         self
     }
 
-    /// Locale resolution, minus the
-    /// platform preferred-locale list FLUI does not deliver yet (see the
-    /// module docs): an explicit locale resolves as a one-element preferred
-    /// list; otherwise resolution runs with no preferred list, which
-    /// [`basic_locale_list_resolution`] answers with the first supported
-    /// locale.
-    fn resolve_locale(&self) -> Locale {
+    /// Resolve the authored override, or subscribe to the nearest inherited
+    /// preferred languages. Missing observations use the first supported locale.
+    fn resolve_locale(&self, ctx: &dyn BuildContext) -> Locale {
         match &self.locale {
             Some(explicit) => basic_locale_list_resolution(
                 Some(std::slice::from_ref(explicit)),
                 &self.supported_locales,
             ),
-            None => basic_locale_list_resolution(None, &self.supported_locales),
+            None => {
+                MediaQuery::depend_on_fields(ctx, MediaQueryData::FIELD_PREFERRED_LOCALES, |data| {
+                    basic_locale_list_resolution(
+                        data.preferred_locales.as_deref(),
+                        &self.supported_locales,
+                    )
+                })
+                .unwrap_or_else(|| basic_locale_list_resolution(None, &self.supported_locales))
+            }
         }
     }
 }
@@ -567,7 +569,7 @@ impl<F: AppForm> ViewState<WidgetsApp<F>> for WidgetsAppState {
         }
     }
 
-    fn build(&self, view: &WidgetsApp<F>, _ctx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, view: &WidgetsApp<F>, ctx: &dyn BuildContext) -> impl IntoView {
         // The routing subtree: FocusScope > Navigator (autofocus limit in
         // the module docs).
         // In the router form, the Router alone, whose navigator is the
@@ -610,7 +612,7 @@ impl<F: AppForm> ViewState<WidgetsApp<F>> for WidgetsAppState {
         delegates.push(BoxedLocalizationsDelegate::new(
             DefaultWidgetsLocalizationsDelegate,
         ));
-        Localizations::new(view.resolve_locale(), delegates, content)
+        Localizations::new(view.resolve_locale(ctx), delegates, content)
     }
 }
 

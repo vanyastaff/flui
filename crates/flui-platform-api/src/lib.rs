@@ -124,7 +124,7 @@ pub use input::{
     logical_to_device, offset_from_coords,
 };
 pub use keyboard::{Code, Key, KeyEvent, KeyState, Location, Modifiers, NamedKey};
-pub use locale::Locale;
+pub use locale::{InvalidLocale, Locale};
 pub use platform_window::PlatformWindow;
 pub use pointer::{
     ButtonChange, CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool,
@@ -134,7 +134,7 @@ pub use pointer::{
 };
 pub use preferences::{
     DurationScale, GesturePreferences, InvalidPreference, MotionPreference, SystemPreferences,
-    WheelPreferences, WheelStep,
+    TextWeightPreference, WheelPreferences, WheelStep,
 };
 pub use storage::{
     Storage, StorageError, StorageFuture, StorageName, Stored, StoredVersion, WriteMode,

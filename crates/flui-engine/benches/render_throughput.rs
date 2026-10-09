@@ -192,6 +192,7 @@ fn render_throughput(c: &mut Criterion) {
     let label = std::sync::Arc::new(
         flui_painting::TextContext::new(&flui_painting::FontCollection::new())
             .shape(&flui_painting::parley_text::ParagraphSpec {
+                font_weight_adjustment: 0,
                 spans: &spans,
                 default_style: None,
                 font_size: 24.0,

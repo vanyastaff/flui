@@ -4,7 +4,7 @@
 //! Includes the deferred-language-match tie-break and the country-only
 //! fallback.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use flui_platform_api::Locale;
 
@@ -13,8 +13,8 @@ use flui_platform_api::Locale;
 /// linear scan. Tuple/`Option` keys are used rather than concatenated
 /// strings, which would conflate an absent subtag with one spelled `"null"`.
 struct SupportedLocaleIndex<'a> {
-    /// language + script + country -> supported locale (perfect match).
-    exact: HashMap<(&'a str, Option<&'a str>, Option<&'a str>), &'a Locale>,
+    /// Complete supported language identities, including variants and extensions.
+    exact: HashSet<&'a Locale>,
     /// language + script -> supported locale.
     language_and_script: HashMap<(&'a str, &'a str), &'a Locale>,
     /// language + country -> supported locale.
@@ -28,7 +28,7 @@ struct SupportedLocaleIndex<'a> {
 impl<'a> SupportedLocaleIndex<'a> {
     fn build(supported_locales: &'a [Locale]) -> Self {
         let mut index = Self {
-            exact: HashMap::new(),
+            exact: HashSet::new(),
             language_and_script: HashMap::new(),
             language_and_country: HashMap::new(),
             language: HashMap::new(),
@@ -37,10 +37,7 @@ impl<'a> SupportedLocaleIndex<'a> {
         for locale in supported_locales {
             // `.or_insert`: only the FIRST supported locale claiming a
             // given key wins.
-            index
-                .exact
-                .entry((locale.language(), locale.script(), locale.country()))
-                .or_insert(locale);
+            index.exact.insert(locale);
             if let Some(script) = locale.script() {
                 index
                     .language_and_script
@@ -72,7 +69,7 @@ impl<'a> SupportedLocaleIndex<'a> {
 ///
 /// # Matching priority
 ///
-/// 1. [`Locale::language`], [`Locale::script`], and [`Locale::country`] all match.
+/// 1. The complete [`Locale`] matches, including variants and extensions.
 /// 2. [`Locale::language`] and [`Locale::script`] only.
 /// 3. [`Locale::language`] and [`Locale::country`] only.
 /// 4. [`Locale::language`] only — with a caveat: a language-only match found
@@ -116,11 +113,7 @@ pub fn basic_locale_list_resolution(
     for (locale_index, user_locale) in preferred_locales.iter().enumerate() {
         // Perfect match: return the *preferred* locale itself (not the
         // supported-list entry).
-        if index.exact.contains_key(&(
-            user_locale.language(),
-            user_locale.script(),
-            user_locale.country(),
-        )) {
+        if index.exact.contains(user_locale) {
             return user_locale.clone();
         }
 
@@ -186,7 +179,7 @@ mod tests {
     use super::*;
 
     fn l(language: &str, country: Option<&str>) -> Locale {
-        Locale::new(language, country)
+        Locale::new(language, country).expect("valid fixture locale")
     }
 
     #[test]

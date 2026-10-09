@@ -350,6 +350,7 @@ fn label(
     let spans = [(label.to_owned(), None)];
     let paragraph = text
         .shape(&ParagraphSpec {
+            font_weight_adjustment: 0,
             spans: &spans,
             default_style: None,
             font_size,

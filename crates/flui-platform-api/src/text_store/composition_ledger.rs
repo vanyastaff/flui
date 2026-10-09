@@ -226,7 +226,6 @@ impl CompositionLedger {
         // and where its own replacement goes.
         let mut removed = String::new();
         let mut rewritten = Vec::new();
-        let mut kept_member = false;
         let mut insert_at = None;
         let mut after_members = 0;
         for (index, run) in self.runs.iter().enumerate() {
@@ -239,7 +238,6 @@ impl CompositionLedger {
                 rewritten.extend(run.replacement);
                 continue;
             }
-            kept_member |= run.content != Content::Marker;
             let past_edit = if run.content.shown() > 0 {
                 at[index] >= edit.start
             } else {
@@ -261,18 +259,14 @@ impl CompositionLedger {
             replacement: Some(replacement),
         };
         let mut insertion = Vec::with_capacity(2);
-        if !removed.is_empty() {
+        // A deletion of preedit still rewrites its replacement. Keep its
+        // zero-width boundary so a later edit can join that lineage even
+        // though there is no committed text to restore.
+        if !removed.is_empty() || inserted.is_empty() {
             insertion.push(part(Content::Removed(removed)));
         }
         if !inserted.is_empty() {
             insertion.push(part(Content::Preedit(inserted.len())));
-        }
-        if insertion.is_empty() && !kept_member {
-            insertion.push(Run {
-                content: Content::Marker,
-                region: Some(region),
-                replacement: None,
-            });
         }
         let mut runs = Vec::with_capacity(self.runs.len() + insertion.len());
         let mut insertion = Some(insertion);

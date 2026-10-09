@@ -35,3 +35,13 @@ _Avoid_: Window state, application policy
 An application's choice of how to respond to a system preference. It can honor
 or override that preference without changing the operating system's setting.
 _Avoid_: System preference
+
+**Preferred UI languages**:
+The ordered languages the user requests for interface content, before an
+application selects among the resources it supports.
+_Avoid_: Formatting region, resolved locale
+
+**Resolved locale**:
+The language identity selected for an application's available resources after
+applying its explicit choice or preferred UI languages and fallback policy.
+_Avoid_: System preference, formatting region

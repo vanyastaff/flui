@@ -440,6 +440,8 @@ fontdb = { version = "0.24", default-features = false, features = [
 ] }
 # The host's locale, which picks the Han fallback list (ADR-0092 §7).
 sys-locale = "0.3"
+# Full BCP 47 language identity and syntactic admission at the platform boundary.
+language-tags = "0.3.2"
 # A character's Unicode script, for the painting test harness's
 # fallback-coverage query. The copy Parley already builds.
 icu_properties = { version = "2.3", default-features = false, features = ["compiled_data"] }

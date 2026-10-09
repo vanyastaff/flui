@@ -54,6 +54,7 @@ pub mod view {
 /// Platform values: brightness and locale.
 pub mod platform {
     pub use flui_platform_api::Brightness;
+    pub use flui_platform_api::InvalidLocale;
     pub use flui_platform_api::Locale;
 }
 

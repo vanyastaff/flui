@@ -149,6 +149,7 @@ impl TextPainter {
             LineOverflow::IgnoreForWidthIntrinsic => (None, None),
         };
         text_cx.shape(&crate::parley_text::ParagraphSpec {
+            font_weight_adjustment: self.font_weight_adjustment,
             spans: &spans,
             default_style: root.as_ref(),
             font_size: self.scaled_font_size(text) as f32,
@@ -238,6 +239,7 @@ impl TextPainter {
         let spans = vec![(ellipsis.to_string(), first)];
         text_cx
             .shape(&crate::parley_text::ParagraphSpec {
+                font_weight_adjustment: self.font_weight_adjustment,
                 spans: &spans,
                 default_style: root.as_ref(),
                 font_size,

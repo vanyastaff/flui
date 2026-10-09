@@ -54,6 +54,17 @@ path.
 
 ## Mapping decisions
 
+### Locale identity survives native observation and resource selection
+
+`Locale` validates a complete BCP 47 tag through one parser boundary (ADR-0173).
+Variants, extensions and private use survive equality and serialization;
+component constructors reject malformed roles rather than creating unchecked
+values. The public `preferences_contract` rows
+`preferred_language_identity_preserves_variants_and_extensions`,
+`malformed_preferred_language_tags_are_refused` and
+`deprecated_subtags_canonicalize_everywhere_a_locale_is_built` pin identity,
+admission and the retained aliases, including serde when enabled.
+
 ### Preference observations preserve unavailable values and native units
 
 `SystemPreferences` records observations rather than framework fallback values
@@ -109,6 +120,15 @@ preedit, the original words for a reconversion) is kept by each store beside
 its composing range and followed through a session by CompositionLedger,
 which applies the same composition rules the stores do, so the owner hears of
 a reconversion only when it commits.
+
+A deletion of preedit keeps its zero-width replacement boundary even when it
+removed no committed text. A later edit crossing that boundary must join the
+deleted replacement's lineage before narrowing decides which origin remains
+(ADR-0142 item 1). `composition_ledger_named_cases` pins the committed text and
+origin after such an edit, including an empty boundary edit and reopening the
+session; `the_ledger_follows_the_reference` checks mixed edits and marks against
+an independent character-based model.
+
 **Tests:** the `text_store` module's unit tests, and `flui-testing`'s
 `in_memory_store_conforms_to_kit_v1`; the public
 `queued_text_store_grants_respect_gate_changes` family covers gate closure

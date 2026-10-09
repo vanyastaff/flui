@@ -52,7 +52,7 @@ mod measured {
     use flui_sdk::pipeline::{
         PathClipConfiguration as _, RenderPhysicalShape as _, TranslationFraction as _,
     };
-    use flui_sdk::platform::{Brightness as _, Locale as _};
+    use flui_sdk::platform::{Brightness as _, InvalidLocale as _, Locale as _};
     use flui_sdk::rendering::{
         BoxConstraints as _, BoxProtocol as _, HitTestBehavior as _, RenderUpdateImpact as _,
     };
@@ -131,6 +131,7 @@ fn the_re_exports_are_the_facades_types() {
     let _: fn(flui::painting::Canvas) -> flui_sdk::painting::Canvas = |x| x;
     let _: fn(flui::painting::DrawOp) -> flui_sdk::painting::DrawOp = |x| x;
     let _: fn(flui::platform::Brightness) -> flui_sdk::platform::Brightness = |x| x;
+    let _: fn(flui::platform::InvalidLocale) -> flui_sdk::platform::InvalidLocale = |x| x;
     let _: fn(flui::rendering::RenderUpdateImpact) -> flui_sdk::rendering::RenderUpdateImpact =
         |x| x;
     let _: fn(flui::rendering::BoxConstraints) -> flui_sdk::rendering::BoxConstraints = |x| x;
@@ -193,6 +194,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_painting::typography::TextDirection;",
         "pub use flui_painting::typography::TextStyle;",
         "pub use flui_platform_api::Brightness;",
+        "pub use flui_platform_api::InvalidLocale;",
         "pub use flui_platform_api::Locale;",
         "pub use flui_rendering::RenderUpdateImpact;",
         "pub use flui_rendering::constraints::BoxConstraints;",
