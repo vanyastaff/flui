@@ -1051,7 +1051,10 @@ fn binding_input_contract_matrix() {
             "native_terminal_observation_failure",
             native_terminal_observation_failure_keeps_owned_delivery,
         ),
-        ("native_close_retirement_failure", native_close_preserves_retirement_ownership),
+        (
+            "native_close_retirement_failure",
+            native_close_preserves_retirement_ownership,
+        ),
         ("native_focus_loss", native_focus_loss_releases_lease),
         (
             "native_claim_retirement",
@@ -2996,12 +2999,21 @@ fn native_staged_retirement_preserves_delivery_and_failure() {
 
 fn native_close_preserves_retirement_ownership() {
     use flui_foundation::geometry::{Offset, Point};
-    use flui_interaction::{GestureBinding, HitTestResult};
-    use flui_interaction::routing::EventPropagation;
     use flui_interaction::events::make_down_event;
-    use flui_platform_api::{EventTime, pointer::{PanZoomEvent, PanZoomPhase, PointerEvent,
-        PointerId, PointerInfo, PointerKind, PointerPosition}};
-    use std::{cell::{Cell, RefCell}, panic::{catch_unwind, AssertUnwindSafe}, rc::Rc};
+    use flui_interaction::routing::EventPropagation;
+    use flui_interaction::{GestureBinding, HitTestResult};
+    use flui_platform_api::{
+        EventTime,
+        pointer::{
+            PanZoomEvent, PanZoomPhase, PointerEvent, PointerId, PointerInfo, PointerKind,
+            PointerPosition,
+        },
+    };
+    use std::{
+        cell::{Cell, RefCell},
+        panic::{AssertUnwindSafe, catch_unwind},
+        rc::Rc,
+    };
 
     struct Capture {
         drops: Rc<Cell<usize>>,
@@ -3014,8 +3026,11 @@ fn native_close_preserves_retirement_ownership() {
         }
     }
     for (preserving, prior_failure, callback_failure, hostile_tail) in [
-        (false, false, false, false), (false, false, true, false),
-        (false, false, true, true), (false, true, false, true), (true, false, false, true),
+        (false, false, false, false),
+        (false, false, true, false),
+        (false, false, true, true),
+        (false, true, false, true),
+        (true, false, false, true),
     ] {
         let lane = InteractionLane::try_new().expect("lane");
         let handle = lane.dispatch_handle();
