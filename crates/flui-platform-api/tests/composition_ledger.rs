@@ -672,9 +672,44 @@ fn named_cases() -> Vec<(
     Option<(Range<usize>, &'static str)>,
     Vec<Op>,
     &'static str,
+    Option<&'static str>,
 )> {
-    use Op::{Mark, Replace};
+    use Op::{Mark, Reopen, Replace};
     vec![
+        (
+            "an empty preedit deletion keeps replacement lineage across a later edit",
+            "abcd",
+            None,
+            vec![
+                Mark(Some(0..1)),
+                Replace(0..4, "aé東"),
+                Replace(1..1, "x"),
+                Replace(7..7, "aé東"),
+                Replace(2..7, ""),
+                Replace(1..3, "x"),
+                Mark(Some(1..2)),
+            ],
+            "axé東",
+            Some("x"),
+        ),
+        (
+            "an empty edit at a deletion boundary and reopening keep the narrowed origin",
+            "abcd",
+            None,
+            vec![
+                Mark(Some(0..1)),
+                Replace(0..4, "aé東"),
+                Replace(1..1, "x"),
+                Replace(7..7, "aé東"),
+                Replace(2..7, ""),
+                Replace(2..2, ""),
+                Replace(1..3, "x"),
+                Mark(Some(1..2)),
+                Reopen,
+            ],
+            "axé東",
+            Some("x"),
+        ),
         (
             "a replace that clears a composition keeps an earlier cleared one",
             "abcdefgh",
@@ -687,6 +722,7 @@ fn named_cases() -> Vec<(
                 Mark(Some(0..1)),
             ],
             "abcdYgh",
+            None,
         ),
         (
             "an empty region where another removal starts keeps its origin",
@@ -699,6 +735,7 @@ fn named_cases() -> Vec<(
                 Mark(Some(0..1)),
             ],
             "abcpq",
+            None,
         ),
         (
             "an insertion does not merge across an empty composition",
@@ -706,6 +743,7 @@ fn named_cases() -> Vec<(
             Some((0..0, "pq")),
             vec![Replace(0..0, "B"), Replace(1..2, "CD"), Mark(Some(0..3))],
             "pq",
+            None,
         ),
         (
             "a partial mark keeps the rest of an insertion new",
@@ -713,6 +751,7 @@ fn named_cases() -> Vec<(
             None,
             vec![Replace(0..0, "abcd"), Mark(Some(0..2)), Mark(Some(2..4))],
             "ab",
+            None,
         ),
         (
             "an empty mark inside an insertion keeps both sides new",
@@ -720,6 +759,7 @@ fn named_cases() -> Vec<(
             None,
             vec![Replace(0..0, "abcd"), Mark(Some(2..2)), Mark(Some(2..4))],
             "ab",
+            None,
         ),
         (
             "a partial edit of a cleared composition keeps the rest of an insertion new",
@@ -732,6 +772,7 @@ fn named_cases() -> Vec<(
                 Mark(Some(2..4)),
             ],
             "aX",
+            None,
         ),
         (
             "narrowing an unchanged reconversion commits the rest as itself",
@@ -739,6 +780,7 @@ fn named_cases() -> Vec<(
             None,
             vec![Mark(Some(0..6)), Mark(Some(0..3))],
             "abcdef",
+            None,
         ),
         (
             "narrowing a conversion of committed text commits what is shown",
@@ -751,6 +793,7 @@ fn named_cases() -> Vec<(
                 Mark(Some(0..3)),
             ],
             "ABCDEF",
+            None,
         ),
         (
             "narrowing new preedit commits the part left behind",
@@ -758,6 +801,7 @@ fn named_cases() -> Vec<(
             None,
             vec![Replace(0..0, "abcdef"), Mark(Some(0..6)), Mark(Some(0..3))],
             "def",
+            None,
         ),
         (
             "narrowing a reopened conversion commits what is shown",
@@ -765,6 +809,7 @@ fn named_cases() -> Vec<(
             Some((0..6, "abcdef")),
             vec![Mark(Some(0..3))],
             "ABCDEF",
+            None,
         ),
         (
             "a removal leaves with its replacement's text",
@@ -772,6 +817,7 @@ fn named_cases() -> Vec<(
             Some((0..3, "")),
             vec![Replace(2..4, "B"), Mark(Some(0..2))],
             "B",
+            None,
         ),
         (
             "a deletion at the end of the narrowed range commits",
@@ -779,13 +825,14 @@ fn named_cases() -> Vec<(
             None,
             vec![Mark(Some(0..9)), Replace(3..6, ""), Mark(Some(0..3))],
             "abcghi",
+            None,
         ),
     ]
 }
 
 pub(crate) fn the_named_cases_hold() {
     let mut failures = Vec::new();
-    for (name, text, composition, ops, committed) in named_cases() {
+    for (name, text, composition, ops, committed, origin) in named_cases() {
         let mut ledger = CompositionLedger::open(
             text,
             composition
@@ -793,20 +840,36 @@ pub(crate) fn the_named_cases_hold() {
                 .map(|(range, origin)| (range, origin.to_owned())),
         );
         let mut current = text.to_owned();
+        let mut composing = composition.as_ref().map(|(range, _)| range.clone());
         for op in &ops {
             match op {
                 Op::Replace(edit, inserted) => {
                     ledger.replace(&current, edit.clone(), inserted);
+                    composing = shifted(composing, edit, inserted.len());
                     current.replace_range(edit.clone(), inserted);
                 }
-                Op::Mark(range) => ledger.set_composition(range.clone()),
-                Op::Reopen => unreachable!("no named case reopens"),
+                Op::Mark(range) => {
+                    ledger.set_composition(range.clone());
+                    composing.clone_from(range);
+                }
+                Op::Reopen => {
+                    let origin = ledger.origin(&current);
+                    ledger = CompositionLedger::open(&current, composing.clone().zip(origin));
+                }
             }
         }
         if ledger.committed(&current) != committed {
             failures.push(format!(
                 "{name}: committed {:?}, want {committed:?}",
                 ledger.committed(&current)
+            ));
+        }
+        if let Some(origin) = origin
+            && ledger.origin(&current).as_deref() != Some(origin)
+        {
+            failures.push(format!(
+                "{name}: origin {:?}, want {origin:?}",
+                ledger.origin(&current)
             ));
         }
         if let Err(difference) = check(text, composition, &ops) {

@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use flui_foundation::geometry::{DevicePixelRatio, Point, Size};
+use flui_foundation::geometry::{DevicePixelRatio, Offset, Point, Size};
 use flui_interaction::{
     DoubleTapGestureRecognizer, DragAxis, DragGestureRecognizer, EagerGestureRecognizer,
     ForcePressGestureRecognizer, GestureArena, GestureArenaMember, GestureRecognizer,
@@ -1144,6 +1144,7 @@ fn force_press_rejects_measured_excursion_before_pressure_returns_to_origin() {
 
 fn nonrepresentable_component_estimate_is_refused() {
     use flui_interaction::processing::VelocityEstimator;
+    let mut failures = Vec::new();
     for estimator in [
         VelocityEstimator::LeastSquares,
         VelocityEstimator::Impulse,
@@ -1154,7 +1155,12 @@ fn nonrepresentable_component_estimate_is_refused() {
         let ends = Rc::new(RefCell::new(Vec::new()));
         let output = ends.clone();
         let drag = DragGestureRecognizer::builder(arena.clone(), DragAxis::Free)
-            .settings(GestureSettings::touch_defaults().with_velocity_estimator(estimator))
+            .settings(
+                GestureSettings::touch_defaults()
+                    .with_velocity_estimator(estimator)
+                    .try_with_fling_velocity(50.0, 200.0)
+                    .expect("valid admitted fling range"),
+            )
             .on_end(move |details| output.borrow_mut().push(details))
             .build();
         for (time, position, phase) in [
@@ -1170,8 +1176,8 @@ fn nonrepresentable_component_estimate_is_refused() {
                 &event(170, PointerKind::Touch, time, position, 0.0, phase),
             );
         }
-        let ends = ends.borrow();
-        let details = ends.last().expect("terminal callback");
+        let terminal = ends.borrow();
+        let details = terminal.last().expect("terminal callback");
         assert_eq!(
             details.reason,
             flui_interaction::GestureEndReason::Completed
@@ -1183,7 +1189,77 @@ fn nonrepresentable_component_estimate_is_refused() {
         );
         assert_eq!(details.fling_velocity(), flui_interaction::Velocity::ZERO);
         assert_eq!(details.primary_velocity, 0.0);
+
+        drop(terminal);
+        for overflow_x in [true, false] {
+            let before = ends.borrow().len();
+            for (time, overflow, phase) in [
+                (100, 0.0, 0),
+                (110, 5e307, 1),
+                (120, 1e308, 1),
+                (130, 1.5e308, 1),
+                (140, 1.5e308, 2),
+            ] {
+                let finite = (time - 100) as f64;
+                let (x, y) = if overflow_x {
+                    (overflow, finite)
+                } else {
+                    (finite, overflow)
+                };
+                send(
+                    &*drag,
+                    &arena,
+                    &event(171, PointerKind::Touch, time, x, y, phase),
+                );
+            }
+            let terminal = ends.borrow();
+            assert_eq!(terminal.len(), before + 1, "one orthogonal terminal");
+            let details = terminal.last().expect("orthogonal terminal callback");
+            let expected = if overflow_x {
+                Offset::new(0.0, 1000.0)
+            } else {
+                Offset::new(1000.0, 0.0)
+            };
+            let raw = details.velocity.pixels_per_second;
+            let fling = details.fling_velocity().pixels_per_second;
+            if !((raw - expected).distance() < 1e-6 && (fling - expected * 0.2).distance() < 1e-6) {
+                failures.push(format!(
+                    "{estimator:?} overflow_x={overflow_x}: raw={raw:?}, fling={fling:?}, expected={expected:?}"
+                ));
+            }
+        }
+        let before = ends.borrow().len();
+        for (time, phase) in [(200, 0), (210, 1), (220, 1), (230, 1), (240, 2)] {
+            let position = (time - 200) as f64;
+            send(
+                &*drag,
+                &arena,
+                &event(
+                    172,
+                    PointerKind::Touch,
+                    time,
+                    position,
+                    position * 2.0,
+                    phase,
+                ),
+            );
+        }
+        let terminal = ends.borrow();
+        assert_eq!(terminal.len(), before + 1, "next healthy contact completes");
+        let details = terminal.last().expect("healthy terminal callback");
+        assert!(
+            (details.velocity.pixels_per_second - Offset::new(1000.0, 2000.0)).distance() < 1e-6,
+            "{estimator:?} next healthy contact recovers both axes"
+        );
+        assert!(
+            (details.fling_velocity().pixels_per_second.distance() - 200.0).abs() < 1e-6,
+            "{estimator:?} healthy contact retains admitted ceiling"
+        );
     }
+    assert!(
+        failures.is_empty(),
+        "finite orthogonal motion lost: {failures:?}"
+    );
 }
 
 fn force_press_snapshots_live_drift_policy_at_down() {

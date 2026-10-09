@@ -200,7 +200,10 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   different pointer IDs. Measured history counts toward drift; predictions do
   not. Raw terminal velocity preserves finite measured components independently
   of the admitted fling bounds. An unrepresentable component estimate is refused
-  as zero. Free-drag terminal scalar magnitude alone uses `f64::MAX` when its norm
+  as zero without erasing the finite orthogonal component;
+  `nonrepresentable_component_estimate_is_refused` pins both axes across all four
+  estimators, admitted fling bounds and the next healthy contact. Free-drag
+  terminal scalar magnitude alone uses `f64::MAX` when its norm
   cannot be represented; the finite raw vector and derived directional fling
   remain available separately.
   `DragEndDetails::fling_velocity` and `ScaleEndDetails::focal_fling_velocity`

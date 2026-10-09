@@ -130,6 +130,15 @@ preedit, the original words for a reconversion) is kept by each store beside
 its composing range and followed through a session by CompositionLedger,
 which applies the same composition rules the stores do, so the owner hears of
 a reconversion only when it commits.
+
+A deletion of preedit keeps its zero-width replacement boundary even when it
+removed no committed text. A later edit crossing that boundary must join the
+deleted replacement's lineage before narrowing decides which origin remains
+(ADR-0142 item 1). `composition_ledger_named_cases` pins the committed text and
+origin after such an edit, including an empty boundary edit and reopening the
+session; `the_ledger_follows_the_reference` checks mixed edits and marks against
+an independent character-based model.
+
 **Tests:** the `text_store` module's unit tests, and `flui-testing`'s
 `in_memory_store_conforms_to_kit_v1`; the public
 `queued_text_store_grants_respect_gate_changes` family covers gate closure
