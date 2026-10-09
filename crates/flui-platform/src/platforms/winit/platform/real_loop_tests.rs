@@ -135,7 +135,7 @@ fn build_test_event_loop() -> EventLoop<()> {
     reason = "the test owns this live HWND and changes only its position and visibility"
 )]
 fn make_unactivated_offscreen(window: &dyn HostWindow) -> anyhow::Result<()> {
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use raw_window_handle::RawWindowHandle;
     use windows::Win32::{
         Foundation::HWND,
         UI::WindowsAndMessaging::{
