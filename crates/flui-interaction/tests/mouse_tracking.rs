@@ -613,6 +613,7 @@ enum CursorReentryCase {
     Replacement,
     HookReentry,
     Failure,
+    ReentrantFailure,
     CompetingFailure,
     Close,
 }
@@ -625,6 +626,7 @@ fn latest_cursor_publication_survives_reentry_replacement_and_failure() {
         CursorReentryCase::Replacement,
         CursorReentryCase::HookReentry,
         CursorReentryCase::Failure,
+        CursorReentryCase::ReentrantFailure,
         CursorReentryCase::CompetingFailure,
         CursorReentryCase::Close,
     ] {
@@ -639,7 +641,9 @@ fn latest_cursor_publication_survives_reentry_replacement_and_failure() {
             });
         let failed = Rc::new(Cell::new(matches!(
             case,
-            CursorReentryCase::Failure | CursorReentryCase::CompetingFailure
+            CursorReentryCase::Failure
+                | CursorReentryCase::ReentrantFailure
+                | CursorReentryCase::CompetingFailure
         )));
         let old_observed = Rc::clone(&observed);
         let hook_tracker = tracker.clone();
@@ -650,6 +654,13 @@ fn latest_cursor_publication_survives_reentry_replacement_and_failure() {
             old_observed.borrow_mut().push(("old", pointer.id, cursor));
             if case == CursorReentryCase::HookReentry && !entered_hook.replace(true) {
                 hook_tracker.set_cursor_change_callback(Rc::clone(&next_hook));
+                hook_tracker.update_with_motion(
+                    &hover(MOUSE, PointerKind::Mouse, Offset::new(7.0, 7.0), 2),
+                    PointerMotionKind::Hover,
+                    &cursor_path(&[Some(CursorIcon::Text)]),
+                );
+            }
+            if case == CursorReentryCase::ReentrantFailure && !entered_hook.replace(true) {
                 hook_tracker.update_with_motion(
                     &hover(MOUSE, PointerKind::Mouse, Offset::new(7.0, 7.0), 2),
                     PointerMotionKind::Hover,
@@ -695,7 +706,9 @@ fn latest_cursor_publication_survives_reentry_replacement_and_failure() {
                         CursorReentryCase::CompetingFailure => {
                             assert!(!enter_failed.get(), "cursor enter first failure")
                         }
-                        CursorReentryCase::HookReentry | CursorReentryCase::Failure => {}
+                        CursorReentryCase::HookReentry
+                        | CursorReentryCase::Failure
+                        | CursorReentryCase::ReentrantFailure => {}
                     })),
                     ..MouseRegionCallbacks::default()
                 })
@@ -767,7 +780,9 @@ fn latest_cursor_publication_survives_reentry_replacement_and_failure() {
                 observed.borrow().is_empty(),
                 "closed owner cannot publish cursor"
             ),
-            CursorReentryCase::Failure | CursorReentryCase::CompetingFailure => {}
+            CursorReentryCase::Failure
+            | CursorReentryCase::ReentrantFailure
+            | CursorReentryCase::CompetingFailure => {}
         }
         if case != CursorReentryCase::Close {
             let published = observed.borrow().len();
