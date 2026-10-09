@@ -241,6 +241,7 @@ fn overlay_contracts() {
         ("drawer::drawer_settling_uses_the_captured_fling_profile", drawer::drawer_settling_uses_the_captured_fling_profile),
         ("drawer::open_drawer_settling_uses_the_captured_fling_profile", drawer::open_drawer_settling_uses_the_captured_fling_profile),
         ("drawer::a_drawer_release_keeps_finger_speed", drawer::a_drawer_release_keeps_finger_speed),
+        ("drawer::drawer_slides_without_rebuilding_per_frame", drawer::drawer_slides_without_rebuilding_per_frame),
         (
         "snack_bar::a completion panic still advances the accepted snack bar queue",
         snack_bar::a_completion_panic_still_advances_the_accepted_snack_bar_queue,

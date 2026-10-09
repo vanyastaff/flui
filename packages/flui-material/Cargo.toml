@@ -34,6 +34,8 @@ tracing = { workspace = true }
 # (`flui_testing::widgets`), a dev edge only, so the normal build never links
 # the test driver.
 flui-testing = { workspace = true }
+# Committed scene inspection includes ancestor transform and opacity layers.
+flui-layer = { path = "../../crates/flui-layer", version = "=0.2.0-dev" }
 # Key events (`events`, `testing::input::KeyEventBuilder`) and `FocusManager`,
 # which a few tests construct directly (`ink_well.rs`, `text_field.rs`).
 flui-interaction = { path = "../../crates/flui-interaction", version = "=0.2.0-dev", features = [
