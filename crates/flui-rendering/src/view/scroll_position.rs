@@ -252,12 +252,13 @@ impl Inner {
     /// there is exactly one place that decides who gets told.
     fn notify(&self) {
         let mut recovery = flui_foundation::panic::PanicRecovery::new();
-        self.notifier.notify_listeners_with_recovery(&mut recovery);
+        self.notifier
+            .notify_listeners_with_recovery(&mut recovery.scope());
         // Accepted pixel geometry must reach render invalidation even when a
         // widget listener failed. Both channels share the first failure and
         // the existing notifier's live-membership and retirement rules.
         self.offset_notifier
-            .notify_listeners_with_recovery(&mut recovery);
+            .notify_listeners_with_recovery(&mut recovery.scope());
         recovery.finish();
     }
 
@@ -894,8 +895,10 @@ impl ViewportOffset for ScrollPosition {
         if let Some(id) = removed {
             let callback = self.inner.offset_notifier.take_listener(id);
             let mut recovery = flui_foundation::panic::PanicRecovery::new();
-            self.inner.notifier.inherit_failure(&mut recovery);
-            self.inner.offset_notifier.inherit_failure(&mut recovery);
+            self.inner.notifier.inherit_failure(&mut recovery.scope());
+            self.inner
+                .offset_notifier
+                .inherit_failure(&mut recovery.scope());
             recovery.retire(callback);
             recovery.finish();
         }

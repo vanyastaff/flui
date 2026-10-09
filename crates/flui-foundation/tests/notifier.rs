@@ -704,7 +704,7 @@ fn recursive_relay_retirement_preserves_failure() {
         }));
         let callback = owner.take_listener(id).expect("fresh callback");
         let mut recovery = PanicRecovery::new();
-        owner.inherit_failure(&mut recovery);
+        owner.inherit_failure(&mut recovery.scope());
         recovery.retire(callback);
         recovery.finish();
     }));

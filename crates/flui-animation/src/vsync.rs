@@ -22,6 +22,7 @@
 //! controller run twice (forward to completion, then reverse) is ticked from the
 //! second run's own start instead of snapping to its target on the first frame.
 
+use flui_foundation::panic::RecoveryScope;
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 use std::rc::{Rc, Weak};
@@ -593,7 +594,11 @@ impl Vsync {
         retirement.finish();
     }
 
-    fn tick_all_with_retirement(&self, now: crate::AnimationTime, retirement: &mut Retirement) {
+    fn tick_all_with_retirement(
+        &self,
+        now: crate::AnimationTime,
+        retirement: &mut RecoveryScope<'_>,
+    ) {
         let (fence, children, muted) = {
             let mut inner = self.inner.borrow_mut();
             inner.last_time = inner.last_time.max(now);

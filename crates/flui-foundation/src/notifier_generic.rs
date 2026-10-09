@@ -11,6 +11,7 @@
 //! use-after-dispose message, and `remove_listener` tolerating a disposed
 //! receiver via [`Notifier::remove_even_if_disposed`]).
 
+use crate::panic::RecoveryScope;
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
@@ -21,17 +22,14 @@ use std::{
 
 use crate::id::ListenerId;
 use crate::panic::PanicRecovery;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// A listener callback that borrows its argument for the duration of the call.
 pub type ArgCallback<Arg> = Rc<dyn Fn(&Arg) + 'static>;
 
 /// Framework relay that borrows the enclosing delivery's failure custody.
 #[doc(hidden)]
-pub type RecoveryCallback<Arg> = Rc<dyn Fn(&Arg, &mut PanicRecovery)>;
+pub type RecoveryCallback<Arg> = Rc<dyn Fn(&Arg, &mut RecoveryScope<'_>)>;
 
 /// A callback envelope withdrawn by a framework owner before retirement.
 #[doc(hidden)]
@@ -55,7 +53,7 @@ impl<Arg> NotificationCallback<Arg> {
     pub fn relay(callback: RecoveryCallback<Arg>) -> Rc<Self> {
         Rc::new(Self(CallbackKind::Relay(callback)))
     }
-    fn invoke(&self, arg: &Arg, recovery: &mut PanicRecovery) {
+    fn invoke(&self, arg: &Arg, recovery: &mut RecoveryScope<'_>) {
         match &self.0 {
             CallbackKind::User(callback) => callback(arg),
             CallbackKind::Relay(callback) => callback(arg, recovery),
@@ -74,7 +72,7 @@ impl<Arg> fmt::Debug for NotificationCallback<Arg> {
 struct ListenerStorage<Arg> {
     entries: RefCell<HashMap<ListenerId, OwnedCallback<Arg>>>,
     delivery_depth: Cell<usize>,
-    failed: Arc<AtomicBool>,
+    failed: AtomicBool,
     retired: RefCell<Vec<(ListenerId, OwnedCallback<Arg>)>>,
 }
 
@@ -176,7 +174,7 @@ impl<Arg> Notifier<Arg> {
             listeners: Rc::new(ListenerStorage {
                 entries: RefCell::new(HashMap::new()),
                 delivery_depth: Cell::new(0),
-                failed: Arc::new(AtomicBool::new(false)),
+                failed: AtomicBool::new(false),
                 retired: RefCell::new(Vec::new()),
             }),
             next_id: Rc::new(Cell::new(1)),
@@ -365,7 +363,7 @@ impl<Arg> Notifier<Arg> {
 
     /// Carry this active channel's enclosing failure into reentrant owner cleanup.
     #[doc(hidden)]
-    pub fn inherit_failure(&self, recovery: &mut PanicRecovery) {
+    pub fn inherit_failure(&self, recovery: &mut RecoveryScope<'_>) {
         if self.listeners.delivery_depth.get() != 0 && self.listeners.failed.load(Ordering::Relaxed)
         {
             recovery.inherit_failure();
@@ -434,19 +432,23 @@ impl<Arg> Notifier<Arg> {
         if self.listeners.failed.load(Ordering::Relaxed) {
             recovery.inherit_failure();
         }
-        self.notify_unchecked_with_recovery(arg, &mut recovery);
+        self.notify_unchecked_with_recovery(arg, &mut recovery.scope());
         recovery.finish();
     }
 
     /// Notify within an enclosing framework delivery's first-failure custody.
     #[doc(hidden)]
-    pub fn notify_with_recovery(&self, arg: &Arg, recovery: &mut PanicRecovery) {
+    pub fn notify_with_recovery(&self, arg: &Arg, recovery: &mut RecoveryScope<'_>) {
         if !self.check_disposed() {
             self.notify_unchecked_with_recovery(arg, recovery);
         }
     }
 
-    pub(crate) fn notify_unchecked_with_recovery(&self, arg: &Arg, recovery: &mut PanicRecovery) {
+    pub(crate) fn notify_unchecked_with_recovery(
+        &self,
+        arg: &Arg,
+        recovery: &mut RecoveryScope<'_>,
+    ) {
         self.notify_selection(arg, None, recovery);
     }
 
@@ -456,7 +458,7 @@ impl<Arg> Notifier<Arg> {
         &self,
         arg: &Arg,
         ids: &[ListenerId],
-        recovery: &mut PanicRecovery,
+        recovery: &mut RecoveryScope<'_>,
     ) {
         if !self.check_disposed() {
             self.notify_selection(arg, Some(ids), recovery);
@@ -467,9 +469,9 @@ impl<Arg> Notifier<Arg> {
         &self,
         arg: &Arg,
         ids: Option<&[ListenerId]>,
-        recovery: &mut PanicRecovery,
+        recovery: &mut RecoveryScope<'_>,
     ) {
-        recovery.with_failure_latch(Arc::clone(&self.listeners.failed), |recovery| {
+        recovery.with_failure_latch(&self.listeners.failed, |recovery| {
             self.listeners
                 .delivery_depth
                 .set(self.listeners.delivery_depth.get() + 1);
