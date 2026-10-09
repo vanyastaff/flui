@@ -362,6 +362,100 @@ pub(crate) fn container_property_motion_settles_and_unmounts_independently() {
     }
 }
 
+fn assert_refused_container_motion_preserves_the_admitted_run(accepted_slopes: usize) {
+    use flui_animation::curve::Curve;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    struct RefusingCurve {
+        calls: AtomicUsize,
+        accepted: usize,
+        refused: Arc<AtomicBool>,
+    }
+    impl Curve for RefusingCurve {
+        fn transform(&self, t: f64) -> f64 {
+            t
+        }
+        fn slope(&self, _t: f64) -> f64 {
+            if self.calls.fetch_add(1, Ordering::Relaxed) < self.accepted {
+                1.0
+            } else {
+                self.refused.store(true, Ordering::Relaxed);
+                f64::NAN
+            }
+        }
+    }
+
+    let registry = Vsync::new();
+    let tree = |size, scale, curve| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedContainer::new(SizedBox::shrink())
+                .width(size)
+                .height(size)
+                .transform(Matrix4::scaling(scale, scale, 1.0))
+                .duration(RUN)
+                .curve(curve),
+        )
+    };
+    let linear = || ArcCurve::new(Curves::Linear);
+    let mut laid = lay_out_animated(tree(20.0, 1.0, linear()), loose(300.0), registry.clone());
+    laid.pump_widget(tree(100.0, 2.0, linear()));
+    laid.pump_for(Duration::from_millis(1));
+    laid.pump_for(Duration::from_millis(40));
+    let seam = laid.size(laid.current_root());
+    let scale = layer_scale(&mut laid);
+    assert!(seam.width > 20.0 && seam.width < 100.0);
+    assert!(scale > 1.0 && scale < 2.0);
+
+    let refused = Arc::new(AtomicBool::new(false));
+    laid.pump_widget(tree(
+        200.0,
+        3.0,
+        ArcCurve::new(RefusingCurve {
+            calls: AtomicUsize::new(0),
+            accepted: accepted_slopes,
+            refused: Arc::clone(&refused),
+        }),
+    ));
+    assert!(
+        refused.load(Ordering::Relaxed),
+        "the update must encounter refusal"
+    );
+    assert_eq!(laid.size(laid.current_root()), seam);
+    assert_eq!(layer_scale(&mut laid), scale);
+    laid.pump_for(Duration::from_millis(60));
+    let settled = laid.size(laid.current_root());
+    assert_eq!(
+        (settled.width, settled.height),
+        (100.0, 100.0),
+        "refused motion must preserve both previously admitted goals"
+    );
+    assert_eq!(
+        layer_scale(&mut laid),
+        2.0,
+        "refused progress must preserve the previously admitted matrix run"
+    );
+
+    laid.pump_widget(tree(200.0, 4.0, linear()));
+    laid.pump_for(Duration::from_millis(1));
+    laid.pump_for(RUN);
+    let recovered = laid.size(laid.current_root());
+    assert_eq!((recovered.width, recovered.height), (200.0, 200.0));
+    assert_eq!(layer_scale(&mut laid), 4.0);
+    laid.pump_widget(SizedBox::shrink());
+    assert!(registry.is_empty());
+}
+
+pub(crate) fn container_refused_property_motion_preserves_the_admitted_goals() {
+    // A scalar segment prepares its start and end slopes. Width prepares
+    // successfully; the same curve then refuses height preparation.
+    assert_refused_container_motion_preserves_the_admitted_run(2);
+}
+
+pub(crate) fn container_refused_transform_motion_preserves_the_admitted_matrix() {
+    assert_refused_container_motion_preserves_the_admitted_run(0);
+}
+
 pub(crate) fn align_retarget_with_a_new_curve_keeps_the_displayed_sample() {
     assert_target_and_curve_retarget_preserves_sample(
         |registry, target, curve| {

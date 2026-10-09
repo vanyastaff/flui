@@ -552,6 +552,8 @@ fn animation_and_visibility() {
             ("implicit_animations::container_retarget_preserves_the_laid_out_size_velocity", crate::implicit_animations::container_retarget_preserves_the_laid_out_size_velocity),
             ("implicit_animations::container_color_retarget_preserves_painted_alpha_progress", crate::implicit_animations::container_color_retarget_preserves_painted_alpha_progress),
             ("implicit_animations::container_property_motion_settles_and_unmounts_independently", crate::implicit_animations::container_property_motion_settles_and_unmounts_independently),
+            ("implicit_animations::container_refused_property_motion_preserves_the_admitted_goals", crate::implicit_animations::container_refused_property_motion_preserves_the_admitted_goals),
+            ("implicit_animations::container_refused_transform_motion_preserves_the_admitted_matrix", crate::implicit_animations::container_refused_transform_motion_preserves_the_admitted_matrix),
             ("implicit_animations::align_retarget_with_a_new_curve_keeps_the_displayed_sample", crate::implicit_animations::align_retarget_with_a_new_curve_keeps_the_displayed_sample),
             ("implicit_animations::align_retarget_preserves_the_laid_out_velocity", crate::implicit_animations::align_retarget_preserves_the_laid_out_velocity),
             ("implicit_animations::align_changes_leave_an_unchanged_factor_on_its_original_deadline", crate::implicit_animations::align_changes_leave_an_unchanged_factor_on_its_original_deadline),
