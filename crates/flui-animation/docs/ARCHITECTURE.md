@@ -152,6 +152,10 @@ converter and target-clone reentry, component failure, owner release inside a cu
 and exact-target delivery.
 The existing physical properties use replayed public Vsync traces for independent
 derivative probes; there is no production `advance(dt)` or owner clone.
+`a_steady_state_frame_allocates_nothing` measures a running scalar controller
+and a running four-component owner in one registry, including observer value
+reads and four listeners on each. Every measured component must advance; the
+run-start negative control verifies that the allocation counter is live.
 
 ### Registration tokens and removal
 

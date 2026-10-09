@@ -1,8 +1,8 @@
 //! A steady-state frame of a running animation must not allocate.
 //!
-//! One `Vsync::tick_all` that advances a live controller with four value
-//! listeners and a status listener is the per-frame cost every animating
-//! widget pays, so it runs with a counting `#[global_allocator]` here. That
+//! One `Vsync::tick_all` advances a live scalar controller and a four-component
+//! owning value, each with four value listeners. This exercises both frame
+//! paths with a counting `#[global_allocator]`. That
 //! allocator is process-wide, which is why this file is a test target of its
 //! own rather than a module of `tests/main.rs`.
 //!
@@ -18,8 +18,11 @@ use std::hint::black_box;
 
 use std::time::Duration;
 
-use flui_animation::{Animation, AnimationController, Vsync};
+use flui_animation::{
+    AnimatedValue, Animation, AnimationController, ArcCurve, Curves, MotionSpec, Vsync,
+};
 use flui_foundation::Listenable;
+use flui_foundation::geometry::EdgeInsets;
 
 // `Cell<usize>` in a const-initialised thread-local has no drop glue and no
 // lazy init, so reading it cannot itself allocate or run during TLS teardown.
@@ -89,6 +92,24 @@ fn a_steady_state_frame_allocates_nothing() {
         black_box(status);
     }));
     let _run = controller.forward().expect("forward on a live controller");
+    let mut vector = AnimatedValue::new(
+        EdgeInsets::ZERO,
+        MotionSpec::Curve {
+            duration: Duration::from_secs(3600),
+            curve: ArcCurve::new(Curves::Linear),
+        },
+        Some(&vsync),
+    )
+    .expect("finite vector with a live registry");
+    let stream = vector.animation();
+    for _ in 0..4 {
+        stream.add_listener(std::rc::Rc::new(|| {
+            black_box(());
+        }));
+    }
+    let _vector_run = vector
+        .animate_to(EdgeInsets::new(10.0, 20.0, 30.0, 40.0))
+        .expect("finite vector target");
 
     // Warmup: the first frame anchors the run; later ones settle any
     // one-time lazy initialisation outside the measured path.
@@ -106,6 +127,7 @@ fn a_steady_state_frame_allocates_nothing() {
     let mut total_bytes = 0usize;
     let mut worst_frame_bytes = 0usize;
     let start_value = controller.value();
+    let start_insets = vector.value();
     for _ in 0..FRAMES {
         let calls_before = read(&ALLOC_COUNT);
         let bytes_before = read(&ALLOC_BYTES);
@@ -115,6 +137,7 @@ fn a_steady_state_frame_allocates_nothing() {
         );
         now += FRAME;
 
+        black_box(stream.value());
         let calls = read(&ALLOC_COUNT) - calls_before;
         let bytes = read(&ALLOC_BYTES) - bytes_before;
         total_calls += calls;
@@ -128,6 +151,15 @@ fn a_steady_state_frame_allocates_nothing() {
     assert!(
         controller.status().is_running() && controller.value() > start_value,
         "the measured frames must advance a live run, or they priced an early return"
+    );
+    let final_insets = vector.value();
+    assert!(
+        !vector.is_settled()
+            && final_insets.top > start_insets.top
+            && final_insets.right > start_insets.right
+            && final_insets.bottom > start_insets.bottom
+            && final_insets.left > start_insets.left,
+        "the measured vector must advance every component of its live run"
     );
     eprintln!(
         "tick_allocation: {FRAMES} frames -- {total_calls} allocating calls, {total_bytes} \
