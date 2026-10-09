@@ -2572,13 +2572,13 @@ impl UpdateScheduler {
     /// # Example
     ///
     /// ```rust
-    /// use std::sync::Arc;
+    /// use std::rc::Rc;
     ///
     /// use flui_scheduler::{AppLifecycleState, UpdateScheduler};
     ///
     /// let scheduler = UpdateScheduler::new();
     ///
-    /// let id = scheduler.add_lifecycle_state_listener(Arc::new(|state| {
+    /// let id = scheduler.add_lifecycle_state_listener(Rc::new(|state| {
     ///     println!("App lifecycle changed to: {}", state);
     /// }));
     ///
