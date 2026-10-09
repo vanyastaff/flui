@@ -1002,7 +1002,7 @@ fn ambient_probe_cannot_replace_reentrant_physical_observation(moved: bool, reti
         assert_eq!(tracker.device_position(device(MOUSE)), Some(fresh_position));
         assert_eq!(
             tracker.device_cursor(device(MOUSE)),
-            Some(CursorIcon::Pointer),
+            CursorIcon::Pointer,
             "stale probe cannot overwrite a newer physical observation, even at the same position"
         );
         assert_eq!(observed.borrow().last(), Some(&CursorIcon::Pointer));
