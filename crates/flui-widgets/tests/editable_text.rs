@@ -821,7 +821,8 @@ pub(crate) fn inherited_text_sizing_updates_editable_glyphs_and_caret() {
     assert!(
         enlarged.0.size().width > original.0.size().width * 1.5
             && enlarged.0.size().height > original.0.size().height * 1.5
-            && enlarged.1.origin().x > original.1.origin().x * 1.5,
+            && enlarged.1.origin().x > original.1.origin().x * 1.5
+            && enlarged.1.height() > original.1.height() * 1.5,
         "editable glyphs and the end caret must follow text sizing: original={original:?}, enlarged={enlarged:?}"
     );
     harness.swap_root(field(1.0));
@@ -843,6 +844,67 @@ pub(crate) fn inherited_text_sizing_updates_editable_glyphs_and_caret() {
     }
     assert_eq!(controller.text(), "mmmm");
     assert_eq!(controller.caret_byte_offset(), 4);
+
+    // Both the primitive and its decorated consumer retain an explicit
+    // logical height, but derive the default from actual (also empty) text.
+    for (raw, text, font_size) in [
+        (false, "", 16.0),
+        (false, "mmmm", 32.0),
+        (true, "", 14.0),
+        (true, "mmmm", 14.0),
+    ] {
+        let controller = TextEditingController::with_text(text);
+        let focus = FocusNode::with_debug_label("caret sizing case");
+        let field = |scale, height: Option<f64>| {
+            let inner = if raw {
+                let mut view = flui_widgets::RawTextField::new(controller.clone());
+                if let Some(height) = height {
+                    view = view.caret_height(height);
+                }
+                view.boxed()
+            } else {
+                let mut view = EditableText::new(controller.clone(), Rc::clone(&focus))
+                    .text_style(TextStyle::default().with_font_size(font_size));
+                if let Some(height) = height {
+                    view = view.caret_height(height);
+                }
+                view.boxed()
+            };
+            MediaQuery::new(
+                MediaQueryData {
+                    text_scale_factor: scale,
+                    ..MediaQueryData::default()
+                },
+                inner,
+            )
+        };
+        let height = |harness: &crate::common::harness::Harness| {
+            with_render_editable(harness, |render| {
+                let painted = render.caret_local_rect();
+                let ime = render
+                    .local_rect_for_range(text.len()..text.len())
+                    .expect("caret geometry");
+                assert_eq!(painted.height(), ime.height());
+                painted.height()
+            })
+            .expect("editable")
+        };
+        let mut harness = crate::common::harness::mount(field(1.0, None));
+        let original = height(&harness);
+        assert!(original.is_finite() && original > 0.0);
+        harness.swap_root(field(2.0, None));
+        assert!((height(&harness) - original * 2.0).abs() < 0.001);
+        for scale in [2.0, 1.0] {
+            harness.swap_root(field(scale, Some(18.0)));
+            assert_eq!(height(&harness), 18.0, "explicit override remains logical");
+        }
+        harness.swap_root(field(1.0, None));
+        assert_eq!(
+            height(&harness),
+            original,
+            "removing override restores line metrics"
+        );
+    }
 }
 
 /// An obscured field's real characters never reach the render object.

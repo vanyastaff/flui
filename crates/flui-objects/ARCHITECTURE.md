@@ -212,6 +212,12 @@ constrained-parent producer and recovery after a finite parent update.
 clipping text, selection, composition and caret to the allocated viewport.
 Painting subtracts the horizontal displacement; pointer lookup adds it back.
 Caret movement reveals the active caret without changing the allocated width.
+An absent caret-height override resolves to the shaped single-line height.
+Paint and collapsed-range/IME rectangles use that same resolved height;
+dry layout and intrinsics derive it from their own text measurement. Explicit
+heights remain logical lengths. The mounted widget contract
+`inherited_text_sizing_updates_editable_glyphs_and_caret` covers scaled and
+empty text, decorated fields and override removal.
 The widgets text-editing contract table checks actual editing and pointer
 selection through the viewport, including RTL and obscured text.
 
