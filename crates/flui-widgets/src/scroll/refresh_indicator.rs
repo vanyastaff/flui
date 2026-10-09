@@ -426,8 +426,6 @@ pub struct RefreshIndicatorState {
     fling_controller: DrivenController,
     /// Listener ID on `fling_controller`; removed in `dispose`.
     fling_listener_id: Option<ListenerId>,
-    /// Vsync handle kept for `unregister` in `dispose`.
-    /// Registration returned by `vsync.register(fling_controller)`.
     /// Presentation metrics acquired before event callbacks are installed.
     pipeline: Option<WeakPipelineCell>,
     /// Schedules this element's rebuild; acquired in `init_state`.

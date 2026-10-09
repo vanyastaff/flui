@@ -18,7 +18,7 @@ use std::time::Duration;
 use crate::child_process;
 use flui_animation::{
     Animation, AnimationController, AnimationStatus, AnimationSwitch, ConstantAnimation,
-    ProxyAnimation, StatusCallback, Vsync, curve::Curve,
+    DrivenController, ProxyAnimation, StatusCallback, Vsync, curve::Curve,
 };
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
 
@@ -70,8 +70,9 @@ impl Curve for PanicsOnce {
 
 /// A controller running `0 → 1` over one second; with `panic`, its curve
 /// panics with that message on the first interior frame.
-fn running(panic: Option<&'static str>) -> AnimationController {
-    let controller = controller();
+fn running(registry: &Vsync, panic: Option<&'static str>) -> DrivenController {
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(registry));
+    let controller = owner.controller();
     let _run = match panic {
         Some(message) => controller.animate_to_curved(
             1.0,
@@ -84,7 +85,7 @@ fn running(panic: Option<&'static str>) -> AnimationController {
         None => controller.forward(),
     }
     .expect("run starts");
-    controller
+    owner
 }
 
 // --- callback failures -----------------------------------------------------------
@@ -198,8 +199,8 @@ fn competing_value_listener_panics_re_raise_the_first() {
 
 fn panicking_continuation_during_dispose_finishes_the_dispose() {
     let vsync = Vsync::new();
-    let controller = controller();
-    let _registration = vsync.register(controller.clone());
+    let mut owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
+    let controller = owner.controller().clone();
     let run = controller.forward().expect("run starts");
     run.when_complete_or_cancel(|_| panic_any("first"));
     let outcome = Arc::new(Mutex::new(None));
@@ -208,7 +209,7 @@ fn panicking_continuation_during_dispose_finishes_the_dispose() {
         *sink.lock().expect("continuation outcome") = Some(end.is_err());
     });
 
-    let disposed = catch_unwind(AssertUnwindSafe(|| controller.dispose()));
+    let disposed = catch_unwind(AssertUnwindSafe(|| owner.dispose()));
 
     let payload = disposed.expect_err("the continuation's panic is re-raised");
     assert_eq!(payload_text(payload.as_ref()), Some("first"));
@@ -258,14 +259,9 @@ fn panicking_status_listener_leaves_the_next_frame_ticking() {
 
 fn vsync_walk_ticks_siblings_after_a_panicking_controller() {
     let vsync = Vsync::new();
-    let first = running(Some("first"));
-    let second = running(Some("second"));
-    let sibling = running(None);
-    let _registrations = [
-        vsync.register(first),
-        vsync.register(second),
-        vsync.register(sibling.clone()),
-    ];
+    let _first = running(&vsync, Some("first"));
+    let _second = running(&vsync, Some("second"));
+    let sibling = running(&vsync, None);
     vsync.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)),
     );
@@ -277,7 +273,7 @@ fn vsync_walk_ticks_siblings_after_a_panicking_controller() {
     }));
 
     assert_eq!(
-        sibling.value(),
+        sibling.controller().value(),
         0.5,
         "a controller after a panicking one is ticked in the same frame"
     );
@@ -291,11 +287,10 @@ fn vsync_walk_ticks_siblings_after_a_panicking_controller() {
 
 fn vsync_walk_ticks_the_parent_after_a_panicking_child_registry() {
     let parent = Vsync::new();
-    let own = running(None);
-    let _own = parent.register(own.clone());
+    let own = running(&parent, None);
     let child = Vsync::new();
     let _child = parent.attach_child(&child).expect("child attaches");
-    let _failing = child.register(running(Some("child")));
+    let _failing = running(&child, Some("child"));
     parent.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)),
     );
@@ -307,7 +302,7 @@ fn vsync_walk_ticks_the_parent_after_a_panicking_child_registry() {
     }));
 
     assert_eq!(
-        own.value(),
+        own.controller().value(),
         0.5,
         "the parent's own controller is ticked after a child registry panicked"
     );
@@ -317,12 +312,8 @@ fn vsync_walk_ticks_the_parent_after_a_panicking_child_registry() {
 
 fn vsync_walk_after_a_panic_ticks_every_controller() {
     let vsync = Vsync::new();
-    let failing = running(Some("once"));
-    let sibling = running(None);
-    let _registrations = [
-        vsync.register(failing.clone()),
-        vsync.register(sibling.clone()),
-    ];
+    let failing = running(&vsync, Some("once"));
+    let sibling = running(&vsync, None);
     vsync.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)),
     );
@@ -337,11 +328,15 @@ fn vsync_walk_after_a_panic_ticks_every_controller() {
     );
 
     assert_eq!(
-        failing.value(),
+        failing.controller().value(),
         0.75,
         "the controller that panicked ticks again"
     );
-    assert_eq!(sibling.value(), 0.75, "its sibling ticks on the next frame");
+    assert_eq!(
+        sibling.controller().value(),
+        0.75,
+        "its sibling ticks on the next frame"
+    );
 }
 
 // --- removal and disposal during a fan-out -----------------------------------
@@ -905,17 +900,18 @@ fn peer_failure_retains_removed_value_captures() {
 }
 
 fn removed_value_capture_custody(mode: &str) {
-    let controller = controller();
     let vsync = Vsync::new();
-    let peer = super::status_delivery::controller();
+    let mut peer_owner =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
+    let peer = peer_owner.controller().clone();
+    let mut driven = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
+    let controller = driven.controller().clone();
     let initial_peer_tick = std::cell::Cell::new(true);
     let peer_failure = peer.add_listener(std::rc::Rc::new(move || {
         if !initial_peer_tick.replace(false) {
             panic_any("first peer failure");
         }
     }));
-    let _peer_registration = vsync.register(peer.clone());
-    let _registration = vsync.register(controller.clone());
     let drops = Arc::new(AtomicUsize::new(0));
     let captures = Arc::clone(&drops);
     let owner = std::rc::Rc::new(std::cell::RefCell::new(Some(controller.clone())));
@@ -1012,8 +1008,8 @@ fn removed_value_capture_custody(mode: &str) {
         },
         "next frame still delivers"
     );
-    controller.dispose();
-    peer.dispose();
+    driven.dispose();
+    peer_owner.dispose();
     assert_eq!(drops.load(Ordering::SeqCst), 0);
 }
 
@@ -1198,18 +1194,16 @@ fn frame_failure_retains_run_captures(nested: bool) {
     let parent = Vsync::new();
     let child = Vsync::new();
     let _child = nested.then(|| parent.attach_child(&child).expect("child registry"));
-    let failing = controller();
-    fail_on_completion(&failing);
+    let failing_owner = AnimationController::builder(Duration::from_secs(1))
+        .build_on(Some(if nested { &child } else { &parent }));
+    let failing = failing_owner.controller();
+    fail_on_completion(failing);
     let _run = failing.forward().expect("failing run starts");
-    let _first = if nested {
-        child.register(failing)
-    } else {
-        parent.register(failing)
-    };
-    let sibling = controller();
+    let mut sibling_owner =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&parent));
+    let sibling = sibling_owner.controller().clone();
     let drops = Arc::new(AtomicUsize::new(0));
     let calls = install_hostile_continuation(&sibling, &drops);
-    let _sibling = parent.register(sibling.clone());
     parent.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)),
     );
@@ -1232,7 +1226,7 @@ fn frame_failure_retains_run_captures(nested: bool) {
     );
     assert_eq!(sibling.value(), 0.0);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    sibling.dispose();
+    sibling_owner.dispose();
 }
 
 // --- AnimationSwitch -----------------------------------------------------------

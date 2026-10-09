@@ -122,8 +122,9 @@ pub(crate) fn an_invalid_or_backwards_frame_time_holds_the_animation() {
     use std::time::Duration;
 
     let ui_runtime = mount_root();
-    let controller = AnimationController::builder(Duration::from_secs(1)).build();
-    ui_runtime.vsync().register(controller.clone());
+    let owner =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&ui_runtime.vsync()));
+    let controller = owner.controller();
     controller.forward().expect("fresh controller forwards");
     let frame_at = |secs: f64| {
         ui_runtime.set_now_secs_for_test(secs);

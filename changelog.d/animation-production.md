@@ -22,5 +22,6 @@
 
 ### Removed
 
+- Public manual `Vsync` controller registration and removal; use `build_on` and the resulting `DrivenController` to own its seat.
 - The scheduler ticker, ticker-provider and ticker-group APIs, process-global animation time dilation and unused epoch helpers.
 - Unused `CompoundAnimation`, `AnimationOperator`, the animation prelude, and scheduler convenience re-exports from the animation crate.

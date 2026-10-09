@@ -374,8 +374,9 @@ fn a_manual_clock_ui_runtime_gates_its_min_produce_interval_on_that_clock() {
 fn a_frame_outside_a_pump_ticks_vsync_on_the_ui_runtimes_clock() {
     let clock = ManualClock::new();
     let ui_runtime = manual_clock_ui_runtime(&clock);
-    let controller = AnimationController::builder(Duration::from_millis(100)).build();
-    ui_runtime.vsync().register(controller.clone());
+    let mut owner = AnimationController::builder(Duration::from_millis(100))
+        .build_on(Some(&ui_runtime.vsync()));
+    let controller = owner.controller();
     controller.forward().expect("fresh controller forwards");
     let constraints = BoxConstraints::tight(Size::new(800.0, 600.0));
 
@@ -389,7 +390,7 @@ fn a_frame_outside_a_pump_ticks_vsync_on_the_ui_runtimes_clock() {
         (value - 0.5).abs() < 1e-4,
         "50 ms of the ui_runtime's clock into a 100 ms run is halfway (value={value})"
     );
-    controller.dispose();
+    owner.dispose();
 }
 
 fn ui_runtime_produced(ui_runtime: &UiRuntime) -> u64 {

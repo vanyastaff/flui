@@ -33,11 +33,10 @@ use crate::animation::{Retirement, Terminal};
 use crate::{AnimationTime, FrameTick};
 use std::time::Duration;
 
-/// Opaque handle identifying one controller registered with a [`Vsync`].
+/// Opaque identity for one admission to a [`Vsync`] registry.
 ///
-/// Returned by [`Vsync::register`]; pass it to [`Vsync::unregister`] when the
-/// owner (typically an implicitly-animated widget's state in `dispose`) is torn
-/// down, so the registry does not pin the controller alive past its widget.
+/// [`Vsync::attach_child`] returns a token for [`Vsync::detach_child`]. Controller
+/// admissions belong to [`crate::DrivenController`] and expose no removal token.
 #[derive(Debug, Clone)]
 pub struct VsyncRegistration {
     owner: Weak<RefCell<VsyncInner>>,
@@ -244,7 +243,8 @@ impl Vsync {
     ///
     /// Panics permanently after all available registration identities have been
     /// consumed. Use [`try_register`](Self::try_register) for typed refusal.
-    pub fn register(&self, controller: AnimationController) -> VsyncRegistration {
+    #[cfg(test)]
+    pub(crate) fn register(&self, controller: AnimationController) -> VsyncRegistration {
         let controller = Terminal::new(controller);
         match self.try_register(controller.get()) {
             Ok(registration) => registration,
@@ -261,7 +261,8 @@ impl Vsync {
     /// # Panics
     /// If requesting an already running controller's first sample fails, the
     /// provisional seat is removed before the wake failure propagates.
-    pub fn try_register(
+    #[cfg(test)]
+    pub(crate) fn try_register(
         &self,
         controller: &AnimationController,
     ) -> Result<VsyncRegistration, VsyncRegistrationError> {
@@ -314,7 +315,7 @@ impl Vsync {
 
     /// Remove the controller previously registered under `id`. Idempotent: an
     /// unknown or already-removed id is a no-op.
-    pub fn unregister(&self, id: &VsyncRegistration) {
+    pub(crate) fn unregister(&self, id: &VsyncRegistration) {
         if !Weak::ptr_eq(&id.owner, &Rc::downgrade(&self.inner)) {
             return;
         }
@@ -693,6 +694,9 @@ impl std::fmt::Debug for Vsync {
             .finish_non_exhaustive()
     }
 }
+
+#[cfg(test)]
+mod retirement_tests;
 
 #[cfg(test)]
 mod tests {

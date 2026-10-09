@@ -9,6 +9,9 @@ The widget layer consumes them through `flui-widgets`' `animated` and
 `transitions` modules: implicit animations own controllers, while transition
 widgets and `AnimatedBuilder` observe existing animations. `DrivenController`
 owns registration on the widget's ambient Vsync registry.
+`build_on` is the public controller admission path; observer clones cannot
+register or remove a seat. `DrivenController::rebind` migrates the owned seat,
+and disposal or drop unregisters before canceling its run (ADR-0179).
 
 ```text
 flui-widgets: animated / transitions
@@ -77,7 +80,7 @@ A `VsyncRegistration` names the registry that issued it (a weak identity) and
 one slot from a monotonic namespace that controllers and children share
 (ADR-0125). Removal borrows the token: a token from another registry, or one
 whose registration is already gone, removes nothing. A registry never reuses or
-wraps a slot; once the namespace is exhausted, `try_register` and
+wraps a slot; once the namespace is exhausted, owning-controller admission and
 `attach_child` refuse every new registration (`VsyncRegistrationError`), so a
 stale token can never name later work.
 
@@ -88,6 +91,12 @@ fresh work, and removing a child keeps the tick order of the remaining
 children. A panic from that destructor propagates to the caller after the
 registration is already absent (ADR-0127). Destruction of a whole registry is
 not covered by this contract.
+
+Controller registration and removal are private to this crate. Public callers
+own a `DrivenController`; child callers retain the explicit attachment token.
+`registration_identity_and_retirement` needs private token access to pin
+foreign, expired, stale and wrong-kind removal, retirement reentry and child
+order. Public owner behavior remains in integration tests.
 
 ### Animation<T> Trait
 

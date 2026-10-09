@@ -12,9 +12,7 @@ use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
 use crate::child_process;
-use flui_animation::{
-    Animation, AnimationController, AnimationRunFuture, AnimationStatus, Vsync,
-};
+use flui_animation::{Animation, AnimationController, AnimationRunFuture, AnimationStatus, Vsync};
 use flui_foundation::Listenable;
 
 /// A one-second `[0, 1]` controller advanced only by explicit times.
