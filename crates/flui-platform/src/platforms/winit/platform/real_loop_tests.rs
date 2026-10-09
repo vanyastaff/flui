@@ -136,6 +136,77 @@ fn build_test_event_loop() -> EventLoop<()> {
     reason = "pointer-free queued mouse messages target an owned hidden HWND"
 )]
 fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
+    struct RetryObserver {
+        inner: WinitApp,
+        packets: Arc<Mutex<Vec<flui_platform_api::pointer::ScrollEvent>>>,
+        frames: Arc<Mutex<usize>>,
+        injected: bool,
+    }
+
+    impl ApplicationHandler for RetryObserver {
+        fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+            self.inner.resumed(event_loop);
+        }
+
+        fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: winit::event::StartCause) {
+            self.inner.new_events(event_loop, cause);
+        }
+
+        fn window_event(
+            &mut self,
+            event_loop: &ActiveEventLoop,
+            window_id: WinitWindowId,
+            event: WinitWindowEvent,
+        ) {
+            self.inner.window_event(event_loop, window_id, event);
+        }
+
+        fn user_event(&mut self, event_loop: &ActiveEventLoop, (): ()) {
+            self.inner.user_event(event_loop, ());
+        }
+
+        fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+            // Drain the real ingress and initial frame before measuring an idle retry.
+            if !self.injected && self.packets.lock().len() == 4 && *self.frames.lock() > 0 {
+                self.injected = true;
+                let source = self
+                    .inner
+                    .preference_source
+                    .as_ref()
+                    .expect("live native source");
+                source.send_setting_change_for_test();
+                assert!(
+                    source.pending(),
+                    "actual receiver invalidates the native sample"
+                );
+                let error = source.sample_with(|| {
+                    Err(crate::PlatformError::Preferences {
+                        message: "injected native read failure".into(),
+                    })
+                });
+                assert!(error.is_err(), "the native read fails before publication");
+                assert!(
+                    source.retry_deadline().is_some(),
+                    "failure retains paced delivery"
+                );
+                self.inner.refresh_preferences();
+                let signal = self
+                    .inner
+                    .platform
+                    .owner_signal
+                    .lock()
+                    .clone()
+                    .expect("owner signal");
+                let _ = signal.wake();
+            }
+            self.inner.about_to_wait(event_loop);
+        }
+
+        fn exiting(&mut self, event_loop: &ActiveEventLoop) {
+            self.inner.exiting(event_loop);
+        }
+    }
+
     use flui_platform_api::{
         WheelStep,
         pointer::{PointerEvent, ScrollUnit},
@@ -170,6 +241,9 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
         .expect("install actual owner lane");
     let scrolls = Arc::new(Mutex::new(Vec::new()));
     let observations = Arc::new(Mutex::new(None));
+    let frames = Arc::new(Mutex::new(0_usize));
+    let deferred_frame = Arc::new(Mutex::new(None));
+    let recovered = Arc::new(AtomicBool::new(false));
     let done = Arc::new(AtomicBool::new(false));
     let timeout_done = done.clone();
     let timeout_control = control.clone();
@@ -184,6 +258,11 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
     let observed = observations.clone();
     let callback_done = done.clone();
     let quit = platform.clone();
+    let wake_platform = platform.clone();
+    let wake_frames = frames.clone();
+    let wake_deferred = deferred_frame.clone();
+    let wake_recovered = recovered.clone();
+    let frame_sink = frames.clone();
     let mut app = WinitApp {
         platform: platform.clone(),
         preference_source: None,
@@ -212,6 +291,27 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
             };
             let snapshot = owner.preferences()?;
             *observed.lock() = Some((snapshot.wheel().clone(), expected, characters));
+            owner.on_wake(Box::new(move || match wake_platform.preferences() {
+                Err(crate::PlatformError::PreferencesDeferred) => {
+                    wake_deferred.lock().get_or_insert(*wake_frames.lock());
+                }
+                Ok(snapshot) => {
+                    let before = *wake_deferred.lock();
+                    if let Some(before) = before {
+                        assert_eq!(
+                            *wake_frames.lock(),
+                            before,
+                            "idle preference retry must not redraw"
+                        );
+                        assert_eq!(snapshot.wheel().vertical(), Some(expected));
+                        assert_eq!(snapshot.wheel().horizontal_characters(), Some(characters));
+                        wake_recovered.store(true, Ordering::Release);
+                        callback_done.store(true, Ordering::Release);
+                        quit.quit();
+                    }
+                }
+                Err(error) => panic!("unexpected owner preference result: {error}"),
+            }))?;
             let window = owner
                 .open_window(options("winit-wheel-policy"))?
                 .try_ready()?;
@@ -219,19 +319,13 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
                 panic!("Windows event loop must create a Win32 window");
             };
             let hwnd = HWND(handle.hwnd.get() as *mut std::ffi::c_void);
+            window.on_request_frame(Box::new(move || *frame_sink.lock() += 1));
+            window.request_redraw();
             window.on_input(Box::new(move |input| {
                 if let flui_platform_api::PlatformInput::Pointer(PointerEvent::Scroll(scroll)) =
                     input
                 {
-                    let complete = {
-                        let mut log = sink.lock();
-                        log.push(scroll);
-                        log.len() == 4
-                    };
-                    if complete {
-                        callback_done.store(true, Ordering::Release);
-                        quit.quit();
-                    }
+                    sink.lock().push(scroll);
                 }
                 crate::DispatchEventResult::default()
             }));
@@ -262,7 +356,14 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
         self_close_deadline: None,
         self_close_route: SelfCloseRoute::default(),
     };
-    let result = event_loop.run_app(&mut app);
+    let mut observer = RetryObserver {
+        inner: app,
+        packets: scrolls.clone(),
+        frames,
+        injected: false,
+    };
+    let result = event_loop.run_app(&mut observer);
+    app = observer.inner;
     done.store(true, Ordering::Release);
     timeout.join().expect("bounded exit worker");
     result.expect("real event loop completes");
@@ -270,6 +371,14 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
         app.bootstrap_error.is_none(),
         "public bootstrap failed: {:?}",
         app.bootstrap_error
+    );
+    assert!(
+        recovered.load(Ordering::Acquire),
+        "failed native read recovers through an idle owner wake"
+    );
+    assert!(
+        platform.preferences().is_err(),
+        "shutdown refuses the retired owner snapshot"
     );
     let log = scrolls.lock();
     assert_eq!(
