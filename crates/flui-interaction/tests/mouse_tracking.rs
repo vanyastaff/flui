@@ -1094,7 +1094,7 @@ fn ambient_batch_delivers_accepted_regions_before_later_probe_reentry(
                     assert!(!probe_failure, "later ambient probe failure");
                     sibling.clone()
                 }
-            })
+            });
         }));
         if exit_failure || probe_failure {
             assert_eq!(
