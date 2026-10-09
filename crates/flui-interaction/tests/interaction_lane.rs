@@ -1044,6 +1044,10 @@ fn binding_input_contract_matrix() {
             native_staged_retirement_preserves_delivery_and_failure,
         ),
         (
+            "native_claim_prior_observation_failure",
+            native_claim_prior_observation_failure_preserves_captures,
+        ),
+        (
             "native_staged_owner_cleanup",
             native_staged_owner_cleanup_is_exact,
         ),
@@ -3130,6 +3134,162 @@ fn native_cancellation_retains_captures_after_prior_capture_failure() {
                 );
             });
         }
+    }
+}
+
+fn native_claim_prior_observation_failure_preserves_captures() {
+    use flui_foundation::geometry::{Offset, Point};
+    use flui_interaction::recognizers::scale::{PanZoomDisposition, ScaleGestureRecognizer};
+    use flui_interaction::routing::EventPropagation;
+    use flui_interaction::{GestureBinding, HitTestResult};
+    use flui_platform_api::{
+        EventTime,
+        pointer::{
+            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerInfo,
+            PointerKind, PointerPosition,
+        },
+    };
+    use std::{
+        cell::Cell,
+        panic::{AssertUnwindSafe, catch_unwind},
+        rc::Rc,
+    };
+
+    struct Capture(Rc<Cell<usize>>);
+    impl Drop for Capture {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+    for (observer_failure, cleanup_failure, winner_failure) in [
+        (false, false, false),
+        (true, false, false),
+        (true, true, false),
+        (true, false, true),
+    ] {
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let binding = GestureBinding::new();
+        let drops = Rc::new(Cell::new(0));
+        let cleanups = Rc::new(Cell::new(0));
+        let starts = Rc::new(Cell::new(0));
+        let updates = Rc::new(Cell::new(0));
+        let ends = Rc::new(Cell::new(0));
+        let (started, updated, ended) = (starts.clone(), updates.clone(), ends.clone());
+        let actor = ScaleGestureRecognizer::builder(binding.arena().clone())
+            .on_start(move |_| {
+                started.set(started.get() + 1);
+                assert!(
+                    !winner_failure || started.get() != 1,
+                    "native winner body failure"
+                );
+            })
+            .on_update(move |_| updated.set(updated.get() + 1))
+            .on_end(move |_| ended.set(ended.get() + 1))
+            .build();
+        let source = PointerInfo::new(
+            PointerId::try_from(860_u64).expect("source"),
+            PointerKind::Trackpad,
+        );
+        let packet = |phase| {
+            PointerEvent::PanZoom(PanZoomEvent::new(
+                source,
+                EventTime::from_nanos(0),
+                PointerPosition::try_new(Point::ZERO).expect("position"),
+                phase,
+            ))
+        };
+        let update = || {
+            packet(PanZoomPhase::Update(
+                PanZoomTransform::try_new(Offset::ZERO, 1.2, 0.0).expect("scale"),
+            ))
+        };
+        lane.enter(|| {
+            let owner = actor.clone();
+            let winner = handle
+                .register_pan_zoom(move |dispatch| {
+                    if owner.handle_pan_zoom(dispatch) == PanZoomDisposition::Handled {
+                        EventPropagation::Stop
+                    } else {
+                        EventPropagation::Continue
+                    }
+                })
+                .expect("winner");
+            let (retired, called) = (drops.clone(), cleanups.clone());
+            let fail_cleanup = Cell::new(cleanup_failure);
+            let loser = handle
+                .register_pan_zoom(move |dispatch| {
+                    if dispatch.local.phase == PanZoomPhase::Start {
+                        let capture = Capture(retired.clone());
+                        let called = called.clone();
+                        let fail = fail_cleanup.replace(false);
+                        assert!(dispatch.on_retirement(move || {
+                            let _keep = &capture;
+                            called.set(called.get() + 1);
+                            assert!(!fail, "native losing cleanup failure");
+                        }));
+                    }
+                    EventPropagation::Continue
+                })
+                .expect("loser");
+            let fail_observer = Cell::new(observer_failure);
+            let observer = handle
+                .register_pointer(move |dispatch| {
+                    if matches!(dispatch.local, PointerEvent::PanZoom(event)
+                    if matches!(event.phase, PanZoomPhase::Update(_)))
+                    {
+                        assert!(
+                            !fail_observer.replace(false),
+                            "native observer first failure"
+                        );
+                    }
+                })
+                .expect("raw observer");
+            let mut path = HitTestResult::new();
+            path.add(
+                HitTestEntry::new(RenderId::new(1))
+                    .pan_zoom_target(winner)
+                    .pointer_target(observer),
+            );
+            path.add(HitTestEntry::new(RenderId::new(2)).pan_zoom_target(loser));
+            binding.handle_pointer_event(&packet(PanZoomPhase::Start), |_| path.clone());
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                binding.handle_pointer_event(&update(), |_| path.clone())
+            }));
+            if observer_failure {
+                assert_eq!(
+                    result.expect_err("observer failure").downcast_ref::<&str>(),
+                    Some(&"native observer first failure")
+                );
+            } else {
+                result.expect("healthy native claim");
+            }
+            assert_eq!(
+                (starts.get(), updates.get(), cleanups.get()),
+                (1, 1, 1),
+                "winning callbacks and losing quiescence remain deliverable"
+            );
+            assert_eq!(
+                drops.get(),
+                usize::from(!observer_failure),
+                "opaque losing captures inherit the earlier observation failure"
+            );
+            binding.handle_pointer_event(&update(), |_| HitTestResult::new());
+            binding.handle_pointer_event(&packet(PanZoomPhase::End), |_| HitTestResult::new());
+            assert_eq!((updates.get(), ends.get()), (2, 1));
+            binding.handle_pointer_event(&packet(PanZoomPhase::Start), |_| path.clone());
+            binding.handle_pointer_event(&update(), |_| path.clone());
+            binding.handle_pointer_event(&packet(PanZoomPhase::End), |_| HitTestResult::new());
+            assert_eq!(
+                (starts.get(), updates.get(), ends.get(), cleanups.get()),
+                (2, 3, 2, 2)
+            );
+            assert_eq!(
+                drops.get(),
+                usize::from(!observer_failure) + 1,
+                "a fresh healthy claim destroys its capture normally"
+            );
+        });
     }
 }
 
