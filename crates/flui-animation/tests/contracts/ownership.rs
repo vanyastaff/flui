@@ -320,7 +320,7 @@ fn counted_registry() -> (Vsync, std::rc::Rc<std::cell::Cell<usize>>) {
     let wakes = std::rc::Rc::new(std::cell::Cell::new(0));
     let observed = wakes.clone();
     registry.set_frame_requester(Some(std::rc::Rc::new(move || {
-        observed.set(observed.get() + 1)
+        observed.set(observed.get() + 1);
     })));
     (registry, wakes)
 }
@@ -478,9 +478,10 @@ fn wake_failure_preserves_delivery_and_recovery() {
         owner
             .controller()
             .add_status_listener(Rc::new(move |status| {
-                if competing && status == AnimationStatus::Forward {
-                    panic!("listener failure");
-                }
+                assert!(
+                    !(competing && status == AnimationStatus::Forward),
+                    "listener failure"
+                );
             }));
         let delivered = Rc::new(Cell::new(0));
         let observed = delivered.clone();
