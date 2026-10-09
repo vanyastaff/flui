@@ -18,6 +18,8 @@ pub(crate) mod clipboard_lock;
 // (consumers: the winit, Win32, and AppKit event-conversion backends).
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod android_scroll;
+#[cfg(any(target_os = "android", test))]
+pub(crate) mod android_text_weight;
 pub mod events;
 mod handlers;
 pub(crate) mod owner_signal;

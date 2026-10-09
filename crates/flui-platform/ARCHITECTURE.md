@@ -219,6 +219,23 @@ refresh, recovery and invalid projection. It does not prove execution on an
 Android device. The AppKit/Android native sources require device validation in
 addition to cross-target type checking.
 
+### Android text weight shares the Activity preference source
+
+The preference aggregate reads `Configuration.fontWeightAdjustment` through the
+Activity's resources on API31 and later. Earlier SDKs never query the missing
+field. Android's undefined sentinel is unavailable, zero is known no preference,
+and signed adjustments remain exact until the text consumer applies its policy
+(ADR-0174). JNI errors use the existing aggregate admission and retry path;
+geometry-only reads skip this text observation entirely.
+
+`android_text_weight_query_contract` exercises the private production query seam
+with unsupported SDKs, undefined and zero values, signed extremes, query failure
+and recovery. The public OS interface cannot deterministically inject SDK levels
+or field-query failures, which is why this seam is tested privately. Removing
+either SDK admission or sentinel handling makes its corresponding case fail.
+This portable test and Android cross-target checking do not prove JNI execution
+or configuration-change delivery on a device.
+
 ### Native Win32 owner delivery survives message-post refusal
 
 Owner turns ordinarily use the internal HWND's posted message, including inside

@@ -1,4 +1,4 @@
-//! Activity-context observations through public Android ViewConfiguration APIs.
+//! Activity-context observations through public Android configuration APIs.
 //!
 //! The host samples every 500ms while its owner loop runs, plus ConfigChanged,
 //! even without a user surface. This is bounded polling, not an OS notification.
@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use android_activity::AndroidApp;
 use flui_foundation::geometry::DevicePixelRatio;
+use flui_platform_api::TextWeightPreference;
 use jni::{JValue, JavaVM, jni_sig, jni_str, objects::JObject, refs::Global};
 
 use crate::{
@@ -22,6 +23,12 @@ struct Reading {
     max_fling: i32,
     double_tap: i32,
     long_press: i32,
+    text_weight: Option<TextWeightPreference>,
+}
+
+enum ReadScope {
+    Geometry,
+    Preferences,
 }
 
 #[expect(
@@ -52,7 +59,7 @@ fn with_activity<T>(
     })
 }
 
-fn read(app: &AndroidApp) -> Result<Reading, PreferenceQueryError> {
+fn read(app: &AndroidApp, scope: ReadScope) -> Result<Reading, PreferenceQueryError> {
     with_activity(app, |env, activity| {
         let resources = env
             .call_method(
@@ -130,6 +137,34 @@ fn read(app: &AndroidApp) -> Result<Reading, PreferenceQueryError> {
                 &[],
             )?
             .i()?;
+        let text_weight = match scope {
+            ReadScope::Geometry => None,
+            ReadScope::Preferences => {
+                let sdk = env
+                    .get_static_field(
+                        jni_str!("android/os/Build$VERSION"),
+                        jni_str!("SDK_INT"),
+                        jni_sig!("I"),
+                    )?
+                    .i()?;
+                crate::shared::android_text_weight::observe(sdk, || {
+                    let configuration = env
+                        .call_method(
+                            &resources,
+                            jni_str!("getConfiguration"),
+                            jni_sig!("()Landroid/content/res/Configuration;"),
+                            &[],
+                        )?
+                        .l()?;
+                    env.get_field(
+                        &configuration,
+                        jni_str!("fontWeightAdjustment"),
+                        jni_sig!("I"),
+                    )?
+                    .i()
+                })?
+            }
+        };
         Ok((
             density,
             touch_slop,
@@ -138,10 +173,20 @@ fn read(app: &AndroidApp) -> Result<Reading, PreferenceQueryError> {
             max_fling,
             double_tap,
             long_press,
+            text_weight,
         ))
     })
     .and_then(
-        |(density, touch_slop, double_tap_slop, min_fling, max_fling, double_tap, long_press)| {
+        |(
+            density,
+            touch_slop,
+            double_tap_slop,
+            min_fling,
+            max_fling,
+            double_tap,
+            long_press,
+            text_weight,
+        )| {
             let ratio =
                 DevicePixelRatio::new(density).ok_or(crate::InvalidPreference::PixelRatio)?;
             Ok(Reading {
@@ -152,6 +197,7 @@ fn read(app: &AndroidApp) -> Result<Reading, PreferenceQueryError> {
                 max_fling,
                 double_tap,
                 long_press,
+                text_weight,
             })
         },
     )
@@ -300,7 +346,7 @@ pub(super) fn scroll_factors(
 }
 
 pub(super) fn geometry(app: &AndroidApp) -> Result<GestureGeometry, PreferenceQueryError> {
-    let reading = read(app)?;
+    let reading = read(app, ReadScope::Geometry)?;
     GestureGeometry::from_native_touch(&native_geometry(&reading)?).map_err(Into::into)
 }
 
@@ -316,7 +362,7 @@ fn native_geometry(reading: &Reading) -> Result<NativeTouchGeometry, PreferenceQ
 }
 
 pub(super) fn sample(app: &AndroidApp) -> Result<SystemPreferences, PreferenceQueryError> {
-    let reading = read(app)?;
+    let reading = read(app, ReadScope::Preferences)?;
     let duration = |value: i32| {
         u64::try_from(value)
             .map(Duration::from_millis)
@@ -328,5 +374,9 @@ pub(super) fn sample(app: &AndroidApp) -> Result<SystemPreferences, PreferenceQu
         .with_double_tap_interval(duration(reading.double_tap)?)
         .with_long_press_timeout(duration(reading.long_press)?)
         .with_native_touch_geometry(native_geometry(&reading)?);
-    Ok(SystemPreferences::default().with_gestures(gestures))
+    let preferences = SystemPreferences::default().with_gestures(gestures);
+    Ok(match reading.text_weight {
+        Some(weight) => preferences.with_text_weight(weight),
+        None => preferences,
+    })
 }
