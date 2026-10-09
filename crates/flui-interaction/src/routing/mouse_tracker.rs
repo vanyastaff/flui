@@ -154,6 +154,8 @@ type Latched<C> = (C, OwnerLatch);
 /// State for a single mouse device.
 #[derive(Debug, Clone)]
 struct DeviceState {
+    /// Authority retained by ambient probes across their reentrant hit-test call.
+    observation: Rc<()>,
     /// Latest source metadata for callbacks and the `mouse_is_connected` query.
     pointer: PointerInfo,
     /// Last known position.
@@ -175,12 +177,21 @@ struct DeviceState {
 impl DeviceState {
     fn new(pointer: PointerInfo, position: Offset<f64>) -> Self {
         Self {
+            observation: Rc::new(()),
             pointer,
             last_position: position,
             active_regions: HashSet::new(),
             active_order: Vec::new(),
             current_cursor: CursorIcon::Default,
             inside_window: true,
+        }
+    }
+
+    fn advance_observation(&mut self) {
+        // A retained probe must remain distinguishable from a newer admission.
+        // With no overlapping probe, the unique token can be reused.
+        if Rc::strong_count(&self.observation) > 1 {
+            self.observation = Rc::new(());
         }
     }
 }
@@ -394,6 +405,8 @@ impl MouseTracker {
                 .devices
                 .iter_mut()
                 .filter_map(|(_, state)| {
+                    state.advance_observation();
+                    state.inside_window = false;
                     if state.active_order.is_empty() && state.current_cursor == CursorIcon::Default
                     {
                         return None;
@@ -486,6 +499,7 @@ impl MouseTracker {
                 .devices
                 .entry(device_id)
                 .or_insert_with(|| DeviceState::new(pointer, position));
+            state.advance_observation();
             state.pointer = pointer;
             state.inside_window = true;
 
@@ -621,7 +635,7 @@ impl MouseTracker {
     where
         F: Fn(Offset<f64>) -> HitTestResult,
     {
-        let device_positions: Vec<(SourceKey, PointerInfo, Offset<f64>)> = self
+        let device_positions: Vec<(SourceKey, PointerInfo, Offset<f64>, Rc<()>)> = self
             .inner
             .borrow()
             .devices
@@ -630,12 +644,14 @@ impl MouseTracker {
             // stale in-window position — that would re-enter the regions the
             // sweep just exited. Its next real motion re-primes it.
             .filter(|(_, state)| state.inside_window)
-            .map(|(id, state)| (*id, state.pointer, state.last_position))
+            .map(|(id, state)| {
+                (*id, state.pointer, state.last_position, Rc::clone(&state.observation))
+            })
             .collect();
 
         let mut failure = crate::__runtime::ClosePanic::new();
         let mut pending = Vec::with_capacity(device_positions.len());
-        for (device_id, pointer, position) in device_positions {
+        for (device_id, pointer, position, observation) in device_positions {
             let Some((resolved, new_cursor)) = failure.invoke(|| {
                 let result = hit_test_fn(position);
                 (
@@ -647,9 +663,16 @@ impl MouseTracker {
             };
             let new_regions: HashSet<RegionId> = resolved.order.iter().copied().collect();
 
-            // The probe may have removed or closed its own device. Its resolved
-            // captures retire without a tracker borrow in that case too.
-            if self.inner.borrow().closed || !self.inner.borrow().devices.contains_key(&device_id) {
+            // User hit testing may admit newer work, even for the same source
+            // at the same position. Only the captured admission can commit.
+            let current = {
+                let inner = self.inner.borrow();
+                !inner.closed
+                    && inner.devices.get(&device_id).is_some_and(|state| {
+                        state.inside_window && Rc::ptr_eq(&state.observation, &observation)
+                    })
+            };
+            if !current {
                 for annotation in resolved.annotations.into_values() {
                     failure.retire(annotation);
                 }
@@ -669,6 +692,7 @@ impl MouseTracker {
                     .devices
                     .get_mut(&device_id)
                     .expect("BUG: refresh checked the device before borrowing the tracker");
+                state.advance_observation();
 
                 let entered: SmallVec<[RegionId; 4]> = resolved
                     .order
