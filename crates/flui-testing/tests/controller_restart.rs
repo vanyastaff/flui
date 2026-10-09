@@ -56,9 +56,7 @@ pub(crate) fn driver_replacement_preserves_first_failure_and_recovers() {
     impl Drop for Capture {
         fn drop(&mut self) {
             self.retired.set(self.retired.get() + 1);
-            if self.fail {
-                panic!("retirement failure");
-            }
+            assert!(!self.fail, "retirement failure");
         }
     }
     for (installation_fails, retirement_fails) in [(true, false), (false, true), (true, true)] {
@@ -81,12 +79,10 @@ pub(crate) fn driver_replacement_preserves_first_failure_and_recovers() {
         binding
             .scheduler()
             .set_on_frame_scheduled(Some(Arc::new(move || {
-                if installation_fails {
-                    panic!("installation failure");
-                }
+                assert!(!installation_fails, "installation failure");
             })));
         let failure = catch_unwind(AssertUnwindSafe(|| {
-            binding.adopt_vsync(replacement.clone())
+            binding.adopt_vsync(replacement.clone());
         }))
         .expect_err("replacement contains the injected failure");
         let expected = if installation_fails {

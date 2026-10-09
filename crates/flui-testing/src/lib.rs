@@ -648,7 +648,7 @@ impl HeadlessBinding {
     fn complete_driver_replacement<T>(vsync: &Vsync, request: std::rc::Rc<dyn Fn()>, outgoing: T) {
         use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
         let installation = catch_unwind(AssertUnwindSafe(|| {
-            vsync.set_frame_requester(Some(request))
+            vsync.set_frame_requester(Some(request));
         }));
         let retirement = catch_unwind(AssertUnwindSafe(|| drop(outgoing)));
         if let Err(first) = installation {
