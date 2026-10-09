@@ -401,7 +401,7 @@ pub mod prelude {
     pub use flui_painting::paint::Clip;
     pub use flui_painting::styling::Color;
     pub use flui_painting::typography::TextBaseline;
-    pub use flui_platform_api::Locale;
+    pub use flui_platform_api::{InvalidLocale, Locale};
     pub use flui_rendering::constraints::AxisDirection;
     pub use flui_rendering::constraints::BoxConstraints;
     pub use flui_rendering::hit_testing::{

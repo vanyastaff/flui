@@ -20,10 +20,14 @@ host.
   `queued_state_bursts_coalesce_between_observing_frames` pin these paths.
 
 - **Preference projection is updated with the accepted snapshot.** Root media
-  publication derives text scale and contrast together. Unknown contrast uses
+  publication derives text scale, contrast and ordered preferred locales together.
+  Unknown contrast uses
   normal contrast without altering the raw host observation. The mounted row
   `resize_and_surface_restore_reach_the_product_frame` checks contrast changes,
   unknown fallback and the seed seen by a later runtime's first build.
+  `preferred_locales_select_resources_and_direction` checks actual localized
+  resources and direction after publication and on a late runtime's first build
+  (ADR-0173).
 
 - **Rebuild delivery is assembled before mount.** Every presentation connects
   its build owner and widgets binding to the scheduler and its own weak window

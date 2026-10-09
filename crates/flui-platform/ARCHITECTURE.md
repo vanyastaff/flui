@@ -106,7 +106,8 @@ does not prove that they pass. Browser touch-action policy remains page-owned.
 ### Windows preferences have a window-independent owner lifetime
 
 `Platform::preferences` reads text scale, animation preference, high contrast,
-double-click interval and discrete wheel distances before any user window exists.
+double-click interval, discrete wheel distances and ordered UI languages before
+any user window exists.
 Unknown observations remain absent. The owner context holds one WinRT STA entry,
 native interfaces and subscriptions. Foreign reads are refused. Direct
 `RoActivateInstance` avoids generated process-wide factory caching: recreating a
@@ -114,6 +115,13 @@ host after its apartment ended reproduced a stale-factory access violation with
 `UISettings::new`. `windows_reads_preferences_before_a_user_window_exists` in
 `preferences_contract` exercises successive host lifetimes, refusal, repeated
 native reads and subsequent native window creation.
+
+UI languages use `GetUserPreferredUILanguages`, sharing this source's receiver,
+cache and retry lifetime (ADR-0173). The private
+`preferred_language_buffer_contract` injects capacity races and malformed UTF-16
+lists that cannot be produced deterministically through the public OS API. It
+pins ordered complete tags, count/terminator validation and bounded retries;
+failed query outputs never become a preference observation.
 
 The source's hidden top-level HWND receives setting broadcasts outside user-window
 membership and exit policy. WinRT text-scale and animation observers and the HWND

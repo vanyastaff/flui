@@ -27,6 +27,7 @@ use windows::core::{Interface, RuntimeName};
 use crate::PlatformError;
 use crate::shared::{owner_signal::OwnerSignal, panic_boundary::contain_owner_callback};
 
+mod languages;
 mod receiver;
 #[cfg(test)]
 mod tests;
@@ -357,6 +358,7 @@ fn sample(
         })?
         .with_motion(motion)
         .with_high_contrast(high_contrast)
+        .with_locales(languages::sample()?)
         .with_gestures(
             GesturePreferences::default()
                 .with_double_click_interval(Duration::from_millis(u64::from(double_click))),

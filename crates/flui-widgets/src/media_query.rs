@@ -3,7 +3,7 @@
 //! ## Implemented subset
 //!
 //! `size`, `device_pixel_ratio`, `text_scale_factor`, `padding`,
-//! `view_insets`, `platform_brightness`, `high_contrast` — presentation and
+//! `view_insets`, `platform_brightness`, `high_contrast`, `preferred_locales` — presentation and
 //! preference fields for layout and theming.
 //!
 //! ## Deferred (not yet implemented)
@@ -16,9 +16,10 @@
 
 use flui_foundation::geometry::EdgeInsets;
 use flui_foundation::geometry::Size;
-use flui_platform_api::Brightness;
+use flui_platform_api::{Brightness, Locale};
 use flui_view::prelude::*;
 use flui_view::{BoxedView, FieldMask, InheritedData, InheritedView, impl_inherited_view};
+use std::sync::Arc;
 
 /// Ambient logical-screen data provided to descendants by a [`MediaQuery`]
 /// ancestor.
@@ -44,6 +45,7 @@ use flui_view::{BoxedView, FieldMask, InheritedData, InheritedView, impl_inherit
 /// - [`view_insets`](Self::view_insets)
 /// - [`platform_brightness`](Self::platform_brightness)
 /// - [`high_contrast`](Self::high_contrast)
+/// - [`preferred_locales`](Self::preferred_locales)
 #[derive(Debug, Clone, PartialEq, flui_view::prelude::InheritedData)]
 pub struct MediaQueryData {
     /// Logical size of the current display surface (window or full screen).
@@ -80,6 +82,14 @@ pub struct MediaQueryData {
     /// Whether the user requests a higher-contrast palette. An unavailable
     /// platform observation projects to `false`; nested providers may override it.
     pub high_contrast: bool,
+
+    /// Ordered preferred UI languages observed by the host. `None` means
+    /// unavailable; an empty list is an observed empty preference list.
+    /// Application locale overrides and resource fallback belong to
+    /// [`WidgetsApp`](crate::WidgetsApp). Like the other fields, a nested
+    /// `MediaQuery` replaces this value; copy parent data to preserve it when
+    /// overriding another field.
+    pub preferred_locales: Option<Arc<[Locale]>>,
 }
 
 impl Default for MediaQueryData {
@@ -92,6 +102,7 @@ impl Default for MediaQueryData {
             view_insets: EdgeInsets::ZERO,
             platform_brightness: Brightness::Light,
             high_contrast: false,
+            preferred_locales: None,
         }
     }
 }

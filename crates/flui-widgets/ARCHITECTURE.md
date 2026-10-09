@@ -8,6 +8,15 @@ owns the shell and `SafeArea`, not the source of inherited presentation data.
 The module DAG enforces this direction. Field-specific dependency behavior is
 pinned by `a_size_only_change_rebuilds_size_and_whole_readers_only`.
 
+`WidgetsApp` resolves supported resources from ordered `preferred_locales`,
+subscribing only to that media field when no explicit locale is authored.
+Complete locale identity determines exact matches before the established
+script/region/language fallback (ADR-0173). A nested `MediaQuery` remains a whole
+replacement; it does not fall through to an ancestor for an unavailable field.
+`locale_override_removal_uses_the_nearest_current_preferences` pins override
+removal and nested-provider precedence. The runtime's
+`preferred_locales_select_resources_and_direction` exercises loaded resources.
+
 `RichText` reads inherited text sizing during its stateless build and passes
 the value with its unchanged authored spans to a private render view. Native
 settings and inherited lookups do not enter `RenderObjectContext`. The paragraph

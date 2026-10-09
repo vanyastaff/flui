@@ -54,6 +54,17 @@ path.
 
 ## Mapping decisions
 
+### Locale identity survives native observation and resource selection
+
+`Locale` validates a complete BCP 47 tag through one parser boundary (ADR-0173).
+Variants, extensions and private use survive equality and serialization;
+component constructors reject malformed roles rather than creating unchecked
+values. The public `preferences_contract` rows
+`preferred_language_identity_preserves_variants_and_extensions`,
+`malformed_preferred_language_tags_are_refused` and
+`deprecated_subtags_canonicalize_everywhere_a_locale_is_built` pin identity,
+admission and the retained aliases, including serde when enabled.
+
 ### Preference observations preserve unavailable values and native units
 
 `SystemPreferences` records observations rather than framework fallback values

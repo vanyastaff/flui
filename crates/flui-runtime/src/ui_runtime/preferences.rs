@@ -10,6 +10,7 @@ pub(super) fn publish(presentation: &PresentationState, snapshot: &SystemPrefere
     presentation.media_query.update(|data| {
         data.text_scale_factor = snapshot.values.text_scale().unwrap_or(1.0);
         data.high_contrast = snapshot.values.high_contrast().unwrap_or(false);
+        data.preferred_locales = snapshot.values.locales().map(Into::into);
     });
 }
 

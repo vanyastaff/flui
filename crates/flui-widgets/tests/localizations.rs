@@ -70,7 +70,7 @@ pub(crate) fn the_global_delegate_makes_an_rtl_locale_subtree_rtl() {
     let (probe, captured) = capture(Directionality::of);
     let _harness = mount(
         Localizations::new(
-            Locale::new("ar", None::<&str>),
+            Locale::new("ar", None::<&str>).expect("valid Arabic locale"),
             vec![BoxedLocalizationsDelegate::new(
                 GlobalWidgetsLocalizationsDelegate,
             )],

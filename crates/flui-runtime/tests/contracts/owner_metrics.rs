@@ -591,6 +591,10 @@ fn owner_metrics_contract() {
                 initial_inherited_scale_matches_the_renderer as fn(),
             ),
             (
+                "preferred_locales_select_resources_and_direction",
+                preferred_locales_select_resources_and_direction as fn(),
+            ),
+            (
                 "preference_fanout_survives_a_failing_runtime",
                 preference_fanout_survives_a_failing_runtime as fn(),
             ),
@@ -616,6 +620,272 @@ fn owner_metrics_contract() {
             ),
         ],
     );
+}
+
+fn preferred_locales_select_resources_and_direction() {
+    use flui_painting::typography::TextDirection;
+    use flui_platform_api::{Locale, SystemPreferences};
+    use flui_widgets::localization::{
+        BoxedLocalizationsDelegate, Directionality, GlobalWidgetsLocalizationsDelegate,
+        Localizations, LocalizationsDelegate,
+    };
+
+    #[derive(Debug)]
+    struct Greeting(&'static str);
+
+    #[derive(Debug)]
+    struct Greetings;
+
+    impl LocalizationsDelegate for Greetings {
+        type Resources = Greeting;
+
+        fn is_supported(&self, locale: &Locale) -> bool {
+            *locale == Locale::en_us()
+                || *locale == Locale::new("ar", None::<&str>).expect("valid Arabic locale")
+                || ["ca-ES", "ca-ES-valencia"].iter().any(|tag| {
+                    *locale
+                        == tag
+                            .parse::<Locale>()
+                            .expect("valid Catalan resource locale")
+                })
+        }
+
+        fn load(&self, locale: &Locale) -> Greeting {
+            Greeting(match locale.to_language_tag().as_str() {
+                "ar" => "مرحبا",
+                "ca-ES" => "Sortir",
+                "ca-ES-valencia" => "Eixir",
+                _ => "Hello",
+            })
+        }
+    }
+
+    #[derive(Clone, StatelessView)]
+    struct LocalizedContent(Rc<RefCell<Vec<(&'static str, TextDirection)>>>);
+
+    impl StatelessView for LocalizedContent {
+        fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+            let greeting = Localizations::of::<Greeting>(ctx);
+            self.0
+                .borrow_mut()
+                .push((greeting.0, Directionality::of(ctx)));
+            flui_widgets::Text::new(greeting.0)
+        }
+    }
+
+    for (explicit, overridden) in [
+        (None, None),
+        (Some(Locale::en_us()), Some(("Hello", TextDirection::Ltr))),
+        (
+            Some(Locale::new("ar", None::<&str>).expect("valid Arabic locale")),
+            Some(("مرحبا", TextDirection::Rtl)),
+        ),
+    ] {
+        let owner = OwnerHost::new();
+        let runtime = crate::owner_publication::runtime();
+        let observed = Rc::new(RefCell::new(Vec::new()));
+        let app = flui_widgets::WidgetsApp::new(LocalizedContent(Rc::clone(&observed)))
+            .supported_locales(vec![
+                Locale::en_us(),
+                Locale::new("ar", None::<&str>).expect("valid Arabic locale"),
+                "ca-ES".parse().expect("valid Catalan resource locale"),
+                "ca-ES-valencia"
+                    .parse()
+                    .expect("valid Valencian resource locale"),
+            ])
+            .localizations_delegates(vec![
+                BoxedLocalizationsDelegate::new(Greetings),
+                BoxedLocalizationsDelegate::new(GlobalWidgetsLocalizationsDelegate),
+            ]);
+        let app = match explicit {
+            Some(locale) => app.locale(locale),
+            None => app,
+        };
+        runtime
+            .attach_root_widget_with_size(&app, 800.0, 600.0)
+            .expect("mount localized app");
+        let address = owner
+            .publication(owner.prepare_runtime(runtime))
+            .expect("publish localized runtime")
+            .commit();
+        let size = Rc::new(Cell::new((800, 600)));
+        let effects = Effects {
+            address,
+            sink: RefCell::new(Sink {
+                size: Rc::clone(&size),
+                submitted: 0,
+            }),
+            size,
+            frame_time: Cell::new(web_time::Instant::now()),
+            trace: RefCell::new(Vec::new()),
+            expects_present: Cell::new(None),
+            owner: owner.clone(),
+            burst: Cell::new(false),
+            native_sizes: RefCell::new(Vec::new()),
+            fail_resize: Cell::new(false),
+            fail_tail: Cell::new(false),
+        };
+        let frames = owner.frame_dispatcher(address).expect("localized frames");
+        frames.deliver(&effects).expect("fallback frame");
+        assert_eq!(
+            observed.borrow().last(),
+            Some(&overridden.unwrap_or(("Hello", TextDirection::Ltr)))
+        );
+        for (locales, expected) in [
+            (
+                Some(vec![
+                    Locale::new("ar", None::<&str>).expect("valid Arabic locale"),
+                    Locale::en_us(),
+                ]),
+                ("مرحبا", TextDirection::Rtl),
+            ),
+            (
+                Some(vec![
+                    Locale::en_us(),
+                    Locale::new("ar", None::<&str>).expect("valid Arabic locale"),
+                ]),
+                ("Hello", TextDirection::Ltr),
+            ),
+            (Some(vec![]), ("Hello", TextDirection::Ltr)),
+            (
+                Some(vec![
+                    Locale::new("fr", None::<&str>).expect("valid French locale"),
+                ]),
+                ("Hello", TextDirection::Ltr),
+            ),
+            (
+                Some(vec![
+                    Locale::new("ar", None::<&str>).expect("valid Arabic locale"),
+                ]),
+                ("مرحبا", TextDirection::Rtl),
+            ),
+            (
+                Some(vec![
+                    "en-US-u-hc-h12".parse().expect("valid extended preference"),
+                ]),
+                ("Hello", TextDirection::Ltr),
+            ),
+            (None, ("Hello", TextDirection::Ltr)),
+            (
+                Some(vec![
+                    "ca-ES-valencia".parse().expect("valid preferred variant"),
+                ]),
+                ("Eixir", TextDirection::Ltr),
+            ),
+            (
+                Some(vec!["ca-ES".parse().expect("valid preferred language")]),
+                ("Sortir", TextDirection::Ltr),
+            ),
+        ] {
+            let values = match locales {
+                Some(locales) => SystemPreferences::default().with_locales(locales),
+                None => SystemPreferences::default(),
+            };
+            owner
+                .update_preferences(values, &effects)
+                .expect("publish ordered languages");
+            frames.deliver(&effects).expect("localized frame");
+            assert_eq!(
+                observed.borrow().last(),
+                Some(&overridden.unwrap_or(expected)),
+                "host language order must reach real app resources and direction"
+            );
+        }
+        if overridden.is_none() {
+            owner
+                .update_preferences(
+                    SystemPreferences::default().with_locales(vec![
+                        Locale::new("ar", None::<&str>).expect("valid Arabic locale"),
+                    ]),
+                    &effects,
+                )
+                .expect("language before late runtime exists");
+            let mut late = UiRuntime::new(
+                crate::owner_publication::window(),
+                1.0,
+                flui_runtime::ui_runtime::RuntimeHostServices::new(
+                    std::sync::Arc::new(|| {}),
+                    std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                    std::sync::Arc::new(flui_platform_api::InMemoryClipboard::new()),
+                    &flui_painting::FontCollection::new(),
+                    flui_scheduler::ClockSource::Platform,
+                )
+                .with_preferences(
+                    owner
+                        .preferences()
+                        .expect("live owner")
+                        .expect("accepted languages"),
+                ),
+            )
+            .expect("late localized runtime");
+            let initial = Rc::new(RefCell::new(Vec::new()));
+            late.attach_root_widget_with_size(
+                &flui_widgets::WidgetsApp::new(LocalizedContent(Rc::clone(&initial)))
+                    .supported_locales(vec![
+                        Locale::en_us(),
+                        Locale::new("ar", None::<&str>).expect("valid Arabic locale"),
+                    ])
+                    .localizations_delegates(vec![
+                        BoxedLocalizationsDelegate::new(Greetings),
+                        BoxedLocalizationsDelegate::new(GlobalWidgetsLocalizationsDelegate),
+                    ]),
+                800.0,
+                600.0,
+            )
+            .expect("late root");
+            let mut sink = Sink {
+                size: Rc::new(Cell::new((800, 600))),
+                submitted: 0,
+            };
+            assert!(
+                late.pump(
+                    &mut flui_runtime::pump::SampledClock(web_time::Instant::now()),
+                    &mut sink
+                )
+                .presented()
+            );
+            assert_eq!(
+                *initial.borrow(),
+                [("مرحبا", TextDirection::Rtl)],
+                "first build must load the latest host language, without an English intermediate build"
+            );
+            let late_address = owner
+                .publication(owner.prepare_runtime(late))
+                .expect("publish late localized runtime")
+                .commit();
+            let late_effects = Effects {
+                address: late_address,
+                size: Rc::clone(&sink.size),
+                sink: RefCell::new(sink),
+                frame_time: Cell::new(web_time::Instant::now()),
+                trace: RefCell::default(),
+                expects_present: Cell::new(Some(true)),
+                owner: owner.clone(),
+                burst: Cell::new(false),
+                native_sizes: RefCell::default(),
+                fail_resize: Cell::new(false),
+                fail_tail: Cell::new(false),
+            };
+            owner
+                .update_preferences(
+                    SystemPreferences::default().with_locales(vec![Locale::en_us()]),
+                    &effects,
+                )
+                .expect("update both localized runtimes");
+            for (recipient, resources) in [(&effects, &observed), (&late_effects, &initial)] {
+                owner
+                    .frame_dispatcher(recipient.address)
+                    .expect("live localized recipient")
+                    .deliver(recipient)
+                    .expect("localized recipient frame");
+                assert_eq!(
+                    resources.borrow().last(),
+                    Some(&("Hello", TextDirection::Ltr))
+                );
+            }
+        }
+        owner.shutdown(&effects);
+    }
 }
 
 fn preference_fanout_survives_a_failing_runtime() {
