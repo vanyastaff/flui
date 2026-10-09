@@ -1307,6 +1307,62 @@ fn cancel_mid_drag_cancels_once() {
     assert_eq!(log.count("up"), 1);
 }
 
+fn finite_tap_drag_inputs_cannot_publish_overflowing_motion() {
+    for (initial, first, later, fail_cancel) in [
+        (-f64::MAX, f64::MAX, None, false),
+        (0.0, -f64::MAX, Some(f64::MAX), false),
+        (-f64::MAX, f64::MAX, None, true),
+        (0.0, -f64::MAX, Some(f64::MAX), true),
+    ] {
+        let arena = GestureArena::new();
+        let deltas = Rc::new(RefCell::new(Vec::<Offset<f64>>::new()));
+        let observed = deltas.clone();
+        let cancelled = Rc::new(Cell::new(0));
+        let cancellation = cancelled.clone();
+        let fail = Rc::new(Cell::new(fail_cancel));
+        let cancel_failure = fail.clone();
+        let recognizer = TapAndDragGestureRecognizer::builder(arena.clone())
+            .on_drag_update(move |details| observed.borrow_mut().push(details.delta))
+            .on_cancel(move || {
+                cancellation.set(cancellation.get() + 1);
+                assert!(!cancel_failure.replace(false), "overflow cancellation failure");
+            })
+            .build();
+        let down = make_down_event_for_id(id(1), Offset::new(initial, 0.0), PointerKind::Touch)
+            .expect("finite Down is admitted by checked vocabulary");
+        recognizer.add_pointer(PointerDispatch::at_root(&down));
+        arena.close(id(1));
+        arena.drain_deferred_resolutions();
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            for x in std::iter::once(first).chain(later) {
+                let movement = make_move_event_for_id(id(1), Offset::new(x, 0.0), PointerKind::Touch)
+                    .expect("finite Move is admitted by checked vocabulary");
+                recognizer.handle_event(PointerDispatch::at_root(&movement));
+            }
+        }));
+        assert!(deltas.borrow().iter().all(|delta| delta.is_finite()), "finite input must not publish infinite delta: {:?}", *deltas.borrow());
+        assert_eq!(cancelled.get(), 1, "invalid derived displacement cancels the contact once");
+        if fail_cancel {
+            let payload = result.expect_err("cancellation callback failure propagates");
+            assert_eq!(payload.downcast_ref::<&str>(), Some(&"overflow cancellation failure"));
+        } else {
+            result.expect("finite-input refusal does not panic");
+        }
+        assert_eq!(recognizer.cancel(), flui_interaction::CancelOutcome::Idle);
+        deltas.borrow_mut().clear();
+        let down = make_down_event_for_id(id(1), Offset::ZERO, PointerKind::Touch).expect("finite recovery Down");
+        recognizer.add_pointer(PointerDispatch::at_root(&down));
+        arena.close(id(1));
+        arena.drain_deferred_resolutions();
+        let movement = make_move_event_for_id(id(1), Offset::new(40.0, 0.0), PointerKind::Touch).expect("finite recovery Move");
+        recognizer.handle_event(PointerDispatch::at_root(&movement));
+        let up = make_up_event_for_id(id(1), Offset::new(40.0, 0.0), PointerKind::Touch).expect("finite recovery Up");
+        recognizer.handle_event(PointerDispatch::at_root(&up));
+        assert_eq!(&*deltas.borrow(), &[Offset::new(40.0, 0.0)], "same-ID recovery delivers actual finite displacement");
+        assert_eq!(cancelled.get(), 1);
+    }
+}
+
 fn tap_drag_disposed_from_its_drag_start() {
     let rig = Rig::new();
     let slot: Rc<RefCell<Option<Rc<TapAndDragGestureRecognizer>>>> = Rc::default();
@@ -1451,6 +1507,10 @@ fn tap_and_drag_resolves_through_the_shared_arena() {
             (
                 "non-finite global position",
                 tap_drag_publishes_no_non_finite_global_position,
+            ),
+            (
+                "finite endpoints cannot overflow published delta",
+                finite_tap_drag_inputs_cannot_publish_overflowing_motion,
             ),
             ("cancel mid drag", cancel_mid_drag_cancels_once),
             (
