@@ -614,6 +614,8 @@ enum CursorReentryCase {
     HookReentry,
     Failure,
     ReentrantFailure,
+    ReentrantSuccess,
+    HookReplacement,
     CompetingFailure,
     Close,
 }
@@ -627,6 +629,8 @@ fn latest_cursor_publication_survives_reentry_replacement_and_failure() {
         CursorReentryCase::HookReentry,
         CursorReentryCase::Failure,
         CursorReentryCase::ReentrantFailure,
+        CursorReentryCase::ReentrantSuccess,
+        CursorReentryCase::HookReplacement,
         CursorReentryCase::CompetingFailure,
         CursorReentryCase::Close,
     ] {
@@ -660,12 +664,19 @@ fn latest_cursor_publication_survives_reentry_replacement_and_failure() {
                     &cursor_path(&[Some(CursorIcon::Text)]),
                 );
             }
-            if case == CursorReentryCase::ReentrantFailure && !entered_hook.replace(true) {
+            if matches!(
+                case,
+                CursorReentryCase::ReentrantFailure | CursorReentryCase::ReentrantSuccess
+            ) && !entered_hook.replace(true)
+            {
                 hook_tracker.update_with_motion(
                     &hover(MOUSE, PointerKind::Mouse, Offset::new(7.0, 7.0), 2),
                     PointerMotionKind::Hover,
                     &cursor_path(&[Some(CursorIcon::Text)]),
                 );
+            }
+            if case == CursorReentryCase::HookReplacement && !entered_hook.replace(true) {
+                hook_tracker.set_cursor_change_callback(Rc::clone(&next_hook));
             }
             assert!(!hook_failed.get(), "cursor publication failure");
         }));
@@ -708,7 +719,9 @@ fn latest_cursor_publication_survives_reentry_replacement_and_failure() {
                         }
                         CursorReentryCase::HookReentry
                         | CursorReentryCase::Failure
-                        | CursorReentryCase::ReentrantFailure => {}
+                        | CursorReentryCase::ReentrantFailure
+                        | CursorReentryCase::ReentrantSuccess
+                        | CursorReentryCase::HookReplacement => {}
                     })),
                     ..MouseRegionCallbacks::default()
                 })
@@ -783,6 +796,32 @@ fn latest_cursor_publication_survives_reentry_replacement_and_failure() {
             CursorReentryCase::Failure
             | CursorReentryCase::ReentrantFailure
             | CursorReentryCase::CompetingFailure => {}
+            CursorReentryCase::ReentrantSuccess | CursorReentryCase::HookReplacement => {
+                assert_eq!(*observed.borrow(), [("old", pointer, CursorIcon::Text)]);
+                lane.enter(|| {
+                    tracker.update_with_motion(
+                        &event,
+                        PointerMotionKind::Hover,
+                        &cursor_path(&[Some(CursorIcon::Text)]),
+                    )
+                });
+                assert_eq!(
+                    *observed.borrow(),
+                    [
+                        ("old", pointer, CursorIcon::Text),
+                        (
+                            if case == CursorReentryCase::HookReplacement {
+                                "new"
+                            } else {
+                                "old"
+                            },
+                            pointer,
+                            CursorIcon::Text
+                        )
+                    ],
+                    "old successful publication cannot clear newly accepted debt"
+                );
+            }
         }
         if case != CursorReentryCase::Close {
             let published = observed.borrow().len();
