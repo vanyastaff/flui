@@ -874,7 +874,10 @@ fn queue_diagnostic_permits_inspection() {
     impl tracing::Subscriber for InspectQueue {
         fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
             metadata.target().ends_with("resampler")
-                && matches!(*metadata.level(), tracing::Level::DEBUG | tracing::Level::WARN)
+                && matches!(
+                    *metadata.level(),
+                    tracing::Level::DEBUG | tracing::Level::WARN
+                )
         }
         fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
             tracing::span::Id::from_u64(1)
@@ -949,22 +952,41 @@ fn queue_diagnostic_permits_inspection() {
         flui_testing::log_capture::disarm_interest_cache();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             tracing::subscriber::with_default(
-                InspectQueue { resampler: resampler.clone(), observed: observed.clone(), fail },
-                || resampler.sample(t0 + ms(25.0), t0 + ms(35.0), |_| {
-                    panic!("regressed sampling must deliver nothing");
-                }),
+                InspectQueue {
+                    resampler: resampler.clone(),
+                    observed: observed.clone(),
+                    fail,
+                },
+                || {
+                    resampler.sample(t0 + ms(25.0), t0 + ms(35.0), |_| {
+                        panic!("regressed sampling must deliver nothing");
+                    })
+                },
             );
         }));
-        assert_eq!(observed.load(Ordering::Relaxed), 1, "WARN subscriber can inspect accepted future Move before failure");
+        assert_eq!(
+            observed.load(Ordering::Relaxed),
+            1,
+            "WARN subscriber can inspect accepted future Move before failure"
+        );
         if fail {
             let payload = result.expect_err("subscriber failure propagates");
-            assert_eq!(payload.downcast_ref::<&str>(), Some(&"sampling diagnostic failure"));
+            assert_eq!(
+                payload.downcast_ref::<&str>(),
+                Some(&"sampling diagnostic failure")
+            );
         } else {
             result.expect("regressed sampling inspection does not deadlock");
         }
         let mut delivered = Vec::new();
-        resampler.sample(t0 + ms(150.0), t0 + ms(160.0), |event| delivered.push(event));
-        assert_eq!(delivered.len(), 1, "future Move remains deliverable after diagnostic failure");
+        resampler.sample(t0 + ms(150.0), t0 + ms(160.0), |event| {
+            delivered.push(event)
+        });
+        assert_eq!(
+            delivered.len(),
+            1,
+            "future Move remains deliverable after diagnostic failure"
+        );
         assert_eq!(event_x(&delivered[0]), Some(100.0));
     }
 }

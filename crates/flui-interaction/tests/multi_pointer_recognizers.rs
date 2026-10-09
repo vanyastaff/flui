@@ -1325,7 +1325,10 @@ fn finite_tap_drag_inputs_cannot_publish_overflowing_motion() {
             .on_drag_update(move |details| observed.borrow_mut().push(details.delta))
             .on_cancel(move || {
                 cancellation.set(cancellation.get() + 1);
-                assert!(!cancel_failure.replace(false), "overflow cancellation failure");
+                assert!(
+                    !cancel_failure.replace(false),
+                    "overflow cancellation failure"
+                );
             })
             .build();
         let down = make_down_event_for_id(id(1), Offset::new(initial, 0.0), PointerKind::Touch)
@@ -1335,30 +1338,49 @@ fn finite_tap_drag_inputs_cannot_publish_overflowing_motion() {
         arena.drain_deferred_resolutions();
         let result = catch_unwind(AssertUnwindSafe(|| {
             for x in std::iter::once(first).chain(later) {
-                let movement = make_move_event_for_id(id(1), Offset::new(x, 0.0), PointerKind::Touch)
-                    .expect("finite Move is admitted by checked vocabulary");
+                let movement =
+                    make_move_event_for_id(id(1), Offset::new(x, 0.0), PointerKind::Touch)
+                        .expect("finite Move is admitted by checked vocabulary");
                 recognizer.handle_event(PointerDispatch::at_root(&movement));
             }
         }));
-        assert!(deltas.borrow().iter().all(|delta| delta.is_finite()), "finite input must not publish infinite delta: {:?}", *deltas.borrow());
-        assert_eq!(cancelled.get(), 1, "invalid derived displacement cancels the contact once");
+        assert!(
+            deltas.borrow().iter().all(|delta| delta.is_finite()),
+            "finite input must not publish infinite delta: {:?}",
+            *deltas.borrow()
+        );
+        assert_eq!(
+            cancelled.get(),
+            1,
+            "invalid derived displacement cancels the contact once"
+        );
         if fail_cancel {
             let payload = result.expect_err("cancellation callback failure propagates");
-            assert_eq!(payload.downcast_ref::<&str>(), Some(&"overflow cancellation failure"));
+            assert_eq!(
+                payload.downcast_ref::<&str>(),
+                Some(&"overflow cancellation failure")
+            );
         } else {
             result.expect("finite-input refusal does not panic");
         }
         assert_eq!(recognizer.cancel(), flui_interaction::CancelOutcome::Idle);
         deltas.borrow_mut().clear();
-        let down = make_down_event_for_id(id(1), Offset::ZERO, PointerKind::Touch).expect("finite recovery Down");
+        let down = make_down_event_for_id(id(1), Offset::ZERO, PointerKind::Touch)
+            .expect("finite recovery Down");
         recognizer.add_pointer(PointerDispatch::at_root(&down));
         arena.close(id(1));
         arena.drain_deferred_resolutions();
-        let movement = make_move_event_for_id(id(1), Offset::new(40.0, 0.0), PointerKind::Touch).expect("finite recovery Move");
+        let movement = make_move_event_for_id(id(1), Offset::new(40.0, 0.0), PointerKind::Touch)
+            .expect("finite recovery Move");
         recognizer.handle_event(PointerDispatch::at_root(&movement));
-        let up = make_up_event_for_id(id(1), Offset::new(40.0, 0.0), PointerKind::Touch).expect("finite recovery Up");
+        let up = make_up_event_for_id(id(1), Offset::new(40.0, 0.0), PointerKind::Touch)
+            .expect("finite recovery Up");
         recognizer.handle_event(PointerDispatch::at_root(&up));
-        assert_eq!(&*deltas.borrow(), &[Offset::new(40.0, 0.0)], "same-ID recovery delivers actual finite displacement");
+        assert_eq!(
+            &*deltas.borrow(),
+            &[Offset::new(40.0, 0.0)],
+            "same-ID recovery delivers actual finite displacement"
+        );
         assert_eq!(cancelled.get(), 1);
     }
 }

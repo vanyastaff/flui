@@ -20,8 +20,8 @@ use flui_interaction::{
     arena::run_pointer_lifecycle,
     cancel_all,
     events::{
-        PointerButton, PointerEvent, PointerKind, make_down_event_for_id_with_button,
-        make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
+        PointerButton, PointerEvent, PointerKind, make_down_event_for_id,
+        make_down_event_for_id_with_button, make_move_event_for_id, make_up_event_for_id,
     },
     routing::PointerDispatch,
 };
@@ -461,11 +461,19 @@ fn scale_clock_can_cancel_admission_and_preserve_reentrant_replacements() {
             if self.armed.swap(false, Ordering::Relaxed) {
                 let owner = CLOCK_SCALE.with(|slot| slot.borrow().as_ref().and_then(Weak::upgrade));
                 if let Some(owner) = owner {
-                    assert_eq!(owner.cancel(), CancelOutcome::Cancelled, "Down commits admission before user clock");
+                    assert_eq!(
+                        owner.cancel(),
+                        CancelOutcome::Cancelled,
+                        "Down commits admission before user clock"
+                    );
                     if self.replace {
                         for (raw, x) in [(301, 10.0), (302, 110.0)] {
-                            let event = make_down_event_for_id(pointer(raw), Offset::new(x, 0.0), PointerKind::Touch)
-                                .expect("finite replacement Down");
+                            let event = make_down_event_for_id(
+                                pointer(raw),
+                                Offset::new(x, 0.0),
+                                PointerKind::Touch,
+                            )
+                            .expect("finite replacement Down");
                             owner.add_pointer(PointerDispatch::at_root(&event));
                         }
                     }
@@ -497,9 +505,12 @@ fn scale_clock_can_cancel_admission_and_preserve_reentrant_replacements() {
         CLOCK_SCALE.with(|slot| *slot.borrow_mut() = Some(Rc::downgrade(&scale)));
         let _clear = ClearScaleClock;
         clock.armed.store(true, Ordering::Relaxed);
-        let original = make_down_event_for_id(pointer(301), Offset::new(-200.0, 0.0), PointerKind::Touch)
-            .expect("finite original Down");
-        let result = catch_unwind(AssertUnwindSafe(|| scale.add_pointer(PointerDispatch::at_root(&original))));
+        let original =
+            make_down_event_for_id(pointer(301), Offset::new(-200.0, 0.0), PointerKind::Touch)
+                .expect("finite original Down");
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            scale.add_pointer(PointerDispatch::at_root(&original))
+        }));
         if fail {
             let payload = result.expect_err("the original clock failure propagates");
             assert_eq!(payload.downcast_ref::<&str>(), Some(&"scale clock failure"));
@@ -507,10 +518,15 @@ fn scale_clock_can_cancel_admission_and_preserve_reentrant_replacements() {
             result.expect("the clock can cancel through the public owner without a RefCell panic");
         }
         if !replace {
-            assert_eq!(scale.cancel(), CancelOutcome::Idle, "cancelled Down must not be restored by outer admission");
+            assert_eq!(
+                scale.cancel(),
+                CancelOutcome::Idle,
+                "cancelled Down must not be restored by outer admission"
+            );
             for (raw, x) in [(301, 10.0), (302, 110.0)] {
-                let event = make_down_event_for_id(pointer(raw), Offset::new(x, 0.0), PointerKind::Touch)
-                    .expect("finite recovery Down");
+                let event =
+                    make_down_event_for_id(pointer(raw), Offset::new(x, 0.0), PointerKind::Touch)
+                        .expect("finite recovery Down");
                 scale.add_pointer(PointerDispatch::at_root(&event));
             }
         }
@@ -518,12 +534,20 @@ fn scale_clock_can_cancel_admission_and_preserve_reentrant_replacements() {
             arena.close(pointer(raw));
         }
         arena.drain_deferred_resolutions();
-        let movement = make_move_event_for_id(pointer(302), Offset::new(210.0, 0.0), PointerKind::Touch)
-            .expect("finite replacement Move");
+        let movement =
+            make_move_event_for_id(pointer(302), Offset::new(210.0, 0.0), PointerKind::Touch)
+                .expect("finite replacement Move");
         scale.handle_event(PointerDispatch::at_root(&movement));
-        assert_eq!(updates.borrow().last(), Some(&2.0), "same-ID replacement keeps its own 100px baseline after reentry or caught clock failure");
+        assert_eq!(
+            updates.borrow().last(),
+            Some(&2.0),
+            "same-ID replacement keeps its own 100px baseline after reentry or caught clock failure"
+        );
         scale.cancel();
-        assert!(arena.is_empty(), "replacement retires its exact arena generations");
+        assert!(
+            arena.is_empty(),
+            "replacement retires its exact arena generations"
+        );
     }
 }
 
