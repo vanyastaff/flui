@@ -132,7 +132,7 @@ saved clock cannot schedule a sibling after owner teardown.
 
 `owning_animated_value_contract` covers atomic components, owner release during
 sampling, exact-target delivery, reentrant conversion and retained deadlines.
-The mounted widget velocity rows exercise opacity, padding and rotation through
+The mounted widget velocity rows exercise opacity, padding, alignment and rotation through
 their render, layout and transform producers. The two mounted scroll replacement
 rows assert pixel velocity continuity, exact settlement and activity completion.
 

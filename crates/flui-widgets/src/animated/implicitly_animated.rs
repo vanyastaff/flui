@@ -1,7 +1,7 @@
 //! Shared machinery for the implicitly-animated widget family.
 //!
-//! [`ImplicitController`] drives the normalized progress used by the container,
-//! and alignment tween paths. Opacity, padding and rotation consume owning
+//! [`ImplicitController`] drives the normalized progress used by the container
+//! tween paths. Opacity, padding, alignment and rotation consume owning
 //! component motion directly. Their states reconfigure motion when a parent
 //! supplies new values; frame samples update the observed render or build path.
 //!

@@ -235,6 +235,150 @@ pub(crate) fn align_retarget_with_a_new_curve_keeps_the_displayed_sample() {
     );
 }
 
+pub(crate) fn align_retarget_preserves_the_laid_out_velocity() {
+    let registry = Vsync::new();
+    let tree = |target, curve: ArcCurve| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedAlign::new(target, SizedBox::new(20.0, 10.0))
+                .duration(Duration::from_secs(1))
+                .curve(curve),
+        )
+    };
+    let mut laid = lay_out_animated(
+        tree(Alignment::TOP_LEFT, ArcCurve::new(Curves::Linear)),
+        tight(100.0, 80.0),
+        registry.clone(),
+    );
+    let position = |laid: &mut LaidOut| laid.offset(laid.child(laid.current_root(), 0));
+    laid.pump_widget(tree(Alignment::BOTTOM_RIGHT, ArcCurve::new(Curves::Linear)));
+    laid.pump_for(Duration::from_millis(1));
+    laid.pump_for(Duration::from_millis(250));
+    let h = Duration::from_micros(100);
+    let previous = position(&mut laid);
+    laid.pump_for(h);
+    let seam = position(&mut laid);
+    let arriving = [
+        (seam.dx - previous.dx) / h.as_secs_f64(),
+        (seam.dy - previous.dy) / h.as_secs_f64(),
+    ];
+    assert!(arriving.iter().all(|velocity| *velocity > 1.0));
+    laid.pump_widget(tree(Alignment::TOP_LEFT, ArcCurve::new(Curves::EaseIn)));
+    assert_eq!(
+        position(&mut laid),
+        seam,
+        "the layout seam must be continuous"
+    );
+    laid.pump_for(h);
+    let after = position(&mut laid);
+    let departing = [
+        (after.dx - seam.dx) / h.as_secs_f64(),
+        (after.dy - seam.dy) / h.as_secs_f64(),
+    ];
+    for (arriving, departing) in arriving.into_iter().zip(departing) {
+        assert!(
+            (arriving - departing).abs() < 0.1,
+            "laid-out alignment velocity was lost: {arriving} -> {departing}"
+        );
+    }
+}
+
+pub(crate) fn align_changes_leave_an_unchanged_factor_on_its_original_deadline() {
+    let registry = Vsync::new();
+    let curve = ArcCurve::new(Curves::Linear);
+    let tree = |alignment, factor| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedAlign::new(alignment, SizedBox::square(10.0))
+                .width_factor(factor)
+                .duration(RUN)
+                .curve(curve.clone()),
+        )
+    };
+    let mut laid = lay_out_animated(tree(Alignment::CENTER, 2.0), loose(200.0), registry.clone());
+    laid.pump_widget(tree(Alignment::BOTTOM_RIGHT, 5.0));
+    laid.pump_for(Duration::from_millis(1));
+    laid.pump_for(Duration::from_millis(40));
+    let seam = laid.size(laid.current_root()).width;
+    assert!(seam > 20.0 && seam < 50.0, "factor motion is live: {seam}");
+    laid.pump_widget(tree(Alignment::TOP_LEFT, 5.0));
+    assert_eq!(laid.size(laid.current_root()).width, seam);
+    laid.pump_for(Duration::from_millis(60));
+    assert_eq!(
+        laid.size(laid.current_root()).width,
+        50.0,
+        "changing alignment must not extend the factor's deadline"
+    );
+}
+
+pub(crate) fn align_spring_settles_and_optional_factors_snap_independently() {
+    let registry = Vsync::new();
+    let tree = |alignment, width: Option<f64>| {
+        let mut align = AnimatedAlign::new(alignment, SizedBox::square(10.0)).spring(
+            flui_animation::SpringDescription::with_damping_ratio(1.0, 100.0, 1.0),
+        );
+        if let Some(width) = width {
+            align = align.width_factor(width);
+        }
+        VsyncScope::new(registry.clone(), align)
+    };
+    let mut laid = lay_out_animated(
+        tree(Alignment::TOP_LEFT, None),
+        loose(200.0),
+        registry.clone(),
+    );
+    assert_eq!(laid.size(laid.current_root()).width, 200.0);
+    laid.pump_widget(tree(Alignment::BOTTOM_RIGHT, Some(3.0)));
+    assert_eq!(laid.size(laid.current_root()).width, 30.0);
+    laid.pump_for(Duration::from_millis(1));
+    laid.pump_for(Duration::from_millis(200));
+    let child = laid.child(laid.current_root(), 0);
+    let seam = laid.offset(child).dx;
+    assert!(seam > 0.0 && seam < 20.0, "alignment spring moved: {seam}");
+    laid.pump_widget(tree(Alignment::BOTTOM_RIGHT, None));
+    assert_eq!(laid.size(laid.current_root()).width, 200.0);
+    laid.pump_for(Duration::from_secs(3));
+    let child = laid.child(laid.current_root(), 0);
+    assert_eq!(laid.offset(child).dx, 190.0);
+    assert_eq!(laid.offset(child).dy, 190.0);
+    laid.pump_widget(SizedBox::square(10.0));
+    assert!(registry.is_empty(), "unmount withdraws all property motion");
+}
+
+pub(crate) fn invalid_align_targets_preserve_all_running_layout_properties() {
+    let registry = Vsync::new();
+    let curve = ArcCurve::new(Curves::Linear);
+    let tree = |alignment, factor| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedAlign::new(alignment, SizedBox::square(10.0))
+                .width_factor(factor)
+                .duration(RUN)
+                .curve(curve.clone()),
+        )
+    };
+    let mut laid = lay_out_animated(
+        tree(Alignment::TOP_LEFT, 2.0),
+        loose(200.0),
+        registry.clone(),
+    );
+    laid.pump_widget(tree(Alignment::BOTTOM_RIGHT, 5.0));
+    laid.pump_for(Duration::from_millis(1));
+    laid.pump_for(Duration::from_millis(40));
+    let size = laid.size(laid.current_root());
+    let child = laid.child(laid.current_root(), 0);
+    let offset = laid.offset(child);
+    laid.pump_widget(tree(Alignment::TOP_LEFT, f64::NAN));
+    assert_eq!(laid.size(laid.current_root()), size);
+    let child = laid.child(laid.current_root(), 0);
+    assert_eq!(laid.offset(child), offset);
+    laid.pump_for(Duration::from_millis(60));
+    assert_eq!(laid.size(laid.current_root()).width, 50.0);
+    let child = laid.child(laid.current_root(), 0);
+    assert_eq!(laid.offset(child).dx, 40.0);
+    assert_eq!(laid.offset(child).dy, 190.0);
+}
+
 pub(crate) fn rotation_retarget_preserves_the_painted_velocity() {
     let registry = Vsync::new();
     let tree = |target, curve: ArcCurve| {

@@ -1,5 +1,24 @@
 # flui-widgets architecture
 
+## Independent alignment motion
+
+`AnimatedAlign` owns alignment and optional factor motion independently. Each
+property uses typed `AnimatedValue` components under the presentation's Vsync;
+one weakly connected notification channel dirties its inner `AnimatedBuilder`.
+Retargeting alignment does not restart a factor's run or extend its deadline.
+Present factors preserve their physical velocities; appearing and disappearing
+factors snap because there is no value to interpolate on the absent side.
+Unset factors reach `Align` as unset, preserving constraints-fill semantics.
+Negative factor overshoot clamps to zero at layout. Non-finite targets refuse
+the whole numeric update before any property's motion is changed.
+
+`align_retarget_preserves_the_laid_out_velocity` observes position differences
+through actual layout. `align_changes_leave_an_unchanged_factor_on_its_original_deadline`
+pins independent progress. `align_spring_settles_and_optional_factors_snap_independently`
+covers exact spring settlement, absent factors and unmount withdrawal.
+`invalid_align_targets_preserve_all_running_layout_properties` verifies rejected
+numeric updates keep both old layout trajectories deliverable.
+
 ## Inherited presentation data
 
 `MediaQuery` lives in the lower `media_query` module, below text, interaction and

@@ -7,7 +7,7 @@
 - Animation status subscriptions own removal authority through
   `StatusSubscription`; dropping a guard removes its callback without retaining
   the animation owner, while detaching leaves it registered until source closure.
-- Opacity, padding and rotation support spring motion and retain their incoming
+- Opacity, padding, alignment and rotation support spring motion and retain their incoming
   velocities when retargeted through the render, layout and transform paths.
 
 ### Changed
@@ -28,6 +28,8 @@
 
 ### Fixed
 
+- Keep AnimatedAlign factors on their own motion deadlines when alignment changes;
+  preserve optional factor constraints-fill behavior and refuse non-finite targets.
 - Return inert status subscriptions after controller or switch disposal and
   release state borrows before refusing exhausted controller identities.
 - Finish interruptible spring motion continuously at its exact target, preserving
