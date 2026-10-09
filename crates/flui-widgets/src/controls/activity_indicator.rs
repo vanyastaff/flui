@@ -133,7 +133,7 @@ impl Motion {
 }
 
 /// Persistent state for [`ActivityIndicator`]: the repeating controller and
-/// its registration with the ambient [`Vsync`].
+/// its registration with the ambient [`Vsync`](flui_animation::Vsync).
 pub struct ActivityIndicatorState {
     controller: DrivenController,
     motion: Arc<Motion>,
