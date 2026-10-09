@@ -287,26 +287,20 @@ impl MotionClock {
     }
 
     /// Apply application policy continuously from the last accepted frame.
-    /// Returns whether the preference changed; no controller is sampled here.
-    pub fn set_preference(&mut self, preference: MotionPreference) -> bool {
+    /// No controller is sampled here.
+    pub fn set_preference(&mut self, preference: MotionPreference) {
         if self.preference != preference {
             self.rebase_normal();
             self.preference = preference;
-            true
-        } else {
-            false
         }
     }
 
     /// Apply the existing host preference after runtime projection.
-    /// Returns whether the observation changed; no controller is sampled here.
-    pub fn set_system_motion(&mut self, system: flui_platform_api::MotionPreference) -> bool {
+    /// No controller is sampled here.
+    pub fn set_system_motion(&mut self, system: flui_platform_api::MotionPreference) {
         if self.system != system {
             self.rebase_normal();
             self.system = system;
-            true
-        } else {
-            false
         }
     }
 
