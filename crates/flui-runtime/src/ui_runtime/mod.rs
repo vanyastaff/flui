@@ -22,7 +22,7 @@
 //! still gets a fresh generational [`UiRuntimeId`], so results stamped for a
 //! dead runtime are droppable by identity, not by convention.
 
-mod preferences;
+pub(crate) mod preferences;
 mod presentation_factory;
 pub use presentation_factory::PresentationFactory;
 mod presentation_lifecycle;
@@ -144,6 +144,7 @@ pub enum UiRuntimeError {
 pub struct UiRuntime {
     id: UiRuntimeId,
     preferences: RefCell<Option<crate::owner::SystemPreferencesSnapshot>>,
+    geometry_turn: std::rc::Rc<RefCell<Option<Vec<flui_foundation::PresentationId>>>>,
     /// The UI runtime's owner-local frame state — its post-frame queue and its
     /// async tasks — of which the UI runtime is the only strong owner (ADR-0136
     /// §2). Every frame drive passes it; teardown retires it in `Drop`, on

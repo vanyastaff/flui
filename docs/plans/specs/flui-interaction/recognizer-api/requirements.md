@@ -54,6 +54,10 @@ Pre-1.0 это дешевле исправить сейчас: внешних п
   внешняя реализация нелегитимна (решение и обоснование — design D5).
 - **(e)** `Listener::recognizer(..)` (или равный типизированный attachment) вместо ручной проводки;
   `add_pointer(dispatch)` вместо `add_pointer`/`add_pointer_with_kind`/`add_pointer_down`.
+- Исторический план настроек в следующем пункте заменён
+  [ADR-0172](../../../../adr/ADR-0172-host-owned-system-preferences.md): существующий
+  `GestureArenaScope` доставляет read-only provider, snapshot сохраняется от admission
+  до terminal; см. [design.md §D8](design.md#d8-настройки).
 - Дополнительно решить: дедлайны — один `deadline() -> Option<Instant>`; настройки — `Cell<GestureSettings>`
   из `GestureSettingsScope` (I11); освобождение — `Drop` против явного `cancel()` с исходом.
 

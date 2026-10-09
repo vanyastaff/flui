@@ -15,7 +15,7 @@ use crate::{
     ids::PointerId,
     processing::VelocityTracker,
     routing::{PointerDispatch, RoutePanic},
-    settings::GestureSettings,
+    settings::{GestureSettings, GestureSettingsProvider},
 };
 use flui_foundation::geometry::Offset;
 use std::{
@@ -94,7 +94,7 @@ impl Drop for MultiDragCallbacks {
 pub struct MultiDragGestureRecognizerBuilder {
     arena: GestureArena,
     axis: MultiDragAxis,
-    settings: GestureSettings,
+    settings: GestureSettingsProvider,
     callbacks: MultiDragCallbacks,
 }
 impl std::fmt::Debug for MultiDragGestureRecognizerBuilder {
@@ -107,8 +107,8 @@ impl std::fmt::Debug for MultiDragGestureRecognizerBuilder {
 impl MultiDragGestureRecognizerBuilder {
     /// Set settings captured separately for each Down.
     #[must_use]
-    pub fn settings(mut self, settings: GestureSettings) -> Self {
-        self.settings = settings;
+    pub fn settings(mut self, settings: impl Into<GestureSettingsProvider>) -> Self {
+        self.settings = settings.into();
         self
     }
     /// Set the accepted-contact factory.
@@ -144,7 +144,7 @@ struct MultiDragPointerState {
     last_position: Offset<f64>,
     last_global_position: Offset<f64>,
     kind: PointerKind,
-    slop: f64,
+    settings: GestureSettings,
     pending_delta: Offset<f64>,
     accepted: bool,
     client: Option<Rc<dyn MultiDragHandle>>,
@@ -158,7 +158,7 @@ struct MultiDragPointerState {
 pub struct MultiDragGestureRecognizer {
     membership: ArenaMembership,
     axis: MultiDragAxis,
-    settings: GestureSettings,
+    settings: GestureSettingsProvider,
     callbacks: MultiDragCallbacks,
     pointers: RefCell<BTreeMap<PointerId, MultiDragPointerState>>,
     generation: Cell<u64>,
@@ -177,7 +177,7 @@ impl MultiDragGestureRecognizer {
         MultiDragGestureRecognizerBuilder {
             arena,
             axis,
-            settings: GestureSettings::default(),
+            settings: GestureSettingsProvider::default(),
             callbacks: MultiDragCallbacks::default(),
         }
     }
@@ -318,12 +318,12 @@ impl MultiDragGestureRecognizer {
                 let crossed =
                     super::recognizer::measured_positions(dispatch.local).any(|position| {
                         let delta = position - state.initial_position;
-                        let magnitude = match self.axis {
-                            MultiDragAxis::Free => delta.dx.hypot(delta.dy),
-                            MultiDragAxis::Horizontal => delta.dx.abs(),
-                            MultiDragAxis::Vertical => delta.dy.abs(),
+                        let movement = match self.axis {
+                            MultiDragAxis::Free => delta,
+                            MultiDragAxis::Horizontal => Offset::new(delta.dx, 0.0),
+                            MultiDragAxis::Vertical => Offset::new(0.0, delta.dy),
                         };
-                        magnitude > state.slop
+                        state.settings.exceeds_hit_slop(state.kind, movement)
                     });
                 (
                     None,
@@ -447,6 +447,7 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
         let Some(id) = ContactId::next(&self.generation) else {
             return;
         };
+        let settings = self.settings.snapshot();
         let clock = self.membership.now();
         if self.pointers.borrow().contains_key(&pointer) {
             return;
@@ -461,7 +462,7 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
         let mut timeline = EventTimeline::default();
         let now = timeline.instant(event_time(dispatch.local), clock);
         let mut velocity_tracker =
-            VelocityTracker::with_estimator(kind, self.settings.velocity_estimator());
+            VelocityTracker::for_gesture(kind, settings.velocity_estimator());
         velocity_tracker.add_position(now, position);
         self.pointers.borrow_mut().insert(
             pointer,
@@ -472,7 +473,7 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
                 last_position: position,
                 last_global_position: global,
                 kind,
-                slop: self.settings.hit_slop(kind),
+                settings,
                 pending_delta: Offset::ZERO,
                 accepted: false,
                 client: None,

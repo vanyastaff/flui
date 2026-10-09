@@ -34,10 +34,12 @@
 //!
 //! For any sequence of finite samples — duplicate or out-of-order
 //! timestamps, sub-microsecond spacing, coordinates anywhere in the `f64`
-//! range — every tracker publishes a finite estimate whose speed is at most
-//! [`DEFAULT_MAX_FLING_VELOCITY`], in the direction of the measured motion.
-//! A gesture with a stricter configured maximum clamps further through
-//! [`GestureSettings::clamp_fling_velocity`](crate::settings::GestureSettings::clamp_fling_velocity).
+//! range — public tracker constructors publish a finite estimate whose speed is
+//! at most [`DEFAULT_MAX_FLING_VELOCITY`]. Gesture producers retain finite measured
+//! components independently of fling policy; terminal details derive their
+//! separate fling velocity from the profile admitted by the gesture. An estimate
+//! whose components are not representable is refused as zero, rather than
+//! publishing a saturated stand-in measurement.
 //!
 //! # Stop detection
 //!
@@ -138,6 +140,30 @@ fn bounded(pixels_per_second: Offset<f64>) -> Offset<f64> {
         .pixels_per_second
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+enum VelocityOutput {
+    #[default]
+    DefaultBounded,
+    Measurement,
+}
+
+impl VelocityOutput {
+    fn publish(self, velocity: Offset<f64>) -> Offset<f64> {
+        match self {
+            Self::DefaultBounded => bounded(velocity),
+            Self::Measurement if !velocity.is_finite() => Offset::ZERO,
+            Self::Measurement => velocity,
+        }
+    }
+
+    fn component_limit(self) -> f64 {
+        match self {
+            Self::DefaultBounded => DEFAULT_MAX_FLING_VELOCITY,
+            Self::Measurement => f64::MAX,
+        }
+    }
+}
+
 /// `newest - oldest`, saturated to the finite range: two coordinates of
 /// opposite sign near `f64::MAX` would otherwise subtract to infinity.
 fn finite_offset(newest: Offset<f64>, oldest: Offset<f64>) -> Offset<f64> {
@@ -202,6 +228,8 @@ pub struct VelocityTracker {
 
     estimator: VelocityEstimator,
 
+    output: VelocityOutput,
+
     /// Circular buffer of samples. Empty slots are `None` so we can
     /// distinguish "slot not yet written" from a sample at `Instant::EPOCH`.
     samples: [Option<PointAtTime>; HISTORY_SIZE],
@@ -247,9 +275,19 @@ impl VelocityTracker {
         Self {
             kind,
             estimator,
+            output: VelocityOutput::DefaultBounded,
             samples: [None; HISTORY_SIZE],
             index: 0,
             cached_fit: None,
+        }
+    }
+
+    /// Gesture callbacks publish measurements before applying admitted fling
+    /// policy. Reset retains this numerical output policy and the estimator.
+    pub(crate) fn for_gesture(kind: PointerKind, estimator: VelocityEstimator) -> Self {
+        Self {
+            output: VelocityOutput::Measurement,
+            ..Self::with_estimator(kind, estimator)
         }
     }
 
@@ -424,6 +462,21 @@ impl VelocityTracker {
             n += 1;
         })?;
         let ws = [1.0f64; HISTORY_SIZE]; // Uniform weights.
+        let normalize = |values: &mut [f64]| {
+            if !matches!(self.output, VelocityOutput::Measurement) {
+                return 1.0;
+            }
+            let scale = values.iter().copied().map(f64::abs).fold(0.0_f64, f64::max);
+            if scale == 0.0 {
+                return 1.0;
+            }
+            for value in values {
+                *value /= scale;
+            }
+            scale
+        };
+        let x_scale = normalize(&mut xs[..n]);
+        let y_scale = normalize(&mut ys[..n]);
         let offset = finite_offset(newest.position, oldest.position);
         let duration = time_between(newest.time, oldest.time);
 
@@ -498,10 +551,11 @@ impl VelocityTracker {
             );
             return Some(VelocityEstimate::new(offset, Offset::ZERO, duration, 0.0));
         };
-        let slope = |fit: &PolynomialFit| fit.coefficients[1] * 1000.0;
+        let slope = |fit: &PolynomialFit, scale: f64| (fit.coefficients[1] * 1000.0) * scale;
         Some(VelocityEstimate::new(
             offset,
-            bounded(Offset::new(slope(&x_fit), slope(&y_fit))),
+            self.output
+                .publish(Offset::new(slope(&x_fit, x_scale), slope(&y_fit, y_scale))),
             duration,
             x_fit.confidence * y_fit.confidence,
         ))
@@ -527,8 +581,9 @@ impl VelocityTracker {
     /// computed from the newest and oldest eligible samples.
     fn compute_weighted(&self, weights: [f64; 3]) -> Option<VelocityEstimate> {
         let (newest, oldest, eligible_samples) = self.walk_window(|_, _| {})?;
-        let estimated_velocity =
-            bounded(self.estimated_weighted_velocity(weights, eligible_samples));
+        let estimated_velocity = self
+            .output
+            .publish(self.estimated_weighted_velocity(weights, eligible_samples));
 
         Some(VelocityEstimate::new(
             finite_offset(newest.position, oldest.position),
@@ -539,8 +594,10 @@ impl VelocityTracker {
     }
 
     /// The raw weighted-average velocity, regardless of the
-    /// "stationary for 40 ms" gate. Each two-point velocity is bounded
-    /// before weighting, so the sum cannot overflow.
+    /// "stationary for 40 ms" gate. Normalized convex weighting preserves
+    /// representable components without overflowing the sum. Default output
+    /// bounds each interval first; measurement output refuses an unrepresentable
+    /// interval instead of substituting a saturated measurement.
     fn estimated_weighted_velocity(
         &self,
         weights: [f64; 3],
@@ -551,11 +608,24 @@ impl VelocityTracker {
                 return Offset::ZERO;
             }
             let (dx, dy) = self.two_sample_velocity_at_f64(offset);
-            bounded(Offset::new(dx, dy))
+            match self.output {
+                VelocityOutput::DefaultBounded => bounded(Offset::new(dx, dy)),
+                VelocityOutput::Measurement => Offset::new(dx, dy),
+            }
         };
         let (a, b, c) = (v(-2, 4), v(-1, 3), v(0, 2));
-        let dx = a.dx * weights[0] + b.dx * weights[1] + c.dx * weights[2];
-        let dy = a.dy * weights[0] + b.dy * weights[1] + c.dy * weights[2];
+        let average = |values: [f64; 3]| {
+            let scale = values.into_iter().map(f64::abs).fold(0.0_f64, f64::max);
+            if scale == 0.0 {
+                return 0.0;
+            }
+            let normalized = (values[0] / scale) * weights[0]
+                + (values[1] / scale) * weights[1]
+                + (values[2] / scale) * weights[2];
+            normalized.clamp(-1.0, 1.0) * scale
+        };
+        let dx = average([a.dx, b.dx, c.dx]);
+        let dy = average([a.dy, b.dy, c.dy]);
         Offset::new(dx, dy)
     }
 
@@ -575,9 +645,11 @@ impl VelocityTracker {
             return (0.0, 0.0);
         }
         let dt_ms = dt_us as f64 / 1000.0;
-        // (end - start) is in pixels; divide by dt_ms to get px/ms; × 1000 = px/s.
-        let dx_px_s = (end.position.dx - start.position.dx) * 1000.0 / dt_ms;
-        let dy_px_s = (end.position.dy - start.position.dy) * 1000.0 / dt_ms;
+        // Divide by seconds before scaling the displacement: multiplying a large
+        // representable displacement by 1000 first could overflow unnecessarily.
+        let seconds = dt_ms / 1000.0;
+        let dx_px_s = (end.position.dx - start.position.dx) / seconds;
+        let dy_px_s = (end.position.dy - start.position.dy) / seconds;
         (dx_px_s, dy_px_s)
     }
 }
@@ -593,14 +665,28 @@ impl VelocityTracker {
     /// Impulse velocity over one axis. `positions`/`times` are chronological
     /// (oldest first); both slices have the same length ≥ 2 and strictly
     /// increasing times (enforced by the caller's sample walk).
-    fn impulse_axis(positions: &[f64], dts: &[f64]) -> f64 {
-        let mut work = 0.0_f64;
+    fn impulse_axis(&self, positions: &[f64], dts: &[f64]) -> f64 {
+        let mut velocities = [0.0_f64; HISTORY_SIZE];
+        let mut scale = 0.0_f64;
+        let limit = self.output.component_limit();
         for i in 0..positions.len() - 1 {
+            let measured = (positions[i + 1] - positions[i]) / dts[i];
+            if matches!(self.output, VelocityOutput::Measurement) && !measured.is_finite() {
+                return f64::NAN;
+            }
+            let velocity = measured.clamp(-limit, limit);
+            velocities[i] = velocity;
+            scale = scale.max(velocity.abs());
+        }
+        if scale == 0.0 {
+            return 0.0;
+        }
+        let mut work = 0.0_f64;
+        for (i, &velocity) in velocities.iter().take(positions.len() - 1).enumerate() {
             let v_prev = Self::kinetic_energy_to_velocity(work);
-            // Bounded per interval, so the squared term cannot overflow; the
-            // published vector is bounded again as a whole.
-            let v_curr = ((positions[i + 1] - positions[i]) / dts[i])
-                .clamp(-DEFAULT_MAX_FLING_VELOCITY, DEFAULT_MAX_FLING_VELOCITY);
+            // Integrate dimensionless work, so squaring representable measured
+            // speeds cannot overflow before the terminal policy sees them.
+            let v_curr = velocity / scale;
             work += (v_curr - v_prev) * v_curr.abs();
             if i == 0 {
                 // Boundary condition (AOSP "approach 2"): with no information
@@ -609,7 +695,7 @@ impl VelocityTracker {
                 work *= 0.5;
             }
         }
-        Self::kinetic_energy_to_velocity(work)
+        Self::kinetic_energy_to_velocity(work) * scale
     }
 
     /// Buffer-pure impulse estimate; the caller applies the query-clock gate.
@@ -686,12 +772,12 @@ impl VelocityTracker {
             ));
         }
 
-        let vx = Self::impulse_axis(&xs[..m], &dts[..m - 1]);
-        let vy = Self::impulse_axis(&ys[..m], &dts[..m - 1]);
+        let vx = self.impulse_axis(&xs[..m], &dts[..m - 1]);
+        let vy = self.impulse_axis(&ys[..m], &dts[..m - 1]);
 
         Some(VelocityEstimate::new(
             finite_offset(newest.position, oldest.position),
-            bounded(Offset::new(vx, vy)),
+            self.output.publish(Offset::new(vx, vy)),
             newest.time.saturating_duration_since(oldest.time),
             // The impulse model makes no fit-quality claim (AOSP reports the
             // value unconditionally).

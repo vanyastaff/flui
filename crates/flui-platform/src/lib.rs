@@ -174,8 +174,9 @@ pub mod config;
 /// and re-exported here at its old path.
 pub use flui_platform_api::data_transfer;
 pub use flui_platform_api::{
-    DurationScale, GesturePreferences, InvalidPreference, MotionPreference, SystemPreferences,
-    WheelPreferences, WheelStep,
+    Distance, DurationScale, FlingSpeeds, GestureGeometry, GesturePreferences, InvalidPreference,
+    MotionPreference, NativeMouseGeometry, NativeTouchGeometry, PreferenceQueryError,
+    SystemPreferences, WheelPreferences, WheelStep,
 };
 pub mod error;
 #[cfg(not(target_arch = "wasm32"))]

@@ -9,20 +9,23 @@ use crate::keyboard::Modifiers;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ScrollUnit {
-    /// Lines (or wheel notches): one notch of a conventional wheel is `1.0`, and a
-    /// high-resolution wheel reports fractions of it.
+    /// Already translated line distances. System lines-per-detent preferences
+    /// have already been applied by the producer and must not be applied again.
     Lines,
     /// Logical pixels.
     Pixels,
     /// Pages: one page is the receiving viewport's extent.
     Pages,
+    /// Raw wheel rotation: one conventional detent is `1.0`; fractional
+    /// rotation is preserved. The consumer applies the system notch policy.
+    Detents,
 }
 
 /// How far one scroll event asks to scroll, in the unit the device reported.
 ///
-/// The unit is kept to the consumer: a line or a page is resolved by the scrollable that
-/// receives it (its line height, its viewport extent, the platform's lines-per-notch setting),
-/// not here. Positive values scroll the content down and to the right, so the scroll offset
+/// The unit is kept to the consumer: translated lines use its authored distance,
+/// pages use its viewport, and raw detents use the system notch preference
+/// together with those distances. Positive values scroll down and right, so the scroll offset
 /// grows: the W3C `WheelEvent` convention, whatever the platform's own sign.
 ///
 /// # Examples
@@ -30,8 +33,8 @@ pub enum ScrollUnit {
 /// ```
 /// use flui_platform_api::pointer::{ScrollDelta, ScrollUnit};
 ///
-/// let notch = ScrollDelta::try_new(ScrollUnit::Lines, 0.0, 1.0)?;
-/// assert_eq!((notch.unit(), notch.x(), notch.y()), (ScrollUnit::Lines, 0.0, 1.0));
+/// let notch = ScrollDelta::try_new(ScrollUnit::Detents, 0.0, 1.0)?;
+/// assert_eq!((notch.unit(), notch.x(), notch.y()), (ScrollUnit::Detents, 0.0, 1.0));
 /// assert!(ScrollDelta::try_new(ScrollUnit::Pixels, f64::NAN, 0.0).is_err());
 /// # Ok::<(), flui_platform_api::pointer::InputValueError>(())
 /// ```

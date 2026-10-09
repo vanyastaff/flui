@@ -45,6 +45,8 @@ pub struct MacOSPlatform {
 
     loop_control: Arc<super::loop_control::LoopControl>,
 
+    preferences: Arc<super::preferences::PreferenceSource>,
+
     /// Background executor (GCD-based)
     background_executor: Arc<BackgroundExecutor>,
 
@@ -162,8 +164,10 @@ impl MacOSPlatform {
 
             let loop_control =
                 super::loop_control::LoopControl::new(Arc::clone(&windows), Arc::clone(&handlers));
+            let preferences = super::preferences::PreferenceSource::new(&loop_control.owner_signal);
             let platform = Self {
                 loop_control,
+                preferences,
                 app,
                 windows,
                 handlers,
@@ -187,6 +191,10 @@ impl MacOSPlatform {
 }
 
 impl Platform for MacOSPlatform {
+    fn preferences(&self) -> Result<crate::SystemPreferences, PlatformError> {
+        self.preferences.read()
+    }
+
     fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
         Arc::clone(&self.background_executor) as Arc<dyn PlatformExecutor>
     }

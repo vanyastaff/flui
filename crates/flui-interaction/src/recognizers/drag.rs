@@ -15,7 +15,7 @@ use crate::{
     ids::PointerId,
     processing::VelocityTracker,
     routing::PointerDispatch,
-    settings::GestureSettings,
+    settings::{GestureSettings, GestureSettingsProvider},
     traits::DragAxis,
 };
 use flui_foundation::geometry::Offset;
@@ -126,8 +126,23 @@ pub struct DragEndDetails {
     pub global_position: Offset<f64>,
     /// Final receiving-node position.
     pub local_position: Offset<f64>,
-    /// Axis component of the velocity.
+    /// Exact axis component, or the vector magnitude for a free drag.
+    /// An unrepresentable free-drag magnitude uses the finite scalar ceiling
+    /// `f64::MAX`; the raw vector components remain available in [`Self::velocity`].
     pub primary_velocity: f64,
+    fling_velocity: Velocity,
+}
+impl DragEndDetails {
+    /// Release velocity resolved with the gesture's admitted minimum and maximum.
+    ///
+    /// Cancellation and releases below the minimum give zero. The maximum caps
+    /// vector magnitude while preserving direction. [`Self::velocity`] remains
+    /// the raw finite-component measurement, independent of fling policy. A
+    /// component estimate outside the representable range is refused as zero.
+    #[must_use]
+    pub const fn fling_velocity(&self) -> Velocity {
+        self.fling_velocity
+    }
 }
 pub use crate::processing::Velocity;
 /// Callback for an admitted contact.
@@ -172,7 +187,7 @@ pub struct DragGestureRecognizerBuilder {
     axis: DragAxis,
     start_behavior: DragStartBehavior,
     pointer_strategy: DragPointerStrategy,
-    settings: GestureSettings,
+    settings: GestureSettingsProvider,
     callbacks: DragCallbacks,
 }
 impl std::fmt::Debug for DragGestureRecognizerBuilder {
@@ -190,10 +205,10 @@ impl DragGestureRecognizerBuilder {
         self.pointer_strategy = strategy;
         self
     }
-    /// Configure admission settings, captured independently for each contact.
+    /// Choose settings captured by the first contact and retained by its drag group.
     #[must_use]
-    pub fn settings(mut self, settings: GestureSettings) -> Self {
-        self.settings = settings;
+    pub fn settings(mut self, settings: impl Into<GestureSettingsProvider>) -> Self {
+        self.settings = settings.into();
         self
     }
     /// Configure the initial-position policy.
@@ -300,7 +315,7 @@ pub struct DragGestureRecognizer {
     axis: DragAxis,
     start_behavior: DragStartBehavior,
     pointer_strategy: DragPointerStrategy,
-    settings: GestureSettings,
+    settings: GestureSettingsProvider,
     callbacks: DragCallbacks,
 }
 impl std::fmt::Debug for DragGestureRecognizer {
@@ -321,7 +336,7 @@ impl DragGestureRecognizer {
             axis,
             start_behavior: DragStartBehavior::default(),
             pointer_strategy: DragPointerStrategy::default(),
-            settings: GestureSettings::default(),
+            settings: GestureSettingsProvider::default(),
             callbacks: DragCallbacks::default(),
         }
     }
@@ -377,14 +392,16 @@ impl DragGestureRecognizer {
             DragAxis::Free => delta.dx.hypot(delta.dy),
         }
     }
-    fn slop(&self, kind: PointerKind, settings: &GestureSettings) -> f64 {
+    fn exceeds_slop(
+        &self,
+        kind: PointerKind,
+        settings: &GestureSettings,
+        delta: Offset<f64>,
+    ) -> bool {
         match self.axis {
-            DragAxis::Free => settings.pan_slop_for(kind),
-            DragAxis::Vertical | DragAxis::Horizontal if kind == PointerKind::Mouse => {
-                settings.hit_slop(kind)
-            }
-            DragAxis::Vertical => settings.pan_slop_vertical(),
-            DragAxis::Horizontal => settings.pan_slop_horizontal(),
+            DragAxis::Free => settings.exceeds_pan_slop_for(kind, delta),
+            DragAxis::Vertical => delta.dy.abs() > settings.pan_slop_vertical_for(kind),
+            DragAxis::Horizontal => delta.dx.abs() > settings.pan_slop_horizontal_for(kind),
         }
     }
     fn handle_move(&self, dispatch: PointerDispatch<'_>) {
@@ -447,8 +464,7 @@ impl DragGestureRecognizer {
             let claim = active
                 && !state.accepted
                 && super::recognizer::measured_positions(dispatch.local).any(|position| {
-                    self.primary_delta(position - snapshot.local).abs()
-                        > self.slop(snapshot.kind, &snapshot.settings)
+                    self.exceeds_slop(snapshot.kind, &snapshot.settings, position - snapshot.local)
                 });
             (update, claim)
         };
@@ -595,6 +611,9 @@ impl DragGestureRecognizer {
         let Some(active) = self.active_contact() else {
             return CancelOutcome::Idle;
         };
+        let Some(snapshot) = active.contact.current() else {
+            return CancelOutcome::Idle;
+        };
         // Detach the complete outgoing sequence before clocks, diagnostics,
         // arena verdicts or callbacks can admit a replacement.
         let outgoing = std::mem::take(&mut *self.contacts.borrow_mut());
@@ -620,6 +639,13 @@ impl DragGestureRecognizer {
                     )
                 });
             (velocity, position, global)
+        };
+        let fling_velocity = if reason == GestureEndReason::Completed {
+            snapshot
+                .settings
+                .resolve_fling_velocity(snapshot.kind, velocity)
+        } else {
+            Velocity::ZERO
         };
         let retire = || {
             let mut first = clock_failure;
@@ -652,7 +678,10 @@ impl DragGestureRecognizer {
                     velocity,
                     local_position: position,
                     global_position: global,
-                    primary_velocity: self.primary_delta(velocity.pixels_per_second),
+                    primary_velocity: self
+                        .primary_delta(velocity.pixels_per_second)
+                        .clamp(f64::MIN, f64::MAX),
+                    fling_velocity,
                 });
             });
         } else {
@@ -677,7 +706,7 @@ impl GestureRecognizer for DragGestureRecognizer {
                 return;
             }
         }
-        if let Some(active) = self.active_contact() {
+        let settings = if let Some(active) = self.active_contact() {
             let Some(snapshot) = active.contact.current() else {
                 return;
             };
@@ -688,7 +717,10 @@ impl GestureRecognizer for DragGestureRecognizer {
             {
                 return;
             }
-        }
+            snapshot.settings
+        } else {
+            self.settings.snapshot()
+        };
         let previous = self.active.get();
         let Some(id) = ContactId::next(&self.last_contact) else {
             return;
@@ -700,7 +732,7 @@ impl GestureRecognizer for DragGestureRecognizer {
         let mut timeline = EventTimeline::default();
         let now = timeline.instant(event_time(dispatch.local), clock);
         let mut velocity_tracker =
-            VelocityTracker::with_estimator(down.pointer.kind, self.settings.velocity_estimator());
+            VelocityTracker::for_gesture(down.pointer.kind, settings.velocity_estimator());
         let Some(position) = dispatch.local.position() else {
             return;
         };
@@ -723,7 +755,7 @@ impl GestureRecognizer for DragGestureRecognizer {
                 velocity_tracker,
             }),
         });
-        if tracked.contact.begin(dispatch, &self.settings).is_err() {
+        if tracked.contact.begin(dispatch, &settings).is_err() {
             return;
         }
         if self.active.get() != previous || self.current(down.pointer.id).is_some() {

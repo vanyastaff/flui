@@ -106,6 +106,13 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   `ArenaMembership` independently for each pointer.
   `public_recognizer_extension_contracts` pins overlapping admission, settings
   freezing, cancellation of every owner, silent Drop and later recovery.
+- **Multi-tap is a simultaneous contact group.** `MultiTapGestureRecognizer`
+  recognizes the configured number of contacts only after all have released
+  within their own slop. Either release order completes once; an unrelated
+  cancellation leaves the group intact, while a tracked cancellation retires
+  the attempt and allows the next group. This is the policy documented in
+  [GESTURES.md](GESTURES.md), pinned by
+  `multi_contact_events_keep_independent_pointer_identity`.
 - **One owned input vocabulary (ADR-0143).** Platform dispatch, interaction,
   runtime replay and widget callbacks share `flui-platform-api`'s pointer and
   keyboard types. Pointer and hardware IDs remain distinct; absent device or
@@ -174,6 +181,36 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   exact contact identity again. `tap_and_drag_resolves_through_the_shared_arena`
   pins 39/40 ms admission, both mouse and touch, a held first contact and reused-ID
   recovery; `tap_builder_lifecycle_contract` pins cancellation and later reuse.
+- **Gesture settings belong to the admitted sequence.** A presentation has one
+  `GestureSettingsSource` producer and supplies readonly owner-local providers.
+  Authored `GestureSettings` remain fixed. New contacts observe the provider;
+  active contacts, drag handoff groups, scale sessions and consecutive-tap
+  candidates retain their admitted policy. Publishing a replacement invokes no
+  callback and requests no frame. `admitted_gesture_settings_contract` exercises
+  retained, next-contact and restored controls through gesture callbacks.
+  Exact presentation geometry keeps mouse rectangles per axis; observed touch
+  distances preserve authored hit-to-pan and hit-to-span ratios. A zero baseline
+  hit tier keeps its authored dependent tiers, while an unrepresentable derived
+  tier returns a recoverable error. Native mouse click timing begins at the
+  first Down; authored and touch intervals begin at the first Up. The independent
+  40 ms bounce guard remains measured from the first Up.
+  Consecutive contacts must share pointer kind and typed device identity;
+  two absent device identities use kind-local matching, while a known device
+  cannot match an unknown one. Ordinary successive touch contacts may use
+  different pointer IDs. Measured history counts toward drift; predictions do
+  not. Raw terminal velocity preserves finite measured components independently
+  of the admitted fling bounds. An unrepresentable component estimate is refused
+  as zero. Free-drag terminal scalar magnitude alone uses `f64::MAX` when its norm
+  cannot be represented; the finite raw vector and derived directional fling
+  remain available separately.
+  `DragEndDetails::fling_velocity` and `ScaleEndDetails::focal_fling_velocity`
+  apply the admitted pixel-speed bounds once at terminal delivery. Scale's
+  dimensionless velocity remains independent of those bounds. Native scale
+  stages its profile at Begin without claiming delivery or invoking callbacks;
+  `PanZoomDisposition` distinguishes that admission from a refused Begin and
+  from recognized handling. The mounting owner keeps a refused native session
+  refused until its terminal event, while an Update without Begin remains an
+  independent relative step.
 - **Focus scope identity is explicit.** A `FocusScopeNode` owns an inner `FocusNode`, and that backing node carries a `Weak<FocusScopeNode>` owner link. This keeps enclosing-scope lookup, focused-child history, and `FocusManager::focus_next` / `focus_previous` rooted in the same tree instead of relying on a parallel manager structure. `descendants_are_focusable=false` gates descendant requests; a true-to-false transition evicts focus held by the node or its subtree while leaving the node eligible for a later explicit request. FLUI clears primary focus to `None` rather than selecting a previously focused child.
 - **`processing::lsq_solver` is crate-internal.** `VelocityTracker` is its only user; the resampler interpolates linearly and does not fit a polynomial.
 - **Observability is crate-public.** `pub mod observability` exports stable `GestureEvent` spellings, component-name constants, and `pointer_event_kind`. `flui-app` configures a generic subscriber; gesture-specific devtools consumption requires its own integration. `stable_recognizer_observability_kinds_reach_the_subscriber` pins admission and dispatch fields through public recognizer calls.

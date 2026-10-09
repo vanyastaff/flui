@@ -123,6 +123,15 @@ lists that cannot be produced deterministically through the public OS API. It
 pins ordered complete tags, count/terminator validation and bounded retries;
 failed query outputs never become a preference observation.
 
+The same source samples mouse rectangle/drag metrics at an explicit 96-DPI
+bootstrap context without user windows. Those raw observations only invalidate
+consumers. Each presentation queries `GetDpiForWindow` and
+`GetSystemMetricsForDpi` for its live HWND; scaling a representative window's
+metrics cannot reproduce this query. Full double-click dimensions and drag
+half-extents remain distinct, and legitimate zero axes are retained. The public
+native row compares the projection with independent Win32 reads and checks
+foreign-thread and closed-window refusal.
+
 The source's hidden top-level HWND receives setting broadcasts outside user-window
 membership and exit policy. WinRT text-scale and animation observers and the HWND
 mark a refresh obligation and wake the owner; they never invoke runtime code.
@@ -162,6 +171,53 @@ message to that exact receiver must cause a real OS read on the registered owner
 callback. Removing only invalidation leaves the stale value and fails the test.
 The OS configuration is never changed; this proves message-to-observation delivery,
 not an actual OS preference change or a rendered native application's update.
+
+### Native gesture sampling follows public API refresh limits
+
+AppKit observes `NSEvent::doubleClickInterval` on the application owner lane.
+Android observes public `ViewConfiguration` timeouts and physical touch/fling
+metrics using the Activity context and its resource density; its presentation
+query samples that context again. Neither backend invents unsupported mouse or
+touch geometry. iOS and web retain unknown numeric gesture observations.
+
+Neither verified public API provides a complete external-setting notification
+for these observations. The host therefore attempts a refresh every 500ms while
+its owner loop can run, including without user windows. This is a sampling
+cadence, not an immediate OS notification or a bound on a blocked owner's latency.
+Android also invalidates on `ConfigChanged` and delivers accepted configuration
+changes before subsequent input. AppKit timer captures hold only a weak source;
+owner closure or source retirement makes queued work inert. Its next attempt is
+armed before native work and contained diagnostics. Errors preserve the accepted
+observation and the next refresh attempt.
+AppKit installs this sampler before its first native getter. A cold source has
+no accepted observation; an initial query error cannot abort platform bootstrap,
+publish a fabricated default, or discard its retry. The shared production read
+path's `cold_native_observation_recovers_without_forged_defaults` covers failed
+initial observation, deferred retry, first successful publication and recovery
+without a stale-success response. This portable seam does not execute AppKit's
+native constructor or its GCD timer.
+Successful recovery requests owner delivery even when the comparison value is
+unchanged: a prior failed consumer read must not strand the accepted observation.
+Healthy unchanged observations remain quiet.
+Failed or unwinding native reads restore a 500ms admission deadline; unrelated
+owner wakes cannot repeat the getter early. Reentrant reads return
+`PreferencesDeferred` before native work, and foreign calls do not affect that
+admission. `bounded_native_read_admission` exercises this portable production
+guard through failure, competing admission and recovery after unwind.
+
+Android API26 public horizontal/vertical scroll factors normalize fractional
+axis values to logical pixel deltas exactly once. API21–25 resolve the public
+`listPreferredItemHeight` theme attribute through the Activity's display metrics,
+without hidden API reflection; this is the public
+[AndroidX compatibility path](https://android.googlesource.com/platform/frameworks/support/+/34ede8799a022385ca94a1bc111f978ac2e65f45/core/core/src/main/java/androidx/core/view/ViewConfigurationCompat.java).
+These pixel packets bypass discrete wheel preferences. A failed refresh keeps
+the accepted logical factors; when no factor was ever observed, an explicit
+authored compatibility policy treats each axis unit as one line. That fallback
+does not claim an OS factor. `android_axis_factor_policy` runs the actual portable
+cache/normalization seam and covers API selection, fractional values, failed
+refresh, recovery and invalid projection. It does not prove execution on an
+Android device. The AppKit/Android native sources require device validation in
+addition to cross-target type checking.
 
 ### Native Win32 owner delivery survives message-post refusal
 

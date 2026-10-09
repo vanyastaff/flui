@@ -2235,6 +2235,35 @@ equal-edge cancellation, custom physics callback/retirement competition and
 fresh gesture recovery. Pixel listener failures follow the notifier's existing
 diagnostic contract rather than implying frame-pump propagation.
 
+### Terminal inertia uses admitted gesture policy
+
+`Scrollable`, `RefreshIndicator` and `Dismissible` consume the admitted terminal
+impulse from `DragEndDetails::fling_velocity()` (ADR-0172). Axis selection and
+scroll reversal preserve its sign. The recognizer applies the contact's captured
+minimum and maximum before release; these consumers do not replace that policy
+with a framework default. Scroll physics and dismissal direction/threshold
+rules remain independently authored. Raw measured velocity remains available to
+application callbacks.
+
+`terminal_scroll_motion_uses_the_admitted_fling_profile` and
+`terminal_refresh_motion_uses_the_admitted_fling_profile` observe bounded coast,
+below-minimum rest and fresh-contact recovery after a live profile change.
+They also admit a maximum above the framework baseline and observe the larger
+coasting distance; no second default ceiling constrains the resolved impulse.
+`dismissal_release_uses_its_captured_fling_profile` and
+`vertical_dismissal_release_uses_its_captured_fling_profile` preserve dismissal
+thresholds and the active contact's impulse on both axes.
+
+`InteractiveViewer` seeds focal friction from
+`ScaleEndDetails::focal_fling_velocity()`. Contact Down and native Begin capture
+the release policy; replacing the source before End affects the next sequence.
+Its public interaction callback retains the raw focal measurement in logical
+pixels per second and the separate dimensionless scale velocity.
+`viewer_touch_focal_inertia_uses_the_admitted_profile` and
+`viewer_native_focal_inertia_uses_the_admitted_profile` observe below-minimum
+rest, the captured maximum and fresh-sequence recovery through actual frame
+motion.
+
 ### Accepted gesture cancellation does not commit a release action
 
 Accepted drag cancellation still reaches `on_end`, carrying
@@ -2273,7 +2302,7 @@ counter and next completed swipe.
 `InteractionEndDetails`. Discrete wheel and panzoom updates synthesize
 `Completed`, without claiming a physical pointer release.
 `viewer_reports_cancelled_then_completed_interactions` checks what the public
-callback observes. The viewer still has no built-in pan inertia.
+callback observes. Cancellation stops focal inertia without a release impulse.
 
 
 ### Text-store exact points use source scalar intervals in either direction
@@ -2355,3 +2384,40 @@ recognizers are no longer invoked. The controlled slider retirement row pins
 mid-contact disablement, stale Move/Up delivery and a fresh mounted contact.
 Disclosure explicitly merges its named Focus/action header semantics while its
 body remains a separate subtree; indicator direction uses the header allocation.
+
+## Mounted gesture policy ownership
+
+`GestureDetector`, `Draggable` and the navigator's edge-swipe detector acquire
+the resolved `GestureSettingsProvider` in lifecycle hooks. Live host publication
+updates that same provider; recognizers snapshot policy at admission and retain
+it through the contact or candidate's terminal event. An authored fixed profile
+or a different source identity replaces the owning recognizers instead. Equal
+profiles and the same live source preserve active work.
+
+Mounted listeners retain private weak attachments. Replacement commits every
+incoming owner and target before cancelling outgoing owners, so cached routes
+cannot reach a retired actor. Disposal revokes admission before cleanup.
+`authored_settings_replace_active_owners_and_preserve_equal_profiles`,
+`authored_settings_retire_tap_candidates_and_deadlines` and
+`authored_settings_retire_native_scale_session_before_fresh_admission` pin the
+six detector families. `draggable_reads_admission_profiles_and_retires_authored_owners`
+and `replacing_authored_back_swipe_policy_cancels_the_outgoing_contact` cover
+the direct consumers and their next healthy operation.
+
+The back-swipe settle converts the admitted fling vector's signed horizontal
+component to route widths per second, then applies directionality. Raw measured
+velocity remains available for reporting; `Draggable` reports it without an
+internal inertial animation. `mounted_back_swipe_settle_uses_the_admitted_fling_bound`
+pins retained policy and the subsequent contact's fresh bound against actual
+mounted route transitions.
+
+Native scale Begin stages the actor's immutable profile without claiming the
+stream or delivering recognized callbacks. The actor's typed disposition
+distinguishes dormant admission from refusal and recognized handling. A Begin
+refused while touch contacts are active remains refused until its terminal
+event; a later Update cannot revive that session after touch release. Admitted
+dormant End and cancellation retire the actor before an independent Update can
+start. `mounted_native_begin_retains_estimator_before_first_claim` pins the
+estimator at Begin, identity updates and unclaimed terminal cleanup;
+`mounted_native_begin_refused_by_touch_cannot_claim_after_touch_terminal` pins
+refusal, standalone updates and fresh-session recovery.

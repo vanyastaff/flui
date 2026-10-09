@@ -12,6 +12,8 @@ mod multidrag;
 mod observability;
 #[path = "recognizer_api/scale_force_press.rs"]
 mod scale_force_press;
+#[path = "recognizer_api/settings_admission.rs"]
+mod settings_admission;
 #[path = "recognizer_api/tap_contracts.rs"]
 mod tap_contracts;
 #[path = "recognizer_api/tapdrag_eager.rs"]

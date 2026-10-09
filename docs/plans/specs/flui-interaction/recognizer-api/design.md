@@ -156,6 +156,15 @@ pub trait GestureArenaMember {
 
 ### D8. Настройки
 
+**Историческое решение, заменено в I11:** варианты и выбор ниже фиксируют план
+2026-10-06. [ADR-0172](../../../../adr/ADR-0172-host-owned-system-preferences.md)
+вместо `Cell<GestureSettings>` / `set_settings` / `GestureSettingsScope` закрепляет
+builder `.settings(impl Into<GestureSettingsProvider>)`, read-only provider через
+существующий `GestureArenaScope` и snapshot на admission до terminal. Обычное
+host-обновление обслуживает следующие admission; замена authored provider
+переустанавливает владельцев с contained cancellation исходящих. Текущая приёмка —
+[../tasks.md](../tasks.md), задача I11.
+
 | Вариант | Итог |
 |---|---|
 | `Arc<Mutex<GestureSettings>>` (сейчас) | замок без потоков |

@@ -39,7 +39,7 @@ use crate::{
     ids::PointerId,
     processing::{Velocity, VelocityTracker},
     routing::{PanZoomDispatch, PointerDispatch, RoutePanic},
-    settings::GestureSettings,
+    settings::{GestureSettings, GestureSettingsProvider},
 };
 
 // ============================================================================
@@ -132,6 +132,33 @@ pub struct ScaleEndDetails {
     pub velocity: f64,
     /// Release velocity of the local focal point, in logical pixels per second.
     pub focal_velocity: Velocity,
+    focal_fling_velocity: Velocity,
+}
+
+impl ScaleEndDetails {
+    /// Focal release velocity resolved with the session's admitted fling limits.
+    ///
+    /// Releases below the minimum give zero; the maximum caps vector magnitude
+    /// while preserving direction. [`Self::focal_velocity`] retains the raw
+    /// measurement. These pixel-speed limits do not alter [`Self::velocity`],
+    /// which measures dimensionless scale change per second.
+    #[must_use]
+    pub const fn focal_fling_velocity(&self) -> Velocity {
+        self.focal_fling_velocity
+    }
+}
+
+/// Admission and recognition of one native pan/zoom event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+#[must_use]
+pub enum PanZoomDisposition {
+    /// The event was refused or does not belong to this actor's session.
+    Ignored,
+    /// The event belongs to a dormant session without claiming native delivery.
+    Admitted,
+    /// The event belongs to a recognized session and claims native delivery.
+    Handled,
 }
 
 /// The contact count that can begin recognition.
@@ -193,7 +220,7 @@ pub struct ScaleGestureRecognizer {
     next_contact: Cell<u64>,
     gesture_state: RefCell<ScaleState>,
     native: RefCell<Option<NativeScale>>,
-    settings: GestureSettings,
+    settings: GestureSettingsProvider,
     callbacks: ScaleCallbacks,
 }
 
@@ -333,6 +360,8 @@ impl Ratios {
 #[derive(Debug)]
 struct ScaleState {
     start_mode: ScaleStartMode,
+    /// First-contact profile, retained until the last contact retires.
+    settings: GestureSettings,
     /// Identity of the current contact sequence, never reused after retirement.
     sequence: Option<ContactId>,
     phase: ScalePhase,
@@ -371,6 +400,7 @@ impl Default for ScaleState {
     fn default() -> Self {
         Self {
             start_mode: ScaleStartMode::Scale,
+            settings: GestureSettings::default(),
             sequence: None,
             phase: ScalePhase::Idle,
             contacts: Vec::new(),
@@ -570,12 +600,17 @@ impl ScaleState {
             .velocity_at(now)
             .pixels_per_second
             .dx;
+        let focal_velocity = self.focal_velocity_tracker.velocity_at(now);
+        let focal_fling_velocity = self
+            .settings
+            .resolve_fling_velocity(self.focal_velocity_tracker.kind(), focal_velocity);
         ScaleEndDetails {
             focal_point: self.published_focal,
             scale: self.current.scale,
             rotation: self.rotation,
             velocity: if velocity.is_finite() { velocity } else { 0.0 },
-            focal_velocity: self.focal_velocity_tracker.velocity_at(now),
+            focal_velocity,
+            focal_fling_velocity,
         }
     }
 
@@ -616,6 +651,7 @@ enum Outcome {
 struct NativeScale {
     id: ContactId,
     source: PointerInfo,
+    settings: GestureSettings,
     started: bool,
     focal: Offset<f64>,
     global_focal: Offset<f64>,
@@ -637,16 +673,17 @@ impl NativeScale {
         Self {
             id,
             source,
+            settings: settings.clone(),
             started: false,
             focal,
             global_focal,
             scale: 1.0,
             rotation: 0.0,
-            focal_velocity: VelocityTracker::with_estimator(
+            focal_velocity: VelocityTracker::for_gesture(
                 source.kind,
                 settings.velocity_estimator(),
             ),
-            scale_velocity: VelocityTracker::with_estimator(
+            scale_velocity: VelocityTracker::for_gesture(
                 source.kind,
                 settings.velocity_estimator(),
             ),
@@ -659,12 +696,16 @@ impl NativeScale {
     }
 
     fn end(&mut self, now: Instant) -> ScaleEndDetails {
+        let focal_velocity = self.focal_velocity.velocity_at(now);
         ScaleEndDetails {
             focal_point: self.global_focal,
             scale: self.scale,
             rotation: self.rotation,
             velocity: self.scale_velocity.velocity_at(now).pixels_per_second.dx,
-            focal_velocity: self.focal_velocity.velocity_at(now),
+            focal_velocity,
+            focal_fling_velocity: self
+                .settings
+                .resolve_fling_velocity(self.source.kind, focal_velocity),
         }
     }
 }
@@ -673,7 +714,7 @@ impl NativeScale {
 #[must_use]
 pub struct ScaleGestureRecognizerBuilder {
     arena: crate::arena::GestureArena,
-    settings: GestureSettings,
+    settings: GestureSettingsProvider,
     start_mode: ScaleStartMode,
     callbacks: ScaleCallbacks,
 }
@@ -693,8 +734,8 @@ impl ScaleGestureRecognizerBuilder {
         self
     }
     /// Freeze device-specific tolerances before contact admission.
-    pub fn settings(mut self, settings: GestureSettings) -> Self {
-        self.settings = settings;
+    pub fn settings(mut self, settings: impl Into<GestureSettingsProvider>) -> Self {
+        self.settings = settings.into();
         self
     }
     /// Configure the callback delivered once the scale wins its arenas.
@@ -747,32 +788,48 @@ impl Drop for ScaleGestureRecognizer {
 impl ScaleGestureRecognizer {
     /// Deliver a native session through the same actor as contact recognition.
     ///
-    /// Start stages the source until its first Update. The return value identifies
-    /// an Update or terminal event belonging to a recognized source, allowing a
-    /// leaf-first widget claimant to stop delivery to its ancestors. An Update
-    /// without Start is an independent relative step and completes immediately.
-    /// Callers performing arbitration must admit the input before calling this.
-    pub fn handle_pan_zoom(&self, dispatch: PanZoomDispatch<'_>) -> bool {
+    /// Start stages the source until its first Update, reporting admission without
+    /// callbacks or claiming delivery. Recognized Updates and terminal events
+    /// report handling, allowing a leaf-first widget claimant to stop delivery to
+    /// its ancestors. A terminal event also retires an admitted dormant session.
+    /// An Update without Start is an independent relative step and completes
+    /// immediately. Callers arbitrate native delivery before forwarding the
+    /// first Update that can recognize the session.
+    pub fn handle_pan_zoom(&self, dispatch: PanZoomDispatch<'_>) -> PanZoomDisposition {
         let (local, global) = (dispatch.local, dispatch.global);
         let source = *local.pointer();
         if source.id != global.pointer().id
             || source.device != global.pointer().device
             || !self.gesture_state.borrow().contacts.is_empty()
         {
-            return false;
+            return PanZoomDisposition::Ignored;
         }
         let anchor = local.position.get();
         let global_anchor = global.position.get();
         let anchor = Offset::new(anchor.x, anchor.y);
         let global_anchor = Offset::new(global_anchor.x, global_anchor.y);
+        let settings = match local.phase {
+            PanZoomPhase::Start => Some(self.settings.snapshot()),
+            PanZoomPhase::Update(_) if self.native.borrow().is_none() => {
+                Some(self.settings.snapshot())
+            }
+            _ => None,
+        };
         let now = self.membership.now();
         match local.phase {
             PanZoomPhase::Start => {
                 let Some(id) = ContactId::next(&self.next_contact) else {
-                    return false;
+                    return PanZoomDisposition::Ignored;
                 };
-                let mut incoming =
-                    NativeScale::new(id, source, anchor, global_anchor, &self.settings);
+                let mut incoming = NativeScale::new(
+                    id,
+                    source,
+                    anchor,
+                    global_anchor,
+                    settings
+                        .as_ref()
+                        .expect("BUG: native start captures settings"),
+                );
                 let time = incoming.timeline.instant(Some(local.time.as_nanos()), now);
                 incoming.focal_velocity.add_position(time, anchor);
                 incoming
@@ -782,32 +839,36 @@ impl ScaleGestureRecognizer {
                 if retired.is_some_and(|state| state.started) {
                     self.deliver(Outcome::Cancel);
                 }
-                false
+                PanZoomDisposition::Admitted
             }
             PanZoomPhase::Update(transform) => {
                 let PanZoomPhase::Update(global_transform) = global.phase else {
-                    return false;
+                    return PanZoomDisposition::Ignored;
                 };
                 let focal = anchor + transform.pan();
                 let global_focal = global_anchor + global_transform.pan();
                 if !focal.is_finite() || !global_focal.is_finite() {
-                    return false;
+                    return PanZoomDisposition::Ignored;
                 }
                 let mut state = self.native.borrow_mut();
                 if state.as_ref().is_some_and(|state| !state.matches(source)) {
-                    return false;
+                    return PanZoomDisposition::Ignored;
                 }
                 let independent = state.is_none();
                 if independent {
+                    let Some(settings) = settings.as_ref() else {
+                        // The clock retired the active session reentrantly.
+                        return PanZoomDisposition::Ignored;
+                    };
                     let Some(id) = ContactId::next(&self.next_contact) else {
-                        return false;
+                        return PanZoomDisposition::Ignored;
                     };
                     *state = Some(NativeScale::new(
                         id,
                         source,
                         anchor,
                         global_anchor,
-                        &self.settings,
+                        settings,
                     ));
                 }
                 let native = state
@@ -830,7 +891,7 @@ impl ScaleGestureRecognizer {
                     pointer_count: 0,
                 };
                 if !details.focal_point_delta.is_finite() {
-                    return false;
+                    return PanZoomDisposition::Ignored;
                 }
                 native.started = true;
                 native.focal = focal;
@@ -874,12 +935,12 @@ impl ScaleGestureRecognizer {
                     );
                 }
                 finish_containment(first, std::thread::panicking());
-                true
+                PanZoomDisposition::Handled
             }
             PanZoomPhase::End | PanZoomPhase::Cancelled => {
                 let mut state = self.native.borrow_mut();
                 if state.as_ref().is_none_or(|state| !state.matches(source)) {
-                    return false;
+                    return PanZoomDisposition::Ignored;
                 }
                 let mut native = state
                     .take()
@@ -887,23 +948,23 @@ impl ScaleGestureRecognizer {
                 drop(state);
                 let time = native.timeline.instant(Some(local.time.as_nanos()), now);
                 if !native.started {
-                    return false;
+                    return PanZoomDisposition::Admitted;
                 }
                 self.deliver(if matches!(local.phase, PanZoomPhase::Cancelled) {
                     Outcome::Cancel
                 } else {
                     Outcome::End(native.end(time))
                 });
-                true
+                PanZoomDisposition::Handled
             }
-            _ => false,
+            _ => PanZoomDisposition::Ignored,
         }
     }
     /// Assemble immutable callbacks and gesture policy before sharing the owner.
     pub fn builder(arena: crate::arena::GestureArena) -> ScaleGestureRecognizerBuilder {
         ScaleGestureRecognizerBuilder {
             arena,
-            settings: GestureSettings::default(),
+            settings: GestureSettingsProvider::default(),
             start_mode: ScaleStartMode::Scale,
             callbacks: ScaleCallbacks::default(),
         }
@@ -1028,8 +1089,12 @@ impl ScaleGestureRecognizer {
     ///
     /// The span and focal tiers are per-kind (`computeScaleSlop` /
     /// `computePanSlop`); the ratio tier is dimensionless and so has no kind.
-    fn should_accept(&self, baseline: Measure, current: Measure, kind: PointerKind) -> bool {
-        let settings = &self.settings;
+    fn should_accept(
+        baseline: Measure,
+        current: Measure,
+        kind: PointerKind,
+        settings: &GestureSettings,
+    ) -> bool {
         if (current.span - baseline.span).abs() > settings.span_slop_for(kind) {
             return true;
         }
@@ -1041,7 +1106,7 @@ impl ScaleGestureRecognizer {
         {
             return true;
         }
-        (current.focal - baseline.focal).distance() > settings.pan_slop_for(kind)
+        settings.exceeds_pan_slop_for(kind, current.focal - baseline.focal)
     }
 
     /// Handle a tracked contact's move.
@@ -1080,7 +1145,7 @@ impl ScaleGestureRecognizer {
             let measure = state.sample();
             crossed |= state.contacts.len() >= state.start_mode.minimum_contacts()
                 && measure.is_some_and(|measure| {
-                    baseline.is_some_and(|b| self.should_accept(b, measure, kind))
+                    baseline.is_some_and(|b| Self::should_accept(b, measure, kind, &state.settings))
                 });
             if measure.is_some() && state.contacts.len() >= 2 {
                 let scale = state.current.scale;
@@ -1115,7 +1180,8 @@ impl ScaleGestureRecognizer {
                 // transition, so an observer never sees `on_start` for a
                 // gesture a competitor then takes.
                 crossed |= state.contacts.len() >= state.start_mode.minimum_contacts()
-                    && baseline.is_some_and(|b| self.should_accept(b, measure, kind));
+                    && baseline
+                        .is_some_and(|b| Self::should_accept(b, measure, kind, &state.settings));
                 if crossed && !state.won {
                     state.claiming = true;
                     let entries = state.contacts.iter().map(|c| c.entry.clone()).collect();
@@ -1250,6 +1316,7 @@ impl GestureRecognizer for ScaleGestureRecognizer {
         let Some(id) = ContactId::next(&self.next_contact) else {
             return;
         };
+        let settings = self.settings.snapshot();
         let Some(entry) = self.membership.join(pointer) else {
             return;
         };
@@ -1260,13 +1327,14 @@ impl GestureRecognizer for ScaleGestureRecognizer {
         if state.contacts.is_empty()
             && let PointerEvent::Down(data) = down.local
         {
-            state.scale_velocity_tracker = VelocityTracker::with_estimator(
+            state.settings = settings;
+            state.scale_velocity_tracker = VelocityTracker::for_gesture(
                 data.pointer.kind,
-                self.settings.velocity_estimator(),
+                state.settings.velocity_estimator(),
             );
-            state.focal_velocity_tracker = VelocityTracker::with_estimator(
+            state.focal_velocity_tracker = VelocityTracker::for_gesture(
                 data.pointer.kind,
-                self.settings.velocity_estimator(),
+                state.settings.velocity_estimator(),
             );
         }
         let claim = state.won.then(|| entry.clone());
@@ -1327,7 +1395,7 @@ impl GestureRecognizer for ScaleGestureRecognizer {
         match event {
             PointerEvent::PanZoom(local) => {
                 if let PointerEvent::PanZoom(global) = dispatch.global {
-                    self.handle_pan_zoom(PanZoomDispatch { local, global });
+                    let _ = self.handle_pan_zoom(PanZoomDispatch { local, global });
                 }
             }
             PointerEvent::Move(data) => {

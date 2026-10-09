@@ -252,6 +252,57 @@ host.
 
 ## Mapping decisions
 
+### Native gesture geometry belongs to one accepted coordinate context
+
+Each presentation queries its window when it is created, when accepted host
+preferences change, and when its renderer accepts a different device pixel
+ratio (ADR-0172). New contacts copy the complete checked projection; active
+contacts retain their admission profile. Timing and wheel preferences publish
+before inherited-data callbacks. A failed exact query retains usable geometry
+only at the same ratio; a different ratio admits the consumer baseline until
+recovery. Successful absence clears the cache. A successful but unrepresentable
+projection acknowledges the query, retains that same-context fallback, and
+waits for a real source/context change instead of repeating a deterministic
+failure indefinitely.
+
+Failed native reads retain a separate query obligation, paced by the injected
+clock from 100 milliseconds to a one-second cap. Idle inbox drains, normal
+pumps and background pumps service due obligations. One owner operation and
+its nested host gates share a typed-presentation attempt budget, so slow
+getters or host work cannot cause a second retry in the same operation.
+Standalone pumps create their own turn. Deadlines join `next_wake`; querying
+does not create redraw or synthetic-frame debt, and closing removes the
+presentation's obligation. Strong barrier identities refuse stale query or
+diagnostic continuations without a wrapping generation counter. Containment
+preserves the first query, publication or pacing failure through recovery.
+
+The public `owner_metrics_contract` rows
+`native_geometry_controls_admission_and_retries_without_a_frame` and
+`late_geometry_recovery_is_isolated_per_presentation` use actual mounted touch
+contacts, the owner pump and an exact scripted window. They pin initial and
+late admission, different-DPI fallback, active-contact continuity, independent
+timing, capped repeated failure, slow getter and before-gate work, recovery
+after a query panic, and isolated cancellation on close. They exercise the
+runtime contract; native operating-system event translation requires its own
+platform execution evidence.
+
+`native_fling_profile_controls_real_scroll_inertia` connects the exact native
+touch fling range to observed scrolling pixels, including an active contact's
+retained maximum and the next contact's changed minimum. Its raw-velocity
+source inverse produces an excessive coast instead of the positive bounded
+motion required by the admitted profile.
+
+Two private rows join `frame_pacing_and_pump_matrix` because its required
+failure boundaries are unreachable through the current public runtime
+baseline and the non-reentrant owner lease. The default touch ratios are one;
+`checked_geometry_refusal_acknowledges_the_query_and_keeps_safe_admission`
+injects a baseline ratio of two to exercise overflow of a valid finite native
+reading, then recognizes a real tap using the retained or fallback projection.
+`newer_geometry_publication_survives_query_and_diagnostic_reentry` invokes a
+same-presentation replacement inside the actual getter and diagnostic. Mounted
+inherited values, tap recognition and a hold deadline distinguish the latest
+geometry/timing publication from stale healthy or panicking continuations.
+
 ### Observing input follows its presentation's accepted motion
 
 Keyboard and IME drain a frozen measured motion prefix before dispatch without

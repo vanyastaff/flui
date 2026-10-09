@@ -15,7 +15,7 @@ use crate::{
     events::{PointerEvent, PointerEventExt, PointerKind},
     ids::PointerId,
     routing::{PointerDispatch, RoutePanic},
-    settings::GestureSettings,
+    settings::{GestureSettings, GestureSettingsProvider},
 };
 use flui_foundation::geometry::Offset;
 use std::{
@@ -75,7 +75,7 @@ pub struct MultiTapGestureRecognizer {
     last_id: Cell<u64>,
     callbacks: MultiTapCallbacks,
     required_pointer_count: usize,
-    settings: GestureSettings,
+    settings: GestureSettingsProvider,
 }
 /// Immutable multi-tap policy and callbacks, consumed to create one owner.
 #[must_use]
@@ -83,12 +83,12 @@ pub struct MultiTapGestureRecognizerBuilder {
     arena: GestureArena,
     callbacks: MultiTapCallbacks,
     required_pointer_count: usize,
-    settings: GestureSettings,
+    settings: GestureSettingsProvider,
 }
 impl MultiTapGestureRecognizerBuilder {
     /// Freeze gesture settings at admission.
-    pub fn settings(mut self, settings: GestureSettings) -> Self {
-        self.settings = settings;
+    pub fn settings(mut self, settings: impl Into<GestureSettingsProvider>) -> Self {
+        self.settings = settings.into();
         self
     }
     /// Called after all required contacts release.
@@ -134,7 +134,7 @@ impl MultiTapGestureRecognizer {
             arena,
             required_pointer_count,
             callbacks: MultiTapCallbacks::default(),
-            settings: GestureSettings::default(),
+            settings: GestureSettingsProvider::default(),
         }
     }
     fn details(sequence: &MultiTapSequence) -> MultiTapDetails {
@@ -242,6 +242,7 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
             self.cancel();
             return;
         }
+        let settings = self.settings.snapshot();
         let now = self.membership.now();
         if self.last_id.get() != generation
             || self.sequence.borrow().as_ref().map(|sequence| sequence.id)
@@ -293,7 +294,7 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
                     id,
                     contacts: BTreeMap::new(),
                     kind: data.pointer.kind,
-                    settings: self.settings.clone(),
+                    settings,
                     deadline: now.checked_add(Duration::from_millis(100)),
                     deadline_registration: registration,
                 });
@@ -338,7 +339,7 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
                         || !position.dy.is_finite()
                         || measured_positions(dispatch.local).any(|position| {
                             let delta = position - contact.initial;
-                            delta.dx.hypot(delta.dy) > sequence.settings.hit_slop(contact.kind)
+                            sequence.settings.exceeds_hit_slop(contact.kind, delta)
                         })
                 };
                 if exceeded {

@@ -439,8 +439,23 @@ impl UiRuntime {
         if !self.set_pipeline_device_pixel_ratio_for(id, device_pixel_ratio) {
             return false;
         }
-        if let Some(source) = self.media_query_for(id) {
-            source.update(|data| data.device_pixel_ratio = device_pixel_ratio);
+        let mut first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.refresh_gesture_context_for(id);
+        }))
+        .err();
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if let Some(source) = self.media_query_for(id) {
+                source.update(|data| data.device_pixel_ratio = device_pixel_ratio);
+            }
+        }))
+        .err();
+        crate::lifecycle_state::preserve_first_lifecycle_panic(
+            &mut first,
+            failure,
+            "pixel ratio publication",
+        );
+        if let Some(failure) = first {
+            std::panic::resume_unwind(failure);
         }
         true
     }
@@ -493,7 +508,14 @@ impl UiRuntime {
     pub fn next_wake(&self) -> Option<web_time::Instant> {
         self.presentations
             .iter()
-            .filter_map(|presentation| presentation.gestures().next_deadline())
+            .filter(|presentation| !presentation.closing_requested.get())
+            .flat_map(|presentation| {
+                [
+                    presentation.gestures().next_deadline(),
+                    presentation.gesture_geometry.borrow().next_wake(),
+                ]
+            })
+            .flatten()
             .min()
     }
 }

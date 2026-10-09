@@ -172,3 +172,330 @@ pub(crate) fn cancelling_a_back_swipe_past_halfway_keeps_the_route() {
     );
     assert!(!navigator.user_gesture_in_progress());
 }
+
+pub(crate) fn mounted_back_swipe_reads_retained_admission_settings() {
+    use crate::common::{lay_out_animated, tight};
+    use crate::gesture_settings::SettingsScope;
+    use flui_animation::Vsync;
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::events::{
+        PointerKind, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
+    };
+    use flui_interaction::{GestureSettings, GestureSettingsSource, PointerId};
+    use flui_painting::styling::Color;
+    use flui_widgets::{ColoredBox, GestureDetector, VsyncScope};
+
+    let profile = |slop| {
+        GestureSettings::default()
+            .try_with_touch_slop(200.0)
+            .expect("finite touch slop")
+            .try_with_pan_slop_horizontal(slop)
+            .expect("finite axis slop")
+    };
+    let source = GestureSettingsSource::new(profile(20.0));
+    let navigator = NavigatorHandle::new();
+    navigator.seed_initial(SimpleRoute::<i32>::new(|_| {
+        ColoredBox::new(Color::BLACK).boxed()
+    }));
+    let vsync = Vsync::new();
+    let mut laid = lay_out_animated(
+        VsyncScope::new(
+            vsync.clone(),
+            SettingsScope::new(source.provider(), Navigator::new(navigator.clone())),
+        ),
+        tight(300.0, 300.0),
+        vsync,
+    );
+    let route = PageRoute::<i32>::new(|_, _, _| {
+        GestureDetector::new()
+            .on_tap(|_| {})
+            .child(ColoredBox::new(Color::WHITE))
+            .boxed()
+    })
+    .back_gesture(true)
+    .transition_duration(Duration::from_millis(100));
+    laid.enter_owner_scope(|| drop(navigator.push(route)));
+    for _ in 0..40 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    let top = navigator.current().expect("pushed route is current");
+    let pointer = PointerId::try_from(1_u64).expect("nonzero touch");
+    let down = make_down_event_for_id(pointer, Offset::new(10.0, 150.0), PointerKind::Touch)
+        .expect("finite touch fixture");
+    let small = make_move_event_for_id(pointer, Offset::new(50.0, 150.0), PointerKind::Touch)
+        .expect("finite touch fixture");
+    let large = make_move_event_for_id(pointer, Offset::new(130.0, 150.0), PointerKind::Touch)
+        .expect("finite touch fixture");
+    let cancel = make_cancel_event_for_id(pointer, PointerKind::Touch);
+
+    laid.dispatch_pointer_event(&down);
+    source.replace(profile(100.0));
+    laid.dispatch_pointer_event(&small);
+    assert!(
+        navigator.user_gesture_in_progress(),
+        "active edge contact retains its short admitted threshold"
+    );
+    laid.dispatch_pointer_event(&cancel);
+    for _ in 0..40 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert_eq!(navigator.current(), Some(top));
+    assert!(!navigator.user_gesture_in_progress());
+
+    laid.dispatch_pointer_event(&down);
+    laid.dispatch_pointer_event(&small);
+    assert!(
+        !navigator.user_gesture_in_progress(),
+        "fresh edge contact reads the updated large threshold"
+    );
+    laid.dispatch_pointer_event(&large);
+    assert!(
+        navigator.user_gesture_in_progress(),
+        "a deliberate edge swipe still starts"
+    );
+    laid.dispatch_pointer_event(&cancel);
+    for _ in 0..40 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert_eq!(navigator.current(), Some(top));
+    assert!(!navigator.user_gesture_in_progress());
+}
+
+pub(crate) fn replacing_authored_back_swipe_policy_cancels_the_outgoing_contact() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use crate::common::{ProbeSignals, SignalProbe, lay_out_animated, tight};
+    use crate::gesture_settings::SettingsScope;
+    use flui_animation::Vsync;
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::events::{
+        PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
+    };
+    use flui_interaction::{GestureSettings, PointerId};
+    use flui_painting::styling::Color;
+    use flui_widgets::{ColoredBox, GestureDetector, VsyncScope};
+
+    let navigator = NavigatorHandle::new();
+    navigator.seed_initial(SimpleRoute::<i32>::new(|_| {
+        ColoredBox::new(Color::BLACK).boxed()
+    }));
+    let threshold = Rc::new(Cell::new(20.0));
+    let signal = Rc::new(Cell::new(None));
+    let (profile, remembered, navigation) = (threshold.clone(), signal.clone(), navigator.clone());
+    let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
+        remembered.set(Some(count));
+        SettingsScope::new(
+            GestureSettings::default()
+                .try_with_touch_slop(250.0)
+                .expect("finite touch slop")
+                .try_with_pan_slop_horizontal(profile.get())
+                .expect("finite axis slop"),
+            Navigator::new(navigation.clone()),
+        )
+    });
+    let vsync = Vsync::new();
+    let mut laid = lay_out_animated(
+        VsyncScope::new(vsync.clone(), probe.view()),
+        tight(300.0, 300.0),
+        vsync,
+    );
+    let route = PageRoute::<i32>::new(|_, _, _| {
+        GestureDetector::new()
+            .on_tap(|_| {})
+            .child(ColoredBox::new(Color::WHITE))
+            .boxed()
+    })
+    .back_gesture(true)
+    .transition_duration(Duration::from_millis(100));
+    let transition = route.transition_handle();
+    laid.enter_owner_scope(|| drop(navigator.push(route)));
+    for _ in 0..40 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    let top = navigator.current().expect("pushed route is current");
+    let pointer = PointerId::try_from(1_u64).expect("nonzero touch");
+    let down = make_down_event_for_id(pointer, Offset::new(10.0, 150.0), PointerKind::Touch)
+        .expect("finite touch fixture");
+    let large = make_move_event_for_id(pointer, Offset::new(210.0, 150.0), PointerKind::Touch)
+        .expect("finite touch fixture");
+    let up = make_up_event_for_id(pointer, Offset::new(210.0, 150.0), PointerKind::Touch)
+        .expect("finite touch fixture");
+    let small = make_move_event_for_id(pointer, Offset::new(50.0, 150.0), PointerKind::Touch)
+        .expect("finite touch fixture");
+    let intermediate =
+        make_move_event_for_id(pointer, Offset::new(130.0, 150.0), PointerKind::Touch)
+            .expect("finite touch fixture");
+    let far = make_move_event_for_id(pointer, Offset::new(290.0, 150.0), PointerKind::Touch)
+        .expect("finite touch fixture");
+    let far_up = make_up_event_for_id(pointer, Offset::new(290.0, 150.0), PointerKind::Touch)
+        .expect("finite touch fixture");
+    laid.dispatch_pointer_event(&down);
+    laid.dispatch_pointer_event(&small);
+    laid.dispatch_pointer_event(&large);
+    assert!(navigator.user_gesture_in_progress());
+    assert!(
+        transition
+            .controller()
+            .expect("mounted route controller")
+            .value()
+            < 0.5,
+        "outgoing swipe has actually crossed halfway"
+    );
+    probe
+        .write(|cx| signal.get().expect("mounted probe").set(cx, 1))
+        .expect("publish equal authored back swipe policy");
+    laid.pump();
+    assert!(
+        navigator.user_gesture_in_progress(),
+        "equal policy keeps the accepted edge contact"
+    );
+    threshold.set(100.0);
+    probe
+        .write(|cx| signal.get().expect("mounted probe").set(cx, 2))
+        .expect("replace authored back swipe policy");
+    laid.pump();
+    for _ in 0..40 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert!(
+        !navigator.user_gesture_in_progress(),
+        "authored replacement cancels the outgoing edge contact"
+    );
+    assert_eq!(
+        navigator.current(),
+        Some(top),
+        "replacement cancellation keeps the route past halfway"
+    );
+    laid.dispatch_pointer_event(&up);
+    for _ in 0..40 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert_eq!(
+        navigator.current(),
+        Some(top),
+        "stale release cannot pop the retained route"
+    );
+    laid.dispatch_pointer_event(&down);
+    laid.dispatch_pointer_event(&intermediate);
+    laid.dispatch_pointer_event(&far);
+    assert!(
+        transition
+            .controller()
+            .expect("mounted route controller")
+            .value()
+            < 0.5,
+        "fresh swipe actually crosses halfway"
+    );
+    laid.dispatch_pointer_event(&far_up);
+    for _ in 0..40 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert_eq!(
+        navigator.route_ids().len(),
+        1,
+        "replacement admits a healthy subsequent swipe"
+    );
+    assert!(!navigator.user_gesture_in_progress());
+}
+
+pub(crate) fn mounted_back_swipe_settle_uses_the_admitted_fling_bound() {
+    use crate::common::{lay_out_animated, tight};
+    use crate::gesture_settings::SettingsScope;
+    use flui_animation::Vsync;
+    use flui_foundation::geometry::Point;
+    use flui_interaction::{GestureSettings, GestureSettingsSource};
+    use flui_painting::styling::Color;
+    use flui_platform_api::{
+        EventTime,
+        pointer::{
+            PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind,
+            PointerMove, PointerPosition, PointerPress, PointerRelease, PointerSample,
+        },
+    };
+    use flui_widgets::{ColoredBox, VsyncScope};
+
+    let profile = |max| {
+        GestureSettings::default()
+            .try_with_fling_velocity(50.0, max)
+            .expect("finite fling range")
+    };
+    let source = GestureSettingsSource::new(profile(200.0));
+    let navigator = NavigatorHandle::new();
+    navigator.seed_initial(SimpleRoute::<i32>::new(|_| {
+        ColoredBox::new(Color::BLACK).boxed()
+    }));
+    let vsync = Vsync::new();
+    let mut laid = lay_out_animated(
+        VsyncScope::new(
+            vsync.clone(),
+            SettingsScope::new(source.provider(), Navigator::new(navigator.clone())),
+        ),
+        tight(300.0, 300.0),
+        vsync,
+    );
+    let route = PageRoute::<i32>::new(|_, _, _| ColoredBox::new(Color::WHITE).boxed())
+        .back_gesture(true)
+        .transition_duration(Duration::from_millis(100));
+    laid.enter_owner_scope(|| drop(navigator.push(route)));
+    for _ in 0..40 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    let top = navigator.current().expect("pushed route is current");
+    let held = PointerButtons::only(PointerButton::PRIMARY);
+    for contact in [1_u64, 2] {
+        let info = PointerInfo::new(
+            PointerId::try_from(contact).expect("nonzero touch"),
+            PointerKind::Touch,
+        );
+        let sample = |millis: u64, x| {
+            PointerSample::new(
+                EventTime::from_nanos((contact * 1_000 + millis) * 1_000_000),
+                PointerPosition::try_new(Point::new(x, 150.0)).expect("finite touch position"),
+            )
+        };
+        laid.dispatch_pointer_event(&PointerEvent::Down(PointerPress::new(
+            info,
+            PointerButton::PRIMARY,
+            PointerButtons::NONE,
+            sample(0, 10.0),
+        )));
+        if contact == 1 {
+            source.replace(profile(8_000.0));
+        }
+        for (millis, x) in [(10, 40.0), (20, 70.0), (30, 100.0), (40, 130.0)] {
+            laid.dispatch_pointer_event(&PointerEvent::Move(PointerMove::new(
+                info,
+                held,
+                sample(millis, x),
+            )));
+        }
+        assert!(
+            navigator.user_gesture_in_progress(),
+            "actual fast edge swipe is admitted"
+        );
+        laid.dispatch_pointer_event(&PointerEvent::Up(PointerRelease::new(
+            info,
+            PointerButton::PRIMARY,
+            held,
+            sample(40, 130.0),
+        )));
+        for _ in 0..40 {
+            laid.pump_for(Duration::from_millis(16));
+        }
+        assert!(!navigator.user_gesture_in_progress());
+        if contact == 1 {
+            assert_eq!(
+                navigator.current(),
+                Some(top),
+                "retained 200px/s release stays below the product fling threshold before halfway"
+            );
+        } else {
+            assert_eq!(
+                navigator.route_ids().len(),
+                1,
+                "fresh contact uses the new bound and commits a fast release"
+            );
+        }
+    }
+}

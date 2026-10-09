@@ -3031,7 +3031,7 @@ mod native_windows {
                 scroll.pointer, hover,
                 "native wheel retains actual hover metadata"
             );
-            assert_eq!(scroll.delta.unit(), ScrollUnit::Lines);
+            assert_eq!(scroll.delta.unit(), ScrollUnit::Detents);
             assert_eq!((scroll.delta.x(), scroll.delta.y()), expected);
             assert_eq!(scroll.phase, None, "a wheel tick supplies no gesture phase");
             let point = scroll.position.get();
@@ -3132,7 +3132,7 @@ mod native_windows {
                 scroll.pointer, source,
                 "packet classification retains actual source"
             );
-            assert_eq!(scroll.delta.unit(), ScrollUnit::Lines);
+            assert_eq!(scroll.delta.unit(), ScrollUnit::Detents);
             assert_eq!((scroll.delta.x(), scroll.delta.y()), (x, y));
             assert_eq!(
                 scroll.precision, precision,

@@ -11,6 +11,7 @@ mod catalog_disclosure;
 mod catalog_slider;
 mod common;
 mod contracts;
+mod gesture_settings;
 mod pointer_vocabulary;
 
 #[path = "absorb_pointer.rs"]

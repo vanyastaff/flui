@@ -1,13 +1,117 @@
 # flui-interaction — задачи (волна 1)
 
-- **Статус:** в работе; текущий остаток сверяется с кодом и merged-PR
+- **Статус:** основная реализация merged; I11 gesture/wheel реализована, заключительный локальный gate и Win32 wheel smoke прошли; CI ожидается
 - **Дата:** 2026-10-06, база `main` @ `9a4daa3ed`
 - **Источник:** [orchestration.md](orchestration.md), [matrix.md](matrix.md); ledger'ы этапа 1 — вне репозитория.
 - **Правила:** задача = ветка `interaction/<slug>` = worktree = draft-PR. Каждый фикс: тест через
   публичный API, красный с откатом фикса (вывод в PR), `cargo xtask check-changed` зелёный.
   ID задач — только здесь.
 
-## Текущее выполнение
+## Сверка после слияния
+
+[PR #1514](https://github.com/vanyastaff/flui/pull/1514) слит в `main`
+2026-10-08, merge commit `91bb1fe1d`. [CI на head `3e803ebfc`](https://github.com/vanyastaff/flui/actions/runs/37737270723)
+завершился успешно: `deps`, `live-smoke`, strict clippy, тесты и native
+cross-typecheck Windows/macOS/iOS/Android прошли. Native cross-typecheck означает
+компиляцию, а не исполнение на этих платформах; physical pen/touch остаётся
+отдельным ограничением.
+
+[PR #1515](https://github.com/vanyastaff/flui/pull/1515) добавил host-owned
+SystemPreferences и его доставку. На исторической базе `main` @ `b357bc903`
+публикация runtime применяла text scale и contrast; gesture timing, geometry,
+fling и wheel ещё не были подключены к полной цепочке потребителей.
+Текущая реализация I11 следует ADR-0172 и platform-layer LY9; её отдельная
+локальная приёмка записана ниже.
+
+## Текущая локальная приёмка I11: gesture/wheel
+
+Host-owned `SystemPreferences` доставляет timings, per-presentation geometry
+и wheel policy через существующий `GestureArenaScope`. Новые admissions читают
+live provider, а активные contacts, native sessions, handoffs и consecutive-tap
+candidates сохраняют принятый профиль. Authored overrides заменяют владельцев
+распознавателей; равный fixed profile или прежний live provider их не отменяет.
+Невыставленный nested scope наследует gesture и wheel policy.
+
+Публичная таблица `admitted_gesture_settings_contract` проверяет native timings,
+per-axis mouse geometry, touch/pan ratios, сохранение профиля и terminal fling.
+В `gesture_lifecycle_matrix` строки `drag_captures_the_selected_estimator`,
+`multidrag_captures_the_selected_estimator`,
+`tap_and_drag_captures_the_selected_estimator` и
+`scale_captures_the_selected_estimator` проверяют выбранный estimator.
+Mounted admission и authored replacement проверены в
+`pointer_and_gesture_recognition`, включая
+`mounted_native_begin_retains_estimator_before_first_claim` и
+`mounted_native_begin_refused_by_touch_cannot_claim_after_touch_terminal`.
+
+Реальная wheel/inertia доставка проверена в `scroll_physics_and_activity`,
+`pointer_and_gesture_recognition` и `navigator_and_overlay`: Scrollable,
+RefreshIndicator, горизонтальный и вертикальный Dismissible, InteractiveViewer
+и Back gesture используют принятый fling profile. Material Drawer проверен
+строками `drawer_settling_uses_the_captured_fling_profile` и
+`open_drawer_settling_uses_the_captured_fling_profile` в `overlay_contracts`.
+`owner_metrics_contract`
+проверяет input-order publication, wheel delivery, geometry retry без кадра
+и изоляцию presentations. Private `frame_pacing_and_pump_matrix` включает
+`checked_geometry_refusal_acknowledges_the_query_and_keeps_safe_admission`:
+успешный native query с непредставимой проекцией погашает query debt, сохраняя
+пригодный профиль в том же контексте либо baseline после смены DPI.
+Публичные и private geometry failure families проверены независимыми
+откатами production-изменений: пять причинных откатов дали ожидаемый отказ,
+исходники восстановлены и целевые прогоны прошли. Runtime clippy также прошёл.
+
+Целевые команды приёмки (запускаются владельцем интеграции):
+
+```text
+cargo nextest run --locked -p flui-interaction admitted_gesture_settings_contract --no-capture
+cargo nextest run --locked -p flui-interaction gesture_lifecycle_matrix --no-capture
+cargo nextest run --locked -p flui-widgets pointer_and_gesture_recognition --no-capture
+cargo nextest run --locked -p flui-widgets scroll_physics_and_activity --no-capture
+cargo nextest run --locked -p flui-widgets navigator_and_overlay --no-capture
+cargo nextest run --locked -p flui-material overlay_contracts --no-capture
+cargo nextest run --locked -p flui-runtime owner_metrics_contract --no-capture
+cargo nextest run --locked -p flui-runtime frame_pacing_and_pump_matrix --no-capture
+```
+
+Windows `preferences_contract` исполнил native query и восстановление после
+холодного COM cache через `windows_reads_preferences_before_a_user_window_exists`.
+Win32 wheel строки `native_mouse_wheels_keep_hover_identity_and_signed_units`
+и `fractional_native_wheel_packets_preserve_observed_precision_and_source`
+исполнены напрямую в `contract::test_window_lifecycle_contract`: реальные
+`SendInput` и пакеты очереди owned HWND прошли без `CANNOT_VERIFY`.
+Проверены Detents, знак, source identity, precision и DPI conversion.
+Interaction all-target/all-features clippy прошёл; `compile_fail::trybuild_ui`
+проверил все 12 fixtures с обновлением ожиданий выключенным. Две ожидаемые
+E0277-диагностики расширены заметками о provider; запрет Send не изменён.
+Android и AppKit проверены Rust-only library compilation; это не native execution
+и не проверка физического устройства.
+Заключительный `cargo xtask check-changed --base b357bc9031324f0929f419305f6d647577862428`
+на исходниках `38f9d52388803c00b7365f4e1632e1ece9f85969` завершился exit 0:
+522 теста прошли, 20 skipped; platform compiler guards — 1/1. Strict clippy,
+private-items rustdoc, doctests, native Windows и wasm проверки прошли;
+оба per-feature прохода завершились 65/65, включая tests, benches и examples.
+Полные macOS/iOS/Android cross-typecheck локально пропущены из-за отсутствующих
+cross toolchain/SDK; Linux native suite требует xvfb-run и остаётся за CI.
+CI этой реализации в [PR #1519](https://github.com/vanyastaff/flui/pull/1519)
+ещё ожидается. Первый Android SDK cross-typecheck обнаружил два JNI 0.22
+lint-сайта: лишний `as_ref()` и binding для unit-результата `exception_clear()`.
+Двухстрочное исправление `ae47bdb52` прошло Android Rust-only library clippy
+с `-D warnings`; полный SDK CI запускается повторно.
+Standards и Spec review не нашли оставшихся concrete blockers.
+Явное patch-level сравнение `cargo-semver-checks` с базой `b357bc903`, default
+features и `serde` прошло 229 checks для interaction и widgets. Platform-api
+имеет один намеренный отказ: `GesturePreferences` больше не реализует `Eq`.
+Побочные сдвиги discriminants трёх enum устранены; прежние значения сохранены.
+Ручная сверка дополнительно учитывает новый return type native admission,
+удаление `InheritedView` у конфигурации scope и inference migration settings
+builders; они записаны в changelog и не объявляются совместимыми patch changes.
+Эта приёмка закрывает реализацию I11 gesture/wheel, но не остальные требования
+LY8/LY9 к text, motion и общей host authority.
+
+Ниже сохранена историческая локальная приёмка до публикации PR #1514.
+Её «CI/merge впереди» и отложенная внешняя зависимость I11 описывают только
+то состояние, а не текущую реализацию gesture/wheel.
+
+## Локальная приёмка до публикации
 
 Сверка 2026-10-08 по интеграционной базе `5f28646ad`, коду и именам тестов.
 Локальный `check-changed` завершился exit 0; CI ещё не опубликован, слияние
@@ -248,7 +352,7 @@ Up. Публичные Mouse/Touch строки проверяют 39 ms bounce,
 | ID | Задача | [P] |
 |---|---|---|
 | I10 | Арена: `DashMap` + `parking_lot::Mutex` внутри `!Send + !Sync` `GestureArena` → однопоточное хранилище (`RefCell` + слоты с поколением); `Arc` участника не роняется под lock слота (`arena/mod.rs:942,1221,1313`); порядок map/slot зафиксирован; `signal_resolver.rs:152` — `checked_add` | после I1 |
-| I11 | Распознаватели: `GestureSettings` строится из `SystemPreferences::gestures()` (ADR-0151 §4, после platform-layer LY8) через `GestureSettingsScope`; `Arc<Mutex<GestureSettings>>` (10 мест) → `Cell<GestureSettings>`; `GestureSettings` из binding/виджета доходит до распознавателя (matrix X2) | после I1, I3 |
+| I11 | Распознаватели и wheel consumers: host-owned `SystemPreferences` проецируется для каждой presentation через существующий `GestureArenaScope` (ADR-0172, platform-layer LY9). Read-only live providers обслуживают новые admission; активные contacts, sessions и consecutive-tap candidates сохраняют принятый профиль. Authored overrides, geometry/DPI, fling, FIFO updates и восстановление после отказа проверяются через production consumers. Отдельный `GestureSettingsScope` и изменяемый профиль активного контакта не вводятся | после I1, I3 и platform-layer LY8 |
 
 ## Спека `recognizer-api/` (сквозной рефакторинг; подтверждена владельцем 2026-10-06)
 
