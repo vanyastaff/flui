@@ -249,6 +249,12 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   from recognized handling. The mounting owner keeps a refused native session
   refused until its terminal event, while an Update without Begin remains an
   independent relative step.
+- **Native cached routes require current admission before dispatch.** Fresh
+  hit testing or raw observation can admit a replacement Start for the same
+  source and timestamp. A superseded Start or Update cannot invoke the cached
+  actor; rejecting its claim after invocation would already mutate the newer
+  session. `binding_input_contract_matrix` covers both observation paths,
+  competing observation failure and subsequent Update/End recovery.
 - **Focus scope identity is explicit.** A `FocusScopeNode` owns an inner `FocusNode`, and that backing node carries a `Weak<FocusScopeNode>` owner link. This keeps enclosing-scope lookup, focused-child history, and `FocusManager::focus_next` / `focus_previous` rooted in the same tree instead of relying on a parallel manager structure. `descendants_are_focusable=false` gates descendant requests; a true-to-false transition evicts focus held by the node or its subtree while leaving the node eligible for a later explicit request. FLUI clears primary focus to `None` rather than selecting a previously focused child.
 - **`processing::lsq_solver` is crate-internal.** `VelocityTracker` is its only user; the resampler interpolates linearly and does not fit a polynomial.
 - **Observability is crate-public.** `pub mod observability` exports stable `GestureEvent` spellings, component-name constants, and `pointer_event_kind`. `flui-app` configures a generic subscriber; gesture-specific devtools consumption requires its own integration. `stable_recognizer_observability_kinds_reach_the_subscriber` pins admission and dispatch fields through public recognizer calls.

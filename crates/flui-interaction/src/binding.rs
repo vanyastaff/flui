@@ -2040,7 +2040,9 @@ impl GestureBinding {
                         ),
                         PanZoomAdmission::Refused => false,
                         PanZoomAdmission::Active(sequence) => {
-                            if let Some(route) = sequence.route.get() {
+                            if let Some(route) = sequence.route.get()
+                                && self.is_current_pan_zoom_sequence(*gesture.pointer(), sequence)
+                            {
                                 let stage = |ticket| {
                                     self.stage_pan_zoom(
                                         *gesture.pointer(),
