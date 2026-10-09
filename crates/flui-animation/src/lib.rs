@@ -133,6 +133,7 @@ pub mod vsync;
 // Data types
 pub mod curve;
 pub mod status;
+mod status_subscription;
 pub mod tween_types;
 
 // Re-exports from animation modules
@@ -150,6 +151,7 @@ pub use proxy::ProxyAnimation;
 pub use retarget::MotionSpec;
 pub use reverse::ReverseAnimation;
 pub use run_future::{AnimationRunFuture, RunCanceled};
+pub use status_subscription::StatusSubscription;
 pub use simulation::{
     BouncingScrollSimulation, BoundedFrictionSimulation, FrictionSimulation, Simulation,
     SimulationBounds, SimulationError, SimulationParameter, SpringDescription, SpringSimulation,

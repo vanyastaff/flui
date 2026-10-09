@@ -2866,6 +2866,17 @@ impl Animation<f64> for AnimationController {
 }
 
 impl AnimationController {
+    /// Observe status changes while the returned subscription lives.
+    /// Dropping it withdraws only this registration, without retaining the owner.
+    pub fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription {
+        let id = self.register_status_listener(StatusListener::User(callback));
+        if self.inner.borrow().disposed {
+            crate::StatusSubscription::default()
+        } else {
+            crate::StatusSubscription::new(&self.inner, id, Self::withdraw_status_listener)
+        }
+    }
+
     fn register_status_listener(&self, callback: StatusListener) -> ListenerId {
         let mut callback = Opaque::new(callback);
         let mut inner = self.inner.borrow_mut();
@@ -2892,9 +2903,19 @@ impl AnimationController {
     }
 
     fn unregister_status_listener(&self, id: ListenerId) {
+        let mut recovery = Retirement::new();
+        Self::withdraw_status_listener(&self.inner, id, &mut recovery);
+        recovery.finish();
+    }
+
+    fn withdraw_status_listener(
+        source: &RefCell<AnimationControllerInner>,
+        id: ListenerId,
+        recovery: &mut Retirement,
+    ) {
         let mut retired;
         {
-            let mut inner = self.inner.borrow_mut();
+            let mut inner = source.borrow_mut();
             retired = inner
                 .status_listeners
                 .iter()
@@ -2910,7 +2931,7 @@ impl AnimationController {
                     .push_back(ControllerDelivery::Retire(sources));
             }
         }
-        drop(retired);
+        recovery.retire(retired);
     }
 }
 

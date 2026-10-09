@@ -36,6 +36,9 @@ mod ownership;
 #[path = "contracts/status_delivery.rs"]
 mod status_delivery;
 
+#[path = "contracts/status_subscription.rs"]
+mod status_subscription;
+
 #[path = "contracts/curve.rs"]
 mod curve;
 

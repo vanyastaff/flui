@@ -157,6 +157,26 @@ and a running four-component owner in one registry, including observer value
 reads and four listeners on each. Every measured component must advance; the
 run-start negative control verifies that the allocation counter is live.
 
+### Source-bound status removal
+
+`StatusSubscription` holds weak source ownership, a `Copy` registration token and
+a removal function pointer. Dropping it withdraws that registration; `detach`
+disables removal without touching the source's callback. Custom sources construct
+the same guard and receive the borrowed recovery context during withdrawal. Their
+callback captures retire through that context, while the guard's private envelope
+contains no user captures and can always retire normally.
+
+Controller withdrawal commits removal under its existing state borrow. During
+delivery, callback retirement joins its existing FIFO; outside delivery it runs
+after releasing the borrow. The guard neither owns a second channel nor keeps the
+controller owner alive. Scrollable activity and AnimatedSize completion callbacks
+retain the owning subscription beside their driven controller.
+
+`owning_status_subscription_contract` uses bounded child-process rows for source
+and channel independence, detach, source teardown, custom-source construction,
+self/later removal during delivery, reentrant capture retirement, first-failure
+custody, recovery and disposed admission.
+
 ### Registration tokens and removal
 
 A `VsyncRegistration` names the registry that issued it (a weak identity) and

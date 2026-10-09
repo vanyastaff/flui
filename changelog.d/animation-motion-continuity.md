@@ -4,6 +4,9 @@
   last published position and velocity and cancels the displaced run.
 - `AnimatedValue` owns one Vsync registration for all components, exposes a
   surviving observer stream, and supports atomic target and motion replacement.
+- Controller status subscriptions own removal authority through
+  `StatusSubscription`; dropping a guard removes its callback without retaining
+  the animation owner, while detaching leaves it registered until source closure.
 - Opacity, padding and rotation support spring motion and retain their incoming
   velocities when retargeted through the render, layout and transform paths.
 

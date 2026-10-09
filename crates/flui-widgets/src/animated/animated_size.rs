@@ -22,8 +22,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use flui_animation::curve::{ArcCurve, Curve};
-use flui_animation::{Animation, AnimationController, AnimationStatus, Curves, DrivenController};
-use flui_foundation::ListenerId;
+use flui_animation::{
+    AnimationController, AnimationStatus, Curves, DrivenController, StatusSubscription,
+};
 use flui_objects::RenderAnimatedSize;
 use flui_painting::Alignment;
 use flui_painting::paint::Clip;
@@ -141,7 +142,7 @@ impl std::fmt::Debug for AnimatedSize {
 /// a `Vsync`/`UpdateScheduler` itself).
 pub struct AnimatedSizeState {
     controller: DrivenController,
-    status_listener_id: Option<ListenerId>,
+    status_subscription: Option<StatusSubscription>,
     completed_runs: Rc<AtomicU64>,
     delivered_completed_runs: Cell<u64>,
     writer: Option<WriterSource>,
@@ -171,7 +172,7 @@ impl StatefulView for AnimatedSize {
         }
         AnimatedSizeState {
             controller,
-            status_listener_id: None,
+            status_subscription: None,
             completed_runs: Rc::new(AtomicU64::new(0)),
             delivered_completed_runs: Cell::new(0),
             writer: None,
@@ -189,7 +190,7 @@ impl ViewState<AnimatedSize> for AnimatedSizeState {
         self.post_frame = ctx.post_frame_handle();
         let completed_runs = Rc::clone(&self.completed_runs);
         let rebuild = ctx.rebuild_handle();
-        self.status_listener_id = Some(self.controller.controller().add_status_listener(
+        self.status_subscription = Some(self.controller.controller().subscribe_status(
             std::rc::Rc::new(move |status| {
                 if status == AnimationStatus::Completed {
                     completed_runs.fetch_add(1, Ordering::SeqCst);
@@ -268,9 +269,7 @@ impl ViewState<AnimatedSize> for AnimatedSizeState {
 
     fn dispose(&mut self) {
         self.mounted.set(false);
-        if let Some(id) = self.status_listener_id.take() {
-            self.controller.controller().remove_status_listener(id);
-        }
+        drop(self.status_subscription.take());
         self.controller.dispose();
     }
 }
