@@ -189,14 +189,24 @@ uses a chord at the Update's current focal; scale and rotation remain unchanged
 (see [HIT_TESTING.md](HIT_TESTING.md)). `ScaleGestureRecognizer::handle_pan_zoom`
 drives the same immutable callbacks used for touch input.
 
-`GestureDetector` admits a native source when enabled scale callbacks accept a
-meaningful Update. `GestureBinding` retains the selected owner until the source
+With scale callbacks enabled, `GestureDetector` forwards Begin (`Start`) immediately:
+an accepted Begin admits a dormant session and freezes its settings before
+movement, without emitting callbacks or claiming the source. The first meaningful
+Update starts recognition and selects the owner. A Begin refused while touch is
+busy stays refused until its terminal event, even after the touch contact ends.
+End or Cancelled also retires an unclaimed dormant session without callbacks.
+`PanZoomDisposition::Admitted` distinguishes that dormant admission from
+`Handled` recognition and `Ignored` refusal.
+`GestureBinding` retains the selected owner until the source
 ends or is cancelled; an enabled descendant cannot steal that session during
 a rebuild. `InteractiveViewer` consumes these callbacks rather than retaining
 a second native actor. Public rows
 `viewer_native_session_reports_one_start_and_one_terminal`,
 `viewer_repeated_native_start_retires_the_previous_generation` and
 `viewer_native_owner_survives_descendant_enable_during_rebuild` pin this lifecycle.
+`mounted_native_begin_retains_estimator_before_first_claim` and
+`mounted_native_begin_refused_by_touch_cannot_claim_after_touch_terminal` pin
+admission separately from recognition and recovery after a refused Begin.
 An Update without Start is an independent compatibility step: the recognizer
 emits start/update/end for that step instead of inventing a continuing source.
 

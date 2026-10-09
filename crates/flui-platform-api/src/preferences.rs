@@ -36,6 +36,12 @@ impl TextWeightPreference {
     }
 }
 
+mod geometry;
+pub use geometry::{
+    Distance, FlingSpeeds, GestureGeometry, NativeMouseGeometry, NativeTouchGeometry,
+    PreferenceQueryError,
+};
+
 /// An invalid numeric observation refused before snapshot publication.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
@@ -46,6 +52,21 @@ pub enum InvalidPreference {
     /// Motion duration factors must be finite and nonnegative.
     #[error("motion duration scale must be finite and nonnegative")]
     DurationScale,
+    /// Native sampling scale must be finite and strictly positive.
+    #[error("preference sampling pixel ratio must be finite and strictly positive")]
+    PixelRatio,
+    /// Rectangle dimensions and drag half-extents must be finite and nonnegative.
+    #[error("gesture area must have finite nonnegative dimensions")]
+    GestureArea,
+    /// Logical distances must be finite and nonnegative.
+    #[error("gesture distance must be finite and nonnegative")]
+    Distance,
+    /// Fling speeds must be finite and strictly positive.
+    #[error("fling speed must be finite and strictly positive")]
+    Speed,
+    /// Minimum fling speed cannot exceed maximum fling speed.
+    #[error("minimum fling speed exceeds maximum fling speed")]
+    FlingRange,
 }
 
 /// A finite, strictly positive multiplier of an animation's duration.
@@ -111,14 +132,17 @@ pub enum WheelStep {
 }
 
 /// Observed gesture timing; absent values leave the consumer's policy in charge.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct GesturePreferences {
     double_click_interval: Option<Duration>,
+    double_tap_interval: Option<Duration>,
     long_press_timeout: Option<Duration>,
+    native_mouse_geometry: Option<NativeMouseGeometry>,
+    native_touch_geometry: Option<NativeTouchGeometry>,
 }
 
 impl GesturePreferences {
-    /// Observed maximum interval between clicks in a double-click sequence.
+    /// Observed mouse double-click interval; this is not a touch double-tap policy.
     #[must_use]
     pub const fn double_click_interval(&self) -> Option<Duration> {
         self.double_click_interval
@@ -128,6 +152,47 @@ impl GesturePreferences {
     #[must_use]
     pub const fn with_double_click_interval(mut self, value: Duration) -> Self {
         self.double_click_interval = Some(value);
+        self
+    }
+
+    /// Observed touch double-tap interval, independently of mouse click timing.
+    #[must_use]
+    pub const fn double_tap_interval(&self) -> Option<Duration> {
+        self.double_tap_interval
+    }
+
+    /// Record an observed touch double-tap interval.
+    #[must_use]
+    pub const fn with_double_tap_interval(mut self, value: Duration) -> Self {
+        self.double_tap_interval = Some(value);
+        self
+    }
+
+    /// Window-independent mouse geometry used for comparison and invalidation.
+    ///
+    /// Exact presentation geometry is queried separately from `PlatformWindow`.
+    #[must_use]
+    pub const fn native_mouse_geometry(&self) -> Option<NativeMouseGeometry> {
+        self.native_mouse_geometry
+    }
+
+    /// Record a native observation without projecting it through another window.
+    #[must_use]
+    pub const fn with_native_mouse_geometry(mut self, value: NativeMouseGeometry) -> Self {
+        self.native_mouse_geometry = Some(value);
+        self
+    }
+
+    /// Native touch-context observation used only for comparison and invalidation.
+    #[must_use]
+    pub const fn native_touch_geometry(&self) -> Option<NativeTouchGeometry> {
+        self.native_touch_geometry
+    }
+
+    /// Record physical touch measurements without projecting another presentation.
+    #[must_use]
+    pub const fn with_native_touch_geometry(mut self, value: NativeTouchGeometry) -> Self {
+        self.native_touch_geometry = Some(value);
         self
     }
 

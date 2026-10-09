@@ -236,6 +236,8 @@ fn text_input_contracts() {
 #[test]
 fn overlay_contracts() {
     common::run_cases(&[
+        ("drawer::drawer_settling_uses_the_captured_fling_profile", drawer::drawer_settling_uses_the_captured_fling_profile),
+        ("drawer::open_drawer_settling_uses_the_captured_fling_profile", drawer::open_drawer_settling_uses_the_captured_fling_profile),
         (
             "snack_bar::a completion panic still advances the accepted snack bar queue",
             snack_bar::a_completion_panic_still_advances_the_accepted_snack_bar_queue,

@@ -1,6 +1,6 @@
 # ADR-0172: Host-owned system preferences and ordered runtime delivery
 
-- **Status:** Accepted architecture; implementation and consumer acceptance pending.
+- **Status:** Accepted architecture; gesture/wheel consumers implemented with local acceptance; broader implementation and acceptance pending.
 - **Date:** 2026-10-08
 - **Supersedes:** [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) §4 only.
 - **Related:** [ADR-0082](ADR-0082-platform-api-contract-crate.md),
@@ -85,14 +85,81 @@ DPI without creating another native observer. Wheel disabled, line/character and
 page values remain distinguishable; pixel-based input does not acquire a second
 system multiplier.
 
-`GestureArenaScope` distributes the interaction projection alongside its existing
-arena identity. Its production consumers observe changes through lifecycle
-dependencies. A settings update has an explicit active-sequence policy, pinned
-through recognizer behavior: retain the admitted settings until terminal, or
-replace/cancel through existing containment. Silently changing an active
-sequence's thresholds is not an implementation choice. Authored overrides remain
-authoritative. A separate gesture-settings source or parallel inherited scope
-would recreate the authority this decision removes.
+`GestureArenaScope` distributes a read-only, owner-local interaction projection
+alongside its existing arena identity. Host publication commits this projection
+before the next admitted input; a later inherited rebuild is not its delivery
+barrier. Each new contact or gesture session captures an immutable settings
+snapshot. Active contacts, multi-contact handoffs and consecutive-tap candidates
+retain their admitted settings until terminal. Changing the host observation
+therefore affects new sequences without silently changing an active sequence's
+thresholds. Terminal fling policy also comes from that admitted snapshot rather
+than a later settings read or a framework default.
+
+Drag release and scale focal release retain their raw measured velocity for
+callbacks and expose a separate admitted velocity for inertial consumers. Focal
+velocity is measured in logical pixels per second and uses the admitted fling
+range. Scale-change velocity is measured in scale units per second and does not
+acquire a pixel-speed limit.
+
+A native Begin captures the profile when its session is admitted, independently
+of recognizing the first movement. Refused admission, an admitted dormant
+session and recognized delivery are distinct outcomes. A Begin refused while
+the actor owns touch contacts cannot later become a new session from its tail;
+its terminal event clears that refused stream. An Update received without any
+Begin retains the independent relative-step contract.
+
+Velocity estimation is consumer policy, not an observed OS preference. The
+framework uses least squares for absolute pointer-position gestures on every
+platform; authored scopes may select another estimator, and each admitted
+contact or native session retains that selection. This keeps one tested baseline
+without asserting native fling parity from a platform name. Android's
+[axis-specific default strategy](https://android.googlesource.com/platform/frameworks/native.git/+/refs/heads/main/libs/input/VelocityTracker.cpp)
+uses least squares for X/Y and impulse for differential scroll input; that
+differential policy does not apply to absolute gesture-position samples. The
+other estimators are configurable strategies, not native system observations.
+
+Authored scope settings remain authoritative. An actual authored provider
+replacement commits new recognizer ownership before cancelling outgoing owners
+through existing containment; an equal fixed profile or an unchanged live
+provider identity does not cancel a gesture. Lifecycle dependencies handle these
+provider replacements, while ordinary host updates use the existing live
+projection. A separate native settings source or parallel inherited scope would
+recreate the authority this decision removes.
+
+An unconfigured nested gesture scope inherits both projections. Explicit
+authored settings override gesture policy without hiding the host's wheel
+policy. The composition wrapper resolves these values into one inherited
+provider; it does not install a second settings authority.
+
+Presentation geometry queries distinguish accepted absence from failure.
+Accepted absence restores the consumer baseline. A failed query retains the
+last observation and a bounded retry obligation. Its geometry is usable only
+in the coordinate context it was accepted for: after a DPI change, new
+admissions use the baseline until a query for that presentation succeeds.
+Timing observations remain independently applicable. Retrying services the
+owner's existing wake path without beginning a synthetic frame.
+
+A successful exact-context query can still yield geometry whose projection
+against the authored baseline is not representable. This acknowledges the query
+obligation, but does not replace the last successfully projected geometry in that
+same context; without one, the consumer uses its baseline. Latest timings and
+wheel observations remain independently deliverable. Repeating a successful
+native read cannot repair a deterministic projection failure, so only a later
+host or DPI barrier initiates another query. The raw host snapshot retains the
+observation; the fallback is consumer policy.
+
+Native touch slop supplies the touch displacement measurement. The consumer
+retains its deliberate pan-to-hit and per-axis policy ratios rather than
+collapsing distinct gesture thresholds into one value. Projection validates
+intermediate arithmetic, handles a zero baseline explicitly and leaves
+dimensionless scale tolerance independent of pixel distances.
+
+An observed mouse double-click interval measures first press to second press;
+it does not extend by the duration of the first held press. This follows the
+[Windows double-click message sequence](https://learn.microsoft.com/en-us/windows/win32/inputdev/about-mouse-input#double-click-messages)
+and [AppKit mouse-down click counting](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/EventOverview/HandlingMouseEvents/HandlingMouseEvents.html).
+Touch double-tap and fixed authored timing keep their existing release-to-press
+policy. A retained consecutive-tap candidate includes its timing origin.
 
 Motion observations distinguish no preference, reduced motion and a finite,
 strictly positive duration scale. An OS scale of zero maps to reduced motion;
@@ -134,6 +201,43 @@ The runtime owns its root publication mechanism. The constant-backed
 no consumers to migrate. Other superseded authorities are removed with their
 consumer migrations. No public constant-backed facade or mount-only seed
 satisfies this decision.
+
+## Gesture and wheel consumer acceptance
+
+The implemented projection reaches real recognizers and wheel/inertia consumers.
+[`admitted_gesture_settings_contract`](../../crates/flui-interaction/tests/recognizer_api/settings_admission.rs)
+and [`gesture_lifecycle_matrix`](../../crates/flui-interaction/tests/gesture_lifecycle.rs)
+pin immutable admission policy and selected estimators.
+The widget tables `pointer_and_gesture_recognition`, `scroll_physics_and_activity`
+and `navigator_and_overlay` in [consumer contracts](../../crates/flui-widgets/tests/contracts.rs)
+exercise provider replacement, native Begin admission and admitted fling policy.
+[`owner_metrics_contract`](../../crates/flui-runtime/tests/contracts/owner_metrics.rs)
+checks ordered publication, mounted wheel/inertia delivery and independent
+presentation geometry recovery.
+[`frame_pacing_and_pump_matrix`](../../crates/flui-runtime/src/ui_runtime/tests/mod.rs)
+additionally pins
+successful-query acknowledgement when projection is unrepresentable, preserving
+same-context geometry or a safe baseline. Independent inverses of the geometry
+repairs failed these affected contracts; restored implementations passed.
+
+Windows [`preferences_contract`](../../crates/flui-platform/tests/preferences.rs)
+executes native queries and cold-cache recovery through
+`windows_reads_preferences_before_a_user_window_exists`. The direct child rows
+`native_mouse_wheels_keep_hover_identity_and_signed_units` and
+`fractional_native_wheel_packets_preserve_observed_precision_and_source` in
+[`test_window_lifecycle_contract`](../../crates/flui-platform/tests/contract.rs)
+also executed successfully, without `CANNOT_VERIFY`: actual injected and queued
+native packets preserve source, precision, signed Detents and DPI conversion.
+Interaction all-target/all-feature clippy and all 12 compiler fixtures passed.
+Android and AppKit evidence is Rust-only library compilation, not native
+execution. The scoped `cargo xtask check-changed` gate passed at `38f9d5238`
+against `b357bc903`: 522 tests passed, 20 skipped, and platform compiler guards
+passed. Strict clippy, private-items rustdoc, doctests, native Windows and wasm
+checks passed, together with both 65-case per-feature passes. Complete Apple and
+Android cross-typechecks need unavailable SDKs/toolchains on this host; the
+Linux native suite needs xvfb-run. Those paths and CI acceptance remain pending.
+This local gesture/wheel acceptance does not complete text, motion or
+the broader host-authority acceptance in the platform-layer specification.
 
 ## Windows transport constraint
 

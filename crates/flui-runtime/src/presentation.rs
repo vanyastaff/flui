@@ -294,6 +294,10 @@ struct SegmentProbe {
 pub struct PresentationState {
     id: PresentationId,
     pub(super) media_query: Rc<crate::media_query_root::MediaQuerySource>,
+    /// Presentation-local projection of the host's accepted interaction policy.
+    /// Recognizers read it at admission; active sequences keep owned snapshots.
+    pub(super) gesture_settings: flui_interaction::GestureSettingsSource,
+    pub(crate) gesture_geometry: RefCell<crate::ui_runtime::preferences::GeometryProjection>,
     pub(super) window_visible: Cell<bool>,
     pub(super) window_focused: Cell<bool>,
     pub(super) window_execution: Cell<flui_platform_api::WindowExecutionState>,
@@ -318,6 +322,7 @@ pub struct PresentationState {
     /// presentation must not keep it alive past the window.
     accessibility: Option<Weak<dyn PlatformAccessibility>>,
     gestures: GestureBinding,
+    pub(crate) wheel_preferences: flui_interaction::WheelPreferencesSource,
     interaction_dispatch: Option<InteractionDispatchHandle>,
     /// Pointer input retained while this presentation has no committed tree.
     /// The queue is owner-thread-only and internally capped; replay detaches
@@ -763,6 +768,12 @@ impl PresentationState {
 
         let state = Self {
             id,
+            gesture_geometry: RefCell::new(
+                crate::ui_runtime::preferences::GeometryProjection::default(),
+            ),
+            gesture_settings: flui_interaction::GestureSettingsSource::new(
+                gestures.default_settings().clone(),
+            ),
             media_query: Rc::new(crate::media_query_root::MediaQuerySource::from_window(
                 window.as_ref(),
                 pipeline.with(PipelineOwner::device_pixel_ratio),
@@ -779,6 +790,9 @@ impl PresentationState {
             window: Arc::downgrade(&window),
             accessibility: accessibility.as_ref().map(Arc::downgrade),
             gestures,
+            wheel_preferences: flui_interaction::WheelPreferencesSource::new(
+                flui_platform_api::WheelPreferences::default(),
+            ),
             interaction_dispatch: Some(interaction_dispatch),
             held_pointer_input: RefCell::new(HeldPointerQueue::new(id)),
             focus,
@@ -848,6 +862,12 @@ impl PresentationState {
 
         let state = Self {
             id,
+            gesture_geometry: RefCell::new(
+                crate::ui_runtime::preferences::GeometryProjection::default(),
+            ),
+            gesture_settings: flui_interaction::GestureSettingsSource::new(
+                gestures.default_settings().clone(),
+            ),
             media_query: Rc::new(crate::media_query_root::MediaQuerySource::from_window(
                 window.as_ref(),
                 pipeline.with(PipelineOwner::device_pixel_ratio),
@@ -864,6 +884,9 @@ impl PresentationState {
             window: Arc::downgrade(&window),
             accessibility: accessibility.as_ref().map(Arc::downgrade),
             gestures,
+            wheel_preferences: flui_interaction::WheelPreferencesSource::new(
+                flui_platform_api::WheelPreferences::default(),
+            ),
             interaction_dispatch: None,
             held_pointer_input: RefCell::new(HeldPointerQueue::new(id)),
             focus,
@@ -1064,15 +1087,6 @@ impl PresentationState {
     /// window was installed; here it is "the window this presentation was
     /// built with is gone" instead of "no window installed yet", since a
     /// presentation always has one from construction.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "read only by perform_haptic_feedback, itself unreached \
-                      outside tests until a production caller wires haptics \
-                      through a presentation"
-        )
-    )]
     pub(crate) fn with_window<R>(&self, f: impl FnOnce(&dyn PlatformWindow) -> R) -> Option<R> {
         self.window.upgrade().map(|window| f(window.as_ref()))
     }

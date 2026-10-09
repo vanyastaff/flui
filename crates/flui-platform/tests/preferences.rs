@@ -13,6 +13,10 @@ fn unavailable_observations_do_not_claim_system_defaults() {
 }
 
 #[cfg(target_os = "windows")]
+#[allow(
+    unsafe_code,
+    reason = "compare the live presentation query with independent Win32 metrics"
+)]
 fn windows_reads_preferences_before_a_user_window_exists() {
     use flui_platform::Platform;
 
@@ -53,6 +57,8 @@ fn windows_reads_preferences_before_a_user_window_exists() {
             "Windows must observe its ordered UI languages before a user window exists"
         );
         assert!(observed.gestures().double_click_interval().is_some());
+        assert!(observed.gestures().double_tap_interval().is_none());
+        assert!(observed.gestures().native_mouse_geometry().is_some());
         assert!(observed.wheel().vertical().is_some());
         assert!(observed.wheel().horizontal_characters().is_some());
     }
@@ -64,7 +70,58 @@ fn windows_reads_preferences_before_a_user_window_exists() {
             ..Default::default()
         })
         .expect("native window after preference reads");
+    let projected = window
+        .gesture_geometry()
+        .expect("native geometry query")
+        .expect("Windows observes mouse geometry");
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::{
+        Foundation::HWND,
+        UI::{
+            HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi},
+            WindowsAndMessaging::{SM_CXDOUBLECLK, SM_CXDRAG, SM_CYDOUBLECLK, SM_CYDRAG},
+        },
+    };
+    let RawWindowHandle::Win32(handle) = window.window_handle().expect("live handle").as_raw()
+    else {
+        panic!("native Win32 handle")
+    };
+    let hwnd = HWND(handle.hwnd.get() as *mut _);
+    // SAFETY: the owning window remains live on this thread for these reads.
+    let dpi = unsafe { GetDpiForWindow(hwnd) };
+    let ratio = f64::from(dpi) / 96.0;
+    // SAFETY: each index is a documented mouse metric, at the live window DPI.
+    let (area, drag) = unsafe {
+        (
+            flui_foundation::geometry::Size::new(
+                f64::from(GetSystemMetricsForDpi(SM_CXDOUBLECLK, dpi)) / ratio,
+                f64::from(GetSystemMetricsForDpi(SM_CYDOUBLECLK, dpi)) / ratio,
+            ),
+            flui_foundation::geometry::Size::new(
+                f64::from(GetSystemMetricsForDpi(SM_CXDRAG, dpi)).abs() / ratio,
+                f64::from(GetSystemMetricsForDpi(SM_CYDRAG, dpi)).abs() / ratio,
+            ),
+        )
+    };
+    assert_eq!(projected.pixel_ratio().get(), ratio);
+    assert_eq!(projected.mouse_double_click_area(), Some(area));
+    assert_eq!(projected.mouse_drag_tolerance(), Some(drag));
+    assert!(projected.touch_slop().is_none());
+    let refused = std::thread::scope(|scope| {
+        scope
+            .spawn(|| window.gesture_geometry())
+            .join()
+            .expect("foreign query returned")
+    });
+    assert_eq!(
+        refused,
+        Err(flui_platform::PreferenceQueryError::WrongThread)
+    );
     window.close();
+    assert_eq!(
+        window.gesture_geometry(),
+        Err(flui_platform::PreferenceQueryError::Unavailable)
+    );
 }
 
 #[test]

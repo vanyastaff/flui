@@ -77,9 +77,10 @@ use flui_view::{
 use crate::animated::VsyncScope;
 use crate::localization::axis_direction_from_axis_reverse_and_directionality;
 use crate::scroll::{ClampingScrollPhysics, ScrollController, ScrollMetrics, SharedScrollPhysics};
-use crate::{GestureDetector, Listener, Semantics, SingleChildScrollView};
+use crate::{GestureArenaScope, GestureDetector, Listener, Semantics, SingleChildScrollView};
 use flui_interaction::routing::EventPropagation;
 use flui_platform_api::{
+    WheelPreferences, WheelStep,
     keyboard::Modifiers,
     pointer::{ScrollEvent, ScrollPrecision, ScrollUnit},
 };
@@ -243,6 +244,55 @@ impl InheritedView for FlingScope {
 
 impl_inherited_view!(FlingScope);
 
+/// Authored logical distances used to resolve wheel input.
+///
+/// The defaults retain the framework's 53-pixel line step and use a 16-pixel
+/// character step. These are application policy fallbacks, not measured line
+/// heights or character widths. Applications can supply their content's policy.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WheelScrollDistances {
+    line: f64,
+    character: f64,
+}
+
+/// An authored wheel distance that cannot produce meaningful finite geometry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum InvalidWheelScrollDistance {
+    /// The line distance is not finite and strictly positive.
+    #[error("wheel line distance must be finite and strictly positive")]
+    Line,
+    /// The character distance is not finite and strictly positive.
+    #[error("wheel character distance must be finite and strictly positive")]
+    Character,
+}
+
+impl WheelScrollDistances {
+    /// Author logical distances for translated lines and raw horizontal characters.
+    ///
+    /// # Errors
+    /// Refuses zero, negative or nonfinite distances. Products are checked again
+    /// when resolving a packet because finite inputs can overflow.
+    pub fn try_new(line: f64, character: f64) -> Result<Self, InvalidWheelScrollDistance> {
+        if !line.is_finite() || line <= 0.0 {
+            return Err(InvalidWheelScrollDistance::Line);
+        }
+        if !character.is_finite() || character <= 0.0 {
+            return Err(InvalidWheelScrollDistance::Character);
+        }
+        Ok(Self { line, character })
+    }
+}
+
+impl Default for WheelScrollDistances {
+    fn default() -> Self {
+        Self {
+            line: 53.0,
+            character: 16.0,
+        }
+    }
+}
+
 /// A caller-supplied composition of the scrollable content, receiving the
 /// [`Scrollable`]'s shared [`ScrollPosition`] and returning the view to
 /// scroll. See [`Scrollable::viewport_builder`].
@@ -297,6 +347,7 @@ pub type ViewportBuilder = Rc<dyn Fn(ScrollPosition) -> BoxedView>;
 pub struct Scrollable {
     /// The shared position + notification hub.
     controller: ScrollController,
+    wheel_distances: WheelScrollDistances,
     /// An authored boundary / fling policy; `None` uses the owner's default.
     physics: Option<SharedScrollPhysics>,
     /// The axis along which the child scrolls.
@@ -337,6 +388,7 @@ impl Default for Scrollable {
     fn default() -> Self {
         Self {
             controller: ScrollController::new(),
+            wheel_distances: WheelScrollDistances::default(),
             physics: None,
             scroll_direction: Axis::Vertical,
             axis_direction: None,
@@ -360,6 +412,17 @@ impl Scrollable {
     #[must_use]
     pub fn controller(mut self, controller: ScrollController) -> Self {
         self.controller = controller;
+        self
+    }
+
+    /// Author the logical distance of one translated line or raw wheel character.
+    ///
+    /// These distances are application scroll policy, not measurements of glyphs
+    /// or native typography. Raw detents additionally use system counts; translated
+    /// line packets use only the line distance and pixel packets remain unchanged.
+    #[must_use]
+    pub fn wheel_distances(mut self, distances: WheelScrollDistances) -> Self {
+        self.wheel_distances = distances;
         self
     }
 
@@ -767,6 +830,8 @@ impl ViewState<Scrollable> for ScrollableState {
     }
 
     fn build(&self, view: &Scrollable, ctx: &dyn BuildContext) -> impl IntoView {
+        let wheel_preferences = GestureArenaScope::wheel_preferences_of(ctx);
+        let wheel_distances = view.wheel_distances;
         let scroll_controller = view.controller.clone();
         let a11y_controller = view.controller.clone();
         let physics = view
@@ -895,28 +960,20 @@ impl ViewState<Scrollable> for ScrollableState {
                     // direction the scroll offset increases when the finger
                     // moves the opposite way, so we negate; for a reversed one
                     // (`up`/`left`) the two negations cancel.
-                    let raw_velocity =
+                    let admitted_velocity =
                         if details.reason == flui_interaction::GestureEndReason::Cancelled {
                             0.0
                         } else {
                             match scroll_direction {
-                                Axis::Vertical => details.velocity.pixels_per_second.dy,
-                                Axis::Horizontal => details.velocity.pixels_per_second.dx,
+                                Axis::Vertical => details.fling_velocity().pixels_per_second.dy,
+                                Axis::Horizontal => details.fling_velocity().pixels_per_second.dx,
                             }
                         };
                     let fling_velocity_px_per_sec = if axis_direction.is_reversed() {
-                        raw_velocity
+                        admitted_velocity
                     } else {
-                        -raw_velocity
+                        -admitted_velocity
                     };
-                    // Cap the fling at the default gesture settings' maximum
-                    // fling velocity, keeping its sign; an unbounded velocity drives
-                    // `UnderdampedSolution` to `f64::INFINITY` for any t > 0.
-                    // NaN becomes zero, so physics still springs back when
-                    // the position is past a boundary.
-                    let fling_velocity_px_per_sec = flui_interaction::GestureSettings::default()
-                        .clamp_fling_velocity(fling_velocity_px_per_sec);
-
                     if !endpoint_fling.start(
                         fling_velocity_px_per_sec,
                         presentation_device_pixel_ratio(pipeline_fling.as_ref()),
@@ -957,6 +1014,8 @@ impl ViewState<Scrollable> for ScrollableState {
                         scroll_direction,
                         data,
                         ctrl_wheel.position().viewport_dimension(),
+                        &wheel_preferences.snapshot(),
+                        wheel_distances,
                     );
                     // Platform deltas arrive already normalized —
                     // positive = content scrolls down (each backend converts its native axes
@@ -985,8 +1044,12 @@ impl ViewState<Scrollable> for ScrollableState {
                     } else {
                         pixels
                     };
-                    let target = (base + delta)
-                        .clamp(position.min_scroll_extent(), position.max_scroll_extent());
+                    let proposed = base + delta;
+                    if !proposed.is_finite() {
+                        return EventPropagation::Continue;
+                    }
+                    let target =
+                        proposed.clamp(position.min_scroll_extent(), position.max_scroll_extent());
                     tracing::trace!(
                         delta,
                         target,
@@ -1309,7 +1372,19 @@ fn scroll_semantics(
 /// nothing from it, so an enclosing horizontal one can. A device that already
 /// reports horizontal motion (a trackpad, a tilt wheel, or macOS, which swaps
 /// the axes itself) is passed through unchanged.
-fn wheel_axis_delta(axis: Axis, data: &ScrollEvent, viewport_dimension: f64) -> f64 {
+fn wheel_axis_delta(
+    axis: Axis,
+    data: &ScrollEvent,
+    viewport_dimension: f64,
+    preferences: &WheelPreferences,
+    distances: WheelScrollDistances,
+) -> f64 {
+    if (data.delta.unit() == ScrollUnit::Pages
+        || (data.delta.unit() == ScrollUnit::Detents && axis == Axis::Vertical))
+        && (!viewport_dimension.is_finite() || viewport_dimension < 0.0)
+    {
+        return 0.0;
+    }
     let shifted = data.modifiers.contains(Modifiers::SHIFT) && data.delta.x() == 0.0;
     let delta = match axis {
         Axis::Vertical if shifted => 0.0,
@@ -1319,11 +1394,34 @@ fn wheel_axis_delta(axis: Axis, data: &ScrollEvent, viewport_dimension: f64) -> 
     };
     let pixels_per_unit = match data.delta.unit() {
         ScrollUnit::Pixels => 1.0,
-        // Existing consumer policy until the platform-layer preference producer
-        // supplies the system wheel line step. This is not a host preference.
-        ScrollUnit::Lines => 53.0,
+        // Environment-translated lines bypass native lines-per-detent counts.
+        ScrollUnit::Lines => distances.line,
         ScrollUnit::Pages => viewport_dimension,
+        ScrollUnit::Detents => match axis {
+            Axis::Vertical => match preferences.vertical().unwrap_or(WheelStep::Lines(1)) {
+                WheelStep::Lines(count) => {
+                    let distance = f64::from(count) * distances.line;
+                    if !distance.is_finite() {
+                        return 0.0;
+                    }
+                    // Win32 recommends page-like behavior when the configured
+                    // line count exceeds the viewport. This cap applies only to
+                    // raw detents, never to already translated line packets.
+                    distance.min(viewport_dimension)
+                }
+                WheelStep::Page => viewport_dimension,
+                _ => return 0.0,
+            },
+            Axis::Horizontal => {
+                f64::from(preferences.horizontal_characters().unwrap_or(1)) * distances.character
+            }
+        },
         _ => return 0.0,
     };
-    delta * pixels_per_unit
+    let distance = delta * pixels_per_unit;
+    if pixels_per_unit.is_finite() && pixels_per_unit >= 0.0 && distance.is_finite() {
+        distance
+    } else {
+        0.0
+    }
 }
