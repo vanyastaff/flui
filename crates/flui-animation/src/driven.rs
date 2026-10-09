@@ -111,7 +111,7 @@ impl DrivenController {
             }
             Seat::Unbound | Seat::Retired => None,
         };
-        recovery.run_with(|recovery| self.controller.dispose_with_retirement(recovery));
+        recovery.run_with(|recovery| self.controller.dispose(recovery));
         recovery.retire(outgoing_registry);
         recovery.finish();
     }

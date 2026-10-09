@@ -351,7 +351,7 @@ mod tests {
         proxy.set_parent(controller2.clone() as Rc<dyn Animation<f64>>);
         assert_eq!(seen.borrow().as_slice(), &[AnimationStatus::Completed]);
 
-        controller1.dispose();
-        controller2.dispose();
+        crate::test_cases::dispose_controller(&controller1);
+        crate::test_cases::dispose_controller(&controller2);
     }
 }

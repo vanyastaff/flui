@@ -428,7 +428,9 @@ fn reversing_on_completed_keeps_commit_order() {
 }
 
 fn reentrant_transitions_keep_the_return_to_the_original_status() {
-    let controller = controller();
+    let mut lifecycle =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = lifecycle.controller().clone();
     let slot = std::rc::Rc::new(Mutex::new(Some(controller.clone())));
     let pending = std::rc::Rc::clone(&slot);
     let (late, late_listener) = recorder();
@@ -460,11 +462,13 @@ fn reentrant_transitions_keep_the_return_to_the_original_status() {
         1.0,
         "the last admitted run survives delivery"
     );
-    controller.dispose();
+    lifecycle.dispose();
 }
 
 fn reentrant_completion_delivers_its_outcome_before_the_next_status() {
-    let controller = controller();
+    let mut lifecycle =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = lifecycle.controller().clone();
     let run = controller.forward().expect("original run");
     let order = Arc::new(Mutex::new(Vec::new()));
     let slot = std::rc::Rc::new(Mutex::new(Some(controller.clone())));
@@ -519,7 +523,7 @@ fn reentrant_completion_delivers_its_outcome_before_the_next_status() {
             "dismissed status"
         ]
     );
-    controller.dispose();
+    lifecycle.dispose();
 }
 
 struct DropFailure(Arc<AtomicUsize>);
@@ -537,7 +541,9 @@ struct HostileOwnership {
 }
 
 fn status_failure_retains_removed_captures_and_competing_payloads() {
-    let controller = controller();
+    let mut lifecycle =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = lifecycle.controller().clone();
     let drops = Arc::new(AtomicUsize::new(0));
     let armed = AtomicBool::new(true);
     controller.add_status_listener(std::rc::Rc::new(move |_| {
@@ -594,7 +600,7 @@ fn status_failure_retains_removed_captures_and_competing_payloads() {
         [Forward, Completed],
         "the next frame still delivers"
     );
-    controller.dispose();
+    lifecycle.dispose();
     assert_eq!(drops.load(Ordering::SeqCst), 0);
 }
 
@@ -750,7 +756,9 @@ fn make_wrapper(
 fn dropping_wrapper_silences_its_tail(kind: &str) {
     for status in [true, false] {
         for failed in [false, true] {
-            let parent = controller();
+            let mut lifecycle =
+                AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+            let parent = lifecycle.controller().clone();
             let failure_id = failed.then(|| {
                 if status {
                     parent.add_status_listener(std::rc::Rc::new(|_| {
@@ -826,13 +834,15 @@ fn dropping_wrapper_silences_its_tail(kind: &str) {
                 0,
                 "retired wrapper receives no next notification"
             );
-            parent.dispose();
+            lifecycle.dispose();
         }
     }
 }
 
 fn wrapper_keeps_parent_failure_custody(status: bool, kind: &str) {
-    let parent = controller();
+    let mut lifecycle =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let parent = lifecycle.controller().clone();
     let failure_id = if status {
         parent.add_status_listener(std::rc::Rc::new(|_| panic_any("first parent failure")))
     } else {
@@ -898,7 +908,7 @@ fn wrapper_keeps_parent_failure_custody(status: bool, kind: &str) {
         parent.set_value(1.0);
     }
     assert_eq!(calls.get(), 2, "next notification still arrives");
-    parent.dispose();
+    lifecycle.dispose();
 }
 
 fn value_failure_retains_removed_value_captures() {
@@ -1024,7 +1034,9 @@ fn removed_value_capture_custody(mode: &str) {
 }
 
 fn status_failure_retains_a_reentrantly_removed_new_subscription() {
-    let controller = controller();
+    let mut lifecycle =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = lifecycle.controller().clone();
     let drops = Arc::new(AtomicUsize::new(0));
     let armed = AtomicBool::new(true);
     controller.add_status_listener(std::rc::Rc::new(move |_| {
@@ -1056,7 +1068,7 @@ fn status_failure_retains_a_reentrantly_removed_new_subscription() {
     assert_eq!(drops.load(Ordering::SeqCst), 0);
     controller.tick_at(std::time::Duration::from_secs_f64(1.0));
     assert_eq!(seen(&tail), [Forward, Completed]);
-    controller.dispose();
+    lifecycle.dispose();
 }
 
 fn install_hostile_continuation(
@@ -1089,7 +1101,9 @@ fn fail_on_completion(controller: &AnimationController) {
 }
 
 fn status_failure_retains_completed_run_captures() {
-    let controller = controller();
+    let mut lifecycle =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = lifecycle.controller().clone();
     let drops = Arc::new(AtomicUsize::new(0));
     fail_on_completion(&controller);
     let calls = install_hostile_continuation(&controller, &drops);
@@ -1107,7 +1121,7 @@ fn status_failure_retains_completed_run_captures() {
     controller.tick_at(std::time::Duration::from_secs_f64(1.0));
     assert_eq!(seen(&tail), [Completed, Reverse, Dismissed]);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    controller.dispose();
+    lifecycle.dispose();
 }
 
 struct HostileWaiter {
@@ -1126,7 +1140,9 @@ impl Wake for HostileWaiter {
 }
 
 fn status_failure_retains_completed_run_waiter() {
-    let controller = controller();
+    let mut lifecycle =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = lifecycle.controller().clone();
     fail_on_completion(&controller);
     let drops = Arc::new(AtomicUsize::new(0));
     let calls = Arc::new(AtomicUsize::new(0));
@@ -1157,11 +1173,13 @@ fn status_failure_retains_completed_run_waiter() {
     ));
     controller.tick_at(std::time::Duration::from_secs_f64(2.0));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    controller.dispose();
+    lifecycle.dispose();
 }
 
 fn status_failure_remains_authoritative_over_run_failure() {
-    let controller = controller();
+    let mut lifecycle =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = lifecycle.controller().clone();
     fail_on_completion(&controller);
     let drops = Arc::new(AtomicUsize::new(0));
     let payload_drops = Arc::clone(&drops);
@@ -1189,7 +1207,7 @@ fn status_failure_remains_authoritative_over_run_failure() {
     controller.tick_at(std::time::Duration::from_secs_f64(1.0));
     assert_eq!(controller.value(), 0.0);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    controller.dispose();
+    lifecycle.dispose();
 }
 
 fn frame_failure_retains_a_siblings_run_captures() {

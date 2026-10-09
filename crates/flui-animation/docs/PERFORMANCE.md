@@ -257,7 +257,7 @@ let animation: Rc<dyn Animation<f64>> = Rc::new(CurvedAnimation::new(
     Curves::EaseInOut,
 ));
 let value = animation.value(); // dynamic dispatch into the curved layer
-# controller.dispose();
+# drop(controller);
 ```
 
 ---
@@ -283,8 +283,8 @@ use flui_foundation::{Listenable, ListenerCallback};
 let callback: ListenerCallback = Rc::new(|| println!("changed"));
 controller.add_listener(Rc::clone(&callback));
 other.add_listener(callback);
-# controller.dispose();
-# other.dispose();
+# drop(controller);
+# drop(other);
 ```
 
 The per-frame cost of listeners is in the benchmark table:
@@ -307,7 +307,7 @@ and `status_fan_out/{1,4,8}` for status transitions.
 // Instead of creating a controller per animation, rewind and replay
 controller.reset()?;
 controller.forward()?;
-# controller.dispose();
+# drop(controller);
 # Ok(())
 # }
 ```
@@ -325,7 +325,7 @@ controller.forward()?;
 controller.add_status_listener(Rc::new(|status| {
     if status == AnimationStatus::Completed { /* ... */ }
 }));
-# controller.dispose();
+# drop(controller);
 ```
 
 ### 3. Batch Animations

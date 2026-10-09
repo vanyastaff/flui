@@ -11,10 +11,11 @@
 /// use flui_animation::{AnimationController, AnimationError};
 /// use std::time::Duration;
 ///
-/// let controller = AnimationController::builder(Duration::from_millis(300)).build();
+/// let mut owner = AnimationController::builder(Duration::from_millis(300)).build_on(None);
+/// let controller = owner.controller().clone();
 ///
-/// // Dispose the controller
-/// controller.dispose();
+/// // The owner closes the shared controller.
+/// owner.dispose();
 ///
 /// // Now operations will return AnimationError::Disposed
 /// let result = controller.forward();
@@ -27,7 +28,7 @@ pub enum AnimationError {
     /// The [`AnimationController`](crate::AnimationController) has been disposed.
     ///
     /// This error occurs when attempting to use a controller after
-    /// calling [`AnimationController::dispose()`](crate::AnimationController::dispose).
+    /// retiring its [`DrivenController`](crate::DrivenController) owner.
     #[error("AnimationController has been disposed")]
     Disposed,
 

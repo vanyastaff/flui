@@ -305,7 +305,7 @@ struct RepeatSample {
 /// let value = controller.value();
 ///
 /// // Cleanup when done
-/// controller.dispose();
+/// drop(controller);
 /// ```
 #[derive(Clone)]
 pub struct AnimationController {
@@ -2237,21 +2237,9 @@ impl AnimationController {
         self.finish(status, ValueChange::Notify, delivery, retired, inner);
     }
 
-    /// **CRITICAL:** Dispose when done to prevent leaks.
-    ///
-    /// Stops the animation and clears resources. Idempotent. Cancels the
-    /// active run's [`AnimationRunFuture`] with
-    /// [`RunCanceled`](crate::RunCanceled) —
-    /// delivered with no controller lock held — even though `dispose` itself never
-    /// changes `status` and so fires no status listener (they are already
-    /// cleared by the time delivery runs).
-    pub fn dispose(&self) {
-        let mut retirement = Retirement::new();
-        self.dispose_with_retirement(&mut retirement);
-        retirement.finish();
-    }
-
-    pub(crate) fn dispose_with_retirement(&self, retirement: &mut Retirement) {
+    /// Close the kernel and cancel its run under the owning lifecycle's recovery.
+    /// The owner withdraws its seat before entering this idempotent drain.
+    pub(crate) fn dispose(&self, retirement: &mut Retirement) {
         let mut retired = RetiredSources::new();
         let mut inner = self.inner.borrow_mut();
         if inner.disposed {

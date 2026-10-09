@@ -102,7 +102,7 @@ fn forward_from_mid_scales_run_duration() {
     );
     c.tick_at(std::time::Duration::from_secs_f64(0.05));
     assert_eq!(c.status(), AnimationStatus::Completed);
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 }
 
 fn set_value_nan_is_canonicalized() {
@@ -115,7 +115,7 @@ fn set_value_nan_is_canonicalized() {
         "NaN must canonicalize to the lower bound, not poison the value"
     );
     assert_eq!(c.status(), AnimationStatus::Dismissed);
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 }
 
 /// `without_ticker_bounds` is a BOUNDED constructor: bounded means
@@ -153,12 +153,12 @@ fn without_ticker_bounds_rejects_wide_open_ones() {
         0.0,
         "unbounded_without_ticker starts at 0.0, never -inf"
     );
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 }
 
 fn disposed_controller_rejects_forward() {
     let c = controller(100);
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
     assert!(matches!(c.forward(), Err(AnimationError::Disposed)));
 }
 
@@ -179,7 +179,7 @@ fn bounded_controller_clamps_infinite_target_and_from_to_the_pointed_at_bound() 
         1.0,
         "animate_to(+inf) clamps to the finite upper bound"
     );
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 
     // `from` clamping to the upper bound makes `forward_from`'s own
     // target (also `upper_bound`) already reached -- this settles
@@ -191,7 +191,7 @@ fn bounded_controller_clamps_infinite_target_and_from_to_the_pointed_at_bound() 
         1.0,
         "forward_from(Some(+inf)) clamps to the finite upper bound"
     );
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 
     // Mirror case: `reverse_from`'s `from` clamps to the LOWER bound,
     // which is also `reverse`'s own target -- settles SYNCHRONOUSLY at
@@ -203,7 +203,7 @@ fn bounded_controller_clamps_infinite_target_and_from_to_the_pointed_at_bound() 
         0.0,
         "reverse_from(Some(-inf)) clamps to the finite lower bound"
     );
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 }
 
 // ---- #1183: fling_with's ordering and non-finite refusals ---------------
@@ -288,7 +288,7 @@ fn a_simulation_that_turns_non_finite_mid_run_ends_the_run_at_the_last_finite_va
         std::task::Poll::Ready(Ok(())),
         "the future must resolve Ok -- the run ended on its own terms, not by cancellation"
     );
-    c.dispose();
+    crate::test_cases::dispose_controller(c);
 }
 
 // ---- B1c: status listener may re-enter the controller without deadlock ----
@@ -310,7 +310,7 @@ fn status_callback_can_reenter_controller_without_deadlock() {
     c.forward().unwrap();
     c.tick_at(std::time::Duration::from_secs_f64(0.10)); // complete -> fires Completed -> callback re-enters
     assert_eq!(reentered.load(Ordering::SeqCst), 1);
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 }
 
 // ---- repeat with a finite count stops + completes ----
@@ -330,7 +330,7 @@ fn repeat_consumes_all_cycles_in_one_long_frame() {
         AnimationStatus::Completed,
         "all four cycles retired in one long frame -> exhausted"
     );
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 }
 
 /// The `min == max` equality case. A degenerate `min == max` range is
@@ -339,7 +339,7 @@ fn repeat_with_rejects_equal_min_and_max() {
     let c = controller(100);
     let r = c.repeat_with(Some(0.5), Some(0.5), false, None, None);
     assert!(matches!(r, Err(AnimationError::InvalidBounds(_))));
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 }
 
 // ---- repeat sampling is a pure function of elapsed time (#1078) ----
@@ -369,8 +369,8 @@ fn repeat_value_is_partition_invariant_across_a_skipped_cycle() {
     );
     assert_eq!(direct.value(), partitioned.value());
     assert_eq!(direct.status(), partitioned.status());
-    direct.dispose();
-    partitioned.dispose();
+    crate::test_cases::dispose_controller(&direct);
+    crate::test_cases::dispose_controller(&partitioned);
 
     // Bounce mode: same elapsed time, opposite leg (cycle index 1 is
     // the reverse leg).
@@ -392,8 +392,8 @@ fn repeat_value_is_partition_invariant_across_a_skipped_cycle() {
     );
     assert_eq!(direct.value(), partitioned.value());
     assert_eq!(direct.status(), partitioned.status());
-    direct.dispose();
-    partitioned.dispose();
+    crate::test_cases::dispose_controller(&direct);
+    crate::test_cases::dispose_controller(&partitioned);
 }
 
 /// A finite-count bouncing repeat, ticked with ABSOLUTE frame timestamps:
@@ -413,7 +413,7 @@ fn repeat_bounce_finite_count_and_absolute_time_rewind() {
     // A stale sample cannot rewind the run.
     c.tick_at(std::time::Duration::from_secs_f64(0.06));
     assert!((c.value() - 1.0).abs() < 1e-6, "value={}", c.value());
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 
     // The non-rewound interpretation, for contrast: elapsed 160ms lands
     // on the reverse leg's 0.4, not the forward leg's 0.6.
@@ -421,7 +421,7 @@ fn repeat_bounce_finite_count_and_absolute_time_rewind() {
     c2.repeat_with(None, None, true, None, Some(4)).unwrap();
     c2.tick_at(std::time::Duration::from_secs_f64(0.16));
     assert!((c2.value() - 0.4).abs() < 1e-6, "value={}", c2.value());
-    c2.dispose();
+    crate::test_cases::dispose_controller(&c2);
 
     // Exhaustion at exactly 400ms lands on the 4th (odd-indexed)
     // cycle's reverse-leg endpoint.
@@ -430,7 +430,7 @@ fn repeat_bounce_finite_count_and_absolute_time_rewind() {
     c3.tick_at(std::time::Duration::from_secs_f64(0.4));
     assert!((c3.value() - 0.0).abs() < 1e-6, "value={}", c3.value());
     assert_eq!(c3.status(), AnimationStatus::Dismissed);
-    c3.dispose();
+    crate::test_cases::dispose_controller(&c3);
 }
 
 /// `Duration::try_from_secs_f64` returning `Err` (an out-of-range
@@ -446,7 +446,7 @@ fn repeat_tick_at_infinity_exhausts_a_finite_count_instead_of_rewinding() {
     c.tick_at(Duration::MAX);
     assert_eq!(c.status(), AnimationStatus::Completed);
     assert!((c.value() - 1.0).abs() < 1e-6, "value={}", c.value());
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 }
 
 /// A zero effective period settles SYNCHRONOUSLY at the call — Android's
@@ -471,7 +471,7 @@ fn repeat_with_zero_period_settles_synchronously_at_the_call() {
         (c.value() - 1.0).abs() < 1e-6,
         "a later tick must change nothing"
     );
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 
     // Infinite count: lands on cycle 0's end (Android's skip-to-end) —
     // a documented exception to "an infinite repeat's future resolves
@@ -483,7 +483,7 @@ fn repeat_with_zero_period_settles_synchronously_at_the_call() {
     assert!(future2.is_complete());
     assert!((c2.value() - 1.0).abs() < 1e-6, "value={}", c2.value());
     assert_eq!(c2.status(), AnimationStatus::Completed);
-    c2.dispose();
+    crate::test_cases::dispose_controller(&c2);
 }
 
 /// `velocity()` on a reverse leg is SIGNED (negative while the
@@ -503,7 +503,7 @@ fn repeat_reverse_leg_velocity_is_negative() {
         "a reverse leg's velocity must be negative: {}",
         c.velocity()
     );
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 }
 
 // ---- animate_to_curved / animate_back_curved thread a curve through the run ----
@@ -531,7 +531,7 @@ fn animate_to_curved_eases_through_the_given_curve() {
         "the curve must land exactly on the target at t=1.0"
     );
     assert_eq!(c.status(), AnimationStatus::Completed);
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 }
 
 // ---- controller-owned run futures (issue #1161 / ADR-0064) ----
@@ -563,7 +563,7 @@ fn a_zero_duration_run_cancels_the_displaced_run_after_its_own_status_is_observa
         "even a synchronously-settling run must publish its own status \
          before the run it displaced observes its cancellation"
     );
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 }
 
 /// A trivially-finished [`Simulation`] test double: `is_done` is true
@@ -599,7 +599,7 @@ fn simulation_run_future_resolves_ok_when_the_simulation_finishes() {
         future.is_complete(),
         "tick_simulation's is_done branch must complete the run's future"
     );
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 }
 
 fn stop_cancels_the_active_run() {
@@ -607,7 +607,7 @@ fn stop_cancels_the_active_run() {
     let future = c.forward().unwrap();
     c.stop().unwrap();
     assert!(future.is_canceled(), "stop() must cancel the run in flight");
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 }
 
 fn every_delivery_runs_with_the_controller_lock_free() {
@@ -629,7 +629,7 @@ fn every_delivery_runs_with_the_controller_lock_free() {
         "a delivery must run with the controller's own lock free — the \
          finish chokepoint drops it before calling deliver()"
     );
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 }
 
 fn a_panicking_status_listener_leaves_the_finished_run_ok() {
@@ -669,7 +669,7 @@ fn a_panicking_status_listener_leaves_the_finished_run_ok() {
          the panicking listener ran"
     );
     assert!(future.is_complete());
-    c.dispose();
+    crate::test_cases::dispose_controller(&c);
 }
 
 #[test]

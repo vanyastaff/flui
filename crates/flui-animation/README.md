@@ -71,7 +71,7 @@ let controller = AnimationController::builder(duration)
     .initial_value(0.5)
     .reverse_duration(Duration::from_millis(200))
     .build();
-# controller.dispose();
+# drop(controller);
 # Ok(())
 # }
 ```
@@ -97,7 +97,7 @@ controller.reverse_from(Some(0.8))?;  // Jump to 0.8, then animate backward
 controller.animate_to(0.6, None)?;    // Animate to a value over the forward duration
 controller.stop()?;                   // Stop at current value
 controller.reset()?;                  // Jump to lower_bound, status = Dismissed
-# controller.dispose();
+# drop(controller);
 # Ok(())
 # }
 ```
@@ -116,7 +116,7 @@ controller.repeat(true)?;  // Bounce: 0→1→0→1→...
 
 // Bounded: three legs between 0.2 and 0.8, one period each (forward, reverse, forward)
 controller.repeat_with(Some(0.2), Some(0.8), true, None, Some(3))?;
-# controller.dispose();
+# drop(controller);
 # Ok(())
 # }
 ```
@@ -142,7 +142,7 @@ controller.fling_with(1.0, Some(spring))?;
 let bouncy = SpringDescription::with_damping_ratio(1.0, 500.0, 0.7);
 let sim = SpringSimulation::new(bouncy, 0.0, 1.0, 2.0);
 controller.animate_with(sim)?;
-# controller.dispose();
+# drop(controller);
 # Ok(())
 # }
 ```
@@ -172,7 +172,7 @@ let id = controller.add_status_listener(Rc::new(|status| {
     }
 }));
 controller.remove_status_listener(id);
-# controller.dispose();
+# drop(controller);
 ```
 
 ### Lifecycle
@@ -182,8 +182,9 @@ controller.remove_status_listener(id);
 # use flui_animation::{AnimationController, AnimationError};
 # use flui_scheduler::UpdateScheduler;
 # let scheduler = UpdateScheduler::new();
-# let controller = AnimationController::builder(Duration::from_millis(300)).build();
-controller.dispose(); // Cancel the run and close its callbacks
+# let mut owner = AnimationController::builder(Duration::from_millis(300)).build_on(None);
+# let controller = owner.controller().clone();
+owner.dispose(); // Cancel the run and close its callbacks
 assert!(matches!(controller.forward(), Err(AnimationError::Disposed)));
 ```
 
@@ -314,7 +315,7 @@ assert_eq!(tween.transform(0.5), 50.0);
 
 // With animation
 let position = tween.transform(controller.value());
-# controller.dispose();
+# drop(controller);
 ```
 
 ### Keyframes
@@ -392,7 +393,7 @@ let curved = CurvedAnimation::new(Rc::new(controller.clone()), Curves::EaseInOut
 
 // Value is: curve.transform(controller.value())
 let value = curved.value();
-# controller.dispose();
+# drop(controller);
 ```
 
 ### TweenAnimation
@@ -411,7 +412,7 @@ let animated = TweenAnimation::new(tween, Rc::new(controller.clone()));
 
 // Value is: tween.transform(controller.value())
 let pixels = animated.value(); // 0.0 to 300.0
-# controller.dispose();
+# drop(controller);
 ```
 
 ### ReverseAnimation
@@ -430,7 +431,7 @@ let reversed = ReverseAnimation::new(Rc::new(controller.clone()));
 // value = 1.0 - parent.value()
 // Forward becomes Reverse, Completed becomes Dismissed
 assert_eq!(reversed.value(), 1.0);
-# controller.dispose();
+# drop(controller);
 ```
 
 ### ProxyAnimation
@@ -449,8 +450,8 @@ let proxy = ProxyAnimation::new(Rc::new(controller1.clone()));
 
 // Later, switch to different animation
 proxy.set_parent(Rc::new(controller2.clone()));
-# controller1.dispose();
-# controller2.dispose();
+# drop(controller1);
+# drop(controller2);
 ```
 
 ### ConstantAnimation
@@ -486,8 +487,8 @@ let switch = AnimationSwitch::new(Rc::new(anim1.clone()), Some(Rc::new(anim2.clo
 // When anim1 and anim2 values cross, switches to anim2
 // Useful for "train hopping" between overlapping animations
 # switch.dispose();
-# anim1.dispose();
-# anim2.dispose();
+# drop(anim1);
+# drop(anim2);
 ```
 
 ---
@@ -507,7 +508,7 @@ use flui_animation::AnimatableExt;
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 let curved = Rc::new(CurvedAnimation::new(Rc::new(controller.clone()), Curves::EaseOut));
 let animated = FloatTween::new(0.0, 100.0).animate(curved);
-# controller.dispose();
+# drop(controller);
 ```
 
 ---

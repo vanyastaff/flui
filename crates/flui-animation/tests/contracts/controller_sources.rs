@@ -109,7 +109,9 @@ fn poll(future: &mut AnimationRunFuture) -> Poll<Result<(), RunCanceled>> {
     Pin::new(future).poll(&mut Context::from_waker(Waker::noop()))
 }
 fn exercise(method: Method, action: Action) {
-    let controller = AnimationController::builder(Duration::from_secs(1)).build();
+    let mut lifecycle =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = lifecycle.controller().clone();
     let replacement = Rc::new(Mutex::new(None));
     let hook = Rc::new(Hook {
         controller: controller.clone(),
@@ -177,7 +179,7 @@ fn exercise(method: Method, action: Action) {
         }
         Action::PanicAfterStop => unreachable!(),
     }
-    controller.dispose();
+    lifecycle.dispose();
 }
 fn position_may_read() {
     exercise(Method::Position, Action::Read);
@@ -308,7 +310,9 @@ impl Simulation for HostileSimulation {
     }
 }
 fn hostile_source_after_sample_failure(initial: bool) {
-    let controller = AnimationController::builder(Duration::from_secs(1)).build();
+    let mut lifecycle =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = lifecycle.controller().clone();
     let drops = Rc::new(AtomicUsize::new(0));
     let source = HostileSimulation {
         hook: Rc::new(Hook {
@@ -347,7 +351,7 @@ fn hostile_source_after_sample_failure(initial: bool) {
     controller.tick_at(std::time::Duration::from_secs_f64(1.0));
     assert_eq!(controller.value(), 1.0);
     assert_eq!(poll(&mut next), Poll::Ready(Ok(())));
-    controller.dispose();
+    lifecycle.dispose();
 }
 fn initial_failure_retains_hostile_source() {
     hostile_source_after_sample_failure(true);
@@ -365,7 +369,9 @@ impl Curve for CurveDrop {
     }
 }
 fn curve_retirement_may_reenter() {
-    let controller = AnimationController::builder(Duration::from_secs(1)).build();
+    let mut lifecycle =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = lifecycle.controller().clone();
     let drops = Rc::new(AtomicUsize::new(0));
     let _future = controller
         .animate_to_curved(
@@ -381,10 +387,12 @@ fn curve_retirement_may_reenter() {
         .expect("owned curve");
     controller.stop().expect("curve stop");
     assert_eq!(drops.load(Ordering::SeqCst), 1);
-    controller.dispose();
+    lifecycle.dispose();
 }
 fn callback_retirement_may_reenter() {
-    let controller = AnimationController::builder(Duration::from_secs(1)).build();
+    let mut lifecycle =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = lifecycle.controller().clone();
     let drops = Rc::new(AtomicUsize::new(0));
     let probe = SourceDrop {
         controller: controller.clone(),
@@ -402,11 +410,13 @@ fn callback_retirement_may_reenter() {
     controller.add_status_listener(std::rc::Rc::new(move |_| {
         let _owned = &probe;
     }));
-    controller.dispose();
+    lifecycle.dispose();
     assert_eq!(drops.load(Ordering::SeqCst), 2);
 }
 fn status_failure_retains_retired_source_and_callback() {
-    let controller = AnimationController::builder(Duration::from_secs(1)).build();
+    let mut lifecycle =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = lifecycle.controller().clone();
     let drops = Rc::new(AtomicUsize::new(0));
     let source = HostileSimulation {
         hook: Rc::new(Hook {
@@ -461,7 +471,7 @@ fn status_failure_retains_retired_source_and_callback() {
     controller.tick_at(std::time::Duration::from_secs_f64(1.0));
     assert_eq!(poll(&mut next), Poll::Ready(Ok(())));
     assert_eq!(controller.value(), 1.0);
-    controller.dispose();
+    lifecycle.dispose();
 }
 
 struct FailingRetirement;
@@ -482,7 +492,9 @@ impl Simulation for FailingRetirement {
     }
 }
 fn ordinary_retirement_failure_preserves_new_run() {
-    let controller = AnimationController::builder(Duration::from_secs(1)).build();
+    let mut lifecycle =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = lifecycle.controller().clone();
     let mut old = controller
         .animate_with(FailingRetirement)
         .expect("retiring source");
@@ -504,7 +516,7 @@ fn ordinary_retirement_failure_preserves_new_run() {
     let mut next = controller.forward().expect("later run");
     controller.tick_at(std::time::Duration::from_secs_f64(1.0));
     assert_eq!(poll(&mut next), Poll::Ready(Ok(())));
-    controller.dispose();
+    lifecycle.dispose();
 }
 fn retirement_failure_retains_later_callback_envelope() {
     let mut owner =

@@ -41,7 +41,7 @@
 //! let animation = TweenAnimation::new(tween, Rc::new(controller.clone()));
 //!
 //! // Cleanup when done
-//! controller.dispose();
+//! drop(controller);
 //! ```
 //!
 //! ## Usage Example
@@ -63,7 +63,7 @@
 //! let value = controller.value();
 //!
 //! // Cleanup when done
-//! controller.dispose();
+//! drop(controller);
 //! # Ok(())
 //! # }
 //! ```
