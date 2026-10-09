@@ -942,6 +942,104 @@ fn ambient_refresh_preserves_the_latest_physical_cursor_owner() {
     tracker.clear_cursor_change_callback();
 }
 
+fn ambient_probe_cannot_replace_reentrant_physical_observation(moved: bool, retirement: u8) {
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = lane.dispatch_handle();
+    let tracker = MouseTracker::new();
+    let regions = Log::default();
+    let initial = lane.enter(|| logging_region(&handle, "initial", &regions));
+    let fresh = lane.enter(|| logging_region(&handle, "fresh", &regions));
+    let stale = lane.enter(|| logging_region(&handle, "stale", &regions));
+    let make_path = |id, target, cursor| {
+        let mut result = HitTestResult::new();
+        let id = RenderId::new(id);
+        result.add(
+            HitTestEntry::new(id)
+                .mouse_annotation(MouseTrackerAnnotation::new(id, target))
+                .cursor(cursor),
+        );
+        result
+    };
+    let initial_path = make_path(51, initial, CursorIcon::Text);
+    let fresh_path = make_path(52, fresh, CursorIcon::Pointer);
+    let stale_path = make_path(53, stale, CursorIcon::Crosshair);
+    let original_position = Offset::new(5.0, 5.0);
+    let fresh_position = if moved {
+        Offset::new(25.0, 25.0)
+    } else {
+        original_position
+    };
+    let observed = Rc::new(RefCell::new(Vec::new()));
+    let callback_log = Rc::clone(&observed);
+    tracker.set_cursor_change_callback(Rc::new(move |_, cursor| {
+        callback_log.borrow_mut().push(cursor);
+    }));
+    lane.enter(|| {
+        tracker.update_with_motion(
+            &hover(MOUSE, PointerKind::Mouse, original_position, 1),
+            PointerMotionKind::Hover,
+            &initial_path,
+        );
+        take(&regions);
+        tracker.update_all_devices(|position| {
+            assert_eq!(
+                position, original_position,
+                "probe uses its admitted snapshot"
+            );
+            match retirement {
+                0 => {}
+                1 => tracker.remove_device(device(MOUSE)),
+                2 => tracker.dispatch_window_left(),
+                _ => unreachable!("fixture retirement"),
+            }
+            tracker.update_with_motion(
+                &hover(MOUSE, PointerKind::Mouse, fresh_position, 2),
+                PointerMotionKind::Hover,
+                &fresh_path,
+            );
+            stale_path.clone()
+        });
+        assert_eq!(tracker.device_position(device(MOUSE)), Some(fresh_position));
+        assert_eq!(
+            tracker.device_cursor(device(MOUSE)),
+            Some(CursorIcon::Pointer),
+            "stale probe cannot overwrite a newer physical observation, even at the same position"
+        );
+        assert_eq!(observed.borrow().last(), Some(&CursorIcon::Pointer));
+        let transitions = take(&regions);
+        assert!(transitions.iter().any(|entry| entry == "enter fresh 2"));
+        assert!(
+            transitions.iter().all(|entry| !entry.contains("stale")),
+            "discarded probe must not publish stale region transitions: {transitions:?}"
+        );
+        tracker.update_all_devices(|position| {
+            assert_eq!(position, fresh_position);
+            fresh_path.clone()
+        });
+        assert!(
+            take(&regions).is_empty(),
+            "fresh hover state remains committed"
+        );
+    });
+    tracker.clear_cursor_change_callback();
+}
+
+fn ambient_probe_preserves_reentrant_motion() {
+    ambient_probe_cannot_replace_reentrant_physical_observation(true, 0);
+}
+
+fn ambient_probe_preserves_same_position_reentry() {
+    ambient_probe_cannot_replace_reentrant_physical_observation(false, 0);
+}
+
+fn ambient_probe_preserves_removed_and_readmitted_source() {
+    ambient_probe_cannot_replace_reentrant_physical_observation(false, 1);
+}
+
+fn ambient_probe_preserves_left_and_readmitted_source() {
+    ambient_probe_cannot_replace_reentrant_physical_observation(false, 2);
+}
+
 fn removed_cursor_owner_failure_keeps_default_publication_deliverable() {
     let tracker = MouseTracker::new();
     let failed = Rc::new(Cell::new(false));
@@ -1363,6 +1461,22 @@ fn mouse_tracking_ordering_and_cursor_deferral() {
     run_rows(
         "mouse tracking",
         &[
+            (
+                "ambient probe reentrant motion",
+                ambient_probe_preserves_reentrant_motion,
+            ),
+            (
+                "ambient probe same-position reentry",
+                ambient_probe_preserves_same_position_reentry,
+            ),
+            (
+                "ambient probe removed source readmission",
+                ambient_probe_preserves_removed_and_readmitted_source,
+            ),
+            (
+                "ambient probe window-left readmission",
+                ambient_probe_preserves_left_and_readmitted_source,
+            ),
             (
                 "ambient refresh preserves latest physical cursor owner",
                 ambient_refresh_preserves_the_latest_physical_cursor_owner,
