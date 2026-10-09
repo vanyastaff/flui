@@ -82,6 +82,12 @@ native retirement. Accepted native cleanup callbacks remain deliverable after
 an earlier CaptureLost failure; their opaque captures retain the earlier failure's
 ownership fence under ADR-0127. Fresh admission after containment retires its own
 captures normally and does not redeliver the cancelled generation.
+Borrowed staging and claim authority carry failures already contained during fresh
+hit testing or raw observation into the same retirement fence. Required losing
+admission cleanup and accepted winner delivery continue, while opaque callback
+captures retain that earliest failure's ownership policy. A later losing hook or
+winner callback failure cannot replace it. Healthy subsequent admission still
+retires its captures normally.
 `nested_native_scale_loser_recovers_touch_after_winner_terminal` checks winner
 continuity, both terminal reasons and the losing ancestor's next touch gesture.
 
@@ -154,5 +160,8 @@ failure and subsequent same-source recovery.
 `native_cancellation_retains_captures_after_prior_capture_failure` specifies
 required native cleanup, safe capture retention and fresh same-source recovery
 through both public pointer-sequence cancellation methods.
+`native_claim_prior_observation_failure_preserves_captures` covers prior observer
+failure competing with losing cleanup and winner delivery, retained safe captures
+and healthy subsequent admission.
 Existing Scale tables retain the default two-contact contract. These owned-event
 witnesses do not claim physical trackpad or touchscreen execution on every backend.
