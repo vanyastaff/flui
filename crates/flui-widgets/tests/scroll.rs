@@ -1335,7 +1335,12 @@ pub(crate) fn replacing_vsync_retires_old_motion_and_drives_fresh_contacts() {
         let before_same = pixels();
         laid.pump_widget(VsyncScope::new(first.clone(), child.clone()));
         laid.pump_for(Duration::from_millis(16));
-        assert!(pixels() > before_same, "{family}: same owner preserves the run");
+        if pixels() <= before_same {
+            failures.push(format!("{family}: same owner rebuild stopped real inertia"));
+        }
+        // A fresh, not-yet-ticked release independently exercises clock
+        // replacement even if the preceding same-owner control fails.
+        fling(&laid);
 
         laid.pump_widget(VsyncScope::new(second.clone(), child));
         let replaced = pixels();
