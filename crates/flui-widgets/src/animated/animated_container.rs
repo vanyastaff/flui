@@ -1,29 +1,34 @@
 //! [`AnimatedContainer`] — animates several [`Container`] properties at once.
 
-use std::time::Duration;
+use std::{rc::Rc, time::Duration};
 
-use flui_animation::Animation;
 use flui_animation::curve::{ArcCurve, Curve};
+use flui_animation::{
+    AnimatedValue, Animation, MotionSpec, SpringDescription, TwoWayConverter, Vsync,
+};
 use flui_foundation::geometry::{EdgeInsets, Matrix4};
+use flui_foundation::{ChangeNotifier, Listenable};
 use flui_painting::Alignment;
 use flui_painting::styling::Color;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
 use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
 
-use crate::animated::implicitly_animated::{
-    DEFAULT_DURATION, ImplicitController, OptTween, default_curve,
-};
+use crate::animated::implicitly_animated::{DEFAULT_DURATION, TransformTween, default_curve};
+use crate::animated::property_motion::PropertyMotion;
 use crate::animated::vsync_scope::VsyncScope;
 use crate::{AnimatedBuilder, Container};
 
 /// Animates [`Container`]'s alignment, padding, color, width, height, margin and
 /// transform whenever any of them changes.
 ///
-/// One controller drives every property in lockstep over `duration` along
-/// `curve`. A property animates only across a present→present change; a property
+/// Numeric properties retain independent component velocities and deadlines.
+/// A property animates only across a present→present change; a property
 /// that appears or disappears snaps (no value to interpolate from/to). An
 /// overshooting curve may carry a value past its target; padding, margin, width
 /// and height are clamped at zero, the other properties extrapolate.
+/// Matrix replacement preserves the displayed decomposition with C⁰ continuity;
+/// its progress has separate motion. Non-finite initial properties are omitted,
+/// and non-finite updates preserve all previously admitted property targets.
 ///
 /// Driven by a binding under a [`VsyncScope`].
 #[derive(Clone, StatefulView)]
@@ -35,8 +40,7 @@ pub struct AnimatedContainer {
     height: Option<f64>,
     margin: Option<EdgeInsets>,
     transform: Option<Matrix4>,
-    duration: Duration,
-    curve: ArcCurve,
+    motion: MotionSpec,
     child: BoxedView,
 }
 
@@ -52,8 +56,10 @@ impl AnimatedContainer {
             height: None,
             margin: None,
             transform: None,
-            duration: DEFAULT_DURATION,
-            curve: default_curve(),
+            motion: MotionSpec::Curve {
+                duration: DEFAULT_DURATION,
+                curve: default_curve(),
+            },
             child: child.into_view().boxed(),
         }
     }
@@ -114,7 +120,11 @@ impl AnimatedContainer {
     /// Override the transition duration.
     #[must_use]
     pub fn duration(mut self, duration: Duration) -> Self {
-        self.duration = duration;
+        let curve = match self.motion {
+            MotionSpec::Curve { curve, .. } => curve,
+            _ => default_curve(),
+        };
+        self.motion = MotionSpec::Curve { duration, curve };
         self
     }
 
@@ -122,7 +132,22 @@ impl AnimatedContainer {
     /// [`Curve`], including elastic and bounce curves.
     #[must_use]
     pub fn curve(mut self, curve: impl Curve + Send + Sync + 'static) -> Self {
-        self.curve = ArcCurve::new(curve);
+        let duration = match self.motion {
+            MotionSpec::Curve { duration, .. } => duration,
+            _ => DEFAULT_DURATION,
+        };
+        self.motion = MotionSpec::Curve {
+            duration,
+            curve: ArcCurve::new(curve),
+        };
+        self
+    }
+
+    /// Select spring motion for properties and decomposed transform progress.
+    /// Numeric properties retain velocity; matrix replacement retains position.
+    #[must_use]
+    pub fn spring(mut self, spring: SpringDescription) -> Self {
+        self.motion = MotionSpec::Spring(spring);
         self
     }
 }
@@ -130,23 +155,24 @@ impl AnimatedContainer {
 impl std::fmt::Debug for AnimatedContainer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AnimatedContainer")
-            .field("duration", &self.duration)
+            .field("motion", &self.motion)
             .finish_non_exhaustive()
     }
 }
 
-/// State for [`AnimatedContainer`] — one shared controller plus a tween per
-/// animatable property.
+/// State for [`AnimatedContainer`] — owns independent property trajectories.
 #[derive(Debug)]
 pub struct AnimatedContainerState {
-    controller: ImplicitController,
-    alignment: OptTween<Alignment>,
-    padding: OptTween<EdgeInsets>,
-    color: OptTween<Color>,
-    width: OptTween<f64>,
-    height: OptTween<f64>,
-    margin: OptTween<EdgeInsets>,
-    transform: OptTween<Matrix4>,
+    alignment: PropertyMotion<Alignment>,
+    padding: PropertyMotion<EdgeInsets>,
+    color: PropertyMotion<Color>,
+    width: PropertyMotion<f64>,
+    height: PropertyMotion<f64>,
+    margin: PropertyMotion<EdgeInsets>,
+    transform_progress: AnimatedValue<f64>,
+    transform: TransformTween,
+    notifications: Rc<ChangeNotifier>,
+    vsync: Option<Vsync>,
     child: BoxedView,
 }
 
@@ -154,15 +180,61 @@ impl StatefulView for AnimatedContainer {
     type State = AnimatedContainerState;
 
     fn create_state(&self) -> Self::State {
+        let notifications = Rc::new(ChangeNotifier::new());
+        let transform_progress = AnimatedValue::new(0.0, self.motion.clone(), None)
+            .expect("BUG: initial transform progress is finite");
+        let weak = Rc::downgrade(&notifications);
+        transform_progress
+            .animation()
+            .add_observer(Rc::new(move |recovery| {
+                if let Some(notifications) = weak.upgrade() {
+                    notifications.notify_listeners_with_recovery(recovery);
+                }
+            }));
         AnimatedContainerState {
-            controller: ImplicitController::new(self.duration, self.curve.clone()),
-            alignment: OptTween::at_rest(self.alignment),
-            padding: OptTween::at_rest(self.padding),
-            color: OptTween::at_rest(self.color),
-            width: OptTween::at_rest(self.width),
-            height: OptTween::at_rest(self.height),
-            margin: OptTween::at_rest(self.margin),
-            transform: OptTween::at_rest(self.transform),
+            alignment: PropertyMotion::new(
+                self.alignment.filter(finite),
+                self.motion.clone(),
+                &notifications,
+                None,
+            )
+            .expect("BUG: initial alignment was made finite"),
+            padding: PropertyMotion::new(
+                self.padding.filter(finite),
+                self.motion.clone(),
+                &notifications,
+                None,
+            )
+            .expect("BUG: initial padding was made finite"),
+            color: PropertyMotion::new(self.color, self.motion.clone(), &notifications, None)
+                .expect("BUG: color components are finite"),
+            width: PropertyMotion::new(
+                self.width.filter(finite),
+                self.motion.clone(),
+                &notifications,
+                None,
+            )
+            .expect("BUG: initial width was made finite"),
+            height: PropertyMotion::new(
+                self.height.filter(finite),
+                self.motion.clone(),
+                &notifications,
+                None,
+            )
+            .expect("BUG: initial height was made finite"),
+            margin: PropertyMotion::new(
+                self.margin.filter(finite),
+                self.motion.clone(),
+                &notifications,
+                None,
+            )
+            .expect("BUG: initial margin was made finite"),
+            transform: TransformTween::at_rest(
+                self.transform.filter(|m| m.m.iter().all(|v| v.is_finite())),
+            ),
+            transform_progress,
+            notifications,
+            vsync: None,
             child: self.child.clone(),
         }
     }
@@ -170,46 +242,59 @@ impl StatefulView for AnimatedContainer {
 
 impl ViewState<AnimatedContainer> for AnimatedContainerState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.controller.rebind(VsyncScope::maybe_of(ctx).as_ref());
+        self.vsync = VsyncScope::maybe_of(ctx);
+        for result in [
+            self.alignment.rebind(self.vsync.as_ref()),
+            self.padding.rebind(self.vsync.as_ref()),
+            self.color.rebind(self.vsync.as_ref()),
+            self.width.rebind(self.vsync.as_ref()),
+            self.height.rebind(self.vsync.as_ref()),
+            self.margin.rebind(self.vsync.as_ref()),
+            self.transform_progress.rebind(self.vsync.as_ref()),
+        ] {
+            if let Err(error) = result {
+                tracing::error!(%error, "container animation has no clock");
+            }
+        }
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
-        self.controller.rebind(VsyncScope::maybe_of(ctx).as_ref());
+        self.init_state(ctx);
     }
 
     fn build(&self, _view: &AnimatedContainer, _ctx: &dyn BuildContext) -> impl IntoView {
-        let curved = self.controller.curved();
-        let alignment = self.alignment.clone();
-        let padding = self.padding.clone();
-        let color = self.color.clone();
-        let width = self.width.clone();
-        let height = self.height.clone();
-        let margin = self.margin.clone();
+        let progress = self.transform_progress.animation();
+        let alignment = self.alignment.animation();
+        let padding = self.padding.animation();
+        let color = self.color.animation();
+        let width = self.width.animation();
+        let height = self.height.animation();
+        let margin = self.margin.animation();
         let transform = self.transform.clone();
         let child = self.child.clone();
-        AnimatedBuilder::new(self.controller.listenable(), move || {
+        AnimatedBuilder::new(self.notifications.clone(), move || {
             // An overshooting curve extrapolates the tweens past their targets; the
             // insets and the size are clamped into their non-negative domain here,
             // where they meet the property (ADR-0149).
-            let t = curved.value();
+            let t = progress.value();
             let mut container = Container::new();
-            if let Some(value) = alignment.current(t) {
-                container = container.alignment(value);
+            if let Some(value) = &alignment {
+                container = container.alignment(value.value());
             }
-            if let Some(value) = padding.current(t) {
-                container = container.padding(value.clamp_non_negative());
+            if let Some(value) = &padding {
+                container = container.padding(value.value().clamp_non_negative());
             }
-            if let Some(value) = color.current(t) {
-                container = container.color(value);
+            if let Some(value) = &color {
+                container = container.color(value.value());
             }
-            if let Some(value) = width.current(t) {
-                container = container.width(non_negative(value));
+            if let Some(value) = &width {
+                container = container.width(non_negative(value.value()));
             }
-            if let Some(value) = height.current(t) {
-                container = container.height(non_negative(value));
+            if let Some(value) = &height {
+                container = container.height(non_negative(value.value()));
             }
-            if let Some(value) = margin.current(t) {
-                container = container.margin(value.clamp_non_negative());
+            if let Some(value) = &margin {
+                container = container.margin(value.value().clamp_non_negative());
             }
             if let Some(value) = transform.current(t) {
                 container = container.transform(value);
@@ -220,39 +305,94 @@ impl ViewState<AnimatedContainer> for AnimatedContainerState {
 
     fn did_update_view(&mut self, _old_view: &AnimatedContainer, new_view: &AnimatedContainer) {
         self.child = new_view.child.clone();
-        // All properties share the controller, so a change to any one restarts it
-        // and re-anchors every property at the same instant.
-        let restart = self.alignment.animates_toward(new_view.alignment.as_ref())
-            || self.padding.animates_toward(new_view.padding.as_ref())
-            || self.color.animates_toward(new_view.color.as_ref())
-            || self.width.animates_toward(new_view.width.as_ref())
-            || self.height.animates_toward(new_view.height.as_ref())
-            || self.margin.animates_toward(new_view.margin.as_ref())
-            || self.transform.animates_toward(new_view.transform.as_ref());
-        let restart_at = restart.then(|| self.controller.value());
-        self.controller.set_duration(new_view.duration);
-        self.controller.set_curve(new_view.curve.clone());
-        self.alignment.retarget(new_view.alignment, restart_at);
-        self.padding.retarget(new_view.padding, restart_at);
-        self.color.retarget(new_view.color, restart_at);
-        self.width.retarget(new_view.width, restart_at);
-        self.height.retarget(new_view.height, restart_at);
-        self.margin.retarget(new_view.margin, restart_at);
+        if new_view.alignment.as_ref().is_some_and(|v| !finite(v))
+            || new_view.padding.as_ref().is_some_and(|v| !finite(v))
+            || new_view.width.is_some_and(|v| !v.is_finite())
+            || new_view.height.is_some_and(|v| !v.is_finite())
+            || new_view.margin.as_ref().is_some_and(|v| !finite(v))
+            || new_view
+                .transform
+                .is_some_and(|m| m.m.iter().any(|v| !v.is_finite()))
+        {
+            tracing::warn!("container targets refused; retaining published motion");
+            return;
+        }
+        for result in [
+            self.alignment.retarget(
+                new_view.alignment,
+                new_view.motion.clone(),
+                &self.notifications,
+                self.vsync.as_ref(),
+            ),
+            self.padding.retarget(
+                new_view.padding,
+                new_view.motion.clone(),
+                &self.notifications,
+                self.vsync.as_ref(),
+            ),
+            self.color.retarget(
+                new_view.color,
+                new_view.motion.clone(),
+                &self.notifications,
+                self.vsync.as_ref(),
+            ),
+            self.width.retarget(
+                new_view.width,
+                new_view.motion.clone(),
+                &self.notifications,
+                self.vsync.as_ref(),
+            ),
+            self.height.retarget(
+                new_view.height,
+                new_view.motion.clone(),
+                &self.notifications,
+                self.vsync.as_ref(),
+            ),
+            self.margin.retarget(
+                new_view.margin,
+                new_view.motion.clone(),
+                &self.notifications,
+                self.vsync.as_ref(),
+            ),
+        ] {
+            if let Err(error) = result {
+                tracing::warn!(%error, "container property refused; retaining its published run");
+            }
+        }
+        let restart = self.transform.animates_toward(new_view.transform.as_ref());
+        let restart_at = restart.then(|| self.transform_progress.value());
         self.transform.retarget(new_view.transform, restart_at);
-        if restart {
-            // Restart from zero, gated strictly on a target change — a
-            // curve-only change never restarts.
-            self.controller.restart_from_zero();
+        let result = if restart {
+            // Matrix decomposition defines position interpolation, not a vector
+            // derivative. Re-anchor the displayed matrix before restarting progress.
+            self.transform_progress.snap_to(0.0).and_then(|()| {
+                self.transform_progress
+                    .retarget(1.0, new_view.motion.clone())
+            })
+        } else {
+            self.transform_progress.set_motion(new_view.motion.clone())
+        };
+        if let Err(error) = result {
+            tracing::warn!(%error, "container transform motion refused");
         }
     }
 
     fn dispose(&mut self) {
-        self.controller.dispose();
+        self.alignment.dispose();
+        self.padding.dispose();
+        self.color.dispose();
+        self.width.dispose();
+        self.height.dispose();
+        self.margin.dispose();
+        self.transform_progress.dispose();
     }
 }
 
-/// Clamps a negative overshoot to zero; NaN passes through (ADR-0149), as
-/// `EdgeInsets::clamp_non_negative` does for the insets.
+/// Clamp finite motion overshoot at the layout property's boundary (ADR-0149).
 fn non_negative(value: f64) -> f64 {
     if value < 0.0 { 0.0 } else { value }
+}
+
+fn finite<T: TwoWayConverter>(value: &T) -> bool {
+    value.to_vector().as_ref().iter().all(|v| v.is_finite())
 }

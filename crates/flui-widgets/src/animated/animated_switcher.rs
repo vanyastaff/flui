@@ -2,9 +2,8 @@
 //! sequence of children keyed by [`View::can_update`].
 //!
 //! Structurally this widget is the odd one out among its
-//! `animated/` siblings: `AnimatedContainer`/`AnimatedOpacity`/… hold ONE
-//! persistent [`AnimationController`] retargeted in place
-//! ([`crate::animated::implicitly_animated::ImplicitController`]).
+//! `animated/` siblings: property widgets own persistent trajectories retargeted
+//! in place.
 //! `AnimatedSwitcher` instead owns a **set of entries**, each with its own
 //! controller — a new child gets a fresh entry that animates in while the
 //! previous entry (now "outgoing") animates out, and outgoing entries are

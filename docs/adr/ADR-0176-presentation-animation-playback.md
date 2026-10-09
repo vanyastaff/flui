@@ -132,8 +132,17 @@ saved clock cannot schedule a sibling after owner teardown.
 
 `owning_animated_value_contract` covers atomic components, owner release during
 sampling, exact-target delivery, reentrant conversion and retained deadlines.
-The mounted widget velocity rows exercise opacity, padding, alignment and rotation through
-their render, layout and transform producers. The two mounted scroll replacement
+Owning implicit property motion admits finite components only. Non-finite initial
+optional properties are omitted; a non-finite update preserves the previous
+numeric goals and their motion. This is admission to owning motion, independent
+of ADR-0149's `Lerp` input domain. Container properties have independent owners
+under the same presentation registry and notify one inner builder through weak
+relays. Matrix targets keep ADR-0149 decomposition: replacement re-anchors the
+displayed matrix with C⁰ continuity and runs separate curve or spring progress.
+
+The mounted widget velocity rows exercise opacity, padding, alignment, container size and rotation through
+their render, layout and transform producers. Painted container alpha continuity
+is measured within its 8-bit quantization. The two mounted scroll replacement
 rows assert pixel velocity continuity, exact settlement and activity completion.
 
 The wire schema golden and additivity gate cover published protocol shapes.

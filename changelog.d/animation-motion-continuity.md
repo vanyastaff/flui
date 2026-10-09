@@ -7,7 +7,7 @@
 - Animation status subscriptions own removal authority through
   `StatusSubscription`; dropping a guard removes its callback without retaining
   the animation owner, while detaching leaves it registered until source closure.
-- Opacity, padding, alignment and rotation support spring motion and retain their incoming
+- Opacity, padding, alignment, numeric container properties and rotation support spring motion and retain their incoming
   velocities when retargeted through the render, layout and transform paths.
 
 ### Changed
@@ -22,12 +22,16 @@
 
 ### Removed
 
+- Shared normalized implicit controllers and optional generic property tweens;
+  matrix interpolation retains its concrete decomposition tween.
 - Manual animation status listener IDs and source-selected status removal.
   Retain the returned subscription to control its lifetime, or detach it to
   leave the callback registered until source closure.
 
 ### Fixed
 
+- Retain container size and color motion through interruption; independent
+  properties keep their own deadlines, and non-finite targets preserve live motion.
 - Keep AnimatedAlign factors on their own motion deadlines when alignment changes;
   preserve optional factor constraints-fill behavior and refuse non-finite targets.
 - Return inert status subscriptions after controller or switch disposal and

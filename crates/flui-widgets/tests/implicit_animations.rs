@@ -21,7 +21,7 @@ use flui_view::prelude::{BuildContext, StatefulView};
 use flui_view::{IntoView, ViewState};
 use flui_widgets::{
     AnimatedAlign, AnimatedContainer, AnimatedOpacity, AnimatedPadding, AnimatedRotation,
-    Container, RotationPath, SizedBox, VsyncScope,
+    RotationPath, SizedBox, VsyncScope,
 };
 use parking_lot::Mutex;
 
@@ -208,6 +208,158 @@ pub(crate) fn container_retarget_with_a_new_curve_keeps_the_displayed_sample() {
         },
         [20.0, 100.0, 60.0],
     );
+}
+
+pub(crate) fn container_retarget_preserves_the_laid_out_size_velocity() {
+    let registry = Vsync::new();
+    let tree = |width, height, curve: ArcCurve| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedContainer::new(SizedBox::shrink())
+                .width(width)
+                .height(height)
+                .duration(Duration::from_secs(1))
+                .curve(curve),
+        )
+    };
+    let mut laid = lay_out_animated(
+        tree(20.0, 30.0, ArcCurve::new(Curves::Linear)),
+        loose(200.0),
+        registry.clone(),
+    );
+    laid.pump_widget(tree(100.0, 90.0, ArcCurve::new(Curves::Linear)));
+    laid.pump_for(Duration::from_millis(1));
+    laid.pump_for(Duration::from_millis(250));
+    // Layout rounds sizes to hundredths of a logical pixel. A 5 ms interval
+    // resolves both moving axes; the tolerance includes that quantization.
+    let h = Duration::from_millis(5);
+    let previous = laid.size(laid.current_root());
+    laid.pump_for(h);
+    let seam = laid.size(laid.current_root());
+    let arriving = [
+        (seam.width - previous.width) / h.as_secs_f64(),
+        (seam.height - previous.height) / h.as_secs_f64(),
+    ];
+    assert!(
+        arriving.iter().all(|v| *v > 1.0),
+        "size must be moving: previous {previous:?}, seam {seam:?}, velocities {arriving:?}"
+    );
+    laid.pump_widget(tree(40.0, 10.0, ArcCurve::new(Curves::EaseIn)));
+    assert_eq!(laid.size(laid.current_root()), seam);
+    laid.pump_for(h);
+    let after = laid.size(laid.current_root());
+    let departing = [
+        (after.width - seam.width) / h.as_secs_f64(),
+        (after.height - seam.height) / h.as_secs_f64(),
+    ];
+    for (arriving, departing) in arriving.into_iter().zip(departing) {
+        assert!(
+            (arriving - departing).abs() < 5.0,
+            "container size velocity was lost: {arriving} -> {departing}"
+        );
+    }
+}
+
+pub(crate) fn container_color_retarget_preserves_painted_alpha_progress() {
+    use flui_painting::display_list::DrawOp;
+    let alpha = |laid: &LaidOut| {
+        laid.draw_ops()
+            .into_iter()
+            .find_map(|command| {
+                if let DrawOp::Rect { paint, .. } = command.op {
+                    Some(f64::from(paint.color.alpha_f32()))
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0.0)
+    };
+    let registry = Vsync::new();
+    let tree = |color, curve: ArcCurve| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedContainer::new(SizedBox::square(20.0))
+                .color(color)
+                .duration(Duration::from_secs(1))
+                .curve(curve),
+        )
+    };
+    let mut laid = lay_out_animated(
+        tree(Color::TRANSPARENT, ArcCurve::new(Curves::Linear)),
+        loose(200.0),
+        registry.clone(),
+    );
+    laid.pump_widget(tree(Color::WHITE, ArcCurve::new(Curves::Linear)));
+    laid.pump_for(Duration::from_millis(1));
+    laid.pump_for(Duration::from_millis(250));
+    let h = Duration::from_millis(20);
+    let previous = alpha(&laid);
+    laid.pump_for(h);
+    let seam = alpha(&laid);
+    let arriving = seam - previous;
+    assert!(
+        arriving >= 3.0 / 255.0,
+        "painted alpha must be moving: {arriving}"
+    );
+    laid.pump_widget(tree(Color::BLACK, ArcCurve::new(Curves::EaseIn)));
+    assert_eq!(alpha(&laid), seam);
+    laid.pump_for(h);
+    let departing = alpha(&laid) - seam;
+    assert!(
+        (departing - arriving).abs() <= 2.0 / 255.0,
+        "painted alpha progress was lost: {arriving} -> {departing}"
+    );
+}
+
+pub(crate) fn container_property_motion_settles_and_unmounts_independently() {
+    for spring in [false, true] {
+        let registry = Vsync::new();
+        let curve = ArcCurve::new(Curves::Linear);
+        let tree = |size, scale, color| {
+            let mut container = AnimatedContainer::new(SizedBox::shrink())
+                .width(size)
+                .height(size)
+                .color(color)
+                .transform(Matrix4::scaling(scale, scale, 1.0))
+                .duration(RUN)
+                .curve(curve.clone());
+            if spring {
+                container = container.spring(
+                    flui_animation::SpringDescription::with_damping_ratio(1.0, 100.0, 1.0),
+                );
+            }
+            VsyncScope::new(registry.clone(), container)
+        };
+        let mut laid = lay_out_animated(
+            tree(20.0, 1.0, Color::BLACK),
+            loose(200.0),
+            registry.clone(),
+        );
+        laid.pump_widget(tree(100.0, 2.0, Color::BLACK));
+        laid.pump_for(Duration::from_millis(1));
+        laid.pump_for(Duration::from_millis(40));
+        let seam = laid.size(laid.current_root());
+        assert!(seam.width > 20.0 && seam.width < 100.0);
+        laid.pump_widget(tree(100.0, 2.0, Color::WHITE));
+        assert_eq!(laid.size(laid.current_root()), seam);
+        laid.pump_for(if spring {
+            Duration::from_secs(3)
+        } else {
+            Duration::from_millis(60)
+        });
+        let settled = laid.size(laid.current_root());
+        assert_eq!(
+            (settled.width, settled.height),
+            (100.0, 100.0),
+            "color replacement cannot delay size settlement"
+        );
+        assert_eq!(layer_scale(&mut laid), 2.0);
+        laid.pump_widget(SizedBox::square(10.0));
+        assert!(
+            registry.is_empty(),
+            "all property owners withdraw on unmount"
+        );
+    }
 }
 
 pub(crate) fn align_retarget_with_a_new_curve_keeps_the_displayed_sample() {
@@ -923,34 +1075,41 @@ pub(crate) fn overshooting_size_stays_non_negative() {
     );
 }
 
-/// A NaN width or height reaches the container as NaN, the way a plain
-/// `Container` takes it, instead of being replaced by zero (ADR-0149).
-pub(crate) fn nan_size_passes_through_like_container() {
-    let animated = lay_out_animated(
+/// Owning motion refuses non-finite components before changing live goals.
+pub(crate) fn non_finite_container_targets_preserve_the_last_admitted_layout() {
+    let registry = Vsync::new();
+    let mut animated = lay_out_animated(
         VsyncScope::new(
-            Vsync::new(),
+            registry.clone(),
             AnimatedContainer::new(SizedBox::new(10.0, 10.0))
                 .width(f64::NAN)
                 .height(f64::NAN),
         ),
         loose(200.0),
-        Vsync::new(),
+        registry.clone(),
     );
-    let plain = lay_out_animated(
-        Container::new()
-            .width(f64::NAN)
-            .height(f64::NAN)
-            .child(SizedBox::new(10.0, 10.0)),
-        loose(200.0),
-        Vsync::new(),
-    );
-    let size = |laid: &LaidOut| laid.try_size(laid.find_by_render_type("RenderContainer"));
-    let (animated, plain) = (size(&animated), size(&plain));
-    assert_eq!(
-        format!("{animated:?}"),
-        format!("{plain:?}"),
-        "AnimatedContainer laid out NaN size as {animated:?}, Container as {plain:?}"
-    );
+    assert_eq!(animated.size(animated.current_root()).width, 10.0);
+    let tree = |width, height| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedContainer::new(SizedBox::square(10.0))
+                .width(width)
+                .height(height)
+                .duration(RUN)
+                .curve(Curves::Linear),
+        )
+    };
+    animated.pump_widget(tree(20.0, 30.0));
+    animated.pump_widget(tree(100.0, 90.0));
+    animated.pump_for(Duration::from_millis(1));
+    animated.pump_for(Duration::from_millis(40));
+    let seam = animated.size(animated.current_root());
+    assert!(seam.width > 20.0 && seam.width < 100.0);
+    animated.pump_widget(tree(40.0, f64::INFINITY));
+    assert_eq!(animated.size(animated.current_root()), seam);
+    animated.pump_for(Duration::from_millis(60));
+    let settled = animated.size(animated.current_root());
+    assert_eq!((settled.width, settled.height), (100.0, 90.0));
 }
 
 // ----------------------------------------------------------------------------

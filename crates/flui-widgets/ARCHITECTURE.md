@@ -1,6 +1,22 @@
 # flui-widgets architecture
 
-## Independent alignment motion
+## Independent implicit property motion
+
+`AnimatedContainer` uses the same independent property ownership for alignment,
+insets, Oklab color and both sizes. Its transform has separate normalized motion
+and a concrete `TransformTween` using ADR-0149 decomposition. Changing color
+does not restart size or transform. Matrix replacement guarantees C⁰ continuity;
+numeric components retain C¹ motion. Absent endpoints snap. Non-finite initial
+optional properties are omitted; non-finite live targets preserve the existing
+numeric update as a whole. Plain `Lerp` keeps its own NaN contract.
+
+`container_retarget_preserves_the_laid_out_size_velocity` measures both axes
+with layout quantization included in its tolerance. The painted alpha row
+`container_color_retarget_preserves_painted_alpha_progress` reads display-list
+paint within 8-bit color precision. `container_property_motion_settles_and_unmounts_independently`
+observes curve and spring exact settlement after a color-only update and registry
+withdrawal on unmount. `non_finite_container_targets_preserve_the_last_admitted_layout`
+pins initial omission and delivery of previously admitted size goals after refusal.
 
 `AnimatedAlign` owns alignment and optional factor motion independently. Each
 property uses typed `AnimatedValue` components under the presentation's Vsync;
