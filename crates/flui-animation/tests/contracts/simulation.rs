@@ -1,6 +1,6 @@
 //! Friction, bounds and the bouncing scroll fling.
 
-use flui_animation::AnimatedValue;
+use crate::motion_trace::AnimatedValue;
 use flui_animation::simulation::{
     BouncingScrollSimulation, BoundedFrictionSimulation, FrictionSimulation, Simulation,
     SimulationBounds, SimulationError, SimulationParameter, SpringDescription, Tolerance,
@@ -343,7 +343,7 @@ fn color_spring_fades_to_transparent_without_darkening() {
     let spring =
         SpringDescription::with_response_and_damping(std::time::Duration::from_millis(300), 1.0)
             .expect("a critically damped 300 ms spring is valid");
-    let mut v = flui_animation::AnimatedValue::new(red, spring).expect("finite colour");
+    let mut v = AnimatedValue::new(red, spring).expect("finite colour");
     assert_eq!(v.value(), red);
     v.animate_to(Color::TRANSPARENT).expect("finite colour");
     for frame in 0..120 {

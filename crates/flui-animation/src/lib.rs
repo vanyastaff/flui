@@ -155,7 +155,7 @@ pub use simulation::{
     SimulationBounds, SimulationError, SimulationParameter, SpringDescription, SpringSimulation,
     SpringType, Tolerance,
 };
-pub use spring::{AnimatedValue, TwoWayConverter};
+pub use spring::{AnimatedValue, AnimatedValueView, AnimationVector, TwoWayConverter};
 pub use stagger::{Stagger, StaggerOrigin};
 // `#[derive(TwoWayConverter)]` generates `TwoWayConverter` and `Lerp` impls. It
 // shares the trait's name but lives in the macro namespace (the serde

@@ -129,6 +129,7 @@ enum TickSource {
 enum SimulationRun {
     Custom(Rc<dyn Simulation>),
     Motion(Rc<Segment>),
+    Value(Rc<dyn crate::spring::ValueMotion>),
     Fling {
         source: Rc<dyn Simulation>,
         bound: f64,
@@ -156,12 +157,13 @@ impl SimulationRun {
         match self {
             Self::Custom(source) | Self::Fling { source, .. } => source.as_ref(),
             Self::Motion(source) => source.as_ref(),
+            Self::Value(source) => source.as_ref(),
         }
     }
 
     fn reached_bound(&self, sample: f64) -> bool {
         match self {
-            Self::Custom(_) | Self::Motion(_) => false,
+            Self::Custom(_) | Self::Motion(_) | Self::Value(_) => false,
             Self::Fling {
                 bound, direction, ..
             } => match direction {
@@ -1809,6 +1811,12 @@ impl AnimationController {
                 self.tick_repeat(inner, *run, cycle, retirement);
             }
             TickSource::Simulation(simulation) => {
+                if let SimulationRun::Value(source) = simulation
+                    && !source
+                        .stage_sample(cycle, &|| self.inner.borrow().matches_sample(&identity))
+                {
+                    return;
+                }
                 let sampled = simulation.source().x(cycle);
                 // A position callback may stop or replace the run. Do not call
                 // another method on its stale source after that decision.
@@ -1824,6 +1832,9 @@ impl AnimationController {
                 }
                 if sampled.is_finite() {
                     time.commit(&mut inner);
+                    if let SimulationRun::Value(source) = simulation {
+                        source.commit_sample(inner.local_elapsed);
+                    }
                 }
                 self.tick_simulation(inner, sampled, is_done, retirement);
             }
@@ -1925,6 +1936,14 @@ impl AnimationController {
                 }
             }
             TickSource::Simulation(simulation) => {
+                if let SimulationRun::Value(source) = simulation {
+                    let inner = self.inner.borrow_mut();
+                    if inner.matches_sample(&identity) {
+                        source.settle();
+                        self.tick_simulation(inner, 0.0, true, recovery);
+                    }
+                    return;
+                }
                 if matches!(simulation, SimulationRun::Motion(_)) {
                     let inner = self.inner.borrow_mut();
                     if inner.matches_sample(&identity) {

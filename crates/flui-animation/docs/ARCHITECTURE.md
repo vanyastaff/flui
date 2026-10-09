@@ -46,7 +46,8 @@ src/
 ├── tween_types.rs    # Animatable, Tween, all tween types
 ├── status.rs         # AnimationStatus, AnimationBehavior
 ├── simulation.rs     # Simulation trait, Spring, Friction, bounded and bouncing scroll
-├── spring.rs         # AnimatedValue, TwoWayConverter
+├── spring.rs         # TwoWayConverter, fixed component arrays
+├── spring/driver.rs  # AnimatedValue owner, AnimatedValueView, vector sample commits
 ├── retarget.rs       # Interruptible scalar motion segments
 │
 ├── keyframes.rs      # Keyframes, KeyframesBuilder, KeyframesError
@@ -114,6 +115,43 @@ contract. `a_controller_spring_arrives_at_rest_independently_of_frames` uses
 the registry and different frame partitions; the public
 `a_controller_spring_enters_and_leaves_rest_continuously` probes both joins
 with position differences and an independent early-trajectory reference.
+
+### Owning vector motion
+
+`AnimatedValue<T>` owns one `DrivenController` for all its scalar components.
+The controller's generated value-motion branch evaluates components outside
+its borrow, stages one vector sample and publishes that sample together with
+elapsed time only after its sample identity survives. The commit copies fixed
+arrays: `AnimationVector` is sealed to `[f64; N]`, so user implementations of
+`AsMut` cannot run inside the controller borrow. A failed later component leaves
+the whole previous sample and clock authoritative. The sample identity is checked
+between each component's position and velocity callouts. Owner release, replacement
+or a nested frame stops the displaced sample before the next framework callout.
+
+Target and motion preparation invoke converters and curves outside borrows.
+Admission commits the exact target, component sample, motion and reversal state
+before status, cancellation or value callbacks. Repeating a motion-equivalent
+target retains the run's future and deadline, while notifying observers of its
+exact target representation (transparent color channels can differ). A curve-only
+update uses the current segment's remaining deadline; explicitly changing its
+duration configures a new segment duration. `retarget(target, motion)` admits
+both changes in one transaction.
+
+`AnimatedValueView<T>` observes the published sample and controller; it owns no
+registry seat or moving source. Dropping or disposing the owner unregisters and
+cancels, even when views survive. Views keep the last sample; at rest they keep
+the exact target, including components not recoverable from its motion vector.
+Reading an exact target clones its `Rc` under the target borrow, then invokes
+`T::clone` after releasing that borrow. Conversion from a sampled vector likewise
+runs without state guards. Outgoing targets and curves retire separately under
+the controller's enclosing first-failure custody.
+
+`owning_animated_value_contract` covers component publication before cancellation,
+repeated configuration deadlines, unbound settlement, surviving observers,
+converter and target-clone reentry, component failure, owner release inside a curve
+and exact-target delivery.
+The existing physical properties use replayed public Vsync traces for independent
+derivative probes; there is no production `advance(dt)` or owner clone.
 
 ### Registration tokens and removal
 

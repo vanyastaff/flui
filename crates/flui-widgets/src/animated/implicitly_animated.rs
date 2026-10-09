@@ -1,17 +1,12 @@
 //! Shared machinery for the implicitly-animated widget family.
 //!
-//! Each implicitly-animated widget (`AnimatedOpacity`, `AnimatedPadding`, …) is
-//! a [`StatefulView`](flui_view::StatefulView) whose state owns one
-//! [`ImplicitController`] driving one or more tweens. The state's `build`
-//! returns an [`AnimatedBuilder`](crate::AnimatedBuilder) over the controller,
-//! so only that inner builder rebuilds per frame; the implicit widget itself
-//! rebuilds solely when its parent hands it a new configuration, at which point
-//! `did_update_view` retargets.
+//! [`ImplicitController`] drives the normalized progress used by the container,
+//! and alignment tween paths. Opacity, padding and rotation consume owning
+//! component motion directly. Their states reconfigure motion when a parent
+//! supplies new values; frame samples update the observed render or build path.
 //!
 //! - [`ImplicitController`] — the persistent controller + curve + vsync
 //!   registration, with no notion of *what* is animated.
-//! - [`ImplicitAnimation`] — `ImplicitController` plus one [`Tween<T>`] (the
-//!   single-property widgets: opacity, padding, alignment).
 //! - [`OptTween`] — one optional property of a multi-property widget
 //!   (`AnimatedContainer`), animated only while both old and new values are set.
 
@@ -168,90 +163,6 @@ impl std::fmt::Debug for ImplicitController {
             .field("status", &self.status())
             .field("registered", &self.controller.is_bound())
             .finish_non_exhaustive()
-    }
-}
-
-/// One animated property: an [`ImplicitController`] plus a [`Tween<T>`] whose
-/// `begin`/`end` are re-anchored on every retarget. The single-property
-/// implicitly-animated widgets (`AnimatedOpacity`, `AnimatedPadding`,
-/// `AnimatedAlign`) hold exactly one of these.
-///
-/// `T` must be [`Lerp`] so the tween can interpolate it and [`PartialEq`] so a
-/// retarget can detect "the target actually changed".
-#[derive(Debug)]
-pub(crate) struct ImplicitAnimation<T: Lerp + Clone + PartialEq + Send + Sync + 'static> {
-    controller: ImplicitController,
-    /// `begin` = the value shown when the current run started; `end` = the
-    /// target. At rest both equal the target, so the widget sits at its target
-    /// with no motion until a configuration change retargets it.
-    tween: Tween<T>,
-}
-
-impl<T: Lerp + Clone + PartialEq + Send + Sync + 'static> ImplicitAnimation<T> {
-    /// Build an animation sitting at `target` (no motion yet).
-    pub(crate) fn new(target: T, duration: Duration, curve: ArcCurve) -> Self {
-        Self {
-            controller: ImplicitController::new(duration, curve),
-            tween: Tween::new(target.clone(), target),
-        }
-    }
-
-    /// Register with `vsync` so a binding drives this controller each frame.
-    pub(crate) fn rebind(&mut self, vsync: Option<&Vsync>) {
-        self.controller.rebind(vsync);
-    }
-
-    /// The current displayed value — the tween evaluated at the curved progress.
-    pub(crate) fn current_value(&self) -> T {
-        self.tween.transform(self.controller.value())
-    }
-
-    /// The listenable an `AnimatedBuilder` subscribes to.
-    pub(crate) fn listenable(&self) -> std::rc::Rc<dyn Listenable> {
-        self.controller.listenable()
-    }
-
-    /// A clone of the curved animation for capture in a build closure.
-    pub(crate) fn curved(&self) -> CurvedAnimation<ArcCurve> {
-        self.controller.curved()
-    }
-
-    /// A clone of the current tween for capture in a build closure.
-    pub(crate) fn tween(&self) -> Tween<T> {
-        self.tween.clone()
-    }
-
-    /// Retarget to `new_target` over `duration` along `curve`, reporting
-    /// whether the tween/curve chain a caller composes over
-    /// (`curved()`/`tween()`) was invalidated — i.e. the target changed OR
-    /// the curve changed. Callers that recompute a downstream composition
-    /// (e.g. `AnimatedOpacity`'s `ProxyAnimation::set_parent`) gate that
-    /// recompute on this report so an unrelated rebuild does not reallocate
-    /// it.
-    ///
-    /// `duration` is pushed to the controller unconditionally. Only a genuine TARGET change
-    /// restarts the run from `0`; a curve-only change swaps the easing
-    /// applied to the run already in flight — see
-    /// [`ImplicitController::set_curve`]/[`ImplicitController::restart_from_zero`]. A target
-    /// change captures the displayed value before changing the curve, so the new
-    /// tween begins at the old run's last sample.
-    pub(crate) fn retarget(&mut self, new_target: T, duration: Duration, curve: ArcCurve) -> bool {
-        let target_changed = self.tween.end != new_target;
-        let from = target_changed.then(|| self.current_value());
-        self.controller.set_duration(duration);
-        let curve_changed = self.controller.set_curve(curve);
-
-        if let Some(from) = from {
-            self.tween = Tween::new(from, new_target);
-            self.controller.restart_from_zero();
-        }
-
-        target_changed || curve_changed
-    }
-
-    /// Unregister from the binding and dispose the controller.
-    pub(crate) fn dispose(&mut self) {
-        self.controller.dispose();
     }
 }
 

@@ -12,6 +12,12 @@
 #[path = "support/child_process.rs"]
 mod child_process;
 
+#[path = "support/motion_trace.rs"]
+mod motion_trace;
+
+#[path = "contracts/animated_value.rs"]
+mod animated_value;
+
 #[path = "contracts/builder.rs"]
 mod builder;
 

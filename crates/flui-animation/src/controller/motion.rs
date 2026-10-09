@@ -23,6 +23,32 @@ struct Seam {
     origin: RunStart,
 }
 
+/// Identity and origin of a typed value's published sample. Preparation may
+/// invoke a converter or curve, so admission must still match this seam.
+pub(crate) struct ValueSeam {
+    generation: u64,
+    epoch: u64,
+    origin: RunStart,
+}
+
+impl ValueSeam {
+    fn matches(&self, inner: &AnimationControllerInner) -> bool {
+        !inner.disposed
+            && inner.run_generation == self.generation
+            && inner.sample_epoch == self.epoch
+    }
+}
+
+fn continuation(inner: &AnimationControllerInner) -> RunStart {
+    match inner.run_start {
+        origin @ RunStart::Continue { .. } if inner.last_elapsed.is_zero() => origin,
+        _ => RunStart::Continue {
+            generation: inner.run_generation,
+            elapsed: inner.last_elapsed,
+        },
+    }
+}
+
 impl Seam {
     fn capture(inner: &AnimationControllerInner) -> Self {
         Self {
@@ -34,14 +60,7 @@ impl Seam {
             playback: inner.playback_rate.get(),
             span: inner.target_value - inner.start_value,
             duration: inner.current_duration(),
-            origin: match inner.run_start {
-                // Several replacements before another tick share one seam.
-                origin @ RunStart::Continue { .. } if inner.last_elapsed.is_zero() => origin,
-                _ => RunStart::Continue {
-                    generation: inner.run_generation,
-                    elapsed: inner.last_elapsed,
-                },
-            },
+            origin: continuation(inner),
         }
     }
 
@@ -82,6 +101,87 @@ impl Seam {
 }
 
 impl AnimationController {
+    pub(crate) fn publish_value_metadata(&self, recovery: &mut Retirement) {
+        let inner = self.inner.borrow_mut();
+        let status = inner.status;
+        self.finish_with_retirement(
+            status,
+            ValueChange::Notify,
+            None,
+            RetiredSources::new(),
+            inner,
+            recovery,
+        );
+    }
+
+    pub(crate) fn value_run_future(&self) -> AnimationRunFuture {
+        self.inner
+            .borrow()
+            .active_run
+            .as_ref()
+            .map_or_else(AnimationRunFuture::complete, RunCompleter::future)
+    }
+
+    pub(crate) fn value_seam(&self) -> Result<ValueSeam, AnimationError> {
+        let inner = self.inner.borrow();
+        Self::check_run_admission(&inner)?;
+        Ok(ValueSeam {
+            generation: inner.run_generation,
+            epoch: inner.sample_epoch,
+            origin: continuation(&inner),
+        })
+    }
+
+    /// The closure only moves prepared framework fields; it must not call or
+    /// drop user code. Returned outgoing ownership retires after unlocking.
+    pub(crate) fn start_value_motion<R>(
+        &self,
+        seam: &ValueSeam,
+        source: Rc<dyn crate::spring::ValueMotion>,
+        immediate: bool,
+        commit: impl FnOnce() -> R,
+        recovery: &mut Retirement,
+    ) -> Result<(AnimationRunFuture, R), AnimationError> {
+        let mut source = Opaque::new(source);
+        let mut inner = self.inner.borrow_mut();
+        Self::check_run_admission(&inner)?;
+        if !seam.matches(&inner) {
+            drop(inner);
+            recovery.retire(source);
+            return Err(AnimationError::ReentrantMotion);
+        }
+        let mut retired = RetiredSources::new();
+        inner.clear_run_modes(&mut retired);
+        inner.value = 0.0;
+        inner.start_value = 0.0;
+        inner.target_value = 0.0;
+        inner.direction = AnimationDirection::Forward;
+        inner.status = inner.direction.running_status();
+        inner.simulation = Some(SimulationRun::Value(source.take()));
+        Self::begin_run(&mut inner);
+        inner.run_start = seam.origin;
+        if immediate {
+            inner.run_duration = Some(Duration::ZERO);
+            inner.settle_pending = true;
+        }
+        let outgoing = commit();
+        let (completer, future) = AnimationRunFuture::pending();
+        let displaced = inner
+            .active_run
+            .replace(completer)
+            .map(RunCompleter::cancel);
+        let status = inner.status;
+        self.finish_with_retirement(
+            status,
+            ValueChange::Notify,
+            displaced,
+            retired,
+            inner,
+            recovery,
+        );
+        Ok((future, outgoing))
+    }
+
     /// Velocity at the last sampled run time, in value units per second.
     ///
     /// Curved runs use the curve's derivative, including the applied playback

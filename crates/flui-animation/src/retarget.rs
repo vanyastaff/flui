@@ -211,6 +211,16 @@ impl SpringRest {
 }
 
 impl Segment {
+    pub(crate) fn curve_duration(&self) -> Option<Duration> {
+        match self {
+            Self::Rest(_) => Some(Duration::ZERO),
+            Self::Curve(curve) => {
+                Some(Duration::try_from_secs_f64(curve.duration).unwrap_or(Duration::MAX))
+            }
+            Self::Spring { .. } => None,
+        }
+    }
+
     /// The segment that starts at `x0` with velocity `v0` and moves to
     /// `target` as `motion` says.
     ///

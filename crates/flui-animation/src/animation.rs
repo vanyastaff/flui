@@ -190,7 +190,7 @@ impl<T> Terminal<T> {
             .expect("BUG: a live animation owns its field")
     }
 
-    fn get_mut(&mut self) -> &mut T {
+    pub(crate) fn get_mut(&mut self) -> &mut T {
         self.0
             .as_mut()
             .expect("BUG: a live animation owns its field")

@@ -2,6 +2,15 @@
 
 - Scalar controller retargeting between curve and spring motion preserves the
   last published position and velocity and cancels the displaced run.
+- `AnimatedValue` owns one Vsync registration for all components, exposes a
+  surviving observer stream, and supports atomic target and motion replacement.
+- Opacity, padding and rotation support spring motion and retain their incoming
+  velocities when retargeted through the render, layout and transform paths.
+
+### Changed
+
+- Replace manual `AnimatedValue::advance` and owner cloning with frame-driven
+  ownership. Component vectors are fixed arrays; observer views remain cloneable.
 
 ### Fixed
 

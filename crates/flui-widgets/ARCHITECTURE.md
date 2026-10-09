@@ -252,8 +252,24 @@ through rendered opacity, layout and a transform layer. The container row also
 keeps an unchanged height continuous. The separate row
 `changing_only_the_curve_keeps_the_existing_deadline` pins the original completion
 deadline. It does not prove position or velocity continuity for curve-only
-changes. Transferring velocity into replacement motion remains part of the
-retarget design.
+changes. Container and alignment still use the shared progress path described above.
+
+Opacity, padding and rotation own `AnimatedValue` motion rather than reconstructing
+a tween over normalized progress. Target and curve changes are admitted together;
+each component inherits its last published velocity. Opacity keeps the same
+render proxy; padding's builder keeps a stable observed stream and reads its
+component sample for layout. Rotation's stable proxy observes angular motion in
+turns. All three expose curve and spring configuration, and
+retain the owning registration until state disposal. Non-finite initial values
+use transparent opacity or zero insets; invalid later targets retain the admitted
+run. Padding clamps sampled insets to non-negative values at the layout boundary.
+`opacity_retarget_preserves_the_painted_velocity` and
+`padding_retarget_preserves_the_laid_out_velocity` compare the actual producer's
+position intervals on either side of interruption;
+`rotation_retarget_preserves_the_painted_velocity` does the same through the
+transform layer. Changing to the shorter rotation path retains the incoming
+velocity, brakes and settles at the nearest equivalent; the public
+`animated_rotation_retargets_on_a_path_change` row pins that behavior.
 
 ### Focused document selection uses the normal action chain
 

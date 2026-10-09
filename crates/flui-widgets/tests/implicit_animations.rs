@@ -82,6 +82,96 @@ pub(crate) fn opacity_retarget_with_a_new_curve_keeps_the_displayed_sample() {
     );
 }
 
+pub(crate) fn opacity_retarget_preserves_the_painted_velocity() {
+    let registry = Vsync::new();
+    let tree = |target, curve: ArcCurve| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedOpacity::new(target, SizedBox::new(100.0, 50.0))
+                .duration(Duration::from_secs(1))
+                .curve(curve),
+        )
+    };
+    let mut laid = lay_out_animated(
+        tree(0.0, ArcCurve::new(Curves::Linear)),
+        tight(100.0, 50.0),
+        registry.clone(),
+    );
+    laid.pump_widget(tree(1.0, ArcCurve::new(Curves::Linear)));
+    laid.pump_for(Duration::from_millis(1));
+    laid.pump_for(Duration::from_millis(250));
+    let h = Duration::from_micros(100);
+    let previous = laid.opacity(laid.current_root());
+    laid.pump_for(h);
+    let seam = laid.opacity(laid.current_root());
+    let arriving = (seam - previous) / h.as_secs_f64();
+    assert!(
+        arriving > 0.1,
+        "the rendered opacity was moving before retarget"
+    );
+    laid.pump_widget(tree(0.0, ArcCurve::new(Curves::EaseIn)));
+    assert!((laid.opacity(laid.current_root()) - seam).abs() < 1e-12);
+    laid.pump_for(h);
+    let departing = (laid.opacity(laid.current_root()) - seam) / h.as_secs_f64();
+    assert!(
+        (departing - arriving).abs() < 0.01,
+        "the painted path must inherit its velocity: before {arriving}, after {departing}"
+    );
+}
+
+pub(crate) fn padding_retarget_preserves_the_laid_out_velocity() {
+    let registry = Vsync::new();
+    let tree = |padding, curve: ArcCurve| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedPadding::new(padding, SizedBox::new(20.0, 10.0))
+                .duration(Duration::from_secs(1))
+                .curve(curve),
+        )
+    };
+    let mut laid = lay_out_animated(
+        tree(EdgeInsets::ZERO, ArcCurve::new(Curves::Linear)),
+        tight(100.0, 80.0),
+        registry.clone(),
+    );
+    let position = |laid: &mut LaidOut| laid.offset(laid.child(laid.current_root(), 0));
+    laid.pump_widget(tree(
+        EdgeInsets::new(10.0, 0.0, 0.0, 20.0),
+        ArcCurve::new(Curves::Linear),
+    ));
+    laid.pump_for(Duration::from_millis(1));
+    laid.pump_for(Duration::from_millis(250));
+    let h = Duration::from_micros(100);
+    let previous = position(&mut laid);
+    laid.pump_for(h);
+    let seam = position(&mut laid);
+    let arriving = [
+        (seam.dx - previous.dx) / h.as_secs_f64(),
+        (seam.dy - previous.dy) / h.as_secs_f64(),
+    ];
+    assert!(
+        arriving.iter().all(|velocity| *velocity > 1.0),
+        "both layout components must be moving"
+    );
+    laid.pump_widget(tree(
+        EdgeInsets::new(30.0, 0.0, 0.0, 5.0),
+        ArcCurve::new(Curves::EaseIn),
+    ));
+    assert_eq!(position(&mut laid), seam);
+    laid.pump_for(h);
+    let after = position(&mut laid);
+    let departing = [
+        (after.dx - seam.dx) / h.as_secs_f64(),
+        (after.dy - seam.dy) / h.as_secs_f64(),
+    ];
+    for (arriving, departing) in arriving.into_iter().zip(departing) {
+        assert!(
+            (arriving - departing).abs() < 0.05,
+            "laid-out velocity was lost: {arriving} -> {departing}"
+        );
+    }
+}
+
 pub(crate) fn padding_retarget_with_a_new_curve_keeps_the_displayed_sample() {
     assert_target_and_curve_retarget_preserves_sample(
         |registry, target, curve| {
@@ -142,6 +232,41 @@ pub(crate) fn align_retarget_with_a_new_curve_keeps_the_displayed_sample() {
             [offset.dx, offset.dy]
         },
         [0.0, 1.0, 0.0],
+    );
+}
+
+pub(crate) fn rotation_retarget_preserves_the_painted_velocity() {
+    let registry = Vsync::new();
+    let tree = |target, curve: ArcCurve| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedRotation::new(Angle::from_turns(target), SizedBox::new(20.0, 10.0))
+                .path(RotationPath::Numeric)
+                .duration(Duration::from_secs(1))
+                .curve(curve),
+        )
+    };
+    let mut laid = lay_out_animated(
+        tree(0.0, ArcCurve::new(Curves::Linear)),
+        tight(100.0, 80.0),
+        registry.clone(),
+    );
+    laid.pump_widget(tree(0.25, ArcCurve::new(Curves::Linear)));
+    laid.pump_for(Duration::from_millis(1));
+    laid.pump_for(Duration::from_millis(250));
+    let h = Duration::from_micros(100);
+    let previous = layer_turns(&mut laid);
+    laid.pump_for(h);
+    let seam = layer_turns(&mut laid);
+    let arriving = (seam - previous) / h.as_secs_f64();
+    assert!(arriving > 0.1, "the painted rotation was moving");
+    laid.pump_widget(tree(0.0, ArcCurve::new(Curves::EaseIn)));
+    assert!((layer_turns(&mut laid) - seam).abs() < 1e-12);
+    laid.pump_for(h);
+    let departing = (layer_turns(&mut laid) - seam) / h.as_secs_f64();
+    assert!(
+        (departing - arriving).abs() < 0.01,
+        "rotation must inherit velocity: before {arriving}, after {departing}"
     );
 }
 
@@ -910,7 +1035,8 @@ pub(crate) fn animated_rotation_takes_the_numeric_arc() {
 }
 
 /// Changing only the path mid-run re-anchors from the angle shown now: a
-/// `Numeric` 0 → ¾ turn switched to `Shorter` a quarter of the way turns back.
+/// `Numeric` 0 → ¾ turn switched to `Shorter` a quarter of the way brakes its
+/// incoming velocity before turning back to the nearest equivalent.
 pub(crate) fn animated_rotation_retargets_on_a_path_change() {
     let vsync = Vsync::new();
     let angle = Arc::new(Mutex::new(Angle::ZERO));
@@ -932,14 +1058,24 @@ pub(crate) fn animated_rotation_retargets_on_a_path_change() {
     );
     *path.lock() = RotationPath::Shorter;
     laid.pump();
-    laid.pump_for(FRAME); // detection
+    assert!((layer_turns(&mut laid) - before).abs() < 1e-12);
+    laid.pump_for(Duration::from_micros(100));
+    assert!(
+        layer_turns(&mut laid) > before,
+        "changing the path preserves the incoming direction at the seam"
+    );
     // Kept short so both candidate angles stay inside (-½, ½] turn, where the
     // read-back rotation is unambiguous.
-    laid.pump_for(RUN / 10);
+    laid.pump_for(RUN / 2);
     let after = layer_turns(&mut laid);
     assert!(
         after < before,
         "the shorter arc turns back from {before}: now {after} turns"
     );
     assert!(after > 0.0, "still short of the target: {after} turns");
+    laid.pump_for(RUN);
+    assert!(
+        (layer_turns(&mut laid) + 0.25).abs() < 1e-12,
+        "the shorter path settles at the nearest equivalent"
+    );
 }
