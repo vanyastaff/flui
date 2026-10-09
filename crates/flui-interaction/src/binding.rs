@@ -1517,9 +1517,13 @@ impl GestureBinding {
                 .remove(&SignalSource::from(cancel.pointer));
             first = self.retire_pan_zoom_sequences(native.into_iter().collect());
         }
-        RoutePanic::preserve_first(&mut first, RoutePanic::capture(||
-            self.handle_pointer_event_after_signal_withdrawal(event, hit_test_fn)), "pointer after native withdrawal");
-        if let Some(first) = first { first.resume(); }
+        if first.is_some() {
+            RoutePanic::preserve_first(&mut first, RoutePanic::capture(||
+                self.handle_pointer_event_after_signal_withdrawal(event, hit_test_fn)), "pointer after native withdrawal");
+            first.expect("BUG: native withdrawal failure remains authoritative").resume();
+        } else {
+            self.handle_pointer_event_after_signal_withdrawal(event, hit_test_fn);
+        }
     }
 
     /// Owner cancellation batches withdraw signal admissions before invoking
