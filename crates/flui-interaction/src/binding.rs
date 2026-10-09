@@ -1464,15 +1464,23 @@ impl GestureBinding {
                     .is_some_and(|winner| winner.same_target(*route))
             });
             *sequence.staged.borrow_mut() = kept;
-            Self::retire_pan_zoom_tickets_capturing_panic(retired, first);
+            Self::retire_pan_zoom_tickets_capturing_panic(retired, first, false);
         }
         PanZoomAdmission::Active(sequence)
     }
 
-    fn retire_pan_zoom_tickets(tickets: Vec<(PanZoomRoute, PanZoomRetirement)>) {
+    fn retire_pan_zoom_tickets(
+        tickets: Vec<(PanZoomRoute, PanZoomRetirement)>,
+        preserving_failure: &Cell<bool>,
+    ) {
         let mut first = None;
-        Self::retire_pan_zoom_tickets_capturing_panic(tickets, &mut first);
+        Self::retire_pan_zoom_tickets_capturing_panic(
+            tickets,
+            &mut first,
+            preserving_failure.get(),
+        );
         if let Some(failure) = first {
+            preserving_failure.set(true);
             failure.resume();
         }
     }
@@ -1480,6 +1488,7 @@ impl GestureBinding {
     fn retire_pan_zoom_tickets_capturing_panic(
         tickets: Vec<(PanZoomRoute, PanZoomRetirement)>,
         first: &mut Option<RoutePanic>,
+        preserving_failure: bool,
     ) {
         for (_, ticket) in tickets {
             if std::thread::panicking() {
@@ -1493,7 +1502,7 @@ impl GestureBinding {
                 RoutePanic::capture(|| (ticket.0)()),
                 "native admission retirement",
             );
-            if first.is_some() {
+            if preserving_failure || first.is_some() {
                 crate::retain::Retain::retain(crate::retain::Owned(ticket.0));
             } else {
                 RoutePanic::preserve_first(
@@ -1511,11 +1520,12 @@ impl GestureBinding {
         sequence: &Rc<PanZoomSequence>,
         route: PanZoomRoute,
         ticket: PanZoomRetirement,
+        preserving_failure: &Cell<bool>,
     ) {
         if self.is_current_pan_zoom_sequence(pointer, sequence) {
             sequence.staged.borrow_mut().push((route, ticket));
         } else {
-            Self::retire_pan_zoom_tickets(vec![(route, ticket)]);
+            Self::retire_pan_zoom_tickets(vec![(route, ticket)], preserving_failure);
         }
     }
 
@@ -1524,6 +1534,7 @@ impl GestureBinding {
         pointer: PointerInfo,
         sequence: &Rc<PanZoomSequence>,
         route: PanZoomRoute,
+        preserving_failure: &Cell<bool>,
     ) {
         if !self.is_current_pan_zoom_sequence(pointer, sequence) {
             return;
@@ -1541,7 +1552,7 @@ impl GestureBinding {
             .into_iter()
             .partition(|(staged, _)| staged.same_target(route));
         *sequence.staged.borrow_mut() = kept;
-        Self::retire_pan_zoom_tickets(retired);
+        Self::retire_pan_zoom_tickets(retired, preserving_failure);
     }
 
     fn retire_pan_zoom_sequences(
@@ -1553,7 +1564,7 @@ impl GestureBinding {
             .into_iter()
             .flat_map(|sequence| std::mem::take(&mut *sequence.staged.borrow_mut()))
             .collect();
-        Self::retire_pan_zoom_tickets_capturing_panic(tickets, first);
+        Self::retire_pan_zoom_tickets_capturing_panic(tickets, first, false);
     }
 
     fn detach_pan_zoom_sequences(&self) -> Vec<Rc<PanZoomSequence>> {
@@ -1961,6 +1972,9 @@ impl GestureBinding {
                     self.dispatch_ephemeral(event, &path),
                     "native observers after admission retirement",
                 );
+                // Borrowed admission callbacks need the failure policy, while
+                // this delivery keeps custody of the authoritative payload.
+                let preserving_failure = Cell::new(first_panic.is_some());
                 let claim = RoutePanic::capture(|| {
                     let claimed = match &admission {
                         PanZoomAdmission::Terminal(Some(sequence)) => {
@@ -1973,7 +1987,10 @@ impl GestureBinding {
                                             gesture,
                                             &|_| {},
                                             &|route, ticket| {
-                                                Self::retire_pan_zoom_tickets(vec![(route, ticket)])
+                                                Self::retire_pan_zoom_tickets(
+                                                    vec![(route, ticket)],
+                                                    &preserving_failure,
+                                                )
                                             },
                                             Some(&|route| {
                                                 Self::native_terminal_is_current(sequence, route)
@@ -1988,9 +2005,10 @@ impl GestureBinding {
                                             || {},
                                             Some(PanZoomAdmissionAuthority {
                                                 stage: &|ticket| {
-                                                    Self::retire_pan_zoom_tickets(vec![(
-                                                        route, ticket,
-                                                    )])
+                                                    Self::retire_pan_zoom_tickets(
+                                                        vec![(route, ticket)],
+                                                        &preserving_failure,
+                                                    )
                                                 },
                                                 claim: &|| {},
                                                 terminal: Some(&current),
@@ -2013,17 +2031,34 @@ impl GestureBinding {
                         PanZoomAdmission::Terminal(None) => path.dispatch_pan_zoom_admitted(
                             gesture,
                             &|_| {},
-                            &|route, ticket| Self::retire_pan_zoom_tickets(vec![(route, ticket)]),
+                            &|route, ticket| {
+                                Self::retire_pan_zoom_tickets(
+                                    vec![(route, ticket)],
+                                    &preserving_failure,
+                                )
+                            },
                             Some(&|_| false),
                         ),
                         PanZoomAdmission::Refused => false,
                         PanZoomAdmission::Active(sequence) => {
                             if let Some(route) = sequence.route.get() {
                                 let stage = |ticket| {
-                                    self.stage_pan_zoom(*gesture.pointer(), sequence, route, ticket)
+                                    self.stage_pan_zoom(
+                                        *gesture.pointer(),
+                                        sequence,
+                                        route,
+                                        ticket,
+                                        &preserving_failure,
+                                    )
                                 };
-                                let claim =
-                                    || self.claim_pan_zoom(*gesture.pointer(), sequence, route);
+                                let claim = || {
+                                    self.claim_pan_zoom(
+                                        *gesture.pointer(),
+                                        sequence,
+                                        route,
+                                        &preserving_failure,
+                                    )
+                                };
                                 route.dispatch_admitted(
                                     gesture,
                                     || {},
@@ -2039,7 +2074,12 @@ impl GestureBinding {
                                 path.dispatch_pan_zoom_admitted(
                                     gesture,
                                     &|route| {
-                                        self.claim_pan_zoom(*gesture.pointer(), sequence, route)
+                                        self.claim_pan_zoom(
+                                            *gesture.pointer(),
+                                            sequence,
+                                            route,
+                                            &preserving_failure,
+                                        )
                                     },
                                     &|route, ticket| {
                                         self.stage_pan_zoom(
@@ -2047,6 +2087,7 @@ impl GestureBinding {
                                             sequence,
                                             route,
                                             ticket,
+                                            &preserving_failure,
                                         )
                                     },
                                     None,
