@@ -37,7 +37,7 @@ use std::{
     time::Duration,
 };
 
-use flui_animation::{Animation, AnimationController, Vsync, VsyncRegistration};
+use flui_animation::{Animation, AnimationController, AnimationStatus, Vsync, VsyncRegistration};
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
 use flui_painting::styling::Color;
 use flui_rendering::hit_testing::HitTestBehavior;
@@ -426,6 +426,7 @@ pub struct RefreshIndicatorState {
     fling_controller: AnimationController,
     /// Listener ID on `fling_controller`; removed in `dispose`.
     fling_listener_id: Option<ListenerId>,
+    fling_status_listener_id: Option<ListenerId>,
     /// Vsync handle kept for `unregister` in `dispose`.
     vsync: Option<Vsync>,
     /// Registration returned by `vsync.register(fling_controller)`.
@@ -467,6 +468,7 @@ impl StatefulView for RefreshIndicator {
             scroll_controller: self.scroll_controller.clone(),
             fling_controller,
             fling_listener_id: None,
+            fling_status_listener_id: None,
             vsync: None,
             vsync_registration: None,
             pipeline: None,
@@ -516,6 +518,17 @@ impl RefreshIndicatorState {
         self.fling_listener_id = Some(self.fling_controller.add_listener(Arc::new(move || {
             scroll.set_pixels(fling.value());
         })));
+        if let Some(id) = self.fling_status_listener_id.take() {
+            self.fling_controller.remove_status_listener(id);
+        }
+        let position = self.scroll_controller.position();
+        self.fling_status_listener_id = Some(self.fling_controller.add_status_listener(Arc::new(
+            move |status| {
+                if matches!(status, AnimationStatus::Completed | AnimationStatus::Dismissed) {
+                    position.set_is_scrolling(false);
+                }
+            },
+        )));
     }
 
     /// Listens to `controller` and rebuilds only when its refresh phase
@@ -592,6 +605,7 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
         let threshold_px = view.threshold_px;
         let fling_stop = self.fling_controller.clone();
         let rc_start = view.controller.clone();
+        let sc_start = self.scroll_controller.clone();
         let sc_update = self.scroll_controller.clone();
         let rc_update = view.controller.clone();
         let ph_update = view.physics.clone();
@@ -607,6 +621,7 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
                 // Halt any in-flight fling when the user grabs the content.
                 let _ = fling_stop.stop();
                 if !rc_start.is_refreshing() {
+                    sc_start.position().set_is_scrolling(true);
                     rc_start.set_pull_distance_px(0.0);
                 }
             })
@@ -619,6 +634,13 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
                 // Positive dy (finger moving DOWN) maps to a decrease in
                 // scroll offset (reveals content above).
                 let raw_delta_y = details.delta.dy;
+                if raw_delta_y != 0.0 {
+                    sc_update.position().set_user_scroll_direction(if raw_delta_y > 0.0 {
+                        flui_rendering::view::ScrollDirection::Forward
+                    } else {
+                        flui_rendering::view::ScrollDirection::Reverse
+                    });
+                }
                 // Pull remains outside the clamped scroll position. Consume
                 // it first when the finger reverses toward ordinary scrolling.
                 let proposed = sc_update.pixels() - rc_update.pull_distance_px() - raw_delta_y;
@@ -638,6 +660,7 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
             })
             .on_pan_end(move |cx, details| {
                 if rc_end.is_refreshing() {
+                    sc_end.position().set_is_scrolling(false);
                     return;
                 }
                 if details.reason == flui_interaction::GestureEndReason::Cancelled {
@@ -647,6 +670,8 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
                     );
                     if let Some(sim) = ph_end.create_ballistic_simulation(&metrics, 0.0) {
                         let _ = fc_fling.animate_with(sim);
+                    } else {
+                        sc_end.position().set_is_scrolling(false);
                     }
                     return;
                 }
@@ -655,6 +680,7 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
                     // Sufficient overscroll: enter refreshing state and
                     // fire the caller's callback.
                     rc_end.begin_refresh();
+                    sc_end.position().set_is_scrolling(false);
                     on_refresh_cb(cx);
                 } else {
                     // Under-threshold pull: reset and start a normal fling.
@@ -670,6 +696,8 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
                         ph_end.create_ballistic_simulation(&metrics, fling_vel_px_per_sec)
                     {
                         let _ = fc_fling.animate_with(sim);
+                    } else {
+                        sc_end.position().set_is_scrolling(false);
                     }
                 }
             })
@@ -685,6 +713,7 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
             // A run samples the old position's metrics. Do not carry that
             // simulation into a replacement position with different bounds.
             let _ = self.fling_controller.stop();
+            self.scroll_controller.position().set_is_scrolling(false);
             self.scroll_controller = new_view.scroll_controller.clone();
             self.install_fling_listener();
         }
@@ -702,6 +731,10 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
         if let Some(id) = self.fling_listener_id.take() {
             self.fling_controller.remove_listener(id);
         }
+        if let Some(id) = self.fling_status_listener_id.take() {
+            self.fling_controller.remove_status_listener(id);
+        }
+        self.scroll_controller.position().set_is_scrolling(false);
         if let (Some(vsync), Some(registration)) =
             (self.vsync.take(), self.vsync_registration.take())
         {
