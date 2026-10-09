@@ -67,11 +67,11 @@ struct SwitchOwner {
 impl SwitchOwner {
     fn reject_status<T>(&self, callback: T) {
         let mut recovery = Retirement::new();
-        self.notifier.inherit_failure(&mut recovery);
+        self.notifier.inherit_failure(&mut recovery.scope());
         self.inner
             .borrow()
             .status_listeners
-            .inherit_failure(&mut recovery);
+            .inherit_failure(&mut recovery.scope());
         recovery.retire(Terminal::new(callback));
         recovery.finish();
     }
@@ -425,8 +425,8 @@ impl AnimationSwitch {
             }
         };
         let mut recovery = Retirement::new();
-        cancel_status_subscription(previous, &mut recovery);
-        cancel_status_subscription(subscription, &mut recovery);
+        cancel_status_subscription(previous, &mut recovery.scope());
+        cancel_status_subscription(subscription, &mut recovery.scope());
         recovery.finish();
     }
 
