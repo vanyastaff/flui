@@ -3,7 +3,9 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_animation::{
-    Animation, AnimationController, AnimationStatus, MotionClock, StatusSubscription, Vsync,
+    Animation, AnimationController, AnimationStatus, AnimationSwitch, CurvedAnimation, Curves,
+    FloatTween, MotionClock, ProxyAnimation, ReverseAnimation, StatusCallback, StatusSubscription,
+    TweenAnimation, Vsync,
 };
 use flui_foundation::{Listenable, ListenerId, Notifier};
 
@@ -295,9 +297,134 @@ fn admission_after_disposal_retires_captures_outside_the_state_borrow() {
     assert!(registry.is_empty());
 }
 
+fn proxy_subscription_survives_parent_replacement() {
+    let first = Rc::new(AnimationController::builder(Duration::from_secs(1)).build());
+    let next = Rc::new(AnimationController::builder(Duration::from_secs(1)).build());
+    let proxy = ProxyAnimation::new(first.clone());
+    let statuses = Rc::new(RefCell::new(Vec::new()));
+    let subscription = proxy.subscribe_status({
+        let statuses = Rc::clone(&statuses);
+        Rc::new(move |status| statuses.borrow_mut().push(status))
+    });
+    let _run = first.forward().unwrap();
+    proxy.set_parent(next.clone());
+    let _run = next.forward().unwrap();
+    assert_eq!(
+        *statuses.borrow(),
+        [
+            AnimationStatus::Forward,
+            AnimationStatus::Dismissed,
+            AnimationStatus::Forward
+        ]
+    );
+    drop(subscription);
+    let _run = next.reverse().unwrap();
+    let _run = first.reverse().unwrap();
+    assert_eq!(statuses.borrow().len(), 3);
+}
+
+fn switch_subscription_survives_the_active_parent_hop() {
+    let first = Rc::new(AnimationController::builder(Duration::from_secs(1)).build());
+    let next = Rc::new(AnimationController::builder(Duration::from_secs(1)).build());
+    first.set_value(0.8);
+    next.set_value(0.3);
+    let switch = AnimationSwitch::new(first.clone(), Some(next.clone()));
+    let statuses = Rc::new(RefCell::new(Vec::new()));
+    let subscription = switch.subscribe_status({
+        let statuses = Rc::clone(&statuses);
+        Rc::new(move |status| statuses.borrow_mut().push(status))
+    });
+    next.set_value(1.0);
+    assert!(Rc::ptr_eq(
+        &switch.current(),
+        &(next.clone() as Rc<dyn Animation<f64>>)
+    ));
+    assert_eq!(*statuses.borrow(), [AnimationStatus::Completed]);
+    let _run = next.reverse().unwrap();
+    assert_eq!(
+        *statuses.borrow(),
+        [AnimationStatus::Completed, AnimationStatus::Reverse]
+    );
+    drop(subscription);
+    let _run = next.forward().unwrap();
+    first.set_value(0.0);
+    assert_eq!(statuses.borrow().len(), 2);
+}
+
+fn adapter_subscriptions_follow_the_shared_owner() {
+    fn check<A: Animation<f64> + Clone>(
+        construct: impl FnOnce(Rc<dyn Animation<f64>>) -> A,
+        subscribe: fn(&A, StatusCallback) -> StatusSubscription,
+    ) {
+        let parent = Rc::new(AnimationController::builder(Duration::from_secs(1)).build());
+        let adapter = construct(parent.clone());
+        let sibling = adapter.clone();
+        let calls = Rc::new(Cell::new(0));
+        let drops = Rc::new(Cell::new(0));
+        let removed = subscribe(&adapter, {
+            let calls = Rc::clone(&calls);
+            let capture = Capture(Rc::clone(&drops));
+            Rc::new(move |_| {
+                let _keep = &capture;
+                calls.set(calls.get() + 1);
+            })
+        });
+        let kept_calls = Rc::new(Cell::new(0));
+        let kept_drops = Rc::new(Cell::new(0));
+        let surviving_guard = subscribe(&sibling, {
+            let calls = Rc::clone(&kept_calls);
+            let capture = Capture(Rc::clone(&kept_drops));
+            Rc::new(move |_| {
+                let _keep = &capture;
+                calls.set(calls.get() + 1);
+            })
+        });
+        drop(adapter);
+        let _run = parent.forward().unwrap();
+        assert_eq!(calls.get(), 1);
+        assert_eq!(kept_calls.get(), 1);
+        drop(removed);
+        assert_eq!(drops.get(), 1);
+        let _run = parent.reverse().unwrap();
+        assert_eq!(calls.get(), 1);
+        assert_eq!(kept_calls.get(), 2);
+        drop(sibling);
+        assert_eq!(kept_drops.get(), 1, "the guard must not own the adapter");
+        drop(surviving_guard);
+        let _run = parent.forward().unwrap();
+        assert_eq!(kept_calls.get(), 2);
+    }
+    check(ReverseAnimation::new, ReverseAnimation::subscribe_status);
+    check(
+        |parent| CurvedAnimation::new(parent, Curves::Linear),
+        CurvedAnimation::subscribe_status,
+    );
+    check(
+        |parent| TweenAnimation::new(FloatTween::new(0.0, 1.0), parent),
+        TweenAnimation::subscribe_status,
+    );
+    check(ProxyAnimation::new, ProxyAnimation::subscribe_status);
+    check(
+        |parent| AnimationSwitch::new(parent, None),
+        AnimationSwitch::subscribe_status,
+    );
+}
+
 #[test]
 fn owning_status_subscription_contract() {
     let cases: &[(&str, fn())] = &[
+        (
+            "adapter shared owner",
+            adapter_subscriptions_follow_the_shared_owner,
+        ),
+        (
+            "proxy replacement",
+            proxy_subscription_survives_parent_replacement,
+        ),
+        (
+            "switch parent hop",
+            switch_subscription_survives_the_active_parent_hop,
+        ),
         (
             "independent sources and channels",
             dropping_one_subscription_preserves_independent_sources_and_channels,

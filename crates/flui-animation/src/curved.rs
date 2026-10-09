@@ -72,6 +72,11 @@ impl<C: Curve + Clone> Drop for CurvedAnimation<C> {
 }
 
 impl<C: Curve + Clone> CurvedAnimation<C> {
+    /// Subscribe to this animation's status until the returned guard is dropped.
+    pub fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription {
+        self.links.subscribe_status(callback)
+    }
+
     /// Create a new curved animation.
     ///
     /// # Arguments

@@ -106,6 +106,12 @@ impl<T> ProxyAnimation<T>
 where
     T: Clone + fmt::Debug + 'static,
 {
+    /// Subscribe to this proxy's status across parent replacements.
+    pub fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription {
+        let id = self.add_status_listener(callback);
+        crate::StatusSubscription::new(&self.inner, id, ProxyOwner::withdraw_status)
+    }
+
     /// Create a new proxy animation.
     ///
     /// # Arguments
@@ -262,20 +268,23 @@ where
     }
 
     fn remove_status_listener(&self, id: ListenerId) {
-        if self.inner.delivering.get() {
-            if let Some(callback) = self.inner.status_listeners.take_callback(id) {
-                self.inner
-                    .retired
-                    .borrow_mut()
-                    .push(Terminal::new(callback));
+        let mut recovery = Retirement::new();
+        self.inner.withdraw_status(id, &mut recovery);
+        recovery.finish();
+    }
+}
+
+impl<T: Clone + 'static> ProxyOwner<T> {
+    fn withdraw_status(&self, id: ListenerId, recovery: &mut Retirement) {
+        let callback = self.status_listeners.take_callback(id);
+        if self.delivering.get() {
+            if let Some(callback) = callback {
+                self.retired.borrow_mut().push(Terminal::new(callback));
             }
         } else {
-            let callback = self.inner.status_listeners.take_callback(id);
-            let mut recovery = Retirement::new();
-            self.inner.status_listeners.inherit_failure(&mut recovery);
-            self.inner.notifier.inherit_failure(&mut recovery);
-            recovery.retire(callback);
-            recovery.finish();
+            self.status_listeners.inherit_failure(recovery);
+            self.notifier.inherit_failure(recovery);
+            recovery.retire(Terminal::new(callback));
         }
     }
 }

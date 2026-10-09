@@ -63,6 +63,16 @@ struct SwitchOwner {
     notifier: Terminal<Rc<ChangeNotifier>>,
 }
 
+impl SwitchOwner {
+    fn withdraw_status(&self, id: ListenerId, recovery: &mut Retirement) {
+        let listeners = Rc::clone(&self.inner.borrow().status_listeners);
+        let callback = listeners.take_callback(id);
+        listeners.inherit_failure(recovery);
+        self.notifier.inherit_failure(recovery);
+        recovery.retire(Terminal::new(callback));
+    }
+}
+
 impl Drop for SwitchOwner {
     fn drop(&mut self) {
         let mut recovery = Retirement::new();
@@ -158,6 +168,12 @@ impl Drop for AnimationSwitchInner {
 }
 
 impl AnimationSwitch {
+    /// Subscribe to this switch's status across changes of the active parent.
+    pub fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription {
+        let id = self.add_status_listener(callback);
+        crate::StatusSubscription::new(&self.owner, id, SwitchOwner::withdraw_status)
+    }
+
     /// Creates a new animation switch.
     ///
     /// If `next` is `None`, this animation will just proxy `current` and never switch.
@@ -520,12 +536,8 @@ impl Animation<f64> for AnimationSwitch {
     }
 
     fn remove_status_listener(&self, id: ListenerId) {
-        let listeners = Rc::clone(&self.owner.inner.borrow().status_listeners);
-        let callback = listeners.take_callback(id);
         let mut recovery = Retirement::new();
-        listeners.inherit_failure(&mut recovery);
-        self.owner.notifier.inherit_failure(&mut recovery);
-        recovery.retire(callback);
+        self.owner.withdraw_status(id, &mut recovery);
         recovery.finish();
     }
 }

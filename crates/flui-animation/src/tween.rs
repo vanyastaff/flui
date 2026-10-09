@@ -82,6 +82,11 @@ where
         }
     }
 
+    /// Subscribe to this animation's status until the returned guard is dropped.
+    pub fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription {
+        self.links.subscribe_status(callback)
+    }
+
     /// Get a reference to the tween.
     #[inline]
     #[must_use]

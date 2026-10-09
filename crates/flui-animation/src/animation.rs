@@ -272,6 +272,22 @@ impl ParentLinks {
         self.notifier.inherit_failure(recovery);
         self.status_notifier.inherit_failure(recovery);
     }
+
+    pub(crate) fn subscribe_status(
+        self: &Rc<Self>,
+        callback: StatusCallback,
+    ) -> crate::StatusSubscription {
+        let id = self
+            .status_notifier
+            .add(Rc::new(move |status| callback(*status)));
+        crate::StatusSubscription::new(self, id, Self::withdraw_status)
+    }
+
+    fn withdraw_status(&self, id: ListenerId, recovery: &mut Retirement) {
+        self.inherit_failure(recovery);
+        let callback = self.status_notifier.take_callback(id);
+        recovery.retire(Terminal::new(callback));
+    }
 }
 
 impl Drop for ParentLinks {

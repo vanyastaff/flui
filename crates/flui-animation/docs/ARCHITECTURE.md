@@ -172,10 +172,19 @@ after releasing the borrow. The guard neither owns a second channel nor keeps th
 controller owner alive. Scrollable activity and AnimatedSize completion callbacks
 retain the owning subscription beside their driven controller.
 
+Reverse, curved and tween subscriptions identify their shared `ParentLinks`
+owner, while proxy and switch subscriptions identify their respective owners.
+An owning guard survives a parent replacement or a switch hop without delegating
+its removal token to the active parent. It does not extend wrapper lifetime:
+the last wrapper clone closes both channels even if a guard survives. Withdrawal
+inherits both channel failure histories before retiring captures; proxy removal
+during delivery joins the existing deferred retirement queue.
+
 `owning_status_subscription_contract` uses bounded child-process rows for source
 and channel independence, detach, source teardown, custom-source construction,
 self/later removal during delivery, reentrant capture retirement, first-failure
-custody, recovery and disposed admission.
+custody, recovery, disposed admission, shared wrapper lifetime, proxy replacement
+and switch hops.
 
 ### Registration tokens and removal
 
