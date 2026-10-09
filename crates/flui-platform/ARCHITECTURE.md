@@ -183,7 +183,15 @@ controlled JS boundary. It is not an actual OS-setting change test.
 
 The same host observation set also reads motion. AppKit samples
 `NSWorkspace::accessibilityDisplayShouldReduceMotion` on its existing owner-lane
-timer. Android reads `Settings.Global.ANIMATOR_DURATION_SCALE` through the
+timer. The same timer also serves the macOS winit fallback: `WinitApp` owns the
+source and the platform stores only a weak lookup. Reads lease it outside platform state;
+no AppKit query is added to `about_to_wait`. Shutdown and unwinding fence the
+signal before retiring that source. `winit_preferences_probe` checks initial
+native observations, foreign-thread refusal and reentrant retirement without a
+user window. It requires a macOS main-thread process; local cross-compilation
+does not establish that the probe passes.
+
+Android reads `Settings.Global.ANIMATOR_DURATION_SCALE` through the
 Activity's ContentResolver during preference sampling, validates it before
 publication, and leaves geometry-only queries independent of that setting.
 UIKit retains both bold-text and reduced-motion notification tokens on one

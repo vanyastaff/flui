@@ -410,6 +410,10 @@ path = "tests/compiler_guards.rs"
 name = "platform_it"
 path = "tests/main.rs"
 
+[[example]]
+name = "winit_preferences_probe"
+required-features = ["winit-backend"]
+
 # Deliberately its own process: these tests WRITE the process-wide
 # `FLUI_HEADLESS` env var (`unsafe env::set_var`/`remove_var`) to exercise
 # headless-backend selection; env vars are process-global, so isolation —

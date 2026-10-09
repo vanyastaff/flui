@@ -22,13 +22,13 @@ use crate::{
 
 const SAMPLE_INTERVAL: Duration = Duration::from_millis(500);
 
-pub(super) struct PreferenceSource {
+pub(in crate::platforms) struct PreferenceSource {
     signal: Weak<OwnerSignal>,
     admission: crate::shared::preference_read::ReadAdmission,
 }
 
 impl PreferenceSource {
-    pub(super) fn new(signal: &Arc<OwnerSignal>) -> Arc<Self> {
+    pub(in crate::platforms) fn new(signal: &Arc<OwnerSignal>) -> Arc<Self> {
         let source = Arc::new(Self {
             signal: Arc::downgrade(signal),
             admission: crate::shared::preference_read::ReadAdmission::default(),
@@ -44,7 +44,7 @@ impl PreferenceSource {
         source
     }
 
-    pub(super) fn read(&self) -> Result<SystemPreferences, PlatformError> {
+    pub(in crate::platforms) fn read(&self) -> Result<SystemPreferences, PlatformError> {
         if MainThreadMarker::new().is_none() {
             return Err(PlatformError::Preferences {
                 message: "AppKit preferences require the application owner thread".into(),

@@ -6,6 +6,8 @@
 - Native macOS and iOS hosts observe reduced motion; Android preference sampling
   observes and validates the system animation-duration scale through the
   existing host preference source.
+- The macOS winit fallback shares the AppKit preference sampler and retires it
+  with its event-loop owner, including during unwinding.
 
 - Add the interactive `motion_lab` example with Full/Reduce/FollowSystem modes,
   property interruption, independent deadlines, swipe and drawer transitions.

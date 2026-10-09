@@ -868,7 +868,7 @@ fn winit_lane_dropped_after_delivery_unwinds_and_leaves_the_window_gone() {
 
     let mut app = WinitApp {
         platform: Arc::clone(&platform),
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         preference_source: None,
         on_ready: None,
         control: receiver,
@@ -1076,7 +1076,7 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
     let mut app = ExitObserver {
         inner: WinitApp {
             platform: Arc::clone(&platform),
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             preference_source: None,
             on_ready: None,
             control: receiver,

@@ -67,7 +67,7 @@ mod liquid_glass;
 mod loop_control;
 mod owner_lane;
 mod platform;
-mod preferences;
+pub(super) mod preferences;
 mod text_input;
 mod view;
 mod wake_pump;
