@@ -2192,6 +2192,15 @@ targets commit before outgoing contact cancellation; the old Move or terminal
 cannot drive the replacement position. Ordinary same-position rebuild retains
 the contact. `replacing_a_scroll_position_cancels_its_contact_and_recovers`
 checks both widgets, Up/Cancel and fresh-contact recovery.
+Its bouncing-overscroll cases also check that cancellation of an outgoing
+refresh contact cannot start a simulation through retargeted value listeners.
+Refresh callback authority retires before listeners change; accepted terminals
+from that owner cannot restart the shared fling controller. Without an ambient
+Vsync registration, a current refresh contact can still drag and refresh, but
+its terminal declines ballistic motion and ends scroll activity.
+`refresh_without_vsync_ends_activity_after_release_and_cancel` mounts through
+the public embedder bootstrap without a VsyncScope and checks Up/Cancel,
+unchanged pixels through later frames and fresh-contact recovery.
 
 The three gesture inertia drivers in `Scrollable`, `RefreshIndicator` and
 `InteractiveViewer` depend on the ambient `VsyncScope` during lifecycle hooks.

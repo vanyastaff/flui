@@ -777,6 +777,76 @@ pub(crate) fn refresh_motion_notifies_activity_through_release_and_recovery() {
     );
 }
 
+pub(crate) fn refresh_without_vsync_ends_activity_after_release_and_cancel() {
+    use flui_testing::{HeadlessBinding, MountOptions, MountOwners, PointerPhase, ScriptedPointer};
+
+    let pointer = |binding: &HeadlessBinding, phase, y, millis| {
+        binding.clock().advance(Duration::from_millis(10));
+        let event = ScriptedPointer::new(
+            Duration::from_millis(millis),
+            flui_interaction::PointerId::try_from(1).expect("nonzero fixture contact"),
+            phase,
+            flui_foundation::geometry::Offset::new(150.0, y),
+        )
+        .to_event();
+        binding.dispatch_pointer(&event, |position| binding.hit_test(position));
+    };
+    let mut failures = Vec::new();
+    for cancelled in [false, true] {
+        let scroll = ScrollController::new();
+        let refresh = RefreshController::new();
+        let mut binding = HeadlessBinding::new();
+        let root = flui_widgets::GestureArenaScope::new(
+            binding.arena().clone(),
+            flui_widgets::FocusRoot::new(
+                refresh_content(&scroll, &refresh).physics(Arc::new(BouncingScrollPhysics::new())),
+            ),
+        );
+        let _mounted = binding.mount_root(
+            &root,
+            MountOwners::fresh(),
+            MountOptions::tight(300.0, 300.0),
+        );
+        scroll.set_pixels(scroll.max_scroll_extent() - 10.0);
+        pointer(&binding, PointerPhase::Down, 250.0, 0);
+        for (millis, y) in [
+            (10, 230.0),
+            (20, 210.0),
+            (30, 190.0),
+            (40, 170.0),
+            (50, 150.0),
+        ] {
+            pointer(&binding, PointerPhase::Move, y, millis);
+        }
+        assert!(scroll.position().is_scrolling());
+        assert!(scroll.pixels() > scroll.max_scroll_extent());
+        if cancelled {
+            pointer(&binding, PointerPhase::Cancel, 150.0, 50);
+        } else {
+            pointer(&binding, PointerPhase::Up, 150.0, 50);
+        }
+        let released = scroll.pixels();
+        binding.pump_frame(Duration::from_millis(16));
+        binding.pump_frame(Duration::from_secs(10));
+        assert_eq!(
+            scroll.pixels(),
+            released,
+            "no clock drives ballistic motion"
+        );
+        if scroll.position().is_scrolling() {
+            failures.push(format!(
+                "cancelled={cancelled}: terminal activity remains live"
+            ));
+        }
+        pointer(&binding, PointerPhase::Down, 100.0, 100);
+        pointer(&binding, PointerPhase::Move, 150.0, 110);
+        pointer(&binding, PointerPhase::Move, 180.0, 120);
+        assert!(scroll.pixels() < released, "fresh contact remains usable");
+        pointer(&binding, PointerPhase::Cancel, 180.0, 120);
+    }
+    assert!(failures.is_empty(), "{}", failures.join("; "));
+}
+
 pub(crate) fn a_failed_refresh_notification_releases_activity_and_recovers() {
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -1529,11 +1599,13 @@ pub(crate) fn replacing_a_scroll_position_cancels_its_contact_and_recovers() {
     use std::sync::Mutex;
 
     let mut failures = Vec::new();
-    for (family, cancelled) in [
-        ("scrollable", false),
-        ("scrollable", true),
-        ("refresh", false),
-        ("refresh", true),
+    for (family, cancelled, bouncing) in [
+        ("scrollable", false, false),
+        ("scrollable", true, false),
+        ("refresh", false, false),
+        ("refresh", true, false),
+        ("refresh", false, true),
+        ("refresh", true, true),
     ] {
         let old = ScrollController::new();
         let new = ScrollController::new();
@@ -1550,7 +1622,14 @@ pub(crate) fn replacing_a_scroll_position_cancels_its_contact_and_recovers() {
         let refresh = RefreshController::new();
         let content = |controller: &ScrollController| {
             let child = if family == "refresh" {
-                refresh_content(controller, &refresh).boxed()
+                let content = refresh_content(controller, &refresh);
+                if bouncing {
+                    content
+                        .physics(Arc::new(BouncingScrollPhysics::new()))
+                        .boxed()
+                } else {
+                    content.boxed()
+                }
             } else {
                 Scrollable::new()
                     .controller(controller.clone())
@@ -1575,6 +1654,11 @@ pub(crate) fn replacing_a_scroll_position_cancels_its_contact_and_recovers() {
             old.pixels() > same,
             "same position preserves the admitted contact"
         );
+
+        if bouncing {
+            old.set_pixels(old.max_scroll_extent() + 40.0);
+            assert!(old.position().is_scrolling());
+        }
 
         laid.pump_widget(content(&new));
         let retired = old.pixels();
@@ -1616,6 +1700,10 @@ pub(crate) fn replacing_a_scroll_position_cancels_its_contact_and_recovers() {
             "fresh movement reaches the real activity consumer"
         );
         laid.dispatch_pointer_cancel();
+        if bouncing {
+            advance_scroll_run(&mut laid);
+            laid.pump_for(Duration::from_secs(10));
+        }
         assert!(!incoming.is_scrolling());
         incoming.remove_activity_listener(subscription);
     }

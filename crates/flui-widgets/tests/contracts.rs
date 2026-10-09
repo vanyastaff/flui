@@ -326,6 +326,7 @@ fn scroll_physics_and_activity() {
             ("scroll::cancelling_an_in_range_scroll_ends_activity_without_coasting", crate::scroll::cancelling_an_in_range_scroll_ends_activity_without_coasting as fn()),
             ("scroll::refresh_indicator_drag_scrolls_without_rebuilding", crate::scroll::refresh_indicator_drag_scrolls_without_rebuilding),
             ("scroll::refresh_motion_notifies_activity_through_release_and_recovery", crate::scroll::refresh_motion_notifies_activity_through_release_and_recovery),
+            ("scroll::refresh_without_vsync_ends_activity_after_release_and_cancel", crate::scroll::refresh_without_vsync_ends_activity_after_release_and_cancel),
             ("scroll::replacing_vsync_retires_old_motion_and_drives_fresh_contacts", crate::scroll::replacing_vsync_retires_old_motion_and_drives_fresh_contacts),
             ("scroll::replacing_a_scroll_position_cancels_its_contact_and_recovers", crate::scroll::replacing_a_scroll_position_cancels_its_contact_and_recovers),
             ("scroll::a_failed_refresh_notification_releases_activity_and_recovers", crate::scroll::a_failed_refresh_notification_releases_activity_and_recovers),
