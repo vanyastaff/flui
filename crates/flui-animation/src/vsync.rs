@@ -58,7 +58,7 @@ impl VsyncRegistration {
         self.owner.strong_count() != 0
     }
 
-    pub(crate) fn request_frame(&self, retirement: &mut Retirement) {
+    pub(crate) fn request_frame(&self, retirement: &mut RecoveryScope<'_>) {
         let Some(owner) = self.owner.upgrade() else {
             return;
         };
@@ -207,13 +207,13 @@ impl Vsync {
         let outgoing = std::mem::replace(&mut self.inner.borrow_mut().request_frame, request_frame);
         let mut retirement = Retirement::new();
         if self.has_running() {
-            Self::request_frame_from(&self.inner, &mut retirement);
+            Self::request_frame_from(&self.inner, &mut retirement.scope());
         }
         retirement.retire(outgoing);
         retirement.finish();
     }
 
-    fn request_frame_from(owner: &Rc<RefCell<VsyncInner>>, retirement: &mut Retirement) {
+    fn request_frame_from(owner: &Rc<RefCell<VsyncInner>>, retirement: &mut RecoveryScope<'_>) {
         let (request, parents) = {
             let mut inner = owner.borrow_mut();
             if inner.muted {
@@ -269,7 +269,7 @@ impl Vsync {
         let registration = self.try_register_with_anchor(controller, RunAnchor::Fresh)?;
         let mut retirement = Retirement::new();
         if controller.walk_probe().live_running {
-            registration.request_frame(&mut retirement);
+            registration.request_frame(&mut retirement.scope());
         }
         if retirement.has_failure() {
             retirement.run(|| self.unregister(&registration));
@@ -360,7 +360,7 @@ impl Vsync {
         child.inner.borrow_mut().parents.push(registration.clone());
         let mut retirement = Retirement::new();
         if child.has_running() {
-            registration.request_frame(&mut retirement);
+            registration.request_frame(&mut retirement.scope());
         }
         if retirement.has_failure() {
             retirement.run(|| self.detach_child(&registration));
@@ -441,7 +441,7 @@ impl Vsync {
         };
         if changed && !muted && self.has_running() {
             let mut retirement = Retirement::new();
-            Self::request_frame_from(&self.inner, &mut retirement);
+            Self::request_frame_from(&self.inner, &mut retirement.scope());
             retirement.finish();
         }
     }
