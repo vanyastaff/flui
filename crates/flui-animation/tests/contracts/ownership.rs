@@ -683,7 +683,7 @@ fn last_driven_owner_release_revokes_its_driver() {
         replacement.tick_all(&clock.frame(Duration::from_secs(1)));
         assert!(matches!(
             Pin::new(&mut replacement_run).poll(&mut Context::from_waker(Waker::noop())),
-            Poll::Ready(Ok(_))
+            Poll::Ready(Ok(()))
         ));
     }
 }
