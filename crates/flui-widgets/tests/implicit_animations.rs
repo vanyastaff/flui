@@ -187,7 +187,7 @@ pub(crate) fn changing_only_the_curve_keeps_the_existing_run_timeline() {
         eased > 0.0 && eased < linear,
         "the new curve eases the existing progress"
     );
-    laid.pump_for(RUN - FRAME);
+    laid.pump_for(RUN.checked_sub(FRAME).expect("run exceeds one frame"));
     assert_eq!(
         laid.opacity(laid.current_root()),
         1.0,
