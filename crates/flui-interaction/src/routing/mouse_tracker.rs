@@ -208,11 +208,22 @@ struct CursorPublication {
     observation: Rc<()>,
     published: CursorIcon,
     pending: bool,
+    in_flight: SmallVec<[CursorFlight; 1]>,
+}
+
+struct CursorFlight {
+    observation: Rc<()>,
+    callback: std::rc::Weak<dyn Fn(PointerInfo, CursorIcon)>,
+    cursor: CursorIcon,
 }
 
 impl CursorPublication {
     fn observe(&mut self, cursor: CursorIcon) -> Rc<()> {
-        self.observation = Rc::new(());
+        // Only overlapping work needs another allocation; ordinary sequential
+        // mouse packets reuse the uniquely held observation identity.
+        if Rc::strong_count(&self.observation) > 1 {
+            self.observation = Rc::new(());
+        }
         self.pending |= self.published != cursor;
         Rc::clone(&self.observation)
     }
@@ -880,26 +891,58 @@ impl DeviceWork {
                 )
             {
                 let callback = inner.cursor_change_callback.clone();
-                if callback.is_some() {
-                    // Commit delivery before reentrant code. A successful old
-                    // publication cannot acknowledge a newer observation or hook.
-                    inner.cursor_publication.pending = false;
-                    inner.cursor_publication.published = self.new_cursor;
+                if let Some(callback) = &callback {
+                    let identity = Rc::downgrade(callback);
+                    if inner.cursor_publication.in_flight.iter().any(|flight| {
+                        flight.cursor == self.new_cursor
+                            && std::rc::Weak::ptr_eq(&flight.callback, &identity)
+                    }) {
+                        // Same-hook, same-state recursion cannot complete the
+                        // in-flight publication. Its latest debt stays pending.
+                        None
+                    } else {
+                        inner.cursor_publication.in_flight.push(CursorFlight {
+                            observation: Rc::clone(&self.cursor_observation),
+                            callback: identity,
+                            cursor: self.new_cursor,
+                        });
+                        Some(Rc::clone(callback))
+                    }
+                } else {
+                    None
                 }
-                callback
             } else {
                 None
             }
         };
         if let Some(callback) = callback {
             let delivered = failure.invoke(|| callback(self.pointer, self.new_cursor));
-            if delivered.is_none() {
+            {
                 let mut inner = self.tracker.borrow_mut();
+                if let Some(index) = inner
+                    .cursor_publication
+                    .in_flight
+                    .iter()
+                    .position(|flight| Rc::ptr_eq(&flight.observation, &self.cursor_observation))
+                {
+                    inner.cursor_publication.in_flight.remove(index);
+                }
                 if Rc::ptr_eq(
                     &inner.cursor_publication.observation,
                     &self.cursor_observation,
                 ) {
-                    inner.cursor_publication.pending = true;
+                    if delivered.is_some() {
+                        inner.cursor_publication.published = self.new_cursor;
+                        if inner
+                            .cursor_change_callback
+                            .as_ref()
+                            .is_some_and(|current| Rc::ptr_eq(current, &callback))
+                        {
+                            inner.cursor_publication.pending = false;
+                        }
+                    } else {
+                        inner.cursor_publication.pending = true;
+                    }
                 }
             }
             let preserved = {
