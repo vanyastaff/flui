@@ -1200,6 +1200,74 @@ fn advance_scroll_run(laid: &mut LaidOut) {
     }
 }
 
+pub(crate) fn replacing_vsync_retires_old_motion_and_drives_fresh_contacts() {
+    use flui_foundation::geometry::EdgeInsets;
+    use flui_widgets::{InteractiveViewer, TransformationController};
+
+    let mut failures = Vec::new();
+    for family in ["scrollable", "refresh", "viewer"] {
+        let scroll = ScrollController::new();
+        let transform = TransformationController::new();
+        let child = match family {
+            "scrollable" => Scrollable::new()
+                .controller(scroll.clone())
+                .child(SizedBox::new(300.0, 5000.0))
+                .boxed(),
+            "refresh" => refresh_content(&scroll, &RefreshController::new()).boxed(),
+            _ => InteractiveViewer::new()
+                .controller(transform.clone())
+                .boundary_margin(EdgeInsets::all(1000.0))
+                .scale_enabled(false)
+                .child(SizedBox::new(300.0, 300.0))
+                .boxed(),
+        };
+        let pixels = || {
+            if family == "viewer" {
+                -transform.value().to_col_major_array()[13]
+            } else {
+                scroll.pixels()
+            }
+        };
+        let first = Vsync::new();
+        let second = Vsync::new();
+        let mut laid = crate::common::lay_out_animated(
+            VsyncScope::new(first.clone(), child.clone()),
+            tight(300.0, 300.0),
+            first.clone(),
+        );
+        let fling = |laid: &LaidOut| {
+            laid.dispatch_pointer_down(150.0, 250.0);
+            for y in [230.0, 210.0, 190.0, 170.0, 150.0] {
+                laid.dispatch_pointer_move_after(150.0, y, Duration::from_millis(10));
+            }
+            laid.dispatch_pointer_up(150.0, 150.0);
+        };
+        fling(&laid);
+        let released = pixels();
+        advance_scroll_run(&mut laid);
+        assert!(pixels() > released, "{family}: initial owner drives real inertia");
+        let before_same = pixels();
+        laid.pump_widget(VsyncScope::new(first.clone(), child.clone()));
+        laid.pump_for(Duration::from_millis(16));
+        assert!(pixels() > before_same, "{family}: same owner preserves the run");
+
+        laid.pump_widget(VsyncScope::new(second.clone(), child));
+        let replaced = pixels();
+        laid.pump_for(Duration::from_millis(16));
+        if pixels() != replaced {
+            failures.push(format!("{family}: retired Vsync still advances content"));
+        }
+        fling(&laid);
+        let fresh_release = pixels();
+        second.tick_all(1.0);
+        second.tick_all(1.032);
+        if pixels() <= fresh_release {
+            failures.push(format!("{family}: replacement Vsync cannot drive fresh inertia"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("; "));
+}
+
 fn dispatch_typed_wheel(
     laid: &LaidOut,
     precision: flui_platform_api::pointer::ScrollPrecision,
