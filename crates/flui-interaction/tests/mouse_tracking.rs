@@ -797,6 +797,7 @@ fn latest_cursor_publication_survives_reentry_replacement_and_failure() {
                 "healthy unchanged motion does not duplicate a publication"
             );
         }
+        tracker.clear_cursor_change_callback();
     }
 }
 
