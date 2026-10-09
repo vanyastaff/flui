@@ -1272,7 +1272,12 @@ pub(crate) fn replacing_a_scroll_position_cancels_its_contact_and_recovers() {
     use std::sync::Mutex;
 
     let mut failures = Vec::new();
-    for cancelled in [false, true] {
+    for (family, cancelled) in [
+        ("scrollable", false),
+        ("scrollable", true),
+        ("refresh", false),
+        ("refresh", true),
+    ] {
         let old = ScrollController::new();
         let new = ScrollController::new();
         let vsync = Vsync::new();
@@ -1286,8 +1291,20 @@ pub(crate) fn replacing_a_scroll_position_cancels_its_contact_and_recovers() {
                 watched.user_scroll_direction(),
             ));
         }));
+        let refresh = RefreshController::new();
+        let content = |controller: &ScrollController| {
+            let child = if family == "refresh" {
+                refresh_content(controller, &refresh).boxed()
+            } else {
+                Scrollable::new()
+                    .controller(controller.clone())
+                    .child(SizedBox::new(300.0, 5000.0))
+                    .boxed()
+            };
+            VsyncScope::new(vsync.clone(), child)
+        };
         let mut laid = crate::common::lay_out_animated(
-            animated_scroll_content(&old, &vsync),
+            content(&old),
             tight(300.0, 300.0),
             vsync.clone(),
         );
@@ -1295,18 +1312,20 @@ pub(crate) fn replacing_a_scroll_position_cancels_its_contact_and_recovers() {
         laid.dispatch_pointer_move_after(150.0, 200.0, Duration::from_millis(10));
         laid.dispatch_pointer_move_after(150.0, 180.0, Duration::from_millis(10));
         assert!(old.pixels() > 0.0);
-        assert!(old.position().is_scrolling());
+        if family == "scrollable" {
+            assert!(old.position().is_scrolling());
+        }
         let same = old.pixels();
-        laid.pump_widget(animated_scroll_content(&old, &vsync));
+        laid.pump_widget(content(&old));
         laid.dispatch_pointer_move_after(150.0, 160.0, Duration::from_millis(10));
         assert!(old.pixels() > same, "same position preserves the admitted contact");
 
-        laid.pump_widget(animated_scroll_content(&new, &vsync));
+        laid.pump_widget(content(&new));
         let retired = old.pixels();
         let before = new.pixels();
         laid.dispatch_pointer_move_after(150.0, 140.0, Duration::from_millis(10));
         if new.pixels() != before {
-            failures.push("replacement position consumed the retired contact");
+            failures.push(format!("{family}: replacement position consumed the retired contact"));
         }
         assert_eq!(old.pixels(), retired);
         assert!(!old.position().is_scrolling());
@@ -1317,7 +1336,7 @@ pub(crate) fn replacing_a_scroll_position_cancels_its_contact_and_recovers() {
         }
         advance_scroll_run(&mut laid);
         if new.pixels() != before || incoming.is_scrolling() {
-            failures.push("retired terminal started replacement motion or activity");
+            failures.push(format!("{family}: retired terminal started replacement motion or activity"));
         }
         observed.lock().expect("activity observer lock").clear();
         let fresh = new.pixels();
@@ -1326,8 +1345,9 @@ pub(crate) fn replacing_a_scroll_position_cancels_its_contact_and_recovers() {
         laid.dispatch_pointer_move_after(150.0, 180.0, Duration::from_millis(10));
         assert!(new.pixels() > fresh, "fresh contact drives replacement content");
         assert!(
-            observed.lock().expect("activity observer lock")
-                .contains(&(true, ScrollDirection::Reverse)),
+            family == "refresh"
+                || observed.lock().expect("activity observer lock")
+                    .contains(&(true, ScrollDirection::Reverse)),
             "fresh movement reaches the real activity consumer"
         );
         laid.dispatch_pointer_cancel();
