@@ -186,6 +186,7 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
     let quit = platform.clone();
     let mut app = WinitApp {
         platform: platform.clone(),
+        preference_source: None,
         on_ready: Some(Box::new(move |owner| {
             let mut lines = 0_u32;
             let mut characters = 0_u32;
@@ -219,7 +220,9 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
             };
             let hwnd = HWND(handle.hwnd.get() as *mut std::ffi::c_void);
             window.on_input(Box::new(move |input| {
-                if let flui_platform_api::PlatformInput::Pointer(PointerEvent::Scroll(scroll)) = input {
+                if let flui_platform_api::PlatformInput::Pointer(PointerEvent::Scroll(scroll)) =
+                    input
+                {
                     let complete = {
                         let mut log = sink.lock();
                         log.push(scroll);
@@ -442,6 +445,8 @@ fn winit_lane_dropped_after_delivery_unwinds_and_leaves_the_window_gone() {
 
     let mut app = WinitApp {
         platform: Arc::clone(&platform),
+        #[cfg(windows)]
+        preference_source: None,
         on_ready: None,
         control: receiver,
         quit_notified: false,
@@ -648,6 +653,8 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
     let mut app = ExitObserver {
         inner: WinitApp {
             platform: Arc::clone(&platform),
+            #[cfg(windows)]
+            preference_source: None,
             on_ready: None,
             control: receiver,
             quit_notified: false,
