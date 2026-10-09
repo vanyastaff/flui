@@ -6,9 +6,10 @@
 //! empty composition) and computes each composition's origin as a string
 //! when the composition forms, from the origins of the regions it takes in;
 //! the ledger keeps what every piece stands for and derives the origin when
-//! asked. A narrowing is computed by cutting the leaving text's share off
-//! the front and back of the origin string, which the reference checks is
-//! there to cut. ADR-0142 item 1 states the rules both follow.
+//! asked. A narrowing cuts leaving contributions from the frozen origin
+//! string in provenance order, which the reference checks they reconstruct.
+//! Their removal marks need not sit at the document's ends. ADR-0142 item 1
+//! states the rules both follow.
 
 use std::ops::Range;
 
@@ -451,7 +452,7 @@ impl Reference {
     }
 
     /// The part of `group` outside `range` commits as shown; the origin left
-    /// is the group's origin with the leaving parts' share cut off its ends,
+    /// is the group's origin with the leaving contributions removed,
     /// unless a replacement that removed text is split, when the group left
     /// stands for its own visible text.
     ///
@@ -460,8 +461,8 @@ impl Reference {
     /// range leaves whole, removal included, and one with characters on both
     /// sides is split. Only a removal whose replacement has no characters (a
     /// deletion), or a group's marker, is placed by where it sits: it stays
-    /// strictly inside the range. Which leaving tokens come before the range
-    /// and which after is read from their order around the staying tokens.
+    /// strictly inside the range. Origin contributions are consumed in their
+    /// own order; their physical marks can lie between staying characters.
     fn narrow(&mut self, group: usize, range: &Range<usize>) {
         let at = self.at();
         let members: Vec<usize> = (0..self.tokens.len())
@@ -526,33 +527,28 @@ impl Reference {
                 .filter_map(|&index| self.tokens[index].ch)
                 .collect()
         } else {
-            let (first, last) = (staying.first().copied(), staying.last().copied());
-            let mut before = String::new();
-            let mut after = String::new();
-            for &index in members.iter().filter(|&&i| leaves[i]) {
+            let whole = &self.origins[group];
+            let mut remaining = whole.as_str();
+            let mut retained = String::new();
+            for &index in &members {
                 let share = self.share(&self.tokens[index]);
-                // A leaving token that stands for nothing takes no share.
                 if share.is_empty() {
                     continue;
                 }
-                match (first, last) {
-                    (Some(first), _) if index < first => before.push_str(&share),
-                    (_, Some(last)) if index > last => after.push_str(&share),
-                    (None, None) => before.push_str(&share),
-                    _ => panic!(
-                        "reference: a leaving token {index} lies between staying tokens of group {group}"
-                    ),
+                remaining = remaining.strip_prefix(&share).unwrap_or_else(|| {
+                    panic!(
+                        "reference: token {index}'s contribution {share:?} does not reconstruct origin {whole:?}"
+                    )
+                });
+                if !leaves[index] {
+                    retained.push_str(&share);
                 }
             }
-            let whole = &self.origins[group];
-            let rest = whole
-                .strip_prefix(before.as_str())
-                .and_then(|rest| rest.strip_suffix(after.as_str()));
             assert!(
-                rest.is_some(),
-                "reference: the leaving parts {before:?} / {after:?} are not the ends of the origin {whole:?}"
+                remaining.is_empty(),
+                "reference: contributions leave an unaccounted origin suffix {remaining:?} in {whole:?}"
             );
-            rest.expect("asserted").to_owned()
+            retained
         };
         self.origins[group] = origin;
         let mut out = Vec::new();
@@ -676,6 +672,20 @@ fn named_cases() -> Vec<(
 )> {
     use Op::{Mark, Reopen, Replace};
     vec![
+        (
+            "a leaving replacement can have a removal between staying tokens",
+            "abcdef",
+            Some((0..1, "")),
+            vec![
+                Replace(0..2, "yz"),
+                Replace(1..5, ""),
+                Mark(Some(0..2)),
+                Replace(1..1, "yz"),
+                Mark(Some(1..4)),
+            ],
+            "yf",
+            Some("f"),
+        ),
         (
             "an empty preedit deletion keeps replacement lineage across a later edit",
             "abcd",
