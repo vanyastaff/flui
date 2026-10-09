@@ -500,7 +500,7 @@ impl AnimationController {
             .retain(|candidate| candidate != route);
     }
 
-    pub(crate) fn set_clock_bound(&self, bound: bool, retirement: &mut Retirement) {
+    pub(crate) fn set_clock_bound(&self, bound: bool, retirement: &mut RecoveryScope<'_>) {
         let mut inner = self.inner.borrow_mut();
         inner.clock_binding = if bound {
             ClockBinding::Bound

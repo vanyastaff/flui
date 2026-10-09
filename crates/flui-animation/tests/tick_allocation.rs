@@ -155,7 +155,9 @@ fn a_steady_state_frame_allocates_nothing() {
     // channel has only one listener, so this measures relay depth rather than
     // a listener snapshot exceeding its inline capacity.
     for depth in [1, 5, 32] {
-        let controller = AnimationController::builder(NEVER_ENDING).build();
+        let vsync = Vsync::new();
+        let owner = AnimationController::builder(NEVER_ENDING).build_on(Some(&vsync));
+        let controller = owner.controller();
         let mut leaf: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(controller.clone());
         for _ in 0..depth {
             leaf = std::rc::Rc::new(ReverseAnimation::new(leaf));
@@ -163,8 +165,6 @@ fn a_steady_state_frame_allocates_nothing() {
         let delivered = std::rc::Rc::new(Cell::new(0usize));
         let observed = delivered.clone();
         leaf.add_listener(std::rc::Rc::new(move || observed.set(observed.get() + 1)));
-        let vsync = Vsync::new();
-        let _registration = vsync.register(controller.clone());
         let _run = controller.forward().expect("forward on a live controller");
         let mut clock = flui_animation::MotionClock::new();
         let mut now = 0.0;
