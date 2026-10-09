@@ -1490,7 +1490,13 @@ pub(crate) fn replacing_vsync_retires_old_motion_and_drives_fresh_contacts() {
     use flui_widgets::{InteractiveViewer, TransformationController};
 
     let mut failures = Vec::new();
-    for family in ["scrollable", "refresh", "viewer"] {
+    for (family, fail_stop) in [
+        ("scrollable", false),
+        ("scrollable", true),
+        ("refresh", false),
+        ("refresh", true),
+        ("viewer", false),
+    ] {
         let scroll = ScrollController::new();
         let transform = TransformationController::new();
         let child = match family {
@@ -1544,8 +1550,41 @@ pub(crate) fn replacing_vsync_retires_old_motion_and_drives_fresh_contacts() {
         // replacement even if the preceding same-owner control fails.
         fling(&laid);
 
-        laid.pump_widget(VsyncScope::new(second.clone(), child));
+        let armed = Rc::new(Cell::new(fail_stop));
+        let attempted = Rc::new(Cell::new(0_usize));
+        let position = scroll.position();
+        let (watched, fail, seen) = (position.clone(), armed.clone(), attempted.clone());
+        let activity_listener = position.add_activity_listener(Rc::new(move || {
+            if !watched.is_scrolling() && fail.replace(false) {
+                seen.set(seen.get() + 1);
+                panic!("clock replacement activity failure");
+            }
+        }));
+        let replacement = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            laid.pump_widget(VsyncScope::new(second.clone(), child.clone()));
+        }));
+        if let Err(payload) = replacement {
+            assert!(fail_stop, "healthy clock replacement must not unwind");
+            assert_eq!(
+                flui_foundation::panic::payload_text(payload.as_ref()),
+                Some("clock replacement activity failure"),
+                "clock replacement preserves the first callback failure"
+            );
+        }
+        assert_eq!(
+            attempted.get(),
+            usize::from(fail_stop),
+            "{family}: replacement reaches the one-shot activity failure"
+        );
         let replaced = pixels();
+        // Repeating the accepted new registry cannot hide a seat left on the
+        // old clock after cancellation notified a failing activity observer.
+        laid.pump_widget(VsyncScope::new(second.clone(), child));
+        assert_eq!(
+            pixels(),
+            replaced,
+            "{family}: retry on the same new clock preserves sampled pixels"
+        );
         laid.pump_for(Duration::from_millis(16));
         if pixels() != replaced {
             failures.push(format!("{family}: retired Vsync still advances content"));
@@ -1560,6 +1599,7 @@ pub(crate) fn replacing_vsync_retires_old_motion_and_drives_fresh_contacts() {
                 "{family}: replacement Vsync cannot drive fresh inertia"
             ));
         }
+        position.remove_activity_listener(activity_listener);
     }
     assert!(failures.is_empty(), "{}", failures.join("; "));
 }
