@@ -44,6 +44,15 @@ callback captures retire outside tracker borrows using ADR-0127: after a caught
 failure, later opaque captures are retained and the next healthy operation can
 progress.
 
+The hosting window has one cursor output. Its latest physical source owns that
+output; ambient probes refresh every device's regions but cannot transfer cursor
+ownership by iteration order. An ambient result revalidates its device's exact
+observation after the probe, preserving newer reentrant motion and re-admission.
+Removing the owner selects the arrow with the retired source's real metadata.
+In-flight cursor callbacks are distinct from successful publication: only a
+successful current observation and hook acknowledge delivery. Failure, hook
+replacement and same-state reentry retain newer debt for a subsequent operation.
+
 ## Evidence
 
 The public integration contracts are `explicit_arrow_cursor_wins`,
@@ -54,3 +63,7 @@ first device's competing callback failure and recovery after a probe failure;
 bounded retirement children cover single and competing capture failures,
 retention of the remaining captures, and subsequent healthy enter/exit delivery.
 These contracts make no native backend execution claim.
+
+`mouse_tracking_ordering_and_cursor_deferral` additionally covers physical
+source ownership, stale ambient probes, source retirement, callback replacement,
+publication failure and recovery.

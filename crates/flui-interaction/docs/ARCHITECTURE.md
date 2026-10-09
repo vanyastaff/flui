@@ -41,6 +41,41 @@ implementations cannot change arena ordering or bypass exact membership checks.
 
 Local design choices and why. Each entry names the conflict, the choice, and the reference (a strategy clause, a design rule, or a precedent plan).
 
+- **Diagnostics participate in the subsystem's ownership boundary.** Router
+  mutations and ignored sampling windows release their borrow or mutex before
+  tracing invokes user code. Focus commits primary/history and enters its
+  notification round before diagnostics, then completes observers and accepted
+  FIFO requests before resuming the first failure. The public
+  `binding_input_contract_matrix`,
+  `resampler_interpolates_on_event_time_and_never_drops_terminals` and
+  `caught_callback_failures_leave_captures_with_their_owner` cover diagnostic
+  reentry, competing failures and subsequent healthy delivery.
+- **A router snapshot identifies a registration, independently of its callback.**
+  Removing a callback removes its duplicate registrations; adding the same
+  callback creates new registrations eligible for the next event. Private
+  retained identities cannot alias an outstanding snapshot. The
+  `binding_input_contract_matrix` pins pointer/global duplicates, removal,
+  re-admission and accepted healthy tails after failure.
+- **Cursor publication belongs to the latest physical source.** Device-local
+  enter/exit rounds remain independent. Ambient refresh updates the current
+  source's window cursor without handing ownership to a stationary device by
+  iteration order. Publication debt differs from an in-flight hook and from
+  acknowledged output; only successful current delivery acknowledges it.
+  Reentry and replacement preserve newer debt. Removing the owner requests the
+  arrow with its actual source metadata and permits retry without probing the
+  removed source. Ambient probes revalidate their exact device observation
+  after user code, so stale results cannot replace a newer physical reading or
+  a re-admitted source. `mouse_tracking_ordering_and_cursor_deferral` pins these
+  boundaries, same-position reentry, callback failure and healthy recovery.
+- **Checked positions do not guarantee representable derived motion.**
+  TapAndDrag checks initial and incremental displacement before publication;
+  overflow cancels the attempt rather than fabricating a clamped delta.
+  `tap_and_drag_resolves_through_the_shared_arena` covers both boundaries,
+  cancellation failure and finite same-pointer recovery. Scale commits its
+  admitted contact before calling the user clock outside its state borrow,
+  then revalidates the exact generation. `public_recognizer_extension_contracts`
+  covers clock cancellation, repeated-pointer replacement, failure and recovery.
+
 - **Render hit paths contain identities, not executable target objects.**
   Rendering protocols produce `RenderId` paths and data-only owner-lane targets;
   `InteractionLane` resolves them and `GestureBinding` retains pointer routes.
