@@ -1047,6 +1047,7 @@ fn binding_input_contract_matrix() {
             "native_staged_owner_cleanup",
             native_staged_owner_cleanup_is_exact,
         ),
+        ("native_terminal_observation_failure", native_terminal_observation_failure_keeps_owned_delivery),
         ("native_focus_loss", native_focus_loss_releases_lease),
         (
             "native_claim_retirement",
@@ -2986,6 +2987,67 @@ fn native_staged_retirement_preserves_delivery_and_failure() {
                 assert_eq!(retired.get(), if replacement { 2 } else { 1 });
             });
         }
+    }
+}
+
+fn native_terminal_observation_failure_keeps_owned_delivery() {
+    use flui_foundation::geometry::{Offset, Point};
+    use flui_interaction::{GestureBinding, HitTestResult};
+    use flui_interaction::recognizers::{PanZoomDisposition, ScaleGestureRecognizer};
+    use flui_interaction::routing::EventPropagation;
+    use flui_platform_api::{EventTime, pointer::{PanZoomEvent, PanZoomPhase, PanZoomTransform,
+        PointerEvent, PointerId, PointerInfo, PointerKind, PointerPosition}};
+    use std::{cell::Cell, panic::{catch_unwind, AssertUnwindSafe}, rc::Rc};
+    for (body_failure, terminal_failure) in [(false, true), (true, false), (true, true)] {
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let binding = GestureBinding::new();
+        let ends = Rc::new(Cell::new(0));
+        let retired = Rc::new(Cell::new(0));
+        let ended = ends.clone();
+        let fail = Cell::new(terminal_failure);
+        let actor = ScaleGestureRecognizer::builder(binding.arena().clone())
+            .on_update(|_| {})
+            .on_end(move |_| {
+                ended.set(ended.get() + 1);
+                assert!(!fail.replace(false), "native terminal callback failure");
+            }).build();
+        let source = PointerInfo::new(PointerId::try_from(830_u64).expect("source"), PointerKind::Trackpad);
+        let packet = |phase| PointerEvent::PanZoom(PanZoomEvent::new(source,
+            EventTime::from_nanos(0), PointerPosition::try_new(Point::ZERO).expect("position"), phase));
+        let update = || packet(PanZoomPhase::Update(
+            PanZoomTransform::try_new(Offset::ZERO, 1.2, 0.0).expect("scale")));
+        lane.enter(|| {
+            let owner = actor.clone();
+            let count = retired.clone();
+            let target = handle.register_pan_zoom(move |dispatch| {
+                if dispatch.local.phase == PanZoomPhase::Start {
+                    let count = count.clone();
+                    assert!(dispatch.on_retirement(move || count.set(count.get() + 1)));
+                }
+                if owner.handle_pan_zoom(dispatch) == PanZoomDisposition::Handled {
+                    EventPropagation::Stop
+                } else { EventPropagation::Continue }
+            }).expect("native owner");
+            let mut path = HitTestResult::new();
+            path.add(HitTestEntry::new(RenderId::new(1)).pan_zoom_target(target));
+            binding.handle_pointer_event(&packet(PanZoomPhase::Start), |_| path.clone());
+            binding.handle_pointer_event(&update(), |_| path.clone());
+            let result = catch_unwind(AssertUnwindSafe(||
+                binding.handle_pointer_event(&packet(PanZoomPhase::End), |_| {
+                    assert!(!body_failure, "native terminal hit-test failure");
+                    HitTestResult::new()
+                })));
+            assert_eq!(result.expect_err("terminal failure").downcast_ref::<&str>(), Some(&if body_failure {
+                "native terminal hit-test failure"
+            } else { "native terminal callback failure" }));
+            assert_eq!((ends.get(), retired.get()), (1, 1),
+                "fresh observation failure cannot erase the exact cached owner's terminal or cleanup");
+            binding.handle_pointer_event(&packet(PanZoomPhase::Start), |_| path.clone());
+            binding.handle_pointer_event(&update(), |_| path.clone());
+            binding.handle_pointer_event(&packet(PanZoomPhase::End), |_| HitTestResult::new());
+            assert_eq!((ends.get(), retired.get()), (2, 2), "same-source recovery retires its own admission");
+        });
     }
 }
 
