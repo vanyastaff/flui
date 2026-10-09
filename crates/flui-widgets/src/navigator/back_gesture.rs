@@ -46,6 +46,7 @@ use flui_view::{AnimatedView, impl_animated_view};
 use super::binding::PopPacing;
 use super::navigator::NavigatorHandle;
 use super::route::RouteId;
+use crate::interaction::recognizer_attachment::RecognizerAttachment;
 use crate::{Directionality, GestureArenaScope, Listener, Positioned, SizedBox, Stack, StackFit};
 
 /// The width of the edge-anchored hit region that can start a drag.
@@ -332,7 +333,7 @@ impl BackGestureRuntime {
             return;
         }
         let velocity = convert_to_logical(
-            details.primary_velocity / self.normalized_width(),
+            details.fling_velocity().pixels_per_second.dx / self.normalized_width(),
             self.direction.get(),
         );
         self.finish_drag(velocity);
@@ -539,18 +540,23 @@ impl StatefulView for BackGestureDetector {
                 Rc::clone(&self.enabled),
             ))),
             recognizer: None,
+            settings: None,
+            attachment: Rc::new(RecognizerAttachment::default()),
         }
     }
 }
 
 pub(crate) struct BackGestureDetectorState {
     runtime: super::lifecycle::Terminal<Rc<BackGestureRuntime>>,
-    /// Built exactly once in `init_state` against the presentation arena.
+    /// Current admission owner, replaced when an authored provider changes.
     recognizer: Option<Rc<DragGestureRecognizer>>,
+    settings: Option<flui_interaction::GestureSettingsProvider>,
+    attachment: Rc<RecognizerAttachment<DragGestureRecognizer>>,
 }
 
 impl Drop for BackGestureDetectorState {
     fn drop(&mut self) {
+        self.attachment.clear();
         let runtime = self.runtime.withdraw();
         let recognizer = super::lifecycle::Terminal::new(self.recognizer.take());
         drop((runtime, recognizer));
@@ -566,7 +572,24 @@ impl std::fmt::Debug for BackGestureDetectorState {
 
 impl ViewState<BackGestureDetector> for BackGestureDetectorState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.recognizer = Some(self.build_recognizer(ctx));
+        let settings = GestureArenaScope::settings_of(ctx);
+        let recognizer = self.build_recognizer(ctx, settings.clone());
+        self.settings = Some(settings);
+        self.attachment.attach(&recognizer);
+        self.recognizer = Some(recognizer);
+    }
+
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        let settings = GestureArenaScope::settings_of(ctx);
+        if self.settings.as_ref() != Some(&settings) {
+            let incoming = self.build_recognizer(ctx, settings.clone());
+            self.settings = Some(settings);
+            self.attachment.attach(&incoming);
+            let outgoing = self.recognizer.replace(incoming);
+            if let Some(outgoing) = outgoing {
+                outgoing.cancel();
+            }
+        }
     }
 
     fn build(&self, view: &BackGestureDetector, ctx: &dyn BuildContext) -> impl IntoView {
@@ -580,16 +603,11 @@ impl ViewState<BackGestureDetector> for BackGestureDetectorState {
             .direction
             .set(Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr));
 
-        let recognizer = self
-            .recognizer
-            .as_ref()
-            .expect("BUG: init_state must build the recognizer before the first build");
-
         let down_runtime = super::lifecycle::Terminal::new(Rc::clone(&self.runtime));
 
         let listener = Listener::new()
             .behavior(HitTestBehavior::Translucent)
-            .recognizer_when(recognizer, move |_| down_runtime.admits_new_gesture());
+            .recognizer_when(&self.attachment, move |_| down_runtime.admits_new_gesture());
 
         let child = view
             .child
@@ -610,6 +628,7 @@ impl ViewState<BackGestureDetector> for BackGestureDetectorState {
     }
 
     fn dispose(&mut self) {
+        self.attachment.clear();
         self.runtime.dispose_safety_net();
         if let Some(recognizer) = self.recognizer.take() {
             recognizer.cancel();
@@ -618,7 +637,11 @@ impl ViewState<BackGestureDetector> for BackGestureDetectorState {
 }
 
 impl BackGestureDetectorState {
-    fn build_recognizer(&self, ctx: &dyn BuildContext) -> Rc<DragGestureRecognizer> {
+    fn build_recognizer(
+        &self,
+        ctx: &dyn LifecycleContext,
+        settings: flui_interaction::GestureSettingsProvider,
+    ) -> Rc<DragGestureRecognizer> {
         let arena = GestureArenaScope::of(ctx);
 
         let start_runtime = Rc::clone(&self.runtime);
@@ -626,6 +649,7 @@ impl BackGestureDetectorState {
         let end_runtime = Rc::clone(&self.runtime);
         let cancel_runtime = Rc::clone(&self.runtime);
         horizontal_drag(arena)
+            .settings(settings)
             .on_start(move |details| start_runtime.on_drag_start(details))
             .on_update(move |details| update_runtime.on_drag_update(details))
             .on_end(move |details| end_runtime.on_drag_end(details))

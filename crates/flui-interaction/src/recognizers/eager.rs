@@ -5,7 +5,7 @@ use crate::{
     events::{PointerEvent, PointerEventExt},
     ids::PointerId,
     routing::PointerDispatch,
-    settings::GestureSettings,
+    settings::GestureSettingsProvider,
 };
 use std::rc::{Rc, Weak};
 
@@ -13,7 +13,7 @@ use std::rc::{Rc, Weak};
 #[derive(Debug)]
 pub struct EagerGestureRecognizer {
     contact: PrimaryContact,
-    settings: GestureSettings,
+    settings: GestureSettingsProvider,
 }
 
 /// Construction policy, frozen before the recognizer gains shared ownership.
@@ -21,13 +21,13 @@ pub struct EagerGestureRecognizer {
 #[derive(Debug)]
 pub struct EagerGestureRecognizerBuilder {
     arena: GestureArena,
-    settings: GestureSettings,
+    settings: GestureSettingsProvider,
 }
 
 impl EagerGestureRecognizerBuilder {
     /// Set the settings snapshot captured by each admitted contact.
-    pub fn settings(mut self, settings: GestureSettings) -> Self {
-        self.settings = settings;
+    pub fn settings(mut self, settings: impl Into<GestureSettingsProvider>) -> Self {
+        self.settings = settings.into();
         self
     }
     /// Build an owner-local recognizer.
@@ -47,7 +47,7 @@ impl EagerGestureRecognizer {
     pub fn builder(arena: GestureArena) -> EagerGestureRecognizerBuilder {
         EagerGestureRecognizerBuilder {
             arena,
-            settings: GestureSettings::default(),
+            settings: GestureSettingsProvider::default(),
         }
     }
 }
@@ -62,7 +62,8 @@ impl GestureRecognizer for EagerGestureRecognizer {
             pointer = ?pointer,
             event = %crate::observability::GestureEvent::RecognizerAdded,
         );
-        if self.contact.begin(down, &self.settings).is_ok() {
+        let settings = self.settings.snapshot();
+        if self.contact.begin(down, &settings).is_ok() {
             self.contact.accept();
         }
     }

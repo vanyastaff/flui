@@ -835,7 +835,7 @@ fn closed_edge_strip(
             .on_horizontal_drag_update(move |_cx, details| move_core.move_by(details.primary_delta))
             .on_horizontal_drag_end(move |_cx, details| {
                 settle_core.settle(match details.reason {
-                    GestureEndReason::Completed => details.primary_velocity,
+                    GestureEndReason::Completed => details.fling_velocity().pixels_per_second.dx,
                     GestureEndReason::Cancelled => 0.0,
                 });
             })
@@ -886,7 +886,7 @@ fn open_panel(core: &Rc<DrawerControllerCore>, view: &DrawerController) -> impl 
         .on_horizontal_drag_update(move |_cx, details| update_core.move_by(details.primary_delta))
         .on_horizontal_drag_end(move |_cx, details| {
             end_core.settle(match details.reason {
-                GestureEndReason::Completed => details.primary_velocity,
+                GestureEndReason::Completed => details.fling_velocity().pixels_per_second.dx,
                 GestureEndReason::Cancelled => 0.0,
             });
         })

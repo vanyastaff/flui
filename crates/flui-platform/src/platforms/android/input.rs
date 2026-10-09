@@ -15,7 +15,7 @@ use flui_platform_api::{
         ButtonChange, CancelReason, ContactSize, DeviceId, PenOrientation, PenTool, PointerButton,
         PointerButtons, PointerCancel, PointerDeviceChange, PointerEvent, PointerId, PointerInfo,
         PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole,
-        PointerSample, PointerSignal, Pressure, ScrollDelta, ScrollEvent, ScrollUnit,
+        PointerSample, PointerSignal, Pressure, ScrollEvent,
     },
 };
 use keyboard_types::{Key, KeyState, Modifiers, NamedKey};
@@ -204,6 +204,7 @@ impl AndroidInputState {
         &mut self,
         event: &android_activity::input::MotionEvent<'_>,
         scale_factor: f64,
+        scroll_policy: crate::shared::android_scroll::AxisPolicy,
         discovery: DeviceReading,
     ) -> Vec<PlatformInput> {
         let time = u64::try_from(event.event_time())
@@ -411,13 +412,14 @@ impl AndroidInputState {
                 MotionAction::Scroll => {
                     let Some(sample) = sample else { continue };
                     // Android axes are positive left/up, opposite the owned wheel convention.
-                    // Their unit is wheel detents; no platform precision or phase is reported.
-                    let delta = ScrollDelta::try_new(
-                        ScrollUnit::Lines,
-                        -f64::from(pointer.axis_value(Axis::Hscroll)),
-                        -f64::from(pointer.axis_value(Axis::Vscroll)),
-                    )
-                    .unwrap_or_else(|_| ScrollDelta::zero(ScrollUnit::Lines));
+                    // The accepted activity-context policy already projects
+                    // native factors into logical pixels exactly once.
+                    let Some(delta) = scroll_policy.delta(
+                        pointer.axis_value(Axis::Hscroll),
+                        pointer.axis_value(Axis::Vscroll),
+                    ) else {
+                        continue;
+                    };
                     Some(PointerEvent::Scroll(
                         ScrollEvent::new(info, sample.time, sample.position, delta)
                             .with_modifiers(modifiers),

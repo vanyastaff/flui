@@ -173,6 +173,22 @@ pub trait PlatformWindow: Send + Sync {
     /// Get the scale factor (DPI scaling)
     fn scale_factor(&self) -> f64;
 
+    /// Query gesture geometry for this presentation's native coordinate context.
+    ///
+    /// Call on the platform owner thread after accepting system-preference or DPI
+    /// changes. This query shares the host's observation lifetime; it installs no
+    /// additional native subscription. `Ok(None)` means unsupported geometry.
+    ///
+    /// # Errors
+    /// A closed owner, wrong thread, native failure or invalid projection fails
+    /// the query. Preserve the last accepted projection and arrange a bounded
+    /// retry instead of replacing it with unknown values.
+    fn gesture_geometry(
+        &self,
+    ) -> Result<Option<crate::GestureGeometry>, crate::PreferenceQueryError> {
+        Ok(None)
+    }
+
     /// Request that this window produce a frame.
     ///
     /// **Owner thread only**, per this trait's [Thread

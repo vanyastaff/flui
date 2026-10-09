@@ -16,9 +16,15 @@ pub(crate) mod accessibility_bridge;
 pub(crate) mod clipboard_lock;
 // `pub` for the same off-target-consumed reason as `hwnd_affinity` below
 // (consumers: the winit, Win32, and AppKit event-conversion backends).
+#[cfg(any(target_os = "android", test))]
+pub(crate) mod android_scroll;
+#[cfg(any(target_os = "android", test))]
+pub(crate) mod android_text_weight;
 pub mod events;
 mod handlers;
 pub(crate) mod owner_signal;
+#[cfg(any(target_os = "android", target_os = "macos", test))]
+pub(crate) mod preference_read;
 // `pub`, not `pub(crate)`, for the same reason `keys`/`keys_macos` are:
 // these cfg-free rule modules are consumed only by one target's backend
 // (here Win32), so on every other target a crate-private visibility flags

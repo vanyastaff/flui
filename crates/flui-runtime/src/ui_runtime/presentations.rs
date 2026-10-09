@@ -185,9 +185,15 @@ impl UiRuntime {
     /// `AppRuntime`/`WindowRegistry` at all.
     pub fn install_presentation(&mut self, presentation: PresentationState) -> PresentationId {
         let presentation_id = presentation.id();
-        if let Some(snapshot) = self.preferences.borrow().as_ref() {
-            super::preferences::publish(&presentation, snapshot);
-        }
+        let snapshot = self.preferences.borrow().clone();
+        let unknown = flui_platform_api::SystemPreferences::default();
+        super::preferences::publish(
+            &presentation,
+            snapshot
+                .as_ref()
+                .map_or(&unknown, |snapshot| &snapshot.values),
+            flui_foundation::MonotonicClock::now(&self.clock),
+        );
         if presentation.window_focused.get() && presentation.window_visible.get() {
             for previous in self.presentations.iter() {
                 previous.window_focused.set(false);

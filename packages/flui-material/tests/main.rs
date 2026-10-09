@@ -238,10 +238,12 @@ fn overlay_contracts() {
     common::run_cases(&[
         ("unmounting_a_hovered_snack_bar_releases_its_timer_pause", snack_bar::unmounting_a_hovered_snack_bar_releases_its_timer_pause),
         ("snack_bar_display_timer_pauses_while_hovered", snack_bar::snack_bar_display_timer_pauses_while_hovered),
+        ("drawer::drawer_settling_uses_the_captured_fling_profile", drawer::drawer_settling_uses_the_captured_fling_profile),
+        ("drawer::open_drawer_settling_uses_the_captured_fling_profile", drawer::open_drawer_settling_uses_the_captured_fling_profile),
         (
-            "snack_bar::a completion panic still advances the accepted snack bar queue",
-            snack_bar::a_completion_panic_still_advances_the_accepted_snack_bar_queue,
-        ),
+        "snack_bar::a completion panic still advances the accepted snack bar queue",
+        snack_bar::a_completion_panic_still_advances_the_accepted_snack_bar_queue,
+    ),
         ("drawer::narrow_start_drawer_cancel_uses_its_actual_panel_extent", drawer::narrow_start_drawer_cancel_uses_its_actual_panel_extent),
         ("drawer::narrow_end_drawer_cancel_uses_its_actual_panel_extent", drawer::narrow_end_drawer_cancel_uses_its_actual_panel_extent),
         ("drawer::smaller_configured_drawer_keeps_its_declared_panel_extent", drawer::smaller_configured_drawer_keeps_its_declared_panel_extent),

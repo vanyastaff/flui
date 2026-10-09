@@ -3,6 +3,10 @@
 - **Статус:** в работе
 - **Дата:** 2026-10-06
 - **База:** `main` @ `9a4daa3ed`
+- **Актуализация I11, 2026-10-08:** исходное решение ниже о `GestureSettingsScope`
+  сохранено как история и заменено [ADR-0172](../../../adr/ADR-0172-host-owned-system-preferences.md).
+  Текущий путь — существующий `GestureArenaScope`, read-only provider и неизменяемый
+  snapshot при admission; состояние приёмки записано в [tasks.md](tasks.md).
 - **Смежные спеки:** [../focus-keyboard/](../focus-keyboard/), [../text-ime/](../text-ime/),
   [../release/](../release/) — задачи, уже назначенные там, здесь не дублируются, а
   ссылаются.

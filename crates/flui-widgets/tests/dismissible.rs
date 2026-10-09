@@ -11,6 +11,72 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
+pub(crate) fn dismissal_release_uses_its_captured_fling_profile() {
+    dismissal_release_uses_profile(DismissDirection::Horizontal);
+}
+
+pub(crate) fn vertical_dismissal_release_uses_its_captured_fling_profile() {
+    dismissal_release_uses_profile(DismissDirection::Vertical);
+}
+
+fn dismissal_release_uses_profile(direction: DismissDirection) {
+    for (min, max) in [(50.0, 100.0), (5000.0, 5000.0)] {
+        let profile = |min, max| {
+            flui_interaction::GestureSettings::default()
+                .try_with_fling_velocity(min, max)
+                .expect("valid fling range")
+        };
+        let source = flui_interaction::settings::GestureSettingsSource::new(profile(min, max));
+        let dismissed = Rc::new(Cell::new(0));
+        let recorder = Rc::clone(&dismissed);
+        let card = Dismissible::new(ColoredBox::new(Color::rgb(10, 20, 30)))
+            .direction(direction)
+            .resize_duration(None)
+            .on_dismissed(move |_, _| recorder.set(recorder.get() + 1));
+        let vsync = Vsync::new();
+        let mut laid = lay_out_animated(
+            VsyncScope::new(
+                vsync.clone(),
+                crate::scroll::FlingProfile {
+                    provider: source.provider(),
+                    child: flui_view::ViewExt::boxed(card),
+                },
+            ),
+            tight(300.0, 300.0),
+            vsync,
+        );
+        let horizontal = direction == DismissDirection::Horizontal;
+        for attempt in 0..2 {
+            laid.dispatch_pointer_down(20.0, 20.0);
+            for value in [35.0, 50.0, 65.0, 80.0, 95.0] {
+                let (x, y) = if horizontal {
+                    (value, 20.0)
+                } else {
+                    (20.0, value)
+                };
+                laid.dispatch_pointer_move_after(x, y, Duration::from_millis(10));
+            }
+            if attempt == 0 {
+                source.replace(profile(50.0, 2000.0));
+            }
+            let (x, y) = if horizontal {
+                (95.0, 20.0)
+            } else {
+                (20.0, 95.0)
+            };
+            laid.dispatch_pointer_up(x, y);
+            for _ in 0..60 {
+                laid.pump_for(Duration::from_millis(16));
+            }
+            assert_eq!(
+                dismissed.get(),
+                attempt,
+                "{direction:?}: admitted range {min}..{max} suppresses the old release; a fresh profile recovers"
+            );
+        }
+    }
+}
+
 fn cancelled_card(direction: DismissDirection, end: f64) {
     let dismissed = Rc::new(Cell::new(0));
     let taps = Rc::new(Cell::new(0));

@@ -659,13 +659,7 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
 
                     // Convert pointer velocity to scroll velocity (negate:
                     // finger DOWN = positive dy → offset increases with negative delta).
-                    let fling_vel_px_per_sec = {
-                        let raw = -details.velocity.pixels_per_second.dy;
-                        let bounded = raw.clamp(-8_000.0, 8_000.0);
-                        // `clamp` propagates NaN (IEEE 754); treat NaN as 0
-                        // so spring-back still works without measurable velocity.
-                        if bounded.is_nan() { 0.0 } else { bounded }
-                    };
+                    let fling_vel_px_per_sec = -details.fling_velocity().pixels_per_second.dy;
                     let metrics = ScrollMetrics::from(&sc_end.position()).with_device_pixel_ratio(
                         presentation_device_pixel_ratio(pipeline_end.as_ref()),
                     );

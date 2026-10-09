@@ -442,6 +442,8 @@ fn frame_pacing_and_pump_matrix() {
             ("frame_clock_segment_gate::closed_presentation_animation_cannot_wake_a_surviving_window", frame_clock_segment_gate::closed_presentation_animation_cannot_wake_a_surviving_window as fn()),
             ("frame_clock_segment_gate::agent_playback_drives_independent_windows_and_one_paused_step_frame", frame_clock_segment_gate::agent_playback_drives_independent_windows_and_one_paused_step_frame as fn()),
             ("frame_clock_segment_gate::gated_presentations_hold_samples_then_catch_up_when_visible", frame_clock_segment_gate::gated_presentations_hold_samples_then_catch_up_when_visible as fn()),
+            ("checked_geometry_refusal_acknowledges_the_query_and_keeps_safe_admission", super::preferences::checked_geometry_refusal_acknowledges_the_query_and_keeps_safe_admission as fn()),
+            ("newer_geometry_publication_survives_query_and_diagnostic_reentry", super::preferences::tests::newer_geometry_publication_survives_query_and_diagnostic_reentry as fn()),
             ("frame_clock_segment_gate::segment_runs_iff_woken_or_has_pending_work_over_the_full_table", frame_clock_segment_gate::segment_runs_iff_woken_or_has_pending_work_over_the_full_table as fn()),
             ("frame_clock_segment_gate::n_ticks_under_backpressure_wake_the_platform_exactly_once_then_rearm", frame_clock_segment_gate::n_ticks_under_backpressure_wake_the_platform_exactly_once_then_rearm as fn()),
             ("frame_clock_segment_gate::occlude_then_dirty_then_unocclude_wakes_exactly_once_and_produces_exactly_once", frame_clock_segment_gate::occlude_then_dirty_then_unocclude_wakes_exactly_once_and_produces_exactly_once as fn()),

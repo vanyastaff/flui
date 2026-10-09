@@ -85,13 +85,15 @@ impl UiRuntime {
         clock: &mut dyn FrameClockSource,
         sink: &mut dyn FrameSink,
     ) -> FrameOutcome {
-        self.pump_entered(clock, sink)
+        let turn = self.begin_geometry_turn();
+        self.pump_entered(clock, sink, &turn)
     }
 
     fn pump_entered(
         &self,
         clock: &mut dyn FrameClockSource,
         sink: &mut dyn FrameSink,
+        turn: &super::preferences::GeometryTurn,
     ) -> FrameOutcome {
         let now = clock.frame_time();
         let deadline = clock.idle_deadline(now);
@@ -101,6 +103,7 @@ impl UiRuntime {
             if report != DrainReport::default() {
                 tracing::trace!(?report, "owner inbox drained at pump start");
             }
+            ui_runtime.service_gesture_geometry(turn);
             // Begin, draw and end frame run as the ui_runtime's text-store
             // transaction, with the commit anchor after it (ADR-0027 §3).
             let presented = ui_runtime.drive_frame(now, deadline, || ui_runtime.render_frame(sink));
@@ -119,8 +122,10 @@ impl UiRuntime {
     /// frame find the latch still set, fire no wake, and starve until
     /// unrelated input arrives (see `UpdateScheduler::finish_async_pump`).
     pub fn pump_background(&mut self) {
+        let turn = self.begin_geometry_turn();
         self.enter(|ui_runtime| {
             ui_runtime.scheduler.finish_async_pump();
+            ui_runtime.service_gesture_geometry(&turn);
             ui_runtime.owner_frame.poll_ready();
         });
     }
@@ -134,10 +139,12 @@ impl UiRuntime {
     /// wake takes. Draining on every wake is what keeps the bounded inbox
     /// from filling; the coalesced redraw request is consumed here.
     pub fn drain_owner_inbox(&self) -> bool {
+        let turn = self.begin_geometry_turn();
         let report = self.drain_commands();
         if report != DrainReport::default() {
             tracing::trace!(?report, "owner inbox drained");
         }
+        self.service_gesture_geometry(&turn);
         self.take_redraw_request()
     }
 }

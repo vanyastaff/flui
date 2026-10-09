@@ -11,7 +11,7 @@ use crate::{
     events::{PointerEvent, PointerEventExt, PointerKind},
     ids::PointerId,
     routing::{PointerDispatch, RoutePanic},
-    settings::GestureSettings,
+    settings::GestureSettingsProvider,
 };
 use flui_foundation::geometry::Offset;
 use smallvec::SmallVec;
@@ -124,7 +124,7 @@ impl Drop for TapCallbacks {
 #[must_use]
 pub struct TapGestureRecognizerBuilder {
     arena: GestureArena,
-    settings: GestureSettings,
+    settings: GestureSettingsProvider,
     callbacks: TapCallbacks,
 }
 impl std::fmt::Debug for TapGestureRecognizerBuilder {
@@ -135,9 +135,10 @@ impl std::fmt::Debug for TapGestureRecognizerBuilder {
     }
 }
 impl TapGestureRecognizerBuilder {
-    /// Freeze gesture settings for all contacts admitted by this recognizer.
-    pub fn settings(mut self, settings: GestureSettings) -> Self {
-        self.settings = settings;
+    /// Choose a fixed profile or a read-only provider for new contacts.
+    /// Active contacts retain their admitted settings through completion.
+    pub fn settings(mut self, settings: impl Into<GestureSettingsProvider>) -> Self {
+        self.settings = settings.into();
         self
     }
     /// Register a callback before building the recognizer.
@@ -223,7 +224,7 @@ pub struct TapGestureRecognizer {
     arena: GestureArena,
     this: Weak<Self>,
     sequences: RefCell<TapSequences>,
-    settings: GestureSettings,
+    settings: GestureSettingsProvider,
     callbacks: TapCallbacks,
 }
 impl std::fmt::Debug for TapGestureRecognizer {
@@ -295,7 +296,7 @@ impl TapGestureRecognizer {
     pub fn builder(arena: GestureArena) -> TapGestureRecognizerBuilder {
         TapGestureRecognizerBuilder {
             arena,
-            settings: GestureSettings::default(),
+            settings: GestureSettingsProvider::default(),
             callbacks: TapCallbacks::default(),
         }
     }
@@ -405,7 +406,8 @@ impl GestureRecognizer for TapGestureRecognizer {
                 sequence: id,
             }
         });
-        if member.contact.begin(dispatch, &self.settings).is_err() {
+        let settings = self.settings.snapshot();
+        if member.contact.begin(dispatch, &settings).is_err() {
             return;
         }
         *member.entry.borrow_mut() = member.contact.entry();
@@ -457,7 +459,7 @@ impl GestureRecognizer for TapGestureRecognizer {
             PointerEvent::Move(_) => {
                 if measured_positions(dispatch.local).any(|position| {
                     let delta = position - snapshot.local;
-                    delta.dx.hypot(delta.dy) > snapshot.settings.hit_slop(snapshot.kind)
+                    snapshot.settings.exceeds_hit_slop(snapshot.kind, delta)
                 }) {
                     self.cancel_sequence(member.sequence, details);
                 } else {

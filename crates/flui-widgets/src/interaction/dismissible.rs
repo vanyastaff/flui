@@ -863,6 +863,7 @@ impl ViewState<Dismissible> for DismissibleState {
                         );
                     })
                     .on_horizontal_drag_end(move |_cx, details: DragEndDetails| {
+                        let velocity = details.fling_velocity().pixels_per_second;
                         handle_drag_end(
                             &drag_for_end,
                             &controller_for_end,
@@ -871,8 +872,8 @@ impl ViewState<Dismissible> for DismissibleState {
                             &rebuild_for_end,
                             constraints,
                             details.reason,
-                            details.velocity.pixels_per_second.dx,
-                            details.velocity.pixels_per_second.dy,
+                            velocity.dx,
+                            velocity.dy,
                         );
                     });
             } else {
@@ -891,6 +892,7 @@ impl ViewState<Dismissible> for DismissibleState {
                         );
                     })
                     .on_pan_end(move |_cx, details: DragEndDetails| {
+                        let velocity = details.fling_velocity().pixels_per_second;
                         handle_drag_end(
                             &drag_for_end,
                             &controller_for_end,
@@ -899,8 +901,8 @@ impl ViewState<Dismissible> for DismissibleState {
                             &rebuild_for_end,
                             constraints,
                             details.reason,
-                            details.velocity.pixels_per_second.dy,
-                            details.velocity.pixels_per_second.dx,
+                            velocity.dy,
+                            velocity.dx,
                         );
                     });
             }
