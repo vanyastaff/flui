@@ -361,6 +361,7 @@ impl RenderBox for RenderSemanticsAnnotations {
             let max = position.max_scroll_extent();
             let pixels = position.pixels();
             config.set_scroll_position(pixels);
+            config.set_scroll_axis(*axis);
             config.set_scroll_extent_min(min);
             config.set_scroll_extent_max(max);
             if config.has_action(SemanticsAction::SetNumericValue)
