@@ -240,6 +240,7 @@ fn overlay_contracts() {
         ("snack_bar_display_timer_pauses_while_hovered", snack_bar::snack_bar_display_timer_pauses_while_hovered),
         ("drawer::drawer_settling_uses_the_captured_fling_profile", drawer::drawer_settling_uses_the_captured_fling_profile),
         ("drawer::open_drawer_settling_uses_the_captured_fling_profile", drawer::open_drawer_settling_uses_the_captured_fling_profile),
+        ("drawer::a_drawer_release_keeps_finger_speed", drawer::a_drawer_release_keeps_finger_speed),
         (
         "snack_bar::a completion panic still advances the accepted snack bar queue",
         snack_bar::a_completion_panic_still_advances_the_accepted_snack_bar_queue,

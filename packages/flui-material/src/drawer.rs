@@ -611,9 +611,9 @@ impl DrawerControllerCore {
         }
         let width = self.panel_width.get();
         if width.is_finite() && width > 0.0 && primary_velocity.abs() >= MIN_FLING_VELOCITY {
-            let visual_velocity = primary_velocity / width * self.direction_factor();
-            let _ = self.controller.fling(visual_velocity);
-            self.notify_open_changed(visual_velocity > 0.0);
+            let directed_velocity = primary_velocity * self.direction_factor();
+            let _ = self.controller.fling_across(directed_velocity, width);
+            self.notify_open_changed(directed_velocity > 0.0);
         } else if self.controller.value() < 0.5 {
             self.close();
         } else {
@@ -780,17 +780,7 @@ impl ViewState<DrawerController> for DrawerControllerState {
         LayoutBuilder::new(move |_ctx, constraints| {
             core.panel_width
                 .set(view.panel_width.min(constraints.max_width));
-            if core.is_dismissed() {
-                if view.enable_open_drag_gesture {
-                    closed_edge_strip(&core, view.alignment, drag_area_width)
-                        .into_view()
-                        .boxed()
-                } else {
-                    SizedBox::shrink().into_view().boxed()
-                }
-            } else {
-                open_panel(&core, &view).into_view().boxed()
-            }
+            drawer_surface(&core, &view, drag_area_width)
         })
     }
 
@@ -811,16 +801,28 @@ impl View for DrawerController {
     }
 }
 
-/// The closed-state edge-drag strip — `translucent` hit-testing (the body
-/// stays tappable both inside and outside its bounds), only mounted when
-/// [`DrawerController::enable_open_drag_gesture`] is set.
-fn closed_edge_strip(
+/// One contact owner survives the edge strip becoming the open panel.
+/// Only its child and hit extent change; the captured route stays alive.
+fn drawer_surface(
     core: &Rc<DrawerControllerCore>,
-    alignment: DrawerAlignment,
+    view: &DrawerController,
     drag_area_width: f64,
-) -> impl IntoView {
+) -> impl IntoView + use<> {
+    let closed = core.is_dismissed();
+    let content = if closed {
+        let width = if view.enable_open_drag_gesture {
+            drag_area_width
+        } else {
+            0.0
+        };
+        SizedBox::new(width, f64::INFINITY).into_view().boxed()
+    } else {
+        open_panel(core, view).into_view().boxed()
+    };
+    let down_core = Rc::clone(core);
     let move_core = Rc::clone(core);
     let settle_core = Rc::clone(core);
+    let cancel_core = Rc::clone(core);
     // `Align` measures its child against LOOSE constraints (0..available),
     // even though the scaffold's own drawer slot is tight — a
     // `SizedBox::width` (height passed through) would collapse to zero
@@ -831,8 +833,11 @@ fn closed_edge_strip(
     // unbounded) — a `SizedBox(height: f64::INFINITY)`; the
     // unbounded-height guard is skipped as a named
     // simplification (see the type docs).
-    Align::new(outer_alignment(alignment)).child(
+    Align::new(outer_alignment(view.alignment)).child(
         GestureDetector::new()
+            .on_horizontal_drag_down(move |_cx, _details| {
+                let _ = down_core.controller.stop();
+            })
             .on_horizontal_drag_update(move |_cx, details| move_core.move_by(details.primary_delta))
             .on_horizontal_drag_end(move |_cx, details| {
                 settle_core.settle(match details.reason {
@@ -840,12 +845,17 @@ fn closed_edge_strip(
                     GestureEndReason::Cancelled => 0.0,
                 });
             })
-            .behavior(HitTestBehavior::Translucent)
-            .child(SizedBox::new(drag_area_width, f64::INFINITY)),
+            .on_horizontal_drag_cancel(move |_cx| cancel_core.handle_drag_cancel())
+            .behavior(if closed {
+                HitTestBehavior::Translucent
+            } else {
+                HitTestBehavior::DeferToChild
+            })
+            .child(content),
     )
 }
 
-/// The open-state scrim + panel, wrapped in the drag-to-close detector.
+/// The open-state scrim and panel below the retained contact owner.
 fn open_panel(core: &Rc<DrawerControllerCore>, view: &DrawerController) -> impl IntoView {
     let value = core.controller.value();
 
@@ -869,30 +879,10 @@ fn open_panel(core: &Rc<DrawerControllerCore>, view: &DrawerController) -> impl 
             .child(view.child.clone()),
     );
 
-    let scoped = DrawerAlignmentScope {
+    DrawerAlignmentScope {
         alignment: view.alignment,
         child: Stack::new(vec![scrim.boxed(), panel.boxed()]).boxed(),
-    };
-
-    let down_core = Rc::clone(core);
-    let update_core = Rc::clone(core);
-    let end_core = Rc::clone(core);
-    let cancel_core = Rc::clone(core);
-    GestureDetector::new()
-        .on_horizontal_drag_down(
-            move |_cx, _details: flui_sdk::interaction::DragDownDetails| {
-                let _ = down_core.controller.stop();
-            },
-        )
-        .on_horizontal_drag_update(move |_cx, details| update_core.move_by(details.primary_delta))
-        .on_horizontal_drag_end(move |_cx, details| {
-            end_core.settle(match details.reason {
-                GestureEndReason::Completed => details.fling_velocity().pixels_per_second.dx,
-                GestureEndReason::Cancelled => 0.0,
-            });
-        })
-        .on_horizontal_drag_cancel(move |_cx| cancel_core.handle_drag_cancel())
-        .child(scoped)
+    }
 }
 
 fn outer_alignment(alignment: DrawerAlignment) -> Alignment {

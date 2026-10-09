@@ -296,6 +296,13 @@ updates before invoking the action.
 
 ### Drawer release uses admitted gesture policy
 
+One gesture owner survives the edge strip opening into the panel. It changes
+only its child and hit extent, preserving the captured contact through rendered
+frames. `a_drawer_release_keeps_finger_speed` pumps between moves and measures
+painted position and release speed on both sides, including a viewport narrower
+than the authored panel. The common `fling_across` admission converts velocity
+using that extent (ADR-0182).
+
 Both the closed edge strip and open panel settle from the admitted signed
 horizontal component of `DragEndDetails::fling_velocity()` (ADR-0172), before
 normalizing by the actual panel width. The drawer's authored fling threshold

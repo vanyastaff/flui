@@ -1463,6 +1463,35 @@ impl AnimationController {
         self.fling_with(velocity, None)
     }
 
+    /// Drive toward a bound with a gesture velocity in pixels per second.
+    /// `extent` is the positive pixel length corresponding to the controller's range.
+    ///
+    /// # Errors
+    /// Returns [`AnimationError::InvalidExtent`] for non-finite or non-positive
+    /// extents. Non-finite input or unrepresentable converted velocity returns
+    /// [`AnimationError::NonFiniteTarget`]. Other refusals match [`Self::fling`].
+    pub fn fling_across(
+        &self,
+        velocity: f64,
+        extent: f64,
+    ) -> Result<AnimationRunFuture, AnimationError> {
+        let inner = self.inner.borrow_mut();
+        Self::check_run_admission(&inner)?;
+        if !extent.is_finite() || extent <= 0.0 {
+            return Err(AnimationError::InvalidExtent);
+        }
+        let span = inner.upper_bound - inner.lower_bound;
+        let converted = crate::retarget::rate(velocity, span, extent);
+        if !velocity.is_finite() || !span.is_finite() || !converted.is_finite() {
+            let error = AnimationError::NonFiniteTarget(format!(
+                "gesture velocity {velocity} across extent {extent} and range {span} must yield a finite velocity"
+            ));
+            return Err(Self::warn_non_finite_target(inner, error));
+        }
+        drop(inner);
+        self.fling(converted)
+    }
+
     /// Drive the animation with a custom spring and initial velocity.
     ///
     /// # Errors

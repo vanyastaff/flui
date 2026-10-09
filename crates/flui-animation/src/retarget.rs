@@ -388,20 +388,20 @@ impl CurveSegment {
 
 /// `value` if finite, else `fallback`: a sample of finite admitted state
 /// whose exact value is not representable never publishes inf or NaN.
-/// `a · b / d` without an overflow the result does not need: tries the
+/// `a · b / d` without intermediate overflow or avoidable underflow: tries the
 /// grouping that keeps the intermediate in range for a small `b`, then the one
 /// for a large `b`, then dividing `b` first. Non-finite only when the rate
 /// itself is not representable.
 pub(crate) fn rate(a: f64, b: f64, d: f64) -> f64 {
-    let small_b = a * b / d;
-    if small_b.is_finite() {
-        return small_b;
+    let product_first = a * b / d;
+    for candidate in [product_first, a / d * b, a * (b / d)] {
+        if candidate.is_finite() && candidate != 0.0 {
+            return candidate;
+        }
     }
-    let large_b = a / d * b;
-    if large_b.is_finite() {
-        return large_b;
-    }
-    a * (b / d)
+    // A zero may be intermediate underflow; try each association before
+    // accepting it. Preserve an unrepresentable result for admission to refuse.
+    product_first
 }
 
 /// Apply a clock scale without first overflowing or underflowing the slope

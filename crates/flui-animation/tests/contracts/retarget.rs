@@ -834,9 +834,90 @@ fn retargeting_a_curve_to_its_target_keeps_its_schedule() {
     assert_eq!(value.value(), 10.0);
 }
 
+fn fling_across_hands_the_gesture_velocity_to_the_spring() {
+    use flui_animation::{Animation, MotionClock, ValueRange};
+    for (lower, upper, extent, velocity, expected) in [
+        (0.0, 1.0, 150.0, 1500.0, 10.0),
+        (0.0, 1.0, 1200.0, -1500.0, -1.25),
+        (-2.0, 3.0, 250.0, 1500.0, 30.0),
+        (0.0, 1e200, 1e200, 1e200, 1e200),
+        (0.0, 1e-200, 1e-300, 1e-200, 1e-100),
+    ] {
+        let registry = Vsync::new();
+        let mut clock = MotionClock::new();
+        let owner = AnimationController::builder(Duration::from_secs(1))
+            .bounds(ValueRange::new(lower, upper).unwrap())
+            .initial_value(lower + (upper - lower) / 2.0)
+            .build_on(Some(&registry));
+        let controller = owner.controller();
+        controller.fling_across(velocity, extent).unwrap();
+        registry.tick_all(&clock.frame(Duration::ZERO));
+        let actual = controller.velocity();
+        assert!(
+            (actual / expected - 1.0).abs() < 1e-12,
+            "extent {extent}, range {lower}..{upper}: {actual} instead of {expected}"
+        );
+        if extent >= 150.0 && upper <= 3.0 {
+            let before = controller.value();
+            registry.tick_all(&clock.frame(Duration::from_micros(1)));
+            let screen_speed = (controller.value() - before) / 1e-6 * extent / (upper - lower);
+            assert!((screen_speed - velocity).abs() < 1.0);
+        }
+    }
+    let registry = Vsync::new();
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
+    let controller = owner.controller();
+    let run = controller.forward().unwrap();
+    let mut clock = MotionClock::new();
+    registry.tick_all(&clock.frame(Duration::ZERO));
+    registry.tick_all(&clock.frame(Duration::from_millis(250)));
+    let seam = (
+        controller.value(),
+        controller.velocity(),
+        controller.status(),
+    );
+    for extent in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        assert_eq!(
+            controller.fling_across(1500.0, extent).unwrap_err(),
+            flui_animation::AnimationError::InvalidExtent
+        );
+        assert_eq!(
+            (
+                controller.value(),
+                controller.velocity(),
+                controller.status()
+            ),
+            seam
+        );
+        assert!(run.is_pending());
+    }
+    for (velocity, extent) in [(f64::NAN, 1.0), (f64::INFINITY, 1.0), (f64::MAX, 0.5)] {
+        assert!(matches!(
+            controller.fling_across(velocity, extent),
+            Err(flui_animation::AnimationError::NonFiniteTarget(_))
+        ));
+        assert_eq!(
+            (
+                controller.value(),
+                controller.velocity(),
+                controller.status()
+            ),
+            seam
+        );
+        assert!(run.is_pending());
+    }
+    registry.tick_all(&clock.frame(Duration::from_secs(1)));
+    assert!(run.is_complete());
+    assert_eq!(controller.value(), 1.0);
+}
+
 #[test]
 fn retarget_seams() {
     crate::run_table(&[
+        (
+            "gesture velocity uses the whole controller range",
+            fling_across_hands_the_gesture_velocity_to_the_spring,
+        ),
         (
             "controller velocity boundaries",
             controller_velocity_boundaries,

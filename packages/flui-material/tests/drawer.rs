@@ -73,6 +73,77 @@ pub fn open_drawer_settling_uses_the_captured_fling_profile() {
     drawer_settling_uses_profile(true);
 }
 
+pub fn a_drawer_release_keeps_finger_speed() {
+    use flui_sdk::painting::{Color, DrawOp};
+    use flui_sdk::widgets::ColoredBox;
+    let color = Color::rgb(17, 83, 149);
+    let painted_x = |laid: &common::LaidOut| {
+        laid.draw_ops()
+            .into_iter()
+            .find_map(|command| {
+                if let DrawOp::Rect { rect, paint } = command.op
+                    && paint.color == color
+                {
+                    Some(command.transform.transform_point(rect.left(), rect.top()).0)
+                } else {
+                    None
+                }
+            })
+            .expect("the authored drawer content paints")
+    };
+    for (configured, viewport, end) in [
+        (150.0, 400.0, false),
+        (1200.0, 1320.0, false),
+        (304.0, 100.0, false),
+        (150.0, 400.0, true),
+        (1200.0, 1320.0, true),
+    ] {
+        let vsync = Vsync::new();
+        let drawer = Drawer::new()
+            .width(configured)
+            .child(SizedBox::height(400.0).child(ColoredBox::new(color)));
+        let scaffold = if end {
+            Scaffold::new().end_drawer(drawer)
+        } else {
+            Scaffold::new().drawer(drawer)
+        };
+        let mut laid = lay_out_animated(
+            themed_animated(scaffold, &vsync),
+            tight(viewport, 400.0),
+            vsync,
+        );
+        let sign = if end { -1.0 } else { 1.0 };
+        let mut x = if end { viewport - 5.0 } else { 5.0 };
+        laid.dispatch_pointer_down(x, 200.0);
+        for _ in 0..5 {
+            x += sign * 15.0;
+            laid.dispatch_pointer_move_after(x, 200.0, Duration::from_millis(10));
+            laid.pump();
+        }
+        laid.pump();
+        let seam = painted_x(&laid);
+        laid.dispatch_pointer_up(x, 200.0);
+        laid.pump();
+        assert!((painted_x(&laid) - seam).abs() < 1e-9);
+        let step = Duration::from_micros(100);
+        let mut samples = Vec::new();
+        for _ in 0..3 {
+            laid.pump_for(step);
+            samples.push(painted_x(&laid));
+        }
+        let pair = samples
+            .windows(2)
+            .find(|pair| pair[1] != pair[0])
+            .expect("the drawer moves after release");
+        let speed = (pair[1] - pair[0]) / step.as_secs_f64();
+        assert!(
+            (speed - sign * 1500.0).abs() < 150.0,
+            "configured {configured}, viewport {viewport}, end {end}: painted speed {speed}"
+        );
+        laid.pump_widget(SizedBox::shrink());
+    }
+}
+
 fn drawer_settling_uses_profile(initially_open: bool) {
     for (min, max) in [(50.0, 100.0), (5000.0, 5000.0)] {
         let profile = |min, max| {

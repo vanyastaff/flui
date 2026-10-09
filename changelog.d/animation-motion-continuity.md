@@ -1,5 +1,8 @@
 ### Added
 
+- `AnimationController::fling_across` converts physical gesture velocity across
+  a validated extent and the authored controller range before admitting motion.
+
 - Scalar controller retargeting between curve and spring motion preserves the
   last published position and velocity and cancels the displaced run.
 - `AnimatedValue` owns one Vsync registration for all components, exposes a
@@ -32,6 +35,10 @@
 
 ### Fixed
 
+- Preserve the dragged position when Dismissible releases in the opposite direction.
+- Retain Drawer gesture ownership while opening changes its painted content;
+  gesture release preserves physical speed across panel widths.
+- Preserve representable motion rates when intermediate multiplication underflows.
 - Refuse invalid Container or Align motion before changing any property run;
   preserve prior matrix progress when replacement motion cannot be prepared.
 - Release rejected optional-owner registrations after preparation panic and

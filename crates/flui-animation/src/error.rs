@@ -47,6 +47,10 @@ pub enum AnimationError {
     #[error("grouped motion preparation was interrupted")]
     AdmissionAborted,
 
+    /// A gesture extent must be finite and strictly positive.
+    #[error("gesture extent must be finite and strictly positive")]
+    InvalidExtent,
+
     /// Invalid animation bounds, or an invalid `repeat`/`repeat_with` range,
     /// were provided.
     ///

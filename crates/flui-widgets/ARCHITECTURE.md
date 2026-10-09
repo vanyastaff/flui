@@ -1,5 +1,14 @@
 # flui-widgets architecture
 
+## Gesture release retains the painted position
+
+Dismissible preserves the dragged side while a reverse release moves back
+toward the origin. Physical velocity uses `AnimationController::fling_across`
+(ADR-0182). `a_dismissible_release_keeps_finger_speed_on_any_width` measures
+painted coordinates before and after release and the first frame velocity for
+both release directions on two tightly constrained widths. Loose child sizing
+still needs the actual laid-out extent rather than constraint maxima.
+
 ## Independent implicit property motion
 
 `AnimatedContainer` uses the same independent property ownership for alignment,

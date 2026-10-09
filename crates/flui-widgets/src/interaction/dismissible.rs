@@ -1041,7 +1041,7 @@ fn handle_drag_update(
     }
 }
 
-/// The release speed in `move_controller` units per second: the gesture's
+/// Ends a drag: fling, threshold, or spring back. Release speed uses the gesture's
 /// px/s over the same dismiss-axis extent `handle_drag_update` divides drag
 /// deltas by, so the controller keeps the rate the drag gave it and the card
 /// leaves as fast as it was moving. Under tight constraints (the common
@@ -1049,27 +1049,7 @@ fn handle_drag_update(
 /// speed whatever its size. Under loose ones it is the maximum, not the
 /// laid-out child, so drag and fling alike move the card slower than the
 /// finger by the same factor (module docs divergence #4: no laid-out size
-/// accessor). An extent that is not positive and finite (unbounded
-/// constraints, already caught in debug builds) yields one unit per second.
-fn fling_speed(
-    primary_velocity: f64,
-    constraints: BoxConstraints,
-    direction: DismissDirection,
-) -> f64 {
-    let extent = if direction_is_x_axis(direction) {
-        constraints.max_width
-    } else {
-        constraints.max_height
-    };
-    let speed = primary_velocity.abs() / extent;
-    if extent > 0.0 && speed.is_finite() {
-        speed
-    } else {
-        1.0
-    }
-}
-
-/// Ends a drag: fling, threshold, or spring back.
+/// accessor). Invalid extents are refused by the common fling admission.
 #[expect(clippy::too_many_arguments)] // the release handler receives its captured state and terminal details
 fn handle_drag_end(
     drag: &Rc<DragState>,
@@ -1110,7 +1090,11 @@ fn handle_drag_end(
     // Every branch below starts a REAL run (`.forward()`/`.reverse()`/`.fling()`)
     // — re-register now so `Vsync`'s tick anchor lines up with the run's true
     // start (see `unregister_move_controller_vsync`'s doc).
-    let fling_speed = fling_speed(primary_velocity, constraints, resolved.direction);
+    let extent = if direction_is_x_axis(resolved.direction) {
+        constraints.max_width
+    } else {
+        constraints.max_height
+    };
     match describe_fling_gesture(
         drag.drag_extent.get(),
         resolved.direction,
@@ -1122,13 +1106,13 @@ fn handle_drag_end(
             if threshold >= 1.0 {
                 let _ = move_controller.reverse();
             } else {
-                drag.drag_extent.set(primary_velocity.signum());
-                let _ = move_controller.fling(fling_speed);
+                let _ = move_controller.fling_across(primary_velocity.abs(), extent);
             }
         }
         FlingGestureKind::Reverse => {
-            drag.drag_extent.set(primary_velocity.signum());
-            let _ = move_controller.fling(-fling_speed);
+            // Keep the card on its dragged side while velocity points back
+            // toward the origin; changing the position sign would jump it.
+            let _ = move_controller.fling_across(-primary_velocity.abs(), extent);
         }
         FlingGestureKind::None => {
             if !move_controller.is_dismissed() {
