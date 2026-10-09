@@ -164,6 +164,325 @@ fn parked_repeat_resumes_from_zero_under_full() {
 }
 
 #[test]
+fn policy_flips_mid_run() {
+    use flui_animation::{AnimationBehavior, MotionPreference};
+    for nested in [false, true] {
+        let registry = flui_animation::Vsync::new();
+        let child = flui_animation::Vsync::new();
+        let _seat = nested.then(|| registry.attach_child(&child).expect("nested registry"));
+        let target = if nested { &child } else { &registry };
+        let normal = AnimationController::builder(ms(1000)).build_on(Some(target));
+        let preserve = AnimationController::builder(ms(1000))
+            .behavior(AnimationBehavior::Preserve)
+            .build_on(Some(target));
+        let finite = normal.controller().forward().expect("normal run");
+        let continuing = preserve.controller().forward().expect("preserved run");
+        let mut clock = MotionClock::new();
+        registry.tick_all(&clock.frame(Duration::ZERO));
+        registry.tick_all(&clock.frame(ms(200)));
+        clock.set_preference(MotionPreference::Reduce);
+        clock.set_preference(MotionPreference::Full);
+        assert_eq!(normal.controller().value(), 0.2);
+        registry.tick_all(&clock.frame(ms(400)));
+        assert_eq!(normal.controller().value(), 0.4);
+        assert!(!finite.is_complete(), "a superseded policy does not settle");
+        clock.set_preference(MotionPreference::Reduce);
+        assert_eq!(
+            normal.controller().value(),
+            0.4,
+            "settlement waits for a frame"
+        );
+        registry.tick_all(&clock.frame(ms(500)));
+        assert_eq!(normal.controller().value(), 1.0);
+        assert!(finite.is_complete());
+        assert_eq!(preserve.controller().value(), 0.5);
+        assert!(!continuing.is_complete());
+        let repeated = normal
+            .controller()
+            .repeat(false)
+            .expect("repeat under Reduce");
+        registry.tick_all(&clock.frame(ms(600)));
+        assert_eq!(normal.controller().value(), 0.0);
+        clock.set_preference(MotionPreference::Full);
+        registry.tick_all(&clock.frame(ms(800)));
+        assert_eq!(
+            normal.controller().value(),
+            0.0,
+            "resume has a fresh anchor"
+        );
+        registry.tick_all(&clock.frame(ms(900)));
+        assert!((normal.controller().value() - 0.1).abs() < 1e-9);
+        assert_eq!(preserve.controller().value(), 0.9);
+        assert!(!repeated.is_complete());
+    }
+}
+
+/// An external simulation with an observable time coordinate, including holes
+/// and sources whose own completion predicate never succeeds.
+#[derive(Debug)]
+struct GridSimulation {
+    non_finite_after: f64,
+    done_at: f64,
+}
+
+impl flui_animation::Simulation for GridSimulation {
+    fn x(&self, time: f64) -> f64 {
+        if time >= self.non_finite_after {
+            f64::NAN
+        } else {
+            time
+        }
+    }
+
+    fn dx(&self, _time: f64) -> f64 {
+        1.0
+    }
+
+    fn is_done(&self, time: f64) -> bool {
+        time >= self.done_at
+    }
+}
+
+fn settle_simulation(source: impl flui_animation::Simulation + 'static, expected: f64) {
+    use flui_animation::{AnimationStatus, MotionPreference};
+    use std::{cell::Cell, rc::Rc};
+    let registry = flui_animation::Vsync::new();
+    let owner = AnimationController::builder(ms(1000))
+        .unbounded()
+        .initial_value(7.0)
+        .build_on(Some(&registry));
+    let controller = owner.controller();
+    let run = controller.animate_with(source).expect("simulation run");
+    let delivered = Rc::new(Cell::new(0));
+    let count = Rc::clone(&delivered);
+    let _listener = controller.subscribe_status(Rc::new(move |status| {
+        assert_eq!(status, AnimationStatus::Completed);
+        count.set(count.get() + 1);
+    }));
+    let mut clock = MotionClock::new();
+    let initial = controller.value();
+    clock.set_preference(MotionPreference::Reduce);
+    assert_eq!(
+        controller.value(),
+        initial,
+        "policy does not sample user code"
+    );
+    registry.tick_all(&clock.frame(Duration::ZERO));
+    assert!((controller.value() - expected).abs() < 1e-12);
+    assert!(run.is_complete());
+    registry.tick_all(&clock.frame(ms(1000)));
+    assert_eq!(delivered.get(), 1);
+    assert!(!registry.has_running());
+}
+
+fn reduced_friction_reaches_its_analytic_rest() {
+    use flui_animation::simulation::{FrictionSimulation, Tolerance};
+    settle_simulation(
+        FrictionSimulation::new(0.135, 5.0, 300.0, Tolerance::DEFAULT).expect("friction"),
+        5.0 - 300.0 / 0.135_f64.ln(),
+    );
+}
+
+fn reduced_spring_reaches_its_exact_endpoint() {
+    use flui_animation::simulation::{SpringDescription, SpringSimulation, Tolerance};
+    settle_simulation(
+        SpringSimulation::try_new(
+            SpringDescription::new(1.0, 100.0, 20.0).expect("spring description"),
+            7.0,
+            13.0,
+            -4.0,
+            Tolerance::DEFAULT,
+        )
+        .expect("spring"),
+        13.0,
+    );
+}
+
+fn reduced_simulation_uses_the_first_finished_grid_sample() {
+    settle_simulation(
+        GridSimulation {
+            non_finite_after: f64::INFINITY,
+            done_at: 2.1,
+        },
+        4.0,
+    );
+}
+
+fn reduced_simulation_uses_the_last_finite_grid_sample() {
+    settle_simulation(
+        GridSimulation {
+            non_finite_after: f64::INFINITY,
+            done_at: f64::INFINITY,
+        },
+        64.0,
+    );
+    settle_simulation(
+        GridSimulation {
+            non_finite_after: 4.0,
+            done_at: f64::INFINITY,
+        },
+        2.0,
+    );
+}
+
+fn reduced_non_finite_simulation_keeps_the_published_value() {
+    settle_simulation(
+        GridSimulation {
+            non_finite_after: 0.125,
+            done_at: f64::INFINITY,
+        },
+        0.0,
+    );
+}
+
+#[test]
+fn simulation_settle_grid() {
+    run_table(&[
+        (
+            "friction analytic rest",
+            reduced_friction_reaches_its_analytic_rest,
+        ),
+        (
+            "spring exact endpoint",
+            reduced_spring_reaches_its_exact_endpoint,
+        ),
+        (
+            "first finished sample",
+            reduced_simulation_uses_the_first_finished_grid_sample,
+        ),
+        (
+            "last finite sample",
+            reduced_simulation_uses_the_last_finite_grid_sample,
+        ),
+        (
+            "no finite sample",
+            reduced_non_finite_simulation_keeps_the_published_value,
+        ),
+    ]);
+}
+
+#[test]
+fn reduced_settle_retires_simulation_sources_after_delivery() {
+    use flui_animation::{AnimationRunFuture, AnimationStatus, MotionPreference, Simulation};
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+    };
+
+    #[derive(Debug)]
+    struct RestartOnDrop {
+        controller: AnimationController,
+        restarted: Rc<RefCell<Option<AnimationRunFuture>>>,
+        drops: Rc<Cell<usize>>,
+        panic_on_drop: bool,
+    }
+
+    impl Simulation for RestartOnDrop {
+        fn x(&self, time: f64) -> f64 {
+            time
+        }
+        fn dx(&self, _time: f64) -> f64 {
+            1.0
+        }
+        fn is_done(&self, time: f64) -> bool {
+            time >= 0.25
+        }
+    }
+
+    impl Drop for RestartOnDrop {
+        fn drop(&mut self) {
+            self.drops.set(self.drops.get() + 1);
+            assert_eq!(self.controller.status(), AnimationStatus::Completed);
+            assert_eq!(self.controller.value(), 0.25);
+            *self.restarted.borrow_mut() = Some(
+                self.controller
+                    .forward_from(Some(0.0))
+                    .expect("restart from Drop"),
+            );
+            assert!(!self.panic_on_drop, "simulation retirement panic");
+        }
+    }
+
+    for (panic_listener, panic_drop) in [(false, false), (true, false), (false, true), (true, true)]
+    {
+        let registry = flui_animation::Vsync::new();
+        let child = flui_animation::Vsync::new();
+        let _seat = registry.attach_child(&child).expect("nested registry");
+        let owner = AnimationController::builder(ms(1000)).build_on(Some(&child));
+        let peer = AnimationController::builder(ms(1000)).build_on(Some(&registry));
+        let restarted = Rc::new(RefCell::new(None));
+        let drops = Rc::new(Cell::new(0));
+        let run = owner
+            .controller()
+            .animate_with(RestartOnDrop {
+                controller: owner.controller().clone(),
+                restarted: Rc::clone(&restarted),
+                drops: Rc::clone(&drops),
+                panic_on_drop: panic_drop,
+            })
+            .expect("simulation run");
+        let peer_run = peer.controller().forward().expect("peer run");
+        let completions = Rc::new(Cell::new(0));
+        let observed = Rc::clone(&completions);
+        let _listener = owner.controller().subscribe_status(Rc::new(move |status| {
+            if status == AnimationStatus::Completed {
+                observed.set(observed.get() + 1);
+                assert!(
+                    !(panic_listener && observed.get() == 1),
+                    "simulation listener panic"
+                );
+            }
+        }));
+        let mut clock = MotionClock::new();
+        clock.set_preference(MotionPreference::Reduce);
+        let settled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            registry.tick_all(&clock.frame(Duration::ZERO));
+        }));
+        assert_eq!(settled.is_err(), panic_listener || panic_drop);
+        if let Err(payload) = settled {
+            assert_eq!(
+                payload.downcast_ref::<&str>(),
+                Some(&if panic_listener {
+                    "simulation listener panic"
+                } else {
+                    "simulation retirement panic"
+                })
+            );
+        }
+        assert!(
+            run.is_complete(),
+            "completion precedes outgoing source retirement"
+        );
+        assert!(
+            peer_run.is_complete(),
+            "failure does not consume the parent's accepted tail"
+        );
+        let expected_drops = usize::from(!panic_listener);
+        assert_eq!(drops.get(), expected_drops);
+        if panic_listener {
+            // ADR-0127 retains outgoing user ownership after the first failure;
+            // even a caught listener panic must prevent a competing destructor.
+            assert!(restarted.borrow().is_none());
+            assert_eq!(owner.controller().value(), 0.25);
+            *restarted.borrow_mut() = Some(
+                owner
+                    .controller()
+                    .forward_from(Some(0.0))
+                    .expect("recovery run"),
+            );
+        }
+        assert_eq!(owner.controller().value(), 0.0);
+        assert!(!restarted.borrow().as_ref().expect("new run").is_complete());
+        registry.tick_all(&clock.frame(ms(16)));
+        assert_eq!(completions.get(), 2);
+        assert_eq!(drops.get(), expected_drops);
+        assert!(restarted.borrow().as_ref().expect("new run").is_complete());
+        assert_eq!(owner.controller().value(), 1.0);
+        assert!(!registry.has_running());
+    }
+}
+
+#[test]
 fn motion_policy_resolves_preference_against_the_system() {
     use flui_animation::{AnimationBehavior, MotionPolicy, MotionPreference};
     use flui_platform_api::MotionPreference as SystemMotion;
@@ -491,6 +810,77 @@ fn reduced_motion_admission_wakes_a_paused_run() {
         registry.tick_all(&clock.frame(ms(16)));
         assert_eq!(owner.controller().value(), 1.0);
         assert!(!registry.has_running());
+    }
+}
+
+#[test]
+fn muted_registry_settles_on_unmute() {
+    use flui_animation::MotionPreference;
+    use std::{cell::Cell, rc::Rc};
+    for mute_parent in [false, true] {
+        for paused in [false, true] {
+            let registry = flui_animation::Vsync::new();
+            let child = flui_animation::Vsync::new();
+            let _seat = registry.attach_child(&child).expect("nested registry");
+            let owner = AnimationController::builder(ms(1000)).build_on(Some(&child));
+            let run = owner.controller().forward().expect("normal run");
+            if paused {
+                owner.controller().set_playback_rate(PlaybackRate::PAUSED);
+            }
+            let mut clock = MotionClock::new();
+            registry.tick_all(&clock.frame(Duration::ZERO));
+            let gate = if mute_parent { &registry } else { &child };
+            gate.set_muted(true);
+            clock.set_preference(MotionPreference::Reduce);
+            registry.tick_all(&clock.frame(ms(16)));
+            assert_eq!(owner.controller().value(), 0.0);
+            assert!(!run.is_complete(), "muting defers settlement");
+            let wakes = Rc::new(Cell::new(0));
+            let count = Rc::clone(&wakes);
+            registry.set_frame_requester(Some(Rc::new(move || count.set(count.get() + 1))));
+            wakes.set(0);
+            gate.set_muted(false);
+            assert!(
+                wakes.get() > 0,
+                "unmute must request settlement, parent={mute_parent}, paused={paused}"
+            );
+            wakes.set(0);
+            let count = Rc::clone(&wakes);
+            registry.set_frame_requester(Some(Rc::new(move || count.set(count.get() + 1))));
+            assert!(
+                wakes.get() > 0,
+                "replacement hook inherits undelivered settlement"
+            );
+            registry.tick_all(&clock.frame(ms(16)));
+            assert_eq!(owner.controller().value(), 1.0);
+            assert!(run.is_complete());
+            assert!(!registry.has_running());
+            wakes.set(0);
+            registry.set_frame_requester(None);
+            let count = Rc::clone(&wakes);
+            registry.set_frame_requester(Some(Rc::new(move || count.set(count.get() + 1))));
+            assert_eq!(
+                wakes.get(),
+                0,
+                "delivered settlement creates no continuation"
+            );
+            let repeated = owner.controller().repeat(false).expect("parked repeat");
+            registry.tick_all(&clock.frame(ms(32)));
+            assert!(!registry.has_running());
+            gate.set_muted(true);
+            clock.set_preference(MotionPreference::Full);
+            registry.tick_all(&clock.frame(ms(64)));
+            wakes.set(0);
+            gate.set_muted(false);
+            assert!(wakes.get() > 0, "unmute requests a parked resumption");
+            registry.tick_all(&clock.frame(ms(64)));
+            assert_eq!(
+                owner.controller().value(),
+                0.0,
+                "resumption anchors at this frame"
+            );
+            assert!(!repeated.is_complete());
+        }
     }
 }
 
@@ -850,6 +1240,74 @@ fn op() -> impl Strategy<Value = Op> {
 }
 
 proptest! {
+    #[test]
+    fn preserve_runs_identically_under_any_policy(
+        changes in prop::collection::vec((0..100_000u64, 0..7usize, 0..3usize, 0..RATES.len()), 1..64),
+    ) {
+        use flui_animation::{AnimationBehavior, MotionPreference};
+        use flui_platform_api::MotionPreference as SystemMotion;
+        let registry = flui_animation::Vsync::new();
+        let reference = flui_animation::Vsync::new();
+        let owner = AnimationController::builder(Duration::from_secs(100))
+            .behavior(AnimationBehavior::Preserve).build_on(Some(&registry));
+        let baseline = AnimationController::builder(Duration::from_secs(100))
+            .build_on(Some(&reference));
+        owner.controller().forward().expect("preserved run");
+        baseline.controller().forward().expect("reference run");
+        let mut clock = MotionClock::new();
+        let mut full = MotionClock::new();
+        full.set_preference(MotionPreference::Full);
+        registry.tick_all(&clock.frame(Duration::ZERO));
+        reference.tick_all(&full.frame(Duration::ZERO));
+        let mut raw = Duration::ZERO;
+        for (delta, system, preference, rate_index) in changes {
+            clock.set_system_motion(match system {
+                0 => SystemMotion::Reduce,
+                1 => SystemMotion::NoPreference,
+                index => SystemMotion::from_duration_scale([0.25, 0.5, 2.0, 4.0, 10.0][index - 2]).expect("scale"),
+            });
+            clock.set_preference([MotionPreference::FollowSystem, MotionPreference::Reduce, MotionPreference::Full][preference]);
+            let (numerator, denominator) = RATES[rate_index];
+            #[expect(clippy::cast_precision_loss, reason = "small exact integers")]
+            let chosen = rate(numerator as f64 / denominator as f64);
+            clock.set_rate(chosen);
+            full.set_rate(chosen);
+            raw += Duration::from_micros(delta);
+            registry.tick_all(&clock.frame(raw));
+            reference.tick_all(&full.frame(raw));
+            prop_assert_eq!(owner.controller().value(), baseline.controller().value());
+            prop_assert_eq!(owner.controller().status(), baseline.controller().status());
+        }
+    }
+
+    #[test]
+    fn normal_timeline_integrates_inverse_scale_over_any_partition(
+        changes in prop::collection::vec((0..100_000u64, 0..5usize, any::<bool>()), 1..64),
+    ) {
+        use flui_animation::MotionPreference;
+        use flui_platform_api::MotionPreference as SystemMotion;
+        // Power-of-two scales permit an independent exact integer integral.
+        const INVERSE_SCALES: [(u64, u64); 5] = [(4, 1), (2, 1), (1, 1), (1, 2), (1, 4)];
+        let registry = flui_animation::Vsync::new();
+        let owner = AnimationController::builder(Duration::from_secs(100)).build_on(Some(&registry));
+        owner.controller().forward().expect("normal run");
+        let mut clock = MotionClock::new();
+        registry.tick_all(&clock.frame(Duration::ZERO));
+        let mut raw = Duration::ZERO;
+        let mut integral_ns = 0u64;
+        for (delta_us, index, authored) in changes {
+            clock.set_preference(if authored { MotionPreference::Full } else { MotionPreference::FollowSystem });
+            clock.set_system_motion(SystemMotion::from_duration_scale([0.25, 0.5, 1.0, 2.0, 4.0][index]).expect("scale"));
+            let (numerator, denominator) = if authored { (1, 1) } else { INVERSE_SCALES[index] };
+            integral_ns += delta_us * 1000 * numerator / denominator;
+            raw += Duration::from_micros(delta_us);
+            registry.tick_all(&clock.frame(raw));
+            #[expect(clippy::cast_precision_loss, reason = "bounded nanosecond reference")]
+            let expected = integral_ns as f64 / 100_000_000_000.0;
+            prop_assert!((owner.controller().value() - expected).abs() < 1e-10);
+        }
+    }
+
     #[test]
     fn animation_time_never_decreases(ops in prop::collection::vec(op(), 1..64)) {
         let mut clock = MotionClock::new();

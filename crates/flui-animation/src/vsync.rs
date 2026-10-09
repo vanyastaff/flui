@@ -227,7 +227,7 @@ impl Vsync {
     pub fn set_frame_requester(&self, request_frame: Option<Rc<dyn Fn()>>) {
         let outgoing = std::mem::replace(&mut self.inner.borrow_mut().request_frame, request_frame);
         let mut retirement = Retirement::new();
-        if self.has_running() {
+        if self.has_frame_demand(None) {
             Self::request_frame_from(&self.inner, &mut retirement.scope());
         }
         retirement.retire(outgoing);
@@ -334,7 +334,8 @@ impl Vsync {
         drop(inner);
         child.inner.borrow_mut().parents.push(registration.clone());
         let mut retirement = Retirement::new();
-        if child.has_running() {
+        let tick = self.inner.borrow().last_tick;
+        if child.has_frame_demand(tick) {
             registration.request_frame(&mut retirement.scope());
         }
         if retirement.has_failure() {
@@ -414,11 +415,49 @@ impl Vsync {
             inner.muted = muted;
             changed
         };
-        if changed && !muted && self.has_running() {
+        if changed && !muted && self.has_frame_demand(None) {
             let mut retirement = Retirement::new();
             Self::request_frame_from(&self.inner, &mut retirement.scope());
             retirement.finish();
         }
+    }
+
+    /// Include one-shot settlement and resumption in wake demand, without
+    /// making parked or paused work request continuous frames. Ancestor policy
+    /// also reaches children that have not observed it while muted.
+    fn has_frame_demand(&self, inherited: Option<FrameTick>) -> bool {
+        let (mine, children, tick) = {
+            let inner = self.inner.borrow();
+            if inner.muted {
+                return false;
+            }
+            let tick = inherited.map_or(inner.last_tick, |tick| {
+                Some(tick.hold_after(inner.last_tick.unwrap_or(tick)))
+            });
+            let mine = inner.controllers.values().any(|registered| {
+                let probe = registered.controller.walk_probe();
+                probe.live_running
+                    || (probe.has_run
+                        && tick.is_some_and(|tick| {
+                            let exhausted =
+                                tick.time(probe.behavior).as_duration() == Duration::MAX;
+                            if probe.parked {
+                                tick.policy() == crate::MotionPolicy::Full && !exhausted
+                            } else {
+                                exhausted
+                                    || (probe.behavior == crate::AnimationBehavior::Normal
+                                        && tick.policy() == crate::MotionPolicy::Reduce)
+                            }
+                        }))
+            });
+            let children = inner
+                .children
+                .iter()
+                .map(|registered| registered.child.clone())
+                .collect::<Vec<_>>();
+            (mine, children, tick)
+        };
+        mine || children.iter().any(|child| child.has_frame_demand(tick))
     }
 
     /// The number of controllers registered **with this registry**, not

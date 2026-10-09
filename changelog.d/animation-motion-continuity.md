@@ -76,3 +76,6 @@
 
 - Report a curved controller's instantaneous velocity at its last sampled time, including direction and playback rate, instead of its average run velocity.
 - Refuse stale derivatives after a curve or simulation reenters the controller; preserve the first failure through derivative-source retirement and keep representable scaled velocities finite.
+- Request pending motion settlement and parked resumption when a registry is
+  unmuted, its frame requester is replaced or its child is attached, including
+  paused playback and policy changes deferred by an ancestor gate.

@@ -39,6 +39,12 @@ Full resumes parked work from a fresh zero-time anchor. A reentrant replacement
 waits until the next frame. Existing retirement and first-failure custody apply
 to listeners, futures and simulation sources.
 
+Wake demand includes pending settlement and parked resumption independently of
+continuous animation demand. Unmuting, replacing a frame requester or attaching
+a child requests this work even when playback is paused. Ancestor policy reaches
+children that did not observe the changed tick while muted. Completed work and
+repeats parked under Reduce request no further frames.
+
 Runtime projection commits every presentation's clock before publication or wake
 callbacks. Changed policy or scale requests a frame, including when a repeat is
 parked or playback is paused. The resolved policy is published as
@@ -74,8 +80,23 @@ covers reverse and finite repeat endpoints, including paused clocks and runs.
 `reduced_motion_admission_wakes_a_paused_run` pins new work admitted after paused
 playback has already taken effect, through both direct and nested registries.
 `parked_repeat_resumes_from_zero_under_full` pins parking and fresh resumption.
+`policy_flips_mid_run` distinguishes an observed Reduce tick from a policy
+superseded before the frame. `simulation_settle_grid` checks analytic friction
+rest, the exact spring endpoint, first completed and last finite grid probes,
+and preservation of the published value when every grid probe is non-finite.
+`preserve_runs_identically_under_any_policy` compares real controllers against
+an independent Full registry across random policy, scale and playback changes.
+`normal_timeline_integrates_inverse_scale_over_any_partition` compares sampled
+controller output with an exact integer integral.
+`muted_registry_settles_on_unmute` verifies both child and ancestor gates,
+paused playback, replacement requesters, settlement and parked resumption.
 `reduced_settle_preserves_peer_delivery_and_reentrant_runs` checks competing
 callback failures and the next frame after containment.
+`reduced_settle_retires_simulation_sources_after_delivery` checks reentrant
+destruction, competing listener/destructor failures and recovery. Under
+[ADR-0127](ADR-0127-exceptional-path-retention.md), a listener failure retains
+outgoing user ownership instead of invoking a competing destructor; successful
+delivery retires the source outside borrows, after completing its run.
 `system_motion_change_reaches_media_query_and_the_clock` drives host publication,
 actual runtime frames, duplicate observations, late runtime seeds and later
 presentation overrides. Removing clock projection makes that test fail.
