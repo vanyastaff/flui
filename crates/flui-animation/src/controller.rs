@@ -615,7 +615,7 @@ impl AnimationController {
     /// and `Err(RunCanceled)` if it is superseded (a later run starts
     /// before this one ends) or torn down ([`stop`](Self::stop)/
     /// [`set_value`](Self::set_value)/[`reset`](Self::reset)/
-    /// [`dispose`](Self::dispose)). See
+    /// [owning disposal](crate::DrivenController::dispose)). See
     /// [`AnimationRunFuture::when_complete_or_cancel`] for the idiom to react to
     /// either outcome without matching on it, and this method's own
     /// `# Awaiting a run` section below for the `async`/`await` route.
@@ -1724,8 +1724,8 @@ impl AnimationController {
     /// `live_running` is `!disposed && active_run.is_some()` — **not**
     /// `status.is_running()`, which is the wrong "is a run installed"
     /// predicate for two independent reasons:
-    /// - [`dispose`](Self::dispose) deliberately leaves `status` untouched
-    ///   (see its own doc), so a controller disposed mid-run keeps whatever
+    /// - [Owning disposal](crate::DrivenController::dispose) leaves `status` untouched,
+    ///   so a controller disposed mid-run keeps whatever
     ///   running status it had.
     /// - [`set_value`](Self::set_value) reports a *directional* running
     ///   status at an interior value
