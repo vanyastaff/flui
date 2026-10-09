@@ -614,6 +614,73 @@ pub(crate) fn dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_ti
 /// from the grab with the user's direction recorded, live through the
 /// ballistic run past the release, and idle again — direction reset — once
 /// the run settles. The signal a floating header's snap trigger keys on.
+pub(crate) fn refresh_motion_notifies_activity_through_release_and_recovery() {
+    let mut failures = Vec::new();
+    for cancelled in [false, true] {
+        let scroll = ScrollController::new();
+        let refresh = RefreshController::new();
+        let vsync = Vsync::new();
+        let position = scroll.position();
+        let observations = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let observed = Arc::clone(&observations);
+        let observed_position = position.clone();
+        let listener = position.add_activity_listener(Arc::new(move || {
+            observed.lock().expect("activity observer").push((
+                observed_position.is_scrolling(),
+                observed_position.user_scroll_direction(),
+            ));
+        }));
+        let mut laid = crate::common::lay_out_animated(
+            VsyncScope::new(vsync.clone(), refresh_content(&scroll, &refresh)),
+            tight(300.0, 300.0),
+            vsync,
+        );
+        laid.dispatch_pointer_down(150.0, 250.0);
+        for y in [230.0, 210.0, 190.0, 170.0, 150.0] {
+            laid.dispatch_pointer_move_after(150.0, y, Duration::from_millis(10));
+        }
+        let released = scroll.pixels();
+        assert!(released > 0.0, "refresh wrapper actually scrolls");
+        if !observations.lock().expect("activity observer")
+            .contains(&(true, ScrollDirection::Reverse))
+        {
+            failures.push(format!("cancelled={cancelled}: no active-direction delivery during drag"));
+        }
+        if cancelled {
+            laid.dispatch_pointer_cancel();
+        } else {
+            laid.dispatch_pointer_up(150.0, 150.0);
+        }
+        laid.pump_for(Duration::from_millis(16));
+        laid.pump_for(Duration::from_millis(16));
+        if cancelled {
+            assert_eq!(scroll.pixels(), released, "cancelled in-range drag does not coast");
+        } else {
+            assert!(scroll.pixels() > released, "completed refresh drag actually coasts");
+            if !position.is_scrolling() {
+                failures.push("ballistic pixels move while activity is idle".into());
+            }
+        }
+        laid.pump_for(Duration::from_secs(10));
+        assert!(!position.is_scrolling(), "terminal motion settles");
+        assert_eq!(position.user_scroll_direction(), ScrollDirection::Idle);
+        observations.lock().expect("activity observer").clear();
+        let before = scroll.pixels();
+        laid.dispatch_pointer_down(150.0, 250.0);
+        laid.dispatch_pointer_move_after(150.0, 210.0, Duration::from_millis(10));
+        laid.dispatch_pointer_move_after(150.0, 190.0, Duration::from_millis(10));
+        assert!(scroll.pixels() > before, "next healthy contact drives content");
+        if !observations.lock().expect("activity observer")
+            .contains(&(true, ScrollDirection::Reverse))
+        {
+            failures.push(format!("cancelled={cancelled}: next contact has no activity delivery"));
+        }
+        laid.dispatch_pointer_cancel();
+        position.remove_activity_listener(listener);
+    }
+    assert!(failures.is_empty(), "refresh activity delivery failed: {failures:?}");
+}
+
 pub(crate) fn scroll_activity_tracks_the_whole_gesture_lifecycle() {
     let controller = ScrollController::new();
     controller.update_dimensions(300.0, 0.0, 4700.0);
