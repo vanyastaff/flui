@@ -19,7 +19,8 @@ use std::hint::black_box;
 use std::time::Duration;
 
 use flui_animation::{
-    AnimatedValue, Animation, AnimationController, ArcCurve, Curves, MotionSpec, ReverseAnimation, Vsync,
+    AnimatedValue, Animation, AnimationController, ArcCurve, Curves, MotionSpec, ReverseAnimation,
+    Vsync,
 };
 use flui_foundation::Listenable;
 use flui_foundation::geometry::EdgeInsets;
