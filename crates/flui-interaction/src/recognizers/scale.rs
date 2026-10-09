@@ -853,13 +853,9 @@ impl ScaleGestureRecognizer {
                     move || {
                         if let Some(owner) = owner.upgrade() {
                             let mut native = owner.native.borrow_mut();
-                            let retired = if native.as_ref().is_some_and(|native| native.id == id) {
-                                native.take()
-                            } else {
-                                None
-                            };
-                            drop(native);
-                            drop(retired);
+                            if native.as_ref().is_some_and(|native| native.id == id) {
+                                *native = None;
+                            }
                         }
                     },
                 );

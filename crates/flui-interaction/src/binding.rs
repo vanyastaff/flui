@@ -749,7 +749,7 @@ impl GestureBinding {
         .flatten();
         let mut first = self.drain_capture_losses(ending);
         let delivered = RoutePanic::capture(|| {
-            self.handle_pointer_event_kernel(event, hit_test_fn, &mut first)
+            self.handle_pointer_event_kernel(event, hit_test_fn, &mut first);
         });
         RoutePanic::preserve_first(&mut first, delivered, "pointer input after capture loss");
         if let Some(failure) = first {
@@ -1221,7 +1221,7 @@ impl GestureBinding {
             .map(|(&pointer_id, entry)| (pointer_id, entry.pointer, entry.time, entry.sequence))
             .collect();
         pointers.sort_unstable_by_key(|(pointer_id, _, _, _)| *pointer_id);
-        self.retire_pan_zoom_sequences(native_sequences, &mut first_panic);
+        Self::retire_pan_zoom_sequences(native_sequences, &mut first_panic);
         for (pointer_id, pointer, time, sequence) in pointers {
             // A handler run by an earlier iteration may have re-entered the
             // binding and terminated or replaced this sequence. The numeric
@@ -1556,7 +1556,6 @@ impl GestureBinding {
     }
 
     fn retire_pan_zoom_sequences(
-        &self,
         sequences: Vec<Rc<PanZoomSequence>>,
         first: &mut Option<RoutePanic>,
     ) {
@@ -1621,7 +1620,7 @@ impl GestureBinding {
                 .pan_zoom_sequences
                 .borrow_mut()
                 .remove(&SignalSource::from(cancel.pointer));
-            self.retire_pan_zoom_sequences(native.into_iter().collect(), first);
+            Self::retire_pan_zoom_sequences(native.into_iter().collect(), first);
         }
         self.handle_pointer_event_after_signal_withdrawal(event, hit_test_fn, first);
     }
@@ -1652,7 +1651,7 @@ impl GestureBinding {
                     .pan_zoom_sequences
                     .borrow_mut()
                     .remove(&SignalSource::Device(device.device));
-                self.retire_pan_zoom_sequences(native.into_iter().collect(), &mut first_panic);
+                Self::retire_pan_zoom_sequences(native.into_iter().collect(), &mut first_panic);
                 let mut pointers: Vec<_> = self
                     .hit_tests
                     .borrow()
@@ -1990,7 +1989,7 @@ impl GestureBinding {
                                                 Self::retire_pan_zoom_tickets(
                                                     vec![(route, ticket)],
                                                     &preserving_failure,
-                                                )
+                                                );
                                             },
                                             Some(&|route| {
                                                 Self::native_terminal_is_current(sequence, route)
@@ -2008,7 +2007,7 @@ impl GestureBinding {
                                                     Self::retire_pan_zoom_tickets(
                                                         vec![(route, ticket)],
                                                         &preserving_failure,
-                                                    )
+                                                    );
                                                 },
                                                 claim: &|| {},
                                                 terminal: Some(&current),
@@ -2022,7 +2021,7 @@ impl GestureBinding {
                                 delivery,
                                 "native terminal delivery",
                             );
-                            self.retire_pan_zoom_sequences(vec![Rc::clone(sequence)], &mut first);
+                            Self::retire_pan_zoom_sequences(vec![Rc::clone(sequence)], &mut first);
                             if let Some(first) = first {
                                 first.resume();
                             }
@@ -2035,7 +2034,7 @@ impl GestureBinding {
                                 Self::retire_pan_zoom_tickets(
                                     vec![(route, ticket)],
                                     &preserving_failure,
-                                )
+                                );
                             },
                             Some(&|_| false),
                         ),
@@ -2049,7 +2048,7 @@ impl GestureBinding {
                                         route,
                                         ticket,
                                         &preserving_failure,
-                                    )
+                                    );
                                 };
                                 let claim = || {
                                     self.claim_pan_zoom(
@@ -2057,7 +2056,7 @@ impl GestureBinding {
                                         sequence,
                                         route,
                                         &preserving_failure,
-                                    )
+                                    );
                                 };
                                 route.dispatch_admitted(
                                     gesture,
@@ -2079,7 +2078,7 @@ impl GestureBinding {
                                             sequence,
                                             route,
                                             &preserving_failure,
-                                        )
+                                        );
                                     },
                                     &|route, ticket| {
                                         self.stage_pan_zoom(
@@ -2088,7 +2087,7 @@ impl GestureBinding {
                                             route,
                                             ticket,
                                             &preserving_failure,
-                                        )
+                                        );
                                     },
                                     None,
                                 )
@@ -2619,7 +2618,7 @@ impl GestureBinding {
         cached_routes.sort_unstable_by_key(|(pointer, _)| *pointer);
         let mut pending_moves: Vec<_> = self.pending_moves.borrow_mut().drain().collect();
         pending_moves.sort_unstable_by_key(|(pointer, _)| *pointer);
-        self.retire_pan_zoom_sequences(native_sequences, &mut first_panic);
+        Self::retire_pan_zoom_sequences(native_sequences, &mut first_panic);
 
         // Every map above is empty before any arena callback or destructor
         // runs. Arena abandonment likewise removes all exact slots before
