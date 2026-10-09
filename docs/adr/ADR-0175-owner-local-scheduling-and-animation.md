@@ -9,7 +9,7 @@
   futures. Their controller-owned outcome and continuation custody rules remain.
 - **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md),
   [ADR-0136](ADR-0136-owner-local-ui-surfaces.md),
-  [ADR-0174](ADR-0174-notification-first-failure-custody.md).
+  [ADR-0178](ADR-0178-notification-first-failure-custody.md).
 
 ## Context
 
@@ -26,7 +26,7 @@ foundation notification channels share owner state through `Rc`. Mutable owner
 state uses `Cell` or `RefCell`; borrows end before user callbacks or outgoing
 captures are invoked or retired. Callback and continuation authoring accepts
 owner-local captures. Framework notification relays borrow the same failure
-custody as their source, as specified by ADR-0174.
+custody as their source, as specified by ADR-0178.
 
 Render delegates execute on the UI owner and accept owner-local captures.
 `CustomPaint` and `RenderCustomPaint` share their painter through `Rc`, so

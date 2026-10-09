@@ -285,7 +285,7 @@ struct RepeatSample {
 ///
 /// Controllers and callbacks belong to their UI owner thread. Clones share
 /// `Rc` state; every callback runs after state borrows have been released.
-/// Reentrant transitions join the active delivery queue (ADR-0173, ADR-0174).
+/// Reentrant transitions join the active delivery queue (ADR-0177, ADR-0178).
 ///
 /// # Examples
 ///

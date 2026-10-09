@@ -38,7 +38,7 @@ notifier's snapshot, live membership and separate capture retirement. Viewport
 pointer identity is weak metadata paired with a listener ID; it does not add
 another owner of a callback capture. Removal withdraws that identity before
 retiring the callback outside the position borrow. After the healthy tails
-finish, the first failure propagates (ADR-0174).
+finish, the first failure propagates (ADR-0178).
 
 The public widget row
 `show_on_screen_failure_continues_live_ancestors_and_fresh_requests_recover`

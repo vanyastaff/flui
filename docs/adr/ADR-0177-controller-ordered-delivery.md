@@ -1,7 +1,7 @@
-# ADR-0173: Controller transitions and run deliveries preserve commit order
+# ADR-0177: Controller transitions and run deliveries preserve commit order
 
 - **Status:** Accepted
-- **Superseded-by:** [ADR-0174](ADR-0174-notification-first-failure-custody.md) for the shared notification failure policy and owner-local callback integration.
+- **Superseded-by:** [ADR-0178](ADR-0178-notification-first-failure-custody.md) for the shared notification failure policy and owner-local callback integration.
 - **Date:** 2026-10-08
 - **Related:** [ADR-0064](ADR-0064-animation-completion-is-one-controller-resolved-future.md),
   [ADR-0106](ADR-0106-ticker-continuation-ownership-and-terminal-waiters.md),
@@ -59,7 +59,7 @@ registered and muted peers retain the existing walk rules. A non-finite frame
 instant is ignored before any registry changes its run anchors.
 
 This decision introduced ordered delivery within the controller ownership
-contract. ADR-0174 extends first-failure custody through foundation channels
+contract. ADR-0178 extends first-failure custody through foundation channels
 and animation relays; it supersedes the earlier logged-listener-failure policy.
 
 ## Alternatives

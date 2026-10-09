@@ -58,8 +58,8 @@ wake capability without sharing the controller kernel.
 
 Status commits and run deliveries join one FIFO. Reentrant transitions append
 to the active drain. Removed subscriptions are silent, and the first failure
-remains authoritative while healthy peers and retirement finish (ADR-0173,
-ADR-0174). Containment cannot rescue an opaque user aggregate whose own
+remains authoritative while healthy peers and retirement finish (ADR-0177,
+ADR-0178). Containment cannot rescue an opaque user aggregate whose own
 destructors double-panic before reaching the framework boundary.
 
 ## One outcome per run

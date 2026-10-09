@@ -58,7 +58,7 @@ src/
 ### Controller delivery
 
 Controller status transitions and run deliveries share a FIFO committed under
-the controller state guard and drained outside it (ADR-0173). Reentrant changes
+the controller state guard and drained outside it (ADR-0177). Reentrant changes
 append to the outermost drain. Each status snapshots subscription membership;
 removed listeners and disposed controllers are skipped before invocation. New
 subscriptions participate in subsequent commits without implicit catch-up.

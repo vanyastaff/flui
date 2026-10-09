@@ -227,7 +227,7 @@ notification path. Worker replies and wakes retain their separate Send edges.
 Items below are concrete cleanups visible from `flui-foundation` outward. Each is sized for an `/aif-implement` dispatch without out-of-band clarification.
 
 - **`Notifier` re-entrancy semantics — DONE.** Both `ChangeNotifier::notify_listeners` and `Notifier::notify` now document the round-N-vs-round-N+1 behaviour (snapshot-then-fire, mid-notify removals skipped, post-snapshot additions deferred to the next round, `catch_unwind` isolation).
-- **State notification** — `Notifier`/`ChangeNotifier` is the owner-local listener channel (ADR-0174). Runtime-scoped signals retain their separate graph and dependency tracking in `flui-view`; their read contract lives in `read_scope` (ADR-0085).
+- **State notification** — `Notifier`/`ChangeNotifier` is the owner-local listener channel (ADR-0178). Runtime-scoped signals retain their separate graph and dependency tracking in `flui-view`; their read contract lives in `read_scope` (ADR-0085).
 
 ---
 
@@ -296,7 +296,7 @@ The first callback failure resumes after the healthy tail; removing a listener
 or disposing the channel immediately silences its remaining snapshot entries.
 Active delivery defers outgoing callbacks until the outermost round retires
 them. Framework relays borrow `panic::PanicRecovery`; reentrant owner cleanup
-inherits active channel failure custody without an ambient registry (ADR-0174).
+inherits active channel failure custody without an ambient registry (ADR-0178).
 The notifier's owned snapshot prevents a removed callback from disappearing
 while it runs. After a caught listener failure, the payload and snapshot remain
 retained: opaque capture or panic-payload aggregates can double-panic during

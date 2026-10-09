@@ -1,4 +1,4 @@
-# ADR-0174: Notification delivery preserves the enclosing first failure
+# ADR-0178: Notification delivery preserves the enclosing first failure
 
 - **Status:** Accepted
 - **Date:** 2026-10-08
@@ -6,7 +6,7 @@
   swallowed listener failure and snapshot disposal behavior.
 - **Related:** [ADR-0119](ADR-0119-inert-panic-payload-retirement.md),
   [ADR-0127](ADR-0127-exceptional-path-retention.md),
-  [ADR-0173](ADR-0173-controller-ordered-delivery.md)
+  [ADR-0177](ADR-0177-controller-ordered-delivery.md)
 
 ## Context
 

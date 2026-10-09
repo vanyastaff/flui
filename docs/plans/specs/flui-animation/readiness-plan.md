@@ -43,7 +43,7 @@
 Для текущей реализации общий owner-local контракт закреплён
 [ADR-0175](../../../adr/ADR-0175-owner-local-scheduling-and-animation.md),
 а custody первой ошибки —
-[ADR-0174](../../../adr/ADR-0174-notification-first-failure-custody.md).
+[ADR-0178](../../../adr/ADR-0178-notification-first-failure-custody.md).
 Общий scheduler/notifier/controller путь и его consumers меняются вместе.
 Это не закрывает оставшийся ledger ADR-0136 и не разрешает считать draft
 выпускной проверкой. Playback-контракт описан в
