@@ -219,7 +219,7 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
             };
             let hwnd = HWND(handle.hwnd.get() as *mut std::ffi::c_void);
             window.on_input(Box::new(move |input| {
-                if let crate::PlatformInput::Pointer(PointerEvent::Scroll(scroll)) = input {
+                if let flui_platform_api::PlatformInput::Pointer(PointerEvent::Scroll(scroll)) = input {
                     let complete = {
                         let mut log = sink.lock();
                         log.push(scroll);
