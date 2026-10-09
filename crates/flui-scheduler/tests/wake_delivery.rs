@@ -5,6 +5,47 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::task::{Poll, Waker};
 use std::time::Duration;
 
+#[test]
+fn wake_in_flight_releases_owner_storage() {
+    struct Capture(Arc<AtomicUsize>);
+    impl Drop for Capture {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let scheduler = UpdateScheduler::new();
+    let drops = Arc::new(AtomicUsize::new(0));
+    let capture = Capture(drops.clone());
+    scheduler.schedule_frame_callback(Box::new(move |_| {
+        let _ = &capture;
+    }));
+    scheduler.finish_async_pump();
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let release_rx = Mutex::new(release_rx);
+    scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
+        entered_tx.send(()).expect("owner observes the hook");
+        release_rx
+            .lock()
+            .expect("release receiver")
+            .recv_timeout(Duration::from_secs(10))
+            .expect("release wake");
+    })));
+    let waker = scheduler.frame_waker();
+    let worker = std::thread::spawn(move || waker.request_frame());
+    entered_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("wake entered");
+    drop(scheduler);
+    let released_before_wake_returns = drops.load(Ordering::SeqCst);
+    release_tx.send(()).expect("release worker");
+    worker.join().expect("wake returned");
+    assert_eq!(
+        released_before_wake_returns, 1,
+        "a wake holds only wake infrastructure"
+    );
+}
+
 fn repeated_scheduler_request_retries_failed_delivery() {
     let scheduler = UpdateScheduler::new();
     let calls = Arc::new(AtomicUsize::new(0));
@@ -71,7 +112,7 @@ fn older_success_cannot_acknowledge_a_newer_failed_request() {
             _ => {}
         }
     })));
-    let older = scheduler.clone();
+    let older = scheduler.frame_waker();
     let worker = std::thread::spawn(move || older.request_frame());
     entered_rx
         .recv_timeout(Duration::from_secs(10))
@@ -92,7 +133,7 @@ fn older_success_cannot_acknowledge_a_newer_failed_request() {
 
 fn reentrant_fresh_request_is_delivered_without_recursing() {
     let scheduler = UpdateScheduler::new();
-    let weak = scheduler.downgrade();
+    let weak = crate::owner_callbacks::owner_probe(&scheduler);
     let calls = Arc::new(AtomicUsize::new(0));
     let hook_calls = Arc::clone(&calls);
     let entered = Arc::new(AtomicBool::new(false));
@@ -259,7 +300,7 @@ fn driver_older_success_cannot_erase_newer_failed_wake() {
 
 fn competing_reentrant_failures_preserve_the_first_panic() {
     let scheduler = UpdateScheduler::new();
-    let weak = scheduler.downgrade();
+    let weak = crate::owner_callbacks::owner_probe(&scheduler);
     let calls = Arc::new(AtomicUsize::new(0));
     let hook_calls = Arc::clone(&calls);
     scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
@@ -300,7 +341,7 @@ fn a_panicking_self_uninstalled_hook_retains_its_captures() {
         }
     }
     let scheduler = UpdateScheduler::new();
-    let weak = scheduler.downgrade();
+    let weak = crate::owner_callbacks::owner_probe(&scheduler);
     let drops = Arc::new(AtomicUsize::new(0));
     let capture = Capture(Arc::clone(&drops));
     scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
@@ -343,7 +384,7 @@ fn secondary_payload_retirement(aggregate: bool) {
         }
     }
     let scheduler = UpdateScheduler::new();
-    let weak = scheduler.downgrade();
+    let weak = crate::owner_callbacks::owner_probe(&scheduler);
     let calls = Arc::new(AtomicUsize::new(0));
     let hook_calls = Arc::clone(&calls);
     let payload_drops = Arc::new(AtomicUsize::new(0));
@@ -391,7 +432,7 @@ fn a_secondary_aggregate_with_two_panicking_fields_is_retained() {
 
 fn perpetual_reentrant_demand_is_bounded_and_retained() {
     let scheduler = UpdateScheduler::new();
-    let weak = scheduler.downgrade();
+    let weak = crate::owner_callbacks::owner_probe(&scheduler);
     let calls = Arc::new(AtomicUsize::new(0));
     let hook_calls = Arc::clone(&calls);
     scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
@@ -453,7 +494,7 @@ fn assert_reentrant_hook_replacement_after_failure(use_driver: bool) {
     let replacement_calls = Arc::new(AtomicUsize::new(0));
     let hook_initial_calls = Arc::clone(&initial_calls);
     let hook_replacement_calls = Arc::clone(&replacement_calls);
-    let weak = scheduler.downgrade();
+    let weak = crate::owner_callbacks::owner_probe(&scheduler);
     let initial = move || {
         hook_initial_calls.fetch_add(1, Ordering::Relaxed);
         let scheduler = weak.upgrade().expect("live scheduler");
@@ -518,7 +559,7 @@ fn initial_hook_retirement_retains_the_compensating_envelope_on_failure() {
         }
     }
     let scheduler = UpdateScheduler::new();
-    let weak = scheduler.downgrade();
+    let weak = crate::owner_callbacks::owner_probe(&scheduler);
     let initial_drops = Arc::new(AtomicUsize::new(0));
     let replacement_drops = Arc::new(AtomicUsize::new(0));
     let replacement_calls = Arc::new(AtomicUsize::new(0));
@@ -537,7 +578,7 @@ fn initial_hook_retirement_retains_the_compensating_envelope_on_failure() {
             failure: "replacement envelope retirement",
         };
         let replacement_calls = Arc::clone(&hook_replacement_calls);
-        let replacement_weak = scheduler.downgrade();
+        let replacement_weak = crate::owner_callbacks::owner_probe(&scheduler);
         scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
             let _keep_capture = &replacement_capture;
             replacement_calls.fetch_add(1, Ordering::Relaxed);

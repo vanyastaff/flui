@@ -1,6 +1,6 @@
 //! [`CustomPaint`] — delegates drawing to user-supplied [`CustomPainter`]s.
 
-use std::sync::Arc;
+use std::rc::Rc;
 
 use flui_foundation::geometry::Size;
 use flui_objects::RenderCustomPaint;
@@ -17,8 +17,8 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// layout constraints.
 #[derive(Clone, Debug, Default)]
 pub struct CustomPaint {
-    painter: Option<Arc<dyn CustomPainter>>,
-    foreground_painter: Option<Arc<dyn CustomPainter>>,
+    painter: Option<Rc<dyn CustomPainter>>,
+    foreground_painter: Option<Rc<dyn CustomPainter>>,
     size: Size,
     child: Child,
 }
@@ -32,14 +32,14 @@ impl CustomPaint {
 
     /// Sets the painter that draws behind the child.
     #[must_use]
-    pub fn painter(mut self, painter: Arc<dyn CustomPainter>) -> Self {
+    pub fn painter(mut self, painter: Rc<dyn CustomPainter>) -> Self {
         self.painter = Some(painter);
         self
     }
 
     /// Sets the painter that draws in front of the child.
     #[must_use]
-    pub fn foreground_painter(mut self, painter: Arc<dyn CustomPainter>) -> Self {
+    pub fn foreground_painter(mut self, painter: Rc<dyn CustomPainter>) -> Self {
         self.foreground_painter = Some(painter);
         self
     }

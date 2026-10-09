@@ -33,14 +33,8 @@ bitflags = { workspace = true }
 # Thread-safe synchronization
 parking_lot.workspace = true
 
-# Lock-free concurrent collections
-dashmap.workspace = true
-
 # Error derive
 thiserror.workspace = true
-
-# Per-future completion registrations, removed when their futures are dropped.
-slab.workspace = true
 
 # Logging
 tracing.workspace = true
@@ -107,5 +101,4 @@ order = 2
 # Process-global state, checked by `cargo xtask globals` (ADR-0097).
 globals = [
     { item = "task::next_task_id::COUNTER", grant = "ADR-0097", class = "counter", reason = "Task identities, advanced by try_update with permanent exhaustion refusal" },
-    { item = "config::TIME_DILATION", exit = "ADR-0097", reason = "process-wide time dilation; it becomes a property of each presentation's frame clock" },
 ]

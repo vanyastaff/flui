@@ -39,8 +39,8 @@
 //! * **No navigator size.** `Positioned` takes `left`/`top`/`width`/`height`
 //!   directly, so the rect needs no conversion against the navigator's size.
 
-use std::sync::Arc;
-use std::sync::Weak;
+use std::rc::Rc;
+use std::rc::Weak;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use flui_animation::{
@@ -49,7 +49,7 @@ use flui_animation::{
 };
 use flui_foundation::geometry::Rect;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerId, RenderId};
-use flui_scheduler::LocalPostFrameHandle;
+use flui_scheduler::PostFrameHandle;
 use flui_view::prelude::*;
 use flui_view::{AnimatedView, BoxedView, ViewExt, impl_animated_view};
 use parking_lot::Mutex;
@@ -96,7 +96,7 @@ struct FlightInner {
 
     /// The animation the shuttle reads, already reversed for a pop. Its **parent** is repointed by a divert;
     /// the proxy object itself, and the listeners on it, never change.
-    proxy: Terminal<Arc<ProxyAnimation<f64>>>,
+    proxy: Terminal<Rc<ProxyAnimation<f64>>>,
     /// The shuttle's rect-tween endpoints. Re-aimed by
     /// [`FlightInner::on_tick`]; interpolated through [`rect_factory`](Self::rect_factory).
     rect: Terminal<Mutex<RectTween>>,
@@ -129,7 +129,7 @@ struct FlightInner {
     /// tell the shuttle to rebuild when a gesture ends (nothing about the
     /// animation itself changed then); this is what gives a status parked
     /// mid-gesture a rebuild to drain, the moment the gesture ends.
-    wake: Terminal<Arc<ChangeNotifier>>,
+    wake: Terminal<Rc<ChangeNotifier>>,
     /// The forwarding subscription feeding [`wake`](Self::wake) from
     /// [`proxy`](Self::proxy)'s own value changes.
     proxy_wake_subscription: Terminal<Mutex<Option<ListenerId>>>,
@@ -160,7 +160,7 @@ struct FlightInner {
     /// progress on this flight's navigator — a terminal status arriving mid-
     /// gesture is parked instead (see
     /// [`gesture_wake_subscription`](Self::gesture_wake_subscription)).
-    settled_status: Terminal<Arc<AtomicU8>>,
+    settled_status: Terminal<Rc<AtomicU8>>,
     /// The in-flight widget, inflated once at start and rebuilt on a divert. Either the resolved `flight_shuttle_builder`'s output or, when none is
     /// set, a fresh copy of the destination hero's child.
     shuttle: Terminal<Mutex<Option<BoxedView>>>,
@@ -336,7 +336,7 @@ impl Drop for FlightInner {
 /// reversed) proxy.
 fn inflate_shuttle(
     builder: Option<&ShuttleBuilder>,
-    animation: &Arc<dyn Animation<f64>>,
+    animation: &std::rc::Rc<dyn Animation<f64>>,
     direction: FlightDirection,
     from_hero: &HeroHandle,
     to_hero: &HeroHandle,
@@ -358,7 +358,7 @@ fn inflate_shuttle(
 /// module is private, so nothing else names it.
 #[derive(Clone)]
 pub struct HeroFlight {
-    inner: Arc<FlightInner>,
+    inner: Rc<FlightInner>,
 }
 
 impl std::fmt::Debug for HeroFlight {
@@ -529,7 +529,7 @@ impl HeroFlight {
 
         // The new parent for the proxy animation, the new rect endpoints, and whether the
         // shuttle is rebuilt — decided per branch, applied afterwards.
-        let new_parent: Terminal<Arc<dyn Animation<f64>>>;
+        let new_parent: Terminal<std::rc::Rc<dyn Animation<f64>>>;
         let (new_begin, new_end): (Rect, Rect);
         let mut new_shuttle: Terminal<Option<BoxedView>> = Terminal::new(None);
 
@@ -542,7 +542,7 @@ impl HeroFlight {
                      (heroes.dart:744-745)"
                 );
                 // The proxy's parent becomes the reverse of the new animation.
-                new_parent = Terminal::new(Arc::new(ReverseAnimation::new(new_anim.take_value())));
+                new_parent = Terminal::new(Rc::new(ReverseAnimation::new(new_anim.take_value())));
                 // The tween is reversed. FLUI has only a **linear** `RectTween`, for
                 // which reversing the tween and swapping begin/end are identical
                 // (`lerp(a,b,1-t) == lerp(b,a,t)`). A non-linear path (an arc tween)
@@ -568,7 +568,7 @@ impl HeroFlight {
                 // proxy's own value here reads mirrored progress and teleports the
                 // shuttle unless the divert happens at exactly the halfway point.
                 let begin = 1.0 - self.inner.proxy.value();
-                new_parent = Terminal::new(Arc::new(animate(
+                new_parent = Terminal::new(Rc::new(animate(
                     Tween { begin, end: 1.0 },
                     new_anim.take_value(),
                 )));
@@ -604,9 +604,9 @@ impl HeroFlight {
 
                 // The shuttle builder wants the raw route animation, so clone before the
                 // proxy parent takes ownership below.
-                let shuttle_animation = Terminal::new(Arc::clone(&new_anim));
+                let shuttle_animation = Terminal::new(Rc::clone(&new_anim));
                 new_parent = Terminal::new(match new_dir {
-                    FlightDirection::Pop => Arc::new(ReverseAnimation::new(new_anim.take_value())),
+                    FlightDirection::Pop => Rc::new(ReverseAnimation::new(new_anim.take_value())),
                     FlightDirection::Push => new_anim.take_value(),
                 });
 
@@ -693,7 +693,7 @@ pub(crate) struct FlightPlan {
     /// The destination route's primary animation for a push, the source route's
     /// for a pop, already wrapped in the manifest's `CurvedAnimation` on the
     /// driving hero's `curve`/`reverse_curve`.
-    pub(crate) animation: Terminal<Arc<dyn Animation<f64>>>,
+    pub(crate) animation: Terminal<std::rc::Rc<dyn Animation<f64>>>,
     /// The resolved `create_rect_tween` factory: the destination hero's, else the
     /// controller's default, else `None` (linear).
     pub(crate) rect_factory: Terminal<Option<RectTweenFactory>>,
@@ -720,7 +720,7 @@ pub(crate) struct FlightPlan {
 /// under.
 ///
 /// So `finish` never drops: it moves the flight into `retired` and
-/// schedules a drain through the binding's [`LocalPostFrameHandle`]. That runs at
+/// schedules a drain through the binding's [`PostFrameHandle`]. That runs at
 /// **end-of-frame** — after the status listener has returned and `fan_out_status` has
 /// unwound, but within the same turn — so a single transition cleans up after itself
 /// without waiting for an unrelated hero measurement. The drain is coalesced: many
@@ -739,7 +739,7 @@ pub struct FlightManager {
     /// flight schedules its own end-of-frame drain through this, so cleanup does not
     /// wait for the next transition. `None` before the first launch or on an unmounted
     /// navigator — then the measurement-head backstop is the only path.
-    post_frame: Terminal<Mutex<Option<LocalPostFrameHandle>>>,
+    post_frame: Terminal<Mutex<Option<PostFrameHandle>>>,
     /// One drain per frame: set when a drain is scheduled, cleared when it runs.
     drain_scheduled: AtomicBool,
     /// How many drains this manager has actually scheduled — for the coalescing
@@ -778,7 +778,7 @@ impl FlightManager {
     /// Capture the binding's post-frame capability, so a finished flight can schedule
     /// its own drain. Set from the controller's measurement pass, where the navigator
     /// still resolves it.
-    pub(crate) fn set_post_frame(&self, handle: Option<LocalPostFrameHandle>) {
+    pub(crate) fn set_post_frame(&self, handle: Option<PostFrameHandle>) {
         *self.post_frame.lock() = handle;
     }
 
@@ -797,20 +797,20 @@ impl FlightManager {
 
     /// Queue a single end-of-frame drain of [`retired`](Self::retired).
     ///
-    /// **Not re-entrant.** `LocalPostFrameHandle::schedule_local` only pushes onto the lane's
+    /// **Not re-entrant.** `PostFrameHandle::schedule` only pushes onto the lane's
     /// post-frame queue; the closure runs at `end_frame`, long after `fan_out_status`
     /// has returned, so nothing here drops a flight while its listener is still on the
     /// stack. The closure holds a `Weak`: a manager dropped before the frame ends
     /// simply takes its retired flights with it.
-    fn schedule_drain(self: &Arc<Self>) {
+    fn schedule_drain(self: &Rc<Self>) {
         let Some(post_frame) = self.post_frame.lock().clone() else {
             return; // No binding capability; the measurement-head drain is the backstop.
         };
         if self.drain_scheduled.swap(true, Ordering::SeqCst) {
             return; // Already scheduled this frame — coalesce.
         }
-        let weak = Arc::downgrade(self);
-        let schedule_result = post_frame.schedule_local(move |_timing| {
+        let weak = Rc::downgrade(self);
+        let schedule_result = post_frame.schedule(move |_timing| {
             if let Some(this) = weak.upgrade() {
                 this.drain_scheduled.store(false, Ordering::SeqCst);
                 this.drain_retired();
@@ -855,12 +855,12 @@ impl FlightManager {
     ///
     /// `plan.animation` is the **destination** route's primary animation for a
     /// push, the **source** route's for a pop.
-    pub(crate) fn start(self: &Arc<Self>, manifest: &HeroFlightManifest, plan: FlightPlan) {
+    pub(crate) fn start(self: &Rc<Self>, manifest: &HeroFlightManifest, plan: FlightPlan) {
         self.start_reserving(manifest, plan, crate::OverlayEntryId::next);
     }
 
     fn start_reserving(
-        self: &Arc<Self>,
+        self: &Rc<Self>,
         manifest: &HeroFlightManifest,
         plan: FlightPlan,
         reserve_entry: impl FnOnce() -> crate::OverlayEntryId,
@@ -895,16 +895,17 @@ impl FlightManager {
 
         // The shuttle builder gets `manifest.animation` — the curved route animation, not
         // the (possibly reversed) proxy — so keep a clone before the proxy takes ownership.
-        let shuttle_animation = Terminal::new(Arc::clone(&animation));
+        let shuttle_animation = Terminal::new(Rc::clone(&animation));
 
         // The proxy's parent is the reverse of the animation for a pop, the
         // animation itself for a push.
-        let mut parent: Terminal<Arc<dyn Animation<f64>>> = Terminal::new(match direction {
-            FlightDirection::Push => animation.take_value(),
-            FlightDirection::Pop => Arc::new(ReverseAnimation::new(animation.take_value())),
-        });
+        let mut parent: Terminal<std::rc::Rc<dyn Animation<f64>>> =
+            Terminal::new(match direction {
+                FlightDirection::Push => animation.take_value(),
+                FlightDirection::Pop => Rc::new(ReverseAnimation::new(animation.take_value())),
+            });
 
-        let inner = Arc::new(FlightInner {
+        let inner = Rc::new(FlightInner {
             tag: Terminal::new(manifest.tag.clone()),
             state: Terminal::new(Mutex::new(FlightState {
                 direction,
@@ -913,7 +914,7 @@ impl FlightManager {
                 to_route_subtree,
                 is_user_gesture_transition,
             })),
-            proxy: Terminal::new(Arc::new(ProxyAnimation::new(parent.take_value()))),
+            proxy: Terminal::new(Rc::new(ProxyAnimation::new(parent.take_value()))),
             rect: Terminal::new(Mutex::new(RectTween {
                 begin: manifest.from_rect,
                 end: manifest.to_rect,
@@ -926,10 +927,10 @@ impl FlightManager {
             entry: Terminal::new(Mutex::new(None)),
             subscriptions: Terminal::new(Mutex::new(None)),
             gesture_signal: Terminal::new(gesture_signal.clone()),
-            wake: Terminal::new(Arc::new(ChangeNotifier::new())),
+            wake: Terminal::new(Rc::new(ChangeNotifier::new())),
             proxy_wake_subscription: Terminal::new(Mutex::new(None)),
             gesture_wake_subscription: Terminal::new(Mutex::new(None)),
-            settled_status: Terminal::new(Arc::new(AtomicU8::new(0))),
+            settled_status: Terminal::new(Rc::new(AtomicU8::new(0))),
             shuttle: Terminal::new(Mutex::new(None)),
             shuttle_builder: Terminal::new(Mutex::new(shuttle_builder.take_value())),
         });
@@ -950,11 +951,11 @@ impl FlightManager {
         ));
 
         let entry = {
-            let inner = Arc::clone(&inner);
-            let manager = Arc::downgrade(self);
+            let inner = Rc::clone(&inner);
+            let manager = Rc::downgrade(self);
             OverlayEntry::with_reserved_id(entry_id, move |_ctx| {
                 Shuttle {
-                    flight: Arc::clone(&inner),
+                    flight: Rc::clone(&inner),
                     manager: manager.clone(),
                 }
                 .boxed()
@@ -964,7 +965,7 @@ impl FlightManager {
         let _prev = inner.entry.lock().replace(entry);
 
         let flight = HeroFlight {
-            inner: Arc::clone(&inner),
+            inner: Rc::clone(&inner),
         };
 
         // The per-tick `on_tick` is served by the shuttle's `AnimatedView`
@@ -972,10 +973,10 @@ impl FlightManager {
         // dirty, and `ShuttleState::build` runs `on_tick` before reading the rect.
         // The shuttle listens to `wake`, not `proxy` directly — forward every proxy
         // tick into it so that stays true.
-        let proxy_to_wake = Arc::clone(&inner.wake);
+        let proxy_to_wake = Rc::clone(&inner.wake);
         let proxy_wake_id = inner
             .proxy
-            .add_listener(Arc::new(move || proxy_to_wake.notify_listeners()));
+            .add_listener(std::rc::Rc::new(move || proxy_to_wake.notify_listeners()));
         *inner.proxy_wake_subscription.lock() = Some(proxy_wake_id);
 
         // The status listener must remain a data-plane callback. It records only a
@@ -987,20 +988,22 @@ impl FlightManager {
         // once, for the flight's whole life) picks it up when the gesture ends,
         // reading the proxy's status fresh at that time rather than trusting
         // whatever it was at the moment it was skipped.
-        let settled_status = Arc::clone(&inner.settled_status);
+        let settled_status = Rc::clone(&inner.settled_status);
         let listener_gesture_signal = gesture_signal.clone();
-        let status_id = inner.proxy.add_status_listener(Arc::new(move |status| {
-            // Only terminal statuses matter: forward/reverse is exactly the
-            // complement of dismissed/completed.
-            if listener_gesture_signal.in_progress() {
-                return;
-            }
-            match status {
-                AnimationStatus::Dismissed => settled_status.store(1, Ordering::Release),
-                AnimationStatus::Completed => settled_status.store(2, Ordering::Release),
-                _ => {}
-            }
-        }));
+        let status_id = inner
+            .proxy
+            .add_status_listener(std::rc::Rc::new(move |status| {
+                // Only terminal statuses matter: forward/reverse is exactly the
+                // complement of dismissed/completed.
+                if listener_gesture_signal.in_progress() {
+                    return;
+                }
+                match status {
+                    AnimationStatus::Dismissed => settled_status.store(1, Ordering::Release),
+                    AnimationStatus::Completed => settled_status.store(2, Ordering::Release),
+                    _ => {}
+                }
+            }));
         *inner.subscriptions.lock() = Some(status_id);
 
         // The deferred-replay half of the gesture deferral: fires on every 0→1/1→0 transition of the navigator's gesture state, for the
@@ -1011,22 +1014,24 @@ impl FlightManager {
         // `Rc`-based view state). Writing `settled_status` alone would not be seen:
         // nothing about `proxy` itself changed on a gesture-end, so the owner-local
         // shuttle needs telling to rebuild and drain it — hence also waking.
-        let settled_status = Arc::clone(&inner.settled_status);
-        let proxy_for_replay = Arc::clone(&inner.proxy);
-        let gesture_to_wake = Arc::clone(&inner.wake);
+        let settled_status = Rc::clone(&inner.settled_status);
+        let proxy_for_replay = Rc::clone(&inner.proxy);
+        let gesture_to_wake = Rc::clone(&inner.wake);
         let replay_gesture_signal = gesture_signal.clone();
-        let gesture_wake_id = gesture_signal.notifier().add_listener(Arc::new(move || {
-            if !replay_gesture_signal.in_progress() {
-                // Read the status fresh, not whatever status was skipped when it
-                // was parked.
-                match proxy_for_replay.status() {
-                    AnimationStatus::Dismissed => settled_status.store(1, Ordering::Release),
-                    AnimationStatus::Completed => settled_status.store(2, Ordering::Release),
-                    _ => {} // Still animating; nothing to replay.
+        let gesture_wake_id = gesture_signal
+            .notifier()
+            .add_listener(std::rc::Rc::new(move || {
+                if !replay_gesture_signal.in_progress() {
+                    // Read the status fresh, not whatever status was skipped when it
+                    // was parked.
+                    match proxy_for_replay.status() {
+                        AnimationStatus::Dismissed => settled_status.store(1, Ordering::Release),
+                        AnimationStatus::Completed => settled_status.store(2, Ordering::Release),
+                        _ => {} // Still animating; nothing to replay.
+                    }
                 }
-            }
-            gesture_to_wake.notify_listeners();
-        }));
+                gesture_to_wake.notify_listeners();
+            }));
         *inner.gesture_wake_subscription.lock() = Some(gesture_wake_id);
 
         let _prev = self.flights.lock().insert(manifest.tag.clone(), flight);
@@ -1034,13 +1039,13 @@ impl FlightManager {
 
     /// Drop the flight from the registry. Called from the flight's own status listener, so the flight
     /// is *retired*, not dropped — see the type docs.
-    fn finish(self: &Arc<Self>, flight: &HeroFlight, status: AnimationStatus) {
+    fn finish(self: &Rc<Self>, flight: &HeroFlight, status: AnimationStatus) {
         flight.finish(status);
         self.retire(flight);
     }
 
     /// [`HeroFlight::abort`], then the same retire-and-drain `finish` uses.
-    fn abort(self: &Arc<Self>, flight: &HeroFlight) {
+    fn abort(self: &Rc<Self>, flight: &HeroFlight) {
         flight.abort();
         self.retire(flight);
     }
@@ -1050,7 +1055,7 @@ impl FlightManager {
     /// from a detached controller's sweep (`abort`) — both park rather than
     /// drop, so the flight is freed outside any animation listener (see the
     /// type docs).
-    fn retire(self: &Arc<Self>, flight: &HeroFlight) {
+    fn retire(self: &Rc<Self>, flight: &HeroFlight) {
         let removed = self.flights.lock().remove(flight.tag());
         if let Some(removed) = removed {
             // Park it — we may be inside its status listener — and schedule the
@@ -1072,7 +1077,7 @@ impl FlightManager {
     /// Owner-local, never from inside an animation listener, so aborting (which
     /// parks a flight) is safe here, unlike the data-plane status listeners in
     /// [`start`](Self::start).
-    pub(crate) fn finish_all(self: &Arc<Self>) {
+    pub(crate) fn finish_all(self: &Rc<Self>) {
         let all: Vec<HeroFlight> = self.flights.lock().values().cloned().collect();
         for flight in all {
             self.abort(&flight);
@@ -1089,7 +1094,7 @@ impl FlightManager {
     /// never from inside an animation listener — so calling `finish` here (which
     /// may drop the flight) is unconditionally safe, unlike the data-plane status
     /// listeners in [`start`](Self::start).
-    pub(crate) fn finish_stalled_gesture_pops(self: &Arc<Self>) {
+    pub(crate) fn finish_stalled_gesture_pops(self: &Rc<Self>) {
         let stalled: Vec<HeroFlight> = self
             .flights
             .lock()
@@ -1116,7 +1121,7 @@ impl FlightManager {
 /// lands at the origin.
 #[derive(Clone)]
 struct Shuttle {
-    flight: Arc<FlightInner>,
+    flight: Rc<FlightInner>,
     manager: Weak<FlightManager>,
 }
 
@@ -1135,8 +1140,8 @@ impl AnimatedView for Shuttle {
     /// forwards the navigator's gesture-notifier, so a flight parked
     /// mid-gesture (`FlightInner::gesture_wake_subscription`) gets a rebuild
     /// the moment the gesture ends, to drain the status that was replayed.
-    fn listenable(&self) -> Arc<dyn Listenable> {
-        Arc::clone(&self.flight.wake) as Arc<dyn Listenable>
+    fn listenable(&self) -> std::rc::Rc<dyn Listenable> {
+        Rc::clone(&self.flight.wake) as std::rc::Rc<dyn Listenable>
     }
 }
 
@@ -1158,7 +1163,7 @@ impl ViewState<Shuttle> for ShuttleState {
         {
             manager.finish(
                 &HeroFlight {
-                    inner: Arc::clone(&view.flight),
+                    inner: Rc::clone(&view.flight),
                 },
                 status,
             );
@@ -1207,11 +1212,12 @@ mod terminal_tests {
         callback_panics: bool,
         factory_panics: bool,
         builder_panics: bool,
-    ) -> (HeroFlight, [Arc<AtomicUsize>; 3]) {
-        let parent: Arc<dyn Animation<f64>> = Arc::new(flui_animation::ConstantAnimation::new(0.0));
-        let proxy = Arc::new(ProxyAnimation::new(parent));
+    ) -> (HeroFlight, [std::sync::Arc<AtomicUsize>; 3]) {
+        let parent: std::rc::Rc<dyn Animation<f64>> =
+            std::rc::Rc::new(flui_animation::ConstantAnimation::new(0.0));
+        let proxy = Rc::new(ProxyAnimation::new(parent));
         let (callback, callback_drops) = bomb("subscription retirement", callback_panics);
-        let subscription = proxy.add_status_listener(Arc::new(move |_| {
+        let subscription = proxy.add_status_listener(std::rc::Rc::new(move |_| {
             let _capture = &callback;
         }));
         let (rect_capture, rect_drops) = bomb("rect factory retirement", factory_panics);
@@ -1249,16 +1255,16 @@ mod terminal_tests {
             entry: Terminal::new(Mutex::new(None)),
             subscriptions: Terminal::new(Mutex::new(Some(subscription))),
             gesture_signal: Terminal::new(signal),
-            wake: Terminal::new(Arc::new(ChangeNotifier::new())),
+            wake: Terminal::new(Rc::new(ChangeNotifier::new())),
             proxy_wake_subscription: Terminal::new(Mutex::new(None)),
             gesture_wake_subscription: Terminal::new(Mutex::new(None)),
-            settled_status: Terminal::new(Arc::new(AtomicU8::new(0))),
+            settled_status: Terminal::new(Rc::new(AtomicU8::new(0))),
             shuttle: Terminal::new(Mutex::new(None)),
             shuttle_builder: Terminal::new(Mutex::new(Some(builder))),
         };
         (
             HeroFlight {
-                inner: Arc::new(inner),
+                inner: Rc::new(inner),
             },
             [callback_drops, rect_drops, shuttle_drops],
         )
@@ -1291,13 +1297,13 @@ mod terminal_tests {
             to_hero: Terminal::new(to.clone()),
             to_route_subtree: RenderId::new(1),
             overlay: Terminal::new(overlay.clone()),
-            animation: Terminal::new(Arc::new(flui_animation::ConstantAnimation::new(0.0))),
+            animation: Terminal::new(Rc::new(flui_animation::ConstantAnimation::new(0.0))),
             rect_factory: Terminal::new(None),
             shuttle_builder: Terminal::new(None),
             is_user_gesture_transition: false,
             gesture_signal: Terminal::new(NavigatorHandle::new().user_gesture_signal()),
         };
-        let manager = Arc::new(FlightManager::default());
+        let manager = Rc::new(FlightManager::default());
         let exhausted = std::sync::atomic::AtomicU64::new(0);
         let failure = catch_unwind(AssertUnwindSafe(|| {
             manager.start_reserving(&manifest, plan(), || {

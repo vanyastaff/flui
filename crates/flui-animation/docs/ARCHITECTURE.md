@@ -7,8 +7,8 @@ Internal architecture of `flui_animation`.
 `flui_animation` supplies animation values, controllers, curves and simulations.
 The widget layer consumes them through `flui-widgets`' `animated` and
 `transitions` modules: implicit animations own controllers, while transition
-widgets and `AnimatedBuilder` observe existing animations. Ticker ownership
-comes from the scheduler and the widget's vsync scope.
+widgets and `AnimatedBuilder` observe existing animations. `DrivenController`
+owns registration on the widget's ambient Vsync registry.
 
 ```text
 flui-widgets: animated / transitions
@@ -17,7 +17,7 @@ flui-widgets: animated / transitions
 flui-animation: Animation<T> / AnimationController / Curve / Simulation
                    │
                    ▼
-flui-scheduler: Ticker / Scheduler
+flui-scheduler: owner frame scheduling
 ```
 
 ## Module Structure
@@ -36,7 +36,6 @@ src/
 ├── tween.rs          # TweenAnimation<T> (maps to type T)
 ├── reverse.rs        # ReverseAnimation (inverts value)
 ├── proxy.rs          # ProxyAnimation (hot-swappable parent)
-├── compound.rs       # CompoundAnimation (combine with operators)
 ├── constant.rs       # ConstantAnimation (fixed value)
 ├── switch.rs         # AnimationSwitch (crossover switching)
 │
@@ -83,7 +82,7 @@ wraps a slot; once the namespace is exhausted, `try_register` and
 stale token can never name later work.
 
 `unregister` and `detach_child` withdraw the registered value under the
-registry mutex and drop it after unlocking. The destructor of a last owner may
+registry borrow and drop it after releasing the borrow. The destructor of a last owner may
 therefore reenter the same registry, remove the same token again or register
 fresh work, and removing a child keeps the tick order of the remaining
 children. A panic from that destructor propagates to the caller after the
@@ -95,9 +94,9 @@ not covered by this contract.
 The central abstraction:
 
 ```rust
-pub trait Animation<T>: Listenable + Send + Sync + Debug
+pub trait Animation<T>: Listenable + Debug
 where
-    T: Clone + Send + Sync + 'static,
+    T: Clone + 'static,
 {
     /// Current value
     fn value(&self) -> T;
@@ -114,7 +113,7 @@ where
 Design decisions:
 - **Generic over T** — any value type (f64, Color, Size)
 - **Extends Listenable** — integrates with change notification system
-- **Send + Sync** — thread-safe by default
+- **Owner-local** — UI state and callbacks stay on one owner
 - **Debug required** — all animations inspectable
 
 ### Curve Trait
@@ -135,7 +134,7 @@ pub trait Curve {
 
 ```rust
 /// Maps t ∈ [0,1] → value of type T
-pub trait Animatable<T>: Clone + Send + Sync + Debug {
+pub trait Animatable<T> {
     fn transform(&self, t: f64) -> T;
 }
 
@@ -152,7 +151,7 @@ pub trait Tween<T>: Animatable<T> {
 Physics-based value generation:
 
 ```rust
-pub trait Simulation: Send + Sync {
+pub trait Simulation {
     /// Position at time t
     fn x(&self, time: f64) -> f64;
     
@@ -171,65 +170,10 @@ pub trait Simulation: Send + Sync {
 
 ### State
 
-```rust
-pub struct AnimationController {
-    inner: Arc<Mutex<AnimationControllerInner>>,
-    notifier: Arc<ChangeNotifier>,
-}
-
-struct AnimationControllerInner {
-    // Current state
-    value: f64,
-    status: AnimationStatus,
-    direction: AnimationDirection,
-    
-    // Configuration
-    duration: Duration,
-    reverse_duration: Option<Duration>,
-    lower_bound: f64,
-    upper_bound: f64,
-    
-    // Animation state. Time comes from the ticker's elapsed seconds (scaled by
-    // time_dilation), not wall-clock Instants: `restart_ticker` always begins a
-    // fresh run's Ticker at elapsed zero, so that elapsed time IS the elapsed
-    // time since the run started — no per-run epoch to subtract.
-    run_duration: Option<Duration>, // per-run override (animate_to), never clobbers `duration`
-    start_value: f64,
-    target_value: f64,
-    
-    // Physics
-    simulation: Option<Box<dyn Simulation>>,
-    
-    // Repeat: `None` outside a repeat run, so "repeating with no
-    // configuration" is unrepresentable. value/status/direction
-    // are a pure function of elapsed time since the run started
-    // (`RepeatRun::initial_ns`, the phase the run started at, plus that
-    // elapsed time, reduced modulo `RepeatRun::period_ns` in integer
-    // nanoseconds) — no incremental per-cycle bookkeeping.
-    repeat: Option<RepeatRun>,
-    
-    // Ticker
-    ticker: Option<Ticker>,
-    
-    // Listeners
-    status_listeners: Vec<(ListenerId, StatusCallback)>,
-    
-    // Lifecycle
-    disposed: bool,
-}
-
-// `period_ns` is always `> 0` — constructed only after `repeat_with`'s
-// zero-period and zero-count degenerate cases have already settled
-// synchronously and returned. See `AnimationControllerInner::repeat_sample`.
-struct RepeatRun {
-    reverse: bool,
-    min: f64,
-    max: f64,
-    period_ns: u128,
-    count: Option<u32>,
-    initial_ns: u128,
-}
-```
+The controller kernel stores its value, direction, run source, local time,
+listener membership and committed delivery FIFO in `Rc<RefCell<_>>`.
+`DrivenController` separately owns the Vsync registration and controller lifetime.
+Observer clones retain the kernel without retaining that registration.
 
 ### State Machine
 
@@ -259,21 +203,27 @@ struct RepeatRun {
 
 ### Tick Cycle
 
-Each frame calls `tick_at(raw_elapsed_secs: f64)` with the absolute time
-since the active run started (`tick()` reads it from the controller's own
-ticker; production widgets are advanced through `Vsync::tick_all`):
-
-1. Lock `inner`, read the active run and its generation, unlock
-2. Sample the run's source (curve or simulation) outside the lock
-3. Lock `inner` again; if the run is still the same generation, commit the
-   new `value`, detect completion and update `status`; unlock
-4. Notify value listeners (via `ChangeNotifier`)
-5. Notify status listeners (if status changed)
-
-User code (curves, simulations, listeners) never runs under the state lock,
-so a frame takes the lock up to three times rather than once.
+A presentation samples its `MotionClock` and passes a typed `FrameTick` to
+`Vsync::tick_all`. Manual controllers accept elapsed `Duration` through
+`tick_at`. Source sampling releases the state borrow before invoking user code;
+the run generation and sample epoch must still match before its result commits.
+Value, status and outcome callbacks drain outside the borrow with shared
+first-failure custody. Playback-rate changes apply after the old rate has
+sampled the current frame, preserving local-time continuity.
 
 ## Mapping decisions
+
+### Run and sample identities never wrap
+
+Each admitted run consumes a monotonically increasing generation; each sample
+consumes an epoch before calling its source. Exhausted namespaces refuse new
+runs with `AnimationError::IdentityExhausted`. A final admitted run can finish;
+sample exhaustion instead cancels its pending outcome without publishing a
+new sample. Stop and reset remain available without reopening admission.
+
+`exhausted_run_identities_refuse_without_displacing_the_last_run` and
+`exhausted_sample_identities_cancel_without_reissuing_a_stale_sample` seed the
+terminal counter boundary privately, then observe only controller behavior.
 
 ### Terminal owners retire outside their guards
 
@@ -285,7 +235,7 @@ is accepted, so a constructor that fails later still detaches it. After the
 first destructor failure in a retirement, or while the thread is already
 panicking, the remaining owned values are retained rather than dropped
 ([ADR-0127](../../../docs/adr/ADR-0127-exceptional-path-retention.md)); the
-first failure propagates. Callbacks are thread-shared `Arc`s, so a snapshot
+first failure propagates. Callbacks are owner-shared `Rc`s, so a snapshot
 clone cannot be proven non-last and is retained too.
 Tested by `controller_sources_allow_reentry_and_preserve_run_ownership`.
 
@@ -301,10 +251,10 @@ value cannot replace the decoding or range error.
 `reverse_from`, `animate_to`, `animate_back`, `animate_to_curved`,
 `animate_back_curved`, `repeat`, `repeat_with`, `fling`, `fling_with`,
 `animate_with`, `animate_back_with`) returns
-`Result<TickerFuture, AnimationError>`: `Err` means the run could not start
-(the controller is disposed); the `TickerFuture` is how the run ends,
-`Ok(())` on a normal finish and `Err(TickerCanceled)` when it is superseded
-or torn down. `AnimationControllerInner.active_run: Option<TickerCompleter>`
+`Result<AnimationRunFuture, AnimationError>`: `Err` means the run could not start
+(the controller is disposed); the `AnimationRunFuture` is how the run ends,
+`Ok(())` on a normal finish and `Err(RunCanceled)` when it is superseded
+or torn down. `AnimationControllerInner.active_run: Option<RunCompleter>`
 is the one completer this controller ever holds; every run-ending or
 run-starting site funnels through `AnimationController::finish`, the single
 chokepoint that owns `drop(inner)` then delivers — see
@@ -324,14 +274,14 @@ fact).
 | `stop`/`set_value` (`stop_running`) | — | `active_run`, canceled |
 | `reset` (`stop_running`) | — | `active_run`, canceled |
 | `dispose` | — | `active_run`, canceled |
-| last `Arc<Mutex<Inner>>` drop (no explicit `dispose()`) | — | `active_run`'s own `Drop`, canceled — reachable only for `without_ticker`(`_bounds`) controllers; `new` **and** `with_detached_ticker` both install a real `Ticker`, and once a run starts `restart_ticker` gives it a callback capturing `self.clone()` regardless of whether that ticker is scheduler-driven or detached, so both hold `inner.ticker → callback → controller clone → inner` — a cycle that never reaches zero strong references without `dispose()` |
+| last controller kernel drop | — | the remaining active run is canceled; no scheduler callback retains a controller cycle |
 
 **Publish-before-listeners.** A natural end (`tick_time_based`,
 `tick_simulation`) takes `active_run` and calls
-`TickerCompleter::complete()` **before** `drop(inner)` — the same guard scope
+`RunCompleter::complete()` **before** `drop(inner)` — the same guard scope
 that sets `status`, before listeners are notified; only *delivery*
 (continuations, wakers) is deferred past the unlock. This is what makes a panicking status listener
-leave the run `Ok`: the controller drains the admitted `TickerDelivery` with
+leave the run `Ok`: the controller drains the admitted `RunDelivery` with
 the already-published outcome, even after containing a listener failure.
 
 **Status-before-cancel.** A run-starting site displaces `active_run` under
@@ -375,7 +325,7 @@ landed" once both report `Completed`, so the listener re-triggered a
 redundant zero-distance settle when the release it started reached its own
 end (no observable trace — same-status writes are deduplicated — but the
 wrong shape). It now chains the release on the press fade's own
-`TickerFuture` (`chain_release_fade`, `packages/flui-cupertino/src/button.rs`),
+`AnimationRunFuture` (`chain_release_fade`, `packages/flui-cupertino/src/button.rs`),
 `Ok`-only and one-shot.
 
 **`stop()`/`set_value` keep the bounds-first rule.**
@@ -539,14 +489,11 @@ contract rather than introducing a repeat-specific special case. Pinned by
 
 ### Unbounded is a constructor fact; bound-targeting runs on it are refused; no path reads NaN
 
-**Issue #1183.** `AnimationController::unbounded`/`unbounded_without_ticker`/
-`unbounded_with_detached_ticker` fix bounds at `(f64::NEG_INFINITY,
-f64::INFINITY)` and are infallible: unboundedness is a constructor fact,
-never a bound VALUE.
+`AnimationControllerBuilder::unbounded` fixes bounds at
+`(f64::NEG_INFINITY, f64::INFINITY)` and is infallible: unboundedness is a
+configuration fact, never a bound value.
 
-`with_bounds`/`without_ticker_bounds`/`with_detached_ticker_bounds` (and
-`AnimationControllerBuilder::bounds`, which duplicates the same check) now
-REJECT any bound that is not finite, including a wide-open
+`ValueRange::new` rejects any bound that is not finite, including a wide-open
 `(NEG_INFINITY, INFINITY)` pair, AND reject a pair whose finite endpoints
 still overflow `f64` as a RANGE (`(-f64::MAX, f64::MAX)`; a bounded run's
 `target - value`/`target - start` arithmetic needs the SPAN to be finite,
@@ -771,25 +718,25 @@ round trips, unreachable queries and the remaining-glide rest.
 
 ## Composition Model
 
-Animations compose via `Arc<dyn Animation<f64>>`:
+Animations compose via `Rc<dyn Animation<f64>>`:
 
 ```
 AnimationController (produces 0.0 → 1.0)
         │
-        ▼ Arc<dyn Animation<f64>>
+        ▼ Rc<dyn Animation<f64>>
 CurvedAnimation (applies easing curve)
         │
-        ▼ Arc<dyn Animation<f64>>
+        ▼ Rc<dyn Animation<f64>>
 TweenAnimation<Color> (maps to Color)
         │
         ▼ Animation<Color>
 ```
 
-Each wrapper stores parent as `Arc<dyn Animation<f64>>`:
+Each wrapper stores parent as `Rc<dyn Animation<f64>>`:
 
 ```rust
 pub struct CurvedAnimation<C: Curve> {
-    parent: Arc<dyn Animation<f64>>,
+    parent: Rc<dyn Animation<f64>>,
     curve: C,
     reverse_curve: Option<C>,
 }
@@ -806,20 +753,13 @@ impl<C: Curve> Animation<f64> for CurvedAnimation<C> {
 }
 ```
 
-## Thread Safety
+## UI ownership
 
-All types are `Send + Sync`. Synchronization strategy:
-
-| Component | Mechanism | Rationale |
-|-----------|-----------|-----------|
-| Controller state | `Mutex<Inner>` | Single lock, batch updates |
-| Value listeners | `ChangeNotifier` | Separate from state lock |
-| Status listeners | Inside `Inner` | Updated with state |
-| Disposed flag | Inside `Inner` | Checked under lock |
-
-`parking_lot::Mutex` does not poison on panic. Controller code must restore its
-own invariants and invoke user callbacks outside the state lock; choosing this
-primitive is not a measured throughput claim.
+Controllers, Vsync registries, notification channels and animation wrappers
+share owner-local state through `Rc`, `Cell` and `RefCell` (ADR-0175).
+Borrows end before callbacks, curves, simulations, diagnostics or outgoing
+captures run. Frame wakers retain a separate cross-thread wake capability;
+they do not retain UI callback storage.
 
 ## Error Handling
 
@@ -829,7 +769,7 @@ primitive is not a measured throughput claim.
 pub enum AnimationError {
     Disposed,                // operation on a disposed controller
     InvalidBounds(String),   // lower >= upper, non-finite bound/span, bad repeat range
-    TickerNotAvailable,      // declared; no current operation returns it
+    IdentityExhausted,        // run or sample identity namespace exhausted
     InvalidSpring(String),   // oscillating spring passed to fling
     NonFiniteTarget(String), // non-finite target, `from`, velocity or simulation start
 }
@@ -837,30 +777,31 @@ pub enum AnimationError {
 
 Design:
 - `#[non_exhaustive]` — can add variants without breaking
-- `Clone` — shareable across threads
+- `Clone` — an outcome can retain its error value
 - All fallible operations return `Result<_, AnimationError>`
 
 ## Memory Management
 
-### Arc Sharing
+### Rc Sharing
 
 ```rust
-// `AnimationController` is itself a handle over `Arc`-shared state:
+// `AnimationController` is itself a handle over `Rc`-shared state:
 // `clone()` shares the controller.
-let controller = AnimationController::new(duration, &scheduler);
-let curved: Arc<dyn Animation<f64>> =
-    Arc::new(CurvedAnimation::new(Arc::new(controller.clone()), curve));
-let tweened = TweenAnimation::new(tween, Arc::clone(&curved));
+let controller = AnimationController::builder(duration).build();
+let curved: Rc<dyn Animation<f64>> =
+    Rc::new(CurvedAnimation::new(Rc::new(controller.clone()), curve));
+let tweened = TweenAnimation::new(tween, Rc::clone(&curved));
 ```
 
 Benefits:
-- Cheap cloning (pointer copy + atomic increment)
+- Cheap cloning (pointer copy + reference-count increment)
 - Automatic cleanup on last reference drop
-- Thread-safe sharing
+- Owner-local sharing
 
 ### Explicit Disposal
 
-Controllers require explicit disposal:
+An owning `DrivenController` unregisters and disposes automatically on drop.
+Manual controller handles can close their shared kernel explicitly:
 
 ```rust
 controller.dispose();
@@ -868,29 +809,13 @@ controller.dispose();
 
 After disposal, driving operations (`forward`, `reverse`, `animate_*`,
 `fling*`, `repeat*`, `stop`, `reset`) return `Err(AnimationError::Disposed)`
-and the ticker is stopped.
+and the active run is canceled.
 
 Why not just Drop?
 - Clones of an `AnimationController` share one controller, so dropping one
   handle cannot mean the animation is finished; `dispose` is the explicit end
   of life for every handle at once
 - Explicit disposal can be called safely multiple times
-
-### Known gaps in the current controller
-
-These are defects, recorded here so the document matches the code until the
-controller rework lands; each has an ignored `contract:` test row that pins
-the intended behaviour (`cargo nextest run -p flui-animation --run-ignored only`):
-`tests/contracts/controller_robustness.rs` (disposed controller, curved-run
-finiteness and bounds), `tests/contracts/status_delivery.rs` (listener and
-`Vsync` walk panics, switch reentry) and `tests/contracts/ownership.rs`.
-
-- After `dispose`, `set_value` still changes the value, listener registration
-  is still accepted, and value listeners stay attached.
-- A curved run publishes the curve's output without a finiteness check or a
-  clamp to the bounds: a curve returning NaN or overshooting is published as is.
-- `AnimationSwitch` reads its parents' `value()` and `status()` while holding its
-  own lock, so a parent that reads the switch back deadlocks.
 
 ### Proxy queries release the parent guard before user code
 

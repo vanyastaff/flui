@@ -93,18 +93,18 @@ pub(crate) fn post_frame_callback_runs_after_layout_in_the_same_pumped_frame() {
     let pipeline_cb = pipeline;
     // `PipelineCell` is `!Send`, so this callback cannot go through
     // `add_post_frame_callback` (its `Box<dyn Fn() + Send + Sync>` bound is for
-    // cross-thread wake, not owner-local frame callbacks). `LocalPostFrameHandle::
-    // schedule_local` accepts it instead, matching the `editable_text.rs` IME
+    // cross-thread wake, not owner-local frame callbacks). `PostFrameHandle::
+    // schedule` accepts it instead, matching the `editable_text.rs` IME
     // cursor-loop pattern: the handle is `!Send` and addresses its lane directly
     // (a `Weak` pointer), so there is no "active lane" requirement to satisfy —
     // only the lane and its scheduler need to still be alive.
     let post_frame_handle = binding
         .build_owner_mut()
-        .local_post_frame_handle()
+        .post_frame_handle()
         .expect("owner-local post-frame handle installed by with_tree/bind_tree")
         .clone();
     post_frame_handle
-        .schedule_local(move |_timing| {
+        .schedule(move |_timing| {
             calls_cb.fetch_add(1, Ordering::SeqCst);
             *observed_cb.write() = pipeline_cb.with(|owner| owner.box_size(root));
         })

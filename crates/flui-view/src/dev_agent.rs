@@ -339,6 +339,20 @@ impl AgentWindow {
             .ok_or_else(AgentFault::window_gone)?
             .act(request)
     }
+
+    /// Read or change this window's animation playback through its owner inbox.
+    /// Rate and step are applied together only after validation.
+    ///
+    /// # Errors
+    /// As [`Self::read`]; an invalid rate is reported in the answer.
+    pub fn motion(
+        &self,
+        request: flui_protocol::MotionRequest,
+    ) -> Result<AgentAnswer<flui_protocol::MotionState>, AgentFault> {
+        self.open_port()
+            .ok_or_else(AgentFault::window_gone)?
+            .motion(request)
+    }
 }
 
 impl fmt::Debug for AgentWindow {
@@ -387,6 +401,15 @@ mod tests {
 
         fn act(&self, _request: ActionRequest) -> Result<AgentAnswer<()>, AgentFault> {
             Ok(crate::__runtime::agent_answer(Ready(Some(()))))
+        }
+
+        fn motion(
+            &self,
+            _request: flui_protocol::MotionRequest,
+        ) -> Result<AgentAnswer<flui_protocol::MotionState>, AgentFault> {
+            Ok(crate::__runtime::agent_answer(Ready(Some(
+                flui_protocol::MotionState::new(1.0, 0.0),
+            ))))
         }
     }
 

@@ -12,18 +12,15 @@
 //! ```text
 //! AnimationController::repeat(reverse) → registered with the UI runtime's Vsync
 //!   → the UI runtime ticks Vsync once per frame (`UiRuntime::draw_frame`)
-//!   → the controller's Listenable notification marks this AnimatedView's
-//!     element dirty (see `flui_view::AnimatedView`) → `build` recolors the
+//!   → the controller's Listenable notification schedules the state's rebuild
+//!     through its lifecycle rebuild handle → `build` recolors the
 //!     leaf render object from the controller's current value
 //!   → next frame, next tick → …
 //! ```
 //!
-//! There is no process-global scheduler to reach for any more (each UI runtime
-//! now owns its own): the controller is built with
-//! [`AnimationController::with_detached_ticker`] and driven entirely through
-//! the ambient `VsyncScope` the UI runtime wraps every mounted tree in — the same
-//! seam `AnimatedSize` uses internally, and the same constructor it picked,
-//! since a ticker-less controller cannot report `is_animating()`.
+//! The mounted state owns a [`DrivenController`], bound to the ambient
+//! `VsyncScope`. Dependency changes move its registry seat while preserving
+//! run elapsed time. Disposal releases the seat and cancels the run.
 //!
 //! The loop is self-sustaining and STOPS sustaining itself the moment
 //! the controller stops — no busy-looping while idle.
@@ -38,30 +35,22 @@
 //! controller: the histogram is exactly the cadence this window's frame
 //! loop delivers.
 //!
-//! # Why `AnimatedView`, not a direct render-object mutation
-//!
-//! An earlier version of this example reached into the render pipeline
-//! directly from the ticker listener (`AppBinding::instance().render_pipeline_mut()`)
-//! to mutate the mounted `RenderColoredBox` in place, bypassing the widget
-//! tree. That ambient process-wide reach retired along with `AppBinding`:
-//! `AppRuntime`/`UiRuntime` are deliberately `pub(crate)`, not a public escape
-//! hatch, so an application author now drives per-tick recoloring the
-//! idiomatic way instead: subscribe an
-//! `AnimatedView` to the controller's `Listenable` and let the framework
-//! mark it dirty and rebuild on every tick.
+//! The state acquires its rebuild handle during initialization. Each value
+//! notification schedules a rebuild; the resulting view updates the render
+//! object's color through the ordinary render-view path.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use flui_animation::{Animation, AnimationController, Vsync, VsyncRegistration};
+use flui_animation::{Animation, AnimationController, DrivenController};
 use flui_app::run_app;
 use flui_foundation::Listenable;
 use flui_foundation::geometry::Size;
 use flui_objects::RenderColoredBox;
 use flui_painting::styling::Color;
 use flui_view::{
-    AnimatedView, BuildContext, BuildContextExt, IntoView, LifecycleContext, RenderView,
-    StatefulView, StatelessView, View, ViewExt, ViewState, impl_animated_view,
+    BuildContext, IntoView, LifecycleContext, RenderView, StatefulView, StatelessView, View,
+    ViewExt, ViewState,
 };
 use flui_widgets::VsyncScope;
 
@@ -138,11 +127,9 @@ impl RenderView for AnimatedBox {
 flui_view::impl_render_view!(AnimatedBox);
 
 /// Stateless root: `run_app` requires a `StatelessView` entry point, so the
-/// actual `AnimatedView` (which needs `StatefulView` state to hold the
-/// registered listener) mounts one level down.
+/// actual stateful animation owner mounts one level down.
 #[derive(Clone, Debug)]
 pub struct App {
-    controller: Arc<AnimationController>,
     red: Color,
     blue: Color,
     histogram_enabled: bool,
@@ -152,7 +139,6 @@ pub struct App {
 impl StatelessView for App {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         AnimatedBoxDemo {
-            controller: Arc::clone(&self.controller),
             red: self.red,
             blue: self.blue,
             histogram_enabled: self.histogram_enabled,
@@ -169,40 +155,13 @@ impl View for App {
 }
 
 impl App {
-    /// A ready-to-mount instance: the demo's standard 1400 ms bounce
-    /// controller (not yet started — `repeat(true)` is the caller's job)
-    /// and default red/blue palette.
+    /// A ready-to-mount instance with the default red/blue palette.
     ///
     /// `App`'s fields are private, so this is the one public construction
     /// path both `main` (below) and the headless screenshot harness
-    /// (`examples/screenshot.rs`, which mounts and captures a single frame
-    /// at t=0 without ever starting the controller) go through.
+    /// (`examples/screenshot.rs`, which captures the initial frame) go through.
     pub fn new() -> Self {
-        // A real, but permanently detached, ticker -- `with_detached_ticker`,
-        // not `without_ticker`. There is no process-global scheduler to reach
-        // for any more (each ui_runtime now owns its own);
-        // `AnimatedBoxDemoState::init_state` registers this controller with the
-        // ambient `VsyncScope` the ui_runtime wraps every mounted tree in — the same
-        // seam `AnimatedSize` uses internally — so it advances once mounted
-        // under a real ui_runtime. But `is_animating()` is intentionally
-        // ticker-based (it reports whether a ticker is active, not this
-        // controller's own status), so a ticker-less controller can never
-        // report it, and `repeat()` on one logs "the animation will not
-        // advance" — which is false here, since `Vsync` drives the value ticks
-        // through `tick_at` regardless. `with_detached_ticker` gives the
-        // controller a ticker whose start/stop transitions real ticker state
-        // without an `UpdateScheduler` to pump, which is exactly what
-        // `AnimatedSize` chose for the same reason. `repeat(true)` happens in
-        // `init_state`, after registration, not here: the screenshot harness
-        // mounts this tree without ever registering (a headless
-        // `HeadlessBinding` tree with no `VsyncScope`), so this constructor
-        // alone must never start the run.
-        let controller = Arc::new(AnimationController::with_detached_ticker(
-            Duration::from_millis(1400),
-        ));
-
         Self {
-            controller,
             red: Color::rgb(244, 67, 54),
             blue: Color::rgb(33, 150, 243),
             histogram_enabled: std::env::var_os(FRAME_HISTOGRAM_ENV_VAR).is_some(),
@@ -217,16 +176,20 @@ impl Default for App {
     }
 }
 
-/// The animated leaf host: subscribed directly to the `AnimationController`
-/// via `AnimatedView` — the framework marks this element dirty and rebuilds
-/// it on every controller notification, no ambient pipeline reach involved.
+/// The animated leaf host. Its mounted state owns the controller and schedules
+/// rebuilds through its lifecycle handle on value notification.
 #[derive(Clone)]
 struct AnimatedBoxDemo {
-    controller: Arc<AnimationController>,
     red: Color,
     blue: Color,
     histogram_enabled: bool,
     histogram: Arc<parking_lot::Mutex<FrameHistogram>>,
+}
+
+impl View for AnimatedBoxDemo {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
 }
 
 impl StatefulView for AnimatedBoxDemo {
@@ -234,55 +197,47 @@ impl StatefulView for AnimatedBoxDemo {
 
     fn create_state(&self) -> Self::State {
         AnimatedBoxDemoState {
-            controller: Arc::clone(&self.controller),
-            registration: None,
+            controller: AnimationController::builder(Duration::from_millis(1400)).build_on(None),
         }
     }
 }
 
-impl AnimatedView for AnimatedBoxDemo {
-    fn listenable(&self) -> Arc<dyn Listenable> {
-        Arc::clone(&self.controller) as Arc<dyn Listenable>
-    }
-}
-
-impl_animated_view!(AnimatedBoxDemo);
-
 struct AnimatedBoxDemoState {
-    controller: Arc<AnimationController>,
-    /// The ambient `Vsync` this state registered with, plus the
-    /// registration handle -- `None` when mounted with no `VsyncScope`
-    /// above it (the headless screenshot harness's tree), in which case the
-    /// controller simply never advances.
-    registration: Option<(Vsync, VsyncRegistration)>,
+    controller: DrivenController,
 }
 
 impl ViewState<AnimatedBoxDemo> for AnimatedBoxDemoState {
     /// Lifecycle-only (ADR-0021): registers with the
     /// ambient `VsyncScope` and starts the bounce here, never from `build`.
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        if let Some(vsync) = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()) {
-            let registration = vsync.register((*self.controller).clone());
-            self.registration = Some((vsync, registration));
-        }
+        let rebuild = ctx.rebuild_handle();
+        self.controller
+            .controller()
+            .add_listener(std::rc::Rc::new(move || {
+                rebuild.schedule(flui_foundation::RebuildReason::StateChange);
+            }));
+        let _ = self.controller.rebind(VsyncScope::maybe_of(ctx).as_ref());
         // Bounce 0 → 1 → 0 forever. A freshly built controller always
         // accepts `repeat()`.
         self.controller
+            .controller()
             .repeat(true)
             .expect("a freshly created controller accepts repeat()");
     }
 
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        let _ = self.controller.rebind(VsyncScope::maybe_of(ctx).as_ref());
+    }
+
     fn dispose(&mut self) {
-        if let Some((vsync, registration)) = self.registration.take() {
-            vsync.unregister(&registration);
-        }
+        self.controller.dispose();
     }
 
     fn build(&self, view: &AnimatedBoxDemo, _ctx: &dyn BuildContext) -> impl IntoView {
         if view.histogram_enabled {
             view.histogram.lock().record(Instant::now());
         }
-        let value = view.controller.value();
+        let value = self.controller.controller().value();
         let color = Color::lerp(view.red, view.blue, value).to_f32_array();
         AnimatedBox { color }.boxed()
     }

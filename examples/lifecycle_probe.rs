@@ -57,7 +57,7 @@ mod probe {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
 
-    use flui::animation::{Animation, AnimationController, Vsync, VsyncRegistration};
+    use flui::animation::{Animation, AnimationController, DrivenController};
     use flui::app::{AppConfig, AppHandle, Application, StartupWindow};
     use flui::foundation::Listenable;
     use flui::material::{Scaffold, Theme, ThemeData};
@@ -140,8 +140,7 @@ mod probe {
 
     struct ProbeRootState {
         witness: Arc<Witness>,
-        controller: AnimationController,
-        registration: Option<(Vsync, VsyncRegistration)>,
+        controller: DrivenController,
     }
 
     impl StatefulView for ProbeRoot {
@@ -150,8 +149,8 @@ mod probe {
         fn create_state(&self) -> Self::State {
             ProbeRootState {
                 witness: Arc::clone(&self.witness),
-                controller: AnimationController::with_detached_ticker(Duration::from_millis(1_000)),
-                registration: None,
+                controller: AnimationController::builder(Duration::from_millis(1_000))
+                    .build_on(None),
             }
         }
     }
@@ -164,27 +163,29 @@ mod probe {
             // The controller's value drives a rebuild every tick, so the
             // tree is genuinely animating, not merely ticking.
             let rebuild = ctx.rebuild_handle();
-            self.controller.add_listener(Arc::new(move || {
-                rebuild.schedule(flui::foundation::RebuildReason::StateChange);
-            }));
-            if let Some(vsync) = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()) {
-                let registration = vsync.register(self.controller.clone());
-                self.registration = Some((vsync, registration));
-            }
             self.controller
+                .controller()
+                .add_listener(std::rc::Rc::new(move || {
+                    rebuild.schedule(flui::foundation::RebuildReason::StateChange);
+                }));
+            let _ = self.controller.rebind(VsyncScope::maybe_of(ctx).as_ref());
+            self.controller
+                .controller()
                 .repeat(true)
                 .expect("a freshly created controller accepts repeat()");
         }
 
+        fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+            let _ = self.controller.rebind(VsyncScope::maybe_of(ctx).as_ref());
+        }
+
         fn dispose(&mut self) {
-            if let Some((vsync, registration)) = self.registration.take() {
-                vsync.unregister(&registration);
-            }
+            self.controller.dispose();
         }
 
         fn build(&self, _view: &ProbeRoot, _ctx: &dyn BuildContext) -> impl IntoView {
             let witness = Arc::clone(&self.witness);
-            let value = self.controller.value();
+            let value = self.controller.controller().value();
             Theme::new(
                 ThemeData::light(),
                 Scaffold::new().body(LayoutBuilder::new(move |_ctx, constraints| {

@@ -37,15 +37,15 @@ use std::{
     time::Duration,
 };
 
-use flui_animation::{Animation, AnimationController, Vsync, VsyncRegistration};
+use flui_animation::{Animation, AnimationController, DrivenController};
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
 use flui_painting::styling::Color;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::pipeline::WeakPipelineCell;
 use flui_view::prelude::StatefulView;
 use flui_view::{
-    BuildContext, BuildContextExt, Child, EventCx, EventOutcome, IntoView, LifecycleContext,
-    RebuildHandle, RebuildReason, ViewExt, ViewState,
+    BuildContext, Child, EventCx, EventOutcome, IntoView, LifecycleContext, RebuildHandle,
+    RebuildReason, ViewExt, ViewState,
 };
 
 use crate::animated::VsyncScope;
@@ -165,13 +165,13 @@ impl Listenable for RefreshControllerInner {
 /// Every clone shares the same inner state via `Arc`.
 #[derive(Clone, Debug)]
 pub struct RefreshController {
-    inner: Arc<RefreshControllerInner>,
+    inner: Rc<RefreshControllerInner>,
 }
 
 impl Default for RefreshController {
     fn default() -> Self {
         Self {
-            inner: Arc::new(RefreshControllerInner {
+            inner: Rc::new(RefreshControllerInner {
                 pull_distance_px: Mutex::new(0.0),
                 phase: Mutex::new(Phase::default()),
                 notifier: ChangeNotifier::new(),
@@ -236,8 +236,8 @@ impl RefreshController {
     /// Subscribe via [`AnimatedBuilder`](crate::transitions::AnimatedBuilder) to rebuild when the refresh phase or
     /// pull distance changes.
     #[must_use]
-    pub fn as_listenable(&self) -> Arc<dyn Listenable> {
-        Arc::clone(&self.inner) as Arc<dyn Listenable>
+    pub fn as_listenable(&self) -> std::rc::Rc<dyn Listenable> {
+        Rc::clone(&self.inner) as std::rc::Rc<dyn Listenable>
     }
 
     // -- crate-internal mutation called from gesture callbacks ----------------
@@ -254,7 +254,7 @@ impl RefreshController {
 
     /// Whether `other` is a clone of this controller (the same shared state).
     fn shares_state_with(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.inner, &other.inner)
+        Rc::ptr_eq(&self.inner, &other.inner)
     }
 
     pub(super) fn begin_refresh(&self) {
@@ -423,13 +423,11 @@ pub struct RefreshIndicatorState {
     /// Ballistic simulation driver (wide-open bounds so pixel values are never
     /// clamped by the controller itself). A value listener pushes current pixel
     /// values into `scroll_controller` each vsync tick.
-    fling_controller: AnimationController,
+    fling_controller: DrivenController,
     /// Listener ID on `fling_controller`; removed in `dispose`.
     fling_listener_id: Option<ListenerId>,
     /// Vsync handle kept for `unregister` in `dispose`.
-    vsync: Option<Vsync>,
     /// Registration returned by `vsync.register(fling_controller)`.
-    vsync_registration: Option<VsyncRegistration>,
     /// Presentation metrics acquired before event callbacks are installed.
     pipeline: Option<WeakPipelineCell>,
     /// Schedules this element's rebuild; acquired in `init_state`.
@@ -446,7 +444,7 @@ impl std::fmt::Debug for RefreshIndicatorState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RefreshIndicatorState")
             .field("scroll_controller", &self.scroll_controller)
-            .field("fling_registered", &self.vsync_registration.is_some())
+            .field("fling_registered", &self.fling_controller.is_bound())
             .finish_non_exhaustive()
     }
 }
@@ -460,15 +458,14 @@ impl StatefulView for RefreshIndicator {
         // terminates the run. Unboundedness is a constructor fact (#1183),
         // not a bound value. No ticker: `Vsync` drives this controller once
         // registered.
-        let fling_controller =
-            AnimationController::unbounded_without_ticker(Duration::from_millis(1));
+        let fling_controller = AnimationController::builder(Duration::from_millis(1))
+            .unbounded()
+            .build_on(None);
 
         RefreshIndicatorState {
             scroll_controller: self.scroll_controller.clone(),
             fling_controller,
             fling_listener_id: None,
-            vsync: None,
-            vsync_registration: None,
             pipeline: None,
             rebuild: None,
             phase_subscription: None,
@@ -488,7 +485,7 @@ fn listen_for_phase_flips(
 ) -> ListenerId {
     let tracker = Arc::new(PhaseTracker(Mutex::new(snapshot)));
     let on_flip = Arc::new(on_flip);
-    let id = controller.inner.add_listener(Arc::new({
+    let id = controller.inner.add_listener(std::rc::Rc::new({
         let watched = controller.clone();
         let tracker = Arc::clone(&tracker);
         let on_flip = Arc::clone(&on_flip);
@@ -509,13 +506,15 @@ fn listen_for_phase_flips(
 impl RefreshIndicatorState {
     fn install_fling_listener(&mut self) {
         if let Some(id) = self.fling_listener_id.take() {
-            self.fling_controller.remove_listener(id);
+            self.fling_controller.controller().remove_listener(id);
         }
-        let fling = self.fling_controller.clone();
+        let fling = self.fling_controller.controller().clone();
         let scroll = self.scroll_controller.clone();
-        self.fling_listener_id = Some(self.fling_controller.add_listener(Arc::new(move || {
-            scroll.set_pixels(fling.value());
-        })));
+        self.fling_listener_id = Some(self.fling_controller.controller().add_listener(
+            std::rc::Rc::new(move || {
+                scroll.set_pixels(fling.value());
+            }),
+        ));
     }
 
     /// Listens to `controller` and rebuilds only when its refresh phase
@@ -548,18 +547,16 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
             self.subscribe_phase(&controller);
         }
 
-        // Register with the ambient VsyncScope so the binding ticks the fling
-        // controller on each virtual frame deterministically.
-        if let Some(vsync) = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()) {
-            let registration = vsync.register(self.fling_controller.clone());
-            self.vsync = Some(vsync);
-            self.vsync_registration = Some(registration);
-        }
-        // This controller has no ticker: without a VsyncScope registration,
-        // gesture updates still work but ballistic runs do not advance.
+        self.did_change_dependencies(ctx);
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        if let Err(error) = self
+            .fling_controller
+            .rebind(VsyncScope::maybe_of(ctx).as_ref())
+        {
+            tracing::error!(%error, "RefreshIndicator lost its frame registry");
+        }
         self.pipeline = ctx.pipeline_owner().map(|cell| cell.downgrade());
     }
 
@@ -590,7 +587,7 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
         }
 
         let threshold_px = view.threshold_px;
-        let fling_stop = self.fling_controller.clone();
+        let fling_stop = self.fling_controller.controller().clone();
         let rc_start = view.controller.clone();
         let sc_update = self.scroll_controller.clone();
         let rc_update = view.controller.clone();
@@ -598,7 +595,7 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
         let sc_end = self.scroll_controller.clone();
         let rc_end = view.controller.clone();
         let ph_end = view.physics.clone();
-        let fc_fling = self.fling_controller.clone();
+        let fc_fling = self.fling_controller.controller().clone();
         let on_refresh_cb = view.on_refresh.clone();
 
         GestureDetector::new()
@@ -690,7 +687,7 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
         {
             // A run samples the old position's metrics. Do not carry that
             // simulation into a replacement position with different bounds.
-            let _ = self.fling_controller.stop();
+            let _ = self.fling_controller.controller().stop();
             self.scroll_controller = new_view.scroll_controller.clone();
             self.install_fling_listener();
         }
@@ -706,12 +703,7 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
     fn dispose(&mut self) {
         self.unsubscribe_phase();
         if let Some(id) = self.fling_listener_id.take() {
-            self.fling_controller.remove_listener(id);
-        }
-        if let (Some(vsync), Some(registration)) =
-            (self.vsync.take(), self.vsync_registration.take())
-        {
-            vsync.unregister(&registration);
+            self.fling_controller.controller().remove_listener(id);
         }
         self.fling_controller.dispose();
     }

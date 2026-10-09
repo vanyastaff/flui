@@ -1,9 +1,6 @@
 //! `AnimationControllerBuilder` validates bounds like the constructors do.
 
-use std::time::Duration;
-
-use flui_animation::{AnimationControllerBuilder, AnimationError};
-use flui_scheduler::UpdateScheduler;
+use flui_animation::{AnimationError, ValueRange};
 
 /// `.bounds()` applies the constructors' rule: bounded means finite,
 /// endpoints and span alike. A `lower >= upper` check alone accepts `NaN`
@@ -11,7 +8,6 @@ use flui_scheduler::UpdateScheduler;
 /// `lower < upper`.
 #[test]
 fn bounds_rejects_non_finite_endpoints() {
-    let scheduler = UpdateScheduler::new();
     let cases: &[(f64, f64)] = &[
         (f64::NAN, 1.0),
         (0.0, f64::NAN),
@@ -22,8 +18,7 @@ fn bounds_rejects_non_finite_endpoints() {
         (-f64::MAX, f64::MAX),
     ];
     for &(lower, upper) in cases {
-        let result = AnimationControllerBuilder::new(Duration::from_millis(100), &scheduler)
-            .bounds(lower, upper);
+        let result = ValueRange::new(lower, upper);
         assert!(
             matches!(result, Err(AnimationError::InvalidBounds(_))),
             "bounds({lower}, {upper}) must be rejected"

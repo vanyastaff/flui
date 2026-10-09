@@ -134,6 +134,7 @@ fn containment_and_isolation_matrix() {
             ("window_scale_factor::rescaling_the_primary_window_updates_only_its_semantics_bounds", window_scale_factor::rescaling_the_primary_window_updates_only_its_semantics_bounds as fn()),
             ("window_scale_factor::a_secondary_window_publishes_its_own_media_query", window_scale_factor::a_secondary_window_publishes_its_own_media_query as fn()),
             ("multi_presentation_clock::the_motion_clock_rate_and_step_drive_the_binding_vsync", multi_presentation_clock::the_motion_clock_rate_and_step_drive_the_binding_vsync as fn()),
+            ("multi_presentation_clock::presentation_rates_pause_and_step_are_independent", multi_presentation_clock::presentation_rates_pause_and_step_are_independent as fn()),
         ],
     );
 }

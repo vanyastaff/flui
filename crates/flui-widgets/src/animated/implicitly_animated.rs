@@ -15,13 +15,14 @@
 //! - [`OptTween`] — one optional property of a multi-property widget
 //!   (`AnimatedContainer`), animated only while both old and new values are set.
 
-use std::sync::{Arc, OnceLock};
+use std::rc::Rc;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use flui_animation::curve::ArcCurve;
 use flui_animation::{
-    Animatable, Animation, AnimationController, AnimationStatus, CurvedAnimation, Curves, Tween,
-    Vsync, VsyncRegistration,
+    Animatable, Animation, AnimationController, AnimationStatus, CurvedAnimation, Curves,
+    DrivenController, Tween, Vsync,
 };
 use flui_foundation::Listenable;
 use flui_foundation::geometry::Lerp;
@@ -55,15 +56,13 @@ pub(crate) fn default_curve() -> ArcCurve {
 /// registration. Holds no tween — `value()` is the curved progress its owner
 /// feeds to one or more tweens.
 pub(crate) struct ImplicitController {
-    controller: AnimationController,
+    controller: DrivenController,
     /// The curve currently baked into `curved`, kept alongside it so
     /// [`set_curve`](Self::set_curve) can detect a no-op reconfigure
     /// (`ArcCurve`'s `PartialEq` is reference equality — see its doc) without
     /// re-deriving it from the `CurvedAnimation`, which exposes no getter.
     curve: ArcCurve,
     curved: CurvedAnimation<ArcCurve>,
-    vsync: Option<Vsync>,
-    vsync_registration: Option<VsyncRegistration>,
 }
 
 impl ImplicitController {
@@ -71,24 +70,23 @@ impl ImplicitController {
     pub(crate) fn new(duration: Duration, curve: ArcCurve) -> Self {
         // No ticker: `VsyncScope` drives this controller deterministically
         // via `tick_at` instead.
-        let controller = AnimationController::without_ticker(duration);
-        let parent: Arc<dyn Animation<f64>> = Arc::new(controller.clone());
+        let controller = AnimationController::builder(duration).build_on(None);
+        let parent: std::rc::Rc<dyn Animation<f64>> =
+            std::rc::Rc::new(controller.controller().clone());
         let curved = CurvedAnimation::new(parent, curve.clone());
         Self {
             controller,
             curve,
             curved,
-            vsync: None,
-            vsync_registration: None,
         }
     }
 
     /// Register with `vsync` so a binding drives this controller each frame.
     /// Called exactly once, from the owning state's `init_state`.
-    pub(crate) fn register(&mut self, vsync: Vsync) {
-        let registration = vsync.register(self.controller.clone());
-        self.vsync = Some(vsync);
-        self.vsync_registration = Some(registration);
+    pub(crate) fn rebind(&mut self, vsync: Option<&Vsync>) {
+        if let Err(error) = self.controller.rebind(vsync) {
+            tracing::error!(%error, "implicit animation has no clock");
+        }
     }
 
     /// The curved progress (`0`→`1`, possibly overshooting) the tweens map.
@@ -99,8 +97,8 @@ impl ImplicitController {
     /// The listenable an [`AnimatedBuilder`](crate::AnimatedBuilder) subscribes
     /// to: the curved animation, which re-emits the controller's ticks. Its
     /// underlying notifier is stable across the clones each rebuild mints.
-    pub(crate) fn listenable(&self) -> Arc<dyn Listenable> {
-        Arc::new(self.curved.clone())
+    pub(crate) fn listenable(&self) -> std::rc::Rc<dyn Listenable> {
+        Rc::new(self.curved.clone())
     }
 
     /// A clone of the curved animation for capture in a build closure.
@@ -115,7 +113,7 @@ impl ImplicitController {
     /// Never retimes a run already in flight — see
     /// `AnimationController::set_duration`'s own doc.
     pub(crate) fn set_duration(&mut self, duration: Duration) {
-        self.controller.set_duration(duration);
+        self.controller.controller().set_duration(duration);
     }
 
     /// Swap in `curve`, rebuilding the `CurvedAnimation` over the SAME
@@ -134,7 +132,8 @@ impl ImplicitController {
         if self.curve == curve {
             return false;
         }
-        let parent: Arc<dyn Animation<f64>> = Arc::new(self.controller.clone());
+        let parent: std::rc::Rc<dyn Animation<f64>> =
+            std::rc::Rc::new(self.controller.controller().clone());
         self.curved = CurvedAnimation::new(parent, curve.clone());
         self.curve = curve;
         true
@@ -149,19 +148,16 @@ impl ImplicitController {
     pub(crate) fn restart_from_zero(&mut self) {
         // Owned, freshly registered controller: `forward_from` only errors when
         // disposed, which cannot happen before `dispose`.
-        let _ = self.controller.forward_from(Some(0.0));
+        let _ = self.controller.controller().forward_from(Some(0.0));
     }
 
     /// The controller's run status (for diagnostics).
     pub(crate) fn status(&self) -> AnimationStatus {
-        self.controller.status()
+        self.controller.controller().status()
     }
 
     /// Unregister from the binding and dispose the controller.
     pub(crate) fn dispose(&mut self) {
-        if let (Some(vsync), Some(registration)) = (&self.vsync, self.vsync_registration.take()) {
-            vsync.unregister(&registration);
-        }
         self.controller.dispose();
     }
 }
@@ -170,7 +166,7 @@ impl std::fmt::Debug for ImplicitController {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ImplicitController")
             .field("status", &self.status())
-            .field("registered", &self.vsync_registration.is_some())
+            .field("registered", &self.controller.is_bound())
             .finish_non_exhaustive()
     }
 }
@@ -201,8 +197,8 @@ impl<T: Lerp + Clone + PartialEq + Send + Sync + 'static> ImplicitAnimation<T> {
     }
 
     /// Register with `vsync` so a binding drives this controller each frame.
-    pub(crate) fn register(&mut self, vsync: Vsync) {
-        self.controller.register(vsync);
+    pub(crate) fn rebind(&mut self, vsync: Option<&Vsync>) {
+        self.controller.rebind(vsync);
     }
 
     /// The current displayed value — the tween evaluated at the curved progress.
@@ -211,7 +207,7 @@ impl<T: Lerp + Clone + PartialEq + Send + Sync + 'static> ImplicitAnimation<T> {
     }
 
     /// The listenable an `AnimatedBuilder` subscribes to.
-    pub(crate) fn listenable(&self) -> Arc<dyn Listenable> {
+    pub(crate) fn listenable(&self) -> std::rc::Rc<dyn Listenable> {
         self.controller.listenable()
     }
 

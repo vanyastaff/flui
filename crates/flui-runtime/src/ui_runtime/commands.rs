@@ -99,6 +99,15 @@ pub enum UiCommand {
         /// Where the answer goes.
         reply: super::agent::ReplySender<()>,
     },
+    /// Apply playback to the exact presentation's animation clock.
+    Motion {
+        /// The window addressed by the agent port.
+        presentation_id: PresentationId,
+        /// Rate and step, validated before either is committed.
+        request: flui_protocol::MotionRequest,
+        /// The accepted state or refusal.
+        reply: super::agent::ReplySender<flui_protocol::MotionState>,
+    },
     /// Apply a typed navigator mutation on the owner thread.
     Navigation(NavigatorCommand),
     /// Run a write against the reactive graph that minted `target` (ADR-0074
@@ -148,6 +157,15 @@ impl std::fmt::Debug for UiCommand {
                 .field("presentation_id", presentation_id)
                 .field("element", &request.element)
                 .field("action", &request.action)
+                .finish_non_exhaustive(),
+            UiCommand::Motion {
+                presentation_id,
+                request,
+                ..
+            } => f
+                .debug_struct("UiCommand::Motion")
+                .field("presentation_id", presentation_id)
+                .field("request", request)
                 .finish_non_exhaustive(),
             UiCommand::Navigation(command) => f
                 .debug_tuple("UiCommand::Navigation")
@@ -580,6 +598,41 @@ impl UiRuntime {
                             );
                             report.dropped_stale += 1;
                         }
+                    }
+                }
+                UiCommand::Motion {
+                    presentation_id,
+                    request,
+                    reply,
+                } => {
+                    let result = self
+                        .presentations
+                        .get(presentation_id)
+                        .ok_or(super::AgentError::PresentationGone)
+                        .and_then(|presentation| {
+                            presentation
+                                .apply_motion(request)
+                                .map(|(state, demand)| {
+                                    if demand {
+                                        presentation
+                                            .clock()
+                                            .mark_demand(flui_scheduler::DemandKind::Animation);
+                                    }
+                                    (state, demand)
+                                })
+                                .map_err(|_| super::AgentError::InvalidArgument {
+                                    reason: "motion rate must be finite and non-negative",
+                                })
+                        });
+                    let demand = result.as_ref().is_ok_and(|(_, demand)| *demand);
+                    if result == Err(super::AgentError::PresentationGone) {
+                        report.dropped_stale += 1;
+                    } else {
+                        report.invoked += 1;
+                    }
+                    super::agent::send_reply(&reply, None, result.map(|(state, _)| state));
+                    if demand {
+                        self.wake_frame();
                     }
                 }
                 UiCommand::SemanticsRead {

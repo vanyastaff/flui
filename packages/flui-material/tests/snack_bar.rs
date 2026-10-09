@@ -53,6 +53,87 @@ const ENTRY: Duration = Duration::from_millis(250);
 /// The per-pump virtual-time step.
 const FRAME: Duration = Duration::from_millis(16);
 
+pub fn snack_bar_display_timer_pauses_while_hovered() {
+    let vsync = Vsync::new();
+    let (mut laid, handle) =
+        mount_with_scaffolds(&vsync, vec![Scaffold::new().body(body_marker())]);
+    let closed = Rc::new(RefCell::new(Vec::new()));
+    let recorded = Rc::clone(&closed);
+    handle
+        .show_snack_bar(SnackBar::new(Text::new("Saved")).duration(Duration::from_millis(800)))
+        .on_closed(move |_cx, reason| recorded.borrow_mut().push(reason));
+    pump_ms(&mut laid, 450);
+    let bar = find_snack_bar_material(&laid).expect("visible bar");
+    let offset = laid.absolute_offset(bar);
+    let size = laid.size(bar);
+    laid.dispatch_pointer_hover(offset.dx + size.width * 0.5, offset.dy + size.height * 0.5);
+    pump_ms(&mut laid, 5_000);
+    assert_eq!(
+        snack_bar_material_count(&laid),
+        1,
+        "hover preserves the visible bar"
+    );
+    assert!(
+        closed.borrow().is_empty(),
+        "hover cannot consume the display duration"
+    );
+    laid.dispatch_pointer_hover(10.0, 10.0);
+    pump_ms(&mut laid, 300);
+    assert_eq!(
+        snack_bar_material_count(&laid),
+        1,
+        "resume keeps the unconsumed remainder"
+    );
+    pump_ms(&mut laid, 900);
+    assert_eq!(snack_bar_material_count(&laid), 0);
+    assert_eq!(
+        &*closed.borrow(),
+        &[flui_material::SnackBarClosedReason::Timeout]
+    );
+}
+
+pub fn unmounting_a_hovered_snack_bar_releases_its_timer_pause() {
+    let vsync = Vsync::new();
+    let (mut laid, handle) =
+        mount_with_scaffolds(&vsync, vec![Scaffold::new().body(body_marker())]);
+    let closed = Rc::new(Cell::new(None));
+    let recorded = Rc::clone(&closed);
+    handle
+        .show_snack_bar(SnackBar::new(Text::new("Saved")).duration(Duration::from_millis(800)))
+        .on_closed(move |_cx, reason| recorded.set(Some(reason)));
+    pump_ms(&mut laid, 450);
+    let bar = find_snack_bar_material(&laid).expect("visible bar");
+    let offset = laid.absolute_offset(bar);
+    let size = laid.size(bar);
+    laid.dispatch_pointer_hover(offset.dx + size.width * 0.5, offset.dy + size.height * 0.5);
+    pump_ms(&mut laid, 1_000);
+    assert_eq!(closed.get(), None);
+
+    let slot = Rc::new(RefCell::new(None));
+    laid.pump_widget(themed_animated(
+        &vsync,
+        ScaffoldMessenger::new(flui_sdk::widgets::Column::new(vec![
+            HandleProbe {
+                slot: Rc::clone(&slot),
+            }
+            .boxed(),
+        ])),
+    ));
+    laid.pump();
+    assert!(
+        slot.borrow()
+            .as_ref()
+            .expect("retained scope")
+            .ptr_eq(&handle),
+        "only the Scaffold unmounts; its messenger and accepted timer survive"
+    );
+    pump_ms(&mut laid, 1_300);
+    assert_eq!(
+        closed.get(),
+        Some(flui_material::SnackBarClosedReason::Timeout)
+    );
+}
+
 /// Pumps enough `FRAME`-sized steps to carry `millis` of virtual time past
 /// its end, with headroom for one extra frame (matching
 /// `tests/drawer.rs`'s `PUMPS`/`FLING_SETTLE_PUMPS` `+ 2` margin).

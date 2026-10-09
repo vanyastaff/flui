@@ -28,6 +28,162 @@ use parking_lot::Mutex;
 const FRAME: Duration = Duration::from_millis(20);
 const RUN: Duration = Duration::from_millis(100);
 
+pub(crate) fn swapping_the_scope_registry_preserves_an_implicit_run() {
+    let old = Vsync::new();
+    let new = Vsync::new();
+    let tree = |registry: Vsync, target| {
+        VsyncScope::new(
+            registry,
+            AnimatedOpacity::new(target, SizedBox::new(100.0, 50.0)).duration(RUN),
+        )
+    };
+    let mut laid = lay_out_animated(tree(old.clone(), 0.0), tight(100.0, 50.0), old.clone());
+    laid.pump_widget(tree(old.clone(), 1.0));
+    laid.pump_for(FRAME);
+    laid.pump_for(FRAME);
+    let displayed = laid.opacity(laid.current_root());
+    assert!(displayed > 0.0 && displayed < 1.0);
+
+    laid.pump_widget(tree(new.clone(), 1.0));
+    assert!(
+        old.is_empty(),
+        "the retained widget releases its old registry"
+    );
+    assert_eq!(new.len(), 1);
+    laid.adopt_vsync(new.clone());
+    laid.pump_for(Duration::ZERO);
+    assert!((laid.opacity(laid.current_root()) - displayed).abs() < 1e-9);
+    laid.pump_for(FRAME);
+    assert!(laid.opacity(laid.current_root()) > displayed);
+
+    laid.pump_widget(SizedBox::shrink());
+    assert!(new.is_empty(), "unmount releases the owning handle");
+}
+
+pub(crate) fn a_detached_ticker_mode_lands_an_implicit_run() {
+    let tree = |target| {
+        VsyncScope::detached(flui_widgets::TickerMode::new(
+            AnimatedOpacity::new(target, SizedBox::new(100.0, 50.0)).duration(RUN),
+        ))
+    };
+    let mut laid = crate::common::lay_out(tree(0.0), tight(100.0, 50.0));
+    laid.pump_widget(tree(1.0));
+    assert_eq!(laid.opacity(laid.current_root()), 1.0);
+}
+
+#[derive(Clone)]
+struct KeyedOpacity {
+    key: flui_view::GlobalKey<KeyedOpacityState>,
+    target: f64,
+    registry: std::rc::Rc<std::cell::RefCell<Option<Vsync>>>,
+    inits: std::rc::Rc<std::cell::Cell<usize>>,
+}
+
+struct KeyedOpacityState {
+    registry: std::rc::Rc<std::cell::RefCell<Option<Vsync>>>,
+    inits: std::rc::Rc<std::cell::Cell<usize>>,
+}
+
+impl flui_view::View for KeyedOpacity {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+    fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
+        Some(&self.key)
+    }
+}
+
+impl StatefulView for KeyedOpacity {
+    type State = KeyedOpacityState;
+    fn create_state(&self) -> Self::State {
+        KeyedOpacityState {
+            registry: self.registry.clone(),
+            inits: self.inits.clone(),
+        }
+    }
+}
+
+impl ViewState<KeyedOpacity> for KeyedOpacityState {
+    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
+        self.inits.set(self.inits.get() + 1);
+        *self.registry.borrow_mut() = VsyncScope::maybe_of(ctx);
+    }
+    fn did_change_dependencies(&mut self, ctx: &dyn flui_view::LifecycleContext) {
+        *self.registry.borrow_mut() = VsyncScope::maybe_of(ctx);
+    }
+    fn build(&self, view: &KeyedOpacity, _ctx: &dyn BuildContext) -> impl IntoView {
+        AnimatedOpacity::new(view.target, SizedBox::new(40.0, 30.0)).duration(RUN)
+    }
+}
+
+pub(crate) fn reparenting_across_ticker_mode_moves_the_registration() {
+    use flui_view::ViewExt;
+    let root = Vsync::new();
+    let registry = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let inits = std::rc::Rc::new(std::cell::Cell::new(0));
+    let key = flui_view::GlobalKey::new();
+    let tree = |moved, target, enabled| {
+        let child = KeyedOpacity {
+            key: key.clone(),
+            target,
+            registry: registry.clone(),
+            inits: inits.clone(),
+        };
+        let empty = SizedBox::shrink().boxed();
+        let (left, right) = if moved {
+            (empty, child.boxed())
+        } else {
+            (child.boxed(), empty)
+        };
+        VsyncScope::new(
+            root.clone(),
+            flui_widgets::Row::new((
+                flui_widgets::TickerMode::new(left),
+                flui_widgets::TickerMode::new(right).enabled(enabled),
+            )),
+        )
+    };
+    let mut laid = lay_out_animated(tree(false, 0.0, false), tight(200.0, 60.0), root.clone());
+    laid.pump_widget(tree(false, 1.0, false));
+    laid.pump_for(FRAME);
+    laid.pump_for(FRAME);
+    let rendered = laid.find_by_render_type("RenderAnimatedOpacity");
+    let shown = laid.opacity(rendered);
+    assert!(shown > 0.0 && shown < 1.0);
+    let old = registry.borrow().clone().expect("old scope recorded");
+
+    laid.pump_widget(tree(true, 1.0, false));
+    let new = registry.borrow().clone().expect("new scope recorded");
+    assert!(!old.is_same(&new));
+    assert!(old.is_empty());
+    assert_eq!(new.len(), 1);
+    assert_eq!(
+        inits.get(),
+        1,
+        "the GlobalKey retains the animation subtree"
+    );
+    laid.pump_for(FRAME);
+    assert_eq!(
+        laid.opacity(rendered),
+        shown,
+        "the new muted scope holds the sample"
+    );
+    laid.pump_widget(tree(true, 1.0, true));
+    laid.pump_for(FRAME);
+    assert_eq!(
+        laid.opacity(rendered),
+        shown,
+        "the first eligible tick anchors the preserved elapsed time"
+    );
+    laid.pump_for(FRAME);
+    assert!(
+        laid.opacity(rendered) > shown,
+        "the new enabled scope advances the same run"
+    );
+    laid.pump_widget(SizedBox::shrink());
+    assert!(new.is_empty());
+}
+
 // ----------------------------------------------------------------------------
 // AnimatedOpacity
 // ----------------------------------------------------------------------------

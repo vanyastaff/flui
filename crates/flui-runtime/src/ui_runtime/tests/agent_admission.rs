@@ -113,6 +113,10 @@ fn agent_port_admission_matrix() {
         "agent_port_admission_matrix",
         &[
             (
+                "agent_motion_sets_rate_and_steps_a_paused_window",
+                agent_motion_sets_rate_and_steps_a_paused_window,
+            ),
+            (
                 "read_wake_can_close_admission",
                 read_wake_can_close_admission as fn(),
             ),
@@ -121,5 +125,65 @@ fn agent_port_admission_matrix() {
                 action_wake_can_close_admission as fn(),
             ),
         ],
+    );
+}
+
+fn agent_motion_sets_rate_and_steps_a_paused_window() {
+    use flui_protocol::MotionRequest;
+    let runtime = super::super::tests::new_runtime(Arc::new(|| {})).expect("runtime");
+    let window = runtime
+        .dev_agent_window(runtime.presentation_id())
+        .expect("window");
+    let mut paused = window
+        .motion(MotionRequest::new().with_rate(0.0))
+        .expect("enqueued");
+    assert!(
+        paused.try_take().is_none(),
+        "a worker cannot mutate the clock inline"
+    );
+    assert_eq!(runtime.drain_commands().invoked, 1);
+    let state = paused
+        .try_take()
+        .expect("owner answered")
+        .expect("valid motion request");
+    assert_eq!(state.rate, 0.0);
+    let mut stepped = window
+        .motion(MotionRequest::new().with_step_ms(100))
+        .expect("enqueued");
+    assert_eq!(runtime.drain_commands().invoked, 1);
+    let next = stepped
+        .try_take()
+        .expect("owner answered")
+        .expect("valid step");
+    assert_eq!(next.rate, 0.0);
+    assert!((next.time_ms - state.time_ms - 100.0).abs() < 1e-9);
+    for rate in [-1.0, f64::NAN, f64::INFINITY] {
+        let mut refused = window
+            .motion(MotionRequest::new().with_rate(rate).with_step_ms(500))
+            .expect("enqueued");
+        assert_eq!(runtime.drain_commands().invoked, 1);
+        assert_eq!(
+            refused
+                .try_take()
+                .expect("answered")
+                .expect_err("invalid rate")
+                .code(),
+            ErrorCode::InvalidArgument
+        );
+    }
+    let mut observed = window.motion(MotionRequest::new()).expect("enqueued");
+    assert_eq!(runtime.drain_commands().invoked, 1);
+    assert_eq!(
+        observed.try_take().expect("answered").expect("snapshot"),
+        next,
+        "an invalid request applies neither rate nor step"
+    );
+    drop(runtime);
+    assert_eq!(
+        window
+            .motion(MotionRequest::new())
+            .expect_err("closed")
+            .code(),
+        ErrorCode::Gone
     );
 }

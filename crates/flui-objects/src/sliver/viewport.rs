@@ -9,8 +9,6 @@
 //! no `center`/`anchor` — it always lays out every child forward from the
 //! first.
 
-use std::sync::Arc;
-
 use flui_foundation::Diagnosticable;
 use flui_foundation::Variable;
 use flui_foundation::geometry::Axis;
@@ -38,7 +36,7 @@ const DEFAULT_CACHE_EXTENT: f64 = 250.0;
 /// doesn't need a hand-written `Debug` impl for a value that is fundamentally
 /// an opaque closure — `Debug` just reports that a listener is registered,
 /// not what it does.
-struct OffsetListener(Arc<dyn Fn() + Send + Sync>);
+struct OffsetListener(std::rc::Rc<dyn Fn()>);
 
 impl std::fmt::Debug for OffsetListener {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -59,8 +57,8 @@ impl std::fmt::Debug for OffsetListener {
 /// `scroll_position` module docs) — so this listener can only ever fire from
 /// OUTSIDE `perform_layout`; there is no synchronous mark-during-layout
 /// re-entrancy to guard against here.
-fn offset_relayout_listener(handle: RenderInvalidationHandle) -> Arc<dyn Fn() + Send + Sync> {
-    Arc::new(move || {
+fn offset_relayout_listener(handle: RenderInvalidationHandle) -> std::rc::Rc<dyn Fn()> {
+    std::rc::Rc::new(move || {
         // `SendError::OwnerGone` (pipeline owner torn down — node/tree gone,
         // this is teardown, not a fault) and any future variant (`SendError`
         // is `#[non_exhaustive]`) get silent treatment: nothing left to

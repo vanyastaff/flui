@@ -92,8 +92,9 @@ pub(crate) type RectTweenFactory =
 /// destination hero's child). The builder receives the flight animation, the
 /// direction, and the source and destination hero child views directly (FLUI cannot
 /// hand out the two foreign `BuildContext`s a flight would otherwise involve).
-pub(crate) type ShuttleBuilder =
-    Rc<dyn Fn(&Arc<dyn Animation<f64>>, FlightDirection, &BoxedView, &BoxedView) -> BoxedView>;
+pub(crate) type ShuttleBuilder = Rc<
+    dyn Fn(&std::rc::Rc<dyn Animation<f64>>, FlightDirection, &BoxedView, &BoxedView) -> BoxedView,
+>;
 
 /// Builds the widget left in the hero's place while it is in flight. It is
 /// state-preserving: it takes only the frozen [`Size`], never the child, so it
@@ -826,7 +827,8 @@ impl Hero {
     #[must_use]
     pub fn flight_shuttle_builder<F, V>(mut self, builder: F) -> Self
     where
-        F: Fn(&Arc<dyn Animation<f64>>, FlightDirection, &BoxedView, &BoxedView) -> V + 'static,
+        F: Fn(&std::rc::Rc<dyn Animation<f64>>, FlightDirection, &BoxedView, &BoxedView) -> V
+            + 'static,
         V: IntoView,
     {
         self.shuttle_builder = Some(Rc::new(move |animation, direction, from, to| {

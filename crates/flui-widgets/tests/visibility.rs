@@ -57,7 +57,9 @@ impl std::fmt::Debug for AnimationProbeState {
 impl ViewState<AnimationProbe> for AnimationProbeState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.init_count.fetch_add(1, Ordering::Relaxed);
-        let ambient = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone());
+        let ambient = ctx
+            .get::<VsyncScope, _>(|scope| scope.vsync().cloned())
+            .flatten();
         *self.found_ambient.lock() = Some(ambient.is_some());
         if let Some(vsync) = ambient {
             let registration = vsync.register(self.controller.clone());
@@ -78,7 +80,7 @@ impl ViewState<AnimationProbe> for AnimationProbeState {
 }
 
 fn animation_controller() -> AnimationController {
-    AnimationController::without_ticker(Duration::from_secs(1))
+    AnimationController::builder(Duration::from_secs(1)).build()
 }
 
 type AnimationProbeFixture = (

@@ -6,7 +6,7 @@ use flui_animation::Animation;
 use flui_animation::curve::{ArcCurve, Curve};
 use flui_painting::Alignment;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
-use flui_view::{BoxedView, BuildContextExt, IntoView, ViewExt, ViewState};
+use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
 
 use crate::animated::implicitly_animated::{
     DEFAULT_DURATION, ImplicitController, OptTween, default_curve,
@@ -119,9 +119,11 @@ impl StatefulView for AnimatedAlign {
 
 impl ViewState<AnimatedAlign> for AnimatedAlignState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        if let Some(vsync) = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()) {
-            self.controller.register(vsync);
-        }
+        self.controller.rebind(VsyncScope::maybe_of(ctx).as_ref());
+    }
+
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        self.controller.rebind(VsyncScope::maybe_of(ctx).as_ref());
     }
 
     fn build(&self, _view: &AnimatedAlign, _ctx: &dyn BuildContext) -> impl IntoView {

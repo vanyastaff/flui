@@ -11,11 +11,11 @@ use flui_rendering::{
     pipeline::RenderInvalidationHandle,
     view::{ScrollPosition, ViewportOffset},
 };
-use std::sync::Arc;
+use std::rc::Rc;
 
 struct ScrollSubscription {
     position: ScrollPosition,
-    listener: Arc<dyn Fn() + Send + Sync>,
+    listener: std::rc::Rc<dyn Fn()>,
 }
 impl std::fmt::Debug for ScrollSubscription {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -90,7 +90,7 @@ pub struct RenderSemanticsAnnotations {
     has_child: bool,
     action_route: Option<SemanticsActionRoute>,
     scroll: Option<(ScrollPosition, Axis, bool)>,
-    scroll_subscription: Option<Arc<ScrollSubscription>>,
+    scroll_subscription: Option<Rc<ScrollSubscription>>,
     invalidation: Option<RenderInvalidationHandle>,
 }
 
@@ -141,11 +141,11 @@ impl RenderSemanticsAnnotations {
     fn subscribe_scroll(&mut self) {
         if let (Some((position, _, _)), Some(handle)) = (&self.scroll, &self.invalidation) {
             let handle = handle.clone();
-            let listener: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let listener: std::rc::Rc<dyn Fn()> = std::rc::Rc::new(move || {
                 let _ = handle.mark_needs_semantics();
             });
-            position.add_listener(Arc::clone(&listener));
-            self.scroll_subscription = Some(Arc::new(ScrollSubscription {
+            position.add_listener(std::rc::Rc::clone(&listener));
+            self.scroll_subscription = Some(Rc::new(ScrollSubscription {
                 position: position.clone(),
                 listener,
             }));

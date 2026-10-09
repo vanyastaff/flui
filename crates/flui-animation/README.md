@@ -1,6 +1,6 @@
 # flui_animation
 
-Animation system for FLUI: values over time driven by a ticker, with controllers, curves, tweens and simulations.
+Animation system for FLUI: values over time driven by a presentation clock, with controllers, curves, tweens and simulations.
 
 Every `rust` block in this document is compiled as a doctest against the
 current API. Lines starting with `#` are hidden setup (a scheduler, a
@@ -10,11 +10,11 @@ controller) that the rendered page leaves out.
 
 ### The Animation Model
 
-In FLUI an `Animation<T>` produces values of type `T` over time. The animation itself doesn't know about time—it's driven externally by a ticker.
+In FLUI an `Animation<T>` produces values of type `T` over time. The animation itself doesn't know about time—it's sampled by a presentation registry or manually.
 
 ```text
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│     Ticker      │────▶│   Controller    │────▶│    Animation    │
+│   MotionClock   │────▶│   Controller    │────▶│    Animation    │
 │  (time source)  │     │  (0.0 → 1.0)    │     │   (any value)   │
 └─────────────────┘     └─────────────────┘     └─────────────────┘
 ```
@@ -63,17 +63,14 @@ The primary driver. Holds a value in `[lower_bound, upper_bound]` (default 0.0�
 # fn main() -> Result<(), AnimationError> {
 # let scheduler = UpdateScheduler::new();
 # let duration = Duration::from_millis(300);
-let controller = AnimationController::new(
-    Duration::from_millis(300),
-    &scheduler,
-);
+let controller = AnimationController::builder(Duration::from_millis(300)).build();
 
 // Or with builder for full control
-let controller = AnimationController::builder(duration, &scheduler)
-    .bounds(0.0, 1.0)?
+let controller = AnimationController::builder(duration)
+    .bounds(flui_animation::ValueRange::new(0.0, 1.0)?)
     .initial_value(0.5)
     .reverse_duration(Duration::from_millis(200))
-    .build()?;
+    .build();
 # controller.dispose();
 # Ok(())
 # }
@@ -82,7 +79,7 @@ let controller = AnimationController::builder(duration, &scheduler)
 ### Driving Animations
 
 Every run-starting method (`forward`, `reverse`, `*_from`, `animate_to`,
-`repeat*`, `fling*`, `animate_with`) returns a `TickerFuture` that resolves
+`repeat*`, `fling*`, `animate_with`) returns a `AnimationRunFuture` that resolves
 when the run ends; dropping it does not cancel the run. `stop` and `reset`
 return `Result<(), AnimationError>` and give no future.
 
@@ -92,7 +89,7 @@ return `Result<(), AnimationError>` and give no future.
 # use flui_scheduler::UpdateScheduler;
 # fn main() -> Result<(), AnimationError> {
 # let scheduler = UpdateScheduler::new();
-# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
+# let controller = AnimationController::builder(Duration::from_millis(300)).build();
 controller.forward()?;                // Animate to upper_bound
 controller.reverse()?;                // Animate to lower_bound
 controller.forward_from(Some(0.5))?;  // Jump to 0.5, then animate forward
@@ -113,7 +110,7 @@ controller.reset()?;                  // Jump to lower_bound, status = Dismissed
 # use flui_scheduler::UpdateScheduler;
 # fn main() -> Result<(), AnimationError> {
 # let scheduler = UpdateScheduler::new();
-# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
+# let controller = AnimationController::builder(Duration::from_millis(300)).build();
 controller.repeat(false)?; // Loop:   0→1, 0→1, ...
 controller.repeat(true)?;  // Bounce: 0→1→0→1→...
 
@@ -132,7 +129,7 @@ controller.repeat_with(Some(0.2), Some(0.8), true, None, Some(3))?;
 # use flui_scheduler::UpdateScheduler;
 # fn main() -> Result<(), AnimationError> {
 # let scheduler = UpdateScheduler::new();
-# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
+# let controller = AnimationController::builder(Duration::from_millis(300)).build();
 // Fling with velocity (uses spring physics)
 controller.fling(1.0)?;   // velocity toward upper_bound
 controller.fling(-1.0)?;  // velocity toward lower_bound
@@ -153,23 +150,23 @@ controller.animate_with(sim)?;
 ### Listening
 
 Value listeners come from `flui_foundation::Listenable`; status listeners
-from `Animation`. Both take an `Arc`'d callback and return a `ListenerId`.
+from `Animation`. Both take an `Rc`'d callback and return a `ListenerId`.
 
 ```rust
-# use std::sync::Arc;
+# use std::rc::Rc;
 # use std::time::Duration;
 # use flui_animation::{Animation, AnimationController, AnimationStatus};
 # use flui_scheduler::UpdateScheduler;
 use flui_foundation::Listenable;
 # let scheduler = UpdateScheduler::new();
-# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
+# let controller = AnimationController::builder(Duration::from_millis(300)).build();
 
 // Value changes
-let id = controller.add_listener(Arc::new(|| println!("value changed")));
+let id = controller.add_listener(Rc::new(|| println!("value changed")));
 controller.remove_listener(id);
 
 // Status changes
-let id = controller.add_status_listener(Arc::new(|status| {
+let id = controller.add_status_listener(Rc::new(|status| {
     if status == AnimationStatus::Completed {
         println!("done");
     }
@@ -185,8 +182,8 @@ controller.remove_status_listener(id);
 # use flui_animation::{AnimationController, AnimationError};
 # use flui_scheduler::UpdateScheduler;
 # let scheduler = UpdateScheduler::new();
-# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
-controller.dispose(); // Stop the run, release the ticker
+# let controller = AnimationController::builder(Duration::from_millis(300)).build();
+controller.dispose(); // Cancel the run and close its callbacks
 assert!(matches!(controller.forward(), Err(AnimationError::Disposed)));
 ```
 
@@ -310,7 +307,7 @@ let _ = ConstantTween::new(42.0);
 # use flui_scheduler::UpdateScheduler;
 use flui_animation::{Animatable, FloatTween};
 # let scheduler = UpdateScheduler::new();
-# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
+# let controller = AnimationController::builder(Duration::from_millis(300)).build();
 
 let tween = FloatTween::new(0.0, 100.0);
 assert_eq!(tween.transform(0.5), 50.0);
@@ -378,20 +375,20 @@ assert!(eased < 0.5);
 
 ## Animation Composition
 
-Composition types take their parent as `Arc<dyn Animation<f64>>`.
+Composition types take their parent as `Rc<dyn Animation<f64>>`.
 
 ### CurvedAnimation
 
 Apply a curve to an animation's output:
 
 ```rust
-# use std::sync::Arc;
+# use std::rc::Rc;
 # use std::time::Duration;
 # use flui_animation::{Animation, AnimationController, CurvedAnimation, Curves};
 # use flui_scheduler::UpdateScheduler;
 # let scheduler = UpdateScheduler::new();
-# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
-let curved = CurvedAnimation::new(Arc::new(controller.clone()), Curves::EaseInOut);
+# let controller = AnimationController::builder(Duration::from_millis(300)).build();
+let curved = CurvedAnimation::new(Rc::new(controller.clone()), Curves::EaseInOut);
 
 // Value is: curve.transform(controller.value())
 let value = curved.value();
@@ -403,14 +400,14 @@ let value = curved.value();
 Map animation output through a tween:
 
 ```rust
-# use std::sync::Arc;
+# use std::rc::Rc;
 # use std::time::Duration;
 # use flui_animation::{Animation, AnimationController, FloatTween, TweenAnimation};
 # use flui_scheduler::UpdateScheduler;
 # let scheduler = UpdateScheduler::new();
-# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
+# let controller = AnimationController::builder(Duration::from_millis(300)).build();
 let tween = FloatTween::new(0.0, 300.0);
-let animated = TweenAnimation::new(tween, Arc::new(controller.clone()));
+let animated = TweenAnimation::new(tween, Rc::new(controller.clone()));
 
 // Value is: tween.transform(controller.value())
 let pixels = animated.value(); // 0.0 to 300.0
@@ -422,13 +419,13 @@ let pixels = animated.value(); // 0.0 to 300.0
 Invert an animation:
 
 ```rust
-# use std::sync::Arc;
+# use std::rc::Rc;
 # use std::time::Duration;
 # use flui_animation::{Animation, AnimationController, ReverseAnimation};
 # use flui_scheduler::UpdateScheduler;
 # let scheduler = UpdateScheduler::new();
-# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
-let reversed = ReverseAnimation::new(Arc::new(controller.clone()));
+# let controller = AnimationController::builder(Duration::from_millis(300)).build();
+let reversed = ReverseAnimation::new(Rc::new(controller.clone()));
 
 // value = 1.0 - parent.value()
 // Forward becomes Reverse, Completed becomes Dismissed
@@ -441,46 +438,19 @@ assert_eq!(reversed.value(), 1.0);
 Hot-swap the parent animation:
 
 ```rust
-# use std::sync::Arc;
+# use std::rc::Rc;
 # use std::time::Duration;
 # use flui_animation::{AnimationController, ProxyAnimation};
 # use flui_scheduler::UpdateScheduler;
 # let scheduler = UpdateScheduler::new();
-# let controller1 = AnimationController::new(Duration::from_millis(300), &scheduler);
-# let controller2 = AnimationController::new(Duration::from_millis(300), &scheduler);
-let proxy = ProxyAnimation::new(Arc::new(controller1.clone()));
+# let controller1 = AnimationController::builder(Duration::from_millis(300)).build();
+# let controller2 = AnimationController::builder(Duration::from_millis(300)).build();
+let proxy = ProxyAnimation::new(Rc::new(controller1.clone()));
 
 // Later, switch to different animation
-proxy.set_parent(Arc::new(controller2.clone()));
+proxy.set_parent(Rc::new(controller2.clone()));
 # controller1.dispose();
 # controller2.dispose();
-```
-
-### CompoundAnimation
-
-Combine two animations with an operator:
-
-```rust
-# use std::sync::Arc;
-# use flui_animation::{Animation, ConstantAnimation};
-use flui_animation::{AnimationOperator, CompoundAnimation};
-# let a: Arc<dyn Animation<f64>> = Arc::new(ConstantAnimation::new(0.25));
-# let b: Arc<dyn Animation<f64>> = Arc::new(ConstantAnimation::new(0.75));
-
-// Arithmetic
-let sum = CompoundAnimation::new(a.clone(), b.clone(), AnimationOperator::Add);
-let diff = CompoundAnimation::new(a.clone(), b.clone(), AnimationOperator::Subtract);
-let prod = CompoundAnimation::new(a.clone(), b.clone(), AnimationOperator::Multiply);
-let quot = CompoundAnimation::new(a.clone(), b.clone(), AnimationOperator::Divide);
-
-// Selection
-let minimum = CompoundAnimation::new(a.clone(), b.clone(), AnimationOperator::Min);
-let maximum = CompoundAnimation::new(a.clone(), b.clone(), AnimationOperator::Max);
-
-// Average
-let mean = CompoundAnimation::mean(a.clone(), b.clone());
-assert_eq!(sum.value(), 1.0);
-assert_eq!(mean.value(), 0.5);
 ```
 
 ### ConstantAnimation
@@ -504,14 +474,14 @@ assert_eq!(ALWAYS_DISMISSED.value(), 0.0);
 Switch between animations when they cross:
 
 ```rust
-# use std::sync::Arc;
+# use std::rc::Rc;
 # use std::time::Duration;
 # use flui_animation::{AnimationController, AnimationSwitch};
 # use flui_scheduler::UpdateScheduler;
 # let scheduler = UpdateScheduler::new();
-# let anim1 = AnimationController::new(Duration::from_millis(300), &scheduler);
-# let anim2 = AnimationController::new(Duration::from_millis(300), &scheduler);
-let switch = AnimationSwitch::new(Arc::new(anim1.clone()), Some(Arc::new(anim2.clone())));
+# let anim1 = AnimationController::builder(Duration::from_millis(300)).build();
+# let anim2 = AnimationController::builder(Duration::from_millis(300)).build();
+let switch = AnimationSwitch::new(Rc::new(anim1.clone()), Some(Rc::new(anim2.clone())));
 
 // When anim1 and anim2 values cross, switches to anim2
 // Useful for "train hopping" between overlapping animations
@@ -528,14 +498,14 @@ let switch = AnimationSwitch::new(Arc::new(anim1.clone()), Some(Arc::new(anim2.c
 `TweenAnimation`; a curve over an animation is `CurvedAnimation::new`.
 
 ```rust
-# use std::sync::Arc;
+# use std::rc::Rc;
 # use std::time::Duration;
 # use flui_animation::{AnimationController, CurvedAnimation, Curves, FloatTween};
 # use flui_scheduler::UpdateScheduler;
 use flui_animation::AnimatableExt;
 # let scheduler = UpdateScheduler::new();
-# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
-let curved = Arc::new(CurvedAnimation::new(Arc::new(controller.clone()), Curves::EaseOut));
+# let controller = AnimationController::builder(Duration::from_millis(300)).build();
+let curved = Rc::new(CurvedAnimation::new(Rc::new(controller.clone()), Curves::EaseOut));
 let animated = FloatTween::new(0.0, 100.0).animate(curved);
 # controller.dispose();
 ```
@@ -665,9 +635,9 @@ Fallible operations return `Result<_, AnimationError>`:
 
 | Variant | When |
 |---------|------|
-| `Disposed` | Fallible driving operations (`forward`, `reverse`, `animate_*`, `fling*`, `repeat*`, `stop`, `reset`); value setters, listeners and queries remain callable |
+| `Disposed` | Fallible driving operations refuse; queries remain readable and closed channels do not resume delivery |
 | `InvalidBounds(String)` | `lower >= upper`, a non-finite bound or span, or a bad `repeat_with` range |
-| `TickerNotAvailable` | Declared for a missing ticker; no current operation returns it |
+| `IdentityExhausted` | A run or sample namespace has exhausted its non-reusable identities |
 | `InvalidSpring(String)` | An underdamped (oscillating) spring passed to `fling_with`; use `animate_with` for those |
 | `NonFiniteTarget(String)` | A `NaN` target or `from` (always), an infinite one when the bound it would clamp to is itself infinite (on a bounded controller infinities clamp to the bound), or a non-finite fling velocity or simulation start |
 
@@ -676,20 +646,22 @@ Fallible operations return `Result<_, AnimationError>`:
 # use flui_animation::{AnimationController, AnimationError};
 # use flui_scheduler::UpdateScheduler;
 # let scheduler = UpdateScheduler::new();
-let err = AnimationController::with_bounds(Duration::from_millis(300), &scheduler, 1.0, 0.0);
+let err = flui_animation::ValueRange::new(1.0, 0.0);
 assert!(matches!(err, Err(AnimationError::InvalidBounds(_))));
 ```
 
 ---
 
-## Thread Safety
+## UI ownership
 
-- `AnimationController` is `Send + Sync`
-- All animations are `Send + Sync`
-- Listeners are invoked synchronously by the call that causes the change, including
-  `forward`, `reverse`, `stop`, `reset` and ticks, after the
-  controller's lock is released
-- Internal state is protected by `parking_lot::Mutex`
+Controllers, animation wrappers and listeners belong to one UI owner and share
+state through `Rc`. Listener captures can contain owner-local values. Callbacks,
+curves, simulations and outgoing captures run after `RefCell` borrows end.
+
+Create a `DrivenController` with `builder(duration).build_on(Some(&vsync))`
+and retain it for the widget's lifetime. Its observer clones share the kernel;
+dropping the owner unregisters and cancels the run. A manual controller from
+`build()` advances only through `tick_at(Duration)`.
 
 ---
 

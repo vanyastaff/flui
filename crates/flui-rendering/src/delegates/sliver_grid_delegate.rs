@@ -155,7 +155,7 @@ impl SliverGridLayout {
 ///     }
 /// }
 /// ```
-pub trait SliverGridDelegate: Send + Sync + Debug {
+pub trait SliverGridDelegate: Debug {
     /// Get the grid layout for the given constraints.
     ///
     /// # Arguments

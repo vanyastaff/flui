@@ -34,13 +34,13 @@
 //! any other kind of `pub` item, so adding to the surface is a reviewed edit.
 
 use std::rc::Rc;
-use std::sync::Arc;
+
 use std::time::Duration;
 
 use flui_animation::Curve;
 use flui_foundation::{ElementId, RenderId};
 use flui_rendering::pipeline::PipelineCell;
-use flui_scheduler::{LocalPostFrameHandle, TickerFuture};
+use flui_scheduler::PostFrameHandle;
 
 pub use crate::navigator::back_gesture::{BackGestureController, BackGestureRuntime};
 pub use crate::navigator::binding::{TransitionGroup, TransitionPeer};
@@ -87,7 +87,7 @@ pub trait NavigatorProbe {
     /// What `id` publishes about its transition.
     fn route_peer(&self, id: RouteId) -> Option<TransitionPeer>;
     /// The owner-local post-frame handle captured at mount.
-    fn local_post_frame_handle(&self) -> Option<LocalPostFrameHandle>;
+    fn post_frame_handle(&self) -> Option<PostFrameHandle>;
     /// The render tree the navigator is mounted in.
     fn render_tree(&self) -> Option<PipelineCell>;
     /// Whether `route` may start an edge-swipe-back gesture right now.
@@ -97,7 +97,7 @@ pub trait NavigatorProbe {
         &self,
         route: RouteId,
         duration: Duration,
-        curve: Arc<dyn Curve + Send + Sync>,
+        curve: Rc<dyn Curve + Send + Sync>,
     ) -> bool;
 }
 
@@ -135,8 +135,8 @@ impl NavigatorProbe for NavigatorHandle {
     fn route_peer(&self, id: RouteId) -> Option<TransitionPeer> {
         NavigatorHandle::route_peer(self, id)
     }
-    fn local_post_frame_handle(&self) -> Option<LocalPostFrameHandle> {
-        NavigatorHandle::local_post_frame_handle(self)
+    fn post_frame_handle(&self) -> Option<PostFrameHandle> {
+        NavigatorHandle::post_frame_handle(self)
     }
     fn render_tree(&self) -> Option<PipelineCell> {
         NavigatorHandle::render_tree(self)
@@ -148,7 +148,7 @@ impl NavigatorProbe for NavigatorHandle {
         &self,
         route: RouteId,
         duration: Duration,
-        curve: Arc<dyn Curve + Send + Sync>,
+        curve: Rc<dyn Curve + Send + Sync>,
     ) -> bool {
         NavigatorHandle::pop_paced(
             self,
@@ -212,7 +212,12 @@ impl Route for ZeroDurationRoute {
         // continuation on the future once the push's own flush releases the
         // history lock, and that continuation raises `PushCompleted`
         // (ADR-0064) — a route has no seam to raise it directly.
-        PushCompletion::Animating(TickerFuture::complete())
+        PushCompletion::Animating(
+            flui_animation::AnimationController::builder(std::time::Duration::ZERO)
+                .build()
+                .forward()
+                .expect("BUG: fresh controller admits a run"),
+        )
     }
 
     fn did_pop(&mut self) -> bool {
@@ -294,7 +299,7 @@ pub trait HeroControllerProbe {
     /// The flights that started, one per shared tag.
     fn manifests(&self) -> Vec<HeroFlightManifest>;
     /// The flights currently in the air.
-    fn flights(&self) -> &Arc<FlightManager>;
+    fn flights(&self) -> &Rc<FlightManager>;
 }
 
 impl HeroControllerProbe for HeroController {
@@ -310,7 +315,7 @@ impl HeroControllerProbe for HeroController {
     fn manifests(&self) -> Vec<HeroFlightManifest> {
         HeroController::manifests(self)
     }
-    fn flights(&self) -> &Arc<FlightManager> {
+    fn flights(&self) -> &Rc<FlightManager> {
         HeroController::flights(self)
     }
 }
@@ -529,7 +534,7 @@ mod tests {
         "NavigatorProbe::entry_of",
         "NavigatorProbe::hero_observer_count",
         "NavigatorProbe::is_current",
-        "NavigatorProbe::local_post_frame_handle",
+        "NavigatorProbe::post_frame_handle",
         "NavigatorProbe::overlay",
         "NavigatorProbe::pop_gesture_enabled",
         "NavigatorProbe::pop_paced",

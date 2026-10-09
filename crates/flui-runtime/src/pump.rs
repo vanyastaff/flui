@@ -12,9 +12,8 @@
 /// receives) and to the UI runtime's `Vsync` tick, so `Vsync` controllers advance
 /// on the frame's clock rather than on whenever the tick read the wall clock.
 ///
-/// A `flui_scheduler::Ticker` does not follow it: a controller built on the
-/// scheduler measures elapsed time on the wall clock (a recorded divergence,
-/// `flui-scheduler`'s `ARCHITECTURE.md`).
+/// Each presentation projects this timestamp through its `MotionClock` before
+/// sampling its controllers with a typed `FrameTick`.
 pub trait FrameClockSource {
     /// This frame's timestamp. Called exactly once per pump.
     fn frame_time(&mut self) -> web_time::Instant;

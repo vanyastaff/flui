@@ -20,17 +20,16 @@
 //! element/render tree or schedules a rebuild, so it stays outside the
 //! controller-tick frame phase's setState/rebuild restriction.
 
-use std::sync::Arc;
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use flui_animation::{AnimationController, Vsync, VsyncRegistration};
+use flui_animation::{AnimationController, DrivenController};
 use flui_foundation::Listenable;
 use flui_view::{
-    BuildContext, BuildContextExt, IntoView, LifecycleContext, StatefulView, StatelessView, View,
-    ViewState,
+    BuildContext, IntoView, LifecycleContext, StatefulView, StatelessView, View, ViewState,
 };
 use flui_widgets::VsyncScope;
-use parking_lot::Mutex;
 
 /// Env var that turns the histogram on. Unset (the default): zero overhead,
 /// identical behavior to the plain interactive demo.
@@ -88,53 +87,21 @@ fn log_window(mut deltas: Vec<Duration>) {
 }
 
 /// Wraps `child` with the free-running histogram probe. A no-op wrapper
-/// (`controller: None`) when [`ENABLE_ENV_VAR`] is unset — identical
+/// when [`ENABLE_ENV_VAR`] is unset — identical
 /// behavior to mounting `child` directly.
 #[derive(Clone)]
 pub struct HistogramProbe<V> {
     child: V,
-    controller: Option<Arc<AnimationController>>,
+    enabled: bool,
 }
 
 impl<V: View + Clone + 'static> HistogramProbe<V> {
-    /// Builds the wrapper, installing the recording listener now (so it is
-    /// live the instant the controller starts ticking) iff
-    /// [`ENABLE_ENV_VAR`] is set. The controller itself does not start
-    /// running here — no `BuildContext` exists yet — that happens once
-    /// mounted, in [`HistogramProbeState::init_state`], after registering
-    /// with the ambient `VsyncScope`.
+    /// Enables measurement when [`ENABLE_ENV_VAR`] is set. The mounted state
+    /// owns the controller and starts it after acquiring its frame clock.
     pub fn wrap(child: V) -> Self {
-        let Some(()) = std::env::var_os(ENABLE_ENV_VAR).map(|_| ()) else {
-            return Self {
-                child,
-                controller: None,
-            };
-        };
-
-        // `with_detached_ticker`, not `without_ticker`: this controller is
-        // driven by the ambient `VsyncScope` through `tick_at`, but `repeat()`
-        // below is a real run and `is_animating()` is ticker-based (it
-        // reports whether a ticker is active), so a ticker-less controller
-        // could never report it and would log "the animation will not advance" while
-        // demonstrably advancing. Same choice, for the same reason, as
-        // `AnimatedSize`.
-        let controller = AnimationController::with_detached_ticker(CONTROLLER_CYCLE);
-        let window = Arc::new(Mutex::new(TickWindow::default()));
-        controller.add_listener(Arc::new(move || {
-            let deltas = window.lock().record(Instant::now());
-            if let Some(deltas) = deltas {
-                log_window(deltas);
-            }
-        }));
-
-        tracing::info!(
-            window_sample_count = WINDOW_SAMPLE_COUNT,
-            "frame histogram enabled ({ENABLE_ENV_VAR}=1)"
-        );
-
         Self {
             child,
-            controller: Some(Arc::new(controller)),
+            enabled: std::env::var_os(ENABLE_ENV_VAR).is_some(),
         }
     }
 }
@@ -149,7 +116,7 @@ impl<V: View + Clone + 'static> StatelessView for HistogramProbe<V> {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         HistogramProbeInner {
             child: self.child.clone(),
-            controller: self.controller.clone(),
+            enabled: self.enabled,
         }
     }
 }
@@ -161,7 +128,7 @@ impl<V: View + Clone + 'static> StatelessView for HistogramProbe<V> {
 #[derive(Clone)]
 struct HistogramProbeInner<V> {
     child: V,
-    controller: Option<Arc<AnimationController>>,
+    enabled: bool,
 }
 
 impl<V: View + Clone + 'static> View for HistogramProbeInner<V> {
@@ -175,19 +142,23 @@ impl<V: View + Clone + 'static> StatefulView for HistogramProbeInner<V> {
 
     fn create_state(&self) -> Self::State {
         HistogramProbeState {
-            controller: self.controller.clone(),
-            registration: None,
+            controller: self.enabled.then(|| {
+                let controller = AnimationController::builder(CONTROLLER_CYCLE).build_on(None);
+                let window = Rc::new(RefCell::new(TickWindow::default()));
+                controller.controller().add_listener(Rc::new(move || {
+                    let deltas = window.borrow_mut().record(Instant::now());
+                    if let Some(deltas) = deltas {
+                        log_window(deltas);
+                    }
+                }));
+                controller
+            }),
         }
     }
 }
 
 struct HistogramProbeState {
-    controller: Option<Arc<AnimationController>>,
-    /// The ambient `Vsync` this state registered with, plus the
-    /// registration handle -- stays `None` (and the controller never runs)
-    /// when the probe is disabled, or when mounted with no `VsyncScope`
-    /// above it.
-    registration: Option<(Vsync, VsyncRegistration)>,
+    controller: Option<DrivenController>,
 }
 
 impl<V: View + Clone + 'static> ViewState<HistogramProbeInner<V>> for HistogramProbeState {
@@ -195,22 +166,28 @@ impl<V: View + Clone + 'static> ViewState<HistogramProbeInner<V>> for HistogramP
     /// ambient `VsyncScope` and starts the free-running cycle here, never
     /// from `build`.
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        let Some(controller) = self.controller.as_ref() else {
+        let Some(controller) = self.controller.as_mut() else {
             return;
         };
-        if let Some(vsync) = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()) {
-            let registration = vsync.register((**controller).clone());
-            self.registration = Some((vsync, registration));
-        }
+        let _ = controller.rebind(VsyncScope::maybe_of(ctx).as_ref());
+        tracing::info!(
+            window_sample_count = WINDOW_SAMPLE_COUNT,
+            "frame histogram enabled"
+        );
         controller
+            .controller()
             .repeat(true)
             .expect("a freshly created controller accepts repeat()");
     }
 
-    fn dispose(&mut self) {
-        if let Some((vsync, registration)) = self.registration.take() {
-            vsync.unregister(&registration);
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        if let Some(controller) = self.controller.as_mut() {
+            let _ = controller.rebind(VsyncScope::maybe_of(ctx).as_ref());
         }
+    }
+
+    fn dispose(&mut self) {
+        drop(self.controller.take());
     }
 
     fn build(&self, view: &HistogramProbeInner<V>, _ctx: &dyn BuildContext) -> impl IntoView {

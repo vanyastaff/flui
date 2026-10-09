@@ -81,7 +81,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use flui::animation::{AnimationController, Vsync, VsyncRegistration};
+use flui::animation::{AnimationController, DrivenController};
 use flui::app::{AppConfig, AppHandle, Application, StartupWindow};
 use flui::foundation::Listenable;
 use flui::material::{AppBar, InputDecoration, Scaffold, TextField, Theme, ThemeData};
@@ -294,7 +294,8 @@ fn step_type(text_controller: &TextEditingController, tick_index: u64) {
 /// "Idle-phase frame counting").
 fn schedule_idle_observer(post_frame: PostFrameHandle, idle_frames: Arc<AtomicU64>) {
     let next_post_frame = post_frame.clone();
-    post_frame.schedule(move |_timing| {
+    // Closing the presentation ends this observation chain.
+    let _ = post_frame.schedule(move |_timing| {
         idle_frames.fetch_add(1, Ordering::SeqCst);
         schedule_idle_observer(next_post_frame, idle_frames);
     });
@@ -455,17 +456,18 @@ struct WorkloadDriver {
 }
 
 struct WorkloadDriverState {
-    probe: Arc<Probe>,
-    registration: Option<(Vsync, VsyncRegistration)>,
+    probe: std::rc::Rc<Probe>,
+    controller: DrivenController,
 }
 
 impl StatefulView for WorkloadDriver {
     type State = WorkloadDriverState;
 
     fn create_state(&self) -> Self::State {
+        let controller = AnimationController::builder(Duration::from_millis(1_000)).build_on(None);
         WorkloadDriverState {
-            probe: Arc::new(Probe {
-                controller: AnimationController::with_detached_ticker(Duration::from_millis(1_000)),
+            probe: std::rc::Rc::new(Probe {
+                controller: controller.controller().clone(),
                 tick_state: Mutex::new(TickState::new(Instant::now())),
                 scroll_controller: self.scroll_controller.clone(),
                 text_controller: self.text_controller.clone(),
@@ -474,7 +476,7 @@ impl StatefulView for WorkloadDriver {
                 app_handle: self.app_handle.clone(),
                 config: self.config,
             }),
-            registration: None,
+            controller,
         }
     }
 }
@@ -485,25 +487,24 @@ impl ViewState<WorkloadDriver> for WorkloadDriverState {
             *self.probe.post_frame.lock() = Some(handle);
         }
 
-        let probe = Arc::clone(&self.probe);
+        let probe = std::rc::Rc::clone(&self.probe);
         self.probe
             .controller
-            .add_listener(Arc::new(move || probe.on_tick()));
+            .add_listener(std::rc::Rc::new(move || probe.on_tick()));
 
-        if let Some(vsync) = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()) {
-            let registration = vsync.register(self.probe.controller.clone());
-            self.registration = Some((vsync, registration));
-        }
+        let _ = self.controller.rebind(VsyncScope::maybe_of(ctx).as_ref());
         self.probe
             .controller
             .repeat(true)
             .expect("a freshly created controller accepts repeat()");
     }
 
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        let _ = self.controller.rebind(VsyncScope::maybe_of(ctx).as_ref());
+    }
+
     fn dispose(&mut self) {
-        if let Some((vsync, registration)) = self.registration.take() {
-            vsync.unregister(&registration);
-        }
+        self.controller.dispose();
     }
 
     fn build(&self, view: &WorkloadDriver, _ctx: &dyn BuildContext) -> impl IntoView {

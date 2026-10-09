@@ -8,18 +8,19 @@ decisions` entries below; a full crate architecture writeup is deferred.
 
 ## Mapping decisions
 
-### Ticker delivery preserves an enclosing failure during resource retirement
+### Scheduler storage belongs to one UI owner
 
-`TickerDelivery::deliver_after_failure` preserves accepted continuation and
-waiter invocation while retaining their opaque resources under ADR-0127. A
-controller calls it when its existing retirement context already owns a status
-or frame-peer failure: `thread::panicking()` alone cannot express a caught
-failure. Normal `deliver` still retires healthy resources. This extends the
-delivery seam rather than introducing another run or owner model.
+`UpdateScheduler` shares UI state through `Rc`, `Cell` and `RefCell`.
+`OwnerFrame` owns async tasks and the single claimed post-frame queue.
+Frame and task wakers retain only weak references to separate cross-thread
+wake infrastructure. The scheduler closes that infrastructure before retiring
+UI captures (ADR-0175). Callback invocation and outgoing retirement occur
+after owner-state borrows end. Earlier failure examples below describe locks
+in the retired implementation; the current equivalent boundary is a borrow.
 
-The public animation test `status_delivery_failure_custody` covers continuation
-and owning-waker retirement after status failure, including a previous sibling
-or child-registry failure (ADR-0173).
+`owner_callback_contract` pins owner-local captures, public callback reentry
+and stale post-frame handle refusal. `wake_in_flight_releases_owner_storage`
+pins owner retirement while a platform wake hook remains in flight.
 
 ### Exhausted task identities permanently refuse admission
 
@@ -32,30 +33,21 @@ before polling a future or publishing a task, and the rejected callback or
 future is retained rather than dropped (ADR-0127), so its destructor cannot
 replace the capacity failure.
 
-### Ticker cancellation precedes terminal callback retirement
-
-Disposing, stopping or resetting a ticker withdraws its callback and cancels
-its pending scheduler registration before dropping the callback, so a failing
-callback destructor never leaves the registration live. While the thread is already
-panicking the callback is retained instead of dropped
-([ADR-0127](../../docs/adr/ADR-0127-exceptional-path-retention.md)).
-
 ### Post-frame panic preserves uninvoked work in its original queue
 
 A post-frame callback panic stops the drain and propagates after frame completion
 bookkeeping closes. The panicking entry is consumed, not retried; the uninvoked
-tail returns to its original shared or owner-local queue with its original IDs.
+tail returns to the owner queue with its original IDs.
 The private `scheduler::post_frame_dispatch` module owns this snapshot and tail
 recovery; the frame-close path retains phase and completion bookkeeping.
 The next completed frame sorts those IDs with newer registrations, so surviving
 work precedes work registered reentrantly by the failed callback. Cancellation
-records remain intact on the failed drain, including records belonging to other
-callback queues. No user callback or captured destructor runs under a queue guard.
+records remain intact on the failed drain. No user callback or captured
+destructor runs under a queue borrow.
 
-After the shared and owner-local queues have been snapshotted, but before their
-entries are sorted or invoked, the dispatcher emits one debug event with
-`shared_callbacks`, `local_callbacks`, and `total_callbacks`. These are queue
-work-item counts for diagnosing post-frame amplification; they are only a lower
+After the owner queue has been snapshotted, but before its entries are sorted
+or invoked, the dispatcher emits one debug event with `total_callbacks`.
+This work-item count diagnoses post-frame amplification; it is only a lower
 bound on retained memory because an opaque callback's captured bytes cannot be
 measured. Nested registrations therefore appear in the next frame's event, and
 a panic-restored tail appears again in the retry frame's event. Observability
@@ -67,7 +59,7 @@ frame, or promise that a platform host survives an application panic. A direct
 or headless caller that catches the propagated panic decides whether to resume.
 The regression test
 `post_frame_panic_preserves_uninvoked_mixed_tail_before_reentrant_work` pins
-tail survival, mixed-queue FIFO, and consumption of the failed entry.
+tail survival, registration FIFO, and consumption of the failed entry.
 
 ### One recovery boundary closes phase/completion state before any pre-pipeline panic propagates
 
@@ -421,9 +413,8 @@ same-thread caller's demand from being lost is not these no-op arms but
 what the demand is for: a pipeline visual-update issued mid-frame is by
 construction already inside the frame that will observe it (the pipeline
 runs in `.persistentCallbacks`, and the other two mid-frame phases precede
-it), while ticker/animation demand travels
-`Ticker::schedule_tick_if_active` (`ticker.rs`) to `schedule_frame_callback`,
-whose own registration ends in an ungated `self.request_frame()` call,
+it), while animation continuation demand is committed by the presentation frame
+path and routed through its wake capability,
 independent of this phase gate. `UpdateScheduler::ensure_visual_update`
 implements the phase switch as a `match` over `phase()`, with every
 `SchedulerPhase` variant spelled out and no wildcard arm: on the thread
@@ -459,9 +450,8 @@ request.
 phase-based dedup `request_frame_impl`'s `frame_scheduled` coalescing
 alone cannot provide: that flag says "a frame is already scheduled," not
 "a frame is already running and would observe this request anyway." It
-carries a same-thread requirement: `UpdateScheduler` is `Send + Sync` and
-documented as reachable from any thread, so the mid-frame no-op arms only
-apply when `frame_thread` names the calling thread. Scoped to
+applies on the owning thread: `UpdateScheduler` owns thread-local callbacks;
+workers use `FrameWaker` to request a later frame. Scoped to
 `ensure_visual_update` alone: `schedule_frame_if_enabled` (shared with
 `end_of_frame`) and `set_frames_enabled` keep their existing, unrelated
 contracts.
@@ -519,242 +509,6 @@ before the pipeline runs, and `drive_frame_impl` runs the lane closure
 with no scheduler lock held. A mid-frame pipeline mark therefore locks a
 free `frame_thread`, reads `Some(current)`, returns `false`, and pokes
 nothing.
-
-### The ticker callback slot is a state machine, leased across user code
-
-**Rule:** a ticker dispatch (`Ticker::tick`, `Ticker::tick_and_reschedule_static`)
-must invoke the user callback with no lock held, and whatever that callback
-does to the SAME ticker — `stop`/`start`/`mute`/`unmute`/`dispose`/`reset`,
-called reentrantly — must be resolved against the run's actual outcome, not
-against a state re-read after the fact that cannot tell which run it belongs
-to.
-
-**Conflict:** issue #1059 found `TickerInner::callback: Option<TickerCallback>`
-conflated two different reasons for being `None` — "never installed, or the
-run stopped" and "checked out for an in-flight dispatch" — and that the
-auto-scheduling dispatch (`tick_and_reschedule_static`) resolved a checkout
-by re-reading `state == Active` alone, an ABA problem: that check cannot
-distinguish "still my run" from "a different run the callback itself just
-started". Two concrete failures followed, both with production call
-chains through `AnimationController::restart_ticker` (a status listener
-that calls `forward()`/`reverse()` again from inside the run it is reacting
-to is the ordinary "chain the next animation" idiom, not an edge case):
-
-- **Restart inside a tick.** A callback that calls `stop()` then
-  `start(new)` had `new` overwritten by the dispatch tail's own blind
-  `guard.callback = callback` (the OLD, checked-out closure) restore, and
-  the tail then registered ANOTHER transient callback on top of the one
-  `start()`'s own `schedule_tick_if_active()` had just registered — measured
-  before the fix: `(pending_after_restart, old_calls, new_calls) = (2, 3, 0)`
-  instead of `(1, 1, 1)`.
-- **Mute then unmute inside a tick.** `mute()` promised to retain the
-  callback, but during the dispatch the callback was held OUTSIDE the inner
-  slot entirely (checked out into a bare local, not a tracked state); the
-  old dispatch tail's restore condition (`state == Active`) never fires for
-  a ticker that ends the callback Muted, so `unmute()`'s own re-registration
-  was the only one — except a reentrant mute-then-unmute in the SAME tick
-  raced it against the tail's blind re-registration, orphaning one of the
-  two live ids (issue #1059's own reentrancy trace).
-
-**Choice:** replace the `Option` with an explicit three-state
-`CallbackSlot` (`Vacant` | `Ready(TickerCallback)` | `CheckedOut`), and check
-a `Ready` callback out into an RAII `TickerLease` for the duration of the
-dispatch — the same checkout/restore-or-discard shape as `flui-platform`'s
-`CallbackLease` (`crates/flui-platform/src/shared/handlers.rs`), adapted
-for a run-completion condition instead of a "window torn down" one. The
-lease's `Drop` (which runs on a panicking callback's unwind too, closing a
-latent bug where a panic left the slot checked out — i.e. empty — forever)
-restores the callback to `Ready` only if the slot is STILL exactly
-`CheckedOut` (nothing reentrant already replaced it with a fresh
-`Ready(new)`) AND the ticker is still running (`TickerState::is_running()`:
-`Active` or `Muted`); otherwise it drops the checked-out callback, always
-OUTSIDE the inner lock (a callback's own `Drop` — an `Arc`/`Box` capture's
-destructor — is user code that may call back into this same, non-reentrant
-ticker; see the workspace memory note `a-statement-lock-drops-its-guard-last`
-and the sibling fix in `flui-platform`'s `CallbackLease::drop`). This
-resolves both failures structurally rather than by re-checking more state
-after the fact:
-
-- A reentrant `start()` overwrites `CheckedOut` with `Ready(new)` directly,
-  so the lease finds the slot no longer `CheckedOut` when it drops and
-  discards the superseded callback instead of restoring it — an old run can
-  no longer overwrite a newer one.
-- A reentrant `mute()` leaves the slot `CheckedOut` untouched (mute never
-  touched the slot, before or after this fix — only `state`), so the lease
-  restores the SAME callback because `Muted` is still `is_running()`. The
-  callback is never held outside a tracked state at all.
-
-**One scheduling predicate, not one check per site:**
-`TickerInner::should_schedule_tick` (`state == Active && matches!(slot,
-Ready(_)) && scheduled_callback_id.is_none()`) is the
-ONLY scheduling check, shared by `start_inner`, `unmute` (via
-`schedule_tick_if_active`), and the auto-tick tail. Checking the SLOT, not
-just `state`, is what closes the duplicate-registration failure above:
-while a callback is checked out, `slot` is `CheckedOut`, not `Ready`, so
-`should_schedule_tick` is false for the WHOLE reentrant window a
-mute()-then-unmute() runs inside — `unmute()`'s own scheduling attempt
-during that window is a correctly-refused no-op, leaving the dispatch
-tail's own (post-restore) attempt as the only one that can succeed. Every
-site that still registers a callback id after computing this predicate
-also refuses to overwrite an existing `Some` id — a residual defense (not
-required to make either measured failure disappear, since the predicate
-above already prevents both) against a caller registering between the
-predicate check and the id being stored, both of which run with no lock
-held; a redundant registration is traced and cancelled rather than
-orphaned.
-
-**Five sites hardened to drop a displaced callback outside the lock, none
-independently reproducible today (`stop`/`dispose`/`reset` already
-released the lock before this fix; `start_inner`'s explicit-callback
-overwrite and `set_pending_callback` were the two genuine
-statement-scoped-guard instances — memory note
-`a-statement-lock-drops-its-guard-last`):** `stop`, `dispose`, `reset`
-(`CallbackSlot::clear_if_ready` extracts a `Ready` callback and leaves a
-`CheckedOut` one for the dispatching lease to resolve, so a reentrant
-stop/dispose/reset never fights the lease over the same callback), and
-`start_inner`'s explicit-callback branch and `set_pending_callback` (both
-now `mem::replace` the slot and bind the displaced value out of the lock's
-block before dropping it).
-
-**Why the ticker needs a slot protocol:** a ticker that held one callback
-for its entire life would need only its registration id
-(`scheduled_callback_id`) to answer "which run does this checked-out
-closure belong to". FLUI's
-`Ticker::start` accepts a fresh callback on every run (`TickerProvider`'s
-factory shape plus ad hoc `start(closure)` call sites), so the SAME ticker
-legitimately dispatches through a sequence of different closures over its
-life — the slot state machine is what tracks which one a given dispatch is
-allowed to restore.
-
-**Recorded limitations, not closed by this fix:**
-
-- **`start_inner` while `Muted` bypasses the `Idle`/`Stopped` contract.**
-  A muted ticker is still active (muting gates ticking and scheduling,
-  never activity), so `start` on it is a second start of an active ticker.
-  `Ticker::start_inner`'s own `debug_assert!`/early-return
-  rejects only `TickerState::Active`, so FLUI accepts the call, silently
-  overwriting the muted run's callback and future and re-anchoring its
-  start time. Named here as a known gap; closing it is a `start_inner`
-  contract change outside this fix's scope.
-- **A panicking tick callback leaves the ticker unscheduled.** The lease
-  restores the callback on unwind, so the slot is `Ready` and the state is
-  still `Active` — but the registration id was cleared at dispatch entry
-  and the tail that would re-register never runs, so the ticker stays
-  active and idle until something external (a `mute()`/`unmute()` cycle, a
-  `stop()`+`start()`) re-arms scheduling. Pinned by
-  `a_panicking_tick_callback_leaves_the_slot_restored`, which asserts the
-  slot's contents, not that ticking resumes.
-- **Register-outside-lock / store-id-under-lock is still a genuine
-  cross-thread TOCTOU window; the concrete consequence it produced is
-  closed (issue #1166).** `schedule_tick_if_active` and the auto-tick
-  tail both check eligibility, then upgrade the scheduler and register,
-  then re-lock ONLY to decide whether to keep the id — three separate
-  lock acquisitions with no lock held across any of them, and that window
-  itself remains open. Both tails decide with
-  `TickerInner::may_record_registration` (`state == Active &&
-  scheduled_callback_id.is_none()`, re-read under the SAME lock as the
-  write, deliberately without `should_schedule_tick`'s slot term — see that
-  method's own doc for why a checked-out slot must not retract a
-  registration here), and self-cancel the id they just minted via
-  `UpdateScheduler::cancel_frame_callback` whenever a `stop`/`dispose`/
-  `reset`/`mute` raced them in that window and left the ticker anything
-  other than `Active` with no registration id on record. A concurrent
-  cross-thread `mute()` immediately followed by `unmute()` racing this
-  window is traced and cancelled the same way — it is NEITHER a starvation
-  hazard (the losing tail's self-cancel blocks nothing) NOR an orphan
-  hazard (nothing survives live and uncancelled); whichever tail's
-  registration lands in the re-lock first wins outright, and the other
-  cancels its own. Two residual gaps this fix does not touch, both
-  structural rather than part of #1166's scope: (a) the transient loop's
-  `cancelled` check (`handle_begin_frame`) is read outside the `transient`
-  lock, so a callback popped for execution in the same instant it is
-  cancelled can still run once — inert, since the tick path's own
-  top-of-dispatch `state` re-read is what makes it harmless; (b) the
-  top-of-tick unconditional `scheduled_callback_id = None` in
-  `tick_and_reschedule_static` assumes the firing closure is the one
-  currently on record — a stale closure firing concurrently with a fresh
-  registration's record on another thread could clobber that fresh id
-  instead of its own stale one. Both need two frames racing on two threads
-  to manifest.
-- **The `AnimationController` ↔ `Ticker` strong-clone reference cycle is
-  unchanged and undocumented as a NEW risk by this fix.**
-  `AnimationController::restart_ticker` captures `let controller =
-  self.clone();` into the ticker's callback closure — `Ticker` holds
-  `TickerCallback = Box<dyn FnMut(f64) + Send>`, so the controller's
-  `Arc<Mutex<AnimationControllerInner>>` is kept alive by its OWN ticker's
-  installed callback for as long as that callback is installed. This is
-  safe today only because every mutator that could otherwise deadlock or
-  leak reaches the controller through a borrowed `&self` (never taking a
-  second strong clone that would need dropping to break the cycle) and
-  `dispose()`/`stop()`/`reset()` all clear the ticker's callback (directly,
-  or via `Ticker::dispose`/`Ticker::stop`), which drops the closure and
-  with it the controller's self-reference. The invariant — every
-  `AnimationController` method that runs while its own ticker's callback
-  could still be installed must reach `self` through a borrow, never
-  through a second owned strong clone the callback itself would need to
-  outlive — is recorded here rather than changed.
-
-**Tests:** `flui-scheduler`'s `ticker::tests` module —
-`restart_inside_auto_tick_preserves_new_callback_and_one_pending_tick` pins
-the restart-inside-a-tick failure directly, and
-`a_panicking_tick_callback_leaves_the_slot_restored` pins the panic-unwind
-fix. The manual `Ticker::tick(&self, ...)` path cannot support the SAME
-reentrant-restart probe: restarting needs `&mut Ticker` (`stop`/`start`),
-which — since `tick` takes only `&self` — is only reachable by wrapping the
-ticker in an outer lock the CALLER holds for `tick`'s entire duration,
-including the callback; a reentrant call back through that same
-non-reentrant lock self-deadlocks before it ever reaches `stop()`. For the
-mute/unmute-inside-a-tick retention failure, `dispose()`/`reset()` inside a
-tick leaving no pending registration, the superseded callback being dropped
-outside the lock, the manual path's (non-reentrant) restore contract, and
-the restart-inside-a-tick failure reached through `AnimationController`'s
-production call chain (a status listener chaining the next run, then
-`stop()` cancelling it fully), **Unasserted:** no test pins this.
-
-**Alternatives considered:**
-
-- Keep `Option<TickerCallback>` and add a generation/epoch counter
-  (the issue's own "possible direction") checked alongside `state`.
-  Rejected: an epoch still answers "is this the same run", but does nothing
-  about the SECOND failure (mute/unmute retention while checked out) or the
-  panic-unwind leak, both of which are a missing STATE — "checked out" is
-  not representable in `Option` at all — rather than a missing identity
-  check. The slot state machine subsumes what an epoch would have bought
-  and closes the other two failures the same shape closes.
-- Hold the ticker's inner lock across the callback invocation, so no
-  reentrant call could observe an inconsistent slot. Rejected per the
-  issue's own explicit instruction and this crate's existing
-  no-lock-held-during-a-callback discipline (see this file's own "No
-  legacy, lock-tied frame-callback registration API" entry above): it would
-  prohibit the legitimate reentrancy (`AnimationController::restart_ticker`
-  IS a real, common call path) and reintroduce exactly the self-deadlock
-  class issue #1058 removed.
-
-**Trade-off accepted:** the two named limitations above (the `Muted`
-start-contract gap and the cross-thread register/store TOCTOU) ship
-unfixed, named rather than silently assumed closed; both predate this fix
-and are not measured to have widened under it.
-
-### A ticker's elapsed time is wall-clock time, not the frame timestamp
-
-**Rule:** `Ticker` reports `start_time.elapsed()`: the wall-clock time since
-`start`, read when the tick runs. The frame's vsync timestamp, which the
-scheduler hands every transient callback, is ignored (`_vsync_time` in both
-auto-tick registrations).
-
-**Consequence:** anchoring on the first frame's timestamp would give every
-ticker in a frame the same instant and let a test's fake clock drive them.
-Here a host that
-drives frames on a virtual clock (`flui-runtime`'s `UiRuntime::pump` with a
-`ManualClock`) moves the frame timestamp, the UI runtime's `Vsync` controllers and
-the scheduler's frame timing, but not an `AnimationController` built on the
-scheduler: that one advances only as real time passes.
-
-**Choice:** kept for now, named. Moving the ticker onto the frame timestamp
-changes `start`, `mute`/`unmute`'s elapsed rebasing and the manual
-`Ticker::tick` path together, and belongs with the headless driver that needs
-it, not with the pump that exposed it. **Unasserted:** no test pins this.
-Moving the ticker onto the frame timestamp should delete this entry.
 
 ### `end_of_frame` registers before it demands, and the live registry is the memo
 
@@ -970,17 +724,14 @@ code fabricate an outcome, and `#[non_exhaustive]` on a *tuple* variant is no
 middle ground — it makes the variant fully opaque cross-crate, not even
 matchable as `Completed(..)`; the struct shape is the one form that is both
 sealed for construction and open for matching. `SchedulerClosed` is a plain
-unit struct, not `#[non_exhaustive]`, mirroring this crate's closest sibling,
-`ticker::TickerCanceled`.
+unit struct, not `#[non_exhaustive]`.
 
 **Fused for free, not by a new mechanism:** `poll` used to `take()` the
 resolved timing, so a second poll after `Ready` found `None` again and hung
 forever — a real "polling it again after it resolved is a silent hang" trap,
 named on the future's own doc before this issue. `Result<FrameOutcome,
 SchedulerClosed>` is `Copy` (both arms are), so `poll` now peeks the stored
-value by copy instead, and a second poll simply repeats it. This mirrors
-`TickerFuture`'s own `poll_resolution` shape in this crate (`ticker.rs`)
-rather than introducing a second fusing mechanism.
+value by copy instead, and a second poll simply repeats it. No extra fusing mechanism is needed.
 
 **Teardown mechanism:** `impl Drop for SchedulerInner` drains the completion
 registry with `Mutex::get_mut` — no lock, sound because `Drop::drop` runs
@@ -1069,173 +820,6 @@ conflating a frame outcome with "no frame will ever resolve this," which the
 a real frame's timing by construction, exactly the "cannot tell them apart"
 defect this issue exists to close, just moved to a new field instead of
 solved.
-
-### A ticker future registers atomically with its terminal-state read
-
-**Rule:** durable resolution is the source of truth. While pending, each polled
-`TickerFuture` owns one slab registration under the same state lock that publishes
-completion or cancellation. Repeat polls replace that slot's waker; clones have
-independent slots. Dropping a pending future removes its slot, so registration
-storage tracks live polled futures rather than historical polling or clone churn.
-Old wakers are retired only after unlocking. Publication takes both callbacks and
-the waitset, then delivery invokes every waker outside all locks. Terminal polls
-need no subscription and can safely run inline from a wake.
-
-**Conflict:** `event-listener` 5.4.2 calls a waker under its intrusive-list lock,
-preventing inline poll/drop. Its notify loop advances the next entry and marks it
-notified before waking, but increments the notified count afterward. A panicking
-waker therefore leaves inconsistent accounting; catch-and-retry cannot repair the
-listener's later removal. This is why ticker waiting now uses the durable-state
-slab instead of that notification backend (ADR-0106).
-
-**Proof:** the consumer `ticker_future_delivery_recovery` table covers repeated
-poll replacement, independent clones, immediate resource release on waiter drop,
-publication racing registration, inline wake polling and dropping, failed wake
-and retirement followed by healthy waiters, and a subsequent independent run.
-Abort- and deadlock-capable negatives run in bounded child processes.
-
-### The ticker resolves nothing; the controller owns the one run future
-
-**Rule:** `Ticker::start`/`stop`/`dispose`/`reset` are fire-and-forget. Nothing
-in this crate creates a `TickerFuture` for a ticker's own run any more —
-`TickerFuture::pending()` hands its caller a `TickerCompleter`/`TickerFuture`
-pair, and that caller (never the ticker) decides when and how to resolve it.
-
-**Conflict:** a ticker that owned its run future and resolved it in
-`stop`/`dispose` was the earlier shape (through #1167), and it was a defect
-waiting to happen: every `ticker.stop()`
-`AnimationController` calls runs **under the controller's own `inner` lock**
-(`reset`, `settle_at_target`, `tick_simulation`, both `tick_time_based`
-completion arms, `dispose`, `restart_ticker`, `stop_running`). A future the
-ticker resolved would run its continuations and wake its pollers — arbitrary
-user code — from inside that non-reentrant mutex.
-
-**Choice:** move resolution up to the layer that owns the lock and the
-cancel/complete distinction. The ticker keeps exactly one thing: a "run in
-progress" fact (`TickerState::is_running()`), used only to refuse a second
-`start`. See
-`docs/adr/ADR-0064-animation-completion-is-one-controller-resolved-future.md`
-for the full accounting, including why this is a moved fact and not a
-different one.
-
-### A second resolution is ignored, not asserted
-
-**Rule:** `TickerCompleter::publish` is once-only; a second `complete`/`cancel`
-call (including the implicit one `Drop` performs) is a silent no-op and the
-first outcome stands.
-
-**Choice:** a no-op, not an assertion that the transition happens exactly once. `TickerCompleter::complete`/`cancel`
-consume `self`, so only `Drop` can ever attempt a second transition (when the
-completer was explicitly resolved and then falls out of scope) — a hard
-failure there would fire on the ordinary, correct path, not a bug. The
-invariant is load-bearing rather than cosmetic: it is what lets a re-read
-after registering stand in for a notification that was never delivered.
-
-### Publish then deliver: two phases, so the fan-out never runs under a caller's lock
-
-**Rule:** resolving a run is two calls, not one. `TickerCompleter::complete`/
-`cancel` **publish** — set the durable state and take every continuation
-registered so far, in one locked step — and return a `TickerDelivery`, which
-**delivers**: run each continuation (its own `catch_unwind`), then notify
-pollers. A caller finishes publishing while still holding its own lock and
-defers delivery until after that lock is released.
-
-**Conflict:** FLUI's fan-out is synchronous, so a single-phase resolve would
-either run under whatever lock the resolver holds (the exact hazard the
-previous section moves resolution to avoid) or force every resolver to
-manually stage a two-step unlock dance with no shared shape.
-
-**Choice:** the split is the shared shape.
-`AnimationController::finish` is the chokepoint every run-ending or
-run-starting site funnels through: drop the controller lock, notify value
-listeners if the run's value changed, fire status listeners, THEN deliver.
-Continuations run **before** wakers within delivery. Each continuation is
-`FnMut`, called exactly once through a borrow of its owning envelope; this keeps
-captured values out of an invocation's unwind. The already-resolved registration
-path uses the same ownership boundary and remains synchronous. Normal capture
-retirement follows invocation and can raise the first failure; subsequent opaque
-envelopes are retained once a failure has priority. Callback, capture retirement,
-wake, waker retirement and reporting failures cannot starve the remaining fan-out.
-The first payload resumes after delivery, or is retained when delivery runs during
-an existing unwind. Secondary payloads are always retained through the shared
-foundation helper. These exceptional leaks are deliberate: aggregate drop glue
-cannot be safely executed while preserving another failure. Two panicking fields
-inside an ordinary first retirement remain an unavoidable Rust abort boundary.
-
-`Drop for TickerDelivery` delivers if explicit delivery was omitted, and
-`Drop for TickerCompleter` publishes cancellation and delivers. No runtime, host
-or global registry is introduced. `ticker_future_delivery_recovery` pins these
-paths, chronological competition, hostile captured values, reporting failures and
-next-operation progress. ADR-0106 supersedes ADR-0064's invocation/waker policy
-while preserving controller ownership and two-phase publication.
-
-**Review checkpoint, not a test-checkable one:** `TickerCompleter::publish`
-taking one lock for both "set the durable state" and "take the continuation
-`Vec`" has no test that can fail if it is ever split into two locks instead —
-the window between them contains no user code, so nothing observable changes
-from outside. A registration racing across that window (a `when_complete_or_cancel`
-call from another thread, landing between the two hypothetical locks) would
-still see a consistent state either way in every case this crate's own tests
-can drive. Guard the one-lock shape at review time: a future edit that splits
-`publish` into "set state" then "take continuations" as two separate
-`self.inner.state.lock()` calls is the regression to catch by reading the
-diff, not by a red test.
-
-### A start while a run is already installed is refused, in every build
-
-**Rule:** `Ticker::start`/`start_default` refuse when the ticker is `Active`
-*or* `Muted` — muting pauses a run rather than ending it. A refused start
-logs at `error!` and drops the caller's callback; it does not touch ticker
-state.
-
-**Reason:** an unguarded second `start()` would overwrite the run and
-the displaced future would never complete. Before the
-controller took over resolution, FLUI keyed this same refusal on
-`active_future.is_some()` — the future's own presence was the durable fact
-`mute()` never touched, so the refusal survived muting where a narrower
-`state == Active` test did not (issue #1161). With no future left on the
-ticker, `TickerState::is_running()` (`Active | Muted`) is that same fact
-restated directly against state, since a live run and a live future were
-always the same thing here.
-
-**Choice:** refuse on `is_running()`; keep the existing `debug_assert!` on
-`state == Active` unchanged — two different questions, not two guesses at
-one: the assertion answers "is this a *started twice* programming
-error?" and the refusal answers "is there a live run I must not silently
-replace?". A start on a *muted* ticker is a supported, refused operation
-rather than a thrown error.
-
-**Lock discipline, because the refusal runs user code:** the decision is taken
-under `Mutex<TickerInner>` and acted on after it. Both the `tracing` event
-(whose subscriber is arbitrary user code) and the rejected callback's `Drop`
-(likewise) would otherwise be able to re-enter a non-reentrant mutex.
-
-**Cross-crate consequence:** `AnimationController::restart_ticker` guards its
-pre-start `stop()` on `TickerState::is_running()` for the identical reason —
-`mute()`-then-`restart` must end the muted run before installing a new one, or
-the ticker's own refusal above silently drops the new callback instead of
-starting it.
-
-### `when_complete_or_cancel` never blocks; it registers a continuation
-
-**Rule:** `TickerFuture::when_complete_or_cancel` runs its callback
-immediately, on the calling thread, when the future is already resolved —
-including in the window between a `TickerCompleter` publishing and its
-`TickerDelivery` running registered continuations. On a still-pending future
-it stores the callback and returns; whichever `complete`/`cancel` (or its
-`Drop`) resolves the future runs it later, from inside `TickerDelivery::deliver`.
-
-**Conflict:** the earlier implementation blocked the calling thread on a
-still-pending future, which meant there was no non-blocking route to react to a resolution without
-`async`/`await`, and its wasm path silently reported a completion that had
-not happened.
-
-**Choice:** register a continuation and return immediately; an already-resolved (or resolving) future runs the callback
-**synchronously on the caller's thread**, not on a microtask, so a registrant
-must be safe to re-enter from this call, and the relative order between two
-different registrants racing a resolution is not a contract. This removes the
-wasm special case entirely — there is no blocking path left to fail on a
-target with no thread to park.
 
 ### The UI runtime owns its async tasks: `OwnerFrame` holds them, `AsyncDriver` is `Weak`
 

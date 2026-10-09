@@ -438,8 +438,8 @@ pub(crate) mod native_actions {
         assert_eq!(harness.active_ime_clients(), 1);
         let store = harness.active_text_store().expect("focused store");
         harness
-            .local_post_frame_handle()
-            .schedule_local(move |_| {
+            .post_frame_handle()
+            .schedule(move |_| {
                 assert_eq!(
                     project_ime_event(&*store, &flui_platform_api::ImeEvent::Commit("IME".into())),
                     Ok(LockOutcome::Deferred)
@@ -575,8 +575,8 @@ pub(crate) mod native_actions {
             .active_text_store()
             .expect("semantic focus attached an IME session");
         harness
-            .local_post_frame_handle()
-            .schedule_local(move |_| {
+            .post_frame_handle()
+            .schedule(move |_| {
                 assert_eq!(
                     project_ime_event(&*store, &flui_platform_api::ImeEvent::Commit("IME".into())),
                     Ok(LockOutcome::Deferred)
@@ -723,7 +723,7 @@ pub(crate) fn focus_gain_attaches_an_ime_client_and_routes_preedit_to_the_contro
 // ------------------------------------------------------------------
 // IME cursor-area tracking (ADR-0030)
 //
-// `CursorAreaLoop`'s `LocalPostFrameHandle::schedule_local` call
+// `CursorAreaLoop`'s `PostFrameHandle::schedule` call
 // addresses the harness's lane directly (a `Weak` pointer, minted once
 // by `install_build_capabilities`) — it does not need `enter_owner_scope`
 // active to succeed, only the lane and its scheduler to still be alive.
@@ -734,7 +734,7 @@ pub(crate) fn focus_gain_attaches_an_ime_client_and_routes_preedit_to_the_contro
 // the same way. A focus change with the harness's binding already
 // dropped would still attach/detach the IME client correctly (that part
 // needs no lane at all), it would just never start the loop — the
-// `LocalPostFrameScheduleError::LaneClosed` path `CursorAreaLoop::schedule`
+// `PostFrameScheduleError::Closed` path `CursorAreaLoop::schedule`
 // warns on rather than panicking over.
 //
 // Transient-`None` resilience (a fully in-place red-check for "skip
@@ -1419,8 +1419,8 @@ pub(crate) mod text_store {
         let text_in_frame = Rc::new(RefCell::new(None));
         let (observed_controller, observed_text) = (controller.clone(), Rc::clone(&text_in_frame));
         harness
-            .local_post_frame_handle()
-            .schedule_local(move |_| {
+            .post_frame_handle()
+            .schedule(move |_| {
                 let outcome = flui_platform_api::text_store::project_ime_event(
                     &*field,
                     &flui_platform_api::ImeEvent::Commit("A".to_owned()),
@@ -1588,7 +1588,7 @@ pub(crate) mod text_store {
         LISTENED_FIELD.with(|slot| *slot.borrow_mut() = Some(Rc::clone(&field)));
         let answered = Arc::new(AtomicBool::new(false));
         let once = Arc::clone(&answered);
-        let listener = controller.add_listener(Arc::new(move || {
+        let listener = controller.add_listener(std::rc::Rc::new(move || {
             if once.swap(true, Ordering::SeqCst) {
                 return;
             }
@@ -1739,8 +1739,8 @@ pub(crate) mod text_store {
     fn queue_in_a_frame(harness: &mut Harness, field: &Rc<dyn TextStore>, grants: Vec<LockGrant>) {
         let field = Rc::clone(field);
         harness
-            .local_post_frame_handle()
-            .schedule_local(move |_| {
+            .post_frame_handle()
+            .schedule(move |_| {
                 for grant in grants {
                     assert_eq!(
                         field.request_lock(grant, LockTiming::Async),

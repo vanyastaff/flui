@@ -344,7 +344,7 @@ impl ViewState<Checkbox> for CheckboxState {
         // handle is consumed directly by the listener closure; nothing else
         // needs to re-read it later, so it is not stored on `self`.
         let rebuild = ctx.rebuild_handle();
-        self.states_listener = Some(self.states.add_listener(std::sync::Arc::new(move || {
+        self.states_listener = Some(self.states.add_listener(std::rc::Rc::new(move || {
             rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
         })));
     }
@@ -409,7 +409,7 @@ impl ViewState<Checkbox> for CheckboxState {
                 .or_else(|| Some(checkbox_default_overlay_color(&colors, resolved_states)))
         });
 
-        let painter: std::sync::Arc<dyn CustomPainter> = std::sync::Arc::new(CheckboxPainter {
+        let painter: std::rc::Rc<dyn CustomPainter> = std::rc::Rc::new(CheckboxPainter {
             fill_color,
             side,
             check_color,

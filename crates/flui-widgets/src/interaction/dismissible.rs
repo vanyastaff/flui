@@ -74,7 +74,7 @@ use std::time::Duration;
 
 use flui_animation::curve::{Curve, Interval};
 use flui_animation::{
-    Animation, AnimationController, AnimationStatus, Curves, Vsync, VsyncRegistration,
+    Animation, AnimationController, AnimationStatus, Curves, DrivenController, Vsync,
 };
 use flui_foundation::geometry::Size;
 use flui_foundation::{Listenable, ListenerId};
@@ -85,8 +85,8 @@ use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
 use flui_view::{
-    BoxedView, BuildContextExt, EventCx, EventOutcome, IntoView, LocalPostFrameHandle,
-    RebuildHandle, ViewExt, ViewState, WriterSource,
+    BoxedView, EventCx, EventOutcome, IntoView, PostFrameHandle, RebuildHandle, ViewExt, ViewState,
+    WriterSource,
 };
 
 use crate::animated::VsyncScope;
@@ -475,12 +475,10 @@ struct DragState {
     /// `move_controller`'s current `Vsync` registration — re-registered (not
     /// just registered once) on every direct `set_value` while dragging; see
     /// `reanchor_move_controller_vsync`'s doc for why.
-    move_vsync_registration: RefCell<Option<VsyncRegistration>>,
 
     /// Lazily created once the move animation completes past threshold.
-    resize_controller: RefCell<Option<AnimationController>>,
+    resize_controller: RefCell<Option<DrivenController>>,
     resize_listener_id: RefCell<Option<ListenerId>>,
-    resize_vsync_registration: RefCell<Option<VsyncRegistration>>,
 
     /// Bumped by `move_controller`'s status listener on every transition to
     /// `Completed`. `Send + Sync` (an atomic), so the listener may touch it
@@ -547,7 +545,7 @@ enum DismissEvent {
 /// The input-time completion bypass dispatches immediately with the same source.
 struct DismissEvents {
     writer: WriterSource,
-    post_frame: Option<LocalPostFrameHandle>,
+    post_frame: Option<PostFrameHandle>,
     mounted: Cell<bool>,
     callbacks: Rc<RefCell<DismissCallbacks>>,
 }
@@ -583,7 +581,7 @@ impl DismissEvents {
             return;
         };
         let events = self.clone();
-        if let Err(error) = post_frame.schedule_local(move |_| events.dispatch(event)) {
+        if let Err(error) = post_frame.schedule(move |_| events.dispatch(event)) {
             tracing::warn!(
                 ?error,
                 "Dismissible: event dropped because the owner post-frame lane is closed"
@@ -600,7 +598,7 @@ impl DismissEvents {
 pub struct DismissibleState {
     events: Option<Rc<DismissEvents>>,
     callbacks: Rc<RefCell<DismissCallbacks>>,
-    move_controller: AnimationController,
+    move_controller: DrivenController,
     move_value_listener_id: Option<ListenerId>,
     move_status_listener_id: Option<ListenerId>,
     vsync: Option<Vsync>,
@@ -622,17 +620,7 @@ impl StatefulView for Dismissible {
     type State = DismissibleState;
 
     fn create_state(&self) -> Self::State {
-        // A real, but permanently detached, ticker -- not `without_ticker`:
-        // this module reads `move_controller.is_animating()` extensively
-        // (`handle_drag_start`/`handle_drag_update`/`handle_drag_end`), and
-        // `is_animating` is intentionally ticker-based,
-        // not status-based — a ticker-less controller
-        // can never report `is_animating() == true`. `VsyncScope` still
-        // drives the actual value ticks deterministically via `tick_at`;
-        // `with_detached_ticker` gives this controller a ticker whose
-        // `start()`/`stop()` transition real ticker state without needing an
-        // `UpdateScheduler` at all.
-        let move_controller = AnimationController::with_detached_ticker(self.movement_duration);
+        let move_controller = AnimationController::builder(self.movement_duration).build_on(None);
         DismissibleState {
             events: None,
             callbacks: Rc::new(RefCell::new(DismissCallbacks::from(self))),
@@ -655,36 +643,55 @@ impl ViewState<Dismissible> for DismissibleState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.events = Some(Rc::new(DismissEvents {
             writer: ctx.writer_source(),
-            post_frame: ctx.local_post_frame_handle(),
+            post_frame: ctx.post_frame_handle(),
             mounted: Cell::new(true),
             callbacks: self.callbacks.clone(),
         }));
         let rebuild = ctx.rebuild_handle();
 
         let rebuild_for_value = rebuild.clone();
-        self.move_value_listener_id =
-            Some(self.move_controller.add_listener(Arc::new(move || {
+        self.move_value_listener_id = Some(self.move_controller.controller().add_listener(
+            std::rc::Rc::new(move || {
                 rebuild_for_value.schedule(flui_view::RebuildReason::AnimationTick);
-            })));
+            }),
+        ));
 
         let move_completed_runs = Arc::clone(&self.drag.move_completed_runs);
         let rebuild_for_status = rebuild.clone();
-        self.move_status_listener_id = Some(self.move_controller.add_status_listener(Arc::new(
-            move |status| {
+        self.move_status_listener_id = Some(self.move_controller.controller().add_status_listener(
+            std::rc::Rc::new(move |status| {
                 if status == AnimationStatus::Completed {
                     move_completed_runs.fetch_add(1, Ordering::Relaxed);
                     rebuild_for_status.schedule(flui_view::RebuildReason::AnimationTick);
                 }
-            },
-        )));
+            }),
+        ));
 
-        if let Some(vsync) = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()) {
-            let registration = vsync.register(self.move_controller.clone());
-            *self.drag.move_vsync_registration.borrow_mut() = Some(registration);
-            self.vsync = Some(vsync);
-        }
+        self.did_change_dependencies(ctx);
 
         self.rebuild = Some(rebuild);
+    }
+
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        self.vsync = VsyncScope::maybe_of(ctx);
+        if let Err(error) = self.move_controller.rebind(self.vsync.as_ref()) {
+            tracing::error!(%error, "Dismissible lost its frame registry");
+        }
+        let resize = self.drag.resize_controller.borrow_mut().take();
+        if let Some(mut owner) = resize {
+            if let Err(error) = owner.rebind(self.vsync.as_ref()) {
+                tracing::error!(%error, "Dismissible resize lost its frame registry");
+            }
+            let outgoing = {
+                let mut slot = self.drag.resize_controller.borrow_mut();
+                if slot.is_none() {
+                    slot.replace(owner)
+                } else {
+                    Some(owner)
+                }
+            };
+            drop(outgoing);
+        }
     }
 
     fn build(&self, view: &Dismissible, ctx: &dyn BuildContext) -> impl IntoView {
@@ -744,7 +751,7 @@ impl ViewState<Dismissible> for DismissibleState {
         let direction = view.direction;
         let child = view.child.clone();
         let background = resolve_background(view, self.drag.drag_extent.get(), text_direction);
-        let move_controller = self.move_controller.clone();
+        let move_controller = self.move_controller.controller().clone();
         let drag = Rc::clone(&self.drag);
         let vsync = self.vsync.clone();
         // `rebuild` is set in `init_state`, which always runs before the
@@ -800,7 +807,7 @@ impl ViewState<Dismissible> for DismissibleState {
                     "BUG: resize_controller exists only after size_prior_to_collapse is set",
                 );
                 return resize_collapse_view(
-                    resize_controller,
+                    resize_controller.controller(),
                     axis_is_x,
                     prior,
                     background.clone(),
@@ -831,7 +838,6 @@ impl ViewState<Dismissible> for DismissibleState {
             let mut detector = GestureDetector::new().behavior(behavior);
             let drag_for_start = Rc::clone(&drag);
             let controller_for_start = move_controller.clone();
-            let vsync_for_start = vsync.clone();
             let drag_for_update = Rc::clone(&drag);
             let controller_for_update = move_controller.clone();
             let resolved_for_update = Rc::clone(&resolved);
@@ -844,12 +850,7 @@ impl ViewState<Dismissible> for DismissibleState {
             if axis_is_x {
                 detector = detector
                     .on_horizontal_drag_start(move |_cx, _details: DragStartDetails| {
-                        handle_drag_start(
-                            &drag_for_start,
-                            &controller_for_start,
-                            vsync_for_start.as_ref(),
-                            overall_extent,
-                        );
+                        handle_drag_start(&drag_for_start, &controller_for_start, overall_extent);
                     })
                     .on_horizontal_drag_update(move |_cx, details: DragUpdateDetails| {
                         handle_drag_update(
@@ -877,12 +878,7 @@ impl ViewState<Dismissible> for DismissibleState {
             } else {
                 detector = detector
                     .on_pan_start(move |_cx, _details: DragStartDetails| {
-                        handle_drag_start(
-                            &drag_for_start,
-                            &controller_for_start,
-                            vsync_for_start.as_ref(),
-                            overall_extent,
-                        );
+                        handle_drag_start(&drag_for_start, &controller_for_start, overall_extent);
                     })
                     .on_pan_update(move |_cx, details: DragUpdateDetails| {
                         handle_drag_update(
@@ -918,28 +914,18 @@ impl ViewState<Dismissible> for DismissibleState {
             events.mounted.set(false);
         }
         if let Some(id) = self.move_value_listener_id.take() {
-            self.move_controller.remove_listener(id);
+            self.move_controller.controller().remove_listener(id);
         }
         if let Some(id) = self.move_status_listener_id.take() {
-            self.move_controller.remove_status_listener(id);
-        }
-        if let (Some(vsync), Some(registration)) =
-            (&self.vsync, self.drag.move_vsync_registration.take())
-        {
-            vsync.unregister(&registration);
+            self.move_controller.controller().remove_status_listener(id);
         }
         self.move_controller.dispose();
 
         let resize_controller = self.drag.resize_controller.borrow_mut().take();
-        if let Some(resize_controller) = resize_controller {
+        if let Some(mut resize_controller) = resize_controller {
             let resize_listener_id = self.drag.resize_listener_id.borrow_mut().take();
             if let Some(id) = resize_listener_id {
-                resize_controller.remove_listener(id);
-            }
-            if let (Some(vsync), Some(registration)) =
-                (&self.vsync, self.drag.resize_vsync_registration.take())
-            {
-                vsync.unregister(&registration);
+                resize_controller.controller().remove_listener(id);
             }
             resize_controller.dispose();
         }
@@ -949,65 +935,6 @@ impl ViewState<Dismissible> for DismissibleState {
 // ============================================================================
 // Gesture handlers — free functions called from the `'static` closures `build()` reconstructs.
 // ============================================================================
-
-/// Unregisters `move_controller` from `vsync` for the duration of a raw drag.
-///
-/// `set_value` (called on every drag update) leaves the controller's `AnimationStatus`
-/// at `Forward`/`Reverse` for any value strictly between the bounds — the
-/// same status a REAL `.forward()`/`.reverse()` run leaves it at
-/// (`AnimationController::settled_status_keep_direction`, which "keeps
-/// direction" rather than reporting a settled `Dismissed`/`Completed` for a
-/// non-bound value). `Vsync::tick_all` gates ticking on
-/// `status().is_running()` — indistinguishable, from `Vsync`'s side, from a
-/// genuine run in progress — so it ticks the controller via `tick_at`, which
-/// recomputes `value` from the controller's own internal run epoch
-/// (`AnimationController::tick_time_based`) rather than treating `set_value`
-/// as authoritative. Since `set_value` does not update that internal epoch
-/// (only `.forward()`/`.reverse()`/`.fling()` do), any tick while merely
-/// drag-tracking silently overwrites the value just written — with a STALE
-/// epoch this drifts gradually; even freshly re-anchoring on every update
-/// (an earlier, insufficient attempt at this fix) still overwrites it
-/// immediately, just with a near-zero value instead of a drifting one. The
-/// only way to keep a direct `set_value` authoritative is to make sure the
-/// controller is not ticked AT ALL while it is happening — hence full
-/// unregistration for the drag's duration, paired with
-/// [`ensure_move_controller_registered`] re-registering right before the
-/// REAL run (`.forward()`/`.reverse()`/`.fling()`) that should actually be
-/// vsync-driven.
-///
-/// This is a real interaction gap between `AnimationController::set_value`
-/// and `Vsync::tick_all` (the latter should likely gate on the ticker-based
-/// `is_animating()` this module already prefers elsewhere, not the
-/// status-based `is_running()`, and/or `tick_at` should no-op when nothing
-/// bumped the run epoch since the last tick) — worth fixing at the
-/// `flui-animation` layer for every future widget that combines direct
-/// value-tracking with vsync-driven settling on the same controller, not
-/// just this one.
-fn unregister_move_controller_vsync(drag: &DragState, vsync: Option<&Vsync>) {
-    let (Some(vsync), Some(registration)) = (vsync, drag.move_vsync_registration.take()) else {
-        return;
-    };
-    vsync.unregister(&registration);
-}
-
-/// Re-registers `move_controller` with `vsync` if it is not already
-/// registered — called right before a REAL run
-/// (`.forward()`/`.reverse()`/`.fling()`) starts, so `Vsync`'s tick anchor and
-/// the controller's own internal run epoch both correspond to "now", the
-/// run's true start. See [`unregister_move_controller_vsync`]'s doc for the
-/// full rationale.
-fn ensure_move_controller_registered(
-    drag: &DragState,
-    move_controller: &AnimationController,
-    vsync: Option<&Vsync>,
-) {
-    let Some(vsync) = vsync else { return };
-    if drag.move_vsync_registration.borrow().is_some() {
-        return;
-    }
-    let registration = vsync.register(move_controller.clone());
-    *drag.move_vsync_registration.borrow_mut() = Some(registration);
-}
 
 /// Marks whatever `move_completed_runs` currently holds as already
 /// "delivered", discarding any `Completed` transition a direct `set_value`
@@ -1055,7 +982,6 @@ fn discard_transient_move_completion(drag: &DragState) {
 fn handle_drag_start(
     drag: &Rc<DragState>,
     move_controller: &AnimationController,
-    vsync: Option<&Vsync>,
     overall_extent: f64,
 ) {
     drag.drag_underway.set(true);
@@ -1071,7 +997,6 @@ fn handle_drag_start(
     // Unregister for the drag's duration — see `unregister_move_controller_vsync`'s
     // doc for why a vsync-ticked controller cannot also be a direct-`set_value`-tracked
     // one at the same time.
-    unregister_move_controller_vsync(drag, vsync);
     // A `set_value(0.0)` above cannot itself clamp to the upper bound, but a
     // resumed-mid-animation `set_value` (the `is_animating()` branch) could in
     // principle land exactly at a bound too — discard defensively; see
@@ -1162,7 +1087,6 @@ fn handle_drag_end(
     drag.drag_underway.set(false);
     if reason == flui_interaction::GestureEndReason::Cancelled {
         discard_transient_move_completion(drag);
-        ensure_move_controller_registered(drag, move_controller, vsync);
         let _ = move_controller.reverse();
         return;
     }
@@ -1185,7 +1109,6 @@ fn handle_drag_end(
     // Every branch below starts a REAL run (`.forward()`/`.reverse()`/`.fling()`)
     // — re-register now so `Vsync`'s tick anchor lines up with the run's true
     // start (see `unregister_move_controller_vsync`'s doc).
-    ensure_move_controller_registered(drag, move_controller, vsync);
     let fling_speed = fling_speed(primary_velocity, constraints, resolved.direction);
     match describe_fling_gesture(
         drag.drag_extent.get(),
@@ -1251,7 +1174,6 @@ fn run_move_completion(
         // A real run starts here too (reached via the `is_completed()` bypass
         // in `handle_drag_end`, where the drag itself — never vsync-registered,
         // see `unregister_move_controller_vsync` — pushed the value to 1.0).
-        ensure_move_controller_registered(drag, move_controller, vsync);
         let _ = move_controller.reverse();
         return;
     }
@@ -1311,28 +1233,25 @@ fn start_resize_animation(
     drag.size_prior_to_collapse
         .set(Some(size_prior_to_collapse));
 
-    let resize_controller = AnimationController::without_ticker(duration);
+    let resize_controller = AnimationController::builder(duration).build_on(vsync);
 
-    let resize_ref = resize_controller.clone();
+    let resize_ref = resize_controller.controller().clone();
     let progress_ticks = Arc::clone(&drag.resize_progress_ticks);
     let completed_flag = Arc::clone(&drag.resize_completed);
     let rebuild_for_resize = rebuild.clone();
-    let listener_id = resize_controller.add_listener(Arc::new(move || {
-        if resize_ref.is_completed() {
-            completed_flag.store(true, Ordering::Relaxed);
-        } else {
-            progress_ticks.fetch_add(1, Ordering::Relaxed);
-        }
-        rebuild_for_resize.schedule(flui_view::RebuildReason::AnimationTick);
-    }));
+    let listener_id = resize_controller
+        .controller()
+        .add_listener(std::rc::Rc::new(move || {
+            if resize_ref.is_completed() {
+                completed_flag.store(true, Ordering::Relaxed);
+            } else {
+                progress_ticks.fetch_add(1, Ordering::Relaxed);
+            }
+            rebuild_for_resize.schedule(flui_view::RebuildReason::AnimationTick);
+        }));
     *drag.resize_listener_id.borrow_mut() = Some(listener_id);
 
-    if let Some(vsync) = vsync {
-        let registration = vsync.register(resize_controller.clone());
-        *drag.resize_vsync_registration.borrow_mut() = Some(registration);
-    }
-
-    let _ = resize_controller.forward();
+    let _ = resize_controller.controller().forward();
     let _prev = drag
         .resize_controller
         .borrow_mut()

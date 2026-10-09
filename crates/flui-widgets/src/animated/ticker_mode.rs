@@ -126,8 +126,8 @@ impl std::fmt::Debug for TickerModeState {
 impl TickerModeState {
     /// Re-derive the ambient registry and move this one under it. Idempotent:
     /// re-nesting under the same parent is a no-op.
-    fn renest(&mut self, ctx: &dyn BuildContext) {
-        let ambient = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone());
+    fn renest(&mut self, ctx: &dyn LifecycleContext) {
+        let ambient = VsyncScope::maybe_of(ctx);
         let unchanged = self
             .parent
             .as_ref()
@@ -188,7 +188,7 @@ impl ViewState<TickerMode> for TickerModeState {
     /// bare and the fallback keeps working.
     fn build(&self, view: &TickerMode, _ctx: &dyn BuildContext) -> impl IntoView {
         if self.parent.is_none() {
-            return view.child.clone();
+            return VsyncScope::detached(view.child.clone()).into_view().boxed();
         }
         VsyncScope::new(self.registry.clone(), view.child.clone())
             .into_view()

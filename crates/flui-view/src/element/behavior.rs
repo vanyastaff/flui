@@ -10,7 +10,7 @@ use std::{
     collections::HashMap,
     marker::PhantomData,
     panic::AssertUnwindSafe,
-    sync::Arc,
+    rc::Rc,
 };
 
 use flui_foundation::{ElementId, Listenable, ListenerId, RenderId};
@@ -134,7 +134,6 @@ where
             lifecycle_handle: owner.lifecycle_handle.clone(),
             async_driver: owner.async_driver.clone(),
             post_frame_handle: owner.post_frame_handle.clone(),
-            local_post_frame_handle: owner.local_post_frame_handle.clone(),
             text_input_handle: owner.text_input_handle.clone(),
             clipboard_handle: owner.clipboard_handle.clone(),
             storage: owner.storage.clone(),
@@ -1604,7 +1603,7 @@ where
     /// it: the hook is no longer on the removal path at all, so a
     /// `listenable()` that panics on every call after mount cannot make
     /// unmount panic too.
-    subscribed: Option<(Arc<dyn Listenable>, ListenerId)>,
+    subscribed: Option<(std::rc::Rc<dyn Listenable>, ListenerId)>,
 }
 
 impl<V> AnimatedBehavior<V>
@@ -1738,7 +1737,7 @@ where
         let unchanged = self
             .subscribed
             .as_ref()
-            .is_some_and(|(cached, _)| Arc::ptr_eq(cached, &new_listenable));
+            .is_some_and(|(cached, _)| Rc::ptr_eq(cached, &new_listenable));
 
         if !unchanged {
             // Safe to unsubscribe unconditionally, even if the old

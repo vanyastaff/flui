@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_sdk::animation::{
-    Animatable, Animation, AnimationController, Cubic, Keyframes, Vsync, VsyncRegistration,
+    Animatable, Animation, AnimationController, Cubic, DrivenController, Keyframes, Vsync,
 };
 use flui_sdk::foundation::Listenable;
 use flui_sdk::geometry::{Rect, Size};
@@ -127,10 +127,9 @@ impl Bars {
 /// controller, registered with the ambient [`Vsync`] only while the
 /// indicator is indeterminate.
 pub struct LinearProgressIndicatorState {
-    controller: AnimationController,
+    controller: DrivenController,
     bars: Arc<Bars>,
     vsync: Option<Vsync>,
-    registration: Option<VsyncRegistration>,
     /// The current configuration, used when the ambient registry changes.
     indeterminate: bool,
 }
@@ -138,7 +137,7 @@ pub struct LinearProgressIndicatorState {
 impl std::fmt::Debug for LinearProgressIndicatorState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LinearProgressIndicatorState")
-            .field("running", &self.registration.is_some())
+            .field("running", &self.controller.is_bound())
             .finish_non_exhaustive()
     }
 }
@@ -148,10 +147,9 @@ impl StatefulView for LinearProgressIndicator {
 
     fn create_state(&self) -> Self::State {
         LinearProgressIndicatorState {
-            controller: AnimationController::without_ticker(CYCLE),
+            controller: AnimationController::builder(CYCLE).build_on(None),
             bars: Arc::new(Bars::new()),
             vsync: None,
-            registration: None,
             indeterminate: self.value.is_none(),
         }
     }
@@ -162,20 +160,16 @@ impl LinearProgressIndicatorState {
     /// unregisters it otherwise.
     fn run(&mut self, indeterminate: bool) {
         self.indeterminate = indeterminate;
-        match (&self.vsync, indeterminate, self.registration.is_some()) {
-            (Some(vsync), true, false) => {
-                self.registration = Some(vsync.register(self.controller.clone()));
-                // An undisposed controller over [0, 1] accepts a repeat; the
-                // new registry anchors its clock at the current phase.
-                let _ = self.controller.repeat(false);
+        if indeterminate {
+            if let Err(error) = self.controller.rebind(self.vsync.as_ref()) {
+                tracing::error!(%error, "progress indicator lost its frame registry");
             }
-            (_, false, true) | (None, _, _) => {
-                let _ = self.controller.stop();
-                if let (Some(vsync), Some(registration)) = (&self.vsync, self.registration.take()) {
-                    vsync.unregister(&registration);
-                }
+            if !self.controller.controller().is_animating() {
+                let _ = self.controller.controller().repeat(false);
             }
-            _ => {}
+        } else {
+            let _ = self.controller.controller().stop();
+            let _ = self.controller.rebind(None);
         }
     }
 }
@@ -186,19 +180,7 @@ impl ViewState<LinearProgressIndicator> for LinearProgressIndicatorState {
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
-        let next = ctx.depend_on::<VsyncScope, _>(|scope| scope.vsync().clone());
-        let unchanged = match (&self.vsync, &next) {
-            (Some(old), Some(new)) => old.is_same(new),
-            (None, None) => true,
-            _ => false,
-        };
-        if unchanged {
-            return;
-        }
-        if let (Some(vsync), Some(token)) = (&self.vsync, self.registration.take()) {
-            vsync.unregister(&token);
-        }
-        self.vsync = next;
+        self.vsync = VsyncScope::maybe_of(ctx);
         self.run(self.indeterminate);
     }
 
@@ -208,7 +190,7 @@ impl ViewState<LinearProgressIndicator> for LinearProgressIndicatorState {
             progress: match view.value {
                 Some(fraction) => Progress::Done(fraction),
                 None => Progress::Indeterminate {
-                    controller: self.controller.clone(),
+                    controller: self.controller.controller().clone(),
                     bars: Arc::clone(&self.bars),
                 },
             },
@@ -226,13 +208,13 @@ impl ViewState<LinearProgressIndicator> for LinearProgressIndicatorState {
         semantics.child(
             CustomPaint::new()
                 .size(Size::new(WIDTH, HEIGHT))
-                .painter(Arc::new(painter)),
+                .painter(std::rc::Rc::new(painter)),
         )
     }
 
     fn did_update_view(&mut self, old: &LinearProgressIndicator, new: &LinearProgressIndicator) {
         if old.value.is_some() && new.value.is_none() {
-            self.controller.set_value(0.0);
+            self.controller.controller().set_value(0.0);
         }
         self.run(new.value.is_none());
     }
@@ -314,10 +296,12 @@ impl CustomPainter for BarPainter {
             }
     }
 
-    fn repaint(&self) -> Option<Arc<dyn Listenable>> {
+    fn repaint(&self) -> Option<std::rc::Rc<dyn Listenable>> {
         match &self.progress {
             Progress::Done(_) => None,
-            Progress::Indeterminate { controller, .. } => Some(Arc::new(controller.clone())),
+            Progress::Indeterminate { controller, .. } => {
+                Some(std::rc::Rc::new(controller.clone()))
+            }
         }
     }
 

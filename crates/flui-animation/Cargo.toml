@@ -34,18 +34,17 @@ flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev" }
 # `#[derive(TwoWayConverter)]` — re-exported for user-defined animatable types.
 flui-macros = { path = "../flui-macros", version = "=0.2.0-dev" }
 
-# Concurrency
-parking_lot.workspace = true
-
 # Utility
 thiserror.workspace = true
 smallvec.workspace = true
+slab.workspace = true
 tracing.workspace = true
 
 # Serialization (optional)
 serde = { workspace = true, optional = true }
 
 [dev-dependencies]
+parking_lot.workspace = true
 criterion = { workspace = true }
 proptest.workspace = true
 serde_json = { workspace = true }

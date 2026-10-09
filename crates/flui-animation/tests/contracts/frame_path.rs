@@ -13,16 +13,16 @@ use std::time::Duration;
 
 use crate::child_process;
 use flui_animation::{
-    Animation, AnimationController, AnimationStatus, TickerFuture, Vsync, VsyncRegistration,
+    Animation, AnimationController, AnimationRunFuture, AnimationStatus, Vsync, VsyncRegistration,
 };
 use flui_foundation::Listenable;
 
 /// A one-second `[0, 1]` controller advanced only by explicit times.
 fn controller() -> AnimationController {
-    AnimationController::without_ticker(Duration::from_secs(1))
+    AnimationController::builder(Duration::from_secs(1)).build()
 }
 
-fn poll(run: &mut TickerFuture) -> Poll<Result<(), flui_animation::TickerCanceled>> {
+fn poll(run: &mut AnimationRunFuture) -> Poll<Result<(), flui_animation::RunCanceled>> {
     Pin::new(run).poll(&mut Context::from_waker(Waker::noop()))
 }
 
@@ -41,14 +41,14 @@ fn reads_inside_a_status_listener_see_the_commit() {
     let observed = Arc::new(Mutex::new(None));
     let sink = Arc::clone(&observed);
     let reader = controller.clone();
-    controller.add_status_listener(Arc::new(move |status| {
+    controller.add_status_listener(std::rc::Rc::new(move |status| {
         if status == AnimationStatus::Completed {
             *sink.lock().expect("observed read") =
                 Some((reader.value(), reader.status(), format!("{reader:?}")));
         }
     }));
     let _run = controller.forward().expect("run starts");
-    controller.tick_at(1.0);
+    controller.tick_at(std::time::Duration::from_secs_f64(1.0));
 
     let (value, status, debug) = observed
         .lock()
@@ -63,8 +63,8 @@ fn nested_commit_is_not_overwritten() {
     let controller = controller();
     let nested = Arc::new(Mutex::new(None));
     let sink = Arc::clone(&nested);
-    let slot = Arc::new(Mutex::new(Some(controller.clone())));
-    controller.add_status_listener(Arc::new(move |status| {
+    let slot = std::rc::Rc::new(Mutex::new(Some(controller.clone())));
+    controller.add_status_listener(std::rc::Rc::new(move |status| {
         if status != AnimationStatus::Completed {
             return;
         }
@@ -78,7 +78,7 @@ fn nested_commit_is_not_overwritten() {
     }));
     let _run = controller.forward().expect("run starts");
 
-    controller.tick_at(1.0);
+    controller.tick_at(std::time::Duration::from_secs_f64(1.0));
 
     let nested = nested
         .lock()
@@ -109,19 +109,25 @@ fn dispose_from_a_value_listener_mid_walk() {
     let mut run = disposed.forward().expect("run starts");
     let _sibling_run = sibling.forward().expect("run starts");
     let reader = disposed.clone();
-    disposed.add_listener(Arc::new(move || {
+    disposed.add_listener(std::rc::Rc::new(move || {
         if reader.value() >= 0.5 {
             reader.dispose();
         }
     }));
 
-    vsync.tick_all(0.0);
-    vsync.tick_all(0.5);
+    vsync.tick_all(
+        &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)),
+    );
+    vsync.tick_all(
+        &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.5)),
+    );
     assert!(
         matches!(poll(&mut run), Poll::Ready(Err(_))),
         "disposing from a listener cancels the run"
     );
-    vsync.tick_all(0.75);
+    vsync.tick_all(
+        &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.75)),
+    );
 
     assert_eq!(
         disposed.value(),
@@ -137,7 +143,7 @@ fn dispose_from_a_value_listener_mid_walk() {
 
 fn last_owner_released_from_its_own_listener_mid_walk() {
     let vsync = Vsync::new();
-    let first = AnimationController::without_ticker(Duration::from_millis(500));
+    let first = AnimationController::builder(Duration::from_millis(500)).build();
     let second = controller();
     let registrations: Vec<VsyncRegistration> = vec![
         vsync.register(first.clone()),
@@ -146,14 +152,14 @@ fn last_owner_released_from_its_own_listener_mid_walk() {
     let _first_run = first.forward().expect("run starts");
     let _second_run = second.forward().expect("run starts");
     let (second_ticks, count) = counter();
-    second.add_listener(Arc::new(count));
+    second.add_listener(std::rc::Rc::new(count));
 
-    let owners = Arc::new(Mutex::new(Some((
+    let owners = std::rc::Rc::new(Mutex::new(Some((
         vec![first.clone(), second],
         registrations,
     ))));
     let registry = vsync.clone();
-    first.add_status_listener(Arc::new(move |status| {
+    first.add_status_listener(std::rc::Rc::new(move |status| {
         if status != AnimationStatus::Completed {
             return;
         }
@@ -167,9 +173,13 @@ fn last_owner_released_from_its_own_listener_mid_walk() {
     }));
     drop(first);
 
-    vsync.tick_all(0.0);
+    vsync.tick_all(
+        &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)),
+    );
     let before = ticks(&second_ticks);
-    vsync.tick_all(0.5);
+    vsync.tick_all(
+        &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.5)),
+    );
     assert_eq!(
         ticks(&second_ticks),
         before,
@@ -177,7 +187,9 @@ fn last_owner_released_from_its_own_listener_mid_walk() {
     );
     assert_eq!(vsync.len(), 0);
     assert!(!vsync.has_running());
-    vsync.tick_all(0.75);
+    vsync.tick_all(
+        &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.75)),
+    );
     assert_eq!(ticks(&second_ticks), before);
 }
 

@@ -254,8 +254,8 @@ fn native_close_failure_preserves_first_error_and_does_not_restore_the_runtime()
     let capture = Capture;
     runtime
         .owner_frame()
-        .local_post_frame_handle()
-        .schedule_local(move |_| drop(capture))
+        .post_frame_handle()
+        .schedule(move |_| drop(capture))
         .expect("capture");
     let address = owner
         .publication(owner.prepare_runtime(runtime))

@@ -7,7 +7,9 @@ starting with `#` are hidden setup.
 
 ## Measured benchmarks
 
-The benchmark tables below record measurements from the committed Criterion
+The benchmark tables below are historical measurements from before the
+owner-local controller migration. They are not measurements of the current
+implementation. The committed Criterion
 targets `benches/animation_bench.rs` and `benches/vsync_registry.rs`. The later
 per-controller analysis also records historical scratch measurements and a
 standalone prototype; those experiments are not committed, and the command
@@ -79,10 +81,10 @@ doc for the cursor-walk design. Measured with the committed Criterion bench
 (`benches/vsync_registry.rs`); run `cargo bench -p flui-animation --bench
 vsync_registry` to reproduce. The `unregister_all` rows below are from the
 bench's current shape, which keeps one extra clone of every controller alive
-per batch so a removal's `Arc` drop only decrements a refcount instead of
+per batch so a removal's `Rc` drop only decrements a refcount instead of
 deallocating a whole `AnimationController` — both the "before" and "after"
-`unregister_all` rows were re-measured under that shape so they compare like
-for like.
+`unregister_all` rows were measured under that shape so they compare like
+for like. Repeat these measurements before assessing the current implementation.
 
 Host: 13th Gen Intel Core i9-13900K, rustc 1.98.1 (48a229cea 2026-09-01),
 Linux x86_64 — not CPU-isolated, so treat these as a distribution and a
@@ -195,11 +197,10 @@ them. What matters for cost is what each type holds:
 
 | Type | Holds |
 |------|-------|
-| `AnimationController` | two `Arc`s (state behind one `parking_lot::Mutex`, and the value notifier); `clone()` shares the controller |
-| `CurvedAnimation<C>` | the curve(s) and one `Arc` of links: the parent `Arc<dyn Animation<f64>>`, a notifier, a curve-direction `Mutex` and two parent subscriptions (value and status) |
-| `TweenAnimation<T, A>` | the parent `Arc<dyn Animation<f64>>`, the animatable, a notifier and a parent subscription |
-| `ReverseAnimation` | the parent `Arc<dyn Animation<f64>>`, a notifier and a parent subscription |
-| `CompoundAnimation` | two parent `Arc<dyn Animation<f64>>`s, a notifier and two parent subscriptions |
+| `AnimationController` | two `Rc`s (state behind one `parking_lot::Mutex`, and the value notifier); `clone()` shares the controller |
+| `CurvedAnimation<C>` | the curve(s) and one `Rc` of links: the parent `Rc<dyn Animation<f64>>`, a notifier, a curve-direction `Mutex` and two parent subscriptions (value and status) |
+| `TweenAnimation<T, A>` | the parent `Rc<dyn Animation<f64>>`, the animatable, a notifier and a parent subscription |
+| `ReverseAnimation` | the parent `Rc<dyn Animation<f64>>`, a notifier and a parent subscription |
 | `ConstantAnimation<T>` | the value and a status; no notifier, since it never changes |
 | `Cubic`, `ElasticOutCurve`, `Interval<C>` | plain `f64` parameters (plus the inner curve) |
 | `Steps` | step count and jump placement |
@@ -207,53 +208,52 @@ them. What matters for cost is what each type holds:
 
 ---
 
-## Synchronization
+## UI ownership
 
-### Controller lock strategy
+### Controller borrow strategy
 
-All controller state sits behind a single `parking_lot::Mutex`, next to a
+Controller state sits behind an owner-local `RefCell`, next to a
 separately shared value notifier:
 
 ```text
 AnimationController {
-    inner: Arc<Mutex<AnimationControllerInner>>,
-    notifier: Arc<ChangeNotifier>,
+    inner: Rc<RefCell<AnimationControllerInner>>,
+    notifier: Rc<ChangeNotifier>,
 }
 ```
 
 Benefits:
 - Simple reasoning about state consistency
-- Batched updates in single lock acquisition
-- Lock released before user code (listeners, curves, simulations) runs
+- Borrows end before user code (listeners, curves, simulations) runs
 
 ### Tick cycle
 
-A frame is driven by `tick_at(raw_elapsed_secs)`, an absolute time since the
-run started. The controller samples the active run's source (curve or
-simulation) outside its lock, commits the new value and status under the
-lock, releases it, and only then notifies value listeners and, on a status
-change, status listeners. The `tick_at` rows of the benchmark table include
-that lock traffic.
+A manual sample uses `tick_at(Duration)`. A registered controller receives a
+typed `FrameTick` from its presentation's `MotionClock` through `Vsync`.
+Sampling releases the state borrow before invoking a curve or simulation,
+then verifies run and sample identities before committing its result.
+Value and status delivery runs outside the state borrow. Existing benchmark
+rows must be measured again before claiming a performance improvement.
 
 ---
 
-## Arc and dispatch
+## Rc and dispatch
 
 `AnimationController::clone()` is two reference-count increments. Composition
-types hold their parent as `Arc<dyn Animation<f64>>`, so each `value()` call
+types hold their parent as `Rc<dyn Animation<f64>>`, so each `value()` call
 crosses one dynamic dispatch per layer; `controller/curved_value` above is
 that hop plus a cubic solve.
 
 ```rust
-# use std::sync::Arc;
+# use std::rc::Rc;
 # use std::time::Duration;
 # use flui_animation::{Animation, AnimationController, CurvedAnimation, Curves};
 # use flui_scheduler::UpdateScheduler;
 # let scheduler = UpdateScheduler::new();
-# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
+# let controller = AnimationController::builder(Duration::from_millis(300)).build();
 let shared = controller.clone(); // shares the controller, no copy
-let animation: Arc<dyn Animation<f64>> = Arc::new(CurvedAnimation::new(
-    Arc::new(shared),
+let animation: Rc<dyn Animation<f64>> = Rc::new(CurvedAnimation::new(
+    Rc::new(shared),
     Curves::EaseInOut,
 ));
 let value = animation.value(); // dynamic dispatch into the curved layer
@@ -264,24 +264,24 @@ let value = animation.value(); // dynamic dispatch into the curved layer
 
 ## Listener overhead
 
-Value and status listeners are `Arc<dyn Fn ...>` callbacks. Reusing one
-callback across several animations shares its `Arc` and captures, but
-`add_listener` still wraps each registration in a fresh `Arc` (plus any map
+Value and status listeners are `Rc<dyn Fn ...>` callbacks. Reusing one
+callback across several animations shares its `Rc` and captures, but
+`add_listener` still wraps each registration in a fresh `Rc` (plus any map
 growth), so every registration costs at least one allocation:
 
 ```rust
-# use std::sync::Arc;
+# use std::rc::Rc;
 # use std::time::Duration;
 # use flui_animation::AnimationController;
 # use flui_scheduler::UpdateScheduler;
 use flui_foundation::{Listenable, ListenerCallback};
 # let scheduler = UpdateScheduler::new();
-# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
-# let other = AnimationController::new(Duration::from_millis(300), &scheduler);
+# let controller = AnimationController::builder(Duration::from_millis(300)).build();
+# let other = AnimationController::builder(Duration::from_millis(300)).build();
 
 // The captures are shared; each registration still allocates its own wrapper
-let callback: ListenerCallback = Arc::new(|| println!("changed"));
-controller.add_listener(Arc::clone(&callback));
+let callback: ListenerCallback = Rc::new(|| println!("changed"));
+controller.add_listener(Rc::clone(&callback));
 other.add_listener(callback);
 # controller.dispose();
 # other.dispose();
@@ -303,7 +303,7 @@ and `status_fan_out/{1,4,8}` for status transitions.
 # use flui_scheduler::UpdateScheduler;
 # fn main() -> Result<(), AnimationError> {
 # let scheduler = UpdateScheduler::new();
-# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
+# let controller = AnimationController::builder(Duration::from_millis(300)).build();
 // Instead of creating a controller per animation, rewind and replay
 controller.reset()?;
 controller.forward()?;
@@ -315,14 +315,14 @@ controller.forward()?;
 ### 2. Use Status Listeners Instead of Polling
 
 ```rust
-# use std::sync::Arc;
+# use std::rc::Rc;
 # use std::time::Duration;
 # use flui_animation::{Animation, AnimationController, AnimationStatus};
 # use flui_scheduler::UpdateScheduler;
 # let scheduler = UpdateScheduler::new();
-# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
+# let controller = AnimationController::builder(Duration::from_millis(300)).build();
 // React to the transition once instead of reading status every frame
-controller.add_status_listener(Arc::new(|status| {
+controller.add_status_listener(Rc::new(|status| {
     if status == AnimationStatus::Completed { /* ... */ }
 }));
 # controller.dispose();
@@ -331,16 +331,16 @@ controller.add_status_listener(Arc::new(|status| {
 ### 3. Batch Animations
 
 ```rust
-# use std::sync::Arc;
+# use std::rc::Rc;
 # use std::time::Duration;
 # use flui_animation::AnimationController;
 # use flui_scheduler::UpdateScheduler;
-// Good: single scheduler drives all
-let scheduler = Arc::new(UpdateScheduler::new());
+// One presentation registry drives both owning controllers.
+let vsync = flui_animation::Vsync::new();
 let d = Duration::from_millis(300);
-let ctrl1 = AnimationController::new(d, &scheduler);
-let ctrl2 = AnimationController::new(d, &scheduler);
-// Both tick on same frame callback
+let mut ctrl1 = AnimationController::builder(d).build_on(Some(&vsync));
+let mut ctrl2 = AnimationController::builder(d).build_on(Some(&vsync));
+// Both receive the presentation's FrameTick through this registry.
 # ctrl1.dispose();
 # ctrl2.dispose();
 ```

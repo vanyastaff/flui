@@ -18,14 +18,11 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use flui_animation::curve::{ArcCurve, Curve};
-use flui_animation::{
-    Animation, AnimationController, AnimationStatus, Curves, Vsync, VsyncRegistration,
-};
+use flui_animation::{Animation, AnimationController, AnimationStatus, Curves, DrivenController};
 use flui_foundation::ListenerId;
 use flui_objects::RenderAnimatedSize;
 use flui_painting::Alignment;
@@ -33,8 +30,8 @@ use flui_painting::paint::Clip;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
 use flui_view::{
-    BuildContextExt, Child, EventCx, EventOutcome, IntoView, LocalPostFrameHandle, RenderView,
-    ViewState, WriterSource, impl_render_view,
+    Child, EventCx, EventOutcome, IntoView, PostFrameHandle, RenderView, ViewState, WriterSource,
+    impl_render_view,
 };
 
 type EndCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
@@ -143,14 +140,12 @@ impl std::fmt::Debug for AnimatedSize {
 /// (the render object is handed an already-built controller and never sees
 /// a `Vsync`/`UpdateScheduler` itself).
 pub struct AnimatedSizeState {
-    controller: AnimationController,
-    vsync: Option<Vsync>,
-    vsync_registration: Option<VsyncRegistration>,
+    controller: DrivenController,
     status_listener_id: Option<ListenerId>,
-    completed_runs: Arc<AtomicU64>,
+    completed_runs: Rc<AtomicU64>,
     delivered_completed_runs: Cell<u64>,
     writer: Option<WriterSource>,
-    post_frame: Option<LocalPostFrameHandle>,
+    post_frame: Option<PostFrameHandle>,
     mounted: Rc<Cell<bool>>,
     on_end: Rc<RefCell<Option<EndCallback>>>,
     child: Child,
@@ -159,7 +154,7 @@ pub struct AnimatedSizeState {
 impl std::fmt::Debug for AnimatedSizeState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AnimatedSizeState")
-            .field("registered", &self.vsync_registration.is_some())
+            .field("registered", &self.controller.is_bound())
             .finish_non_exhaustive()
     }
 }
@@ -168,26 +163,16 @@ impl StatefulView for AnimatedSize {
     type State = AnimatedSizeState;
 
     fn create_state(&self) -> Self::State {
-        // A real, but permanently detached, ticker -- not `without_ticker`:
-        // this controller's `is_animating()` is read by `RenderAnimatedSize`
-        // (`flui-objects`), and `is_animating` is intentionally
-        // ticker-based, not status-based
-        // — a ticker-less controller can never report `is_animating() ==
-        // true`. `VsyncScope` still drives the actual value ticks
-        // deterministically via `tick_at`; `with_detached_ticker` gives this
-        // controller a ticker whose `start()`/`stop()`/`mute()` transition
-        // real ticker state without needing an `UpdateScheduler` at all — no
-        // allocation for something nothing was ever going to pump.
-        let controller = AnimationController::with_detached_ticker(self.duration);
+        let controller = AnimationController::builder(self.duration).build_on(None);
         if let Some(reverse_duration) = self.reverse_duration {
-            controller.set_reverse_duration(reverse_duration);
+            controller
+                .controller()
+                .set_reverse_duration(reverse_duration);
         }
         AnimatedSizeState {
             controller,
-            vsync: None,
-            vsync_registration: None,
             status_listener_id: None,
-            completed_runs: Arc::new(AtomicU64::new(0)),
+            completed_runs: Rc::new(AtomicU64::new(0)),
             delivered_completed_runs: Cell::new(0),
             writer: None,
             post_frame: None,
@@ -201,20 +186,24 @@ impl StatefulView for AnimatedSize {
 impl ViewState<AnimatedSize> for AnimatedSizeState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.writer = Some(ctx.writer_source());
-        self.post_frame = ctx.local_post_frame_handle();
-        let completed_runs = Arc::clone(&self.completed_runs);
+        self.post_frame = ctx.post_frame_handle();
+        let completed_runs = Rc::clone(&self.completed_runs);
         let rebuild = ctx.rebuild_handle();
-        self.status_listener_id =
-            Some(self.controller.add_status_listener(Arc::new(move |status| {
+        self.status_listener_id = Some(self.controller.controller().add_status_listener(
+            std::rc::Rc::new(move |status| {
                 if status == AnimationStatus::Completed {
                     completed_runs.fetch_add(1, Ordering::SeqCst);
                     rebuild.schedule(flui_view::RebuildReason::AnimationTick);
                 }
-            })));
+            }),
+        ));
 
-        if let Some(vsync) = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()) {
-            self.vsync_registration = Some(vsync.register(self.controller.clone()));
-            self.vsync = Some(vsync);
+        self.did_change_dependencies(ctx);
+    }
+
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        if let Err(error) = self.controller.rebind(VsyncScope::maybe_of(ctx).as_ref()) {
+            tracing::error!(%error, "AnimatedSize lost its frame registry");
         }
     }
 
@@ -231,7 +220,7 @@ impl ViewState<AnimatedSize> for AnimatedSizeState {
                         .expect("BUG: AnimatedSize initialized before build");
                     let mounted = self.mounted.clone();
                     let callback = self.on_end.clone();
-                    if let Err(error) = post_frame.schedule_local(move |_| {
+                    if let Err(error) = post_frame.schedule(move |_| {
                         for _ in delivered_runs..completed_runs {
                             if !mounted.get() {
                                 break;
@@ -256,7 +245,7 @@ impl ViewState<AnimatedSize> for AnimatedSizeState {
         }
 
         AnimatedSizeRenderView {
-            controller: self.controller.clone(),
+            controller: self.controller.controller().clone(),
             curve: view.curve.clone(),
             alignment: view.alignment,
             clip_behavior: view.clip_behavior,
@@ -269,19 +258,18 @@ impl ViewState<AnimatedSize> for AnimatedSizeState {
         drop(previous);
         self.child = new_view.child.clone();
         // Plain-assignment setters — no restart of an in-flight run.
-        self.controller.set_duration(new_view.duration);
+        self.controller.controller().set_duration(new_view.duration);
         if let Some(reverse_duration) = new_view.reverse_duration {
-            self.controller.set_reverse_duration(reverse_duration);
+            self.controller
+                .controller()
+                .set_reverse_duration(reverse_duration);
         }
     }
 
     fn dispose(&mut self) {
         self.mounted.set(false);
         if let Some(id) = self.status_listener_id.take() {
-            self.controller.remove_status_listener(id);
-        }
-        if let (Some(vsync), Some(registration)) = (&self.vsync, self.vsync_registration.take()) {
-            vsync.unregister(&registration);
+            self.controller.controller().remove_status_listener(id);
         }
         self.controller.dispose();
     }

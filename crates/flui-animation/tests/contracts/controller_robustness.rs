@@ -20,21 +20,21 @@ use flui_foundation::Listenable;
 
 /// A one-second `[0, 1]` controller advanced only by explicit times.
 fn controller() -> AnimationController {
-    AnimationController::without_ticker(Duration::from_secs(1))
+    AnimationController::builder(Duration::from_secs(1)).build()
 }
 
 /// `is_animating` as answered by the controller and by each wrapper over it.
 fn is_animating_everywhere(controller: &AnimationController) -> Vec<(&'static str, bool)> {
-    let source: Arc<dyn Animation<f64>> = Arc::new(controller.clone());
+    let source: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(controller.clone());
     vec![
         ("controller", controller.is_animating()),
         (
             "proxy",
-            ProxyAnimation::new(Arc::clone(&source)).is_animating(),
+            ProxyAnimation::new(std::rc::Rc::clone(&source)).is_animating(),
         ),
         (
             "reverse",
-            ReverseAnimation::new(Arc::clone(&source)).is_animating(),
+            ReverseAnimation::new(std::rc::Rc::clone(&source)).is_animating(),
         ),
         (
             "curved",
@@ -57,7 +57,7 @@ fn assert_is_animating_everywhere(controller: &AnimationController, expected: bo
 fn is_animating_while_a_run_is_installed() {
     let controller = controller();
     let _run = controller.forward().expect("run starts");
-    controller.tick_at(0.5);
+    controller.tick_at(std::time::Duration::from_secs_f64(0.5));
     assert_is_animating_everywhere(&controller, true);
 }
 
@@ -71,7 +71,7 @@ fn is_animating_after_set_value_stops_the_run() {
 fn is_animating_after_the_run_completes() {
     let controller = controller();
     let _run = controller.forward().expect("run starts");
-    controller.tick_at(1.0);
+    controller.tick_at(std::time::Duration::from_secs_f64(1.0));
     assert_is_animating_everywhere(&controller, false);
 }
 
@@ -102,22 +102,22 @@ fn curved_run_never_publishes_a_non_finite_value() {
     let published = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&published);
     let reader = controller.clone();
-    controller.add_listener(Arc::new(move || {
+    controller.add_listener(std::rc::Rc::new(move || {
         sink.lock().expect("published values").push(reader.value());
     }));
     let _run = controller
         .animate_to_curved(1.0, Some(Duration::from_secs(1)), Arc::new(NanInTheMiddle))
         .expect("curved run");
 
-    controller.tick_at(0.2);
+    controller.tick_at(std::time::Duration::from_secs_f64(0.2));
     assert_eq!(controller.value(), 0.2);
-    controller.tick_at(0.5);
+    controller.tick_at(std::time::Duration::from_secs_f64(0.5));
     assert_eq!(
         controller.value(),
         0.2,
         "a non-finite curve sample keeps the last finite value"
     );
-    controller.tick_at(1.0);
+    controller.tick_at(std::time::Duration::from_secs_f64(1.0));
     assert_eq!(controller.value(), 1.0, "the run still lands on its target");
     assert_eq!(controller.status(), AnimationStatus::Completed);
     let published = published.lock().expect("published values").clone();
@@ -133,7 +133,7 @@ fn overshooting_curve_stays_within_bounds() {
         let _run = controller
             .animate_to_curved(1.0, Some(Duration::from_secs(1)), Arc::new(Constant(curve)))
             .expect("curved run");
-        controller.tick_at(0.5);
+        controller.tick_at(std::time::Duration::from_secs_f64(0.5));
         assert_eq!(
             controller.value(),
             bound,
@@ -145,7 +145,7 @@ fn overshooting_curve_stays_within_bounds() {
 // --- Duration::MAX ------------------------------------------------------------------
 
 fn max_duration_start_from(from: f64, start: fn(&AnimationController)) {
-    let controller = AnimationController::without_ticker(Duration::MAX);
+    let controller = AnimationController::builder(Duration::MAX).build();
     controller.set_value(from);
     let started = catch_unwind(AssertUnwindSafe(|| start(&controller)));
     assert!(
@@ -157,7 +157,7 @@ fn max_duration_start_from(from: f64, start: fn(&AnimationController)) {
         from,
         "starting the run leaves the value"
     );
-    controller.tick_at(1.0);
+    controller.tick_at(std::time::Duration::from_secs_f64(1.0));
     let value = controller.value();
     assert!(
         value.is_finite() && (0.0..=1.0).contains(&value),
@@ -198,7 +198,7 @@ fn disposed_controller_ignores_set_value() {
     controller.set_value(0.3);
     let notified = Arc::new(Mutex::new(0_usize));
     let sink = Arc::clone(&notified);
-    controller.add_listener(Arc::new(move || {
+    controller.add_listener(std::rc::Rc::new(move || {
         *sink.lock().expect("notification count") += 1;
     }));
     controller.dispose();
@@ -218,7 +218,7 @@ fn disposed_controller_drops_a_late_status_listener() {
     controller.dispose();
     let probe = Arc::new(());
     let capture = Arc::clone(&probe);
-    let _id = controller.add_status_listener(Arc::new(move |_| {
+    let _id = controller.add_status_listener(std::rc::Rc::new(move |_| {
         let _ = &capture;
     }));
     assert_eq!(
@@ -233,7 +233,7 @@ fn disposed_controller_drops_a_late_value_listener() {
     controller.dispose();
     let probe = Arc::new(());
     let capture = Arc::clone(&probe);
-    let _id = controller.add_listener(Arc::new(move || {
+    let _id = controller.add_listener(std::rc::Rc::new(move || {
         let _ = &capture;
     }));
     assert_eq!(
@@ -253,18 +253,23 @@ fn registered_run() -> (Vsync, AnimationController) {
     (vsync, controller)
 }
 
-fn nan_frame_time_does_not_anchor_a_run() {
+fn finite_clock_time_anchors_a_run() {
     let (vsync, controller) = registered_run();
-    vsync.tick_all(f64::NAN);
     assert!(controller.value().is_finite());
-    vsync.tick_all(0.0);
-    vsync.tick_all(0.5);
+    vsync.tick_all(
+        &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)),
+    );
+    vsync.tick_all(
+        &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.5)),
+    );
     assert_eq!(
         controller.value(),
         0.5,
         "the run is anchored at the first finite frame"
     );
-    vsync.tick_all(1.0);
+    vsync.tick_all(
+        &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(1.0)),
+    );
     assert_eq!(
         controller.status(),
         AnimationStatus::Completed,
@@ -274,16 +279,24 @@ fn nan_frame_time_does_not_anchor_a_run() {
 
 fn backwards_frame_time_resumes_the_run() {
     let (vsync, controller) = registered_run();
-    vsync.tick_all(10.0);
-    vsync.tick_all(9.0);
+    vsync.tick_all(
+        &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(10.0)),
+    );
+    vsync.tick_all(
+        &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(9.0)),
+    );
     assert_eq!(
         controller.value(),
         0.0,
         "time before the anchor samples the run's start"
     );
-    vsync.tick_all(10.5);
+    vsync.tick_all(
+        &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(10.5)),
+    );
     assert_eq!(controller.value(), 0.5);
-    vsync.tick_all(11.0);
+    vsync.tick_all(
+        &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(11.0)),
+    );
     assert_eq!(controller.status(), AnimationStatus::Completed);
 }
 
@@ -291,13 +304,21 @@ fn repeated_frame_time_announces_completion_once() {
     let (vsync, controller) = registered_run();
     let statuses = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&statuses);
-    controller.add_status_listener(Arc::new(move |status| {
+    controller.add_status_listener(std::rc::Rc::new(move |status| {
         sink.lock().expect("status log").push(status);
     }));
-    vsync.tick_all(0.0);
-    vsync.tick_all(1.0);
-    vsync.tick_all(1.0);
-    vsync.tick_all(2.0);
+    vsync.tick_all(
+        &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)),
+    );
+    vsync.tick_all(
+        &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(1.0)),
+    );
+    vsync.tick_all(
+        &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(1.0)),
+    );
+    vsync.tick_all(
+        &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(2.0)),
+    );
     assert_eq!(
         *statuses.lock().expect("status log"),
         [AnimationStatus::Completed]
@@ -326,54 +347,46 @@ fn controller_robustness_contract() {
 }
 
 #[test]
-#[ignore = "contract: is_animating is true while a run is installed, through every wrapper"]
 fn is_animating_tracks_an_installed_run() {
     is_animating_while_a_run_is_installed();
 }
 
 #[test]
-#[ignore = "contract: is_animating is false after set_value stops the run, through every wrapper"]
 fn is_animating_false_after_set_value() {
     is_animating_after_set_value_stops_the_run();
 }
 
 #[test]
-#[ignore = "contract: a curved run never publishes a non-finite value"]
 fn curved_run_holds_the_last_finite_value() {
     curved_run_never_publishes_a_non_finite_value();
 }
 
 #[test]
-#[ignore = "contract: a curved run on a bounded controller stays within its bounds"]
 fn curved_run_clamps_overshoot() {
     overshooting_curve_stays_within_bounds();
 }
 
 #[test]
-#[ignore = "contract: a Duration::MAX run over the full range starts without panicking"]
 fn max_duration_full_range_starts() {
     max_duration_forward_over_the_full_range();
 }
 
 #[test]
-#[ignore = "contract: set_value on a disposed controller changes nothing"]
 fn disposed_set_value_is_refused() {
     disposed_controller_ignores_set_value();
 }
 
 #[test]
-#[ignore = "contract: a disposed controller does not retain a late status listener"]
 fn disposed_drops_late_status_listener() {
     disposed_controller_drops_a_late_status_listener();
 }
 
 #[test]
-#[ignore = "contract: a disposed controller does not retain a late value listener"]
 fn disposed_drops_late_value_listener() {
     disposed_controller_drops_a_late_value_listener();
 }
 
 #[test]
-fn nan_frame_time_is_skipped() {
-    nan_frame_time_does_not_anchor_a_run();
+fn finite_clock_time_is_anchored() {
+    finite_clock_time_anchors_a_run();
 }

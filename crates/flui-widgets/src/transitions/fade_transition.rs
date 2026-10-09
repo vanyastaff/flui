@@ -1,6 +1,6 @@
 //! [`FadeTransition`] — animates its child's opacity without rebuilding its child.
 
-use std::sync::Arc;
+use std::rc::Rc;
 
 use flui_animation::{Animation, ProxyAnimation};
 use flui_objects::RenderAnimatedOpacity;
@@ -18,19 +18,19 @@ use flui_view::{
 /// `0.0` is fully transparent, `1.0` fully opaque; the child is always laid out.
 ///
 /// ```rust,ignore
-/// let controller = AnimationController::without_ticker(Duration::from_millis(300));
-/// let fade = FadeTransition::new(Arc::new(controller), Text::new("hi"));
+/// let controller = AnimationController::builder(Duration::from_millis(300)).build();
+/// let fade = FadeTransition::new(Rc::new(controller.clone()), Text::new("hi"));
 /// controller.forward(); // each frame re-reads the opacity into the child
 /// ```
 #[derive(Clone, StatefulView)]
 pub struct FadeTransition {
-    opacity: Arc<dyn Animation<f64>>,
+    opacity: std::rc::Rc<dyn Animation<f64>>,
     child: BoxedView,
 }
 
 impl FadeTransition {
     /// A fade driven by `opacity`, fading `child`.
-    pub fn new(opacity: Arc<dyn Animation<f64>>, child: impl IntoView) -> Self {
+    pub fn new(opacity: std::rc::Rc<dyn Animation<f64>>, child: impl IntoView) -> Self {
         Self {
             opacity,
             child: child.into_view().boxed(),
@@ -50,7 +50,7 @@ impl std::fmt::Debug for FadeTransition {
 /// State that keeps the render object's animation proxy stable across view updates.
 pub struct FadeTransitionState {
     proxy: ProxyAnimation<f64>,
-    opacity: Arc<dyn Animation<f64>>,
+    opacity: std::rc::Rc<dyn Animation<f64>>,
     child: BoxedView,
 }
 
@@ -64,9 +64,9 @@ impl ViewState<FadeTransition> for FadeTransitionState {
 
     fn did_update_view(&mut self, _old_view: &FadeTransition, new_view: &FadeTransition) {
         self.child = new_view.child.clone();
-        if !Arc::ptr_eq(&self.opacity, &new_view.opacity) {
-            self.opacity = Arc::clone(&new_view.opacity);
-            self.proxy.set_parent(Arc::clone(&new_view.opacity));
+        if !Rc::ptr_eq(&self.opacity, &new_view.opacity) {
+            self.opacity = Rc::clone(&new_view.opacity);
+            self.proxy.set_parent(Rc::clone(&new_view.opacity));
         }
     }
 }
@@ -76,8 +76,8 @@ impl StatefulView for FadeTransition {
 
     fn create_state(&self) -> Self::State {
         FadeTransitionState {
-            proxy: ProxyAnimation::new(Arc::clone(&self.opacity)),
-            opacity: Arc::clone(&self.opacity),
+            proxy: ProxyAnimation::new(Rc::clone(&self.opacity)),
+            opacity: Rc::clone(&self.opacity),
             child: self.child.clone(),
         }
     }

@@ -50,17 +50,17 @@
 // public route or re-exported to the integration tests by `crate::__test_access`
 // (ADR-0083 §4).
 
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 use std::{fmt, marker::PhantomData};
-use std::{rc::Rc, sync::Arc};
 
 use flui_animation::{
     ALWAYS_COMPLETE, ALWAYS_DISMISSED, Animation, AnimationController, AnimationStatus,
-    AnimationSwitch, ConstantAnimation, ProxyAnimation, VsyncRegistration,
+    AnimationSwitch, ConstantAnimation, DrivenController, ProxyAnimation,
 };
 use flui_foundation::ChangeNotifier;
-use parking_lot::Mutex;
+use std::cell::{Cell, RefCell};
 
 use super::binding::{CompletedSignal, RouteBindingSlot, TransitionGroup, TransitionPeer};
 use super::overlay_route::{NavigatorRoute, RouteContentBuilder};
@@ -68,14 +68,14 @@ use super::route::{PushCompletion, Route, RouteId, RouteSettings};
 
 /// The always-dismissed animation a `secondary_animation` rests at
 /// (`value == 0.0`, `status == dismissed`).
-pub(crate) fn always_dismissed() -> Arc<dyn Animation<f64>> {
-    Arc::new(ConstantAnimation::dismissed(ALWAYS_DISMISSED.value()))
+pub(crate) fn always_dismissed() -> std::rc::Rc<dyn Animation<f64>> {
+    Rc::new(ConstantAnimation::dismissed(ALWAYS_DISMISSED.value()))
 }
 
 /// The always-complete animation (`value == 1.0`, `status == completed`). What an
 /// **offstage** `ModalRoute`'s primary animation points at.
-pub(crate) fn always_complete() -> Arc<dyn Animation<f64>> {
-    Arc::new(ConstantAnimation::completed(ALWAYS_COMPLETE.value()))
+pub(crate) fn always_complete() -> std::rc::Rc<dyn Animation<f64>> {
+    Rc::new(ConstantAnimation::completed(ALWAYS_COMPLETE.value()))
 }
 
 /// What the `secondary_animation` proxy currently points at.
@@ -93,7 +93,10 @@ enum SecondaryParent {
 
 impl SecondaryParent {
     /// The animation currently *driving* the proxy, unwrapping a hopper.
-    fn current_train(&self, proxy: &ProxyAnimation<f64>) -> Option<Arc<dyn Animation<f64>>> {
+    fn current_train(
+        &self,
+        proxy: &ProxyAnimation<f64>,
+    ) -> Option<std::rc::Rc<dyn Animation<f64>>> {
         match self {
             Self::Dismissed => None,
             Self::Direct(_) => Some(proxy.parent()),
@@ -107,21 +110,22 @@ impl SecondaryParent {
 /// The listener is `Arc<dyn Fn(AnimationStatus)> + 'static` and cannot borrow the
 /// route, so everything it touches lives here behind an `Arc`.
 struct TransitionInner {
-    controller: Mutex<Option<AnimationController>>,
+    controller: RefCell<Option<DrivenController>>,
+    disposed: Cell<bool>,
     binding: super::lifecycle::Terminal<RouteBindingSlot>,
     /// Statuses reported by the `Send + Sync` animation listener, awaiting
     /// owner-local application.
-    pending_statuses: Arc<Mutex<Vec<AnimationStatus>>>,
+    pending_statuses: Rc<RefCell<Vec<AnimationStatus>>>,
     /// Data-only owner wake for status changes that do not produce a value tick,
     /// e.g. `reverse()` from 1.0. `ModalRoute` points this at the same relay that
     /// its `ModalScope` listens to.
-    status_wake: Mutex<Option<Arc<ChangeNotifier>>>,
+    status_wake: RefCell<Option<Rc<ChangeNotifier>>>,
 
     /// The proxy handed to the route *below* this one is **this** route's
     /// secondary; the primary is the controller, unproxied. Only the secondary
     /// animation is a `ProxyAnimation`.
-    secondary: super::lifecycle::Terminal<Arc<ProxyAnimation<f64>>>,
-    secondary_parent: Mutex<SecondaryParent>,
+    secondary: super::lifecycle::Terminal<Rc<ProxyAnimation<f64>>>,
+    secondary_parent: RefCell<SecondaryParent>,
 
     /// Set once the route is popped: a popped route is no longer active, which is
     /// the half that matters to the status handler's `Dismissed` guard.
@@ -134,12 +138,9 @@ struct TransitionInner {
     /// `false`, the conservative value: nothing is skipped unless a route asks.
     opaque: AtomicBool,
 
-    vsync_registration: Mutex<Option<(flui_animation::Vsync, VsyncRegistration)>>,
-    will_dispose_controller: bool,
-
     /// Fired in `dispose`. The route **below** listens on it to release its
     /// secondary proxy.
-    completed: super::lifecycle::Terminal<Arc<CompletedSignal>>,
+    completed: super::lifecycle::Terminal<Rc<CompletedSignal>>,
 
     /// How many times the status listener raised `finalize()`. Test-facing: the
     /// `pop_finalized` guard is what keeps this at one, and nothing else observes
@@ -150,7 +151,7 @@ struct TransitionInner {
 
 impl Drop for TransitionInner {
     fn drop(&mut self) {
-        let controller = super::lifecycle::Terminal::new(self.controller.get_mut().take());
+        let controller = self.controller.get_mut().take();
         let binding = self.binding.withdraw();
         let wake = super::lifecycle::Terminal::new(self.status_wake.get_mut().take());
         let secondary = self.secondary.withdraw();
@@ -158,28 +159,44 @@ impl Drop for TransitionInner {
             self.secondary_parent.get_mut(),
             SecondaryParent::Dismissed,
         ));
-        let registration = self.vsync_registration.get_mut().take();
-        let (vsync, registration) = match registration {
-            Some((vsync, registration)) => (Some(vsync), Some(registration)),
-            None => (None, None),
-        };
-        let vsync = super::lifecycle::Terminal::new(vsync);
-        let registration = super::lifecycle::Terminal::new(registration);
         let completed = self.completed.withdraw();
-        drop((
-            controller,
-            binding,
-            wake,
-            secondary,
-            parent,
-            vsync,
-            registration,
-            completed,
-        ));
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        recovery.run(|| drop(controller));
+        recovery.retire((binding, wake, secondary, parent, completed));
+        recovery.finish();
     }
 }
 
 impl TransitionInner {
+    fn controller(&self) -> Option<AnimationController> {
+        self.controller
+            .borrow()
+            .as_ref()
+            .map(|owner| owner.controller().clone())
+    }
+
+    fn rebind_clock(&self, vsync: Option<&flui_animation::Vsync>) {
+        if self.disposed.get() {
+            return;
+        }
+        let outgoing = self.controller.borrow_mut().take();
+        let Some(mut owner) = outgoing else {
+            return;
+        };
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        recovery.run(|| {
+            if let Err(error) = owner.rebind(vsync) {
+                tracing::error!(%error, "route animation has no frame clock");
+            }
+        });
+        if !self.disposed.get() && self.controller.borrow().is_none() {
+            *self.controller.borrow_mut() = Some(owner);
+        } else {
+            recovery.run(|| drop(owner));
+        }
+        recovery.finish();
+    }
+
     /// Whether the route is still active (not yet popped).
     fn is_active(&self) -> bool {
         !self.popped.load(Ordering::Acquire)
@@ -195,7 +212,7 @@ impl TransitionInner {
             AnimationStatus::Completed => {
                 // Publish `opaque` to the route's overlay entry.
                 // The entrance settling `pushing` → `idle` is driven by
-                // `NavigatorShared::apply` awaiting the `TickerFuture`
+                // `NavigatorShared::apply` awaiting the `AnimationRunFuture`
                 // `did_push` already handed the navigator (ADR-0064), not by
                 // this listener — which owns only the opaque flag.
                 binding.set_entry_opaque(self.opaque.load(Ordering::Relaxed));
@@ -220,7 +237,7 @@ impl TransitionInner {
     }
 
     fn drain_pending_statuses(&self) {
-        let statuses = std::mem::take(&mut *self.pending_statuses.lock());
+        let statuses = std::mem::take(&mut *self.pending_statuses.borrow_mut());
         for status in statuses {
             self.handle_status_changed(status);
         }
@@ -246,7 +263,7 @@ pub struct TransitionRoute<T> {
     /// [`TransitionGroup::Page`]; everything else stays at the default.
     group: TransitionGroup,
 
-    inner: super::lifecycle::Terminal<Arc<TransitionInner>>,
+    inner: super::lifecycle::Terminal<Rc<TransitionInner>>,
     _output: PhantomData<fn() -> T>,
 }
 
@@ -277,21 +294,20 @@ impl<T> TransitionRoute<T> {
             can_transition_to: true,
             can_transition_from: true,
             group: TransitionGroup::Default,
-            inner: super::lifecycle::Terminal::new(Arc::new(TransitionInner {
-                controller: Mutex::new(None),
+            inner: super::lifecycle::Terminal::new(Rc::new(TransitionInner {
+                controller: RefCell::new(None),
+                disposed: Cell::new(false),
                 binding: super::lifecycle::Terminal::new(binding),
-                pending_statuses: Arc::new(Mutex::new(Vec::new())),
-                status_wake: Mutex::new(None),
-                secondary: super::lifecycle::Terminal::new(Arc::new(ProxyAnimation::new(
+                pending_statuses: Rc::new(RefCell::new(Vec::new())),
+                status_wake: RefCell::new(None),
+                secondary: super::lifecycle::Terminal::new(Rc::new(ProxyAnimation::new(
                     always_dismissed(),
                 ))),
-                secondary_parent: Mutex::new(SecondaryParent::Dismissed),
+                secondary_parent: RefCell::new(SecondaryParent::Dismissed),
                 popped: AtomicBool::new(false),
                 pop_finalized: AtomicBool::new(false),
                 opaque: AtomicBool::new(false),
-                vsync_registration: Mutex::new(None),
-                will_dispose_controller: true,
-                completed: super::lifecycle::Terminal::new(Arc::new(CompletedSignal::default())),
+                completed: super::lifecycle::Terminal::new(Rc::new(CompletedSignal::default())),
                 finalize_calls: AtomicUsize::new(0),
             })),
             _output: PhantomData,
@@ -360,17 +376,17 @@ impl<T> TransitionRoute<T> {
     /// The controller is created in `install()`, so a caller cannot hold it up
     /// front; the handle resolves it lazily. Test-facing: a unit test drives
     /// the transition by hand through this handle (`set_value`) rather than
-    /// awaiting the `TickerFuture` `did_push` returns; awaiting it needs real
+    /// awaiting the `AnimationRunFuture` `did_push` returns; awaiting it needs real
     /// elapsed time driven through a `Vsync`.
     #[must_use]
     pub fn handle(&self) -> TransitionHandle {
         TransitionHandle {
-            inner: Arc::clone(&self.inner),
+            inner: Rc::clone(&self.inner),
         }
     }
 
-    pub(crate) fn set_status_wake(&self, wake: Arc<ChangeNotifier>) {
-        let _prev = self.inner.status_wake.lock().replace(wake);
+    pub(crate) fn set_status_wake(&self, wake: Rc<ChangeNotifier>) {
+        let _prev = self.inner.status_wake.borrow_mut().replace(wake);
     }
 
     /// Point the secondary animation at the next route's primary animation.
@@ -397,7 +413,7 @@ impl<T> TransitionRoute<T> {
             return;
         };
 
-        let mut parent = self.inner.secondary_parent.lock();
+        let mut parent = self.inner.secondary_parent.borrow_mut();
 
         // Already pointed at this route (directly, or as a hop target): nothing to do.
         match &*parent {
@@ -410,7 +426,7 @@ impl<T> TransitionRoute<T> {
         }
 
         let current_train = parent.current_train(&self.inner.secondary);
-        let next_animation = Arc::clone(peer.animation());
+        let next_animation = Rc::clone(peer.animation());
 
         // Jump when the two trains are at the same value or the next one is not moving.
         //
@@ -434,26 +450,26 @@ impl<T> TransitionRoute<T> {
         let previous = std::mem::replace(&mut *parent, SecondaryParent::Dismissed);
 
         if jump {
-            self.inner.secondary.set_parent(Arc::clone(&next_animation));
+            self.inner.secondary.set_parent(Rc::clone(&next_animation));
             *parent = SecondaryParent::Direct(next_id);
         } else {
             let train = current_train.expect("jump == false implies a current train");
             // Weak: the proxy parents this switch, so a strong capture would form
             // `proxy -> switch -> callback -> proxy` and outlive a route dropped
             // without `dispose`.
-            let proxy = Arc::downgrade(&self.inner.secondary);
-            let target_for_hop = super::lifecycle::Terminal::new(Arc::clone(&next_animation));
-            let switch = AnimationSwitch::new(train, Some(Arc::clone(&next_animation)))
+            let proxy = Rc::downgrade(&self.inner.secondary);
+            let target_for_hop = super::lifecycle::Terminal::new(Rc::clone(&next_animation));
+            let switch = AnimationSwitch::new(train, Some(Rc::clone(&next_animation)))
                 // On the switch: point the proxy **directly** at the target and
                 // drop the hopper.
                 .on_switched(move || {
                     if let Some(proxy) = proxy.upgrade() {
-                        proxy.set_parent(Arc::clone(&target_for_hop));
+                        proxy.set_parent(Rc::clone(&target_for_hop));
                     }
                 });
             self.inner
                 .secondary
-                .set_parent(Arc::new(switch.clone()) as Arc<dyn Animation<f64>>);
+                .set_parent(Rc::new(switch.clone()) as std::rc::Rc<dyn Animation<f64>>);
             *parent = SecondaryParent::Hopping {
                 target: next_id,
                 switch,
@@ -473,10 +489,10 @@ impl<T> TransitionRoute<T> {
 
         // Release the reference when the route above is disposed, but only if we
         // are still pointing at it — a stale disposal must not clobber a newer parent.
-        let inner = Arc::downgrade(&self.inner);
+        let inner = Rc::downgrade(&self.inner);
         peer.completed.on_completed(Rc::new(move || {
             let Some(inner) = inner.upgrade() else { return };
-            let mut parent = inner.secondary_parent.lock();
+            let mut parent = inner.secondary_parent.borrow_mut();
             let still_ours = matches!(
                 &*parent,
                 SecondaryParent::Direct(id) | SecondaryParent::Hopping { target: id, .. }
@@ -494,8 +510,8 @@ impl<T> TransitionRoute<T> {
         }));
     }
 
-    fn set_secondary(&self, kind: SecondaryParent, animation: Arc<dyn Animation<f64>>) {
-        let previous = std::mem::replace(&mut *self.inner.secondary_parent.lock(), kind);
+    fn set_secondary(&self, kind: SecondaryParent, animation: std::rc::Rc<dyn Animation<f64>>) {
+        let previous = std::mem::replace(&mut *self.inner.secondary_parent.borrow_mut(), kind);
         self.inner.secondary.set_parent(animation);
         if let SecondaryParent::Hopping { switch, .. } = previous {
             switch.dispose();
@@ -506,7 +522,7 @@ impl<T> TransitionRoute<T> {
 /// A cloneable view of a [`TransitionRoute`]'s animation state.
 #[derive(Clone)]
 pub struct TransitionHandle {
-    inner: Arc<TransitionInner>,
+    inner: Rc<TransitionInner>,
 }
 
 impl fmt::Debug for TransitionHandle {
@@ -520,14 +536,14 @@ impl TransitionHandle {
     /// has created it.
     #[must_use]
     pub fn controller(&self) -> Option<AnimationController> {
-        self.inner.controller.lock().clone()
+        self.inner.controller()
     }
 
     /// The controller, erased. The always-dismissed animation before `install()` —
     /// a route that is not yet pushed has no controller.
-    pub(crate) fn primary_animation(&self) -> Arc<dyn Animation<f64>> {
+    pub(crate) fn primary_animation(&self) -> std::rc::Rc<dyn Animation<f64>> {
         match self.controller() {
-            Some(controller) => Arc::new(controller) as Arc<dyn Animation<f64>>,
+            Some(controller) => Rc::new(controller) as std::rc::Rc<dyn Animation<f64>>,
             None => always_dismissed(),
         }
     }
@@ -549,8 +565,8 @@ impl TransitionHandle {
     /// The secondary animation: a `ProxyAnimation` resting at the
     /// always-dismissed animation.
     #[must_use]
-    pub fn secondary_animation(&self) -> Arc<ProxyAnimation<f64>> {
-        Arc::clone(&self.inner.secondary)
+    pub fn secondary_animation(&self) -> Rc<ProxyAnimation<f64>> {
+        Rc::clone(&self.inner.secondary)
     }
 
     /// Whether the pop has already been finalized.
@@ -569,7 +585,7 @@ impl TransitionHandle {
     #[must_use]
     pub fn secondary_is_dismissed(&self) -> bool {
         matches!(
-            &*self.inner.secondary_parent.lock(),
+            &*self.inner.secondary_parent.borrow_mut(),
             SecondaryParent::Dismissed
         )
     }
@@ -578,7 +594,7 @@ impl TransitionHandle {
     #[must_use]
     pub fn secondary_is_hopping(&self) -> bool {
         matches!(
-            &*self.inner.secondary_parent.lock(),
+            &*self.inner.secondary_parent.borrow_mut(),
             SecondaryParent::Hopping { .. }
         )
     }
@@ -614,8 +630,7 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
     fn finished_when_popped(&self) -> bool {
         let dismissed = self
             .inner
-            .controller
-            .lock()
+            .controller()
             .as_ref()
             .is_some_and(AnimationController::is_dismissed);
         dismissed && !self.inner.pop_finalized.load(Ordering::Acquire)
@@ -633,51 +648,35 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
              `NavigatorHandle::push` fills its `RouteBindingSlot` first"
         );
 
-        // A real, but permanently detached, ticker -- not `without_ticker`:
-        // this controller's `is_animating()` is read by `BackGestureController`
-        // and by tests (`tests/transition_route.rs`), and `is_animating` is
-        // intentionally ticker-based (whether the ticker is active),
-        // not status-based — a ticker-less controller can never report
-        // `is_animating() == true`. The navigator's `Vsync` (registered
-        // below when present) drives the actual value ticks
-        // deterministically; `with_detached_ticker` gives this controller a
-        // ticker whose `start()`/`stop()` transition real ticker state
-        // without needing an `UpdateScheduler` at all.
-        let controller = AnimationController::with_detached_ticker(self.duration);
+        let vsync = self.inner.binding.get().and_then(|binding| binding.vsync());
+        let owner = AnimationController::builder(self.duration).build_on(vsync.as_ref());
+        let controller = owner.controller().clone();
         if let Some(reverse) = self.reverse_duration {
             controller.set_reverse_duration(reverse);
         }
 
-        let pending_statuses = Arc::clone(&self.inner.pending_statuses);
-        let status_wake = self.inner.status_wake.lock().clone();
-        controller.add_status_listener(Arc::new(move |status| {
-            pending_statuses.lock().push(status);
+        let pending_statuses = Rc::clone(&self.inner.pending_statuses);
+        let status_wake = self.inner.status_wake.borrow_mut().clone();
+        controller.add_status_listener(std::rc::Rc::new(move |status| {
+            pending_statuses.borrow_mut().push(status);
             if let Some(wake) = &status_wake {
                 wake.notify_listeners();
             }
         }));
 
-        // The navigator's clock. Absent a `VsyncScope`, there is no wall-clock fallback: the
-        // controller simply never advances (its ticker never fires; see the
-        // constructor's own doc above).
-        if let Some(binding) = self.inner.binding.get()
-            && let Some(vsync) = binding.vsync()
-        {
-            let registration = vsync.register(controller.clone());
-            let _prev = self
-                .inner
-                .vsync_registration
-                .lock()
-                .replace((vsync, registration));
-        }
-
         // Publish the primary animation so the route below can coordinate.
         if let Some(binding) = self.inner.binding.get() {
+            let weak = Rc::downgrade(&self.inner);
             binding.publish_peer(TransitionPeer {
-                animation: Some(Arc::new(controller.clone()) as Arc<dyn Animation<f64>>),
+                animation: Some(Rc::new(controller.clone()) as std::rc::Rc<dyn Animation<f64>>),
                 can_transition_from: self.can_transition_from,
                 group: self.group,
-                completed: super::lifecycle::Terminal::new(Arc::clone(&self.inner.completed)),
+                completed: super::lifecycle::Terminal::new(Rc::clone(&self.inner.completed)),
+                rebind_clock: Rc::new(move |vsync| {
+                    if let Some(inner) = weak.upgrade() {
+                        inner.rebind_clock(vsync);
+                    }
+                }),
             });
 
             // A controller that installs already completed never fires a status
@@ -687,7 +686,8 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
             }
         }
 
-        let _prev = self.inner.controller.lock().replace(controller);
+        let outgoing = self.inner.controller.borrow_mut().replace(owner);
+        drop(outgoing);
     }
 
     /// Drive the controller forward and hand the navigator the resulting future.
@@ -702,9 +702,7 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
     /// postures: one `expect`, not an `expect` plus a silently-degrading
     /// `error!` arm nothing can reach or test.
     fn did_push(&mut self) -> PushCompletion {
-        let controller = self.inner.controller.lock();
-        let controller = controller
-            .as_ref()
+        let controller = self.inner.controller()
             .expect("BUG: install() runs before did_push and nothing disposes the controller before the push");
         let future = controller
             .forward()
@@ -714,7 +712,7 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
 
     /// Jump to the end, no animation.
     fn did_add(&mut self) {
-        if let Some(controller) = self.inner.controller.lock().as_ref() {
+        if let Some(controller) = self.inner.controller() {
             controller.set_value(1.0);
         }
     }
@@ -735,9 +733,9 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
             .binding
             .get()
             .and_then(|binding| binding.take_pop_pacing());
-        if let Some(controller) = self.inner.controller.lock().as_ref() {
+        if let Some(controller) = self.inner.controller() {
             let _ = match pacing {
-                Some(pacing) => pacing.animate_back(controller),
+                Some(pacing) => pacing.animate_back(&controller),
                 None => controller.reverse(),
             };
         }
@@ -762,6 +760,7 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
     /// Detach the listener, unregister the
     /// clock, drop the peer, and dispose the controller **only if we own it**.
     fn dispose(&mut self) {
+        self.inner.disposed.set(true);
         if let Some(binding) = self.inner.binding.get() {
             binding.withdraw_peer();
         }
@@ -770,21 +769,8 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
         self.inner.completed.complete();
         self.set_secondary(SecondaryParent::Dismissed, always_dismissed());
 
-        let vsync_registration = self.inner.vsync_registration.lock().take();
-        if let Some((vsync, registration)) = vsync_registration {
-            // `VsyncRegistration` has no `Drop`; a missed unregister keeps a
-            // disposed route's controller ticking forever.
-            vsync.unregister(&registration);
-        }
-
-        // Take the controller out before disposing it: disposal retires status
-        // listeners, whose captures may read this route through its handle.
-        let controller = self.inner.controller.lock().take();
-        if let Some(controller) = controller
-            && self.inner.will_dispose_controller
-        {
-            controller.dispose();
-        }
+        let outgoing = self.inner.controller.borrow_mut().take();
+        drop(outgoing);
     }
 }
 

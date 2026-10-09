@@ -96,11 +96,11 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::Arc;
+
 use std::time::Duration;
 
 use flui_sdk::animation::{
-    Animation, AnimationController, AnimationStatus, UpdateScheduler, Vsync, VsyncRegistration,
+    Animation, AnimationController, AnimationStatus, DrivenController, Vsync,
 };
 use flui_sdk::foundation::Listenable;
 use flui_sdk::interaction::FocusNode;
@@ -216,15 +216,6 @@ impl std::fmt::Debug for InkWell {
     }
 }
 
-/// One in-flight press-deactivation timer: the controller, the [`Vsync`] it
-/// is registered with, and that registration's id — all three are needed to
-/// unregister cleanly (see [`InkWellState::cancel_pending_deactivation`]).
-struct PendingDeactivation {
-    controller: AnimationController,
-    vsync: Vsync,
-    registration: VsyncRegistration,
-}
-
 /// Persistent state behind [`InkWell`] — see [`StatefulView`]/[`ViewState`].
 pub struct InkWellState {
     states: WidgetStatesController,
@@ -240,7 +231,7 @@ pub struct InkWellState {
     vsync: Option<Vsync>,
     /// `Some` once `init_state` has run — always the case by `build`.
     rebuild: Option<RebuildHandle>,
-    pending_deactivation: Rc<RefCell<Option<PendingDeactivation>>>,
+    pending_deactivation: Rc<RefCell<Option<DrivenController>>>,
 }
 
 impl std::fmt::Debug for InkWellState {
@@ -258,12 +249,9 @@ impl std::fmt::Debug for InkWellState {
 impl InkWellState {
     /// Cancels and disposes any in-flight press-deactivation timer.
     /// Idempotent (a no-op when nothing is pending).
-    fn cancel_pending_deactivation(pending: &Rc<RefCell<Option<PendingDeactivation>>>) {
+    fn cancel_pending_deactivation(pending: &Rc<RefCell<Option<DrivenController>>>) {
         let taken = pending.borrow_mut().take();
-        if let Some(previous) = taken {
-            previous.vsync.unregister(&previous.registration);
-            previous.controller.dispose();
-        }
+        drop(taken);
     }
 }
 
@@ -315,12 +303,31 @@ impl ViewState<InkWell> for InkWellState {
         // (hover/focus/press/disabled) from here on, so the overlay color
         // is re-resolved.
         let rebuild_for_listener = rebuild.clone();
-        self.states_listener = Some(self.states.add_listener(Arc::new(move || {
+        self.states_listener = Some(self.states.add_listener(std::rc::Rc::new(move || {
             rebuild_for_listener.schedule(flui_sdk::view::RebuildReason::StateChange);
         })));
 
-        self.vsync = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone());
+        self.vsync = VsyncScope::maybe_of(ctx);
         self.rebuild = Some(rebuild);
+    }
+
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        self.vsync = VsyncScope::maybe_of(ctx);
+        let pending = self.pending_deactivation.borrow_mut().take();
+        if let Some(mut owner) = pending {
+            if let Err(error) = owner.rebind(self.vsync.as_ref()) {
+                tracing::error!(%error, "InkWell lost its frame registry");
+            }
+            let displaced = {
+                let mut slot = self.pending_deactivation.borrow_mut();
+                if slot.is_none() {
+                    slot.replace(owner)
+                } else {
+                    Some(owner)
+                }
+            };
+            drop(displaced);
+        }
     }
 
     fn did_update_view(&mut self, old_view: &InkWell, new_view: &InkWell) {
@@ -354,7 +361,7 @@ impl ViewState<InkWell> for InkWellState {
                 .rebuild
                 .clone()
                 .expect("init_state runs before the first did_update_view");
-            self.states_listener = Some(self.states.add_listener(Arc::new(move || {
+            self.states_listener = Some(self.states.add_listener(std::rc::Rc::new(move || {
                 rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
             })));
         } else if new_view.is_interactive() != old_view.is_interactive() {
@@ -507,7 +514,7 @@ fn overlay_content(view: &InkWell, resolved_overlay: Option<Color>) -> BoxedView
 /// `pending` must already be empty (the caller cancels any previous timer
 /// first) — this only ever *installs*, never itself cancels.
 fn begin_press_deactivation(
-    pending: &Rc<RefCell<Option<PendingDeactivation>>>,
+    pending: &Rc<RefCell<Option<DrivenController>>>,
     states: &WidgetStatesController,
     vsync: Option<Vsync>,
     rebuild: &RebuildHandle,
@@ -521,8 +528,8 @@ fn begin_press_deactivation(
         return;
     };
 
-    let controller = AnimationController::new(PRESS_DEACTIVATION_DELAY, &UpdateScheduler::new());
-    let registration = vsync.register(controller.clone());
+    let owner = AnimationController::builder(PRESS_DEACTIVATION_DELAY).build_on(Some(&vsync));
+    let controller = owner.controller().clone();
 
     // The status listener only needs to be `Send + Sync` (its bound), so it
     // captures the `Send + Sync` states controller and rebuild handle by
@@ -533,7 +540,7 @@ fn begin_press_deactivation(
     // idempotent).
     let states_for_listener = states.clone();
     let rebuild_for_listener = rebuild.clone();
-    controller.add_status_listener(Arc::new(move |status| {
+    controller.add_status_listener(std::rc::Rc::new(move |status| {
         if status == AnimationStatus::Completed {
             states_for_listener.update(WidgetState::Pressed, false);
             rebuild_for_listener.schedule(flui_sdk::view::RebuildReason::AnimationTick);
@@ -542,14 +549,10 @@ fn begin_press_deactivation(
 
     if let Err(error) = controller.forward_from(Some(0.0)) {
         tracing::debug!(?error, "InkWell press-deactivation timer failed to start");
-        vsync.unregister(&registration);
         states.update(WidgetState::Pressed, false);
         return;
     }
 
-    *pending.borrow_mut() = Some(PendingDeactivation {
-        controller,
-        vsync,
-        registration,
-    });
+    let outgoing = pending.borrow_mut().replace(owner);
+    drop(outgoing);
 }

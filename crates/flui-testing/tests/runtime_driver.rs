@@ -107,8 +107,8 @@ fn harness_frames_are_text_store_transactions() {
         Rc::clone(&async_outcome),
         Rc::clone(&granted_in_phase),
     );
-    laid.local_post_frame_handle()
-        .schedule_local(move |_timing| {
+    laid.post_frame_handle()
+        .schedule(move |_timing| {
             *sync_slot.borrow_mut() = Some(store.request_lock(
                 LockGrant::read(|_: &dyn TextStoreRead| {}),
                 LockTiming::Sync,
@@ -166,8 +166,8 @@ fn a_grant_queued_before_an_unwind_runs_at_the_next_pumps_anchor() {
     let granted_in_phase = Rc::new(Cell::new(None));
     let scheduler = laid.scheduler().clone();
     let (outcome_slot, phase_slot) = (Rc::clone(&outcome), Rc::clone(&granted_in_phase));
-    laid.local_post_frame_handle()
-        .schedule_local(move |_timing| {
+    laid.post_frame_handle()
+        .schedule(move |_timing| {
             *outcome_slot.borrow_mut() = Some(store.request_lock(
                 LockGrant::read(move |_: &dyn TextStoreRead| {
                     phase_slot.set(Some(scheduler.phase()));
@@ -377,8 +377,8 @@ fn the_harness_makes_progress_after_a_contained_failure() {
 #[test]
 fn a_contained_frame_failure_stays_authoritative_over_a_later_post_frame_panic() {
     let (mut laid, _armed) = armed_tripwire();
-    laid.local_post_frame_handle()
-        .schedule_local(|_timing| panic!("post-frame callback panicked"))
+    laid.post_frame_handle()
+        .schedule(|_timing| panic!("post-frame callback panicked"))
         .expect("the ui_runtime's post-frame lane is alive");
 
     let raised = catch_unwind(AssertUnwindSafe(|| laid.tick()))
@@ -401,8 +401,8 @@ fn a_contained_frame_failure_stays_authoritative_over_a_later_post_frame_panic()
 fn the_harness_paints_after_a_post_frame_unwind() {
     let (mut laid, armed) = armed_tripwire();
     armed.store(false, Ordering::SeqCst);
-    laid.local_post_frame_handle()
-        .schedule_local(|_timing| panic!("post-frame callback panicked"))
+    laid.post_frame_handle()
+        .schedule(|_timing| panic!("post-frame callback panicked"))
         .expect("the ui_runtime's post-frame lane is alive");
     let raised = catch_unwind(AssertUnwindSafe(|| laid.tick()))
         .expect_err("the post-frame panic unwinds out of the pump");

@@ -30,6 +30,21 @@ deepest-first element unmount so view lifecycle hooks remain canonical.
 
 ## Mapping decisions
 
+### Scroll notification failure cannot starve render invalidation
+
+`ScrollPosition` delivers an accepted pixel change to widget and viewport
+listeners under the same `PanicRecovery`. Both channels use the foundation
+notifier's snapshot, live membership and separate capture retirement. Viewport
+pointer identity is weak metadata paired with a listener ID; it does not add
+another owner of a callback capture. Removal withdraws that identity before
+retiring the callback outside the position borrow. After the healthy tails
+finish, the first failure propagates (ADR-0174).
+
+The public widget row
+`show_on_screen_failure_continues_live_ancestors_and_fresh_requests_recover`
+checks render notification after a value failure, live ancestor reveal and a
+fresh request after recovery.
+
 The `trybuild_ui` test in `tests/compile_fail.rs` pins pipeline constructor
 admission and phase boundaries: E0061 for construction without a text context,
 E0277 for `Default` construction and downstream phase implementations, and

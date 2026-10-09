@@ -1,309 +1,84 @@
-# Design Patterns
+# Animation design patterns
 
-Patterns used in `flui_animation` and their rationale.
+## Persistent owners and observer handles
 
-## Persistent Object Pattern
+A widget creates its `DrivenController` during lifecycle initialization and
+retains it across rebuilds. The owner holds the Vsync registration. A clone
+obtained from `controller()` shares the kernel and observes the same run;
+dropping that clone does not withdraw the registration.
 
-### Problem
-
-React-style hooks recreate state each render. Animations need continuous state across rebuilds.
-
-### Solution
-
-Animations are long-lived objects with explicit lifecycle:
+Dropping the owning controller withdraws its registration before disposing
+the kernel. Rebinding preserves the last sampled elapsed time. Missing clocks
+settle finite runs and park infinite repeats (ADR-0175).
 
 ```rust
-// Created once
-let controller = AnimationController::new(duration, &scheduler);
+use flui_animation::{AnimationController, Vsync};
+use std::time::Duration;
 
-// Used across rebuilds
-controller.forward()?;
-controller.reverse()?;
-
-// Explicit cleanup
-controller.dispose();
+let vsync = Vsync::new();
+let owner = AnimationController::builder(Duration::from_millis(300))
+    .build_on(Some(&vsync));
+let observer = owner.controller().clone();
+observer.forward().expect("live controller");
+drop(owner); // unregister, then cancel
 ```
 
-### Benefits
+## Validated configuration
 
-- Animations survive widget rebuilds
-- Explicit control over timing
-- Predictable memory management
-
----
-
-## Composition Pattern
-
-### Problem
-
-Inheritance hierarchies are rigid and don't fit Rust's ownership model.
-
-### Solution
-
-Build complex animations by wrapping simpler ones:
+`ValueRange` validates finite endpoints and a finite positive span before a
+builder accepts bounds. An unbounded controller is an explicit builder choice.
+Building a manual controller acquires no scheduler or presentation registry.
 
 ```rust
-let controller = Arc::new(AnimationController::new(...));
-let curved = Arc::new(CurvedAnimation::new(controller, curve));
-let color = TweenAnimation::new(curved, ColorTween::new(RED, BLUE));
-```
+use flui_animation::{AnimationController, ValueRange};
+use std::time::Duration;
 
-### Implementation
-
-Composed animations store `Arc<dyn Animation<T>>`:
-
-```rust
-pub struct CurvedAnimation<C: Curve> {
-    parent: Arc<dyn Animation<f64>>,
-    curve: C,
-}
-
-pub struct TweenAnimation<T, A: Animatable<T>> {
-    parent: Arc<dyn Animation<f64>>,
-    tween: A,
-}
-```
-
-### Benefits
-
-- Type-safe composition
-- No inheritance hierarchies
-- Clear ownership via Arc
-
----
-
-## Builder Pattern
-
-### Problem
-
-Many optional configuration parameters. Multiple constructors become unwieldy.
-
-### Solution
-
-Builder with validation at each step:
-
-```rust
-let controller = AnimationController::builder(duration, &scheduler)
-    .bounds(0.0, 100.0)?      // Validates immediately
-    .reverse_duration(Duration::from_millis(500))
+let controller = AnimationController::builder(Duration::from_millis(300))
+    .bounds(ValueRange::new(0.0, 100.0).expect("finite range"))
     .initial_value(50.0)
-    .build()?;
+    .build();
 ```
 
-### Why Result in Builder Methods?
+## Composition and type erasure
 
-Unlike builders that defer validation to `build()`, we validate immediately:
+Wrappers store parents as `Rc<dyn Animation<T>>`. `Animation<T>` extends
+`Listenable`, so erased parents expose value and status subscription APIs
+without an additional combined trait. Static curve and tween types remain
+generic where their concrete shape is known.
 
-```rust
-pub fn bounds(mut self, lower: f64, upper: f64) -> Result<Self, AnimationError> {
-    if !(lower < upper) || !(upper - lower).is_finite() {
-        return Err(AnimationError::InvalidBounds(format!("{lower}..{upper}")));
-    }
-    self.lower_bound = lower;
-    self.upper_bound = upper;
-    Ok(self)
-}
-```
+Parent queries and subscription removal run after internal borrows end.
+Replacement commits the new parent before outgoing ownership retires.
 
-Benefits:
-- Fail fast — errors caught at misconfiguration point
-- Better context — error location preserved
-- No silent failures
+## Owner-local callbacks
 
----
+Value and status callbacks use `Rc<dyn Fn(...)>` and can capture `Rc`, `Cell`
+or other UI owner state. They run synchronously on the owner that commits the
+change, outside state borrows. Frame wakers separately provide cross-thread
+wake capability without sharing the controller kernel.
 
-## Keyframe Track Pattern
+Status commits and run deliveries join one FIFO. Reentrant transitions append
+to the active drain. Removed subscriptions are silent, and the first failure
+remains authoritative while healthy peers and retirement finish (ADR-0173,
+ADR-0174). Containment cannot rescue an opaque user aggregate whose own
+destructors double-panic before reaching the framework boundary.
 
-### Problem
+## One outcome per run
 
-A looping indicator moves several properties on one timeline, some delayed,
-some offset per element. One controller per property or per element means
-one vsync registration, listener and dispose path each.
+Run-starting operations return `Result<AnimationRunFuture, AnimationError>`.
+The controller publishes completion or cancellation before invoking outcome
+callbacks. Dropping the future does not cancel the run. Replacement, stop,
+reset and owner retirement cancel the displaced run.
 
-### Solution
+## Immutable tracks
 
-One repeating controller; each property is a `Keyframes` track with the same
-`total`, sampled in `paint` at the controller's progress. A delay is a
-leading `hold`; a per-element offset is `Stagger::delay`, read with
-`value_at_looped(elapsed + total − delay)`. The tracks are immutable values,
-so a paint that panics leaves nothing to repair.
+`Keyframes` and `Stagger` describe immutable tracks sampled from a controller's
+progress. Several paint properties can share one repeating controller and
+one registration. A track has no listener or independent scheduling state.
 
-```rust,ignore
-let elapsed = rotation.total().mul_f64(controller.value());
-for i in 0..count {
-    let shifted = elapsed + track.total() - stagger.delay(i, count);
-    draw_tick(i, track.value_at_looped(shifted));
-}
-```
+## Typed presentation time
 
----
-
-## Type Erasure Pattern
-
-### Problem
-
-Generic animations need uniform storage and handling.
-
-### Solution
-
-Use `Arc<dyn Animation<T>>`:
-
-```rust
-pub struct Container {
-    animations: Vec<Arc<dyn Animation<f64>>>,
-}
-
-impl Container {
-    fn add<A: Animation<f64> + 'static>(&mut self, anim: A) {
-        self.animations.push(Arc::new(anim));
-    }
-}
-```
-
-### Listening Through the Erased Type
-
-`Animation<T>` has `Listenable` as a supertrait, so an `Arc<dyn Animation<T>>`
-already exposes both value and status listeners; no extra combined trait is
-needed.
-
----
-
-## Callback Pattern
-
-### Problem
-
-Animations need to notify listeners on changes.
-
-### Solution
-
-Closures with `Send + Sync`:
-
-```rust
-pub type StatusCallback = Arc<dyn Fn(AnimationStatus) + Send + Sync>;
-
-impl AnimationController {
-    pub fn add_status_listener(&self, callback: StatusCallback) -> ListenerId {
-        let id = ListenerId::new();
-        // Store (id, callback)
-        id
-    }
-}
-```
-
-### Why Arc<dyn Fn>?
-
-- **Shared** — stored and called multiple times
-- **Thread-safe** — `Send + Sync` for multi-threaded UI
-- **Flexible** — closures capture environment
-
-### Listener IDs
-
-Return IDs for later removal:
-
-```rust
-let id = controller.add_status_listener(callback);
-controller.remove_status_listener(id);
-```
-
----
-
-## Disposal Pattern
-
-### Problem
-
-Controllers hold resources (tickers) requiring cleanup.
-
-### Solution
-
-Explicit `dispose()` with guard flag:
-
-```rust
-pub fn dispose(&self) {
-    let mut inner = self.inner.lock();
-    if inner.disposed {
-        return;
-    }
-    inner.disposed = true;
-
-    if let Some(ticker) = inner.ticker.take() {
-        ticker.stop();
-    }
-    inner.status_listeners.clear();
-}
-```
-
-### Guard Against Use After Dispose
-
-```rust
-pub fn forward(&self) -> Result<TickerFuture, AnimationError> {
-    let inner = self.inner.lock();
-    if inner.disposed {
-        return Err(AnimationError::Disposed);
-    }
-    // ...
-}
-```
-
-### Why Not Drop?
-
-- Clones of an `AnimationController` share one controller, so dropping one
-  handle cannot mean the animation is finished; `dispose()` ends it for every
-  handle at once
-- Explicit disposal is idempotent (safe to call multiple times)
-
----
-
-## Validated Construction Pattern
-
-### Problem
-
-Invalid parameters (zero mass, negative duration) cause runtime failures.
-
-### Solution
-
-Validate in constructors and return a typed error; keep the fields private so
-an invalid value cannot be built by literal:
-
-```rust,ignore
-impl SpringDescription {
-    pub fn new(mass: f64, stiffness: f64, damping: f64) -> Result<Self, SimulationError> {
-        let mass = positive(SimulationParameter::Mass, mass)?.sqrt();
-        let stiffness = positive(SimulationParameter::Stiffness, stiffness)?.sqrt();
-        let damping = positive(SimulationParameter::Damping, damping)?;
-        Self::from_omega_zeta(stiffness / mass, damping / 2.0 / stiffness / mass)
-    }
-}
-```
-
-A panicking constructor is kept only for constants
-(`SpringDescription::with_damping_ratio`), documented under `# Panics`.
-
-### Boundary Guarantees
-
-Curves guarantee exact boundary values:
-
-```rust
-impl Curve for ElasticInCurve {
-    fn transform(&self, t: f64) -> f64 {
-        let t = t.clamp(0.0, 1.0);
-        if t == 0.0 { return 0.0; }
-        if t == 1.0 { return 1.0; }
-        // ... elastic formula
-    }
-}
-```
-
----
-
-## Summary
-
-| Pattern | Problem | Solution |
-|---------|---------|----------|
-| Persistent Object | Hooks don't work for animations | Long-lived objects with explicit lifecycle |
-| Composition | Inheritance doesn't fit Rust | Wrap via `Arc<dyn Animation>` |
-| Builder | Many optional parameters | Fluent builder with immediate validation |
-| Extension Trait | API bloat | Optional fluent methods via traits |
-| Type Erasure | Uniform handling | `Arc<dyn Animation<T>>` |
-| Callback | Change notification | `Arc<dyn Fn + Send + Sync>` |
-| Disposal | Resource cleanup | Explicit `dispose()` with guard |
-| Validated Construction | Invalid parameters | Assert in constructors, guarantee boundaries |
+A presentation owns one `MotionClock`, which produces `FrameTick` values for
+its Vsync registry. Manual controllers accept `Duration`. Playback rates are
+validated values; applying a new rate samples the previous segment first to
+preserve local-time continuity. A paused presentation can admit a deterministic
+step without starting continuous frame demand.

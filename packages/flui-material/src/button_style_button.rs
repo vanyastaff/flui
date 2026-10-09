@@ -77,8 +77,6 @@
 //! which fires independently of this type's rebuild — see `ink_well.rs`)
 //! keep resolving it fresh.
 
-use std::sync::Arc;
-
 use flui_sdk::foundation::{Listenable, ListenerId};
 use flui_sdk::painting::Color;
 use flui_sdk::painting::TextStyle;
@@ -240,7 +238,7 @@ impl ViewState<ButtonStyleButtonCore> for ButtonStyleButtonCoreState {
             .update(WidgetState::Disabled, !self.initially_enabled);
 
         let rebuild_for_listener = rebuild.clone();
-        self.states_listener = Some(self.states.add_listener(Arc::new(move || {
+        self.states_listener = Some(self.states.add_listener(std::rc::Rc::new(move || {
             rebuild_for_listener.schedule(flui_sdk::view::RebuildReason::StateChange);
         })));
 

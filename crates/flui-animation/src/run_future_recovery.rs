@@ -1,11 +1,11 @@
 //! Consumer-visible continuation ownership and terminal waiter recovery.
-use flui_scheduler::ticker::TickerFuture;
+use super::AnimationRunFuture;
 use std::future::Future;
 use std::io::Read;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
 use std::time::{Duration, Instant};
 
@@ -37,7 +37,7 @@ fn waker(calls: &Arc<AtomicUsize>, action: impl Fn() + Send + Sync + 'static) ->
         _retirement: None,
     }))
 }
-fn register(future: &mut TickerFuture, waker: &Waker) {
+fn register(future: &mut AnimationRunFuture, waker: &Waker) {
     assert!(
         Pin::new(future)
             .poll(&mut Context::from_waker(waker))
@@ -53,7 +53,7 @@ fn assert_failure(result: std::thread::Result<()>, expected: &str) {
     flui_foundation::panic::retain_opaque_payload(payload);
 }
 fn assert_next_run() {
-    let (completer, mut future) = TickerFuture::pending();
+    let (completer, mut future) = AnimationRunFuture::pending();
     let calls = Arc::new(AtomicUsize::new(0));
     let wake = waker(&calls, || {});
     register(&mut future, &wake);
@@ -66,7 +66,7 @@ fn assert_next_run() {
 }
 
 fn competing_payloads(mode: &str) {
-    let (completer, mut future) = TickerFuture::pending();
+    let (completer, mut future) = AnimationRunFuture::pending();
     let drops = Arc::new(AtomicUsize::new(0));
     let secondary_drops = Arc::clone(&drops);
     let tail = Arc::new(AtomicUsize::new(0));
@@ -119,7 +119,8 @@ fn captured_callback_failure(resolved: bool) {
     let drops = Arc::new(AtomicUsize::new(0));
     let captures = (Bomb(Arc::clone(&drops)), Bomb(Arc::clone(&drops)));
     if resolved {
-        let future = TickerFuture::canceled();
+        let (completer, future) = AnimationRunFuture::pending();
+        completer.cancel().deliver();
         assert_failure(
             catch_unwind(AssertUnwindSafe(|| {
                 future.when_complete_or_cancel(move |outcome| {
@@ -131,7 +132,7 @@ fn captured_callback_failure(resolved: bool) {
             "callback body",
         );
     } else {
-        let (completer, future) = TickerFuture::pending();
+        let (completer, future) = AnimationRunFuture::pending();
         future.when_complete_or_cancel(move |_| {
             let _keep = &captures;
             panic!("callback body");
@@ -146,7 +147,7 @@ fn captured_callback_failure(resolved: bool) {
 }
 
 fn ordinary_capture_retirement_keeps_the_tail_live() {
-    let (completer, future) = TickerFuture::pending();
+    let (completer, future) = AnimationRunFuture::pending();
     let drops = Arc::new(AtomicUsize::new(0));
     let capture = Bomb(Arc::clone(&drops));
     future.when_complete_or_cancel(move |_| {
@@ -167,7 +168,7 @@ fn ordinary_capture_retirement_keeps_the_tail_live() {
 }
 
 fn waiter_failure_keeps_later_waiters_live(primary: bool, retirement: bool) {
-    let (completer, mut first) = TickerFuture::pending();
+    let (completer, mut first) = AnimationRunFuture::pending();
     let mut later = first.clone();
     if primary {
         first.when_complete_or_cancel(|_| panic!("primary continuation"));
@@ -221,7 +222,7 @@ fn hostile_waker_captures_are_retained(unwinding: bool) {
             panic!("hostile waker failure");
         }
     }
-    let (completer, mut first) = TickerFuture::pending();
+    let (completer, mut first) = AnimationRunFuture::pending();
     let mut later = first.clone();
     let drops = Arc::new(AtomicUsize::new(0));
     let hostile = Waker::from(Arc::new(HostileWake {
@@ -258,7 +259,7 @@ fn hostile_waker_captures_are_retained(unwinding: bool) {
 }
 
 fn independent_replaced_and_dropped_waiters() {
-    let (completer, mut first) = TickerFuture::pending();
+    let (completer, mut first) = AnimationRunFuture::pending();
     let mut second = first.clone();
     let mut dropped = first.clone();
     let old_calls = Arc::new(AtomicUsize::new(0));
@@ -300,15 +301,17 @@ fn independent_replaced_and_dropped_waiters() {
 }
 
 fn inline_wake_can_poll_and_drop_its_future() {
-    let (completer, future) = TickerFuture::pending();
-    let holder = Arc::new(Mutex::new(Some(future)));
-    let target = Arc::clone(&holder);
+    thread_local! {
+        static FUTURE: std::cell::RefCell<Option<AnimationRunFuture>> = const { std::cell::RefCell::new(None) };
+    }
+    let (completer, future) = AnimationRunFuture::pending();
+    FUTURE.with(|slot| *slot.borrow_mut() = Some(future));
+    let owner_thread = std::thread::current().id();
     let calls = Arc::new(AtomicUsize::new(0));
     let wake = waker(&calls, move || {
-        let mut future = target
-            .lock()
-            .expect("future holder")
-            .take()
+        assert_eq!(owner_thread, std::thread::current().id());
+        let mut future = FUTURE
+            .with(|slot| slot.borrow_mut().take())
             .expect("live future");
         assert_eq!(
             Pin::new(&mut future).poll(&mut Context::from_waker(Waker::noop())),
@@ -316,43 +319,37 @@ fn inline_wake_can_poll_and_drop_its_future() {
         );
         drop(future);
     });
-    register(
-        holder
-            .lock()
-            .expect("future holder")
-            .as_mut()
-            .expect("live future"),
-        &wake,
-    );
+    FUTURE.with(|slot| register(slot.borrow_mut().as_mut().expect("live future"), &wake));
     completer.complete().deliver();
     assert_eq!(calls.load(Ordering::Relaxed), 1);
-    assert!(holder.lock().expect("future holder").is_none());
+    FUTURE.with(|slot| assert!(slot.borrow().is_none()));
     assert_next_run();
 }
 
 fn replaced_waker_retirement_can_reenter_registration() {
+    thread_local! {
+        static FUTURE: std::cell::RefCell<Option<AnimationRunFuture>> = const { std::cell::RefCell::new(None) };
+    }
     struct RegisterOnDrop {
-        future: Arc<Mutex<Option<TickerFuture>>>,
+        owner_thread: std::thread::ThreadId,
         calls: Arc<AtomicUsize>,
     }
     impl Drop for RegisterOnDrop {
         fn drop(&mut self) {
-            let mut future = self
-                .future
-                .lock()
-                .expect("nested future")
-                .take()
+            assert_eq!(self.owner_thread, std::thread::current().id());
+            let mut future = FUTURE
+                .with(|slot| slot.borrow_mut().take())
                 .expect("live nested future");
             register(&mut future, Waker::noop());
             drop(future);
             self.calls.fetch_add(1, Ordering::Relaxed);
         }
     }
-    let (completer, mut future) = TickerFuture::pending();
-    let holder = Arc::new(Mutex::new(Some(future.clone())));
+    let (completer, mut future) = AnimationRunFuture::pending();
+    FUTURE.with(|slot| *slot.borrow_mut() = Some(future.clone()));
     let retired = Arc::new(AtomicUsize::new(0));
     let capture = RegisterOnDrop {
-        future: Arc::clone(&holder),
+        owner_thread: std::thread::current().id(),
         calls: Arc::clone(&retired),
     };
     let calls = Arc::new(AtomicUsize::new(0));
@@ -363,25 +360,28 @@ fn replaced_waker_retirement_can_reenter_registration() {
     drop(old);
     register(&mut future, Waker::noop());
     assert_eq!(retired.load(Ordering::Relaxed), 1);
-    assert!(holder.lock().expect("nested future").is_none());
+    FUTURE.with(|slot| assert!(slot.borrow().is_none()));
     completer.complete().deliver();
     assert_next_run();
 }
 
-fn publication_and_registration_race() {
-    for _ in 0..32 {
-        let (completer, mut future) = TickerFuture::pending();
-        let barrier = Arc::new(std::sync::Barrier::new(2));
-        let worker_barrier = Arc::clone(&barrier);
-        let worker = std::thread::spawn(move || {
-            worker_barrier.wait();
-            completer.cancel().deliver();
-        });
+fn publication_and_registration_orderings() {
+    for publish_first in [false, true] {
+        let (completer, mut future) = AnimationRunFuture::pending();
         let calls = Arc::new(AtomicUsize::new(0));
         let wake = waker(&calls, || {});
-        barrier.wait();
+        let mut completer = Some(completer);
+        if publish_first {
+            completer
+                .take()
+                .expect("unpublished outcome")
+                .cancel()
+                .deliver();
+        }
         let initial = Pin::new(&mut future).poll(&mut Context::from_waker(&wake));
-        worker.join().expect("resolver");
+        if let Some(completer) = completer {
+            completer.cancel().deliver();
+        }
         if initial.is_pending() {
             assert_eq!(calls.load(Ordering::Relaxed), 1);
         }
@@ -410,7 +410,7 @@ impl tracing::Subscriber for PanickingSubscriber {
 }
 fn telemetry_failure_stays_secondary() {
     tracing::subscriber::with_default(PanickingSubscriber, || {
-        let (completer, future) = TickerFuture::pending();
+        let (completer, future) = AnimationRunFuture::pending();
         let tail = Arc::new(AtomicUsize::new(0));
         let tail_calls = Arc::clone(&tail);
         future.when_complete_or_cancel(|_| panic!("primary continuation"));
@@ -427,7 +427,7 @@ fn telemetry_failure_stays_secondary() {
 }
 
 #[test]
-fn ticker_future_delivery_recovery() {
+fn run_delivery_recovery() {
     let cases: &[(&str, fn())] = &[
         ("complete payload competition", || {
             competing_payloads("complete");
@@ -482,8 +482,8 @@ fn ticker_future_delivery_recovery() {
             replaced_waker_retirement_can_reenter_registration,
         ),
         (
-            "publication registration race",
-            publication_and_registration_race,
+            "publication registration orderings",
+            publication_and_registration_orderings,
         ),
         ("telemetry competition", telemetry_failure_stays_secondary),
     ];
@@ -501,7 +501,7 @@ fn ticker_future_delivery_recovery() {
             std::process::Command::new(std::env::current_exe().expect("test executable"))
                 .args([
                     "--exact",
-                    "ticker_future_recovery::ticker_future_delivery_recovery",
+                    "run_future::recovery_tests::run_delivery_recovery",
                     "--nocapture",
                 ])
                 .env("FLUI_TICKER_RECOVERY_CASE", name)

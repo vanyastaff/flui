@@ -30,7 +30,6 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController, Curves};
@@ -164,7 +163,7 @@ impl BackGestureController {
         } else {
             PopPacing::Curved {
                 duration: DROPPED_SWIPE_DURATION,
-                curve: Arc::new(Curves::FastEaseInToSlowEaseOut), // see `PopPacing`'s doc (binding.rs) — same erased easing-curve boundary
+                curve: Rc::new(Curves::FastEaseInToSlowEaseOut), // see `PopPacing`'s doc (binding.rs) — same erased easing-curve boundary
             }
         };
 
@@ -409,10 +408,10 @@ impl BackGestureRuntime {
             return;
         }
         let navigator = self.navigator.clone();
-        match navigator.local_post_frame_handle() {
+        match navigator.post_frame_handle() {
             Some(post_frame) => {
                 let deferred = navigator.clone();
-                let schedule_result = post_frame.schedule_local(move |_timing| {
+                let schedule_result = post_frame.schedule(move |_timing| {
                     if deferred.is_mounted() {
                         deferred.did_stop_user_gesture();
                     }
@@ -523,8 +522,8 @@ impl AnimatedView for BackGestureDetector {
     /// `poll_settle` fire promptly: every tick of a gesture-driven release
     /// animation renotifies this same controller, which reschedules this
     /// `ViewState`'s `build`.
-    fn listenable(&self) -> Arc<dyn Listenable> {
-        Arc::new(self.controller.clone()) as Arc<dyn Listenable>
+    fn listenable(&self) -> std::rc::Rc<dyn Listenable> {
+        Rc::new(self.controller.clone()) as std::rc::Rc<dyn Listenable>
     }
 }
 

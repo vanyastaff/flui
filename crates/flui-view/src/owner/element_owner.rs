@@ -252,7 +252,6 @@ pub struct ElementOwner<'a> {
 
     /// The binding's owner-local post-frame capability, threaded into every
     /// `BuildCtx` the same way `post_frame_handle` is.
-    pub(crate) local_post_frame_handle: &'a Option<flui_scheduler::LocalPostFrameHandle>,
 
     /// The binding's IME/text-input attach-detach capability, threaded into
     /// every `BuildCtx` the same way `post_frame_handle` is.

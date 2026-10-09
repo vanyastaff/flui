@@ -45,7 +45,7 @@
 //! | flip the destination offstage | [`ModalHandle::set_offstage`] via the navigator's modal registry |
 //! | a route becomes top | `Notification::TopChanged`, delivered outside the history lock |
 //! | offstage ⇒ `animation.value == 1.0` | the `ModalRoute` animation proxies |
-//! | measure after the frame | [`LocalPostFrameHandle`] |
+//! | measure after the frame | [`PostFrameHandle`] |
 //! | the callback runs *after* layout commits | `UpdateScheduler::drive_frame` |
 //! | the destination's page subtree | [`RouteSubtree`] |
 //! | the subtree's committed size | `PipelineOwner::box_size` |
@@ -86,7 +86,7 @@
 //! `hero_flight.rs`.
 //!
 //! [`ModalHandle::set_offstage`]: super::modal_route::ModalHandle::set_offstage
-//! [`LocalPostFrameHandle`]: flui_scheduler::LocalPostFrameHandle
+//! [`PostFrameHandle`]: flui_scheduler::PostFrameHandle
 //! [`RouteSubtree`]: super::subtree::RouteSubtree
 
 // A `Navigator` now auto-attaches a `HeroController` in production, so the
@@ -241,7 +241,7 @@ pub struct HeroController {
     /// One per tag that both routes share and that measured to a finite rect.
     manifests: Terminal<Arc<TerminalVec<HeroFlightManifest>>>,
     /// One flight per tag in the air.
-    flights: Terminal<Arc<FlightManager>>,
+    flights: Terminal<Rc<FlightManager>>,
     /// The fallback rect-tween factory for heroes that set none of their own.
     /// `None` = linear.
     default_rect_factory: Terminal<Option<RectTweenFactory>>,
@@ -326,7 +326,7 @@ impl HeroController {
     }
 
     /// The flights currently in the air.
-    pub(crate) fn flights(&self) -> &Arc<FlightManager> {
+    pub(crate) fn flights(&self) -> &Rc<FlightManager> {
         &self.flights
     }
 
@@ -421,7 +421,7 @@ impl HeroController {
         // the destination offstage forever: nothing else ever calls
         // `set_offstage(false)`, because the only caller is the measurement we just
         // failed to schedule. Acquire, then mutate.
-        let Some(post_frame) = navigator.local_post_frame_handle() else {
+        let Some(post_frame) = navigator.post_frame_handle() else {
             return;
         };
 
@@ -429,12 +429,12 @@ impl HeroController {
         // independent capture must retain itself after another capture fails.
         let measurements = Terminal::new(Arc::clone(&self.measurements));
         let manifests = Terminal::new(Arc::clone(&self.manifests));
-        let flights = Terminal::new(Arc::clone(&self.flights));
+        let flights = Terminal::new(Rc::clone(&self.flights));
         let default_rect_factory = Terminal::new(self.default_rect_factory.clone());
         let measured_destination = Terminal::new(destination.clone());
         let navigator = Terminal::new(navigator);
         let source = Terminal::new(source);
-        let schedule_result = post_frame.schedule_local(move |_timing| {
+        let schedule_result = post_frame.schedule(move |_timing| {
             let pass = MeasurementPass {
                 navigator: &navigator,
                 source: &source,
@@ -487,7 +487,7 @@ struct MeasurementPass<'a> {
     /// than a programmatic push/pop — threaded into every
     /// [`HeroFlightManifest`] and used to filter heroes that did not opt in.
     is_user_gesture_transition: bool,
-    flights: &'a Arc<FlightManager>,
+    flights: &'a Rc<FlightManager>,
     /// The controller-level `create_rect_tween` fallback, used for a hero that set
     /// none of its own.
     default_rect_factory: &'a Option<RectTweenFactory>,
@@ -562,7 +562,7 @@ impl MeasurementPass<'_> {
         // end-of-frame, before any of them can finish. Same handle the pass itself was
         // scheduled through, so it targets the binding's scheduler.
         self.flights
-            .set_post_frame(self.navigator.local_post_frame_handle());
+            .set_post_frame(self.navigator.post_frame_handle());
 
         let mut started = RetiredValues(self.collect_manifests());
         for matched in &started.0 {
@@ -611,7 +611,7 @@ impl MeasurementPass<'_> {
                 .unwrap_or_else(|| ArcCurve::new(curve.flipped()));
             curved.with_reverse_curve(reverse_curve)
         };
-        let animation: Arc<dyn Animation<f64>> = Arc::new(curved);
+        let animation: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(curved);
 
         // The destination hero's factory wins, then the controller's default, then
         // linear.

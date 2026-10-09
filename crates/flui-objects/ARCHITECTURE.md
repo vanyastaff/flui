@@ -21,6 +21,18 @@ recorded so far.
 
 ## Mapping decisions
 
+### Floating-header snap subscriptions follow the attached controller
+
+Both floating-header modes retain their current invalidation handle while
+attached. Replacing or withdrawing a snap controller removes the outgoing
+value subscription and installs the replacement outside controller borrows.
+Detach withdraws the invalidation handle before removing the current listener;
+the widget continues to own cancellation and controller retirement.
+`harness_swapping_the_snap_controller_moves_the_layout_listener` tests initial
+absence, replacement, withdrawal and detach through complete render frames
+for both floating and floating-pinned headers. The frame's layout telemetry
+distinguishes callbacks from an outgoing controller from the new controller.
+
 ### Hidden layout retention does not imply accessibility retention
 
 `RenderVisibility` lays its child out even when hidden. Its child participates

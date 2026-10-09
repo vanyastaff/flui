@@ -19,6 +19,22 @@ stamps it. `trybuild_ui::ui_tests` pins E0277 for both local-state types' thread
 bounds, E0624 for depth minting and E0308 for raw-integer stamping, alongside
 valid local-state constructors and an opaque-depth forwarding caller.
 
+Binding local state acquires its rebuild handle and writer source together.
+Every bound mutation checks the presentation's write admission before changing
+the value or invoking an update closure. A refused build write reports the
+existing owner-context error and creates no rebuild debt. The binding is
+snapshotted before checking or scheduling, so neither a frame hook nor a
+diagnostic executes while its slot is borrowed. Unbound construction remains
+mutable. `bound_local_state_refuses_build_mutation_then_recovers` pins refusal,
+unchanged values and a later admitted rebuild through a mounted widget.
+
+An admitted StateHandle update can mutate its value before panicking. The
+borrow is released before scheduling that committed value, and the shared
+PanicRecovery preserves the update failure over a competing frame-hook failure.
+`a_panicking_local_update_rebuilds_its_committed_value` pins the next frame and
+the next healthy mutation. As with other containment seams, an opaque updater
+whose captures double-panic during its own unwind can abort before recovery.
+
 ### Clean widget frames report no builds
 
 The binding's draw-frame entry clears build telemetry even when no build work is pending.

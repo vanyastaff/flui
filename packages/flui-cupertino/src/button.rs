@@ -42,14 +42,13 @@
 //!   the resolved text style is not wired here (no icon-bearing V1 consumer).
 
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::Duration;
 
 use flui_sdk::animation::ext::AnimatableExt;
 
 use flui_sdk::animation::{
-    Animation, AnimationController, CurvedAnimation, Curves, FloatTween, TickerFuture,
-    UpdateScheduler, Vsync, VsyncRegistration,
+    Animation, AnimationController, AnimationRunFuture, CurvedAnimation, Curves, DrivenController,
+    FloatTween,
 };
 use flui_sdk::geometry::EdgeInsets;
 use flui_sdk::painting::Alignment;
@@ -388,7 +387,7 @@ fn resolve_foreground_color(
     }
 }
 
-/// Starts the press-in fade on tap, returning the run's [`TickerFuture`] so
+/// Starts the press-in fade on tap, returning the run's [`AnimationRunFuture`] so
 /// the caller can chain the release fade onto it — `None` if it did not
 /// start a run at all. Extracted from the `on_tap` closure so "does a tap
 /// with `pressed_opacity: None` actually start the controller" is
@@ -404,10 +403,10 @@ fn start_press_fade(
     controller: &AnimationController,
     pressed_opacity: Option<f64>,
     rebuild: Option<&RebuildHandle>,
-) -> Option<TickerFuture> {
+) -> Option<AnimationRunFuture> {
     pressed_opacity?;
-    let curve: Arc<dyn flui_sdk::animation::Curve + Send + Sync> =
-        Arc::new(Curves::EaseInOutCubicEmphasized);
+    let curve: Rc<dyn flui_sdk::animation::Curve + Send + Sync> =
+        std::rc::Rc::new(Curves::EaseInOutCubicEmphasized);
     let outcome = controller.animate_to_curved(1.0, Some(K_FADE_OUT_DURATION), curve);
     if let Err(error) = &outcome {
         tracing::debug!(?error, "CupertinoButton press fade failed to start");
@@ -425,19 +424,19 @@ fn start_press_fade(
 /// unit test proves "the release starts exactly once per tap" without
 /// mounting a render tree.
 ///
-/// Chained on `press_fade`'s own [`TickerFuture`] (ADR-0064), not a status
+/// Chained on `press_fade`'s own [`AnimationRunFuture`] (ADR-0064), not a status
 /// listener: a status listener has no way to tell "the press fade just
 /// landed" from "the release fade just landed" now that direction is chosen
 /// by the method (`animate_to_curved` reports `Completed` at BOTH ends,
 /// issue #1171) — a listener watching `Completed` unconditionally
 /// re-triggers itself once the release it started lands. Chaining off the
 /// return of the leg just started is one-shot, unlike a persistent listener.
-fn chain_release_fade(controller: &AnimationController, press_fade: TickerFuture) {
+fn chain_release_fade(controller: &AnimationController, press_fade: AnimationRunFuture) {
     let release_controller = controller.clone();
     press_fade.when_complete_or_cancel(move |outcome| {
         if outcome.is_ok() {
-            let curve: Arc<dyn flui_sdk::animation::Curve + Send + Sync> =
-                Arc::new(Curves::EaseOutCubic);
+            let curve: Rc<dyn flui_sdk::animation::Curve + Send + Sync> =
+                std::rc::Rc::new(Curves::EaseOutCubic);
             if let Err(error) =
                 release_controller.animate_to_curved(0.0, Some(K_FADE_IN_DURATION), curve)
             {
@@ -453,9 +452,7 @@ pub struct CupertinoButtonState {
     /// `None` when there is no ambient [`VsyncScope`] — see the module doc's
     /// press-fade section; the button still responds to taps, it just has no
     /// clock to animate the fade against.
-    controller: Option<AnimationController>,
-    vsync: Option<Vsync>,
-    registration: Option<VsyncRegistration>,
+    controller: Option<DrivenController>,
     rebuild: Option<RebuildHandle>,
 }
 
@@ -473,8 +470,6 @@ impl StatefulView for CupertinoButton {
     fn create_state(&self) -> Self::State {
         CupertinoButtonState {
             controller: None,
-            vsync: None,
-            registration: None,
             rebuild: None,
         }
     }
@@ -487,21 +482,18 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
         // never from `build` itself).
         self.rebuild = Some(ctx.rebuild_handle());
 
-        let Some(vsync) = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()) else {
-            // No ambient VsyncScope: no clock to animate the fade against.
-            // Tapping still fires the handler with no visible fade — the same
-            // degrade `flui-material`'s `ink_well` documents for its own
-            // `VsyncScope`-less case.
-            return;
-        };
+        self.controller = Some(
+            AnimationController::builder(Duration::from_millis(200))
+                .build_on(VsyncScope::maybe_of(ctx).as_ref()),
+        );
+    }
 
-        let controller =
-            AnimationController::new(Duration::from_millis(200), &UpdateScheduler::new());
-        let registration = vsync.register(controller.clone());
-
-        self.controller = Some(controller);
-        self.vsync = Some(vsync);
-        self.registration = Some(registration);
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        if let Some(controller) = self.controller.as_mut()
+            && let Err(error) = controller.rebind(VsyncScope::maybe_of(ctx).as_ref())
+        {
+            tracing::error!(%error, "CupertinoButton lost its frame registry");
+        }
     }
 
     fn build(&self, view: &CupertinoButton, ctx: &dyn BuildContext) -> impl IntoView {
@@ -556,19 +548,19 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
 
         let decorated = DecoratedBox::new(decoration).child(Padding::new(padding).child(content));
 
-        let opacity: Arc<dyn Animation<f64>> = match &self.controller {
+        let opacity: std::rc::Rc<dyn Animation<f64>> = match &self.controller {
             Some(controller) => {
                 let pressed_opacity = view.pressed_opacity.unwrap_or(1.0);
-                let curved = Arc::new(CurvedAnimation::new(
-                    Arc::new(controller.clone()) as Arc<dyn Animation<f64>>,
+                let curved = std::rc::Rc::new(CurvedAnimation::new(
+                    Rc::new(controller.controller().clone()) as std::rc::Rc<dyn Animation<f64>>,
                     Curves::Decelerate,
                 ));
-                Arc::new(
+                std::rc::Rc::new(
                     FloatTween::new(1.0, pressed_opacity)
-                        .animate(curved as Arc<dyn Animation<f64>>),
+                        .animate(curved as std::rc::Rc<dyn Animation<f64>>),
                 )
             }
-            None => Arc::new(flui_sdk::animation::ConstantAnimation::new(1.0)),
+            None => std::rc::Rc::new(flui_sdk::animation::ConstantAnimation::new(1.0)),
         };
 
         // The button role is applied unconditionally, not gated on `enabled`
@@ -581,7 +573,10 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
         let mut gesture_detector = GestureDetector::new();
         if enabled {
             if let Some(on_pressed) = view.on_pressed.clone() {
-                let controller = self.controller.clone();
+                let controller = self
+                    .controller
+                    .as_ref()
+                    .map(|owner| owner.controller().clone());
                 let rebuild = self.rebuild.clone();
                 let pressed_opacity = view.pressed_opacity;
                 gesture_detector = gesture_detector.on_tap(move |cx| {
@@ -603,11 +598,6 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
     }
 
     fn dispose(&mut self) {
-        if let (Some(vsync), Some(registration)) = (self.vsync.take(), self.registration.take()) {
-            vsync.unregister(&registration);
-        }
-        if let Some(controller) = self.controller.take() {
-            controller.dispose();
-        }
+        self.controller.take();
     }
 }

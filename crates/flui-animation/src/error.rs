@@ -9,11 +9,9 @@
 ///
 /// ```
 /// use flui_animation::{AnimationController, AnimationError};
-/// use flui_scheduler::UpdateScheduler;
 /// use std::time::Duration;
 ///
-/// let scheduler = UpdateScheduler::new();
-/// let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
+/// let controller = AnimationController::builder(Duration::from_millis(300)).build();
 ///
 /// // Dispose the controller
 /// controller.dispose();
@@ -33,13 +31,15 @@ pub enum AnimationError {
     #[error("AnimationController has been disposed")]
     Disposed,
 
+    /// This controller permanently consumed its run or sample identities.
+    /// New runs refuse before mutation; a final admitted run may still finish.
+    #[error("AnimationController identities exhausted")]
+    IdentityExhausted,
+
     /// Invalid animation bounds, or an invalid `repeat`/`repeat_with` range,
     /// were provided.
     ///
-    /// Returned by [`with_bounds`](crate::AnimationController::with_bounds)/
-    /// [`without_ticker_bounds`](crate::AnimationController::without_ticker_bounds)/
-    /// [`with_detached_ticker_bounds`](crate::AnimationController::with_detached_ticker_bounds)
-    /// and [`AnimationControllerBuilder::bounds`](crate::builder::AnimationControllerBuilder::bounds)
+    /// Returned by [`ValueRange::new`](crate::ValueRange::new)
     /// unless both bounds are finite, `lower_bound < upper_bound`, AND
     /// `upper_bound - lower_bound` itself fits in `f64` — two finite
     /// endpoints do not by themselves make a finite range
@@ -54,13 +54,6 @@ pub enum AnimationError {
     /// is still non-finite.
     #[error("Invalid animation bounds: {0}")]
     InvalidBounds(String),
-
-    /// Ticker is not available.
-    ///
-    /// This error occurs when the animation system cannot obtain
-    /// a ticker for frame synchronization.
-    #[error("Ticker not available")]
-    TickerNotAvailable,
 
     /// Invalid spring configuration for fling animation.
     ///
@@ -77,7 +70,7 @@ pub enum AnimationError {
     ///
     /// `NaN` is always refused — there is no finite value to repair toward.
     /// A `+-inf` input is refused only when the bound it would clamp to is
-    /// itself non-finite (an [`unbounded`](crate::AnimationController::unbounded)-family
+    /// itself non-finite (an [`unbounded`](crate::AnimationControllerBuilder::unbounded)
     /// controller); on a bounded controller it clamps to that bound instead
     /// (the "go to the end" idiom).
     ///

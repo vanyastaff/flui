@@ -141,3 +141,155 @@ pub(crate) fn writer_source_from_init_state_writes_and_rebuilds_the_reader() {
     let report = binding.build_owner_mut().last_frame_build_report();
     assert_eq!(report.count(RebuildReason::SignalChange), 1, "{report:?}");
 }
+
+#[derive(Clone, StatefulView)]
+struct LocalStateProbe {
+    count: flui_view::StateCell<u32>,
+    items: flui_view::StateHandle<Vec<u32>>,
+    attempted: Rc<Cell<bool>>,
+    callbacks: Rc<Cell<usize>>,
+    reads: Rc<RefCell<Vec<(u32, usize)>>>,
+}
+
+struct LocalStateProbeState {
+    count: flui_view::StateCell<u32>,
+    items: flui_view::StateHandle<Vec<u32>>,
+}
+
+impl StatefulView for LocalStateProbe {
+    type State = LocalStateProbeState;
+    fn create_state(&self) -> Self::State {
+        LocalStateProbeState {
+            count: self.count.clone(),
+            items: self.items.clone(),
+        }
+    }
+}
+
+impl ViewState<LocalStateProbe> for LocalStateProbeState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.count.bind(ctx);
+        self.items.bind(ctx);
+    }
+    fn build(&self, view: &LocalStateProbe, _ctx: &dyn BuildContext) -> impl IntoView {
+        if !view.attempted.replace(true) {
+            self.count.set(9);
+            self.count.update(|value| {
+                view.callbacks.set(view.callbacks.get() + 1);
+                value + 1
+            });
+            self.items.update(|items| {
+                view.callbacks.set(view.callbacks.get() + 1);
+                items.push(9);
+            });
+        }
+        view.reads
+            .borrow_mut()
+            .push((self.count.get(), self.items.with(Vec::len)));
+        Leaf
+    }
+}
+
+pub(crate) fn bound_local_state_refuses_build_mutation_then_recovers() {
+    let count = flui_view::StateCell::new(0);
+    let items = flui_view::StateHandle::new(Vec::new());
+    let callbacks = Rc::new(Cell::new(0));
+    let reads = Rc::new(RefCell::new(Vec::new()));
+    let root = LocalStateProbe {
+        count: count.clone(),
+        items: items.clone(),
+        attempted: Rc::new(Cell::new(false)),
+        callbacks: callbacks.clone(),
+        reads: reads.clone(),
+    };
+    let mut binding = HeadlessBinding::new();
+    binding.mount_root(
+        &root,
+        MountOwners::fresh(),
+        MountOptions::tight(100.0, 100.0),
+    );
+    binding.pump_frame(FRAME);
+    assert_eq!(
+        count.get(),
+        0,
+        "a refused build write leaves the accepted value intact"
+    );
+    assert_eq!(items.with(Vec::len), 0);
+    assert_eq!(
+        callbacks.get(),
+        0,
+        "refusal precedes invoking the mutation closure"
+    );
+    assert_eq!(*reads.borrow(), [(0, 0)], "refusal creates no rebuild debt");
+
+    count.set(5);
+    items.update(|items| items.push(5));
+    binding.pump_frame(FRAME);
+    assert_eq!(
+        *reads.borrow(),
+        [(0, 0), (5, 1)],
+        "a later admitted mutation rebuilds once"
+    );
+}
+
+pub(crate) fn a_panicking_local_update_rebuilds_its_committed_value() {
+    for competing_wake_failure in [false, true] {
+        let count = flui_view::StateCell::new(0);
+        let items = flui_view::StateHandle::new(Vec::new());
+        let reads = Rc::new(RefCell::new(Vec::new()));
+        let root = LocalStateProbe {
+            count,
+            items: items.clone(),
+            attempted: Rc::new(Cell::new(true)),
+            callbacks: Rc::new(Cell::new(0)),
+            reads: reads.clone(),
+        };
+        let mut binding = HeadlessBinding::new();
+        let wake_failure = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let wake_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut owners = MountOwners::fresh();
+        let armed = wake_failure.clone();
+        let calls = wake_calls.clone();
+        owners.build_owner.set_on_build_scheduled(move || {
+            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            assert!(
+                !armed.load(std::sync::atomic::Ordering::SeqCst),
+                "frame request failed"
+            );
+        });
+        binding.mount_root(&root, owners, MountOptions::tight(100.0, 100.0));
+        binding.pump_frame(FRAME);
+        let initial_wakes = wake_calls.load(std::sync::atomic::Ordering::SeqCst);
+        wake_failure.store(competing_wake_failure, std::sync::atomic::Ordering::SeqCst);
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            items.update(|items| {
+                items.push(5);
+                panic!("local update failed after commit");
+            });
+        }))
+        .expect_err("the original update failure is propagated");
+        assert_eq!(
+            failure.downcast_ref::<&str>(),
+            Some(&"local update failed after commit")
+        );
+        assert_eq!(
+            wake_calls.load(std::sync::atomic::Ordering::SeqCst),
+            initial_wakes + 1,
+            "the committed update attempts its frame wake even after failure"
+        );
+        wake_failure.store(false, std::sync::atomic::Ordering::SeqCst);
+        binding.pump_frame(FRAME);
+        assert_eq!(
+            *reads.borrow(),
+            [(0, 0), (0, 1)],
+            "the committed edit remains deliverable after failure"
+        );
+        items.update(|items| items.push(6));
+        binding.pump_frame(FRAME);
+        assert_eq!(
+            *reads.borrow(),
+            [(0, 0), (0, 1), (0, 2)],
+            "the next update remains usable"
+        );
+    }
+}

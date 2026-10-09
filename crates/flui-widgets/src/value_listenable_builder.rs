@@ -187,9 +187,11 @@ impl<T: 'static> ValueListenableBuilderState<T> {
             .handle
             .clone()
             .expect("BUG: subscribe() called before init_state populated handle");
-        let listener_id = self.value_listenable.add_listener(Arc::new(move || {
-            handle.schedule(flui_view::RebuildReason::StateChange);
-        }));
+        let listener_id = self
+            .value_listenable
+            .add_listener(std::rc::Rc::new(move || {
+                handle.schedule(flui_view::RebuildReason::StateChange);
+            }));
         self.listener_id = Some(listener_id);
     }
 }

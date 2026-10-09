@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use flui_interaction::InteractionDispatchHandle;
 use flui_platform_api::{Clipboard, Storage};
-use flui_scheduler::{AsyncDriver, ClockSource, LocalPostFrameHandle, WeakUpdateScheduler};
+use flui_scheduler::{AsyncDriver, ClockSource, PostFrameHandle, WeakUpdateScheduler};
 use flui_view::GlobalKeyScope;
 
 use super::{UiCommandSender, UiRuntime};
@@ -16,7 +16,7 @@ use crate::presentation::{PresentationState, PresentationWindow, RuntimeCapabili
 pub struct PresentationFactory {
     global_key_scope: GlobalKeyScope,
     async_driver: AsyncDriver,
-    local_post_frame_handle: LocalPostFrameHandle,
+    post_frame_handle: PostFrameHandle,
     interaction_dispatch_handle: InteractionDispatchHandle,
     scheduler: WeakUpdateScheduler,
     wake: Arc<dyn Fn() + Send + Sync>,
@@ -41,7 +41,7 @@ impl UiRuntime {
         PresentationFactory {
             global_key_scope: self.global_key_scope.clone(),
             async_driver: self.owner_frame.async_driver(),
-            local_post_frame_handle: self.owner_frame.local_post_frame_handle(),
+            post_frame_handle: self.owner_frame.post_frame_handle(),
             interaction_dispatch_handle: self.interaction_lane.dispatch_handle(),
             scheduler: self.scheduler.downgrade(),
             wake: Arc::clone(&self.wake),
@@ -80,7 +80,7 @@ impl PresentationFactory {
             RuntimeCapabilities {
                 global_key_scope: self.global_key_scope.clone(),
                 async_driver: self.async_driver.clone(),
-                local_post_frame_handle: self.local_post_frame_handle.clone(),
+                post_frame_handle: self.post_frame_handle.clone(),
                 interaction_dispatch_handle: self.interaction_dispatch_handle.clone(),
                 scheduler: &scheduler,
                 wake: Arc::clone(&self.wake),

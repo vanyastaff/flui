@@ -357,15 +357,14 @@ impl Harness {
     }
 
     /// The owner-local post-frame handle the UI runtime installed on this tree's
-    /// `BuildOwner`, so a test can `schedule_local` a callback that captures
-    /// the (`!Send`) [`PipelineCell`] — `add_post_frame_callback`'s `Send`
-    /// bound cannot carry it.
-    pub fn local_post_frame_handle(&mut self) -> flui_scheduler::LocalPostFrameHandle {
+    /// `BuildOwner`, so a test can `schedule` a callback that captures
+    /// the (`!Send`) [`PipelineCell`] on its owning thread.
+    pub fn post_frame_handle(&mut self) -> flui_scheduler::PostFrameHandle {
         self.host
             .ui_runtime()
             .ui_runtime()
             .widgets()
-            .with_build_owner(|owner| owner.local_post_frame_handle().cloned())
+            .with_build_owner(|owner| owner.post_frame_handle().cloned())
             .expect("the ui_runtime installs an owner-local post-frame handle")
     }
 

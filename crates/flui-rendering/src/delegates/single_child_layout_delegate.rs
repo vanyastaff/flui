@@ -48,7 +48,7 @@ use crate::constraints::BoxConstraints;
 ///     }
 /// }
 /// ```
-pub trait SingleChildLayoutDelegate: Send + Sync + Debug {
+pub trait SingleChildLayoutDelegate: Debug {
     /// Get the size of the parent for the given constraints.
     ///
     /// Called during layout to determine the parent's size.

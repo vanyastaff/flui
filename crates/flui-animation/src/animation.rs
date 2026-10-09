@@ -3,12 +3,16 @@
 use crate::status::AnimationStatus;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerId};
 use std::fmt;
-use std::sync::Arc;
+use std::rc::Rc;
 
 /// Callback for animation status changes.
 ///
 /// Called when an animation's status changes (e.g., from Forward to Completed).
-pub type StatusCallback = Arc<dyn Fn(AnimationStatus) + Send + Sync>;
+pub type StatusCallback = Rc<dyn Fn(AnimationStatus)>;
+
+/// Internal status relay borrowing the enclosing delivery's recovery context.
+#[doc(hidden)]
+pub type StatusObserver = Rc<dyn Fn(AnimationStatus, &mut Retirement)>;
 
 /// The direction an animation is running.
 ///
@@ -46,9 +50,10 @@ impl AnimationDirection {
 ///
 /// * `T` - The type of value this animation produces (e.g., `f64`, `Color`, `Size`)
 ///
-/// # Thread Safety
+/// # Ownership
 ///
-/// All animations must be thread-safe (`Send + Sync`).
+/// Animation values and callbacks belong to the UI owner. Implementations may
+/// capture `Rc` state; cross-thread producers use the owner's wake or IO edge.
 ///
 /// # Examples
 ///
@@ -65,9 +70,9 @@ impl AnimationDirection {
 ///     }
 /// }
 /// ```
-pub trait Animation<T>: Listenable + Send + Sync + fmt::Debug
+pub trait Animation<T>: Listenable + fmt::Debug
 where
-    T: Clone + Send + Sync + 'static,
+    T: Clone + 'static,
 {
     /// Returns the current value of the animation.
     fn value(&self) -> T;
@@ -79,6 +84,16 @@ where
     ///
     /// Returns a listener ID that can be used to remove the listener later.
     fn add_status_listener(&self, callback: StatusCallback) -> ListenerId;
+
+    /// Register a framework relay in this animation's status channel.
+    #[doc(hidden)]
+    fn add_status_observer(&self, observer: StatusObserver) -> ListenerId {
+        self.add_status_listener(Rc::new(move |status| {
+            let mut recovery = Retirement::new();
+            recovery.run_with(|recovery| observer(status, recovery));
+            recovery.finish();
+        }))
+    }
 
     /// Remove a status listener.
     fn remove_status_listener(&self, id: ListenerId);
@@ -123,15 +138,13 @@ where
 /// the subscription is reference-counted here and torn down exactly once, on the
 /// final drop — never while a sibling clone is still alive.
 pub(crate) struct ParentSubscription {
-    // `Mutex<Option<…>>` makes the `Send`-only teardown closure `Sync` so the
-    // enclosing combinator stays `Send + Sync`; the closure runs once, on drop.
-    teardown: parking_lot::Mutex<Option<Box<dyn FnMut() + Send>>>,
+    teardown: std::cell::RefCell<Option<Box<dyn FnMut()>>>,
 }
 
 impl ParentSubscription {
-    pub(crate) fn new(teardown: impl FnMut() + Send + 'static) -> Arc<Self> {
-        Arc::new(Self {
-            teardown: parking_lot::Mutex::new(Some(Box::new(teardown))),
+    pub(crate) fn new(teardown: impl FnMut() + 'static) -> Rc<Self> {
+        Rc::new(Self {
+            teardown: std::cell::RefCell::new(Some(Box::new(teardown))),
         })
     }
 }
@@ -152,7 +165,7 @@ impl Drop for ParentSubscription {
 
 impl ParentSubscription {
     pub(crate) fn detach(&self, retirement: &mut Retirement) {
-        let teardown = self.teardown.lock().take();
+        let teardown = self.teardown.borrow_mut().take();
         if let Some(teardown) = teardown {
             let mut teardown = Terminal::new(teardown);
             retirement.run(|| (teardown.get_mut())());
@@ -225,59 +238,67 @@ impl<T> Drop for Terminal<T> {
 }
 
 /// Keeps failure priority explicit while subscription detachments continue.
-pub(crate) struct Retirement {
-    incoming: bool,
-    first: Option<Box<dyn std::any::Any + Send>>,
+pub(crate) use flui_foundation::panic::PanicRecovery as Retirement;
+
+/// The last combinator owner withdraws both channels before detaching parents.
+pub(crate) struct ParentLinks {
+    pub(crate) parent: Terminal<Rc<dyn Animation<f64>>>,
+    pub(crate) notifier: Terminal<Rc<ChangeNotifier>>,
+    pub(crate) status_notifier: Terminal<Rc<flui_foundation::Notifier<AnimationStatus>>>,
+    value_sub: Terminal<Rc<ParentSubscription>>,
+    status_sub: Terminal<Rc<ParentSubscription>>,
 }
 
-impl Retirement {
-    pub(crate) fn new() -> Self {
-        Self {
-            incoming: std::thread::panicking(),
-            first: None,
-        }
+impl ParentLinks {
+    pub(crate) fn new(
+        parent: Rc<dyn Animation<f64>>,
+        map: impl Fn(AnimationStatus) -> AnimationStatus + 'static,
+    ) -> Rc<Self> {
+        let parent = Terminal::new(parent);
+        let notifier = Rc::new(ChangeNotifier::new());
+        let status_notifier = Rc::new(flui_foundation::Notifier::new());
+        let value_sub = link_parent(&parent, &notifier);
+        let status_sub = link_parent_status(&parent, &status_notifier, map);
+        Rc::new(Self {
+            parent,
+            notifier: Terminal::new(notifier),
+            status_notifier: Terminal::new(status_notifier),
+            value_sub: Terminal::new(value_sub),
+            status_sub: Terminal::new(status_sub),
+        })
     }
 
-    pub(crate) fn run(&mut self, action: impl FnOnce()) {
-        self.run_with(|_| action());
-    }
-
-    pub(crate) fn run_with(&mut self, action: impl FnOnce(&mut Self)) {
-        if let Err(payload) =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| action(self)))
-        {
-            if self.incoming || self.first.is_some() {
-                flui_foundation::panic::retain_opaque_payload(payload);
-            } else {
-                self.first = Some(payload);
-            }
-        }
-    }
-
-    pub(crate) fn has_failure(&self) -> bool {
-        self.incoming || self.first.is_some()
-    }
-
-    pub(crate) fn retire<T>(&mut self, value: T) {
-        if self.has_failure() {
-            std::mem::forget(value);
-        } else {
-            self.run(|| drop(value));
-        }
-    }
-
-    pub(crate) fn finish(mut self) {
-        if let Some(payload) = self.first.take() {
-            std::panic::resume_unwind(payload);
-        }
+    pub(crate) fn inherit_failure(&self, recovery: &mut Retirement) {
+        self.notifier.inherit_failure(recovery);
+        self.status_notifier.inherit_failure(recovery);
     }
 }
 
-impl Drop for Retirement {
+impl Drop for ParentLinks {
     fn drop(&mut self) {
-        if let Some(payload) = self.first.take() {
-            flui_foundation::panic::retain_opaque_payload(payload);
+        let mut recovery = Retirement::new();
+        self.inherit_failure(&mut recovery);
+        let parent = self.parent.withdraw();
+        let notifier = self.notifier.withdraw();
+        let statuses = self.status_notifier.withdraw();
+        let value_sub = self.value_sub.withdraw();
+        let status_sub = self.status_sub.withdraw();
+        let values = notifier.dispose_and_take_listeners();
+        let callbacks = statuses.dispose_and_take_callbacks();
+        value_sub.detach(&mut recovery);
+        status_sub.detach(&mut recovery);
+        for callback in values {
+            recovery.retire(Terminal::new(callback));
         }
+        for callback in callbacks {
+            recovery.retire(Terminal::new(callback));
+        }
+        recovery.retire(value_sub);
+        recovery.retire(status_sub);
+        recovery.retire(parent);
+        recovery.retire(notifier);
+        recovery.retire(statuses);
+        recovery.finish();
     }
 }
 
@@ -288,18 +309,34 @@ impl Drop for Retirement {
 /// The parent's callback holds only a `Weak` reference to `notifier`, so the
 /// subscription never keeps the combinator's notifier alive on its own.
 pub(crate) fn link_parent<T>(
-    parent: &Arc<dyn Animation<T>>,
-    notifier: &Arc<ChangeNotifier>,
-) -> Arc<ParentSubscription>
+    parent: &Rc<dyn Animation<T>>,
+    notifier: &Rc<ChangeNotifier>,
+) -> Rc<ParentSubscription>
 where
-    T: Clone + Send + Sync + 'static,
+    T: Clone + 'static,
 {
-    let weak = Arc::downgrade(notifier);
-    let id = parent.add_listener(Arc::new(move || {
+    let weak = Rc::downgrade(notifier);
+    let id = parent.add_observer(Rc::new(move |recovery| {
         if let Some(notifier) = weak.upgrade() {
-            notifier.notify_listeners();
+            notifier.notify_listeners_with_recovery(recovery);
         }
     }));
-    let parent = Arc::clone(parent);
+    let parent = Rc::clone(parent);
     ParentSubscription::new(move || parent.remove_listener(id))
+}
+
+/// Status listeners belong to the wrapper; its parent holds only a weak relay.
+pub(crate) fn link_parent_status<T: Clone + 'static>(
+    parent: &Rc<dyn Animation<T>>,
+    notifier: &Rc<flui_foundation::Notifier<AnimationStatus>>,
+    map: impl Fn(AnimationStatus) -> AnimationStatus + 'static,
+) -> Rc<ParentSubscription> {
+    let weak = Rc::downgrade(notifier);
+    let id = parent.add_status_observer(Rc::new(move |status, recovery| {
+        if let Some(notifier) = weak.upgrade() {
+            notifier.notify_with_recovery(&map(status), recovery);
+        }
+    }));
+    let parent = Rc::clone(parent);
+    ParentSubscription::new(move || parent.remove_status_listener(id))
 }

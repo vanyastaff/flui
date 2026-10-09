@@ -166,7 +166,7 @@ pub type SharedHeaderDelegate = Rc<dyn SliverPersistentHeaderDelegate>; // same 
 /// Sealed by location — implemented here for exactly the four variants; the
 /// pinned/floating *behavior* differences live entirely in the render layer.
 pub trait PersistentHeaderRenderObject:
-    flui_rendering::traits::RenderObject<SliverProtocol> + Send + Sync + 'static
+    flui_rendering::traits::RenderObject<SliverProtocol> + 'static
 {
     /// Construct with the delegate's extents. No cell yet — the element mints
     /// and installs it at mount, because only the element knows the registry

@@ -366,7 +366,7 @@ impl RenderBox for RenderAnimatedOpacity {
         // — see the module docs' *Retargeting* section: a widget-side
         // `set_parent` swap re-fires this same subscription with the new
         // parent's values, so it never needs to move.
-        self.listener_id = Some(self.animation.add_listener(Arc::new(move || {
+        self.listener_id = Some(self.animation.add_listener(std::rc::Rc::new(move || {
             Self::recompute_alpha(&animation, &alpha, &mark_handle);
         })));
 
@@ -385,13 +385,13 @@ impl RenderBox for RenderAnimatedOpacity {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_animation::{AnimationController, UpdateScheduler};
+    use flui_animation::AnimationController;
     use flui_rendering::pipeline::PipelineOwner;
     use flui_rendering::protocol::BoxProtocol;
     use std::time::Duration;
 
     fn controller(ms: u64) -> AnimationController {
-        AnimationController::new(Duration::from_millis(ms), &UpdateScheduler::new())
+        AnimationController::builder(Duration::from_millis(ms)).build()
     }
 
     fn render_at(opacity: f64) -> RenderAnimatedOpacity {
@@ -401,7 +401,7 @@ mod tests {
     fn proxy_at(opacity: f64) -> ProxyAnimation<f64> {
         let c = controller(100);
         c.set_value(opacity);
-        let parent: Arc<dyn Animation<f64>> = Arc::new(c);
+        let parent: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(c);
         ProxyAnimation::new(parent)
     }
 

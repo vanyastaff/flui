@@ -236,6 +236,8 @@ fn text_input_contracts() {
 #[test]
 fn overlay_contracts() {
     common::run_cases(&[
+        ("unmounting_a_hovered_snack_bar_releases_its_timer_pause", snack_bar::unmounting_a_hovered_snack_bar_releases_its_timer_pause),
+        ("snack_bar_display_timer_pauses_while_hovered", snack_bar::snack_bar_display_timer_pauses_while_hovered),
         (
             "snack_bar::a completion panic still advances the accepted snack bar queue",
             snack_bar::a_completion_panic_still_advances_the_accepted_snack_bar_queue,

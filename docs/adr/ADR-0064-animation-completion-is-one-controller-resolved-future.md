@@ -2,6 +2,8 @@
 
 - **Status:** Accepted
 - **Superseded-by:** ADR-0106 (continuation ownership and waiter delivery policy only)
+- **Superseded-by:** ADR-0175 (scheduler ticker surface, run-future placement,
+  names, thread ownership and controller registration lifetime)
 - **Date:** 2026-09-15
 - **Supersedes:** ADR-0020's push-completion mechanism (a status-listener seam in place of a
   `TickerFuture`)

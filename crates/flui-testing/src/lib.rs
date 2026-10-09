@@ -38,7 +38,7 @@
 //!
 //! ### Restart-aware controllers
 //!
-//! A registered [`AnimationController`] is
+//! A registered [`AnimationController`](flui_animation::AnimationController) is
 //! ticked via `tick_at(seconds_since_this_run_started)`. Because a controller
 //! re-zeros its run epoch on every fresh `forward()`/`reverse()`/…, the binding
 //! watches the controller's
@@ -139,7 +139,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_animation::{AnimationController, MotionClock, Vsync};
+use flui_animation::{MotionClock, Vsync};
 use flui_foundation::PresentationId;
 use flui_interaction::ManualClock;
 use flui_interaction::arena::GestureArena;
@@ -301,6 +301,7 @@ struct PresentationClockEntry {
     /// [`Vsync::tick_all`](flui_animation::Vsync::tick_all) wants) without
     /// reaching back through `clock`'s `ClockSource`.
     virtual_clock: ManualClock,
+    motion_clock: std::cell::RefCell<MotionClock>,
 }
 
 impl HeadlessBinding {
@@ -401,8 +402,7 @@ impl HeadlessBinding {
     pub fn install_build_capabilities(&self, build_owner: &mut flui_view::BuildOwner) {
         build_owner.set_lifecycle_handle(self.lifecycle.handle());
         build_owner.set_async_driver(self.owner_frame.async_driver());
-        build_owner.set_post_frame_handle(flui_scheduler::PostFrameHandle::new(&self.scheduler));
-        build_owner.set_local_post_frame_handle(self.owner_frame.local_post_frame_handle());
+        build_owner.set_post_frame_handle(self.owner_frame.post_frame_handle());
         build_owner.set_interaction_dispatch_handle(self.interaction_dispatch_handle());
     }
 
@@ -411,7 +411,7 @@ impl HeadlessBinding {
     /// Harnesses call this around the first `mount_root` + `build_scope`, so a
     /// lifecycle callback runs with the same active interaction lane as it does
     /// during [`pump_frame`](Self::pump_frame). The local post-frame lane needs
-    /// no activation: `LocalPostFrameHandle` addresses its lane directly (a
+    /// no activation: `PostFrameHandle` addresses its lane directly (a
     /// `Weak` pointer, minted once by `install_build_capabilities`), so
     /// scheduling through it works regardless of what is "entered" here.
     pub fn enter_owner_scope<R>(&self, callback: impl FnOnce() -> R) -> R {
@@ -577,9 +577,7 @@ impl HeadlessBinding {
             // scheduler — the one `pump_frame`'s `drive_frame` drains — never
             // some other binding's or ui_runtime's `UpdateScheduler`, which nothing drives
             // headlessly.
-            build_owner
-                .set_post_frame_handle(flui_scheduler::PostFrameHandle::new(&self.scheduler));
-            build_owner.set_local_post_frame_handle(self.owner_frame.local_post_frame_handle());
+            build_owner.set_post_frame_handle(self.owner_frame.post_frame_handle());
             build_owner.set_interaction_dispatch_handle(self.interaction_dispatch_handle());
             self.install_hit_test_capability(&mut build_owner, &pipeline_owner);
         }
@@ -595,20 +593,6 @@ impl HeadlessBinding {
         if self.last_frame_painted {
             self.painted_frame_count = self.painted_frame_count.saturating_add(1);
         }
-    }
-
-    /// Register `controller` with this binding's [`Vsync`] so each
-    /// [`pump_frame`](Self::pump_frame) advances it on the virtual timeline.
-    ///
-    /// The controller is `Clone` (`Arc`-backed); register a clone and keep your
-    /// own handle to drive it (`forward()`, `reverse()`, …). The registry is
-    /// restart-aware: it re-anchors a controller's run on every fresh
-    /// `forward`/`reverse`, so a controller run multiple times stays in sync
-    /// without any binding-side run lifecycle. Convenience for a test that owns
-    /// the controller directly; an implicitly-animated widget instead registers
-    /// through a `VsyncScope` over [`vsync`](Self::vsync).
-    pub fn register_controller(&mut self, controller: AnimationController) {
-        self.vsync.register(controller);
     }
 
     /// The controller registry this binding ticks each frame.
@@ -840,12 +824,11 @@ impl HeadlessBinding {
     /// ```
     /// use std::time::Duration;
     /// use flui_animation::{Animation as _, AnimationController, PlaybackRate};
-    /// use flui_scheduler::UpdateScheduler;
     /// use flui_testing::HeadlessBinding;
     ///
     /// let mut binding = HeadlessBinding::new();
-    /// let controller = AnimationController::new(Duration::from_secs(1), &UpdateScheduler::new());
-    /// binding.vsync().register(controller.clone());
+    /// let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(binding.vsync()));
+    /// let controller = owner.controller();
     /// controller.forward().expect("a fresh controller forwards");
     /// binding.pump_frame(Duration::ZERO);
     ///
@@ -1079,7 +1062,7 @@ impl HeadlessBinding {
             //    seconds elapsed since that run's anchor. The motion clock maps the
             //    virtual elapsed time to animation time (its rate and steps).
             let tick = motion_clock.frame(clock.elapsed());
-            vsync.tick_all(tick.now().as_duration().as_secs_f64());
+            vsync.tick_all(&tick);
 
             // 5-8. THE shared frame ordering:
             //
@@ -1300,7 +1283,7 @@ impl HeadlessBinding {
     /// Register a fresh, independent [`FrameClock`] + [`Vsync`] pair for
     /// `id`. Returns the `Vsync` clone a caller wraps a `VsyncScope` around
     /// for that presentation's own widget subtree (or registers a bare
-    /// [`AnimationController`] into directly).
+    /// [`AnimationController`](flui_animation::AnimationController) into directly).
     ///
     /// Re-registering an already-installed `id` replaces its pair with a
     /// fresh one — any controller registered on the old `Vsync` handle is
@@ -1317,6 +1300,7 @@ impl HeadlessBinding {
                 vsync: vsync.clone(),
                 clock,
                 virtual_clock,
+                motion_clock: std::cell::RefCell::new(MotionClock::new()),
             },
         );
         vsync
@@ -1330,6 +1314,31 @@ impl HeadlessBinding {
         self.presentation_clocks
             .get(&id)
             .map(|entry| entry.vsync.clone())
+    }
+
+    /// Edit one presentation's motion clock without exposing its borrow.
+    /// A step or a resumed rate marks demand on this presentation only.
+    /// Returns `None` when the presentation has no installed clock.
+    pub fn with_presentation_motion_clock<R>(
+        &mut self,
+        id: PresentationId,
+        edit: impl FnOnce(&mut MotionClock) -> R,
+    ) -> Option<R> {
+        let entry = self.presentation_clocks.get(&id)?;
+        let (result, demand) = {
+            let mut clock = entry.motion_clock.borrow_mut();
+            let before = clock.now();
+            let was_paused = clock.is_paused();
+            let result = edit(&mut clock);
+            (
+                result,
+                clock.now() != before || (was_paused && !clock.is_paused()),
+            )
+        };
+        if demand {
+            entry.clock.mark_demand(DemandKind::Animation);
+        }
+        Some(result)
     }
 
     /// Mark direct demand on `id`'s own clock — for scripting a produce with
@@ -1435,9 +1444,12 @@ impl HeadlessBinding {
         });
         entry.clock.advance(dt);
         let now = entry.clock.now();
-        let now_secs = entry.virtual_clock.elapsed().as_secs_f64();
-        let was_running = entry.vsync.has_running();
-        entry.vsync.tick_all(now_secs);
+        let tick = entry
+            .motion_clock
+            .borrow_mut()
+            .frame(entry.virtual_clock.elapsed());
+        let was_running = entry.vsync.has_running() && !entry.motion_clock.borrow().is_paused();
+        entry.vsync.tick_all(&tick);
         if was_running {
             entry.clock.mark_demand(DemandKind::Animation);
         }

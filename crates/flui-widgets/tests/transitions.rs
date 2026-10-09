@@ -9,8 +9,8 @@
 //! `PipelineOwner::transform_to`.
 
 use std::f64::consts::TAU;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use crate::common::{LaidOut, lay_out, loose};
@@ -36,19 +36,19 @@ const SIDE: f64 = 40.0;
 const VALUES: [f64; 3] = [0.25, 0.5, 1.0];
 
 fn controller() -> AnimationController {
-    AnimationController::without_ticker(Duration::from_millis(300))
+    AnimationController::builder(Duration::from_millis(300)).build()
 }
 
-fn scalar(controller: &AnimationController) -> Arc<dyn Animation<f64>> {
-    Arc::new(controller.clone())
+fn scalar(controller: &AnimationController) -> std::rc::Rc<dyn Animation<f64>> {
+    std::rc::Rc::new(controller.clone())
 }
 
 /// `controller` mapped onto `ZERO → end`.
 fn fraction(
     controller: &AnimationController,
     end: TranslationFraction,
-) -> Arc<dyn Animation<TranslationFraction>> {
-    Arc::new(Tween::new(TranslationFraction::ZERO, end).animate(scalar(controller)))
+) -> std::rc::Rc<dyn Animation<TranslationFraction>> {
+    std::rc::Rc::new(Tween::new(TranslationFraction::ZERO, end).animate(scalar(controller)))
 }
 
 fn child_box() -> SizedBox {
@@ -253,9 +253,11 @@ pub(crate) fn shared_controller_moves_both_transitions_on_one_tick() {
 /// paints nothing, a reverse mid-run shows the controller's current value,
 /// and a jump past the end lands on the end value in one frame.
 pub(crate) fn virtual_time_ticks_follow_the_controller_value() {
-    let c = controller();
-    let mut tree = Headless::mount(ScaleTransition::new(scalar(&c), child_box()));
-    tree.binding.register_controller(c.clone());
+    let vsync = flui_animation::Vsync::new();
+    let owner = AnimationController::builder(Duration::from_millis(300)).build_on(Some(&vsync));
+    let c = owner.controller();
+    let mut tree = Headless::mount(ScaleTransition::new(scalar(c), child_box()));
+    tree.binding.adopt_vsync(vsync);
     c.forward().expect("a fresh controller forwards");
     tree.pump(FRAME);
     let report = tree.pump(Duration::from_millis(150));
@@ -415,7 +417,8 @@ pub(crate) fn the_animation_is_released_after_unmount() {
     let c = controller();
     c.set_value(0.5);
     let animation = fraction(&c, TranslationFraction::new(1.0, 0.0));
-    let weak: Weak<dyn Animation<TranslationFraction>> = Arc::downgrade(&animation);
+    let weak: std::rc::Weak<dyn Animation<TranslationFraction>> =
+        std::rc::Rc::downgrade(&animation);
     let mut laid = lay_out(SlideTransition::new(animation, child_box()), loose(200.0));
     assert!(
         weak.upgrade().is_some(),

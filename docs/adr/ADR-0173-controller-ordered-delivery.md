@@ -1,6 +1,7 @@
 # ADR-0173: Controller transitions and run deliveries preserve commit order
 
 - **Status:** Accepted
+- **Superseded-by:** [ADR-0174](ADR-0174-notification-first-failure-custody.md) for the shared notification failure policy and owner-local callback integration.
 - **Date:** 2026-10-08
 - **Related:** [ADR-0064](ADR-0064-animation-completion-is-one-controller-resolved-future.md),
   [ADR-0106](ADR-0106-ticker-continuation-ownership-and-terminal-waiters.md),
@@ -57,9 +58,9 @@ its existing registration walk, then resumes the first failure. Removed, newly
 registered and muted peers retain the existing walk rules. A non-finite frame
 instant is ignored before any registry changes its run anchors.
 
-This changes delivery behavior within the existing controller ownership contract.
-It does not adopt the draft core ownership migration or change the foundation
-notifier's documented logged-listener-failure policy.
+This decision introduced ordered delivery within the controller ownership
+contract. ADR-0174 extends first-failure custody through foundation channels
+and animation relays; it supersedes the earlier logged-listener-failure policy.
 
 ## Alternatives
 
@@ -81,8 +82,8 @@ The existing status panic, removal, disposal and Vsync sibling/child-registry
 tests run in the normal suite. `nan_frame_time_is_skipped` checks anchoring through
 public Vsync. These regressions fail with the production changes reverted.
 
-Callbacks run synchronously on the draining caller. While the current controller
-remains Send + Sync, a concurrent caller may return after admission before another
-caller finishes delivery. This contract is not a global ordering between value
-samples and status callbacks, and does not promise recovery from a double panic
-inside user code before containment regains control.
+Callbacks run synchronously on the UI owner. Reentrant operations commit their
+delivery obligations before returning to the outer drain. This contract is not
+a global ordering between value samples and status callbacks, and does not
+promise recovery from a double panic inside user code before containment
+regains control.

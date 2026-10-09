@@ -202,14 +202,15 @@ mod lifecycle_derivation_tests {
         ui_runtime.widgets().add_observer(observer_handle.clone());
         let scheduler_listener_panicked = Arc::new(AtomicBool::new(false));
         let scheduler_probe = Arc::clone(&scheduler_listener_panicked);
-        let scheduler_listener = ui_runtime
-            .scheduler()
-            .add_lifecycle_state_listener(Arc::new(move |state| {
-                if state == AppLifecycleState::Paused {
-                    scheduler_probe.store(true, Ordering::Release);
-                    panic!("scheduler lifecycle listener panic");
-                }
-            }));
+        let scheduler_listener =
+            ui_runtime
+                .scheduler()
+                .add_lifecycle_state_listener(std::rc::Rc::new(move |state| {
+                    if state == AppLifecycleState::Paused {
+                        scheduler_probe.store(true, Ordering::Release);
+                        panic!("scheduler lifecycle listener panic");
+                    }
+                }));
         let widget_listener_panicked = Arc::new(AtomicBool::new(false));
         let panicking_observer: Arc<dyn WidgetsBindingObserver> = Arc::new(
             PanickingLifecycleObserver(Arc::clone(&widget_listener_panicked)),

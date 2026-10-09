@@ -57,8 +57,6 @@
 //! desktop, where users often click into a field) must show the focused
 //! treatment, not the hovered one.
 
-use std::sync::Arc;
-
 use flui_sdk::foundation::ListenerId;
 use flui_sdk::foundation::notifier::Listenable;
 use flui_sdk::geometry::EdgeInsets;
@@ -451,7 +449,7 @@ impl ViewState<InputDecorator> for InputDecoratorState {
         // ADR-0018: `rebuild_handle()` is acquired here, fired later from the
         // hover-controller listener below — never called from `build`.
         let rebuild = ctx.rebuild_handle();
-        self.hover_listener = Some(self.hover.add_listener(Arc::new(move || {
+        self.hover_listener = Some(self.hover.add_listener(std::rc::Rc::new(move || {
             rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
         })));
     }

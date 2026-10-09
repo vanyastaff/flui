@@ -25,23 +25,20 @@
 //!
 //! ## Persistent Object Pattern
 //!
-//! Animation objects are **persistent** ([`Arc`]-based) and survive widget rebuilds:
+//! Animation objects share owner-local state through [`Rc`] and survive widget rebuilds:
 //!
 //! ```
-//! # use std::sync::Arc;
+//! # use std::rc::Rc;
 //! # use std::time::Duration;
 //! # use flui_animation::{AnimationController, FloatTween, TweenAnimation};
 //! # use flui_scheduler::UpdateScheduler;
 //! # let scheduler = UpdateScheduler::new();
 //! # let tween = FloatTween::new(0.0, 100.0);
 //! // Create once (outside widget build)
-//! let controller = AnimationController::new(
-//!     Duration::from_millis(300),
-//!     &scheduler,
-//! );
+//! let controller = AnimationController::builder(Duration::from_millis(300)).build();
 //!
 //! // Use many times (in widget build); `clone()` shares the controller
-//! let animation = TweenAnimation::new(tween, Arc::new(controller.clone()));
+//! let animation = TweenAnimation::new(tween, Rc::new(controller.clone()));
 //!
 //! // Cleanup when done
 //! controller.dispose();
@@ -57,10 +54,7 @@
 //!
 //! // Create scheduler and controller
 //! let scheduler = UpdateScheduler::new();
-//! let controller = AnimationController::new(
-//!     Duration::from_millis(300),
-//!     &scheduler,
-//! );
+//! let controller = AnimationController::builder(Duration::from_millis(300)).build();
 //!
 //! // Start animation
 //! controller.forward()?;
@@ -86,7 +80,7 @@
 //! [`Curves`]: crate::Curves
 //! [`Tween`]: crate::Tween
 //! [`Listenable`]: flui_foundation::Listenable
-//! [`Arc`]: std::sync::Arc
+//! [`Rc`]: std::rc::Rc
 
 // Every public item is documented; keep it that way.
 #![deny(missing_docs)]
@@ -117,10 +111,10 @@ mod test_cases;
 
 pub mod animation;
 pub mod builder;
-pub mod compound;
 pub mod constant;
 pub mod controller;
 pub mod curved;
+mod driven;
 pub mod error;
 pub mod ext;
 pub mod keyframes;
@@ -128,6 +122,7 @@ pub mod motion;
 pub mod proxy;
 pub mod retarget;
 pub mod reverse;
+mod run_future;
 pub mod simulation;
 pub mod spring;
 pub mod stagger;
@@ -142,11 +137,11 @@ pub mod tween_types;
 
 // Re-exports from animation modules
 pub use animation::{Animation, AnimationDirection, StatusCallback};
-pub use builder::AnimationControllerBuilder;
-pub use compound::{AnimationOperator, CompoundAnimation};
+pub use builder::{AnimationControllerBuilder, ValueRange};
 pub use constant::{ALWAYS_COMPLETE, ALWAYS_DISMISSED, ConstantAnimation};
 pub use controller::AnimationController;
 pub use curved::CurvedAnimation;
+pub use driven::DrivenController;
 pub use error::AnimationError;
 pub use ext::AnimatableExt;
 pub use keyframes::{Keyframes, KeyframesBuilder, KeyframesError};
@@ -154,6 +149,7 @@ pub use motion::{AnimationTime, FrameTick, InvalidPlaybackRate, MotionClock, Pla
 pub use proxy::ProxyAnimation;
 pub use retarget::MotionSpec;
 pub use reverse::ReverseAnimation;
+pub use run_future::{AnimationRunFuture, RunCanceled};
 pub use simulation::{
     BouncingScrollSimulation, BoundedFrictionSimulation, FrictionSimulation, Simulation,
     SimulationBounds, SimulationError, SimulationParameter, SpringDescription, SpringSimulation,
@@ -183,46 +179,6 @@ pub use tween_types::{
     CurveTween, EdgeInsetsTween, FloatTween, IntTween, Matrix4Tween, OffsetTween, RectTween,
     ReverseTween, SizeTween, StepTween, Tween,
 };
-
-// Re-export scheduler types for convenience.
-//
-// `SchedulerBinding` was deleted upstream when scheduler binding methods were
-// inlined onto `UpdateScheduler` (see scheduler.rs section "Binding Methods
-// (formerly on SchedulerBinding trait)"). The animation crate now uses
-// `UpdateScheduler` directly.
-pub use flui_scheduler::ticker::{TickerCanceled, TickerFuture, TickerState};
-pub use flui_scheduler::{
-    BudgetPolicy, FrameBudget, FramePhase, FrameTiming, Priority, TaskQueue, Ticker,
-    TickerCallback, TickerProvider, UpdateScheduler,
-};
-
-/// Prelude module for convenient imports
-pub mod prelude {
-    pub use crate::animation::{Animation, AnimationDirection};
-    pub use crate::builder::AnimationControllerBuilder;
-    pub use crate::compound::{AnimationOperator, CompoundAnimation};
-    pub use crate::constant::{ALWAYS_COMPLETE, ALWAYS_DISMISSED, ConstantAnimation};
-    pub use crate::controller::AnimationController;
-    pub use crate::curve::{Curve, Curves};
-    pub use crate::curved::CurvedAnimation;
-    pub use crate::error::AnimationError;
-    pub use crate::ext::AnimatableExt;
-    pub use crate::proxy::ProxyAnimation;
-    pub use crate::reverse::ReverseAnimation;
-    pub use crate::simulation::{
-        FrictionSimulation, Simulation, SpringDescription, SpringSimulation, SpringType, Tolerance,
-    };
-    pub use crate::status::{AnimationBehavior, AnimationStatus};
-    pub use crate::switch::AnimationSwitch;
-    pub use crate::tween::TweenAnimation;
-    pub use crate::tween_types::{Animatable, Tween};
-
-    // Re-export scheduler types
-    pub use crate::{
-        FrameBudget, FramePhase, Priority, TaskQueue, Ticker, TickerCanceled, TickerFuture,
-        TickerProvider, UpdateScheduler,
-    };
-}
 
 // Every `rust` block in the crate's prose docs compiles as a doctest.
 #[cfg(doctest)]

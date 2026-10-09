@@ -238,15 +238,14 @@ fn perf_a_slide_transition_tick_moves_a_layer_without_rebuilding() {
     use flui_animation::{Animation, AnimationController, Tween};
     use flui_objects::TranslationFraction;
     use flui_widgets::{Align, RepaintBoundary, SlideTransition};
-    use std::sync::Arc;
 
-    let controller = AnimationController::without_ticker(Duration::from_millis(300));
-    let position: Arc<dyn Animation<TranslationFraction>> = Arc::new(
+    let controller = AnimationController::builder(Duration::from_millis(300)).build();
+    let position: std::rc::Rc<dyn Animation<TranslationFraction>> = std::rc::Rc::new(
         Tween::new(
             TranslationFraction::new(-1.0, 0.0),
             TranslationFraction::ZERO,
         )
-        .animate(Arc::new(controller.clone()) as Arc<dyn Animation<f64>>),
+        .animate(std::rc::Rc::new(controller.clone()) as std::rc::Rc<dyn Animation<f64>>),
     );
     let panel = Column::new(
         (0..PANEL_ROWS)

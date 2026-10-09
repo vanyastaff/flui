@@ -3,7 +3,7 @@
 //! [`FlowDelegate`] allows users to implement custom flow layout behavior
 //! with custom constraints and painting transforms.
 
-use std::{any::Any, fmt::Debug, sync::Arc};
+use std::{any::Any, fmt::Debug};
 
 use flui_foundation::Listenable;
 use flui_foundation::Variable;
@@ -68,7 +68,7 @@ use crate::{constraints::BoxConstraints, context::PaintCx};
 ///     }
 /// }
 /// ```
-pub trait FlowDelegate: Send + Sync + Debug {
+pub trait FlowDelegate: Debug {
     /// Get the size of the flow layout for the given constraints.
     ///
     /// # Arguments
@@ -143,7 +143,7 @@ pub trait FlowDelegate: Send + Sync + Debug {
     /// Implementations that return `Some` MUST return the *same* instance
     /// across calls, so the host can unsubscribe on detach / delegate swap.
     /// Defaults to `None`.
-    fn repaint(&self) -> Option<Arc<dyn Listenable>> {
+    fn repaint(&self) -> Option<std::rc::Rc<dyn Listenable>> {
         None
     }
 

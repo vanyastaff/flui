@@ -10,7 +10,7 @@
 //!
 //! Most of these drive the transition by hand with `set_value` — which is
 //! deterministic, and is what makes the status-change handler's four arms
-//! individually testable — rather than by awaiting the `TickerFuture`
+//! individually testable — rather than by awaiting the `AnimationRunFuture`
 //! `did_push` returns (ADR-0064). A handful that need the run to have real,
 //! not-yet-covered distance left (so a `reverse()` cannot collapse
 //! synchronously to `Dismissed`) pump a real `Vsync` instead; those say so.
@@ -73,7 +73,7 @@ fn navigator() -> (NavigatorHandle, Harness) {
 /// Drive a controller to `Completed` (entrance finished).
 ///
 /// `set_value` **cancels** the active run rather than completing its
-/// `TickerFuture` — this helper drives `status`, not the future. A test that
+/// `AnimationRunFuture` — this helper drives `status`, not the future. A test that
 /// needs the future to resolve `Ok(())` through natural completion drives a
 /// real `Vsync` instead.
 fn complete(handle: &TransitionHandle) {
@@ -126,7 +126,7 @@ pub(crate) fn push_transition_parks_the_entry_in_pushing_until_the_controller_co
 }
 
 /// Popping a route while its own entrance is still animating cancels that
-/// push's `TickerFuture` **inside the flush that runs `did_pop`**: `did_pop`
+/// push's `AnimationRunFuture` **inside the flush that runs `did_pop`**: `did_pop`
 /// calls `reverse()`, which — as a run-starting method — displaces and
 /// cancels the still-pending `forward()` run before starting the new one, and
 /// `AnimationController::finish` delivers synchronously, so the continuation
@@ -184,6 +184,50 @@ pub(crate) fn pop_mid_push_cancels_the_push_future_inside_the_flush_and_ends_pop
         navigator_handle.route_state(top),
         Some(RouteLifecycle::Popping),
         "canceled by the pop, but popping — not resurrected to idle"
+    );
+}
+
+pub(crate) fn scope_replacement_moves_an_existing_route_without_restarting_it() {
+    let old = Vsync::new();
+    let new = Vsync::new();
+    let navigator = NavigatorHandle::new();
+    navigator.seed_initial(SimpleRoute::<i32>::new(|_ctx| {
+        SizedBox::new(10.0, 10.0).into_view().boxed()
+    }));
+    let tree = |vsync| VsyncScope::new(vsync, Navigator::new(navigator.clone()));
+    let mut laid = crate::common::lay_out_animated(
+        tree(old.clone()),
+        crate::common::tight(200.0, 200.0),
+        old.clone(),
+    );
+    let (route, animation) = transition("second");
+    navigator.push(route);
+    let controller = animation.controller().expect("installed controller");
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(90));
+    let before = controller.value();
+    assert!(before > 0.0 && before < 1.0);
+
+    laid.pump_widget(tree(new.clone()));
+    assert!(old.is_empty(), "the existing route releases its old clock");
+    assert_eq!(new.len(), 1, "the existing route acquires the new clock");
+    laid.adopt_vsync(new.clone());
+    laid.pump_for(Duration::ZERO);
+    assert_eq!(
+        controller.value(),
+        before,
+        "rebinding preserves the sampled elapsed time"
+    );
+    laid.pump_for(Duration::from_millis(30));
+    assert!(
+        controller.value() > before,
+        "the new clock advances the existing run"
+    );
+
+    laid.pump_widget(SizedBox::shrink());
+    assert!(
+        new.is_empty(),
+        "unmount withdraws the route's registry seat"
     );
 }
 
@@ -251,7 +295,7 @@ pub(crate) fn hopping_route_dropped_without_dispose_frees_proxy() {
         "the replacement starts at a different value while moving: a hop"
     );
 
-    let proxy = Arc::downgrade(&bottom_handle.secondary_animation());
+    let proxy = std::rc::Rc::downgrade(&bottom_handle.secondary_animation());
     drop(middle_controller);
     drop(middle_handle);
     drop(bottom_handle);
@@ -304,7 +348,7 @@ pub(crate) fn dispose_releases_the_controller_slot_before_disposing_it() {
         animation
             .controller()
             .expect("install created the controller")
-            .add_status_listener(Arc::new(move |_| {
+            .add_status_listener(std::rc::Rc::new(move |_| {
                 let _ = &probe;
             }));
         REENTRANT_HANDLE.with(|slot| *slot.borrow_mut() = Some(animation.clone()));

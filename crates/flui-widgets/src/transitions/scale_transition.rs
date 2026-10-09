@@ -1,6 +1,6 @@
 //! [`ScaleTransition`] — animates its child's scale from an [`Animation<f64>`].
 
-use std::sync::Arc;
+use std::rc::Rc;
 
 use flui_animation::{Animation, ProxyAnimation};
 use flui_objects::TransformMotion;
@@ -20,13 +20,13 @@ use super::transform_view::AnimatedTransformView;
 /// untransformed.
 #[derive(Clone, StatefulView)]
 pub struct ScaleTransition {
-    scale: Arc<dyn Animation<f64>>,
+    scale: std::rc::Rc<dyn Animation<f64>>,
     child: BoxedView,
 }
 
 impl ScaleTransition {
     /// A scale driven by `scale`, transforming `child`.
-    pub fn new(scale: Arc<dyn Animation<f64>>, child: impl IntoView) -> Self {
+    pub fn new(scale: std::rc::Rc<dyn Animation<f64>>, child: impl IntoView) -> Self {
         Self {
             scale,
             child: child.into_view().boxed(),
@@ -47,7 +47,7 @@ impl std::fmt::Debug for ScaleTransition {
 #[derive(Debug)]
 pub struct ScaleTransitionState {
     proxy: ProxyAnimation<f64>,
-    scale: Arc<dyn Animation<f64>>,
+    scale: std::rc::Rc<dyn Animation<f64>>,
 }
 
 impl ViewState<ScaleTransition> for ScaleTransitionState {
@@ -63,9 +63,9 @@ impl ViewState<ScaleTransition> for ScaleTransitionState {
     }
 
     fn did_update_view(&mut self, _old_view: &ScaleTransition, new_view: &ScaleTransition) {
-        if !Arc::ptr_eq(&self.scale, &new_view.scale) {
-            self.scale = Arc::clone(&new_view.scale);
-            self.proxy.set_parent(Arc::clone(&new_view.scale));
+        if !Rc::ptr_eq(&self.scale, &new_view.scale) {
+            self.scale = Rc::clone(&new_view.scale);
+            self.proxy.set_parent(Rc::clone(&new_view.scale));
         }
     }
 }
@@ -75,8 +75,8 @@ impl StatefulView for ScaleTransition {
 
     fn create_state(&self) -> Self::State {
         ScaleTransitionState {
-            proxy: ProxyAnimation::new(Arc::clone(&self.scale)),
-            scale: Arc::clone(&self.scale),
+            proxy: ProxyAnimation::new(Rc::clone(&self.scale)),
+            scale: Rc::clone(&self.scale),
         }
     }
 }

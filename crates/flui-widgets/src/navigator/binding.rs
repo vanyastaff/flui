@@ -34,7 +34,7 @@
 //!
 //! **Superseded, `notify_push_completed()` half only (ADR-0064).** A route no
 //! longer raises its own `PushCompleted` command: `AnimationController`'s
-//! run-starting methods now return the `TickerFuture` the entrance transition
+//! run-starting methods now return the `AnimationRunFuture` the entrance transition
 //! ends on, `Route::did_push` hands it out as
 //! [`PushCompletion::Animating`](super::route::PushCompletion::Animating),
 //! and `NavigatorShared::apply` registers a continuation on it directly —
@@ -63,12 +63,13 @@
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::fmt;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use flui_animation::{Animation, AnimationController, AnimationError, Curve, TickerFuture, Vsync};
+use flui_animation::{
+    Animation, AnimationController, AnimationError, AnimationRunFuture, Curve, Vsync,
+};
 use parking_lot::Mutex;
 
 use super::modal_route::ModalHandle;
@@ -83,7 +84,7 @@ use crate::OverlayEntry;
 /// flush's walk, which then re-runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RouteCommand {
-    /// The entrance transition's `TickerFuture` resolved, complete or
+    /// The entrance transition's `AnimationRunFuture` resolved, complete or
     /// canceled alike: `pushing` → `idle`, then re-flush. Raised
     /// by `NavigatorShared::await_push`'s continuation (ADR-0064), not by a
     /// route through this binding.
@@ -92,6 +93,8 @@ pub(crate) enum RouteCommand {
     /// a flush runs unless one is already running.
     Finalize(RouteId),
 }
+
+pub(crate) type ClockRebind = dyn Fn(Option<&Vsync>);
 
 /// What one transition route publishes about itself so the route **below** it can
 /// drive its `secondary_animation`.
@@ -104,19 +107,21 @@ pub(crate) enum RouteCommand {
 /// module is private, so nothing else names it.
 pub struct TransitionPeer {
     /// The route's **primary** animation, controller-backed.
-    pub(super) animation: Option<Arc<dyn Animation<f64>>>,
+    pub(super) animation: Option<std::rc::Rc<dyn Animation<f64>>>,
     /// Whether the route *above* can transition from this one.
     pub can_transition_from: bool,
     /// Which family of routes this one coordinates transitions with.
     pub group: TransitionGroup,
     /// Fires when the route is disposed, so the route below can release its
     /// reference to a gone route's animation.
-    pub(crate) completed: super::lifecycle::Terminal<Arc<CompletedSignal>>,
+    pub(crate) completed: super::lifecycle::Terminal<Rc<CompletedSignal>>,
+    /// Weak owner callback used when the mounted navigator acquires another clock.
+    pub(crate) rebind_clock: Rc<ClockRebind>,
 }
 
 impl TransitionPeer {
     /// Returns the route's primary transition animation.
-    pub fn animation(&self) -> &Arc<dyn Animation<f64>> {
+    pub fn animation(&self) -> &std::rc::Rc<dyn Animation<f64>> {
         self.animation
             .as_ref()
             .expect("BUG: transition peer accessed after retirement")
@@ -129,7 +134,8 @@ impl Clone for TransitionPeer {
             animation: self.animation.clone(),
             can_transition_from: self.can_transition_from,
             group: self.group,
-            completed: super::lifecycle::Terminal::new(Arc::clone(&self.completed)),
+            completed: super::lifecycle::Terminal::new(Rc::clone(&self.completed)),
+            rebind_clock: Rc::clone(&self.rebind_clock),
         }
     }
 }
@@ -225,7 +231,7 @@ impl fmt::Debug for CompletedSignal {
 }
 
 /// `RouteId -> TransitionPeer`, shared by every binding a navigator mints.
-pub(crate) type TransitionRegistry = Arc<super::lifecycle::TerminalMap<RouteId, TransitionPeer>>;
+pub(crate) type TransitionRegistry = Rc<super::lifecycle::TerminalMap<RouteId, TransitionPeer>>;
 
 /// The clock a route's `AnimationController` registers with.
 ///
@@ -236,27 +242,25 @@ pub(crate) type TransitionRegistry = Arc<super::lifecycle::TerminalMap<RouteId, 
 /// transitions freeze when the navigator's binding stops ticking.
 ///
 /// `None` when no `VsyncScope` is above the navigator. There is no wall-clock
-/// fallback: a route's `AnimationController` is built with
-/// [`AnimationController::without_ticker`](flui_animation::AnimationController::without_ticker) —
-/// no scheduler, no ticker at all — so with no `Vsync` to register with, the
-/// controller simply never advances (the same shape `AnimatedSize` uses).
-pub(crate) type RouteVsync = Arc<Mutex<Option<Vsync>>>;
+/// fallback: a route owns a `DrivenController` built on this optional registry.
+/// Missing clocks settle finite runs and park infinite repeats (ADR-0175).
+pub(crate) type RouteVsync = Rc<Mutex<Option<Vsync>>>;
 
 /// `RouteId -> OverlayEntry`, the navigator's map. A route reaches **its own**
 /// entry through it; the entries live on the navigator, not the route
 /// (`overlay_route.rs`).
-pub(crate) type RouteEntries = Arc<super::lifecycle::TerminalMap<RouteId, OverlayEntry>>;
+pub(crate) type RouteEntries = Rc<super::lifecycle::TerminalMap<RouteId, OverlayEntry>>;
 
 /// `RouteId -> RouteSubtreeCell`, the navigator's way to reach a route's page
 /// subtree. FLUI's routes live behind `Box<dyn ErasedRoute>` inside the
 /// history's mutex, so the route publishes its cell into a registry the navigator
 /// owns.
-pub(crate) type RouteSubtrees = Arc<super::lifecycle::TerminalMap<RouteId, RouteSubtreeCell>>;
+pub(crate) type RouteSubtrees = Rc<super::lifecycle::TerminalMap<RouteId, RouteSubtreeCell>>;
 
 /// `RouteId -> ModalHandle`, how the navigator (and the hero controller) set a
 /// route's `offstage`. FLUI's routes are unreachable, so a `ModalRoute`
 /// publishes its handle here at `install()`.
-pub(crate) type RouteModals = Arc<super::lifecycle::TerminalMap<RouteId, ModalHandle>>;
+pub(crate) type RouteModals = Rc<super::lifecycle::TerminalMap<RouteId, ModalHandle>>;
 
 /// How a route's exit transition should run, overriding its own default
 /// reverse pacing for exactly one pop.
@@ -278,7 +282,7 @@ pub(crate) enum PopPacing {
     /// Over a fixed duration along a curve.
     Curved {
         duration: Duration,
-        curve: Arc<dyn Curve + Send + Sync>, // see the type doc — erased easing-curve transform, ADR-0021 §8 shape
+        curve: Rc<dyn Curve + Send + Sync>, // see the type doc — erased easing-curve transform, ADR-0021 §8 shape
     },
     /// A fling settle starting at `velocity` controller units per second.
     Fling { velocity: f64 },
@@ -289,7 +293,7 @@ impl PopPacing {
     pub(crate) fn animate_back(
         self,
         controller: &AnimationController,
-    ) -> Result<TickerFuture, AnimationError> {
+    ) -> Result<AnimationRunFuture, AnimationError> {
         match self {
             Self::Curved { duration, curve } => {
                 controller.animate_back_curved(0.0, Some(duration), curve)
@@ -306,13 +310,13 @@ impl PopPacing {
 /// current). Never a field on the route: a stored field would go stale on a
 /// veto or apply to the wrong pop if a *different* route reached `did_pop`
 /// first (see `navigator.rs`'s `pop_paced`).
-pub(crate) type PopPacingRegistry = Arc<super::lifecycle::TerminalMap<RouteId, PopPacing>>;
+pub(crate) type PopPacingRegistry = Rc<super::lifecycle::TerminalMap<RouteId, PopPacing>>;
 
 /// The queue a [`RouteBinding`] writes to and a `RouteHistory` drains.
 ///
 /// Its own mutex, deliberately: it must be lockable while the history's mutex is
 /// held by an in-progress flush.
-pub(crate) type RouteCommandQueue = Arc<Mutex<VecDeque<RouteCommand>>>;
+pub(crate) type RouteCommandQueue = Rc<Mutex<VecDeque<RouteCommand>>>;
 
 /// The `RouteId`-keyed maps a navigator owns and every binding shares.
 ///
@@ -339,19 +343,19 @@ impl RouteRegistries {
     pub(crate) fn new() -> Self {
         Self {
             closed: AtomicBool::new(false),
-            peers: super::lifecycle::Terminal::new(Arc::new(
+            peers: super::lifecycle::Terminal::new(Rc::new(
                 super::lifecycle::TerminalMap::default(),
             )),
-            entries: super::lifecycle::Terminal::new(Arc::new(
+            entries: super::lifecycle::Terminal::new(Rc::new(
                 super::lifecycle::TerminalMap::default(),
             )),
-            subtrees: super::lifecycle::Terminal::new(Arc::new(
+            subtrees: super::lifecycle::Terminal::new(Rc::new(
                 super::lifecycle::TerminalMap::default(),
             )),
-            modals: super::lifecycle::Terminal::new(Arc::new(
+            modals: super::lifecycle::Terminal::new(Rc::new(
                 super::lifecycle::TerminalMap::default(),
             )),
-            pop_pacing: super::lifecycle::Terminal::new(Arc::new(
+            pop_pacing: super::lifecycle::Terminal::new(Rc::new(
                 super::lifecycle::TerminalMap::default(),
             )),
         }
@@ -419,18 +423,18 @@ impl RouteBinding {
         queue: RouteCommandQueue,
         wake: Rc<dyn Fn()>,
         vsync: RouteVsync,
-        registries: Arc<RouteRegistries>,
+        registries: Rc<RouteRegistries>,
     ) -> Self {
         Self {
             route,
-            queue: Arc::downgrade(&queue),
+            queue: Rc::downgrade(&queue),
             wake: super::lifecycle::Terminal::new(wake),
-            vsync: Arc::downgrade(&vsync),
-            registries: Arc::downgrade(&registries),
+            vsync: Rc::downgrade(&vsync),
+            registries: Rc::downgrade(&registries),
         }
     }
 
-    fn active_registries(&self) -> Option<Arc<RouteRegistries>> {
+    fn active_registries(&self) -> Option<Rc<RouteRegistries>> {
         self.registries
             .upgrade()
             .filter(|owner| !owner.closed.load(Ordering::Acquire))
@@ -601,13 +605,13 @@ impl fmt::Debug for RouteBinding {
 /// [`NavigatorRoute::binding_slot`]: super::overlay_route::NavigatorRoute::binding_slot
 #[derive(Clone, Default)]
 pub struct RouteBindingSlot {
-    inner: Arc<Mutex<Option<RouteBinding>>>,
+    inner: Rc<Mutex<Option<RouteBinding>>>,
     /// The transition family of the framework route that owns this slot, or
     /// `None` for a slot a third-party route constructed itself. Written only
     /// by the crate's `TransitionRoute`, so a route outside this crate cannot
     /// claim to be a pageless popup: a `Navigator` under a `Router` admits a
     /// route only when this reads `Some(TransitionGroup::Default)`.
-    group: Arc<Mutex<Option<TransitionGroup>>>,
+    group: Rc<Mutex<Option<TransitionGroup>>>,
 }
 
 impl RouteBindingSlot {

@@ -508,7 +508,7 @@ pub trait RenderView: Clone + 'static + Sized {
 
     /// The RenderObject type this View creates.
     /// Must implement RenderObject<Self::Protocol> for RenderTree storage.
-    type RenderObject: flui_rendering::traits::RenderObject<Self::Protocol> + Send + Sync + 'static;
+    type RenderObject: flui_rendering::traits::RenderObject<Self::Protocol> + 'static;
 
     /// Create a new RenderObject.
     ///

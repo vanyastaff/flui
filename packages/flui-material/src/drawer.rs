@@ -54,12 +54,10 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::Arc;
+
 use std::time::Duration;
 
-use flui_sdk::animation::{
-    Animation, AnimationController, AnimationStatus, UpdateScheduler, Vsync, VsyncRegistration,
-};
+use flui_sdk::animation::{Animation, AnimationController, AnimationStatus, DrivenController};
 use flui_sdk::foundation::Listenable;
 use flui_sdk::geometry::Radius;
 use flui_sdk::interaction::GestureEndReason;
@@ -550,8 +548,6 @@ impl std::fmt::Debug for DrawerController {
 /// [`GlobalKey`] bridge and `ViewState` lifecycle both operate on.
 struct DrawerControllerCore {
     controller: AnimationController,
-    vsync: RefCell<Option<Vsync>>,
-    vsync_registration: RefCell<Option<VsyncRegistration>>,
     rebuild: RefCell<Option<RebuildHandle>>,
     /// Starts `false` regardless of the controller's initial value (a
     /// drawer that starts open still fires one on-changed(true) the first
@@ -655,6 +651,7 @@ impl DrawerControllerCore {
 /// State for a [`DrawerController`] — see [`DrawerHandle`] for how
 /// `crate::Scaffold` reaches this from outside the tree via [`GlobalKey`].
 pub struct DrawerControllerState {
+    controller: DrivenController,
     core: Rc<DrawerControllerCore>,
     writer: Option<WriterSource>,
 }
@@ -688,22 +685,21 @@ impl StatefulView for DrawerController {
     type State = DrawerControllerState;
 
     fn create_state(&self) -> Self::State {
-        let controller = AnimationController::new(BASE_SETTLE_DURATION, &UpdateScheduler::new());
+        let controller = AnimationController::builder(BASE_SETTLE_DURATION).build_on(None);
         if self.is_open {
-            controller.set_value(1.0);
+            controller.controller().set_value(1.0);
         }
         DrawerControllerState {
             writer: None,
             core: Rc::new(DrawerControllerCore {
-                controller,
-                vsync: RefCell::new(None),
-                vsync_registration: RefCell::new(None),
+                controller: controller.controller().clone(),
                 rebuild: RefCell::new(None),
                 previously_opened: Cell::new(false),
                 alignment: Cell::new(self.alignment),
                 panel_width: Cell::new(self.panel_width),
                 on_open_changed: RefCell::new(None),
             }),
+            controller,
         }
     }
 }
@@ -714,15 +710,7 @@ impl ViewState<DrawerController> for DrawerControllerState {
         let rebuild = ctx.rebuild_handle();
         let _prev = self.core.rebuild.borrow_mut().replace(rebuild.clone());
 
-        // No dependency: the vsync handle never changes for this
-        // controller's life (same reasoning `GestureDetectorState::init_state`
-        // documents for its own ambient-arena lookup).
-        let vsync = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone());
-        if let Some(vsync) = &vsync {
-            let registration = vsync.register(self.core.controller.clone());
-            *self.core.vsync_registration.borrow_mut() = Some(registration);
-        }
-        let _prev = std::mem::replace(&mut *self.core.vsync.borrow_mut(), vsync);
+        self.did_change_dependencies(ctx);
 
         // One listener pair covers every path that must rebuild: a value
         // tick (drag `set_value`, or a fling/forward settling frame-by-frame)
@@ -733,15 +721,21 @@ impl ViewState<DrawerController> for DrawerControllerState {
         // reaching some threshold, so there is no intermediate frame where
         // the panel is visible at a stale, already-open-looking position.
         let rebuild_for_value = rebuild.clone();
-        self.core.controller.add_listener(Arc::new(move || {
+        self.core.controller.add_listener(std::rc::Rc::new(move || {
             rebuild_for_value.schedule(flui_sdk::view::RebuildReason::AnimationTick);
         }));
         let rebuild_for_status = rebuild;
         self.core
             .controller
-            .add_status_listener(Arc::new(move |_status| {
+            .add_status_listener(std::rc::Rc::new(move |_status| {
                 rebuild_for_status.schedule(flui_sdk::view::RebuildReason::AnimationTick);
             }));
+    }
+
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        if let Err(error) = self.controller.rebind(VsyncScope::maybe_of(ctx).as_ref()) {
+            tracing::error!(%error, "Drawer lost its frame registry");
+        }
     }
 
     fn did_update_view(&mut self, old_view: &DrawerController, new_view: &DrawerController) {
@@ -802,13 +796,7 @@ impl ViewState<DrawerController> for DrawerControllerState {
     fn dispose(&mut self) {
         self.core.replace_callback(None);
         self.writer = None;
-        if let (Some(vsync), Some(registration)) = (
-            self.core.vsync.borrow_mut().take(),
-            self.core.vsync_registration.borrow_mut().take(),
-        ) {
-            vsync.unregister(&registration);
-        }
-        self.core.controller.dispose();
+        self.controller.dispose();
     }
 }
 

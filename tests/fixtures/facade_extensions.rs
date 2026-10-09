@@ -35,7 +35,7 @@ impl CustomPainter for RectanglePainter {
         self
     }
 
-    fn repaint(&self) -> Option<Arc<dyn flui::foundation::Listenable>> {
+    fn repaint(&self) -> Option<Rc<dyn flui::foundation::Listenable>> {
         None
     }
 
@@ -195,7 +195,7 @@ fn gesture_recognizer_uses_headless_virtual_time() {
 
 #[test]
 fn pointer_input_schedules_a_widget_rebuild() {
-    let changed = Arc::new(flui::foundation::ChangeNotifier::new());
+    let changed = Rc::new(flui::foundation::ChangeNotifier::new());
     let value = Arc::new(AtomicUsize::new(0));
     let builds = Arc::new(AtomicUsize::new(0));
     let read = value.clone();
@@ -355,8 +355,8 @@ fn downstream_custom_recognizer_competes_in_the_arena() {
 
 use flui::view::{
     AsyncDriver, BoxedTask, BudgetPercentage, FrameDuration, FramePhase, FrameTiming, Instant,
-    InvalidDurationConfig, LocalPostFrameHandle, LocalPostFrameScheduleError, Microseconds,
-    Milliseconds, PostFrameHandle, Seconds, TaskToken,
+    InvalidDurationConfig, Microseconds, Milliseconds, PostFrameHandle, PostFrameScheduleError,
+    Seconds, TaskToken,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -367,7 +367,6 @@ struct LifecycleCapabilities {
     task: Option<TaskToken>,
     pending: Option<TaskToken>,
     post_frame: Option<PostFrameHandle>,
-    local_post_frame: Option<LocalPostFrameHandle>,
 }
 
 #[derive(Clone, StatefulView)]
@@ -421,7 +420,6 @@ impl ViewState<CapabilityView> for CapabilityState {
     fn init_state(&mut self, context: &dyn LifecycleContext) {
         let driver: AsyncDriver = context.async_driver().expect("bound async driver");
         let post_frame: PostFrameHandle = context.post_frame_handle().expect("post-frame handle");
-        let local: LocalPostFrameHandle = context.local_post_frame_handle().expect("local handle");
         let done = self.0.completed.clone();
         let task: BoxedTask = Box::pin(async move {
             done.fetch_add(1, Ordering::SeqCst);
@@ -432,13 +430,15 @@ impl ViewState<CapabilityView> for CapabilityState {
             dropped: self.0.pending_dropped.clone(),
         }));
         let shared = self.0.shared_callback.clone();
-        post_frame.schedule(move |timing: &FrameTiming| {
-            inspect_timing(timing);
-            shared.fetch_add(1, Ordering::SeqCst);
-        });
+        post_frame
+            .schedule(move |timing: &FrameTiming| {
+                inspect_timing(timing);
+                shared.fetch_add(1, Ordering::SeqCst);
+            })
+            .expect("live owner");
         let callbacks = self.0.callbacks.clone();
-        let scheduled: Result<(), LocalPostFrameScheduleError> =
-            local.schedule_local(move |timing: &FrameTiming| {
+        let scheduled: Result<(), PostFrameScheduleError> =
+            post_frame.schedule(move |timing: &FrameTiming| {
                 inspect_timing(timing);
                 callbacks.borrow_mut().push("local");
             });
@@ -448,7 +448,6 @@ impl ViewState<CapabilityView> for CapabilityState {
             task: Some(token),
             pending: Some(pending),
             post_frame: Some(post_frame),
-            local_post_frame: Some(local),
         };
     }
     fn build(&self, _: &CapabilityView, _: &dyn BuildContext) -> impl IntoView {
@@ -475,7 +474,6 @@ fn lifecycle_capabilities_are_named_and_run_through_the_facade() {
     let capabilities = view.capabilities.borrow();
     assert!(capabilities.task.is_some());
     assert!(capabilities.post_frame.is_some());
-    assert!(capabilities.local_post_frame.is_some());
     let pending = capabilities.pending.as_ref().expect("retained token");
     pending.cancel();
     assert!(pending.is_cancelled());

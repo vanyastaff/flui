@@ -5,45 +5,10 @@ use crate::animation::{
 };
 use crate::status::AnimationStatus;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
-use parking_lot::{Mutex, RwLock};
+use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::fmt;
-use std::sync::Arc;
-
-/// Proxy-owned status-listener registry.
-///
-/// Status listeners must be owned by the proxy (not delegated to the current
-/// parent): after `set_parent`, listeners registered on the old parent would
-/// be orphaned there and `remove_status_listener` would target the new parent
-/// with a foreign id. A single forwarder per parent fans out to this registry
-/// and is migrated on every swap.
-struct StatusListeners {
-    listeners: Vec<(ListenerId, StatusCallback)>,
-    next_id: usize,
-}
-
-impl StatusListeners {
-    fn new() -> Self {
-        Self {
-            listeners: Vec::new(),
-            // Listener ids start at 1 so a zero id can never collide.
-            next_id: 1,
-        }
-    }
-}
-
-/// Snapshot-then-fire so user callbacks run without the registry lock held
-/// (a callback may re-enter add/remove_status_listener).
-fn fan_out_status(listeners: &Mutex<StatusListeners>, status: AnimationStatus) {
-    let snapshot: Vec<Terminal<StatusCallback>> = listeners
-        .lock()
-        .listeners
-        .iter()
-        .map(|(_, cb)| Terminal::new(Arc::clone(cb)))
-        .collect();
-    for cb in snapshot {
-        cb(status);
-    }
-}
+use std::rc::Rc;
 
 /// An animation that can be hot-swapped for another animation.
 ///
@@ -56,59 +21,80 @@ fn fan_out_status(listeners: &Mutex<StatusListeners>, status: AnimationStatus) {
 /// ```
 /// use flui_animation::{ProxyAnimation, AnimationController, Animation};
 /// use flui_scheduler::UpdateScheduler;
-/// use std::sync::Arc;
+/// use std::rc::Rc;
 /// use std::time::Duration;
 ///
 /// let scheduler = UpdateScheduler::new();
-/// let controller1 = Arc::new(AnimationController::new(
-///     Duration::from_millis(300),
-///     &scheduler,
-/// ));
+/// let controller1 = Rc::new(AnimationController::builder(Duration::from_millis(300)).build());
 ///
-/// let proxy = ProxyAnimation::new(controller1.clone() as Arc<dyn Animation<f64>>);
+/// let proxy = ProxyAnimation::new(controller1.clone() as Rc<dyn Animation<f64>>);
 ///
 /// // Later, swap to a different animation
-/// let controller2 = Arc::new(AnimationController::new(
-///     Duration::from_millis(500),
-///     &scheduler,
-/// ));
-/// proxy.set_parent(controller2 as Arc<dyn Animation<f64>>);
+/// let controller2 = Rc::new(AnimationController::builder(Duration::from_millis(500)).build());
+/// proxy.set_parent(controller2 as Rc<dyn Animation<f64>>);
 /// ```
 #[derive(Clone)]
 pub struct ProxyAnimation<T>
 where
-    T: Clone + Send + Sync + 'static,
+    T: Clone + 'static,
 {
-    inner: Arc<ProxyOwner<T>>,
+    inner: Rc<ProxyOwner<T>>,
 }
 
-struct ProxyOwner<T: Clone + Send + Sync + 'static> {
-    parent: RwLock<Terminal<Arc<dyn Animation<T>>>>,
-    notifier: Terminal<Arc<ChangeNotifier>>,
-    parent_sub: RwLock<Terminal<Arc<ParentSubscription>>>,
-    status_listeners: Terminal<Arc<Mutex<StatusListeners>>>,
-    status_sub: RwLock<Terminal<Arc<ParentSubscription>>>,
+struct ProxyOwner<T: Clone + 'static> {
+    parent: RefCell<Terminal<Rc<dyn Animation<T>>>>,
+    notifier: Terminal<Rc<ChangeNotifier>>,
+    parent_sub: RefCell<Terminal<Rc<ParentSubscription>>>,
+    status_listeners: Terminal<Rc<flui_foundation::Notifier<AnimationStatus>>>,
+    status_sub: RefCell<Terminal<Rc<ParentSubscription>>>,
+    delivering: Cell<bool>,
+    pending: RefCell<VecDeque<ProxyDelivery<T>>>,
+    retired: RefCell<
+        Vec<Terminal<Rc<flui_foundation::notifier_generic::NotificationCallback<AnimationStatus>>>>,
+    >,
 }
 
-impl<T: Clone + Send + Sync + 'static> Drop for ProxyOwner<T> {
+enum ProxyDelivery<T: Clone + 'static> {
+    Retire {
+        parent: Terminal<Rc<dyn Animation<T>>>,
+        previous: Terminal<Rc<dyn Animation<T>>>,
+        value_sub: Terminal<Rc<ParentSubscription>>,
+        status_sub: Terminal<Rc<ParentSubscription>>,
+    },
+    Value,
+    Status(AnimationStatus, Vec<ListenerId>),
+}
+
+impl<T: Clone + 'static> Drop for ProxyOwner<T> {
     fn drop(&mut self) {
+        let mut retirement = Retirement::new();
+        self.notifier.inherit_failure(&mut retirement);
+        self.status_listeners.inherit_failure(&mut retirement);
         let parent = self.parent.get_mut().withdraw();
         let notifier = self.notifier.withdraw();
         let value_sub = self.parent_sub.get_mut().withdraw();
         let status_sub = self.status_sub.get_mut().withdraw();
         let listeners = self.status_listeners.withdraw();
-        let callbacks: Vec<_> = std::mem::take(&mut listeners.lock().listeners)
-            .into_iter()
-            .map(|(_, callback)| Terminal::new(callback))
-            .collect();
-        let mut retirement = Retirement::new();
+        let pending = self.pending.get_mut().drain(..).collect::<Vec<_>>();
+        let retired = std::mem::take(self.retired.get_mut());
+        let callbacks = listeners.dispose_and_take_callbacks();
+        let value_callbacks = notifier.dispose_and_take_listeners();
         value_sub.detach(&mut retirement);
         status_sub.detach(&mut retirement);
         retirement.retire(value_sub);
         retirement.retire(status_sub);
         retirement.retire(parent);
+        for delivery in pending {
+            retirement.retire(delivery);
+        }
+        for callback in retired {
+            retirement.retire(callback);
+        }
         for callback in callbacks {
             retirement.retire(callback);
+        }
+        for callback in value_callbacks {
+            retirement.retire(Terminal::new(callback));
         }
         retirement.retire(listeners);
         retirement.retire(notifier);
@@ -116,44 +102,9 @@ impl<T: Clone + Send + Sync + 'static> Drop for ProxyOwner<T> {
     }
 }
 
-impl Drop for StatusListeners {
-    fn drop(&mut self) {
-        let callbacks: Vec<_> = std::mem::take(&mut self.listeners)
-            .into_iter()
-            .map(|(_, callback)| Terminal::new(callback))
-            .collect();
-        let mut retirement = Retirement::new();
-        for callback in callbacks {
-            retirement.retire(callback);
-        }
-        retirement.finish();
-    }
-}
-
-/// Subscribe a status forwarder on `parent` that fans out to `listeners`.
-///
-/// Holds only a `Weak` to the registry so the subscription never keeps the
-/// proxy alive; returns the teardown handle that removes the forwarder.
-fn link_parent_status<T>(
-    parent: &Arc<dyn Animation<T>>,
-    listeners: &Arc<Mutex<StatusListeners>>,
-) -> Arc<ParentSubscription>
-where
-    T: Clone + Send + Sync + 'static,
-{
-    let weak = Arc::downgrade(listeners);
-    let id = parent.add_status_listener(Arc::new(move |status| {
-        if let Some(listeners) = weak.upgrade() {
-            fan_out_status(&listeners, status);
-        }
-    }));
-    let parent = Arc::clone(parent);
-    ParentSubscription::new(move || parent.remove_status_listener(id))
-}
-
 impl<T> ProxyAnimation<T>
 where
-    T: Clone + Send + Sync + fmt::Debug + 'static,
+    T: Clone + fmt::Debug + 'static,
 {
     /// Create a new proxy animation.
     ///
@@ -161,19 +112,23 @@ where
     ///
     /// * `parent` - The initial parent animation
     #[must_use]
-    pub fn new(parent: Arc<dyn Animation<T>>) -> Self {
+    pub fn new(parent: Rc<dyn Animation<T>>) -> Self {
         let parent = Terminal::new(parent);
-        let notifier = Arc::new(ChangeNotifier::new());
+        let notifier = Rc::new(ChangeNotifier::new());
         let parent_sub = link_parent(&parent, &notifier);
-        let status_listeners = Arc::new(Mutex::new(StatusListeners::new()));
-        let status_sub = link_parent_status(&parent, &status_listeners);
+        let status_listeners = Rc::new(flui_foundation::Notifier::new());
+        let status_sub =
+            crate::animation::link_parent_status(&parent, &status_listeners, |status| status);
         Self {
-            inner: Arc::new(ProxyOwner {
-                parent: RwLock::new(parent),
+            inner: Rc::new(ProxyOwner {
+                parent: RefCell::new(parent),
                 notifier: Terminal::new(notifier),
-                parent_sub: RwLock::new(Terminal::new(parent_sub)),
+                parent_sub: RefCell::new(Terminal::new(parent_sub)),
                 status_listeners: Terminal::new(status_listeners),
-                status_sub: RwLock::new(Terminal::new(status_sub)),
+                status_sub: RefCell::new(Terminal::new(status_sub)),
+                delivering: Cell::new(false),
+                pending: RefCell::new(VecDeque::new()),
+                retired: RefCell::new(Vec::new()),
             }),
         }
     }
@@ -181,8 +136,8 @@ where
     /// Get the current parent animation.
     #[inline]
     #[must_use]
-    pub fn parent(&self) -> Arc<dyn Animation<T>> {
-        self.inner.parent.read().get().clone()
+    pub fn parent(&self) -> Rc<dyn Animation<T>> {
+        self.inner.parent.borrow().get().clone()
     }
 
     /// Set a new parent animation.
@@ -190,7 +145,10 @@ where
     /// Value listeners are always notified (the value type has no equality
     /// bound, so the proxy cannot compare old vs. new). Status listeners are
     /// notified only when the status actually differs across the swap.
-    pub fn set_parent(&self, new_parent: Arc<dyn Animation<T>>) {
+    pub fn set_parent(&self, new_parent: Rc<dyn Animation<T>>) {
+        let mut retirement = Retirement::new();
+        self.inner.notifier.inherit_failure(&mut retirement);
+        self.inner.status_listeners.inherit_failure(&mut retirement);
         let new_parent = Terminal::new(new_parent);
         let previous_parent = Terminal::new(self.parent());
         let old_status = previous_parent.status();
@@ -198,37 +156,84 @@ where
         // subscriptions drops the old ones, which removes the value listener
         // and status forwarder from the previous parent.
         let new_sub = link_parent(&new_parent, &self.inner.notifier);
-        let new_status_sub = link_parent_status(&new_parent, &self.inner.status_listeners);
+        let new_status_sub = crate::animation::link_parent_status(
+            &new_parent,
+            &self.inner.status_listeners,
+            |status| status,
+        );
         let new_status = new_parent.status();
-        let old_parent = std::mem::replace(&mut *self.inner.parent.write(), new_parent);
-        let old_parent_sub =
-            std::mem::replace(&mut *self.inner.parent_sub.write(), Terminal::new(new_sub));
+        let old_parent = std::mem::replace(&mut *self.inner.parent.borrow_mut(), new_parent);
+        let old_parent_sub = std::mem::replace(
+            &mut *self.inner.parent_sub.borrow_mut(),
+            Terminal::new(new_sub),
+        );
         let old_status_sub = std::mem::replace(
-            &mut *self.inner.status_sub.write(),
+            &mut *self.inner.status_sub.borrow_mut(),
             Terminal::new(new_status_sub),
         );
-        // Drop the displaced subscriptions after the write guards release: a
-        // `ParentSubscription` drop removes a listener from the (old) parent,
-        // which takes the parent's own lock, so dropping it under a guard here
-        // would invert the lock order.
-        let mut retirement = Retirement::new();
-        old_parent_sub.detach(&mut retirement);
-        old_status_sub.detach(&mut retirement);
-        retirement.retire(old_parent_sub);
-        retirement.retire(old_status_sub);
-        retirement.retire(old_parent);
-        retirement.retire(previous_parent);
-        retirement.finish();
-        self.inner.notifier.notify_listeners();
+        // Admission includes outgoing ownership before any parent teardown can
+        // re-enter. Nested swaps append after this commit's notifications.
+        let mut pending = self.inner.pending.borrow_mut();
+        pending.push_back(ProxyDelivery::Retire {
+            parent: old_parent,
+            previous: previous_parent,
+            value_sub: old_parent_sub,
+            status_sub: old_status_sub,
+        });
+        pending.push_back(ProxyDelivery::Value);
         if new_status != old_status {
-            fan_out_status(&self.inner.status_listeners, new_status);
+            let snapshot = self.inner.status_listeners.listener_ids();
+            pending.push_back(ProxyDelivery::Status(new_status, snapshot));
         }
+        drop(pending);
+        self.drain(&mut retirement);
+        retirement.finish();
+    }
+
+    fn drain(&self, retirement: &mut Retirement) {
+        if self.inner.delivering.replace(true) {
+            return;
+        }
+        loop {
+            let delivery = self.inner.pending.borrow_mut().pop_front();
+            let Some(delivery) = delivery else { break };
+            match delivery {
+                ProxyDelivery::Retire {
+                    parent,
+                    previous,
+                    value_sub,
+                    status_sub,
+                } => {
+                    value_sub.detach(retirement);
+                    status_sub.detach(retirement);
+                    retirement.retire(value_sub);
+                    retirement.retire(status_sub);
+                    retirement.retire(parent);
+                    retirement.retire(previous);
+                }
+                ProxyDelivery::Value => retirement.run_with(|recovery| {
+                    self.inner.notifier.notify_listeners_with_recovery(recovery);
+                }),
+                ProxyDelivery::Status(status, callbacks) => {
+                    retirement.run_with(|recovery| {
+                        self.inner
+                            .status_listeners
+                            .notify_selected_with_recovery(&status, &callbacks, recovery);
+                    });
+                }
+            }
+            let retired = std::mem::take(&mut *self.inner.retired.borrow_mut());
+            for callback in retired {
+                retirement.retire(callback);
+            }
+        }
+        self.inner.delivering.set(false);
     }
 }
 
 impl<T> Animation<T> for ProxyAnimation<T>
 where
-    T: Clone + Send + Sync + fmt::Debug + 'static,
+    T: Clone + fmt::Debug + 'static,
 {
     #[inline]
     fn value(&self) -> T {
@@ -240,47 +245,77 @@ where
         self.parent().status()
     }
 
+    fn is_animating(&self) -> bool {
+        self.parent().is_animating()
+    }
+
     fn add_status_listener(&self, callback: StatusCallback) -> ListenerId {
-        let mut reg = self.inner.status_listeners.lock();
-        let id = ListenerId::new(reg.next_id);
-        reg.next_id += 1;
-        reg.listeners.push((id, callback));
-        id
+        self.inner
+            .status_listeners
+            .add(Rc::new(move |status| callback(*status)))
+    }
+
+    fn add_status_observer(&self, observer: crate::animation::StatusObserver) -> ListenerId {
+        self.inner
+            .status_listeners
+            .add_with_recovery(Rc::new(move |status, recovery| observer(*status, recovery)))
     }
 
     fn remove_status_listener(&self, id: ListenerId) {
-        let removed = {
-            let mut listeners = self.inner.status_listeners.lock();
-            listeners
-                .listeners
-                .iter()
-                .position(|(candidate, _)| *candidate == id)
-                .map(|index| listeners.listeners.remove(index).1)
-        };
-        drop(Terminal::new(removed));
+        if self.inner.delivering.get() {
+            if let Some(callback) = self.inner.status_listeners.take_callback(id) {
+                self.inner
+                    .retired
+                    .borrow_mut()
+                    .push(Terminal::new(callback));
+            }
+        } else {
+            let callback = self.inner.status_listeners.take_callback(id);
+            let mut recovery = Retirement::new();
+            self.inner.status_listeners.inherit_failure(&mut recovery);
+            self.inner.notifier.inherit_failure(&mut recovery);
+            recovery.retire(callback);
+            recovery.finish();
+        }
     }
 }
 
 impl<T> Listenable for ProxyAnimation<T>
 where
-    T: Clone + Send + Sync + 'static,
+    T: Clone + 'static,
 {
+    fn add_observer(&self, observer: flui_foundation::notifier::ListenerObserver) -> ListenerId {
+        self.inner.notifier.add_observer(observer)
+    }
+
     fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
         self.inner.notifier.add_listener(callback)
     }
 
     fn remove_listener(&self, id: ListenerId) {
-        self.inner.notifier.remove_listener(id);
+        let callback = self.inner.notifier.take_listener(id);
+        let mut recovery = Retirement::new();
+        self.inner.status_listeners.inherit_failure(&mut recovery);
+        self.inner.notifier.inherit_failure(&mut recovery);
+        recovery.retire(callback);
+        recovery.finish();
     }
 
     fn remove_all_listeners(&self) {
-        self.inner.notifier.remove_all_listeners();
+        let callbacks = self.inner.notifier.take_listeners();
+        let mut recovery = Retirement::new();
+        self.inner.status_listeners.inherit_failure(&mut recovery);
+        self.inner.notifier.inherit_failure(&mut recovery);
+        for callback in callbacks {
+            recovery.retire(callback);
+        }
+        recovery.finish();
     }
 }
 
 impl<T> fmt::Debug for ProxyAnimation<T>
 where
-    T: Clone + Send + Sync + fmt::Debug + 'static,
+    T: Clone + fmt::Debug + 'static,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ProxyAnimation")
@@ -294,35 +329,27 @@ where
 mod tests {
     use super::*;
     use crate::AnimationController;
-    use flui_scheduler::UpdateScheduler;
 
     use std::time::Duration;
 
     #[test]
     fn swap_with_status_change_fires_listeners() {
-        let scheduler = UpdateScheduler::new();
-        let controller1 = Arc::new(AnimationController::new(
-            Duration::from_millis(100),
-            &scheduler,
-        ));
-        let controller2 = Arc::new(AnimationController::new(
-            Duration::from_millis(100),
-            &scheduler,
-        ));
+        let controller1 = Rc::new(AnimationController::builder(Duration::from_millis(100)).build());
+        let controller2 = Rc::new(AnimationController::builder(Duration::from_millis(100)).build());
         controller2.set_value(1.0); // Completed
 
-        let proxy = ProxyAnimation::new(controller1.clone() as Arc<dyn Animation<f64>>);
+        let proxy = ProxyAnimation::new(controller1.clone() as Rc<dyn Animation<f64>>);
 
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let seen2 = Arc::clone(&seen);
-        let _id = proxy.add_status_listener(Arc::new(move |status| {
-            seen2.lock().push(status);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let seen2 = Rc::clone(&seen);
+        let _id = proxy.add_status_listener(Rc::new(move |status| {
+            seen2.borrow_mut().push(status);
         }));
 
         // Dismissed -> Completed across the swap must fire once with the new
         // status.
-        proxy.set_parent(controller2.clone() as Arc<dyn Animation<f64>>);
-        assert_eq!(seen.lock().as_slice(), &[AnimationStatus::Completed]);
+        proxy.set_parent(controller2.clone() as Rc<dyn Animation<f64>>);
+        assert_eq!(seen.borrow().as_slice(), &[AnimationStatus::Completed]);
 
         controller1.dispose();
         controller2.dispose();

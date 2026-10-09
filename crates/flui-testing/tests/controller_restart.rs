@@ -3,7 +3,7 @@
 //! a stale anchor.
 //!
 //! This is the discriminating test for the `run_generation` re-anchoring in
-//! [`HeadlessBinding::register_controller`] / `pump_frame`. With a naive fixed
+//! [`flui_animation::Vsync`] / `pump_frame`. With a naive fixed
 //! anchor (recorded once at registration), the first reverse pump would feed
 //! `tick_at(huge_elapsed)` and snap the value straight to the target (0.0,
 //! Dismissed) on a single frame. Re-anchoring on the observed run-generation
@@ -12,7 +12,7 @@
 
 use std::time::Duration;
 
-use flui_animation::{Animation, AnimationController, AnimationStatus, UpdateScheduler};
+use flui_animation::{Animation, AnimationController, AnimationStatus};
 use flui_testing::HeadlessBinding;
 
 /// One frame's worth of virtual time at 20ms — five of these span the 100ms run.
@@ -20,12 +20,9 @@ const FRAME: Duration = Duration::from_millis(20);
 
 pub(crate) fn second_run_ticks_from_its_own_start_not_a_stale_anchor() {
     let mut binding = HeadlessBinding::new();
-    let scheduler = UpdateScheduler::new();
-    let controller = AnimationController::new(Duration::from_millis(100), &scheduler);
-
-    // Register before starting so the binding cleanly re-anchors on the first
-    // observed run-generation bump.
-    binding.register_controller(controller.clone());
+    let owner =
+        AnimationController::builder(Duration::from_millis(100)).build_on(Some(binding.vsync()));
+    let controller = owner.controller();
 
     // --- Run 1: forward to completion. ---
     controller.forward().expect("a fresh controller forwards");
@@ -89,5 +86,5 @@ pub(crate) fn second_run_ticks_from_its_own_start_not_a_stale_anchor() {
         "a fully pumped reverse run dismisses",
     );
 
-    controller.dispose();
+    drop(owner);
 }

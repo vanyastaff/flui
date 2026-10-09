@@ -476,6 +476,21 @@ impl SemanticsAgent {
             answer,
         )
     }
+
+    fn motion_command(
+        &self,
+        request: flui_protocol::MotionRequest,
+    ) -> (UiCommand, AgentReply<flui_protocol::MotionState>) {
+        let (reply, answer) = self.reply(|_, _| {});
+        (
+            UiCommand::Motion {
+                presentation_id: self.sender.presentation_id,
+                request,
+                reply,
+            },
+            answer,
+        )
+    }
 }
 
 /// The development seam's port: a [`flui_view::dev_agent::AgentWindow`]
@@ -541,6 +556,13 @@ impl AgentPort for DevAgentPort {
 
     fn act(&self, request: ActionRequest) -> Result<AgentAnswer<()>, AgentFault> {
         self.admit(|agent| agent.action_command(request))
+    }
+
+    fn motion(
+        &self,
+        request: flui_protocol::MotionRequest,
+    ) -> Result<AgentAnswer<flui_protocol::MotionState>, AgentFault> {
+        self.admit(|agent| agent.motion_command(request))
     }
 }
 

@@ -9,7 +9,7 @@
 use std::num::NonZeroU32;
 use std::time::Duration;
 
-use flui_animation::{Animation, AnimationController, UpdateScheduler};
+use flui_animation::{Animation, AnimationController};
 use flui_foundation::PresentationId;
 use flui_testing::HeadlessBinding;
 
@@ -33,10 +33,10 @@ pub(crate) fn two_presentations_at_independent_scripted_cadences_tick_and_advanc
     // virtual time over 100 pumps -- 5s clears that with room to spare) --
     // any value difference below then traces purely to each presentation's
     // own advance cadence, not one of them settling early.
-    let a_controller = AnimationController::new(Duration::from_secs(5), &UpdateScheduler::new());
-    let b_controller = AnimationController::new(Duration::from_secs(5), &UpdateScheduler::new());
-    a_vsync.register(a_controller.clone());
-    b_vsync.register(b_controller.clone());
+    let a_owner = AnimationController::builder(Duration::from_secs(5)).build_on(Some(&a_vsync));
+    let b_owner = AnimationController::builder(Duration::from_secs(5)).build_on(Some(&b_vsync));
+    let a_controller = a_owner.controller();
+    let b_controller = b_owner.controller();
     a_controller.forward().expect("fresh controller forwards");
     b_controller.forward().expect("fresh controller forwards");
 
@@ -85,20 +85,86 @@ pub(crate) fn two_presentations_at_independent_scripted_cadences_tick_and_advanc
          same tick count -- a single shared clock could not produce this asymmetry"
     );
 
-    a_controller.dispose();
-    b_controller.dispose();
+    drop(a_owner);
+    drop(b_owner);
 }
 
 /// The binding's motion clock sets the rate its `Vsync` runs at against the
 /// virtual clock: at double rate a 1 s run is half done after 250 ms, a
 /// rate change mid-run continues from the current value, and a step on a
 /// paused clock moves the run by exactly the step.
+pub(crate) fn presentation_rates_pause_and_step_are_independent() {
+    use flui_animation::PlaybackRate;
+    let mut binding = HeadlessBinding::new();
+    let a = presentation(0);
+    let b = presentation(1);
+    let a_vsync = binding.install_presentation_clock(a);
+    let b_vsync = binding.install_presentation_clock(b);
+    let a_owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&a_vsync));
+    let b_owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&b_vsync));
+    let a_run = a_owner.controller();
+    let b_run = b_owner.controller();
+    a_run.forward().expect("A starts");
+    b_run.forward().expect("B starts");
+    binding.pump_all(Duration::ZERO);
+    binding
+        .with_presentation_motion_clock(a, |clock| {
+            clock.set_rate(PlaybackRate::new(2.0).expect("valid rate"));
+        })
+        .expect("A exists");
+    binding
+        .with_presentation_motion_clock(b, |clock| {
+            clock.set_rate(PlaybackRate::new(0.5).expect("valid rate"));
+        })
+        .expect("B exists");
+    binding.pump_all(Duration::from_millis(250));
+    assert!((a_run.value() - 0.5).abs() < 1e-9);
+    assert!((b_run.value() - 0.125).abs() < 1e-9);
+    binding
+        .with_presentation_motion_clock(a, |clock| clock.set_rate(PlaybackRate::PAUSED))
+        .expect("A exists");
+    let frames = binding.presentation_produced_count(a);
+    binding.pump_presentation(a, Duration::from_secs(10));
+    assert_eq!(a_run.value(), 0.5);
+    assert_eq!(
+        binding.presentation_produced_count(a),
+        frames,
+        "paused animation creates no frame demand"
+    );
+    binding.pump_presentation(b, Duration::from_millis(100));
+    assert!(
+        (b_run.value() - 0.175).abs() < 1e-9,
+        "B continues at its own rate"
+    );
+    binding
+        .with_presentation_motion_clock(a, |clock| clock.step(Duration::from_millis(100)))
+        .expect("A exists");
+    binding.pump_presentation(a, Duration::ZERO);
+    assert!((a_run.value() - 0.6).abs() < 1e-9);
+    assert_eq!(
+        binding.presentation_produced_count(a),
+        frames + 1,
+        "step produces one paused frame"
+    );
+    binding.pump_presentation(a, Duration::ZERO);
+    assert_eq!(
+        binding.presentation_produced_count(a),
+        frames + 1,
+        "step does not restart continuous demand"
+    );
+    assert_eq!(
+        binding.with_presentation_motion_clock(presentation(99), |_| ()),
+        None
+    );
+}
+
 pub(crate) fn the_motion_clock_rate_and_step_drive_the_binding_vsync() {
     use flui_animation::PlaybackRate;
 
     let mut binding = HeadlessBinding::new();
-    let controller = AnimationController::new(Duration::from_secs(1), &UpdateScheduler::new());
-    binding.vsync().register(controller.clone());
+    let owner =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(binding.vsync()));
+    let controller = owner.controller();
     controller.forward().expect("fresh controller forwards");
     binding.pump_frame(Duration::ZERO);
 

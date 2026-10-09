@@ -6,7 +6,6 @@ use std::{
     cell::{Cell, RefCell},
     ops::Range,
     rc::Rc,
-    sync::Arc,
 };
 
 use flui_foundation::ListenerId;
@@ -695,7 +694,7 @@ pub struct EditableTextState {
     /// `build`). `None` under a binding that installs no post-frame handle —
     /// the loop then simply never starts (warned, not panicked; see
     /// `init_state`'s IME focus listener).
-    local_post_frame_handle: Option<flui_scheduler::LocalPostFrameHandle>,
+    post_frame_handle: Option<flui_scheduler::PostFrameHandle>,
     /// The current IME attach's cursor-area loop alive-flag, if a loop is
     /// currently running. `None` when no loop is running (never attached,
     /// or already blurred/disposed).
@@ -781,7 +780,7 @@ impl StatefulView for EditableText {
             ime_focus_transition: None,
             ime_handle: None,
             ime_token: Rc::new(RefCell::new(None)),
-            local_post_frame_handle: None,
+            post_frame_handle: None,
             cursor_area_alive: Rc::new(RefCell::new(None)),
             writer: None,
             on_submitted: Rc::new(RefCell::new(self.on_submitted.clone())),
@@ -1511,9 +1510,12 @@ impl ViewState<EditableText> for EditableTextState {
         // 3. Forward controller change events into the rebuild notifier so the
         //    inner AnimatedBuilder rebuilds on every keystroke.
         let rebuild_notifier_for_text = self.rebuild_notifier.clone();
-        let controller_listener_id = self.controller.borrow().add_listener(Arc::new(move || {
-            rebuild_notifier_for_text.notify_listeners();
-        }));
+        let controller_listener_id =
+            self.controller
+                .borrow()
+                .add_listener(std::rc::Rc::new(move || {
+                    rebuild_notifier_for_text.notify_listeners();
+                }));
         self.controller_listener_id = Some(controller_listener_id);
 
         // 4. Forward FocusManager focus-change events into the rebuild notifier
@@ -1539,12 +1541,12 @@ impl ViewState<EditableText> for EditableTextState {
 
         // 5. Attach/detach the IME client on this field's own focus
         //    transitions, through the handle acquired in 1b.
-        //    `local_post_frame_handle()` is acquired here for the same
+        //    `post_frame_handle()` is acquired here for the same
         //    reason — the IME cursor-area loop (ADR-0030) it drives is
         //    started/stopped by the same closure.
-        self.local_post_frame_handle = ctx.local_post_frame_handle();
+        self.post_frame_handle = ctx.post_frame_handle();
         let ime_handle_for_focus = self.ime_handle.clone();
-        let post_frame_handle_for_focus = self.local_post_frame_handle.clone();
+        let post_frame_handle_for_focus = self.post_frame_handle.clone();
         let pipeline_owner_for_focus = self.pipeline_owner.clone();
         let inner_anchor_for_focus = self.inner_anchor.clone();
         let store_for_ime = self
@@ -1720,10 +1722,11 @@ impl ViewState<EditableText> for EditableTextState {
             );
             calls.retire(replaced);
             let rebuild_notifier_for_text = self.rebuild_notifier.clone();
-            self.controller_listener_id =
-                Some(self.controller.borrow().add_listener(Arc::new(move || {
+            self.controller_listener_id = Some(self.controller.borrow().add_listener(
+                std::rc::Rc::new(move || {
                     rebuild_notifier_for_text.notify_listeners();
-                })));
+                }),
+            ));
             // The visible text is the replacement's now, and nothing else
             // will say so: the old controller's notifications are gone and the
             // new one has not changed since it was handed over.
@@ -1894,7 +1897,7 @@ impl ViewState<EditableText> for EditableTextState {
             .behavior(HitTestBehavior::Opaque)
             .child(crate::__private::AnchoredBox::new(
                 self.anchor.clone(),
-                AnimatedBuilder::new(Arc::new(self.rebuild_notifier.clone()), move || {
+                AnimatedBuilder::new(std::rc::Rc::new(self.rebuild_notifier.clone()), move || {
                     build_field_view(
                         &controller.borrow(),
                         &focus_node,
@@ -2034,13 +2037,13 @@ impl ViewState<EditableText> for EditableTextState {
 /// [`TextInputHandle::set_cursor_area`] when it changed, then reschedules
 /// itself for the next completed frame, dormant whenever no frame runs.
 /// `Clone` because
-/// [`flui_scheduler::LocalPostFrameHandle::schedule_local`] takes an `FnOnce`, so the only way to
+/// [`flui_scheduler::PostFrameHandle::schedule`] takes an `FnOnce`, so the only way to
 /// make it self-rescheduling without boxing a trait object is for each
 /// firing to consume `self` and, if still alive, construct the next firing's
 /// closure from a fresh clone of the same capture.
 #[derive(Clone)]
 struct CursorAreaLoop {
-    post_frame: flui_scheduler::LocalPostFrameHandle,
+    post_frame: flui_scheduler::PostFrameHandle,
     pipeline_owner: Option<PipelineCell>,
     /// The `EditableTextRenderView`'s own inner anchor (ADR-0030) — see
     /// `EditableTextState::inner_anchor`'s doc.
@@ -2064,12 +2067,12 @@ struct CursorAreaLoop {
 }
 
 impl CursorAreaLoop {
-    /// Register the next firing. Every `schedule_local` failure is warned,
+    /// Register the next firing. Every `schedule` failure is warned,
     /// never silent: a loop that stops rescheduling without a diagnostic is
     /// a candidate window stuck at (0, 0) with no signal anything is wrong.
     fn schedule(self) {
         let post_frame = self.post_frame.clone();
-        if let Err(error) = post_frame.schedule_local(move |_timing| self.fire()) {
+        if let Err(error) = post_frame.schedule(move |_timing| self.fire()) {
             tracing::warn!(
                 ?error,
                 "IME cursor-area tick could not be (re)scheduled; the platform \

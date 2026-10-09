@@ -60,9 +60,9 @@ pub(crate) fn pump_post_frame_callback_observes_this_frames_committed_layout() {
     // lane, which only a pump that ends its frame with that lane drains.
     ui_runtime
         .widgets()
-        .with_build_owner(|owner| owner.local_post_frame_handle().cloned())
+        .with_build_owner(|owner| owner.post_frame_handle().cloned())
         .expect("owner-local post-frame handle installed by UiRuntime::construct")
-        .schedule_local(move |_timing| {
+        .schedule(move |_timing| {
             calls_cb.fetch_add(1, Ordering::SeqCst);
             *observed_cb.write() = pipeline_cb.with(|owner| owner.box_size(root));
         })
@@ -374,10 +374,7 @@ fn a_manual_clock_ui_runtime_gates_its_min_produce_interval_on_that_clock() {
 fn a_frame_outside_a_pump_ticks_vsync_on_the_ui_runtimes_clock() {
     let clock = ManualClock::new();
     let ui_runtime = manual_clock_ui_runtime(&clock);
-    let controller = AnimationController::new(
-        Duration::from_millis(100),
-        &flui_scheduler::UpdateScheduler::new(),
-    );
+    let controller = AnimationController::builder(Duration::from_millis(100)).build();
     ui_runtime.vsync().register(controller.clone());
     controller.forward().expect("fresh controller forwards");
     let constraints = BoxConstraints::tight(Size::new(800.0, 600.0));

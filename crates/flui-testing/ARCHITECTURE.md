@@ -9,6 +9,15 @@ substrate driver over raw owners, which the raw-owner suites still use.
 
 ## Invariants
 
+- **Extra presentation motion clocks remain independent.** An owning controller
+  registers through `build_on` and remains alive for the scripted run. The
+  harness has no manual controller-registration shortcut. Editing an extra
+  presentation clock stays within its borrow; a step marks that presentation's
+  demand after the borrow is released. A paused clock contributes no continuous
+  animation demand. `presentation_rates_pause_and_step_are_independent` pins
+  distinct rates, sibling progress, no paused produce and exactly one step
+  produce. The runtime and development-agent projection is still separate.
+
 - **A harness frame is `UiRuntime::pump`.** `host::HeadlessHost::pump` is the
   only way the widget harness (`widgets::lay_out`, `widgets::harness::mount`)
   draws a frame, the mount included: apply commands, begin frame, the
