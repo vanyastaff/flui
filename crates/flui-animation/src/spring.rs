@@ -277,12 +277,13 @@ impl<T: TwoWayConverter> AnimatedValue<T> {
     /// The current animated value.
     #[must_use]
     pub fn value(&self) -> T {
-        // Completed curve and constant segments retain the exact target, including
+        // Every completed segment retains the exact target, including
         // components a converter cannot recover (transparent color channels).
-        // A settled spring still publishes its analytic convergence.
-        if self.components.iter().all(|segment| {
-            !matches!(segment, Segment::Spring { .. }) && segment.is_done(self.elapsed_seconds())
-        }) {
+        if self
+            .components
+            .iter()
+            .all(|segment| segment.is_done(self.elapsed_seconds()))
+        {
             return self.target.clone();
         }
         T::from_vector(self.current_vector())
@@ -305,14 +306,9 @@ impl<T: TwoWayConverter> AnimatedValue<T> {
         &self.target
     }
 
-    /// Whether every component has settled: a curve segment has arrived, a
-    /// spring is within its distance tolerance of the target.
-    ///
-    /// Settled means within tolerance; the value keeps converging
-    /// continuously, with no final jump. A settled spring's
-    /// [`value`](Self::value) may still differ from the target by up to the
-    /// tolerance and keeps approaching it, so stop driving frames on
-    /// `is_settled`, not on `value() == target`.
+    /// Whether every component has arrived at its exact target at rest.
+    /// A spring retains its native trajectory up to its tolerance threshold,
+    /// then reaches the target continuously over a short Hermite transition.
     #[must_use]
     pub fn is_settled(&self) -> bool {
         self.components

@@ -37,6 +37,18 @@ requested during source evaluation remains pending for a subsequent sample.
 Reserving a sample identity before source evaluation still invalidates an outer
 sample when the same controller is ticked reentrantly.
 
+An interruptible spring run completes at the exact target at rest, independent
+of the frame that observes completion. Its native trajectory lasts until the
+physical rest threshold, followed by a cubic Hermite transition preserving
+the incoming position and velocity. The transition lasts at most one inverse
+natural frequency; its inherited velocity displacement is capped by the
+position tolerance. Stopping at the threshold would freeze a frame-dependent
+near-target value and cut off residual velocity. Continuing the analytic tail
+after completion would require frames for a run already reported as stopped.
+The finite transition keeps completion, frame demand and published values
+consistent. This applies to interruptible motion; standalone simulation rest
+semantics remain those of the physics contract.
+
 The runtime's exact window agent port admits `MotionRequest` through the same
 owner inbox and close fence as semantics operations. The owner validates the
 whole request before changing rate or time. An invalid rate applies neither

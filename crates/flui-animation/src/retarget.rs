@@ -8,11 +8,12 @@
 //! value and velocity (C⁰ and C¹) however often it is interrupted.
 //!
 //! - A **spring** segment is the damped spring from `(x0, v0)` toward the
-//!   target; its value and velocity are analytic for every `t`. It never
-//!   snaps: *settled* means within the spring's distance tolerance of the
-//!   target, and the value keeps converging continuously from there, with no
-//!   final jump. As `t → ∞` the value reaches the target and the velocity
-//!   zero, and both stay finite for every `t`.
+//!   target until its physical rest threshold. A cubic Hermite transition
+//!   then carries that position and velocity to the exact target at rest.
+//!   Its duration is at most one inverse natural frequency, shortened when
+//!   needed to keep the inherited displacement within the position tolerance.
+//!   No sample snaps: both joins are C¹, and the finite completion time is
+//!   independent of the frame that observes it.
 //! - A **curve** segment follows `x0 + Δ·c(τ)` over the duration, `τ = t / D`,
 //!   bent by two Hermite terms, `r·D·τ(1 − τ)²` with `r = v0 − Δ·c'(0) / D`
 //!   and `a·τ²(1 − τ)` with `a = Δ·c'(1)`. Both are zero at both ends; the
@@ -88,14 +89,13 @@ pub(crate) enum Segment {
     Rest(f64),
     /// A spring from the seam's value and velocity.
     ///
-    /// The simulation does not snap to its target: being within tolerance
-    /// only makes [`is_done`](Self::is_done) true, and the published value
-    /// and velocity stay the analytic spring's. The seam reads `x0` and `v0`
-    /// exactly, and is never done.
+    /// Native spring motion followed by a continuous transition to exact rest.
+    /// The seam reads `x0` and `v0` exactly, and is never done.
     Spring {
         simulation: SpringSimulation,
         x0: f64,
         v0: f64,
+        rest: SpringRest,
     },
     /// A curve with a Hermite velocity correction.
     Curve(CurveSegment),
@@ -132,6 +132,84 @@ pub(crate) struct CurveSegment {
     curve: ArcCurve,
 }
 
+/// The small remaining spring displacement, retired without a final snap.
+#[derive(Clone, Debug)]
+pub(crate) struct SpringRest {
+    start: f64,
+    duration: f64,
+    end: f64,
+    from: f64,
+    target: f64,
+    velocity: f64,
+}
+
+impl SpringRest {
+    fn new(
+        simulation: &SpringSimulation,
+        x0: f64,
+        v0: f64,
+        target: f64,
+    ) -> Result<Self, SimulationError> {
+        let (start, duration) = simulation.rest_transition();
+        let (from, velocity) = if start == 0.0 {
+            (x0, v0)
+        } else {
+            simulation.analytic_sample(start)
+        };
+        let end = start + duration;
+        if !end.is_finite()
+            || end <= start
+            || !(velocity * duration).is_finite()
+            || !(from - target).is_finite()
+        {
+            return Err(SimulationError::Overflow);
+        }
+        Ok(Self {
+            start,
+            duration,
+            end,
+            from,
+            target,
+            velocity,
+        })
+    }
+
+    fn x(&self, t: f64) -> f64 {
+        if t <= self.start {
+            return self.from;
+        }
+        if t >= self.end {
+            return self.target;
+        }
+        let tau = (t - self.start) / self.duration;
+        let u = 1.0 - tau;
+        // Factoring the remaining displacement keeps both endpoint weights
+        // exact and avoids subtraction of nearly equal cubic polynomials.
+        finite_or(
+            self.target
+                + (self.from - self.target) * u * u * (1.0 + 2.0 * tau)
+                + self.velocity * self.duration * tau * u * u,
+            self.target,
+        )
+    }
+
+    fn dx(&self, t: f64) -> f64 {
+        if t <= self.start {
+            return self.velocity;
+        }
+        if t >= self.end {
+            return 0.0;
+        }
+        let tau = (t - self.start) / self.duration;
+        let u = 1.0 - tau;
+        finite_or(
+            rate(self.target - self.from, 6.0 * tau * u, self.duration)
+                + self.velocity * u * (1.0 - 3.0 * tau),
+            0.0,
+        )
+    }
+}
+
 impl Segment {
     /// The segment that starts at `x0` with velocity `v0` and moves to
     /// `target` as `motion` says.
@@ -163,11 +241,17 @@ impl Segment {
             return Ok(Self::Rest(target));
         }
         Ok(match motion {
-            MotionSpec::Spring(spring) => Self::Spring {
-                simulation: SpringSimulation::try_new(*spring, x0, target, v0, Tolerance::DEFAULT)?,
-                x0,
-                v0,
-            },
+            MotionSpec::Spring(spring) => {
+                let simulation =
+                    SpringSimulation::try_new(*spring, x0, target, v0, Tolerance::DEFAULT)?;
+                let rest = SpringRest::new(&simulation, x0, v0, target)?;
+                Self::Spring {
+                    simulation,
+                    x0,
+                    v0,
+                    rest,
+                }
+            }
             MotionSpec::Curve { duration, curve } => {
                 let scale = if shortening.is_finite() {
                     shortening.clamp(0.0, 1.0)
@@ -209,6 +293,7 @@ impl Segment {
             // A non-finite sample means the phase or the polynomial term
             // overflowed long after the exponential decayed to zero: the
             // spring's limit, its target.
+            Self::Spring { rest, .. } if t >= rest.start => rest.x(t),
             Self::Spring { simulation, .. } => {
                 finite_or(simulation.analytic_sample(t).0, simulation.x(f64::INFINITY))
             }
@@ -222,23 +307,18 @@ impl Segment {
         match self {
             Self::Rest(_) => 0.0,
             Self::Spring { v0, .. } if t == 0.0 => *v0,
+            Self::Spring { rest, .. } if t >= rest.start => rest.dx(t),
             Self::Spring { simulation, .. } => finite_or(simulation.analytic_sample(t).1, 0.0),
             Self::Curve(curve) => curve.dx(t),
         }
     }
 
-    /// Whether the segment has settled by `t`: a curve has arrived, a spring
-    /// is within its distance tolerance of the target. Settling never changes
-    /// [`x`](Self::x) or [`dx`](Self::dx); a spring keeps converging.
+    /// Whether the segment has arrived at its exact target with zero velocity.
     pub(crate) fn is_done(&self, t: f64) -> bool {
         let t = seam_time(t);
         match self {
             Self::Rest(_) => true,
-            Self::Spring { simulation, .. } => {
-                t > 0.0
-                    && (simulation.is_done(t)
-                        || !(simulation.x(t).is_finite() && simulation.dx(t).is_finite()))
-            }
+            Self::Spring { rest, .. } => t >= rest.end,
             Self::Curve(curve) => t >= curve.duration,
         }
     }

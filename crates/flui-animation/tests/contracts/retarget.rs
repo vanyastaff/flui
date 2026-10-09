@@ -407,8 +407,8 @@ fn seam_at_zero() {
 }
 
 /// A spring retargeted by less than its distance tolerance, from rest, starts
-/// where it is instead of jumping to the target at the seam, is settled on the
-/// next frame, and is still moving continuously toward the target there.
+/// where it is instead of jumping to the target at the seam, remains moving
+/// on the next frame, then reaches exact rest continuously.
 fn a_retarget_within_the_spring_tolerance_starts_at_the_seam() {
     let mode = Mode::Spring {
         omega: 1.0,
@@ -421,10 +421,17 @@ fn a_retarget_within_the_spring_tolerance_starts_at_the_seam() {
     assert_eq!(value.value(), Offset::new(0.0, 0.0));
     assert!(!value.is_settled(), "settled away from its target");
     value.advance(Duration::from_secs_f64(1.0 / 60.0));
-    assert!(value.is_settled());
+    assert!(
+        !value.is_settled(),
+        "a tolerance-sized goal still has a continuous rest transition"
+    );
     let y = value.value().dy;
     assert!(y < 0.0 && y > target.dy, "not converging continuously: {y}");
     assert_velocity_is_the_derivative(&value, 1, &mode, 1e-3);
+    value.advance(Duration::from_secs(1));
+    assert!(value.is_settled());
+    assert_eq!(value.value(), target);
+    assert_eq!(value.velocity(), [0.0, 0.0]);
 }
 
 /// A spring whose rest boundary falls between two frames: the frame before is
@@ -464,11 +471,8 @@ fn the_spring_rest_boundary_is_c1() {
         (difference - v).abs() <= 1e-4,
         "finite difference {difference} across the rest boundary is not the velocity {v}"
     );
-    assert!(
-        after.value() < 1.0,
-        "jumped onto the target: {}",
-        after.value()
-    );
+    assert_eq!(after.value(), 1.0, "arrival must reach the exact target");
+    assert_eq!(after.velocity(), [0.0]);
 }
 
 fn seam_on_the_completing_frame() {
@@ -936,6 +940,14 @@ fn controller_retarget_is_c0_and_c1_at_the_seam() {
             a_controller_curve_arrives_at_rest,
         ),
         (
+            "a_controller_spring_arrives_at_rest_independently_of_frames",
+            a_controller_spring_arrives_at_rest_independently_of_frames,
+        ),
+        (
+            "a_controller_spring_enters_and_leaves_rest_continuously",
+            a_controller_spring_enters_and_leaves_rest_continuously,
+        ),
+        (
             "a_panicking_curve_slope_leaves_the_old_segment_running",
             a_panicking_curve_slope_leaves_the_old_segment_running,
         ),
@@ -960,6 +972,102 @@ fn controller_retarget_is_c0_and_c1_at_the_seam() {
 
 struct FailingQuadratic {
     panic: bool,
+}
+
+fn a_controller_spring_arrives_at_rest_independently_of_frames() {
+    use flui_animation::{Animation, MotionClock};
+    for zeta in [0.5, 1.0, 4.0] {
+        for frame in [
+            Duration::from_millis(1),
+            Duration::from_millis(17),
+            Duration::from_secs(20),
+        ] {
+            let registry = Vsync::new();
+            let mut clock = MotionClock::new();
+            let owner =
+                AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
+            let controller = owner.controller();
+            let mut run = controller
+                .retarget(0.8, &MotionSpec::Spring(spring(10.0, zeta)))
+                .expect("spring segment");
+            registry.tick_all(&clock.frame(Duration::ZERO));
+            let horizon = Duration::from_secs(20);
+            let mut now = Duration::ZERO;
+            while now < horizon {
+                now = now.saturating_add(frame).min(horizon);
+                registry.tick_all(&clock.frame(now));
+            }
+            assert_eq!(
+                controller.value(),
+                0.8,
+                "zeta={zeta}, frame={frame:?}: completion must reach the same exact target"
+            );
+            assert_eq!(controller.velocity(), 0.0);
+            assert!(matches!(poll_run(&mut run), std::task::Poll::Ready(Ok(()))));
+        }
+    }
+}
+
+fn a_controller_spring_enters_and_leaves_rest_continuously() {
+    use flui_animation::Animation;
+    for zeta in [0.5, 1.0, 4.0] {
+        let sample = |nanos: u64| {
+            let registry = Vsync::new();
+            let owner =
+                AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
+            let controller = owner.controller();
+            let _run = controller
+                .retarget(0.8, &MotionSpec::Spring(spring(10.0, zeta)))
+                .expect("spring segment");
+            controller.tick_at(Duration::from_nanos(nanos));
+            (
+                controller.value(),
+                controller.velocity(),
+                !controller.is_animating(),
+            )
+        };
+        // Find completion through the public run, without its private rest time.
+        let (mut lo, mut hi) = (0, 20_000_000_000_u64);
+        while hi - lo > 1 {
+            let mid = lo + (hi - lo) / 2;
+            if sample(mid).2 {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+        assert!(sample(hi).2 && !sample(lo).2);
+        // With omega=10 the inverse frequency is 100ms; default speed tolerance
+        // cannot shorten that transition. Probe each join with actual positions.
+        let start = hi - 100_000_000;
+        let step = 1_000;
+        for join in [start, hi] {
+            let left = sample(join - step);
+            let at = sample(join);
+            let right = sample(join + step);
+            let arriving = (at.0 - left.0) / 1e-6;
+            let leaving = (right.0 - at.0) / 1e-6;
+            assert!(
+                (arriving - at.1).abs() < 1e-6 && (leaving - at.1).abs() < 1e-6,
+                "zeta={zeta}, join={join}: position derivatives {arriving}, {leaving} must match velocity {}",
+                at.1
+            );
+        }
+        assert_eq!(sample(hi).0, 0.8);
+        assert_eq!(sample(hi).1, 0.0);
+        if zeta == 0.5 {
+            let t = 0.25;
+            let frequency = 75.0_f64.sqrt();
+            let expected = 0.8
+                * (1.0
+                    - (-5.0_f64 * t).exp()
+                        * ((frequency * t).cos() + 5.0 / frequency * (frequency * t).sin()));
+            assert!(
+                close(sample(250_000_000).0, expected, 1e-12),
+                "native spring must be unchanged before its rest transition"
+            );
+        }
+    }
 }
 
 fn a_controller_curve_arrives_at_rest() {

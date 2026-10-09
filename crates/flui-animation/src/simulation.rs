@@ -786,6 +786,19 @@ impl SpringSimulation {
         )
     }
 
+    /// Start and duration of interruptible motion's continuous rest transition.
+    /// Keep its inherited displacement below the position tolerance even when
+    /// the natural time scale is large compared with the remaining velocity.
+    pub(crate) fn rest_transition(&self) -> (f64, f64) {
+        let speed = self.velocity(self.rest_secs).abs();
+        let duration = if speed == 0.0 {
+            self.omega.recip()
+        } else {
+            self.omega.recip().min(self.tolerance.distance / speed)
+        };
+        (self.rest_secs, duration)
+    }
+
     /// The analytic velocity at `t â‰¥ 0`, ignoring rest.
     fn velocity(&self, t: f64) -> f64 {
         let (c, s) = self.propagator(t);

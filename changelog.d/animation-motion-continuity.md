@@ -5,6 +5,9 @@
 
 ### Fixed
 
+- Finish interruptible spring motion continuously at its exact target, preserving
+  velocity through the rest transition and removing dependence on the last frame.
+
 - Keep controller sample time and pending playback changes intact when a curve
   panics, returns a non-finite position, or a simulation completion query fails.
 

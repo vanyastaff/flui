@@ -100,6 +100,21 @@ endpoint derivative would otherwise be cut off at completion.
 `controller_retarget_is_c0_and_c1_at_the_seam` covers retry, refusal and the last
 position interval before rest.
 
+Interruptible spring motion retains the native analytic trajectory until the
+physical simulation's distance and speed rest threshold. Stopping there would
+freeze an arbitrary near-target sample and cut off its residual velocity.
+A cubic Hermite transition instead inherits that position and velocity, then
+arrives exactly at the target with zero velocity. Its duration is
+`min(1 / omega, distance_tolerance / abs(velocity))`, with the second term
+omitted for zero velocity. The remaining displacement is bounded by
+`distance_tolerance * 31 / 27`; both joins preserve position and velocity.
+Completion occurs at the computed threshold plus that duration, independently
+of the observing frame. Standalone physics simulations retain their own rest
+contract. `a_controller_spring_arrives_at_rest_independently_of_frames` uses
+the registry and different frame partitions; the public
+`a_controller_spring_enters_and_leaves_rest_continuously` probes both joins
+with position differences and an independent early-trajectory reference.
+
 ### Registration tokens and removal
 
 A `VsyncRegistration` names the registry that issued it (a weak identity) and
