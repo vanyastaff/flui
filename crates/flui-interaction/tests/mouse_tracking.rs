@@ -309,55 +309,73 @@ fn refresh_hit_test_panic_keeps_the_device_for_the_next_refresh() {
     );
 }
 
-fn refresh_hit_test_failure_precedes_a_competing_callback_failure() {
-    let lane = InteractionLane::try_new().expect("lane");
-    let handle = lane.dispatch_handle();
-    let tracker = MouseTracker::new();
-    let exits = Rc::new(Cell::new(0));
-    let enters = Rc::new(Cell::new(0));
-    let mouse_region =
-        lane.enter(|| panicking_exit(&handle, &exits, &enters, "callback failure after probe"));
-    let mouse_at = Offset::new(10.0, 10.0);
-    let pen_at = Offset::new(20.0, 20.0);
-    lane.enter(|| {
-        tracker.update_with_motion(
-            &hover(MOUSE, PointerKind::Mouse, mouse_at, 1),
-            PointerMotionKind::Hover,
-            &path(&[(1, mouse_region)]),
-        );
-        tracker.update_with_motion(
-            &hover(PEN, PointerKind::Pen { tool: PenTool::Tip }, pen_at, 2),
-            PointerMotionKind::Hover,
-            &HitTestResult::new(),
-        );
-    });
-
-    let payload = catch_unwind(AssertUnwindSafe(|| {
+fn refresh_preserves_the_first_failure_in_device_delivery_order() {
+    for callback_first in [false, true] {
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let tracker = MouseTracker::new();
+        let exits = Rc::new(Cell::new(0));
+        let enters = Rc::new(Cell::new(0));
+        let region = lane.enter(|| panicking_exit(&handle, &exits, &enters, "callback failure"));
+        let mouse_at = Offset::new(10.0, 10.0);
+        let pen_at = Offset::new(20.0, 20.0);
+        let (callback_at, probe_at) = if callback_first {
+            (mouse_at, pen_at)
+        } else {
+            (pen_at, mouse_at)
+        };
         lane.enter(|| {
-            tracker.update_all_devices(|position| {
-                assert!(position != pen_at, "probe failure first");
-                HitTestResult::new()
-            });
-        });
-    }))
-    .expect_err("the probe failure resumes after delivering the committed exit");
-    assert_eq!(payload.downcast_ref::<&str>(), Some(&"probe failure first"));
-    assert_eq!(exits.get(), 1, "the competing exit callback still runs");
-
-    lane.enter(|| {
-        tracker.update_all_devices(|position| {
-            if position == mouse_at {
-                path(&[(1, mouse_region)])
-            } else {
-                HitTestResult::new()
+            for (source, kind, at) in [
+                (MOUSE, PointerKind::Mouse, mouse_at),
+                (PEN, PointerKind::Pen { tool: PenTool::Tip }, pen_at),
+            ] {
+                let result = if at == callback_at {
+                    path(&[(1, region)])
+                } else {
+                    HitTestResult::new()
+                };
+                tracker.update_with_motion(
+                    &hover(source, kind, at, 1),
+                    PointerMotionKind::Hover,
+                    &result,
+                );
             }
         });
-    });
-    assert_eq!(
-        enters.get(),
-        2,
-        "the next refresh can enter the region again"
-    );
+
+        let payload = catch_unwind(AssertUnwindSafe(|| {
+            lane.enter(|| {
+                tracker.update_all_devices(|position| {
+                    assert!(position != probe_at, "probe failure");
+                    HitTestResult::new()
+                });
+            });
+        }))
+        .expect_err("the first failure resumes after delivering the committed exit");
+        assert_eq!(
+            payload.downcast_ref::<&str>(),
+            Some(&if callback_first {
+                "callback failure"
+            } else {
+                "probe failure"
+            })
+        );
+        assert_eq!(exits.get(), 1, "the competing exit callback still runs");
+
+        lane.enter(|| {
+            tracker.update_all_devices(|position| {
+                if position == callback_at {
+                    path(&[(1, region)])
+                } else {
+                    HitTestResult::new()
+                }
+            });
+        });
+        assert_eq!(
+            enters.get(),
+            2,
+            "the next refresh can enter the region again"
+        );
+    }
 }
 
 /// Reenters the tracker from a region callback's destructor.
@@ -1691,7 +1709,7 @@ fn ambient_refresh_contains_each_device() {
             ),
             (
                 "probe and callback compete",
-                refresh_hit_test_failure_precedes_a_competing_callback_failure,
+                refresh_preserves_the_first_failure_in_device_delivery_order,
             ),
         ],
     );
