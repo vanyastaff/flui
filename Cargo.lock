@@ -1848,7 +1848,6 @@ dependencies = [
  "flui-rendering",
  "flui-runtime",
  "flui-scheduler",
- "flui-semantics",
  "flui-testing",
  "flui-view",
  "flui-widgets",
