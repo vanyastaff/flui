@@ -203,6 +203,21 @@ impl std::fmt::Debug for MouseTracker {
 /// Callback for cursor changes with the source's actual contact and optional hardware identity.
 pub type CursorChangeCallback = Rc<dyn Fn(PointerInfo, CursorIcon) + 'static>;
 
+#[derive(Default)]
+struct CursorPublication {
+    observation: Rc<()>,
+    published: CursorIcon,
+    pending: bool,
+}
+
+impl CursorPublication {
+    fn observe(&mut self, cursor: CursorIcon) -> Rc<()> {
+        self.observation = Rc::new(());
+        self.pending |= self.published != cursor;
+        Rc::clone(&self.observation)
+    }
+}
+
 struct MouseTrackerInner {
     closed: bool,
     close_mode: crate::__runtime::CloseTombstone,
@@ -218,6 +233,7 @@ struct MouseTrackerInner {
     mouse_connected: bool,
     /// Callback for cursor changes.
     cursor_change_callback: Option<CursorChangeCallback>,
+    cursor_publication: CursorPublication,
 }
 
 impl MouseTracker {
@@ -231,6 +247,7 @@ impl MouseTracker {
                 annotations: BTreeMap::new(),
                 mouse_connected: false,
                 cursor_change_callback: None,
+                cursor_publication: CursorPublication::default(),
             })),
         }
     }
@@ -322,9 +339,6 @@ impl MouseTracker {
                                 .and_then(ResolvedMouseTrackerAnnotation::on_exit)
                         })
                         .collect();
-                    let cursor_callback = (state.current_cursor != CursorIcon::Default)
-                        .then(|| inner.cursor_change_callback.clone())
-                        .flatten();
                     let position = state.last_position;
                     state.active_regions.clear();
                     state.active_order.clear();
@@ -336,7 +350,7 @@ impl MouseTracker {
                         position,
                         enter_callbacks: SmallVec::new(),
                         exit_callbacks,
-                        cursor_callback,
+                        cursor_observation: inner.cursor_publication.observe(CursorIcon::Default),
                         new_cursor: CursorIcon::Default,
                         retired_annotations: Vec::new(),
                     })
@@ -417,7 +431,6 @@ impl MouseTracker {
                 .copied()
                 .collect();
 
-            let cursor_changed = state.current_cursor != new_cursor;
             state.last_position = position;
             state.active_regions = new_regions;
             state.active_order = resolved.order;
@@ -451,16 +464,13 @@ impl MouseTracker {
                     retired_annotations.push(annotation);
                 }
             }
-            let cursor_callback = cursor_changed
-                .then(|| inner.cursor_change_callback.clone())
-                .flatten();
             DeviceWork {
                 tracker: Rc::clone(&self.inner),
                 pointer,
                 position,
                 enter_callbacks,
                 exit_callbacks,
-                cursor_callback,
+                cursor_observation: inner.cursor_publication.observe(new_cursor),
                 new_cursor,
                 retired_annotations,
             }
@@ -601,7 +611,6 @@ impl MouseTracker {
                     .copied()
                     .collect();
 
-                let cursor_changed = state.current_cursor != new_cursor;
                 state.active_regions = new_regions;
                 state.active_order = resolved.order;
                 state.current_cursor = new_cursor;
@@ -634,9 +643,6 @@ impl MouseTracker {
                         retired_annotations.push(annotation);
                     }
                 }
-                let cursor_callback = cursor_changed
-                    .then(|| inner.cursor_change_callback.clone())
-                    .flatten();
 
                 DeviceWork {
                     tracker: Rc::clone(&self.inner),
@@ -644,7 +650,7 @@ impl MouseTracker {
                     position,
                     enter_callbacks,
                     exit_callbacks,
-                    cursor_callback,
+                    cursor_observation: inner.cursor_publication.observe(new_cursor),
                     new_cursor,
                     retired_annotations,
                 }
@@ -714,6 +720,7 @@ impl MouseTracker {
             let outgoing = if inner.closed {
                 Some(callback)
             } else {
+                inner.cursor_publication.pending = true;
                 inner.cursor_change_callback.replace(callback)
             };
             (outgoing, mode)
@@ -827,7 +834,7 @@ struct DeviceWork {
     position: Offset<f64>,
     enter_callbacks: SmallVec<[Latched<MouseEnterCallback>; 4]>,
     exit_callbacks: SmallVec<[Latched<MouseExitCallback>; 4]>,
-    cursor_callback: Option<CursorChangeCallback>,
+    cursor_observation: Rc<()>,
     new_cursor: CursorIcon,
     /// Replaced and departed annotations whose captures retire after dispatch.
     retired_annotations: Vec<ResolvedMouseTrackerAnnotation>,
@@ -863,12 +870,37 @@ impl DeviceWork {
                 failure.invoke(|| latch.release(callback));
             }
         }
-        if let Some(callback) = self.cursor_callback {
-            let closed = self.tracker.borrow().closed;
-            if !closed {
-                failure.invoke(|| {
-                    callback(self.pointer, self.new_cursor);
-                });
+        let callback = {
+            let mut inner = self.tracker.borrow_mut();
+            if !inner.closed
+                && inner.cursor_publication.pending
+                && Rc::ptr_eq(
+                    &inner.cursor_publication.observation,
+                    &self.cursor_observation,
+                )
+            {
+                let callback = inner.cursor_change_callback.clone();
+                if callback.is_some() {
+                    // Commit delivery before reentrant code. A successful old
+                    // publication cannot acknowledge a newer observation or hook.
+                    inner.cursor_publication.pending = false;
+                    inner.cursor_publication.published = self.new_cursor;
+                }
+                callback
+            } else {
+                None
+            }
+        };
+        if let Some(callback) = callback {
+            let delivered = failure.invoke(|| callback(self.pointer, self.new_cursor));
+            if delivered.is_none() {
+                let mut inner = self.tracker.borrow_mut();
+                if Rc::ptr_eq(
+                    &inner.cursor_publication.observation,
+                    &self.cursor_observation,
+                ) {
+                    inner.cursor_publication.pending = true;
+                }
             }
             let preserved = {
                 let inner = self.tracker.borrow();
