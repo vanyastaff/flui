@@ -5,6 +5,23 @@ Performance characteristics of `flui_animation`.
 Every `rust` block is compiled as a doctest against the current API. Lines
 starting with `#` are hidden setup.
 
+## Motion policy and idle frames
+
+`Vsync::has_running` describes continuous animation activity. A parked Normal
+repeat under Reduce contributes no continuous demand, while a Preserve
+indicator still does. Pending settlement and Full resumption can require a
+single frame even when continuous demand is false, including with paused
+playback. The registry retains that obligation across gates and rebinding.
+
+Property owners keep independent timelines: retargeting one property does not
+restart unchanged properties. Render-owned opacity, rotation, Drawer and
+Dismissible transitions invalidate their retained render path instead of
+rebuilding content on every sample. The workspace `motion_lab` example makes
+these paths interactive; its activity indicator intentionally keeps frames
+running, so it is not an idle-frame benchmark.
+
+The historical timing tables below do not measure the current policy path.
+
 ## Measured benchmarks
 
 The benchmark tables below are historical measurements from before the

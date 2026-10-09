@@ -76,10 +76,10 @@ impl AnimationController {
             match delivery {
                 ControllerDelivery::RequestFrame => {
                     let probe = self.walk_probe();
-                    if probe.has_run && !probe.parked {
+                    if probe.has_run {
                         let routes = self.inner.borrow().frame_routes.clone();
                         for route in routes {
-                            if probe.live_running || route.requires_settlement(probe.behavior) {
+                            if route.requires_sample(&probe) {
                                 route.request_frame(retirement);
                             }
                         }

@@ -18,6 +18,34 @@ use flui_sdk::interaction::FocusNode;
 use flui_sdk::view::SignalWriteExt;
 use flui_sdk::widgets::{SizedBox, WidgetState, WidgetStatesController};
 
+pub fn press_highlight_lasts_its_delay_under_reduced_motion() {
+    use flui_sdk::animation::MotionPreference;
+    use std::time::Duration;
+    let states = WidgetStatesController::default();
+    let mut laid = lay_out(
+        InkWell::new(SizedBox::new(80.0, 40.0))
+            .states_controller(states.clone())
+            .on_tap(|_| {}),
+        tight(80.0, 40.0),
+    );
+    laid.set_motion_preference(MotionPreference::Reduce);
+    laid.pump_for(Duration::from_millis(16));
+    laid.dispatch_pointer_down(40.0, 20.0);
+    laid.dispatch_pointer_up(40.0, 20.0);
+    assert!(states.value().contains_state(WidgetState::Pressed));
+    laid.pump_for(Duration::from_millis(16));
+    laid.pump_for(Duration::from_millis(50));
+    assert!(
+        states.value().contains_state(WidgetState::Pressed),
+        "Reduce must not consume the authored press delay"
+    );
+    laid.pump_for(Duration::from_millis(64));
+    assert!(
+        !states.value().contains_state(WidgetState::Pressed),
+        "the delay still expires under Reduce"
+    );
+}
+
 pub fn pointer_and_keyboard_activation_write_the_owning_signal() {
     let node = FocusNode::with_debug_label("writer-activation");
     let child_node = Rc::clone(&node);

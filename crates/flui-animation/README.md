@@ -8,6 +8,34 @@ controller) that the rendered page leaves out.
 
 ## Core Concepts
 
+### Presentation motion policy
+
+Application `MotionPreference` is `FollowSystem` (the default), `Reduce` or
+`Full`. Each presentation resolves it against the host's `SystemPreferences`.
+The runtime updates its clock and publishes `MediaQuery::motion_of` before
+the next frame. Application Full uses authored durations even when the host
+requests reduced motion or a duration scale.
+
+Controllers default to `AnimationBehavior::Normal`. Under Reduce, a finite
+run settles at its terminal value on the next registry tick; an infinite
+repeat parks without completing its future or requesting continuous frames.
+Full resumes a parked repeat with a fresh time anchor. Under FollowSystem,
+a positive host duration scale multiplies Normal durations.
+
+Select `AnimationBehavior::Preserve` for physical inertia, activity indicators
+and essential timers. It keeps authored timing under motion preferences;
+debug playback and registry muting still apply. Changing policy commits clock
+state without sampling controllers or invoking their listeners.
+
+The [guide](docs/GUIDE.md#motion-preferences) gives an executable clock example.
+The interactive `motion_lab` example at the workspace root compares property
+interruption, independent deadlines, gestures and preserved timers:
+
+```bash
+cargo run --example motion_lab --features material -- --full
+cargo run --example motion_lab --features material -- --reduce
+```
+
 ### The Animation Model
 
 In FLUI an `Animation<T>` produces values of type `T` over time. The animation itself doesn't know about time—it's sampled by a presentation registry or manually.

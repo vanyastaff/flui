@@ -482,6 +482,17 @@ impl LaidOut {
         self.host.ui_runtime().enter(|_| callback())
     }
 
+    /// Apply application motion policy through this tree's UI runtime.
+    /// The next pump observes it in animation ticks and inherited MediaQuery.
+    ///
+    /// # Panics
+    ///
+    /// Propagates the first publication or frame-request callback failure,
+    /// after the runtime has committed the preference.
+    pub fn set_motion_preference(&self, preference: flui_animation::MotionPreference) {
+        self.host.ui_runtime().set_motion_preference(preference);
+    }
+
     /// Close the tree's presentation for `reason`, as the host does once the
     /// close is agreed: its lifecycle observers are told it is detached, its
     /// held input is dropped, and later lifecycle updates are ignored. The

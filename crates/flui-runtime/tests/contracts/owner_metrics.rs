@@ -13,6 +13,110 @@ use flui_view::prelude::*;
 type ObservedMetrics = Rc<RefCell<Vec<(Size<f64>, f64)>>>;
 
 #[derive(Clone, StatelessView)]
+struct OpacityTarget(Rc<Cell<f64>>);
+
+impl StatelessView for OpacityTarget {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        flui_widgets::AnimatedOpacity::new(
+            self.0.get(),
+            flui_widgets::ColoredBox::new(flui_painting::styling::Color::rgb(255, 0, 0)),
+        )
+        .duration(std::time::Duration::from_secs(1))
+        .curve(flui_animation::ArcCurve::new(
+            flui_animation::Curves::Linear,
+        ))
+    }
+}
+
+#[derive(Default)]
+struct OpacitySceneSink {
+    alpha: Option<f64>,
+}
+
+impl FrameSink for OpacitySceneSink {
+    fn surface_size(&mut self) -> (u32, u32) {
+        (800, 600)
+    }
+
+    fn submit(&mut self, scene: flui_layer::Scene) -> SubmitVerdict {
+        self.alpha = scene.tree().iter().find_map(|(_, node)| {
+            if let flui_layer::Layer::Opacity(layer) = node.layer() {
+                Some(layer.alpha())
+            } else {
+                None
+            }
+        });
+        SubmitVerdict::Presented
+    }
+}
+
+#[test]
+fn implicit_opacity_settles_under_reduce() {
+    use flui_animation::MotionPreference;
+    use flui_foundation::{ManualClock, MonotonicClock};
+    use flui_runtime::ui_runtime::RuntimeHostServices;
+    use std::{
+        sync::{Arc, atomic::AtomicBool},
+        time::Duration,
+    };
+
+    fn frame(
+        runtime: &mut UiRuntime,
+        clock: &ManualClock,
+        sink: &mut OpacitySceneSink,
+        millis: u64,
+    ) {
+        clock.advance(Duration::from_millis(millis));
+        let _ = runtime.pump(&mut flui_runtime::pump::SampledClock(clock.now()), sink);
+    }
+
+    for preference in [MotionPreference::Full, MotionPreference::Reduce] {
+        let clock = ManualClock::new();
+        let mut runtime = UiRuntime::new(
+            crate::owner_publication::window(),
+            1.0,
+            RuntimeHostServices::new(
+                Arc::new(|| {}),
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(flui_platform_api::InMemoryClipboard::new()),
+                &flui_painting::FontCollection::new(),
+                flui_scheduler::ClockSource::Manual(clock.clone()),
+            ),
+        )
+        .expect("opacity runtime");
+        let target = Rc::new(Cell::new(0.2));
+        runtime
+            .attach_root_widget_with_size(&OpacityTarget(Rc::clone(&target)), 800.0, 600.0)
+            .expect("opacity root");
+        let mut sink = OpacitySceneSink::default();
+        frame(&mut runtime, &clock, &mut sink, 16);
+        assert_eq!(sink.alpha, Some(0.2));
+        target.set(0.8);
+        runtime.enter(|runtime| runtime.widgets().perform_reassemble());
+        frame(&mut runtime, &clock, &mut sink, 16);
+        frame(&mut runtime, &clock, &mut sink, 16);
+        frame(&mut runtime, &clock, &mut sink, 400);
+        let moving = sink.alpha.expect("painted opacity");
+        assert!(moving > 0.2 && moving < 0.8);
+        runtime.set_motion_preference(preference);
+        assert_eq!(sink.alpha, Some(moving), "publication waits for the frame");
+        frame(&mut runtime, &clock, &mut sink, 16);
+        if preference == MotionPreference::Reduce {
+            assert_eq!(
+                sink.alpha,
+                Some(0.8),
+                "the next painted scene reaches the authored endpoint"
+            );
+            assert!(!runtime.vsync().has_running());
+        } else {
+            assert!(sink.alpha.expect("moving opacity") > moving);
+            assert!(sink.alpha.expect("moving opacity") < 0.8);
+            assert!(runtime.vsync().has_running());
+        }
+    }
+}
+
+#[derive(Clone, StatelessView)]
 struct MotionReader(Rc<RefCell<Vec<flui_animation::MotionPolicy>>>);
 
 impl StatelessView for MotionReader {

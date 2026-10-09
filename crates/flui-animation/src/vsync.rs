@@ -54,15 +54,11 @@ impl PartialEq for VsyncRegistration {
 impl Eq for VsyncRegistration {}
 
 impl VsyncRegistration {
-    pub(crate) fn requires_settlement(&self, behavior: crate::AnimationBehavior) -> bool {
+    pub(crate) fn requires_sample(&self, probe: &crate::controller::WalkProbe) -> bool {
         let Some(owner) = self.owner.upgrade() else {
             return false;
         };
-        owner.borrow().last_tick.is_some_and(|tick| {
-            tick.time(behavior).as_duration() == Duration::MAX
-                || (behavior == crate::AnimationBehavior::Normal
-                    && tick.policy() == crate::MotionPolicy::Reduce)
-        })
+        probe.needs_sample(owner.borrow().last_tick)
     }
 
     pub(crate) fn owner_is_alive(&self) -> bool {
@@ -434,22 +430,10 @@ impl Vsync {
             let tick = inherited.map_or(inner.last_tick, |tick| {
                 Some(tick.hold_after(inner.last_tick.unwrap_or(tick)))
             });
-            let mine = inner.controllers.values().any(|registered| {
-                let probe = registered.controller.walk_probe();
-                probe.live_running
-                    || (probe.has_run
-                        && tick.is_some_and(|tick| {
-                            let exhausted =
-                                tick.time(probe.behavior).as_duration() == Duration::MAX;
-                            if probe.parked {
-                                tick.policy() == crate::MotionPolicy::Full && !exhausted
-                            } else {
-                                exhausted
-                                    || (probe.behavior == crate::AnimationBehavior::Normal
-                                        && tick.policy() == crate::MotionPolicy::Reduce)
-                            }
-                        }))
-            });
+            let mine = inner
+                .controllers
+                .values()
+                .any(|registered| registered.controller.walk_probe().needs_sample(tick));
             let children = inner
                 .children
                 .iter()

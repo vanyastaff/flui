@@ -695,6 +695,18 @@ impl HeadlessHost {
         self.ui_runtime.request_redraw();
     }
 
+    /// Apply application motion policy to this host's UI runtime and all its
+    /// presentations. Existing animations observe it at the next frame;
+    /// presentations opened later inherit it before their first root build.
+    ///
+    /// # Panics
+    ///
+    /// Propagates the first inherited-data or frame-request callback failure,
+    /// after the runtime has committed the preference to its presentations.
+    pub fn set_motion_preference(&self, preference: flui_animation::MotionPreference) {
+        self.enter(|runtime| runtime.set_motion_preference(preference));
+    }
+
     /// The clock the UI runtime reads. Advancing it moves the frame time, the
     /// gesture-arena deadlines and the produce gate together.
     #[must_use]

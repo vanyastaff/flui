@@ -885,6 +885,46 @@ fn muted_registry_settles_on_unmute() {
 }
 
 #[test]
+fn rebinding_a_parked_repeat_requests_its_new_policy_sample() {
+    use flui_animation::MotionPreference;
+    use std::{cell::Cell, rc::Rc};
+    for nested in [false, true] {
+        for sampled_destination in [false, true] {
+            let old = flui_animation::Vsync::new();
+            let mut owner = AnimationController::builder(ms(1000)).build_on(Some(&old));
+            let run = owner.controller().repeat(false).expect("infinite repeat");
+            let mut reduced = MotionClock::new();
+            reduced.set_preference(MotionPreference::Reduce);
+            old.tick_all(&reduced.frame(Duration::ZERO));
+            assert!(!old.has_running());
+            let registry = flui_animation::Vsync::new();
+            let child = flui_animation::Vsync::new();
+            let _seat = nested.then(|| registry.attach_child(&child).expect("nested registry"));
+            let target = if nested { &child } else { &registry };
+            let mut full = MotionClock::new();
+            if sampled_destination {
+                registry.tick_all(&full.frame(ms(100)));
+            }
+            let wakes = Rc::new(Cell::new(0));
+            let count = Rc::clone(&wakes);
+            registry.set_frame_requester(Some(Rc::new(move || count.set(count.get() + 1))));
+            owner.rebind(Some(target)).expect("move parked repeat");
+            assert!(
+                wakes.get() > 0,
+                "the new clock must observe its run, nested={nested}, sampled={sampled_destination}"
+            );
+            assert!(old.is_empty());
+            registry.tick_all(&full.frame(ms(200)));
+            assert_eq!(owner.controller().value(), 0.0);
+            registry.tick_all(&full.frame(ms(450)));
+            assert_eq!(owner.controller().value(), 0.25);
+            assert!(!run.is_complete());
+            assert!(registry.has_running());
+        }
+    }
+}
+
+#[test]
 fn tiny_scale_saturates_and_completes_once() {
     use std::{
         cell::Cell,

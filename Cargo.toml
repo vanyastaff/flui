@@ -849,6 +849,11 @@ path = "examples/material_demo/main.rs"
 required-features = ["material"]
 
 [[example]]
+name = "motion_lab"
+path = "examples/motion_lab.rs"
+required-features = ["material"]
+
+[[example]]
 name = "counter"
 path = "examples/counter.rs"
 

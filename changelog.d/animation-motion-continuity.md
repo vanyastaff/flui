@@ -1,5 +1,10 @@
 ### Added
 
+- Add the interactive `motion_lab` example with Full/Reduce/FollowSystem modes,
+  property interruption, independent deadlines, swipe and drawer transitions.
+- Headless hosts and laid-out widget harnesses can set the application motion
+  preference through the runtime's existing override path.
+
 - Resolve host motion preferences through presentation clocks, with application
   FollowSystem/Reduce/Full overrides and explicit Normal/Preserve controller
   behavior. Publish resolved policy through `MediaQuery::motion_of`.
@@ -34,6 +39,9 @@
   current position.
 
 ### Removed
+
+- Unused `AnimationBehavior::should_preserve` and `is_normal` predicates;
+  select behavior on the controller builder and match the enum when needed.
 
 - Shared normalized implicit controllers and optional generic property tweens;
   matrix interpolation retains its concrete decomposition tween.
@@ -79,3 +87,5 @@
 - Request pending motion settlement and parked resumption when a registry is
   unmuted, its frame requester is replaced or its child is attached, including
   paused playback and policy changes deferred by an ancestor gate.
+- Request a fresh policy sample when a parked repeat is rebound to another
+  presentation, including a registry that has not received its first tick.

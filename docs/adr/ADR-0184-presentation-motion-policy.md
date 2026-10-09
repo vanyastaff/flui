@@ -45,6 +45,12 @@ a child requests this work even when playback is paused. Ancestor policy reaches
 children that did not observe the changed tick while muted. Completed work and
 repeats parked under Reduce request no further frames.
 
+Rebinding a parked owner requests an initial policy sample on its destination
+registry. An unticked destination must observe its first policy before it can
+decide whether to remain parked. Once it has observed a tick, Full requests a
+fresh anchor unless the selected timeline is exhausted. A shared probe query
+classifies this one-frame obligation for both registry gates and owner admission.
+
 Runtime projection commits every presentation's clock before publication or wake
 callbacks. Changed policy or scale requests a frame, including when a repeat is
 parked or playback is paused. The resolved policy is published as
@@ -80,6 +86,8 @@ covers reverse and finite repeat endpoints, including paused clocks and runs.
 `reduced_motion_admission_wakes_a_paused_run` pins new work admitted after paused
 playback has already taken effect, through both direct and nested registries.
 `parked_repeat_resumes_from_zero_under_full` pins parking and fresh resumption.
+`rebinding_a_parked_repeat_requests_its_new_policy_sample` covers fresh and
+already-ticked destinations through direct and nested registrations.
 `policy_flips_mid_run` distinguishes an observed Reduce tick from a policy
 superseded before the frame. `simulation_settle_grid` checks analytic friction
 rest, the exact spring endpoint, first completed and last finite grid probes,
@@ -102,3 +110,10 @@ actual runtime frames, duplicate observations, late runtime seeds and later
 presentation overrides. Removing clock projection makes that test fail.
 `cupertino_route_does_not_slide_under_reduced_motion` checks that a pushed
 page accepts input at its final position on its first frame.
+`implicit_opacity_settles_under_reduce` observes the actual runtime's submitted
+opacity layer before and after a policy change. Material's
+`press_highlight_lasts_its_delay_under_reduced_motion` and
+`snack_bar_keeps_its_display_duration_under_reduced_motion` exercise preserved
+timers through the headless application's override, ordinary frames and input.
+`motion_lab_buttons_drive_independent_property_deadlines_and_reduce` drives the
+interactive example's exact tree and observes its committed painted geometry.
