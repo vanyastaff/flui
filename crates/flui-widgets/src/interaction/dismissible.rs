@@ -42,15 +42,10 @@
 //!    recognizer's would be, so a mostly-horizontal drag can still start a
 //!    vertical `Dismissible`'s gesture. Horizontal-family directions are
 //!    unaffected — they use the real `on_horizontal_drag_*` family.
-//! 4. **No live "my own size" query.** Event handlers run well after `build`
-//!    and would need this widget's last-laid-out size, but FLUI's
-//!    `BuildContext` has no such accessor. This widget
-//!    wraps its content in [`LayoutBuilder`] instead and
-//!    uses the incoming `BoxConstraints` (`max_width`/`max_height`) as the
-//!    drag-axis extent and the resize collapse's prior size — exact when the
-//!    constraints are tight (the common case: a fixed-extent list item), but
-//!    **`Dismissible` requires bounded constraints along its dismiss axis**;
-//!    an unbounded axis has no extent to divide the drag fraction by.
+//! 4. **Finite laid-out size.** Drag and release use the card's committed
+//!    render size through the presentation's pipeline owner. Loose or
+//!    unbounded incoming constraints are supported when the child lays out
+//!    to a finite positive dismiss-axis extent. A zero-sized card cannot drag.
 //! 5. **No keep-alive.** A mid-flight `Dismissible` can be disposed by a lazy
 //!    list's viewport GC. FLUI has no keep-alive mechanism at all yet — a
 //!    framework-wide gap, not specific to this widget.
@@ -77,23 +72,22 @@ use flui_animation::{
     Animation, AnimationController, AnimationStatus, Curves, DrivenController, Vsync,
 };
 use flui_foundation::geometry::Size;
-use flui_foundation::{Listenable, ListenerId};
+use flui_foundation::{Listenable, ListenerId, RenderId};
 use flui_interaction::{DragEndDetails, DragStartDetails, DragUpdateDetails};
 use flui_painting::paint::Clip;
 use flui_painting::typography::TextDirection;
-use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::hit_testing::HitTestBehavior;
+use flui_rendering::pipeline::PipelineCell;
+use flui_view::element::ElementKind;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
 use flui_view::{
-    BoxedView, EventCx, EventOutcome, IntoView, PostFrameHandle, RebuildHandle, ViewExt, ViewState,
-    WriterSource,
+    BoxedView, EventCx, EventOutcome, IntoView, PostFrameHandle, RebuildHandle, View, ViewExt,
+    ViewState, WriterSource,
 };
 
 use crate::animated::VsyncScope;
 use crate::localization::Directionality;
-use crate::{
-    ClipRect, FractionalTranslation, GestureDetector, LayoutBuilder, Positioned, SizedBox, Stack,
-};
+use crate::{ClipRect, FractionalTranslation, GestureDetector, Positioned, SizedBox, Stack};
 
 /// Minimum fling speed — a fling below this speed
 /// never dismisses, regardless of direction.
@@ -157,7 +151,7 @@ pub struct DismissUpdateDetails {
 ///
 /// See the module docs for the documented
 /// limits (no `confirm_dismiss`, no progressive background clip, no
-/// vertical-drag recognizer family, bounded-constraints contract, no
+/// vertical-drag recognizer family, finite laid-out-size contract, no
 /// keep-alive, no required key).
 #[derive(Clone, StatefulView)]
 pub struct Dismissible {
@@ -458,6 +452,9 @@ fn describe_fling_gesture(
 /// signals and mutates this state.
 #[derive(Default)]
 struct DragState {
+    node: Cell<Option<RenderId>>,
+    pipeline: RefCell<Option<PipelineCell>>,
+    laid_out_size: Cell<Option<Size>>,
     /// Signed pixel extent dragged so far.
     drag_extent: Cell<f64>,
     /// Whether a drag contact is currently down.
@@ -500,6 +497,70 @@ struct DragState {
     /// Set by the resize controller's listener once it observes completion.
     resize_completed: Arc<AtomicBool>,
     delivered_resize_dismissal: Cell<bool>,
+}
+
+impl DragState {
+    /// Input runs after layout; resolve the retained listener identity against
+    /// its owning pipeline without holding a borrow during controller delivery.
+    fn refresh_size(&self) -> Option<Size> {
+        let node = self.node.get()?;
+        let pipeline = self.pipeline.borrow().clone()?;
+        let size = pipeline.with(|owner| owner.box_size(node))?;
+        self.laid_out_size.set(Some(size));
+        Some(size)
+    }
+}
+
+/// The detector's direct child identifies its Listener render node, whose
+/// committed size matches the untranslated card. No new render node is needed.
+#[derive(Clone)]
+struct DismissGeometry {
+    drag: Rc<DragState>,
+    child: BoxedView,
+}
+
+impl View for DismissGeometry {
+    fn create_element(&self) -> ElementKind {
+        ElementKind::stateful(self)
+    }
+}
+
+impl StatefulView for DismissGeometry {
+    type State = DismissGeometryState;
+
+    fn create_state(&self) -> Self::State {
+        DismissGeometryState {
+            drag: self.drag.clone(),
+            post_frame: None,
+        }
+    }
+}
+
+struct DismissGeometryState {
+    drag: Rc<DragState>,
+    post_frame: Option<PostFrameHandle>,
+}
+
+impl ViewState<DismissGeometry> for DismissGeometryState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.drag.node.set(ctx.find_render_object());
+        self.post_frame = ctx.post_frame_handle();
+    }
+
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        self.drag.node.set(ctx.find_render_object());
+        self.post_frame = ctx.post_frame_handle();
+    }
+
+    fn build(&self, view: &DismissGeometry, _ctx: &dyn BuildContext) -> impl IntoView {
+        if let Some(post_frame) = &self.post_frame {
+            let drag = view.drag.clone();
+            let _ = post_frame.schedule(move |_| {
+                drag.refresh_size();
+            });
+        }
+        view.child.clone()
+    }
 }
 
 /// Configuration captured once per `build()` as an owned (non-borrowing)
@@ -674,6 +735,8 @@ impl ViewState<Dismissible> for DismissibleState {
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        let outgoing = self.drag.pipeline.replace(ctx.pipeline_owner());
+        drop(outgoing);
         self.vsync = VsyncScope::maybe_of(ctx);
         if let Err(error) = self.move_controller.rebind(self.vsync.as_ref()) {
             tracing::error!(%error, "Dismissible lost its frame registry");
@@ -762,157 +825,146 @@ impl ViewState<Dismissible> for DismissibleState {
             .clone()
             .expect("BUG: Dismissible::build ran before init_state acquired a RebuildHandle");
 
-        LayoutBuilder::new(move |_ctx, constraints| {
-            let axis_is_x = direction_is_x_axis(direction);
-            let overall_extent = if axis_is_x {
-                constraints.max_width
-            } else {
-                constraints.max_height
-            };
-            // Module docs divergence #4: this widget divides by
-            // `overall_extent` to turn a drag delta into a fraction, so it
-            // requires bounded constraints along the dismiss axis. An
-            // unbounded axis (`f64::INFINITY`) would silently produce a
-            // stuck-at-zero or NaN drag fraction instead of a loud failure —
-            // catch the caller error here instead.
-            debug_assert!(
-                overall_extent.is_finite(),
-                "BUG: Dismissible requires bounded constraints along its dismiss axis \
-                 (got an unbounded/non-finite extent) — see module docs divergence #4"
+        let axis_is_x = direction_is_x_axis(direction);
+
+        // Resolve completion from committed geometry, then deliver user
+        // effects after this frame rather than writing signals in build.
+        deliver_move_completion(&drag, &move_controller, &deferred, vsync.as_ref(), &rebuild);
+        deliver_resize_progress(&drag, &deferred);
+        deliver_on_update(
+            &drag,
+            &move_controller,
+            direction,
+            text_direction,
+            &resolved,
+            on_update.as_ref(),
+        );
+
+        if let Some(resize_controller) = drag.resize_controller.borrow().as_ref() {
+            let prior = drag
+                .size_prior_to_collapse
+                .get()
+                .expect("BUG: resize_controller exists only after size_prior_to_collapse is set");
+            return resize_collapse_view(
+                resize_controller.controller(),
+                axis_is_x,
+                prior,
+                background,
             );
+        }
 
-            // This closure is an ordinary build pass serviced between layout
-            // passes. Resolve the animation transitions with these constraints,
-            // but dispatch their user effects only after the frame: a signal
-            // write from here would be rejected as WrittenDuringBuild.
-            deliver_move_completion(
-                &drag,
-                &move_controller,
-                &deferred,
-                vsync.as_ref(),
-                &rebuild,
-                constraints,
-            );
-            deliver_resize_progress(&drag, &deferred);
-            deliver_on_update(
-                &drag,
-                &move_controller,
-                direction,
-                text_direction,
-                &resolved,
-                on_update.as_ref(),
-            );
+        let content = sliding_content_view(
+            &move_controller,
+            drag.drag_extent.get(),
+            direction,
+            resolved.cross_axis_end_offset,
+            child,
+        );
+        let content = match background {
+            Some(bg) if move_controller.value() != 0.0 => Stack::new(vec![
+                Positioned::fill(ClipRect::new().clip_behavior(Clip::HardEdge).child(bg)).boxed(),
+                content.boxed(),
+            ])
+            .boxed(),
+            _ => content.boxed(),
+        };
 
-            if let Some(resize_controller) = drag.resize_controller.borrow().as_ref() {
-                let prior = drag.size_prior_to_collapse.get().expect(
-                    "BUG: resize_controller exists only after size_prior_to_collapse is set",
-                );
-                return resize_collapse_view(
-                    resize_controller.controller(),
-                    axis_is_x,
-                    prior,
-                    background.clone(),
-                );
-            }
+        if direction == DismissDirection::None {
+            return content;
+        }
 
-            let content = sliding_content_view(
-                &move_controller,
-                drag.drag_extent.get(),
-                direction,
-                resolved.cross_axis_end_offset,
-                child.clone(),
-            );
-            let content = match background.clone() {
-                Some(bg) if move_controller.value() != 0.0 => Stack::new(vec![
-                    Positioned::fill(ClipRect::new().clip_behavior(Clip::HardEdge).child(bg))
-                        .boxed(),
-                    content.boxed(),
-                ])
-                .boxed(),
-                _ => content.boxed(),
-            };
+        let mut detector = GestureDetector::new().behavior(behavior);
+        let drag_for_start = Rc::clone(&drag);
+        let controller_for_start = move_controller.clone();
+        let drag_for_update = Rc::clone(&drag);
+        let controller_for_update = move_controller.clone();
+        let resolved_for_update = Rc::clone(&resolved);
+        let drag_for_end = Rc::clone(&drag);
+        let controller_for_end = move_controller;
+        let resolved_for_end = Rc::clone(&resolved);
+        let vsync_for_end = vsync;
+        let rebuild_for_end = rebuild;
 
-            if direction == DismissDirection::None {
-                return content;
-            }
+        if axis_is_x {
+            detector = detector
+                .on_horizontal_drag_start(move |_cx, _details: DragStartDetails| {
+                    if let Some(size) = drag_for_start.refresh_size() {
+                        handle_drag_start(&drag_for_start, &controller_for_start, size.width);
+                    }
+                })
+                .on_horizontal_drag_update(move |_cx, details: DragUpdateDetails| {
+                    handle_drag_update(
+                        &drag_for_update,
+                        &controller_for_update,
+                        direction,
+                        resolved_for_update.text_direction,
+                        drag_for_update
+                            .refresh_size()
+                            .map_or(0.0, |size| size.width),
+                        details.delta.dx,
+                    );
+                })
+                .on_horizontal_drag_end(move |_cx, details: DragEndDetails| {
+                    let velocity = details.fling_velocity().pixels_per_second;
+                    handle_drag_end(
+                        &drag_for_end,
+                        &controller_for_end,
+                        &resolved_for_end,
+                        vsync_for_end.as_ref(),
+                        &rebuild_for_end,
+                        drag_for_end.refresh_size(),
+                        details.reason,
+                        velocity.dx,
+                        velocity.dy,
+                    );
+                });
+        } else {
+            detector = detector
+                .on_pan_start(move |_cx, _details: DragStartDetails| {
+                    if let Some(size) = drag_for_start.refresh_size() {
+                        handle_drag_start(&drag_for_start, &controller_for_start, size.height);
+                    }
+                })
+                .on_pan_update(move |_cx, details: DragUpdateDetails| {
+                    handle_drag_update(
+                        &drag_for_update,
+                        &controller_for_update,
+                        direction,
+                        resolved_for_update.text_direction,
+                        drag_for_update
+                            .refresh_size()
+                            .map_or(0.0, |size| size.height),
+                        details.delta.dy,
+                    );
+                })
+                .on_pan_end(move |_cx, details: DragEndDetails| {
+                    let velocity = details.fling_velocity().pixels_per_second;
+                    handle_drag_end(
+                        &drag_for_end,
+                        &controller_for_end,
+                        &resolved_for_end,
+                        vsync_for_end.as_ref(),
+                        &rebuild_for_end,
+                        drag_for_end.refresh_size(),
+                        details.reason,
+                        velocity.dy,
+                        velocity.dx,
+                    );
+                });
+        }
 
-            let mut detector = GestureDetector::new().behavior(behavior);
-            let drag_for_start = Rc::clone(&drag);
-            let controller_for_start = move_controller.clone();
-            let drag_for_update = Rc::clone(&drag);
-            let controller_for_update = move_controller.clone();
-            let resolved_for_update = Rc::clone(&resolved);
-            let drag_for_end = Rc::clone(&drag);
-            let controller_for_end = move_controller.clone();
-            let resolved_for_end = Rc::clone(&resolved);
-            let vsync_for_end = vsync.clone();
-            let rebuild_for_end = rebuild.clone();
-
-            if axis_is_x {
-                detector = detector
-                    .on_horizontal_drag_start(move |_cx, _details: DragStartDetails| {
-                        handle_drag_start(&drag_for_start, &controller_for_start, overall_extent);
-                    })
-                    .on_horizontal_drag_update(move |_cx, details: DragUpdateDetails| {
-                        handle_drag_update(
-                            &drag_for_update,
-                            &controller_for_update,
-                            direction,
-                            resolved_for_update.text_direction,
-                            overall_extent,
-                            details.delta.dx,
-                        );
-                    })
-                    .on_horizontal_drag_end(move |_cx, details: DragEndDetails| {
-                        let velocity = details.fling_velocity().pixels_per_second;
-                        handle_drag_end(
-                            &drag_for_end,
-                            &controller_for_end,
-                            &resolved_for_end,
-                            vsync_for_end.as_ref(),
-                            &rebuild_for_end,
-                            constraints,
-                            details.reason,
-                            velocity.dx,
-                            velocity.dy,
-                        );
-                    });
-            } else {
-                detector = detector
-                    .on_pan_start(move |_cx, _details: DragStartDetails| {
-                        handle_drag_start(&drag_for_start, &controller_for_start, overall_extent);
-                    })
-                    .on_pan_update(move |_cx, details: DragUpdateDetails| {
-                        handle_drag_update(
-                            &drag_for_update,
-                            &controller_for_update,
-                            direction,
-                            resolved_for_update.text_direction,
-                            overall_extent,
-                            details.delta.dy,
-                        );
-                    })
-                    .on_pan_end(move |_cx, details: DragEndDetails| {
-                        let velocity = details.fling_velocity().pixels_per_second;
-                        handle_drag_end(
-                            &drag_for_end,
-                            &controller_for_end,
-                            &resolved_for_end,
-                            vsync_for_end.as_ref(),
-                            &rebuild_for_end,
-                            constraints,
-                            details.reason,
-                            velocity.dy,
-                            velocity.dx,
-                        );
-                    });
-            }
-
-            detector.child(content).boxed()
-        })
+        detector
+            .child(DismissGeometry {
+                drag,
+                child: content,
+            })
+            .boxed()
     }
 
     fn dispose(&mut self) {
+        self.drag.node.set(None);
+        let outgoing = self.drag.pipeline.borrow_mut().take();
+        drop(outgoing);
         if let Some(events) = &self.events {
             events.mounted.set(false);
         }
@@ -985,6 +1037,9 @@ fn handle_drag_start(
     move_controller: &AnimationController,
     overall_extent: f64,
 ) {
+    if !overall_extent.is_finite() || overall_extent <= 0.0 {
+        return;
+    }
     drag.drag_underway.set(true);
     if move_controller.is_animating() {
         let sign = drag_sign(drag.drag_extent.get());
@@ -1020,7 +1075,11 @@ fn handle_drag_update(
     overall_extent: f64,
     delta: f64,
 ) {
-    if !drag.drag_underway.get() || move_controller.is_animating() {
+    if !drag.drag_underway.get()
+        || move_controller.is_animating()
+        || !overall_extent.is_finite()
+        || overall_extent <= 0.0
+    {
         return;
     }
     let new_extent =
@@ -1044,12 +1103,8 @@ fn handle_drag_update(
 /// Ends a drag: fling, threshold, or spring back. Release speed uses the gesture's
 /// px/s over the same dismiss-axis extent `handle_drag_update` divides drag
 /// deltas by, so the controller keeps the rate the drag gave it and the card
-/// leaves as fast as it was moving. Under tight constraints (the common
-/// case) that extent is the card's, and the card leaves at the finger's
-/// speed whatever its size. Under loose ones it is the maximum, not the
-/// laid-out child, so drag and fling alike move the card slower than the
-/// finger by the same factor (module docs divergence #4: no laid-out size
-/// accessor). Invalid extents are refused by the common fling admission.
+/// leaves as fast as it was moving under tight, loose or unbounded incoming
+/// constraints. Invalid extents are refused by the common fling admission.
 #[expect(clippy::too_many_arguments)] // the release handler receives its captured state and terminal details
 fn handle_drag_end(
     drag: &Rc<DragState>,
@@ -1057,7 +1112,7 @@ fn handle_drag_end(
     resolved: &Rc<ResolvedConfig>,
     vsync: Option<&Vsync>,
     rebuild: &RebuildHandle,
-    constraints: BoxConstraints,
+    size: Option<Size>,
     reason: flui_interaction::GestureEndReason,
     primary_velocity: f64,
     cross_velocity: f64,
@@ -1071,6 +1126,10 @@ fn handle_drag_end(
         let _ = move_controller.reverse();
         return;
     }
+    let Some(size) = size else {
+        let _ = move_controller.reverse();
+        return;
+    };
     if move_controller.is_completed() {
         // The direct bypass for a drag released exactly at 100%. Calls
         // `run_move_completion` unconditionally, NOT the counter-gated
@@ -1078,7 +1137,7 @@ fn handle_drag_end(
         // bumped `move_completed_runs` in the first place (see
         // `discard_transient_move_completion`), so gating on that counter here
         // would wrongly skip this legitimate completion.
-        run_move_completion(drag, move_controller, resolved, vsync, rebuild, constraints);
+        run_move_completion(drag, move_controller, resolved, vsync, rebuild, size);
         return;
     }
     let dismiss_direction = extent_to_direction(
@@ -1091,9 +1150,9 @@ fn handle_drag_end(
     // — re-register now so `Vsync`'s tick anchor lines up with the run's true
     // start (see `unregister_move_controller_vsync`'s doc).
     let extent = if direction_is_x_axis(resolved.direction) {
-        constraints.max_width
+        size.width
     } else {
-        constraints.max_height
+        size.height
     };
     match describe_fling_gesture(
         drag.drag_extent.get(),
@@ -1147,7 +1206,7 @@ fn run_move_completion(
     resolved: &Rc<ResolvedConfig>,
     vsync: Option<&Vsync>,
     rebuild: &RebuildHandle,
-    constraints: BoxConstraints,
+    size: Size,
 ) {
     let dismiss_direction = extent_to_direction(
         drag.drag_extent.get(),
@@ -1170,7 +1229,7 @@ fn run_move_completion(
             }
         }
         Some(duration) => {
-            start_resize_animation(drag, duration, vsync, rebuild, constraints.biggest());
+            start_resize_animation(drag, duration, vsync, rebuild, size);
         }
     }
 }
@@ -1192,14 +1251,16 @@ fn deliver_move_completion(
     resolved: &Rc<ResolvedConfig>,
     vsync: Option<&Vsync>,
     rebuild: &RebuildHandle,
-    constraints: BoxConstraints,
 ) {
     let completed_runs = drag.move_completed_runs.load(Ordering::Relaxed);
     if completed_runs <= drag.delivered_move_completions.get() {
         return;
     }
+    let Some(size) = drag.laid_out_size.get() else {
+        return;
+    };
     drag.delivered_move_completions.set(completed_runs);
-    run_move_completion(drag, move_controller, resolved, vsync, rebuild, constraints);
+    run_move_completion(drag, move_controller, resolved, vsync, rebuild, size);
 }
 
 /// Starts the resize collapse: the

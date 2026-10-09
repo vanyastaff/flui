@@ -173,13 +173,14 @@ pub(crate) fn cancelling_a_fully_slid_card_restores_it_without_dismissal() {
 
 /// The card's speed, in px/s, just after a release at 1500 px/s on a card
 /// `width` px wide.
-fn release_speed(width: f64, reverse: bool) -> f64 {
+fn release_speed(width: f64, reverse: bool, maximum: Option<f64>, vertical: bool) -> f64 {
     let painted_x = |laid: &crate::common::LaidOut| {
         laid.draw_ops()
             .into_iter()
             .find_map(|command| {
                 if let flui_painting::display_list::DrawOp::Rect { rect, .. } = command.op {
-                    Some(command.transform.transform_point(rect.left(), rect.top()).0)
+                    let (x, y) = command.transform.transform_point(rect.left(), rect.top());
+                    Some(if vertical { y } else { x })
                 } else {
                     None
                 }
@@ -187,29 +188,63 @@ fn release_speed(width: f64, reverse: bool) -> f64 {
             .expect("the card paints a rectangle")
     };
     let vsync = Vsync::new();
-    let card = Dismissible::new(ColoredBox::new(Color::rgb(10, 20, 30))).resize_duration(None);
+    let size = if vertical {
+        flui_foundation::geometry::Size::new(100.0, width)
+    } else {
+        flui_foundation::geometry::Size::new(width, 100.0)
+    };
+    let card = Dismissible::new(
+        flui_widgets::SizedBox::new(size.width, size.height)
+            .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+    )
+    .direction(if vertical {
+        DismissDirection::Vertical
+    } else {
+        DismissDirection::Horizontal
+    })
+    .resize_duration(None);
     let mut laid = lay_out_animated(
         VsyncScope::new(vsync.clone(), card),
-        tight(width, 100.0),
+        if let Some(maximum) = maximum {
+            flui_rendering::constraints::BoxConstraints::loose(
+                flui_foundation::geometry::Size::new(
+                    if vertical { 100.0 } else { maximum },
+                    if vertical { maximum } else { 100.0 },
+                ),
+            )
+        } else {
+            tight(size.width, size.height)
+        },
         vsync,
     );
-    laid.dispatch_pointer_down(10.0, 50.0);
+    let point = |primary| {
+        if vertical {
+            (50.0, primary)
+        } else {
+            (primary, 50.0)
+        }
+    };
+    let (start_x, start_y) = point(10.0);
+    laid.dispatch_pointer_down(start_x, start_y);
     // 15 px every 10 ms: 1500 px/s to the right.
     let mut x = 10.0;
     for _ in 0..if reverse { 12 } else { 5 } {
         x += if reverse { 20.0 } else { 15.0 };
-        laid.dispatch_pointer_move_after(x, 50.0, Duration::from_millis(10));
+        let (px, py) = point(x);
+        laid.dispatch_pointer_move_after(px, py, Duration::from_millis(10));
     }
     if reverse {
         for _ in 0..12 {
             x -= 15.0;
-            laid.dispatch_pointer_move_after(x, 50.0, Duration::from_millis(10));
+            let (px, py) = point(x);
+            laid.dispatch_pointer_move_after(px, py, Duration::from_millis(10));
         }
     }
     laid.pump();
     let before_release = painted_x(&laid);
     assert!(before_release > 0.0);
-    laid.dispatch_pointer_up(x, 50.0);
+    let (px, py) = point(x);
+    laid.dispatch_pointer_up(px, py);
     laid.pump();
     let after_release = painted_x(&laid);
     assert!(
@@ -236,17 +271,70 @@ fn release_speed(width: f64, reverse: bool) -> f64 {
 /// card's width: the gesture's px/s become controller units per second by
 /// dividing by the width, not by a fixed scale.
 pub(crate) fn a_dismissible_release_keeps_finger_speed_on_any_width() {
-    for (width, reverse) in [
-        (150.0, false),
-        (1200.0, false),
-        (150.0, true),
-        (1200.0, true),
-    ] {
-        let speed = release_speed(width, reverse);
-        let expected = if reverse { -1500.0 } else { 1500.0 };
-        assert!(
-            (speed - expected).abs() <= 0.1 * 1500.0,
-            "a {width} px card left at {speed} px/s after a {expected} px/s release"
+    for vertical in [false, true] {
+        for (width, reverse, maximum) in [
+            (150.0, false, None),
+            (1200.0, false, None),
+            (150.0, true, None),
+            (1200.0, true, None),
+            (150.0, false, Some(2400.0)),
+            (1200.0, false, Some(2400.0)),
+            (150.0, true, Some(2400.0)),
+            (150.0, false, Some(f64::INFINITY)),
+        ] {
+            let speed = release_speed(width, reverse, maximum, vertical);
+            let expected = if reverse { -1500.0 } else { 1500.0 };
+            assert!(
+                (speed - expected).abs() <= 0.1 * 1500.0,
+                "a {width} px card (maximum {maximum:?}, vertical {vertical}) left at {speed} px/s after a {expected} px/s release"
+            );
+        }
+    }
+}
+
+pub(crate) fn a_dismissible_collapses_its_laid_out_size() {
+    let color = Color::rgb(131, 43, 71);
+    let dismissed = Rc::new(Cell::new(0));
+    let output = dismissed.clone();
+    let vsync = Vsync::new();
+    let card = Dismissible::new(
+        flui_widgets::SizedBox::new(150.0, 100.0).child(ColoredBox::new(Color::rgb(10, 20, 30))),
+    )
+    .background(ColoredBox::new(color))
+    .on_dismissed(move |_, _| output.set(output.get() + 1));
+    let mut laid = lay_out_animated(
+        VsyncScope::new(vsync.clone(), card),
+        flui_rendering::constraints::BoxConstraints::loose(flui_foundation::geometry::Size::new(
+            2400.0, 100.0,
+        )),
+        vsync,
+    );
+    laid.dispatch_pointer_down(10.0, 50.0);
+    for step in 1..=12 {
+        laid.dispatch_pointer_move_after(
+            10.0 + f64::from(step) * 20.0,
+            50.0,
+            Duration::from_millis(10),
         );
     }
+    laid.dispatch_pointer_up(250.0, 50.0);
+    laid.pump();
+    let rect = laid
+        .draw_ops()
+        .into_iter()
+        .find_map(|command| {
+            if let flui_painting::display_list::DrawOp::Rect { rect, paint } = command.op
+                && paint.color == color
+            {
+                Some(rect)
+            } else {
+                None
+            }
+        })
+        .expect("the collapsing background paints");
+    assert_eq!((rect.width(), rect.height()), (150.0, 100.0));
+    assert_eq!(dismissed.get(), 0);
+    laid.pump_for(Duration::from_secs(1));
+    laid.pump_for(Duration::from_secs(1));
+    assert_eq!(dismissed.get(), 1);
 }

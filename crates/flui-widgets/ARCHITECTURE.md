@@ -6,8 +6,12 @@ Dismissible preserves the dragged side while a reverse release moves back
 toward the origin. Physical velocity uses `AnimationController::fling_across`
 (ADR-0182). `a_dismissible_release_keeps_finger_speed_on_any_width` measures
 painted coordinates before and after release and the first frame velocity for
-both release directions on two tightly constrained widths. Loose child sizing
-still needs the actual laid-out extent rather than constraint maxima.
+both axes and release directions under tight, loose and unbounded incoming
+constraints. Lifecycle retains the Listener identity and presentation pipeline;
+input reads committed size before controller calls, and post-frame snapshots
+provide geometry to deferred collapse. Build never queries the pipeline.
+`a_dismissible_collapses_its_laid_out_size` verifies the initial painted collapse
+extent and single completion delivery.
 
 ## Independent implicit property motion
 

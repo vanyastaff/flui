@@ -36,6 +36,8 @@
 ### Fixed
 
 - Preserve the dragged position when Dismissible releases in the opposite direction.
+- Use Dismissible's actual laid-out size for drag, fling and collapse under loose
+  or unbounded incoming constraints, and remove its constraints-only LayoutBuilder.
 - Retain Drawer gesture ownership while opening changes its painted content;
   gesture release preserves physical speed across panel widths.
 - Preserve representable motion rates when intermediate multiplication underflows.

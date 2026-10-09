@@ -30,9 +30,12 @@ configured edge; opening expands it to the panel and scrim without replacing
 the captured route. Cancellation still settles by position without momentum.
 
 This contract does not choose the consumer's extent. Drawer uses its declared
-panel width capped by available width. Dismissible's existing constraints-based
-extent is exact under tight constraints; actual child sizing under loose
-constraints remains a separate geometry requirement.
+panel width capped by available width. Dismissible resolves its retained
+Listener identity against the presentation's pipeline after layout. Input reads
+the committed card size before any controller delivery; a post-frame snapshot
+supplies the size for deferred collapse without querying the pipeline in build.
+Tight, loose and unbounded incoming constraints share this actual-size contract;
+a finite positive dismiss-axis extent is required for dragging.
 
 ## Evidence
 
@@ -43,7 +46,9 @@ delivery of the previous run. Screen velocity is checked from position samples.
 
 The mounted `animation_and_visibility` table measures painted card coordinates
 in `a_dismissible_release_keeps_finger_speed_on_any_width`, including backward
-release and the position seam on two widths.
+release and the position seam on two widths, both axes, loose and unbounded
+incoming constraints. `a_dismissible_collapses_its_laid_out_size` checks the
+painted collapse background's initial extent and one completion callback.
 
 Material's `overlay_contracts` table mounts
 `a_drawer_release_keeps_finger_speed`. It pumps between pointer moves and checks
