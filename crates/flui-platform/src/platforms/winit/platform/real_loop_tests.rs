@@ -128,6 +128,186 @@ fn build_test_event_loop() -> EventLoop<()> {
     }
 }
 
+/// Native ingress needs the real event-loop owner; no test changes OS settings.
+#[test]
+#[cfg(target_os = "windows")]
+#[allow(
+    unsafe_code,
+    reason = "pointer-free queued mouse messages target an owned hidden HWND"
+)]
+fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
+    use flui_platform_api::{
+        WheelStep,
+        pointer::{PointerEvent, ScrollUnit},
+    };
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::{
+        Foundation::{HWND, LPARAM, WPARAM},
+        UI::WindowsAndMessaging::{
+            PostMessageW, SPI_GETWHEELSCROLLCHARS, SPI_GETWHEELSCROLLLINES,
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW, WM_MOUSEHWHEEL,
+            WM_MOUSEMOVE, WM_MOUSEWHEEL,
+        },
+    };
+
+    let platform = Arc::new(WinitPlatform::new());
+    let event_loop = build_test_event_loop();
+    let proxy = event_loop.create_proxy();
+    let owner_proxy = proxy.clone();
+    let signal = crate::shared::owner_signal::OwnerSignal::new(Arc::new(move || {
+        owner_proxy
+            .send_event(())
+            .map_err(|error| crate::PlatformError::EventLoop {
+                message: error.to_string(),
+            })
+    }));
+    *platform.owner_signal.lock() = Some(signal);
+    let (control, receiver) = control_lane(Arc::new(move || {
+        let _ = proxy.send_event(());
+    }));
+    platform
+        .install_control_lane(thread::current().id(), control.clone())
+        .expect("install actual owner lane");
+    let scrolls = Arc::new(Mutex::new(Vec::new()));
+    let observations = Arc::new(Mutex::new(None));
+    let done = Arc::new(AtomicBool::new(false));
+    let timeout_done = done.clone();
+    let timeout_control = control.clone();
+    let timeout = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !timeout_done.load(Ordering::Acquire) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        timeout_control.request_quit();
+    });
+    let sink = scrolls.clone();
+    let observed = observations.clone();
+    let callback_done = done.clone();
+    let quit = platform.clone();
+    let mut app = WinitApp {
+        platform: platform.clone(),
+        on_ready: Some(Box::new(move |owner| {
+            let mut lines = 0_u32;
+            let mut characters = 0_u32;
+            // SAFETY: writable scalar outputs; these getters do not mutate OS policy.
+            unsafe {
+                SystemParametersInfoW(
+                    SPI_GETWHEELSCROLLLINES,
+                    0,
+                    Some((&raw mut lines).cast()),
+                    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+                )?;
+                SystemParametersInfoW(
+                    SPI_GETWHEELSCROLLCHARS,
+                    0,
+                    Some((&raw mut characters).cast()),
+                    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+                )?;
+            }
+            let expected = if lines == u32::MAX {
+                WheelStep::Page
+            } else {
+                WheelStep::Lines(lines)
+            };
+            let snapshot = owner.preferences()?;
+            *observed.lock() = Some((snapshot.wheel().clone(), expected, characters));
+            let window = owner
+                .open_window(options("winit-wheel-policy"))?
+                .try_ready()?;
+            let RawWindowHandle::Win32(handle) = window.window_handle()?.as_raw() else {
+                panic!("Windows event loop must create a Win32 window");
+            };
+            let hwnd = HWND(handle.hwnd.get() as *mut std::ffi::c_void);
+            window.on_input(Box::new(move |input| {
+                if let crate::PlatformInput::Pointer(PointerEvent::Scroll(scroll)) = input {
+                    let complete = {
+                        let mut log = sink.lock();
+                        log.push(scroll);
+                        log.len() == 4
+                    };
+                    if complete {
+                        callback_done.store(true, Ordering::Release);
+                        quit.quit();
+                    }
+                }
+                crate::DispatchEventResult::default()
+            }));
+            // SAFETY: this exact owned hidden HWND remains tracked until loop shutdown;
+            // every queued message contains only by-value coordinates/wheel distance.
+            unsafe {
+                PostMessageW(Some(hwnd), WM_MOUSEMOVE, WPARAM(0), LPARAM(40 | (40 << 16)))?;
+                for (message, distance) in [
+                    (WM_MOUSEWHEEL, 120_i16),
+                    (WM_MOUSEWHEEL, -60),
+                    (WM_MOUSEHWHEEL, 120),
+                    (WM_MOUSEHWHEEL, -60),
+                ] {
+                    PostMessageW(
+                        Some(hwnd),
+                        message,
+                        WPARAM(usize::from(distance.cast_unsigned()) << 16),
+                        LPARAM(0),
+                    )?;
+                }
+            }
+            Ok(())
+        })),
+        control: receiver,
+        quit_notified: false,
+        in_flight_replies: Vec::new(),
+        bootstrap_error: None,
+        self_close_deadline: None,
+        self_close_route: SelfCloseRoute::default(),
+    };
+    let result = event_loop.run_app(&mut app);
+    done.store(true, Ordering::Release);
+    timeout.join().expect("bounded exit worker");
+    result.expect("real event loop completes");
+    assert!(
+        app.bootstrap_error.is_none(),
+        "public bootstrap failed: {:?}",
+        app.bootstrap_error
+    );
+    let log = scrolls.lock();
+    assert_eq!(
+        log.len(),
+        4,
+        "all actual native packets remain deliverable: {log:?}"
+    );
+    let mut failures = Vec::new();
+    for (scroll, (x, y)) in log
+        .iter()
+        .zip([(0.0, -1.0), (0.0, 0.5), (1.0, 0.0), (-0.5, 0.0)])
+    {
+        if scroll.delta.unit() != ScrollUnit::Detents {
+            failures.push(format!(
+                "raw native wheel mislabeled {:?}",
+                scroll.delta.unit()
+            ));
+        }
+        assert_eq!((scroll.delta.x(), scroll.delta.y()), (x, y));
+        assert_eq!(
+            scroll.pointer, log[0].pointer,
+            "one native mouse keeps identity across axes"
+        );
+    }
+    let observed = observations.lock();
+    let (wheel, vertical, horizontal) = observed.as_ref().expect("owner bootstrap observation");
+    if wheel.vertical() != Some(*vertical) {
+        failures.push(format!(
+            "owner vertical policy {:?} instead of {vertical:?}",
+            wheel.vertical()
+        ));
+    }
+    if wheel.horizontal_characters() != Some(*horizontal) {
+        failures.push(format!(
+            "owner character policy {:?} instead of {horizontal}",
+            wheel.horizontal_characters()
+        ));
+    }
+    assert!(failures.is_empty(), "{}", failures.join("; "));
+}
+
 #[cfg(target_os = "macos")]
 fn build_test_event_loop() -> EventLoop<()> {
     EventLoop::builder()
