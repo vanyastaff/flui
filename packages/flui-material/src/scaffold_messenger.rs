@@ -345,10 +345,6 @@ impl SnackBarHoverTarget {
             } else {
                 PlaybackRate::PAUSED
             });
-            let rebuild = messenger.rebuild.borrow().clone();
-            if let Some(rebuild) = rebuild {
-                rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
-            }
         }
     }
 }

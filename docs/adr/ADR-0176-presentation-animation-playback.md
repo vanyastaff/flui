@@ -29,6 +29,24 @@ An explicit step creates demand for its presentation. A paused registry alone
 does not create ongoing animation demand. Testing's extra presentations expose
 the same clock operations and keep their own rates and origins.
 
+Run admission, playback-rate changes and registration migration request their
+first sample through the live registry seat. The controller queues this demand
+alongside its committed deliveries, so unchanged directional status does not
+suppress a restart's wake. Registry addresses hold weak ownership and never
+reuse slots; unregister revokes the route. Nested registries forward demand
+through their live parent seats, subject to every ancestor's mute gate.
+Unmuting requests a retained running sample.
+
+The presentation binds its registry to its frame request capability. Callback
+invocation and capture retirement occur outside controller and registry borrows
+under the existing first-failure custody. Missing or failed delivery leaves the
+accepted run installed; installing a replacement requests retained demand.
+The scheduler's wake capability records platform delivery debt independently
+of its frame latch. A run does not retain the UI runtime through that capability.
+Closing a presentation revokes its driver authority even if a caller retains
+the registry. Headless registry replacement revokes the outgoing authority
+before invoking or retiring callbacks.
+
 Protocol 0.2 adds `MotionRequest` and `MotionState` without changing existing
 wire types. Devtools exposes the operation as `motion` with an exact window
 handle. Missing request fields read the current clock. A mutating request that
@@ -42,6 +60,15 @@ atomic validation, accepted state and closed-window refusal.
 `motion_op_round_trips_over_the_endpoint` exercises the actual local endpoint.
 `presentation_rates_pause_and_step_are_independent` drives two testing
 presentations through different rates, pause and one-frame step.
+
+`starting_an_idle_bound_controller_requests_its_first_frame` and
+`starting_an_idle_presentation_animation_requests_its_first_frame` assert the
+request before any forced pump; removing run-admission demand fails both.
+`driven_controller_owns_its_seat_and_run` covers same-status restarts, rate pause
+and resume, nested mute, migration, competing wake/listener failures, hook
+replacement and reentrant capture retirement.
+`closed_presentation_animation_cannot_wake_a_surviving_window` proves that a
+saved clock cannot schedule a sibling after owner teardown.
 
 The wire schema golden and additivity gate cover published protocol shapes.
 Required fields on a newly introduced response type do not change older

@@ -87,6 +87,9 @@ fn headless_frame_driver_matrix() {
             ("post_frame_after_layout::post_frame_callback_runs_after_layout_in_the_same_pumped_frame", post_frame_after_layout::post_frame_callback_runs_after_layout_in_the_same_pumped_frame as fn()),
             ("self_rescheduling_local_post_frame::self_rescheduling_local_post_frame_callback_fires_exactly_once_per_pumped_frame", self_rescheduling_local_post_frame::self_rescheduling_local_post_frame_callback_fires_exactly_once_per_pumped_frame as fn()),
             ("async_driver::headless_wake_from_another_thread_is_polled_on_the_frame_thread", async_driver::headless_wake_from_another_thread_is_polled_on_the_frame_thread as fn()),
+            ("controller_restart::starting_an_idle_bound_controller_requests_its_first_frame", controller_restart::starting_an_idle_bound_controller_requests_its_first_frame as fn()),
+            ("controller_restart::adopting_a_registry_revokes_the_previous_driver_binding", controller_restart::adopting_a_registry_revokes_the_previous_driver_binding as fn()),
+            ("controller_restart::driver_replacement_preserves_first_failure_and_recovers", controller_restart::driver_replacement_preserves_first_failure_and_recovers as fn()),
             ("controller_restart::second_run_ticks_from_its_own_start_not_a_stale_anchor", controller_restart::second_run_ticks_from_its_own_start_not_a_stale_anchor as fn()),
             ("pointer_script_replay::a_long_press_script_held_past_the_deadline_fires_it", pointer_script_replay::a_long_press_script_held_past_the_deadline_fires_it as fn()),
             ("pointer_script_replay::the_same_script_released_before_the_deadline_does_not", pointer_script_replay::the_same_script_released_before_the_deadline_does_not as fn()),
@@ -135,6 +138,7 @@ fn containment_and_isolation_matrix() {
             ("window_scale_factor::a_secondary_window_publishes_its_own_media_query", window_scale_factor::a_secondary_window_publishes_its_own_media_query as fn()),
             ("multi_presentation_clock::the_motion_clock_rate_and_step_drive_the_binding_vsync", multi_presentation_clock::the_motion_clock_rate_and_step_drive_the_binding_vsync as fn()),
             ("multi_presentation_clock::presentation_rates_pause_and_step_are_independent", multi_presentation_clock::presentation_rates_pause_and_step_are_independent as fn()),
+            ("multi_presentation_clock::extra_registry_drivers_request_frames_and_retire_on_replacement", multi_presentation_clock::extra_registry_drivers_request_frames_and_retire_on_replacement as fn()),
         ],
     );
 }

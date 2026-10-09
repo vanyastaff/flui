@@ -404,6 +404,17 @@ can change its own rate, pause or step through its exact agent window's owner
 inbox ([ADR-0176](../../docs/adr/ADR-0176-presentation-animation-playback.md)).
 There is no process-wide time multiplier or scheduler ticker controller path.
 
+The presentation keeps one driver-bound registry for its lifetime. A bound
+controller requests its first frame through its live seat, including a restart
+whose directional status is unchanged. The frame capability holds only the
+scheduler's weak wake edge, a weak window and the presentation's revocable
+lifetime. A retained registry cannot wake surviving windows after its owner
+closes (`closed_presentation_animation_cannot_wake_a_surviving_window`).
+Registry callbacks and outgoing
+capture retirement occur outside borrows. The public pump row
+`starting_an_idle_presentation_animation_requests_its_first_frame` asserts
+the request before pumping and then observes completion through that driver.
+
 `agent_playback_drives_independent_windows_and_one_paused_step_frame` drives
 two real runtime presentation registries at different rates, then observes
 paused frame production and one addressed step frame without sibling demand.

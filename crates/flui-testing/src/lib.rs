@@ -224,10 +224,12 @@ pub struct HeadlessBinding {
     /// and owner lane.
     gestures: GestureBinding,
     /// The controller registry ticked each frame on the virtual timeline,
-    /// restart-aware. Shared (`Arc`-backed): a `VsyncScope` hands the same
+    /// restart-aware. Shared (`Rc`-backed): a `VsyncScope` hands the same
     /// registry to a widget subtree so an implicitly-animated widget registers
     /// its controller here. See [`vsync`](Self::vsync) / [`adopt_vsync`](Self::adopt_vsync).
     vsync: Vsync,
+    /// Revokes this registry's frame capability when the binding adopts another.
+    vsync_driver_alive: std::rc::Rc<()>,
     /// Maps [`clock`](Self::clock)'s elapsed time to the animation time
     /// [`vsync`](Self::vsync) is ticked with; see
     /// [`motion_clock_mut`](Self::motion_clock_mut).
@@ -292,6 +294,8 @@ pub struct HeadlessBinding {
 struct PresentationClockEntry {
     /// This presentation's own implicit-animation controller registry.
     vsync: Vsync,
+    /// Revoked before a replaced entry invokes or retires user callbacks.
+    driver_alive: Option<std::rc::Rc<()>>,
     /// This presentation's own produce-gate state machine, reading
     /// `virtual_clock` through a [`ClockSource::Manual`].
     clock: FrameClock,
@@ -327,6 +331,9 @@ impl HeadlessBinding {
         let clock = ManualClock::new();
         let gestures = GestureBinding::with_clock(Arc::new(clock.clone()));
         let scheduler = UpdateScheduler::new();
+        let vsync = Vsync::new();
+        let (vsync_driver_alive, request_frame) = Self::registry_driver(&scheduler);
+        vsync.set_frame_requester(Some(request_frame));
         let owner_frame =
             OwnerFrame::new(&scheduler).expect("BUG: a fresh scheduler has no owner frame");
         let interaction_lane = InteractionLane::try_new()?;
@@ -334,7 +341,8 @@ impl HeadlessBinding {
             lifecycle: flui_view::__runtime::LifecycleSource::new(),
             clock,
             gestures,
-            vsync: Vsync::new(),
+            vsync,
+            vsync_driver_alive,
             motion_clock: MotionClock::new(),
             tree: None,
             scheduler,
@@ -614,7 +622,44 @@ impl HeadlessBinding {
     /// the binding must drive that same registry). Call before any controller is
     /// registered, so no registration is stranded on the discarded registry.
     pub fn adopt_vsync(&mut self, vsync: Vsync) {
-        self.vsync = vsync;
+        if self.vsync.is_same(&vsync) {
+            return;
+        }
+        let (alive, request_frame) = Self::registry_driver(&self.scheduler);
+        self.vsync_driver_alive = alive;
+        let outgoing = std::mem::replace(&mut self.vsync, vsync);
+        Self::complete_driver_replacement(&self.vsync, request_frame, outgoing);
+    }
+
+    fn registry_driver(scheduler: &UpdateScheduler) -> (std::rc::Rc<()>, std::rc::Rc<dyn Fn()>) {
+        let alive = std::rc::Rc::new(());
+        let driver = std::rc::Rc::downgrade(&alive);
+        let frame_waker = scheduler.frame_waker();
+        let request = std::rc::Rc::new(move || {
+            if driver.upgrade().is_some() {
+                frame_waker.ensure_visual_update();
+            }
+        });
+        (alive, request)
+    }
+
+    /// State and authority are committed before either operation can call user code.
+    /// A failed installation still retires the outgoing owner, preserving the first failure.
+    fn complete_driver_replacement<T>(vsync: &Vsync, request: std::rc::Rc<dyn Fn()>, outgoing: T) {
+        use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+        let installation = catch_unwind(AssertUnwindSafe(|| {
+            vsync.set_frame_requester(Some(request))
+        }));
+        let retirement = catch_unwind(AssertUnwindSafe(|| drop(outgoing)));
+        if let Err(first) = installation {
+            if let Err(later) = retirement {
+                std::mem::forget(later);
+            }
+            resume_unwind(first);
+        }
+        if let Err(failure) = retirement {
+            resume_unwind(failure);
+        }
     }
 
     /// The UI runtime's reactive graph (ADR-0074): create signals, write them, and
@@ -1294,15 +1339,21 @@ impl HeadlessBinding {
         let virtual_clock = ManualClock::new();
         let clock = FrameClock::with_source(ClockSource::Manual(virtual_clock.clone()));
         let vsync = Vsync::new();
-        self.presentation_clocks.insert(
+        let (alive, request_frame) = Self::registry_driver(&self.scheduler);
+        let mut outgoing = self.presentation_clocks.insert(
             id,
             PresentationClockEntry {
                 vsync: vsync.clone(),
+                driver_alive: Some(alive),
                 clock,
                 virtual_clock,
                 motion_clock: std::cell::RefCell::new(MotionClock::new()),
             },
         );
+        if let Some(outgoing) = &mut outgoing {
+            drop(outgoing.driver_alive.take());
+        }
+        Self::complete_driver_replacement(&vsync, request_frame, outgoing);
         vsync
     }
 

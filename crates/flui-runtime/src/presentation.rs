@@ -395,15 +395,9 @@ pub struct PresentationState {
     /// (`Self::has_pending_work`) — see `UiRuntime::draw_frame_entered`'s
     /// per-presentation loop.
     redraw_pending: Cell<bool>,
-    /// This presentation's own controller registry for implicit animations
-    /// (moved from the UI runtime-level `UiRuntime::vsync_slot`, issue #556: each
-    /// surface paces its own animations independently). `RefCell`, not a
-    /// plain field — mirrors `UiRuntime::vsync_slot`'s old `Mutex`: `Self::
-    /// set_vsync` replaces the whole handle through `&self`, and the
-    /// per-frame `tick_all`/`has_running` calls operate on a cloned `Vsync`
-    /// handle (sharing the inner `Arc<Mutex<VsyncInner>>`), so this cell is
-    /// only ever borrowed for the length of a clone or a swap.
-    vsync: RefCell<Vsync>,
+    /// This presentation's controller registry. Handles share owner-local state;
+    /// the presentation keeps its driver binding for its whole lifetime.
+    vsync: Vsync,
     /// This presentation's animation clock: maps the UI runtime's raw frame time
     /// to the monotonic animation time [`Self::vsync`] is ticked with.
     /// Borrowed only inside [`Self::motion_tick`], never across user code.
@@ -728,6 +722,14 @@ impl PresentationState {
                 window.request_redraw();
             }
         });
+        let vsync = Vsync::new();
+        let request_animation_frame = Arc::clone(&request_frame);
+        let animation_owner = Rc::downgrade(&alive);
+        vsync.set_frame_requester(Some(Rc::new(move || {
+            if animation_owner.upgrade().is_some() {
+                request_animation_frame();
+            }
+        })));
         // Install before mounting any element: rebuild handles capture this
         // hook at creation. Every presentation needs the same scheduling edge,
         // including those assembled without a desktop runner.
@@ -790,7 +792,7 @@ impl PresentationState {
             not_shown_streak: Cell::new(0),
             performance_overlay: RefCell::new(None),
             redraw_pending: Cell::new(false),
-            vsync: RefCell::new(Vsync::new()),
+            vsync,
             motion_clock: RefCell::new(MotionClock::new()),
             clock: frame_clock,
             last_segment_span: Cell::new(None),
@@ -875,7 +877,7 @@ impl PresentationState {
             not_shown_streak: Cell::new(0),
             performance_overlay: RefCell::new(None),
             redraw_pending: Cell::new(false),
-            vsync: RefCell::new(Vsync::new()),
+            vsync: Vsync::new(),
             motion_clock: RefCell::new(MotionClock::new()),
             clock: FrameClock::new(),
             last_segment_span: Cell::new(None),
@@ -950,7 +952,7 @@ impl PresentationState {
     /// (issue #556: the registry moved here, one per presentation).
     #[must_use]
     pub(crate) fn vsync(&self) -> Vsync {
-        self.vsync.borrow().clone()
+        self.vsync.clone()
     }
 
     /// This frame's animation tick for the UI runtime's raw frame time `raw`
@@ -994,19 +996,6 @@ impl PresentationState {
             ),
             demand,
         ))
-    }
-
-    /// Replace this presentation's registry with a pre-existing shared
-    /// `Vsync` — see `UiRuntime::set_vsync`'s doc for the one legitimate use
-    /// (a `VsyncScope` built before this presentation's own registry was
-    /// acquired).
-    #[expect(
-        dead_code,
-        reason = "no production caller yet -- forwards from UiRuntime::set_vsync, \
-                  itself also uncalled in production (see that method's own doc)"
-    )]
-    pub(crate) fn set_vsync(&self, vsync: Vsync) {
-        let _prev = std::mem::replace(&mut *self.vsync.borrow_mut(), vsync);
     }
 
     /// This presentation's own physical-time produce-gate state machine

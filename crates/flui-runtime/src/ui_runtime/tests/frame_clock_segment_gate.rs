@@ -1,5 +1,103 @@
 use super::*;
 
+pub(crate) fn closed_presentation_animation_cannot_wake_a_surviving_window() {
+    use crate::pump::SampledClock;
+    use flui_animation::AnimationController;
+    use std::time::Duration;
+
+    let mut runtime = mount_root_here();
+    let closed = runtime.install_second_presentation_for_test();
+    let retired_clock = runtime
+        .presentations
+        .get(closed)
+        .expect("second presentation")
+        .vsync();
+    assert!(runtime.close_presentation_entered(closed));
+    let mut sink = ScriptedSink::always_presents();
+    let origin = web_time::Instant::now();
+    runtime.set_now_secs_for_test(0.0);
+    let _ = runtime.pump(&mut SampledClock(origin), &mut sink);
+    assert!(
+        !runtime.scheduler().has_scheduled_frame(),
+        "survivor quiesces"
+    );
+
+    let retired_owner =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&retired_clock));
+    retired_owner
+        .controller()
+        .forward()
+        .expect("retained clock run");
+    assert!(
+        !runtime.scheduler().has_scheduled_frame(),
+        "a closed presentation cannot request a sibling's frame"
+    );
+    let live_owner =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&runtime.vsync()));
+    live_owner.controller().forward().expect("survivor run");
+    assert!(
+        runtime.scheduler().has_scheduled_frame(),
+        "live driver still wakes"
+    );
+}
+
+pub(crate) fn starting_an_idle_presentation_animation_requests_its_first_frame() {
+    use crate::pump::SampledClock;
+    use flui_animation::{Animation as _, AnimationController};
+    use std::time::Duration;
+
+    let mut runtime = mount_root_here();
+    let mut sink = ScriptedSink::always_presents();
+    let origin = web_time::Instant::now();
+    runtime.set_now_secs_for_test(0.0);
+    assert!(
+        runtime
+            .pump(&mut SampledClock(origin), &mut sink)
+            .presented(),
+        "mount frame presents"
+    );
+    assert!(
+        !runtime.scheduler().has_scheduled_frame(),
+        "presentation quiesces"
+    );
+
+    let owner =
+        AnimationController::builder(Duration::from_millis(100)).build_on(Some(&runtime.vsync()));
+    assert!(
+        !runtime.scheduler().has_scheduled_frame(),
+        "an idle seat needs no frame"
+    );
+    owner.controller().forward().expect("fresh run");
+    assert!(
+        runtime.scheduler().has_scheduled_frame(),
+        "accepted run wakes the driver before a pump"
+    );
+
+    runtime.set_now_secs_for_test(0.02);
+    let _ = runtime.pump(
+        &mut SampledClock(origin + Duration::from_millis(20)),
+        &mut sink,
+    );
+    assert!(
+        owner.controller().is_animating(),
+        "first sample preserves the run"
+    );
+    assert!(
+        runtime.needs_redraw(),
+        "the running animation requests continuation"
+    );
+    runtime.set_now_secs_for_test(0.12);
+    let _ = runtime.pump(
+        &mut SampledClock(origin + Duration::from_millis(120)),
+        &mut sink,
+    );
+    assert_eq!(owner.controller().value(), 1.0);
+    assert!(
+        !runtime.vsync().has_running(),
+        "completed run releases frame demand"
+    );
+}
+
 pub(crate) fn agent_playback_drives_independent_windows_and_one_paused_step_frame() {
     use flui_animation::{Animation as _, AnimationController};
     use flui_protocol::MotionRequest;

@@ -52,6 +52,27 @@ impl PartialEq for VsyncRegistration {
 
 impl Eq for VsyncRegistration {}
 
+impl VsyncRegistration {
+    pub(crate) fn owner_is_alive(&self) -> bool {
+        self.owner.strong_count() != 0
+    }
+
+    pub(crate) fn request_frame(&self, retirement: &mut Retirement) {
+        let Some(owner) = self.owner.upgrade() else {
+            return;
+        };
+        let live = {
+            let inner = owner.borrow();
+            inner.controllers.contains_key(&self.slot)
+                || inner.children.iter().any(|child| child.slot == self.slot)
+        };
+        if live {
+            Vsync::request_frame_from(&owner, retirement);
+        }
+        retirement.retire(owner);
+    }
+}
+
 impl Hash for VsyncRegistration {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.owner.as_ptr().hash(state);
@@ -143,6 +164,8 @@ struct VsyncInner {
     /// children's. A nested unmuted registry cannot re-enable a muted
     /// ancestor, because the ancestor never forwards the tick.
     children: Vec<RegisteredChild>,
+    parents: Vec<VsyncRegistration>,
+    request_frame: Option<Rc<dyn Fn()>>,
     next_id: u64,
     muted: bool,
     last_time: crate::AnimationTime,
@@ -172,6 +195,41 @@ impl Vsync {
         Self::default()
     }
 
+    /// Bind this registry's frame demand to its presentation's frame driver.
+    ///
+    /// Existing running controllers request a sample from the new driver.
+    /// Invocation and outgoing capture retirement occur outside registry borrows.
+    ///
+    /// # Panics
+    /// Propagates the first callback or capture-retirement failure after recovery.
+    pub fn set_frame_requester(&self, request_frame: Option<Rc<dyn Fn()>>) {
+        let outgoing = std::mem::replace(&mut self.inner.borrow_mut().request_frame, request_frame);
+        let mut retirement = Retirement::new();
+        if self.has_running() {
+            Self::request_frame_from(&self.inner, &mut retirement);
+        }
+        retirement.retire(outgoing);
+        retirement.finish();
+    }
+
+    fn request_frame_from(owner: &Rc<RefCell<VsyncInner>>, retirement: &mut Retirement) {
+        let (request, parents) = {
+            let mut inner = owner.borrow_mut();
+            if inner.muted {
+                return;
+            }
+            inner.parents.retain(VsyncRegistration::owner_is_alive);
+            (inner.request_frame.clone(), inner.parents.clone())
+        };
+        if let Some(request) = request {
+            retirement.run(|| request());
+            retirement.retire(request);
+        }
+        for parent in parents {
+            parent.request_frame(retirement);
+        }
+    }
+
     /// Register `controller` so each [`tick_all`](Self::tick_all) advances it on
     /// the virtual timeline.
     ///
@@ -199,11 +257,24 @@ impl Vsync {
     /// Register a borrowed controller, reporting permanent identity exhaustion.
     ///
     /// A refusal leaves the controller and every admitted registration intact.
+    ///
+    /// # Panics
+    /// If requesting an already running controller's first sample fails, the
+    /// provisional seat is removed before the wake failure propagates.
     pub fn try_register(
         &self,
         controller: &AnimationController,
     ) -> Result<VsyncRegistration, VsyncRegistrationError> {
-        self.try_register_with_anchor(controller, RunAnchor::Fresh)
+        let registration = self.try_register_with_anchor(controller, RunAnchor::Fresh)?;
+        let mut retirement = Retirement::new();
+        if controller.walk_probe().live_running {
+            registration.request_frame(&mut retirement);
+        }
+        if retirement.has_failure() {
+            retirement.run(|| self.unregister(&registration));
+        }
+        retirement.finish();
+        Ok(registration)
     }
 
     pub(crate) fn try_register_resuming(
@@ -232,10 +303,13 @@ impl Vsync {
                 last_gen,
             },
         );
-        Ok(VsyncRegistration {
+        let registration = VsyncRegistration {
             owner: Rc::downgrade(&self.inner),
             slot: id,
-        })
+        };
+        drop(inner);
+        controller.add_frame_route(registration.clone());
+        Ok(registration)
     }
 
     /// Remove the controller previously registered under `id`. Idempotent: an
@@ -250,7 +324,10 @@ impl Vsync {
         };
         // The last controller owner can retire user captures that reenter this
         // registry. Its registration is absent and the guard is released first.
-        drop(removed);
+        if let Some(removed) = removed {
+            removed.controller.remove_frame_route(id);
+            drop(removed);
+        }
     }
 
     /// Nest `child` under this registry: [`tick_all`](Self::tick_all) forwards
@@ -274,10 +351,21 @@ impl Vsync {
             slot,
             child: child.clone(),
         });
-        Some(VsyncRegistration {
+        let registration = VsyncRegistration {
             owner: Rc::downgrade(&self.inner),
             slot,
-        })
+        };
+        drop(inner);
+        child.inner.borrow_mut().parents.push(registration.clone());
+        let mut retirement = Retirement::new();
+        if child.has_running() {
+            registration.request_frame(&mut retirement);
+        }
+        if retirement.has_failure() {
+            retirement.run(|| self.detach_child(&registration));
+        }
+        retirement.finish();
+        Some(registration)
     }
 
     /// Detach the child registry previously attached under `id`. Idempotent.
@@ -295,7 +383,15 @@ impl Vsync {
         };
         // Removing one child preserves the remaining registration order. Its
         // last controller captures must retire after releasing the parent guard.
-        drop(removed);
+        if let Some(removed) = removed {
+            removed
+                .child
+                .inner
+                .borrow_mut()
+                .parents
+                .retain(|parent| parent != id);
+            drop(removed);
+        }
     }
 
     /// Whether both handles name the **same** registry (`Rc` identity) — how a
@@ -336,7 +432,17 @@ impl Vsync {
     /// resume from where it stopped: a muted clock still runs, only the
     /// callback is withheld.
     pub fn set_muted(&self, muted: bool) {
-        self.inner.borrow_mut().muted = muted;
+        let changed = {
+            let mut inner = self.inner.borrow_mut();
+            let changed = inner.muted != muted;
+            inner.muted = muted;
+            changed
+        };
+        if changed && !muted && self.has_running() {
+            let mut retirement = Retirement::new();
+            Self::request_frame_from(&self.inner, &mut retirement);
+            retirement.finish();
+        }
     }
 
     /// The number of controllers registered **with this registry**, not

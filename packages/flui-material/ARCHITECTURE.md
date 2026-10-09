@@ -21,6 +21,8 @@ addressed; an old entry's callbacks cannot change the next entry's timer.
 Hover uses the controller's playback rate and retains the display run and its
 completion. Replacing or disposing a presenter withdraws its hover admission
 before retiring its captures; retired callbacks cannot acquire it again.
+Playback-rate changes request their sample through the timer's registry seat;
+hover does not rebuild the tree merely to wake that sample.
 
 `snack_bar_display_timer_pauses_while_hovered` drives real pointer hover and
 observes the preserved remainder and one Timeout completion.

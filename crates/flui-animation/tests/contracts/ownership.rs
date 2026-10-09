@@ -281,6 +281,22 @@ fn an_unbound_controller_settles_every_run_kind_at_once() {
 fn driven_controller_owns_its_seat_and_run() {
     crate::run_table(&[
         (
+            "run restart and rate resume request samples",
+            runs_and_rate_changes_request_samples,
+        ),
+        (
+            "nested mute and rebind preserve the addressed driver",
+            nested_mute_and_rebind_address_the_live_driver,
+        ),
+        (
+            "wake failure preserves delivery and recovery",
+            wake_failure_preserves_delivery_and_recovery,
+        ),
+        (
+            "wake replacement retires captures outside borrows",
+            wake_replacement_retires_captures_outside_borrows,
+        ),
+        (
             "drop unregisters before cancel",
             dropping_a_driven_controller_unregisters_then_cancels_its_run,
         ),
@@ -297,6 +313,206 @@ fn driven_controller_owns_its_seat_and_run() {
             dropping_the_last_owner_from_its_own_listener_mid_frame,
         ),
     ]);
+}
+
+fn counted_registry() -> (Vsync, std::rc::Rc<std::cell::Cell<usize>>) {
+    let registry = Vsync::new();
+    let wakes = std::rc::Rc::new(std::cell::Cell::new(0));
+    let observed = wakes.clone();
+    registry.set_frame_requester(Some(std::rc::Rc::new(move || {
+        observed.set(observed.get() + 1)
+    })));
+    (registry, wakes)
+}
+
+fn wake_replacement_retires_captures_outside_borrows() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    struct Capture {
+        registry: Vsync,
+        retired: Rc<Cell<usize>>,
+    }
+    impl Drop for Capture {
+        fn drop(&mut self) {
+            assert!(
+                self.registry.has_running(),
+                "capture can reenter the registry during retirement"
+            );
+            self.retired.set(self.retired.get() + 1);
+        }
+    }
+    let registry = Vsync::new();
+    let retired = Rc::new(Cell::new(0));
+    let capture = Capture {
+        registry: registry.clone(),
+        retired: retired.clone(),
+    };
+    let wakes = Rc::new(Cell::new(0));
+    let replacement_wakes = wakes.clone();
+    registry.set_frame_requester(Some(Rc::new(move || {
+        let observed = replacement_wakes.clone();
+        capture
+            .registry
+            .set_frame_requester(Some(Rc::new(move || observed.set(observed.get() + 1))));
+        let _ = &capture;
+    })));
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
+    owner.controller().forward().unwrap();
+    assert_eq!(retired.get(), 1, "the replaced hook releases its captures");
+    assert_eq!(
+        wakes.get(),
+        1,
+        "replacement delivers the accepted running demand"
+    );
+    owner.controller().forward().unwrap();
+    assert_eq!(wakes.get(), 2);
+    registry.set_frame_requester(None);
+    let run = owner.controller().forward().unwrap();
+    let observed = wakes.clone();
+    registry.set_frame_requester(Some(Rc::new(move || observed.set(observed.get() + 1))));
+    assert_eq!(
+        wakes.get(),
+        3,
+        "missing hook keeps demand for later installation"
+    );
+    let mut clock = flui_animation::MotionClock::new();
+    registry.tick_all(&clock.frame(Duration::ZERO));
+    registry.tick_all(&clock.frame(Duration::from_secs(1)));
+    assert!(run.is_complete());
+}
+
+fn runs_and_rate_changes_request_samples() {
+    use flui_animation::{MotionClock, PlaybackRate};
+    let (registry, wakes) = counted_registry();
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
+    assert_eq!(wakes.get(), 0, "an idle registration does not wake");
+    owner.controller().forward().unwrap();
+    let run = owner.controller().forward().unwrap();
+    owner.controller().set_playback_rate(PlaybackRate::NORMAL);
+    assert_eq!(
+        wakes.get(),
+        2,
+        "a same-status restart requests its frame; an unchanged rate adds no demand"
+    );
+    let mut clock = MotionClock::new();
+    registry.tick_all(&clock.frame(Duration::ZERO));
+    registry.tick_all(&clock.frame(Duration::from_millis(500)));
+    owner.controller().set_playback_rate(PlaybackRate::PAUSED);
+    assert_eq!(wakes.get(), 3);
+    registry.tick_all(&clock.frame(Duration::from_millis(600)));
+    assert!(!registry.has_running(), "pause releases continuous demand");
+    registry.tick_all(&clock.frame(Duration::from_secs(10)));
+    owner.controller().set_playback_rate(PlaybackRate::NORMAL);
+    assert_eq!(
+        wakes.get(),
+        4,
+        "resume requests the rate application sample"
+    );
+    registry.tick_all(&clock.frame(Duration::from_secs(11)));
+    assert!(
+        (owner.controller().value() - 0.6).abs() < 1e-9,
+        "pause time is excluded"
+    );
+    registry.tick_all(&clock.frame(Duration::from_millis(11_400)));
+    assert!(run.is_complete());
+    assert_eq!(owner.controller().value(), 1.0);
+    assert_eq!(
+        wakes.get(),
+        4,
+        "sampling does not manufacture new wake requests"
+    );
+}
+
+fn nested_mute_and_rebind_address_the_live_driver() {
+    let (a, a_wakes) = counted_registry();
+    let (b, b_wakes) = counted_registry();
+    let child = Vsync::new();
+    let seat = a.attach_child(&child).expect("child admitted");
+    let mut owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&child));
+    a.set_muted(true);
+    owner.controller().forward().unwrap();
+    assert_eq!(
+        a_wakes.get(),
+        0,
+        "an unmuted descendant cannot wake a muted ancestor"
+    );
+    a.set_muted(false);
+    assert_eq!(a_wakes.get(), 1, "unmute requests the retained run");
+    child.set_muted(true);
+    owner.controller().forward().unwrap();
+    assert_eq!(a_wakes.get(), 1);
+    a.detach_child(&seat);
+    child.set_muted(false);
+    assert_eq!(
+        a_wakes.get(),
+        1,
+        "a detached child cannot wake its old parent"
+    );
+    owner.rebind(Some(&b)).unwrap();
+    assert_eq!(b_wakes.get(), 1, "a live run requests its new driver");
+    owner.controller().forward().unwrap();
+    assert_eq!((a_wakes.get(), b_wakes.get()), (1, 2));
+    let observer = owner.controller().clone();
+    drop(owner);
+    observer.set_playback_rate(flui_animation::PlaybackRate::NORMAL);
+    assert_eq!(
+        (a_wakes.get(), b_wakes.get()),
+        (1, 2),
+        "retired observer clones cannot wake either driver"
+    );
+}
+
+fn wake_failure_preserves_delivery_and_recovery() {
+    use std::cell::Cell;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::rc::Rc;
+    for competing in [false, true] {
+        let registry = Vsync::new();
+        let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
+        let inspected = owner.controller().clone();
+        registry.set_frame_requester(Some(Rc::new(move || {
+            assert!(inspected.is_animating(), "run admission precedes wake");
+            assert_eq!(inspected.status(), AnimationStatus::Forward);
+            panic!("wake failure");
+        })));
+        owner
+            .controller()
+            .add_status_listener(Rc::new(move |status| {
+                if competing && status == AnimationStatus::Forward {
+                    panic!("listener failure");
+                }
+            }));
+        let delivered = Rc::new(Cell::new(0));
+        let observed = delivered.clone();
+        owner
+            .controller()
+            .add_status_listener(Rc::new(move |_| observed.set(observed.get() + 1)));
+        let failure = catch_unwind(AssertUnwindSafe(|| owner.controller().forward()));
+        let payload = failure.expect_err("wake failure propagates after delivery");
+        assert_eq!(payload.downcast_ref::<&str>(), Some(&"wake failure"));
+        assert_eq!(
+            delivered.get(),
+            1,
+            "healthy status tail is delivered despite both failures"
+        );
+        assert!(
+            owner.controller().is_animating(),
+            "accepted run survives wake failure"
+        );
+        let recovered = Rc::new(Cell::new(0));
+        let observed = recovered.clone();
+        registry.set_frame_requester(Some(Rc::new(move || observed.set(observed.get() + 1))));
+        let run = owner.controller().forward().unwrap();
+        assert_eq!(
+            recovered.get(),
+            2,
+            "replacement and same-status restart remain deliverable"
+        );
+        let mut clock = flui_animation::MotionClock::new();
+        registry.tick_all(&clock.frame(Duration::ZERO));
+        registry.tick_all(&clock.frame(Duration::from_secs(1)));
+        assert!(run.is_complete());
+    }
 }
 
 /// Counts how many times the value it guards is dropped.

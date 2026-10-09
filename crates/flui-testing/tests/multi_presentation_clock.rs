@@ -17,6 +17,42 @@ fn presentation(index: u32) -> PresentationId {
     PresentationId::new_gen(index, NonZeroU32::MIN)
 }
 
+pub(crate) fn extra_registry_drivers_request_frames_and_retire_on_replacement() {
+    let mut binding = HeadlessBinding::new();
+    let a = presentation(0);
+    let b = presentation(1);
+    let a_registry = binding.install_presentation_clock(a);
+    let b_registry = binding.install_presentation_clock(b);
+    let a_owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&a_registry));
+    let b_owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&b_registry));
+    a_owner.controller().forward().expect("A run");
+    assert!(
+        binding.scheduler().has_scheduled_frame(),
+        "an extra presentation requests its first sample"
+    );
+    binding.pump_frame(Duration::ZERO);
+    assert!(!binding.scheduler().has_scheduled_frame());
+    let replacement = binding.install_presentation_clock(a);
+    a_owner
+        .controller()
+        .forward()
+        .expect("standalone retired A run");
+    assert!(
+        !binding.scheduler().has_scheduled_frame(),
+        "replacing A revokes its old driver capability"
+    );
+    let new_owner =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&replacement));
+    new_owner.controller().forward().expect("replacement A run");
+    assert!(binding.scheduler().has_scheduled_frame());
+    binding.pump_frame(Duration::ZERO);
+    b_owner.controller().forward().expect("B run");
+    assert!(
+        binding.scheduler().has_scheduled_frame(),
+        "replacing A preserves B's driver"
+    );
+}
+
 /// A on a scripted 144 Hz cadence and B on
 /// 60 Hz, advanced in one interleaved script ⇒ per-presentation tick counts
 /// and animation values match their own cadences exactly.

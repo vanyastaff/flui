@@ -18,6 +18,133 @@ use flui_testing::HeadlessBinding;
 /// One frame's worth of virtual time at 20ms — five of these span the 100ms run.
 const FRAME: Duration = Duration::from_millis(20);
 
+pub(crate) fn adopting_a_registry_revokes_the_previous_driver_binding() {
+    let mut binding = HeadlessBinding::new();
+    let old_registry = binding.vsync().clone();
+    binding.adopt_vsync(flui_animation::Vsync::new());
+    let old_owner =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&old_registry));
+    old_owner
+        .controller()
+        .forward()
+        .expect("standalone old registry run");
+    assert!(
+        !binding.scheduler().has_scheduled_frame(),
+        "an obsolete registry cannot wake the binding that replaced it"
+    );
+    let new_owner =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(binding.vsync()));
+    new_owner
+        .controller()
+        .forward()
+        .expect("current registry run");
+    assert!(
+        binding.scheduler().has_scheduled_frame(),
+        "the replacement registry retains its frame driver"
+    );
+}
+
+pub(crate) fn driver_replacement_preserves_first_failure_and_recovers() {
+    use std::cell::Cell;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::rc::Rc;
+    use std::sync::Arc;
+    struct Capture {
+        retired: Rc<Cell<usize>>,
+        fail: bool,
+    }
+    impl Drop for Capture {
+        fn drop(&mut self) {
+            self.retired.set(self.retired.get() + 1);
+            if self.fail {
+                panic!("retirement failure");
+            }
+        }
+    }
+    for (installation_fails, retirement_fails) in [(true, false), (false, true), (true, true)] {
+        let mut binding = HeadlessBinding::new();
+        let retired = Rc::new(Cell::new(0));
+        let capture = Capture {
+            retired: retired.clone(),
+            fail: retirement_fails,
+        };
+        binding.vsync().set_frame_requester(Some(Rc::new(move || {
+            let _ = &capture;
+        })));
+        let replacement = flui_animation::Vsync::new();
+        let owner =
+            AnimationController::builder(Duration::from_secs(1)).build_on(Some(&replacement));
+        owner
+            .controller()
+            .forward()
+            .expect("run admitted before driver installation");
+        binding
+            .scheduler()
+            .set_on_frame_scheduled(Some(Arc::new(move || {
+                if installation_fails {
+                    panic!("installation failure");
+                }
+            })));
+        let failure = catch_unwind(AssertUnwindSafe(|| {
+            binding.adopt_vsync(replacement.clone())
+        }))
+        .expect_err("replacement contains the injected failure");
+        let expected = if installation_fails {
+            "installation failure"
+        } else {
+            "retirement failure"
+        };
+        assert_eq!(failure.downcast_ref::<&str>(), Some(&expected));
+        assert_eq!(
+            retired.get(),
+            1,
+            "installation failure cannot skip outgoing retirement"
+        );
+        assert!(
+            binding.vsync().is_same(&replacement),
+            "new driver state is committed before callouts"
+        );
+        binding
+            .scheduler()
+            .set_on_frame_scheduled(Some(Arc::new(|| {})));
+        let run = owner
+            .controller()
+            .forward()
+            .expect("the replacement stays usable");
+        binding.pump_frame(Duration::ZERO);
+        binding.pump_frame(Duration::from_secs(1));
+        assert!(
+            run.is_complete(),
+            "accepted work progresses after containment"
+        );
+    }
+}
+
+pub(crate) fn starting_an_idle_bound_controller_requests_its_first_frame() {
+    let mut binding = HeadlessBinding::new();
+    let owner =
+        AnimationController::builder(Duration::from_millis(100)).build_on(Some(binding.vsync()));
+    assert!(
+        !binding.scheduler().has_scheduled_frame(),
+        "registering an idle controller must leave the frame driver idle",
+    );
+
+    owner
+        .controller()
+        .forward()
+        .expect("a fresh controller forwards");
+    assert!(
+        binding.scheduler().has_scheduled_frame(),
+        "accepting a bound run must request its first frame before any manual pump",
+    );
+
+    for _ in 0..6 {
+        binding.pump_frame(FRAME);
+    }
+    assert_eq!(owner.controller().status(), AnimationStatus::Completed);
+    assert_eq!(owner.controller().value(), 1.0);
+}
+
 pub(crate) fn second_run_ticks_from_its_own_start_not_a_stale_anchor() {
     let mut binding = HeadlessBinding::new();
     let owner =

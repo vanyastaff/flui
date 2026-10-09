@@ -98,6 +98,7 @@ impl RetiredSources {
 /// Snapshot ownership keeps removed callbacks alive until they can retire outside
 /// the state guard, with the round's first failure still authoritative.
 enum ControllerDelivery {
+    RequestFrame,
     SettleRun(u64),
     Status(
         AnimationStatus,
@@ -343,6 +344,7 @@ struct AnimationControllerInner {
 
     pending_delivery: VecDeque<ControllerDelivery>,
     delivering: bool,
+    frame_routes: Vec<crate::VsyncRegistration>,
 
     /// Current run direction.
     direction: AnimationDirection,
@@ -482,6 +484,21 @@ impl AnimationController {
         self.inner.borrow().last_elapsed
     }
 
+    pub(crate) fn add_frame_route(&self, route: crate::VsyncRegistration) {
+        let mut inner = self.inner.borrow_mut();
+        inner
+            .frame_routes
+            .retain(crate::VsyncRegistration::owner_is_alive);
+        inner.frame_routes.push(route);
+    }
+
+    pub(crate) fn remove_frame_route(&self, route: &crate::VsyncRegistration) {
+        self.inner
+            .borrow_mut()
+            .frame_routes
+            .retain(|candidate| candidate != route);
+    }
+
     pub(crate) fn set_clock_bound(&self, bound: bool) {
         let mut inner = self.inner.borrow_mut();
         inner.clock_binding = if bound {
@@ -490,6 +507,11 @@ impl AnimationController {
             ClockBinding::Missing
         };
         inner.settle_pending = !bound && inner.active_run.is_some();
+        if bound && inner.active_run.is_some() {
+            inner
+                .pending_delivery
+                .push_back(ControllerDelivery::RequestFrame);
+        }
         let status = inner.status;
         self.finish(
             status,
@@ -532,6 +554,7 @@ impl AnimationController {
             upper_bound,
             status_listeners: Vec::new(),
             pending_delivery: VecDeque::new(),
+            frame_routes: Vec::new(),
             delivering: false,
             direction: AnimationDirection::Forward,
             start_value: initial_value,
@@ -1642,13 +1665,25 @@ impl AnimationController {
 
     /// Apply `rate` at the next sample, preserving the local run time there.
     ///
-    /// A paused run stays installed and keeps its completion future. Request a
-    /// frame after changing this setting on an otherwise idle presentation.
+    /// A paused run stays installed and keeps its completion future. A bound
+    /// controller requests the sample that applies this change.
     pub fn set_playback_rate(&self, rate: PlaybackRate) {
         let mut inner = self.inner.borrow_mut();
-        if !inner.disposed {
-            inner.pending_rate = Some(rate);
+        if inner.disposed || inner.pending_rate.unwrap_or(inner.playback_rate) == rate {
+            return;
         }
+        inner.pending_rate = Some(rate);
+        inner
+            .pending_delivery
+            .push_back(ControllerDelivery::RequestFrame);
+        let status = inner.status;
+        self.finish(
+            status,
+            ValueChange::Unchanged,
+            None,
+            RetiredSources::new(),
+            inner,
+        );
     }
 
     /// Rate currently applied to samples; a pending change takes effect next tick.
@@ -1675,11 +1710,11 @@ impl AnimationController {
     /// `animate_back` whose distance or duration is trivial; and
     /// `repeat_with`'s own zero-effective-period and zero-`count` settles —
     /// all of which settle through the private `settle_at_target`
-    /// chokepoint) leave it untouched. It wraps on `u64` overflow — only
-    /// its *change* is observed, so the wrap is harmless.
+    /// chokepoint) leave it untouched. Exhaustion permanently refuses new runs;
+    /// an already issued generation is never reused.
     #[must_use]
     pub fn run_generation(&self) -> u64 {
-        self.inner.borrow_mut().run_generation
+        self.inner.borrow().run_generation
     }
 
     /// One-lock snapshot for [`Vsync`](crate::vsync::Vsync)'s per-frame walk —
@@ -1712,7 +1747,7 @@ impl AnimationController {
     /// `true`, holding the frame loop open forever.
     #[must_use]
     pub(crate) fn walk_probe(&self) -> WalkProbe {
-        let inner = self.inner.borrow_mut();
+        let inner = self.inner.borrow();
         WalkProbe {
             generation: inner.run_generation,
             live_running: !inner.disposed
@@ -2331,6 +2366,9 @@ impl AnimationController {
             .checked_add(1)
             .expect("BUG: run admission reserves an available generation");
         inner.settle_pending = inner.clock_binding == ClockBinding::Missing;
+        inner
+            .pending_delivery
+            .push_back(ControllerDelivery::RequestFrame);
     }
 
     fn retire_value_callbacks(
@@ -2400,6 +2438,14 @@ impl AnimationController {
                 delivery
             };
             match delivery {
+                ControllerDelivery::RequestFrame => {
+                    if self.walk_probe().live_running {
+                        let routes = self.inner.borrow().frame_routes.clone();
+                        for route in routes {
+                            route.request_frame(retirement);
+                        }
+                    }
+                }
                 ControllerDelivery::SettleRun(generation) => {
                     retirement.run_with(|retirement| {
                         settled |= self.settle_run(generation, retirement);
