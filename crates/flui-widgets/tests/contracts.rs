@@ -197,6 +197,7 @@ fn pointer_and_gesture_recognition() {
             ("gesture_detector::authored_settings_retire_native_scale_session_before_fresh_admission", crate::gesture_detector::authored_settings_retire_native_scale_session_before_fresh_admission),
             ("gesture_detector::mounted_native_begin_retains_estimator_before_first_claim", crate::gesture_detector::mounted_native_begin_retains_estimator_before_first_claim),
             ("gesture_detector::mounted_native_begin_refused_by_touch_cannot_claim_after_touch_terminal", crate::gesture_detector::mounted_native_begin_refused_by_touch_cannot_claim_after_touch_terminal),
+            ("gesture_detector::nested_native_scale_loser_recovers_touch_after_winner_terminal", crate::gesture_detector::nested_native_scale_loser_recovers_touch_after_winner_terminal),
             ("gesture_detector::scoped_settings_control_touch_recognition_thresholds", crate::gesture_detector::scoped_settings_control_touch_recognition_thresholds),
             ("gesture_detector::scoped_settings_control_gesture_deadlines", crate::gesture_detector::scoped_settings_control_gesture_deadlines),
             ("gesture_detector::scoped_estimator_controls_delivered_drag_velocity", crate::gesture_detector::scoped_estimator_controls_delivered_drag_velocity),
@@ -293,6 +294,7 @@ fn scroll_physics_and_activity() {
     run_cases(
         "scroll_physics_and_activity",
         &[
+            ("scroll::scrollable_accessibility_ranges_follow_the_actual_axis", crate::scroll::scrollable_accessibility_ranges_follow_the_actual_axis),
             ("scroll::terminal_scroll_motion_uses_the_admitted_fling_profile", crate::scroll::terminal_scroll_motion_uses_the_admitted_fling_profile as fn()),
             ("scroll::terminal_refresh_motion_uses_the_admitted_fling_profile", crate::scroll::terminal_refresh_motion_uses_the_admitted_fling_profile),
             ("scroll::nested_fling_hands_remaining_velocity_to_matching_parent_axes", crate::scroll::nested_fling_hands_remaining_velocity_to_matching_parent_axes as fn()),
@@ -323,6 +325,12 @@ fn scroll_physics_and_activity() {
             ("scroll::dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_tick", crate::scroll::dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_tick),
             ("scroll::cancelling_an_in_range_scroll_ends_activity_without_coasting", crate::scroll::cancelling_an_in_range_scroll_ends_activity_without_coasting as fn()),
             ("scroll::refresh_indicator_drag_scrolls_without_rebuilding", crate::scroll::refresh_indicator_drag_scrolls_without_rebuilding),
+            ("scroll::refresh_motion_notifies_activity_through_release_and_recovery", crate::scroll::refresh_motion_notifies_activity_through_release_and_recovery),
+            ("scroll::refresh_without_vsync_ends_activity_after_release_and_cancel", crate::scroll::refresh_without_vsync_ends_activity_after_release_and_cancel),
+            ("scroll::replacing_vsync_retires_old_motion_and_drives_fresh_contacts", crate::scroll::replacing_vsync_retires_old_motion_and_drives_fresh_contacts),
+            ("scroll::replacing_a_scroll_position_cancels_its_contact_and_recovers", crate::scroll::replacing_a_scroll_position_cancels_its_contact_and_recovers),
+            ("scroll::a_failed_refresh_notification_releases_activity_and_recovers", crate::scroll::a_failed_refresh_notification_releases_activity_and_recovers),
+            ("scroll::a_repeated_frame_does_not_cancel_viewer_inertia", crate::scroll::a_repeated_frame_does_not_cancel_viewer_inertia),
             ("scroll::refresh_indicator_rebuilds_only_on_a_phase_change", crate::scroll::refresh_indicator_rebuilds_only_on_a_phase_change),
             ("scroll::cancelling_bouncing_overscroll_settles_without_release_velocity", crate::scroll::cancelling_bouncing_overscroll_settles_without_release_velocity as fn()),
             ("scroll::cancelling_a_threshold_refresh_pull_does_not_refresh", crate::scroll::cancelling_a_threshold_refresh_pull_does_not_refresh as fn()),

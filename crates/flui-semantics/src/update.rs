@@ -30,7 +30,7 @@
 //! the tree can resolve child identities, because a node stores its children
 //! as arena ids.
 
-use flui_foundation::geometry::{Matrix4, Rect};
+use flui_foundation::geometry::{Axis, Matrix4, Rect};
 use smallvec::SmallVec;
 use smol_str::SmolStr;
 
@@ -102,6 +102,8 @@ pub struct SemanticsNodeData {
     pub current_value_length: Option<i32>,
     /// Scroll position.
     pub scroll_position: Option<f64>,
+    /// Axis of the scroll position and extents; absent metadata means vertical.
+    pub scroll_axis: Option<Axis>,
     /// Maximum scroll extent.
     pub scroll_extent_max: Option<f64>,
     /// Minimum scroll extent.
@@ -153,6 +155,7 @@ impl Default for SemanticsNodeData {
             max_value_length: None,
             current_value_length: None,
             scroll_position: None,
+            scroll_axis: None,
             scroll_extent_max: None,
             scroll_extent_min: None,
             scroll_index: None,

@@ -59,6 +59,21 @@ pub type PointerRouteHandler = Rc<dyn Fn(&PointerEvent)>;
 /// Global handler that receives all pointer events.
 pub type GlobalPointerHandler = Rc<dyn Fn(&PointerEvent)>;
 
+#[derive(Clone)]
+struct RouteRegistration {
+    identity: Rc<()>,
+    handler: PointerRouteHandler,
+}
+
+impl RouteRegistration {
+    fn new(handler: PointerRouteHandler) -> Self {
+        Self {
+            identity: Rc::new(()),
+            handler,
+        }
+    }
+}
+
 /// Centralized pointer event router.
 ///
 /// Allows handlers to register for pointer events by pointer ID,
@@ -78,10 +93,10 @@ pub struct PointerRouter {
     closed: std::cell::Cell<bool>,
     close_mode: crate::__runtime::CloseTombstone,
     /// Routes per pointer ID
-    routes: RefCell<HashMap<PointerId, Vec<PointerRouteHandler>>>,
+    routes: RefCell<HashMap<PointerId, Vec<RouteRegistration>>>,
 
     /// Global handlers (receive all events)
-    global_handlers: RefCell<Vec<GlobalPointerHandler>>,
+    global_handlers: RefCell<Vec<RouteRegistration>>,
 }
 
 impl std::fmt::Debug for PointerRouter {
@@ -137,8 +152,11 @@ impl PointerRouter {
             failure.finish();
             return;
         }
-        let mut routes = self.routes.borrow_mut();
-        routes.entry(pointer).or_default().push(handler);
+        self.routes
+            .borrow_mut()
+            .entry(pointer)
+            .or_default()
+            .push(RouteRegistration::new(handler));
 
         tracing::trace!(?pointer, "Added pointer route");
     }
@@ -148,27 +166,28 @@ impl PointerRouter {
     /// Uses `Rc` pointer equality to find and remove the handler.
     /// Returns `true` if the handler was found and removed.
     pub fn remove_route(&self, pointer: PointerId, handler: &PointerRouteHandler) -> bool {
-        let mut routes = self.routes.borrow_mut();
+        let removed = {
+            let mut routes = self.routes.borrow_mut();
+            if let Some(handlers) = routes.get_mut(&pointer) {
+                let initial_len = handlers.len();
+                handlers.retain(|h| !Rc::ptr_eq(&h.handler, handler));
 
-        if let Some(handlers) = routes.get_mut(&pointer) {
-            let initial_len = handlers.len();
-            handlers.retain(|h| !Rc::ptr_eq(h, handler));
+                let removed = handlers.len() < initial_len;
 
-            let removed = handlers.len() < initial_len;
+                // Clean up empty entries
+                if handlers.is_empty() {
+                    routes.remove(&pointer);
+                }
 
-            // Clean up empty entries
-            if handlers.is_empty() {
-                routes.remove(&pointer);
+                removed
+            } else {
+                false
             }
-
-            if removed {
-                tracing::trace!(?pointer, "Removed pointer route");
-            }
-
-            removed
-        } else {
-            false
+        };
+        if removed {
+            tracing::trace!(?pointer, "Removed pointer route");
         }
+        removed
     }
 
     /// Remove all routes for a specific pointer.
@@ -201,7 +220,9 @@ impl PointerRouter {
             failure.finish();
             return;
         }
-        self.global_handlers.borrow_mut().push(handler);
+        self.global_handlers
+            .borrow_mut()
+            .push(RouteRegistration::new(handler));
         tracing::trace!("Added global pointer handler");
     }
 
@@ -215,7 +236,7 @@ impl PointerRouter {
         let routes = std::mem::take(&mut *self.routes.borrow_mut());
         let globals = std::mem::take(&mut *self.global_handlers.borrow_mut());
         for handler in routes.into_values().flatten().chain(globals) {
-            failure.retire(handler);
+            failure.retire(handler.handler);
         }
         failure.finish();
     }
@@ -224,10 +245,12 @@ impl PointerRouter {
     ///
     /// Returns `true` if the handler was found and removed.
     pub fn remove_global_handler(&self, handler: &GlobalPointerHandler) -> bool {
-        let mut handlers = self.global_handlers.borrow_mut();
-        let initial_len = handlers.len();
-        handlers.retain(|h| !Rc::ptr_eq(h, handler));
-        let removed = handlers.len() < initial_len;
+        let removed = {
+            let mut handlers = self.global_handlers.borrow_mut();
+            let initial_len = handlers.len();
+            handlers.retain(|h| !Rc::ptr_eq(&h.handler, handler));
+            handlers.len() < initial_len
+        };
 
         if removed {
             tracing::trace!("Removed global pointer handler");
@@ -286,7 +309,7 @@ impl PointerRouter {
         // Snapshot per-pointer handlers (clone the `Rc`s) so the borrow is
         // released before dispatch — a handler may re-enter the router. A
         // `SmallVec` keeps the common ≤4-handler case off the heap.
-        let pointer_handlers: SmallVec<[PointerRouteHandler; 4]> = pointer
+        let pointer_handlers: SmallVec<[RouteRegistration; 4]> = pointer
             .and_then(|pointer| {
                 self.routes
                     .borrow()
@@ -297,14 +320,14 @@ impl PointerRouter {
 
         // Snapshot global handlers before the first callback for the same
         // reentrancy contract as the per-pointer snapshot.
-        let global_handlers: SmallVec<[GlobalPointerHandler; 4]> =
+        let global_handlers: SmallVec<[RouteRegistration; 4]> =
             self.global_handlers.borrow().iter().cloned().collect();
 
         let mut first_panic = None;
 
         // Per-pointer handlers first.
-        for handler in pointer_handlers {
-            if pointer.is_some_and(|pointer| self.contains_route(pointer, &handler)) {
+        for RouteRegistration { identity, handler } in pointer_handlers {
+            if pointer.is_some_and(|pointer| self.contains_route(pointer, &identity)) {
                 let delivered = RoutePanic::capture(|| handler(event));
                 RoutePanic::preserve_first(
                     &mut first_panic,
@@ -325,8 +348,8 @@ impl PointerRouter {
         }
 
         // Global handlers after per-pointer.
-        for handler in global_handlers {
-            if self.contains_global_handler(&handler) {
+        for RouteRegistration { identity, handler } in global_handlers {
+            if self.contains_global_handler(&identity) {
                 let delivered = RoutePanic::capture(|| handler(event));
                 RoutePanic::preserve_first(&mut first_panic, delivered, "global router callback");
             }
@@ -355,20 +378,20 @@ impl PointerRouter {
     }
 
     /// Whether a snapshotted per-pointer callback is still registered.
-    fn contains_route(&self, pointer: PointerId, handler: &PointerRouteHandler) -> bool {
+    fn contains_route(&self, pointer: PointerId, identity: &Rc<()>) -> bool {
         self.routes.borrow().get(&pointer).is_some_and(|handlers| {
             handlers
                 .iter()
-                .any(|candidate| Rc::ptr_eq(candidate, handler))
+                .any(|candidate| Rc::ptr_eq(&candidate.identity, identity))
         })
     }
 
     /// Whether a snapshotted global callback is still registered.
-    fn contains_global_handler(&self, handler: &GlobalPointerHandler) -> bool {
+    fn contains_global_handler(&self, identity: &Rc<()>) -> bool {
         self.global_handlers
             .borrow()
             .iter()
-            .any(|candidate| Rc::ptr_eq(candidate, handler))
+            .any(|candidate| Rc::ptr_eq(&candidate.identity, identity))
     }
 
     /// Check if any handlers are registered for a pointer.
@@ -405,9 +428,10 @@ impl PointerRouter {
 
     /// Callback handles are independent framework-owned values. Retire them
     /// individually, without letting Vec drop glue combine competing failures.
-    fn retire_handlers(handlers: impl IntoIterator<Item = PointerRouteHandler>) {
+    fn retire_handlers(handlers: impl IntoIterator<Item = RouteRegistration>) {
         let mut first_panic = None;
-        for handler in handlers {
+        for registration in handlers {
+            let handler = registration.handler;
             if first_panic.is_some() || std::thread::panicking() {
                 // This callback's opaque capture may contain several hostile
                 // destructors. After failure, do not start another retirement;

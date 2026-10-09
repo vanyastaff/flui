@@ -41,6 +41,42 @@ implementations cannot change arena ordering or bypass exact membership checks.
 
 Local design choices and why. Each entry names the conflict, the choice, and the reference (a strategy clause, a design rule, or a precedent plan).
 
+- **Diagnostics participate in the subsystem's ownership boundary.** Router
+  mutations and ignored sampling windows release their borrow or mutex before
+  tracing invokes user code. Focus commits primary/history and enters its
+  notification round before diagnostics, then completes observers and accepted
+  FIFO requests before resuming the first failure. The public
+  `binding_input_contract_matrix`,
+  `resampler_interpolates_on_event_time_and_never_drops_terminals` and
+  `caught_callback_failures_leave_captures_with_their_owner` cover diagnostic
+  reentry, competing failures and subsequent healthy delivery.
+- **A router snapshot identifies a registration, independently of its callback.**
+  Removing a callback removes its duplicate registrations; adding the same
+  callback creates new registrations eligible for the next event. Private
+  retained identities cannot alias an outstanding snapshot. The
+  `binding_input_contract_matrix` pins pointer/global duplicates, removal,
+  re-admission and accepted healthy tails after failure.
+- **Cursor publication belongs to the latest physical source.** Device-local
+  enter/exit rounds remain independent. Ambient refresh updates the current
+  source's window cursor without handing ownership to a stationary device by
+  iteration order. Publication debt differs from an in-flight hook and from
+  acknowledged output; only successful current delivery acknowledges it.
+  Reentry and replacement preserve newer debt. Removing the owner requests the
+  arrow with its actual source metadata and permits retry without probing the
+  removed source. Ambient probes revalidate their exact device observation
+  after user code, so stale results cannot replace a newer physical reading or
+  a re-admitted source. `mouse_tracking_ordering_and_cursor_deferral` pins these
+  boundaries, same-position reentry, callback failure and healthy recovery.
+- **Checked positions do not guarantee representable derived motion.**
+  TapAndDrag checks initial, incremental and measured historical displacement
+  before recognition, velocity sampling or publication;
+  overflow cancels the attempt rather than fabricating a clamped delta.
+  `tap_and_drag_resolves_through_the_shared_arena` covers these boundaries,
+  cancellation failure and finite same-pointer recovery. Scale commits its
+  admitted contact before calling the user clock outside its state borrow,
+  then revalidates the exact generation. `public_recognizer_extension_contracts`
+  covers clock cancellation, repeated-pointer replacement, failure and recovery.
+
 - **Render hit paths contain identities, not executable target objects.**
   Rendering protocols produce `RenderId` paths and data-only owner-lane targets;
   `InteractionLane` resolves them and `GestureBinding` retains pointer routes.
@@ -80,11 +116,14 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   `explicit_arrow_cursor_wins` pins both hit-path resolution and tracker delivery.
 - **Hover annotations survive until every device leaves.** The tracker keeps a
   shared resolved annotation while any device remains in its region. Devices
-  refresh in identity order, each failed hit test preserves that device's prior
+  refresh in identity order, delivering each committed callback round before
+  probing the next device. A later reentrant probe therefore observes completed
+  prior transitions, including their required exits. Each failed hit test
+  preserves that device's prior
   state for retry, and every committed callback batch runs before the first
   failure resumes. Replaced and departed captures retire outside the tracker
   borrow under ADR-0127. `shared_region_exit_per_device`,
-  `ambient_refresh_contains_each_device` and
+  `ambient_refresh_contains_each_device` (including later-probe reentry) and
   `released_region_destructor_reenters_tracker` pin these contracts.
 - **Hover payload retirement preserves delivery and first failure (ADR-0127).**
   Queued replacement commits its newer movement before the outgoing hit path
@@ -214,6 +253,12 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   from recognized handling. The mounting owner keeps a refused native session
   refused until its terminal event, while an Update without Begin remains an
   independent relative step.
+- **Native cached routes require current admission before dispatch.** Fresh
+  hit testing or raw observation can admit a replacement Start for the same
+  source and timestamp. A superseded Start or Update cannot invoke the cached
+  actor; rejecting its claim after invocation would already mutate the newer
+  session. `binding_input_contract_matrix` covers both observation paths,
+  competing observation failure and subsequent Update/End recovery.
 - **Focus scope identity is explicit.** A `FocusScopeNode` owns an inner `FocusNode`, and that backing node carries a `Weak<FocusScopeNode>` owner link. This keeps enclosing-scope lookup, focused-child history, and `FocusManager::focus_next` / `focus_previous` rooted in the same tree instead of relying on a parallel manager structure. `descendants_are_focusable=false` gates descendant requests; a true-to-false transition evicts focus held by the node or its subtree while leaving the node eligible for a later explicit request. FLUI clears primary focus to `None` rather than selecting a previously focused child.
 - **`processing::lsq_solver` is crate-internal.** `VelocityTracker` is its only user; the resampler interpolates linearly and does not fit a polynomial.
 - **Observability is crate-public.** `pub mod observability` exports stable `GestureEvent` spellings, component-name constants, and `pointer_event_kind`. `flui-app` configures a generic subscriber; gesture-specific devtools consumption requires its own integration. `stable_recognizer_observability_kinds_reach_the_subscriber` pins admission and dispatch fields through public recognizer calls.
@@ -445,6 +490,13 @@ grant ordering, gate changes and the next operation;
 `text_input_owners_are_retained_after_a_failure_and_during_unwind` runs a
 store whose destructor panics twice after a failed callback and under an
 unwinding owner drop, each in its own process.
+
+Allocating a `ClientToken` reserves identity; committing an active client admits
+the replacement. Supersession follows the last successful admission, so failed
+nested gate installation does not reject a valid outer client. The same public
+retirement table covers this failure alone, competing outgoing retirement and
+later healthy IME delivery. Successful nested replacement still supersedes its
+outer operation even if subsequently detached.
 
 ### Presentation-scoped terminal withdrawal
 

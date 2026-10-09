@@ -202,6 +202,7 @@ pub struct GestureDetector {
     behavior: HitTestBehavior,
     drag_pointer_strategy: DragPointerStrategy,
     exclusive_drags: bool,
+    recognizer_owner: Option<Rc<()>>,
     child: Child,
 }
 
@@ -230,6 +231,7 @@ impl Default for GestureDetector {
             behavior: HitTestBehavior::DeferToChild,
             drag_pointer_strategy: DragPointerStrategy::PrimaryOnly,
             exclusive_drags: false,
+            recognizer_owner: None,
             child: Child::empty(),
         }
     }
@@ -272,6 +274,13 @@ impl std::fmt::Debug for GestureDetector {
 }
 
 impl GestureDetector {
+    /// Replaces admitted contacts when a consumer's actual owner changes.
+    #[must_use]
+    pub(crate) fn recognizer_owner(mut self, owner: Rc<()>) -> Self {
+        self.recognizer_owner = Some(owner);
+        self
+    }
+
     /// Allow pan and horizontal-drag callbacks to compete for one arena winner.
     ///
     /// The first recognizer to claim the contact wins; the other receives
@@ -591,7 +600,7 @@ impl ScaleCallbacks {
 #[derive(Default)]
 struct NativeScaleRoute {
     pending: Option<PendingNativeScale>,
-    active: Option<PointerInfo>,
+    active: Option<(PointerInfo, Rc<()>)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -601,11 +610,12 @@ enum NativeBeginAdmission {
     Rejected,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct PendingNativeScale {
     source: PointerInfo,
     time: EventTime,
     admission: NativeBeginAdmission,
+    generation: Rc<()>,
 }
 
 fn same_native_source(left: &PointerInfo, right: &PointerInfo) -> bool {
@@ -615,17 +625,19 @@ fn same_native_source(left: &PointerInfo, right: &PointerInfo) -> bool {
 fn claim_native_scale(
     recognizer: &ScaleGestureRecognizer,
     gates: &RecognizerGates,
-    route: &RefCell<NativeScaleRoute>,
+    route: &Rc<RefCell<NativeScaleRoute>>,
     dispatch: PanZoomDispatch<'_>,
 ) -> EventPropagation {
     let event = dispatch.local;
     match event.phase {
         PanZoomPhase::Start => {
+            let generation = Rc::new(());
             let retired = {
                 let mut route = route.borrow_mut();
                 if route
                     .active
-                    .is_some_and(|active| !same_native_source(&active, event.pointer()))
+                    .as_ref()
+                    .is_some_and(|(active, _)| !same_native_source(active, event.pointer()))
                 {
                     return EventPropagation::Continue;
                 }
@@ -634,9 +646,30 @@ fn claim_native_scale(
                     source: *event.pointer(),
                     time: event.time,
                     admission: NativeBeginAdmission::Staging,
+                    generation: generation.clone(),
                 });
                 retired
             };
+            let pending_route = Rc::downgrade(route);
+            let _ = dispatch.on_retirement(move || {
+                if let Some(route) = pending_route.upgrade() {
+                    let mut route = route.borrow_mut();
+                    if route
+                        .pending
+                        .as_ref()
+                        .is_some_and(|pending| Rc::ptr_eq(&pending.generation, &generation))
+                    {
+                        route.pending = None;
+                    }
+                    if route
+                        .active
+                        .as_ref()
+                        .is_some_and(|(_, active)| Rc::ptr_eq(active, &generation))
+                    {
+                        route.active = None;
+                    }
+                }
+            });
             // Start captures the dormant actor's profile immediately. Claiming
             // and recognized callbacks still wait for an admitted real Update.
             let disposition = recognizer.handle_pan_zoom(dispatch);
@@ -661,13 +694,13 @@ fn claim_native_scale(
             }
         }
         PanZoomPhase::Update(transform) => {
-            let active = route.borrow().active;
+            let active = route.borrow().active.as_ref().map(|(source, _)| *source);
             if let Some(active) = active {
                 if !same_native_source(&active, event.pointer()) {
                     return EventPropagation::Continue;
                 }
             } else {
-                if route.borrow().pending.is_some_and(|pending| {
+                if route.borrow().pending.as_ref().is_some_and(|pending| {
                     same_native_source(&pending.source, event.pointer())
                         && pending.admission == NativeBeginAdmission::Rejected
                 }) {
@@ -692,12 +725,15 @@ fn claim_native_scale(
                 }
                 {
                     let mut route = route.borrow_mut();
-                    if route.pending.is_some_and(|pending| {
+                    if route.pending.as_ref().is_some_and(|pending| {
                         same_native_source(&pending.source, event.pointer())
                             && pending.time <= event.time
                     }) {
-                        route.pending = None;
-                        route.active = Some(*event.pointer());
+                        let pending = route
+                            .pending
+                            .take()
+                            .expect("BUG: matching pending native admission");
+                        route.active = Some((*event.pointer(), pending.generation));
                     }
                 }
             }
@@ -708,7 +744,8 @@ fn claim_native_scale(
                 let mut route = route.borrow_mut();
                 if route
                     .active
-                    .is_some_and(|active| same_native_source(&active, event.pointer()))
+                    .as_ref()
+                    .is_some_and(|(active, _)| same_native_source(active, event.pointer()))
                 {
                     route.active = None;
                 }
@@ -718,17 +755,19 @@ fn claim_native_scale(
         PanZoomPhase::End | PanZoomPhase::Cancelled => {
             let (active, staged) = {
                 let mut route = route.borrow_mut();
-                let staged = if let Some(pending) = route.pending
+                let staged = if let Some(pending) = route.pending.as_ref()
                     && same_native_source(&pending.source, event.pointer())
                 {
+                    let admitted = pending.admission != NativeBeginAdmission::Rejected;
                     route.pending = None;
-                    pending.admission != NativeBeginAdmission::Rejected
+                    admitted
                 } else {
                     false
                 };
                 let active = route
                     .active
-                    .is_some_and(|active| same_native_source(&active, event.pointer()));
+                    .as_ref()
+                    .is_some_and(|(active, _)| same_native_source(active, event.pointer()));
                 if active {
                     route.active = None;
                 }
@@ -1066,6 +1105,23 @@ impl ViewState<GestureDetector> for GestureDetectorState {
     }
 
     fn did_update_view(&mut self, old_view: &GestureDetector, new_view: &GestureDetector) {
+        let owner_changed = match (&old_view.recognizer_owner, &new_view.recognizer_owner) {
+            (None, None) => false,
+            (Some(old), Some(new)) => !Rc::ptr_eq(old, new),
+            _ => true,
+        };
+        if owner_changed {
+            self.drag_pointer_strategy = new_view.drag_pointer_strategy;
+            self.exclusive_drags = new_view.exclusive_drags;
+            self.scale_start_mode = new_view.scale_start_mode;
+            let incoming = self.make_recognizers();
+            self.attach_recognizers(&incoming);
+            *self.native_scale_route.borrow_mut() = NativeScaleRoute::default();
+            if let Some(outgoing) = self.recognizers.replace(incoming) {
+                outgoing.cancel();
+            }
+            return;
+        }
         let replace_drag = old_view.drag_pointer_strategy != new_view.drag_pointer_strategy
             || old_view.exclusive_drags != new_view.exclusive_drags;
         let replace_scale = old_view.scale_start_mode != new_view.scale_start_mode;

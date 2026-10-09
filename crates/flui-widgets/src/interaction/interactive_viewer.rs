@@ -52,7 +52,7 @@ use std::sync::{
 use std::time::Duration;
 
 use flui_animation::{
-    Animation, AnimationController, DrivenController, FrictionSimulation, Tolerance,
+    Animation, AnimationController, DrivenController, FrictionSimulation, Tolerance, Vsync,
 };
 use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::Matrix4;
@@ -72,10 +72,10 @@ use flui_platform_api::{
     pointer::{PanZoomEvent, PanZoomPhase, ScrollEvent, ScrollUnit},
 };
 use flui_rendering::hit_testing::HitTestBehavior;
-use flui_rendering::pipeline::PipelineCell;
+use flui_rendering::pipeline::{PipelineCell, WeakPipelineCell};
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
-use flui_view::{Child, IntoView, View, ViewState};
+use flui_view::{Child, IntoView, PostFrameHandle, View, ViewState};
 
 use crate::anchored_box::AnchoredBox;
 use crate::{AnimatedBuilder, ClipRect, GestureDetector, Listener, Transform, VsyncScope};
@@ -444,9 +444,11 @@ impl StatefulView for InteractiveViewer {
                 rotation: Cell::new(0.0),
             }),
             pipeline_cell: None,
+            post_frame: None,
             writer: None,
             fling,
             controller,
+            clock: None,
         }
     }
 }
@@ -476,7 +478,8 @@ struct GestureTracking {
 #[derive(Debug)]
 struct FocalFling {
     controller: AnimationController,
-    listener: RefCell<Option<(ListenerId, Arc<AtomicBool>)>>,
+    run: RefCell<Option<Rc<FocalRun>>>,
+    clock_bound: Cell<bool>,
     closed: Cell<bool>,
 }
 
@@ -484,16 +487,17 @@ impl FocalFling {
     fn new(controller: AnimationController) -> Self {
         Self {
             controller,
-            listener: RefCell::new(None),
+            run: RefCell::new(None),
+            clock_bound: Cell::new(false),
             closed: Cell::new(false),
         }
     }
 
     fn stop(&self) {
-        let listener = self.listener.borrow_mut().take();
-        if let Some((id, live)) = listener {
-            live.store(false, Ordering::Release);
-            self.controller.remove_listener(id);
+        let outgoing = self.run.borrow_mut().take();
+        if let Some(run) = &outgoing {
+            run.live.store(false, Ordering::Release);
+            self.controller.remove_listener(run.listener);
         }
         let _ = self.controller.stop();
     }
@@ -502,14 +506,24 @@ impl FocalFling {
         &self,
         target: TransformationController,
         velocity: Offset<f64>,
-        viewport: Rect<f64>,
-        boundary: Rect<f64>,
+        pipeline: Option<PipelineCell>,
+        anchor: SubtreeAnchor,
+        margin: EdgeInsets,
+        post_frame: Option<PostFrameHandle>,
     ) {
         self.stop();
         let speed = velocity.dx.hypot(velocity.dy);
-        if self.closed.get() || !speed.is_finite() || speed <= 0.0 {
+        if self.closed.get() || !self.clock_bound.get() || !speed.is_finite() || speed <= 0.0 {
             return;
         }
+        let Some(post_frame) = post_frame else {
+            return;
+        };
+        let Some((viewport, boundary)) =
+            InteractiveViewerState::geometry(pipeline.as_ref(), &anchor, margin)
+        else {
+            return;
+        };
         // Ten percent of the release speed remains after one second. The
         // library simulation supplies finite admission and its rest threshold.
         let Ok(simulation) = FrictionSimulation::new(0.1, 0.0, speed, Tolerance::DEFAULT) else {
@@ -520,7 +534,7 @@ impl FocalFling {
         let live = Arc::new(AtomicBool::new(true));
         let callback_live = live.clone();
         let animation = self.controller.clone();
-        let id = self.controller.add_listener(std::rc::Rc::new(move || {
+        let listener = self.controller.add_listener(std::rc::Rc::new(move || {
             if !callback_live.load(Ordering::Acquire) {
                 return;
             }
@@ -530,19 +544,88 @@ impl FocalFling {
                 let _ = animation.stop();
                 return;
             };
-            if next == target.value() && animation.value() != 0.0 {
+            if next == target.value() && proposed != next {
                 let _ = animation.stop();
             } else {
                 target.set_value(next);
             }
         }));
-        *self.listener.borrow_mut() = Some((id, live));
+        let run = Rc::new(FocalRun {
+            listener,
+            viewport,
+            boundary,
+            pipeline: pipeline.map(|owner| owner.downgrade()),
+            anchor,
+            margin,
+            post_frame,
+            animation: self.controller.clone(),
+            live,
+        });
+        *self.run.borrow_mut() = Some(run.clone());
         let _ = self.controller.animate_with(simulation);
+        run.schedule();
     }
 
     fn close(&self) {
         self.closed.set(true);
+        self.clock_bound.set(false);
         self.stop();
+    }
+}
+
+/// Completed layout validates the immutable limits before the next motion tick.
+/// Publication remains on the Vsync listener, before build and paint.
+#[derive(Debug)]
+struct FocalRun {
+    listener: ListenerId,
+    viewport: Rect<f64>,
+    boundary: Rect<f64>,
+    pipeline: Option<WeakPipelineCell>,
+    anchor: SubtreeAnchor,
+    margin: EdgeInsets,
+    post_frame: PostFrameHandle,
+    animation: AnimationController,
+    live: Arc<AtomicBool>,
+}
+
+impl FocalRun {
+    fn stop(&self) {
+        self.live.store(false, Ordering::Release);
+        self.animation.remove_listener(self.listener);
+        let _ = self.animation.stop();
+    }
+
+    fn schedule(self: Rc<Self>) {
+        let handle = self.post_frame.clone();
+        let pending = Rc::downgrade(&self);
+        if handle
+            .schedule(move |_| {
+                if let Some(run) = pending.upgrade() {
+                    run.tick();
+                }
+            })
+            .is_err()
+        {
+            self.stop();
+        }
+    }
+
+    fn tick(self: Rc<Self>) {
+        if !self.live.load(Ordering::Acquire) {
+            return;
+        }
+        let owner = self.pipeline.as_ref().and_then(WeakPipelineCell::upgrade);
+        if InteractiveViewerState::geometry(owner.as_ref(), &self.anchor, self.margin)
+            != Some((self.viewport, self.boundary))
+        {
+            self.stop();
+            return;
+        }
+        if self.animation.is_animating() {
+            self.schedule();
+        } else {
+            self.stop();
+        }
     }
 }
 
@@ -562,26 +645,47 @@ pub struct InteractiveViewerState {
     /// acquire-in-lifecycle-hook, use-from-callback shape
     /// `FocusState::init_state` uses for its own pipeline handle.
     pipeline_cell: Option<PipelineCell>,
+    post_frame: Option<PostFrameHandle>,
     fling: Rc<FocalFling>,
     controller: DrivenController,
+    /// Identity only: the driven controller owns the registry seat.
+    clock: Option<Vsync>,
 }
 
 impl ViewState<InteractiveViewer> for InteractiveViewerState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.pipeline_cell = ctx.pipeline_owner();
+        self.post_frame = ctx.post_frame_handle();
         self.writer = Some(ctx.writer_source());
         self.did_change_dependencies(ctx);
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
-        self.pipeline_cell = ctx.pipeline_owner();
-        if let Err(error) = self.controller.rebind(VsyncScope::maybe_of(ctx).as_ref()) {
-            tracing::error!(%error, "InteractiveViewer lost its frame registry");
+        let incoming = ctx.pipeline_owner();
+        let unchanged = match (&self.pipeline_cell, &incoming) {
+            (None, None) => true,
+            (Some(current), Some(incoming)) => current.ptr_eq(incoming),
+            _ => false,
+        };
+        if !unchanged {
+            self.fling.stop();
         }
+        self.pipeline_cell = incoming;
+        self.post_frame = ctx.post_frame_handle();
+        self.writer = Some(ctx.writer_source());
+        self.bind_vsync(ctx);
     }
 
     fn did_update_view(&mut self, old: &InteractiveViewer, view: &InteractiveViewer) {
-        if !old.controller.ptr_eq(&view.controller) {
+        if !old.controller.ptr_eq(&view.controller)
+            || old.boundary_margin != view.boundary_margin
+            || old.pan_enabled != view.pan_enabled
+            || old.pan_axis != view.pan_axis
+            || old.min_scale != view.min_scale
+            || old.max_scale != view.max_scale
+            || old.rotation_enabled != view.rotation_enabled
+            || old.alignment != view.alignment
+        {
             self.fling.stop();
         }
     }
@@ -597,6 +701,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
         let anchor = self.subtree_anchor.clone();
         let gesture = Rc::clone(&self.gesture);
         let pipeline_cell = self.pipeline_cell.clone();
+        let post_frame = self.post_frame.clone();
         let boundary_margin = view.boundary_margin;
         let min_scale = view.min_scale;
         let max_scale = view.max_scale;
@@ -715,6 +820,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
             let controller_end = controller.clone();
             let anchor_end = anchor.clone();
             let pipeline_end = pipeline_cell.clone();
+            let post_frame_end = post_frame.clone();
             let pan_end_details = callback_with(move |cx, details: ScaleEndDetails| {
                 let mut velocity = details.focal_fling_velocity().pixels_per_second;
                 velocity = match pan_axis {
@@ -730,14 +836,15 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                 gesture_end.current_axis.set(None);
                 gesture_end.scale.set(1.0);
                 gesture_end.rotation.set(0.0);
-                if pan_enabled
-                    && let Some((viewport, boundary)) = InteractiveViewerState::geometry(
-                        pipeline_end.as_ref(),
-                        &anchor_end,
+                if pan_enabled {
+                    fling_end.start(
+                        controller_end.clone(),
+                        velocity,
+                        pipeline_end.clone(),
+                        anchor_end.clone(),
                         boundary_margin,
-                    )
-                {
-                    fling_end.start(controller_end.clone(), velocity, viewport, boundary);
+                        post_frame_end.clone(),
+                    );
                 }
                 if let Some(callback) = &on_end_pan {
                     callback(
@@ -988,6 +1095,26 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
 }
 
 impl InteractiveViewerState {
+    fn bind_vsync(&mut self, ctx: &dyn LifecycleContext) {
+        let incoming = VsyncScope::maybe_of(ctx);
+        let unchanged = match (&self.clock, &incoming) {
+            (None, None) => true,
+            (Some(current), Some(incoming)) => current.is_same(incoming),
+            _ => false,
+        };
+        if unchanged {
+            return;
+        }
+        self.clock = incoming;
+        self.fling.clock_bound.set(false);
+        self.fling.stop();
+        let rebound = self.controller.rebind(self.clock.as_ref());
+        self.fling.clock_bound.set(self.controller.is_bound());
+        if let Err(error) = rebound {
+            tracing::error!(%error, "InteractiveViewer lost its frame registry");
+        }
+    }
+
     /// The viewport rect and the boundary rect, in scene coordinates, or
     /// `None` before the child is mounted and laid out.
     ///

@@ -60,7 +60,7 @@ impl Invalidation {
 
 /// Native subscriptions and interfaces belong to the owner context, not its
 /// Send + Sync platform wrapper. Interfaces and receiver retire before WinRT.
-pub(super) struct PreferenceSource {
+pub(crate) struct PreferenceSource {
     invalidation: Arc<Invalidation>,
     _receiver: receiver::Receiver,
     ui: UISettings,
@@ -72,7 +72,7 @@ pub(super) struct PreferenceSource {
 }
 
 impl PreferenceSource {
-    pub(super) fn new(signal: &Arc<OwnerSignal>) -> Result<Self, PlatformError> {
+    pub(crate) fn new(signal: &Arc<OwnerSignal>) -> Result<Self, PlatformError> {
         let entry = WinRtEntry::enter().map_err(native_error)?;
         // SAFETY: this owner holds its WinRT entry; class strings are owned.
         // Direct activation avoids the generated process-wide factory cache,
@@ -123,7 +123,7 @@ impl PreferenceSource {
         Ok(source)
     }
 
-    pub(super) fn pending(&self) -> bool {
+    pub(crate) fn pending(&self) -> bool {
         self.invalidation.pending.load(Ordering::Acquire)
     }
 
@@ -137,22 +137,22 @@ impl PreferenceSource {
         clippy::used_underscore_binding,
         reason = "native ingress test addresses the receiver retained only for its lifetime in production"
     )]
-    pub(super) fn send_setting_change_for_test(&self) {
+    pub(crate) fn send_setting_change_for_test(&self) {
         self._receiver.send_setting_change();
     }
 
-    pub(super) fn sample(&self) -> Result<SystemPreferences, PlatformError> {
+    pub(crate) fn sample(&self) -> Result<SystemPreferences, PlatformError> {
         self.sample_with(|| sample(&self.ui, &self.accessibility))
     }
 
-    pub(super) fn sample_with(
+    pub(crate) fn sample_with(
         &self,
         read: impl FnOnce() -> Result<SystemPreferences, PlatformError>,
     ) -> Result<SystemPreferences, PlatformError> {
         self.cache.read(&self.invalidation.pending, read)
     }
 
-    pub(super) fn retry_deadline(&self) -> Option<web_time::Instant> {
+    pub(crate) fn retry_deadline(&self) -> Option<web_time::Instant> {
         (self.invalidation.accepting.load(Ordering::Acquire)
             && self
                 .invalidation
@@ -163,7 +163,7 @@ impl PreferenceSource {
         .flatten()
     }
 
-    pub(super) fn retry_if_due(&self) {
+    pub(crate) fn retry_if_due(&self) {
         let now = web_time::Instant::now();
         if self
             .retry_deadline()

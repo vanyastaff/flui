@@ -632,6 +632,118 @@ pub(crate) fn viewer_focal_fling_advances_then_stops_on_new_input() {
         stopped,
         "new contact stops the previous focal fling"
     );
+    viewer_focal_fling_without_clock_preserves_the_scene();
+}
+
+fn viewer_focal_fling_without_clock_preserves_the_scene() {
+    use flui_animation::Vsync;
+    use flui_widgets::{InteractiveViewer, TransformationController, VsyncScope};
+    use std::time::Duration;
+
+    for initially_bound in [false, true] {
+        let controller = TransformationController::new();
+        let released = Rc::new(RefCell::new(Vec::new()));
+        let vsync = Vsync::new();
+        let tree = |bound| {
+            let ends = released.clone();
+            let viewer = InteractiveViewer::new()
+                .controller(controller.clone())
+                .boundary_margin(EdgeInsets::all(1000.0))
+                .on_interaction_end(move |_, details| ends.borrow_mut().push(details.velocity))
+                .child(SizedBox::new(200.0, 200.0));
+            if bound {
+                VsyncScope::new(vsync.clone(), viewer)
+            } else {
+                VsyncScope::detached(viewer)
+            }
+        };
+        let mut laid = lay_out(tree(initially_bound), tight(200.0, 200.0));
+        laid.adopt_vsync(vsync.clone());
+        let post_frame = laid.post_frame_handle();
+        let packet = |millis: u64, phase| {
+            PointerEvent::PanZoom(PanZoomEvent::new(
+                mouse(),
+                EventTime::from_nanos(millis * 1_000_000),
+                position(50.0, 100.0),
+                phase,
+            ))
+        };
+        let release = |laid: &mut crate::common::LaidOut, base: u64, bound: bool| {
+            laid.dispatch_pointer_event(&packet(base, PanZoomPhase::Start));
+            for (elapsed, pan) in [(10, 20.0), (20, 40.0), (30, 60.0)] {
+                laid.dispatch_pointer_event(&packet(
+                    base + elapsed,
+                    PanZoomPhase::Update(
+                        PanZoomTransform::try_new(Offset::new(pan, 0.0), 1.0, 0.0)
+                            .expect("finite native release"),
+                    ),
+                ));
+            }
+            let before_end = controller.value();
+            laid.dispatch_pointer_event(&packet(base + 31, PanZoomPhase::End));
+            if !bound {
+                for _ in 0..4 {
+                    laid.pump_for(Duration::from_millis(16));
+                    assert_eq!(
+                        post_frame.pending_len(),
+                        0,
+                        "a detached release cannot perpetually queue geometry validation"
+                    );
+                }
+                assert_eq!(
+                    controller.value(),
+                    before_end,
+                    "a missing clock cannot move the scene synchronously at release"
+                );
+            }
+            assert!(
+                released
+                    .borrow()
+                    .last()
+                    .expect("release callback")
+                    .pixels_per_second
+                    .dx
+                    > 1000.0,
+                "a missing clock does not erase the measured release"
+            );
+        };
+        if initially_bound {
+            release(&mut laid, 0, true);
+            laid.pump_for(Duration::from_millis(16));
+            let moving = controller.value();
+            laid.pump_widget(tree(false));
+            laid.pump_for(Duration::from_millis(16));
+            assert_eq!(
+                controller.value(),
+                moving,
+                "clock removal cancels the old run without settlement motion"
+            );
+        }
+        release(&mut laid, 100, false);
+        let settled = controller.value();
+        for _ in 0..4 {
+            laid.pump_for(Duration::from_millis(16));
+            assert_eq!(
+                controller.value(),
+                settled,
+                "a detached release preserves the scene without ongoing motion"
+            );
+            assert_eq!(
+                post_frame.pending_len(),
+                0,
+                "a detached release cannot perpetually queue geometry validation"
+            );
+        }
+        laid.pump_widget(tree(true));
+        release(&mut laid, 200, true);
+        let admitted = controller.value().transform_point(0.0, 0.0).0;
+        laid.pump_for(Duration::from_millis(16));
+        laid.pump_for(Duration::from_millis(16));
+        assert!(
+            controller.value().transform_point(0.0, 0.0).0 > admitted,
+            "a fresh bound release recovers focal inertia"
+        );
+    }
 }
 
 /// A fling keeps immutable limits until real layout or authored bounds change.
@@ -682,6 +794,18 @@ pub(crate) fn viewer_focal_fling_rebuild_preserves_or_retires_geometry() {
             controller.value().transform_point(0.0, 0.0).0 > before_rebuild,
             "an unchanged rebuild preserves the admitted fling"
         );
+        let repeated = controller.value();
+        laid.pump();
+        assert_eq!(
+            controller.value(),
+            repeated,
+            "a repeated frame has no elapsed motion"
+        );
+        laid.pump_for(Duration::from_millis(16));
+        assert!(
+            controller.value().transform_point(0.0, 0.0).0 > repeated.transform_point(0.0, 0.0).0,
+            "a repeated frame does not retire an unchanged fling"
+        );
         laid.pump_widget(if change_viewport {
             tree(100.0, 1000.0)
         } else {
@@ -700,6 +824,36 @@ pub(crate) fn viewer_focal_fling_rebuild_preserves_or_retires_geometry() {
             } else {
                 "the boundary"
             }
+        );
+        laid.dispatch_pointer_event(&packet(100, PanZoomPhase::Start));
+        for (millis, pan) in [(110, 20.0), (120, 40.0), (130, 60.0)] {
+            laid.dispatch_pointer_event(&packet(
+                millis,
+                PanZoomPhase::Update(
+                    PanZoomTransform::try_new(Offset::new(pan, 0.0), 1.0, 0.0)
+                        .expect("finite recovery pan"),
+                ),
+            ));
+        }
+        laid.dispatch_pointer_event(&packet(131, PanZoomPhase::End));
+        let recovered = controller.value().transform_point(0.0, 0.0).0;
+        laid.pump_for(Duration::from_millis(16));
+        laid.pump_for(Duration::from_millis(16));
+        assert!(
+            controller.value().transform_point(0.0, 0.0).0 > recovered,
+            "fresh release uses the replacement geometry"
+        );
+        laid.pump_for(Duration::from_secs(20));
+        let rested = controller.value();
+        assert!(
+            !vsync.has_running(),
+            "settled motion no longer requests Vsync"
+        );
+        laid.pump_for(Duration::from_millis(16));
+        assert_eq!(
+            controller.value(),
+            rested,
+            "settled continuation stays retired"
         );
     }
 }

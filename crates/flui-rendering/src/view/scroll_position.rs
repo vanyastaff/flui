@@ -564,6 +564,18 @@ impl ScrollPosition {
     /// Stopping also resets [`Self::user_scroll_direction`] to `Idle`,
     /// since no drag or fling remains to have a direction.
     pub fn set_is_scrolling(&self, is_scrolling: bool) {
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        self.set_is_scrolling_with_recovery(is_scrolling, &mut recovery);
+        recovery.finish();
+    }
+
+    /// Publish activity within an enclosing framework delivery's failure custody.
+    #[doc(hidden)]
+    pub fn set_is_scrolling_with_recovery(
+        &self,
+        is_scrolling: bool,
+        recovery: &mut flui_foundation::panic::PanicRecovery,
+    ) {
         let changed = {
             let mut activity = self.inner.activity.borrow_mut();
             let changed = activity.is_scrolling != is_scrolling;
@@ -576,7 +588,9 @@ impl ScrollPosition {
         // Lock released before listeners run — a subscriber reading the
         // activity back must not deadlock.
         if changed {
-            self.inner.activity_notifier.notify_listeners();
+            self.inner
+                .activity_notifier
+                .notify_listeners_with_recovery(recovery);
         }
     }
 

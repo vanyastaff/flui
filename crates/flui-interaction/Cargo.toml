@@ -101,6 +101,10 @@ harness = false
 name = "pointer_route_bench"
 harness = false
 
+[[bench]]
+name = "interaction_delivery_bench"
+harness = false
+
 [features]
 default = []
 

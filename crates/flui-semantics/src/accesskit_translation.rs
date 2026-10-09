@@ -543,14 +543,32 @@ pub(crate) fn to_node(data: &SemanticsNodeData) -> Node {
         y1: data.rect.bottom(),
     });
 
-    if let Some(position) = data.scroll_position {
-        node.set_scroll_y(position);
-    }
-    if let Some(max) = data.scroll_extent_max {
-        node.set_scroll_y_max(max);
-    }
-    if let Some(min) = data.scroll_extent_min {
-        node.set_scroll_y_min(min);
+    match data
+        .scroll_axis
+        .unwrap_or(flui_foundation::geometry::Axis::Vertical)
+    {
+        flui_foundation::geometry::Axis::Vertical => {
+            if let Some(position) = data.scroll_position {
+                node.set_scroll_y(position);
+            }
+            if let Some(max) = data.scroll_extent_max {
+                node.set_scroll_y_max(max);
+            }
+            if let Some(min) = data.scroll_extent_min {
+                node.set_scroll_y_min(min);
+            }
+        }
+        flui_foundation::geometry::Axis::Horizontal => {
+            if let Some(position) = data.scroll_position {
+                node.set_scroll_x(position);
+            }
+            if let Some(max) = data.scroll_extent_max {
+                node.set_scroll_x_max(max);
+            }
+            if let Some(min) = data.scroll_extent_min {
+                node.set_scroll_x_min(min);
+            }
+        }
     }
 
     // AccessKit's set-position pair, which is what a screen reader reads out
