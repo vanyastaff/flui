@@ -1,4 +1,4 @@
-# ADR-0180: Fallible text and layout measurement
+# ADR-0181: Fallible text and layout measurement
 
 - **Status:** Accepted
 - **Date:** 2026-10-09

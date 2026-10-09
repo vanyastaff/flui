@@ -31,7 +31,7 @@ has.)*
 
 Layout and child measurements return typed errors. Propagate them with `?`;
 a rejected measurement supplies no size to position or paint. See
-[ADR-0180](https://github.com/vanyastaff/flui/blob/main/docs/adr/ADR-0180-fallible-text-and-layout-measurement.md)
+[ADR-0181](https://github.com/vanyastaff/flui/blob/main/docs/adr/ADR-0181-fallible-text-and-layout-measurement.md)
 for ordinary text rejection and changed-input recovery.
 
 For virtualized/scrollable content, `RenderSliver` implements a second, parallel protocol instead

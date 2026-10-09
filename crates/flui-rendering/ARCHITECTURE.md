@@ -53,7 +53,7 @@ and does not poison the node. The failing dirty root and unprocessed batch remai
 queued until changed input resumes them. Independent successful relayouts are not
 rolled back. `rejected_text_layout_is_fallible_through_queries_and_frames` pins
 queries, repeated errors, viewport metrics, page resize mapping and recovery in
-the same mounted tree. [ADR-0180](../../docs/adr/ADR-0180-fallible-text-and-layout-measurement.md)
+the same mounted tree. [ADR-0181](../../docs/adr/ADR-0181-fallible-text-and-layout-measurement.md)
 records the cross-crate contract.
 
 Viewport corrections are detached `ViewportLayout` proposals. A regular

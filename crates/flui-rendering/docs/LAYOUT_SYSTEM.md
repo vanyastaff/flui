@@ -103,7 +103,7 @@ accepted across an ordinary child failure; failed measurement cannot publish new
 content dimensions. Genuine third-party panic/degraded-pass containment remains
 separate. [ADR-0054](../../../docs/adr/ADR-0054-the-viewport-commits-one-result.md)
 describes degraded viewport passes;
-[ADR-0180](../../../docs/adr/ADR-0180-fallible-text-and-layout-measurement.md)
+[ADR-0181](../../../docs/adr/ADR-0181-fallible-text-and-layout-measurement.md)
 describes ordinary text rejection and recovery.
 
 ## Verifying a render object

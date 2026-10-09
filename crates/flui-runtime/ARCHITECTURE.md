@@ -16,7 +16,7 @@ host.
   the ordinary error; unchanged invalid input does not request a continuous frame
   retry. A pending build or live layout invalidation resumes work. The public
   `invalid_authored_text_waits_for_changed_input_and_then_presents` drives the real
-  pump, rebuild handle and sink through rejection and recovery (ADR-0180).
+  pump, rebuild handle and sink through rejection and recovery (ADR-0181).
 
 - **Inherited DPR agrees with the render pipeline.** Initial media data uses
   the pipeline's accepted ratio. Direct updates reject non-positive and

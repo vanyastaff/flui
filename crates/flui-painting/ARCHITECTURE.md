@@ -199,7 +199,7 @@ Checks cover the actual backend representation and final metrics, rather than
 assuming finite inputs imply finite arithmetic. The `text_contract` and
 `text_context_contract` tables include narrowing boundaries, derived metric
 overflow, real aligned-glyph ink bounds and valid recovery after rejection.
-[ADR-0180](../../docs/adr/ADR-0180-fallible-text-and-layout-measurement.md) records
+[ADR-0181](../../docs/adr/ADR-0181-fallible-text-and-layout-measurement.md) records
 the consumer and frame contract.
 
 ### 1. Closed `DrawCommand` enum, matched exhaustively
