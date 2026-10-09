@@ -1039,6 +1039,8 @@ fn binding_input_contract_matrix() {
             "native_staged_generation",
             native_staged_generation_survives_geometry_and_reentry,
         ),
+        ("native_staged_retirement_failure", native_staged_retirement_preserves_delivery_and_failure),
+        ("native_staged_owner_cleanup", native_staged_owner_cleanup_is_exact),
         ("native_focus_loss", native_focus_loss_releases_lease),
         (
             "native_claim_retirement",
@@ -2872,6 +2874,130 @@ fn native_focus_loss_releases_lease() {
 
 fn native_repeated_start_keeps_selected_owner() {
     assert_signal_lease(ScrollLeaseCase::RepeatedStart, true);
+}
+
+fn native_staged_retirement_preserves_delivery_and_failure() {
+    use flui_foundation::geometry::{Offset, Point};
+    use flui_interaction::{GestureBinding, HitTestResult};
+    use flui_interaction::recognizers::{PanZoomDisposition, ScaleGestureRecognizer};
+    use flui_interaction::routing::EventPropagation;
+    use flui_platform_api::{EventTime, pointer::{PanZoomEvent, PanZoomPhase, PanZoomTransform,
+        PointerEvent, PointerId, PointerInfo, PointerKind, PointerPosition}};
+    use std::{cell::Cell, panic::{catch_unwind, AssertUnwindSafe}, rc::Rc};
+
+    for replacement in [false, true] {
+        for competing in [false, true] {
+            let lane = InteractionLane::new();
+            let handle = lane.dispatch_handle();
+            let binding = GestureBinding::new();
+            let starts = Rc::new(Cell::new(0));
+            let updates = Rc::new(Cell::new(0));
+            let ends = Rc::new(Cell::new(0));
+            let staged_starts = Rc::new(Cell::new(0));
+            let retired = Rc::new(Cell::new(0));
+            let fail_cleanup = Rc::new(Cell::new(true));
+            let (started, updated, ended) = (starts.clone(), updates.clone(), ends.clone());
+            let actor = ScaleGestureRecognizer::builder(binding.arena().clone())
+                .on_start(move |_| {
+                    started.set(started.get() + 1);
+                    assert!(!competing || started.get() != 1, "winning native callback failure");
+                })
+                .on_update(move |_| updated.set(updated.get() + 1))
+                .on_end(move |_| ended.set(ended.get() + 1)).build();
+            let source = PointerInfo::new(PointerId::try_from(810_u64).expect("source"), PointerKind::Trackpad);
+            let packet = |phase| PointerEvent::PanZoom(PanZoomEvent::new(source,
+                EventTime::from_nanos(0), PointerPosition::try_new(Point::ZERO).expect("position"), phase));
+            let update = || packet(PanZoomPhase::Update(
+                PanZoomTransform::try_new(Offset::ZERO, 1.2, 0.0).expect("scale")));
+            lane.enter(|| {
+                let owner = actor.clone();
+                let winner = handle.register_pan_zoom(move |dispatch| {
+                    if owner.handle_pan_zoom(dispatch) == PanZoomDisposition::Handled {
+                        EventPropagation::Stop
+                    } else { EventPropagation::Continue }
+                }).expect("winner");
+                let (begins, count, fail) = (staged_starts.clone(), retired.clone(), fail_cleanup.clone());
+                let loser = handle.register_pan_zoom(move |dispatch| {
+                    if dispatch.local.phase == PanZoomPhase::Start {
+                        begins.set(begins.get() + 1);
+                        let (count, fail) = (count.clone(), fail.clone());
+                        assert!(dispatch.on_retirement(move || {
+                            count.set(count.get() + 1);
+                            assert!(!fail.replace(false), "losing native retirement failure");
+                        }), "binding Start supplies admitted retirement authority");
+                    }
+                    EventPropagation::Continue
+                }).expect("loser");
+                let mut path = HitTestResult::new();
+                path.add(HitTestEntry::new(RenderId::new(1)).pan_zoom_target(winner));
+                path.add(HitTestEntry::new(RenderId::new(2)).pan_zoom_target(loser));
+                binding.handle_pointer_event(&packet(PanZoomPhase::Start), |_| path.clone());
+                let first = catch_unwind(AssertUnwindSafe(|| binding.handle_pointer_event(
+                    &if replacement { packet(PanZoomPhase::Start) } else { update() }, |_| path.clone())));
+                assert_eq!(first.expect_err("retirement failure").downcast_ref::<&str>(),
+                    Some(&"losing native retirement failure"), "the earliest failure remains authoritative");
+                if replacement {
+                    assert_eq!(staged_starts.get(), 2,
+                        "retirement of the replaced Start must not erase delivery of the new admitted Start");
+                    let next = catch_unwind(AssertUnwindSafe(||
+                        binding.handle_pointer_event(&update(), |_| path.clone())));
+                    if competing {
+                        assert_eq!(next.expect_err("winner failure").downcast_ref::<&str>(),
+                            Some(&"winning native callback failure"));
+                    } else { next.expect("new Start update"); }
+                }
+                assert_eq!((starts.get(), updates.get(), ends.get()), (1, 1, 0),
+                    "accepted winning callbacks still run, and its source stays committed after a loser failure");
+                binding.handle_pointer_event(&update(), |_| HitTestResult::new());
+                assert_eq!(updates.get(), 2, "the committed winner recovers without fresh hit geometry");
+                binding.handle_pointer_event(&packet(PanZoomPhase::End), |_| HitTestResult::new());
+                assert_eq!(ends.get(), 1);
+                assert_eq!(retired.get(), if replacement { 2 } else { 1 });
+            });
+        }
+    }
+}
+
+fn native_staged_owner_cleanup_is_exact() {
+    use flui_foundation::geometry::Point;
+    use flui_interaction::{GestureBinding, HitTestResult};
+    use flui_interaction::routing::EventPropagation;
+    use flui_platform_api::{EventTime, pointer::{PanZoomEvent, PanZoomPhase, PointerEvent,
+        PointerId, PointerInfo, PointerKind, PointerPosition}};
+    use std::{cell::Cell, rc::Rc};
+    for close in [false, true] {
+        let lane = InteractionLane::new();
+        let handle = lane.dispatch_handle();
+        let binding = GestureBinding::new();
+        let first = Rc::new(Cell::new(0));
+        let second = Rc::new(Cell::new(0));
+        lane.enter(|| {
+            let (a, b) = (first.clone(), second.clone());
+            let target = handle.register_pan_zoom(move |dispatch| {
+                if dispatch.local.phase == PanZoomPhase::Start {
+                    let count = if dispatch.local.pointer().id.get() == 820 { a.clone() } else { b.clone() };
+                    assert!(dispatch.on_retirement(move || count.set(count.get() + 1)));
+                }
+                EventPropagation::Continue
+            }).expect("staged owner");
+            let mut path = HitTestResult::new();
+            path.add(HitTestEntry::new(RenderId::new(1)).pan_zoom_target(target));
+            let packet = |id: u64, phase| PointerEvent::PanZoom(PanZoomEvent::new(
+                PointerInfo::new(PointerId::try_from(id).expect("source"), PointerKind::Trackpad),
+                EventTime::from_nanos(0), PointerPosition::try_new(Point::ZERO).expect("position"), phase));
+            for id in [820, 821] {
+                binding.handle_pointer_event(&packet(id, PanZoomPhase::Start), |_| path.clone());
+            }
+            binding.handle_pointer_event(&packet(820, PanZoomPhase::Cancelled), |_| HitTestResult::new());
+            assert_eq!((first.get(), second.get()), (1, 0), "unclaimed terminal retires only its exact source");
+            if close {
+                flui_interaction::__runtime::close_gestures(&binding, flui_interaction::__runtime::CloseMode::Ordinary);
+            } else { binding.cancel_all_pointer_sequences(); }
+            assert_eq!((first.get(), second.get()), (1, 1), "owner cleanup retires outstanding dormant admissions");
+            binding.cancel_all_pointer_sequences();
+            assert_eq!((first.get(), second.get()), (1, 1), "retirement is not replayed");
+        });
+    }
 }
 
 fn native_staged_generation_survives_geometry_and_reentry() {
