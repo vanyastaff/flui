@@ -432,10 +432,9 @@ impl PointerEventResampler {
             // Enforce minimum sample interval
             if let Some(last_time) = inner.last_sample_time {
                 let Some(elapsed) = sample_time.checked_duration_since(last_time) else {
-                    tracing::warn!(
-                        pointer_id = ?inner.pointer_id,
-                        "ignoring a regressed pointer sample time"
-                    );
+                    let pointer_id = inner.pointer_id;
+                    drop(inner);
+                    tracing::warn!(?pointer_id, "ignoring a regressed pointer sample time");
                     return;
                 };
                 if elapsed < MIN_SAMPLE_INTERVAL {

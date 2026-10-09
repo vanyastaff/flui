@@ -67,7 +67,9 @@ macOS/iOS/Android и Linux execution пропущены по отсутству�
 [локальной приёмке](tasks.md#текущая-локальная-приёмка-i11-gesturewheel): реализация
 и целевые проверки завершены; заключительный локальный gate,
 all-features clippy/compile-fail и Win32 wheel smoke прошли. CI отдельного
-[PR #1519](https://github.com/vanyastaff/flui/pull/1519) ещё ожидается.
+[PR #1519](https://github.com/vanyastaff/flui/pull/1519)
+[прошёл](https://github.com/vanyastaff/flui/actions/runs/37872694945);
+PR слит в `main`, merge commit `ce4675320`.
 Это не закрывает LY8/LY9 целиком.
 
 | Row | Requirement | Status | Closure |

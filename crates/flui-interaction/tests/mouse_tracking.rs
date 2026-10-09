@@ -309,55 +309,73 @@ fn refresh_hit_test_panic_keeps_the_device_for_the_next_refresh() {
     );
 }
 
-fn refresh_hit_test_failure_precedes_a_competing_callback_failure() {
-    let lane = InteractionLane::try_new().expect("lane");
-    let handle = lane.dispatch_handle();
-    let tracker = MouseTracker::new();
-    let exits = Rc::new(Cell::new(0));
-    let enters = Rc::new(Cell::new(0));
-    let mouse_region =
-        lane.enter(|| panicking_exit(&handle, &exits, &enters, "callback failure after probe"));
-    let mouse_at = Offset::new(10.0, 10.0);
-    let pen_at = Offset::new(20.0, 20.0);
-    lane.enter(|| {
-        tracker.update_with_motion(
-            &hover(MOUSE, PointerKind::Mouse, mouse_at, 1),
-            PointerMotionKind::Hover,
-            &path(&[(1, mouse_region)]),
-        );
-        tracker.update_with_motion(
-            &hover(PEN, PointerKind::Pen { tool: PenTool::Tip }, pen_at, 2),
-            PointerMotionKind::Hover,
-            &HitTestResult::new(),
-        );
-    });
-
-    let payload = catch_unwind(AssertUnwindSafe(|| {
+fn refresh_preserves_the_first_failure_in_device_delivery_order() {
+    for callback_first in [false, true] {
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let tracker = MouseTracker::new();
+        let exits = Rc::new(Cell::new(0));
+        let enters = Rc::new(Cell::new(0));
+        let region = lane.enter(|| panicking_exit(&handle, &exits, &enters, "callback failure"));
+        let mouse_at = Offset::new(10.0, 10.0);
+        let pen_at = Offset::new(20.0, 20.0);
+        let (callback_at, probe_at) = if callback_first {
+            (mouse_at, pen_at)
+        } else {
+            (pen_at, mouse_at)
+        };
         lane.enter(|| {
-            tracker.update_all_devices(|position| {
-                assert!(position != pen_at, "probe failure first");
-                HitTestResult::new()
-            });
-        });
-    }))
-    .expect_err("the probe failure resumes after delivering the committed exit");
-    assert_eq!(payload.downcast_ref::<&str>(), Some(&"probe failure first"));
-    assert_eq!(exits.get(), 1, "the competing exit callback still runs");
-
-    lane.enter(|| {
-        tracker.update_all_devices(|position| {
-            if position == mouse_at {
-                path(&[(1, mouse_region)])
-            } else {
-                HitTestResult::new()
+            for (source, kind, at) in [
+                (MOUSE, PointerKind::Mouse, mouse_at),
+                (PEN, PointerKind::Pen { tool: PenTool::Tip }, pen_at),
+            ] {
+                let result = if at == callback_at {
+                    path(&[(1, region)])
+                } else {
+                    HitTestResult::new()
+                };
+                tracker.update_with_motion(
+                    &hover(source, kind, at, 1),
+                    PointerMotionKind::Hover,
+                    &result,
+                );
             }
         });
-    });
-    assert_eq!(
-        enters.get(),
-        2,
-        "the next refresh can enter the region again"
-    );
+
+        let payload = catch_unwind(AssertUnwindSafe(|| {
+            lane.enter(|| {
+                tracker.update_all_devices(|position| {
+                    assert!(position != probe_at, "probe failure");
+                    HitTestResult::new()
+                });
+            });
+        }))
+        .expect_err("the first failure resumes after delivering the committed exit");
+        assert_eq!(
+            payload.downcast_ref::<&str>(),
+            Some(&if callback_first {
+                "callback failure"
+            } else {
+                "probe failure"
+            })
+        );
+        assert_eq!(exits.get(), 1, "the competing exit callback still runs");
+
+        lane.enter(|| {
+            tracker.update_all_devices(|position| {
+                if position == callback_at {
+                    path(&[(1, region)])
+                } else {
+                    HitTestResult::new()
+                }
+            });
+        });
+        assert_eq!(
+            enters.get(),
+            2,
+            "the next refresh can enter the region again"
+        );
+    }
 }
 
 /// Reenters the tracker from a region callback's destructor.
@@ -603,6 +621,641 @@ fn tracker_reports_the_explicit_arrow() {
         &button,
     );
     assert_eq!(*changes.borrow(), [CursorIcon::Text, CursorIcon::Default]);
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CursorReentryCase {
+    Arrow,
+    SameCursor,
+    OtherDevice,
+    Replacement,
+    HookReentry,
+    Failure,
+    ReentrantFailure,
+    ReentrantSuccess,
+    HookReplacement,
+    CompetingFailure,
+    Close,
+}
+
+fn latest_cursor_publication_survives_reentry_replacement_and_failure() {
+    for case in [
+        CursorReentryCase::Arrow,
+        CursorReentryCase::SameCursor,
+        CursorReentryCase::OtherDevice,
+        CursorReentryCase::Replacement,
+        CursorReentryCase::HookReentry,
+        CursorReentryCase::Failure,
+        CursorReentryCase::ReentrantFailure,
+        CursorReentryCase::ReentrantSuccess,
+        CursorReentryCase::HookReplacement,
+        CursorReentryCase::CompetingFailure,
+        CursorReentryCase::Close,
+    ] {
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let tracker = MouseTracker::new();
+        let observed = Rc::new(RefCell::new(Vec::new()));
+        let next_observed = Rc::clone(&observed);
+        let replacement: flui_interaction::routing::CursorChangeCallback =
+            Rc::new(move |pointer, cursor| {
+                next_observed.borrow_mut().push(("new", pointer.id, cursor));
+            });
+        let failed = Rc::new(Cell::new(matches!(
+            case,
+            CursorReentryCase::Failure
+                | CursorReentryCase::ReentrantFailure
+                | CursorReentryCase::CompetingFailure
+        )));
+        let old_observed = Rc::clone(&observed);
+        let hook_tracker = tracker.clone();
+        let next_hook = Rc::clone(&replacement);
+        let hook_failed = Rc::clone(&failed);
+        let entered_hook = Cell::new(false);
+        tracker.set_cursor_change_callback(Rc::new(move |pointer, cursor| {
+            old_observed.borrow_mut().push(("old", pointer.id, cursor));
+            if case == CursorReentryCase::HookReentry && !entered_hook.replace(true) {
+                hook_tracker.set_cursor_change_callback(Rc::clone(&next_hook));
+                hook_tracker.update_with_motion(
+                    &hover(MOUSE, PointerKind::Mouse, Offset::new(7.0, 7.0), 2),
+                    PointerMotionKind::Hover,
+                    &cursor_path(&[Some(CursorIcon::Text)]),
+                );
+            }
+            if matches!(
+                case,
+                CursorReentryCase::ReentrantFailure | CursorReentryCase::ReentrantSuccess
+            ) && !entered_hook.replace(true)
+            {
+                hook_tracker.update_with_motion(
+                    &hover(MOUSE, PointerKind::Mouse, Offset::new(7.0, 7.0), 2),
+                    PointerMotionKind::Hover,
+                    &cursor_path(&[Some(CursorIcon::Text)]),
+                );
+            }
+            if case == CursorReentryCase::HookReplacement && !entered_hook.replace(true) {
+                hook_tracker.set_cursor_change_callback(Rc::clone(&next_hook));
+            }
+            assert!(!hook_failed.get(), "cursor publication failure");
+        }));
+        let enter_tracker = tracker.clone();
+        let enter_failed = Rc::clone(&failed);
+        let nested_cursor = if case == CursorReentryCase::SameCursor {
+            CursorIcon::Text
+        } else {
+            CursorIcon::Default
+        };
+        let target = lane.enter(|| {
+            handle
+                .register_mouse_region(MouseRegionCallbacks {
+                    on_enter: Some(Rc::new(move |_, _| match case {
+                        CursorReentryCase::Arrow
+                        | CursorReentryCase::SameCursor
+                        | CursorReentryCase::OtherDevice => {
+                            let source = if case == CursorReentryCase::OtherDevice {
+                                PEN
+                            } else {
+                                MOUSE
+                            };
+                            enter_tracker.update_with_motion(
+                                &hover(source, PointerKind::Mouse, Offset::new(7.0, 7.0), 2),
+                                PointerMotionKind::Hover,
+                                &cursor_path(&[Some(nested_cursor)]),
+                            );
+                        }
+                        CursorReentryCase::Replacement => {
+                            enter_tracker.set_cursor_change_callback(Rc::clone(&replacement));
+                        }
+                        CursorReentryCase::Close => {
+                            flui_interaction::__runtime::close_mouse_tracker(
+                                &enter_tracker,
+                                flui_interaction::__runtime::CloseMode::Ordinary,
+                            );
+                        }
+                        CursorReentryCase::CompetingFailure => {
+                            assert!(!enter_failed.get(), "cursor enter first failure");
+                        }
+                        CursorReentryCase::HookReentry
+                        | CursorReentryCase::Failure
+                        | CursorReentryCase::ReentrantFailure
+                        | CursorReentryCase::ReentrantSuccess
+                        | CursorReentryCase::HookReplacement => {}
+                    })),
+                    ..MouseRegionCallbacks::default()
+                })
+                .expect("region")
+        });
+        let region = RenderId::new(1);
+        let mut outer = HitTestResult::new();
+        outer.add(
+            HitTestEntry::new(region)
+                .cursor(CursorIcon::Text)
+                .mouse_annotation(MouseTrackerAnnotation::new(region, target)),
+        );
+        let event = hover(MOUSE, PointerKind::Mouse, Offset::new(5.0, 5.0), 1);
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            lane.enter(|| tracker.update_with_motion(&event, PointerMotionKind::Hover, &outer));
+        }));
+        if failed.get() {
+            let payload = result.expect_err("publication resumes after committed work");
+            assert_eq!(
+                payload.downcast_ref::<&str>(),
+                Some(&if case == CursorReentryCase::CompetingFailure {
+                    "cursor enter first failure"
+                } else {
+                    "cursor publication failure"
+                })
+            );
+            failed.set(false);
+            lane.enter(|| tracker.update_with_motion(&event, PointerMotionKind::Hover, &outer));
+            assert_eq!(
+                observed.borrow().len(),
+                2,
+                "identical state must retry failed publication"
+            );
+        } else {
+            assert!(result.is_ok());
+        }
+        let pointer = PointerId::try_from(MOUSE).expect("pointer");
+        match case {
+            CursorReentryCase::Arrow => {
+                assert_eq!(*observed.borrow(), [("old", pointer, CursorIcon::Default)]);
+                assert_eq!(tracker.device_cursor(device(MOUSE)), CursorIcon::Default);
+            }
+            CursorReentryCase::SameCursor => assert_eq!(
+                *observed.borrow(),
+                [("old", pointer, CursorIcon::Text)],
+                "new observation must deliver an unpublished identical cursor"
+            ),
+            CursorReentryCase::OtherDevice => assert_eq!(
+                *observed.borrow(),
+                [(
+                    "old",
+                    PointerId::try_from(PEN).expect("pointer"),
+                    CursorIcon::Default
+                )],
+                "new window observation from another device wins"
+            ),
+            CursorReentryCase::Replacement => {
+                assert_eq!(*observed.borrow(), [("new", pointer, CursorIcon::Text)]);
+            }
+            CursorReentryCase::HookReentry => assert_eq!(
+                *observed.borrow(),
+                [
+                    ("old", pointer, CursorIcon::Text),
+                    ("new", pointer, CursorIcon::Text)
+                ],
+                "old success cannot acknowledge replacement debt"
+            ),
+            CursorReentryCase::Close => assert!(
+                observed.borrow().is_empty(),
+                "closed owner cannot publish cursor"
+            ),
+            CursorReentryCase::Failure
+            | CursorReentryCase::ReentrantFailure
+            | CursorReentryCase::CompetingFailure => {}
+            CursorReentryCase::ReentrantSuccess | CursorReentryCase::HookReplacement => {
+                assert_eq!(*observed.borrow(), [("old", pointer, CursorIcon::Text)]);
+                lane.enter(|| {
+                    tracker.update_with_motion(
+                        &event,
+                        PointerMotionKind::Hover,
+                        &cursor_path(&[Some(CursorIcon::Text)]),
+                    );
+                });
+                assert_eq!(
+                    *observed.borrow(),
+                    [
+                        ("old", pointer, CursorIcon::Text),
+                        (
+                            if case == CursorReentryCase::HookReplacement {
+                                "new"
+                            } else {
+                                "old"
+                            },
+                            pointer,
+                            CursorIcon::Text
+                        )
+                    ],
+                    "old successful publication cannot clear newly accepted debt"
+                );
+            }
+        }
+        if case != CursorReentryCase::Close {
+            let published = observed.borrow().len();
+            let source = if case == CursorReentryCase::OtherDevice {
+                PEN
+            } else {
+                MOUSE
+            };
+            let cursor = if matches!(
+                case,
+                CursorReentryCase::Arrow | CursorReentryCase::OtherDevice
+            ) {
+                CursorIcon::Default
+            } else {
+                CursorIcon::Text
+            };
+            lane.enter(|| {
+                tracker.update_with_motion(
+                    &hover(source, PointerKind::Mouse, Offset::new(7.0, 7.0), 3),
+                    PointerMotionKind::Hover,
+                    &cursor_path(&[Some(cursor)]),
+                );
+            });
+            assert_eq!(
+                observed.borrow().len(),
+                published,
+                "healthy unchanged motion does not duplicate a publication"
+            );
+        }
+        tracker.clear_cursor_change_callback();
+    }
+}
+
+fn ambient_refresh_preserves_the_latest_physical_cursor_owner() {
+    let tracker = MouseTracker::new();
+    let observed = Rc::new(RefCell::new(Vec::new()));
+    let callback_log = Rc::clone(&observed);
+    tracker.set_cursor_change_callback(Rc::new(move |pointer, cursor| {
+        callback_log.borrow_mut().push((pointer.id, cursor));
+    }));
+    let mouse_at = Offset::new(5.0, 5.0);
+    let pen_at = Offset::new(15.0, 15.0);
+    let text = cursor_path(&[Some(CursorIcon::Text)]);
+    let arrow = cursor_path(&[Some(CursorIcon::Default)]);
+    tracker.update_with_motion(
+        &hover(MOUSE, PointerKind::Mouse, mouse_at, 1),
+        PointerMotionKind::Hover,
+        &text,
+    );
+    tracker.update_with_motion(
+        &hover(PEN, PointerKind::Pen { tool: PenTool::Tip }, pen_at, 2),
+        PointerMotionKind::Hover,
+        &arrow,
+    );
+    tracker.update_with_motion(
+        &hover(MOUSE, PointerKind::Mouse, mouse_at, 3),
+        PointerMotionKind::Hover,
+        &text,
+    );
+    let count = observed.borrow().len();
+    tracker.update_all_devices(|position| {
+        if position == mouse_at {
+            text.clone()
+        } else {
+            arrow.clone()
+        }
+    });
+    assert_eq!(
+        observed.borrow().last(),
+        Some(&(PointerId::try_from(MOUSE).expect("mouse"), CursorIcon::Text)),
+        "unchanged ambient probes cannot transfer the window cursor to BTree's unrelated last source"
+    );
+    assert_eq!(
+        observed.borrow().len(),
+        count,
+        "unchanged ambient geometry must not republish cursor"
+    );
+    tracker.update_all_devices(|_| arrow.clone());
+    assert_eq!(
+        observed.borrow().last(),
+        Some(&(
+            PointerId::try_from(MOUSE).expect("mouse"),
+            CursorIcon::Default
+        )),
+        "layout may change the current physical owner's cursor"
+    );
+    tracker.update_with_motion(
+        &hover(MOUSE, PointerKind::Mouse, mouse_at, 4),
+        PointerMotionKind::Hover,
+        &text,
+    );
+    tracker.remove_device(device(MOUSE));
+    assert_eq!(
+        observed.borrow().last(),
+        Some(&(
+            PointerId::try_from(MOUSE).expect("mouse"),
+            CursorIcon::Default
+        )),
+        "removing the owner deliberately resets to arrow rather than another source"
+    );
+    let count = observed.borrow().len();
+    tracker.update_all_devices(|_| text.clone());
+    assert_eq!(
+        observed.borrow().len(),
+        count,
+        "remaining stationary sources cannot acquire absent cursor ownership"
+    );
+    tracker.update_with_motion(
+        &hover(PEN, PointerKind::Pen { tool: PenTool::Tip }, pen_at, 5),
+        PointerMotionKind::Hover,
+        &text,
+    );
+    assert_eq!(
+        observed.borrow().last(),
+        Some(&(PointerId::try_from(PEN).expect("pen"), CursorIcon::Text)),
+        "fresh physical motion acquires ownership after removal"
+    );
+    tracker.clear_cursor_change_callback();
+}
+
+fn ambient_probe_cannot_replace_reentrant_physical_observation(moved: bool, retirement: u8) {
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = lane.dispatch_handle();
+    let tracker = MouseTracker::new();
+    let regions = Log::default();
+    let initial = lane.enter(|| logging_region(&handle, "initial", &regions));
+    let fresh = lane.enter(|| logging_region(&handle, "fresh", &regions));
+    let stale = lane.enter(|| logging_region(&handle, "stale", &regions));
+    let make_path = |id, target, cursor| {
+        let mut result = HitTestResult::new();
+        let id = RenderId::new(id);
+        result.add(
+            HitTestEntry::new(id)
+                .mouse_annotation(MouseTrackerAnnotation::new(id, target))
+                .cursor(cursor),
+        );
+        result
+    };
+    let initial_path = make_path(51, initial, CursorIcon::Text);
+    let fresh_path = make_path(52, fresh, CursorIcon::Pointer);
+    let stale_path = make_path(53, stale, CursorIcon::Crosshair);
+    let original_position = Offset::new(5.0, 5.0);
+    let fresh_position = if moved {
+        Offset::new(25.0, 25.0)
+    } else {
+        original_position
+    };
+    let observed = Rc::new(RefCell::new(Vec::new()));
+    let callback_log = Rc::clone(&observed);
+    tracker.set_cursor_change_callback(Rc::new(move |_, cursor| {
+        callback_log.borrow_mut().push(cursor);
+    }));
+    lane.enter(|| {
+        tracker.update_with_motion(
+            &hover(MOUSE, PointerKind::Mouse, original_position, 1),
+            PointerMotionKind::Hover,
+            &initial_path,
+        );
+        take(&regions);
+        tracker.update_all_devices(|position| {
+            assert_eq!(
+                position, original_position,
+                "probe uses its admitted snapshot"
+            );
+            match retirement {
+                0 => {}
+                1 => tracker.remove_device(device(MOUSE)),
+                2 => tracker.dispatch_window_left(),
+                _ => unreachable!("fixture retirement"),
+            }
+            tracker.update_with_motion(
+                &hover(MOUSE, PointerKind::Mouse, fresh_position, 2),
+                PointerMotionKind::Hover,
+                &fresh_path,
+            );
+            stale_path.clone()
+        });
+        assert_eq!(tracker.device_position(device(MOUSE)), Some(fresh_position));
+        assert_eq!(
+            tracker.device_cursor(device(MOUSE)),
+            CursorIcon::Pointer,
+            "stale probe cannot overwrite a newer physical observation, even at the same position"
+        );
+        assert_eq!(observed.borrow().last(), Some(&CursorIcon::Pointer));
+        let transitions = take(&regions);
+        assert!(transitions.iter().any(|entry| entry == "enter fresh 2"));
+        assert!(
+            transitions.iter().all(|entry| !entry.contains("stale")),
+            "discarded probe must not publish stale region transitions: {transitions:?}"
+        );
+        tracker.update_all_devices(|position| {
+            assert_eq!(position, fresh_position);
+            fresh_path.clone()
+        });
+        assert!(
+            take(&regions).is_empty(),
+            "fresh hover state remains committed"
+        );
+    });
+    tracker.clear_cursor_change_callback();
+}
+
+fn ambient_batch_delivers_accepted_regions_before_later_probe_reentry(
+    exit_failure: bool,
+    probe_failure: bool,
+) {
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = lane.dispatch_handle();
+    let tracker = MouseTracker::new();
+    let log = Log::default();
+    let old_hovered = Rc::new(Cell::new(false));
+    let transient_hovered = Rc::new(Cell::new(false));
+    let fresh_hovered = Rc::new(Cell::new(false));
+    let sibling_hovered = Rc::new(Cell::new(false));
+    let fail_exit = Rc::new(Cell::new(exit_failure));
+    let region = |name: &'static str, hovered: &Rc<Cell<bool>>, may_fail: bool| {
+        let (entered, exited) = (log.clone(), log.clone());
+        let (enter_state, exit_state) = (hovered.clone(), hovered.clone());
+        let fail = fail_exit.clone();
+        handle
+            .register_mouse_region(MouseRegionCallbacks {
+                on_enter: Some(Rc::new(move |_, _| {
+                    enter_state.set(true);
+                    entered.borrow_mut().push(format!("enter {name}"));
+                })),
+                on_exit: Some(Rc::new(move |_, _| {
+                    exit_state.set(false);
+                    exited.borrow_mut().push(format!("exit {name}"));
+                    assert!(!(may_fail && fail.get()), "earlier ambient exit failure");
+                })),
+                ..MouseRegionCallbacks::default()
+            })
+            .expect("region")
+    };
+    lane.enter(|| {
+        let old = path(&[(71, region("Old", &old_hovered, true))]);
+        let transient = path(&[(72, region("Transient", &transient_hovered, false))]);
+        let fresh = path(&[(73, region("Fresh", &fresh_hovered, false))]);
+        let sibling = path(&[(74, region("Sibling", &sibling_hovered, false))]);
+        let original_position = Offset::new(5.0, 5.0);
+        let sibling_position = Offset::new(15.0, 15.0);
+        let fresh_position = Offset::new(25.0, 25.0);
+        tracker.update_with_motion(
+            &hover(MOUSE, PointerKind::Mouse, original_position, 1),
+            PointerMotionKind::Hover,
+            &old,
+        );
+        tracker.update_with_motion(
+            &hover(
+                PEN,
+                PointerKind::Pen { tool: PenTool::Tip },
+                sibling_position,
+                2,
+            ),
+            PointerMotionKind::Hover,
+            &HitTestResult::new(),
+        );
+        assert_eq!(take(&log), ["enter Old"]);
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            tracker.update_all_devices(|position| {
+                if position == original_position {
+                    transient.clone()
+                } else {
+                    assert_eq!(position, sibling_position);
+                    tracker.update_with_motion(
+                        &hover(MOUSE, PointerKind::Mouse, fresh_position, 3),
+                        PointerMotionKind::Hover,
+                        &fresh,
+                    );
+                    assert!(!probe_failure, "later ambient probe failure");
+                    sibling.clone()
+                }
+            });
+        }));
+        if exit_failure || probe_failure {
+            assert_eq!(
+                result
+                    .expect_err("ambient failure propagates")
+                    .downcast_ref::<&str>(),
+                Some(&if exit_failure {
+                    "earlier ambient exit failure"
+                } else {
+                    "later ambient probe failure"
+                }),
+                "first accepted notification failure remains authoritative"
+            );
+        } else {
+            result.expect("healthy refresh");
+        }
+        let mut expected = vec![
+            "exit Old",
+            "enter Transient",
+            "exit Transient",
+            "enter Fresh",
+        ];
+        if !probe_failure {
+            expected.push("enter Sibling");
+        }
+        assert_eq!(
+            take(&log),
+            expected,
+            "committed A notification debt precedes a later B probe's physical reentry"
+        );
+        assert!(!old_hovered.get(), "outgoing Old exit remains deliverable");
+        assert!(
+            !transient_hovered.get(),
+            "obsolete Transient enter cannot follow newer exit"
+        );
+        assert!(fresh_hovered.get());
+        assert_eq!(sibling_hovered.get(), !probe_failure);
+        fail_exit.set(false);
+        tracker.update_all_devices(|position| {
+            if position == fresh_position {
+                fresh.clone()
+            } else {
+                assert_eq!(position, sibling_position);
+                sibling.clone()
+            }
+        });
+        assert_eq!(
+            take(&log),
+            if probe_failure {
+                vec!["enter Sibling"]
+            } else {
+                Vec::new()
+            },
+            "healthy recovery delivers sibling work without duplicate A transitions"
+        );
+        assert!(!old_hovered.get() && !transient_hovered.get());
+        assert!(fresh_hovered.get() && sibling_hovered.get());
+    });
+}
+
+fn ambient_batch_orders_region_debt_before_probe_reentry() {
+    ambient_batch_delivers_accepted_regions_before_later_probe_reentry(false, false);
+}
+
+fn ambient_batch_exit_failure_preserves_sibling_delivery() {
+    ambient_batch_delivers_accepted_regions_before_later_probe_reentry(true, false);
+}
+
+fn ambient_batch_probe_failure_preserves_newer_hover() {
+    ambient_batch_delivers_accepted_regions_before_later_probe_reentry(false, true);
+}
+
+fn ambient_batch_competing_failures_preserve_notification_authority() {
+    ambient_batch_delivers_accepted_regions_before_later_probe_reentry(true, true);
+}
+
+fn ambient_probe_preserves_reentrant_motion() {
+    ambient_probe_cannot_replace_reentrant_physical_observation(true, 0);
+}
+
+fn ambient_probe_preserves_same_position_reentry() {
+    ambient_probe_cannot_replace_reentrant_physical_observation(false, 0);
+}
+
+fn ambient_probe_preserves_removed_and_readmitted_source() {
+    ambient_probe_cannot_replace_reentrant_physical_observation(false, 1);
+}
+
+fn ambient_probe_preserves_left_and_readmitted_source() {
+    ambient_probe_cannot_replace_reentrant_physical_observation(false, 2);
+}
+
+fn removed_cursor_owner_failure_keeps_default_publication_deliverable() {
+    let tracker = MouseTracker::new();
+    let failed = Rc::new(Cell::new(false));
+    let callback_failed = Rc::clone(&failed);
+    let observed = Rc::new(RefCell::new(Vec::new()));
+    let callback_log = Rc::clone(&observed);
+    tracker.set_cursor_change_callback(Rc::new(move |pointer, cursor| {
+        callback_log.borrow_mut().push((pointer.id, cursor));
+        assert!(
+            !(cursor == CursorIcon::Default && callback_failed.get()),
+            "removed owner cursor failure"
+        );
+    }));
+    tracker.update_with_motion(
+        &hover(MOUSE, PointerKind::Mouse, Offset::new(5.0, 5.0), 1),
+        PointerMotionKind::Hover,
+        &cursor_path(&[Some(CursorIcon::Text)]),
+    );
+    failed.set(true);
+    let payload = catch_unwind(AssertUnwindSafe(|| tracker.remove_device(device(MOUSE))))
+        .expect_err("default publication failure resumes after ownership withdrawal");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"removed owner cursor failure")
+    );
+    assert!(tracker.device_position(device(MOUSE)).is_none());
+    failed.set(false);
+    tracker.update_all_devices(|_| panic!("removed source must not be probed"));
+    assert_eq!(
+        *observed.borrow(),
+        [
+            (PointerId::try_from(MOUSE).expect("mouse"), CursorIcon::Text),
+            (
+                PointerId::try_from(MOUSE).expect("mouse"),
+                CursorIcon::Default
+            ),
+            (
+                PointerId::try_from(MOUSE).expect("mouse"),
+                CursorIcon::Default
+            )
+        ],
+        "ownerless default debt survives until successful publication"
+    );
+    let count = observed.borrow().len();
+    tracker.update_all_devices(|_| panic!("removed source must not be probed"));
+    assert_eq!(
+        observed.borrow().len(),
+        count,
+        "successful default has no repeated debt"
+    );
+    tracker.clear_cursor_change_callback();
 }
 
 /// Local of a global point under `translate(100, 50) · rotate(90°) · scale(2)`:
@@ -974,6 +1627,50 @@ fn mouse_tracking_ordering_and_cursor_deferral() {
         "mouse tracking",
         &[
             (
+                "ambient batch orders accepted region debt",
+                ambient_batch_orders_region_debt_before_probe_reentry,
+            ),
+            (
+                "ambient batch exit failure keeps sibling delivery",
+                ambient_batch_exit_failure_preserves_sibling_delivery,
+            ),
+            (
+                "ambient batch probe failure keeps newer hover",
+                ambient_batch_probe_failure_preserves_newer_hover,
+            ),
+            (
+                "ambient batch competing failure authority",
+                ambient_batch_competing_failures_preserve_notification_authority,
+            ),
+            (
+                "ambient probe reentrant motion",
+                ambient_probe_preserves_reentrant_motion,
+            ),
+            (
+                "ambient probe same-position reentry",
+                ambient_probe_preserves_same_position_reentry,
+            ),
+            (
+                "ambient probe removed source readmission",
+                ambient_probe_preserves_removed_and_readmitted_source,
+            ),
+            (
+                "ambient probe window-left readmission",
+                ambient_probe_preserves_left_and_readmitted_source,
+            ),
+            (
+                "ambient refresh preserves latest physical cursor owner",
+                ambient_refresh_preserves_the_latest_physical_cursor_owner,
+            ),
+            (
+                "removed cursor owner publication failure and recovery",
+                removed_cursor_owner_failure_keeps_default_publication_deliverable,
+            ),
+            (
+                "latest cursor observation, replacement and failure recovery",
+                latest_cursor_publication_survives_reentry_replacement_and_failure,
+            ),
+            (
                 "stationary device follows layout",
                 stationary_device_follows_layout_without_duplicates,
             ),
@@ -1012,7 +1709,7 @@ fn ambient_refresh_contains_each_device() {
             ),
             (
                 "probe and callback compete",
-                refresh_hit_test_failure_precedes_a_competing_callback_failure,
+                refresh_preserves_the_first_failure_in_device_delivery_order,
             ),
         ],
     );

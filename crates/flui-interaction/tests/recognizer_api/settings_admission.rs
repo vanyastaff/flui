@@ -1394,10 +1394,7 @@ fn native_scale_retains_estimator_until_end_and_readmits_next_begin() {
                 PointerPosition::try_new(Point::ZERO).expect("finite anchor"),
                 phase,
             );
-            scale.handle_pan_zoom(PanZoomDispatch {
-                local: &event,
-                global: &event,
-            })
+            scale.handle_pan_zoom(PanZoomDispatch::at_root(&event))
         };
         assert_eq!(
             deliver(0, PanZoomPhase::Start),

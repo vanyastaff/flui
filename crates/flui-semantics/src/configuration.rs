@@ -5,6 +5,8 @@
 
 use std::sync::Arc;
 
+use flui_foundation::geometry::Axis;
+
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use smol_str::SmolStr;
@@ -135,6 +137,8 @@ pub struct SemanticsConfiguration {
 
     /// Scroll position.
     scroll_position: Option<f64>,
+    /// Actual range axis; absent metadata preserves vertical scalar callers.
+    scroll_axis: Option<Axis>,
 
     /// Scroll extent maximum.
     scroll_extent_max: Option<f64>,
@@ -201,6 +205,7 @@ impl PartialEq for SemanticsConfiguration {
             && self.sort_key == other.sort_key
             && self.hint_overrides == other.hint_overrides
             && self.scroll_position == other.scroll_position
+            && self.scroll_axis == other.scroll_axis
             && self.scroll_extent_max == other.scroll_extent_max
             && self.scroll_extent_min == other.scroll_extent_min
             && self.index_in_parent == other.index_in_parent
@@ -920,6 +925,19 @@ impl SemanticsConfiguration {
         self.scroll_position
     }
 
+    /// Sets the axis of this node's scroll position and extents.
+    pub fn set_scroll_axis(&mut self, axis: Axis) {
+        self.scroll_axis = Some(axis);
+        self.mark_annotated();
+    }
+
+    /// Returns the explicit scroll axis. Scalar ranges without it are vertical.
+    #[inline]
+    #[must_use]
+    pub fn scroll_axis(&self) -> Option<Axis> {
+        self.scroll_axis
+    }
+
     /// Sets the scroll extent maximum.
     pub fn set_scroll_extent_max(&mut self, max: f64) {
         self.scroll_extent_max = Some(max);
@@ -1225,6 +1243,13 @@ impl SemanticsConfiguration {
         }
         if self.hint_overrides.is_none() {
             self.hint_overrides.clone_from(&other.hint_overrides);
+        }
+        if self.scroll_axis.is_none()
+            && self.scroll_position.is_none()
+            && self.scroll_extent_max.is_none()
+            && self.scroll_extent_min.is_none()
+        {
+            self.scroll_axis = other.scroll_axis;
         }
         if self.scroll_position.is_none() {
             self.scroll_position = other.scroll_position;

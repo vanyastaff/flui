@@ -653,7 +653,11 @@ impl NativePointerState {
         };
         let (unit, x, y, precision) = match delta {
             MouseScrollDelta::LineDelta(x, y) => (
-                owned::ScrollUnit::Lines,
+                if cfg!(target_os = "windows") {
+                    owned::ScrollUnit::Detents
+                } else {
+                    owned::ScrollUnit::Lines
+                },
                 -f64::from(*x),
                 -f64::from(*y),
                 owned::ScrollPrecision::Notched,
@@ -1171,6 +1175,8 @@ mod pointer_translation_tests {
                     scroll.delta.unit(),
                     if pixels {
                         owned::ScrollUnit::Pixels
+                    } else if cfg!(target_os = "windows") {
+                        owned::ScrollUnit::Detents
                     } else {
                         owned::ScrollUnit::Lines
                     }

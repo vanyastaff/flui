@@ -2167,6 +2167,15 @@ erroneously started fling, then checks post-finish scrolling and coasting.
 Ballistic motion requires an ambient `VsyncScope`; the internal controller has
 no ticker or wall-clock fallback.
 
+Content drags publish scroll activity and direction, retaining activity through
+ballistic motion until completion. Cancellation without a settling run and an
+accepted refresh end activity. `refresh_motion_notifies_activity_through_release_and_recovery`
+observes actual activity listeners alongside pixels; the phase/activity failure
+and recovery row `a_failed_refresh_notification_releases_activity_and_recovers`
+pins shared failure custody through phase publication, terminal activity and
+the accepted refresh callback. Observer failure cannot skip either delivery;
+competing failures preserve the first panic before a later healthy refresh.
+
 A changed `ScrollPosition` identity stops the simulation based on the retired
 position's metrics and replaces the fling listener's target. Reconfiguration
 with the same position preserves the active run. The listener is removed and
@@ -2209,6 +2218,43 @@ scrollables driving one position. The public rows
 `a_same_position_scrollable_rebuild_preserves_motion` and
 `retiring_one_scrollable_preserves_a_later_owners_jump_hook` exercise virtual
 frames, retired-controller commands and a shared-controller detach.
+
+An actual position change in `Scrollable` or `RefreshIndicator` also replaces
+the private detector ownership identity. Incoming recognizers and mounted weak
+targets commit before outgoing contact cancellation; the old Move or terminal
+cannot drive the replacement position. Ordinary same-position rebuild retains
+the contact. `replacing_a_scroll_position_cancels_its_contact_and_recovers`
+checks both widgets, Up/Cancel and fresh-contact recovery.
+Its bouncing-overscroll cases also check that cancellation of an outgoing
+refresh contact cannot start a simulation through retargeted value listeners.
+Refresh callback authority retires before listeners change; accepted terminals
+from that owner cannot restart the shared fling controller. Without an ambient
+Vsync registration, a current refresh contact can still drag and refresh, but
+its terminal declines ballistic motion and ends scroll activity.
+`refresh_without_vsync_ends_activity_after_release_and_cancel` mounts through
+the public embedder bootstrap without a VsyncScope and checks Up/Cancel,
+unchanged pixels through later frames and fresh-contact recovery.
+
+The three gesture inertia drivers in `Scrollable`, `RefreshIndicator` and
+`InteractiveViewer` depend on the ambient `VsyncScope` during lifecycle hooks.
+Same registry identity preserves motion. A changed registry commits the new
+identity and stops the old trajectory at its sampled position before rebinding
+the `DrivenController`, which owns registration and retirement. Stopping first
+prevents clock removal from settling an old finite run into its endpoint.
+Admitted contacts keep their gesture profile. The public row
+`replacing_vsync_retires_old_motion_and_drives_fresh_contacts` observes retired
+clock immobility and fresh motion on the new clock. Viewer stops at a boundary
+only when containment refuses proposed displacement; a repeated accepted frame
+sample preserves the trajectory. `a_repeated_frame_does_not_cancel_viewer_inertia`
+checks zero elapsed time followed by real progression and recovery.
+
+Viewer focal inertia requires a live bound driver. Without one, release retains
+the current scene transform and still reports the measured interaction velocity;
+it does not submit an unbound simulation that would settle synchronously.
+Clock replacement withdraws release authority before stopping and rebinding,
+then publishes the driver's actual binding state for retained callbacks.
+`viewer_focal_fling_advances_then_stops_on_new_input` covers initial detachment,
+detachment during coast, frame-work drainage and fresh motion after reattachment.
 
 
 ### Wheel precision selects local animation policy

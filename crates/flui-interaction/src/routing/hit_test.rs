@@ -112,7 +112,20 @@ pub(crate) struct PanZoomRoute {
 }
 
 impl PanZoomRoute {
+    pub(crate) fn same_target(self, other: Self) -> bool {
+        self.target == other.target
+    }
+
     pub(crate) fn dispatch(self, event: &PanZoomEvent, claimed: impl FnOnce()) -> bool {
+        self.dispatch_admitted(event, claimed, None)
+    }
+
+    pub(crate) fn dispatch_admitted(
+        self,
+        event: &PanZoomEvent,
+        claimed: impl FnOnce(),
+        admission: Option<super::PanZoomAdmissionAuthority<'_>>,
+    ) -> bool {
         let local_event = if let Some(transform) = self.transform {
             if !transform.is_invertible() {
                 return false;
@@ -136,10 +149,10 @@ impl PanZoomRoute {
         };
         match handle.invoke_pan_zoom_target_with_claim(
             self.target,
-            PanZoomDispatch {
-                local: &local_event,
-                global: event,
-            },
+            admission.map_or_else(
+                || PanZoomDispatch::new(&local_event, event),
+                |admission| PanZoomDispatch::admitted(&local_event, event, admission),
+            ),
             claimed,
         ) {
             Ok(propagation) => propagation.should_stop(),
@@ -838,6 +851,38 @@ impl HitTestResult {
                     transform: entry.transform,
                 };
                 if route.dispatch(event, || claimed(route)) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    pub(crate) fn dispatch_pan_zoom_admitted(
+        &self,
+        event: &PanZoomEvent,
+        claimed: &dyn Fn(PanZoomRoute),
+        staged: &dyn Fn(PanZoomRoute, super::PanZoomRetirement),
+        terminal: Option<&dyn Fn(PanZoomRoute) -> bool>,
+    ) -> bool {
+        for entry in &self.path {
+            if let Some(target) = entry.pan_zoom_target {
+                let route = PanZoomRoute {
+                    target,
+                    transform: entry.transform,
+                };
+                let stage = |retirement| staged(route, retirement);
+                let claim = || claimed(route);
+                let current = || terminal.is_some_and(|current| current(route));
+                if route.dispatch_admitted(
+                    event,
+                    claim,
+                    Some(super::PanZoomAdmissionAuthority {
+                        stage: &stage,
+                        claim: &claim,
+                        terminal: terminal.map(|_| &current as &dyn Fn() -> bool),
+                    }),
+                ) {
                     return true;
                 }
             }
