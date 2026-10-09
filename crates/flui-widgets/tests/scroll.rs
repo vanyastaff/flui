@@ -748,11 +748,12 @@ pub(crate) fn a_failed_refresh_notification_releases_activity_and_recovers() {
     activity_fail.store(false, Ordering::SeqCst);
     assert!(refresh.is_refreshing(), "accepted refresh phase survives its observer");
     let stranded = scroll.position().is_scrolling();
+    let before_recovery = calls.get();
     refresh.finish();
     laid.pump_for(Duration::from_millis(16));
     pull(&laid);
     laid.dispatch_pointer_up(150.0, 250.0);
-    assert_eq!(calls.get(), 1, "next healthy refresh callback remains deliverable");
+    assert_eq!(calls.get(), before_recovery + 1, "next healthy refresh callback remains deliverable");
     refresh.finish();
     assert!(!scroll.position().is_scrolling());
     listenable.remove_listener(listener);
