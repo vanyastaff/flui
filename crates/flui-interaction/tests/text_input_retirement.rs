@@ -828,7 +828,7 @@ fn failed_nested_gate_reservation_preserves_the_valid_outer_attachment() {
         owner.dispatch(&flui_platform_api::ImeEvent::Commit("healthy".into()));
         let text = Rc::new(RefCell::new(String::new()));
         let read = Rc::clone(&text);
-        incoming
+        let outcome = incoming
             .request_lock(
                 LockGrant::read(move |session| {
                     *read.borrow_mut() = session
@@ -844,6 +844,7 @@ fn failed_nested_gate_reservation_preserves_the_valid_outer_attachment() {
                 LockTiming::Sync,
             )
             .expect("read admitted store");
+        assert!(matches!(outcome, LockOutcome::Granted));
         assert!(
             text.borrow().contains("healthy"),
             "later IME reaches valid outer store"
