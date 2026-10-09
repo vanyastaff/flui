@@ -855,6 +855,93 @@ fn latest_cursor_publication_survives_reentry_replacement_and_failure() {
     }
 }
 
+fn ambient_refresh_preserves_the_latest_physical_cursor_owner() {
+    let tracker = MouseTracker::new();
+    let observed = Rc::new(RefCell::new(Vec::new()));
+    let callback_log = Rc::clone(&observed);
+    tracker.set_cursor_change_callback(Rc::new(move |pointer, cursor| {
+        callback_log.borrow_mut().push((pointer.id, cursor))
+    }));
+    let mouse_at = Offset::new(5.0, 5.0);
+    let pen_at = Offset::new(15.0, 15.0);
+    let text = cursor_path(&[Some(CursorIcon::Text)]);
+    let arrow = cursor_path(&[Some(CursorIcon::Default)]);
+    tracker.update_with_motion(
+        &hover(MOUSE, PointerKind::Mouse, mouse_at, 1),
+        PointerMotionKind::Hover,
+        &text,
+    );
+    tracker.update_with_motion(
+        &hover(PEN, PointerKind::Pen { tool: PenTool::Tip }, pen_at, 2),
+        PointerMotionKind::Hover,
+        &arrow,
+    );
+    tracker.update_with_motion(
+        &hover(MOUSE, PointerKind::Mouse, mouse_at, 3),
+        PointerMotionKind::Hover,
+        &text,
+    );
+    let count = observed.borrow().len();
+    tracker.update_all_devices(|position| {
+        if position == mouse_at {
+            text.clone()
+        } else {
+            arrow.clone()
+        }
+    });
+    assert_eq!(
+        observed.borrow().last(),
+        Some(&(PointerId::try_from(MOUSE).expect("mouse"), CursorIcon::Text)),
+        "unchanged ambient probes cannot transfer the window cursor to BTree's unrelated last source"
+    );
+    assert_eq!(
+        observed.borrow().len(),
+        count,
+        "unchanged ambient geometry must not republish cursor"
+    );
+    tracker.update_all_devices(|_| arrow.clone());
+    assert_eq!(
+        observed.borrow().last(),
+        Some(&(
+            PointerId::try_from(MOUSE).expect("mouse"),
+            CursorIcon::Default
+        )),
+        "layout may change the current physical owner's cursor"
+    );
+    tracker.update_with_motion(
+        &hover(MOUSE, PointerKind::Mouse, mouse_at, 4),
+        PointerMotionKind::Hover,
+        &text,
+    );
+    tracker.remove_device(device(MOUSE));
+    assert_eq!(
+        observed.borrow().last(),
+        Some(&(
+            PointerId::try_from(MOUSE).expect("mouse"),
+            CursorIcon::Default
+        )),
+        "removing the owner deliberately resets to arrow rather than another source"
+    );
+    let count = observed.borrow().len();
+    tracker.update_all_devices(|_| text.clone());
+    assert_eq!(
+        observed.borrow().len(),
+        count,
+        "remaining stationary sources cannot acquire absent cursor ownership"
+    );
+    tracker.update_with_motion(
+        &hover(PEN, PointerKind::Pen { tool: PenTool::Tip }, pen_at, 5),
+        PointerMotionKind::Hover,
+        &text,
+    );
+    assert_eq!(
+        observed.borrow().last(),
+        Some(&(PointerId::try_from(PEN).expect("pen"), CursorIcon::Text)),
+        "fresh physical motion acquires ownership after removal"
+    );
+    tracker.clear_cursor_change_callback();
+}
+
 /// Local of a global point under `translate(100, 50) · rotate(90°) · scale(2)`:
 /// forward maps local `(x, y)` to `(100 - 2y, 50 + 2x)`.
 fn expected_local(global: (f64, f64)) -> (f64, f64) {
@@ -1223,6 +1310,10 @@ fn mouse_tracking_ordering_and_cursor_deferral() {
     run_rows(
         "mouse tracking",
         &[
+            (
+                "ambient refresh preserves latest physical cursor owner",
+                ambient_refresh_preserves_the_latest_physical_cursor_owner,
+            ),
             (
                 "latest cursor observation, replacement and failure recovery",
                 latest_cursor_publication_survives_reentry_replacement_and_failure,
