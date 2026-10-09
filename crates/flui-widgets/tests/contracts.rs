@@ -197,6 +197,7 @@ fn pointer_and_gesture_recognition() {
             ("gesture_detector::authored_settings_retire_native_scale_session_before_fresh_admission", crate::gesture_detector::authored_settings_retire_native_scale_session_before_fresh_admission),
             ("gesture_detector::mounted_native_begin_retains_estimator_before_first_claim", crate::gesture_detector::mounted_native_begin_retains_estimator_before_first_claim),
             ("gesture_detector::mounted_native_begin_refused_by_touch_cannot_claim_after_touch_terminal", crate::gesture_detector::mounted_native_begin_refused_by_touch_cannot_claim_after_touch_terminal),
+            ("gesture_detector::nested_native_scale_loser_recovers_touch_after_winner_terminal", crate::gesture_detector::nested_native_scale_loser_recovers_touch_after_winner_terminal),
             ("gesture_detector::scoped_settings_control_touch_recognition_thresholds", crate::gesture_detector::scoped_settings_control_touch_recognition_thresholds),
             ("gesture_detector::scoped_settings_control_gesture_deadlines", crate::gesture_detector::scoped_settings_control_gesture_deadlines),
             ("gesture_detector::scoped_estimator_controls_delivered_drag_velocity", crate::gesture_detector::scoped_estimator_controls_delivered_drag_velocity),
@@ -293,6 +294,7 @@ fn scroll_physics_and_activity() {
     run_cases(
         "scroll_physics_and_activity",
         &[
+            ("scroll::scrollable_accessibility_ranges_follow_the_actual_axis", crate::scroll::scrollable_accessibility_ranges_follow_the_actual_axis),
             ("scroll::terminal_scroll_motion_uses_the_admitted_fling_profile", crate::scroll::terminal_scroll_motion_uses_the_admitted_fling_profile as fn()),
             ("scroll::terminal_refresh_motion_uses_the_admitted_fling_profile", crate::scroll::terminal_refresh_motion_uses_the_admitted_fling_profile),
             ("scroll::nested_fling_hands_remaining_velocity_to_matching_parent_axes", crate::scroll::nested_fling_hands_remaining_velocity_to_matching_parent_axes as fn()),
