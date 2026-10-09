@@ -511,6 +511,29 @@ fn listen_for_phase_flips(
 }
 
 impl RefreshIndicatorState {
+    fn bind_vsync(&mut self, ctx: &dyn LifecycleContext) {
+        let incoming = ctx.depend_on::<VsyncScope, _>(|scope| scope.vsync().clone());
+        let unchanged = match (&self.vsync, &incoming) {
+            (None, None) => true,
+            (Some(current), Some(incoming)) => current.is_same(incoming),
+            _ => false,
+        };
+        if unchanged {
+            return;
+        }
+        let registration = incoming
+            .as_ref()
+            .map(|vsync| vsync.register(self.fling_controller.clone()));
+        let outgoing = self.vsync.take().zip(self.vsync_registration.take());
+        self.vsync = incoming;
+        self.vsync_registration = registration;
+        if let Some((vsync, registration)) = outgoing {
+            vsync.unregister(&registration);
+        }
+        // Cancel the old timeline rather than restarting its elapsed anchor.
+        let _ = self.fling_controller.stop();
+    }
+
     fn install_fling_listener(&mut self) {
         if let Some(id) = self.fling_listener_id.take() {
             self.fling_controller.remove_listener(id);
@@ -568,17 +591,14 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
 
         // Register with the ambient VsyncScope so the binding ticks the fling
         // controller on each virtual frame deterministically.
-        if let Some(vsync) = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()) {
-            let registration = vsync.register(self.fling_controller.clone());
-            self.vsync = Some(vsync);
-            self.vsync_registration = Some(registration);
-        }
+        self.bind_vsync(ctx);
         // This controller has no ticker: without a VsyncScope registration,
         // gesture updates still work but ballistic runs do not advance.
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         self.pipeline = ctx.pipeline_owner().map(|cell| cell.downgrade());
+        self.bind_vsync(ctx);
     }
 
     fn build(&self, view: &RefreshIndicator, _ctx: &dyn BuildContext) -> impl IntoView {

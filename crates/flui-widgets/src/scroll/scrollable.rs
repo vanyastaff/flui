@@ -622,6 +622,30 @@ impl StatefulView for Scrollable {
 }
 
 impl ScrollableState {
+    fn bind_vsync(&mut self, ctx: &dyn LifecycleContext) {
+        let incoming = ctx.depend_on::<VsyncScope, _>(|scope| scope.vsync().clone());
+        let unchanged = match (&self.vsync, &incoming) {
+            (None, None) => true,
+            (Some(current), Some(incoming)) => current.is_same(incoming),
+            _ => false,
+        };
+        if unchanged {
+            return;
+        }
+        let registration = incoming
+            .as_ref()
+            .map(|vsync| vsync.register(self.fling_controller.clone()));
+        let outgoing = self.vsync.take().zip(self.vsync_registration.take());
+        self.vsync = incoming;
+        self.vsync_registration = registration;
+        if let Some((vsync, registration)) = outgoing {
+            vsync.unregister(&registration);
+        }
+        // A different clock cannot inherit an elapsed simulation anchor.
+        // Publish its attachment before stop can notify user listeners.
+        let _ = self.fling_controller.stop();
+    }
+
     fn endpoint(
         &self,
         view: &Scrollable,
@@ -815,11 +839,7 @@ impl ViewState<Scrollable> for ScrollableState {
         // Register with the ambient VsyncScope so the binding ticks the fling
         // controller on each virtual frame — the same pattern used by
         // `ImplicitController::register`.
-        if let Some(vsync) = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()) {
-            let registration = vsync.register(self.fling_controller.clone());
-            self.vsync = Some(vsync);
-            self.vsync_registration = Some(registration);
-        }
+        self.bind_vsync(ctx);
         // If no VsyncScope is present, the fling controller has no ticker at
         // all (built via `unbounded_without_ticker`) and simply never
         // advances — there is no wall-clock fallback.
@@ -829,6 +849,7 @@ impl ViewState<Scrollable> for ScrollableState {
         self.post_frame = ctx.post_frame_handle();
         self.pipeline = ctx.pipeline_owner().map(|cell| cell.downgrade());
         self.install_flush_handle(ctx);
+        self.bind_vsync(ctx);
     }
 
     fn build(&self, view: &Scrollable, ctx: &dyn BuildContext) -> impl IntoView {

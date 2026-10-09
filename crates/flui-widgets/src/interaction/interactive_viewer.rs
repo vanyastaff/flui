@@ -571,11 +571,13 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.pipeline_cell = ctx.pipeline_owner();
         self.writer = Some(ctx.writer_source());
-        if let Some(vsync) = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()) {
-            self.vsync_registration = Some(vsync.register(self.fling.controller.clone()));
-            self.vsync = Some(vsync);
-            self.fling.enabled.set(true);
-        }
+        self.bind_vsync(ctx);
+    }
+
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        self.pipeline_cell = ctx.pipeline_owner();
+        self.writer = Some(ctx.writer_source());
+        self.bind_vsync(ctx);
     }
 
     fn did_update_view(&mut self, old: &InteractiveViewer, view: &InteractiveViewer) {
@@ -990,6 +992,29 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
 }
 
 impl InteractiveViewerState {
+    fn bind_vsync(&mut self, ctx: &dyn LifecycleContext) {
+        let incoming = ctx.depend_on::<VsyncScope, _>(|scope| scope.vsync().clone());
+        let unchanged = match (&self.vsync, &incoming) {
+            (None, None) => true,
+            (Some(current), Some(incoming)) => current.is_same(incoming),
+            _ => false,
+        };
+        if unchanged {
+            return;
+        }
+        let registration = incoming
+            .as_ref()
+            .map(|vsync| vsync.register(self.fling.controller.clone()));
+        let outgoing = self.vsync.take().zip(self.vsync_registration.take());
+        self.fling.enabled.set(incoming.is_some());
+        self.vsync = incoming;
+        self.vsync_registration = registration;
+        if let Some((vsync, registration)) = outgoing {
+            vsync.unregister(&registration);
+        }
+        self.fling.stop();
+    }
+
     /// The viewport rect and the boundary rect, in scene coordinates, or
     /// `None` before the child is mounted and laid out.
     ///
