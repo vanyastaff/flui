@@ -840,10 +840,10 @@ impl AppRuntime {
     /// same UI runtime frame path that the wake re-enters.
     #[must_use]
     #[cfg_attr(
-        all(test, any(target_os = "android", target_os = "ios")),
+        all(test, target_os = "ios"),
         expect(
             dead_code,
-            reason = "desktop wake-deadline tests are excluded on mobile"
+            reason = "iOS does not query runtime wake deadlines; desktop deadline tests are excluded"
         )
     )]
     pub(super) fn next_wake(&self) -> Option<web_time::Instant> {
