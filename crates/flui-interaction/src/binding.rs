@@ -1144,11 +1144,14 @@ impl GestureBinding {
         routes.sort_unstable_by_key(|(pointer, _)| *pointer);
         let mut moves: Vec<_> = self.pending_moves.borrow_mut().drain().collect();
         moves.sort_unstable_by_key(|(pointer, _)| *pointer);
-        failure.invoke(|| {
-            if let Some(panic) = self.retire_pan_zoom_sequences(native_sequences) {
-                panic.resume();
-            }
-        });
+        let native_tickets: Vec<_> = native_sequences
+            .into_iter()
+            .flat_map(|sequence| std::mem::take(&mut *sequence.staged.borrow_mut()))
+            .collect();
+        for (_, ticket) in native_tickets {
+            failure.run(|| (ticket.0)());
+            failure.retire(crate::retain::Owned(ticket.0));
+        }
         let arena_mode = if failure.preserving() {
             crate::__runtime::CloseMode::PreservingFailure
         } else {
