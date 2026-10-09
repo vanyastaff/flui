@@ -755,6 +755,102 @@ impl TextStore for ReentrantCommitStore {
         self.inner.set_observer(observer);
     }
 }
+struct FailingGateStore(Rc<InMemoryTextStore>);
+
+impl TextStore for FailingGateStore {
+    fn status(&self) -> TextStoreStatus {
+        self.0.status()
+    }
+
+    fn request_lock(
+        &self,
+        grant: LockGrant,
+        timing: LockTiming,
+    ) -> Result<LockOutcome, TextStoreError> {
+        self.0.request_lock(grant, timing)
+    }
+
+    fn run_deferred_grants(&self) -> usize {
+        self.0.run_deferred_grants()
+    }
+
+    fn set_commit_gate(&self, _: CommitGate) {
+        panic!("nested gate installation failure");
+    }
+
+    fn set_observer(&self, observer: Option<Rc<dyn TextStoreObserver>>) {
+        self.0.set_observer(observer);
+    }
+}
+
+fn failed_nested_gate_reservation_preserves_the_valid_outer_attachment() {
+    for competing_retirement in [false, true] {
+        let (owner, _) = owner();
+        let handle = owner.handle();
+        let outgoing = Rc::new(ReentrantCommitStore {
+            inner: InMemoryTextStore::new("outgoing"),
+            callback: RefCell::new(None),
+        });
+        let capture = OnDrop(Box::new(move || {
+            assert!(!competing_retirement, "later outgoing capture failure");
+        }));
+        handle
+            .attach(
+                TextInputClient::new(outgoing.clone()).on_session_start(move || {
+                    let _keep_alive = &capture;
+                }),
+            )
+            .expect("initial outgoing client");
+        let reentrant = handle.clone();
+        *outgoing.callback.borrow_mut() = Some(Box::new(move || {
+            let _ = reentrant.attach(TextInputClient::new(Rc::new(FailingGateStore(
+                InMemoryTextStore::new("rejected"),
+            ))));
+        }));
+        let incoming = InMemoryTextStore::new("incoming");
+        let token = handle
+            .attach(TextInputClient::new(incoming.clone()))
+            .expect("failed reservation did not admit a newer replacement");
+        assert!(
+            owner.is_attached(token),
+            "valid outer client remains admitted"
+        );
+        let failure = catch_unwind(AssertUnwindSafe(|| {
+            owner.dispatch(&flui_platform_api::ImeEvent::Commit("first".into()));
+        }))
+        .expect_err("owner reports contained gate failure on its next turn");
+        assert_eq!(
+            failure.downcast_ref::<&str>(),
+            Some(&"nested gate installation failure"),
+            "failed nested installation precedes competing outgoing retirement"
+        );
+        assert!(owner.is_attached(token));
+        owner.dispatch(&flui_platform_api::ImeEvent::Commit("healthy".into()));
+        let text = Rc::new(RefCell::new(String::new()));
+        let read = Rc::clone(&text);
+        incoming
+            .request_lock(
+                LockGrant::read(move |session| {
+                    *read.borrow_mut() = session
+                        .text(
+                            flui_platform_api::text_store::Utf16Range::new(
+                                flui_platform_api::text_store::Utf16Offset::ZERO,
+                                session.document_len(),
+                            )
+                            .expect("document range"),
+                        )
+                        .expect("document text");
+                }),
+                LockTiming::Sync,
+            )
+            .expect("read admitted store");
+        assert!(
+            text.borrow().contains("healthy"),
+            "later IME reaches valid outer store"
+        );
+    }
+}
+
 fn commit_reentry_preserves_the_newer_attachment() {
     let (owner, _) = owner();
     let handle = owner.handle();
@@ -807,6 +903,10 @@ fn commit_reentry_preserves_the_newer_attachment() {
 #[test]
 fn text_input_retirement_allows_reentry_and_preserves_recovery() {
     let cases: &[(&str, fn())] = &[
+        (
+            "failed nested gate reservation",
+            failed_nested_gate_reservation_preserves_the_valid_outer_attachment,
+        ),
         (
             "commit reentry",
             commit_reentry_preserves_the_newer_attachment,
