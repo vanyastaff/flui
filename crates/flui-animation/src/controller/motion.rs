@@ -133,6 +133,16 @@ impl AnimationController {
         })
     }
 
+    pub(crate) fn validate_value_seam(&self, seam: &ValueSeam) -> Result<(), AnimationError> {
+        let inner = self.inner.borrow();
+        Self::check_run_admission(&inner)?;
+        if seam.matches(&inner) {
+            Ok(())
+        } else {
+            Err(AnimationError::ReentrantMotion)
+        }
+    }
+
     /// The closure only moves prepared framework fields; it must not call or
     /// drop user code. Returned outgoing ownership retires after unlocking.
     pub(crate) fn start_value_motion<R>(

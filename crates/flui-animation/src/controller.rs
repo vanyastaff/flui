@@ -3,6 +3,7 @@
 mod motion;
 mod sample;
 
+pub(crate) use motion::ValueSeam;
 use sample::{SampleIdentity, SampleTime};
 
 use crate::AnimationRunFuture;

@@ -102,6 +102,19 @@ enum Change {
     Snap,
 }
 
+struct Prepared<V: AnimationVector> {
+    seam: crate::controller::ValueSeam,
+    goal: V,
+    run: Option<PreparedRun<V>>,
+}
+
+struct PreparedRun<V: AnimationVector> {
+    source: Terminal<Rc<dyn ValueMotion>>,
+    sample: Sample<V>,
+    deadline: Option<Duration>,
+    reversal: Reversal<V>,
+}
+
 /// An interruptible value owned by one frame registration.
 ///
 /// Every component inherits its last published position and velocity. The
@@ -330,140 +343,180 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
         recovery: &mut RecoveryScope<'_>,
     ) -> Result<AnimationRunFuture, AnimationError> {
         for _ in 0..2 {
-            let controller = self.driven.controller().clone();
-            let seam = controller.value_seam()?;
-            let goal = target.to_vector();
-            validate(&goal)?;
-            let target_changed = goal.as_ref() != self.target_vector.as_ref();
-            if !matches!(change, Change::Snap)
-                && !target_changed
-                && (motion.get() == self.motion.get() || self.is_settled())
-            {
-                let old_target = self.target.withdraw();
-                let old_motion = self.motion.withdraw();
-                self.target = target.withdraw();
-                self.motion = motion.withdraw();
-                let old_visible = self
-                    .visible_target
-                    .replace(Terminal::new(Rc::clone(&self.target)));
-                // Vector equality preserves the trajectory, but exact targets
-                // can differ (for example a transparent color's hidden hue).
-                controller.publish_value_metadata(recovery);
-                recovery.retire(old_visible);
-                recovery.retire(old_target);
-                recovery.retire(old_motion);
-                return Ok(controller.value_run_future());
-            }
-            let sample = self.published.get();
-            let velocity = if self.is_settled() {
-                sample.velocity.zero()
-            } else {
-                sample.velocity
-            };
-            let mut shortening = 1.0;
-            let mut reversal = Reversal {
-                adjusted_start: sample.value,
-                shortening: 1.0,
-            };
-            let mut segment_motion = Terminal::new(motion.get().clone());
-            if matches!(change, Change::Snap) {
-                segment_motion = Terminal::new(MotionSpec::Curve {
-                    duration: Duration::ZERO,
-                    curve: ArcCurve::new(Curves::Linear),
-                });
-            } else if !target_changed {
-                if let (
-                    MotionSpec::Curve { duration: new, .. },
-                    MotionSpec::Curve { duration: old, .. },
-                ) = (segment_motion.get(), self.motion.get())
-                    && new == old
-                    && !self.is_settled()
-                    && let Some(deadline) = self.deadline
-                    && let MotionSpec::Curve { duration, .. } = segment_motion.get_mut()
-                {
-                    *duration = deadline.saturating_sub(sample.elapsed);
-                }
-            } else if let MotionSpec::Curve { curve, .. } = self.motion.get()
-                && !self.is_settled()
-                && goal.as_ref() == self.reversal.adjusted_start.as_ref()
-            {
-                let old = self.reversal.shortening;
-                let duration = self.deadline.unwrap_or(Duration::ZERO).as_secs_f64();
-                if duration > 0.0 {
-                    shortening = (curve
-                        .transform((sample.elapsed.as_secs_f64() / duration).clamp(0.0, 1.0))
-                        * old
-                        + (1.0 - old))
-                        .abs()
-                        .clamp(0.0, 1.0);
-                    reversal = Reversal {
-                        adjusted_start: self.target_vector,
-                        shortening,
-                    };
-                }
-            }
-            let components = sample
-                .value
-                .as_ref()
-                .iter()
-                .zip(velocity.as_ref())
-                .zip(goal.as_ref())
-                .map(|((&position, &velocity), &target)| {
-                    Segment::start(position, velocity, target, &segment_motion, shortening)
-                })
-                .collect::<Result<SmallVec<[Segment; 4]>, _>>()
-                .map_err(|error| {
-                    AnimationError::NonFiniteTarget(format!("animated value motion: {error}"))
-                })?;
-            recovery.retire(segment_motion);
-            let deadline = components.iter().filter_map(Segment::curve_duration).max();
-            let immediate = components.iter().all(|component| component.is_done(0.0));
-            let prepared = Sample {
-                value: if immediate { goal } else { sample.value },
-                velocity: if immediate { goal.zero() } else { velocity },
-                elapsed: Duration::ZERO,
-                done: immediate,
-            };
-            let run = Terminal::new(Rc::new(ComponentRun {
-                segments: components,
-                goal,
-                published: Rc::clone(&self.published),
-                staged: Cell::new(prepared),
-            }));
-            let source: Rc<dyn ValueMotion> = Rc::clone(run.get()) as Rc<dyn ValueMotion>;
-            let admission = controller.start_value_motion(
-                &seam,
-                source,
-                immediate,
-                || {
-                    let old_target = self.target.withdraw();
-                    let old_motion = self.motion.withdraw();
-                    self.reversal = reversal;
-                    self.target_vector = goal;
-                    self.target = target.withdraw();
-                    self.motion = motion.withdraw();
-                    self.deadline = deadline;
-                    let old_visible = self
-                        .visible_target
-                        .replace(Terminal::new(Rc::clone(&self.target)));
-                    self.published.set(prepared);
-                    (old_target, old_motion, old_visible)
-                },
-                recovery,
-            );
-            recovery.retire(run);
-            match admission {
-                Ok((future, (old_target, old_motion, old_visible))) => {
-                    recovery.retire(old_visible);
-                    recovery.retire(old_motion);
-                    recovery.retire(old_target);
-                    return Ok(future);
-                }
+            let prepared = self.prepare(target, motion, change, recovery)?;
+            match self.install(prepared, target, motion, recovery) {
                 Err(AnimationError::ReentrantMotion) => {}
-                Err(error) => return Err(error),
+                result => return result,
             }
         }
         Err(AnimationError::ReentrantMotion)
+    }
+
+    fn prepare(
+        &self,
+        target: &Terminal<Rc<T>>,
+        motion: &Terminal<MotionSpec>,
+        change: Change,
+        recovery: &mut RecoveryScope<'_>,
+    ) -> Result<Prepared<T::Vector>, AnimationError> {
+        let controller = self.driven.controller().clone();
+        let seam = controller.value_seam()?;
+        let goal = target.to_vector();
+        validate(&goal)?;
+        let target_changed = goal.as_ref() != self.target_vector.as_ref();
+        if !matches!(change, Change::Snap)
+            && !target_changed
+            && (motion.get() == self.motion.get() || self.is_settled())
+        {
+            return Ok(Prepared {
+                seam,
+                goal,
+                run: None,
+            });
+        }
+        let sample = self.published.get();
+        let velocity = if self.is_settled() {
+            sample.velocity.zero()
+        } else {
+            sample.velocity
+        };
+        let mut shortening = 1.0;
+        let mut reversal = Reversal {
+            adjusted_start: sample.value,
+            shortening: 1.0,
+        };
+        let mut segment_motion = Terminal::new(motion.get().clone());
+        if matches!(change, Change::Snap) {
+            segment_motion = Terminal::new(MotionSpec::Curve {
+                duration: Duration::ZERO,
+                curve: ArcCurve::new(Curves::Linear),
+            });
+        } else if !target_changed {
+            if let (
+                MotionSpec::Curve { duration: new, .. },
+                MotionSpec::Curve { duration: old, .. },
+            ) = (segment_motion.get(), self.motion.get())
+                && new == old
+                && !self.is_settled()
+                && let Some(deadline) = self.deadline
+                && let MotionSpec::Curve { duration, .. } = segment_motion.get_mut()
+            {
+                *duration = deadline.saturating_sub(sample.elapsed);
+            }
+        } else if let MotionSpec::Curve { curve, .. } = self.motion.get()
+            && !self.is_settled()
+            && goal.as_ref() == self.reversal.adjusted_start.as_ref()
+        {
+            let old = self.reversal.shortening;
+            let duration = self.deadline.unwrap_or(Duration::ZERO).as_secs_f64();
+            if duration > 0.0 {
+                shortening = (curve
+                    .transform((sample.elapsed.as_secs_f64() / duration).clamp(0.0, 1.0))
+                    * old
+                    + (1.0 - old))
+                    .abs()
+                    .clamp(0.0, 1.0);
+                reversal = Reversal {
+                    adjusted_start: self.target_vector,
+                    shortening,
+                };
+            }
+        }
+        let components = sample
+            .value
+            .as_ref()
+            .iter()
+            .zip(velocity.as_ref())
+            .zip(goal.as_ref())
+            .map(|((&position, &velocity), &target)| {
+                Segment::start(position, velocity, target, &segment_motion, shortening)
+            })
+            .collect::<Result<SmallVec<[Segment; 4]>, _>>()
+            .map_err(|error| {
+                AnimationError::NonFiniteTarget(format!("animated value motion: {error}"))
+            })?;
+        recovery.retire(segment_motion);
+        let deadline = components.iter().filter_map(Segment::curve_duration).max();
+        let immediate = components.iter().all(|component| component.is_done(0.0));
+        let prepared = Sample {
+            value: if immediate { goal } else { sample.value },
+            velocity: if immediate { goal.zero() } else { velocity },
+            elapsed: Duration::ZERO,
+            done: immediate,
+        };
+        let run = Terminal::new(Rc::new(ComponentRun {
+            segments: components,
+            goal,
+            published: Rc::clone(&self.published),
+            staged: Cell::new(prepared),
+        }));
+        let source = Rc::clone(run.get()) as Rc<dyn ValueMotion>;
+        recovery.retire(run);
+        Ok(Prepared {
+            seam,
+            goal,
+            run: Some(PreparedRun {
+                source: Terminal::new(source),
+                sample: prepared,
+                deadline,
+                reversal,
+            }),
+        })
+    }
+
+    fn install(
+        &mut self,
+        prepared: Prepared<T::Vector>,
+        target: &mut Terminal<Rc<T>>,
+        motion: &mut Terminal<MotionSpec>,
+        recovery: &mut RecoveryScope<'_>,
+    ) -> Result<AnimationRunFuture, AnimationError> {
+        let controller = self.driven.controller().clone();
+        controller.validate_value_seam(&prepared.seam)?;
+        let Some(mut run) = prepared.run else {
+            let old_target = self.target.withdraw();
+            let old_motion = self.motion.withdraw();
+            self.target = target.withdraw();
+            self.motion = motion.withdraw();
+            let old_visible = self
+                .visible_target
+                .replace(Terminal::new(Rc::clone(&self.target)));
+            // Equal vectors preserve the run while replacing the exact target.
+            controller.publish_value_metadata(recovery);
+            recovery.retire(old_visible);
+            recovery.retire(old_target);
+            recovery.retire(old_motion);
+            return Ok(controller.value_run_future());
+        };
+        let admission = controller.start_value_motion(
+            &prepared.seam,
+            run.source.withdraw().into_inner(),
+            run.sample.done,
+            || {
+                let old_target = self.target.withdraw();
+                let old_motion = self.motion.withdraw();
+                self.reversal = run.reversal;
+                self.target_vector = prepared.goal;
+                self.target = target.withdraw();
+                self.motion = motion.withdraw();
+                self.deadline = run.deadline;
+                let old_visible = self
+                    .visible_target
+                    .replace(Terminal::new(Rc::clone(&self.target)));
+                self.published.set(run.sample);
+                (old_target, old_motion, old_visible)
+            },
+            recovery,
+        );
+        match admission {
+            Ok((future, (old_target, old_motion, old_visible))) => {
+                recovery.retire(old_visible);
+                recovery.retire(old_motion);
+                recovery.retire(old_target);
+                Ok(future)
+            }
+            Err(error) => Err(error),
+        }
     }
 }
 
