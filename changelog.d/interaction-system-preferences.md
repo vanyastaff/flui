@@ -9,6 +9,7 @@
 - `GestureArenaScope` composes one inherited arena and input-policy node. Unconfigured nested scopes inherit gesture and wheel providers; explicit gesture settings override gesture policy independently. The public scope configuration no longer implements `InheritedView`; consumers acquire the arena through `GestureArenaScope::of`.
 - `Scrollable` applies system wheel counts to raw detents, preserves normalized line, page and pixel input, and supports validated authored line and character distances. Invalid arithmetic refuses the packet without losing the previous scroll position.
 - Raw Windows wheel packets use `ScrollUnit::Detents` instead of labeling each detent as a normalized line. Scroll consumers apply the system count once when resolving that unit.
+- The Windows winit transport publishes the existing owner-local native preference source before owner input delivery, retains deferred queries for deadline retry without requesting an extra redraw, and withdraws the source during shutdown.
 - `GesturePreferences` retains `PartialEq` but no longer implements `Eq`, because native geometry carries validated floating-point measurements.
 
 ### Added

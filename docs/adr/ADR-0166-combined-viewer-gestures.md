@@ -25,7 +25,11 @@ actor. Weak listener attachments do not extend the actor's lifetime.
 
 Native input reaches that same actor through borrowed
 `PanZoomDispatch::new(local, global)`. Local coordinates and the original root-space
-source remain distinct. Native observers still receive fresh hit-tested input;
+source remain distinct. `at_root` constructs the coincident-space form. The
+dispatch is owner-affine: it implements neither `Send` nor `Sync`, and its private
+admission authority prevents external struct literals from fabricating a staged
+binding admission. Synthetic constructors carry no admission authority.
+Native observers still receive fresh hit-tested input;
 the detector's built-in recognizer attachment selects contact events only so raw
 observation cannot mutate the native actor before arbitration.
 
@@ -52,6 +56,12 @@ the delivery owner before recognized callbacks. Losing actors retire even when
 the current hit path no longer contains them. Withdrawal, replacement and closure
 retire outstanding admissions outside borrows. A stale retirement cannot clear a
 reentrant replacement that reuses its source and timestamp.
+Failure while retiring an older staged generation does not reject its already
+accepted replacement Start. The replacement remains deliverable before the
+earliest failure resumes. Likewise, a terminal's fresh hit-test failure cannot
+erase terminal delivery and retirement owed to its cached exact owner. Fresh
+observation and admitted delivery have separate obligations; old cleanup cannot
+withdraw a newer reentrant admission.
 `nested_native_scale_loser_recovers_touch_after_winner_terminal` checks winner
 continuity, both terminal reasons and the losing ancestor's next touch gesture.
 
@@ -85,9 +95,14 @@ determines rest. Without Vsync there is no wall-clock substitute. Axis projectio
 and boundary containment apply to translation. A new Down, gesture recognition, accepted
 wheel input, controller replacement and disposal stop the run. Per-run origin,
 viewport and boundary are captured at release; an unchanged rebuild does not
-restart the simulation. This contract does not promise that a later geometry-only
-rebuild replaces those captured limits. A fresh liveness token prevents retired
-listener work from publishing into a later run.
+restart the simulation. A weak owner-local post-frame callback checks those
+limits against completed layout. Changed viewport geometry or authored boundary
+retires the old run before its next motion tick; a later release captures the new
+limits. Translation still publishes on the Vsync listener before build and paint,
+so geometry validation does not defer current-frame motion until post-frame.
+Repeated samples with no elapsed time publish no motion and do not stop a live
+run. Natural simulation rest removes its listener and stops Vsync requests. A
+fresh liveness token prevents retired listener work from publishing into a later run.
 
 ## Consequences and verification
 
@@ -104,6 +119,12 @@ The public widget `pointer_and_gesture_recognition` table includes
 `viewer_native_rotation_preserves_the_scene_pivot`,
 `viewer_rotation_refuses_an_unfittable_quad_then_recovers`,
 `viewer_reports_scale_velocity_separately_from_focal_velocity`, and
-`viewer_focal_fling_advances_then_stops_on_new_input`.
+`viewer_focal_fling_advances_then_stops_on_new_input`, and
+`viewer_focal_fling_rebuild_preserves_or_retires_geometry`.
+The interaction `binding_input_contract_matrix` includes
+`native_staged_retirement_preserves_delivery_and_failure`,
+`native_terminal_observation_failure_keeps_owned_delivery`, and
+`native_staged_generation_survives_geometry_and_reentry`; these cover isolated
+and competing failure, exact same-source replacement and healthy recovery.
 Existing Scale tables retain the default two-contact contract. These owned-event
 witnesses do not claim physical trackpad or touchscreen execution on every backend.

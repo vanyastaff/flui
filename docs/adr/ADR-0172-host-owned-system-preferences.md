@@ -255,3 +255,13 @@ Native callback execution, headless protocol behavior, cross-platform compilatio
 and actual OS notification delivery are separate evidence. A probe that registers
 and removes a token does not establish change delivery. Implementation acceptance
 is tracked in the [platform-layer spec](../plans/specs/platform-layer/tasks.md).
+
+The Windows winit transport uses this same owner-local source. It publishes a
+sampled preference observation before input or wake delivery, preserves deferred
+sampling for its deadline retry and does not dirty user windows merely to retry
+preferences. Shutdown closes the owner signal and releases the source before
+retiring user-window callbacks. Raw wheel input remains signed Detents; consumers
+resolve the current system count once. Actual queued Windows wheel packets and
+the initial preference snapshot have native evidence. Expanded notification,
+retry and shutdown lifecycle execution remains separate acceptance; source wiring
+and initial observation alone do not establish those outcomes.
