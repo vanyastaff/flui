@@ -1,4 +1,4 @@
-# ADR-0181: Property motion is admitted as a coordinated update
+# ADR-0183: Property motion is admitted as a coordinated update
 
 - **Status:** Accepted
 - **Date:** 2026-10-09
