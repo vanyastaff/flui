@@ -1,6 +1,6 @@
 # ADR-0174: Text-weight observations and shaping policy
 
-- **Status:** Consumer integration implemented; native UIKit execution pending.
+- **Status:** Consumer integration and UIKit/Android sources implemented; native mobile execution pending.
 - **Date:** 2026-10-08
 - **Related:** [ADR-0172](ADR-0172-host-owned-system-preferences.md),
   [ADR-0092](ADR-0092-per-realm-text-over-parley.md).
@@ -53,13 +53,18 @@ closes admission before removing the retained observer token, with no `RefCell`
 borrow across removal. A late callback cannot access a retired source or another
 platform incarnation. Failed reads do not publish an off observation.
 
-Other backends currently leave text weight unavailable. Android integration must
-extend the host's existing Activity-context preference aggregate, using API 31's
-`Configuration.fontWeightAdjustment` and treating
-`FONT_WEIGHT_ADJUSTMENT_UNDEFINED` as unknown. It must retain numeric observations
-and existing refresh/retry ownership. It is not implemented by this decision's
-consumer integration. Windows non-client role fonts are not interpreted as a
-global accessibility-weight preference.
+Android extends the host's existing Activity-context preference aggregate. It
+checks the SDK level before reading API 31's `Configuration.fontWeightAdjustment`
+from the Activity's resources. `FONT_WEIGHT_ADJUSTMENT_UNDEFINED` remains unknown;
+zero is known `NoPreference`, and other signed values retain their exact numeric
+meaning. A failed available query fails the aggregate read, preserving existing
+accepted-observation and retry ownership instead of manufacturing an off value.
+The existing owner samples on `ConfigChanged` and its 500ms polling cadence.
+Geometry-only reads skip the text query, so a text-field failure cannot prevent
+an otherwise valid presentation geometry query.
+
+Other backends currently leave text weight unavailable. Windows non-client role
+fonts are not interpreted as a global accessibility-weight preference.
 
 ## Evidence and limits
 
@@ -82,7 +87,14 @@ outlines do not establish a visible variable-font stroke change.
 
 Local iOS checking and clippy establish type compatibility only. UIKit-generated
 notifications, setting changes and observer retirement have not been executed on
-an iOS device or simulator. Native Android observations remain pending. No
+an iOS device or simulator. `android_text_weight_query_contract` exercises the
+private query-admission seam used by the JNI producer: unsupported SDKs never
+invoke the field query, the undefined sentinel stays absent, numeric values stay
+exact, and errors remain errors before a later successful read. Disabling the
+SDK gate or undefined-sentinel handling independently makes the test fail.
+Android library clippy establishes Rust type compatibility only; it does not
+execute Activity JNI reads, configuration changes or owner delivery on a device.
+Native Android execution remains pending. No
 reduced-motion behavior is implied; Motion integration remains owner-deferred.
 
 ## API migration
