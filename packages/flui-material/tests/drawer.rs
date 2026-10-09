@@ -146,7 +146,7 @@ fn drawer_scene_sample(
         let Layer::Picture(picture) = node.layer() else {
             continue;
         };
-        for command in picture.picture().iter() {
+        for command in picture.picture() {
             let DrawOp::Rect { rect, paint } = &command.op else {
                 continue;
             };
@@ -182,7 +182,14 @@ pub fn drawer_slides_without_rebuilding_per_frame() {
     use flui_sdk::widgets::{ColoredBox, FocusRoot, GestureArenaScope};
     use flui_testing::{HeadlessBinding, MountOptions, MountOwners, PointerScript};
 
-    for end in [false, true] {
+    for (end, settling_frames, panel_tap) in [
+        (false, 0, false),
+        (true, 0, false),
+        (false, 0, true),
+        (true, 0, true),
+        (false, 8, true),
+        (true, 8, true),
+    ] {
         let mut binding = HeadlessBinding::new();
         let taps = Rc::new(std::cell::Cell::new(0));
         let tapped = Rc::clone(&taps);
@@ -226,7 +233,7 @@ pub fn drawer_slides_without_rebuilding_per_frame() {
         binding.pump_frame(FRAME);
         let mut previous =
             drawer_scene_sample(binding.layer_tree().expect("mounted panel"), marker).0;
-        for _ in 0..8 {
+        for _ in 0..settling_frames {
             binding.pump_frame(FRAME);
             let report = binding.last_frame_report();
             assert_eq!(
@@ -252,11 +259,24 @@ pub fn drawer_slides_without_rebuilding_per_frame() {
             );
             previous = x;
         }
-        binding.replay(&PointerScript::tap(Offset::new(
-            if end { 380.0 } else { 20.0 },
-            200.0,
-        )));
-        assert_eq!(taps.get(), 1, "the visible panel receives its tap");
+        if settling_frames == 0 {
+            let open_fraction = if end {
+                (400.0 - previous) / 150.0
+            } else {
+                (previous + 150.0) / 150.0
+            };
+            assert!(
+                (0.3..0.6).contains(&open_fraction),
+                "hit testing is exercised on a partly revealed panel"
+            );
+        }
+        if panel_tap {
+            binding.replay(&PointerScript::tap(Offset::new(
+                if end { 380.0 } else { 20.0 },
+                200.0,
+            )));
+            assert_eq!(taps.get(), 1, "the visible panel receives its tap");
+        }
         binding.replay(&PointerScript::tap(Offset::new(
             if end { 20.0 } else { 380.0 },
             200.0,
