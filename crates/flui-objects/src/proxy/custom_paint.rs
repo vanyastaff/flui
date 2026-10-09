@@ -307,60 +307,79 @@ impl RenderBox for RenderCustomPaint {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, Self::ParentData>) -> Size {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Single, Self::ParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
         let constraints = *ctx.constraints();
         if ctx.child_count() > 0 {
             self.has_child = true;
-            let child_size = ctx.layout_child(0, constraints);
+            let child_size = ctx.layout_child(0, constraints)?;
             ctx.position_child(0, Offset::ZERO);
-            child_size
+            Ok(child_size)
         } else {
             self.has_child = false;
-            constraints.constrain(self.preferred_size)
+            Ok(constraints.constrain(self.preferred_size))
         }
     }
 
-    fn compute_min_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        if ctx.child_count() > 0 {
-            ctx.child_min_intrinsic_width(0, height)
+    fn compute_min_intrinsic_width(
+        &self,
+        height: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(if ctx.child_count() > 0 {
+            ctx.child_min_intrinsic_width(0, height)?
         } else {
             finite_extent_or_zero(self.preferred_size.width)
-        }
+        })
     }
 
-    fn compute_max_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        if ctx.child_count() > 0 {
-            ctx.child_max_intrinsic_width(0, height)
+    fn compute_max_intrinsic_width(
+        &self,
+        height: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(if ctx.child_count() > 0 {
+            ctx.child_max_intrinsic_width(0, height)?
         } else {
             finite_extent_or_zero(self.preferred_size.width)
-        }
+        })
     }
 
-    fn compute_min_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        if ctx.child_count() > 0 {
-            ctx.child_min_intrinsic_height(0, width)
+    fn compute_min_intrinsic_height(
+        &self,
+        width: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(if ctx.child_count() > 0 {
+            ctx.child_min_intrinsic_height(0, width)?
         } else {
             finite_extent_or_zero(self.preferred_size.height)
-        }
+        })
     }
 
-    fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        if ctx.child_count() > 0 {
-            ctx.child_max_intrinsic_height(0, width)
+    fn compute_max_intrinsic_height(
+        &self,
+        width: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(if ctx.child_count() > 0 {
+            ctx.child_max_intrinsic_height(0, width)?
         } else {
             finite_extent_or_zero(self.preferred_size.height)
-        }
+        })
     }
 
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
         ctx: &mut BoxDryLayoutCtx<'_>,
-    ) -> Size {
+    ) -> flui_rendering::RenderResult<Size> {
         if ctx.child_count() > 0 {
             ctx.child_dry_layout(0, constraints)
         } else {
-            constraints.constrain(self.preferred_size)
+            Ok(constraints.constrain(self.preferred_size))
         }
     }
 

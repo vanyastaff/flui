@@ -45,6 +45,16 @@ impl ScrollDirection {
 /// This trait is a `ChangeNotifier`-like that notifies its listeners when
 /// `pixels` changes.
 pub trait ViewportOffset: Debug {
+    /// Detached layout state; it contains no listeners or delivery obligations.
+    type Layout: ViewportLayout;
+
+    /// Starts a layout proposal from the currently accepted position.
+    fn begin_layout(&self) -> Self::Layout;
+
+    /// Publishes a successful proposal, refusing it if accepted input changed
+    /// while descendants were being measured.
+    fn accept_layout(&mut self, layout: Self::Layout) -> crate::RenderResult<()>;
+
     /// The number of pixels to offset the children in the opposite of the axis
     /// direction.
     ///
@@ -110,6 +120,43 @@ pub trait ViewportOffset: Debug {
     fn remove_listener(&self, listener: &Rc<dyn Fn()>);
 }
 
+/// Scroll corrections and dimensions under consideration by a viewport.
+///
+/// A proposal is local to one layout walk. These methods neither publish metrics
+/// nor invoke listeners; dropping a rejected proposal leaves accepted state alone.
+pub trait ViewportLayout: Debug {
+    /// Proposed scroll position.
+    fn pixels(&self) -> f64;
+    /// Applies a proposed viewport extent, returning whether another pass is unnecessary.
+    fn apply_viewport_dimension(&mut self, dimension: f64) -> bool;
+    /// Applies proposed content bounds, returning whether another pass is unnecessary.
+    fn apply_content_dimensions(&mut self, min: f64, max: f64) -> bool;
+    /// Applies a correction derived from the current child pass.
+    fn correct_by(&mut self, correction: f64);
+}
+
+/// Detached layout proposal for a fixed position.
+#[derive(Debug)]
+pub struct FixedViewportLayout {
+    original: f64,
+    pixels: f64,
+}
+
+impl ViewportLayout for FixedViewportLayout {
+    fn pixels(&self) -> f64 {
+        self.pixels
+    }
+    fn apply_viewport_dimension(&mut self, _dimension: f64) -> bool {
+        true
+    }
+    fn apply_content_dimensions(&mut self, _min: f64, _max: f64) -> bool {
+        true
+    }
+    fn correct_by(&mut self, correction: f64) {
+        self.pixels += correction;
+    }
+}
+
 /// A simple fixed viewport offset that doesn't change.
 ///
 /// The `pixels` value does not change unless the viewport issues a correction.
@@ -155,6 +202,23 @@ impl Default for FixedViewportOffset {
 }
 
 impl ViewportOffset for FixedViewportOffset {
+    type Layout = FixedViewportLayout;
+
+    fn begin_layout(&self) -> Self::Layout {
+        FixedViewportLayout {
+            original: self.pixels,
+            pixels: self.pixels,
+        }
+    }
+
+    fn accept_layout(&mut self, layout: Self::Layout) -> crate::RenderResult<()> {
+        if self.pixels.to_bits() != layout.original.to_bits() {
+            return Err(crate::RenderError::ViewportOffsetChanged);
+        }
+        self.pixels = layout.pixels;
+        Ok(())
+    }
+
     fn pixels(&self) -> f64 {
         self.pixels
     }
@@ -239,6 +303,40 @@ pub struct ScrollableViewportOffset {
     notification_state: RefCell<NotificationState>,
 }
 
+/// Detached layout proposal for a scrollable position without page mapping.
+#[derive(Debug)]
+pub struct ScrollableViewportLayout {
+    original: [u64; 4],
+    pixels: f64,
+    min: f64,
+    max: f64,
+    dimension: f64,
+}
+
+impl ViewportLayout for ScrollableViewportLayout {
+    fn pixels(&self) -> f64 {
+        self.pixels
+    }
+    fn apply_viewport_dimension(&mut self, dimension: f64) -> bool {
+        self.dimension = dimension;
+        true
+    }
+    fn apply_content_dimensions(&mut self, min: f64, max: f64) -> bool {
+        if (self.min - min).abs() < f64::EPSILON && (self.max - max).abs() < f64::EPSILON {
+            return true;
+        }
+        self.min = min;
+        self.max = max;
+        let clamped = self.pixels.clamp(min, max);
+        let accepted = (self.pixels - clamped).abs() <= f64::EPSILON;
+        self.pixels = clamped;
+        accepted
+    }
+    fn correct_by(&mut self, correction: f64) {
+        self.pixels += correction;
+    }
+}
+
 #[derive(Debug, Default)]
 struct NotificationState {
     notifying: bool,
@@ -261,6 +359,13 @@ impl Debug for ScrollableViewportOffset {
 }
 
 impl ScrollableViewportOffset {
+    fn publish_layout(&mut self, layout: ScrollableViewportLayout) {
+        self.pixels = layout.pixels;
+        self.min_scroll_extent = layout.min;
+        self.max_scroll_extent = layout.max;
+        self.viewport_dimension = layout.dimension;
+    }
+
     /// Creates a new scrollable viewport offset.
     pub fn new(initial_pixels: f64) -> Self {
         Self {
@@ -382,6 +487,31 @@ impl Default for ScrollableViewportOffset {
 }
 
 impl ViewportOffset for ScrollableViewportOffset {
+    type Layout = ScrollableViewportLayout;
+
+    fn begin_layout(&self) -> Self::Layout {
+        ScrollableViewportLayout {
+            original: [
+                self.pixels.to_bits(),
+                self.min_scroll_extent.to_bits(),
+                self.max_scroll_extent.to_bits(),
+                self.viewport_dimension.to_bits(),
+            ],
+            pixels: self.pixels,
+            min: self.min_scroll_extent,
+            max: self.max_scroll_extent,
+            dimension: self.viewport_dimension,
+        }
+    }
+
+    fn accept_layout(&mut self, layout: Self::Layout) -> crate::RenderResult<()> {
+        if self.begin_layout().original != layout.original {
+            return Err(crate::RenderError::ViewportOffsetChanged);
+        }
+        self.publish_layout(layout);
+        Ok(())
+    }
+
     fn pixels(&self) -> f64 {
         self.pixels
     }
@@ -391,31 +521,17 @@ impl ViewportOffset for ScrollableViewportOffset {
     }
 
     fn apply_viewport_dimension(&mut self, viewport_dimension: f64) -> bool {
-        if (self.viewport_dimension - viewport_dimension).abs() < f64::EPSILON {
-            return true;
-        }
-        self.viewport_dimension = viewport_dimension;
-        true
+        let mut layout = self.begin_layout();
+        let accepted = layout.apply_viewport_dimension(viewport_dimension);
+        self.publish_layout(layout);
+        accepted
     }
 
     fn apply_content_dimensions(&mut self, min_scroll_extent: f64, max_scroll_extent: f64) -> bool {
-        if (self.min_scroll_extent - min_scroll_extent).abs() < f64::EPSILON
-            && (self.max_scroll_extent - max_scroll_extent).abs() < f64::EPSILON
-        {
-            return true;
-        }
-
-        self.min_scroll_extent = min_scroll_extent;
-        self.max_scroll_extent = max_scroll_extent;
-
-        // Clamp pixels to valid range
-        let clamped = self.pixels.clamp(min_scroll_extent, max_scroll_extent);
-        if (self.pixels - clamped).abs() > f64::EPSILON {
-            self.pixels = clamped;
-            return false; // Need relayout
-        }
-
-        true
+        let mut layout = self.begin_layout();
+        let accepted = layout.apply_content_dimensions(min_scroll_extent, max_scroll_extent);
+        self.publish_layout(layout);
+        accepted
     }
 
     fn correct_by(&mut self, correction: f64) {

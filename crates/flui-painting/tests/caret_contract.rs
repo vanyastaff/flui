@@ -30,11 +30,13 @@ fn painter(text: &str, direction: TextDirection) -> TextPainter {
 }
 
 fn laid_out(mut painter: TextPainter, max_width: f64) -> TextPainter {
-    painter.layout(
-        &mut TextContext::new(&FontCollection::new()),
-        0.0,
-        max_width,
-    );
+    painter
+        .layout(
+            &mut TextContext::new(&FontCollection::new()),
+            0.0,
+            max_width,
+        )
+        .expect("valid fixture lays out");
     painter
 }
 
@@ -498,7 +500,9 @@ pub(crate) fn a_lam_alef_ligature_is_one_glyph_and_two_caret_stops() {
     let mut painter = TextPainter::new()
         .with_text(TextSpan::styled(text, style))
         .with_text_direction(TextDirection::Rtl);
-    painter.layout(&mut TextContext::new(&fonts), 0.0, f64::INFINITY);
+    painter
+        .layout(&mut TextContext::new(&fonts), 0.0, f64::INFINITY)
+        .expect("valid fixture lays out");
 
     let (paragraph, _) = painted(&painter);
     let glyphs: Vec<u16> = paragraph
@@ -554,7 +558,9 @@ fn aligned_painter(
     max: f64,
 ) -> TextPainter {
     let mut painter = painter(text, direction).with_text_align(align);
-    painter.layout(&mut TextContext::new(&FontCollection::new()), min, max);
+    painter
+        .layout(&mut TextContext::new(&FontCollection::new()), min, max)
+        .expect("valid fixture lays out");
     painter
 }
 
@@ -690,7 +696,9 @@ pub(crate) fn a_last_kept_soft_line_retains_native_justification() {
     let mut justified = painter(text, TextDirection::Ltr)
         .with_text_align(TextAlign::Justify)
         .with_max_lines(Some(1));
-    justified.layout(&mut TextContext::new(&FontCollection::new()), 200.0, 200.0);
+    justified
+        .layout(&mut TextContext::new(&FontCollection::new()), 200.0, 200.0)
+        .expect("valid fixture lays out");
     let original = left.get_line_metrics();
     assert!(original.len() > 1);
     assert!(!original[0].hard_break);
@@ -748,9 +756,12 @@ pub(crate) fn justification_expands_soft_lines_but_not_the_final_line() {
     let text = "one two three four five six seven eight nine";
     let mut context = TextContext::new(&FontCollection::new());
     let mut left = painter(text, TextDirection::Ltr).with_text_align(TextAlign::Left);
-    left.layout(&mut context, 200.0, 200.0);
+    left.layout(&mut context, 200.0, 200.0)
+        .expect("valid fixture lays out");
     let mut justified = painter(text, TextDirection::Ltr).with_text_align(TextAlign::Justify);
-    justified.layout(&mut context, 200.0, 200.0);
+    justified
+        .layout(&mut context, 200.0, 200.0)
+        .expect("valid fixture lays out");
     let lines = justified.get_line_metrics();
     let original = left.get_line_metrics();
     assert!(lines.len() > 1);
@@ -792,8 +803,13 @@ pub(crate) fn justification_expands_soft_lines_but_not_the_final_line() {
         .x;
     assert!(f64::from(last_glyph - old_glyph) + offset.dx - old_offset.dx > 1.0);
     assert!(
-        (left.min_intrinsic_width(&mut context) - justified.min_intrinsic_width(&mut context))
-            .abs()
+        (left
+            .min_intrinsic_width(&mut context)
+            .expect("valid fixture measures")
+            - justified
+                .min_intrinsic_width(&mut context)
+                .expect("valid fixture measures"))
+        .abs()
             < EPS
     );
 }
@@ -815,20 +831,28 @@ pub(crate) fn justification_leaves_hard_break_lines_unstretched() {
 pub(crate) fn alignment_change_replaces_cached_positions() {
     let mut context = TextContext::new(&FontCollection::new());
     let mut changed = painter("WWWW\ni", TextDirection::Ltr).with_text_align(TextAlign::Left);
-    changed.layout(&mut context, 200.0, 200.0);
+    changed
+        .layout(&mut context, 200.0, 200.0)
+        .expect("valid fixture lays out");
     let left = aligned_painter("WWWW\ni", TextAlign::Left, TextDirection::Ltr, 200.0, 200.0);
     changed.set_text_align(TextAlign::Center);
-    changed.layout(&mut context, 200.0, 200.0);
+    changed
+        .layout(&mut context, 200.0, 200.0)
+        .expect("valid fixture lays out");
     compare_aligned_lines(&left, &changed, 0.5);
     let before = painted(&changed).0;
     changed.set_text_align(TextAlign::Center);
-    changed.layout(&mut context, 200.0, 200.0);
+    changed
+        .layout(&mut context, 200.0, 200.0)
+        .expect("valid fixture lays out");
     assert!(
         Arc::ptr_eq(&before, &painted(&changed).0),
         "unchanged alignment retains paint records"
     );
     changed.set_text_align(TextAlign::Right);
-    changed.layout(&mut context, 200.0, 200.0);
+    changed
+        .layout(&mut context, 200.0, 200.0)
+        .expect("valid fixture lays out");
     compare_aligned_lines(&left, &changed, 1.0);
 }
 
@@ -842,9 +866,12 @@ pub(crate) fn ellipsized_lines_align_only_the_kept_text() {
             .with_ellipsis(Some("…".to_string()))
     };
     let mut left = build(TextAlign::Left);
-    left.layout(&mut context, 200.0, 200.0);
+    left.layout(&mut context, 200.0, 200.0)
+        .expect("valid fixture lays out");
     let mut centered = build(TextAlign::Center);
-    centered.layout(&mut context, 200.0, 200.0);
+    centered
+        .layout(&mut context, 200.0, 200.0)
+        .expect("valid fixture lays out");
     assert!(centered.did_exceed_max_lines());
     assert_eq!(painted(&centered).0.line_count(), 2);
     assert!(painted(&centered).0.text().ends_with('…'));

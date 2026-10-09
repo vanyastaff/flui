@@ -420,14 +420,14 @@ impl RenderWrap {
         &self,
         constraints: BoxConstraints,
         child_count: usize,
-        mut measure: impl FnMut(usize, BoxConstraints) -> Size,
-    ) -> WrapSizes {
+        mut measure: impl FnMut(usize, BoxConstraints) -> flui_rendering::RenderResult<Size>,
+    ) -> flui_rendering::RenderResult<WrapSizes> {
         if child_count == 0 {
-            return WrapSizes {
+            return Ok(WrapSizes {
                 container: constraints.smallest(),
                 runs: vec![],
                 child_sizes: vec![],
-            };
+            });
         }
 
         let child_constraints = self.child_constraints(&constraints);
@@ -443,7 +443,7 @@ impl RenderWrap {
         let mut run_cross = 0.0_f64;
 
         for i in 0..child_count {
-            let child_size = measure(i, child_constraints);
+            let child_size = measure(i, child_constraints)?;
             child_sizes.push(child_size);
 
             let child_main = self.main_extent(child_size);
@@ -495,11 +495,11 @@ impl RenderWrap {
 
         let container = self.constrain_size(&constraints, max_run_main, total_cross);
 
-        WrapSizes {
+        Ok(WrapSizes {
             container,
             runs,
             child_sizes,
-        }
+        })
     }
 
     // ── Intrinsics simulation helper ──────────────────────────────────────────
@@ -510,10 +510,14 @@ impl RenderWrap {
     ///
     /// This is an approximation (a dry layout would be exact), but it
     /// gives reasonable intrinsic values.
-    fn simulate_wrap_cross(&self, max_main: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn simulate_wrap_cross(
+        &self,
+        max_main: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         let child_count = ctx.child_count();
         if child_count == 0 {
-            return 0.0;
+            return Ok(0.0);
         }
 
         let mut total_cross = 0.0_f64;
@@ -525,13 +529,13 @@ impl RenderWrap {
         for i in 0..child_count {
             let (child_main, child_cross) = match self.direction {
                 Axis::Horizontal => {
-                    let w = ctx.child_max_intrinsic_width(i, f64::INFINITY);
-                    let h = ctx.child_min_intrinsic_height(i, w);
+                    let w = ctx.child_max_intrinsic_width(i, f64::INFINITY)?;
+                    let h = ctx.child_min_intrinsic_height(i, w)?;
                     (w, h)
                 }
                 Axis::Vertical => {
-                    let h = ctx.child_max_intrinsic_height(i, f64::INFINITY);
-                    let w = ctx.child_min_intrinsic_width(i, h);
+                    let h = ctx.child_max_intrinsic_height(i, f64::INFINITY)?;
+                    let w = ctx.child_min_intrinsic_width(i, h)?;
                     (h, w)
                 }
             };
@@ -566,7 +570,7 @@ impl RenderWrap {
             total_cross += run_cross;
         }
 
-        total_cross
+        Ok(total_cross)
     }
 }
 
@@ -600,12 +604,15 @@ impl RenderBox for RenderWrap {
     /// free cross-axis space among runs via `run_alignment`, then distribute
     /// free main-axis space within each run via `alignment`, then place each
     /// child with its `cross_axis_alignment` offset within the run.
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, WrapParentData>) -> Size {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Variable, WrapParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
         let constraints = *ctx.constraints();
         let child_count = ctx.child_count();
         self.child_count = child_count;
 
-        let sized = self.compute_runs(constraints, child_count, |i, c| ctx.layout_child(i, c));
+        let sized = self.compute_runs(constraints, child_count, |i, c| ctx.layout_child(i, c))?;
 
         // Zero-child fast path: compute_runs already returns constraints.smallest().
         //
@@ -616,7 +623,7 @@ impl RenderBox for RenderWrap {
         // that skips it is an early return that lies.
         if child_count == 0 {
             self.has_visual_overflow = false;
-            return sized.container;
+            return Ok(sized.container);
         }
 
         let container = sized.container;
@@ -726,40 +733,49 @@ impl RenderBox for RenderWrap {
             cross_cursor += run.cross_axis_extent + run_gap;
         }
 
-        container
+        Ok(container)
     }
 
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
         ctx: &mut BoxDryLayoutCtx<'_>,
-    ) -> Size {
+    ) -> flui_rendering::RenderResult<Size> {
         // Delegates entirely to compute_runs: sizing (Phases 1-2) is
         // identical to perform_layout; Phase 3 positioning is irrelevant
         // for a dry query.
-        self.compute_runs(constraints, ctx.child_count(), |i, c| {
-            ctx.child_dry_layout(i, c)
-        })
-        .container
+        Ok(self
+            .compute_runs(constraints, ctx.child_count(), |i, c| {
+                ctx.child_dry_layout(i, c)
+            })?
+            .container)
     }
 
     // ── Intrinsic dimensions ──────────────────────────────────────────────────
 
-    fn compute_min_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_min_intrinsic_width(
+        &self,
+        height: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         match self.direction {
             // Worst case: every child on its own row → max of child min widths.
             Axis::Horizontal => {
                 let n = ctx.child_count();
                 (0..n)
                     .map(|i| ctx.child_min_intrinsic_width(i, f64::INFINITY))
-                    .fold(0.0_f64, f64::max)
+                    .try_fold(0.0_f64, |max, value| Ok(max.max(value?)))
             }
             // Vertical: simulate column wrapping at the given height.
             Axis::Vertical => self.simulate_wrap_cross(height, ctx),
         }
     }
 
-    fn compute_max_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_max_intrinsic_width(
+        &self,
+        height: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         match self.direction {
             // Best case: all children on one row → SUM of child max widths.
             // The sum has NO inter-child `spacing` term.
@@ -771,7 +787,11 @@ impl RenderBox for RenderWrap {
         }
     }
 
-    fn compute_min_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_min_intrinsic_height(
+        &self,
+        width: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         match self.direction {
             // Horizontal: simulate row wrapping at the given width.
             Axis::Horizontal => self.simulate_wrap_cross(width, ctx),
@@ -780,12 +800,16 @@ impl RenderBox for RenderWrap {
                 let n = ctx.child_count();
                 (0..n)
                     .map(|i| ctx.child_min_intrinsic_height(i, f64::INFINITY))
-                    .fold(0.0_f64, f64::max)
+                    .try_fold(0.0_f64, |max, value| Ok(max.max(value?)))
             }
         }
     }
 
-    fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_max_intrinsic_height(
+        &self,
+        width: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         match self.direction {
             // Horizontal: simulate row wrapping at the given width.
             Axis::Horizontal => self.simulate_wrap_cross(width, ctx),

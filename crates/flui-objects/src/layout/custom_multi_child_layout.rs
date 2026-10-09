@@ -124,39 +124,55 @@ impl RenderBox for RenderCustomMultiChildLayoutBox {
     fn perform_layout(
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Variable, MultiChildLayoutParentData>,
-    ) -> Size {
+    ) -> flui_rendering::RenderResult<Size> {
         let constraints = *ctx.constraints();
         let size = self.get_size(constraints);
         self.child_count = ctx.child_count();
         let slots = Self::child_slots(ctx);
         let mut delegate_context = DelegateLayoutContext::new(ctx, slots);
-        self.delegate.perform_layout(&mut delegate_context, size);
+        self.delegate.perform_layout(&mut delegate_context, size)?;
         delegate_context.finish();
-        size
+        Ok(size)
     }
 
-    fn compute_min_intrinsic_width(&self, height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.intrinsic_width(height)
+    fn compute_min_intrinsic_width(
+        &self,
+        height: f64,
+        _ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(self.intrinsic_width(height))
     }
 
-    fn compute_max_intrinsic_width(&self, height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.intrinsic_width(height)
+    fn compute_max_intrinsic_width(
+        &self,
+        height: f64,
+        _ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(self.intrinsic_width(height))
     }
 
-    fn compute_min_intrinsic_height(&self, width: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.intrinsic_height(width)
+    fn compute_min_intrinsic_height(
+        &self,
+        width: f64,
+        _ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(self.intrinsic_height(width))
     }
 
-    fn compute_max_intrinsic_height(&self, width: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.intrinsic_height(width)
+    fn compute_max_intrinsic_height(
+        &self,
+        width: f64,
+        _ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(self.intrinsic_height(width))
     }
 
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
         _ctx: &mut BoxDryLayoutCtx<'_>,
-    ) -> Size {
-        self.get_size(constraints)
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok(self.get_size(constraints))
     }
 
     fn hit_test(
@@ -234,15 +250,19 @@ impl MultiChildLayoutContext for DelegateLayoutContext<'_, '_> {
         self.slots.id_to_index.contains_key(child_id)
     }
 
-    fn layout_child(&mut self, child_id: &str, constraints: BoxConstraints) -> Size {
+    fn layout_child(
+        &mut self,
+        child_id: &str,
+        constraints: BoxConstraints,
+    ) -> flui_rendering::RenderResult<Size> {
         let index = self.index_for(child_id);
         assert!(
             !self.laid_out[index],
             "The custom multi-child layout delegate tried to lay out child id {child_id:?} more than once"
         );
-        let size = self.ctx.layout_child(index, constraints);
+        let size = self.ctx.layout_child(index, constraints)?;
         self.laid_out[index] = true;
-        size
+        Ok(size)
     }
 
     fn position_child(&mut self, child_id: &str, offset: Offset) {

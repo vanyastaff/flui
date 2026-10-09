@@ -41,10 +41,10 @@ impl PipelineOwner<Layout> {
     ///
     /// # Synchronous Child Layout
     ///
-    /// With interior mutability (RwLock on RenderNode), parent's
-    /// `perform_layout` can call `layout_child()` which triggers
-    /// synchronous child layout through the RenderTree. The child is laid
-    /// out immediately and returns its size.
+    /// The pre-acquired subtree lends each render object to its parent-driven
+    /// walk. `layout_child()` lays out the child synchronously and returns its
+    /// result; a rejected measurement propagates before the parent can publish
+    /// dependent geometry.
     pub fn run_layout(&mut self) -> crate::error::RenderResult<()> {
         let _span =
             tracing::debug_span!("layout", dirty_nodes = self.scheduler.layout_queue_len(),)
@@ -80,7 +80,7 @@ impl PipelineOwner<Layout> {
             // protected by LayoutCycleGuard. Constraints come from
             // cached state (post-frame-1) OR the binding-set
             // root_constraints (frame-1 root).
-            for dirty_node in dirty_nodes {
+            for (index, dirty_node) in dirty_nodes.iter().enumerate() {
                 // Layout-poison backstop: a poisoned node that still
                 // landed in the dirty queue (queue pushes do not lift
                 // poison; only the mark_needs_layout walk does) is
@@ -172,6 +172,14 @@ impl PipelineOwner<Layout> {
                         self.layout_poison.note_success(dirty_node.id);
                     }
                     Err(e) => {
+                        if e.is_recoverable_layout_error() {
+                            let _ = self.scheduler.exit_phase(PhaseKind::Layout);
+                            self.scheduler.retain_layout_batch(
+                                &dirty_nodes[index..],
+                                matches!(e, crate::RenderError::TextLayout(_)),
+                            );
+                            return Err(e);
+                        }
                         let kind = LayoutFailureKind::of(&e);
                         match self.layout_poison.note_failure(
                             dirty_node.id,
@@ -377,6 +385,10 @@ impl PipelineOwner<Layout> {
     /// the existing integration tests.
     ///
     /// # Error handling
+    ///
+    /// - **Rejected text input** propagates through typed child layout and
+    ///   query results. It never supplies stand-in geometry or engages layout
+    ///   poison. `run_layout` retains the failed root and unprocessed batch.
     ///
     /// - **Leaf-path panics** in user `perform_layout` → caught by
     ///   `layout_leaf_only`'s `catch_unwind`, returned as

@@ -846,7 +846,9 @@ fn bold_text_changes_the_painted_glyphs() {
                     },
                 ))
                 .with_text_direction(TextDirection::Ltr);
-            reference.layout(&mut flui_painting::TextContext::new(&fonts), 0.0, 800.0);
+            reference
+                .layout(&mut flui_painting::TextContext::new(&fonts), 0.0, 800.0)
+                .expect("the authored weight reference has valid text layout inputs");
             let mut canvas = flui_painting::Canvas::new();
             reference.paint(&mut canvas, flui_foundation::geometry::Offset::ZERO);
             let mut expected_coords = canvas

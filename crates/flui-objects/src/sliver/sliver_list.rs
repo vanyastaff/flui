@@ -213,7 +213,7 @@ impl RenderSliver for RenderSliverList {
     fn perform_layout(
         &mut self,
         ctx: &mut SliverLayoutContext<'_, Variable, Self::ParentData>,
-    ) -> SliverGeometry {
+    ) -> flui_rendering::RenderResult<SliverGeometry> {
         let constraints = *ctx.constraints();
 
         let (geometry, cache_first, cache_last) = walk_virtualizer_band(
@@ -232,13 +232,13 @@ impl RenderSliver for RenderSliverList {
             &mut |logical_i, _dense_count, _box_constraints, ctx| {
                 ctx.request_child_build(logical_i)
             },
-        );
+        )?;
         // Signal the retained band to the element tree via the pending_retain_bands
         // channel.  The binding layer forwards this to `SparseChildren::retain_band`
         // between layout passes of this frame's fixpoint, evicting everything
         // outside the band.
         ctx.emit_retain_band(cache_first, cache_last);
-        geometry
+        Ok(geometry)
     }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {

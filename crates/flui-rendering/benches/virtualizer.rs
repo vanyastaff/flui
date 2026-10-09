@@ -334,8 +334,11 @@ impl RenderBox for BenchBox {
     type Arity = Leaf;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, Self::ParentData>) -> Size {
-        Size::new(ctx.constraints().max_width, self.height)
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Leaf, Self::ParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok(Size::new(ctx.constraints().max_width, self.height))
     }
 
     fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
@@ -358,11 +361,13 @@ impl RenderBox for BenchSliverHost {
     fn perform_layout(
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Variable, Self::ParentData>,
-    ) -> Size {
-        if ctx.child_count() > 0 {
-            let _ = ctx.layout_sliver_child(0, self.constraints);
-        }
-        ctx.constraints().biggest()
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok({
+            if ctx.child_count() > 0 {
+                let _ = ctx.layout_sliver_child(0, self.constraints)?;
+            }
+            ctx.constraints().biggest()
+        })
     }
 
     fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Variable, Self::ParentData>) -> bool {

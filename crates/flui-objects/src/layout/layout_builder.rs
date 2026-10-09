@@ -118,7 +118,10 @@ impl RenderBox for RenderLayoutBuilder {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
         let constraints = *ctx.constraints();
 
         // Publish BEFORE laying the child out. `publish` raises `needs_build`
@@ -133,13 +136,13 @@ impl RenderBox for RenderLayoutBuilder {
             // The child gets our constraints verbatim (NOT loosened), and we
             // read its size back, which is what makes us a non-boundary that
             // resizes with its child.
-            let child_size = ctx.layout_single_child();
+            let child_size = ctx.layout_single_child()?;
             ctx.position_single_child_at_origin();
-            constraints.constrain(child_size)
+            Ok(constraints.constrain(child_size))
         } else {
             // No child yet — the first pass of a freshly mounted builder, before
             // `service_layout_builders` has run the builder even once.
-            constraints.biggest()
+            Ok(constraints.biggest())
         }
     }
 
@@ -156,13 +159,13 @@ impl RenderBox for RenderLayoutBuilder {
         &self,
         _constraints: BoxConstraints,
         _ctx: &mut BoxDryLayoutCtx<'_>,
-    ) -> Size {
+    ) -> flui_rendering::RenderResult<Size> {
         tracing::error!(
             "RenderLayoutBuilder does not support dry layout: computing it would require \
              running the layout callback speculatively, which would mutate the live element \
              and render trees. Returning Size::ZERO."
         );
-        Size::ZERO
+        Ok(Size::ZERO)
     }
 
     // ── Intrinsics: unsupported ──
@@ -171,24 +174,40 @@ impl RenderBox for RenderLayoutBuilder {
     // cannot be answered without building speculatively. This logs and
     // returns 0.0 (see the module docs).
 
-    fn compute_min_intrinsic_width(&self, _height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_min_intrinsic_width(
+        &self,
+        _height: f64,
+        _ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         report_unsupported_intrinsics();
-        0.0
+        Ok(0.0)
     }
 
-    fn compute_max_intrinsic_width(&self, _height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_max_intrinsic_width(
+        &self,
+        _height: f64,
+        _ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         report_unsupported_intrinsics();
-        0.0
+        Ok(0.0)
     }
 
-    fn compute_min_intrinsic_height(&self, _width: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_min_intrinsic_height(
+        &self,
+        _width: f64,
+        _ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         report_unsupported_intrinsics();
-        0.0
+        Ok(0.0)
     }
 
-    fn compute_max_intrinsic_height(&self, _width: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_max_intrinsic_height(
+        &self,
+        _width: f64,
+        _ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         report_unsupported_intrinsics();
-        0.0
+        Ok(0.0)
     }
 
     // paint() uses the default: a layout builder draws nothing of its own.

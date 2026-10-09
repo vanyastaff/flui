@@ -312,7 +312,7 @@ impl TextPainter {
 
     /// Sets the text scale factor.
     pub fn set_text_scale_factor(&mut self, factor: f64) {
-        if (self.text_scale_factor - factor).abs() > f64::EPSILON {
+        if self.text_scale_factor != factor {
             self.text_scale_factor = factor;
             self.mark_needs_layout();
         }

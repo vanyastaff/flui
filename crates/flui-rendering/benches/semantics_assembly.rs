@@ -43,8 +43,11 @@ impl RenderBox for Labeled {
     type Arity = Leaf;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-        ctx.constraints().constrain(Size::new(10.0, 10.0))
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok(ctx.constraints().constrain(Size::new(10.0, 10.0)))
     }
 
     fn describe_semantics_configuration(&self, config: &mut SemanticsConfiguration) {

@@ -1221,6 +1221,7 @@ impl LaidOut {
                 paragraph,
                 flui_rendering::traits::TextBaseline::Alphabetic,
             )
+            .expect("a laid-out RenderParagraph has valid baseline geometry")
             .expect("a laid-out RenderParagraph reports an alphabetic baseline")
         })
     }

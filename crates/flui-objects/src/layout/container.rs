@@ -470,7 +470,10 @@ impl RenderBox for RenderContainer {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
         let constraints = *ctx.constraints();
         let inner_constraints = self.inner_constraints(&constraints);
         let content_constraints = inner_constraints.deflate(self.effective_padding());
@@ -482,7 +485,7 @@ impl RenderBox for RenderContainer {
             // the resulting box (the `Align` level); without one it takes the
             // content constraints directly and the box is exactly its size.
             let (align_offset, content_size) = if let Some(alignment) = self.alignment {
-                let child_size = ctx.layout_child(0, content_constraints.loosen());
+                let child_size = ctx.layout_child(0, content_constraints.loosen())?;
                 let content_size =
                     positioned_box_size(&content_constraints, child_size, None, None);
                 (
@@ -490,14 +493,14 @@ impl RenderBox for RenderContainer {
                     content_size,
                 )
             } else {
-                (Offset::ZERO, ctx.layout_child(0, content_constraints))
+                (Offset::ZERO, ctx.layout_child(0, content_constraints)?)
             };
 
             self.child_offset = self.child_offset_for(align_offset);
             ctx.position_child(0, self.child_offset);
             self.child_baselines = [
-                ctx.child_distance_to_actual_baseline(0, TextBaseline::Alphabetic),
-                ctx.child_distance_to_actual_baseline(0, TextBaseline::Ideographic),
+                ctx.child_distance_to_actual_baseline(0, TextBaseline::Alphabetic)?,
+                ctx.child_distance_to_actual_baseline(0, TextBaseline::Ideographic)?,
             ];
             content_size
         } else {
@@ -509,23 +512,30 @@ impl RenderBox for RenderContainer {
         self.content_size = content_size;
         let (inner_size, outer_size) = self.inflate(&constraints, &inner_constraints, content_size);
         self.inner_size = inner_size;
-        outer_size
+        Ok(outer_size)
     }
 
-    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f64> {
+    fn compute_distance_to_actual_baseline(
+        &self,
+        baseline: TextBaseline,
+    ) -> flui_rendering::RenderResult<Option<f64>> {
         let index = match baseline {
             TextBaseline::Alphabetic => 0,
             TextBaseline::Ideographic => 1,
         };
-        self.child_baselines[index].map(|raw| raw + self.child_offset.dy)
+        Ok(self.child_baselines[index].map(|raw| raw + self.child_offset.dy))
     }
 
-    fn compute_min_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_min_intrinsic_width(
+        &self,
+        height: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         // Tight additional width answers the query; asking the child would
         // hit LayoutBuilder's unsupported-intrinsics path even though the
         // result is discarded (same short-circuit as RenderConstrainedBox).
         if self.additional_width_is_tight() {
-            return self.intrinsic_width(0.0);
+            return Ok(self.intrinsic_width(0.0));
         }
         let content_height =
             (height - self.margin.vertical_total() - self.effective_padding().vertical_total())
@@ -533,14 +543,18 @@ impl RenderBox for RenderContainer {
         let content = if ctx.child_count() == 0 {
             0.0
         } else {
-            ctx.child_min_intrinsic_width(0, content_height)
+            ctx.child_min_intrinsic_width(0, content_height)?
         };
-        self.intrinsic_width(content)
+        Ok(self.intrinsic_width(content))
     }
 
-    fn compute_max_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_max_intrinsic_width(
+        &self,
+        height: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         if self.additional_width_is_tight() {
-            return self.intrinsic_width(0.0);
+            return Ok(self.intrinsic_width(0.0));
         }
         let content_height =
             (height - self.margin.vertical_total() - self.effective_padding().vertical_total())
@@ -548,14 +562,18 @@ impl RenderBox for RenderContainer {
         let content = if ctx.child_count() == 0 {
             0.0
         } else {
-            ctx.child_max_intrinsic_width(0, content_height)
+            ctx.child_max_intrinsic_width(0, content_height)?
         };
-        self.intrinsic_width(content)
+        Ok(self.intrinsic_width(content))
     }
 
-    fn compute_min_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_min_intrinsic_height(
+        &self,
+        width: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         if self.additional_height_is_tight() {
-            return self.intrinsic_height(0.0);
+            return Ok(self.intrinsic_height(0.0));
         }
         let content_width =
             (width - self.margin.horizontal_total() - self.effective_padding().horizontal_total())
@@ -563,14 +581,18 @@ impl RenderBox for RenderContainer {
         let content = if ctx.child_count() == 0 {
             0.0
         } else {
-            ctx.child_min_intrinsic_height(0, content_width)
+            ctx.child_min_intrinsic_height(0, content_width)?
         };
-        self.intrinsic_height(content)
+        Ok(self.intrinsic_height(content))
     }
 
-    fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_max_intrinsic_height(
+        &self,
+        width: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
         if self.additional_height_is_tight() {
-            return self.intrinsic_height(0.0);
+            return Ok(self.intrinsic_height(0.0));
         }
         let content_width =
             (width - self.margin.horizontal_total() - self.effective_padding().horizontal_total())
@@ -578,33 +600,34 @@ impl RenderBox for RenderContainer {
         let content = if ctx.child_count() == 0 {
             0.0
         } else {
-            ctx.child_max_intrinsic_height(0, content_width)
+            ctx.child_max_intrinsic_height(0, content_width)?
         };
-        self.intrinsic_height(content)
+        Ok(self.intrinsic_height(content))
     }
 
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
         ctx: &mut BoxDryLayoutCtx<'_>,
-    ) -> Size {
+    ) -> flui_rendering::RenderResult<Size> {
         let inner_constraints = self.inner_constraints(&constraints);
         let content_constraints = inner_constraints.deflate(self.effective_padding());
 
         let content_size = if ctx.child_count() > 0 {
             match self.alignment {
                 Some(_) => {
-                    let child_size = ctx.child_dry_layout(0, content_constraints.loosen());
+                    let child_size = ctx.child_dry_layout(0, content_constraints.loosen())?;
                     positioned_box_size(&content_constraints, child_size, None, None)
                 }
-                None => ctx.child_dry_layout(0, content_constraints),
+                None => ctx.child_dry_layout(0, content_constraints)?,
             }
         } else {
             Self::childless_content_size(&content_constraints)
         };
 
-        self.inflate(&constraints, &inner_constraints, content_size)
-            .1
+        Ok(self
+            .inflate(&constraints, &inner_constraints, content_size)
+            .1)
     }
 
     fn compute_dry_baseline(
@@ -612,9 +635,9 @@ impl RenderBox for RenderContainer {
         constraints: BoxConstraints,
         baseline: TextBaseline,
         ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f64> {
+    ) -> flui_rendering::RenderResult<Option<f64>> {
         if ctx.child_count() == 0 {
-            return None;
+            return Ok(None);
         }
         let inner_constraints = self.inner_constraints(&constraints);
         let content_constraints = inner_constraints.deflate(self.effective_padding());
@@ -622,7 +645,7 @@ impl RenderBox for RenderContainer {
         let (child_constraints, align_dy) = match self.alignment {
             Some(alignment) => {
                 let loose = content_constraints.loosen();
-                let child_size = ctx.child_dry_layout(0, loose);
+                let child_size = ctx.child_dry_layout(0, loose)?;
                 let content_size =
                     positioned_box_size(&content_constraints, child_size, None, None);
                 let dy = alignment.along_size(content_size - child_size).dy;
@@ -630,8 +653,11 @@ impl RenderBox for RenderContainer {
             }
             None => (content_constraints, 0.0),
         };
-        let child_baseline = ctx.child_dry_baseline(0, child_constraints, baseline)?;
-        Some(child_baseline + self.child_offset_for(Offset::new(0.0, align_dy)).dy)
+        Ok(ctx
+            .child_dry_baseline(0, child_constraints, baseline)?
+            .map(|child_baseline| {
+                child_baseline + self.child_offset_for(Offset::new(0.0, align_dy)).dy
+            }))
     }
 
     fn skip_paint(&self) -> bool {

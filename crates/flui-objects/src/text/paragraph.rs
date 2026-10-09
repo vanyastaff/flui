@@ -20,6 +20,7 @@ use flui_painting::typography::{InlineSpan, TextAlign, TextDirection};
 use flui_painting::{Invalidation, TextBaseline as PainterBaseline, TextPainter};
 
 use flui_rendering::{
+    RenderResult,
     constraints::BoxConstraints,
     context::{BoxDryBaselineCtx, BoxDryLayoutCtx, BoxIntrinsicsCtx, BoxLayoutContext, PaintCx},
     parent_data::BoxParentData,
@@ -238,25 +239,28 @@ impl RenderBox for RenderParagraph {
     type Arity = Leaf;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+    ) -> RenderResult<Size> {
         let constraints = *ctx.constraints();
         let max_width = self.layout_max_width(&constraints);
         self.painter
-            .layout(&mut ctx.text(), constraints.min_width, max_width);
+            .layout(&mut ctx.text(), constraints.min_width, max_width)?;
         // The text's own size, then clamped into the box constraints.
-        constraints.constrain(self.painter.size())
+        Ok(constraints.constrain(self.painter.size()))
     }
 
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
         ctx: &mut BoxDryLayoutCtx<'_>,
-    ) -> Size {
+    ) -> RenderResult<Size> {
         let max_width = self.layout_max_width(&constraints);
         let text_size = self
             .painter
-            .dry_size(&mut ctx.text(), constraints.min_width, max_width);
-        constraints.constrain(text_size)
+            .dry_size(&mut ctx.text(), constraints.min_width, max_width)?;
+        Ok(constraints.constrain(text_size))
     }
 
     fn compute_dry_baseline(
@@ -264,40 +268,59 @@ impl RenderBox for RenderParagraph {
         constraints: BoxConstraints,
         baseline: TextBaseline,
         ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f64> {
+    ) -> RenderResult<Option<f64>> {
         let max_width = self.layout_max_width(&constraints);
         let painter_baseline = match baseline {
             TextBaseline::Alphabetic => PainterBaseline::Alphabetic,
             TextBaseline::Ideographic => PainterBaseline::Ideographic,
         };
-        self.painter.dry_baseline(
+        Ok(self.painter.dry_baseline(
             &mut ctx.text(),
             constraints.min_width,
             max_width,
             painter_baseline,
-        )
+        )?)
     }
 
     // Width intrinsics ignore the height extent (text width does not depend on
     // available height); height intrinsics lay the text out at the given width.
 
-    fn compute_min_intrinsic_width(&self, _height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.painter.min_intrinsic_width(&mut ctx.text())
+    fn compute_min_intrinsic_width(
+        &self,
+        _height: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> RenderResult<f64> {
+        Ok(self.painter.min_intrinsic_width(&mut ctx.text())?)
     }
 
-    fn compute_max_intrinsic_width(&self, _height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.painter.max_intrinsic_width(&mut ctx.text())
+    fn compute_max_intrinsic_width(
+        &self,
+        _height: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> RenderResult<f64> {
+        Ok(self.painter.max_intrinsic_width(&mut ctx.text())?)
     }
 
-    fn compute_min_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.painter.intrinsic_height(&mut ctx.text(), width)
+    fn compute_min_intrinsic_height(
+        &self,
+        width: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> RenderResult<f64> {
+        Ok(self.painter.intrinsic_height(&mut ctx.text(), width)?)
     }
 
-    fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.painter.intrinsic_height(&mut ctx.text(), width)
+    fn compute_max_intrinsic_height(
+        &self,
+        width: f64,
+        ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> RenderResult<f64> {
+        Ok(self.painter.intrinsic_height(&mut ctx.text(), width)?)
     }
 
-    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f64> {
+    fn compute_distance_to_actual_baseline(
+        &self,
+        baseline: TextBaseline,
+    ) -> RenderResult<Option<f64>> {
         // Map the render-side baseline enum onto the painting-side one (two
         // parallel definitions, consolidation tracked). Valid only after
         // `perform_layout` populated the painter's cache; the baseline phase
@@ -307,10 +330,10 @@ impl RenderBox for RenderParagraph {
             TextBaseline::Alphabetic => PainterBaseline::Alphabetic,
             TextBaseline::Ideographic => PainterBaseline::Ideographic,
         };
-        self.painter.has_layout().then(|| {
+        Ok(self.painter.has_layout().then(|| {
             self.painter
                 .compute_distance_to_actual_baseline(painter_baseline)
-        })
+        }))
     }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Leaf>) {

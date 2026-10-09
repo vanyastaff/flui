@@ -103,6 +103,9 @@ pub(super) struct DirtyTracker {
     /// the last, usually empty, pass; ADR-0074 §8 telemetry).
     layout_drained_total: u64,
 
+    /// Rejected layout retains its work until a live layout invalidation.
+    blocked_layout: Option<RenderId>,
+
     /// Shared wake sink — the same `Arc` that `PipelineOwner` holds for its
     /// callback setters. Both clones point at the same
     /// `RwLock<VisualUpdateNotifier>`.
@@ -119,6 +122,7 @@ impl DirtyTracker {
             debug_doing_paint: false,
             debug_doing_semantics: false,
             layout_drained_total: 0,
+            blocked_layout: None,
             notifier,
         }
     }
@@ -236,7 +240,8 @@ impl DirtyTracker {
                 // Always enqueue the boundary for this invalidation, with a
                 // dedup check so multiple marks-in-same-frame don't push
                 // duplicate entries.
-                if self.dirty.needs_layout.push(DirtyNode::new(current, depth)) {
+                let resumed = self.blocked_layout.take().is_some();
+                if self.dirty.needs_layout.push(DirtyNode::new(current, depth)) || resumed {
                     // Wake the platform: an idle event loop must produce a
                     // frame for this invalidation.
                     // Fired only on a NEW boundary entry — an existing entry
@@ -315,12 +320,13 @@ impl DirtyTracker {
     /// is true (mid-phase routing); otherwise into `dirty.needs_layout`.
     /// Fires the wake only on a new entry.
     pub(super) fn add_node_needing_layout(&mut self, node_id: RenderId, depth: usize) {
+        let resumed = self.blocked_layout.take().is_some();
         let target = if self.debug_doing_layout {
             &mut self.mid_layout_marks.needs_layout
         } else {
             &mut self.dirty.needs_layout
         };
-        if !target.push(DirtyNode::new(node_id, depth)) {
+        if !target.push(DirtyNode::new(node_id, depth)) && !resumed {
             return; // already in set — frame already scheduled
         }
         self.notifier.read().fire_need_visual_update();
@@ -606,12 +612,19 @@ impl DirtyTracker {
     pub(super) fn evict(&mut self, removed_ids: &FxHashSet<RenderId>) {
         self.dirty.evict(removed_ids);
         self.mid_layout_marks.evict(removed_ids);
+        if self
+            .blocked_layout
+            .is_some_and(|id| removed_ids.contains(&id))
+        {
+            self.blocked_layout = None;
+        }
     }
 
     /// Clears all dirty work without processing it. Use with caution.
     pub(super) fn clear_all(&mut self) {
         self.dirty.clear();
         self.mid_layout_marks.clear();
+        self.blocked_layout = None;
     }
 
     // =========================================================================
@@ -737,6 +750,24 @@ impl DirtyTracker {
         let batch: Vec<DirtyNode> = self.dirty.needs_layout.drain().collect();
         self.layout_drained_total += batch.len() as u64;
         batch
+    }
+
+    /// Retains an aborted batch. Authored rejection waits for changed input;
+    /// stale measurement remains runnable against input already accepted.
+    pub(super) fn retain_layout_batch(&mut self, batch: &[DirtyNode], wait_for_input: bool) {
+        for &node in batch {
+            self.dirty.needs_layout.push(node);
+        }
+        self.blocked_layout = if wait_for_input {
+            batch.first().map(|node| node.id)
+        } else {
+            None
+        };
+    }
+
+    /// Pending work remains observable, but unchanged rejected input is not runnable.
+    pub(super) fn layout_waits_for_input(&self) -> bool {
+        self.blocked_layout.is_some()
     }
 
     /// Dirty layout entries drained by every `run_layout` so far.

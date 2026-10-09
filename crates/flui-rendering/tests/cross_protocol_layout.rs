@@ -94,10 +94,15 @@ impl RenderBox for BoxWithSliverChild {
     type Arity = Variable;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>) -> Size {
-        let geom = ctx.layout_sliver_child(0, self.sliver_constraints);
-        *self.captured.lock().unwrap() = Some(geom);
-        ctx.constraints().biggest()
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok({
+            let geom = ctx.layout_sliver_child(0, self.sliver_constraints)?;
+            *self.captured.lock().unwrap() = Some(geom);
+            ctx.constraints().biggest()
+        })
     }
 }
 

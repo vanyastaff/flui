@@ -56,7 +56,9 @@ pub(crate) fn a_truncated_paragraph_paints_exactly_the_lines_it_measured() {
         .with_text_direction(TextDirection::Ltr)
         .with_max_lines(Some(1))
         .with_ellipsis(Some("…".to_string()));
-    painter.layout(&mut text_cx(), 0.0, 80.0);
+    painter
+        .layout(&mut text_cx(), 0.0, 80.0)
+        .expect("valid fixture lays out");
     assert!(painter.did_exceed_max_lines());
 
     let mut canvas = Canvas::new();
@@ -139,7 +141,9 @@ pub(crate) fn root_recolor_keeps_the_shaped_buffer_and_span_recolor_reshapes_onc
     let mut painter = TextPainter::new()
         .with_text(styled(red, blue))
         .with_text_direction(TextDirection::Ltr);
-    painter.layout(&mut text_cx(), 0.0, f64::INFINITY);
+    painter
+        .layout(&mut text_cx(), 0.0, f64::INFINITY)
+        .expect("valid fixture lays out");
     let (first, first_color) = recorded(&painter);
     assert_eq!(first_color, red);
 
@@ -161,7 +165,9 @@ pub(crate) fn root_recolor_keeps_the_shaped_buffer_and_span_recolor_reshapes_onc
         painter.set_text(Some(styled(green, red).into())),
         Invalidation::Layout
     );
-    painter.layout(&mut text_cx(), 0.0, f64::INFINITY);
+    painter
+        .layout(&mut text_cx(), 0.0, f64::INFINITY)
+        .expect("valid fixture lays out");
     let (third, _) = recorded(&painter);
     assert!(
         !std::sync::Arc::ptr_eq(&second, &third),

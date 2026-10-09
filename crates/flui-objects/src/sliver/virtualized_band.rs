@@ -238,7 +238,7 @@ pub(super) fn walk_virtualizer_band<'ctx, G>(
     constraints: &SliverConstraints,
     ctx: &mut SliverLayoutContext<'ctx, Variable, SliverMultiBoxAdaptorParentData>,
     on_absent: &mut G,
-) -> (SliverGeometry, usize, usize)
+) -> flui_rendering::RenderResult<(SliverGeometry, usize, usize)>
 where
     G: FnMut(
         usize, // logical_i
@@ -312,7 +312,7 @@ where
 
         if let Some(&slot) = logical_to_slot.get(&logical_i) {
             // Present: lay out and record the real extent.
-            let size = ctx.layout_box_child(slot, box_constraints);
+            let size = ctx.layout_box_child(slot, box_constraints)?;
             let extent = main_axis_extent(size, constraints.axis_direction);
             let correction = virtualizer.set_measured(logical_i, extent, anchor);
             accumulate_anchor_correction(pending_correction, correction);
@@ -407,7 +407,7 @@ where
         let newly_covered = (next_first..covered_first).chain(covered_last..next_last);
         for logical_i in newly_covered {
             if let Some(&slot) = logical_to_slot.get(&logical_i) {
-                let size = ctx.layout_box_child(slot, box_constraints);
+                let size = ctx.layout_box_child(slot, box_constraints)?;
                 let extent = main_axis_extent(size, constraints.axis_direction);
                 let correction = virtualizer.set_measured(logical_i, extent, anchor);
                 accumulate_anchor_correction(pending_correction, correction);
@@ -522,7 +522,7 @@ where
 
     // Return the geometry and the retained band so the caller can forward it
     // to `ctx.emit_retain_band`.
-    (geometry, cache_first, cache_last)
+    Ok((geometry, cache_first, cache_last))
 }
 
 // ============================================================================

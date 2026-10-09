@@ -108,7 +108,10 @@ impl RenderBox for RenderOffstage {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
         if self.offstage {
             // The child gets the **real** constraints, so it reaches its true
             // geometry. The box itself is sized by the parent to
@@ -117,23 +120,23 @@ impl RenderBox for RenderOffstage {
             let constraints = *ctx.constraints();
             if ctx.child_count() > 0 {
                 self.has_child = true;
-                let _ = ctx.layout_child(0, constraints);
+                ctx.layout_child(0, constraints)?;
                 ctx.position_child(0, Offset::ZERO);
             } else {
                 self.has_child = false;
             }
-            constraints.smallest()
+            Ok(constraints.smallest())
         } else {
             // Transparent proxy.
             let constraints = *ctx.constraints();
             if ctx.child_count() > 0 {
                 self.has_child = true;
-                let child_size = ctx.layout_child(0, constraints);
+                let child_size = ctx.layout_child(0, constraints)?;
                 ctx.position_child(0, Offset::ZERO);
-                child_size
+                Ok(child_size)
             } else {
                 self.has_child = false;
-                constraints.smallest()
+                Ok(constraints.smallest())
             }
         }
     }
@@ -142,9 +145,9 @@ impl RenderBox for RenderOffstage {
         &self,
         height: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
+    ) -> flui_rendering::RenderResult<f64> {
         if self.offstage {
-            0.0
+            Ok(0.0)
         } else {
             forward_min_intrinsic_width(ctx, height)
         }
@@ -154,9 +157,9 @@ impl RenderBox for RenderOffstage {
         &self,
         height: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
+    ) -> flui_rendering::RenderResult<f64> {
         if self.offstage {
-            0.0
+            Ok(0.0)
         } else {
             forward_max_intrinsic_width(ctx, height)
         }
@@ -166,9 +169,9 @@ impl RenderBox for RenderOffstage {
         &self,
         width: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
+    ) -> flui_rendering::RenderResult<f64> {
         if self.offstage {
-            0.0
+            Ok(0.0)
         } else {
             forward_min_intrinsic_height(ctx, width)
         }
@@ -178,9 +181,9 @@ impl RenderBox for RenderOffstage {
         &self,
         width: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
+    ) -> flui_rendering::RenderResult<f64> {
         if self.offstage {
-            0.0
+            Ok(0.0)
         } else {
             forward_max_intrinsic_height(ctx, width)
         }
@@ -190,10 +193,10 @@ impl RenderBox for RenderOffstage {
         &self,
         constraints: BoxConstraints,
         ctx: &mut flui_rendering::context::BoxDryLayoutCtx<'_>,
-    ) -> Size {
+    ) -> flui_rendering::RenderResult<Size> {
         if self.offstage {
             // Same size `perform_layout` commits while offstage.
-            constraints.smallest()
+            Ok(constraints.smallest())
         } else {
             forward_dry_layout(constraints, ctx)
         }
@@ -204,9 +207,9 @@ impl RenderBox for RenderOffstage {
         constraints: BoxConstraints,
         baseline: TextBaseline,
         ctx: &mut flui_rendering::context::BoxDryBaselineCtx<'_>,
-    ) -> Option<f64> {
+    ) -> flui_rendering::RenderResult<Option<f64>> {
         if self.offstage {
-            None
+            Ok(None)
         } else {
             forward_dry_baseline(constraints, baseline, ctx)
         }

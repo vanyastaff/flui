@@ -428,7 +428,8 @@ fn source_paragraph() -> Arc<flui_painting::ShapedParagraph> {
         &mut flui_painting::TextContext::new(&flui_painting::FontCollection::new()),
         0.0,
         64.0,
-    );
+    )
+    .expect("blur fixture has valid text geometry");
     let mut canvas = Canvas::new();
     text.paint(&mut canvas, Offset::ZERO);
     canvas

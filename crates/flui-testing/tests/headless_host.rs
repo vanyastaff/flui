@@ -32,8 +32,11 @@ impl RenderBox for TripwireBox {
     type Arity = Leaf;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-        Size::new(40.0, 24.0)
+    fn perform_layout(
+        &mut self,
+        _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok(Size::new(40.0, 24.0))
     }
 
     fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {

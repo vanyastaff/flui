@@ -52,13 +52,14 @@ impl RenderSliver for RenderSliverToBoxAdapter {
     fn perform_layout(
         &mut self,
         ctx: &mut SliverLayoutContext<'_, Single, Self::ParentData>,
-    ) -> SliverGeometry {
+    ) -> flui_rendering::RenderResult<SliverGeometry> {
         let constraints = *ctx.constraints();
         if ctx.child_count() == 0 {
-            return SliverGeometry::ZERO;
+            return Ok(SliverGeometry::ZERO);
         }
 
-        let child_size = ctx.layout_box_child(0, constraints.unbounded_main_axis_box_constraints());
+        let child_size =
+            ctx.layout_box_child(0, constraints.unbounded_main_axis_box_constraints())?;
         let child_extent = match constraints.axis_direction {
             LeftToRight | RightToLeft => child_size.width,
             TopToBottom | BottomToTop => child_size.height,
@@ -80,7 +81,7 @@ impl RenderSliver for RenderSliverToBoxAdapter {
         };
         let child_paint_offset = child_paint_offset(&constraints, &geometry, 0.0, child_extent);
         ctx.position_child(0, child_paint_offset);
-        geometry
+        Ok(geometry)
     }
 
     fn child_main_axis_position(

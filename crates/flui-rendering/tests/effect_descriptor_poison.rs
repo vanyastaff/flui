@@ -46,13 +46,15 @@ impl flui_rendering::traits::RenderBox for PoisonedDescriptor {
             flui_foundation::Single,
             flui_rendering::parent_data::BoxParentData,
         >,
-    ) -> Size {
-        let constraints = *ctx.constraints();
-        if ctx.child_count() > 0 {
-            ctx.layout_child(0, constraints)
-        } else {
-            constraints.smallest()
-        }
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok({
+            let constraints = *ctx.constraints();
+            if ctx.child_count() > 0 {
+                ctx.layout_child(0, constraints)?
+            } else {
+                constraints.smallest()
+            }
+        })
     }
 
     flui_rendering::forward_single_child_box_queries!();

@@ -273,6 +273,7 @@ fn the_overlay_shapes_through_the_ui_runtime_text_context() {
                 max_lines: None,
                 ellipsis: None,
             })
+            .expect("the overlay reference uses valid text layout inputs")
             .to_shaped(None);
         shaped
             .runs()

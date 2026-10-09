@@ -114,7 +114,7 @@ impl RenderSliver for RenderSliverFillViewport {
     fn perform_layout(
         &mut self,
         ctx: &mut SliverLayoutContext<'_, Variable, Self::ParentData>,
-    ) -> SliverGeometry {
+    ) -> flui_rendering::RenderResult<SliverGeometry> {
         let constraints = *ctx.constraints();
         self.child_count = ctx.child_count();
         let item_extent = self.item_extent(&constraints);
@@ -123,7 +123,7 @@ impl RenderSliver for RenderSliverFillViewport {
             ctx.layout_box_child(
                 index,
                 constraints.as_box_constraints(item_extent, item_extent, None),
-            );
+            )?;
         }
 
         let scroll_extent = item_extent * self.child_count as f64;
@@ -150,7 +150,7 @@ impl RenderSliver for RenderSliverFillViewport {
             );
         }
 
-        geometry
+        Ok(geometry)
     }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {

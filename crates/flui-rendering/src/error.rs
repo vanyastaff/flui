@@ -109,6 +109,16 @@ pub enum RenderError {
         message: Box<str>,
     },
 
+    /// Text preparation or shaping refused the current layout request.
+    /// This is an ordinary input/geometry error, not a caught render panic.
+    #[error(transparent)]
+    TextLayout(#[from] flui_painting::TextLayoutError),
+
+    /// A scroll input changed while its layout proposal was being measured.
+    /// Retry against the accepted input; the proposal has not been published.
+    #[error("viewport offset changed during layout")]
+    ViewportOffsetChanged,
+
     /// Layout performed during paint phase.
     ///
     /// Reserved variant: no production construction site exists yet. The
@@ -412,6 +422,11 @@ pub enum RenderError {
 pub type RenderResult<T> = Result<T, RenderError>;
 
 impl RenderError {
+    /// An ordinary layout refusal must propagate without a poisoned stand-in.
+    pub(crate) fn is_recoverable_layout_error(&self) -> bool {
+        matches!(self, Self::TextLayout(_) | Self::ViewportOffsetChanged)
+    }
+
     /// Creates an invalid constraints error with a message.
     ///
     /// The message is stored as `Box<str>` (heap allocation shrinks from

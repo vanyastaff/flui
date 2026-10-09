@@ -282,10 +282,9 @@ impl std::fmt::Debug for UiRuntime {
 
 /// Outcome of one complete presentation segment, from build through
 /// finalization, pipeline work, post-pipeline tail, and scene construction.
-/// `Idle` and `Errored` both produce no scene to submit, but only `Errored`
-/// forces a retry rather than being treated as a clean segment (see
-/// [`UiRuntime::render_frame`]'s retry gate). Moved here from the retired
-/// `AppBinding`.
+/// `Idle` and `Errored` produce no scene to submit. `Errored` carries the
+/// retry decision: rejected input waits for invalidation, while a transient
+/// failure requests another frame.
 #[derive(Debug)]
 pub(crate) enum FramePaintOutcome {
     /// A fresh layer tree was painted and turned into a `Scene`. Holds
@@ -301,8 +300,11 @@ pub(crate) enum FramePaintOutcome {
     Idle,
     /// The complete segment failed: a structured pipeline error, or a panic
     /// escaped from Build, Finalize, Pipeline, Tail, or Scene and was caught by
-    /// the presentation boundary. The frame was dropped and must be retried.
-    Errored,
+    /// the presentation boundary. The frame was dropped.
+    Errored {
+        /// Transient failures retry automatically; rejected input waits for invalidation.
+        retry: bool,
+    },
 }
 
 /// Whether [`UiRuntime::record_submit_telemetry`] drains a presentation's

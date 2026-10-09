@@ -110,7 +110,10 @@ impl RenderBox for RenderPadding {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
         let constraints = *ctx.constraints();
 
         let size = if ctx.child_count() > 0 {
@@ -118,7 +121,7 @@ impl RenderBox for RenderPadding {
 
             // Deflate constraints for child
             let child_constraints = self.deflate_constraints(&constraints);
-            let child_size = ctx.layout_child(0, child_constraints);
+            let child_size = ctx.layout_child(0, child_constraints)?;
 
             // Position child with top-left padding offset
             self.child_offset = Offset::new(self.padding.left, self.padding.top);
@@ -139,74 +142,74 @@ impl RenderBox for RenderPadding {
         };
 
         // Constrain to parent's constraints
-        constraints.constrain(size)
+        Ok(constraints.constrain(size))
     }
 
     fn compute_min_intrinsic_width(
         &self,
         height: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
+    ) -> flui_rendering::RenderResult<f64> {
         let deflated_height = (height - self.padding.vertical_total()).max(0.0);
         if ctx.child_count() == 0 {
-            return self.padding.horizontal_total();
+            return Ok(self.padding.horizontal_total());
         }
-        ctx.child_min_intrinsic_width(0, deflated_height) + self.padding.horizontal_total()
+        Ok(ctx.child_min_intrinsic_width(0, deflated_height)? + self.padding.horizontal_total())
     }
 
     fn compute_max_intrinsic_width(
         &self,
         height: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
+    ) -> flui_rendering::RenderResult<f64> {
         let deflated_height = (height - self.padding.vertical_total()).max(0.0);
         if ctx.child_count() == 0 {
-            return self.padding.horizontal_total();
+            return Ok(self.padding.horizontal_total());
         }
-        ctx.child_max_intrinsic_width(0, deflated_height) + self.padding.horizontal_total()
+        Ok(ctx.child_max_intrinsic_width(0, deflated_height)? + self.padding.horizontal_total())
     }
 
     fn compute_min_intrinsic_height(
         &self,
         width: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
+    ) -> flui_rendering::RenderResult<f64> {
         let deflated_width = (width - self.padding.horizontal_total()).max(0.0);
         if ctx.child_count() == 0 {
-            return self.padding.vertical_total();
+            return Ok(self.padding.vertical_total());
         }
-        ctx.child_min_intrinsic_height(0, deflated_width) + self.padding.vertical_total()
+        Ok(ctx.child_min_intrinsic_height(0, deflated_width)? + self.padding.vertical_total())
     }
 
     fn compute_max_intrinsic_height(
         &self,
         width: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
+    ) -> flui_rendering::RenderResult<f64> {
         let deflated_width = (width - self.padding.horizontal_total()).max(0.0);
         if ctx.child_count() == 0 {
-            return self.padding.vertical_total();
+            return Ok(self.padding.vertical_total());
         }
-        ctx.child_max_intrinsic_height(0, deflated_width) + self.padding.vertical_total()
+        Ok(ctx.child_max_intrinsic_height(0, deflated_width)? + self.padding.vertical_total())
     }
 
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
         ctx: &mut flui_rendering::context::BoxDryLayoutCtx<'_>,
-    ) -> Size {
+    ) -> flui_rendering::RenderResult<Size> {
         if ctx.child_count() == 0 {
-            return constraints.constrain(Size::new(
+            return Ok(constraints.constrain(Size::new(
                 self.padding.horizontal_total(),
                 self.padding.vertical_total(),
-            ));
+            )));
         }
         let child_constraints = self.deflate_constraints(&constraints);
-        let child_size = ctx.child_dry_layout(0, child_constraints);
-        constraints.constrain(Size::new(
+        let child_size = ctx.child_dry_layout(0, child_constraints)?;
+        Ok(constraints.constrain(Size::new(
             child_size.width + self.padding.horizontal_total(),
             child_size.height + self.padding.vertical_total(),
-        ))
+        )))
     }
 
     fn compute_dry_baseline(
@@ -214,13 +217,14 @@ impl RenderBox for RenderPadding {
         constraints: BoxConstraints,
         baseline: flui_rendering::traits::TextBaseline,
         ctx: &mut flui_rendering::context::BoxDryBaselineCtx<'_>,
-    ) -> Option<f64> {
+    ) -> flui_rendering::RenderResult<Option<f64>> {
         if ctx.child_count() == 0 {
-            return None;
+            return Ok(None);
         }
         let child_constraints = self.deflate_constraints(&constraints);
-        let child_baseline = ctx.child_dry_baseline(0, child_constraints, baseline)?;
-        Some(child_baseline + self.padding.top)
+        Ok(ctx
+            .child_dry_baseline(0, child_constraints, baseline)?
+            .map(|child_baseline| child_baseline + self.padding.top))
     }
 
     // paint() uses default no-op - Padding just positions children

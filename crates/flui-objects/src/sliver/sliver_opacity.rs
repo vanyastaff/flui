@@ -236,14 +236,14 @@ impl RenderSliver for RenderSliverOpacity {
     fn perform_layout(
         &mut self,
         ctx: &mut SliverLayoutContext<'_, Single, SliverPhysicalParentData>,
-    ) -> SliverGeometry {
+    ) -> flui_rendering::RenderResult<SliverGeometry> {
         let constraints = *ctx.constraints();
 
         if ctx.child_count() > 0 {
             // Transparent passthrough — opacity does not affect layout.
             ctx.layout_child(0, constraints)
         } else {
-            SliverGeometry::ZERO
+            Ok(SliverGeometry::ZERO)
         }
     }
 

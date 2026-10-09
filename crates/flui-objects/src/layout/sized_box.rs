@@ -119,7 +119,10 @@ impl RenderBox for RenderSizedBox {
     type Arity = Leaf;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
         let constraints = ctx.constraints();
 
         // Use fixed dimension or constrain to max
@@ -131,47 +134,47 @@ impl RenderBox for RenderSizedBox {
             h.clamp(constraints.min_height, constraints.max_height)
         });
 
-        Size::new(width, height)
+        Ok(Size::new(width, height))
     }
 
     fn compute_min_intrinsic_width(
         &self,
         _height: f64,
         _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
-        self.width.unwrap_or(0.0)
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(self.width.unwrap_or(0.0))
     }
 
     fn compute_max_intrinsic_width(
         &self,
         _height: f64,
         _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
-        self.width.unwrap_or(0.0)
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(self.width.unwrap_or(0.0))
     }
 
     fn compute_min_intrinsic_height(
         &self,
         _width: f64,
         _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
-        self.height.unwrap_or(0.0)
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(self.height.unwrap_or(0.0))
     }
 
     fn compute_max_intrinsic_height(
         &self,
         _width: f64,
         _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f64 {
-        self.height.unwrap_or(0.0)
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(self.height.unwrap_or(0.0))
     }
 
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
         _ctx: &mut flui_rendering::context::BoxDryLayoutCtx<'_>,
-    ) -> Size {
-        self.resolved_size(&constraints)
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok(self.resolved_size(&constraints))
     }
 
     // paint() uses default no-op - SizedBox only affects layout

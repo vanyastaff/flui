@@ -48,12 +48,15 @@ impl RenderBox for RenderIgnoreBaseline {
     type Arity = Single;
     type ParentData = BoxParentData;
 
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
         let constraints = *ctx.constraints();
         if ctx.child_count() > 0 {
             ctx.layout_child(0, constraints)
         } else {
-            constraints.smallest()
+            Ok(constraints.smallest())
         }
     }
 
@@ -70,8 +73,11 @@ impl RenderBox for RenderIgnoreBaseline {
 
     /// Always `None` — this is the whole point of the type. The child's own
     /// baseline is deliberately not forwarded.
-    fn compute_distance_to_actual_baseline(&self, _baseline: TextBaseline) -> Option<f64> {
-        None
+    fn compute_distance_to_actual_baseline(
+        &self,
+        _baseline: TextBaseline,
+    ) -> flui_rendering::RenderResult<Option<f64>> {
+        Ok(None)
     }
 
     /// Always `None`, for the same reason as the live query — a dry pass that
@@ -82,8 +88,8 @@ impl RenderBox for RenderIgnoreBaseline {
         _constraints: BoxConstraints,
         _baseline: TextBaseline,
         _ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f64> {
-        None
+    ) -> flui_rendering::RenderResult<Option<f64>> {
+        Ok(None)
     }
 
     flui_rendering::forward_single_child_intrinsics!();
@@ -92,7 +98,7 @@ impl RenderBox for RenderIgnoreBaseline {
         &self,
         constraints: BoxConstraints,
         ctx: &mut flui_rendering::context::BoxDryLayoutCtx<'_>,
-    ) -> Size {
+    ) -> flui_rendering::RenderResult<Size> {
         flui_rendering::context::proxy_queries::forward_dry_layout(constraints, ctx)
     }
 

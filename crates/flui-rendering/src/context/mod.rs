@@ -26,10 +26,10 @@
 //!     type Arity = Single;
 //!     type ParentData = BoxParentData;
 //!
-//!     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<Single, BoxParentData>) -> Size {
-//!         let child_size = ctx.layout_single_child_loose();
+//!     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<Single, BoxParentData>) -> flui_rendering::RenderResult<Size> {
+//!         let child_size = ctx.layout_single_child_loose()?;
 //!         ctx.position_single_child_at_origin();
-//!         ctx.constrain(child_size)
+//!         Ok(ctx.constrain(child_size))
 //!     }
 //!
 //!     fn paint(&self, ctx: &mut PaintCx<'_, Single>) {

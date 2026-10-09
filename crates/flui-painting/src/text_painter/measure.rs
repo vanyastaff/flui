@@ -7,7 +7,7 @@ use crate::typography::{InlineSpan, TextDirection, TextStyle};
 use flui_foundation::geometry::Size;
 
 use super::{DEFAULT_FONT_SIZE, LayoutMetrics, TextBaseline, TextLayoutCache, TextPainter};
-use crate::text_layout::{FontsKey, TextContext, TextLayoutResult};
+use crate::text_layout::{FontsKey, TextContext, TextLayoutError, TextLayoutResult};
 
 impl TextPainter {
     /// What a cached layout was taken against: `text_cx`'s collection and
@@ -32,20 +32,20 @@ impl TextPainter {
     /// collection and generation are unchanged; a context over another
     /// collection, or a face registered since, shapes again.
     ///
-    /// # Panics
-    ///
-    /// Panics if `text` or `text_direction` is not set.
-    #[expect(clippy::expect_used)] // Documented precondition: text and text_direction must be set
-    pub fn layout(&mut self, text_cx: &mut TextContext, min_width: f64, max_width: f64) {
-        // NaN is forbidden, but `+INFINITY` is the documented "no max
-        // width" sentinel: the shaping below omits the wrap cap for it.
-        // Do not tighten this to `is_finite()`.
-        assert!(
-            !max_width.is_nan() && !min_width.is_nan(),
-            "Width constraints must not be NaN"
-        );
+    /// A failed layout discards the current cache; it cannot publish geometry
+    /// from a previous request as the result of this one.
+    pub fn layout(
+        &mut self,
+        text_cx: &mut TextContext,
+        min_width: f64,
+        max_width: f64,
+    ) -> Result<(), TextLayoutError> {
         text_cx.note_lent();
 
+        if let Err(error) = shaping_widths(min_width, max_width) {
+            self.layout_cache = None;
+            return Err(error);
+        }
         let fonts = Self::font_key(text_cx);
         if let Some(cache) = self
             .layout_cache
@@ -54,28 +54,27 @@ impl TextPainter {
             && (cache.min_width == min_width || (cache.min_width - min_width).abs() < f64::EPSILON)
             && (cache.max_width == max_width || (cache.max_width - max_width).abs() < f64::EPSILON)
         {
-            return;
+            return Ok(());
         }
 
-        let text = self
-            .text
-            .as_ref()
-            .expect("TextPainter.text must be set before layout");
+        self.layout_cache = None;
+
+        let text = self.text.as_ref().ok_or(TextLayoutError::TextNotSet)?;
         let _text_direction = self
             .text_direction
-            .expect("TextPainter.text_direction must be set before layout");
+            .ok_or(TextLayoutError::TextDirectionNotSet)?;
 
         // One layout measures and paints: the paragraph the display list
         // carries is built from the layout the metrics are read from.
         let layout =
-            self.parley_paragraph(text_cx, text, min_width, max_width, LineOverflow::Enforce);
+            self.parley_paragraph(text_cx, text, min_width, max_width, LineOverflow::Enforce)?;
         let result = layout.metrics();
         let metrics = Self::metrics_from(&result, min_width);
         let root = text.style().and_then(crate::text_layout::paint_color);
         let paragraph = Arc::new(layout.to_shaped(root));
 
         // Precompute intrinsic widths (shape once, query many).
-        let (min_intrinsic_width, max_intrinsic_width) = self.intrinsic_widths(text_cx, text);
+        let (min_intrinsic_width, max_intrinsic_width) = self.intrinsic_widths(text_cx, text)?;
 
         self.layout_cache = Some(TextLayoutCache {
             fonts,
@@ -90,6 +89,7 @@ impl TextPainter {
             min_intrinsic_width,
             max_intrinsic_width,
         });
+        Ok(())
     }
 
     /// The colour each shaped run carries, relative to the root. Baked into
@@ -109,11 +109,18 @@ impl TextPainter {
     }
 
     /// The paragraph's font size with the text scale factor applied.
-    fn scaled_font_size(&self, text: &InlineSpan) -> f64 {
-        text.style()
+    fn scaled_font_size(&self, text: &InlineSpan) -> Result<f32, TextLayoutError> {
+        if !self.text_scale_factor.is_finite() || self.text_scale_factor <= 0.0 {
+            return Err(TextLayoutError::InvalidScale {
+                factor: self.text_scale_factor,
+            });
+        }
+        let size = text
+            .style()
             .and_then(|s| s.font_size)
             .unwrap_or(DEFAULT_FONT_SIZE)
-            * self.text_scale_factor
+            * self.text_scale_factor;
+        crate::text_layout::error::font_size(size)
     }
 
     /// Shapes `text` on Parley through `text_cx` at `max_width`, with the
@@ -128,10 +135,6 @@ impl TextPainter {
     /// shapes without line-count truncation so a zero-width wrap cannot erase
     /// visible content under `max_lines` (#1085). Callers that need the
     /// ellipsis as a width floor apply [`Self::ellipsis_width_floor`] on top.
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "f64 layout values narrow to Parley's f32 layout space"
-    )]
     fn parley_paragraph(
         &self,
         text_cx: &mut TextContext,
@@ -139,7 +142,9 @@ impl TextPainter {
         min_width: f64,
         max_width: f64,
         line_overflow: LineOverflow,
-    ) -> crate::parley_text::ParagraphLayout {
+    ) -> Result<crate::parley_text::ParagraphLayout, TextLayoutError> {
+        let font_size = self.scaled_font_size(text)?;
+        let (min_width, max_width) = shaping_widths(min_width, max_width)?;
         let spans = collect_styled_spans(text, self.text_scale_factor);
         let root = text
             .style()
@@ -152,9 +157,9 @@ impl TextPainter {
             font_weight_adjustment: self.font_weight_adjustment,
             spans: &spans,
             default_style: root.as_ref(),
-            font_size: self.scaled_font_size(text) as f32,
-            max_width: max_width.is_finite().then_some(max_width as f32),
-            min_width: min_width as f32,
+            font_size,
+            max_width,
+            min_width,
             text_align: self.text_align,
             line_height: None,
             direction: self.text_direction.unwrap_or(TextDirection::Ltr),
@@ -170,9 +175,10 @@ impl TextPainter {
         text: &InlineSpan,
         max_width: f64,
         line_overflow: LineOverflow,
-    ) -> TextLayoutResult {
-        self.parley_paragraph(text_cx, text, 0.0, max_width, line_overflow)
-            .metrics()
+    ) -> Result<TextLayoutResult, TextLayoutError> {
+        Ok(self
+            .parley_paragraph(text_cx, text, 0.0, max_width, line_overflow)?
+            .metrics())
     }
 
     /// The box metrics a shaped result gives under the width constraints.
@@ -191,8 +197,12 @@ impl TextPainter {
     /// single-line width, both without `max_lines` truncation (#1085) and
     /// both floored at the ellipsis width when truncation can leave only the
     /// ellipsis.
-    fn intrinsic_widths(&self, text_cx: &mut TextContext, text: &InlineSpan) -> (f64, f64) {
-        let floor = self.ellipsis_width_floor(text_cx, text);
+    fn intrinsic_widths(
+        &self,
+        text_cx: &mut TextContext,
+        text: &InlineSpan,
+    ) -> Result<(f64, f64), TextLayoutError> {
+        let floor = self.ellipsis_width_floor(text_cx, text)?;
         let (min, max) = self
             .parley_paragraph(
                 text_cx,
@@ -200,9 +210,9 @@ impl TextPainter {
                 0.0,
                 f64::INFINITY,
                 LineOverflow::IgnoreForWidthIntrinsic,
-            )
+            )?
             .content_widths();
-        (min.max(floor), max.max(floor))
+        Ok((min.max(floor), max.max(floor)))
     }
 
     /// Shaped width of the configured ellipsis when `max_lines` can truncate.
@@ -211,19 +221,19 @@ impl TextPainter {
     /// prefix is exhausted, so width intrinsics must not report a value
     /// narrower than that ellipsis even when line-count truncation is skipped
     /// for the main probe (#1085 follow-up).
-    fn ellipsis_width_floor(&self, text_cx: &mut TextContext, text: &InlineSpan) -> f64 {
+    fn ellipsis_width_floor(
+        &self,
+        text_cx: &mut TextContext,
+        text: &InlineSpan,
+    ) -> Result<f64, TextLayoutError> {
         let Some(ellipsis) = self.ellipsis.as_deref().filter(|e| !e.is_empty()) else {
-            return 0.0;
+            return Ok(0.0);
         };
         if self.max_lines.is_none() {
-            return 0.0;
+            return Ok(0.0);
         }
 
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "f64 layout values narrow to Parley's f32 layout space"
-        )]
-        let font_size = self.scaled_font_size(text) as f32;
+        let font_size = self.scaled_font_size(text)?;
         // The one paragraph truncation keeps whatever the width is the
         // ellipsis alone, and `ellipsize` styles it as the first run: shaped
         // the same way, over the root as the paragraph default, the floor is
@@ -237,7 +247,7 @@ impl TextPainter {
             .style()
             .map(|style| effective_style(style, self.text_scale_factor));
         let spans = vec![(ellipsis.to_string(), first)];
-        text_cx
+        Ok(text_cx
             .shape(&crate::parley_text::ParagraphSpec {
                 font_weight_adjustment: self.font_weight_adjustment,
                 spans: &spans,
@@ -250,9 +260,9 @@ impl TextPainter {
                 direction: self.text_direction.unwrap_or(TextDirection::Ltr),
                 max_lines: None,
                 ellipsis: None,
-            })
+            })?
             .metrics()
-            .width
+            .width)
     }
 
     // ===== Metrics =====
@@ -336,16 +346,15 @@ impl TextPainter {
     /// Returns the precomputed value from the layout cache when it was
     /// measured against `text_cx`'s fonts (O(1) after `layout()`).
     /// Otherwise measures through `text_cx`.
-    #[must_use]
-    pub fn max_intrinsic_width(&self, text_cx: &mut TextContext) -> f64 {
+    pub fn max_intrinsic_width(&self, text_cx: &mut TextContext) -> Result<f64, TextLayoutError> {
         text_cx.note_lent();
         if let Some(cache) = self.cache_for(text_cx) {
-            return cache.max_intrinsic_width;
+            return Ok(cache.max_intrinsic_width);
         }
         let Some(text) = self.text.as_ref() else {
-            return 0.0;
+            return Ok(0.0);
         };
-        self.intrinsic_widths(text_cx, text).1
+        Ok(self.intrinsic_widths(text_cx, text)?.1)
     }
 
     /// The narrowest width the text can take without overflowing — the
@@ -361,63 +370,83 @@ impl TextPainter {
     /// Returns the precomputed value from the layout cache when it was
     /// measured against `text_cx`'s fonts (O(1) after `layout()`).
     /// Otherwise measures through `text_cx`.
-    #[must_use]
-    pub fn min_intrinsic_width(&self, text_cx: &mut TextContext) -> f64 {
+    pub fn min_intrinsic_width(&self, text_cx: &mut TextContext) -> Result<f64, TextLayoutError> {
         text_cx.note_lent();
         if let Some(cache) = self.cache_for(text_cx) {
-            return cache.min_intrinsic_width;
+            return Ok(cache.min_intrinsic_width);
         }
         let Some(text) = self.text.as_ref() else {
-            return 0.0;
+            return Ok(0.0);
         };
-        self.intrinsic_widths(text_cx, text).0
+        Ok(self.intrinsic_widths(text_cx, text)?.0)
     }
 
     /// The height the text takes when laid out at `width` — both the min
     /// and max intrinsic height for a paragraph.
-    #[must_use]
-    pub fn intrinsic_height(&self, text_cx: &mut TextContext, width: f64) -> f64 {
+    pub fn intrinsic_height(
+        &self,
+        text_cx: &mut TextContext,
+        width: f64,
+    ) -> Result<f64, TextLayoutError> {
         text_cx.note_lent();
         let Some(text) = self.text.as_ref() else {
-            return 0.0;
+            return Ok(0.0);
         };
-        self.measure(text_cx, text, width, LineOverflow::Enforce)
-            .height
+        Ok(self
+            .measure(text_cx, text, width, LineOverflow::Enforce)?
+            .height)
     }
 
     /// The size the text would take under the given width constraints,
     /// without committing to `layout_cache` (a dry layout). Returns `Size::ZERO` when no text
     /// is set.
-    #[must_use]
-    pub fn dry_size(&self, text_cx: &mut TextContext, min_width: f64, max_width: f64) -> Size<f64> {
+    pub fn dry_size(
+        &self,
+        text_cx: &mut TextContext,
+        min_width: f64,
+        max_width: f64,
+    ) -> Result<Size<f64>, TextLayoutError> {
         text_cx.note_lent();
         let Some(text) = self.text.as_ref() else {
-            return Size::ZERO;
+            return Ok(Size::ZERO);
         };
-        let result = self.measure(text_cx, text, max_width, LineOverflow::Enforce);
-        Self::metrics_from(&result, min_width).size
+        crate::text_layout::error::width(min_width)?;
+        let result = self.measure(text_cx, text, max_width, LineOverflow::Enforce)?;
+        Ok(Self::metrics_from(&result, min_width).size)
     }
 
     /// Where the first baseline of the given kind would sit after a dry
     /// layout under the width constraints, without touching
     /// `layout_cache`.
-    #[must_use]
     pub fn dry_baseline(
         &self,
         text_cx: &mut TextContext,
         min_width: f64,
         max_width: f64,
         baseline: TextBaseline,
-    ) -> Option<f64> {
+    ) -> Result<Option<f64>, TextLayoutError> {
         text_cx.note_lent();
-        let text = self.text.as_ref()?;
-        let result = self.measure(text_cx, text, max_width, LineOverflow::Enforce);
+        let Some(text) = self.text.as_ref() else {
+            return Ok(None);
+        };
+        crate::text_layout::error::width(min_width)?;
+        let result = self.measure(text_cx, text, max_width, LineOverflow::Enforce)?;
         let metrics = Self::metrics_from(&result, min_width);
-        Some(match baseline {
+        Ok(Some(match baseline {
             TextBaseline::Alphabetic => metrics.alphabetic_baseline,
             TextBaseline::Ideographic => metrics.ideographic_baseline,
-        })
+        }))
     }
+}
+
+fn shaping_widths(min_width: f64, max_width: f64) -> Result<(f32, Option<f32>), TextLayoutError> {
+    let min_width = crate::text_layout::error::width(min_width)?;
+    let max_width = if max_width == f64::INFINITY {
+        None
+    } else {
+        Some(crate::text_layout::error::width(max_width)?)
+    };
+    Ok((min_width, max_width))
 }
 
 /// Whether line-count / ellipsis truncation runs during a metrics probe.

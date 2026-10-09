@@ -58,15 +58,15 @@ impl RenderSliver for RenderSliverFillRemaining {
     fn perform_layout(
         &mut self,
         ctx: &mut SliverLayoutContext<'_, Single, Self::ParentData>,
-    ) -> SliverGeometry {
+    ) -> flui_rendering::RenderResult<SliverGeometry> {
         let constraints = *ctx.constraints();
         let mut extent =
             (constraints.viewport_main_axis_extent - constraints.preceding_scroll_extent).max(0.0);
 
         if ctx.child_count() > 0 {
-            let child_extent = child_max_intrinsic_main_extent(ctx, &constraints);
+            let child_extent = child_max_intrinsic_main_extent(ctx, &constraints)?;
             extent = extent.max(child_extent);
-            ctx.layout_box_child(0, constraints.as_box_constraints(extent, extent, None));
+            ctx.layout_box_child(0, constraints.as_box_constraints(extent, extent, None))?;
         }
 
         let painted_child_size = self.calculate_paint_offset(&constraints, 0.0, extent);
@@ -86,7 +86,7 @@ impl RenderSliver for RenderSliverFillRemaining {
         if ctx.child_count() > 0 {
             ctx.position_child(0, child_paint_offset(&constraints, &geometry));
         }
-        geometry
+        Ok(geometry)
     }
 
     fn child_main_axis_position(
@@ -136,21 +136,20 @@ impl RenderSliver for RenderSliverFillRemainingAndOverscroll {
     fn perform_layout(
         &mut self,
         ctx: &mut SliverLayoutContext<'_, Single, Self::ParentData>,
-    ) -> SliverGeometry {
+    ) -> flui_rendering::RenderResult<SliverGeometry> {
         let constraints = *ctx.constraints();
         let mut extent =
             (constraints.viewport_main_axis_extent - constraints.preceding_scroll_extent).max(0.0);
         let mut max_extent =
             (constraints.remaining_paint_extent - constraints.overlap.min(0.0)).max(0.0);
         if ctx.child_count() > 0 {
-            let child_extent = child_max_intrinsic_main_extent(ctx, &constraints);
+            let child_extent = child_max_intrinsic_main_extent(ctx, &constraints)?;
             extent = extent.max(child_extent);
             max_extent = max_extent.max(extent);
             // Lay the child out; its measured main-axis size is not used for
             // positioning — the offset is derived from geometry.scroll_extent
             // (see below), matching the sibling fill slivers.
-            let _ =
-                ctx.layout_box_child(0, constraints.as_box_constraints(extent, max_extent, None));
+            ctx.layout_box_child(0, constraints.as_box_constraints(extent, max_extent, None))?;
         }
 
         let painted_child_size = max_extent.min(constraints.remaining_paint_extent);
@@ -174,7 +173,7 @@ impl RenderSliver for RenderSliverFillRemainingAndOverscroll {
             // child. This is the same helper the sibling fill slivers use.
             ctx.position_child(0, child_paint_offset(&constraints, &geometry));
         }
-        geometry
+        Ok(geometry)
     }
 
     fn child_main_axis_position(
@@ -224,7 +223,7 @@ impl RenderSliver for RenderSliverFillRemainingWithScrollable {
     fn perform_layout(
         &mut self,
         ctx: &mut SliverLayoutContext<'_, Single, Self::ParentData>,
-    ) -> SliverGeometry {
+    ) -> flui_rendering::RenderResult<SliverGeometry> {
         let constraints = *ctx.constraints();
         let extent = constraints.remaining_paint_extent - constraints.overlap.min(0.0);
         let cache_extent =
@@ -236,7 +235,7 @@ impl RenderSliver for RenderSliverFillRemainingWithScrollable {
             } else {
                 extent
             };
-            ctx.layout_box_child(0, constraints.as_box_constraints(extent, max_extent, None));
+            ctx.layout_box_child(0, constraints.as_box_constraints(extent, max_extent, None))?;
         }
 
         let painted_child_size = self.calculate_paint_offset(&constraints, 0.0, extent);
@@ -255,7 +254,7 @@ impl RenderSliver for RenderSliverFillRemainingWithScrollable {
         if ctx.child_count() > 0 {
             ctx.position_child(0, child_paint_offset(&constraints, &geometry));
         }
-        geometry
+        Ok(geometry)
     }
 
     fn child_main_axis_position(
@@ -278,7 +277,7 @@ impl RenderSliver for RenderSliverFillRemainingWithScrollable {
 fn child_max_intrinsic_main_extent(
     ctx: &mut SliverLayoutContext<'_, Single, SliverPhysicalParentData>,
     constraints: &SliverConstraints,
-) -> f64 {
+) -> flui_rendering::RenderResult<f64> {
     match constraints.axis_direction.axis() {
         flui_foundation::geometry::Axis::Horizontal => {
             ctx.box_child_max_intrinsic_width(0, constraints.cross_axis_extent)

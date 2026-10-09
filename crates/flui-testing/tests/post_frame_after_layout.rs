@@ -46,11 +46,16 @@ impl flui_foundation::Diagnosticable for FixedBox {}
 impl RenderBox for FixedBox {
     type Arity = Leaf;
     type ParentData = BoxParentData;
-    fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-        if let Some(probe) = &self.probe {
-            probe();
-        }
-        Size::new(40.0, 24.0)
+    fn perform_layout(
+        &mut self,
+        _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok({
+            if let Some(probe) = &self.probe {
+                probe();
+            }
+            Size::new(40.0, 24.0)
+        })
     }
     fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
 }
