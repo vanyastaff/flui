@@ -33,7 +33,7 @@ impl UiRuntime {
     /// A clone of the PRIMARY presentation's own controller registry for
     /// implicit animations.
     ///
-    /// `Vsync` is `Arc`-backed; cloning is two atomic increments — cheap. App
+    /// `Vsync` shares its owner-local registry through `Rc`. App
     /// code constructs a `VsyncScope` from this clone so every
     /// implicitly-animated widget below registers its controller here. The
     /// production frame driver (`Self::draw_frame_entered`) ticks EVERY
