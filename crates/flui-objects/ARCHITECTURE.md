@@ -69,6 +69,13 @@ here.
 
 **Test:** `harness_animated_transform_tick_dirty_marking`.
 
+The facade's `a_slide_tick_moves_pixels_without_rebuilding` also drives a
+mounted `SlideTransition` through identity-to-layer and retained-layer ticks.
+GPU interior samples observe the rectangle moving from zero to twenty and
+forty pixels while the frame reports zero element builds. Suppressing delivery
+after the first moving sample leaves a red pixel at the outgoing location,
+distinguishing a stale retained transform from successful rasterization.
+
 ### Non-finite scroll-window edges never reach `f32 as usize`
 
 **Rule:** Rust's `f32 as usize` saturates (`+∞ → usize::MAX`, `NaN → 0`), so

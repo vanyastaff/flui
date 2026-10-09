@@ -34,7 +34,7 @@
 //! as a side effect of ANY mark, an accident no contract promises.
 
 use flui_foundation::RenderId;
-use flui_foundation::geometry::{Offset, Point, Rect, Size};
+use flui_foundation::geometry::{Matrix4, Point, Rect, Size};
 use flui_semantics::{
     AccessibilityNodeId, SemanticsConfiguration, SemanticsNode, SemanticsOwner, SemanticsTree,
 };
@@ -368,10 +368,9 @@ fn visits_child_for_semantics(node: &RenderNode, child_slot: usize) -> bool {
 /// node's own coordinates into the walk's root coordinates.
 fn child_clips_of(
     node: &RenderNode,
-    origin: Offset,
+    transform: Matrix4,
     child_slot: usize,
 ) -> (Option<Rect<f64>>, Option<crate::traits::SemanticsClip>) {
-    let offset = flui_foundation::geometry::Offset::new(origin.dx, origin.dy);
     // The node's own size is passed in rather than cached by each implementor.
     // A clip is always a function of the box it clips, so every implementor
     // would otherwise have to commit its own copy of a value the walk already
@@ -401,13 +400,15 @@ fn child_clips_of(
         }
     };
     (
-        paint.map(|r| r.translate_offset(offset)),
+        paint.map(|rect| transformed_rect(transform, rect).unwrap_or(Rect::ZERO)),
         semantics.map(|clip| match clip {
-            crate::traits::SemanticsClip::Bounds(rect) => {
-                crate::traits::SemanticsClip::Bounds(rect.translate_offset(offset))
-            }
+            crate::traits::SemanticsClip::Bounds(rect) => crate::traits::SemanticsClip::Bounds(
+                transformed_rect(transform, rect).unwrap_or(Rect::ZERO),
+            ),
             crate::traits::SemanticsClip::ScrollCache(rect) => {
-                crate::traits::SemanticsClip::ScrollCache(rect.translate_offset(offset))
+                crate::traits::SemanticsClip::ScrollCache(
+                    transformed_rect(transform, rect).unwrap_or(Rect::ZERO),
+                )
             }
         }),
     )
@@ -446,7 +447,7 @@ fn assemble_semantics_root(
     let fragments = build_semantics_fragments(
         tree,
         root,
-        Offset::ZERO,
+        Matrix4::IDENTITY,
         SemanticsClips::default(),
         SemanticsAssemblyContext {
             is_root: true,
@@ -481,7 +482,7 @@ fn extract_formed_root(
 fn build_semantics_fragments(
     tree: &RenderTree,
     id: RenderId,
-    origin: Offset,
+    transform: Matrix4,
     clips: SemanticsClips,
     context: SemanticsAssemblyContext,
     ancestor_blocks_user_actions: bool,
@@ -490,7 +491,7 @@ fn build_semantics_fragments(
         build_semantics_fragments_impl(
             tree,
             id,
-            origin,
+            transform,
             clips,
             context,
             ancestor_blocks_user_actions,
@@ -553,7 +554,7 @@ fn assembly_decisions(
 fn build_semantics_fragments_impl(
     tree: &RenderTree,
     id: RenderId,
-    origin: Offset,
+    transform: Matrix4,
     clips: SemanticsClips,
     context: SemanticsAssemblyContext,
     ancestor_blocks_user_actions: bool,
@@ -566,8 +567,19 @@ fn build_semantics_fragments_impl(
     let blocks_user_actions = ancestor_blocks_user_actions || config.blocks_user_actions();
     config.set_blocks_user_actions(blocks_user_actions);
     config.set_has_reveal_ancestor(context.has_reveal_ancestor);
-    let reveal_rect = node_semantics_rect(node, origin);
-    let clipped = clips.apply(reveal_rect, context.has_reveal_ancestor);
+    let (reveal_rect, clipped) = match node_semantics_rect(node, transform) {
+        Some(rect) => (rect, clips.apply(rect, context.has_reveal_ancestor)),
+        // Refuse this node's unrepresentable bound but still visit its
+        // children: a smaller child can have representable projected geometry.
+        None => (
+            Rect::ZERO,
+            ClippedRect {
+                rect: Rect::ZERO,
+                hidden: false,
+                dropped: true,
+            },
+        ),
+    };
     let rect = clipped.rect;
     if clipped.hidden {
         config.set_hidden(true);
@@ -602,12 +614,14 @@ fn build_semantics_fragments_impl(
             if !visits_child_for_semantics(node, child_slot) {
                 continue;
             }
-            let child_origin = offset_add(origin, child.offset());
-            let (local_paint, local_semantics) = child_clips_of(node, origin, child_slot);
+            let Some(child_transform) = child_transform(node, child, child_slot, transform) else {
+                continue;
+            };
+            let (local_paint, local_semantics) = child_clips_of(node, transform, child_slot);
             let mut fragments = build_semantics_fragments(
                 tree,
                 child_id,
-                child_origin,
+                child_transform,
                 clips.descend(local_paint, local_semantics),
                 decisions.child_context,
                 blocks_user_actions,
@@ -837,7 +851,7 @@ fn anchor_for(
     }
 }
 
-/// Recomputes the assembly inputs (context, accumulated origin, inherited
+/// Recomputes the assembly inputs (context, accumulated transform, inherited
 /// action-blocking) the full walk would hand `target`, by folding the
 /// ancestor chain root→target through [`assembly_decisions`] — the same
 /// rules the walk itself applies, so the graft assembles under exactly the
@@ -853,7 +867,7 @@ fn assembly_inputs_for(
     tree: &RenderTree,
     pipeline_root: RenderId,
     target: RenderId,
-) -> Option<(SemanticsAssemblyContext, Offset, SemanticsClips, bool)> {
+) -> Option<(SemanticsAssemblyContext, Matrix4, SemanticsClips, bool)> {
     let mut chain = vec![target];
     let mut cursor = target;
     while let Some(parent) = tree.parent(cursor) {
@@ -872,19 +886,16 @@ fn assembly_inputs_for(
         has_reveal_ancestor: false,
     };
     let mut blocks_user_actions = false;
-    let mut origin = Offset::ZERO;
+    let mut transform = Matrix4::IDENTITY;
     let mut clips = SemanticsClips::default();
 
     for (index, &id) in chain.iter().enumerate() {
         let node = tree.get(id)?;
-        if index > 0 {
-            origin = offset_add(origin, node.offset());
-        }
         if id == target {
             if context.merge_into_ancestor {
                 return None;
             }
-            return Some((context, origin, clips, blocks_user_actions));
+            return Some((context, transform, clips, blocks_user_actions));
         }
 
         let mut config = describe_semantics_configuration(node);
@@ -900,8 +911,9 @@ fn assembly_inputs_for(
             .children()
             .iter()
             .position(|&child| child == chain[index + 1])?;
-        let (local_paint, local_semantics) = child_clips_of(node, origin, child_slot);
+        let (local_paint, local_semantics) = child_clips_of(node, transform, child_slot);
         clips = clips.descend(local_paint, local_semantics);
+        transform = child_transform(node, tree.get(chain[index + 1])?, child_slot, transform)?;
         context = assembly_decisions(&config, context).child_context;
     }
 
@@ -926,13 +938,13 @@ fn graft_anchor(
     else {
         return false;
     };
-    let Some((context, origin, clips, blocks_user_actions)) =
+    let Some((context, transform, clips, blocks_user_actions)) =
         assembly_inputs_for(tree, pipeline_root, anchor)
     else {
         return false;
     };
     let Some(mut fragments) =
-        build_semantics_fragments(tree, anchor, origin, clips, context, blocks_user_actions)
+        build_semantics_fragments(tree, anchor, transform, clips, context, blocks_user_actions)
     else {
         return false;
     };
@@ -1079,14 +1091,44 @@ fn node_excludes_semantics_subtree(node: &RenderNode) -> bool {
     }
 }
 
-fn node_semantics_rect(node: &RenderNode, origin: Offset) -> Rect<f64> {
+fn node_semantics_rect(node: &RenderNode, transform: Matrix4) -> Option<Rect<f64>> {
     let size = match node {
         RenderNode::Box(entry) => entry.state().geometry().unwrap_or(Size::ZERO),
         RenderNode::Sliver(entry) => entry.state().absolute_paint_size(),
     };
-    Rect::from_origin_size(Point::new(origin.dx, origin.dy), size)
+    transformed_rect(transform, Rect::from_origin_size(Point::ZERO, size))
 }
 
-fn offset_add(a: Offset, b: Offset) -> Offset {
-    Offset::new(a.dx + b.dx, a.dy + b.dy)
+/// Compose the same committed mapping used by paint and coordinate queries.
+/// Full assembly and graft reconstruction both use this edge operation.
+fn child_transform(
+    parent: &RenderNode,
+    child: &RenderNode,
+    slot: usize,
+    mut transform: Matrix4,
+) -> Option<Matrix4> {
+    parent.apply_paint_transform(slot, child.offset(), &mut transform)?;
+    transform
+        .to_col_major_array()
+        .iter()
+        .all(|value| value.is_finite())
+        .then_some(transform)
+}
+
+fn transformed_rect(transform: Matrix4, rect: Rect<f64>) -> Option<Rect<f64>> {
+    // Validate each corner before min/max: floating-point min/max can conceal
+    // a NaN corner, and finite matrix entries can overflow during projection.
+    for point in [
+        rect.min,
+        Point::new(rect.max.x, rect.min.y),
+        rect.max,
+        Point::new(rect.min.x, rect.max.y),
+    ] {
+        let (x, y) = transform.transform_point(point.x, point.y);
+        if !x.is_finite() || !y.is_finite() {
+            return None;
+        }
+    }
+    let bounds = transform.transform_rect(&rect);
+    (bounds.width().is_finite() && bounds.height().is_finite()).then_some(bounds)
 }

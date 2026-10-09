@@ -417,16 +417,16 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 #[cfg(test)]
 mod tests {
 
-    use flui_foundation::Leaf;
-    use flui_foundation::geometry::Size;
+    use flui_foundation::geometry::{Offset, Size};
+    use flui_foundation::{Leaf, Variable};
 
     use super::*;
     use crate::{context::BoxLayoutContext, parent_data::BoxParentData, traits::RenderBox};
 
-    /// Minimal leaf that contributes semantics without depending on
+    /// Minimal box that contributes semantics and lays out its children without depending on
     /// `flui-objects`.
     #[derive(Debug)]
-    struct SemanticLeaf {
+    struct SemanticBox {
         label: Option<&'static str>,
         boundary: bool,
         merge_descendants: bool,
@@ -434,7 +434,7 @@ mod tests {
         size: Size,
     }
 
-    impl SemanticLeaf {
+    impl SemanticBox {
         fn labeled(label: &'static str) -> Self {
             Self {
                 label: Some(label),
@@ -466,10 +466,10 @@ mod tests {
         }
     }
 
-    impl flui_foundation::Diagnosticable for SemanticLeaf {}
+    impl flui_foundation::Diagnosticable for SemanticBox {}
 
     /// A leaf whose label can change between passes — what a live widget
-    /// does. `SemanticLeaf`'s `&'static str` label is frozen at insertion,
+    /// does. `SemanticBox`'s `&'static str` label is frozen at insertion,
     /// so it can prove structure but never "the published content follows
     /// the render object's current state through a mark-scoped pass".
     #[derive(Debug)]
@@ -518,14 +518,19 @@ mod tests {
         }
     }
 
-    impl RenderBox for SemanticLeaf {
-        type Arity = Leaf;
+    impl RenderBox for SemanticBox {
+        type Arity = Variable;
         type ParentData = BoxParentData;
 
         fn perform_layout(
             &mut self,
-            ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+            ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>,
         ) -> crate::RenderResult<Size> {
+            let constraints = *ctx.constraints();
+            for index in 0..ctx.child_count() {
+                ctx.layout_child(index, constraints.loosen())?;
+                ctx.position_child(index, Offset::ZERO);
+            }
             Ok(ctx.constraints().constrain(self.size))
         }
 
@@ -591,10 +596,13 @@ mod tests {
                     .push(update.clone());
             },
         ));
-        let root_id = owner.set_root_render_object(Box::new(SemanticLeaf::labeled("Submit")));
+        let root_id = owner.set_root_render_object(Box::new(SemanticBox::labeled("Submit")));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(10.0, 10.0))));
         owner.set_semantics_enabled(true);
 
-        let owner = owner.into_layout().into_compositing().into_paint();
+        let mut owner = owner.into_layout();
+        owner.run_layout().expect("initial layout");
+        let owner = owner.into_compositing().into_paint();
         let mut owner = owner.into_semantics();
         owner.run_semantics().expect("first semantics pass");
         let mut owner = owner.finish();
@@ -639,26 +647,29 @@ mod tests {
                     .push(update.clone());
             },
         ));
-        let root = owner.set_root_render_object(Box::new(SemanticLeaf::empty()));
+        let root = owner.set_root_render_object(Box::new(SemanticBox::empty()));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(10.0, 10.0))));
         let branch_a = owner
-            .insert_child_render_object(root, Box::new(SemanticLeaf::boundary_labeled("A")))
+            .insert_child_render_object(root, Box::new(SemanticBox::boundary_labeled("A")))
             .expect("branch A inserted");
         let (leaf, label) = MutableLeaf::labeled("original");
         let a_leaf = owner
             .insert_child_render_object(branch_a, Box::new(leaf))
             .expect("A's leaf inserted");
         let branch_b = owner
-            .insert_child_render_object(root, Box::new(SemanticLeaf::boundary_labeled("B")))
+            .insert_child_render_object(root, Box::new(SemanticBox::boundary_labeled("B")))
             .expect("branch B inserted");
         for _ in 0..8 {
             owner
-                .insert_child_render_object(branch_b, Box::new(SemanticLeaf::labeled("filler")))
+                .insert_child_render_object(branch_b, Box::new(SemanticBox::labeled("filler")))
                 .expect("B filler inserted");
         }
         owner.set_semantics_enabled(true);
 
         super::semantics::reset_assembly_visits();
-        let owner = owner.into_layout().into_compositing().into_paint();
+        let mut owner = owner.into_layout();
+        owner.run_layout().expect("initial layout");
+        let owner = owner.into_compositing().into_paint();
         let mut owner = owner.into_semantics();
         owner.run_semantics().expect("first semantics pass");
         let mut owner = owner.finish();
@@ -1014,7 +1025,7 @@ mod tests {
             };
             owner
                 .render_tree_mut()
-                .insert_box_child(parent, Box::new(SemanticLeaf::empty()))
+                .insert_box_child(parent, Box::new(SemanticBox::empty()))
                 .expect("attached child exercises recursive non-leaf layout");
             root
         };

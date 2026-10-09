@@ -63,6 +63,10 @@
 
 ### Fixed
 
+- Keep accessibility bounds and clips aligned with animated and nested paint
+  transforms during full assembly and partial updates; refuse unrepresentable
+  projected bounds and restore them when finite geometry returns.
+
 - Retiring the final platform background-executor owner from an async task no
   longer panics during runtime shutdown, including when a stopped host's last
   proxy is released after Linux preference observation.

@@ -30,6 +30,27 @@ deepest-first element unmount so view lifecycle hooks remain canonical.
 
 ## Mapping decisions
 
+### Semantics geometry follows committed paint transforms
+
+Full semantics assembly and partial graft reconstruction compose parent edges
+through `RenderNode::apply_paint_transform`, including the committed child
+offset. The resulting root transform projects node bounds, unclipped reveal
+geometry and parent clips. Recomputing only layout offsets leaves animation
+bounds behind the painted child; reconstructing only offsets above a graft
+also loses unchanged transformed ancestors.
+
+Projected corners and the resulting dimensions must remain finite. An
+unrepresentable node bound is omitted while its children are still visited;
+an unrepresentable clip refuses coverage. Later finite geometry can publish
+again. Authored zero-size nodes retain the existing empty-bound behavior.
+
+`animated_slide_publishes_bounds_at_its_current_sample` observes public
+AccessKit bounds through running LTR/RTL transitions, including a graft beneath
+translated and scaled ancestors. `animated_scale_and_rotation_publish_clipped_bounds`
+checks centered scale/rotation with clips under a scaled ancestor.
+`unrepresentable_projected_bounds_are_withdrawn_and_recover` checks overflow and
+recovery. Restoring the offset-only assembler makes all three rows fail.
+
 ### Scroll notification failure cannot starve render invalidation
 
 `ScrollPosition` delivers an accepted pixel change to widget and viewport
