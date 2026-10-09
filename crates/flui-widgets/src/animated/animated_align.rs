@@ -3,7 +3,9 @@
 use std::{rc::Rc, time::Duration};
 
 use flui_animation::curve::{ArcCurve, Curve};
-use flui_animation::{Animation, MotionSpec, SpringDescription, TwoWayConverter, Vsync};
+use flui_animation::{
+    Animation, MotionSpec, MotionUpdate, SpringDescription, TwoWayConverter, Vsync,
+};
 use flui_foundation::ChangeNotifier;
 use flui_painting::Alignment;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
@@ -208,29 +210,31 @@ impl ViewState<AnimatedAlign> for AnimatedAlignState {
             tracing::warn!("alignment targets refused; retaining the published motion");
             return;
         }
-        for result in [
-            self.alignment.retarget(
+        let result = MotionUpdate::run(|update| {
+            self.alignment.stage(
+                update,
                 Some(new_view.alignment),
                 new_view.motion.clone(),
                 &self.notifications,
                 self.vsync.as_ref(),
-            ),
-            self.width_factor.retarget(
+            )?;
+            self.width_factor.stage(
+                update,
                 new_view.width_factor,
                 new_view.motion.clone(),
                 &self.notifications,
                 self.vsync.as_ref(),
-            ),
-            self.height_factor.retarget(
+            )?;
+            self.height_factor.stage(
+                update,
                 new_view.height_factor,
                 new_view.motion.clone(),
                 &self.notifications,
                 self.vsync.as_ref(),
-            ),
-        ] {
-            if let Err(error) = result {
-                tracing::warn!(%error, "alignment motion refused; retaining its published run");
-            }
+            )
+        });
+        if let Err(error) = result {
+            tracing::warn!(%error, "alignment motion refused; retaining its admitted properties");
         }
     }
 

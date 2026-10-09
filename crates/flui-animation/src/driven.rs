@@ -1,7 +1,8 @@
 //! The owner of a controller's registration on a frame registry.
 
-use crate::animation::Retirement;
+use crate::animation::{Retirement, Terminal};
 use crate::{AnimationController, Vsync, VsyncRegistration, VsyncRegistrationError};
+use flui_foundation::panic::RecoveryScope;
 
 enum Seat {
     Bound {
@@ -20,6 +21,21 @@ enum Seat {
 pub struct DrivenController {
     controller: AnimationController,
     seat: Seat,
+}
+
+/// Logical closure is committed before this custody invokes or retires code.
+pub(crate) struct DrivenRetirement {
+    publication: Option<crate::controller::ValuePublication>,
+    registry: Terminal<Option<Vsync>>,
+}
+
+impl DrivenRetirement {
+    pub(crate) fn publish(self, recovery: &mut RecoveryScope<'_>) {
+        if let Some(publication) = self.publication {
+            publication.publish(recovery);
+        }
+        recovery.retire(self.registry);
+    }
 }
 
 impl DrivenController {
@@ -96,24 +112,33 @@ impl DrivenController {
     /// Release the registry seat, then dispose the controller. Idempotent.
     /// Callouts run only after this owner has committed its retired state.
     pub fn dispose(&mut self) {
-        let outgoing = std::mem::replace(&mut self.seat, Seat::Retired);
-        if matches!(outgoing, Seat::Retired) {
-            return;
-        }
         let mut recovery = Retirement::new();
+        self.dispose_with_recovery(&mut recovery.scope());
+        recovery.finish();
+    }
+
+    pub(crate) fn dispose_with_recovery(&mut self, recovery: &mut RecoveryScope<'_>) {
+        self.prepare_dispose().publish(recovery);
+    }
+
+    pub(crate) fn prepare_dispose(&mut self) -> DrivenRetirement {
+        let outgoing = std::mem::replace(&mut self.seat, Seat::Retired);
         let outgoing_registry = match outgoing {
             Seat::Bound {
                 vsync,
                 registration,
             } => {
-                recovery.run(|| vsync.unregister(&registration));
+                // The owning controller remains strong here. Removing its
+                // registry clone and weak route cannot retire user captures.
+                vsync.unregister(&registration);
                 Some(vsync)
             }
             Seat::Unbound | Seat::Retired => None,
         };
-        recovery.run_with(|recovery| self.controller.dispose(recovery));
-        recovery.retire(outgoing_registry);
-        recovery.finish();
+        DrivenRetirement {
+            publication: self.controller.prepare_dispose(),
+            registry: Terminal::new(outgoing_registry),
+        }
     }
 }
 

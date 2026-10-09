@@ -5,8 +5,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_animation::{
-    AnimatedValue, Animation, AnimationStatus, ArcCurve, Curves, MotionClock, MotionSpec,
-    SpringDescription, TwoWayConverter, Vsync,
+    AnimatedValue, Animation, AnimationError, AnimationStatus, ArcCurve, Curves, MotionClock,
+    MotionSpec, MotionUpdate, SpringDescription, TwoWayConverter, Vsync,
 };
 use flui_foundation::geometry::Offset;
 
@@ -415,5 +415,293 @@ fn owning_animated_value_contract() {
             "owner release stops remaining callouts",
             releasing_the_owner_stops_the_remaining_component_callouts,
         ),
+        (
+            "group publishes all owners before delivery",
+            grouped_motion_publishes_all_owners_before_delivery,
+        ),
+        (
+            "ignored refusal cannot admit a prefix",
+            an_ignored_refusal_keeps_every_old_run,
+        ),
+        (
+            "caught preparation panic cannot admit a prefix",
+            a_caught_preparation_panic_keeps_every_old_run,
+        ),
+        (
+            "later converter invalidates earlier preparation",
+            a_later_converter_invalidates_the_whole_group,
+        ),
+        (
+            "refused optional owner releases its seat",
+            a_refused_optional_owner_releases_its_registry_seat,
+        ),
+        (
+            "grouped removal commits every seat before cancellation",
+            grouped_removal_commits_every_seat_before_cancellation,
+        ),
     ]);
+}
+
+fn grouped_motion_publishes_all_owners_before_delivery() {
+    use flui_foundation::Listenable;
+    let registry = Vsync::new();
+    let mut clock = MotionClock::new();
+    let mut left = AnimatedValue::new(0.0, curve(Curves::Linear), Some(&registry)).unwrap();
+    let mut right =
+        AnimatedValue::new(Offset::ZERO, curve(Curves::Linear), Some(&registry)).unwrap();
+    let left_old = left.animate_to(1.0).unwrap();
+    let right_old = right.animate_to(Offset::new(2.0, -4.0)).unwrap();
+    registry.tick_all(&clock.frame(Duration::ZERO));
+    registry.tick_all(&clock.frame(Duration::from_millis(250)));
+    let left_view = left.animation();
+    let right_view = right.animation();
+    let seam = (
+        left.value(),
+        left.velocity(),
+        right.value(),
+        right.velocity(),
+    );
+    let delivered = Rc::new(Cell::new(0));
+    let check = {
+        let delivered = Rc::clone(&delivered);
+        let left_old = left_old.clone();
+        let right_old = right_old.clone();
+        move || {
+            assert!(left_old.is_canceled() && right_old.is_canceled());
+            assert_eq!(
+                (
+                    left_view.value(),
+                    left_view.velocity(),
+                    right_view.value(),
+                    right_view.velocity()
+                ),
+                seam
+            );
+            delivered.set(delivered.get() + 1);
+        }
+    };
+    for view in [left.animation().status(), right.animation().status()] {
+        assert_eq!(view, AnimationStatus::Forward);
+    }
+    let left_listener = left.animation().add_listener(Rc::new(check.clone()));
+    let right_listener = right.animation().add_listener(Rc::new(check.clone()));
+    left_old.when_complete_or_cancel({
+        let check = check.clone();
+        move |result| {
+            assert!(result.is_err());
+            check();
+        }
+    });
+    right_old.when_complete_or_cancel(move |result| {
+        assert!(result.is_err());
+        check();
+    });
+    MotionUpdate::run(|update| {
+        update.retarget(&mut left, -1.0, curve(Curves::EaseIn))?;
+        update.retarget(&mut right, Offset::new(-3.0, 7.0), curve(Curves::EaseOut))
+    })
+    .unwrap();
+    assert_eq!(delivered.get(), 4);
+    left.animation().remove_listener(left_listener);
+    right.animation().remove_listener(right_listener);
+    registry.tick_all(&clock.frame(Duration::from_millis(1250)));
+    assert_eq!(left.value(), -1.0);
+    assert_eq!(right.value(), Offset::new(-3.0, 7.0));
+    drop((left, right));
+    assert!(registry.is_empty());
+}
+
+fn an_ignored_refusal_keeps_every_old_run() {
+    let registry = Vsync::new();
+    let mut clock = MotionClock::new();
+    let mut left = AnimatedValue::new(0.0, curve(Curves::Linear), Some(&registry)).unwrap();
+    let mut right = AnimatedValue::new(0.0, curve(Curves::Linear), Some(&registry)).unwrap();
+    let left_old = left.animate_to(1.0).unwrap();
+    let right_old = right.animate_to(2.0).unwrap();
+    registry.tick_all(&clock.frame(Duration::ZERO));
+    let result = MotionUpdate::run(|update| {
+        update.retarget(&mut left, 3.0, curve(Curves::Linear))?;
+        assert!(
+            update
+                .retarget(&mut right, f64::NAN, curve(Curves::Linear))
+                .is_err()
+        );
+        Ok(())
+    });
+    assert!(matches!(result, Err(AnimationError::NonFiniteTarget(_))));
+    assert!(left_old.is_pending() && right_old.is_pending());
+    registry.tick_all(&clock.frame(Duration::from_secs(1)));
+    assert_eq!((left.value(), right.value()), (1.0, 2.0));
+    MotionUpdate::run(|update| {
+        update.retarget(&mut left, 3.0, curve(Curves::Linear))?;
+        update.retarget(&mut right, 4.0, curve(Curves::Linear))
+    })
+    .unwrap();
+    registry.tick_all(&clock.frame(Duration::from_millis(1001)));
+    registry.tick_all(&clock.frame(Duration::from_millis(2001)));
+    assert_eq!((left.value(), right.value()), (3.0, 4.0));
+}
+
+fn a_caught_preparation_panic_keeps_every_old_run() {
+    let registry = Vsync::new();
+    let mut clock = MotionClock::new();
+    let mut left = AnimatedValue::new(0.0, curve(Curves::Linear), Some(&registry)).unwrap();
+    let mut right = AnimatedValue::new(plain(0.0), curve(Curves::Linear), Some(&registry)).unwrap();
+    let left_old = left.animate_to(1.0).unwrap();
+    let right_old = right.animate_to(plain(2.0)).unwrap();
+    registry.tick_all(&clock.frame(Duration::ZERO));
+    let result = MotionUpdate::run(|update| {
+        update.retarget(&mut left, 3.0, curve(Curves::Linear))?;
+        let target = ReentrantValue {
+            position: 4.0,
+            clone_hook: Rc::new(|| {}),
+            vector_hook: Rc::new(|| panic!("preparation failure")),
+        };
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| update.retarget(
+                &mut right,
+                target,
+                curve(Curves::Linear)
+            )))
+            .is_err()
+        );
+        Ok(())
+    });
+    assert_eq!(result, Err(AnimationError::AdmissionAborted));
+    assert!(left_old.is_pending() && right_old.is_pending());
+    registry.tick_all(&clock.frame(Duration::from_secs(1)));
+    assert_eq!((left.value(), right.value().position), (1.0, 2.0));
+}
+
+fn a_later_converter_invalidates_the_whole_group() {
+    let registry = Vsync::new();
+    let mut clock = MotionClock::new();
+    let mut left = AnimatedValue::new(0.0, curve(Curves::Linear), Some(&registry)).unwrap();
+    let mut right = AnimatedValue::new(plain(0.0), curve(Curves::Linear), Some(&registry)).unwrap();
+    let left_old = left.animate_to(1.0).unwrap();
+    let right_old = right.animate_to(plain(2.0)).unwrap();
+    registry.tick_all(&clock.frame(Duration::ZERO));
+    let tick = clock.frame(Duration::from_millis(250));
+    let target = ReentrantValue {
+        position: 4.0,
+        clone_hook: Rc::new(|| {}),
+        vector_hook: Rc::new({
+            let registry = registry.clone();
+            move || registry.tick_all(&tick)
+        }),
+    };
+    let result = MotionUpdate::run(|update| {
+        update.retarget(&mut left, 3.0, curve(Curves::Linear))?;
+        update.retarget(&mut right, target, curve(Curves::Linear))
+    });
+    assert_eq!(result, Err(AnimationError::ReentrantMotion));
+    assert!(left_old.is_pending() && right_old.is_pending());
+    registry.tick_all(&clock.frame(Duration::from_secs(1)));
+    assert_eq!((left.value(), right.value().position), (1.0, 2.0));
+}
+
+fn a_refused_optional_owner_releases_its_registry_seat() {
+    for panics in [false, true] {
+        let registry = Vsync::new();
+        let mut owner =
+            AnimatedValue::new(plain(0.0), curve(Curves::Linear), Some(&registry)).unwrap();
+        let old = owner.animate_to(plain(1.0)).unwrap();
+        let mut appearing = None;
+        let target = ReentrantValue {
+            position: if panics { 2.0 } else { f64::NAN },
+            clone_hook: Rc::new(|| {}),
+            vector_hook: Rc::new(move || {
+                assert!(!panics, "optional admission failed");
+            }),
+        };
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            MotionUpdate::run(|update| {
+                update.replace(
+                    &mut appearing,
+                    Some(
+                        AnimatedValue::new(0.0_f64, curve(Curves::Linear), Some(&registry))
+                            .unwrap(),
+                    ),
+                );
+                update.retarget(&mut owner, target, curve(Curves::Linear))
+            })
+        }));
+        if panics {
+            assert!(outcome.is_err());
+        } else {
+            assert!(outcome.unwrap().is_err());
+        }
+        assert!(appearing.is_none() && old.is_pending());
+        assert_eq!(
+            registry.len(),
+            1,
+            "refused appearance must release its seat; panic={panics}"
+        );
+        drop(owner);
+        assert!(registry.is_empty());
+    }
+}
+
+fn grouped_removal_commits_every_seat_before_cancellation() {
+    for fails in [false, true] {
+        let registry = Vsync::new();
+        let mut left =
+            Some(AnimatedValue::new(0.0, curve(Curves::Linear), Some(&registry)).unwrap());
+        let mut right =
+            Some(AnimatedValue::new(0.0, curve(Curves::Linear), Some(&registry)).unwrap());
+        let left_old = left.as_mut().unwrap().animate_to(1.0).unwrap();
+        let right_old = right.as_mut().unwrap().animate_to(2.0).unwrap();
+        let left_view = left.as_ref().unwrap().animation();
+        let right_view = right.as_ref().unwrap().animation();
+        let observed = Rc::new(Cell::new(0));
+        let check = {
+            let registry = registry.clone();
+            let observed = Rc::clone(&observed);
+            let left_old = left_old.clone();
+            let right_old = right_old.clone();
+            move || {
+                assert!(
+                    registry.is_empty(),
+                    "every removed seat must be absent before cancellation delivery"
+                );
+                assert!(!left_view.is_animating() && !right_view.is_animating());
+                assert!(left_old.is_canceled() && right_old.is_canceled());
+                observed.set(observed.get() + 1);
+            }
+        };
+        left_old.when_complete_or_cancel({
+            let check = check.clone();
+            move |result| {
+                assert!(result.is_err());
+                check();
+                assert!(!fails, "first grouped cancellation failure");
+            }
+        });
+        right_old.when_complete_or_cancel(move |result| {
+            assert!(result.is_err());
+            check();
+        });
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            MotionUpdate::run(|update| {
+                update.replace(&mut left, None);
+                update.replace(&mut right, None);
+                Ok(())
+            })
+        }));
+        if fails {
+            let payload = result.unwrap_err();
+            assert_eq!(
+                flui_foundation::panic::payload_text(payload.as_ref()),
+                Some("first grouped cancellation failure")
+            );
+        } else {
+            result.unwrap().unwrap();
+        }
+        assert!(left.is_none() && right.is_none() && registry.is_empty());
+        assert_eq!(
+            observed.get(),
+            2,
+            "accepted cancellation tail must be delivered after failure"
+        );
+    }
 }

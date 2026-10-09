@@ -4,6 +4,8 @@
   last published position and velocity and cancels the displaced run.
 - `AnimatedValue` owns one Vsync registration for all components, exposes a
   surviving observer stream, and supports atomic target and motion replacement.
+- `MotionUpdate` coordinates independent property owners, retaining prepared
+  segments and publishing their deliveries only after every owner is admitted.
 - Animation status subscriptions own removal authority through
   `StatusSubscription`; dropping a guard removes its callback without retaining
   the animation owner, while detaching leaves it registered until source closure.
@@ -30,6 +32,10 @@
 
 ### Fixed
 
+- Refuse invalid Container or Align motion before changing any property run;
+  preserve prior matrix progress when replacement motion cannot be prepared.
+- Release rejected optional-owner registrations after preparation panic and
+  close every removed owner before grouped cancellation delivery.
 - Retain container size and color motion through interruption; independent
   properties keep their own deadlines, and non-finite targets preserve live motion.
 - Keep AnimatedAlign factors on their own motion deadlines when alignment changes;

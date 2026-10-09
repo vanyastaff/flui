@@ -156,7 +156,9 @@ pub use simulation::{
     SimulationBounds, SimulationError, SimulationParameter, SpringDescription, SpringSimulation,
     SpringType, Tolerance,
 };
-pub use spring::{AnimatedValue, AnimatedValueView, AnimationVector, TwoWayConverter};
+pub use spring::{
+    AnimatedValue, AnimatedValueView, AnimationVector, MotionUpdate, TwoWayConverter,
+};
 pub use stagger::{Stagger, StaggerOrigin};
 pub use status_subscription::StatusSubscription;
 // `#[derive(TwoWayConverter)]` generates `TwoWayConverter` and `Lerp` impls. It

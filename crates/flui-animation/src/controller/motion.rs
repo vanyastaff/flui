@@ -38,12 +38,21 @@ pub(crate) struct ValueSeam {
 pub(crate) struct ValuePublication {
     controller: AnimationController,
     drain: bool,
+    value_change: ValueChange,
 }
 
 impl ValuePublication {
     pub(crate) fn publish(self, recovery: &mut RecoveryScope<'_>) {
         self.controller
-            .publish_delivery(ValueChange::Notify, self.drain, recovery);
+            .publish_delivery(self.value_change, self.drain, recovery);
+    }
+
+    pub(super) fn disposal(controller: AnimationController, drain: bool) -> Self {
+        Self {
+            controller,
+            drain,
+            value_change: ValueChange::Unchanged,
+        }
     }
 }
 
@@ -124,6 +133,7 @@ impl AnimationController {
         ValuePublication {
             controller: self.clone(),
             drain,
+            value_change: ValueChange::Notify,
         }
     }
 
@@ -201,6 +211,7 @@ impl AnimationController {
             ValuePublication {
                 controller: self.clone(),
                 drain,
+                value_change: ValueChange::Notify,
             },
         ))
     }

@@ -3,8 +3,8 @@
 use std::rc::Rc;
 
 use flui_animation::{
-    AnimatedValue, AnimatedValueView, AnimationError, MotionSpec, TwoWayConverter, Vsync,
-    VsyncRegistrationError,
+    AnimatedValue, AnimatedValueView, AnimationError, MotionSpec, MotionUpdate, TwoWayConverter,
+    Vsync, VsyncRegistrationError,
 };
 use flui_foundation::{ChangeNotifier, Listenable};
 
@@ -42,8 +42,9 @@ impl<T: TwoWayConverter + 'static> PropertyMotion<T> {
         Ok(())
     }
 
-    pub(super) fn retarget(
-        &mut self,
+    pub(super) fn stage<'owners>(
+        &'owners mut self,
+        update: &mut MotionUpdate<'owners>,
         target: Option<T>,
         motion: MotionSpec,
         notifications: &Rc<ChangeNotifier>,
@@ -51,15 +52,17 @@ impl<T: TwoWayConverter + 'static> PropertyMotion<T> {
     ) -> Result<(), AnimationError> {
         match (&mut self.owner, target) {
             (Some(owner), Some(target)) => {
-                let _run = owner.retarget(target, motion)?;
+                update.retarget(owner, target, motion)?;
             }
-            (None, Some(target)) => {
+            (owner @ None, Some(target)) => {
                 // Appearing properties have no previous value to interpolate.
-                *self = Self::new(Some(target), motion, notifications, vsync)?;
+                let next = Self::new(Some(target), motion, notifications, vsync)?;
+                update.replace(owner, next.owner);
             }
             (owner, None) => {
-                let removed = owner.take();
-                drop(removed);
+                if owner.is_some() {
+                    update.replace(owner, None);
+                }
             }
         }
         Ok(())

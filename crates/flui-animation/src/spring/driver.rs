@@ -1,5 +1,8 @@
 //! One owning frame registration for a vector of interruptible components.
 
+mod update;
+pub use update::MotionUpdate;
+
 use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::rc::Rc;
@@ -113,6 +116,24 @@ struct PreparedRun<V: AnimationVector> {
     sample: Sample<V>,
     deadline: Option<Duration>,
     reversal: Reversal<V>,
+}
+
+struct Admission<T> {
+    future: AnimationRunFuture,
+    publication: crate::controller::ValuePublication,
+    old_target: Terminal<Rc<T>>,
+    old_motion: Terminal<MotionSpec>,
+    old_visible: Terminal<Rc<T>>,
+}
+
+impl<T> Admission<T> {
+    fn publish(self, recovery: &mut RecoveryScope<'_>) -> AnimationRunFuture {
+        self.publication.publish(recovery);
+        recovery.retire(self.old_visible);
+        recovery.retire(self.old_motion);
+        recovery.retire(self.old_target);
+        self.future
+    }
 }
 
 /// An interruptible value owned by one frame registration.
@@ -279,6 +300,10 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
         self.driven.get_mut().dispose();
     }
 
+    fn dispose_with_recovery(&mut self, recovery: &mut RecoveryScope<'_>) {
+        self.driven.get_mut().dispose_with_recovery(recovery);
+    }
+
     /// The current published value.
     #[must_use]
     pub fn value(&self) -> T {
@@ -343,10 +368,11 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
         recovery: &mut RecoveryScope<'_>,
     ) -> Result<AnimationRunFuture, AnimationError> {
         for _ in 0..2 {
-            let prepared = self.prepare(target, motion, change, recovery)?;
+            let prepared = self.prepare(target, motion, change)?;
             match self.install(prepared, target, motion, recovery) {
                 Err(AnimationError::ReentrantMotion) => {}
-                result => return result,
+                Ok(admission) => return Ok(admission.publish(recovery)),
+                Err(error) => return Err(error),
             }
         }
         Err(AnimationError::ReentrantMotion)
@@ -357,13 +383,25 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
         target: &Terminal<Rc<T>>,
         motion: &Terminal<MotionSpec>,
         change: Change,
-        recovery: &mut RecoveryScope<'_>,
+    ) -> Result<Prepared<T::Vector>, AnimationError> {
+        self.prepare_from(target, motion, change, None)
+    }
+
+    fn prepare_from(
+        &self,
+        target: &Terminal<Rc<T>>,
+        motion: &Terminal<MotionSpec>,
+        change: Change,
+        origin: Option<T::Vector>,
     ) -> Result<Prepared<T::Vector>, AnimationError> {
         let controller = self.driven.controller().clone();
         let seam = controller.value_seam()?;
         let goal = target.to_vector();
         validate(&goal)?;
-        let target_changed = goal.as_ref() != self.target_vector.as_ref();
+        if let Some(origin) = &origin {
+            validate(origin)?;
+        }
+        let target_changed = origin.is_some() || goal.as_ref() != self.target_vector.as_ref();
         if !matches!(change, Change::Snap)
             && !target_changed
             && (motion.get() == self.motion.get() || self.is_settled())
@@ -374,8 +412,16 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
                 run: None,
             });
         }
-        let sample = self.published.get();
-        let velocity = if self.is_settled() {
+        let sample = origin.map_or_else(
+            || self.published.get(),
+            |value| Sample {
+                value,
+                velocity: value.zero(),
+                elapsed: Duration::ZERO,
+                done: false,
+            },
+        );
+        let velocity = if self.is_settled() || origin.is_some() {
             sample.velocity.zero()
         } else {
             sample.velocity
@@ -404,6 +450,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
                 *duration = deadline.saturating_sub(sample.elapsed);
             }
         } else if let MotionSpec::Curve { curve, .. } = self.motion.get()
+            && origin.is_none()
             && !self.is_settled()
             && goal.as_ref() == self.reversal.adjusted_start.as_ref()
         {
@@ -435,7 +482,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
             .map_err(|error| {
                 AnimationError::NonFiniteTarget(format!("animated value motion: {error}"))
             })?;
-        recovery.retire(segment_motion);
+        drop(segment_motion);
         let deadline = components.iter().filter_map(Segment::curve_duration).max();
         let immediate = components.iter().all(|component| component.is_done(0.0));
         let prepared = Sample {
@@ -451,7 +498,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
             staged: Cell::new(prepared),
         }));
         let source = Rc::clone(run.get()) as Rc<dyn ValueMotion>;
-        recovery.retire(run);
+        drop(run);
         Ok(Prepared {
             seam,
             goal,
@@ -470,7 +517,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
         target: &mut Terminal<Rc<T>>,
         motion: &mut Terminal<MotionSpec>,
         recovery: &mut RecoveryScope<'_>,
-    ) -> Result<AnimationRunFuture, AnimationError> {
+    ) -> Result<Admission<T>, AnimationError> {
         let controller = self.driven.controller().clone();
         controller.validate_value_seam(&prepared.seam)?;
         let Some(mut run) = prepared.run else {
@@ -482,11 +529,13 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
                 .visible_target
                 .replace(Terminal::new(Rc::clone(&self.target)));
             // Equal vectors preserve the run while replacing the exact target.
-            controller.admit_value_metadata().publish(recovery);
-            recovery.retire(old_visible);
-            recovery.retire(old_target);
-            recovery.retire(old_motion);
-            return Ok(controller.value_run_future());
+            return Ok(Admission {
+                future: controller.value_run_future(),
+                publication: controller.admit_value_metadata(),
+                old_target,
+                old_motion,
+                old_visible,
+            });
         };
         let admission = controller.start_value_motion(
             &prepared.seam,
@@ -509,13 +558,13 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
             recovery,
         );
         match admission {
-            Ok((future, (old_target, old_motion, old_visible), publication)) => {
-                publication.publish(recovery);
-                recovery.retire(old_visible);
-                recovery.retire(old_motion);
-                recovery.retire(old_target);
-                Ok(future)
-            }
+            Ok((future, (old_target, old_motion, old_visible), publication)) => Ok(Admission {
+                future,
+                publication,
+                old_target,
+                old_motion,
+                old_visible,
+            }),
             Err(error) => Err(error),
         }
     }

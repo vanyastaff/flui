@@ -42,6 +42,11 @@ pub enum AnimationError {
     #[error("motion changed reentrantly while preparing a retarget")]
     ReentrantMotion,
 
+    /// A grouped update encountered an ignored refusal or a caught panic
+    /// during preparation. None of its prepared changes can be admitted.
+    #[error("grouped motion preparation was interrupted")]
+    AdmissionAborted,
+
     /// Invalid animation bounds, or an invalid `repeat`/`repeat_with` range,
     /// were provided.
     ///

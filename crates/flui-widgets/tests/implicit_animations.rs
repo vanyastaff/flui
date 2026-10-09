@@ -454,6 +454,8 @@ pub(crate) fn container_refused_property_motion_preserves_the_admitted_goals() {
 
 pub(crate) fn container_refused_transform_motion_preserves_the_admitted_matrix() {
     assert_refused_container_motion_preserves_the_admitted_run(0);
+    // Both numeric segments prepare before matrix progress refuses its slope.
+    assert_refused_container_motion_preserves_the_admitted_run(4);
 }
 
 pub(crate) fn align_retarget_with_a_new_curve_keeps_the_displayed_sample() {

@@ -4,7 +4,7 @@ use std::{rc::Rc, time::Duration};
 
 use flui_animation::curve::{ArcCurve, Curve};
 use flui_animation::{
-    AnimatedValue, Animation, MotionSpec, SpringDescription, TwoWayConverter, Vsync,
+    AnimatedValue, Animation, MotionSpec, MotionUpdate, SpringDescription, TwoWayConverter, Vsync,
 };
 use flui_foundation::geometry::{EdgeInsets, Matrix4};
 use flui_foundation::{ChangeNotifier, Listenable};
@@ -317,63 +317,72 @@ impl ViewState<AnimatedContainer> for AnimatedContainerState {
             tracing::warn!("container targets refused; retaining published motion");
             return;
         }
-        for result in [
-            self.alignment.retarget(
-                new_view.alignment,
-                new_view.motion.clone(),
-                &self.notifications,
-                self.vsync.as_ref(),
-            ),
-            self.padding.retarget(
-                new_view.padding,
-                new_view.motion.clone(),
-                &self.notifications,
-                self.vsync.as_ref(),
-            ),
-            self.color.retarget(
-                new_view.color,
-                new_view.motion.clone(),
-                &self.notifications,
-                self.vsync.as_ref(),
-            ),
-            self.width.retarget(
-                new_view.width,
-                new_view.motion.clone(),
-                &self.notifications,
-                self.vsync.as_ref(),
-            ),
-            self.height.retarget(
-                new_view.height,
-                new_view.motion.clone(),
-                &self.notifications,
-                self.vsync.as_ref(),
-            ),
-            self.margin.retarget(
-                new_view.margin,
-                new_view.motion.clone(),
-                &self.notifications,
-                self.vsync.as_ref(),
-            ),
-        ] {
-            if let Err(error) = result {
-                tracing::warn!(%error, "container property refused; retaining its published run");
-            }
-        }
         let restart = self.transform.animates_toward(new_view.transform.as_ref());
         let restart_at = restart.then(|| self.transform_progress.value());
-        self.transform.retarget(new_view.transform, restart_at);
-        let result = if restart {
-            // Matrix decomposition defines position interpolation, not a vector
-            // derivative. Re-anchor the displayed matrix before restarting progress.
-            self.transform_progress.snap_to(0.0).and_then(|()| {
-                self.transform_progress
-                    .retarget(1.0, new_view.motion.clone())
-            })
-        } else {
-            self.transform_progress.set_motion(new_view.motion.clone())
-        };
+        let result = MotionUpdate::run_with(
+            |update| {
+                self.alignment.stage(
+                    update,
+                    new_view.alignment,
+                    new_view.motion.clone(),
+                    &self.notifications,
+                    self.vsync.as_ref(),
+                )?;
+                self.padding.stage(
+                    update,
+                    new_view.padding,
+                    new_view.motion.clone(),
+                    &self.notifications,
+                    self.vsync.as_ref(),
+                )?;
+                self.color.stage(
+                    update,
+                    new_view.color,
+                    new_view.motion.clone(),
+                    &self.notifications,
+                    self.vsync.as_ref(),
+                )?;
+                self.width.stage(
+                    update,
+                    new_view.width,
+                    new_view.motion.clone(),
+                    &self.notifications,
+                    self.vsync.as_ref(),
+                )?;
+                self.height.stage(
+                    update,
+                    new_view.height,
+                    new_view.motion.clone(),
+                    &self.notifications,
+                    self.vsync.as_ref(),
+                )?;
+                self.margin.stage(
+                    update,
+                    new_view.margin,
+                    new_view.motion.clone(),
+                    &self.notifications,
+                    self.vsync.as_ref(),
+                )?;
+                if restart {
+                    update.restart(
+                        &mut self.transform_progress,
+                        0.0,
+                        1.0,
+                        new_view.motion.clone(),
+                    )
+                } else {
+                    let target = *self.transform_progress.target();
+                    update.retarget(
+                        &mut self.transform_progress,
+                        target,
+                        new_view.motion.clone(),
+                    )
+                }
+            },
+            || self.transform.retarget(new_view.transform, restart_at),
+        );
         if let Err(error) = result {
-            tracing::warn!(%error, "container transform motion refused");
+            tracing::warn!(%error, "container motion refused; retaining its admitted properties");
         }
     }
 
