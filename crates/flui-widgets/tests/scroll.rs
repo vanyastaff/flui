@@ -684,6 +684,7 @@ pub(crate) fn refresh_motion_notifies_activity_through_release_and_recovery() {
 pub(crate) fn a_failed_refresh_notification_releases_activity_and_recovers() {
     use std::sync::atomic::{AtomicBool, Ordering};
 
+    let mut failures = Vec::new();
     for (phase_fault, activity_fault) in [(true, false), (false, true), (true, true)] {
     let scroll = ScrollController::new();
     let refresh = RefreshController::new();
@@ -756,9 +757,14 @@ pub(crate) fn a_failed_refresh_notification_releases_activity_and_recovers() {
     assert!(!scroll.position().is_scrolling());
     listenable.remove_listener(listener);
     position.remove_activity_listener(activity_listener);
-    assert_eq!(attempted_cleanup, activity_fault, "mandatory cleanup notification remains attempted");
-    assert!(!stranded, "a failed phase observer stranded terminal scroll activity");
+    if attempted_cleanup != activity_fault {
+        failures.push(format!("phase={phase_fault}, activity={activity_fault}: mandatory cleanup not attempted"));
     }
+    if stranded {
+        failures.push(format!("phase={phase_fault}, activity={activity_fault}: terminal activity stranded"));
+    }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("; "));
 }
 
 pub(crate) fn scroll_activity_tracks_the_whole_gesture_lifecycle() {
