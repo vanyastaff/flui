@@ -586,6 +586,17 @@ impl TapAndDragGestureRecognizer {
         let mut notices = Vec::new();
         let mut step = ArenaStep::None;
         let mut state = self.gesture_state.borrow_mut();
+        let origin = match state.phase {
+            Phase::Down | Phase::Claiming => state.initial,
+            Phase::Dragging => state.last_reported,
+            Phase::Ready | Phase::TapPending => position,
+        };
+        let delta = position - origin;
+        if !delta.is_finite() {
+            drop(state);
+            self.cancel();
+            return;
+        }
         let mut exceeded_tap = false;
         let mut exceeded_drag = false;
         for (stamp, position) in history {
@@ -605,7 +616,6 @@ impl TapAndDragGestureRecognizer {
         state.velocity_tracker.add_position(now, position);
         match state.phase {
             Phase::Down => {
-                let delta = position - state.initial;
                 if exceeded_tap || settings.exceeds_hit_slop(kind, delta) {
                     state.tap_viable = false;
                 }
@@ -621,7 +631,6 @@ impl TapAndDragGestureRecognizer {
                 }
             }
             Phase::Dragging => {
-                let delta = (position - state.last_reported).to_delta();
                 state.last_reported = position;
                 notices.push(Notice::DragUpdate(TapDragUpdateDetails {
                     global_position,
