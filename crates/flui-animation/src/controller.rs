@@ -2295,9 +2295,8 @@ impl AnimationController {
     /// workspace fling controllers spell `let _ = fling.animate_to_curved(..)`
     /// and friends), so this is the only place the refusal becomes
     /// observable. Call only once the refusal is fully decided and no
-    /// mutation has been applied — it drops the controller's lock before
-    /// warning, mirroring [`warn_if_no_ticker`](Self::warn_if_no_ticker), so
-    /// the warning's arbitrary subscriber never runs under it.
+    /// mutation has been applied — it releases the controller's borrow before
+    /// warning, so an arbitrary subscriber can reenter the controller.
     fn warn_non_finite_target(
         inner: std::cell::RefMut<'_, AnimationControllerInner>,
         err: AnimationError,
@@ -2363,8 +2362,8 @@ impl AnimationController {
     /// Emits the "received a non-finite value" warning shared by
     /// [`set_value`](Self::set_value)'s canonicalization and
     /// [`tick_simulation`](Self::tick_simulation)'s mid-run non-finite
-    /// sample — call only after `finish` has unlocked and delivered, for
-    /// the same reason as [`warn_if_no_ticker`](Self::warn_if_no_ticker).
+    /// sample — call only after `finish` has released its borrow and delivered,
+    /// so an arbitrary subscriber can reenter the controller.
     /// `should_warn` is the caller's snapshot of the latch
     /// (`!non_finite_warned`, taken before setting it) — this fires at most
     /// once per controller, not once per frame of a poisoned gesture drag
@@ -2621,11 +2620,9 @@ impl AnimationControllerInner {
         self.local_elapsed.as_secs_f64()
     }
 
-    /// Whether this controller was built by one of the `unbounded*`
-    /// constructors. Both bounds are fixed `+-inf` TOGETHER there — FLUI
-    /// never constructs a half-open pair (one finite, one infinite); see
-    /// [`AnimationController::with_bounds_inner`]'s own doc — so checking
-    /// `lower_bound` alone detects it.
+    /// Unbounded builders store both infinite bounds; a validated value range
+    /// stores two finite endpoints. Checking `lower_bound` alone distinguishes
+    /// those configurations because a half-open pair cannot be constructed.
     fn is_unbounded(&self) -> bool {
         !self.lower_bound.is_finite()
     }
@@ -2634,7 +2631,7 @@ impl AnimationControllerInner {
     ///
     /// Uses exact equality for infinite bounds to avoid the `INFINITY - INFINITY = NaN`
     /// pitfall that breaks the epsilon comparison on an
-    /// [`unbounded`](AnimationController::unbounded)-family controller,
+    /// [`unbounded`](crate::AnimationControllerBuilder::unbounded) controller,
     /// whose bounds are fixed at `(NEG_INFINITY, INFINITY)`.
     fn is_at_upper_bound(&self) -> bool {
         self.value == self.upper_bound

@@ -283,7 +283,7 @@ impl AnimationRunFuture {
         self.inner.read_state() == AnimationRunFutureState::Canceled
     }
 
-    /// Check if the ticker is still pending
+    /// Check if the run is still pending.
     pub fn is_pending(&self) -> bool {
         self.inner.read_state() == AnimationRunFutureState::Pending
     }
@@ -291,17 +291,14 @@ impl AnimationRunFuture {
     /// Calls `f` when this future resolves, however it resolves.
     ///
     /// If the future is already resolved when this method is called —
-    /// including in the window between a [`RunCompleter`] publishing and
-    /// its [`RunDelivery`] running registered continuations — `f` runs
+    /// including between outcome publication and delivery of previously
+    /// registered continuations — `f` runs
     /// immediately, on the calling thread. Callers must therefore be safe to
     /// re-enter from this call (nothing is deferred to a later turn), and
-    /// the relative order between two different registrants racing a
-    /// resolution is not a contract.
+    /// a late registration may run before continuations awaiting delivery.
     ///
     /// This never blocks: on a still-pending future, `f` is stored and run
-    /// later by whichever [`RunCompleter::complete`]/
-    /// [`cancel`](RunCompleter::cancel) (or its `Drop`) resolves the
-    /// future.
+    /// later when the controller completes or cancels the run.
     /// `f` is called exactly once. Its `FnMut` bound keeps captures owned
     /// outside the invocation so a callback panic cannot unwind through them.
     pub fn when_complete_or_cancel<F>(&self, f: F)
