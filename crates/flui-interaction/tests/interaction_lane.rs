@@ -2999,7 +2999,7 @@ fn native_staged_retirement_preserves_delivery_and_failure() {
 
 fn native_close_preserves_retirement_ownership() {
     use flui_foundation::geometry::{Offset, Point};
-    use flui_interaction::events::make_down_event;
+    use flui_interaction::events::make_down_event_for_id;
     use flui_interaction::routing::EventPropagation;
     use flui_interaction::{GestureBinding, HitTestResult};
     use flui_platform_api::{
@@ -3017,15 +3017,13 @@ fn native_close_preserves_retirement_ownership() {
 
     struct Capture {
         drops: Rc<Cell<usize>>,
-        fails: bool,
     }
     impl Drop for Capture {
         fn drop(&mut self) {
             self.drops.set(self.drops.get() + 1);
-            assert!(!self.fails, "native close capture failure");
         }
     }
-    for (preserving, prior_failure, callback_failure, hostile_tail) in [
+    for (preserving, prior_failure, callback_failure, tail_failure) in [
         (false, false, false, false),
         (false, false, true, false),
         (false, false, true, true),
@@ -3039,6 +3037,30 @@ fn native_close_preserves_retirement_ownership() {
         let tail_drops = Rc::new(Cell::new(0));
         let calls = Rc::new(Cell::new(0));
         lane.enter(|| {
+            let (first, tail, called) = (first_drops.clone(), tail_drops.clone(), calls.clone());
+            let target = handle.register_pan_zoom(move |dispatch| {
+                if dispatch.local.phase == PanZoomPhase::Start {
+                    let first = Capture { drops: first.clone() };
+                    let called = called.clone();
+                    assert!(dispatch.on_retirement(move || {
+                        let _keep = &first;
+                        called.set(called.get() + 1);
+                        assert!(!callback_failure, "native close body failure");
+                    }));
+                    let tail = Capture { drops: tail.clone() };
+                    assert!(dispatch.on_retirement(move || {
+                        let _keep = &tail;
+                        assert!(!tail_failure, "native close tail failure");
+                    }));
+                }
+                EventPropagation::Continue
+            }).expect("staged native target");
+            let mut path = HitTestResult::new();
+            path.add(HitTestEntry::new(RenderId::new(2)).pan_zoom_target(target));
+            binding.handle_pointer_event(&PointerEvent::PanZoom(PanZoomEvent::new(
+                PointerInfo::new(PointerId::try_from(840_u64).expect("source"), PointerKind::Trackpad),
+                EventTime::from_nanos(0), PointerPosition::try_new(Point::ZERO).expect("position"), PanZoomPhase::Start,
+            )), |_| path.clone());
             if prior_failure {
                 let tokens = Rc::new(RefCell::new(Vec::new()));
                 let held = tokens.clone();
@@ -3049,33 +3071,14 @@ fn native_close_preserves_retirement_ownership() {
                         _ => {}
                     }
                 }).expect("captured pointer");
-                let mut path = HitTestResult::new();
-                path.add(hit_entry(pointer));
-                binding.handle_pointer_event(&make_down_event(Offset::ZERO, PointerKind::Touch).expect("Down"),
-                    |_| path.clone());
+                let mut contact_path = HitTestResult::new();
+                contact_path.add(hit_entry(pointer));
+                binding.handle_pointer_event(&make_down_event_for_id(
+                    PointerId::try_from(841_u64).expect("independent contact"), Offset::ZERO, PointerKind::Touch,
+                ).expect("Down"), |_| contact_path.clone());
+                // No input follows release: its deferred loss is first delivered by close.
                 tokens.borrow_mut().clear();
             }
-            let (first, tail, called) = (first_drops.clone(), tail_drops.clone(), calls.clone());
-            let target = handle.register_pan_zoom(move |dispatch| {
-                if dispatch.local.phase == PanZoomPhase::Start {
-                    let first = Capture { drops: first.clone(), fails: false };
-                    let called = called.clone();
-                    assert!(dispatch.on_retirement(move || {
-                        let _keep = &first;
-                        called.set(called.get() + 1);
-                        assert!(!callback_failure, "native close body failure");
-                    }));
-                    let tail = Capture { drops: tail.clone(), fails: hostile_tail };
-                    assert!(dispatch.on_retirement(move || { let _keep = &tail; }));
-                }
-                EventPropagation::Continue
-            }).expect("staged native target");
-            let mut path = HitTestResult::new();
-            path.add(HitTestEntry::new(RenderId::new(2)).pan_zoom_target(target));
-            binding.handle_pointer_event(&PointerEvent::PanZoom(PanZoomEvent::new(
-                PointerInfo::new(PointerId::try_from(840_u64).expect("source"), PointerKind::Trackpad),
-                EventTime::from_nanos(0), PointerPosition::try_new(Point::ZERO).expect("position"), PanZoomPhase::Start,
-            )), |_| path.clone());
             if preserving {
                 let original = catch_unwind(|| panic!("original caller failure")).expect_err("caller failed");
                 flui_interaction::__runtime::close_gestures(&binding, flui_interaction::__runtime::CloseMode::PreservingFailure);
