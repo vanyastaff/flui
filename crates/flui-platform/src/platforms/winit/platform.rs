@@ -1466,7 +1466,7 @@ impl ApplicationHandler for WinitApp {
             wake_deadline,
             self.preference_source
                 .as_ref()
-                .and_then(|source| source.retry_deadline()),
+                .and_then(super::super::windows::preferences::PreferenceSource::retry_deadline),
         );
         let control_flow = match earliest_deadline(wake_deadline, self.self_close_deadline) {
             Some(deadline) => ControlFlow::WaitUntil(deadline),

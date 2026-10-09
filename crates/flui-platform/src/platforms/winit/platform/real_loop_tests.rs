@@ -322,7 +322,7 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
     let done = Arc::new(AtomicBool::new(false));
     let drained = Arc::new(AtomicBool::new(false));
     let healthy_frame = Arc::new(Mutex::new(None));
-    let timeout_control = control.clone();
+    let timeout_control = control;
     let timeout = wake_after_native_drain(
         recovered.clone(),
         drained.clone(),
@@ -338,9 +338,9 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
     let quit = platform.clone();
     let wake_platform = platform.clone();
     let wake_frames = frames.clone();
-    let wake_deferred = deferred_frame.clone();
+    let wake_deferred = deferred_frame;
     let wake_recovered = recovered.clone();
-    let wake_drained = drained.clone();
+    let wake_drained = drained;
     let wake_healthy = healthy_frame.clone();
     let frame_healthy = healthy_frame;
     let frame_sink = frames.clone();
@@ -442,7 +442,7 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
             // SAFETY: this exact owned hidden HWND remains tracked until loop shutdown;
             // every queued message contains only by-value coordinates/wheel distance.
             unsafe {
-                PostMessageW(Some(hwnd), WM_MOUSEMOVE, WPARAM(0), LPARAM(40 | (40 << 16)))?;
+                PostMessageW(Some(hwnd), WM_MOUSEMOVE, WPARAM(0), LPARAM(0x0028 | (0x0028 << 16)))?;
                 for (message, distance) in [
                     (WM_MOUSEWHEEL, 120_i16),
                     (WM_MOUSEWHEEL, -60),
