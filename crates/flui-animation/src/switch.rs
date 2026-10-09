@@ -2,6 +2,7 @@
 
 use crate::animation::{Animation, Retirement, StatusCallback, Terminal};
 use crate::status::AnimationStatus;
+use flui_foundation::panic::RecoveryScope;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
 use std::cell::RefCell;
 use std::fmt;
@@ -66,14 +67,14 @@ struct SwitchOwner {
 impl Drop for SwitchOwner {
     fn drop(&mut self) {
         let mut recovery = Retirement::new();
-        self.notifier.inherit_failure(&mut recovery);
+        self.notifier.inherit_failure(&mut recovery.scope());
         self.inner
             .borrow()
             .status_listeners
-            .inherit_failure(&mut recovery);
+            .inherit_failure(&mut recovery.scope());
         let inner = self.inner.withdraw();
         let notifier = self.notifier.withdraw();
-        dispose_switch(&inner, &notifier, &mut recovery);
+        dispose_switch(&inner, &notifier, &mut recovery.scope());
         recovery.retire(inner);
         recovery.retire(notifier);
         recovery.finish();
@@ -114,7 +115,7 @@ fn detach_parents(
     value_id: Option<ListenerId>,
     status_id: Option<ListenerId>,
     next_id: Option<ListenerId>,
-    retirement: &mut Retirement,
+    retirement: &mut RecoveryScope<'_>,
 ) {
     if let Some(id) = value_id {
         retirement.run(|| current.remove_listener(id));
@@ -145,7 +146,7 @@ impl Drop for AnimationSwitchInner {
             value_id,
             status_id,
             next_id,
-            &mut retirement,
+            &mut retirement.scope(),
         );
         retirement.retire(callback);
         for listener in listeners {
@@ -282,7 +283,7 @@ impl AnimationSwitch {
         let status_callback = Self::make_status_callback(&inner_weak);
         let status_callback_for_handler = Rc::clone(&status_callback);
 
-        let value_handler = move |recovery: &mut Retirement| {
+        let value_handler = move |recovery: &mut RecoveryScope<'_>| {
             if let Some(inner_arc) = inner_weak.upgrade() {
                 let (current, next, mode) = {
                     let inner = inner_arc.borrow();
@@ -421,13 +422,17 @@ impl AnimationSwitch {
     /// Disposes of this animation switch, cleaning up listeners.
     pub fn dispose(&self) {
         let mut retirement = Retirement::new();
-        self.owner.notifier.inherit_failure(&mut retirement);
+        self.owner.notifier.inherit_failure(&mut retirement.scope());
         self.owner
             .inner
             .borrow()
             .status_listeners
-            .inherit_failure(&mut retirement);
-        dispose_switch(&self.owner.inner, &self.owner.notifier, &mut retirement);
+            .inherit_failure(&mut retirement.scope());
+        dispose_switch(
+            &self.owner.inner,
+            &self.owner.notifier,
+            &mut retirement.scope(),
+        );
         retirement.finish();
     }
 }
@@ -435,7 +440,7 @@ impl AnimationSwitch {
 fn dispose_switch(
     owner_inner: &Rc<RefCell<AnimationSwitchInner>>,
     owner_notifier: &Rc<ChangeNotifier>,
-    retirement: &mut Retirement,
+    retirement: &mut RecoveryScope<'_>,
 ) {
     let (current, next, value_id, status_id, next_id, callback, listeners) = {
         let mut inner = owner_inner.borrow_mut();
@@ -523,8 +528,8 @@ impl Animation<f64> for AnimationSwitch {
         let listeners = Rc::clone(&self.owner.inner.borrow().status_listeners);
         let callback = listeners.take_callback(id);
         let mut recovery = Retirement::new();
-        listeners.inherit_failure(&mut recovery);
-        self.owner.notifier.inherit_failure(&mut recovery);
+        listeners.inherit_failure(&mut recovery.scope());
+        self.owner.notifier.inherit_failure(&mut recovery.scope());
         recovery.retire(callback);
         recovery.finish();
     }
@@ -542,12 +547,12 @@ impl Listenable for AnimationSwitch {
     fn remove_listener(&self, id: ListenerId) {
         let callback = self.owner.notifier.take_listener(id);
         let mut recovery = Retirement::new();
-        self.owner.notifier.inherit_failure(&mut recovery);
+        self.owner.notifier.inherit_failure(&mut recovery.scope());
         self.owner
             .inner
             .borrow()
             .status_listeners
-            .inherit_failure(&mut recovery);
+            .inherit_failure(&mut recovery.scope());
         recovery.retire(callback);
         recovery.finish();
     }
@@ -555,12 +560,12 @@ impl Listenable for AnimationSwitch {
     fn remove_all_listeners(&self) {
         let callbacks = self.owner.notifier.take_listeners();
         let mut recovery = Retirement::new();
-        self.owner.notifier.inherit_failure(&mut recovery);
+        self.owner.notifier.inherit_failure(&mut recovery.scope());
         self.owner
             .inner
             .borrow()
             .status_listeners
-            .inherit_failure(&mut recovery);
+            .inherit_failure(&mut recovery.scope());
         for callback in callbacks {
             recovery.retire(callback);
         }

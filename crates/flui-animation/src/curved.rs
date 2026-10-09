@@ -58,7 +58,7 @@ pub struct CurvedAnimation<C: Curve + Clone> {
 impl<C: Curve + Clone> Drop for CurvedAnimation<C> {
     fn drop(&mut self) {
         let mut retirement = Retirement::new();
-        self.links.inherit_failure(&mut retirement);
+        self.links.inherit_failure(&mut retirement.scope());
         let links = self.links.withdraw();
         let curve = self.curve.withdraw();
         let reverse = self.reverse_curve.take();
