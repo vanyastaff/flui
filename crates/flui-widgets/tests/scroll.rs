@@ -1359,6 +1359,45 @@ pub(crate) fn replacing_vsync_retires_old_motion_and_drives_fresh_contacts() {
     assert!(failures.is_empty(), "{}", failures.join("; "));
 }
 
+pub(crate) fn a_repeated_frame_does_not_cancel_viewer_inertia() {
+    use flui_foundation::geometry::EdgeInsets;
+    use flui_widgets::{InteractiveViewer, TransformationController};
+
+    let controller = TransformationController::new();
+    let vsync = Vsync::new();
+    let content = VsyncScope::new(
+        vsync.clone(),
+        InteractiveViewer::new()
+            .controller(controller.clone())
+            .boundary_margin(EdgeInsets::all(1000.0))
+            .scale_enabled(false)
+            .child(SizedBox::new(300.0, 300.0)),
+    );
+    let mut laid = crate::common::lay_out_animated(content, tight(300.0, 300.0), vsync);
+    let fling = |laid: &LaidOut| {
+        laid.dispatch_pointer_down(150.0, 250.0);
+        for y in [230.0, 210.0, 190.0, 170.0, 150.0] {
+            laid.dispatch_pointer_move_after(150.0, y, Duration::from_millis(10));
+        }
+        laid.dispatch_pointer_up(150.0, 150.0);
+    };
+    let pixels = || -controller.value().to_col_major_array()[13];
+    fling(&laid);
+    let released = pixels();
+    advance_scroll_run(&mut laid);
+    assert!(pixels() > released, "real viewer inertia was admitted");
+    let before_repeat = pixels();
+    laid.pump_for(Duration::ZERO);
+    assert_eq!(pixels(), before_repeat, "an equal-time frame publishes no extra motion");
+    laid.pump_for(Duration::from_millis(16));
+    let continued = pixels() > before_repeat;
+    fling(&laid);
+    let fresh_release = pixels();
+    advance_scroll_run(&mut laid);
+    assert!(pixels() > fresh_release, "fresh contact recovers real inertia");
+    assert!(continued, "an equal-time frame cancelled the accepted viewer trajectory");
+}
+
 pub(crate) fn replacing_a_scroll_position_cancels_its_contact_and_recovers() {
     use std::sync::Mutex;
 
