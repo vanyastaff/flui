@@ -35,6 +35,7 @@ enum Method {
     Velocity,
     Done,
     Curve,
+    Slope,
 }
 
 struct Hook {
@@ -105,6 +106,18 @@ impl Curve for CustomCurve {
     }
 }
 
+struct CustomSlope(Rc<Hook>);
+impl Curve for CustomSlope {
+    fn transform(&self, t: f64) -> f64 {
+        t
+    }
+
+    fn slope(&self, _: f64) -> f64 {
+        self.0.run();
+        1.0
+    }
+}
+
 fn poll(future: &mut AnimationRunFuture) -> Poll<Result<(), RunCanceled>> {
     Pin::new(future).poll(&mut Context::from_waker(Waker::noop()))
 }
@@ -127,19 +140,31 @@ fn exercise(method: Method, action: Action) {
                 Rc::new(CustomCurve(hook)),
             )
             .expect("curved run")
+    } else if matches!(method, Method::Slope) {
+        controller
+            .animate_to_curved(1.0, Some(Duration::from_secs(1)), CustomSlope(hook))
+            .expect("curved run with a slope hook")
     } else {
         controller
             .animate_with(CustomSimulation { hook, method })
             .expect("simulation run")
     };
-    if matches!(method, Method::Velocity) {
-        assert_eq!(controller.velocity(), 1.0);
+    if matches!(method, Method::Velocity | Method::Slope) {
+        assert_eq!(
+            controller.velocity(),
+            if matches!(action, Action::Read) {
+                1.0
+            } else {
+                0.0
+            },
+            "a derivative cannot publish a sample invalidated by user code"
+        );
     } else {
         controller.tick_at(std::time::Duration::from_secs_f64(0.25));
     }
     match action {
         Action::Read => {
-            if !matches!(method, Method::Velocity) {
+            if !matches!(method, Method::Velocity | Method::Slope) {
                 assert_eq!(controller.value(), 0.25);
             }
             controller.tick_at(std::time::Duration::from_secs_f64(1.0));
@@ -186,6 +211,27 @@ fn position_may_read() {
 }
 fn velocity_may_read() {
     exercise(Method::Velocity, Action::Read);
+}
+fn velocity_may_replace() {
+    exercise(Method::Velocity, Action::Replace);
+}
+fn velocity_may_stop() {
+    exercise(Method::Velocity, Action::Stop);
+}
+fn nested_velocity_tick_wins() {
+    exercise(Method::Velocity, Action::Nested);
+}
+fn slope_may_read() {
+    exercise(Method::Slope, Action::Read);
+}
+fn slope_may_replace() {
+    exercise(Method::Slope, Action::Replace);
+}
+fn slope_may_stop() {
+    exercise(Method::Slope, Action::Stop);
+}
+fn nested_slope_tick_wins() {
+    exercise(Method::Slope, Action::Nested);
 }
 fn completion_may_read() {
     exercise(Method::Done, Action::Read);
@@ -293,6 +339,82 @@ struct HostileSimulation {
     _first: Bomb,
     _second: Bomb,
     initial: bool,
+}
+
+struct HostileSlope {
+    hook: Rc<Hook>,
+    _first: Bomb,
+    _second: Bomb,
+}
+
+impl Curve for HostileSlope {
+    fn transform(&self, t: f64) -> f64 {
+        t
+    }
+
+    fn slope(&self, _: f64) -> f64 {
+        self.hook.run();
+        1.0
+    }
+}
+
+fn slope_failure_keeps_custody(status_fails: bool) {
+    let mut owner =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = owner.controller().clone();
+    let drops = Rc::new(AtomicUsize::new(0));
+    let mut original = controller
+        .animate_to_curved(
+            1.0,
+            Some(Duration::from_secs(1)),
+            HostileSlope {
+                hook: Rc::new(Hook {
+                    controller: controller.clone(),
+                    action: Action::PanicAfterStop,
+                    armed: AtomicBool::new(true),
+                    replacement: Rc::new(Mutex::new(None)),
+                }),
+                _first: Bomb(drops.clone()),
+                _second: Bomb(drops.clone()),
+            },
+        )
+        .expect("live curve");
+    let callback = status_fails.then(|| {
+        controller.add_status_listener(Rc::new(|_| panic!("authoritative status failure")))
+    });
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| controller.velocity()))
+        .expect_err("derivative hook fails");
+    assert_eq!(
+        failure.downcast_ref::<&str>().copied(),
+        Some(if status_fails {
+            "authoritative status failure"
+        } else {
+            "authoritative sample failure"
+        })
+    );
+    std::mem::forget(failure);
+    assert_eq!(
+        drops.load(Ordering::SeqCst),
+        0,
+        "failed source stays in custody"
+    );
+    assert!(matches!(poll(&mut original), Poll::Ready(Err(_))));
+    if let Some(callback) = callback {
+        controller.remove_status_listener(callback);
+    }
+    let mut next = controller.forward().expect("recovery run");
+    controller.tick_at(Duration::from_secs(1));
+    assert_eq!(controller.value(), 1.0);
+    assert_eq!(poll(&mut next), Poll::Ready(Ok(())));
+    owner.dispose();
+}
+
+fn slope_failure_retains_hostile_source() {
+    slope_failure_keeps_custody(false);
+}
+
+fn slope_cancellation_failure_retains_hostile_source() {
+    slope_failure_keeps_custody(true);
 }
 impl Simulation for HostileSimulation {
     fn x(&self, time: f64) -> f64 {
@@ -1481,6 +1603,21 @@ fn controller_sources_allow_reentry_and_preserve_run_ownership() {
         ),
         ("position may read", position_may_read),
         ("velocity may read", velocity_may_read),
+        ("velocity may replace", velocity_may_replace),
+        ("velocity may stop", velocity_may_stop),
+        ("nested velocity tick wins", nested_velocity_tick_wins),
+        ("slope may read", slope_may_read),
+        ("slope may replace", slope_may_replace),
+        ("slope may stop", slope_may_stop),
+        ("nested slope tick wins", nested_slope_tick_wins),
+        (
+            "slope failure retains hostile source",
+            slope_failure_retains_hostile_source,
+        ),
+        (
+            "slope cancellation failure retains hostile source",
+            slope_cancellation_failure_retains_hostile_source,
+        ),
         ("completion may read", completion_may_read),
         ("completion may replace", completion_may_replace),
         ("completion may stop", completion_may_stop),

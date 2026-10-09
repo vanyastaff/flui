@@ -6,9 +6,13 @@
 
 use std::time::Duration;
 
-use flui_animation::{AnimatedValue, ArcCurve, Cubic, Curves, MotionSpec, SpringDescription};
+use flui_animation::{
+    AnimatedValue, AnimationController, ArcCurve, Cubic, Curve, Curves, JumpAt, MotionSpec,
+    PlaybackRate, SpringDescription, Steps, Vsync,
+};
 use flui_foundation::geometry::Offset;
 use proptest::prelude::*;
+use proptest::test_runner::FileFailurePersistence;
 
 /// Control points of the cubic curves the curve-mode properties use.
 const CUBICS: [(f64, f64, f64, f64); 5] = [
@@ -187,9 +191,53 @@ fn frame_dt() -> impl Strategy<Value = f64> {
 proptest! {
     #![proptest_config(ProptestConfig {
         cases: 256,
-        failure_persistence: None,
+        failure_persistence: Some(Box::new(FileFailurePersistence::Direct(
+            "tests/contracts/retarget.proptest-regressions",
+        ))),
         ..ProptestConfig::default()
     })]
+
+    #[test]
+    fn curved_run_velocity_is_the_curve_slope(
+        curve_index in 0..CUBICS.len(),
+        millis in 10_u64..10_000,
+        fraction in 1_u32..999_999,
+        reverse in any::<bool>(),
+        rate in 0.1_f64..4.0,
+    ) {
+        let curve = CUBICS[curve_index];
+        let duration = Duration::from_millis(millis);
+        let owner = AnimationController::builder(duration)
+            .initial_value(if reverse { 1.0 } else { 0.0 })
+            .build_on(Some(&Vsync::new()));
+        let controller = owner.controller();
+        controller.set_playback_rate(PlaybackRate::new(rate).expect("finite positive rate"));
+        let curve = Cubic::new(curve.0, curve.1, curve.2, curve.3);
+        let _run = if reverse {
+            controller.animate_back_curved(0.0, Some(duration), curve)
+        } else {
+            controller.animate_to_curved(1.0, Some(duration), curve)
+        }.expect("finite curved run");
+        controller.tick_at(Duration::ZERO);
+        let controls = CUBICS[curve_index];
+        let initial_slope = if controls.0 == 0.0 {
+            controls.3 / controls.2
+        } else {
+            controls.1 / controls.0
+        };
+        let sign = if reverse { -1.0 } else { 1.0 };
+        prop_assert!(close(controller.velocity(), sign * initial_slope / duration.as_secs_f64() * rate, 1e-7));
+        let elapsed = duration.mul_f64(f64::from(fraction) / 1_000_000.0 / rate);
+        controller.tick_at(elapsed);
+        let local = elapsed.mul_f64(rate);
+        let progress = local.as_secs_f64() / duration.as_secs_f64();
+        let expected = sign * eased_slope(CUBICS[curve_index], progress)
+            / duration.as_secs_f64() * rate;
+        prop_assert!(close(controller.velocity(), expected, 1e-7),
+            "velocity {} differs from slope {expected} at {progress}", controller.velocity());
+        controller.tick_at(Duration::MAX);
+        prop_assert_eq!(controller.velocity(), 0.0);
+    }
 
     /// Retargeting every frame for 120 frames keeps value and velocity
     /// continuous at every seam, publishes only finite values, and the last
@@ -499,6 +547,103 @@ fn linear_spec(millis: u64) -> MotionSpec {
     }
 }
 
+fn controller_velocity_boundaries() {
+    for reverse in [false, true] {
+        for duration in [Duration::ZERO, Duration::from_secs(1)] {
+            let owner = AnimationController::builder(duration)
+                .initial_value(if reverse { 1.0 } else { 0.0 })
+                .build_on(Some(&Vsync::new()));
+            let controller = owner.controller();
+            let _run = if reverse {
+                controller.animate_back_curved(0.0, Some(duration), Curves::Linear)
+            } else {
+                controller.animate_to_curved(1.0, Some(duration), Curves::Linear)
+            }
+            .expect("linear run");
+            let expected = if duration.is_zero() {
+                0.0
+            } else if reverse {
+                -1.0
+            } else {
+                1.0
+            };
+            assert_eq!(controller.velocity(), expected, "initial linear derivative");
+            controller.tick_at(Duration::from_nanos(999_999_999));
+            assert_eq!(
+                controller.velocity(),
+                expected,
+                "linear derivative before completion"
+            );
+            controller.set_playback_rate(PlaybackRate::PAUSED);
+            controller.tick_at(Duration::from_nanos(999_999_999));
+            assert_eq!(controller.velocity(), 0.0);
+        }
+    }
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = owner.controller();
+    let _run = controller
+        .animate_to_curved(1.0, None, Steps::new(4, JumpAt::End))
+        .expect("discontinuous curve");
+    for millis in [0, 100, 250, 500, 999, 1000] {
+        controller.tick_at(Duration::from_millis(millis));
+        assert!(
+            controller.velocity().is_finite(),
+            "finite step derivative at {millis}"
+        );
+        if millis == 100 {
+            assert_eq!(controller.velocity(), 0.0, "constant step interval");
+        }
+    }
+}
+
+struct SuppliedSlope(f64);
+impl Curve for SuppliedSlope {
+    fn transform(&self, t: f64) -> f64 {
+        t
+    }
+    fn slope(&self, _: f64) -> f64 {
+        self.0
+    }
+}
+
+fn controller_velocity_keeps_representable_products() {
+    for (span, slope, duration, playback, expected) in [
+        (1e308, 1e-308, Duration::from_nanos(1), 1.0, 1e9),
+        (
+            1.0,
+            1e308,
+            Duration::from_secs(10_000_000_000_000_000_000),
+            1e10,
+            1e299,
+        ),
+        (1e308, 1e-308, Duration::from_nanos(1), 1e-308, 1e-299),
+        (1e308, 1.0, Duration::from_nanos(1), 1e-308, 1e9),
+        (1.0, f64::NAN, Duration::from_secs(1), 1.0, 0.0),
+        (1.0, f64::INFINITY, Duration::from_secs(1), 1.0, 0.0),
+        (1.0, f64::NEG_INFINITY, Duration::from_secs(1), 1.0, 0.0),
+    ] {
+        let owner = AnimationController::builder(duration)
+            .unbounded()
+            .build_on(Some(&Vsync::new()));
+        let controller = owner.controller();
+        controller.set_playback_rate(PlaybackRate::new(playback).expect("finite playback"));
+        let _run = controller
+            .animate_to_curved(span, Some(duration), SuppliedSlope(slope))
+            .expect("finite span");
+        controller.tick_at(Duration::ZERO);
+        let actual = controller.velocity();
+        assert!(actual.is_finite());
+        if expected == 0.0 {
+            assert_eq!(actual, 0.0);
+        } else {
+            assert!(
+                (actual / expected - 1.0).abs() < 1e-12,
+                "expected {expected}, got {actual}"
+            );
+        }
+    }
+}
+
 /// Finite steps whose sum overflows saturate time instead of publishing a
 /// non-finite value, and a spring whose phase or polynomial term overflows
 /// reads as its limit: the target, at rest.
@@ -635,6 +780,14 @@ fn retargeting_a_curve_to_its_target_keeps_its_schedule() {
 #[test]
 fn retarget_seams() {
     crate::run_table(&[
+        (
+            "controller velocity boundaries",
+            controller_velocity_boundaries,
+        ),
+        (
+            "controller velocity products",
+            controller_velocity_keeps_representable_products,
+        ),
         ("overflowing rates cancel", overflowing_rates_cancel),
         (
             "a_large_retarget_keeps_modest_velocity",

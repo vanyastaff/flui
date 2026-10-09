@@ -19,6 +19,15 @@ and admits explicit forward steps. A zero rate pauses ordinary progression.
 Controllers apply their own playback rate to elapsed animation time, preserving
 the current sample when that rate changes. There is no process-wide multiplier.
 
+A controller's velocity is measured per input animation second at the last
+accepted sample. A curved run reports the signed span times the curve derivative,
+divided by run duration and multiplied by its applied controller rate. Paused
+and stopped runs report zero. Derivative callbacks run outside state borrows;
+replacement, stopping or a nested sample invalidates the old derivative read,
+which reports zero. Source retirement retains the enclosing first failure.
+Non-finite or unrepresentable derivatives report zero; regrouping the finite
+factors preserves representable products at extreme rates and durations.
+
 The runtime's exact window agent port admits `MotionRequest` through the same
 owner inbox and close fence as semantics operations. The owner validates the
 whole request before changing rate or time. An invalid rate applies neither
@@ -67,6 +76,12 @@ request before any forced pump; removing run-admission demand fails both.
 `driven_controller_owns_its_seat_and_run` covers same-status restarts, rate pause
 and resume, nested mute, migration, competing wake/listener failures, hook
 replacement and reentrant capture retirement.
+`curved_run_velocity_is_the_curve_slope` checks the owning controller against
+independent Bézier derivatives in both directions and at different rates.
+The `retarget_seams` table covers linear endpoints, zero duration, pausing,
+discontinuous curves, invalid slopes and extreme representable products.
+`controller_sources_allow_reentry_and_preserve_run_ownership` covers derivative
+reentry, stale-read refusal, competing failures and a subsequent successful run.
 `closed_presentation_animation_cannot_wake_a_surviving_window` proves that a
 saved clock cannot schedule a sibling after owner teardown.
 

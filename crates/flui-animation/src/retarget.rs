@@ -288,7 +288,7 @@ impl CurveSegment {
 /// grouping that keeps the intermediate in range for a small `b`, then the one
 /// for a large `b`, then dividing `b` first. Non-finite only when the rate
 /// itself is not representable.
-fn rate(a: f64, b: f64, d: f64) -> f64 {
+pub(crate) fn rate(a: f64, b: f64, d: f64) -> f64 {
     let small_b = a * b / d;
     if small_b.is_finite() {
         return small_b;
@@ -298,6 +298,24 @@ fn rate(a: f64, b: f64, d: f64) -> f64 {
         return large_b;
     }
     a * (b / d)
+}
+
+/// Apply a clock scale without first overflowing or underflowing the slope
+/// product or the unscaled rate. Invalid or unrepresentable derivatives are zero.
+pub(crate) fn scaled_rate(a: f64, b: f64, d: f64, scale: f64) -> f64 {
+    if !(a.is_finite() && b.is_finite() && d.is_finite() && scale.is_finite()) || d <= 0.0 {
+        return 0.0;
+    }
+    for candidate in [
+        rate(a, b * scale, d),
+        rate(a, b, d) * scale,
+        rate(a, scale, d) * b,
+    ] {
+        if candidate.is_finite() && candidate != 0.0 {
+            return candidate;
+        }
+    }
+    0.0
 }
 
 fn finite_or(value: f64, fallback: f64) -> f64 {

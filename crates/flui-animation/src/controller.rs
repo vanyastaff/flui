@@ -1637,31 +1637,58 @@ impl AnimationController {
         Ok(future)
     }
 
-    /// Get the current velocity of the animation (0.0 if not running).
+    /// Velocity at the last sampled run time, in value units per second.
+    ///
+    /// Curved runs use the curve's derivative, including the applied playback
+    /// rate. Stopped and paused runs report zero. User curves and simulations
+    /// run outside the state borrow; if they invalidate the sampled run, this
+    /// read reports zero instead of publishing a stale velocity. A derivative
+    /// that cannot be represented as a finite value also reports zero.
     #[must_use]
     pub fn velocity(&self) -> f64 {
-        let source;
-        let cycle;
-        let rate;
-        {
-            let inner = self.inner.borrow_mut();
-            if inner.active_run.is_none() {
+        let (source, identity, cycle, playback, span, duration) = {
+            let inner = self.inner.borrow();
+            if inner.active_run.is_none() || inner.playback_rate.is_paused() {
                 return 0.0;
             }
-            cycle = inner.cycle_elapsed_secs();
-            rate = inner.playback_rate.get();
-            if let Some(simulation) = &inner.simulation {
-                source = Opaque::new(Rc::clone(simulation.source()));
-            } else {
-                let duration = inner.current_duration();
-                return if duration.is_zero() {
-                    0.0
-                } else {
-                    (inner.target_value - inner.start_value) / duration.as_secs_f64() * rate
-                };
-            }
+            (
+                Opaque::new(inner.tick_source()),
+                SampleIdentity {
+                    generation: inner.run_generation,
+                    epoch: inner.sample_epoch,
+                },
+                inner.cycle_elapsed_secs(),
+                inner.playback_rate.get(),
+                inner.target_value - inner.start_value,
+                inner.current_duration(),
+            )
+        };
+        let mut recovery = Retirement::new();
+        let mut velocity = 0.0;
+        recovery.run(|| {
+            velocity = match source.get() {
+                TickSource::Simulation(simulation) => simulation.source().dx(cycle) * playback,
+                TickSource::Repeat(_) => {
+                    crate::retarget::rate(span, playback, duration.as_secs_f64())
+                }
+                TickSource::Time { curve, .. } => {
+                    if duration.is_zero() {
+                        0.0
+                    } else {
+                        let progress = (cycle / duration.as_secs_f64()).clamp(0.0, 1.0);
+                        let slope = curve.as_ref().map_or(1.0, |curve| curve.slope(progress));
+                        crate::retarget::scaled_rate(span, slope, duration.as_secs_f64(), playback)
+                    }
+                }
+            };
+        });
+        recovery.retire(source);
+        recovery.finish();
+        if velocity.is_finite() && self.inner.borrow().matches_sample(&identity) {
+            velocity
+        } else {
+            0.0
         }
-        source.get().dx(cycle) * rate
     }
 
     /// Apply `rate` at the next sample, preserving the local run time there.
