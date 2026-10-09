@@ -269,6 +269,8 @@ The native Windows winit tests
 wheel packet pipeline, cold deferred bootstrap followed by idle-owner recovery,
 WM_SETTINGCHANGE refresh failure followed by idle-owner recovery, retry without
 an extra redraw and refusal after shutdown. These witnesses do not change system
-policy. They establish this Windows transport's observed wheel and preference
+policy. The retry witness measures delivered native paint callbacks on an
+offscreen, unactivated user window; preference-only recovery leaves that count
+unchanged. They establish this Windows transport's observed wheel and preference
 delivery, not physical pen or touch input, other operating-system execution or
 broader platform-layer acceptance.

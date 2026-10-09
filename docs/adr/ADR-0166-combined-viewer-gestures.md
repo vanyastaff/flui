@@ -51,6 +51,14 @@ generation while preserving the selected consumer for the replacement. Reentrant
 replacement cannot be retired by old terminal work. Callbacks run outside borrows
 and containment preserves the first failure.
 
+Terminal admission is captured before fresh hit testing and raw observation.
+Both can reenter the same Scale actor with a new Start. The outer terminal and
+its retirement then carry only the original exact admission authority, whether
+the original actor was dormant or recognized. Reusing PointerId, DeviceId and
+EventTime does not make the new actor generation equal to the old one. End,
+Cancelled and callback failure leave that replacement usable for its own Update
+and terminal.
+
 Binding-owned Start dispatch supplies borrowed admission authority. Each staged
 actor registers retirement for its exact generation; the selected Update commits
 the delivery owner before recognized callbacks. Losing actors retire even when
@@ -69,6 +77,11 @@ failure, or during preserving close, opaque ticket callbacks and last-owner
 captures are retained rather than starting another user callback or destructor.
 This keeps native cleanup in the same ownership policy as the binding's other
 accepted work; a separate inner containment accumulator cannot weaken that policy.
+Pointer-sequence cancellation also carries its enclosing first-failure state into
+native retirement. Accepted native cleanup callbacks remain deliverable after
+an earlier CaptureLost failure; their opaque captures retain the earlier failure's
+ownership fence under ADR-0127. Fresh admission after containment retires its own
+captures normally and does not redeliver the cancelled generation.
 `nested_native_scale_loser_recovers_touch_after_winner_terminal` checks winner
 continuity, both terminal reasons and the losing ancestor's next touch gesture.
 
@@ -135,5 +148,11 @@ The interaction `binding_input_contract_matrix` includes
 and competing failure, exact same-source replacement and healthy recovery.
 `native_close_preserves_retirement_ownership` covers healthy and preserving close,
 including first-failure capture retention.
+`native_same_actor_terminal_reentry_preserves_new_generation` covers End and
+Cancelled, dormant and recognized actors, fresh-probe and raw-observer reentry,
+failure and subsequent same-source recovery.
+`native_cancellation_retains_captures_after_prior_capture_failure` specifies
+required native cleanup, safe capture retention and fresh same-source recovery
+through both public pointer-sequence cancellation methods.
 Existing Scale tables retain the default two-contact contract. These owned-event
 witnesses do not claim physical trackpad or touchscreen execution on every backend.
