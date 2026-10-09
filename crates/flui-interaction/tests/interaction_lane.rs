@@ -3114,11 +3114,15 @@ fn native_staged_generation_survives_geometry_and_reentry() {
                 ))
             };
             let first_start = Rc::new(Cell::new(true));
+            let selected_starts = Rc::new(Cell::new(0));
+            let selected_ends = Rc::new(Cell::new(0));
+            let (selected_started, selected_ended) = (selected_starts.clone(), selected_ends.clone());
             let weak = Rc::downgrade(&binding);
             let fresh_path = replacement_path.clone();
             let first = first_start.clone();
             let selected = ScaleGestureRecognizer::builder(binding.arena().clone())
                 .on_start(move |_| {
+                    selected_started.set(selected_started.get() + 1);
                     if first.replace(false) {
                         if reenter {
                             weak.upgrade()
@@ -3131,6 +3135,7 @@ fn native_staged_generation_survives_geometry_and_reentry() {
                     }
                 })
                 .on_update(|_| {})
+                .on_end(move |_| selected_ended.set(selected_ended.get() + 1))
                 .build();
             let starts = Rc::new(Cell::new(0));
             let ends = Rc::new(Cell::new(0));
@@ -3169,11 +3174,13 @@ fn native_staged_generation_survives_geometry_and_reentry() {
                 } else { result.expect("healthy recognized update"); }
                 if reenter {
                     binding.handle_pointer_event(&update(), |_| only_ancestor.clone());
-                    assert_eq!((starts.get(), ends.get()), (1, 0),
+                    assert_eq!((selected_starts.get(), selected_ends.get()), (2, 0),
                         "old tickets must not clear the new same-source, same-time native Start");
                 }
                 binding.handle_pointer_event(&packet(PanZoomPhase::End), |_| HitTestResult::new());
-                assert_eq!(ends.get(), usize::from(reenter), "winner terminal survives geometry changes");
+                assert_eq!(selected_ends.get(), 1, "winner terminal survives geometry changes");
+                assert_eq!((starts.get(), ends.get()), (0, 0),
+                    "repeated Start preserves the committed winner rather than handing it to fresh geometry");
 
                 let previous = starts.get();
                 for (id, x) in [(801_u64, 0.0), (802, 100.0)] {
