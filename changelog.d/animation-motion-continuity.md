@@ -35,6 +35,8 @@
 
 ### Fixed
 
+- Move Dismissible content through a render-owned slide while delivering
+  progress updates independently of element rebuilds.
 - Move Drawer panels and fade their scrims through render-owned transitions,
   removing element rebuilds on settling animation ticks.
 - Preserve the dragged position when Dismissible releases in the opposite direction.

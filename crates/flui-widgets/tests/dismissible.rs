@@ -25,6 +25,7 @@ pub(crate) fn dismissible_slides_without_rebuilding_per_frame() {
             DismissDirection::Horizontal
         })
         .background(ColoredBox::new(Color::rgb(80, 90, 100)))
+        .secondary_background(ColoredBox::new(Color::rgb(110, 120, 130)))
         .movement_duration(Duration::from_secs(1))
         .on_update(move |_, details| updates.borrow_mut().push(details.progress));
         for direction in [
@@ -45,7 +46,7 @@ pub(crate) fn dismissible_slides_without_rebuilding_per_frame() {
             MountOptions::tight(200.0, 200.0),
         );
         binding.pump_frame(Duration::ZERO);
-        binding.replay(&PointerScript::drag(
+        let script = PointerScript::drag(
             Offset::new(100.0, 100.0),
             if vertical {
                 Offset::new(100.0, 100.0 + sign * 80.0)
@@ -54,7 +55,65 @@ pub(crate) fn dismissible_slides_without_rebuilding_per_frame() {
             },
             5,
             Duration::from_millis(10),
-        ));
+        );
+        let mut release_position = script
+            .events()
+            .last()
+            .expect("drag ends with release")
+            .position;
+        for (index, mut event) in script.events().iter().copied().enumerate() {
+            if event.phase == flui_testing::PointerPhase::Up {
+                event.position = release_position;
+            }
+            event.at = if index == 0 {
+                Duration::ZERO
+            } else {
+                Duration::from_millis(10)
+            };
+            binding.replay(&PointerScript::new("one drag event").with(event));
+            binding.pump_frame(Duration::ZERO);
+            if (3..=5).contains(&index) {
+                assert_eq!(
+                    binding.last_frame_report().build.elements_built,
+                    0,
+                    "drag motion does not rebuild after its background mounts"
+                );
+            }
+            if index == 5 {
+                if vertical {
+                    event.position.dy -= sign * 160.0;
+                } else {
+                    event.position.dx -= sign * 160.0;
+                }
+                binding.replay(&PointerScript::new("cross the origin").with(event));
+                binding.pump_frame(Duration::ZERO);
+                let expected = if sign > 0.0 {
+                    Color::rgb(110, 120, 130)
+                } else {
+                    Color::rgb(80, 90, 100)
+                };
+                let scene = binding.layer_tree().expect("dragged card scene");
+                assert!(scene.iter().any(|(_, node)| {
+                    if let flui_rendering::layer::Layer::Picture(picture) = node.layer() {
+                        picture.picture().iter().any(|command| matches!(&command.op,
+                            flui_painting::display_list::DrawOp::Rect { paint, .. } if paint.color == expected))
+                    } else { false }
+                }), "crossing the origin selects the other background");
+                if vertical {
+                    event.position.dy -= sign * 16.0;
+                } else {
+                    event.position.dx -= sign * 16.0;
+                }
+                release_position = event.position;
+                binding.replay(&PointerScript::new("continue on the other side").with(event));
+                binding.pump_frame(Duration::ZERO);
+                assert_eq!(
+                    binding.last_frame_report().build.elements_built,
+                    0,
+                    "motion after the sign change does not rebuild"
+                );
+            }
+        }
         binding.pump_frame(Duration::from_millis(16));
         assert!(
             binding.vsync().has_running(),
@@ -252,17 +311,32 @@ pub(crate) fn cancelling_a_fully_slid_card_restores_it_without_dismissal() {
 /// `width` px wide.
 fn release_speed(width: f64, reverse: bool, maximum: Option<f64>, vertical: bool) -> f64 {
     let painted_x = |laid: &crate::common::LaidOut| {
-        laid.draw_ops()
-            .into_iter()
-            .find_map(|command| {
-                if let flui_painting::display_list::DrawOp::Rect { rect, .. } = command.op {
+        use flui_rendering::layer::Layer;
+        let tree = laid.layer_tree().expect("committed card scene");
+        for (_, node) in tree.iter() {
+            let Layer::Picture(picture) = node.layer() else {
+                continue;
+            };
+            for command in picture.picture() {
+                if let flui_painting::display_list::DrawOp::Rect { rect, .. } = &command.op {
                     let (x, y) = command.transform.transform_point(rect.left(), rect.top());
-                    Some(if vertical { y } else { x })
-                } else {
-                    None
+                    let mut point = flui_foundation::geometry::Point::new(x, y);
+                    let mut parent = node.parent();
+                    while let Some(id) = parent {
+                        let ancestor = tree.get(id).expect("scene parent exists");
+                        match ancestor.layer() {
+                            Layer::Transform(layer) => point = layer.transform_point(point),
+                            Layer::Offset(layer) => point += layer.offset(),
+                            Layer::Opacity(layer) => point += layer.offset(),
+                            _ => {}
+                        }
+                        parent = ancestor.parent();
+                    }
+                    return if vertical { point.y } else { point.x };
                 }
-            })
-            .expect("the card paints a rectangle")
+            }
+        }
+        panic!("the card paints a rectangle");
     };
     let vsync = Vsync::new();
     let size = if vertical {

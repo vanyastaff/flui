@@ -68,12 +68,14 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use flui_animation::curve::{Curve, Interval};
+use flui_animation::ext::AnimatableExt;
 use flui_animation::{
-    Animation, AnimationController, AnimationStatus, Curves, DrivenController, Vsync,
+    Animation, AnimationController, AnimationStatus, Curves, DrivenController, Tween, Vsync,
 };
 use flui_foundation::geometry::Size;
 use flui_foundation::{Listenable, ListenerId, RenderId};
 use flui_interaction::{DragEndDetails, DragStartDetails, DragUpdateDetails};
+use flui_objects::TranslationFraction;
 use flui_painting::paint::Clip;
 use flui_painting::typography::TextDirection;
 use flui_rendering::hit_testing::HitTestBehavior;
@@ -87,7 +89,7 @@ use flui_view::{
 
 use crate::animated::VsyncScope;
 use crate::localization::Directionality;
-use crate::{ClipRect, FractionalTranslation, GestureDetector, Positioned, SizedBox, Stack};
+use crate::{ClipRect, GestureDetector, Positioned, SizedBox, SlideTransition, Stack};
 
 /// Minimum fling speed — a fling below this speed
 /// never dismisses, regardless of direction.
@@ -131,7 +133,6 @@ pub type DismissUpdateCallback = Rc<dyn Fn(&mut EventCx<'_>, DismissUpdateDetail
 
 type ResizeCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
 type DirectionDelivery = Rc<dyn Fn(DismissDirection)>;
-type UpdateDelivery = Rc<dyn Fn(DismissUpdateDetails)>;
 
 /// Details delivered to [`Dismissible::on_update`].
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -444,12 +445,8 @@ fn describe_fling_gesture(
 /// `DismissibleState` and the `'static` `GestureDetector` closures `build()`
 /// reconstructs every rebuild.
 ///
-/// Kept out of `AnimationController` listener closures (which must be
-/// `Send + Sync`, per `flui_foundation::ListenerCallback`): those closures
-/// only ever touch the `Arc<Atomic*>` signal fields below, never this
-/// `Rc`/`Cell`-based state directly. `build()` (single-threaded, run on the
-/// frame/build thread) is the only place that reads or reacts to those
-/// signals and mutates this state.
+/// Input and animation delivery are owner-local. Completion signals defer
+/// layout-sensitive collapse work until committed geometry is available.
 #[derive(Default)]
 struct DragState {
     node: Cell<Option<RenderId>>,
@@ -477,17 +474,8 @@ struct DragState {
     resize_controller: RefCell<Option<DrivenController>>,
     resize_listener_id: RefCell<Option<ListenerId>>,
 
-    /// Bumped by `move_controller`'s status listener on every transition to
-    /// `Completed`. `Send + Sync` (an atomic), so the listener may touch it
-    /// directly; `build()` diffs it against `delivered_move_completions`.
-    ///
-    /// All atomics in this struct use `Relaxed`: they carry bare counts, not
-    /// data publication. Every consumer runs in `build()` after the
-    /// listener's `RebuildHandle::schedule` call, whose queue
-    /// synchronization already orders the listener-side bump before the
-    /// rebuild that reads it; a load racing a concurrent tick can at worst
-    /// miss an increment that the tick's own scheduled rebuild then
-    /// delivers.
+    /// Completion debt is counted separately from value delivery so collapse
+    /// starts after the completion build observes committed card geometry.
     move_completed_runs: Arc<AtomicU64>,
     delivered_move_completions: Cell<u64>,
 
@@ -605,13 +593,47 @@ enum DismissEvent {
 /// payloads there, then dispatch after the frame through the latest callbacks.
 /// The input-time completion bypass dispatches immediately with the same source.
 struct DismissEvents {
+    movement: AnimationController,
+    drag: std::rc::Weak<DragState>,
+    update_config: RefCell<Option<Rc<DismissUpdateConfig>>>,
+    visible_motion: Cell<(bool, bool)>,
     writer: WriterSource,
     post_frame: Option<PostFrameHandle>,
     mounted: Cell<bool>,
     callbacks: Rc<RefCell<DismissCallbacks>>,
 }
 
+struct DismissUpdateConfig {
+    direction: DismissDirection,
+    text_direction: TextDirection,
+    thresholds: HashMap<DismissDirection, f64>,
+}
+
 impl DismissEvents {
+    fn movement_changed(self: &Rc<Self>, rebuild: &RebuildHandle) {
+        let Some(drag) = self.drag.upgrade() else {
+            return;
+        };
+        let value = self.movement.value();
+        let visible = (value != 0.0, value != 0.0 && drag.drag_extent.get() > 0.0);
+        if self.visible_motion.replace(visible) != visible {
+            rebuild.schedule(flui_view::RebuildReason::AnimationTick);
+        }
+        self.queue_update(&drag, value);
+    }
+
+    fn queue_update(self: &Rc<Self>, drag: &DragState, value: f64) {
+        if !self.mounted.get() || self.callbacks.borrow().update.is_none() {
+            return;
+        }
+        let config = self.update_config.borrow().clone();
+        if let Some(config) = config
+            && let Some(details) = move_update(drag, value, &config)
+        {
+            self.defer(DismissEvent::Update(details));
+        }
+    }
+
     fn dispatch(&self, event: DismissEvent) {
         if !self.mounted.get() {
             return;
@@ -703,6 +725,10 @@ impl ViewState<Dismissible> for DismissibleState {
 
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.events = Some(Rc::new(DismissEvents {
+            movement: self.move_controller.controller().clone(),
+            drag: Rc::downgrade(&self.drag),
+            update_config: RefCell::new(None),
+            visible_motion: Cell::new((false, false)),
             writer: ctx.writer_source(),
             post_frame: ctx.post_frame_handle(),
             mounted: Cell::new(true),
@@ -711,9 +737,12 @@ impl ViewState<Dismissible> for DismissibleState {
         let rebuild = ctx.rebuild_handle();
 
         let rebuild_for_value = rebuild.clone();
+        let events = Rc::downgrade(self.events.as_ref().expect("BUG: events initialized"));
         self.move_value_listener_id = Some(self.move_controller.controller().add_listener(
             std::rc::Rc::new(move || {
-                rebuild_for_value.schedule(flui_view::RebuildReason::AnimationTick);
+                if let Some(events) = events.upgrade() {
+                    events.movement_changed(&rebuild_for_value);
+                }
             }),
         ));
 
@@ -783,6 +812,14 @@ impl ViewState<Dismissible> for DismissibleState {
             .events
             .clone()
             .expect("BUG: Dismissible initialized before build");
+        let previous = events
+            .update_config
+            .replace(Some(Rc::new(DismissUpdateConfig {
+                direction: view.direction,
+                text_direction,
+                thresholds: view.dismiss_thresholds.clone(),
+            })));
+        drop(previous);
         let direct_events = events.clone();
         let resolved = Rc::new(ResolvedConfig {
             direction: view.direction,
@@ -808,9 +845,6 @@ impl ViewState<Dismissible> for DismissibleState {
             .as_ref()
             .map(|_| Rc::new(move || resize_events.defer(DismissEvent::Resize)) as Rc<dyn Fn()>);
         let deferred = Rc::new(deferred);
-        let on_update: Option<UpdateDelivery> = view.on_update.as_ref().map(|_| {
-            Rc::new(move |details| events.defer(DismissEvent::Update(details))) as UpdateDelivery
-        });
         let behavior = view.behavior;
         let direction = view.direction;
         let child = view.child.clone();
@@ -831,14 +865,7 @@ impl ViewState<Dismissible> for DismissibleState {
         // effects after this frame rather than writing signals in build.
         deliver_move_completion(&drag, &move_controller, &deferred, vsync.as_ref(), &rebuild);
         deliver_resize_progress(&drag, &deferred);
-        deliver_on_update(
-            &drag,
-            &move_controller,
-            direction,
-            text_direction,
-            &resolved,
-            on_update.as_ref(),
-        );
+        events.queue_update(&drag, move_controller.value());
 
         if let Some(resize_controller) = drag.resize_controller.borrow().as_ref() {
             let prior = drag
@@ -1334,32 +1361,31 @@ fn deliver_resize_progress(drag: &Rc<DragState>, resolved: &Rc<ResolvedConfig>) 
 }
 
 /// Delivers `on_update` when the drag or threshold state changed.
-fn deliver_on_update(
-    drag: &Rc<DragState>,
-    move_controller: &AnimationController,
-    direction: DismissDirection,
-    text_direction: TextDirection,
-    resolved: &Rc<ResolvedConfig>,
-    on_update: Option<&UpdateDelivery>,
-) {
-    let Some(on_update) = on_update else { return };
-    let value = move_controller.value();
+fn move_update(
+    drag: &DragState,
+    value: f64,
+    config: &DismissUpdateConfig,
+) -> Option<DismissUpdateDetails> {
     if value == drag.last_delivered_move_value.get() {
-        return;
+        return None;
     }
     drag.last_delivered_move_value.set(value);
 
-    let dismiss_direction = extent_to_direction(drag.drag_extent.get(), direction, text_direction);
-    let threshold = dismiss_threshold_for(&resolved.dismiss_thresholds, dismiss_direction);
+    let dismiss_direction = extent_to_direction(
+        drag.drag_extent.get(),
+        config.direction,
+        config.text_direction,
+    );
+    let threshold = dismiss_threshold_for(&config.thresholds, dismiss_direction);
     let previous_reached = drag.dismiss_threshold_reached.get();
     let reached = value > threshold;
     drag.dismiss_threshold_reached.set(reached);
-    on_update(DismissUpdateDetails {
+    Some(DismissUpdateDetails {
         direction: dismiss_direction,
         reached,
         previous_reached,
         progress: value,
-    });
+    })
 }
 
 // ============================================================================
@@ -1386,24 +1412,23 @@ fn resolve_background(
     }
 }
 
-/// The slid-and-translated content: `FractionalTranslation` driven directly
-/// by `move_controller.value()` and the drag's current sign (a
-/// zero-`begin` offset tween's value at `t` is just `t * end`).
+/// A retained render transition samples movement without rebuilding content.
 fn sliding_content_view(
     move_controller: &AnimationController,
     drag_extent: f64,
     direction: DismissDirection,
     cross_axis_end_offset: f64,
     child: BoxedView,
-) -> FractionalTranslation {
-    let t = move_controller.value();
+) -> SlideTransition {
     let sign = drag_sign(drag_extent);
     let (dx, dy) = if direction_is_x_axis(direction) {
-        (t * sign, t * cross_axis_end_offset)
+        (sign, cross_axis_end_offset)
     } else {
-        (t * cross_axis_end_offset, t * sign)
+        (cross_axis_end_offset, sign)
     };
-    FractionalTranslation::new(dx, dy).child(child)
+    let position = Tween::new(TranslationFraction::ZERO, TranslationFraction::new(dx, dy))
+        .animate(Rc::new(move_controller.clone()));
+    SlideTransition::new(Rc::new(position), child)
 }
 
 /// The post-dismiss collapse: a `background`-filled box shrinking along the

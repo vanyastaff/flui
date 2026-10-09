@@ -2,6 +2,16 @@
 
 ## Gesture release retains the painted position
 
+Dismissible moves content through `SlideTransition`; its controller's value
+listener rebuilds only when background presence or movement sign changes.
+An owner-local event source snapshots `on_update` payloads independently of
+build and delivers them through the existing post-frame lane using the latest
+callback. Its configuration contains only direction and threshold data, and
+the controller retains a weak route to that source. Collapse remains a layout
+phase with its own rebuilds. `dismissible_slides_without_rebuilding_per_frame`
+uses public frame reports for drag and return frames on both axes and signs,
+and verifies that update events continue on each moving frame.
+
 Dismissible preserves the dragged side while a reverse release moves back
 toward the origin. Physical velocity uses `AnimationController::fling_across`
 (ADR-0182). `a_dismissible_release_keeps_finger_speed_on_any_width` measures
