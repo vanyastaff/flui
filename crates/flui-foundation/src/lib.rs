@@ -25,15 +25,15 @@
 //!
 //! 1. **Minimal Dependencies**: Only essential external crates
 //! 2. **Zero-Cost Abstractions**: Performance-critical paths have no overhead
-//! 3. **Thread Safety**: All types are designed to work in multi-threaded
-//!    contexts
+//! 3. **Ownership**: Notifications stay on their UI owner; values and IO
+//!    capabilities declare their own thread bounds
 //! 4. **Composability**: Types work well together and with external code
 //! 5. **Stability**: Strong backwards compatibility guarantees
 //!
 //! ## Quick Start
 //!
 //! ```rust
-//! use std::sync::Arc;
+//! use std::rc::Rc;
 //!
 //! use flui_foundation::{ChangeNotifier, ElementId, Key, Listenable};
 //!
@@ -43,7 +43,7 @@
 //!
 //! // Observable values for reactive UI
 //! let mut notifier = ChangeNotifier::new();
-//! let listener_id = notifier.add_listener(Arc::new(|| {
+//! let listener_id = notifier.add_listener(Rc::new(|| {
 //!     // react to the change (e.g. mark a widget dirty)
 //! }));
 //!
@@ -89,19 +89,19 @@
 //! ### Change Notification
 //!
 //! ```rust
-//! use std::sync::Arc;
+//! use std::rc::Rc;
 //!
 //! use flui_foundation::{ChangeNotifier, Listenable, ValueNotifier};
 //!
 //! // Basic change notification
 //! let mut notifier = ChangeNotifier::new();
-//! let listener = notifier.add_listener(Arc::new(|| {
+//! let listener = notifier.add_listener(Rc::new(|| {
 //!     // react to the change
 //! }));
 //!
 //! // Value-holding notifier
 //! let mut value_notifier = ValueNotifier::new(42);
-//! let value_listener = value_notifier.add_listener(Arc::new(|| {
+//! let value_listener = value_notifier.add_listener(Rc::new(|| {
 //!     // react to the value change
 //! }));
 //! value_notifier.set_value(100);
@@ -123,10 +123,10 @@
 //!
 //! ## Thread Safety
 //!
-//! All foundation types are designed for multi-threaded use:
+//! Values and notification channels have distinct thread boundaries:
 //! - `ElementId`: `Send + Sync` (copy type)
 //! - `Key`: `Send + Sync` (copy type)
-//! - `ChangeNotifier`: `Send + Sync` with internal synchronization
+//! - `ChangeNotifier`: owner-local callbacks and shared `Rc` listener storage
 //! - `AtomicElementFlags`: Lock-free atomic operations
 //!
 //! ## Performance

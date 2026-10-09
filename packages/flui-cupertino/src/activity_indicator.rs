@@ -98,7 +98,7 @@ impl Phases {
 }
 
 /// Persistent state for [`CupertinoActivityIndicator`]: the repeating
-/// controller and its registration with the ambient [`Vsync`].
+/// controller and its registration with the ambient [`Vsync`](flui_sdk::animation::Vsync).
 pub struct CupertinoActivityIndicatorState {
     controller: DrivenController,
     phases: Arc<Phases>,
