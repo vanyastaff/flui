@@ -442,7 +442,12 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
             // SAFETY: this exact owned hidden HWND remains tracked until loop shutdown;
             // every queued message contains only by-value coordinates/wheel distance.
             unsafe {
-                PostMessageW(Some(hwnd), WM_MOUSEMOVE, WPARAM(0), LPARAM(0x0028 | (0x0028 << 16)))?;
+                PostMessageW(
+                    Some(hwnd),
+                    WM_MOUSEMOVE,
+                    WPARAM(0),
+                    LPARAM(0x0028 | (0x0028 << 16)),
+                )?;
                 for (message, distance) in [
                     (WM_MOUSEWHEEL, 120_i16),
                     (WM_MOUSEWHEEL, -60),
