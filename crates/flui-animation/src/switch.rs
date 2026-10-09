@@ -64,6 +64,17 @@ struct SwitchOwner {
 }
 
 impl SwitchOwner {
+    fn reject_status<T>(&self, callback: T) {
+        let mut recovery = Retirement::new();
+        self.notifier.inherit_failure(&mut recovery);
+        self.inner
+            .borrow()
+            .status_listeners
+            .inherit_failure(&mut recovery);
+        recovery.retire(Terminal::new(callback));
+        recovery.finish();
+    }
+
     fn withdraw_status(
         &self,
         id: ListenerId,
@@ -534,6 +545,10 @@ impl Animation<f64> for AnimationSwitch {
     /// removed against the wrong animation. The internal per-current
     /// forwarder re-emits the active animation's transitions here.
     fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription {
+        if self.owner.inner.borrow().disposed {
+            self.owner.reject_status(callback);
+            return crate::StatusSubscription::default();
+        }
         let listeners = Rc::clone(&self.owner.inner.borrow().status_listeners);
         let id = listeners.add(Rc::new(move |status| callback(*status)));
         crate::StatusSubscription::new(&self.owner, id, SwitchOwner::withdraw_status)
@@ -543,6 +558,10 @@ impl Animation<f64> for AnimationSwitch {
         &self,
         observer: crate::animation::StatusObserver,
     ) -> crate::StatusSubscription {
+        if self.owner.inner.borrow().disposed {
+            self.owner.reject_status(observer);
+            return crate::StatusSubscription::default();
+        }
         let listeners = Rc::clone(&self.owner.inner.borrow().status_listeners);
         let id = listeners
             .add_with_recovery(Rc::new(move |status, recovery| observer(*status, recovery)));

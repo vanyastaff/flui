@@ -2846,21 +2846,17 @@ impl Animation<f64> for AnimationController {
     }
 
     fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription {
-        let id = self.register_status_listener(StatusListener::User(callback));
-        if self.inner.borrow().disposed {
-            crate::StatusSubscription::default()
-        } else {
-            crate::StatusSubscription::new(&self.inner, id, Self::withdraw_status_listener)
-        }
+        self.register_status_listener(StatusListener::User(callback))
+            .map_or_else(crate::StatusSubscription::default, |id| {
+                crate::StatusSubscription::new(&self.inner, id, Self::withdraw_status_listener)
+            })
     }
 
     fn subscribe_status_observer(&self, observer: StatusObserver) -> crate::StatusSubscription {
-        let id = self.register_status_listener(StatusListener::Relay(observer));
-        if self.inner.borrow().disposed {
-            crate::StatusSubscription::default()
-        } else {
-            crate::StatusSubscription::new(&self.inner, id, Self::withdraw_status_listener)
-        }
+        self.register_status_listener(StatusListener::Relay(observer))
+            .map_or_else(crate::StatusSubscription::default, |id| {
+                crate::StatusSubscription::new(&self.inner, id, Self::withdraw_status_listener)
+            })
     }
 
     /// Whether the controller is currently driving a run.
@@ -2872,14 +2868,9 @@ impl Animation<f64> for AnimationController {
 }
 
 impl AnimationController {
-    fn register_status_listener(&self, callback: StatusListener) -> ListenerId {
+    fn register_status_listener(&self, callback: StatusListener) -> Option<ListenerId> {
         let mut callback = Opaque::new(callback);
         let mut inner = self.inner.borrow_mut();
-        let id = ListenerId::new(inner.next_listener_id);
-        inner.next_listener_id = inner
-            .next_listener_id
-            .checked_add(1)
-            .expect("BUG: listener identities exhausted");
         if inner.disposed {
             if inner.delivering {
                 let mut retired = RetiredSources::new();
@@ -2891,10 +2882,16 @@ impl AnimationController {
                 drop(inner);
                 drop(callback);
             }
-            return id;
+            return None;
         }
+        let Some(next_id) = inner.next_listener_id.checked_add(1) else {
+            drop(inner);
+            panic!("BUG: listener identities exhausted");
+        };
+        let id = ListenerId::new(inner.next_listener_id);
+        inner.next_listener_id = next_id;
         inner.status_listeners.push((id, callback.take()));
-        id
+        Some(id)
     }
 
     fn withdraw_status_listener(

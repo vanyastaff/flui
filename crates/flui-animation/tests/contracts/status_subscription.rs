@@ -296,6 +296,38 @@ fn admission_after_disposal_retires_captures_outside_the_state_borrow() {
     assert!(registry.is_empty());
 }
 
+fn disposed_switch_admission_retires_captures_before_returning() {
+    struct Reenter {
+        source: AnimationSwitch,
+        drops: Rc<Cell<usize>>,
+    }
+    impl Drop for Reenter {
+        fn drop(&mut self) {
+            let _value = self.source.value();
+            self.source.dispose();
+            self.drops.set(self.drops.get() + 1);
+        }
+    }
+    let parent = Rc::new(AnimationController::builder(Duration::from_secs(1)).build());
+    let source = AnimationSwitch::new(parent.clone(), None);
+    source.dispose();
+    let drops = Rc::new(Cell::new(0));
+    let subscription = source.subscribe_status({
+        let capture = Reenter {
+            source: source.clone(),
+            drops: Rc::clone(&drops),
+        };
+        Rc::new(move |_| {
+            let _keep = &capture;
+            panic!("a closed switch cannot deliver a callback");
+        })
+    });
+    assert_eq!(drops.get(), 1);
+    drop(subscription);
+    let _run = parent.forward().unwrap();
+    assert_eq!(drops.get(), 1);
+}
+
 fn capture_retirement_releasing_the_last_wrapper_silences_reentry() {
     struct ReleaseAndNotify {
         owner: Rc<RefCell<Option<Rc<dyn Animation<f64>>>>>,
@@ -498,6 +530,10 @@ fn adapter_subscriptions_follow_the_shared_owner() {
 #[test]
 fn owning_status_subscription_contract() {
     let cases: &[(&str, fn())] = &[
+        (
+            "disposed switch admission",
+            disposed_switch_admission_retires_captures_before_returning,
+        ),
         (
             "last wrapper released by capture retirement",
             capture_retirement_releasing_the_last_wrapper_silences_reentry,

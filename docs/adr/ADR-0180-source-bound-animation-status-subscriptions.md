@@ -26,6 +26,12 @@ the shared first-failure custody policy.
 There is no public status ID or source-selected status removal method. Value
 notification keeps the separate `Listenable` contract.
 
+A disposed controller or switch refuses status admission with an inert guard.
+Rejected captures retire outside state borrows and inherit any enclosing delivery
+failure. Refusal does not consume a controller registration identity. A live
+controller's exhausted counter refuses permanently; its panic occurs after
+releasing the state borrow, so panic hooks may query the public source.
+
 The guard holds a weak reference to the logical source owner, a copyable
 registration token and a removal function pointer. It cannot keep the animation
 owner alive and contains no user captures. Custom sources construct the same
@@ -64,6 +70,12 @@ replacement and an actual switch hop. Its enclosing-cleanup row verifies that
 cancellation inherits an already established failure. Its capture-retirement
 row releases the last wrapper owner and reenters the parent; the detached tail
 must remain silent for reverse, curved, tween, proxy and switch sources.
+Disposed admission rows exercise capture reentry. The private counter-injection
+rows in `failure_modes_are_contained` and
+`exhausted_status_identities_refuse_outside_the_state_borrow` observe public
+subscription and delivery: closed admission stays inert at the terminal counter,
+live refusal stays permanent, panic-hook reads succeed, and the last accepted
+callback remains deliverable.
 
 `thread_boundary_ui` rejects
 `status_removal_requires_owning_subscription`. Restoring the former manual

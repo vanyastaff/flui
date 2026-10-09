@@ -183,6 +183,13 @@ after releasing the borrow. The guard neither owns a second channel nor keeps th
 controller owner alive. Scrollable activity and AnimatedSize completion callbacks
 retain the owning subscription beside their driven controller.
 
+Disposed controller and switch status admission returns an inert guard and
+retires rejected captures outside state borrows, using any established delivery
+failure. The controller refuses before minting an identity. A live exhausted
+counter refuses permanently after releasing the borrow; panic hooks can read
+the public source. `exhausted_status_identities_refuse_outside_the_state_borrow`
+pins hook reentry, permanent refusal and delivery to the last admitted callback.
+
 Reverse, curved and tween subscriptions identify their shared `ParentLinks`
 owner, while proxy and switch subscriptions identify their respective owners.
 An owning guard survives a parent replacement or a switch hop without delegating
