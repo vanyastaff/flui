@@ -29,6 +29,7 @@
 //! `flui-view` which provides the `Notification` trait that integrates with
 //! `BuildContext`.
 
+use crate::panic::RecoveryScope;
 use std::{fmt, ops::Deref, rc::Rc};
 
 use crate::{id::ListenerId, notifier_generic::Notifier};
@@ -39,7 +40,7 @@ pub type ListenerCallback = Rc<dyn Fn() + 'static>;
 
 /// Framework listener borrowing the enclosing notification's failure custody.
 #[doc(hidden)]
-pub type ListenerObserver = Rc<dyn Fn(&mut crate::panic::PanicRecovery)>;
+pub type ListenerObserver = Rc<dyn Fn(&mut RecoveryScope<'_>)>;
 
 /// An object that maintains a list of listeners.
 ///
@@ -168,7 +169,7 @@ impl fmt::Debug for ChangeNotifier {
 impl ChangeNotifier {
     /// Carry an active notification's failure into reentrant owner cleanup.
     #[doc(hidden)]
-    pub fn inherit_failure(&self, recovery: &mut crate::panic::PanicRecovery) {
+    pub fn inherit_failure(&self, recovery: &mut RecoveryScope<'_>) {
         self.inner.inherit_failure(recovery);
     }
     /// Create a new change notifier.
@@ -320,7 +321,7 @@ impl ChangeNotifier {
 
     /// Notify within an enclosing framework delivery's failure custody.
     #[doc(hidden)]
-    pub fn notify_listeners_with_recovery(&self, recovery: &mut crate::panic::PanicRecovery) {
+    pub fn notify_listeners_with_recovery(&self, recovery: &mut RecoveryScope<'_>) {
         if !self.check_disposed() {
             self.inner.notify_with_recovery(&(), recovery);
         }

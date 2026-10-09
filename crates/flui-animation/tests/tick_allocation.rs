@@ -18,7 +18,7 @@ use std::hint::black_box;
 
 use std::time::Duration;
 
-use flui_animation::{Animation, AnimationController, Vsync};
+use flui_animation::{Animation, AnimationController, ReverseAnimation, Vsync};
 use flui_foundation::Listenable;
 
 // `Cell<usize>` in a const-initialised thread-local has no drop glue and no
@@ -150,4 +150,43 @@ fn a_steady_state_frame_allocates_nothing() {
         "starting a run must allocate its future; if it does not, the counter is not \
          counting and the zero-allocation claim above proves nothing"
     );
+
+    // Wrapper composition must preserve the same frame-path contract. Each
+    // channel has only one listener, so this measures relay depth rather than
+    // a listener snapshot exceeding its inline capacity.
+    for depth in [1, 5, 32] {
+        let vsync = Vsync::new();
+        let owner = AnimationController::builder(NEVER_ENDING).build_on(Some(&vsync));
+        let controller = owner.controller();
+        let mut leaf: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(controller.clone());
+        for _ in 0..depth {
+            leaf = std::rc::Rc::new(ReverseAnimation::new(leaf));
+        }
+        let delivered = std::rc::Rc::new(Cell::new(0usize));
+        let observed = delivered.clone();
+        leaf.add_listener(std::rc::Rc::new(move || observed.set(observed.get() + 1)));
+        let _run = controller.forward().expect("forward on a live controller");
+        let mut clock = flui_animation::MotionClock::new();
+        let mut now = 0.0;
+        for _ in 0..16 {
+            vsync.tick_all(&clock.frame(Duration::from_secs_f64(now)));
+            now += FRAME;
+        }
+        let start_value = leaf.value();
+        let deliveries_before = delivered.get();
+        let calls_before = read(&ALLOC_COUNT);
+        let bytes_before = read(&ALLOC_BYTES);
+        for _ in 0..FRAMES {
+            vsync.tick_all(&clock.frame(Duration::from_secs_f64(now)));
+            now += FRAME;
+        }
+        let calls = read(&ALLOC_COUNT) - calls_before;
+        let bytes = read(&ALLOC_BYTES) - bytes_before;
+        assert_eq!(delivered.get() - deliveries_before, FRAMES);
+        assert!(controller.status().is_running() && leaf.value() != start_value);
+        assert_eq!(
+            calls, 0,
+            "{depth} animation relays allocated {calls} times ({bytes} bytes)"
+        );
+    }
 }

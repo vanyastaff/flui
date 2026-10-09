@@ -9,6 +9,7 @@ use crate::error::AnimationError;
 use crate::run_future::{RunCompleter, RunDelivery};
 use crate::simulation::{Simulation, SpringDescription, SpringSimulation, SpringType, Tolerance};
 use crate::status::AnimationStatus;
+use flui_foundation::panic::RecoveryScope;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
 use smallvec::SmallVec;
 use std::cell::RefCell;
@@ -141,7 +142,7 @@ enum StatusListener {
 }
 
 impl StatusListener {
-    fn invoke(&self, status: AnimationStatus, recovery: &mut Retirement) {
+    fn invoke(&self, status: AnimationStatus, recovery: &mut RecoveryScope<'_>) {
         match self {
             Self::User(callback) => callback(status),
             Self::Relay(callback) => callback(status, recovery),
@@ -499,7 +500,7 @@ impl AnimationController {
             .retain(|candidate| candidate != route);
     }
 
-    pub(crate) fn set_clock_bound(&self, bound: bool, retirement: &mut Retirement) {
+    pub(crate) fn set_clock_bound(&self, bound: bool, retirement: &mut RecoveryScope<'_>) {
         let mut inner = self.inner.borrow_mut();
         inner.clock_binding = if bound {
             ClockBinding::Bound
@@ -1771,7 +1772,11 @@ impl AnimationController {
         retirement.finish();
     }
 
-    pub(crate) fn tick_at_with_retirement(&self, elapsed: Duration, retirement: &mut Retirement) {
+    pub(crate) fn tick_at_with_retirement(
+        &self,
+        elapsed: Duration,
+        retirement: &mut RecoveryScope<'_>,
+    ) {
         let source;
         let identity;
         let cycle;
@@ -1879,7 +1884,7 @@ impl AnimationController {
 
     /// Settle an admitted run without reading a wall clock or invoking its curve.
     /// Reentrant replacement invalidates the source before the next callout.
-    fn settle_run(&self, generation: u64, recovery: &mut Retirement) -> bool {
+    fn settle_run(&self, generation: u64, recovery: &mut RecoveryScope<'_>) -> bool {
         let (source, identity, warn) = {
             let mut inner = self.inner.borrow_mut();
             if inner.disposed
@@ -1978,7 +1983,7 @@ impl AnimationController {
         mut inner: std::cell::RefMut<'_, AnimationControllerInner>,
         sampled: f64,
         is_done: bool,
-        retirement: &mut Retirement,
+        retirement: &mut RecoveryScope<'_>,
     ) {
         if !sampled.is_finite() {
             let should_warn = !inner.non_finite_warned;
@@ -2019,7 +2024,7 @@ impl AnimationController {
         &self,
         mut inner: std::cell::RefMut<'_, AnimationControllerInner>,
         value_change: ValueChange,
-        retirement: &mut Retirement,
+        retirement: &mut RecoveryScope<'_>,
     ) {
         let retired = RetiredSources {
             simulation: inner.simulation.take().map(Opaque::new),
@@ -2041,7 +2046,7 @@ impl AnimationController {
         mut inner: std::cell::RefMut<'_, AnimationControllerInner>,
         t: f64,
         value: f64,
-        retirement: &mut Retirement,
+        retirement: &mut RecoveryScope<'_>,
     ) {
         if !value.is_finite() {
             return;
@@ -2096,7 +2101,7 @@ impl AnimationController {
         mut inner: std::cell::RefMut<'_, AnimationControllerInner>,
         run: &RepeatRun,
         count: u32,
-        recovery: &mut Retirement,
+        recovery: &mut RecoveryScope<'_>,
     ) {
         let (value, direction) = AnimationControllerInner::repeat_landing(
             run.reverse,
@@ -2127,7 +2132,7 @@ impl AnimationController {
         mut inner: std::cell::RefMut<'_, AnimationControllerInner>,
         run: RepeatRun,
         cycle: f64,
-        retirement: &mut Retirement,
+        retirement: &mut RecoveryScope<'_>,
     ) {
         // `tick_at` already clamps `cycle` to `.max(0.0)`, and NaN cannot
         // reach it (`f64::max` returns the non-NaN operand), so the only
@@ -2239,7 +2244,7 @@ impl AnimationController {
 
     /// Close the kernel and cancel its run under the owning lifecycle's recovery.
     /// The owner withdraws its seat before entering this idempotent drain.
-    pub(crate) fn dispose(&self, retirement: &mut Retirement) {
+    pub(crate) fn dispose(&self, retirement: &mut RecoveryScope<'_>) {
         let mut retired = RetiredSources::new();
         let mut inner = self.inner.borrow_mut();
         if inner.disposed {
@@ -2419,7 +2424,7 @@ impl AnimationController {
     }
 
     /// The outermost caller drains accepted work; reentry only appends to it.
-    fn drain_delivery(&self, retirement: &mut Retirement) {
+    fn drain_delivery(&self, retirement: &mut RecoveryScope<'_>) {
         let mut settled = false;
         loop {
             let delivery = {
@@ -2509,7 +2514,7 @@ impl AnimationController {
             delivery,
             retired,
             inner,
-            &mut retirement,
+            &mut retirement.scope(),
         );
         retirement.finish();
     }
@@ -2521,7 +2526,7 @@ impl AnimationController {
         delivery: Option<RunDelivery>,
         retired: RetiredSources,
         mut inner: std::cell::RefMut<'_, AnimationControllerInner>,
-        retirement: &mut Retirement,
+        retirement: &mut RecoveryScope<'_>,
     ) {
         inner.enqueue_status_change(status);
         if let Some(delivery) = delivery {

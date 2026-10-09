@@ -4,6 +4,7 @@ use crate::animation::{
     Animation, ParentSubscription, Retirement, StatusCallback, Terminal, link_parent,
 };
 use crate::status::AnimationStatus;
+use flui_foundation::panic::RecoveryScope;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -68,8 +69,9 @@ enum ProxyDelivery<T: Clone + 'static> {
 impl<T: Clone + 'static> Drop for ProxyOwner<T> {
     fn drop(&mut self) {
         let mut retirement = Retirement::new();
-        self.notifier.inherit_failure(&mut retirement);
-        self.status_listeners.inherit_failure(&mut retirement);
+        self.notifier.inherit_failure(&mut retirement.scope());
+        self.status_listeners
+            .inherit_failure(&mut retirement.scope());
         let parent = self.parent.get_mut().withdraw();
         let notifier = self.notifier.withdraw();
         let value_sub = self.parent_sub.get_mut().withdraw();
@@ -79,8 +81,8 @@ impl<T: Clone + 'static> Drop for ProxyOwner<T> {
         let retired = std::mem::take(self.retired.get_mut());
         let callbacks = listeners.dispose_and_take_callbacks();
         let value_callbacks = notifier.dispose_and_take_listeners();
-        value_sub.detach(&mut retirement);
-        status_sub.detach(&mut retirement);
+        value_sub.detach(&mut retirement.scope());
+        status_sub.detach(&mut retirement.scope());
         retirement.retire(value_sub);
         retirement.retire(status_sub);
         retirement.retire(parent);
@@ -147,8 +149,10 @@ where
     /// notified only when the status actually differs across the swap.
     pub fn set_parent(&self, new_parent: Rc<dyn Animation<T>>) {
         let mut retirement = Retirement::new();
-        self.inner.notifier.inherit_failure(&mut retirement);
-        self.inner.status_listeners.inherit_failure(&mut retirement);
+        self.inner.notifier.inherit_failure(&mut retirement.scope());
+        self.inner
+            .status_listeners
+            .inherit_failure(&mut retirement.scope());
         let new_parent = Terminal::new(new_parent);
         let previous_parent = Terminal::new(self.parent());
         let old_status = previous_parent.status();
@@ -186,11 +190,11 @@ where
             pending.push_back(ProxyDelivery::Status(new_status, snapshot));
         }
         drop(pending);
-        self.drain(&mut retirement);
+        self.drain(&mut retirement.scope());
         retirement.finish();
     }
 
-    fn drain(&self, retirement: &mut Retirement) {
+    fn drain(&self, retirement: &mut RecoveryScope<'_>) {
         if self.inner.delivering.replace(true) {
             return;
         }
@@ -272,8 +276,10 @@ where
         } else {
             let callback = self.inner.status_listeners.take_callback(id);
             let mut recovery = Retirement::new();
-            self.inner.status_listeners.inherit_failure(&mut recovery);
-            self.inner.notifier.inherit_failure(&mut recovery);
+            self.inner
+                .status_listeners
+                .inherit_failure(&mut recovery.scope());
+            self.inner.notifier.inherit_failure(&mut recovery.scope());
             recovery.retire(callback);
             recovery.finish();
         }
@@ -295,8 +301,10 @@ where
     fn remove_listener(&self, id: ListenerId) {
         let callback = self.inner.notifier.take_listener(id);
         let mut recovery = Retirement::new();
-        self.inner.status_listeners.inherit_failure(&mut recovery);
-        self.inner.notifier.inherit_failure(&mut recovery);
+        self.inner
+            .status_listeners
+            .inherit_failure(&mut recovery.scope());
+        self.inner.notifier.inherit_failure(&mut recovery.scope());
         recovery.retire(callback);
         recovery.finish();
     }
@@ -304,8 +312,10 @@ where
     fn remove_all_listeners(&self) {
         let callbacks = self.inner.notifier.take_listeners();
         let mut recovery = Retirement::new();
-        self.inner.status_listeners.inherit_failure(&mut recovery);
-        self.inner.notifier.inherit_failure(&mut recovery);
+        self.inner
+            .status_listeners
+            .inherit_failure(&mut recovery.scope());
+        self.inner.notifier.inherit_failure(&mut recovery.scope());
         for callback in callbacks {
             recovery.retire(callback);
         }

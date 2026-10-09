@@ -295,8 +295,14 @@ Typed notification callbacks borrow their argument and do not require Clone.
 The first callback failure resumes after the healthy tail; removing a listener
 or disposing the channel immediately silences its remaining snapshot entries.
 Active delivery defers outgoing callbacks until the outermost round retires
-them. Framework relays borrow `panic::PanicRecovery`; reentrant owner cleanup
+them. Framework relays borrow `panic::RecoveryScope` from an owning
+`PanicRecovery`; only the owner can complete the enclosing delivery. Reentrant owner cleanup
 inherits active channel failure custody without an ambient registry (ADR-0178).
+The borrowed recovery marks all active channel signals as soon as a nested relay
+catches a failure, including before returning to its parent. Channel depth owns
+signal reset; nested completion cannot clear an enclosing failed delivery.
+Signal links borrow their enclosing stack frames and channel-local atomics;
+wrapper depth does not grow a heap collection or retain channel storage.
 The notifier's owned snapshot prevents a removed callback from disappearing
 while it runs. After a caught listener failure, the payload and snapshot remain
 retained: opaque capture or panic-payload aggregates can double-panic during
@@ -311,7 +317,8 @@ during ordinary successful-round retirement keeps Rust's abort behavior.
 The public subprocess table `notifier_ownership_and_recovery` checks borrowed
 non-Clone arguments, hostile payloads and self-removal captures, tracing failure
 in competition with a listener failure, chronological retirement competition
-and subsequent progress. The common exceptional-payload operation is
+and subsequent progress, including recursive relay retirement through the same
+channel. The common exceptional-payload operation is
 `panic::retain_opaque_payload`, used by notifications, signal reads
 and the test-table runner. This contract is recorded in
 [ADR-0104](../../docs/adr/ADR-0104-borrowed-notification-and-opaque-panic-retention.md).
