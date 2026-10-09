@@ -48,7 +48,10 @@ impl Drop for VsyncRetirementProbe {
         }
         let fresh = AnimationController::builder(Duration::from_secs(1)).build();
         fresh.forward().expect("retirement registers a fresh run");
-        let id = self.registry.register(fresh.clone());
+        let id = self
+            .registry
+            .try_register_resuming(&fresh, Duration::ZERO)
+            .expect("private token admission");
         *self.replacement.lock().expect("fresh registration") = Some((fresh, id));
         assert_eq!(
             self.registry.len(),
@@ -63,7 +66,9 @@ fn vsync_retirement_reentry(removal: VsyncRemoval) {
     for panics in [false, true] {
         let registry = Vsync::new();
         let sibling = AnimationController::builder(Duration::from_secs(1)).build();
-        let sibling_id = registry.register(sibling.clone());
+        let sibling_id = registry
+            .try_register_resuming(&sibling, Duration::ZERO)
+            .expect("private token admission");
         sibling.forward().expect("sibling runs");
         let registration = Rc::new(Mutex::new(None));
         let replacement = Rc::new(Mutex::new(None));
@@ -95,11 +100,15 @@ fn vsync_retirement_reentry(removal: VsyncRemoval) {
                 }
             }));
             animation.forward().expect("child sibling runs");
-            child.register(animation);
+            child
+                .try_register_resuming(&animation, Duration::ZERO)
+                .expect("private token admission");
             child
         };
         let id = match removal {
-            VsyncRemoval::Controller => registry.register(owner),
+            VsyncRemoval::Controller => registry
+                .try_register_resuming(&owner, Duration::ZERO)
+                .expect("private token admission"),
             VsyncRemoval::Child => {
                 let before = make_child("before");
                 registry
@@ -107,7 +116,9 @@ fn vsync_retirement_reentry(removal: VsyncRemoval) {
                     .expect("before child admitted");
                 sibling_children.push(before);
                 let child = Vsync::new();
-                child.register(owner);
+                child
+                    .try_register_resuming(&owner, Duration::ZERO)
+                    .expect("private token admission");
                 let id = registry.attach_child(&child).expect("owned child admitted");
                 drop(child);
                 for label in ["after first", "after second"] {
@@ -118,6 +129,7 @@ fn vsync_retirement_reentry(removal: VsyncRemoval) {
                 id
             }
         };
+        drop(owner);
         *registration.lock().expect("registration stored") = Some(id.clone());
         assert_eq!(
             drops.load(Ordering::SeqCst),
@@ -197,8 +209,12 @@ fn vsync_tokens_only_remove_their_own_admission() {
     let b = Vsync::new();
     let first = AnimationController::builder(Duration::from_secs(1)).build();
     let second = AnimationController::builder(Duration::from_secs(1)).build();
-    let a_id = a.try_register(&first).expect("first registry admission");
-    let b_id = b.try_register(&second).expect("second registry admission");
+    let a_id = a
+        .try_register_resuming(&first, Duration::ZERO)
+        .expect("first registry admission");
+    let b_id = b
+        .try_register_resuming(&second, Duration::ZERO)
+        .expect("second registry admission");
     first.forward().expect("first run");
     second.forward().expect("second run");
     a.unregister(&b_id);
@@ -225,7 +241,9 @@ fn vsync_tokens_only_remove_their_own_admission() {
     assert_eq!(second.value(), 0.5);
     a.clone().unregister(&a_id.clone());
     assert!(a.is_empty(), "owning registry clone accepts cloned token");
-    let replacement_id = a.register(first.clone());
+    let replacement_id = a
+        .try_register_resuming(&first, Duration::ZERO)
+        .expect("private token admission");
     a.unregister(&a_id);
     a.unregister(&b_id);
     assert_eq!(
@@ -243,11 +261,18 @@ fn vsync_tokens_only_remove_their_own_admission() {
 
     let expired = {
         let registry = Vsync::new();
-        registry.register(AnimationController::builder(Duration::from_secs(1)).build())
+        registry
+            .try_register_resuming(
+                &AnimationController::builder(Duration::from_secs(1)).build(),
+                Duration::ZERO,
+            )
+            .expect("private token admission")
     };
     let unrelated = Vsync::new();
     let resident = AnimationController::builder(Duration::from_secs(1)).build();
-    let resident_id = unrelated.register(resident);
+    let resident_id = unrelated
+        .try_register_resuming(&resident, Duration::ZERO)
+        .expect("private token admission");
     unrelated.unregister(&expired);
     assert_eq!(
         unrelated.len(),
@@ -273,7 +298,9 @@ fn vsync_tokens_only_remove_their_own_admission() {
         .zip(&children)
         .zip(&animations)
         .map(|((parent, child), animation)| {
-            child.register(animation.clone());
+            child
+                .try_register_resuming(animation, Duration::ZERO)
+                .expect("private token admission");
             animation.forward().expect("nested run");
             parent.attach_child(child).expect("nested admission")
         })
@@ -300,7 +327,9 @@ fn vsync_tokens_only_remove_their_own_admission() {
         "foreign child token preserves second nested run"
     );
     let own_controller = AnimationController::builder(Duration::from_secs(1)).build();
-    let controller_id = parents[0].register(own_controller.clone());
+    let controller_id = parents[0]
+        .try_register_resuming(&own_controller, Duration::ZERO)
+        .expect("private token admission");
     own_controller.forward().expect("parent run");
     parents[0].detach_child(&controller_id);
     parents[0].unregister(&child_ids[0]);

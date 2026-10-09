@@ -17,8 +17,8 @@ last sampled elapsed time; missing clocks settle finite runs and park repeats.
 
 Public manual controller registration and removal are removed. The production
 registry admits controllers only through the owning handle's internal path.
-Raw admission helpers exist only for crate-private identity and retirement
-tests. Keeping a second public admission path would leave callers responsible
+Crate-private identity and retirement tests exercise that same production
+admission path. Keeping a second public admission path would leave callers responsible
 for coupling registration and cancellation, defeating the owning API.
 
 Child attachment remains an explicit public operation with a borrowed removal
