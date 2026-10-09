@@ -1059,6 +1059,10 @@ fn binding_input_contract_matrix() {
             "native_same_actor_terminal_reentry",
             native_same_actor_terminal_reentry_preserves_new_generation,
         ),
+        (
+            "native_cancellation_prior_capture_failure",
+            native_cancellation_retains_captures_after_prior_capture_failure,
+        ),
         ("native_focus_loss", native_focus_loss_releases_lease),
         (
             "native_claim_retirement",
@@ -2996,6 +3000,134 @@ fn native_staged_retirement_preserves_delivery_and_failure() {
                 binding.handle_pointer_event(&packet(PanZoomPhase::End), |_| HitTestResult::new());
                 assert_eq!(ends.get(), 1);
                 assert_eq!(retired.get(), if replacement { 2 } else { 1 });
+            });
+        }
+    }
+}
+
+fn native_cancellation_retains_captures_after_prior_capture_failure() {
+    use flui_foundation::geometry::{Offset, Point};
+    use flui_interaction::events::make_down_event;
+    use flui_interaction::routing::EventPropagation;
+    use flui_interaction::{GestureBinding, HitTestResult};
+    use flui_platform_api::{
+        EventTime,
+        pointer::{
+            CancelReason, PanZoomEvent, PanZoomPhase, PointerEvent, PointerId, PointerInfo,
+            PointerKind, PointerPosition,
+        },
+    };
+    use std::{
+        cell::{Cell, RefCell},
+        panic::{AssertUnwindSafe, catch_unwind},
+        rc::Rc,
+    };
+
+    struct Capture(Rc<Cell<usize>>);
+    impl Drop for Capture {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+    for cancel_all in [false, true] {
+        for fail_capture in [false, true] {
+            let lane = InteractionLane::try_new().expect("lane");
+            let handle = lane.dispatch_handle();
+            let binding = GestureBinding::new();
+            let drops = Rc::new(Cell::new(0));
+            let calls = Rc::new(Cell::new(0));
+            let tokens = Rc::new(RefCell::new(Vec::new()));
+            let fail = Rc::new(Cell::new(fail_capture));
+            lane.enter(|| {
+                let (retired, invoked) = (drops.clone(), calls.clone());
+                let target = handle
+                    .register_pan_zoom(move |dispatch| {
+                        if dispatch.local.phase == PanZoomPhase::Start {
+                            let capture = Capture(retired.clone());
+                            let invoked = invoked.clone();
+                            assert!(dispatch.on_retirement(move || {
+                                let _keep = &capture;
+                                invoked.set(invoked.get() + 1);
+                            }));
+                        }
+                        EventPropagation::Continue
+                    })
+                    .expect("staged native owner");
+                let mut native_path = HitTestResult::new();
+                native_path.add(HitTestEntry::new(RenderId::new(2)).pan_zoom_target(target));
+                let start = PointerEvent::PanZoom(PanZoomEvent::new(
+                    PointerInfo::new(
+                        PointerId::try_from(849_u64).expect("native source"),
+                        PointerKind::Trackpad,
+                    ),
+                    EventTime::from_nanos(0),
+                    PointerPosition::try_new(Point::ZERO).expect("position"),
+                    PanZoomPhase::Start,
+                ));
+                binding.handle_pointer_event(&start, |_| native_path.clone());
+                let (held, fails) = (tokens.clone(), fail.clone());
+                let pointer = handle
+                    .register_pointer(move |dispatch| match dispatch.local {
+                        PointerEvent::Down(_) => held
+                            .borrow_mut()
+                            .push(dispatch.capture().expect("touch capture")),
+                        PointerEvent::Cancel(cancel) => {
+                            assert_eq!(cancel.reason, CancelReason::CaptureLost);
+                            assert!(!fails.get(), "capture loss before native cancellation");
+                        }
+                        _ => {}
+                    })
+                    .expect("independent touch owner");
+                let mut pointer_path = HitTestResult::new();
+                pointer_path.add(hit_entry(pointer));
+                binding.handle_pointer_event(
+                    &make_down_event(Offset::ZERO, PointerKind::Touch).expect("touch Down"),
+                    |_| pointer_path.clone(),
+                );
+                tokens.borrow_mut().clear();
+                let cancel = || {
+                    if cancel_all {
+                        binding.cancel_all_pointer_sequences();
+                    } else {
+                        binding.cancel_active_pointers();
+                    }
+                };
+                let result = catch_unwind(AssertUnwindSafe(cancel));
+                if fail_capture {
+                    assert_eq!(
+                        result
+                            .expect_err("earlier capture loss propagates")
+                            .downcast_ref::<&str>(),
+                        Some(&"capture loss before native cancellation")
+                    );
+                } else {
+                    result.expect("healthy cancellation");
+                }
+                assert_eq!(
+                    calls.get(),
+                    1,
+                    "accepted native cleanup still runs after prior capture failure"
+                );
+                assert_eq!(
+                    drops.get(),
+                    usize::from(!fail_capture),
+                    "the first caught failure controls subsequent opaque native capture retirement"
+                );
+                fail.set(false);
+                cancel();
+                assert_eq!(calls.get(), 1, "retired admission is not delivered twice");
+                binding.handle_pointer_event(&start, |_| native_path.clone());
+                cancel();
+                assert_eq!(
+                    calls.get(),
+                    2,
+                    "fresh same-source admission still progresses"
+                );
+                assert_eq!(
+                    drops.get(),
+                    usize::from(!fail_capture) + 1,
+                    "healthy recovery retires only its fresh capture"
+                );
             });
         }
     }
