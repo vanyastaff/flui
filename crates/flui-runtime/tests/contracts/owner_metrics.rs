@@ -13,6 +13,195 @@ use flui_view::prelude::*;
 type ObservedMetrics = Rc<RefCell<Vec<(Size<f64>, f64)>>>;
 
 #[derive(Clone, StatelessView)]
+struct MotionReader(Rc<RefCell<Vec<flui_animation::MotionPolicy>>>);
+
+impl StatelessView for MotionReader {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        self.0
+            .borrow_mut()
+            .push(flui_widgets::MediaQuery::motion_of(ctx).expect("runtime motion policy"));
+        flui_widgets::SizedBox::square(20.0)
+    }
+}
+
+#[test]
+fn system_motion_change_reaches_media_query_and_the_clock() {
+    use flui_animation::{Animation, AnimationBehavior, AnimationController, MotionPolicy};
+    use flui_foundation::{ManualClock, MonotonicClock};
+    use flui_platform_api::{MotionPreference, SystemPreferences};
+    use flui_runtime::ui_runtime::RuntimeHostServices;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
+    use std::time::Duration;
+
+    let owner = OwnerHost::new();
+    let clock = ManualClock::new();
+    let wakes = Arc::new(AtomicUsize::new(0));
+    let recorded_wakes = Arc::clone(&wakes);
+    let runtime = UiRuntime::new(
+        crate::owner_publication::window(),
+        1.0,
+        RuntimeHostServices::new(
+            Arc::new(move || {
+                recorded_wakes.fetch_add(1, Ordering::SeqCst);
+            }),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            &flui_painting::FontCollection::new(),
+            flui_scheduler::ClockSource::Manual(clock.clone()),
+        ),
+    )
+    .expect("motion runtime");
+    let observed = Rc::new(RefCell::new(Vec::new()));
+    runtime
+        .attach_root_widget_with_size(&MotionReader(Rc::clone(&observed)), 800.0, 600.0)
+        .expect("motion reader");
+    let normal =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&runtime.vsync()));
+    let preserve = AnimationController::builder(Duration::from_secs(1))
+        .behavior(AnimationBehavior::Preserve)
+        .build_on(Some(&runtime.vsync()));
+    normal.controller().forward().expect("normal run");
+    preserve.controller().forward().expect("preserved run");
+    let address = owner
+        .publication(owner.prepare_runtime(runtime))
+        .expect("publish")
+        .commit();
+    let size = Rc::new(Cell::new((800, 600)));
+    let effects = Effects {
+        address,
+        sink: RefCell::new(Sink {
+            size: Rc::clone(&size),
+            submitted: 0,
+            paragraphs: Vec::new(),
+        }),
+        size,
+        frame_time: Cell::new(clock.now()),
+        trace: RefCell::default(),
+        expects_present: Cell::new(None),
+        owner: owner.clone(),
+        burst: Cell::new(false),
+        native_sizes: RefCell::default(),
+        fail_resize: Cell::new(false),
+        fail_tail: Cell::new(false),
+        geometry_gate: RefCell::new(None),
+    };
+    let frame = owner.frame_dispatcher(address).expect("frame");
+    owner
+        .update_preferences(
+            SystemPreferences::default()
+                .with_motion(MotionPreference::from_duration_scale(2.0).expect("scale")),
+            &effects,
+        )
+        .expect("scaled motion");
+    frame.deliver(&effects).expect("anchor frame");
+    effects
+        .frame_time
+        .set(effects.frame_time.get() + Duration::from_millis(384));
+    frame.deliver(&effects).expect("scaled frame");
+    assert!((normal.controller().value() - 0.2).abs() < 1e-9);
+    assert!((preserve.controller().value() - 0.4).abs() < 1e-9);
+    let before = observed.borrow().len();
+    wakes.store(0, Ordering::SeqCst);
+    let reduced = SystemPreferences::default().with_motion(MotionPreference::Reduce);
+    owner
+        .update_preferences(reduced.clone(), &effects)
+        .expect("reduce motion");
+    assert!(
+        wakes.load(Ordering::SeqCst) > 0,
+        "policy change wakes the parked host"
+    );
+    assert_eq!(
+        normal.controller().value(),
+        0.2,
+        "publication does not sample user animation"
+    );
+    frame.deliver(&effects).expect("reduced frame");
+    assert_eq!(normal.controller().value(), 1.0);
+    assert!((preserve.controller().value() - 0.416).abs() < 1e-9);
+    assert_eq!(observed.borrow().len(), before + 1);
+    assert_eq!(observed.borrow().last(), Some(&MotionPolicy::Reduce));
+    wakes.store(0, Ordering::SeqCst);
+    owner
+        .update_preferences(reduced, &effects)
+        .expect("duplicate preference");
+    assert_eq!(wakes.load(Ordering::SeqCst), 0);
+    frame.deliver(&effects).expect("duplicate frame");
+    assert_eq!(
+        observed.borrow().len(),
+        before + 1,
+        "no inherited republish for a duplicate"
+    );
+    for (preference, expected) in [
+        (
+            flui_animation::MotionPreference::FollowSystem,
+            MotionPolicy::Reduce,
+        ),
+        (
+            flui_animation::MotionPreference::Reduce,
+            MotionPolicy::Reduce,
+        ),
+        (flui_animation::MotionPreference::Full, MotionPolicy::Full),
+    ] {
+        let mut late = UiRuntime::new(
+            crate::owner_publication::window(),
+            1.0,
+            RuntimeHostServices::new(
+                Arc::new(|| {}),
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(flui_platform_api::InMemoryClipboard::new()),
+                &flui_painting::FontCollection::new(),
+                flui_scheduler::ClockSource::Manual(clock.clone()),
+            )
+            .with_preferences(
+                owner
+                    .preferences()
+                    .expect("host source")
+                    .expect("accepted preference"),
+            ),
+        )
+        .expect("late runtime");
+        late.set_motion_preference(preference);
+        let late_observed = Rc::new(RefCell::new(Vec::new()));
+        late.attach_root_widget_with_size(&MotionReader(Rc::clone(&late_observed)), 800.0, 600.0)
+            .expect("late root");
+        let _ = late.pump(
+            &mut flui_runtime::pump::SampledClock(clock.now() + Duration::from_millis(16)),
+            &mut *effects.sink.borrow_mut(),
+        );
+        assert_eq!(
+            late_observed.borrow().last(),
+            Some(&expected),
+            "first root honors the application override"
+        );
+        let sibling = late
+            .presentation_factory()
+            .assemble(crate::owner_publication::window())
+            .expect("assemble sibling");
+        let sibling = late.install_presentation(sibling);
+        late.attach_root_widget_with_size_to(
+            sibling,
+            &MotionReader(Rc::clone(&late_observed)),
+            800.0,
+            600.0,
+        )
+        .expect("late sibling root");
+        let _ = late.pump(
+            &mut flui_runtime::pump::SampledClock(clock.now() + Duration::from_millis(32)),
+            &mut *effects.sink.borrow_mut(),
+        );
+        assert_eq!(
+            late_observed.borrow().last(),
+            Some(&expected),
+            "later presentations inherit the runtime override"
+        );
+    }
+    owner.shutdown(&effects);
+}
+
+#[derive(Clone, StatelessView)]
 struct PreferenceReader(Rc<RefCell<Vec<f64>>>);
 
 impl StatelessView for PreferenceReader {

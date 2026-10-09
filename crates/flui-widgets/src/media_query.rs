@@ -47,6 +47,7 @@ use std::sync::Arc;
 /// - [`view_insets`](Self::view_insets)
 /// - [`platform_brightness`](Self::platform_brightness)
 /// - [`high_contrast`](Self::high_contrast)
+/// - [`motion`](Self::motion)
 /// - [`preferred_locales`](Self::preferred_locales)
 #[derive(Debug, Clone, PartialEq, flui_view::prelude::InheritedData)]
 pub struct MediaQueryData {
@@ -90,6 +91,10 @@ pub struct MediaQueryData {
     /// platform observation projects to `false`; nested providers may override it.
     pub high_contrast: bool,
 
+    /// Resolved application motion policy. Controllers obey the presentation
+    /// clock; this inherited value lets widgets choose a static composition.
+    pub motion: flui_animation::MotionPolicy,
+
     /// Ordered preferred UI languages observed by the host. `None` means
     /// unavailable; an empty list is an observed empty preference list.
     /// Application locale overrides and resource fallback belong to
@@ -110,6 +115,7 @@ impl Default for MediaQueryData {
             view_insets: EdgeInsets::ZERO,
             platform_brightness: Brightness::Light,
             high_contrast: false,
+            motion: flui_animation::MotionPolicy::Full,
             preferred_locales: None,
         }
     }
@@ -146,6 +152,10 @@ pub struct MediaQuery {
 }
 
 impl MediaQuery {
+    /// Depend on the resolved presentation motion policy.
+    pub fn motion_of(ctx: &dyn BuildContext) -> Option<flui_animation::MotionPolicy> {
+        Self::depend_on_fields(ctx, MediaQueryData::FIELD_MOTION, |data| data.motion)
+    }
     /// Wrap `child` in a `MediaQuery` that provides `data` to all descendants.
     #[must_use]
     pub fn new(data: MediaQueryData, child: impl IntoView) -> Self {

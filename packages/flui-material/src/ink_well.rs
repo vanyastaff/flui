@@ -528,7 +528,9 @@ fn begin_press_deactivation(
         return;
     };
 
-    let owner = AnimationController::builder(PRESS_DEACTIVATION_DELAY).build_on(Some(&vsync));
+    let owner = AnimationController::builder(PRESS_DEACTIVATION_DELAY)
+        .behavior(flui_sdk::animation::AnimationBehavior::Preserve)
+        .build_on(Some(&vsync));
     let controller = owner.controller().clone();
 
     // Completion changes the pressed state. The next press withdraws and

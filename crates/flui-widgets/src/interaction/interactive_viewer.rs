@@ -432,6 +432,7 @@ impl StatefulView for InteractiveViewer {
 
     fn create_state(&self) -> Self::State {
         let controller = AnimationController::builder(Duration::from_millis(1))
+            .behavior(flui_animation::AnimationBehavior::Preserve)
             .unbounded()
             .build_on(None);
         let fling = Rc::new(FocalFling::new(controller.controller().clone()));

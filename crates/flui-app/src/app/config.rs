@@ -2,6 +2,7 @@
 
 use flui_foundation::geometry::Size;
 use flui_log::AppIdentity;
+pub use flui_runtime::MotionPreference;
 pub use flui_runtime::presentation::PointerResampling;
 
 use super::close_request::CloseRequestHandler;
@@ -76,6 +77,9 @@ pub struct AppConfig {
 
     /// Diagnostics defaults for a managed application.
     pub diagnostics_profile: DiagnosticsProfile,
+
+    /// Animation policy for this UI runtime and its later presentations.
+    pub motion_preference: MotionPreference,
 
     /// Window title.
     pub title: String,
@@ -253,6 +257,7 @@ impl Default for AppConfig {
             application_identity: AppIdentity::new("FLUI App")
                 .expect("BUG: the default application identity is valid"),
             diagnostics_profile: DiagnosticsProfile::default(),
+            motion_preference: MotionPreference::FollowSystem,
             title: "FLUI App".to_string(),
             size: Size::new(800.0, 600.0),
             min_size: None,
@@ -279,6 +284,12 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    /// Override the host motion preference before the first root is mounted.
+    #[must_use]
+    pub fn with_motion_preference(mut self, preference: MotionPreference) -> Self {
+        self.motion_preference = preference;
+        self
+    }
     /// Opt this window's presentation into frame-aligned pointer interpolation.
     #[must_use]
     pub fn with_pointer_resampling(mut self, policy: PointerResampling) -> Self {

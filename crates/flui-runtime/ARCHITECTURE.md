@@ -11,6 +11,15 @@ host.
 
 ## Invariants
 
+- **Motion follows one host observation.** Presentation clocks resolve the
+  runtime's application override against accepted `SystemPreferences` before
+  publication callbacks. Both current and later presentations inherit it.
+  Normal runs use the duration-scale timeline and settle under Reduce; Preserve
+  keeps authored timing. Changed motion wakes parked work, while duplicate host
+  observations do not republish inherited data (ADR-0184).
+  `system_motion_change_reaches_media_query_and_the_clock` exercises actual
+  frame sampling, inherited publication and late presentation seeds.
+
 - **Invalid authored text waits for changed input.** A typed text-layout error
   withholds scene submission and retains layout debt. The failure handler receives
   the ordinary error; unchanged invalid input does not request a continuous frame

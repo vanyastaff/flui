@@ -43,6 +43,11 @@ topology is not part of any package manifest.
 
 ## The measured surface
 
+`animation::AnimationBehavior` is used by essential timer and loading-indicator
+controllers. `animation::MotionPolicy` is read by Cupertino route composition
+through `widgets::MediaQuery::motion_of` (ADR-0184). These consumer imports are
+pinned in `tests/surface.rs`.
+
 `platform::InvalidLocale` names the error returned by the validated `Locale`
 constructors and parser (ADR-0173). Package authors can handle malformed authored
 language tags without depending on an internal crate. The surface and identity

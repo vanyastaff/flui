@@ -147,7 +147,9 @@ impl StatefulView for LinearProgressIndicator {
 
     fn create_state(&self) -> Self::State {
         LinearProgressIndicatorState {
-            controller: AnimationController::builder(CYCLE).build_on(None),
+            controller: AnimationController::builder(CYCLE)
+                .behavior(flui_sdk::animation::AnimationBehavior::Preserve)
+                .build_on(None),
             bars: Arc::new(Bars::new()),
             vsync: None,
             indeterminate: self.value.is_none(),

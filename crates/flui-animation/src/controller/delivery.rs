@@ -75,16 +75,23 @@ impl AnimationController {
             };
             match delivery {
                 ControllerDelivery::RequestFrame => {
-                    if self.walk_probe().live_running {
+                    let probe = self.walk_probe();
+                    if probe.has_run && !probe.parked {
                         let routes = self.inner.borrow().frame_routes.clone();
                         for route in routes {
-                            route.request_frame(retirement);
+                            if probe.live_running
+                                || (probe.behavior == crate::AnimationBehavior::Normal
+                                    && route.reduces_motion())
+                            {
+                                route.request_frame(retirement);
+                            }
                         }
                     }
                 }
                 ControllerDelivery::SettleRun(generation) => {
                     retirement.run_with(|retirement| {
-                        settled |= self.settle_run(generation, retirement);
+                        settled |=
+                            self.settle_run(generation, super::SettleReason::Clock, retirement);
                     });
                 }
                 ControllerDelivery::Status(status, listeners) => {

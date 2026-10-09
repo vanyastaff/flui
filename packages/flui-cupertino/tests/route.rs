@@ -43,6 +43,49 @@ fn seeded_navigator() -> NavigatorHandle {
     navigator
 }
 
+pub fn cupertino_route_does_not_slide_under_reduced_motion() {
+    use flui_sdk::animation::MotionPolicy;
+    use flui_sdk::widgets::{GestureDetector, MediaQuery, MediaQueryData};
+    use std::{cell::Cell, rc::Rc};
+    let vsync = Vsync::new();
+    let navigator = seeded_navigator();
+    let root = MediaQuery::new(
+        MediaQueryData {
+            motion: MotionPolicy::Reduce,
+            ..MediaQueryData::default()
+        },
+        app(&vsync, &navigator),
+    );
+    let mut laid = lay_out_animated(root, tight(400.0, 800.0), vsync);
+    let taps = Rc::new(Cell::new(0));
+    let received = Rc::clone(&taps);
+    let _result = navigator.push(cupertino_page_route::<(), _>(
+        move |_ctx, _primary, _secondary| {
+            let received = Rc::clone(&received);
+            GestureDetector::new()
+                .on_tap(move |_| received.set(received.get() + 1))
+                .child(ColoredBox::new(Color::rgb(10, 20, 30)))
+                .boxed()
+        },
+    ));
+    laid.tick();
+    laid.dispatch_pointer_down(20.0, 200.0);
+    laid.dispatch_pointer_up(20.0, 200.0);
+    assert_eq!(
+        taps.get(),
+        1,
+        "the pushed page is interactive at its final position on the first frame"
+    );
+    laid.pump_for(TRANSITION / 2);
+    laid.dispatch_pointer_down(20.0, 200.0);
+    laid.dispatch_pointer_up(20.0, 200.0);
+    assert_eq!(
+        taps.get(),
+        2,
+        "the reduced-motion page keeps its settled hit geometry"
+    );
+}
+
 /// `cupertino_page_transitions` mounts exactly two `SlideTransition`s for a
 /// route nothing else covers: the **primary** (this page's own entrance,
 /// tweened `1.0 -> 0.0`) and the **secondary** (the parallax a covering page

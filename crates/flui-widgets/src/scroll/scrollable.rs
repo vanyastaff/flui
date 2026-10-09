@@ -600,6 +600,7 @@ impl StatefulView for Scrollable {
         // `without_ticker_bounds` now REJECTS a wide-open pair. No ticker:
         // `Vsync` drives this controller once registered below.
         let fling_controller = AnimationController::builder(Duration::from_millis(1))
+            .behavior(flui_animation::AnimationBehavior::Preserve)
             .unbounded()
             .build_on(None);
 

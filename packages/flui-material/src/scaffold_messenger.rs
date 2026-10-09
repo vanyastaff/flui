@@ -602,6 +602,7 @@ impl MessengerCore {
         };
         let vsync = self.vsync.borrow().clone();
         let owner = AnimationController::builder(front.snack_bar.configured_duration())
+            .behavior(flui_sdk::animation::AnimationBehavior::Preserve)
             .build_on(vsync.as_ref());
         let controller = owner.controller().clone();
         if front.hovered_presenters.get() != 0 {

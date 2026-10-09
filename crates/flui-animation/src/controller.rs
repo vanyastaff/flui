@@ -2,9 +2,12 @@
 
 mod delivery;
 mod motion;
+mod policy;
 mod sample;
 
 pub(crate) use motion::{ValuePublication, ValueSeam};
+use policy::MotionRunState;
+pub(crate) use policy::SettleReason;
 use sample::{SampleIdentity, SampleTime};
 
 use crate::AnimationRunFuture;
@@ -221,6 +224,9 @@ pub(crate) struct WalkProbe {
     /// disposed. `status` alone cannot tell the two apart — see
     /// [`AnimationController::walk_probe`]'s own doc.
     pub(crate) live_running: bool,
+    pub(crate) behavior: crate::AnimationBehavior,
+    pub(crate) has_run: bool,
+    pub(crate) parked: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -348,6 +354,8 @@ struct AnimationControllerInner {
 
     /// Duration of forward animation.
     duration: Duration,
+    behavior: crate::AnimationBehavior,
+    motion_state: MotionRunState,
 
     /// Duration of reverse animation (defaults to `duration`).
     reverse_duration: Option<Duration>,
@@ -487,6 +495,7 @@ impl AnimationController {
         duration: Duration,
         bounds: Option<crate::ValueRange>,
         initial: Option<f64>,
+        behavior: crate::AnimationBehavior,
     ) -> Self {
         let (lower, upper, default) = bounds
             .map_or((f64::NEG_INFINITY, f64::INFINITY, 0.0), |range| {
@@ -496,7 +505,7 @@ impl AnimationController {
             .filter(|value| value.is_finite())
             .unwrap_or(default)
             .clamp(lower, upper);
-        Self::new_inner(duration, lower, upper, value)
+        Self::new_inner(duration, lower, upper, value, behavior)
     }
 
     pub(crate) fn last_elapsed(&self) -> Duration {
@@ -556,6 +565,7 @@ impl AnimationController {
         lower_bound: f64,
         upper_bound: f64,
         initial_value: f64,
+        behavior: crate::AnimationBehavior,
     ) -> Self {
         let notifier = Rc::new(ChangeNotifier::new());
 
@@ -563,6 +573,8 @@ impl AnimationController {
             value: initial_value,
             status: AnimationStatus::Dismissed,
             duration,
+            behavior,
+            motion_state: MotionRunState::Active,
             reverse_duration: None,
             lower_bound,
             upper_bound,
@@ -1768,8 +1780,12 @@ impl AnimationController {
         WalkProbe {
             generation: inner.run_generation,
             start: inner.run_start,
+            behavior: inner.behavior,
+            has_run: !inner.disposed && inner.active_run.is_some(),
+            parked: inner.motion_state == MotionRunState::Parked,
             live_running: !inner.disposed
                 && inner.active_run.is_some()
+                && inner.motion_state == MotionRunState::Active
                 && (!inner.playback_rate.is_paused() || inner.pending_rate.is_some()),
         }
     }
@@ -1902,14 +1918,26 @@ impl AnimationController {
 
     /// Settle an admitted run without reading a wall clock or invoking its curve.
     /// Reentrant replacement invalidates the source before the next callout.
-    fn settle_run(&self, generation: u64, recovery: &mut RecoveryScope<'_>) -> bool {
+    pub(crate) fn settle_run(
+        &self,
+        generation: u64,
+        reason: SettleReason,
+        recovery: &mut RecoveryScope<'_>,
+    ) -> bool {
         let (source, identity, warn) = {
             let mut inner = self.inner.borrow_mut();
             if inner.disposed
                 || inner.active_run.is_none()
                 || inner.run_generation != generation
-                || (inner.clock_binding != ClockBinding::Missing
-                    && !inner.current_duration().is_zero())
+                || match reason {
+                    SettleReason::Clock => {
+                        inner.clock_binding != ClockBinding::Missing
+                            && !inner.current_duration().is_zero()
+                    }
+                    SettleReason::ReducedMotion => {
+                        inner.behavior != crate::AnimationBehavior::Normal
+                    }
+                }
             {
                 return false;
             }
@@ -1955,6 +1983,10 @@ impl AnimationController {
                     inner.local_elapsed = Duration::ZERO;
                     inner.rate_epoch_elapsed = Duration::ZERO;
                     inner.rate_epoch_local = Duration::ZERO;
+                    if matches!(reason, SettleReason::ReducedMotion) {
+                        inner.motion_state = MotionRunState::Parked;
+                        inner.run_start = RunStart::Fresh;
+                    }
                     self.finish_with_retirement(
                         AnimationStatus::Forward,
                         ValueChange::Notify,
@@ -2519,6 +2551,7 @@ impl AnimationControllerInner {
     /// Clear repeat/simulation/per-run-duration/curve modes (used when a new
     /// explicit run begins).
     fn clear_run_modes(&mut self, retired: &mut RetiredSources) {
+        self.motion_state = MotionRunState::Active;
         self.repeat = None;
         self.run_duration = None;
         if let Some(simulation) = self.simulation.take() {

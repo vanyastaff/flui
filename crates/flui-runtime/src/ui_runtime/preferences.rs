@@ -120,6 +120,11 @@ pub(super) fn publish(
     values: &SystemPreferences,
     now: web_time::Instant,
 ) {
+    presentation.set_system_motion(
+        values
+            .motion()
+            .unwrap_or(flui_platform_api::MotionPreference::NoPreference),
+    );
     refresh(presentation, values, now, true);
 }
 
@@ -231,6 +236,7 @@ fn refresh(
                     _ => 0,
                 };
                 data.high_contrast = values.high_contrast().unwrap_or(false);
+                data.motion = presentation.motion_policy();
                 data.preferred_locales = values.locales().map(Into::into);
             });
         }))
@@ -266,6 +272,41 @@ fn refresh(
 }
 
 impl UiRuntime {
+    /// Apply an application override to every current and later presentation.
+    /// Clocks commit before any inherited-data notification or platform wake.
+    pub fn set_motion_preference(&self, preference: flui_animation::MotionPreference) {
+        if self.motion_preference.replace(preference) == preference {
+            return;
+        }
+        for presentation in self.presentations.iter() {
+            presentation.set_motion_preference(preference);
+            presentation.mark_redraw_pending();
+        }
+        let mut first_failure = None;
+        for presentation in self.presentations.iter() {
+            let failure = catch_unwind(AssertUnwindSafe(|| {
+                let policy = presentation.motion_policy();
+                presentation.media_query.update(|data| data.motion = policy);
+            }))
+            .err();
+            crate::lifecycle_state::preserve_first_lifecycle_panic(
+                &mut first_failure,
+                failure,
+                "application motion publication",
+            );
+            let failure =
+                catch_unwind(AssertUnwindSafe(|| self.request_redraw_for(presentation))).err();
+            crate::lifecycle_state::preserve_first_lifecycle_panic(
+                &mut first_failure,
+                failure,
+                "application motion wake",
+            );
+        }
+        if let Some(failure) = first_failure {
+            resume_unwind(failure);
+        }
+    }
+
     pub(crate) fn begin_geometry_turn(&self) -> GeometryTurn {
         let mut turn = self.geometry_turn.borrow_mut();
         if turn.is_some() {
@@ -347,8 +388,11 @@ impl UiRuntime {
     }
 
     pub(crate) fn apply_preferences(&self, snapshot: SystemPreferencesSnapshot) {
+        let motion_changed;
         {
             let current = self.preferences.borrow();
+            motion_changed = current.as_ref().and_then(|current| current.values.motion())
+                != snapshot.values.motion();
             if let Some(current) = current.as_ref() {
                 assert!(
                     Rc::ptr_eq(&current.origin, &snapshot.origin),
@@ -360,15 +404,37 @@ impl UiRuntime {
             }
         }
         *self.preferences.borrow_mut() = Some(snapshot.clone());
+        // Preference delivery can invoke native getters and wakes. All clocks
+        // observe the accepted host value before the first such callout.
+        for presentation in self.presentations.iter() {
+            presentation.set_system_motion(
+                snapshot
+                    .values
+                    .motion()
+                    .unwrap_or(flui_platform_api::MotionPreference::NoPreference),
+            );
+            if motion_changed {
+                presentation.mark_redraw_pending();
+            }
+        }
         let mut first_failure = None;
         for presentation in self.presentations.iter() {
             if let Err(failure) = catch_unwind(AssertUnwindSafe(|| {
-                publish(presentation, &snapshot.values, self.clock.now());
+                refresh(presentation, &snapshot.values, self.clock.now(), true);
             })) {
                 crate::lifecycle_state::preserve_first_lifecycle_panic(
                     &mut first_failure,
                     Some(failure),
                     "system preferences publication",
+                );
+            }
+            if motion_changed {
+                let failure =
+                    catch_unwind(AssertUnwindSafe(|| self.request_redraw_for(presentation))).err();
+                crate::lifecycle_state::preserve_first_lifecycle_panic(
+                    &mut first_failure,
+                    failure,
+                    "system motion wake",
                 );
             }
         }

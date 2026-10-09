@@ -146,7 +146,10 @@ pub use driven::DrivenController;
 pub use error::AnimationError;
 pub use ext::AnimatableExt;
 pub use keyframes::{Keyframes, KeyframesBuilder, KeyframesError};
-pub use motion::{AnimationTime, FrameTick, InvalidPlaybackRate, MotionClock, PlaybackRate};
+pub use motion::{
+    AnimationTime, FrameTick, InvalidPlaybackRate, MotionClock, MotionPolicy, MotionPreference,
+    PlaybackRate,
+};
 pub use proxy::ProxyAnimation;
 pub use retarget::MotionSpec;
 pub use reverse::ReverseAnimation;

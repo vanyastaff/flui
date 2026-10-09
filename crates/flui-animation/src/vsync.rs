@@ -54,6 +54,16 @@ impl PartialEq for VsyncRegistration {
 impl Eq for VsyncRegistration {}
 
 impl VsyncRegistration {
+    pub(crate) fn reduces_motion(&self) -> bool {
+        let Some(owner) = self.owner.upgrade() else {
+            return false;
+        };
+        owner
+            .borrow()
+            .last_tick
+            .is_some_and(|tick| tick.policy() == crate::MotionPolicy::Reduce)
+    }
+
     pub(crate) fn owner_is_alive(&self) -> bool {
         self.owner.strong_count() != 0
     }
@@ -179,7 +189,7 @@ struct VsyncInner {
     request_frame: Option<Rc<dyn Fn()>>,
     next_id: u64,
     muted: bool,
-    last_time: crate::AnimationTime,
+    last_tick: Option<FrameTick>,
 }
 
 impl VsyncInner {
@@ -498,18 +508,14 @@ impl Vsync {
     /// preserving that failure through callback and capture retirement.
     pub fn tick_all(&self, tick: &FrameTick) {
         let mut retirement = Retirement::new();
-        retirement.run_with(|retirement| self.tick_all_with_retirement(tick.now(), retirement));
+        retirement.run_with(|retirement| self.tick_all_with_retirement(*tick, retirement));
         retirement.finish();
     }
 
-    fn tick_all_with_retirement(
-        &self,
-        now: crate::AnimationTime,
-        retirement: &mut RecoveryScope<'_>,
-    ) {
+    fn tick_all_with_retirement(&self, tick: FrameTick, retirement: &mut RecoveryScope<'_>) {
         let (fence, children, muted) = {
             let mut inner = self.inner.borrow_mut();
-            inner.last_time = inner.last_time.max(now);
+            inner.last_tick = Some(tick.hold_after(inner.last_tick.unwrap_or(tick)));
             inner.frame = inner.frame.saturating_add(1);
             (
                 inner.next_id,
@@ -532,8 +538,12 @@ impl Vsync {
 
         for child in children {
             let child = Terminal::new(child);
-            let now = self.inner.borrow().last_time;
-            retirement.run_with(|retirement| child.tick_all_with_retirement(now, retirement));
+            let tick = self
+                .inner
+                .borrow()
+                .last_tick
+                .expect("BUG: registry frame stores its tick before walking children");
+            retirement.run_with(|retirement| child.tick_all_with_retirement(tick, retirement));
             retirement.retire(child);
         }
 
@@ -541,7 +551,9 @@ impl Vsync {
         loop {
             let step = {
                 let mut inner = self.inner.borrow_mut();
-                let now = inner.last_time;
+                let tick = inner
+                    .last_tick
+                    .expect("BUG: registry frame stores its tick before walking controllers");
                 let frame = inner.frame;
                 // Re-read per iteration, not only captured at entry above: a
                 // listener that mutes the registry mid-walk must stop the
@@ -557,6 +569,7 @@ impl Vsync {
                     // `disposed` — see its own doc) under a single
                     // controller lock.
                     let probe = registered.controller.walk_probe();
+                    let now = tick.time(probe.behavior);
                     if probe.generation != registered.last_gen {
                         registered.last_gen = probe.generation;
                         registered.anchor = match (probe.start, registered.last_tick) {
@@ -580,7 +593,20 @@ impl Vsync {
                             _ => RunAnchor::Fresh,
                         };
                     }
-                    if probe.live_running {
+                    let resumed = probe.parked
+                        && tick.policy() == crate::MotionPolicy::Full
+                        && registered.controller.resume_motion_run(probe.generation);
+                    if resumed {
+                        registered.anchor = RunAnchor::Fresh;
+                        registered.last_tick = None;
+                    }
+                    if probe.has_run
+                        && !probe.parked
+                        && probe.behavior == crate::AnimationBehavior::Normal
+                        && tick.policy() == crate::MotionPolicy::Reduce
+                    {
+                        RegistryWalkStep::Settling(registered.controller.clone(), probe.generation)
+                    } else if probe.live_running || resumed {
                         // `run_start_secs` is `Some` here — set in the branch
                         // above on this same call if it was `None`.
                         let elapsed = registered.anchor.elapsed(now);
@@ -602,6 +628,17 @@ impl Vsync {
             match step {
                 RegistryWalkStep::Finished => break,
                 RegistryWalkStep::NotRunning => {}
+                RegistryWalkStep::Settling(controller, generation) => {
+                    let controller = Terminal::new(controller);
+                    retirement.run_with(|retirement| {
+                        controller.settle_run(
+                            generation,
+                            crate::controller::SettleReason::ReducedMotion,
+                            retirement,
+                        );
+                    });
+                    retirement.retire(controller);
+                }
                 RegistryWalkStep::Running(controller, elapsed) => {
                     let controller = Terminal::new(controller);
                     retirement.run_with(|retirement| {
@@ -624,6 +661,7 @@ enum RegistryWalkStep {
     /// The controller is running; tick it with the given elapsed seconds
     /// once the registry lock guarding this step is released.
     Running(AnimationController, Duration),
+    Settling(AnimationController, u64),
 }
 
 impl std::fmt::Debug for Vsync {

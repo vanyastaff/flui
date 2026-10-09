@@ -100,6 +100,7 @@ where
         // Debug overlay: `Some` stats IS the enable flag, so this is the
         // single point that turns the frame path's overlay work on.
         ui_runtime.set_performance_overlay(config.show_performance_overlay);
+        ui_runtime.set_motion_preference(config.motion_preference);
 
         // Typed frame-failure route (issue #561) — same wiring as the
         // desktop bootstrap.

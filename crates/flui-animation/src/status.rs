@@ -95,10 +95,9 @@ impl AnimationStatus {
 /// Configures how an animation should behave when animations are globally
 /// disabled (e.g. the platform's reduce-motion accessibility setting).
 ///
-/// This is a policy carrier: `AnimationController` does not read it itself —
-/// the accessibility/bindings layer consults it when deciding whether to
-/// fast-forward (`Normal`) or run unchanged (`Preserve`) under a
-/// disable-animations setting.
+/// The controller builder stores this immutable configuration. Its presentation's
+/// registry selects the corresponding timeline and applies reduced-motion
+/// settlement when delivering a frame.
 ///
 /// # Examples
 ///
@@ -112,19 +111,17 @@ impl AnimationStatus {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum AnimationBehavior {
-    /// The animation will run normally.
+    /// Honor reduced motion and the host duration scale.
     #[default]
     Normal,
 
-    /// The animation will preserve its state when not in view.
-    ///
-    /// This is useful for animations that should not tick when the widget
-    /// is not visible, but should resume when it becomes visible again.
+    /// Keep authored timing under any host motion setting or application policy.
+    /// Debug playback controls and registry muting still apply.
     Preserve,
 }
 
 impl AnimationBehavior {
-    /// Returns true if the animation should preserve its state.
+    /// Whether the animation preserves authored timing under motion policy.
     #[inline]
     #[must_use]
     pub const fn should_preserve(&self) -> bool {

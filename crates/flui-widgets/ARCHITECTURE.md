@@ -70,6 +70,12 @@ owns the shell and `SafeArea`, not the source of inherited presentation data.
 The module DAG enforces this direction. Field-specific dependency behavior is
 pinned by `a_size_only_change_rebuilds_size_and_whole_readers_only`.
 
+`MediaQuery::motion_of` observes the presentation's resolved policy, while
+controllers obey the clock rather than an inherited subtree override. Physical
+scroll and viewer inertia and the activity indicator explicitly use Preserve;
+ordinary transitions remain Normal (ADR-0184). Runtime publication is pinned by
+`system_motion_change_reaches_media_query_and_the_clock`.
+
 `WidgetsApp` resolves supported resources from ordered `preferred_locales`,
 subscribing only to that media field when no explicit locale is authored.
 Complete locale identity determines exact matches before the established

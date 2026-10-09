@@ -994,6 +994,18 @@ impl PresentationState {
         self.motion_clock.borrow().is_paused()
     }
 
+    pub(crate) fn motion_policy(&self) -> flui_animation::MotionPolicy {
+        self.motion_clock.borrow().policy()
+    }
+
+    pub(crate) fn set_motion_preference(&self, preference: flui_animation::MotionPreference) {
+        self.motion_clock.borrow_mut().set_preference(preference);
+    }
+
+    pub(crate) fn set_system_motion(&self, system: flui_platform_api::MotionPreference) {
+        self.motion_clock.borrow_mut().set_system_motion(system);
+    }
+
     pub(crate) fn apply_motion(
         &self,
         request: flui_protocol::MotionRequest,

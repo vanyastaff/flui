@@ -25,6 +25,30 @@
 
 use std::time::Duration;
 
+/// Application policy applied to the host's motion observation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum MotionPreference {
+    /// Honor the current host preference and duration scale.
+    #[default]
+    FollowSystem,
+    /// Reduce animation regardless of the host preference.
+    Reduce,
+    /// Use full animation at its authored duration.
+    Full,
+}
+
+/// The resolved presentation policy, independent of its duration scale.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum MotionPolicy {
+    /// Sample normal animation using its projected duration timeline.
+    #[default]
+    Full,
+    /// Settle normal animation at the next registry tick.
+    Reduce,
+}
+
 /// Animation time of one presentation, measured from the origin of its
 /// [`MotionClock`].
 ///
@@ -137,6 +161,8 @@ pub enum InvalidPlaybackRate {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FrameTick {
     now: AnimationTime,
+    normal: AnimationTime,
+    policy: MotionPolicy,
 }
 
 impl FrameTick {
@@ -144,6 +170,23 @@ impl FrameTick {
     #[must_use]
     pub const fn now(&self) -> AnimationTime {
         self.now
+    }
+
+    pub(crate) const fn time(&self, behavior: crate::AnimationBehavior) -> AnimationTime {
+        match behavior {
+            crate::AnimationBehavior::Normal => self.normal,
+            crate::AnimationBehavior::Preserve => self.now,
+        }
+    }
+
+    pub(crate) fn hold_after(mut self, earlier: Self) -> Self {
+        self.now = self.now.max(earlier.now);
+        self.normal = self.normal.max(earlier.normal);
+        self
+    }
+
+    pub(crate) const fn policy(&self) -> MotionPolicy {
+        self.policy
     }
 }
 
@@ -172,7 +215,7 @@ impl FrameTick {
 /// assert_eq!(clock.step(ms(16)).as_duration(), ms(216));
 /// assert_eq!(clock.frame(ms(10_000)).now().as_duration(), ms(216));
 /// ```
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct MotionClock {
     rate: PlaybackRate,
     /// Raw time at which the current rate took effect.
@@ -183,6 +226,28 @@ pub struct MotionClock {
     last_raw: Duration,
     /// The latest animation time produced.
     now: AnimationTime,
+    preference: MotionPreference,
+    system: flui_platform_api::MotionPreference,
+    normal_epoch: AnimationTime,
+    normal_epoch_time: Duration,
+    normal: AnimationTime,
+}
+
+impl Default for MotionClock {
+    fn default() -> Self {
+        Self {
+            rate: PlaybackRate::NORMAL,
+            epoch_raw: Duration::ZERO,
+            epoch_time: Duration::ZERO,
+            last_raw: Duration::ZERO,
+            now: AnimationTime::ZERO,
+            preference: MotionPreference::FollowSystem,
+            system: flui_platform_api::MotionPreference::NoPreference,
+            normal_epoch: AnimationTime::ZERO,
+            normal_epoch_time: Duration::ZERO,
+            normal: AnimationTime::ZERO,
+        }
+    }
 }
 
 impl MotionClock {
@@ -201,7 +266,7 @@ impl MotionClock {
     /// saturates at [`Duration::MAX`]. Never panics.
     pub fn frame(&mut self, raw: Duration) -> FrameTick {
         if raw < self.last_raw {
-            return FrameTick { now: self.now };
+            return self.tick();
         }
         self.last_raw = raw;
         let scaled = scale(raw.saturating_sub(self.epoch_raw), self.rate);
@@ -209,7 +274,76 @@ impl MotionClock {
         // The epoch formula is already monotone in `raw` within one epoch and
         // continuous across a rebase; `max` keeps that true under saturation.
         self.now = self.now.max(candidate);
-        FrameTick { now: self.now }
+        self.project_normal();
+        self.tick()
+    }
+
+    fn tick(&self) -> FrameTick {
+        FrameTick {
+            now: self.now,
+            normal: self.normal,
+            policy: self.policy(),
+        }
+    }
+
+    /// Apply application policy continuously from the last accepted frame.
+    /// Returns whether the preference changed; no controller is sampled here.
+    pub fn set_preference(&mut self, preference: MotionPreference) -> bool {
+        if self.preference != preference {
+            self.rebase_normal();
+            self.preference = preference;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Apply the existing host preference after runtime projection.
+    /// Returns whether the observation changed; no controller is sampled here.
+    pub fn set_system_motion(&mut self, system: flui_platform_api::MotionPreference) -> bool {
+        if self.system != system {
+            self.rebase_normal();
+            self.system = system;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Resolve the application preference against the current host observation.
+    #[must_use]
+    pub fn policy(&self) -> MotionPolicy {
+        match self.preference {
+            MotionPreference::Reduce => MotionPolicy::Reduce,
+            MotionPreference::Full => MotionPolicy::Full,
+            MotionPreference::FollowSystem => match self.system {
+                flui_platform_api::MotionPreference::Reduce => MotionPolicy::Reduce,
+                _ => MotionPolicy::Full,
+            },
+        }
+    }
+
+    fn rebase_normal(&mut self) {
+        self.normal_epoch = self.now;
+        self.normal_epoch_time = self.normal.0;
+    }
+
+    fn project_normal(&mut self) {
+        if self.policy() == MotionPolicy::Reduce {
+            return;
+        }
+        let span = self.now.saturating_duration_since(self.normal_epoch);
+        let span = match (self.preference, self.system) {
+            (
+                MotionPreference::FollowSystem,
+                flui_platform_api::MotionPreference::Scaled(scale),
+            ) => Duration::try_from_secs_f64(span.as_secs_f64() / scale.get())
+                .unwrap_or(Duration::MAX),
+            _ => span,
+        };
+        self.normal = self
+            .normal
+            .max(AnimationTime(self.normal_epoch_time.saturating_add(span)));
     }
 
     /// The animation time of the latest tick or step.
@@ -239,6 +373,7 @@ impl MotionClock {
     pub fn step(&mut self, dt: Duration) -> AnimationTime {
         self.epoch_time = self.epoch_time.saturating_add(dt);
         self.now = AnimationTime(self.now.0.saturating_add(dt));
+        self.project_normal();
         self.now
     }
 

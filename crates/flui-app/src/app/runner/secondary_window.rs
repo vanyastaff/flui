@@ -1007,6 +1007,7 @@ fn finish_open_secondary_window(
                 )
                 .map_err(mount_error)?;
                 ui_runtime.set_frame_failure_detail(config.frame_failure_detail);
+                ui_runtime.set_motion_preference(config.motion_preference);
                 // No frame-failure handler is installed here. Under
                 // `open_secondary_window`'s current contract this ui_runtime has no
                 // root widget or renderer, so secondary handler ownership is

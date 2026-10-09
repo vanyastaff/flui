@@ -332,6 +332,7 @@ where
     };
 
     ui_runtime.set_performance_overlay(config.show_performance_overlay);
+    ui_runtime.set_motion_preference(config.motion_preference);
     ui_runtime.set_frame_failure_handler(config.frame_failure_handler.clone());
     ui_runtime.set_frame_failure_detail(config.frame_failure_detail);
 
