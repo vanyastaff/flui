@@ -24,8 +24,9 @@ saturates at `Duration::MAX`.
 
 An exhausted timeline cannot deliver another positive interval. Its registry
 therefore settles finite work, including later admissions, and parks infinite
-work without continuation. Parking resumes only on a Full timeline that still
-has time available, such as after rebinding to a fresh presentation registry.
+work without continuation. A parked Normal run resumes only under Full with
+time available. Preserve can resume under either policy once its selected
+timeline has time available, such as after rebinding to a fresh registry.
 This applies to the selected timeline: exhausting Normal leaves Preserve's
 independent clock available. `tiny_scale_saturates_and_completes_once` verifies
 both the original finite run and a later admission.
@@ -47,8 +48,9 @@ repeats parked under Reduce request no further frames.
 
 Rebinding a parked owner requests an initial policy sample on its destination
 registry. An unticked destination must observe its first policy before it can
-decide whether to remain parked. Once it has observed a tick, Full requests a
-fresh anchor unless the selected timeline is exhausted. A shared probe query
+decide whether to remain parked. Once it has observed a tick, Normal under Full
+or Preserve under either policy requests a fresh anchor unless the selected
+timeline is exhausted. A shared probe query
 classifies this one-frame obligation for both registry gates and owner admission.
 
 Runtime projection commits every presentation's clock before publication or wake
@@ -88,6 +90,8 @@ playback has already taken effect, through both direct and nested registries.
 `parked_repeat_resumes_from_zero_under_full` pins parking and fresh resumption.
 `rebinding_a_parked_repeat_requests_its_new_policy_sample` covers fresh and
 already-ticked destinations through direct and nested registrations.
+`preserve_repeat_resumes_after_rebinding_under_reduce` checks Preserve after
+an absent or exhausted origin, with fresh and already-ticked Reduce destinations.
 `policy_flips_mid_run` distinguishes an observed Reduce tick from a policy
 superseded before the frame. `simulation_settle_grid` checks analytic friction
 rest, the exact spring endpoint, first completed and last finite grid probes,

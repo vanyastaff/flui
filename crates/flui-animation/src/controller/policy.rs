@@ -3,6 +3,13 @@
 use super::{AnimationController, WalkProbe};
 
 impl WalkProbe {
+    pub(crate) fn can_resume(&self, tick: crate::FrameTick) -> bool {
+        self.parked
+            && (self.behavior == crate::AnimationBehavior::Preserve
+                || tick.policy() == crate::MotionPolicy::Full)
+            && tick.time(self.behavior).as_duration() != std::time::Duration::MAX
+    }
+
     /// Initial observation, settlement and parked resumption each need one
     /// sample even when they create no continuous animation demand.
     pub(crate) fn needs_sample(&self, tick: Option<crate::FrameTick>) -> bool {
@@ -17,7 +24,7 @@ impl WalkProbe {
         };
         let exhausted = tick.time(self.behavior).as_duration() == std::time::Duration::MAX;
         if self.parked {
-            tick.policy() == crate::MotionPolicy::Full && !exhausted
+            self.can_resume(tick)
         } else {
             exhausted
                 || (self.behavior == crate::AnimationBehavior::Normal

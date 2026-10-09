@@ -618,9 +618,7 @@ impl Vsync {
                             _ => RunAnchor::Fresh,
                         };
                     }
-                    let resumed = probe.parked
-                        && tick.policy() == crate::MotionPolicy::Full
-                        && !exhausted
+                    let resumed = probe.can_resume(tick)
                         && registered.controller.resume_motion_run(probe.generation);
                     if resumed {
                         registered.anchor = RunAnchor::Fresh;

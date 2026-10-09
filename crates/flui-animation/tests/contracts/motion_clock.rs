@@ -925,6 +925,56 @@ fn rebinding_a_parked_repeat_requests_its_new_policy_sample() {
 }
 
 #[test]
+fn preserve_repeat_resumes_after_rebinding_under_reduce() {
+    use flui_animation::{AnimationBehavior, MotionPreference, Vsync};
+    use std::{cell::Cell, rc::Rc};
+
+    for exhausted_origin in [false, true] {
+        for nested in [false, true] {
+            for sampled_destination in [false, true] {
+                let old = Vsync::new();
+                let mut owner = AnimationController::builder(ms(1000))
+                    .behavior(AnimationBehavior::Preserve)
+                    .build_on(exhausted_origin.then_some(&old));
+                let run = owner.controller().repeat(false).expect("preserved repeat");
+                if exhausted_origin {
+                    old.tick_all(&MotionClock::new().frame(Duration::MAX));
+                }
+                assert!(!old.has_running());
+                assert!(!run.is_complete());
+
+                let registry = Vsync::new();
+                let child = Vsync::new();
+                let _seat = nested.then(|| registry.attach_child(&child).expect("nested"));
+                let mut reduced = MotionClock::new();
+                reduced.set_preference(MotionPreference::Reduce);
+                if sampled_destination {
+                    registry.tick_all(&reduced.frame(ms(100)));
+                }
+                let wakes = Rc::new(Cell::new(0));
+                let count = Rc::clone(&wakes);
+                registry.set_frame_requester(Some(Rc::new(move || count.set(count.get() + 1))));
+                owner
+                    .rebind(Some(if nested { &child } else { &registry }))
+                    .expect("rebind");
+                assert!(wakes.get() > 0, "Preserve requests resumption under Reduce");
+                registry.tick_all(&reduced.frame(ms(200)));
+                assert_eq!(owner.controller().value(), 0.0, "fresh resumption anchor");
+                registry.tick_all(&reduced.frame(ms(450)));
+                assert_eq!(
+                    owner.controller().value(),
+                    0.25,
+                    "Preserve ignores Reduce: exhausted_origin={exhausted_origin}, nested={nested}, sampled_destination={sampled_destination}"
+                );
+                assert!(registry.has_running());
+                assert!(!run.is_complete());
+                assert!(old.is_empty());
+            }
+        }
+    }
+}
+
+#[test]
 fn tiny_scale_saturates_and_completes_once() {
     use std::{
         cell::Cell,

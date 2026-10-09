@@ -89,3 +89,5 @@
   paused playback and policy changes deferred by an ancestor gate.
 - Request a fresh policy sample when a parked repeat is rebound to another
   presentation, including a registry that has not received its first tick.
+- Resume Preserve repeats on a fresh registry under Reduce after their previous
+  clock is absent or exhausted; resumption honors the selected timeline's capacity.
