@@ -57,18 +57,22 @@ use std::rc::Rc;
 
 use std::time::Duration;
 
-use flui_sdk::animation::{Animation, AnimationController, AnimationStatus, DrivenController};
-use flui_sdk::foundation::Listenable;
+use flui_sdk::animation::ext::AnimatableExt;
+use flui_sdk::animation::{
+    Animation, AnimationController, AnimationStatus, DrivenController, Tween,
+};
 use flui_sdk::geometry::Radius;
 use flui_sdk::interaction::GestureEndReason;
 use flui_sdk::painting::{Alignment, Clip};
 use flui_sdk::painting::{BorderRadius, BorderRadiusExt, Color};
+use flui_sdk::pipeline::TranslationFraction;
 use flui_sdk::rendering::{BoxConstraints, HitTestBehavior};
 use flui_sdk::view::prelude::*;
-use flui_sdk::view::{GlobalKey, RebuildHandle, impl_inherited_view};
+use flui_sdk::view::{GlobalKey, impl_inherited_view};
 use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::{
-    Align, ColoredBox, ConstrainedBox, GestureDetector, LayoutBuilder, MediaQuery, SizedBox, Stack,
+    Align, ColoredBox, ConstrainedBox, FadeTransition, GestureDetector, LayoutBuilder, MediaQuery,
+    SizedBox, SlideTransition, Stack,
 };
 
 use crate::material::Material;
@@ -548,7 +552,6 @@ impl std::fmt::Debug for DrawerController {
 /// [`GlobalKey`] bridge and `ViewState` lifecycle both operate on.
 struct DrawerControllerCore {
     controller: AnimationController,
-    rebuild: RefCell<Option<RebuildHandle>>,
     /// Starts `false` regardless of the controller's initial value (a
     /// drawer that starts open still fires one on-changed(true) the first
     /// time its value is nudged, since nothing has "previously" been
@@ -693,7 +696,6 @@ impl StatefulView for DrawerController {
             writer: None,
             core: Rc::new(DrawerControllerCore {
                 controller: controller.controller().clone(),
-                rebuild: RefCell::new(None),
                 previously_opened: Cell::new(false),
                 alignment: Cell::new(self.alignment),
                 panel_width: Cell::new(self.panel_width),
@@ -708,22 +710,11 @@ impl ViewState<DrawerController> for DrawerControllerState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.writer = Some(ctx.writer_source());
         let rebuild = ctx.rebuild_handle();
-        let _prev = self.core.rebuild.borrow_mut().replace(rebuild.clone());
 
         self.did_change_dependencies(ctx);
 
-        // One listener pair covers every path that must rebuild: a value
-        // tick (drag `set_value`, or a fling/forward settling frame-by-frame)
-        // and a status transition (Dismissed -> Forward/Reverse the instant
-        // `open()`/`close()`/`fling()` is called) — the latter is what makes
-        // the panel mount on the SAME build the animation starts, at value
-        // 0: the mount gates on `is_dismissed()` (status), not on the value
-        // reaching some threshold, so there is no intermediate frame where
-        // the panel is visible at a stale, already-open-looking position.
-        let rebuild_for_value = rebuild.clone();
-        self.core.controller.add_listener(std::rc::Rc::new(move || {
-            rebuild_for_value.schedule(flui_sdk::view::RebuildReason::AnimationTick);
-        }));
+        // Status mounts the panel as a run starts, even at value zero, and
+        // removes it after dismissal. Render transitions consume value ticks.
         let rebuild_for_status = rebuild;
         self.core
             .controller
@@ -857,9 +848,7 @@ fn drawer_surface(
 
 /// The open-state scrim and panel below the retained contact owner.
 fn open_panel(core: &Rc<DrawerControllerCore>, view: &DrawerController) -> impl IntoView {
-    let value = core.controller.value();
-
-    let scrim_color = scale_alpha(view.scrim_color.unwrap_or(BLACK54), value);
+    let animation: Rc<dyn Animation<f64>> = Rc::new(core.controller.clone());
     let mut scrim_detector = GestureDetector::new();
     if view.barrier_dismissible {
         let close_core = Rc::clone(core);
@@ -871,13 +860,17 @@ fn open_panel(core: &Rc<DrawerControllerCore>, view: &DrawerController) -> impl 
     // `SizedBox` needed `f64::INFINITY` above. `SizedBox::expand` clamps to
     // the Stack's own (bounded — the drawer slot is always tight) size, so
     // the scrim genuinely covers, and is tappable across, the whole area.
-    let scrim = scrim_detector.child(SizedBox::expand().child(ColoredBox::new(scrim_color)));
-
-    let panel = Align::new(outer_alignment(view.alignment)).child(
-        Align::new(inner_alignment(view.alignment))
-            .width_factor(value)
-            .child(view.child.clone()),
-    );
+    let scrim = scrim_detector.child(FadeTransition::new(
+        Rc::clone(&animation),
+        SizedBox::expand().child(ColoredBox::new(view.scrim_color.unwrap_or(BLACK54))),
+    ));
+    let position = Tween::new(
+        TranslationFraction::new(-core.direction_factor(), 0.0),
+        TranslationFraction::ZERO,
+    )
+    .animate(animation);
+    let panel = Align::new(outer_alignment(view.alignment))
+        .child(SlideTransition::new(Rc::new(position), view.child.clone()));
 
     DrawerAlignmentScope {
         alignment: view.alignment,
@@ -890,20 +883,4 @@ fn outer_alignment(alignment: DrawerAlignment) -> Alignment {
         DrawerAlignment::Start => Alignment::CENTER_LEFT,
         DrawerAlignment::End => Alignment::CENTER_RIGHT,
     }
-}
-
-fn inner_alignment(alignment: DrawerAlignment) -> Alignment {
-    match alignment {
-        DrawerAlignment::Start => Alignment::CENTER_RIGHT,
-        DrawerAlignment::End => Alignment::CENTER_LEFT,
-    }
-}
-
-/// Scales `color`'s alpha channel by `factor` (clamped to `[0, 1]`); the
-/// scrim's alpha is `scrim_color.a * controller.value`.
-fn scale_alpha(color: Color, factor: f64) -> Color {
-    let factor = factor.clamp(0.0, 1.0);
-    let scaled = (f64::from(color.a) * factor).round().clamp(0.0, 255.0);
-    let alpha = scaled as u8;
-    color.with_alpha(alpha)
 }

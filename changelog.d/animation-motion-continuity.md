@@ -35,6 +35,8 @@
 
 ### Fixed
 
+- Move Drawer panels and fade their scrims through render-owned transitions,
+  removing element rebuilds on settling animation ticks.
 - Preserve the dragged position when Dismissible releases in the opposite direction.
 - Use Dismissible's actual laid-out size for drag, fling and collapse under loose
   or unbounded incoming constraints, and remove its constraints-only LayoutBuilder.

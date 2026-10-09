@@ -296,6 +296,15 @@ updates before invoking the action.
 
 ### Drawer release uses admitted gesture policy
 
+Panel translation and scrim opacity consume the controller through
+`SlideTransition` and `FadeTransition`. Value ticks update retained render
+layers; only status changes request a controller rebuild to mount or remove
+the open surface. `drawer_slides_without_rebuilding_per_frame` dispatches a
+real edge drag, observes movement and effective scrim alpha in the committed
+scene, and checks the frame build report on opening and closing frames for
+both edges. Its frames do not dirty the logical root. It also checks panel
+tap delivery and scrim dismissal.
+
 One gesture owner survives the edge strip opening into the panel. It changes
 only its child and hit extent, preserving the captured contact through rendered
 frames. `a_drawer_release_keeps_finger_speed` pumps between moves and measures
