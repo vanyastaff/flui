@@ -232,16 +232,16 @@ impl<T: Lerp + Clone + PartialEq + Send + Sync + 'static> ImplicitAnimation<T> {
     /// `duration` is pushed to the controller unconditionally. Only a genuine TARGET change
     /// restarts the run from `0`; a curve-only change swaps the easing
     /// applied to the run already in flight — see
-    /// [`ImplicitController::set_curve`]/[`ImplicitController::restart_from_zero`]. The curve swap happens FIRST so a
-    /// target-changed anchor (`current_value()`, used as the new tween's
-    /// `begin`) reads the already-updated curve.
+    /// [`ImplicitController::set_curve`]/[`ImplicitController::restart_from_zero`]. A target
+    /// change captures the displayed value before changing the curve, so the new
+    /// tween begins at the old run's last sample.
     pub(crate) fn retarget(&mut self, new_target: T, duration: Duration, curve: ArcCurve) -> bool {
+        let target_changed = self.tween.end != new_target;
+        let from = target_changed.then(|| self.current_value());
         self.controller.set_duration(duration);
         let curve_changed = self.controller.set_curve(curve);
 
-        let target_changed = self.tween.end != new_target;
-        if target_changed {
-            let from = self.current_value();
+        if let Some(from) = from {
             self.tween = Tween::new(from, new_target);
             self.controller.restart_from_zero();
         }
@@ -285,14 +285,14 @@ impl<T: Lerp + Clone + PartialEq> OptTween<T> {
         matches!((new_target, &self.tween), (Some(target), Some(existing)) if existing.end != *target)
     }
 
-    /// Move toward `new_target`. When the owner is `restarting` the shared
+    /// Move toward `new_target`. When the owner supplies a restart sample for the shared
     /// controller, every Some→Some tween — changed or not — re-anchors at its value
-    /// for the current progress `t`, so an unchanged property continues from where
+    /// for that progress, so an unchanged property continues from where
     /// it is instead of replaying its old run from the start.
-    pub(crate) fn retarget(&mut self, new_target: Option<T>, t: f64, restarting: bool) {
+    pub(crate) fn retarget(&mut self, new_target: Option<T>, restart_at: Option<f64>) {
         match (new_target, self.tween.as_ref()) {
             (Some(target), Some(existing)) => {
-                if restarting {
+                if let Some(t) = restart_at {
                     let from = existing.transform(t);
                     self.tween = Some(Tween::new(from, target));
                 }

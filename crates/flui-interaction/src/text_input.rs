@@ -366,6 +366,8 @@ fn retire_stores(stores: Vec<Rc<dyn TextStore>>, calls: &mut OwnerCalls, gate: &
 struct OwnerState {
     lifecycle: OwnerLifecycle,
     active: Option<AttachedClient>,
+    /// Successful admissions supersede older in-progress attaches; reservations do not.
+    last_admitted: Option<ClientToken>,
     /// Stores replaced or detached while the frame transaction was open.
     /// A grant they queued then was the platform's answer to them, so it
     /// runs at the anchor that closes this frame, not whenever the field is
@@ -448,6 +450,7 @@ impl TextInputOwner {
             state: RefCell::new(OwnerState {
                 lifecycle: OwnerLifecycle::Open,
                 active: None,
+                last_admitted: None,
                 retired: Vec::new(),
                 completing: Vec::new(),
                 host_ops: VecDeque::new(),
@@ -514,6 +517,7 @@ impl TextInputOwner {
         // capability's last owner, so a failing rejection of the client
         // cannot destroy the backend during its unwind.
         self.ensure_supported()?;
+        let admitted_before = self.state.borrow().last_admitted;
 
         let current = self.next_token.get();
         let next = current
@@ -596,7 +600,7 @@ impl TextInputOwner {
                 return Err(error);
             }
         }
-        if self.next_token.get() != next {
+        if self.state.borrow().last_admitted != admitted_before {
             retire_client_owners(client, &mut calls, Some(&self.gate));
             self.apply_host_ops(&mut calls, HostTurn::Behind);
             if let Some(payload) = calls.into_failure() {
@@ -611,6 +615,7 @@ impl TextInputOwner {
         let (enable_platform, replaced) = {
             let mut state = self.state.borrow_mut();
             let replaced = state.active.replace(AttachedClient { token, client });
+            state.last_admitted = Some(token);
             let enable_platform = platform.is_some() && !state.platform_enabled;
             if let Some(replaced) = &replaced {
                 state.retire(replaced, transaction_open);

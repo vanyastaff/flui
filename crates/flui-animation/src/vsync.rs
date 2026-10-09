@@ -648,7 +648,7 @@ mod tests {
             "the tick flows through the unmuted ancestor"
         );
 
-        animation.dispose();
+        crate::test_cases::dispose_controller(&animation);
     }
 
     /// A cycle would hang the tick walk, so nesting a registry inside itself
@@ -706,7 +706,7 @@ mod tests {
         assert!(slot.borrow().is_none(), "the listener ran and unregistered");
         assert_eq!(vsync.len(), 0, "and the registry dropped the controller");
 
-        controller.dispose();
+        crate::test_cases::dispose_controller(&controller);
     }
 
     fn registration_exhaustion_preserves_admitted_work() {

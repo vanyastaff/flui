@@ -184,7 +184,7 @@ fn controller_tick(c: &mut Criterion) {
     let linear = AnimationController::builder(NEVER_ENDING).build();
     linear.forward().unwrap();
     bench_live_tick(&mut group, "linear", &linear);
-    linear.dispose();
+    drop(linear);
 
     // The same run eased through a cubic Bézier.
     let eased = AnimationController::builder(NEVER_ENDING).build();
@@ -192,7 +192,7 @@ fn controller_tick(c: &mut Criterion) {
         .animate_to_curved(1.0, None, Arc::new(Curves::EaseInOut))
         .unwrap();
     bench_live_tick(&mut group, "ease_in_out", &eased);
-    eased.dispose();
+    drop(eased);
 
     // Value fan-out: every tick notifies the value listeners; the status
     // listener is registered but no tick changes the status.
@@ -205,7 +205,7 @@ fn controller_tick(c: &mut Criterion) {
             &format!("{value_listeners}_value_1_status_listeners"),
             &controller,
         );
-        controller.dispose();
+        drop(controller);
     }
 
     // Simulation runs: a near-unit drag that takes ~2e10 s to slow below the
@@ -218,7 +218,7 @@ fn controller_tick(c: &mut Criterion) {
         .animate_with(FrictionSimulation::new(1.0 - 1e-9, 0.0, 1000.0, Tolerance::DEFAULT).unwrap())
         .unwrap();
     bench_live_tick(&mut group, "simulation_friction", &friction);
-    friction.dispose();
+    drop(friction);
 
     let spring = AnimationController::builder(NEVER_ENDING)
         .unbounded()
@@ -236,7 +236,7 @@ fn controller_tick(c: &mut Criterion) {
         )
         .unwrap();
     bench_live_tick(&mut group, "simulation_spring", &spring);
-    spring.dispose();
+    drop(spring);
 
     // Reading a curved combinator's value goes through one Arc<dyn> hop and
     // the curve; the parent sits mid-run so the curve is actually evaluated.
@@ -250,7 +250,7 @@ fn controller_tick(c: &mut Criterion) {
     });
     assert!(parent_controller.status().is_running());
     drop(curved);
-    parent_controller.dispose();
+    drop(parent_controller);
 
     group.finish();
 }
@@ -270,7 +270,7 @@ fn controller_status(c: &mut Criterion) {
                 controller.tick_at(std::time::Duration::from_secs_f64(black_box(2.0)));
             });
         });
-        controller.dispose();
+        drop(controller);
     }
 
     // Starting a run from rest on a fresh controller with a detached ticker

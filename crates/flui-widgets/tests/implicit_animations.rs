@@ -13,20 +13,187 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::common::{LaidOut, lay_out_animated, loose, tight};
-use flui_animation::{Curves, Vsync};
+use flui_animation::{ArcCurve, Curves, Vsync};
 use flui_foundation::geometry::{Angle, EdgeInsets, Matrix4};
+use flui_painting::Alignment;
 use flui_painting::styling::Color;
 use flui_view::prelude::{BuildContext, StatefulView};
 use flui_view::{IntoView, ViewState};
 use flui_widgets::{
-    AnimatedContainer, AnimatedOpacity, AnimatedRotation, Container, RotationPath, SizedBox,
-    VsyncScope,
+    AnimatedAlign, AnimatedContainer, AnimatedOpacity, AnimatedPadding, AnimatedRotation,
+    Container, RotationPath, SizedBox, VsyncScope,
 };
 use parking_lot::Mutex;
 
 /// A 100 ms run pumped in 20 ms frames spans the run in five steps.
 const FRAME: Duration = Duration::from_millis(20);
 const RUN: Duration = Duration::from_millis(100);
+
+fn assert_target_and_curve_retarget_preserves_sample<V: flui_view::View, const N: usize>(
+    tree: impl Fn(Vsync, f64, ArcCurve) -> V,
+    sample: impl Fn(&mut LaidOut) -> [f64; N],
+    [initial, target, replacement]: [f64; 3],
+) {
+    let registry = Vsync::new();
+    let mut laid = lay_out_animated(
+        tree(registry.clone(), initial, ArcCurve::new(Curves::Linear)),
+        loose(200.0),
+        registry.clone(),
+    );
+    let initial_sample = sample(&mut laid);
+    laid.pump_widget(tree(
+        registry.clone(),
+        target,
+        ArcCurve::new(Curves::Linear),
+    ));
+    laid.pump_for(FRAME);
+    laid.pump_for(FRAME);
+    let displayed = sample(&mut laid);
+    assert!(
+        displayed
+            .into_iter()
+            .zip(initial_sample)
+            .any(|(a, b)| (a - b).abs() > 1e-6),
+        "the mounted property actually moved: {initial_sample:?} to {displayed:?}",
+    );
+
+    laid.pump_widget(tree(registry, replacement, ArcCurve::new(Curves::EaseIn)));
+    let retargeted = sample(&mut laid);
+    for (before, after) in displayed.into_iter().zip(retargeted) {
+        assert!(
+            (after - before).abs() < 1e-12,
+            "retarget advances no time: displayed {displayed:?}, after changing target and curve {retargeted:?}",
+        );
+    }
+}
+
+pub(crate) fn opacity_retarget_with_a_new_curve_keeps_the_displayed_sample() {
+    assert_target_and_curve_retarget_preserves_sample(
+        |registry, target, curve| {
+            VsyncScope::new(
+                registry,
+                AnimatedOpacity::new(target, SizedBox::new(100.0, 50.0))
+                    .duration(RUN)
+                    .curve(curve),
+            )
+        },
+        |laid| [laid.opacity(laid.current_root())],
+        [0.0, 1.0, 0.0],
+    );
+}
+
+pub(crate) fn padding_retarget_with_a_new_curve_keeps_the_displayed_sample() {
+    assert_target_and_curve_retarget_preserves_sample(
+        |registry, target, curve| {
+            VsyncScope::new(
+                registry,
+                AnimatedPadding::new(EdgeInsets::all(target), SizedBox::new(20.0, 10.0))
+                    .duration(RUN)
+                    .curve(curve),
+            )
+        },
+        |laid| {
+            let offset = laid.offset(laid.child(laid.current_root(), 0));
+            [offset.dx, offset.dy]
+        },
+        [0.0, 40.0, 5.0],
+    );
+}
+
+pub(crate) fn container_retarget_with_a_new_curve_keeps_the_displayed_sample() {
+    assert_target_and_curve_retarget_preserves_sample(
+        |registry, target, curve| {
+            VsyncScope::new(
+                registry,
+                AnimatedContainer::new(SizedBox::shrink())
+                    .width(target)
+                    .height(if target == 60.0 { 50.0 } else { target / 2.0 })
+                    .duration(RUN)
+                    .curve(curve),
+            )
+        },
+        |laid| {
+            let size = laid.size(laid.current_root());
+            [size.width, size.height]
+        },
+        [20.0, 100.0, 60.0],
+    );
+}
+
+pub(crate) fn align_retarget_with_a_new_curve_keeps_the_displayed_sample() {
+    assert_target_and_curve_retarget_preserves_sample(
+        |registry, target, curve| {
+            VsyncScope::new(
+                registry,
+                AnimatedAlign::new(
+                    if target == 0.0 {
+                        Alignment::TOP_LEFT
+                    } else {
+                        Alignment::BOTTOM_RIGHT
+                    },
+                    SizedBox::new(20.0, 10.0),
+                )
+                .duration(RUN)
+                .curve(curve),
+            )
+        },
+        |laid| {
+            let offset = laid.offset(laid.child(laid.current_root(), 0));
+            [offset.dx, offset.dy]
+        },
+        [0.0, 1.0, 0.0],
+    );
+}
+
+pub(crate) fn rotation_retarget_with_a_new_curve_keeps_the_displayed_sample() {
+    assert_target_and_curve_retarget_preserves_sample(
+        |registry, target, curve| {
+            VsyncScope::new(
+                registry,
+                AnimatedRotation::new(Angle::from_turns(target), SizedBox::new(20.0, 10.0))
+                    .path(RotationPath::Numeric)
+                    .duration(RUN)
+                    .curve(curve),
+            )
+        },
+        |laid| [layer_turns(laid)],
+        [0.125, 0.375, 0.125],
+    );
+}
+
+pub(crate) fn changing_only_the_curve_keeps_the_existing_deadline() {
+    let registry = Vsync::new();
+    let tree = |target, curve: ArcCurve| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedOpacity::new(target, SizedBox::new(100.0, 50.0))
+                .duration(RUN)
+                .curve(curve),
+        )
+    };
+    let mut laid = lay_out_animated(
+        tree(0.0, ArcCurve::new(Curves::Linear)),
+        tight(100.0, 50.0),
+        registry.clone(),
+    );
+    laid.pump_widget(tree(1.0, ArcCurve::new(Curves::Linear)));
+    laid.pump_for(FRAME);
+    laid.pump_for(FRAME);
+    let linear = laid.opacity(laid.current_root());
+    assert!(linear > 0.1 && linear < 0.3);
+    laid.pump_widget(tree(1.0, ArcCurve::new(Curves::EaseIn)));
+    laid.pump_for(RUN.checked_sub(FRAME).expect("run exceeds one frame"));
+    assert_eq!(
+        laid.opacity(laid.current_root()),
+        1.0,
+        "a curve-only update does not restart time"
+    );
+    laid.pump_widget(SizedBox::shrink());
+    assert!(
+        registry.is_empty(),
+        "unmount releases the owning controller"
+    );
+}
 
 pub(crate) fn swapping_the_scope_registry_preserves_an_implicit_run() {
     let old = Vsync::new();

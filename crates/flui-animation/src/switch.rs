@@ -656,7 +656,7 @@ mod tests {
             "a disposed switch must not hop"
         );
 
-        controller1.dispose();
-        controller2.dispose();
+        crate::test_cases::dispose_controller(&controller1);
+        crate::test_cases::dispose_controller(&controller2);
     }
 }

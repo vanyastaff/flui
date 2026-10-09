@@ -710,7 +710,7 @@ proptest! {
                 frame += 1;
             }
             at_sixths.push(sixths);
-            controller.dispose();
+            drop(controller);
         }
         for run in &at_sixths[1..] {
             for (a, b) in run.iter().zip(&at_sixths[0]) {

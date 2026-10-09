@@ -877,14 +877,16 @@ fn drop_probe() -> (Arc<AtomicUsize>, DropProbe) {
 
 #[test]
 fn dispose_releases_value_listeners() {
-    let controller = controller();
+    let mut lifecycle =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = lifecycle.controller().clone();
     let probe = Arc::new(());
     let capture = Arc::clone(&probe);
     let _id = controller.add_listener(std::rc::Rc::new(move || {
         let _ = &capture;
     }));
 
-    controller.dispose();
+    lifecycle.dispose();
 
     assert_eq!(
         Arc::strong_count(&probe),
@@ -923,9 +925,11 @@ fn last_handle_drop_releases_a_running_controller() {
 type AnimationHandle = std::rc::Rc<dyn Animation<f64>>;
 
 fn wrapper_over_a_disposed_source(wrap: fn(AnimationHandle) -> AnimationHandle) {
-    let parent = controller();
+    let mut lifecycle =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let parent = lifecycle.controller().clone();
     parent.set_value(0.5);
-    parent.dispose();
+    lifecycle.dispose();
     let (drops, value_probe) = drop_probe();
     let status_probe = DropProbe(drops.clone());
     let wrapper = wrap(std::rc::Rc::new(parent.clone()));
@@ -997,7 +1001,7 @@ where
         1,
         "the parent does not retain a status listener added through a dropped wrapper"
     );
-    parent.dispose();
+    drop(parent);
 }
 
 #[test]
@@ -1047,8 +1051,8 @@ fn switch_dispose_releases_callbacks() {
         (1, 1),
         "a disposed switch retains neither on_switched nor its status listeners"
     );
-    current.dispose();
-    next.dispose();
+    drop(current);
+    drop(next);
 }
 
 /// The transition-route shape: a proxy parented to a switch whose
@@ -1076,8 +1080,8 @@ fn proxy_parented_to_a_capturing_switch_is_freed() {
         proxy.set_parent(std::rc::Rc::new(switch.clone()));
         switch.dispose();
     }
-    current.dispose();
-    next.dispose();
+    drop(current);
+    drop(next);
 
     assert_eq!(
         drops.load(Ordering::SeqCst),

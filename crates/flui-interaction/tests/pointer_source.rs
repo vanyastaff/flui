@@ -44,6 +44,8 @@ fn known_hardware_and_fallback_contact_do_not_alias_and_callbacks_reenter() {
     }));
     let mut path = HitTestResult::new();
     path.add(HitTestEntry::new(RenderId::new(1)).cursor(CursorIcon::Text));
+    let mut fallback_path = HitTestResult::new();
+    fallback_path.add(HitTestEntry::new(RenderId::new(2)).cursor(CursorIcon::Crosshair));
     let first = PointerEvent::Move(PointerMove::new(
         known,
         PointerButtons::NONE,
@@ -55,7 +57,7 @@ fn known_hardware_and_fallback_contact_do_not_alias_and_callbacks_reenter() {
         sample(0, 20.0),
     ));
     tracker.update_with_motion(&first, PointerMotionKind::Hover, &path);
-    tracker.update_with_motion(&second, PointerMotionKind::Hover, &path);
+    tracker.update_with_motion(&second, PointerMotionKind::Hover, &fallback_path);
     assert_eq!(
         tracker.source_position(&known),
         Some(Offset::new(10.0, 0.0))
@@ -73,10 +75,10 @@ fn known_hardware_and_fallback_contact_do_not_alias_and_callbacks_reenter() {
         *seen.borrow(),
         [
             (known, CursorIcon::Text),
-            (fallback, CursorIcon::Text),
-            (known, CursorIcon::Default),
+            (fallback, CursorIcon::Crosshair),
             (fallback, CursorIcon::Default)
-        ]
+        ],
+        "device positions stay independent; window leave resets only the latest cursor owner"
     );
 }
 

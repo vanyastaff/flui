@@ -4,6 +4,13 @@
 use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+/// Exercise the production retirement seam for private raw-kernel scenarios.
+pub(crate) fn dispose_controller(controller: &crate::AnimationController) {
+    let mut recovery = crate::animation::Retirement::new();
+    controller.dispose(&mut recovery.scope());
+    recovery.finish();
+}
+
 /// Runs every `(name, scenario)` row, then panics once naming each failing row.
 pub(crate) fn run_cases(cases: &[(&str, fn())]) {
     let mut failures = Vec::new();

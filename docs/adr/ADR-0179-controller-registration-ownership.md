@@ -12,7 +12,9 @@
 `AnimationControllerBuilder::build_on` returns a `DrivenController`. That owner
 holds the controller's registry seat and withdraws it before cancellation on
 disposal or drop. Controller clones observe and operate the same kernel without
-owning the seat. `DrivenController::rebind` migrates that seat and preserves the
+owning the seat. Only the driven owner can dispose that kernel; public observer
+handles cannot close it while leaving its seat registered.
+`DrivenController::rebind` migrates that seat and preserves the
 last sampled elapsed time; missing clocks settle finite runs and park repeats.
 
 Public manual controller registration and removal are removed. The production
@@ -29,7 +31,8 @@ permanent exhaustion and child order retain ADR-0125's rules.
 
 The facade compiler suite rejects
 `registering_a_bare_controller_does_not_compile` and accepts `owner_callbacks`
-using `build_on`. Animation's `driven_controller_owns_its_seat_and_run` and the
+using `build_on` and owning disposal. It also rejects
+`driven_controller_has_no_bare_dispose`. Animation's `driven_controller_owns_its_seat_and_run` and the
 mounted widget/runtime matrices exercise the public ownership path.
 `registration_identity_and_retirement` retains the private foreign, stale,
 expired and wrong-kind token cases, destruction reentry, competing retirement

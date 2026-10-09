@@ -220,18 +220,6 @@ impl ViewState<AnimatedContainer> for AnimatedContainerState {
 
     fn did_update_view(&mut self, _old_view: &AnimatedContainer, new_view: &AnimatedContainer) {
         self.child = new_view.child.clone();
-        // The duration is pushed unconditionally.
-        self.controller.set_duration(new_view.duration);
-        // A curve-only change swaps the `CurvedAnimation` without
-        // restarting. The swap must
-        // happen BEFORE `t` is sampled below so a target-changed anchor
-        // reads the already-updated curve. `build()` re-captures
-        // `controller.curved()` fresh on every reconfigure (this widget
-        // rebuilds via `AnimatedBuilder`), so there is no downstream
-        // recompute to gate on the swap itself — only on a genuine target
-        // change, which decides whether to restart below.
-        self.controller.set_curve(new_view.curve.clone());
-        let t = self.controller.value();
         // All properties share the controller, so a change to any one restarts it
         // and re-anchors every property at the same instant.
         let restart = self.alignment.animates_toward(new_view.alignment.as_ref())
@@ -241,13 +229,16 @@ impl ViewState<AnimatedContainer> for AnimatedContainerState {
             || self.height.animates_toward(new_view.height.as_ref())
             || self.margin.animates_toward(new_view.margin.as_ref())
             || self.transform.animates_toward(new_view.transform.as_ref());
-        self.alignment.retarget(new_view.alignment, t, restart);
-        self.padding.retarget(new_view.padding, t, restart);
-        self.color.retarget(new_view.color, t, restart);
-        self.width.retarget(new_view.width, t, restart);
-        self.height.retarget(new_view.height, t, restart);
-        self.margin.retarget(new_view.margin, t, restart);
-        self.transform.retarget(new_view.transform, t, restart);
+        let restart_at = restart.then(|| self.controller.value());
+        self.controller.set_duration(new_view.duration);
+        self.controller.set_curve(new_view.curve.clone());
+        self.alignment.retarget(new_view.alignment, restart_at);
+        self.padding.retarget(new_view.padding, restart_at);
+        self.color.retarget(new_view.color, restart_at);
+        self.width.retarget(new_view.width, restart_at);
+        self.height.retarget(new_view.height, restart_at);
+        self.margin.retarget(new_view.margin, restart_at);
+        self.transform.retarget(new_view.transform, restart_at);
         if restart {
             // Restart from zero, gated strictly on a target change — a
             // curve-only change never restarts.

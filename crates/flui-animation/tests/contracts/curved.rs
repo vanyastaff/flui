@@ -46,5 +46,5 @@ fn reverse_curve_locked_to_run_entry_direction() {
         "a run entered in Reverse must use the reverse curve ({reverse_run} vs {expected})"
     );
 
-    controller.dispose();
+    drop(controller);
 }

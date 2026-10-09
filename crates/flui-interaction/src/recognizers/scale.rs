@@ -216,6 +216,7 @@ impl ScaleStartMode {
 ///     .on_update(|details| println!("Scale: {:.2}x", details.scale)).build();
 /// ```
 pub struct ScaleGestureRecognizer {
+    owner: std::rc::Weak<ScaleGestureRecognizer>,
     membership: ArenaMembership,
     next_contact: Cell<u64>,
     gesture_state: RefCell<ScaleState>,
@@ -763,6 +764,7 @@ impl ScaleGestureRecognizerBuilder {
         Rc::new_cyclic(|this: &std::rc::Weak<ScaleGestureRecognizer>| {
             let member: std::rc::Weak<dyn GestureArenaMember> = this.clone();
             ScaleGestureRecognizer {
+                owner: this.clone(),
                 membership: ArenaMembership::new(self.arena, member),
                 next_contact: Cell::new(0),
                 gesture_state: RefCell::new(ScaleState {
@@ -836,6 +838,27 @@ impl ScaleGestureRecognizer {
                     .scale_velocity
                     .add_position(time, Offset::new(1.0, 0.0));
                 let retired = self.native.replace(Some(incoming));
+                let owner = self.owner.clone();
+                let current_owner = owner.clone();
+                dispatch.on_generation_retirement(
+                    move || {
+                        current_owner.upgrade().is_some_and(|owner| {
+                            owner
+                                .native
+                                .borrow()
+                                .as_ref()
+                                .is_some_and(|native| native.id == id)
+                        })
+                    },
+                    move || {
+                        if let Some(owner) = owner.upgrade() {
+                            let mut native = owner.native.borrow_mut();
+                            if native.as_ref().is_some_and(|native| native.id == id) {
+                                *native = None;
+                            }
+                        }
+                    },
+                );
                 if retired.is_some_and(|state| state.started) {
                     self.deliver(Outcome::Cancel);
                 }
@@ -904,16 +927,22 @@ impl ScaleGestureRecognizer {
                     .add_position(time, Offset::new(native.scale, 0.0));
                 let id = native.id;
                 drop(state);
-                let mut first = None;
-                if let Some(start) = start {
-                    first = RoutePanic::capture(|| self.deliver(Outcome::Start(start)));
-                }
+                let mut first = RoutePanic::capture(|| dispatch.claim());
                 let live = || {
                     self.native
                         .borrow()
                         .as_ref()
                         .is_some_and(|state| state.id == id)
                 };
+                if live()
+                    && let Some(start) = start
+                {
+                    RoutePanic::preserve_first(
+                        &mut first,
+                        RoutePanic::capture(|| self.deliver(Outcome::Start(start))),
+                        "native scale start",
+                    );
+                }
                 if live() {
                     RoutePanic::preserve_first(
                         &mut first,
@@ -938,6 +967,9 @@ impl ScaleGestureRecognizer {
                 PanZoomDisposition::Handled
             }
             PanZoomPhase::End | PanZoomPhase::Cancelled => {
+                if !dispatch.native_terminal_is_current() {
+                    return PanZoomDisposition::Ignored;
+                }
                 let mut state = self.native.borrow_mut();
                 if state.as_ref().is_none_or(|state| !state.matches(source)) {
                     return PanZoomDisposition::Ignored;
@@ -1321,38 +1353,45 @@ impl GestureRecognizer for ScaleGestureRecognizer {
             return;
         };
 
+        let (claim, sequence) = {
+            let mut state = self.gesture_state.borrow_mut();
+            // A contact added while this recognizer owns the gesture is claimed
+            // with it.
+            if state.contacts.is_empty()
+                && let PointerEvent::Down(data) = down.local
+            {
+                state.settings = settings;
+                state.scale_velocity_tracker = VelocityTracker::for_gesture(
+                    data.pointer.kind,
+                    state.settings.velocity_estimator(),
+                );
+                state.focal_velocity_tracker = VelocityTracker::for_gesture(
+                    data.pointer.kind,
+                    state.settings.velocity_estimator(),
+                );
+            }
+            let claim = state.won.then(|| entry.clone());
+            state.contacts.push(Contact {
+                id,
+                pointer,
+                position,
+                global_position: global,
+                entry,
+            });
+            if state.phase == ScalePhase::Idle {
+                state.phase = ScalePhase::Possible;
+                state.sequence = Some(id);
+            }
+            state.rebaseline();
+            (claim, state.sequence)
+        };
+        let clock = self.membership.now();
         let mut state = self.gesture_state.borrow_mut();
-        // A contact added while this recognizer owns the gesture is claimed
-        // with it.
-        if state.contacts.is_empty()
-            && let PointerEvent::Down(data) = down.local
-        {
-            state.settings = settings;
-            state.scale_velocity_tracker = VelocityTracker::for_gesture(
-                data.pointer.kind,
-                state.settings.velocity_estimator(),
-            );
-            state.focal_velocity_tracker = VelocityTracker::for_gesture(
-                data.pointer.kind,
-                state.settings.velocity_estimator(),
-            );
+        // Clocks may cancel or admit a new generation using this same pointer.
+        if state.sequence != sequence || !state.contacts.iter().any(|contact| contact.id == id) {
+            return;
         }
-        let claim = state.won.then(|| entry.clone());
-        state.contacts.push(Contact {
-            id,
-            pointer,
-            position,
-            global_position: global,
-            entry,
-        });
-        if state.phase == ScalePhase::Idle {
-            state.phase = ScalePhase::Possible;
-            state.sequence = Some(id);
-        }
-        state.rebaseline();
-        let now = state
-            .timeline
-            .instant(event_time(down.local), self.membership.now());
+        let now = state.timeline.instant(event_time(down.local), clock);
         let focal = state.focal_point;
         state.focal_velocity_tracker.add_position(now, focal);
         let start = state.try_start();
@@ -1395,7 +1434,7 @@ impl GestureRecognizer for ScaleGestureRecognizer {
         match event {
             PointerEvent::PanZoom(local) => {
                 if let PointerEvent::PanZoom(global) = dispatch.global {
-                    let _ = self.handle_pan_zoom(PanZoomDispatch { local, global });
+                    let _ = self.handle_pan_zoom(PanZoomDispatch::new(local, global));
                 }
             }
             PointerEvent::Move(data) => {

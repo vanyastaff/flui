@@ -219,8 +219,19 @@ impl std::fmt::Debug for WinitPlatform {
     }
 }
 
+#[cfg(windows)]
+#[derive(Clone)]
+enum PreferenceObservation {
+    Observed(flui_platform_api::SystemPreferences),
+    Deferred,
+    Failed(String),
+}
+
 /// Internal state for WinitPlatform
 struct WinitPlatformState {
+    /// Delivery values only; native observation remains on the event-loop owner.
+    #[cfg(windows)]
+    preferences: PreferenceObservation,
     /// Native pointer identities and phase state are committed before dispatch.
     native_pointer: winit_events::NativePointerState,
     /// Callback handlers
@@ -288,6 +299,8 @@ impl WinitPlatformState {
 
         Self {
             native_pointer: winit_events::NativePointerState::default(),
+            #[cfg(windows)]
+            preferences: PreferenceObservation::Deferred,
             handlers: PlatformHandlers::new(),
             background_executor: Arc::new(BackgroundExecutor::new()),
             clipboard,
@@ -424,6 +437,8 @@ impl WinitPlatform {
 
         let mut app = WinitApp {
             platform: Arc::clone(&self),
+            #[cfg(windows)]
+            preference_source: None,
             on_ready: Some(on_ready),
             control: receiver,
             quit_notified: false,
@@ -817,6 +832,8 @@ fn earliest_deadline(a: Option<Instant>, b: Option<Instant>) -> Option<Instant> 
 /// Implements `ApplicationHandler` to receive events from winit without
 /// consuming the event loop.
 struct WinitApp {
+    #[cfg(windows)]
+    preference_source: Option<super::super::windows::preferences::PreferenceSource>,
     platform: Arc<WinitPlatform>,
     on_ready: Option<PlatformReadyCallback>,
     control: ControlReceiver,
@@ -959,6 +976,24 @@ impl ApplicationHandler for WinitApp {
     /// caller setting `ControlFlow::Poll`, which this backend never does.
     fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: StartCause) {
         if matches!(cause, StartCause::ResumeTimeReached { .. }) {
+            #[cfg(windows)]
+            if let Some(source) = &self.preference_source {
+                let now = Instant::now();
+                let preference_due = source.retry_deadline().is_some_and(|time| time <= now);
+                if preference_due {
+                    source.retry_if_due();
+                    let runtime_hook = self
+                        .platform
+                        .with_state(|state| state.handlers.wake_deadline.clone());
+                    let runtime_due = runtime_hook
+                        .and_then(|hook| hook())
+                        .is_some_and(|time| time <= now);
+                    if !runtime_due {
+                        // Preference retries post owner work; they do not dirty windows.
+                        return;
+                    }
+                }
+            }
             self.platform.with_state(|state| {
                 for window in state.windows.values() {
                     window.inner().request_redraw();
@@ -976,6 +1011,12 @@ impl ApplicationHandler for WinitApp {
                 state.init_displays(event_loop);
             }
         });
+        #[cfg(windows)]
+        if let Err(error) = self.initialize_preferences() {
+            self.bootstrap_error = Some(error.into());
+            self.request_exit(event_loop);
+            return;
+        }
 
         // Call on_ready callback once. `ACTIVE_EVENT_LOOP` is published for
         // this exact nested call so `open_window` can create windows
@@ -1084,6 +1125,11 @@ impl ApplicationHandler for WinitApp {
                 | WinitWindowEvent::CursorEntered { .. }
                 | WinitWindowEvent::CursorLeft { .. }
         );
+        #[cfg(windows)]
+        if native_pointer && self.deliver_preferences() {
+            self.request_exit(event_loop);
+            return;
+        }
         if native_pointer {
             let Some(window) = window else {
                 return;
@@ -1359,6 +1405,11 @@ impl ApplicationHandler for WinitApp {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        #[cfg(windows)]
+        if self.deliver_preferences() {
+            self.request_exit(event_loop);
+            return;
+        }
         // Drop-burst boundary (ADR-0038): winit delivers one `DroppedFile`
         // per file with no end-of-burst marker, so the first `about_to_wait`
         // after at least one `DroppedFile` freezes the accumulated list as
@@ -1410,6 +1461,13 @@ impl ApplicationHandler for WinitApp {
             event_loop.set_control_flow(ControlFlow::Poll);
             return;
         }
+        #[cfg(windows)]
+        let wake_deadline = earliest_deadline(
+            wake_deadline,
+            self.preference_source
+                .as_ref()
+                .and_then(super::super::windows::preferences::PreferenceSource::retry_deadline),
+        );
         let control_flow = match earliest_deadline(wake_deadline, self.self_close_deadline) {
             Some(deadline) => ControlFlow::WaitUntil(deadline),
             None => ControlFlow::Wait,
@@ -1445,6 +1503,55 @@ enum DragPath {
 
 // Helper methods for WinitApp
 impl WinitApp {
+    #[cfg(windows)]
+    fn initialize_preferences(&mut self) -> Result<(), PlatformError> {
+        let signal = self.platform.owner_signal.lock().clone();
+        if self.preference_source.is_none()
+            && let Some(signal) = signal
+        {
+            self.preference_source = Some(
+                super::super::windows::preferences::PreferenceSource::new(&signal)?,
+            );
+        }
+        self.refresh_preferences();
+        Ok(())
+    }
+
+    /// Publishes before owner delivery; errors retain the native source's retry.
+    #[cfg(windows)]
+    fn refresh_preferences(&self) -> bool {
+        let Some(source) = &self.preference_source else {
+            return false;
+        };
+        if !source.pending() {
+            return false;
+        }
+        let observation = match source.sample() {
+            Ok(values) => PreferenceObservation::Observed(values),
+            Err(PlatformError::PreferencesDeferred) => PreferenceObservation::Deferred,
+            Err(error) => PreferenceObservation::Failed(error.to_string()),
+        };
+        let accepted = matches!(&observation, PreferenceObservation::Observed(_));
+        self.platform
+            .with_state(|state| state.preferences = observation);
+        if accepted {
+            let signal = self.platform.owner_signal.lock().clone();
+            if let Some(signal) = signal {
+                let _ = signal.wake();
+            }
+        }
+        accepted
+    }
+
+    #[cfg(windows)]
+    fn deliver_preferences(&self) -> bool {
+        if !self.refresh_preferences() {
+            return false;
+        }
+        let signal = self.platform.owner_signal.lock().clone();
+        signal.is_some_and(|signal| signal.drive() || signal.quitting())
+    }
+
     /// Shared body of the `HoveredFile`/`DroppedFile` arms: feed the path
     /// into the drag-session state machine and dispatch any resulting event.
     ///
@@ -1584,6 +1691,8 @@ impl WinitApp {
             }
         }
 
+        #[cfg(windows)]
+        self.refresh_preferences();
         if let Some(signal) = signal
             && signal.drive()
         {
@@ -1884,10 +1993,14 @@ impl WinitApp {
     }
 
     fn finish_shutdown(&mut self) {
+        #[cfg(windows)]
+        let preference_source = self.preference_source.take();
         let signal = self.platform.owner_signal.lock().clone();
         if let Some(signal) = signal {
             signal.close();
         }
+        #[cfg(windows)]
+        drop(preference_source);
         self.release_open_window_callbacks();
         self.close_owner_lane();
         self.notify_quit_once();
@@ -1966,6 +2079,24 @@ impl Drop for WinitApp {
 }
 
 impl Platform for WinitPlatform {
+    #[cfg(windows)]
+    fn preferences(&self) -> Result<flui_platform_api::SystemPreferences, PlatformError> {
+        let signal = self.owner_signal.lock().clone();
+        if !signal
+            .as_ref()
+            .is_some_and(|signal| signal.accepting() && signal.owner() == thread::current().id())
+        {
+            return Err(PlatformError::Preferences {
+                message: "Windows preferences require the live winit event-loop owner".into(),
+            });
+        }
+        match self.with_state(|state| state.preferences.clone()) {
+            PreferenceObservation::Observed(values) => Ok(values),
+            PreferenceObservation::Deferred => Err(PlatformError::PreferencesDeferred),
+            PreferenceObservation::Failed(message) => Err(PlatformError::Preferences { message }),
+        }
+    }
+
     fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
         self.with_state(|state| state.background_executor.clone())
     }
@@ -2595,6 +2726,8 @@ mod tests {
         }));
         let mut app = WinitApp {
             platform: Arc::clone(&platform),
+            #[cfg(windows)]
+            preference_source: None,
             on_ready: None,
             control: receiver,
             quit_notified: false,

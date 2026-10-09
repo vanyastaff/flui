@@ -1,6 +1,6 @@
 # flui-interaction — задачи (волна 1)
 
-- **Статус:** основная реализация merged; I11 gesture/wheel реализована, заключительный локальный gate и Win32 wheel smoke прошли; CI ожидается
+- **Статус:** основная реализация и I11 gesture/wheel merged; заключительный локальный gate, Win32 wheel smoke и CI прошли
 - **Дата:** 2026-10-06, база `main` @ `9a4daa3ed`
 - **Источник:** [orchestration.md](orchestration.md), [matrix.md](matrix.md); ledger'ы этапа 1 — вне репозитория.
 - **Правила:** задача = ветка `interaction/<slug>` = worktree = draft-PR. Каждый фикс: тест через
@@ -92,10 +92,12 @@ private-items rustdoc, doctests, native Windows и wasm проверки про�
 Полные macOS/iOS/Android cross-typecheck локально пропущены из-за отсутствующих
 cross toolchain/SDK; Linux native suite требует xvfb-run и остаётся за CI.
 CI этой реализации в [PR #1519](https://github.com/vanyastaff/flui/pull/1519)
-ещё ожидается. Первый Android SDK cross-typecheck обнаружил два JNI 0.22
+[завершился успешно на head `95151ad95`](https://github.com/vanyastaff/flui/actions/runs/37872694945).
+PR слит 2026-10-09 UTC, merge commit `ce4675320`.
+Первый Android SDK cross-typecheck обнаружил два JNI 0.22
 lint-сайта: лишний `as_ref()` и binding для unit-результата `exception_clear()`.
 Двухстрочное исправление `ae47bdb52` прошло Android Rust-only library clippy
-с `-D warnings`; полный SDK CI запускается повторно.
+с `-D warnings`; повторный полный SDK CI прошёл.
 Standards и Spec review не нашли оставшихся concrete blockers.
 Явное patch-level сравнение `cargo-semver-checks` с базой `b357bc903`, default
 features и `serde` прошло 229 checks для interaction и widgets. Platform-api

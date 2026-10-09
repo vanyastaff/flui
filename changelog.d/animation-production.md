@@ -1,5 +1,6 @@
 ### Fixed
 
+- Preserve displayed opacity, padding, alignment, size and rotation when an implicit animation changes its target and easing together.
 - Commit a driven controller's new clock binding before retiring the outgoing registry; preserve the first delivery failure and keep subsequent runs usable.
 - Close a driven controller and deliver cancellation before retiring its registry; capture destruction cannot admit a replacement run during owner disposal.
 - Preserve controller status and run-delivery order during reentrant animation changes, finish healthy status listeners after a panic, and skip listeners removed or disposed during delivery.
@@ -22,6 +23,8 @@
 - Run completion and cancellation use `AnimationRunFuture` from the animation crate.
 
 ### Removed
+
+- Public disposal through controller observer handles; retire the owning `DrivenController` to withdraw its seat and cancel its run together.
 
 - Public manual `Vsync` controller registration and removal; use `build_on` and the resulting `DrivenController` to own its seat.
 - The scheduler ticker, ticker-provider and ticker-group APIs, process-global animation time dilation and unused epoch helpers.

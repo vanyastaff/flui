@@ -32,12 +32,13 @@
 //! layer has no async executor.
 
 use std::{
+    cell::Cell,
     rc::Rc,
     sync::{Arc, Mutex},
     time::Duration,
 };
 
-use flui_animation::{Animation, AnimationController, DrivenController};
+use flui_animation::{Animation, AnimationController, AnimationStatus, DrivenController, Vsync};
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
 use flui_painting::styling::Color;
 use flui_rendering::hit_testing::HitTestBehavior;
@@ -257,7 +258,17 @@ impl RefreshController {
         Rc::ptr_eq(&self.inner, &other.inner)
     }
 
-    pub(super) fn begin_refresh(&self) {
+    #[cfg(test)]
+    fn begin_refresh(&self) {
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        recovery.run_with(|recovery| self.begin_refresh_with_recovery(recovery));
+        recovery.finish();
+    }
+
+    fn begin_refresh_with_recovery(
+        &self,
+        recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
+    ) {
         {
             let mut refreshing = self
                 .inner
@@ -272,7 +283,7 @@ impl RefreshController {
             refreshing.set(true);
             *pull = 0.0;
         }
-        self.inner.notifier.notify_listeners();
+        self.inner.notifier.notify_listeners_with_recovery(recovery);
     }
 }
 
@@ -417,6 +428,8 @@ impl RefreshIndicator {
 /// Owns the fling [`AnimationController`] and its vsync registration,
 /// mirroring the pattern used by [`Scrollable`](super::Scrollable).
 pub struct RefreshIndicatorState {
+    recognizer_owner: Rc<()>,
+    fling_authority: Rc<Cell<FlingAuthority>>,
     /// The scroll controller from the current view configuration.
     /// Updated in `did_update_view` when the caller swaps controllers.
     scroll_controller: ScrollController,
@@ -426,6 +439,9 @@ pub struct RefreshIndicatorState {
     fling_controller: DrivenController,
     /// Listener ID on `fling_controller`; removed in `dispose`.
     fling_listener_id: Option<ListenerId>,
+    fling_status_listener_id: Option<ListenerId>,
+    /// Registry identity for gesture cancellation policy; the driver owns its seat.
+    vsync: Option<Vsync>,
     /// Presentation metrics acquired before event callbacks are installed.
     pipeline: Option<WeakPipelineCell>,
     /// Schedules this element's rebuild; acquired in `init_state`.
@@ -436,6 +452,13 @@ pub struct RefreshIndicatorState {
     /// The controller from the first configuration, subscribed in
     /// `init_state` once a rebuild handle exists.
     initial_controller: Option<RefreshController>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FlingAuthority {
+    Detached,
+    Attached,
+    Retired,
 }
 
 impl std::fmt::Debug for RefreshIndicatorState {
@@ -461,9 +484,13 @@ impl StatefulView for RefreshIndicator {
             .build_on(None);
 
         RefreshIndicatorState {
+            recognizer_owner: Rc::new(()),
+            fling_authority: Rc::new(Cell::new(FlingAuthority::Detached)),
             scroll_controller: self.scroll_controller.clone(),
             fling_controller,
             fling_listener_id: None,
+            fling_status_listener_id: None,
+            vsync: None,
             pipeline: None,
             rebuild: None,
             phase_subscription: None,
@@ -502,6 +529,32 @@ fn listen_for_phase_flips(
 }
 
 impl RefreshIndicatorState {
+    fn bind_vsync(&mut self, ctx: &dyn LifecycleContext) {
+        let incoming = VsyncScope::maybe_of(ctx);
+        let unchanged = match (&self.vsync, &incoming) {
+            (None, None) => true,
+            (Some(current), Some(incoming)) => current.is_same(incoming),
+            _ => false,
+        };
+        if unchanged {
+            return;
+        }
+        self.vsync = incoming;
+        self.fling_authority.set(FlingAuthority::Detached);
+        // Stop at sampled pixels before detachment can settle a finite run.
+        let _ = self.fling_controller.controller().stop();
+        let rebound = self.fling_controller.rebind(self.vsync.as_ref());
+        self.fling_authority
+            .set(if self.fling_controller.is_bound() {
+                FlingAuthority::Attached
+            } else {
+                FlingAuthority::Detached
+            });
+        if let Err(error) = rebound {
+            tracing::error!(%error, "RefreshIndicator lost its frame registry");
+        }
+    }
+
     fn install_fling_listener(&mut self) {
         if let Some(id) = self.fling_listener_id.take() {
             self.fling_controller.controller().remove_listener(id);
@@ -513,6 +566,24 @@ impl RefreshIndicatorState {
                 scroll.set_pixels(fling.value());
             }),
         ));
+        if let Some(id) = self.fling_status_listener_id.take() {
+            self.fling_controller
+                .controller()
+                .remove_status_listener(id);
+        }
+        let position = self.scroll_controller.position();
+        self.fling_status_listener_id = Some(
+            self.fling_controller
+                .controller()
+                .add_status_listener(Rc::new(move |status| {
+                    if matches!(
+                        status,
+                        AnimationStatus::Completed | AnimationStatus::Dismissed
+                    ) {
+                        position.set_is_scrolling(false);
+                    }
+                })),
+        );
     }
 
     /// Listens to `controller` and rebuilds only when its refresh phase
@@ -549,13 +620,8 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
-        if let Err(error) = self
-            .fling_controller
-            .rebind(VsyncScope::maybe_of(ctx).as_ref())
-        {
-            tracing::error!(%error, "RefreshIndicator lost its frame registry");
-        }
         self.pipeline = ctx.pipeline_owner().map(|cell| cell.downgrade());
+        self.bind_vsync(ctx);
     }
 
     fn build(&self, view: &RefreshIndicator, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -587,6 +653,7 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
         let threshold_px = view.threshold_px;
         let fling_stop = self.fling_controller.controller().clone();
         let rc_start = view.controller.clone();
+        let sc_start = self.scroll_controller.clone();
         let sc_update = self.scroll_controller.clone();
         let rc_update = view.controller.clone();
         let ph_update = view.physics.clone();
@@ -594,18 +661,43 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
         let rc_end = view.controller.clone();
         let ph_end = view.physics.clone();
         let fc_fling = self.fling_controller.controller().clone();
+        let start_authority = Rc::clone(&self.fling_authority);
+        let update_authority = Rc::clone(&self.fling_authority);
+        let end_authority = Rc::clone(&self.fling_authority);
+        let simulation_authority = Rc::clone(&self.fling_authority);
         let on_refresh_cb = view.on_refresh.clone();
+        let start_fling = move |metrics: &ScrollMetrics, velocity| {
+            if simulation_authority.get() != FlingAuthority::Attached {
+                return false;
+            }
+            let Some(sim) = ph_end.create_ballistic_simulation(metrics, velocity) else {
+                return false;
+            };
+            // Authored physics may reenter and retire this owner or its clock.
+            if simulation_authority.get() != FlingAuthority::Attached {
+                return false;
+            }
+            fc_fling.animate_with(sim).is_ok()
+        };
 
         GestureDetector::new()
+            .recognizer_owner(Rc::clone(&self.recognizer_owner))
             .behavior(HitTestBehavior::Opaque)
             .on_pan_start(move |_cx, _details| {
+                if start_authority.get() == FlingAuthority::Retired {
+                    return;
+                }
                 // Halt any in-flight fling when the user grabs the content.
                 let _ = fling_stop.stop();
                 if !rc_start.is_refreshing() {
+                    sc_start.position().set_is_scrolling(true);
                     rc_start.set_pull_distance_px(0.0);
                 }
             })
             .on_pan_update(move |_cx, details| {
+                if update_authority.get() == FlingAuthority::Retired {
+                    return;
+                }
                 // Ignore scroll/pull updates while a refresh is in progress
                 // so the indicator stays stable.
                 if rc_update.is_refreshing() {
@@ -614,6 +706,15 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
                 // Positive dy (finger moving DOWN) maps to a decrease in
                 // scroll offset (reveals content above).
                 let raw_delta_y = details.delta.dy;
+                if raw_delta_y != 0.0 {
+                    sc_update
+                        .position()
+                        .set_user_scroll_direction(if raw_delta_y > 0.0 {
+                            flui_rendering::view::ScrollDirection::Forward
+                        } else {
+                            flui_rendering::view::ScrollDirection::Reverse
+                        });
+                }
                 // Pull remains outside the clamped scroll position. Consume
                 // it first when the finger reverses toward ordinary scrolling.
                 let proposed = sc_update.pixels() - rc_update.pull_distance_px() - raw_delta_y;
@@ -632,7 +733,13 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
                 }
             })
             .on_pan_end(move |cx, details| {
+                if end_authority.get() == FlingAuthority::Retired {
+                    sc_end.position().set_is_scrolling(false);
+                    rc_end.set_pull_distance_px(0.0);
+                    return;
+                }
                 if rc_end.is_refreshing() {
+                    sc_end.position().set_is_scrolling(false);
                     return;
                 }
                 if details.reason == flui_interaction::GestureEndReason::Cancelled {
@@ -640,8 +747,8 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
                     let metrics = ScrollMetrics::from(&sc_end.position()).with_device_pixel_ratio(
                         presentation_device_pixel_ratio(pipeline_end.as_ref()),
                     );
-                    if let Some(sim) = ph_end.create_ballistic_simulation(&metrics, 0.0) {
-                        let _ = fc_fling.animate_with(sim);
+                    if !start_fling(&metrics, 0.0) {
+                        sc_end.position().set_is_scrolling(false);
                     }
                     return;
                 }
@@ -649,8 +756,15 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
                 if pull >= threshold_px {
                     // Sufficient overscroll: enter refreshing state and
                     // fire the caller's callback.
-                    rc_end.begin_refresh();
-                    on_refresh_cb(cx);
+                    let mut recovery = flui_foundation::panic::PanicRecovery::new();
+                    recovery.run_with(|recovery| rc_end.begin_refresh_with_recovery(recovery));
+                    recovery.run_with(|recovery| {
+                        sc_end
+                            .position()
+                            .set_is_scrolling_with_recovery(false, recovery);
+                    });
+                    recovery.run(|| on_refresh_cb(cx));
+                    recovery.finish();
                 } else {
                     // Under-threshold pull: reset and start a normal fling.
                     rc_end.set_pull_distance_px(0.0);
@@ -661,10 +775,8 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
                     let metrics = ScrollMetrics::from(&sc_end.position()).with_device_pixel_ratio(
                         presentation_device_pixel_ratio(pipeline_end.as_ref()),
                     );
-                    if let Some(sim) =
-                        ph_end.create_ballistic_simulation(&metrics, fling_vel_px_per_sec)
-                    {
-                        let _ = fc_fling.animate_with(sim);
+                    if !start_fling(&metrics, fling_vel_px_per_sec) {
+                        sc_end.position().set_is_scrolling(false);
                     }
                 }
             })
@@ -679,8 +791,17 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
         {
             // A run samples the old position's metrics. Do not carry that
             // simulation into a replacement position with different bounds.
+            // Retire callback authority before stopping or retargeting listeners.
+            self.fling_authority.set(FlingAuthority::Retired);
+            self.fling_authority = Rc::new(Cell::new(if self.fling_controller.is_bound() {
+                FlingAuthority::Attached
+            } else {
+                FlingAuthority::Detached
+            }));
             let _ = self.fling_controller.controller().stop();
+            self.scroll_controller.position().set_is_scrolling(false);
             self.scroll_controller = new_view.scroll_controller.clone();
+            self.recognizer_owner = Rc::new(());
             self.install_fling_listener();
         }
         if !self
@@ -693,10 +814,17 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
     }
 
     fn dispose(&mut self) {
+        self.fling_authority.set(FlingAuthority::Retired);
         self.unsubscribe_phase();
         if let Some(id) = self.fling_listener_id.take() {
             self.fling_controller.controller().remove_listener(id);
         }
+        if let Some(id) = self.fling_status_listener_id.take() {
+            self.fling_controller
+                .controller()
+                .remove_status_listener(id);
+        }
+        self.scroll_controller.position().set_is_scrolling(false);
         self.fling_controller.dispose();
     }
 }

@@ -14,7 +14,7 @@
 //! their stable identities, not the structural input that produced them.
 
 use flui_foundation::SemanticsId;
-use flui_foundation::geometry::{Matrix4, Rect};
+use flui_foundation::geometry::{Axis, Matrix4, Rect};
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use smol_str::SmolStr;
@@ -198,6 +198,7 @@ pub struct SemanticsNodeSnapshot {
     max_value_length: Option<i32>,
     current_value_length: Option<i32>,
     scroll_position: Option<f64>,
+    scroll_axis: Option<Axis>,
     scroll_extent_max: Option<f64>,
     scroll_extent_min: Option<f64>,
     scroll_index: Option<i32>,
@@ -241,6 +242,7 @@ impl SemanticsNodeSnapshot {
             max_value_length: config.max_value_length(),
             current_value_length: config.current_value_length(),
             scroll_position: config.scroll_position(),
+            scroll_axis: config.scroll_axis(),
             scroll_extent_max: config.scroll_extent_max(),
             scroll_extent_min: config.scroll_extent_min(),
             scroll_index: config.scroll_index(),
@@ -414,6 +416,13 @@ impl SemanticsNodeSnapshot {
     #[must_use]
     pub const fn scroll_position(&self) -> Option<f64> {
         self.scroll_position
+    }
+
+    /// Returns the explicit scroll axis; absent metadata means vertical.
+    #[inline]
+    #[must_use]
+    pub const fn scroll_axis(&self) -> Option<Axis> {
+        self.scroll_axis
     }
 
     /// Returns the maximum scroll extent.

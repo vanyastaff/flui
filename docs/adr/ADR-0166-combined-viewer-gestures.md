@@ -24,8 +24,13 @@ span and rotation without restarting the sequence or introducing a visual jump.
 actor. Weak listener attachments do not extend the actor's lifetime.
 
 Native input reaches that same actor through borrowed
-`PanZoomDispatch { local, global }`. Local coordinates and the original root-space
-source remain distinct. Native observers still receive fresh hit-tested input;
+`PanZoomDispatch::new(local, global)`. Local coordinates and the original root-space
+source remain distinct. `at_root` constructs the coincident-space form. The
+dispatch is owner-affine: it implements neither `Send` nor `Sync` and does not
+implement `UnwindSafe` or `RefUnwindSafe`. Its private
+admission authority prevents external struct literals from fabricating a staged
+binding admission. Synthetic constructors carry no admission authority.
+Native observers still receive fresh hit-tested input;
 the detector's built-in recognizer attachment selects contact events only so raw
 observation cannot mutate the native actor before arbitration.
 
@@ -45,6 +50,46 @@ observers and callbacks. A repeated exact Start retires the actor's previous
 generation while preserving the selected consumer for the replacement. Reentrant
 replacement cannot be retired by old terminal work. Callbacks run outside borrows
 and containment preserves the first failure.
+
+Terminal admission is captured before fresh hit testing and raw observation.
+Both can reenter the same Scale actor with a new Start. The outer terminal and
+its retirement then carry only the original exact admission authority, whether
+the original actor was dormant or recognized. Reusing PointerId, DeviceId and
+EventTime does not make the new actor generation equal to the old one. End,
+Cancelled and callback failure leave that replacement usable for its own Update
+and terminal.
+
+Binding-owned Start dispatch supplies borrowed admission authority. Each staged
+actor registers retirement for its exact generation; the selected Update commits
+the delivery owner before recognized callbacks. Losing actors retire even when
+the current hit path no longer contains them. Withdrawal, replacement and closure
+retire outstanding admissions outside borrows. A stale retirement cannot clear a
+reentrant replacement that reuses its source and timestamp.
+Failure while retiring an older staged generation does not reject its already
+accepted replacement Start. The replacement remains deliverable before the
+earliest failure resumes. Likewise, a terminal's fresh hit-test failure cannot
+erase terminal delivery and retirement owed to its cached exact owner. Fresh
+observation and admitted delivery have separate obligations; old cleanup cannot
+withdraw a newer reentrant admission.
+Native admission tickets use the binding owner's close-mode failure fence.
+Healthy close invokes and retires each ticket outside borrows. After the first
+failure, or during preserving close, opaque ticket callbacks and last-owner
+captures are retained rather than starting another user callback or destructor.
+This keeps native cleanup in the same ownership policy as the binding's other
+accepted work; a separate inner containment accumulator cannot weaken that policy.
+Pointer-sequence cancellation also carries its enclosing first-failure state into
+native retirement. Accepted native cleanup callbacks remain deliverable after
+an earlier CaptureLost failure; their opaque captures retain the earlier failure's
+ownership fence under ADR-0127. Fresh admission after containment retires its own
+captures normally and does not redeliver the cancelled generation.
+Borrowed staging and claim authority carry failures already contained during fresh
+hit testing or raw observation into the same retirement fence. Required losing
+admission cleanup and accepted winner delivery continue, while opaque callback
+captures retain that earliest failure's ownership policy. A later losing hook or
+winner callback failure cannot replace it. Healthy subsequent admission still
+retires its captures normally.
+`nested_native_scale_loser_recovers_touch_after_winner_terminal` checks winner
+continuity, both terminal reasons and the losing ancestor's next touch gesture.
 
 Started native scale and rotation are cumulative. Independent Updates without
 Start remain relative one-step interactions. Native localization follows
@@ -76,9 +121,14 @@ determines rest. Without Vsync there is no wall-clock substitute. Axis projectio
 and boundary containment apply to translation. A new Down, gesture recognition, accepted
 wheel input, controller replacement and disposal stop the run. Per-run origin,
 viewport and boundary are captured at release; an unchanged rebuild does not
-restart the simulation. This contract does not promise that a later geometry-only
-rebuild replaces those captured limits. A fresh liveness token prevents retired
-listener work from publishing into a later run.
+restart the simulation. A weak owner-local post-frame callback checks those
+limits against completed layout. Changed viewport geometry or authored boundary
+retires the old run before its next motion tick; a later release captures the new
+limits. Translation still publishes on the Vsync listener before build and paint,
+so geometry validation does not defer current-frame motion until post-frame.
+Repeated samples with no elapsed time publish no motion and do not stop a live
+run. Natural simulation rest removes its listener and stops Vsync requests. A
+fresh liveness token prevents retired listener work from publishing into a later run.
 
 ## Consequences and verification
 
@@ -95,6 +145,23 @@ The public widget `pointer_and_gesture_recognition` table includes
 `viewer_native_rotation_preserves_the_scene_pivot`,
 `viewer_rotation_refuses_an_unfittable_quad_then_recovers`,
 `viewer_reports_scale_velocity_separately_from_focal_velocity`, and
-`viewer_focal_fling_advances_then_stops_on_new_input`.
+`viewer_focal_fling_advances_then_stops_on_new_input`, and
+`viewer_focal_fling_rebuild_preserves_or_retires_geometry`.
+The interaction `binding_input_contract_matrix` includes
+`native_staged_retirement_preserves_delivery_and_failure`,
+`native_terminal_observation_failure_keeps_owned_delivery`, and
+`native_staged_generation_survives_geometry_and_reentry`; these cover isolated
+and competing failure, exact same-source replacement and healthy recovery.
+`native_close_preserves_retirement_ownership` covers healthy and preserving close,
+including first-failure capture retention.
+`native_same_actor_terminal_reentry_preserves_new_generation` covers End and
+Cancelled, dormant and recognized actors, fresh-probe and raw-observer reentry,
+failure and subsequent same-source recovery.
+`native_cancellation_retains_captures_after_prior_capture_failure` specifies
+required native cleanup, safe capture retention and fresh same-source recovery
+through both public pointer-sequence cancellation methods.
+`native_claim_prior_observation_failure_preserves_captures` covers prior observer
+failure competing with losing cleanup and winner delivery, retained safe captures
+and healthy subsequent admission.
 Existing Scale tables retain the default two-contact contract. These owned-event
 witnesses do not claim physical trackpad or touchscreen execution on every backend.

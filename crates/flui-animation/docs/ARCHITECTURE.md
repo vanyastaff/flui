@@ -10,7 +10,7 @@ The widget layer consumes them through `flui-widgets`' `animated` and
 widgets and `AnimatedBuilder` observe existing animations. `DrivenController`
 owns registration on the widget's ambient Vsync registry.
 `build_on` is the public controller admission path; observer clones cannot
-register or remove a seat. `DrivenController::rebind` migrates the owned seat,
+register or remove a seat, or dispose its kernel. `DrivenController::rebind` migrates the owned seat,
 and disposal or drop unregisters before canceling its run (ADR-0179).
 
 ```text
@@ -810,21 +810,20 @@ Benefits:
 ### Explicit Disposal
 
 An owning `DrivenController` unregisters and disposes automatically on drop.
-Manual controller handles can close their shared kernel explicitly:
+It can also end that lifetime explicitly while observer clones remain alive:
 
 ```rust
-controller.dispose();
+owner.dispose();
 ```
 
 After disposal, driving operations (`forward`, `reverse`, `animate_*`,
 `fling*`, `repeat*`, `stop`, `reset`) return `Err(AnimationError::Disposed)`
 and the active run is canceled.
 
-Why not just Drop?
-- Clones of an `AnimationController` share one controller, so dropping one
-  handle cannot mean the animation is finished; `dispose` is the explicit end
-  of life for every handle at once
-- Explicit disposal can be called safely multiple times
+Clones of an `AnimationController` share its kernel; dropping an observer
+does not end its owner's lifetime. Public observers cannot dispose the kernel
+and leave a registry seat behind. Owning disposal is idempotent. A manually
+sampled controller built with `build()` is canceled when its last handle drops.
 
 ### Proxy queries release the parent guard before user code
 

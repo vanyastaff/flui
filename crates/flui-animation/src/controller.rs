@@ -306,7 +306,7 @@ struct RepeatSample {
 /// let value = controller.value();
 ///
 /// // Cleanup when done
-/// controller.dispose();
+/// drop(controller);
 /// ```
 #[derive(Clone)]
 pub struct AnimationController {
@@ -616,7 +616,7 @@ impl AnimationController {
     /// and `Err(RunCanceled)` if it is superseded (a later run starts
     /// before this one ends) or torn down ([`stop`](Self::stop)/
     /// [`set_value`](Self::set_value)/[`reset`](Self::reset)/
-    /// [`dispose`](Self::dispose)). See
+    /// [owning disposal](crate::DrivenController::dispose)). See
     /// [`AnimationRunFuture::when_complete_or_cancel`] for the idiom to react to
     /// either outcome without matching on it, and this method's own
     /// `# Awaiting a run` section below for the `async`/`await` route.
@@ -1725,8 +1725,8 @@ impl AnimationController {
     /// `live_running` is `!disposed && active_run.is_some()` — **not**
     /// `status.is_running()`, which is the wrong "is a run installed"
     /// predicate for two independent reasons:
-    /// - [`dispose`](Self::dispose) deliberately leaves `status` untouched
-    ///   (see its own doc), so a controller disposed mid-run keeps whatever
+    /// - [Owning disposal](crate::DrivenController::dispose) leaves `status` untouched,
+    ///   so a controller disposed mid-run keeps whatever
     ///   running status it had.
     /// - [`set_value`](Self::set_value) reports a *directional* running
     ///   status at an interior value
@@ -2242,21 +2242,9 @@ impl AnimationController {
         self.finish(status, ValueChange::Notify, delivery, retired, inner);
     }
 
-    /// **CRITICAL:** Dispose when done to prevent leaks.
-    ///
-    /// Stops the animation and clears resources. Idempotent. Cancels the
-    /// active run's [`AnimationRunFuture`] with
-    /// [`RunCanceled`](crate::RunCanceled) —
-    /// delivered with no controller lock held — even though `dispose` itself never
-    /// changes `status` and so fires no status listener (they are already
-    /// cleared by the time delivery runs).
-    pub fn dispose(&self) {
-        let mut retirement = Retirement::new();
-        self.dispose_with_retirement(&mut retirement.scope());
-        retirement.finish();
-    }
-
-    pub(crate) fn dispose_with_retirement(&self, retirement: &mut RecoveryScope<'_>) {
+    /// Close the kernel and cancel its run under the owning lifecycle's recovery.
+    /// The owner withdraws its seat before entering this idempotent drain.
+    pub(crate) fn dispose(&self, retirement: &mut RecoveryScope<'_>) {
         let mut retired = RetiredSources::new();
         let mut inner = self.inner.borrow_mut();
         if inner.disposed {

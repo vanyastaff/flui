@@ -153,13 +153,6 @@ impl ViewState<AnimatedAlign> for AnimatedAlignState {
 
     fn did_update_view(&mut self, _old_view: &AnimatedAlign, new_view: &AnimatedAlign) {
         self.child = new_view.child.clone();
-        self.controller.set_duration(new_view.duration);
-        // Swap the curve before sampling `t`, so a target change anchors
-        // against the already-updated curve — same ordering as
-        // `AnimatedContainer`, which explains it.
-        self.controller.set_curve(new_view.curve.clone());
-        let t = self.controller.value();
-
         // A change to any property restarts the shared controller and re-anchors
         // every property at this same instant.
         let restart = self.alignment.animates_toward(Some(&new_view.alignment))
@@ -169,12 +162,15 @@ impl ViewState<AnimatedAlign> for AnimatedAlignState {
             || self
                 .height_factor
                 .animates_toward(new_view.height_factor.as_ref());
+        let restart_at = restart.then(|| self.controller.value());
+        self.controller.set_duration(new_view.duration);
+        self.controller.set_curve(new_view.curve.clone());
         self.alignment
-            .retarget(Some(new_view.alignment), t, restart);
+            .retarget(Some(new_view.alignment), restart_at);
         self.width_factor
-            .retarget(new_view.width_factor, t, restart);
+            .retarget(new_view.width_factor, restart_at);
         self.height_factor
-            .retarget(new_view.height_factor, t, restart);
+            .retarget(new_view.height_factor, restart_at);
         if restart {
             self.controller.restart_from_zero();
         }

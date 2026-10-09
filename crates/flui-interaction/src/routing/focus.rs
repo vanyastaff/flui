@@ -293,17 +293,20 @@ impl FocusManager {
             std::mem::replace(&mut *primary, node.clone())
         };
 
-        tracing::trace!(
-            previous = ?previous.as_ref().map(|node| node.id().get()),
-            new = ?node.as_ref().map(|node| node.id().get()),
-            "focus changed"
-        );
-
         if let Some(node) = &node {
             Self::refresh_focus_history(node);
         }
 
         let _guard = NotificationDepthGuard::enter(&self.notification_depth);
+        let failure_guard = self.notification_failure_scope(failure);
+        let _ = failure.invoke(|| {
+            tracing::trace!(
+                previous = ?previous.as_ref().map(|node| node.id().get()),
+                new = ?node.as_ref().map(|node| node.id().get()),
+                "focus changed"
+            );
+        });
+        failure_guard.preserve(failure.preserving());
         Self::notify_focus_nodes(previous.as_ref(), node.as_ref(), failure);
         self.notify_listeners(previous, node, failure);
     }

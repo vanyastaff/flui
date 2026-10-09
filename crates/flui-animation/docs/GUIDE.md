@@ -46,7 +46,7 @@ let controller = AnimationController::builder(
 .initial_value(50.0)
 .reverse_duration(Duration::from_millis(500))
 .build();
-# controller.dispose();
+# drop(controller);
 # Ok(())
 # }
 ```
@@ -78,7 +78,7 @@ controller.reset()?;
 
 // Set value directly (no animation)
 controller.set_value(0.5);
-# controller.dispose();
+# drop(controller);
 # Ok(())
 # }
 ```
@@ -100,7 +100,7 @@ controller.repeat(true)?;
 
 // Stop repeating
 controller.stop()?;
-# controller.dispose();
+# drop(controller);
 # Ok(())
 # }
 ```
@@ -127,7 +127,7 @@ controller.fling_with(1.0, Some(spring))?;
 // Arbitrary simulation
 let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0);
 controller.animate_with(sim)?;
-# controller.dispose();
+# drop(controller);
 # Ok(())
 # }
 ```
@@ -148,7 +148,7 @@ let status = controller.status(); // AnimationStatus
 controller.is_animating(); // Forward or Reverse
 controller.is_completed(); // At upper_bound
 controller.is_dismissed(); // At lower_bound
-# controller.dispose();
+# drop(controller);
 ```
 
 ### Listening
@@ -179,7 +179,7 @@ let id = controller.add_status_listener(Rc::new(|status| {
     }
 }));
 controller.remove_status_listener(id);
-# controller.dispose();
+# drop(controller);
 ```
 
 ### Cleanup
@@ -189,8 +189,9 @@ controller.remove_status_listener(id);
 # use flui_animation::{AnimationController, AnimationError};
 # use flui_scheduler::UpdateScheduler;
 # let scheduler = UpdateScheduler::new();
-# let controller = AnimationController::builder(Duration::from_millis(300)).build();
-controller.dispose();
+# let mut owner = AnimationController::builder(Duration::from_millis(300)).build_on(None);
+# let controller = owner.controller().clone();
+owner.dispose();
 // Driving operations now return Err(AnimationError::Disposed)
 assert!(matches!(controller.forward(), Err(AnimationError::Disposed)));
 ```
@@ -399,7 +400,7 @@ let curved = CurvedAnimation::new(
     Curves::EaseInOut,
 );
 
-# controller.dispose();
+# drop(controller);
 ```
 
 ### TweenAnimation
@@ -421,7 +422,7 @@ let animated = TweenAnimation::new(
 );
 
 let pixels = animated.value(); // 0.0 to 300.0
-# controller.dispose();
+# drop(controller);
 ```
 
 ### ReverseAnimation
@@ -439,7 +440,7 @@ let reversed = ReverseAnimation::new(Rc::new(controller.clone()));
 // value = 1.0 - parent.value()
 // Forward ↔ Reverse, Completed ↔ Dismissed
 
-# controller.dispose();
+# drop(controller);
 ```
 
 ### ProxyAnimation
@@ -459,8 +460,8 @@ use flui_animation::ProxyAnimation;
 let proxy = ProxyAnimation::new(Rc::new(controller1.clone()));
 // Later...
 proxy.set_parent(Rc::new(controller2.clone()));
-# controller1.dispose();
-# controller2.dispose();
+# drop(controller1);
+# drop(controller2);
 ```
 
 ### ConstantAnimation
@@ -495,8 +496,8 @@ use flui_animation::AnimationSwitch;
 let switch = AnimationSwitch::new(Rc::new(anim1.clone()), Some(Rc::new(anim2.clone())));
 // When values cross, switches from anim1 to anim2
 # switch.dispose();
-# anim1.dispose();
-# anim2.dispose();
+# drop(anim1);
+# drop(anim2);
 ```
 
 ---
@@ -587,15 +588,15 @@ fn animate(d: Duration) -> Result<AnimationController, AnimationError> {
     Ok(controller)
 }
 # let running = animate(Duration::from_millis(300)).unwrap();
-# running.dispose();
-# controller.dispose();
+# drop(running);
+# drop(controller);
 ```
 
 ---
 
 ## Best Practices
 
-### Always Dispose
+### Own the UI Lifetime
 
 ```rust
 # use std::time::Duration;
@@ -603,9 +604,10 @@ fn animate(d: Duration) -> Result<AnimationController, AnimationError> {
 # use flui_scheduler::UpdateScheduler;
 # let scheduler = UpdateScheduler::new();
 # let duration = Duration::from_millis(300);
-let controller = AnimationController::builder(duration).build();
-// ... use controller ...
-controller.dispose(); // Required
+let owner = AnimationController::builder(duration).build_on(None);
+let controller = owner.controller();
+// Observe or operate the controller during this owner's lifetime.
+drop(owner); // Withdraw registration and cancel the run.
 ```
 
 ### Share One Controller
@@ -622,7 +624,7 @@ controller, it does not copy it.
 let controller = AnimationController::builder(Duration::from_millis(300)).build();
 let curved1 = CurvedAnimation::new(Rc::new(controller.clone()), Curves::EaseIn);
 let curved2 = CurvedAnimation::new(Rc::new(controller.clone()), Curves::EaseOut);
-# controller.dispose();
+# drop(controller);
 ```
 
 ### Reuse Controllers
@@ -637,7 +639,7 @@ let curved2 = CurvedAnimation::new(Rc::new(controller.clone()), Curves::EaseOut)
 // Don't create new controller each time
 controller.reset()?;
 controller.forward()?;
-# controller.dispose();
+# drop(controller);
 # Ok(())
 # }
 ```
@@ -658,5 +660,5 @@ if controller.status() == AnimationStatus::Completed { /* ... */ }
 controller.add_status_listener(Rc::new(|status| {
     if status == AnimationStatus::Completed { /* ... */ }
 }));
-# controller.dispose();
+# drop(controller);
 ```

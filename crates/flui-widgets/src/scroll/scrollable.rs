@@ -59,7 +59,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use flui_animation::{Animation, AnimationController, AnimationStatus, Curves, DrivenController};
+use flui_animation::{
+    Animation, AnimationController, AnimationStatus, Curves, DrivenController, Vsync,
+};
 use flui_foundation::geometry::Axis;
 use flui_foundation::{Listenable, ListenerId};
 use flui_rendering::constraints::AxisDirection;
@@ -503,6 +505,7 @@ struct WheelMotion {
 /// are never clamped. A value listener on the controller pushes the live pixel
 /// position into the [`ScrollController`] each tick.
 pub struct ScrollableState {
+    recognizer_owner: Rc<()>,
     /// Stable policy identity across ordinary default-config rebuilds.
     default_physics: SharedScrollPhysics,
     /// The scroll controller from the current view configuration. Kept in
@@ -521,6 +524,9 @@ pub struct ScrollableState {
     /// Created once in `create_state`; registered with the ambient
     /// `VsyncScope` in `init_state`; disposed in `dispose`.
     fling_controller: DrivenController,
+    /// Registry identity for the scroll-specific cancel-on-clock-change policy.
+    /// The driven controller alone owns its registration.
+    fling_clock: Option<Vsync>,
     /// Owner-local accepted wheel work, independent of the displayed pixels.
     wheel_motion: Rc<RefCell<Option<Rc<WheelMotion>>>>,
     fling_endpoint: RefCell<Option<Arc<FlingEndpoint>>>,
@@ -597,10 +603,12 @@ impl StatefulView for Scrollable {
             .build_on(None);
 
         ScrollableState {
+            recognizer_owner: Rc::new(()),
             default_physics: Arc::new(ClampingScrollPhysics::new()),
             scroll_controller: self.controller.clone(),
             stop_hook: None,
             fling_controller,
+            fling_clock: None,
             wheel_motion: Rc::new(RefCell::new(None)),
             fling_endpoint: RefCell::new(None),
             fling_listener_id: None,
@@ -613,6 +621,26 @@ impl StatefulView for Scrollable {
 }
 
 impl ScrollableState {
+    fn bind_vsync(&mut self, ctx: &dyn LifecycleContext) {
+        let incoming = VsyncScope::maybe_of(ctx);
+        let unchanged = match (&self.fling_clock, &incoming) {
+            (None, None) => true,
+            (Some(current), Some(incoming)) => current.is_same(incoming),
+            _ => false,
+        };
+        if unchanged {
+            return;
+        }
+        self.fling_clock = incoming;
+        self.wheel_motion.borrow_mut().take();
+        // Cancel at the sampled pixels before a missing clock can settle the
+        // finite run. Gesture contacts remain owned by their admitted position.
+        let _ = self.fling_controller.controller().stop();
+        if let Err(error) = self.fling_controller.rebind(self.fling_clock.as_ref()) {
+            tracing::error!(%error, "Scrollable lost its frame registry");
+        }
+    }
+
     fn endpoint(
         &self,
         view: &Scrollable,
@@ -813,15 +841,10 @@ impl ViewState<Scrollable> for ScrollableState {
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
-        if let Err(error) = self
-            .fling_controller
-            .rebind(VsyncScope::maybe_of(ctx).as_ref())
-        {
-            tracing::error!(%error, "Scrollable lost its frame registry");
-        }
         self.post_frame = ctx.post_frame_handle();
         self.pipeline = ctx.pipeline_owner().map(|cell| cell.downgrade());
         self.install_flush_handle(ctx);
+        self.bind_vsync(ctx);
     }
 
     fn build(&self, view: &Scrollable, ctx: &dyn BuildContext) -> impl IntoView {
@@ -903,6 +926,7 @@ impl ViewState<Scrollable> for ScrollableState {
             let position_update = ctrl_update.position();
             let position_end = ctrl_update.position();
             let gestures = GestureDetector::new()
+                .recognizer_owner(Rc::clone(&self.recognizer_owner))
                 .drag_pointer_strategy(flui_interaction::DragPointerStrategy::ContinueWithRemaining)
                 .behavior(HitTestBehavior::Opaque)
                 .on_pan_start(move |_cx, _details| {
@@ -1188,6 +1212,7 @@ impl ViewState<Scrollable> for ScrollableState {
         self.remove_command_listener();
         self.detach_stop_hook();
         self.scroll_controller = new_view.controller.clone();
+        self.recognizer_owner = Rc::new(());
         self.install_fling_listener();
         self.install_fling_status_listener();
         self.install_command_listener();

@@ -127,8 +127,9 @@ use crate::{
     ids::PointerId,
     processing::{PointerEventResampler, SamplingClock},
     routing::{
-        HitTestResult, MouseTracker, PanZoomRoute, PointerMotionKind, PointerRouter,
-        ResolvedRouteToken, RoutePanic, ScrollRoute, active_dispatch_handle,
+        HitTestResult, MouseTracker, PanZoomAdmissionAuthority, PanZoomRetirement, PanZoomRoute,
+        PointerMotionKind, PointerRouter, ResolvedRouteToken, RoutePanic, ScrollRoute,
+        active_dispatch_handle,
     },
     settings::GestureSettings,
 };
@@ -355,11 +356,12 @@ enum ScrollAdmission {
 struct PanZoomSequence {
     route: Cell<Option<PanZoomRoute>>,
     pointer: PointerId,
+    staged: RefCell<Vec<(PanZoomRoute, PanZoomRetirement)>>,
 }
 
 enum PanZoomAdmission {
     Active(Rc<PanZoomSequence>),
-    Terminal(Option<PanZoomRoute>),
+    Terminal(Option<Rc<PanZoomSequence>>),
     Refused,
 }
 
@@ -746,8 +748,9 @@ impl GestureBinding {
         .then(|| crate::PointerEventExt::pointer_id(event))
         .flatten();
         let mut first = self.drain_capture_losses(ending);
-        let delivered =
-            RoutePanic::capture(|| self.handle_pointer_event_kernel(event, hit_test_fn));
+        let delivered = RoutePanic::capture(|| {
+            self.handle_pointer_event_kernel(event, hit_test_fn, &mut first);
+        });
         RoutePanic::preserve_first(&mut first, delivered, "pointer input after capture loss");
         if let Some(failure) = first {
             failure.resume();
@@ -1126,7 +1129,7 @@ impl GestureBinding {
         let mut failure = crate::__runtime::ClosePanic::for_close(mode, self.close_mode.clone());
         self.closed.set(true);
         self.scroll_sequences.borrow_mut().clear();
-        self.pan_zoom_sequences.borrow_mut().clear();
+        let native_sequences = self.detach_pan_zoom_sequences();
         if !failure.preserving() {
             failure.invoke(|| {
                 if let Some(loss) = self.drain_capture_losses(None) {
@@ -1142,6 +1145,14 @@ impl GestureBinding {
         routes.sort_unstable_by_key(|(pointer, _)| *pointer);
         let mut moves: Vec<_> = self.pending_moves.borrow_mut().drain().collect();
         moves.sort_unstable_by_key(|(pointer, _)| *pointer);
+        let native_tickets: Vec<_> = native_sequences
+            .into_iter()
+            .flat_map(|sequence| std::mem::take(&mut *sequence.staged.borrow_mut()))
+            .collect();
+        for (_, ticket) in native_tickets {
+            failure.run(|| (ticket.0)());
+            failure.retire(crate::retain::Owned(ticket.0));
+        }
         let arena_mode = if failure.preserving() {
             crate::__runtime::CloseMode::PreservingFailure
         } else {
@@ -1200,7 +1211,7 @@ impl GestureBinding {
     /// window.
     pub fn cancel_active_pointers(&self) {
         self.scroll_sequences.borrow_mut().clear();
-        self.pan_zoom_sequences.borrow_mut().clear();
+        let native_sequences = self.detach_pan_zoom_sequences();
         let mut first_panic = self.drain_capture_losses(None);
         *self.refused_contacts.borrow_mut() = RefusedContacts::default();
         let mut pointers: Vec<_> = self
@@ -1210,6 +1221,7 @@ impl GestureBinding {
             .map(|(&pointer_id, entry)| (pointer_id, entry.pointer, entry.time, entry.sequence))
             .collect();
         pointers.sort_unstable_by_key(|(pointer_id, _, _, _)| *pointer_id);
+        Self::retire_pan_zoom_sequences(native_sequences, &mut first_panic);
         for (pointer_id, pointer, time, sequence) in pointers {
             // A handler run by an earlier iteration may have re-entered the
             // binding and terminated or replaced this sequence. The numeric
@@ -1226,9 +1238,11 @@ impl GestureBinding {
             // panic resumes (the same all-work-first posture the kernel
             // itself has within one sequence).
             let delivered = RoutePanic::capture(|| {
-                self.handle_pointer_event_after_signal_withdrawal(&cancel, |_| {
-                    unreachable!("BUG: a terminal Cancel must never hit-test")
-                });
+                self.handle_pointer_event_after_signal_withdrawal(
+                    &cancel,
+                    |_| unreachable!("BUG: a terminal Cancel must never hit-test"),
+                    &mut first_panic,
+                );
             });
             RoutePanic::preserve_first(&mut first_panic, delivered, "focus-loss pointer cancel");
         }
@@ -1400,7 +1414,11 @@ impl GestureBinding {
             .is_some_and(|current| Rc::ptr_eq(current, sequence))
     }
 
-    fn prepare_pan_zoom_sequence(&self, event: &PanZoomEvent) -> PanZoomAdmission {
+    fn prepare_pan_zoom_sequence(
+        &self,
+        event: &PanZoomEvent,
+        first: &mut Option<RoutePanic>,
+    ) -> PanZoomAdmission {
         let pointer = *event.pointer();
         let source = SignalSource::from(pointer);
         let mut sequences = self.pan_zoom_sequences.borrow_mut();
@@ -1411,20 +1429,12 @@ impl GestureBinding {
             return PanZoomAdmission::Refused;
         }
         if matches!(event.phase, PanZoomPhase::End | PanZoomPhase::Cancelled) {
-            return PanZoomAdmission::Terminal(
-                sequences
-                    .remove(&source)
-                    .and_then(|sequence| sequence.route.get()),
-            );
+            return PanZoomAdmission::Terminal(sequences.remove(&source));
         }
-        let route = if matches!(event.phase, PanZoomPhase::Start) {
+        let prior = if matches!(event.phase, PanZoomPhase::Start) {
             // Repeated exact Start replaces the cumulative session, while its
             // admitted consumer receives retirement and the new staged pair.
-            sequences.remove(&source).and_then(|sequence| {
-                (sequence.pointer == pointer.id)
-                    .then(|| sequence.route.get())
-                    .flatten()
-            })
+            sequences.remove(&source)
         } else if let Some(sequence) = sequences.get(&source) {
             return PanZoomAdmission::Active(Rc::clone(sequence));
         } else {
@@ -1434,11 +1444,150 @@ impl GestureBinding {
             return PanZoomAdmission::Refused;
         }
         let sequence = Rc::new(PanZoomSequence {
-            route: Cell::new(route),
+            route: Cell::new(
+                prior
+                    .as_ref()
+                    .filter(|prior| prior.pointer == pointer.id)
+                    .and_then(|prior| prior.route.get()),
+            ),
             pointer: pointer.id,
+            staged: RefCell::new(Vec::new()),
         });
         sequences.insert(source, Rc::clone(&sequence));
+        drop(sequences);
+        if let Some(prior) = prior {
+            let tickets = std::mem::take(&mut *prior.staged.borrow_mut());
+            let (kept, retired): (Vec<_>, Vec<_>) = tickets.into_iter().partition(|(route, _)| {
+                sequence
+                    .route
+                    .get()
+                    .is_some_and(|winner| winner.same_target(*route))
+            });
+            *sequence.staged.borrow_mut() = kept;
+            Self::retire_pan_zoom_tickets_capturing_panic(retired, first, false);
+        }
         PanZoomAdmission::Active(sequence)
+    }
+
+    fn retire_pan_zoom_tickets(
+        tickets: Vec<(PanZoomRoute, PanZoomRetirement)>,
+        preserving_failure: &Cell<bool>,
+    ) {
+        let mut first = None;
+        Self::retire_pan_zoom_tickets_capturing_panic(
+            tickets,
+            &mut first,
+            preserving_failure.get(),
+        );
+        if let Some(failure) = first {
+            preserving_failure.set(true);
+            failure.resume();
+        }
+    }
+
+    fn retire_pan_zoom_tickets_capturing_panic(
+        tickets: Vec<(PanZoomRoute, PanZoomRetirement)>,
+        first: &mut Option<RoutePanic>,
+        preserving_failure: bool,
+    ) {
+        for (_, ticket) in tickets {
+            if std::thread::panicking() {
+                crate::retain::Retain::retain(crate::retain::Owned(ticket.0));
+                continue;
+            }
+            // Required quiescence still runs after a caught earlier failure;
+            // its opaque captures inherit that failure's retirement policy.
+            RoutePanic::preserve_first(
+                first,
+                RoutePanic::capture(|| (ticket.0)()),
+                "native admission retirement",
+            );
+            if preserving_failure || first.is_some() {
+                crate::retain::Retain::retain(crate::retain::Owned(ticket.0));
+            } else {
+                RoutePanic::preserve_first(
+                    first,
+                    RoutePanic::capture(|| drop(ticket.0)),
+                    "native admission capture retirement",
+                );
+            }
+        }
+    }
+
+    fn stage_pan_zoom(
+        &self,
+        pointer: PointerInfo,
+        sequence: &Rc<PanZoomSequence>,
+        route: PanZoomRoute,
+        ticket: PanZoomRetirement,
+        preserving_failure: &Cell<bool>,
+    ) {
+        if self.is_current_pan_zoom_sequence(pointer, sequence) {
+            sequence.staged.borrow_mut().push((route, ticket));
+        } else {
+            Self::retire_pan_zoom_tickets(vec![(route, ticket)], preserving_failure);
+        }
+    }
+
+    fn claim_pan_zoom(
+        &self,
+        pointer: PointerInfo,
+        sequence: &Rc<PanZoomSequence>,
+        route: PanZoomRoute,
+        preserving_failure: &Cell<bool>,
+    ) {
+        if !self.is_current_pan_zoom_sequence(pointer, sequence) {
+            return;
+        }
+        if sequence
+            .route
+            .get()
+            .is_some_and(|winner| !winner.same_target(route))
+        {
+            return;
+        }
+        sequence.route.set(Some(route));
+        let tickets = std::mem::take(&mut *sequence.staged.borrow_mut());
+        let (kept, retired): (Vec<_>, Vec<_>) = tickets
+            .into_iter()
+            .partition(|(staged, _)| staged.same_target(route));
+        *sequence.staged.borrow_mut() = kept;
+        Self::retire_pan_zoom_tickets(retired, preserving_failure);
+    }
+
+    fn retire_pan_zoom_sequences(
+        sequences: Vec<Rc<PanZoomSequence>>,
+        first: &mut Option<RoutePanic>,
+    ) {
+        let tickets = sequences
+            .into_iter()
+            .flat_map(|sequence| std::mem::take(&mut *sequence.staged.borrow_mut()))
+            .collect();
+        Self::retire_pan_zoom_tickets_capturing_panic(tickets, first, false);
+    }
+
+    fn detach_pan_zoom_sequences(&self) -> Vec<Rc<PanZoomSequence>> {
+        self.pan_zoom_sequences
+            .borrow_mut()
+            .drain()
+            .map(|(_, sequence)| sequence)
+            .collect()
+    }
+
+    fn native_terminal_is_current(sequence: &PanZoomSequence, route: PanZoomRoute) -> bool {
+        // Repeated Start appends the newest actor generation to its retained route.
+        let current = sequence
+            .staged
+            .borrow()
+            .iter()
+            .rev()
+            .find_map(|(target, ticket)| {
+                target
+                    .same_target(route)
+                    .then(|| ticket.1.clone())
+                    .flatten()
+            });
+        current.is_some_and(|current| current())
     }
 
     fn is_current_pan_zoom_sequence(
@@ -1452,8 +1601,12 @@ impl GestureBinding {
             .is_some_and(|current| Rc::ptr_eq(current, sequence))
     }
 
-    fn handle_pointer_event_kernel<F>(&self, event: &PointerEvent, hit_test_fn: F)
-    where
+    fn handle_pointer_event_kernel<F>(
+        &self,
+        event: &PointerEvent,
+        hit_test_fn: F,
+        first: &mut Option<RoutePanic>,
+    ) where
         F: FnOnce(Offset<f64>) -> HitTestResult,
     {
         if self.tearing_down_all_pointers.get() {
@@ -1463,18 +1616,24 @@ impl GestureBinding {
             self.scroll_sequences
                 .borrow_mut()
                 .remove(&SignalSource::from(cancel.pointer));
-            self.pan_zoom_sequences
+            let native = self
+                .pan_zoom_sequences
                 .borrow_mut()
                 .remove(&SignalSource::from(cancel.pointer));
+            Self::retire_pan_zoom_sequences(native.into_iter().collect(), first);
         }
-        self.handle_pointer_event_after_signal_withdrawal(event, hit_test_fn);
+        self.handle_pointer_event_after_signal_withdrawal(event, hit_test_fn, first);
     }
 
     /// Owner cancellation batches withdraw signal admissions before invoking
     /// their first callback. Later old contacts must not withdraw a newly
     /// admitted signal from an earlier callback in that same batch.
-    fn handle_pointer_event_after_signal_withdrawal<F>(&self, event: &PointerEvent, hit_test_fn: F)
-    where
+    fn handle_pointer_event_after_signal_withdrawal<F>(
+        &self,
+        event: &PointerEvent,
+        hit_test_fn: F,
+        incoming: &mut Option<RoutePanic>,
+    ) where
         F: FnOnce(Offset<f64>) -> HitTestResult,
     {
         if self.tearing_down_all_pointers.get() {
@@ -1483,14 +1642,16 @@ impl GestureBinding {
         let Some(pointer_id) = crate::PointerEventExt::pointer_id(event) else {
             // Device lifecycle has no contact identity. It still reaches
             // global observers without fabricating a per-pointer route.
-            let mut first_panic = None;
+            let mut first_panic = incoming.take();
             if let PointerEvent::DeviceRemoved(device) = event {
                 self.scroll_sequences
                     .borrow_mut()
                     .remove(&SignalSource::Device(device.device));
-                self.pan_zoom_sequences
+                let native = self
+                    .pan_zoom_sequences
                     .borrow_mut()
                     .remove(&SignalSource::Device(device.device));
+                Self::retire_pan_zoom_sequences(native.into_iter().collect(), &mut first_panic);
                 let mut pointers: Vec<_> = self
                     .hit_tests
                     .borrow()
@@ -1512,6 +1673,7 @@ impl GestureBinding {
                         self.handle_pointer_event_after_signal_withdrawal(
                             &cancel,
                             terminal_hit_test,
+                            &mut first_panic,
                         );
                     });
                     RoutePanic::preserve_first(
@@ -1791,32 +1953,146 @@ impl GestureBinding {
                 }
             }
             PointerEvent::PanZoom(gesture) => {
-                let admission = self.prepare_pan_zoom_sequence(gesture);
+                let admission = self.prepare_pan_zoom_sequence(gesture, incoming);
+                let mut first_panic = incoming.take();
                 let position = event
                     .position()
                     .expect("BUG: PanZoom carries a checked position");
                 // Native gesture observation follows fresh geometry; accepted
                 // consumption stays with its exact owner across rebuilds.
-                let path = hit_test_fn(position);
-                let mut first_panic = self.dispatch_ephemeral(event, &path);
+                let mut path = HitTestResult::new();
+                RoutePanic::preserve_first(
+                    &mut first_panic,
+                    RoutePanic::capture(|| path = hit_test_fn(position)),
+                    "native fresh observation geometry",
+                );
+                RoutePanic::preserve_first(
+                    &mut first_panic,
+                    self.dispatch_ephemeral(event, &path),
+                    "native observers after admission retirement",
+                );
+                // Borrowed admission callbacks need the failure policy, while
+                // this delivery keeps custody of the authoritative payload.
+                let preserving_failure = Cell::new(first_panic.is_some());
                 let claim = RoutePanic::capture(|| {
                     let claimed = match &admission {
-                        PanZoomAdmission::Terminal(Some(route)) => route.dispatch(gesture, || {}),
-                        PanZoomAdmission::Terminal(None) => path.dispatch_pan_zoom(gesture),
+                        PanZoomAdmission::Terminal(Some(sequence)) => {
+                            let mut handled = false;
+                            let mut first = first_panic.take();
+                            let delivery = RoutePanic::capture(|| {
+                                handled = sequence.route.get().map_or_else(
+                                    || {
+                                        path.dispatch_pan_zoom_admitted(
+                                            gesture,
+                                            &|_| {},
+                                            &|route, ticket| {
+                                                Self::retire_pan_zoom_tickets(
+                                                    vec![(route, ticket)],
+                                                    &preserving_failure,
+                                                );
+                                            },
+                                            Some(&|route| {
+                                                Self::native_terminal_is_current(sequence, route)
+                                            }),
+                                        )
+                                    },
+                                    |route| {
+                                        let current =
+                                            || Self::native_terminal_is_current(sequence, route);
+                                        route.dispatch_admitted(
+                                            gesture,
+                                            || {},
+                                            Some(PanZoomAdmissionAuthority {
+                                                stage: &|ticket| {
+                                                    Self::retire_pan_zoom_tickets(
+                                                        vec![(route, ticket)],
+                                                        &preserving_failure,
+                                                    );
+                                                },
+                                                claim: &|| {},
+                                                terminal: Some(&current),
+                                            }),
+                                        )
+                                    },
+                                );
+                            });
+                            RoutePanic::preserve_first(
+                                &mut first,
+                                delivery,
+                                "native terminal delivery",
+                            );
+                            Self::retire_pan_zoom_sequences(vec![Rc::clone(sequence)], &mut first);
+                            if let Some(first) = first {
+                                first.resume();
+                            }
+                            handled
+                        }
+                        PanZoomAdmission::Terminal(None) => path.dispatch_pan_zoom_admitted(
+                            gesture,
+                            &|_| {},
+                            &|route, ticket| {
+                                Self::retire_pan_zoom_tickets(
+                                    vec![(route, ticket)],
+                                    &preserving_failure,
+                                );
+                            },
+                            Some(&|_| false),
+                        ),
                         PanZoomAdmission::Refused => false,
                         PanZoomAdmission::Active(sequence) => {
-                            if let Some(route) = sequence.route.get() {
-                                route.dispatch(gesture, || {})
+                            if let Some(route) = sequence.route.get()
+                                && self.is_current_pan_zoom_sequence(*gesture.pointer(), sequence)
+                            {
+                                let stage = |ticket| {
+                                    self.stage_pan_zoom(
+                                        *gesture.pointer(),
+                                        sequence,
+                                        route,
+                                        ticket,
+                                        &preserving_failure,
+                                    );
+                                };
+                                let claim = || {
+                                    self.claim_pan_zoom(
+                                        *gesture.pointer(),
+                                        sequence,
+                                        route,
+                                        &preserving_failure,
+                                    );
+                                };
+                                route.dispatch_admitted(
+                                    gesture,
+                                    || {},
+                                    Some(PanZoomAdmissionAuthority {
+                                        stage: &stage,
+                                        claim: &claim,
+                                        terminal: None,
+                                    }),
+                                )
                             } else if self
                                 .is_current_pan_zoom_sequence(*gesture.pointer(), sequence)
                             {
-                                path.dispatch_pan_zoom_with_claim(gesture, |route| {
-                                    if self
-                                        .is_current_pan_zoom_sequence(*gesture.pointer(), sequence)
-                                    {
-                                        sequence.route.set(Some(route));
-                                    }
-                                })
+                                path.dispatch_pan_zoom_admitted(
+                                    gesture,
+                                    &|route| {
+                                        self.claim_pan_zoom(
+                                            *gesture.pointer(),
+                                            sequence,
+                                            route,
+                                            &preserving_failure,
+                                        );
+                                    },
+                                    &|route, ticket| {
+                                        self.stage_pan_zoom(
+                                            *gesture.pointer(),
+                                            sequence,
+                                            route,
+                                            ticket,
+                                            &preserving_failure,
+                                        );
+                                    },
+                                    None,
+                                )
                             } else {
                                 false
                             }
@@ -2334,7 +2610,7 @@ impl GestureBinding {
     /// Detach and clean every interrupted pointer transaction.
     fn clear_all_pointer_state_capturing_panic(&self) -> Option<RoutePanic> {
         self.scroll_sequences.borrow_mut().clear();
-        self.pan_zoom_sequences.borrow_mut().clear();
+        let native_sequences = self.detach_pan_zoom_sequences();
         let mut first_panic = self.drain_capture_losses(None);
         *self.refused_contacts.borrow_mut() = RefusedContacts::default();
         let mut cached_routes: Vec<_> = self.hit_tests.borrow_mut().drain().collect();
@@ -2344,6 +2620,7 @@ impl GestureBinding {
         cached_routes.sort_unstable_by_key(|(pointer, _)| *pointer);
         let mut pending_moves: Vec<_> = self.pending_moves.borrow_mut().drain().collect();
         pending_moves.sort_unstable_by_key(|(pointer, _)| *pointer);
+        Self::retire_pan_zoom_sequences(native_sequences, &mut first_panic);
 
         // Every map above is empty before any arena callback or destructor
         // runs. Arena abandonment likewise removes all exact slots before

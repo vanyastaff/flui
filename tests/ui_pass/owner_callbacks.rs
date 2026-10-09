@@ -20,8 +20,8 @@ fn main() {
     notifier.notify_listeners();
 
     let vsync = Vsync::new();
-    let owner = AnimationController::builder(Duration::from_millis(100)).build_on(Some(&vsync));
-    let controller = owner.controller();
+    let mut owner = AnimationController::builder(Duration::from_millis(100)).build_on(Some(&vsync));
+    let controller = owner.controller().clone();
     let observed = calls.clone();
     controller.add_status_listener(Rc::new(move |status| {
         if status == AnimationStatus::Completed { observed.set(observed.get() + 1); }
@@ -35,7 +35,9 @@ fn main() {
     vsync.tick_all(&flui::animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)));
     vsync.tick_all(&flui::animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.1)));
     assert_eq!(calls.get(), 3);
-    drop(owner);
+    owner.dispose();
+    assert!(vsync.is_empty());
+    assert!(matches!(controller.forward(), Err(flui::animation::AnimationError::Disposed)));
 
     let wake: FrameWaker = scheduler.frame_waker();
     require_thread_spawnable(wake);
