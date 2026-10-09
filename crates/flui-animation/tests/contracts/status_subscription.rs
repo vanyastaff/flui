@@ -297,6 +297,35 @@ fn admission_after_disposal_retires_captures_outside_the_state_borrow() {
     assert!(registry.is_empty());
 }
 
+fn enclosing_cleanup_preserves_its_first_failure() {
+    let controller = AnimationController::builder(Duration::from_secs(1)).build();
+    let drops = Rc::new(Cell::new(0));
+    let mut subscription = controller.subscribe_status({
+        let capture = Capture(Rc::clone(&drops));
+        Rc::new(move |_| {
+            let _keep = &capture;
+        })
+    });
+    let mut recovery = flui_foundation::panic::PanicRecovery::new();
+    recovery.run(|| panic!("enclosing cleanup failure"));
+    subscription.cancel_with_recovery(&mut recovery);
+    assert_eq!(drops.get(), 0, "a failed cleanup retains opaque captures");
+    drop(subscription);
+    let calls = Rc::new(Cell::new(0));
+    let _next = controller.subscribe_status({
+        let calls = Rc::clone(&calls);
+        Rc::new(move |_| calls.set(calls.get() + 1))
+    });
+    let _run = controller.forward().unwrap();
+    assert_eq!(calls.get(), 1);
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| recovery.finish()))
+        .expect_err("the enclosing failure must be resumed");
+    assert_eq!(
+        failure.downcast_ref::<&str>(),
+        Some(&"enclosing cleanup failure")
+    );
+}
+
 fn proxy_subscription_survives_parent_replacement() {
     let first = Rc::new(AnimationController::builder(Duration::from_secs(1)).build());
     let next = Rc::new(AnimationController::builder(Duration::from_secs(1)).build());
@@ -413,6 +442,10 @@ fn adapter_subscriptions_follow_the_shared_owner() {
 #[test]
 fn owning_status_subscription_contract() {
     let cases: &[(&str, fn())] = &[
+        (
+            "enclosing cleanup failure",
+            enclosing_cleanup_preserves_its_first_failure,
+        ),
         (
             "adapter shared owner",
             adapter_subscriptions_follow_the_shared_owner,

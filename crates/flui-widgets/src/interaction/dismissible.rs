@@ -600,7 +600,7 @@ pub struct DismissibleState {
     callbacks: Rc<RefCell<DismissCallbacks>>,
     move_controller: DrivenController,
     move_value_listener_id: Option<ListenerId>,
-    move_status_listener_id: Option<ListenerId>,
+    move_status_subscription: Option<flui_animation::StatusSubscription>,
     vsync: Option<Vsync>,
     rebuild: Option<RebuildHandle>,
     drag: Rc<DragState>,
@@ -626,7 +626,7 @@ impl StatefulView for Dismissible {
             callbacks: Rc::new(RefCell::new(DismissCallbacks::from(self))),
             move_controller,
             move_value_listener_id: None,
-            move_status_listener_id: None,
+            move_status_subscription: None,
             vsync: None,
             rebuild: None,
             drag: Rc::new(DragState::default()),
@@ -658,7 +658,8 @@ impl ViewState<Dismissible> for DismissibleState {
 
         let move_completed_runs = Arc::clone(&self.drag.move_completed_runs);
         let rebuild_for_status = rebuild.clone();
-        self.move_status_listener_id = Some(self.move_controller.controller().add_status_listener(
+        drop(self.move_status_subscription.take());
+        self.move_status_subscription = Some(self.move_controller.controller().subscribe_status(
             std::rc::Rc::new(move |status| {
                 if status == AnimationStatus::Completed {
                     move_completed_runs.fetch_add(1, Ordering::Relaxed);
@@ -918,9 +919,7 @@ impl ViewState<Dismissible> for DismissibleState {
         if let Some(id) = self.move_value_listener_id.take() {
             self.move_controller.controller().remove_listener(id);
         }
-        if let Some(id) = self.move_status_listener_id.take() {
-            self.move_controller.controller().remove_status_listener(id);
-        }
+        drop(self.move_status_subscription.take());
         self.move_controller.dispose();
 
         let resize_controller = self.drag.resize_controller.borrow_mut().take();

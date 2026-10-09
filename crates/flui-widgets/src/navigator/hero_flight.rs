@@ -116,7 +116,7 @@ struct FlightInner {
     ended: AtomicBool,
 
     entry: Terminal<Mutex<Option<OverlayEntry>>>,
-    subscriptions: Terminal<Mutex<Option<ListenerId>>>,
+    subscriptions: Terminal<Mutex<Option<flui_animation::StatusSubscription>>>,
     /// A Send+Sync-safe read of this flight's navigator's user-gesture state
     /// Fixed for the flight's whole life — every divert stays within the same
     /// controller, hence the same navigator.
@@ -295,10 +295,8 @@ impl Drop for FlightInner {
         if std::thread::panicking() {
             return;
         }
-        let status_id = subscriptions.lock().take();
-        if let Some(status_id) = status_id {
-            proxy.remove_status_listener(status_id);
-        }
+        let status_subscription = subscriptions.lock().take();
+        drop(status_subscription);
         let id = proxy_subscription.lock().take();
         if let Some(id) = id {
             proxy.remove_listener(id);
@@ -432,10 +430,8 @@ impl HeroFlight {
             return None;
         }
 
-        let status_id = self.inner.subscriptions.lock().take();
-        if let Some(status_id) = status_id {
-            self.inner.proxy.remove_status_listener(status_id);
-        }
+        let status_subscription = self.inner.subscriptions.lock().take();
+        drop(status_subscription);
         let id = self.inner.proxy_wake_subscription.lock().take();
         if let Some(id) = id {
             self.inner.proxy.remove_listener(id);
@@ -990,9 +986,9 @@ impl FlightManager {
         // whatever it was at the moment it was skipped.
         let settled_status = Rc::clone(&inner.settled_status);
         let listener_gesture_signal = gesture_signal.clone();
-        let status_id = inner
+        let status_subscription = inner
             .proxy
-            .add_status_listener(std::rc::Rc::new(move |status| {
+            .subscribe_status(std::rc::Rc::new(move |status| {
                 // Only terminal statuses matter: forward/reverse is exactly the
                 // complement of dismissed/completed.
                 if listener_gesture_signal.in_progress() {
@@ -1004,7 +1000,7 @@ impl FlightManager {
                     _ => {}
                 }
             }));
-        *inner.subscriptions.lock() = Some(status_id);
+        *inner.subscriptions.lock() = Some(status_subscription);
 
         // The deferred-replay half of the gesture deferral: fires on every 0→1/1→0 transition of the navigator's gesture state, for the
         // flight's whole life. Must stay `Send + Sync` exactly like the status
@@ -1217,7 +1213,7 @@ mod terminal_tests {
             std::rc::Rc::new(flui_animation::ConstantAnimation::new(0.0));
         let proxy = Rc::new(ProxyAnimation::new(parent));
         let (callback, callback_drops) = bomb("subscription retirement", callback_panics);
-        let subscription = proxy.add_status_listener(std::rc::Rc::new(move |_| {
+        let subscription = proxy.subscribe_status(std::rc::Rc::new(move |_| {
             let _capture = &callback;
         }));
         let (rect_capture, rect_drops) = bomb("rect factory retirement", factory_panics);

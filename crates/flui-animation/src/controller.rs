@@ -2849,6 +2849,24 @@ impl Animation<f64> for AnimationController {
         self.register_status_listener(StatusListener::User(callback))
     }
 
+    fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription {
+        let id = self.register_status_listener(StatusListener::User(callback));
+        if self.inner.borrow().disposed {
+            crate::StatusSubscription::default()
+        } else {
+            crate::StatusSubscription::new(&self.inner, id, Self::withdraw_status_listener)
+        }
+    }
+
+    fn subscribe_status_observer(&self, observer: StatusObserver) -> crate::StatusSubscription {
+        let id = self.register_status_listener(StatusListener::Relay(observer));
+        if self.inner.borrow().disposed {
+            crate::StatusSubscription::default()
+        } else {
+            crate::StatusSubscription::new(&self.inner, id, Self::withdraw_status_listener)
+        }
+    }
+
     fn add_status_observer(&self, observer: StatusObserver) -> ListenerId {
         self.register_status_listener(StatusListener::Relay(observer))
     }
@@ -2866,17 +2884,6 @@ impl Animation<f64> for AnimationController {
 }
 
 impl AnimationController {
-    /// Observe status changes while the returned subscription lives.
-    /// Dropping it withdraws only this registration, without retaining the owner.
-    pub fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription {
-        let id = self.register_status_listener(StatusListener::User(callback));
-        if self.inner.borrow().disposed {
-            crate::StatusSubscription::default()
-        } else {
-            crate::StatusSubscription::new(&self.inner, id, Self::withdraw_status_listener)
-        }
-    }
-
     fn register_status_listener(&self, callback: StatusListener) -> ListenerId {
         let mut callback = Opaque::new(callback);
         let mut inner = self.inner.borrow_mut();

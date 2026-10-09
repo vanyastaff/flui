@@ -166,6 +166,14 @@ the same guard and receive the borrowed recovery context during withdrawal. Thei
 callback captures retire through that context, while the guard's private envelope
 contains no user captures and can always retire normally.
 
+`Animation<T>::subscribe_status` exposes that ownership contract through the
+common observation surface. Its framework relay variant borrows the current
+delivery recovery context. Parent links and switch hops retain status guards;
+they cancel them through that same context after releasing state borrows.
+Framework owners in higher layers use `cancel_with_recovery` when status cleanup
+belongs to an already-started retirement round. This preserves its first failure
+and opaque capture policy rather than starting independent cleanup.
+
 Controller withdrawal commits removal under its existing state borrow. During
 delivery, callback retirement joins its existing FIFO; outside delivery it runs
 after releasing the borrow. The guard neither owns a second channel nor keeps the

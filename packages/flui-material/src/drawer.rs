@@ -727,9 +727,10 @@ impl ViewState<DrawerController> for DrawerControllerState {
         let rebuild_for_status = rebuild;
         self.core
             .controller
-            .add_status_listener(std::rc::Rc::new(move |_status| {
+            .subscribe_status(std::rc::Rc::new(move |_status| {
                 rebuild_for_status.schedule(flui_sdk::view::RebuildReason::AnimationTick);
-            }));
+            }))
+            .detach();
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {

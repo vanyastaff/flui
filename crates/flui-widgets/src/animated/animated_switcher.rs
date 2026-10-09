@@ -38,7 +38,7 @@ use flui_animation::{
     Animation, AnimationController, AnimationStatus, CurvedAnimation, Curves, DrivenController,
     Vsync,
 };
-use flui_foundation::{ListenerId, ViewKey};
+use flui_foundation::ViewKey;
 use flui_painting::Alignment;
 use flui_view::element::ElementKind;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
@@ -272,7 +272,7 @@ struct ChildEntry {
     /// `switch_out_curve` going backward — what `transition_builder`
     /// actually animates against.
     curved: CurvedAnimation<ArcCurve>,
-    status_listener_id: Option<ListenerId>,
+    status_subscription: Option<flui_animation::StatusSubscription>,
     /// Flipped by the status-listener callback when `controller` reaches
     /// [`AnimationStatus::Dismissed`] (a completed reverse run). Read — and
     /// acted on — by [`AnimatedSwitcherState::build`]'s sweep; see the
@@ -334,7 +334,7 @@ impl ChildEntry {
             child_number,
             controller,
             curved,
-            status_listener_id: None,
+            status_subscription: None,
             dismissed: Rc::new(AtomicBool::new(false)),
             widget_child: child,
             transition,
@@ -349,7 +349,8 @@ impl ChildEntry {
         self.rebind(vsync.as_ref());
 
         let dismissed = Rc::clone(&self.dismissed);
-        self.status_listener_id = Some(self.controller.controller().add_status_listener(
+        drop(self.status_subscription.take());
+        self.status_subscription = Some(self.controller.controller().subscribe_status(
             std::rc::Rc::new(move |status| {
                 if status == AnimationStatus::Dismissed {
                     dismissed.store(true, Ordering::Release);
@@ -392,9 +393,7 @@ impl ChildEntry {
     /// Detach the status listener, unregister from `vsync`, and dispose the
     /// controller.
     fn dispose(&mut self) {
-        if let Some(id) = self.status_listener_id.take() {
-            self.controller.controller().remove_status_listener(id);
-        }
+        drop(self.status_subscription.take());
         self.controller.dispose();
     }
 }

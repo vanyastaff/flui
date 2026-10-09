@@ -46,7 +46,7 @@ struct ProxyOwner<T: Clone + 'static> {
     notifier: Terminal<Rc<ChangeNotifier>>,
     parent_sub: RefCell<Terminal<Rc<ParentSubscription>>>,
     status_listeners: Terminal<Rc<flui_foundation::Notifier<AnimationStatus>>>,
-    status_sub: RefCell<Terminal<Rc<ParentSubscription>>>,
+    status_sub: RefCell<Terminal<crate::StatusSubscription>>,
     delivering: Cell<bool>,
     pending: RefCell<VecDeque<ProxyDelivery<T>>>,
     retired: RefCell<
@@ -59,7 +59,7 @@ enum ProxyDelivery<T: Clone + 'static> {
         parent: Terminal<Rc<dyn Animation<T>>>,
         previous: Terminal<Rc<dyn Animation<T>>>,
         value_sub: Terminal<Rc<ParentSubscription>>,
-        status_sub: Terminal<Rc<ParentSubscription>>,
+        status_sub: Terminal<crate::StatusSubscription>,
     },
     Value,
     Status(AnimationStatus, Vec<ListenerId>),
@@ -73,14 +73,14 @@ impl<T: Clone + 'static> Drop for ProxyOwner<T> {
         let parent = self.parent.get_mut().withdraw();
         let notifier = self.notifier.withdraw();
         let value_sub = self.parent_sub.get_mut().withdraw();
-        let status_sub = self.status_sub.get_mut().withdraw();
+        let mut status_sub = self.status_sub.get_mut().withdraw();
         let listeners = self.status_listeners.withdraw();
         let pending = self.pending.get_mut().drain(..).collect::<Vec<_>>();
         let retired = std::mem::take(self.retired.get_mut());
         let callbacks = listeners.dispose_and_take_callbacks();
         let value_callbacks = notifier.dispose_and_take_listeners();
         value_sub.detach(&mut retirement);
-        status_sub.detach(&mut retirement);
+        status_sub.get_mut().cancel_with_recovery(&mut retirement);
         retirement.retire(value_sub);
         retirement.retire(status_sub);
         retirement.retire(parent);
@@ -106,12 +106,6 @@ impl<T> ProxyAnimation<T>
 where
     T: Clone + fmt::Debug + 'static,
 {
-    /// Subscribe to this proxy's status across parent replacements.
-    pub fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription {
-        let id = self.add_status_listener(callback);
-        crate::StatusSubscription::new(&self.inner, id, ProxyOwner::withdraw_status)
-    }
-
     /// Create a new proxy animation.
     ///
     /// # Arguments
@@ -208,10 +202,10 @@ where
                     parent,
                     previous,
                     value_sub,
-                    status_sub,
+                    mut status_sub,
                 } => {
                     value_sub.detach(retirement);
-                    status_sub.detach(retirement);
+                    status_sub.get_mut().cancel_with_recovery(retirement);
                     retirement.retire(value_sub);
                     retirement.retire(status_sub);
                     retirement.retire(parent);
@@ -265,6 +259,19 @@ where
         self.inner
             .status_listeners
             .add_with_recovery(Rc::new(move |status, recovery| observer(*status, recovery)))
+    }
+
+    fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription {
+        let id = self.add_status_listener(callback);
+        crate::StatusSubscription::new(&self.inner, id, ProxyOwner::withdraw_status)
+    }
+
+    fn subscribe_status_observer(
+        &self,
+        observer: crate::animation::StatusObserver,
+    ) -> crate::StatusSubscription {
+        let id = self.add_status_observer(observer);
+        crate::StatusSubscription::new(&self.inner, id, ProxyOwner::withdraw_status)
     }
 
     fn remove_status_listener(&self, id: ListenerId) {

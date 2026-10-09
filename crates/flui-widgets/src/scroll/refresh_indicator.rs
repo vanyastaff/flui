@@ -436,7 +436,7 @@ pub struct RefreshIndicatorState {
     fling_controller: DrivenController,
     /// Listener ID on `fling_controller`; removed in `dispose`.
     fling_listener_id: Option<ListenerId>,
-    fling_status_listener_id: Option<ListenerId>,
+    fling_status_subscription: Option<flui_animation::StatusSubscription>,
     /// Registry identity for gesture cancellation policy; the driver owns its seat.
     vsync: Option<Vsync>,
     /// Presentation metrics acquired before event callbacks are installed.
@@ -486,7 +486,7 @@ impl StatefulView for RefreshIndicator {
             scroll_controller: self.scroll_controller.clone(),
             fling_controller,
             fling_listener_id: None,
-            fling_status_listener_id: None,
+            fling_status_subscription: None,
             vsync: None,
             pipeline: None,
             rebuild: None,
@@ -563,24 +563,18 @@ impl RefreshIndicatorState {
                 scroll.set_pixels(fling.value());
             }),
         ));
-        if let Some(id) = self.fling_status_listener_id.take() {
-            self.fling_controller
-                .controller()
-                .remove_status_listener(id);
-        }
+        drop(self.fling_status_subscription.take());
         let position = self.scroll_controller.position();
-        self.fling_status_listener_id = Some(
-            self.fling_controller
-                .controller()
-                .add_status_listener(Rc::new(move |status| {
-                    if matches!(
-                        status,
-                        AnimationStatus::Completed | AnimationStatus::Dismissed
-                    ) {
-                        position.set_is_scrolling(false);
-                    }
-                })),
-        );
+        self.fling_status_subscription = Some(self.fling_controller.controller().subscribe_status(
+            Rc::new(move |status| {
+                if matches!(
+                    status,
+                    AnimationStatus::Completed | AnimationStatus::Dismissed
+                ) {
+                    position.set_is_scrolling(false);
+                }
+            }),
+        ));
     }
 
     /// Listens to `controller` and rebuilds only when its refresh phase
@@ -816,11 +810,7 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
         if let Some(id) = self.fling_listener_id.take() {
             self.fling_controller.controller().remove_listener(id);
         }
-        if let Some(id) = self.fling_status_listener_id.take() {
-            self.fling_controller
-                .controller()
-                .remove_status_listener(id);
-        }
+        drop(self.fling_status_subscription.take());
         self.scroll_controller.position().set_is_scrolling(false);
         self.fling_controller.dispose();
     }

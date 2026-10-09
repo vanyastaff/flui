@@ -991,6 +991,13 @@ mod tests {
             self.1.add_listener(std::rc::Rc::new(|| {}))
         }
         fn remove_status_listener(&self, _: ListenerId) {}
+        fn subscribe_status(
+            &self,
+            callback: flui_animation::StatusCallback,
+        ) -> flui_animation::StatusSubscription {
+            drop(callback);
+            flui_animation::StatusSubscription::default()
+        }
     }
 
     // Debug formats the cache, never the animation.

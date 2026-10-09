@@ -366,10 +366,8 @@ impl BackGestureRuntime {
     /// mid-flight. Expressed as a poll, called from
     /// `BackGestureDetectorState::build` on every rebuild — which happens on
     /// every tick of the release animation, because that `ViewState` is an
-    /// `AnimatedView` subscribed to this same controller. A genuine second
-    /// status listener would need to be `Send + Sync`
-    /// (`AnimationController::add_status_listener`'s bound) and could
-    /// therefore never touch this owner-affine `NavigatorHandle` directly.
+    /// `AnimatedView` subscribed to this same controller. Polling reads the
+    /// settled run before releasing the navigator's user-gesture state.
     pub fn poll_settle(&self) {
         if self.awaiting_settle.get() && !self.controller.is_animating() {
             self.awaiting_settle.set(false);

@@ -992,6 +992,23 @@ fn driven_terminal_cancels_before_retiring_callback() {
 }
 
 struct TerminalParent {
+    state: Rc<TerminalParentState>,
+}
+
+impl std::ops::Deref for TerminalParent {
+    type Target = TerminalParentState;
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
+}
+
+impl std::ops::DerefMut for TerminalParent {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        Rc::get_mut(&mut self.state).expect("configure parent before subscription")
+    }
+}
+
+struct TerminalParentState {
     values: Mutex<Vec<(ListenerId, ListenerCallback)>>,
     statuses: Mutex<Vec<(ListenerId, StatusCallback)>>,
     removed: Rc<Mutex<Vec<&'static str>>>,
@@ -1009,7 +1026,7 @@ impl std::fmt::Debug for TerminalParent {
         f.debug_struct("TerminalParent").finish_non_exhaustive()
     }
 }
-impl TerminalParent {
+impl TerminalParentState {
     fn register(&self) {
         let index = self.registrations.fetch_add(1, Ordering::SeqCst) + 1;
         assert!(
@@ -1054,6 +1071,20 @@ impl Listenable for TerminalParent {
     }
 }
 impl Animation<f64> for TerminalParent {
+    fn subscribe_status(&self, callback: StatusCallback) -> flui_animation::StatusSubscription {
+        let id = self.add_status_listener(callback);
+        flui_animation::StatusSubscription::new(&self.state, id, |source, id, recovery| {
+            let removed = {
+                let mut statuses = source.statuses.lock().expect("parent statuses");
+                statuses
+                    .iter()
+                    .position(|(candidate, _)| *candidate == id)
+                    .map(|i| statuses.remove(i))
+            };
+            recovery.retire(removed);
+            recovery.run(|| source.removed("status removal"));
+        })
+    }
     fn value(&self) -> f64 {
         assert!(!self.fail_value, "parent value failure");
         self.sample
@@ -1086,17 +1117,19 @@ impl Animation<f64> for TerminalParent {
 }
 fn terminal_parent(fail_removal: bool) -> std::rc::Rc<TerminalParent> {
     std::rc::Rc::new(TerminalParent {
-        values: Mutex::new(Vec::new()),
-        statuses: Mutex::new(Vec::new()),
-        removed: Rc::new(Mutex::new(Vec::new())),
-        fail_removal,
-        registrations: AtomicUsize::new(0),
-        fail_registration_at: 0,
-        fail_value: false,
-        sample: 0.5,
-        fail_status: AtomicBool::new(false),
-        probe: None,
-        reenter: Mutex::new(None),
+        state: Rc::new(TerminalParentState {
+            values: Mutex::new(Vec::new()),
+            statuses: Mutex::new(Vec::new()),
+            removed: Rc::new(Mutex::new(Vec::new())),
+            fail_removal,
+            registrations: AtomicUsize::new(0),
+            fail_registration_at: 0,
+            fail_value: false,
+            sample: 0.5,
+            fail_status: AtomicBool::new(false),
+            probe: None,
+            reenter: Mutex::new(None),
+        }),
     })
 }
 fn parent_subscriptions_detach_all_after_failure() {

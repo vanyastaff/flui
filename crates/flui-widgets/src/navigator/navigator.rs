@@ -1025,9 +1025,8 @@ fn resolve_command_target(
 ///
 /// What a data-plane animation status listener needs to defer a terminal
 /// status update until a gesture ends, without capturing the owner-affine
-/// [`NavigatorHandle`] itself — `ProxyAnimation::add_status_listener` requires
-/// `Send + Sync`, which `NavigatorHandle` deliberately is not (see its own
-/// doc). Cloning this is cheap: both fields are `Arc`-backed.
+/// [`NavigatorHandle`] itself. Clones share the gesture counter and notifier;
+/// the listener only needs these gesture observations.
 #[derive(Clone)]
 pub(crate) struct UserGestureSignal {
     in_progress: Arc<AtomicU32>,

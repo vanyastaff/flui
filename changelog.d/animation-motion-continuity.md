@@ -4,7 +4,7 @@
   last published position and velocity and cancels the displaced run.
 - `AnimatedValue` owns one Vsync registration for all components, exposes a
   surviving observer stream, and supports atomic target and motion replacement.
-- Controller status subscriptions own removal authority through
+- Animation status subscriptions own removal authority through
   `StatusSubscription`; dropping a guard removes its callback without retaining
   the animation owner, while detaching leaves it registered until source closure.
 - Opacity, padding and rotation support spring motion and retain their incoming
@@ -14,6 +14,8 @@
 
 - Replace manual `AnimatedValue::advance` and owner cloning with frame-driven
   ownership. Component vectors are fixed arrays; observer views remain cloneable.
+- Custom `Animation<T>` implementations provide `subscribe_status`, returning
+  source-bound removal authority; framework relays share delivery recovery.
 - Scroll and page animation methods accept `ArcCurve`. Replacing programmatic
   scroll motion retains its published velocity, including when braking at the
   current position.

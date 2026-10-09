@@ -22,7 +22,7 @@ struct ReentrantParent {
     proxy: Mutex<Option<Weak<ProxyAnimation<f64>>>>,
     reentry: Reentry,
     values: ChangeNotifier,
-    statuses: ChangeNotifier,
+    statuses: Rc<ChangeNotifier>,
 }
 
 impl ReentrantParent {
@@ -70,6 +70,16 @@ impl Animation<f64> for ReentrantParent {
     fn add_status_listener(&self, _callback: StatusCallback) -> ListenerId {
         self.statuses.add_listener(std::rc::Rc::new(|| {}))
     }
+    fn subscribe_status(&self, callback: StatusCallback) -> flui_animation::StatusSubscription {
+        let id = self.statuses.add_listener(Rc::new(move || {
+            let _keep = &callback;
+        }));
+        flui_animation::StatusSubscription::new(&self.statuses, id, |source, id, recovery| {
+            source.inherit_failure(recovery);
+            let callback = source.take_listener(id);
+            recovery.retire(callback);
+        })
+    }
     fn remove_status_listener(&self, id: ListenerId) {
         self.statuses.remove_listener(id);
     }
@@ -80,7 +90,7 @@ fn fixture(reentry: Reentry) -> (Rc<ProxyAnimation<f64>>, Rc<AtomicUsize>) {
         proxy: Mutex::new(None),
         reentry,
         values: ChangeNotifier::new(),
-        statuses: ChangeNotifier::new(),
+        statuses: Rc::new(ChangeNotifier::new()),
     });
     let proxy = Rc::new(ProxyAnimation::new(parent.clone()));
     *parent.proxy.lock().expect("set parent hook") = Some(Rc::downgrade(&proxy));

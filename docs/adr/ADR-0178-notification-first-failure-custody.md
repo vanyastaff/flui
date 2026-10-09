@@ -42,7 +42,7 @@ through independent handles to the same channel; no production ambient recovery
 registry or process-global failure flag is introduced.
 
 Framework relays borrow this same context through `Listenable::add_observer`
-and `Animation::add_status_observer`. User listeners retain their ordinary
+and `Animation::subscribe_status_observer`. User listeners retain their ordinary
 callback signature. Both kinds share the channel's membership, ordering and
 retirement storage. Foundation channels, controllers and combinators override
 the relay seams so a chain of wrappers does not start a fresh recovery after

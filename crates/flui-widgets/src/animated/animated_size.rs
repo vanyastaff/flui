@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use flui_animation::curve::{ArcCurve, Curve};
 use flui_animation::{
-    AnimationController, AnimationStatus, Curves, DrivenController, StatusSubscription,
+    Animation, AnimationController, AnimationStatus, Curves, DrivenController, StatusSubscription,
 };
 use flui_objects::RenderAnimatedSize;
 use flui_painting::Alignment;

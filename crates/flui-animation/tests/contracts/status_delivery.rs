@@ -1270,7 +1270,7 @@ struct SwitchReader {
     switch: Mutex<Option<AnimationSwitch>>,
     reentry: Reentry,
     values: ChangeNotifier,
-    statuses: ChangeNotifier,
+    statuses: std::rc::Rc<ChangeNotifier>,
 }
 
 impl SwitchReader {
@@ -1319,6 +1319,16 @@ impl Animation<f64> for SwitchReader {
     fn add_status_listener(&self, _callback: StatusCallback) -> ListenerId {
         self.statuses.add_listener(std::rc::Rc::new(|| {}))
     }
+    fn subscribe_status(&self, callback: StatusCallback) -> flui_animation::StatusSubscription {
+        let id = self.statuses.add_listener(std::rc::Rc::new(move || {
+            let _keep = &callback;
+        }));
+        flui_animation::StatusSubscription::new(&self.statuses, id, |source, id, recovery| {
+            source.inherit_failure(recovery);
+            let callback = source.take_listener(id);
+            recovery.retire(callback);
+        })
+    }
     fn remove_status_listener(&self, id: ListenerId) {
         self.statuses.remove_listener(id);
     }
@@ -1329,7 +1339,7 @@ fn switch_reader(reentry: Reentry) -> AnimationSwitch {
         switch: Mutex::new(None),
         reentry,
         values: ChangeNotifier::new(),
-        statuses: ChangeNotifier::new(),
+        statuses: std::rc::Rc::new(ChangeNotifier::new()),
     });
     let switch = AnimationSwitch::new(parent.clone(), None);
     *parent.switch.lock().expect("switch slot") = Some(switch.clone());

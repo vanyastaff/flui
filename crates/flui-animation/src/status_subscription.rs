@@ -66,7 +66,10 @@ impl StatusSubscription {
         self.cancellation = None;
     }
 
-    pub(crate) fn cancel_with_recovery(&mut self, recovery: &mut Retirement) {
+    /// Withdraw this registration within an enclosing framework cleanup round.
+    /// Captures retire through its existing first-failure context.
+    #[doc(hidden)]
+    pub fn cancel_with_recovery(&mut self, recovery: &mut Retirement) {
         if let Some(cancellation) = self.cancellation.take() {
             recovery.run_with(|recovery| cancellation.cancel(recovery));
             // The private cancellation envelope owns only Weak, Copy and a

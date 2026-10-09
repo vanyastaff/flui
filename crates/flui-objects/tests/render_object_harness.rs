@@ -2454,6 +2454,12 @@ impl flui_foundation::Listenable for ScriptedAnimation {
 }
 
 impl Animation<f64> for ScriptedAnimation {
+    fn subscribe_status(
+        &self,
+        callback: flui_animation::StatusCallback,
+    ) -> flui_animation::StatusSubscription {
+        self.controller.subscribe_status(callback)
+    }
     fn value(&self) -> f64 {
         *self.value.lock().expect("unpoisoned")
     }
@@ -2565,6 +2571,12 @@ impl flui_foundation::Listenable for CountingAnimation {
 }
 
 impl Animation<f64> for CountingAnimation {
+    fn subscribe_status(
+        &self,
+        callback: flui_animation::StatusCallback,
+    ) -> flui_animation::StatusSubscription {
+        self.controller.subscribe_status(callback)
+    }
     fn value(&self) -> f64 {
         self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.controller.value()
