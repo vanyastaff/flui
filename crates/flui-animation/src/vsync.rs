@@ -30,6 +30,7 @@ use std::cell::RefCell;
 
 use crate::AnimationController;
 use crate::animation::{Retirement, Terminal};
+use crate::controller::RunStart;
 use crate::{AnimationTime, FrameTick};
 use std::time::Duration;
 
@@ -110,6 +111,15 @@ struct RegisteredController {
     controller: AnimationController,
     anchor: RunAnchor,
     last_gen: u64,
+    last_tick: Option<RegistryTick>,
+}
+
+#[derive(Clone, Copy)]
+struct RegistryTick {
+    frame: u64,
+    now: AnimationTime,
+    generation: u64,
+    elapsed: Duration,
 }
 
 enum RunAnchor {
@@ -151,6 +161,7 @@ struct RegisteredChild {
 
 #[derive(Default)]
 struct VsyncInner {
+    frame: u64,
     /// Keyed by the registration id, which is also the registration
     /// *order*: ids are `next_id` post-increments and are never reused, so
     /// ascending key order is ascending registration order. `tick_all`'s
@@ -253,6 +264,7 @@ impl Vsync {
                 controller: controller.clone(),
                 anchor,
                 last_gen,
+                last_tick: None,
             },
         );
         let registration = VsyncRegistration {
@@ -493,6 +505,7 @@ impl Vsync {
         let (fence, children, muted) = {
             let mut inner = self.inner.borrow_mut();
             inner.last_time = inner.last_time.max(now);
+            inner.frame = inner.frame.saturating_add(1);
             (
                 inner.next_id,
                 inner
@@ -524,6 +537,7 @@ impl Vsync {
             let step = {
                 let mut inner = self.inner.borrow_mut();
                 let now = inner.last_time;
+                let frame = inner.frame;
                 // Re-read per iteration, not only captured at entry above: a
                 // listener that mutes the registry mid-walk must stop the
                 // rest of this frame's entries from ticking.
@@ -540,12 +554,37 @@ impl Vsync {
                     let probe = registered.controller.walk_probe();
                     if probe.generation != registered.last_gen {
                         registered.last_gen = probe.generation;
-                        registered.anchor = RunAnchor::Fresh;
+                        registered.anchor = match (probe.start, registered.last_tick) {
+                            (
+                                RunStart::Continue {
+                                    generation,
+                                    elapsed,
+                                },
+                                Some(last),
+                            ) if frame != u64::MAX
+                                && last.frame >= frame.saturating_sub(1)
+                                && generation == last.generation =>
+                            {
+                                RunAnchor::Established {
+                                    at: last.now,
+                                    // A source failure may leave the published
+                                    // seam earlier than the dispatched tick.
+                                    elapsed: last.elapsed.saturating_sub(elapsed),
+                                }
+                            }
+                            _ => RunAnchor::Fresh,
+                        };
                     }
                     if probe.live_running {
                         // `run_start_secs` is `Some` here — set in the branch
                         // above on this same call if it was `None`.
                         let elapsed = registered.anchor.elapsed(now);
+                        registered.last_tick = Some(RegistryTick {
+                            frame,
+                            now,
+                            generation: probe.generation,
+                            elapsed,
+                        });
                         RegistryWalkStep::Running(registered.controller.clone(), elapsed)
                     } else {
                         RegistryWalkStep::NotRunning
@@ -903,9 +942,48 @@ mod tests {
         }
     }
 
+    fn a_terminal_frame_counter_still_delivers_fresh_runs() {
+        use crate::{Animation, ArcCurve, Curves, MotionClock, MotionSpec};
+        let registry = Vsync::new();
+        registry.inner.borrow_mut().frame = u64::MAX - 2;
+        let mut clock = MotionClock::new();
+        let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
+        let controller = owner.controller();
+        let _old = controller.forward().expect("initial run");
+        registry.tick_all(&clock.frame(Duration::ZERO));
+        registry.tick_all(&clock.frame(Duration::from_millis(100)));
+        for millis in [200, 400] {
+            let seam = controller.value();
+            let _next = controller
+                .retarget(
+                    0.8,
+                    &MotionSpec::Curve {
+                        duration: Duration::from_secs(1),
+                        curve: ArcCurve::new(Curves::Linear),
+                    },
+                )
+                .expect("terminal counter retains run admission");
+            registry.tick_all(&clock.frame(Duration::from_millis(millis)));
+            assert_eq!(
+                controller.value(),
+                seam,
+                "exhausted frame stamps cannot qualify a continuation"
+            );
+            registry.tick_all(&clock.frame(Duration::from_millis(millis + 100)));
+            assert!(
+                controller.value() > seam,
+                "subsequent frames still advance the admitted run"
+            );
+        }
+    }
+
     #[test]
     fn vsync_nesting_and_reentrancy() {
         crate::test_cases::run_cases(&[
+            (
+                "a terminal frame counter still delivers fresh runs",
+                a_terminal_frame_counter_still_delivers_fresh_runs,
+            ),
             (
                 "exhausted registry leaves an owner unbound",
                 rebind_refused_by_an_exhausted_registry_settles_unbound,

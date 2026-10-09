@@ -74,6 +74,32 @@ outcomes and subsequent frames. `status_delivery_failure_custody` covers hostile
 captures and competing payloads in a bounded child process. The current ownership
 and foundation value-notifier policies retain their separate contracts.
 
+### Published samples and run anchors
+
+Retarget continuation carries the source run generation and the raw elapsed
+time of its published seam. A recent registry dispatch also records its generation
+and elapsed time. Matching both coordinates lets the next tick advance from the
+published seam even when an intervening dispatch failed. Replacing a run several
+times before another sample preserves those source coordinates. An idle run
+anchors on its first observed frame instead.
+
+The registry frame counter saturates. At its terminal value, continuation
+eligibility is disabled and replacement runs use a fresh anchor; admitted runs
+still advance on subsequent ticks. `vsync_nesting_and_reentrancy` includes the
+private terminal-counter case. The public `controller_retarget_frame_boundaries`
+table covers repeated replacements, completion callbacks, idle intervals,
+rejected frames and both cross-controller visit orders.
+
+Retarget preparation retries one invalidated seam. Repeated reentry refuses
+with `AnimationError::ReentrantMotion`, preserving the latest installed run;
+silently replacing its velocity with zero would violate the seam contract.
+Invalid results from displaced sources are discarded before another callout.
+Curve motion corrects both departure and arrival velocity: it inherits the seam
+velocity and approaches zero before the controller stops. A curve's nonzero
+endpoint derivative would otherwise be cut off at completion.
+`controller_retarget_is_c0_and_c1_at_the_seam` covers retry, refusal and the last
+position interval before rest.
+
 ### Registration tokens and removal
 
 A `VsyncRegistration` names the registry that issued it (a weak identity) and

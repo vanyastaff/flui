@@ -239,6 +239,58 @@ proptest! {
         prop_assert_eq!(controller.velocity(), 0.0);
     }
 
+    #[test]
+    fn retarget_is_c0_and_c1_at_the_seam(
+        old_motion in mode(),
+        new_motion in mode(),
+        target in -10.0_f64..10.0,
+        elapsed in 0.0_f64..1.0,
+        playback in 0.1_f64..4.0,
+    ) {
+        use flui_animation::Animation;
+        let owner = AnimationController::builder(Duration::from_secs(1))
+            .unbounded().build_on(Some(&Vsync::new()));
+        let controller = owner.controller();
+        controller.set_playback_rate(PlaybackRate::new(playback).expect("positive rate"));
+        let _old = controller.retarget(5.0, &old_motion.spec()).expect("old motion");
+        controller.tick_at(Duration::ZERO);
+        controller.tick_at(Duration::from_secs_f64(elapsed));
+        let (x0, v0) = (controller.value(), controller.velocity());
+        let _new = controller.retarget(target, &new_motion.spec()).expect("new motion");
+        prop_assert!(close(controller.value(), x0, 1e-12));
+        prop_assert!(close(controller.velocity(), v0, 1e-9));
+        let h = 1e-5;
+        controller.tick_at(Duration::from_secs_f64(h / 2.0));
+        let x_half = controller.value();
+        controller.tick_at(Duration::from_secs_f64(h));
+        let x1 = controller.value();
+        controller.tick_at(Duration::from_secs_f64(2.0 * h));
+        let x2 = controller.value();
+        // Controller time lives on Duration's nanosecond grid. Fit the value
+        // samples at their admitted local times, then convert to input seconds.
+        let u1 = Duration::from_secs_f64(h * playback).as_secs_f64();
+        let u2 = Duration::from_secs_f64(2.0 * h * playback).as_secs_f64();
+        let u_half = Duration::from_secs_f64(h / 2.0 * playback).as_secs_f64();
+        let fit = |a: f64, xa: f64, b: f64, xb: f64| {
+            ((xa - x0) * b / a - (xb - x0) * a / b) / (b - a) * playback
+        };
+        let coarse = fit(u1, x1, u2, x2);
+        let fine = fit(u_half, x_half, u1, x1);
+        let derivative = (4.0 * fine - coarse) / 3.0;
+        let evaluation_error = match new_motion {
+            Mode::Spring { .. } => 1e-15,
+            Mode::Curve { .. } => 1e-8,
+        };
+        let range = (target - x0).abs().max(1.0);
+        // Cubics may have a non-analytic second derivative at a flat control
+        // point. The coarse/fine gap measures truncation; the solver's output
+        // accuracy bounds the separate evaluation error amplified by the fit.
+        let tolerance = 3.0 * (coarse - fine).abs()
+            + 16.0 * evaluation_error * range / h + 1e-6 * (1.0 + v0.abs());
+        prop_assert!((derivative - v0).abs() <= tolerance,
+            "reported seam velocity {v0} differs from value derivative {derivative}, tolerance {tolerance}");
+    }
+
     /// Retargeting every frame for 120 frames keeps value and velocity
     /// continuous at every seam, publishes only finite values, and the last
     /// segment still comes to rest at its target.
@@ -852,6 +904,894 @@ fn retarget_seams() {
             retargeting_a_curve_to_its_target_keeps_its_schedule,
         ),
     ]);
+}
+
+#[test]
+fn controller_retarget_is_c0_and_c1_at_the_seam() {
+    crate::run_table(&[
+        (
+            "a_failed_tick_keeps_the_published_seam",
+            a_failed_tick_keeps_the_published_seam,
+        ),
+        (
+            "a_failed_tick_preserves_a_pending_playback_rate",
+            a_failed_tick_preserves_a_pending_playback_rate,
+        ),
+        (
+            "a_rate_requested_by_a_source_remains_pending",
+            a_rate_requested_by_a_source_remains_pending,
+        ),
+        (
+            "a_failed_completion_query_keeps_the_published_seam",
+            a_failed_completion_query_keeps_the_published_seam,
+        ),
+        (
+            "retarget_retries_a_changed_sample_without_publishing_stale_velocity",
+            retarget_retries_a_changed_sample_without_publishing_stale_velocity,
+        ),
+        ("curve controller seam", controller_curve_seam),
+        ("spring controller seam", controller_spring_seam),
+        (
+            "a_controller_curve_arrives_at_rest",
+            a_controller_curve_arrives_at_rest,
+        ),
+        (
+            "a_panicking_curve_slope_leaves_the_old_segment_running",
+            a_panicking_curve_slope_leaves_the_old_segment_running,
+        ),
+        (
+            "a_non_finite_controller_retarget_changes_nothing",
+            a_non_finite_controller_retarget_changes_nothing,
+        ),
+        (
+            "a_non_finite_inherited_velocity_changes_nothing",
+            a_non_finite_inherited_velocity_changes_nothing,
+        ),
+        (
+            "a_retarget_from_a_listener_is_ordered_and_lock_free",
+            a_retarget_from_a_listener_is_ordered_and_lock_free,
+        ),
+        (
+            "a_retarget_without_a_clock_settles_at_its_target",
+            a_retarget_without_a_clock_settles_at_its_target,
+        ),
+    ]);
+}
+
+struct FailingQuadratic {
+    panic: bool,
+}
+
+fn a_controller_curve_arrives_at_rest() {
+    use flui_animation::Animation;
+    for moving in [false, true] {
+        let registry = Vsync::new();
+        let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
+        let controller = owner.controller();
+        if moving {
+            let _old = controller.forward().expect("old run");
+            controller.tick_at(Duration::from_millis(250));
+        }
+        let (x0, v0) = (controller.value(), controller.velocity());
+        let mut run = controller
+            .retarget(0.8, &linear_spec(1000))
+            .expect("curve segment");
+        let h = 1e-4;
+        controller.tick_at(Duration::from_micros(999_900));
+        let before = (controller.value(), controller.velocity());
+        // For a cubic Hermite path, its endpoint acceleration is bounded by
+        // 6*span + 4*initial velocity for this one-second segment.
+        let acceleration_bound = 6.0 * (0.8 - x0).abs() + 4.0 * v0.abs();
+        assert!(before.1.abs() <= acceleration_bound * h);
+        controller.tick_at(Duration::from_secs(1));
+        assert_eq!(controller.value(), 0.8);
+        assert_eq!(controller.velocity(), 0.0);
+        let arriving_velocity = (controller.value() - before.0) / h;
+        assert!(
+            arriving_velocity.abs() <= acceleration_bound * h,
+            "the last position interval must approach rest, not hide a derivative jump by stopping: {arriving_velocity}"
+        );
+        assert!(matches!(poll_run(&mut run), std::task::Poll::Ready(Ok(()))));
+    }
+}
+
+impl Curve for FailingQuadratic {
+    fn transform(&self, t: f64) -> f64 {
+        if t == 0.5 {
+            assert!(!self.panic, "quadratic sample failure");
+            return f64::NAN;
+        }
+        t * t
+    }
+
+    fn slope(&self, t: f64) -> f64 {
+        2.0 * t
+    }
+}
+
+fn a_failed_tick_keeps_the_published_seam() {
+    use flui_animation::Animation;
+    for panic in [false, true] {
+        let registry = Vsync::new();
+        let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
+        let controller = owner.controller();
+        let mut old = controller
+            .animate_to_curved(
+                1.0,
+                Some(Duration::from_secs(1)),
+                FailingQuadratic { panic },
+            )
+            .expect("quadratic source");
+        controller.tick_at(Duration::from_millis(250));
+        let before = (controller.value(), controller.velocity());
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            controller.tick_at(Duration::from_millis(500));
+        }));
+        assert_eq!(failure.is_err(), panic);
+        assert_eq!(controller.value(), before.0);
+        assert_eq!(
+            controller.velocity(),
+            before.1,
+            "a rejected sample cannot move the published derivative"
+        );
+        assert!(poll_run(&mut old).is_pending());
+        let mut next = controller
+            .retarget(0.8, &linear_spec(1000))
+            .expect("inherit the published seam");
+        assert_eq!(controller.value(), before.0);
+        assert!(close(controller.velocity(), before.1, 1e-12));
+        assert!(matches!(poll_run(&mut old), std::task::Poll::Ready(Err(_))));
+        controller.tick_at(Duration::from_secs(1));
+        assert_eq!(controller.value(), 0.8);
+        assert!(matches!(
+            poll_run(&mut next),
+            std::task::Poll::Ready(Ok(()))
+        ));
+    }
+}
+
+fn a_failed_tick_preserves_a_pending_playback_rate() {
+    use flui_animation::Animation;
+    for panic in [false, true] {
+        let registry = Vsync::new();
+        let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
+        let controller = owner.controller();
+        let mut run = controller
+            .animate_to_curved(
+                1.0,
+                Some(Duration::from_secs(1)),
+                FailingQuadratic { panic },
+            )
+            .expect("quadratic source");
+        controller.tick_at(Duration::from_millis(250));
+        controller.set_playback_rate(PlaybackRate::new(2.0).expect("finite rate"));
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            controller.tick_at(Duration::from_millis(500));
+        }));
+        assert_eq!(failure.is_err(), panic);
+        assert_eq!(controller.playback_rate(), PlaybackRate::NORMAL);
+        assert_eq!(controller.velocity(), 0.5);
+        controller.tick_at(Duration::from_millis(750));
+        assert_eq!(
+            controller.value(),
+            0.5625,
+            "the successful sample uses the old rate up to its epoch"
+        );
+        assert_eq!(controller.playback_rate().get(), 2.0);
+        assert_eq!(controller.velocity(), 3.0);
+        controller.tick_at(Duration::from_millis(875));
+        assert_eq!(controller.value(), 1.0);
+        assert!(matches!(poll_run(&mut run), std::task::Poll::Ready(Ok(()))));
+    }
+}
+
+struct FailingCompletion;
+
+struct RateChangingCurve {
+    controller: AnimationController,
+    armed: std::cell::Cell<bool>,
+}
+
+impl Curve for RateChangingCurve {
+    fn transform(&self, t: f64) -> f64 {
+        use flui_animation::Animation;
+        if self.armed.replace(false) {
+            assert_eq!(self.controller.value(), 0.0);
+            assert_eq!(self.controller.velocity(), 1.0);
+            assert_eq!(self.controller.playback_rate(), PlaybackRate::NORMAL);
+            self.controller
+                .set_playback_rate(PlaybackRate::new(3.0).expect("finite rate"));
+        }
+        t
+    }
+
+    fn slope(&self, _: f64) -> f64 {
+        1.0
+    }
+}
+
+fn a_rate_requested_by_a_source_remains_pending() {
+    use flui_animation::Animation;
+    let registry = Vsync::new();
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
+    let controller = owner.controller();
+    let mut run = controller
+        .animate_to_curved(
+            1.0,
+            Some(Duration::from_secs(1)),
+            RateChangingCurve {
+                controller: controller.clone(),
+                armed: std::cell::Cell::new(true),
+            },
+        )
+        .expect("source can request a newer rate");
+    controller.set_playback_rate(PlaybackRate::new(2.0).expect("finite rate"));
+    controller.tick_at(Duration::from_millis(250));
+    assert_eq!(controller.value(), 0.25);
+    assert_eq!(controller.playback_rate().get(), 2.0);
+    assert_eq!(controller.velocity(), 2.0);
+    controller.tick_at(Duration::from_millis(375));
+    assert_eq!(controller.value(), 0.5, "the accepted interval uses rate 2");
+    assert_eq!(controller.playback_rate().get(), 3.0);
+    assert_eq!(controller.velocity(), 3.0);
+    controller.tick_at(Duration::from_millis(500));
+    assert_eq!(
+        controller.value(),
+        0.875,
+        "the subsequent interval uses rate 3"
+    );
+    controller.tick_at(Duration::from_secs(1));
+    assert!(matches!(poll_run(&mut run), std::task::Poll::Ready(Ok(()))));
+}
+
+impl flui_animation::Simulation for FailingCompletion {
+    fn x(&self, t: f64) -> f64 {
+        t * t
+    }
+
+    fn dx(&self, t: f64) -> f64 {
+        2.0 * t
+    }
+
+    fn is_done(&self, t: f64) -> bool {
+        assert_ne!(t, 0.5, "completion query failure");
+        t >= 1.0
+    }
+}
+
+fn a_failed_completion_query_keeps_the_published_seam() {
+    use flui_animation::Animation;
+    let registry = Vsync::new();
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
+    let controller = owner.controller();
+    let mut old = controller
+        .animate_with(FailingCompletion)
+        .expect("quadratic simulation");
+    controller.tick_at(Duration::from_millis(250));
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        controller.tick_at(Duration::from_millis(500));
+    }));
+    assert!(failure.is_err());
+    assert_eq!(controller.value(), 0.0625);
+    assert_eq!(controller.velocity(), 0.5);
+    let _next = controller
+        .retarget(0.8, &linear_spec(1000))
+        .expect("published seam");
+    assert_eq!(controller.value(), 0.0625);
+    assert_eq!(controller.velocity(), 0.5);
+    assert!(matches!(poll_run(&mut old), std::task::Poll::Ready(Err(_))));
+}
+
+struct ReplacingSlope {
+    controller: AnimationController,
+    calls: std::rc::Rc<std::cell::Cell<u32>>,
+    limit: u32,
+    invalid_return: bool,
+    latest: std::rc::Rc<std::cell::RefCell<Option<flui_animation::AnimationRunFuture>>>,
+}
+
+impl Curve for ReplacingSlope {
+    fn transform(&self, t: f64) -> f64 {
+        t
+    }
+    fn slope(&self, _: f64) -> f64 {
+        let call = self.calls.get();
+        self.calls.set(call + 1);
+        if call < self.limit {
+            let next = self
+                .controller
+                .animate_to_curved(
+                    0.9,
+                    Some(Duration::from_secs(1)),
+                    Self {
+                        controller: self.controller.clone(),
+                        calls: self.calls.clone(),
+                        limit: self.limit,
+                        invalid_return: self.invalid_return,
+                        latest: self.latest.clone(),
+                    },
+                )
+                .expect("source callback replaces the run");
+            let outgoing = self.latest.borrow_mut().replace(next);
+            drop(outgoing);
+            if self.invalid_return {
+                return f64::NAN;
+            }
+        }
+        1.0
+    }
+}
+
+fn retarget_retries_a_changed_sample_without_publishing_stale_velocity() {
+    use flui_animation::{Animation, AnimationError};
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+    for (limit, invalid_return) in [(1, false), (2, false), (1, true), (2, true)] {
+        let owner =
+            AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+        let controller = owner.controller();
+        let calls = Rc::new(Cell::new(0));
+        let latest = Rc::new(RefCell::new(None));
+        let mut original = controller
+            .animate_to_curved(
+                1.0,
+                Some(Duration::from_secs(1)),
+                ReplacingSlope {
+                    controller: controller.clone(),
+                    calls: calls.clone(),
+                    limit,
+                    invalid_return,
+                    latest: latest.clone(),
+                },
+            )
+            .expect("old source");
+        controller.tick_at(Duration::from_millis(250));
+        let result = controller.retarget(
+            0.7,
+            &MotionSpec::Curve {
+                duration: Duration::from_secs(1),
+                curve: ArcCurve::new(Curves::Linear),
+            },
+        );
+        assert_eq!(calls.get(), 2, "one retry queries the new source");
+        assert!(matches!(
+            poll_run(&mut original),
+            std::task::Poll::Ready(Err(_))
+        ));
+        assert_eq!(controller.value(), 0.25);
+        assert!(
+            close(controller.velocity(), 0.65, 1e-12),
+            "the old velocity is not published"
+        );
+        let mut latest = latest.borrow_mut().take().expect("source callback's run");
+        if limit == 1 {
+            let mut admitted = result.expect("one replacement is retried");
+            assert!(matches!(
+                poll_run(&mut latest),
+                std::task::Poll::Ready(Err(_))
+            ));
+            controller.tick_at(Duration::from_secs(1));
+            assert_eq!(controller.value(), 0.7);
+            assert!(matches!(
+                poll_run(&mut admitted),
+                std::task::Poll::Ready(Ok(()))
+            ));
+        } else {
+            assert!(matches!(result, Err(AnimationError::ReentrantMotion)));
+            assert!(
+                poll_run(&mut latest).is_pending(),
+                "latest user-installed run survives refusal"
+            );
+            controller.tick_at(Duration::from_secs(1));
+            assert_eq!(controller.value(), 0.9);
+            assert!(matches!(
+                poll_run(&mut latest),
+                std::task::Poll::Ready(Ok(()))
+            ));
+        }
+    }
+}
+
+fn poll_run(
+    run: &mut flui_animation::AnimationRunFuture,
+) -> std::task::Poll<Result<(), flui_animation::RunCanceled>> {
+    use std::future::Future;
+    std::pin::Pin::new(run).poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+}
+
+struct PanickingSlope;
+impl Curve for PanickingSlope {
+    fn transform(&self, t: f64) -> f64 {
+        t
+    }
+    fn slope(&self, _: f64) -> f64 {
+        panic!("retarget slope failure")
+    }
+}
+
+fn a_panicking_curve_slope_leaves_the_old_segment_running() {
+    use flui_animation::Animation;
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = owner.controller();
+    let mut old = controller.forward().expect("old run");
+    controller.tick_at(Duration::from_millis(250));
+    let motion = MotionSpec::Curve {
+        duration: Duration::from_secs(1),
+        curve: ArcCurve::new(PanickingSlope),
+    };
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        controller.retarget(0.8, &motion)
+    }))
+    .expect_err("new curve refuses by panic");
+    assert_eq!(
+        failure.downcast_ref::<&str>().copied(),
+        Some("retarget slope failure")
+    );
+    assert!(poll_run(&mut old).is_pending());
+    assert_eq!(controller.value(), 0.25);
+    controller.tick_at(Duration::from_millis(500));
+    assert_eq!(controller.value(), 0.5, "old run remains installed");
+    controller.tick_at(Duration::from_secs(1));
+    assert!(matches!(poll_run(&mut old), std::task::Poll::Ready(Ok(()))));
+}
+
+fn a_non_finite_controller_retarget_changes_nothing() {
+    use flui_animation::{Animation, AnimationError};
+    for target in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let owner =
+            AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+        let controller = owner.controller();
+        let mut old = controller.forward().expect("old run");
+        controller.tick_at(Duration::from_millis(250));
+        let motion = MotionSpec::Spring(spring(10.0, 0.5));
+        assert!(matches!(
+            controller.retarget(target, &motion),
+            Err(AnimationError::NonFiniteTarget(_))
+        ));
+        assert_eq!(controller.value(), 0.25);
+        assert!(poll_run(&mut old).is_pending());
+        controller.tick_at(Duration::from_secs(1));
+        assert!(matches!(poll_run(&mut old), std::task::Poll::Ready(Ok(()))));
+    }
+}
+
+struct ConstantSlope(f64);
+
+impl Curve for ConstantSlope {
+    fn transform(&self, t: f64) -> f64 {
+        t
+    }
+
+    fn slope(&self, _: f64) -> f64 {
+        self.0
+    }
+}
+
+fn a_non_finite_inherited_velocity_changes_nothing() {
+    use flui_animation::{Animation, AnimationError};
+    for (slope, duration) in [
+        (f64::NAN, Duration::from_secs(1)),
+        (f64::INFINITY, Duration::from_secs(1)),
+        (f64::NEG_INFINITY, Duration::from_secs(1)),
+        (f64::MAX, Duration::from_nanos(1)),
+    ] {
+        let registry = Vsync::new();
+        let owner = AnimationController::builder(duration).build_on(Some(&registry));
+        let controller = owner.controller();
+        let mut old = controller
+            .animate_to_curved(1.0, Some(duration), ConstantSlope(slope))
+            .expect("position source");
+        let generation = controller.run_generation();
+        assert!(
+            matches!(
+                controller.retarget(0.8, &linear_spec(1000)),
+                Err(AnimationError::NonFiniteTarget(_))
+            ),
+            "invalid inherited slope {slope} over {duration:?} must refuse"
+        );
+        assert_eq!(controller.value(), 0.0);
+        assert_eq!(controller.run_generation(), generation);
+        assert!(poll_run(&mut old).is_pending());
+        controller.tick_at(duration);
+        assert_eq!(controller.value(), 1.0);
+        assert!(matches!(poll_run(&mut old), std::task::Poll::Ready(Ok(()))));
+    }
+}
+
+fn a_retarget_from_a_listener_is_ordered_and_lock_free() {
+    use flui_animation::{Animation, AnimationStatus};
+    use flui_foundation::Listenable;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = owner.controller();
+    let mut old = controller.forward().expect("old run");
+    let canceled = Rc::new(Cell::new(false));
+    let sink = canceled.clone();
+    let observer = controller.clone();
+    old.when_complete_or_cancel(move |result| {
+        assert!(result.is_err());
+        assert_eq!(observer.status(), AnimationStatus::Reverse);
+        assert!(
+            observer.is_animating(),
+            "replacement is installed before cancellation"
+        );
+        sink.set(true);
+    });
+    let next = Rc::new(RefCell::new(None));
+    let sink = next.clone();
+    let observer = controller.clone();
+    controller.add_listener(Rc::new(move || {
+        if sink.borrow().is_some() {
+            return;
+        }
+        let run = observer
+            .retarget(
+                0.0,
+                &MotionSpec::Curve {
+                    duration: Duration::from_millis(100),
+                    curve: ArcCurve::new(Curves::EaseIn),
+                },
+            )
+            .expect("retarget from value callback");
+        *sink.borrow_mut() = Some(run);
+    }));
+    controller.tick_at(Duration::from_millis(250));
+    assert!(canceled.get());
+    assert!(matches!(poll_run(&mut old), std::task::Poll::Ready(Err(_))));
+    assert_eq!(controller.value(), 0.25);
+    assert_eq!(controller.velocity(), 1.0);
+    controller.tick_at(Duration::from_millis(100));
+    assert_eq!(controller.value(), 0.0);
+    let mut next = next.borrow_mut().take().expect("replacement future");
+    assert!(matches!(
+        poll_run(&mut next),
+        std::task::Poll::Ready(Ok(()))
+    ));
+}
+
+fn a_retarget_without_a_clock_settles_at_its_target() {
+    use flui_animation::{Animation, AnimationError};
+    let mut owner = AnimationController::builder(Duration::from_secs(1)).build_on(None);
+    let controller = owner.controller().clone();
+    let mut run = controller
+        .retarget(
+            0.8,
+            &MotionSpec::Curve {
+                duration: Duration::from_secs(1000),
+                curve: ArcCurve::new(Curves::EaseIn),
+            },
+        )
+        .expect("clockless retarget");
+    assert_eq!(controller.value(), 0.8);
+    assert!(matches!(poll_run(&mut run), std::task::Poll::Ready(Ok(()))));
+    owner.dispose();
+    assert!(matches!(
+        controller.retarget(0.0, &MotionSpec::Spring(spring(10.0, 0.5))),
+        Err(AnimationError::Disposed)
+    ));
+}
+
+fn controller_curve_seam() {
+    use flui_animation::Animation;
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = owner.controller();
+    let _old = controller.forward().expect("initial linear run");
+    controller.tick_at(Duration::from_millis(250));
+    let before = (controller.value(), controller.velocity());
+    let _new = controller
+        .retarget(
+            0.8,
+            &MotionSpec::Curve {
+                duration: Duration::from_secs(1),
+                curve: ArcCurve::new(Curves::EaseIn),
+            },
+        )
+        .expect("curve retarget");
+    assert!(close(controller.value(), before.0, 1e-12), "position seam");
+    assert!(
+        close(controller.velocity(), before.1, 1e-9),
+        "velocity seam: {} -> {}",
+        before.1,
+        controller.velocity()
+    );
+}
+
+fn controller_spring_seam() {
+    use flui_animation::Animation;
+    let owner = AnimationController::builder(Duration::from_secs(1))
+        .initial_value(1.0)
+        .unbounded()
+        .build_on(Some(&Vsync::new()));
+    let controller = owner.controller();
+    let motion = MotionSpec::Spring(spring(10.0, 0.5));
+    let _old = controller.retarget(0.0, &motion).expect("initial spring");
+    controller.tick_at(Duration::from_millis(100));
+    let before = (controller.value(), controller.velocity());
+    assert!(before.1.abs() > 1.0, "moving spring");
+    let _new = controller
+        .retarget(0.0, &motion)
+        .expect("same spring target");
+    assert!(close(controller.value(), before.0, 1e-12), "position seam");
+    assert!(
+        close(controller.velocity(), before.1, 1e-9),
+        "velocity seam: {} -> {}",
+        before.1,
+        controller.velocity()
+    );
+}
+
+#[test]
+fn controller_retarget_frame_boundaries() {
+    crate::run_table(&[
+        (
+            "repeated_retargets_before_a_frame_share_the_seam",
+            repeated_retargets_before_a_frame_share_the_seam,
+        ),
+        (
+            "retarget_on_the_completing_frame_starts_at_rest",
+            retarget_on_the_completing_frame_starts_at_rest,
+        ),
+        (
+            "a_retarget_after_idle_starts_on_the_next_frame",
+            a_retarget_after_idle_starts_on_the_next_frame,
+        ),
+        (
+            "retarget_after_a_failed_frame_uses_the_published_time",
+            retarget_after_a_failed_frame_uses_the_published_time,
+        ),
+        (
+            "the_frame_after_a_retarget_has_no_hold",
+            the_frame_after_a_retarget_has_no_hold,
+        ),
+        (
+            "retargeting_another_controller_preserves_its_frame_origin",
+            retargeting_another_controller_preserves_its_frame_origin,
+        ),
+    ]);
+}
+
+fn repeated_retargets_before_a_frame_share_the_seam() {
+    use flui_animation::{Animation, MotionClock};
+    let registry = Vsync::new();
+    let mut clock = MotionClock::new();
+    let owner = AnimationController::builder(Duration::from_secs(1))
+        .unbounded()
+        .build_on(Some(&registry));
+    let controller = owner.controller();
+    let mut displaced = controller
+        .animate_to(1.0, Some(Duration::from_secs(1)))
+        .expect("initial run");
+    registry.tick_all(&clock.frame(Duration::ZERO));
+    registry.tick_all(&clock.frame(Duration::from_millis(100)));
+    let before = (controller.value(), controller.velocity());
+    for (target, motion) in [
+        (0.9, linear_spec(1000)),
+        (0.0, MotionSpec::Spring(spring(10.0, 0.5))),
+        (0.7, linear_spec(1000)),
+        (0.0, MotionSpec::Spring(spring(10.0, 0.5))),
+    ] {
+        let next = controller.retarget(target, &motion).expect("next seam");
+        assert_eq!(controller.value(), before.0);
+        assert!(close(controller.velocity(), before.1, 1e-12));
+        assert!(matches!(
+            poll_run(&mut displaced),
+            std::task::Poll::Ready(Err(_))
+        ));
+        displaced = next;
+    }
+    registry.tick_all(&clock.frame(Duration::from_micros(100_100)));
+    let average = (controller.value() - before.0) / 1e-4;
+    let acceleration_bound = 100.0 * before.0.abs() + 10.0 * before.1.abs();
+    assert!(
+        (average - before.1).abs() <= acceleration_bound * 1e-4,
+        "each replacement before a tick retains the original seam time: {average} vs {}",
+        before.1
+    );
+    registry.tick_all(&clock.frame(Duration::from_secs(10)));
+    assert!(matches!(
+        poll_run(&mut displaced),
+        std::task::Poll::Ready(Ok(()))
+    ));
+}
+
+fn retarget_on_the_completing_frame_starts_at_rest() {
+    use flui_animation::{Animation, MotionClock};
+    use flui_foundation::Listenable;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    let registry = Vsync::new();
+    let mut clock = MotionClock::new();
+    let owner = AnimationController::builder(Duration::from_millis(100)).build_on(Some(&registry));
+    let controller = owner.controller();
+    let mut old = controller.forward().expect("initial run");
+    let next = Rc::new(RefCell::new(None));
+    let sink = next.clone();
+    let observer = controller.clone();
+    controller.add_listener(Rc::new(move || {
+        if observer.value() == 1.0 && sink.borrow().is_none() {
+            assert_eq!(observer.velocity(), 0.0, "completed source is at rest");
+            let run = observer
+                .retarget(0.0, &MotionSpec::Spring(spring(10.0, 0.5)))
+                .expect("new run from completion");
+            *sink.borrow_mut() = Some(run);
+        }
+    }));
+    registry.tick_all(&clock.frame(Duration::ZERO));
+    registry.tick_all(&clock.frame(Duration::from_millis(100)));
+    assert!(matches!(poll_run(&mut old), std::task::Poll::Ready(Ok(()))));
+    assert_eq!(controller.value(), 1.0);
+    assert_eq!(controller.velocity(), 0.0);
+    registry.tick_all(&clock.frame(Duration::from_micros(100_100)));
+    assert!(
+        controller.value() < 1.0,
+        "completion-frame retarget advances on the next frame"
+    );
+    let mut next = next.borrow_mut().take().expect("run installed by callback");
+    registry.tick_all(&clock.frame(Duration::from_secs(10)));
+    assert!(matches!(
+        poll_run(&mut next),
+        std::task::Poll::Ready(Ok(()))
+    ));
+}
+
+fn a_retarget_after_idle_starts_on_the_next_frame() {
+    use flui_animation::{Animation, MotionClock};
+    let registry = Vsync::new();
+    let mut clock = MotionClock::new();
+    let owner = AnimationController::builder(Duration::from_millis(100)).build_on(Some(&registry));
+    let controller = owner.controller();
+    let _old = controller.forward().expect("initial run");
+    for millis in [0, 100, 200, 300] {
+        registry.tick_all(&clock.frame(Duration::from_millis(millis)));
+    }
+    let _next = controller
+        .retarget(0.0, &MotionSpec::Spring(spring(10.0, 0.5)))
+        .expect("new run after idle");
+    registry.tick_all(&clock.frame(Duration::from_millis(400)));
+    assert_eq!(
+        controller.value(),
+        1.0,
+        "idle run anchors on its first observed frame"
+    );
+    registry.tick_all(&clock.frame(Duration::from_millis(500)));
+    assert!(controller.value() < 1.0);
+}
+
+fn retarget_after_a_failed_frame_uses_the_published_time() {
+    use flui_animation::{Animation, MotionClock};
+    for panic in [false, true] {
+        let registry = Vsync::new();
+        let mut clock = MotionClock::new();
+        let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
+        let reference = AnimationController::builder(Duration::from_secs(1))
+            .unbounded()
+            .build_on(Some(&Vsync::new()));
+        let controller = owner.controller();
+        let _old = controller
+            .animate_to_curved(
+                1.0,
+                Some(Duration::from_secs(1)),
+                FailingQuadratic { panic },
+            )
+            .expect("quadratic source");
+        registry.tick_all(&clock.frame(Duration::ZERO));
+        registry.tick_all(&clock.frame(Duration::from_millis(250)));
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            registry.tick_all(&clock.frame(Duration::from_millis(500)));
+        }));
+        assert_eq!(failure.is_err(), panic);
+        let motion = MotionSpec::Spring(spring(10.0, 0.5));
+        let _next = controller.retarget(0.8, &motion).expect("published seam");
+        // Build the same physical seam on an independent manual controller.
+        // Its old quadratic source publishes only the successful 250 ms tick.
+        let _reference_old = reference
+            .controller()
+            .animate_to_curved(
+                1.0,
+                Some(Duration::from_secs(1)),
+                FailingQuadratic { panic: false },
+            )
+            .expect("reference source");
+        reference.controller().tick_at(Duration::from_millis(250));
+        let _reference_new = reference
+            .controller()
+            .retarget(0.8, &motion)
+            .expect("reference seam");
+        reference.controller().tick_at(Duration::from_millis(350));
+        registry.tick_all(&clock.frame(Duration::from_millis(600)));
+        assert!(
+            close(controller.value(), reference.controller().value(), 1e-12),
+            "the next sample is 350 ms after the published seam, rather than 100 ms after the rejected frame: {} vs {}",
+            controller.value(),
+            reference.controller().value()
+        );
+    }
+}
+
+fn retargeting_another_controller_preserves_its_frame_origin() {
+    use flui_animation::{Animation, MotionClock};
+    use flui_foundation::Listenable;
+    use std::cell::Cell;
+    use std::rc::Rc;
+    for target_first in [false, true] {
+        let registry = Vsync::new();
+        let mut clock = MotionClock::new();
+        let create =
+            || AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
+        let (trigger, target) = if target_first {
+            let target = create();
+            let trigger = create();
+            (trigger, target)
+        } else {
+            (create(), create())
+        };
+        let _trigger_run = trigger.controller().forward().expect("trigger run");
+        let _target_run = target.controller().forward().expect("target run");
+        registry.tick_all(&clock.frame(Duration::ZERO));
+        registry.tick_all(&clock.frame(Duration::from_millis(100)));
+        let seam = Rc::new(Cell::new(None));
+        let sink = seam.clone();
+        let observer = target.controller().clone();
+        trigger.controller().add_listener(Rc::new(move || {
+            if sink.get().is_some() {
+                return;
+            }
+            let before = (observer.value(), observer.velocity());
+            let _next = observer
+                .retarget(0.0, &MotionSpec::Spring(spring(10.0, 0.5)))
+                .expect("retarget from another controller");
+            assert!(close(observer.value(), before.0, 1e-12));
+            assert!(close(observer.velocity(), before.1, 1e-9));
+            sink.set(Some(before));
+        }));
+        registry.tick_all(&clock.frame(Duration::from_micros(100_100)));
+        let (x0, v0) = seam.get().expect("trigger delivered retarget");
+        if target_first {
+            assert!(
+                close(target.controller().value(), x0, 1e-12),
+                "a visited controller is not sampled twice"
+            );
+            registry.tick_all(&clock.frame(Duration::from_micros(100_200)));
+        }
+        let average = (target.controller().value() - x0) / 1e-4;
+        let acceleration_bound = 100.0 * x0.abs() + 10.0 * v0.abs();
+        assert!(
+            (average - v0).abs() <= acceleration_bound * 1e-4,
+            "target_first={target_first}: a frame cannot hold at the seam, {average} vs {v0}"
+        );
+    }
+}
+
+fn the_frame_after_a_retarget_has_no_hold() {
+    use flui_animation::{Animation, MotionClock};
+    let registry = Vsync::new();
+    let mut clock = MotionClock::new();
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
+    let controller = owner.controller();
+    let _old = controller.forward().expect("initial run");
+    registry.tick_all(&clock.frame(Duration::ZERO));
+    registry.tick_all(&clock.frame(Duration::from_millis(100)));
+    let before = (controller.value(), controller.velocity());
+    assert!(before.0 > 0.0 && before.1 > 0.0, "moving before the seam");
+    let _next = controller
+        .retarget(0.0, &MotionSpec::Spring(spring(10.0, 0.5)))
+        .expect("spring inherits forward velocity before reversing");
+    let dt = Duration::from_micros(100);
+    registry.tick_all(
+        &clock.frame(
+            Duration::from_millis(100)
+                .checked_add(dt)
+                .expect("frame time"),
+        ),
+    );
+    let average_velocity = (controller.value() - before.0) / dt.as_secs_f64();
+    let acceleration_bound = 100.0 * before.0.abs() + 10.0 * before.1.abs();
+    assert!(
+        (average_velocity - before.1).abs() <= acceleration_bound * dt.as_secs_f64(),
+        "the next frame must advance from the seam: old velocity {}, frame velocity {average_velocity}",
+        before.1,
+    );
 }
 
 fn overflowing_rates_cancel() {

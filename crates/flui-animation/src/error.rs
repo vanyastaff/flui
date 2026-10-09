@@ -37,6 +37,11 @@ pub enum AnimationError {
     #[error("AnimationController identities exhausted")]
     IdentityExhausted,
 
+    /// User motion callbacks repeatedly changed the sampled controller before admission.
+    /// The latest installed run remains intact; the caller can retry later.
+    #[error("motion changed reentrantly while preparing a retarget")]
+    ReentrantMotion,
+
     /// Invalid animation bounds, or an invalid `repeat`/`repeat_with` range,
     /// were provided.
     ///

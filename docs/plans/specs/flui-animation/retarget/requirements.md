@@ -76,9 +76,13 @@
   `repeated_interruption_keeps_position_and_velocity_continuous` — оба режима (`Spring`,
   `Curve`), `AnimatedValue<f64>` и `AnimatedValue<Offset<f64>>`, dt ∈ {0, 1/240 … 1/30}.
 - **R7.** КОГДА retarget в режиме `Curve` начинает сегмент с ненулевой скоростью, СИСТЕМА ДОЛЖНА
-  прийти в цель ровно через длительность сегмента со скоростью, заданной кривой в конце, а
-  отклонение от кривой ограничено `|r|·D·4/27` (r — избыточная скорость). Тест (property):
-  `a_curve_segment_lands_on_time_and_bounds_its_overshoot`.
+  прийти в цель ровно через длительность сегмента с нулевой скоростью, непрерывно переходя
+  в покой. Это уточняет первоначальный черновик: конечная скорость кривой иначе обрывалась
+  при остановке контроллера. Отклонение от кривой ограничено
+  `(|r|·D + |s|)·4/27`, где `r = v₀ − Δ·c'(0)/D`, `s = Δ·c'(1)`.
+  Property-тест: `a_curve_segment_lands_on_time_and_bounds_its_overshoot`; публичный controller
+  case `a_controller_curve_arrives_at_rest` проверяет последний интервал позиции, а не только
+  нулевой getter после завершения.
 - **R8.** КОГДА retarget в режиме `Curve` разворачивает движение к reversing-adjusted start
   предыдущего сегмента, СИСТЕМА ДОЛЖНА сократить длительность по CSS Transitions §3.1:
   `S' = clamp01(|ease_old(t)·S_old + (1 − S_old)|)`, `D' = D·S'`. Тест:

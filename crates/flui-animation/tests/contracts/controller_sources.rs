@@ -358,7 +358,7 @@ impl Curve for HostileSlope {
     }
 }
 
-fn slope_failure_keeps_custody(status_fails: bool) {
+fn slope_failure_keeps_custody(status_fails: bool, retarget: bool) {
     let mut owner =
         AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
     let controller = owner.controller().clone();
@@ -382,8 +382,22 @@ fn slope_failure_keeps_custody(status_fails: bool) {
     let callback = status_fails.then(|| {
         controller.add_status_listener(Rc::new(|_| panic!("authoritative status failure")))
     });
-    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| controller.velocity()))
-        .expect_err("derivative hook fails");
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if retarget {
+            let _run = controller
+                .retarget(
+                    0.8,
+                    &flui_animation::MotionSpec::Curve {
+                        duration: Duration::from_secs(1),
+                        curve: flui_animation::ArcCurve::new(flui_animation::Curves::Linear),
+                    },
+                )
+                .expect("motion admission");
+        } else {
+            let _velocity = controller.velocity();
+        }
+    }))
+    .expect_err("derivative hook fails");
     assert_eq!(
         failure.downcast_ref::<&str>().copied(),
         Some(if status_fails {
@@ -410,11 +424,19 @@ fn slope_failure_keeps_custody(status_fails: bool) {
 }
 
 fn slope_failure_retains_hostile_source() {
-    slope_failure_keeps_custody(false);
+    slope_failure_keeps_custody(false, false);
 }
 
 fn slope_cancellation_failure_retains_hostile_source() {
-    slope_failure_keeps_custody(true);
+    slope_failure_keeps_custody(true, false);
+}
+
+fn retarget_failure_retains_hostile_source() {
+    slope_failure_keeps_custody(false, true);
+}
+
+fn retarget_cancellation_failure_retains_hostile_source() {
+    slope_failure_keeps_custody(true, true);
 }
 impl Simulation for HostileSimulation {
     fn x(&self, time: f64) -> f64 {
@@ -1602,6 +1624,14 @@ fn controller_sources_allow_reentry_and_preserve_run_ownership() {
             retirement_failure_retains_later_callback_envelope,
         ),
         ("position may read", position_may_read),
+        (
+            "retarget failure retains hostile source",
+            retarget_failure_retains_hostile_source,
+        ),
+        (
+            "retarget cancellation failure retains hostile source",
+            retarget_cancellation_failure_retains_hostile_source,
+        ),
         ("velocity may read", velocity_may_read),
         ("velocity may replace", velocity_may_replace),
         ("velocity may stop", velocity_may_stop),

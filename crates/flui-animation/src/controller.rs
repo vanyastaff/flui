@@ -1,11 +1,17 @@
 //! `AnimationController` - The primary animation driver.
 
+mod motion;
+mod sample;
+
+use sample::{SampleIdentity, SampleTime};
+
 use crate::AnimationRunFuture;
 use crate::PlaybackRate;
 use crate::animation::StatusObserver;
 use crate::animation::{Animation, AnimationDirection, Retirement, StatusCallback, Terminal};
 use crate::curve::Curve;
 use crate::error::AnimationError;
+use crate::retarget::Segment;
 use crate::run_future::{RunCompleter, RunDelivery};
 use crate::simulation::{Simulation, SpringDescription, SpringSimulation, SpringType, Tolerance};
 use crate::status::AnimationStatus;
@@ -108,11 +114,6 @@ enum ControllerDelivery {
     Retire(RetiredSources),
 }
 
-struct SampleIdentity {
-    generation: u64,
-    epoch: u64,
-}
-
 enum TickSource {
     Repeat(RepeatRun),
     Simulation(SimulationRun),
@@ -127,6 +128,7 @@ enum TickSource {
 #[derive(Clone)]
 enum SimulationRun {
     Custom(Rc<dyn Simulation>),
+    Motion(Rc<Segment>),
     Fling {
         source: Rc<dyn Simulation>,
         bound: f64,
@@ -150,15 +152,16 @@ impl StatusListener {
 }
 
 impl SimulationRun {
-    fn source(&self) -> &Rc<dyn Simulation> {
+    fn source(&self) -> &dyn Simulation {
         match self {
-            Self::Custom(source) | Self::Fling { source, .. } => source,
+            Self::Custom(source) | Self::Fling { source, .. } => source.as_ref(),
+            Self::Motion(source) => source.as_ref(),
         }
     }
 
     fn reached_bound(&self, sample: f64) -> bool {
         match self {
-            Self::Custom(_) => false,
+            Self::Custom(_) | Self::Motion(_) => false,
             Self::Fling {
                 bound, direction, ..
             } => match direction {
@@ -208,10 +211,21 @@ pub(crate) struct WalkProbe {
     /// The controller's [`AnimationController::run_generation`] at the time
     /// of the probe.
     pub(crate) generation: u64,
+    pub(crate) start: RunStart,
     /// Whether the walk should tick this controller: running AND not
     /// disposed. `status` alone cannot tell the two apart — see
     /// [`AnimationController::walk_probe`]'s own doc.
     pub(crate) live_running: bool,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum RunStart {
+    Fresh,
+    /// The published seam in the source run's raw elapsed coordinates.
+    Continue {
+        generation: u64,
+        elapsed: Duration,
+    },
 }
 
 /// The configuration a live `repeat`/`repeat_with` run needs to sample its
@@ -355,9 +369,8 @@ struct AnimationControllerInner {
     /// Target value for the current run.
     target_value: f64,
 
-    /// Most recent raw elapsed time seen by
-    /// [`AnimationController::tick_at`], so `velocity()` can report the
-    /// in-progress rate without a fresh tick.
+    /// Raw and local time of the last published position sample. A rejected
+    /// or panicking source leaves both times and its applied rate unchanged.
     last_elapsed: Duration,
     local_elapsed: Duration,
     playback_rate: PlaybackRate,
@@ -375,6 +388,7 @@ struct AnimationControllerInner {
     /// twice (forward → reverse) is ticked from the second run's start instead
     /// of a stale anchor. Never reset; stable across `tick_at`.
     run_generation: u64,
+    run_start: RunStart,
 
     /// Invalidates outer samples when the same run is ticked reentrantly.
     sample_epoch: u64,
@@ -570,6 +584,7 @@ impl AnimationController {
             settle_pending: false,
             missing_clock_warned: false,
             run_generation: 0,
+            run_start: RunStart::Fresh,
             sample_epoch: 0,
             run_duration: None,
             disposed: false,
@@ -1637,60 +1652,6 @@ impl AnimationController {
         Ok(future)
     }
 
-    /// Velocity at the last sampled run time, in value units per second.
-    ///
-    /// Curved runs use the curve's derivative, including the applied playback
-    /// rate. Stopped and paused runs report zero. User curves and simulations
-    /// run outside the state borrow; if they invalidate the sampled run, this
-    /// read reports zero instead of publishing a stale velocity. A derivative
-    /// that cannot be represented as a finite value also reports zero.
-    #[must_use]
-    pub fn velocity(&self) -> f64 {
-        let (source, identity, cycle, playback, span, duration) = {
-            let inner = self.inner.borrow();
-            if inner.active_run.is_none() || inner.playback_rate.is_paused() {
-                return 0.0;
-            }
-            (
-                Opaque::new(inner.tick_source()),
-                SampleIdentity {
-                    generation: inner.run_generation,
-                    epoch: inner.sample_epoch,
-                },
-                inner.cycle_elapsed_secs(),
-                inner.playback_rate.get(),
-                inner.target_value - inner.start_value,
-                inner.current_duration(),
-            )
-        };
-        let mut recovery = Retirement::new();
-        let mut velocity = 0.0;
-        recovery.run(|| {
-            velocity = match source.get() {
-                TickSource::Simulation(simulation) => simulation.source().dx(cycle) * playback,
-                TickSource::Repeat(_) => {
-                    crate::retarget::rate(span, playback, duration.as_secs_f64())
-                }
-                TickSource::Time { curve, .. } => {
-                    if duration.is_zero() {
-                        0.0
-                    } else {
-                        let progress = (cycle / duration.as_secs_f64()).clamp(0.0, 1.0);
-                        let slope = curve.as_ref().map_or(1.0, |curve| curve.slope(progress));
-                        crate::retarget::scaled_rate(span, slope, duration.as_secs_f64(), playback)
-                    }
-                }
-            };
-        });
-        recovery.retire(source);
-        recovery.finish();
-        if velocity.is_finite() && self.inner.borrow().matches_sample(&identity) {
-            velocity
-        } else {
-            0.0
-        }
-    }
-
     /// Apply `rate` at the next sample, preserving the local run time there.
     ///
     /// A paused run stays installed and keeps its completion future. A bound
@@ -1778,6 +1739,7 @@ impl AnimationController {
         let inner = self.inner.borrow();
         WalkProbe {
             generation: inner.run_generation,
+            start: inner.run_start,
             live_running: !inner.disposed
                 && inner.active_run.is_some()
                 && (!inner.playback_rate.is_paused() || inner.pending_rate.is_some()),
@@ -1802,6 +1764,7 @@ impl AnimationController {
         let source;
         let identity;
         let cycle;
+        let time;
         {
             let mut inner = self.inner.borrow_mut();
             if inner.disposed || inner.active_run.is_none() || elapsed < inner.last_elapsed {
@@ -1827,23 +1790,8 @@ impl AnimationController {
                 });
                 return;
             };
-            inner.last_elapsed = elapsed;
-            let span = elapsed.saturating_sub(inner.rate_epoch_elapsed);
-            let scaled = if inner.playback_rate == PlaybackRate::NORMAL {
-                span
-            } else if inner.playback_rate.is_paused() {
-                Duration::ZERO
-            } else {
-                Duration::try_from_secs_f64(span.as_secs_f64() * inner.playback_rate.get())
-                    .unwrap_or(Duration::MAX)
-            };
-            inner.local_elapsed = inner.rate_epoch_local.saturating_add(scaled);
-            cycle = inner.local_elapsed.as_secs_f64();
-            if let Some(rate) = inner.pending_rate.take() {
-                inner.rate_epoch_elapsed = elapsed;
-                inner.rate_epoch_local = inner.local_elapsed;
-                inner.playback_rate = rate;
-            }
+            time = SampleTime::capture(&inner, elapsed);
+            cycle = time.local_elapsed.as_secs_f64();
             inner.sample_epoch = epoch;
             identity = SampleIdentity {
                 generation: inner.run_generation,
@@ -1853,10 +1801,11 @@ impl AnimationController {
         }
         retirement.run_with(|retirement| match source.get() {
             TickSource::Repeat(run) => {
-                let inner = self.inner.borrow_mut();
+                let mut inner = self.inner.borrow_mut();
                 if !inner.matches_sample(&identity) {
                     return;
                 }
+                time.commit(&mut inner);
                 self.tick_repeat(inner, *run, cycle, retirement);
             }
             TickSource::Simulation(simulation) => {
@@ -1869,9 +1818,12 @@ impl AnimationController {
                 }
                 let is_done = sampled.is_finite()
                     && (simulation.reached_bound(sampled) || simulation.source().is_done(cycle));
-                let inner = self.inner.borrow_mut();
+                let mut inner = self.inner.borrow_mut();
                 if !inner.matches_sample(&identity) {
                     return;
+                }
+                if sampled.is_finite() {
+                    time.commit(&mut inner);
                 }
                 self.tick_simulation(inner, sampled, is_done, retirement);
             }
@@ -1894,9 +1846,12 @@ impl AnimationController {
                     let eased = curve.as_ref().map_or(t, |curve| curve.transform(t));
                     start + (target - start) * eased
                 };
-                let inner = self.inner.borrow_mut();
+                let mut inner = self.inner.borrow_mut();
                 if !inner.matches_sample(&identity) {
                     return;
+                }
+                if value.is_finite() {
+                    time.commit(&mut inner);
                 }
                 self.tick_time_based(inner, t, value, retirement);
             }
@@ -1970,6 +1925,14 @@ impl AnimationController {
                 }
             }
             TickSource::Simulation(simulation) => {
+                if matches!(simulation, SimulationRun::Motion(_)) {
+                    let inner = self.inner.borrow_mut();
+                    if inner.matches_sample(&identity) {
+                        let target = inner.target_value;
+                        self.tick_simulation(inner, target, true, recovery);
+                    }
+                    return;
+                }
                 let mut last_finite = self.inner.borrow().value;
                 for exponent in 0..=8 {
                     let time = 0.25 * f64::from(1u32 << exponent);
@@ -2386,6 +2349,7 @@ impl AnimationController {
 
     /// Establish a fresh run epoch before publishing its callbacks.
     fn begin_run(inner: &mut AnimationControllerInner) {
+        inner.run_start = RunStart::Fresh;
         inner.last_elapsed = Duration::ZERO;
         inner.local_elapsed = Duration::ZERO;
         inner.rate_epoch_elapsed = Duration::ZERO;

@@ -101,6 +101,20 @@ pub(crate) enum Segment {
     Curve(CurveSegment),
 }
 
+impl Simulation for Segment {
+    fn x(&self, time: f64) -> f64 {
+        Self::x(self, time)
+    }
+
+    fn dx(&self, time: f64) -> f64 {
+        Self::dx(self, time)
+    }
+
+    fn is_done(&self, time: f64) -> bool {
+        Self::is_done(self, time)
+    }
+}
+
 /// A curve segment:
 /// `from + span·c(τ) + excess·duration·τ(1 − τ)² + arrival·τ²(1 − τ)`,
 /// exactly `to` from `duration` on.

@@ -28,6 +28,15 @@ which reports zero. Source retirement retains the enclosing first failure.
 Non-finite or unrepresentable derivatives report zero; regrouping the finite
 factors preserves representable products at extreme rates and durations.
 
+Position, raw elapsed time, local elapsed time and applied controller rate
+commit together after the source returns a finite position and its sample
+identity survives. A source panic or rejected position leaves the previous
+sample authoritative. A failed completion query also leaves it intact. A pending
+rate remains deliverable on the next successful sample, while a newer rate
+requested during source evaluation remains pending for a subsequent sample.
+Reserving a sample identity before source evaluation still invalidates an outer
+sample when the same controller is ticked reentrantly.
+
 The runtime's exact window agent port admits `MotionRequest` through the same
 owner inbox and close fence as semantics operations. The owner validates the
 whole request before changing rate or time. An invalid rate applies neither
@@ -82,6 +91,11 @@ The `retarget_seams` table covers linear endpoints, zero duration, pausing,
 discontinuous curves, invalid slopes and extreme representable products.
 `controller_sources_allow_reentry_and_preserve_run_ownership` covers derivative
 reentry, stale-read refusal, competing failures and a subsequent successful run.
+`controller_retarget_is_c0_and_c1_at_the_seam` covers rejected and panicking
+positions, a failed completion query, retained pending rates and a subsequent
+run. `controller_retarget_frame_boundaries` compares the next registered sample
+after a rejected frame with an independently driven controller whose time starts
+at the last published seam.
 `closed_presentation_animation_cannot_wake_a_surviving_window` proves that a
 saved clock cannot schedule a sibling after owner teardown.
 
