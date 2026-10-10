@@ -272,8 +272,16 @@ their query signature and open the viewer's lifecycle-acquired `WriterSource`
 only for the interaction notifications. `PopScope` preserves synchronous
 navigation outcome delivery and the existing observer ordering.
 
-Animation listeners accept owner-local captures. `AnimatedSize` observes
-completion counts during build but invokes `on_end` after the frame.
+Animation listeners accept owner-local captures. Each `AnimatedSize` completed
+status admits one event directly to the owner post-frame lane, before later
+owner events. Build has no completion counter or delivery responsibility.
+Delivery resolves the current `on_end` and opens its writable event context;
+unmount cancels delivery. A callback failure leaves the lane's accepted tail
+for the next frame rather than an internal completion loop dropping it.
+`size_completion_keeps_owner_event_order_and_lifetime` checks ordering,
+callback replacement and late installation, unmount, failure recovery and
+painted endpoints; `animated_size_completion_writes_a_signal_after_build`
+pins writable delivery after the frame.
 `Dismissible` snapshots movement payloads from its controller listener and
 collapse transitions from committed layout geometry, then queues events on
 the owner-local post-frame lane; its fully-slid

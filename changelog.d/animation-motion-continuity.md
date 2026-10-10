@@ -151,3 +151,7 @@
   including when an earlier cancellation fails and widget owners are retained.
   Closed Vsync registries refuse registration with `VsyncRegistrationError::Closed`;
   saved observers cannot start a new run or revive a closed kernel by rebinding.
+- Preserve AnimatedSize completion order relative to later owner post-frame
+  events. Completion directly enters the existing owner lane without a counter
+  or completion-driven rebuild; current callbacks, unmount cancellation and
+  accepted delivery after callback failure follow the lane's contract.

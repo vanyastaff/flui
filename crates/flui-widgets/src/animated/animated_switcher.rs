@@ -13,19 +13,14 @@
 //!
 //! `ViewState::build` takes `&self` (unlike `did_update_view`, which takes
 //! `&mut self`), but an outgoing entry's dismissal is discovered
-//! asynchronously — from an [`AnimationController`] status-listener callback
+//! from an [`AnimationController`] status-listener callback
 //! that fires on a later frame, independent of any `did_update_view` call.
-//! The listener itself only flips a `Send + Sync`-safe [`AtomicBool`] and
-//! schedules a rebuild ([`RebuildHandle::schedule`]) — it never touches
-//! `BoxedView`/`AnimationController`, which are not required to be `Send`
-//! ([`View`] carries no such bound). The actual sweep (disposing the
-//! dismissed entry and dropping it from the list) happens inside `build`,
-//! reading that flag, through a `RefCell<Vec<ChildEntry>>` — the same
-//! shared-mutable-state-behind-`&self` idiom `Overlay`/`Navigator` already use
-//! (`parking_lot::Mutex` there; `RefCell` here since nothing here crosses a
-//! thread boundary). This is the same "pull, don't push" shape
-//! [`AnimatedSize`](crate::AnimatedSize)'s `completed_runs` counter uses for
-//! its `on_end` callback.
+//! The owner-local listener marks the entry dismissed and schedules a rebuild
+//! ([`RebuildHandle::schedule`]). The sweep disposes dismissed entries during
+//! `build`, through a `RefCell<Vec<ChildEntry>>`, before producing the next
+//! layout's transition list. This entry maintenance is separate from event
+//! delivery: [`AnimatedSize`](crate::AnimatedSize) admits its completion effects
+//! directly to the owner post-frame lane.
 
 use std::cell::RefCell;
 use std::rc::Rc;
