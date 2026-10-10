@@ -3,8 +3,8 @@
 Animation system for FLUI: values over time driven by a presentation clock, with controllers, curves, tweens and simulations.
 
 Every `rust` block in this document is compiled as a doctest against the
-current API. Lines starting with `#` are hidden setup (a scheduler, a
-controller) that the rendered page leaves out.
+current API. Lines starting with `#` are hidden controller setup that the
+rendered page leaves out.
 
 ## Core Concepts
 
@@ -87,9 +87,7 @@ The primary driver. Holds a value in `[lower_bound, upper_bound]` (default 0.0�
 ```rust
 # use std::time::Duration;
 # use flui_animation::{AnimationController, AnimationError};
-# use flui_scheduler::UpdateScheduler;
 # fn main() -> Result<(), AnimationError> {
-# let scheduler = UpdateScheduler::new();
 # let duration = Duration::from_millis(300);
 let controller = AnimationController::builder(Duration::from_millis(300)).build();
 
@@ -114,9 +112,7 @@ return `Result<(), AnimationError>` and give no future.
 ```rust
 # use std::time::Duration;
 # use flui_animation::{AnimationController, AnimationError};
-# use flui_scheduler::UpdateScheduler;
 # fn main() -> Result<(), AnimationError> {
-# let scheduler = UpdateScheduler::new();
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 controller.forward()?;                // Animate to upper_bound
 controller.reverse()?;                // Animate to lower_bound
@@ -135,9 +131,7 @@ controller.reset()?;                  // Jump to lower_bound, status = Dismissed
 ```rust
 # use std::time::Duration;
 # use flui_animation::{AnimationController, AnimationError};
-# use flui_scheduler::UpdateScheduler;
 # fn main() -> Result<(), AnimationError> {
-# let scheduler = UpdateScheduler::new();
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 controller.repeat(false)?; // Loop:   0→1, 0→1, ...
 controller.repeat(true)?;  // Bounce: 0→1→0→1→...
@@ -154,9 +148,7 @@ controller.repeat_with(Some(0.2), Some(0.8), true, None, Some(3))?;
 ```rust
 # use std::time::Duration;
 # use flui_animation::{AnimationController, AnimationError, SpringDescription, SpringSimulation};
-# use flui_scheduler::UpdateScheduler;
 # fn main() -> Result<(), AnimationError> {
-# let scheduler = UpdateScheduler::new();
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 // Fling with velocity (uses spring physics)
 controller.fling(1.0)?;   // velocity toward upper_bound
@@ -184,9 +176,7 @@ from `Animation`. Both take an `Rc`'d callback and return a `ListenerId`.
 # use std::rc::Rc;
 # use std::time::Duration;
 # use flui_animation::{Animation, AnimationController, AnimationStatus};
-# use flui_scheduler::UpdateScheduler;
 use flui_foundation::Listenable;
-# let scheduler = UpdateScheduler::new();
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 
 // Value changes
@@ -208,8 +198,6 @@ drop(subscription);
 ```rust
 # use std::time::Duration;
 # use flui_animation::{AnimationController, AnimationError};
-# use flui_scheduler::UpdateScheduler;
-# let scheduler = UpdateScheduler::new();
 # let mut owner = AnimationController::builder(Duration::from_millis(300)).build_on(None);
 # let controller = owner.controller().clone();
 owner.dispose(); // Cancel the run and close its callbacks
@@ -333,9 +321,7 @@ let _ = ConstantTween::new(42.0);
 ```rust
 # use std::time::Duration;
 # use flui_animation::{Animation, AnimationController};
-# use flui_scheduler::UpdateScheduler;
 use flui_animation::{Animatable, FloatTween};
-# let scheduler = UpdateScheduler::new();
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 
 let tween = FloatTween::new(0.0, 100.0);
@@ -414,8 +400,6 @@ Apply a curve to an animation's output:
 # use std::rc::Rc;
 # use std::time::Duration;
 # use flui_animation::{Animation, AnimationController, CurvedAnimation, Curves};
-# use flui_scheduler::UpdateScheduler;
-# let scheduler = UpdateScheduler::new();
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 let curved = CurvedAnimation::new(Rc::new(controller.clone()), Curves::EaseInOut);
 
@@ -432,8 +416,6 @@ Map animation output through a tween:
 # use std::rc::Rc;
 # use std::time::Duration;
 # use flui_animation::{Animation, AnimationController, FloatTween, TweenAnimation};
-# use flui_scheduler::UpdateScheduler;
-# let scheduler = UpdateScheduler::new();
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 let tween = FloatTween::new(0.0, 300.0);
 let animated = TweenAnimation::new(tween, Rc::new(controller.clone()));
@@ -451,8 +433,6 @@ Invert an animation:
 # use std::rc::Rc;
 # use std::time::Duration;
 # use flui_animation::{Animation, AnimationController, ReverseAnimation};
-# use flui_scheduler::UpdateScheduler;
-# let scheduler = UpdateScheduler::new();
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 let reversed = ReverseAnimation::new(Rc::new(controller.clone()));
 
@@ -470,8 +450,6 @@ Hot-swap the parent animation:
 # use std::rc::Rc;
 # use std::time::Duration;
 # use flui_animation::{AnimationController, ProxyAnimation};
-# use flui_scheduler::UpdateScheduler;
-# let scheduler = UpdateScheduler::new();
 # let controller1 = AnimationController::builder(Duration::from_millis(300)).build();
 # let controller2 = AnimationController::builder(Duration::from_millis(300)).build();
 let proxy = ProxyAnimation::new(Rc::new(controller1.clone()));
@@ -506,8 +484,6 @@ Switch between animations when they cross:
 # use std::rc::Rc;
 # use std::time::Duration;
 # use flui_animation::{AnimationController, AnimationSwitch};
-# use flui_scheduler::UpdateScheduler;
-# let scheduler = UpdateScheduler::new();
 # let anim1 = AnimationController::builder(Duration::from_millis(300)).build();
 # let anim2 = AnimationController::builder(Duration::from_millis(300)).build();
 let switch = AnimationSwitch::new(Rc::new(anim1.clone()), Some(Rc::new(anim2.clone())));
@@ -530,9 +506,7 @@ let switch = AnimationSwitch::new(Rc::new(anim1.clone()), Some(Rc::new(anim2.clo
 # use std::rc::Rc;
 # use std::time::Duration;
 # use flui_animation::{AnimationController, CurvedAnimation, Curves, FloatTween};
-# use flui_scheduler::UpdateScheduler;
 use flui_animation::AnimatableExt;
-# let scheduler = UpdateScheduler::new();
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 let curved = Rc::new(CurvedAnimation::new(Rc::new(controller.clone()), Curves::EaseOut));
 let animated = FloatTween::new(0.0, 100.0).animate(curved);
@@ -715,8 +689,6 @@ Fallible operations return `Result<_, AnimationError>`:
 ```rust
 # use std::time::Duration;
 # use flui_animation::{AnimationController, AnimationError};
-# use flui_scheduler::UpdateScheduler;
-# let scheduler = UpdateScheduler::new();
 let err = flui_animation::ValueRange::new(1.0, 0.0);
 assert!(matches!(err, Err(AnimationError::InvalidBounds(_))));
 ```

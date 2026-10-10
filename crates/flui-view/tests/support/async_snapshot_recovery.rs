@@ -133,7 +133,7 @@ fn run_child(stream: bool, competing_value: bool, competing_wake: bool) {
         Some((ConnectionState::Waiting, 0))
     );
     if stream {
-        owner_frame.poll_ready();
+        owner_frame.pump_background(|| {}).expect("live owner turn");
     }
     send(
         &mailbox,
@@ -144,8 +144,10 @@ fn run_child(stream: bool, competing_value: bool, competing_wake: bool) {
         },
     );
     fail_wake.store(competing_wake, Ordering::SeqCst);
-    let payload = catch_unwind(AssertUnwindSafe(|| owner_frame.poll_ready()))
-        .expect_err("old snapshot retirement panics");
+    let payload = catch_unwind(AssertUnwindSafe(|| {
+        owner_frame.pump_background(|| {}).expect("live owner turn")
+    }))
+    .expect_err("old snapshot retirement panics");
     assert_eq!(
         flui_foundation::panic::payload_text(&*payload),
         Some("snapshot retirement first")
@@ -186,7 +188,7 @@ fn run_child(stream: bool, competing_value: bool, competing_wake: bool) {
     owner.schedule_build_for(root, 0, RebuildReason::StateChange);
     owner.build_scope(&mut tree);
     if stream {
-        owner_frame.poll_ready();
+        owner_frame.pump_background(|| {}).expect("live owner turn");
     }
     send(
         &next_mailbox,
@@ -196,7 +198,9 @@ fn run_child(stream: bool, competing_value: bool, competing_wake: bool) {
             drops: Arc::clone(&next_drops),
         },
     );
-    let outcome = catch_unwind(AssertUnwindSafe(|| owner_frame.poll_ready()));
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        owner_frame.pump_background(|| {}).expect("live owner turn")
+    }));
     if competing_value {
         let payload = outcome.expect_err("incoming value has its own ordinary retirement failure");
         assert_eq!(

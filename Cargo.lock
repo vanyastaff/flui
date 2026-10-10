@@ -1825,7 +1825,6 @@ dependencies = [
  "flui-macros",
  "flui-painting",
  "flui-platform-api",
- "flui-scheduler",
  "parking_lot",
  "proptest",
  "serde",

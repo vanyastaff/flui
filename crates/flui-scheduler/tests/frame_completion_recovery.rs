@@ -47,9 +47,15 @@ fn assert_failure(result: Result<(), Box<dyn std::any::Any + Send>>, expected: &
 }
 fn assert_next_frame(scheduler: &UpdateScheduler) {
     let mut next = scheduler.end_of_frame();
-    scheduler.execute_frame(
-        &flui_scheduler::OwnerFrame::new(scheduler).expect("the scheduler has no live owner frame"),
-    );
+    flui_scheduler::OwnerFrame::new(scheduler)
+        .expect("the scheduler has no live owner frame")
+        .drive_frame(
+            flui_scheduler::Instant::now(),
+            flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
+            || {},
+            || {},
+        )
+        .expect("live owner frame");
     assert!(matches!(
         Pin::new(&mut next).poll(&mut Context::from_waker(Waker::noop())),
         Poll::Ready(Ok(FrameOutcome::Completed { .. }))
@@ -152,25 +158,25 @@ fn delivery(case: &str) {
             }
             drop(owned);
         } else if pipeline {
-            scheduler.drive_frame(
-                &flui_scheduler::OwnerFrame::new(scheduler)
-                    .expect("the scheduler has no live owner frame"),
-                Instant::now(),
-                IdleDeadline::far_future(Instant::now()),
-                || panic!("pipeline primary"),
-            );
-        } else if case == "direct abort" {
-            scheduler.handle_begin_frame(
-                Instant::now(),
-                &flui_scheduler::OwnerFrame::new(scheduler)
-                    .expect("the scheduler has no live owner frame"),
-            );
-            scheduler.abort_frame();
+            flui_scheduler::OwnerFrame::new(scheduler)
+                .expect("the scheduler has no live owner frame")
+                .drive_frame(
+                    Instant::now(),
+                    IdleDeadline::far_future(Instant::now()),
+                    || {},
+                    || panic!("pipeline primary"),
+                )
+                .expect("live owner frame");
         } else {
-            scheduler.execute_frame(
-                &flui_scheduler::OwnerFrame::new(scheduler)
-                    .expect("the scheduler has no live owner frame"),
-            );
+            flui_scheduler::OwnerFrame::new(scheduler)
+                .expect("the scheduler has no live owner frame")
+                .drive_frame(
+                    flui_scheduler::Instant::now(),
+                    flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
+                    || {},
+                    || {},
+                )
+                .expect("live owner frame");
         }
     };
     let result = if case.starts_with("telemetry") {
@@ -219,7 +225,7 @@ fn delivery(case: &str) {
     let terminal = Pin::new(&mut last).poll(&mut Context::from_waker(Waker::noop()));
     if teardown {
         assert!(matches!(terminal, Poll::Ready(Err(_))));
-    } else if pipeline || case == "direct abort" {
+    } else if pipeline {
         assert!(matches!(
             terminal,
             Poll::Ready(Ok(FrameOutcome::Aborted { .. }))
@@ -261,7 +267,6 @@ fn pending_cancellation_during_unwind() {
 
 const CASES: &[&str] = &[
     "normal completion",
-    "direct abort",
     "pipeline failure",
     "teardown",
     "unwinding teardown",

@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-08
+- **Superseded-by:** [ADR-0182](ADR-0182-complete-owner-execution.md) for scheduler execution authority and complete-turn entry points.
 - **Supersedes:** ADR-0136's transitional statement that `UpdateScheduler`
   remains `Send`, and its transitional split post-frame queues.
 - **Supersedes:** ADR-0064's scheduler ticker surface and explicit-disposal
@@ -101,7 +102,7 @@ queue; the scheduler then retains only a weak reference. Every `PostFrameHandle`
 addresses an exact queue identity. Owner retirement closes admission and
 withdraws callbacks before retiring captures. A later owner receives a fresh
 queue, and stale handles refuse admission rather than following the replacement.
-The existing frame entry points continue to require `&OwnerFrame`.
+Complete frame and background execution belong to `OwnerFrame` (ADR-0182).
 
 Data and IO boundaries retain their `Send` requirements. Platform frame hooks,
 signal senders, render invalidation handles and callback-free raster data are

@@ -1,11 +1,11 @@
 //! # FLUI UpdateScheduler
 //!
-//! Frame scheduling, task prioritization, and animation coordination for FLUI.
+//! Owner-local frame execution, callbacks, and task prioritization for FLUI.
 //!
 //! `UpdateScheduler` owns *logical* time only — the phase machine, callback
 //! queues, and the priority task queue — and makes no refresh-rate, display,
 //! or surface assumption of its own; a caller supplies the frame's vsync
-//! timestamp and an Idle-slice deadline to [`UpdateScheduler::drive_frame`]
+//! timestamp and an Idle-slice deadline to [`OwnerFrame::drive_frame`]
 //! (physical pacing is a presentation-owned concern, split out from this
 //! crate).
 //!
@@ -14,7 +14,8 @@
 //! ```text
 //! Application
 //!     ↓
-//! UpdateScheduler (orchestrates frames)
+//! OwnerFrame (executes complete frame and background turns)
+//!     └─ UpdateScheduler (admits work and observes logical frame state)
 //!     ├─ TaskQueue (priority-based execution)
 //!     └─ FrameBudget (phase-duration stats)
 //!
@@ -74,7 +75,7 @@
 //!
 //! let scheduler = UpdateScheduler::new();
 //! // The owner thread's frame state: owner-local post-frame callbacks and
-//! // async tasks. A UI runtime owns one; every frame entry point takes it.
+//! // async tasks and complete execution. A UI runtime owns one.
 //! let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
 //!
 //! // Schedule a one-time frame callback (animation tick)
@@ -88,7 +89,9 @@
 //! });
 //!
 //! // Execute frame (called by event loop)
-//! scheduler.execute_frame(&owner);
+//! let now = flui_scheduler::Instant::now();
+//! owner.drive_frame(now, flui_scheduler::IdleDeadline::far_future(now), || {}, || {})
+//!     .expect("the owner accepts the frame");
 //! ```
 //!
 //! ## Feature Flags
@@ -153,7 +156,7 @@ pub use async_driver::{AsyncDriver, BoxedTask, TaskToken};
 pub use budget::{
     AllPhaseStats, BudgetPolicy, FrameBudget, FrameBudgetBuilder, PhaseStats, SharedBudget,
 };
-pub use config::{PerformanceMode, PerformanceModeRequestHandle, TimingsCallback};
+pub use config::TimingsCallback;
 /// [`FrameSnapshot::presentation`]'s type — re-exported so a consumer of
 /// this crate's frame telemetry (e.g. `flui-devtools`' `timeline` feature)
 /// can name it without an extra, redundant direct dependency on
@@ -170,9 +173,10 @@ pub use frame_telemetry::{
     MAX_COALESCED_INPUT_EPOCHS, PresentOutcome,
 };
 pub use post_frame::{OwnerFrame, OwnerFrameError, PostFrameHandle, PostFrameScheduleError};
+pub use scheduler::execution::ExecutionError;
 /// The instant type the frame clock is stamped with. `std::time::Instant` on
 /// native, a `performance.now()` shim on wasm32 — re-exported so a binding can
-/// name `UpdateScheduler::drive_frame`'s `vsync_time` without depending on `web_time`.
+/// name `OwnerFrame::drive_frame`'s timestamp without depending on `web_time`.
 mod post_frame;
 
 mod completion_wake;

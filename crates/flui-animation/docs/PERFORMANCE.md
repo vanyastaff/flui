@@ -377,8 +377,6 @@ that hop plus a cubic solve.
 # use std::rc::Rc;
 # use std::time::Duration;
 # use flui_animation::{Animation, AnimationController, CurvedAnimation, Curves};
-# use flui_scheduler::UpdateScheduler;
-# let scheduler = UpdateScheduler::new();
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 let shared = controller.clone(); // shares the controller, no copy
 let animation: Rc<dyn Animation<f64>> = Rc::new(CurvedAnimation::new(
@@ -402,9 +400,7 @@ growth), so every registration costs at least one allocation:
 # use std::rc::Rc;
 # use std::time::Duration;
 # use flui_animation::AnimationController;
-# use flui_scheduler::UpdateScheduler;
 use flui_foundation::{Listenable, ListenerCallback};
-# let scheduler = UpdateScheduler::new();
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 # let other = AnimationController::builder(Duration::from_millis(300)).build();
 
@@ -429,9 +425,7 @@ and `status_fan_out/{1,4,8}` for status transitions.
 ```rust
 # use std::time::Duration;
 # use flui_animation::{AnimationController, AnimationError};
-# use flui_scheduler::UpdateScheduler;
 # fn main() -> Result<(), AnimationError> {
-# let scheduler = UpdateScheduler::new();
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 // Instead of creating a controller per animation, rewind and replay
 controller.reset()?;
@@ -447,8 +441,6 @@ controller.forward()?;
 # use std::rc::Rc;
 # use std::time::Duration;
 # use flui_animation::{Animation, AnimationController, AnimationStatus};
-# use flui_scheduler::UpdateScheduler;
-# let scheduler = UpdateScheduler::new();
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 // React to the transition once instead of reading status every frame
 let _subscription = controller.subscribe_status(Rc::new(|status| {
@@ -463,7 +455,6 @@ let _subscription = controller.subscribe_status(Rc::new(|status| {
 # use std::rc::Rc;
 # use std::time::Duration;
 # use flui_animation::AnimationController;
-# use flui_scheduler::UpdateScheduler;
 // One presentation registry drives both owning controllers.
 let vsync = flui_animation::Vsync::new();
 let d = Duration::from_millis(300);

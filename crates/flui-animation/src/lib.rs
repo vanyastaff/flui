@@ -35,8 +35,6 @@
 //! # use std::rc::Rc;
 //! # use std::time::Duration;
 //! # use flui_animation::{AnimationController, FloatTween, TweenAnimation};
-//! # use flui_scheduler::UpdateScheduler;
-//! # let scheduler = UpdateScheduler::new();
 //! # let tween = FloatTween::new(0.0, 100.0);
 //! // Create once (outside widget build)
 //! let controller = AnimationController::builder(Duration::from_millis(300)).build();
@@ -53,11 +51,9 @@
 //! ```
 //! # fn main() -> Result<(), flui_animation::AnimationError> {
 //! use flui_animation::{AnimationController, Animation};
-//! use flui_scheduler::UpdateScheduler;
 //! use std::time::Duration;
 //!
-//! // Create scheduler and controller
-//! let scheduler = UpdateScheduler::new();
+//! // Create a manually sampled controller
 //! let controller = AnimationController::builder(Duration::from_millis(300)).build();
 //!
 //! // Start animation

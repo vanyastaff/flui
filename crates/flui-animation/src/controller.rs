@@ -317,10 +317,8 @@ struct RepeatSample {
 ///
 /// ```
 /// use flui_animation::{AnimationController, Animation};
-/// use flui_scheduler::UpdateScheduler;
 /// use std::time::Duration;
 ///
-/// let scheduler = UpdateScheduler::new();
 /// let controller = AnimationController::builder(Duration::from_millis(300)).build();
 ///
 /// // Start animation
@@ -1465,9 +1463,7 @@ impl AnimationController {
     ///
     /// ```
     /// # use flui_animation::AnimationController;
-    /// # use flui_scheduler::UpdateScheduler;
     /// # use std::time::Duration;
-    /// # let scheduler = UpdateScheduler::new();
     /// let controller = AnimationController::builder(Duration::from_millis(300)).build();
     /// controller.fling(1.0).unwrap(); // Fling forward
     /// ```
@@ -1609,9 +1605,7 @@ impl AnimationController {
     /// ```
     /// # use flui_animation::{AnimationController, simulation::SpringSimulation};
     /// # use flui_animation::simulation::SpringDescription;
-    /// # use flui_scheduler::UpdateScheduler;
     /// # use std::time::Duration;
-    /// # let scheduler = UpdateScheduler::new();
     /// let controller = AnimationController::builder(Duration::from_millis(300)).build();
     /// let spring = SpringDescription::with_damping_ratio(1.0, 300.0, 0.5);
     /// let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0);
@@ -2263,8 +2257,7 @@ impl AnimationController {
     /// Set the value directly without animating; recomputes status and notifies.
     ///
     /// Stops any active run first — otherwise
-    /// a live ticker keeps re-registering itself with the scheduler and the
-    /// next frame recomputes the value from the stale run's `start_value`/
+    /// the next manual or presentation sample recomputes the value from the stale run's `start_value`/
     /// `target_value`, silently overwriting what was just set.
     ///
     /// A non-finite input is canonicalized on a BOUNDED controller — `NaN`

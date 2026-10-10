@@ -292,7 +292,7 @@ impl UiRuntime {
     /// This UI runtime's owner-local frame state (its post-frame queue and async
     /// tasks). Test-only: production drives every frame through
     /// [`Self::pump`], whose frame drive passes it to
-    /// `UpdateScheduler::drive_frame` itself so no host can drive a frame
+    /// `OwnerFrame::drive_frame` itself so no host can drive a frame
     /// that forgets it. A test that hand-assembles a frame drive passes it the
     /// same way — by parameter, the same reason [`Self::scheduler`] exists
     /// rather than a process-global lookup.
@@ -317,8 +317,7 @@ impl UiRuntime {
     /// addresses its lane directly (a `Weak` pointer minted once per
     /// presentation), so `schedule` needs no ambient "active lane"
     /// scope to succeed. The frame drive drains that lane by passing it
-    /// explicitly to `UpdateScheduler::drive_frame`/
-    /// `end_frame`, not by anything entered here.
+    /// explicitly through `OwnerFrame::drive_frame`, not by anything entered here.
     pub fn enter<R>(&self, f: impl FnOnce(&Self) -> R) -> R {
         self.interaction_lane.enter(|| {
             let composite = GlobalKeyRegistryComposite::assemble(
