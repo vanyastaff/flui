@@ -31,11 +31,9 @@ enum SwitchMode {
 ///
 /// ```
 /// use flui_animation::{AnimationSwitch, AnimationController, Animation};
-/// use flui_scheduler::UpdateScheduler;
 /// use std::rc::Rc;
 /// use std::time::Duration;
 ///
-/// let scheduler = UpdateScheduler::new();
 ///
 /// let controller1 = Rc::new(AnimationController::builder(Duration::from_millis(300)).build());
 /// let controller2 = Rc::new(AnimationController::builder(Duration::from_millis(300)).build());
