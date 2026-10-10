@@ -36,7 +36,7 @@ src/
 ├── vsync.rs          # Vsync registry: drives many controllers per frame
 │
 ├── curved.rs         # CurvedAnimation (applies curve)
-├── tween.rs          # TweenAnimation<T> (maps to type T)
+├── tween.rs          # TweenAnimation<A> (maps through Animatable A)
 ├── reverse.rs        # ReverseAnimation (inverts value)
 ├── proxy.rs          # ProxyAnimation (hot-swappable parent)
 ├── constant.rs       # ConstantAnimation (fixed value)
@@ -130,6 +130,22 @@ the registry and different frame partitions; the public
 with position differences and an independent early-trajectory reference.
 
 ### Owning vector motion
+
+`TwoWayConverter::rest_thresholds` specifies one positive finite distance per
+component in its vector's own units ([ADR-0186](../../../docs/adr/ADR-0186-typed-animation-rest-thresholds.md)).
+Geometry uses 0.01 logical pixels; scalar, alignment and premultiplied Oklab
+components use 0.001. Speed limits derive from each spring's natural rate.
+Derived values concatenate field thresholds without converting error values
+through nonlinear value conversion. Curve motion ignores spring thresholds.
+Preparation validates thresholds before admission, so invalid distances retain
+the previous run and refuse a coordinated update without admitting a prefix.
+`owning_animated_value_contract` covers distinct geometry/scalar completion and
+single/grouped refusal; `two_way_converter_derive_contract` proves that nested
+geometry retains its own completion timing inside a nested vector. A vector's
+spring components share the latest native rest start and the shortest permitted
+rest interval. This keeps premultiplied color relationships intact while
+respecting every component's distance bound. The color fade case in
+`tolerance_constructors_validate_and_scale_with_dpr` verifies its visible hue.
 
 `AnimatedValue<T>` owns one `DrivenController` for all its scalar components.
 The controller's generated value-motion branch evaluates components outside
@@ -281,21 +297,25 @@ pub trait Curve {
 }
 ```
 
-### Animatable<T> and Tween<T> Traits
+### Animatable mappings and Tween values
 
 ```rust
-/// Maps t ∈ [0,1] → value of type T
-pub trait Animatable<T> {
-    fn transform(&self, t: f64) -> T;
+/// Maps progress to one associated value type.
+pub trait Animatable {
+    type Value;
+    fn transform(&self, t: f64) -> Self::Value;
 }
 
-/// Animatable with explicit begin/end
-pub trait Tween<T>: Animatable<T> {
-    fn begin(&self) -> &T;
-    fn end(&self) -> &T;
-    fn lerp(&self, t: f64) -> T;
+/// A concrete linear mapping between two Lerp values.
+pub struct Tween<V> {
+    pub begin: V,
+    pub end: V,
 }
 ```
+
+`TweenAnimation<A>` retains the mapping and its parent subscription, exposing
+`A::Value` through `Animation`. A mapping specifies its output once; consumers
+such as Hero accept `Animatable<Value = Rect>`, including owner-local captures.
 
 ### Simulation Trait
 
@@ -878,7 +898,7 @@ AnimationController (produces 0.0 → 1.0)
 CurvedAnimation (applies easing curve)
         │
         ▼ Rc<dyn Animation<f64>>
-TweenAnimation<Color> (maps to Color)
+TweenAnimation<ColorTween> (maps to Color)
         │
         ▼ Animation<Color>
 ```

@@ -96,6 +96,101 @@ fn clockless_motion_and_snap_publish_the_exact_target() {
     }
 }
 
+fn geometry_reaches_rest_before_normalized_components() {
+    let registry = Vsync::new();
+    let mut clock = MotionClock::new();
+    let motion = MotionSpec::Spring(SpringDescription::with_damping_ratio(1.0, 100.0, 1.0));
+    let mut geometry = AnimatedValue::new(Offset::ZERO, motion.clone(), Some(&registry)).unwrap();
+    let mut normalized = AnimatedValue::new(0.0, motion, Some(&registry)).unwrap();
+    let geometry_run = geometry.animate_to(Offset::new(1.0, -1.0)).unwrap();
+    let normalized_run = normalized.animate_to(1.0).unwrap();
+    registry.tick_all(&clock.frame(Duration::ZERO));
+    for millis in (10..=5000).step_by(10) {
+        registry.tick_all(&clock.frame(Duration::from_millis(millis)));
+        if geometry_run.is_complete() {
+            assert!(
+                normalized_run.is_pending(),
+                "logical-pixel geometry must use its own rest threshold"
+            );
+            assert_eq!(geometry.value(), Offset::new(1.0, -1.0));
+            assert_eq!(geometry.velocity(), [0.0, 0.0]);
+            registry.tick_all(&clock.frame(Duration::from_secs(5)));
+            assert!(normalized_run.is_complete());
+            assert_eq!((normalized.value(), normalized.velocity()), (1.0, [0.0]));
+            return;
+        }
+    }
+    panic!("the geometry spring must complete in the observed interval");
+}
+
+#[derive(Clone)]
+struct InvalidThreshold<const CASE: usize>(f64);
+
+impl<const CASE: usize> TwoWayConverter for InvalidThreshold<CASE> {
+    type Vector = [f64; 1];
+    fn to_vector(&self) -> Self::Vector {
+        [self.0]
+    }
+    fn from_vector([value]: Self::Vector) -> Self {
+        Self(value)
+    }
+    fn rest_thresholds() -> Self::Vector {
+        [[0.0, -1.0, f64::NAN, f64::INFINITY][CASE]]
+    }
+}
+
+fn refused_threshold<const CASE: usize>() {
+    let registry = Vsync::new();
+    let mut clock = MotionClock::new();
+    let mut owner = AnimatedValue::new(
+        InvalidThreshold::<CASE>(0.0),
+        curve(Curves::Linear),
+        Some(&registry),
+    )
+    .unwrap();
+    let old = owner.animate_to(InvalidThreshold(1.0)).unwrap();
+    let mut healthy = AnimatedValue::new(0.0, curve(Curves::Linear), Some(&registry)).unwrap();
+    let healthy_old = healthy.animate_to(1.0).unwrap();
+    registry.tick_all(&clock.frame(Duration::ZERO));
+    registry.tick_all(&clock.frame(Duration::from_millis(250)));
+    let seam = (owner.value().0, owner.velocity());
+    let healthy_seam = (healthy.value(), healthy.velocity());
+    let spring = MotionSpec::Spring(SpringDescription::with_damping_ratio(1.0, 100.0, 1.0));
+    assert!(matches!(
+        owner.retarget(InvalidThreshold(2.0), spring),
+        Err(AnimationError::InvalidSpring(_))
+    ));
+    assert!(old.is_pending(), "refusal cannot cancel accepted motion");
+    assert_eq!((owner.value().0, owner.velocity()), seam);
+    let refused = MotionUpdate::run(|update| {
+        update.retarget(&mut healthy, 3.0, curve(Curves::Linear))?;
+        update.retarget(
+            &mut owner,
+            InvalidThreshold(2.0),
+            MotionSpec::Spring(SpringDescription::with_damping_ratio(1.0, 100.0, 1.0)),
+        )
+    });
+    assert!(matches!(refused, Err(AnimationError::InvalidSpring(_))));
+    assert!(old.is_pending() && healthy_old.is_pending());
+    assert_eq!((healthy.value(), healthy.velocity()), healthy_seam);
+    registry.tick_all(&clock.frame(Duration::from_secs(1)));
+    assert!(old.is_complete(), "the previous motion remains deliverable");
+    assert_eq!(owner.value().0, 1.0);
+    assert!(healthy_old.is_complete());
+    assert_eq!(healthy.value(), 1.0);
+}
+
+fn invalid_rest_thresholds_preserve_the_accepted_run() {
+    for case in [
+        refused_threshold::<0> as fn(),
+        refused_threshold::<1>,
+        refused_threshold::<2>,
+        refused_threshold::<3>,
+    ] {
+        case();
+    }
+}
+
 fn observers_do_not_prolong_the_run_or_its_seat() {
     let registry = Vsync::new();
     let mut clock = MotionClock::new();
@@ -158,6 +253,9 @@ impl Clone for ReentrantValue {
 
 impl TwoWayConverter for ReentrantValue {
     type Vector = [f64; 1];
+    fn rest_thresholds() -> Self::Vector {
+        [0.001]
+    }
     fn to_vector(&self) -> Self::Vector {
         (self.vector_hook)();
         [self.position]
@@ -383,6 +481,14 @@ fn a_failed_component_keeps_the_whole_published_sample() {
 #[test]
 fn owning_animated_value_contract() {
     crate::run_table(&[
+        (
+            "invalid rest threshold preserves run",
+            invalid_rest_thresholds_preserve_the_accepted_run,
+        ),
+        (
+            "type-specific spring rest",
+            geometry_reaches_rest_before_normalized_components,
+        ),
         (
             "replacement publishes components before cancellation",
             replacement_publishes_all_components_before_cancellation,

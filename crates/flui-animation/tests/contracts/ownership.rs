@@ -3,10 +3,8 @@
 //! keep its controller alive, and the embedder's frame-scheduled hook runs
 //! with the controller free to read.
 //!
-//! A row whose behaviour is not there yet is its own
-//! `#[ignore = "contract: …"]` test, so `--run-ignored` shows it failing on
-//! the assertion that names the behaviour. The hook rows run in child
-//! processes: their failure mode is a deadlock.
+//! The contract rows run in the ordinary suite. Hook rows use child processes
+//! to contain a possible deadlock without hanging the parent runner.
 
 use std::future::Future;
 use std::pin::Pin;

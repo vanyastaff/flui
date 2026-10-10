@@ -69,6 +69,17 @@
 
 ### Fixed
 
+- Release the Hero rect-factory guard before calling its factory, mapping or
+  destructor, allowing each to reenter the same flight without deadlocking.
+- Preserve a Hero mapping's evaluation failure through opaque mapping retirement;
+  a competing destructor failure no longer aborts before frame containment.
+- Give `Animatable` an associated `Value` type. Manual implementations now
+  declare `type Value`; `TweenAnimation` and `ReverseTween` take only the mapping
+  type. Hero rect mappings accept owner-local captures.
+
+- Scalar and geometry interpolation preserve representable extrapolations
+  when the intermediate multiplication overflows before adding the start.
+
 - Preserve representable scalar and composite geometry interpolation between
   opposite finite extremes, and retain authored endpoint bits without clamping
   extrapolated motion.
@@ -123,3 +134,9 @@
   clock is absent or exhausted; resumption honors the selected timeline's capacity.
 - Keep single-drawer drag geometry in the render path when crossing halfway;
   update scaffold structure only when its two drawer slots must change order.
+- Preserve accepted Dismissible resize notifications before completion, including
+  when several animation samples arrive before a build or a resize callback panics.
+- Use component-specific spring rest distances through
+  `TwoWayConverter::rest_thresholds`; derived values compose their fields'
+  distances. Manual converters must implement the new method with positive finite
+  distances in their vector units. Invalid distances preserve the previous run.

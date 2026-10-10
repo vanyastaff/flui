@@ -295,7 +295,7 @@ assert!((flipped.transform(0.0) - 0.0).abs() < 1e-9);
 
 ## Tweens
 
-An `Animatable<T>` transforms `t ∈ [0, 1]` into a value of type `T`.
+An `Animatable` transforms `t ∈ [0, 1]` into its associated `Value` type.
 
 A `Tween<T>` is an `Animatable` with explicit `begin` and `end` values.
 

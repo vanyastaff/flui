@@ -84,9 +84,8 @@ use crate::{Offstage, SizedBox, Stack, TickerMode};
 
 /// Builds the [`RectTween`](flui_animation::RectTween)-like path a hero's shuttle
 /// follows. The default is a linear `RectTween`. Erased and `Rc`-shared because hero customization is UI-owner
-/// local; the returned animation object stays `Send + Sync` for now.
-pub(crate) type RectTweenFactory =
-    Rc<dyn Fn(Rect, Rect) -> Box<dyn Animatable<Rect> + Send + Sync>>;
+/// local, including the returned mapping and its captures.
+pub(crate) type RectTweenFactory = Rc<dyn Fn(Rect, Rect) -> Box<dyn Animatable<Value = Rect>>>;
 
 /// Builds the widget shown in flight instead of the default (a fresh copy of the
 /// destination hero's child). The builder receives the flight animation, the
@@ -812,10 +811,10 @@ impl Hero {
     pub fn create_rect_tween<F, A>(mut self, factory: F) -> Self
     where
         F: Fn(Rect, Rect) -> A + 'static,
-        A: Animatable<Rect> + Send + Sync + 'static,
+        A: Animatable<Value = Rect> + 'static,
     {
         self.rect_factory = Some(Rc::new(move |begin, end| {
-            Box::new(factory(begin, end)) as Box<dyn Animatable<Rect> + Send + Sync>
+            Box::new(factory(begin, end)) as Box<dyn Animatable<Value = Rect>>
         }));
         self
     }

@@ -56,7 +56,7 @@
 | M-INTP-4 | OkLCh и hue-политики вынесены | Вне текущего scope |
 | M-INTP-5, M-INTP-6 | Matrix decomposition/Angle реализованы; проверить render-путь, а не только численные значения | A6, A9 |
 | M-INTP-7, M-INTP-8 | TwoWayConverter/derive есть; миграция реальных implicit consumers ещё нужна | A4, A7 |
-| M-INTP-9 | Порог покоя на тип не заменяется общим Tolerance или DPR scroll tolerance | A7, решение контракта |
+| M-INTP-9 | ADR-0186: пороги компонентов через TwoWayConverter, derive сохраняет единицы полей; публичные проверки различают geometry/scalar rest, отказ сохраняет run и весь coordinated update. Вектор завершает компоненты совместно, сохраняя premultiplied hue. Нужны итоговый consumer gate и CI | A7, A9 |
 | M-INTP-10 | Opt-in discrete values вынесены | Вне текущего scope |
 | M-CMP-1, M-CMP-2, M-CMP-4, M-CMP-5 | Keyframes/hold/группы на общем времени/stagger есть; indicators дают consumers, нужны lifecycle/render проверки | A7 |
 | M-CMP-3 | Repeat покрыт обычными тестами; completion/motion-policy проверить после core миграции | A1, A5 |

@@ -70,10 +70,24 @@ pub trait TwoWayConverter: Clone {
 
     /// Rebuild from scalar components.
     fn from_vector(v: Self::Vector) -> Self;
+
+    /// Positive finite rest distances in each component's own units.
+    ///
+    /// Spring admission validates these distances before replacing a run.
+    /// Speed limits follow the spring's natural rate; curve motion ignores
+    /// these thresholds. Derived values concatenate their fields' thresholds.
+    /// Geometry uses 0.01 logical pixels; normalized scalar, alignment and
+    /// premultiplied Oklab components use 0.001. Custom converters must choose
+    /// distances appropriate for their representation rather than transform a
+    /// value through `to_vector` (nonlinear conversion does not preserve errors).
+    fn rest_thresholds() -> Self::Vector;
 }
 
 impl TwoWayConverter for f64 {
     type Vector = [f64; 1];
+    fn rest_thresholds() -> Self::Vector {
+        [0.001]
+    }
     #[inline]
     fn to_vector(&self) -> Self::Vector {
         [*self]
@@ -86,6 +100,9 @@ impl TwoWayConverter for f64 {
 
 impl TwoWayConverter for Offset<f64> {
     type Vector = [f64; 2];
+    fn rest_thresholds() -> Self::Vector {
+        [0.01; 2]
+    }
     #[inline]
     fn to_vector(&self) -> Self::Vector {
         [self.dx, self.dy]
@@ -98,6 +115,9 @@ impl TwoWayConverter for Offset<f64> {
 
 impl TwoWayConverter for Size<f64> {
     type Vector = [f64; 2];
+    fn rest_thresholds() -> Self::Vector {
+        [0.01; 2]
+    }
     #[inline]
     fn to_vector(&self) -> Self::Vector {
         [self.width, self.height]
@@ -110,6 +130,9 @@ impl TwoWayConverter for Size<f64> {
 
 impl TwoWayConverter for EdgeInsets {
     type Vector = [f64; 4];
+    fn rest_thresholds() -> Self::Vector {
+        [0.01; 4]
+    }
     fn to_vector(&self) -> Self::Vector {
         [self.top, self.right, self.bottom, self.left]
     }
@@ -120,6 +143,9 @@ impl TwoWayConverter for EdgeInsets {
 
 impl TwoWayConverter for Alignment {
     type Vector = [f64; 2];
+    fn rest_thresholds() -> Self::Vector {
+        [0.001; 2]
+    }
     fn to_vector(&self) -> Self::Vector {
         [self.x, self.y]
     }
@@ -133,6 +159,9 @@ impl TwoWayConverter for Alignment {
 /// velocity, and a fade to transparent keeps the opaque end's hue.
 impl TwoWayConverter for Color {
     type Vector = [f64; 4];
+    fn rest_thresholds() -> Self::Vector {
+        [0.001; 4]
+    }
     #[inline]
     fn to_vector(&self) -> Self::Vector {
         let p = self.to_premultiplied_oklab();

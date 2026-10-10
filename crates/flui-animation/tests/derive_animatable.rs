@@ -131,6 +131,55 @@ fn nested_values_retarget_on_one_registered_motion() {
     assert_eq!(settled.1, 2.0);
 }
 
+fn nested_springs_keep_each_fields_rest_units() {
+    use flui_animation::{AnimatedValue, MotionClock, MotionSpec, SpringDescription, Vsync};
+    use std::time::Duration;
+
+    let registry = Vsync::new();
+    let mut clock = MotionClock::new();
+    let motion = MotionSpec::Spring(SpringDescription::with_damping_ratio(1.0, 100.0, 1.0));
+    let mut owner = AnimatedValue::new(
+        NestedAppearance(
+            Appearance {
+                position: Offset::ZERO,
+                color: Color::BLACK,
+            },
+            0.0,
+        ),
+        motion.clone(),
+        Some(&registry),
+    )
+    .expect("finite nested value");
+    let goal = Offset::new(100.0, -100.0);
+    let mut geometry =
+        AnimatedValue::new(Offset::ZERO, motion, Some(&registry)).expect("finite geometry");
+    let geometry_run = geometry.animate_to(goal).expect("finite geometry goal");
+    let run = owner
+        .animate_to(NestedAppearance(
+            Appearance {
+                position: goal,
+                color: Color::BLACK,
+            },
+            0.005,
+        ))
+        .expect("finite target");
+    registry.tick_all(&clock.frame(Duration::ZERO));
+    for millis in (10..=5000).step_by(10) {
+        registry.tick_all(&clock.frame(Duration::from_millis(millis)));
+        if geometry_run.is_complete() {
+            assert!(
+                run.is_complete(),
+                "nested geometry retains the field's threshold rather than the scalar threshold"
+            );
+            assert_eq!(owner.value().0.position, goal);
+            assert_eq!(owner.value().1, 0.005);
+            assert_eq!(owner.velocity(), [0.0; 7]);
+            return;
+        }
+    }
+    panic!("nested geometry must settle in the observed interval");
+}
+
 fn named_struct_round_trips_through_vector() {
     let t = Translation {
         x: 1.0,
@@ -173,6 +222,10 @@ fn derived_type_is_a_keyframe_value() {
 #[test]
 fn two_way_converter_derive_contract() {
     crate::run_table(&[
+        (
+            "nested spring rest units",
+            nested_springs_keep_each_fields_rest_units,
+        ),
         ("finite extreme lerp", derived_extreme_lerp),
         ("vector round trip", named_struct_round_trips_through_vector),
         ("componentwise lerp", derived_lerp_is_componentwise),

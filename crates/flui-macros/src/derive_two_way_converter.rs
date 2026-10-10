@@ -57,6 +57,7 @@ pub fn expand(input: &DeriveInput) -> TokenStream {
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
     let mut width = quote!(0usize);
     let mut reads = Vec::new();
+    let mut thresholds = Vec::new();
     let mut writes = Vec::new();
     let mut lerps = Vec::new();
     for (index, field) in fields.iter().enumerate() {
@@ -76,6 +77,12 @@ pub fn expand(input: &DeriveInput) -> TokenStream {
         reads.push(quote_spanned! {ty.span()=>
             {
                 let field = <#ty as #runtime::TwoWayConverter>::to_vector(&self.#member);
+                vector[#start..#end].copy_from_slice(::core::convert::AsRef::<[f64]>::as_ref(&field));
+            }
+        });
+        thresholds.push(quote_spanned! {ty.span()=>
+            {
+                let field = <#ty as #runtime::TwoWayConverter>::rest_thresholds();
                 vector[#start..#end].copy_from_slice(::core::convert::AsRef::<[f64]>::as_ref(&field));
             }
         });
@@ -116,6 +123,12 @@ pub fn expand(input: &DeriveInput) -> TokenStream {
             #[inline]
             fn from_vector(vector: Self::Vector) -> Self {
                 #from_body
+            }
+
+            fn rest_thresholds() -> Self::Vector {
+                let mut vector = [0.0; #width];
+                #(#thresholds)*
+                vector
             }
         }
 

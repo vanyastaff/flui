@@ -13,6 +13,12 @@ scalar array; no type names, memory layout assumptions or heap buffers determine
 the representation. Derived `Lerp` delegates to each field, preserving geometry
 extrapolation and premultiplied color interpolation, and returns exact authored
 endpoints. The shared scalar `Lerp` handles representable extreme differences.
+The derive also concatenates `rest_thresholds` in that same field order, retaining
+each representation's units ([ADR-0186](../../docs/adr/ADR-0186-typed-animation-rest-thresholds.md)).
+Thresholds are not converted through `to_vector`: a nonlinear value converter
+need not preserve distances. The nested spring case in
+`two_way_converter_derive_contract` observes nested geometry retaining its own
+completion timing rather than adopting the scalar field's threshold.
 
 Empty structs are refused because they have no motion components. A field that
 references a type or const parameter is refused at its type span: stable Rust

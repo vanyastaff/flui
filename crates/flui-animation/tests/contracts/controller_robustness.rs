@@ -3,9 +3,7 @@
 //! value, extreme durations and times never panic or poison the timeline, and
 //! a disposed controller neither changes nor keeps what it is handed.
 //!
-//! Rows that hold today run in the table. A row whose behaviour is not there
-//! yet is its own `#[ignore = "contract: …"]` test, so `--run-ignored` shows
-//! it failing on the assertion that names the behaviour.
+//! The contract rows run in the ordinary suite.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};

@@ -14,8 +14,7 @@ use std::rc::Rc;
 ///
 /// # Type Parameters
 ///
-/// * `T` - The output type (e.g., Color, Size, Offset)
-/// * `A` - The Tween type that can transform f64 to T
+/// * `A` - The mapping type; `A::Value` determines its output.
 ///
 /// # Examples
 ///
@@ -36,20 +35,19 @@ use std::rc::Rc;
 /// );
 /// ```
 #[derive(Clone)]
-pub struct TweenAnimation<T, A>
+pub struct TweenAnimation<A>
 where
-    T: Clone + 'static,
-    A: Animatable<T> + Clone + 'static,
+    A: Animatable + Clone + 'static,
+    A::Value: Clone + 'static,
 {
     tween: Terminal<A>,
     links: Terminal<Rc<ParentLinks>>,
-    _phantom: std::marker::PhantomData<T>,
 }
 
-impl<T, A> Drop for TweenAnimation<T, A>
+impl<A> Drop for TweenAnimation<A>
 where
-    T: Clone + 'static,
-    A: Animatable<T> + Clone + 'static,
+    A: Animatable + Clone + 'static,
+    A::Value: Clone + 'static,
 {
     fn drop(&mut self) {
         let mut recovery = Retirement::new();
@@ -62,10 +60,10 @@ where
     }
 }
 
-impl<T, A> TweenAnimation<T, A>
+impl<A> TweenAnimation<A>
 where
-    T: Clone + 'static,
-    A: Animatable<T> + Clone + 'static,
+    A: Animatable + Clone + 'static,
+    A::Value: Clone + 'static,
 {
     /// Create a new tween animation.
     ///
@@ -78,7 +76,6 @@ where
         Self {
             tween: Terminal::new(tween),
             links: Terminal::new(ParentLinks::new(parent, |status| status)),
-            _phantom: std::marker::PhantomData,
         }
     }
 
@@ -97,13 +94,13 @@ where
     }
 }
 
-impl<T, A> Animation<T> for TweenAnimation<T, A>
+impl<A> Animation<A::Value> for TweenAnimation<A>
 where
-    T: Clone + fmt::Debug + 'static,
-    A: Animatable<T> + Clone + fmt::Debug + 'static,
+    A: Animatable + Clone + fmt::Debug + 'static,
+    A::Value: Clone + fmt::Debug + 'static,
 {
     #[inline]
-    fn value(&self) -> T {
+    fn value(&self) -> A::Value {
         let t = self.links.parent.value();
         self.tween.transform(t)
     }
@@ -129,10 +126,10 @@ where
     }
 }
 
-impl<T, A> Listenable for TweenAnimation<T, A>
+impl<A> Listenable for TweenAnimation<A>
 where
-    T: Clone + 'static,
-    A: Animatable<T> + Clone + 'static,
+    A: Animatable + Clone + 'static,
+    A::Value: Clone + 'static,
 {
     fn add_observer(&self, observer: flui_foundation::notifier::ListenerObserver) -> ListenerId {
         self.links.notifier.add_observer(observer)
@@ -150,10 +147,10 @@ where
     }
 }
 
-impl<T, A> fmt::Debug for TweenAnimation<T, A>
+impl<A> fmt::Debug for TweenAnimation<A>
 where
-    T: Clone + fmt::Debug + 'static,
-    A: Animatable<T> + Clone + fmt::Debug + 'static,
+    A: Animatable + Clone + fmt::Debug + 'static,
+    A::Value: Clone + fmt::Debug + 'static,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TweenAnimation")
@@ -167,10 +164,10 @@ where
 /// Helper function to create a `TweenAnimation` from a Tween and parent animation.
 ///
 /// This is a convenience function for the common case.
-pub fn animate<T, A>(tween: A, parent: Rc<dyn Animation<f64>>) -> TweenAnimation<T, A>
+pub fn animate<A>(tween: A, parent: Rc<dyn Animation<f64>>) -> TweenAnimation<A>
 where
-    T: Clone + 'static,
-    A: Animatable<T> + Clone + 'static,
+    A: Animatable + Clone + 'static,
+    A::Value: Clone + 'static,
 {
     TweenAnimation::new(tween, parent)
 }

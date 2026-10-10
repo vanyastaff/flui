@@ -296,11 +296,11 @@ impl HeroController {
     pub fn with_rect_tween<F, A>(factory: F) -> Arc<Self>
     where
         F: Fn(Rect, Rect) -> A + 'static,
-        A: Animatable<Rect> + Send + Sync + 'static,
+        A: Animatable<Value = Rect> + 'static,
     {
         let mut controller = Self::default();
         controller.default_rect_factory = Terminal::new(Some(Rc::new(move |begin, end| {
-            Box::new(factory(begin, end)) as Box<dyn Animatable<Rect> + Send + Sync>
+            Box::new(factory(begin, end)) as Box<dyn Animatable<Value = Rect>>
         })));
         Arc::new(controller)
     }

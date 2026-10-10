@@ -80,10 +80,20 @@ the early return of a settled controller.
 | `controller/status_fan_out/8` | 531 ns |
 | `controller/forward` | 206 ns |
 
-A steady-state frame (`Vsync::tick_all` on a running controller with four
-value listeners and one status listener) performs no heap allocation; the
-`tick_allocation` test target pins that with a counting allocator. The
-notifier's listener snapshot holds four callbacks inline, so a fifth value
+A counting allocator in the standalone `tick_allocation` target measures
+10,000 advancing frames on one presentation clock. The registry holds a live
+scalar controller, four-component insets and a seven-component derived value
+containing geometry, color and a scalar, each with four value listeners.
+Reading both value observers and evaluating a scalar cubic keyframe track are
+included: the measured window makes zero allocating calls and allocates zero
+bytes. Progress and listener-delivery assertions prevent an idle workload from
+satisfying this claim; starting another run provides the allocator's negative
+control. Relay depths of 1, 5 and 32 also allocate nothing while delivering
+each measured frame.
+
+Admission, retargeting and teardown are outside this steady-state measurement.
+It does not promise allocation-free user converters or listener callbacks.
+The notifier's listener snapshot holds four callbacks inline, so a fifth value
 listener spills it to the heap on every notification.
 
 ### Curves, tweens and simulations
@@ -237,7 +247,7 @@ them. What matters for cost is what each type holds:
 |------|-------|
 | `AnimationController` | two `Rc`s (state behind one `parking_lot::Mutex`, and the value notifier); `clone()` shares the controller |
 | `CurvedAnimation<C>` | the curve(s) and one `Rc` of links: the parent `Rc<dyn Animation<f64>>`, a notifier, a curve-direction `Mutex` and two parent subscriptions (value and status) |
-| `TweenAnimation<T, A>` | the parent `Rc<dyn Animation<f64>>`, the animatable, a notifier and a parent subscription |
+| `TweenAnimation<A>` | the parent `Rc<dyn Animation<f64>>`, the animatable, a notifier and a parent subscription |
 | `ReverseAnimation` | the parent `Rc<dyn Animation<f64>>`, a notifier and a parent subscription |
 | `ConstantAnimation<T>` | the value and a status; no notifier, since it never changes |
 | `Cubic`, `ElasticOutCurve`, `Interval<C>` | plain `f64` parameters (plus the inner curve) |

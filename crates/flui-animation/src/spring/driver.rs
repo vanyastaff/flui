@@ -251,6 +251,8 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
     ///
     /// # Errors
     /// Refuses invalid inputs or repeated preparation reentry before mutation.
+    /// A spring converter's invalid rest distance returns `InvalidSpring`
+    /// without cancelling the previous run.
     pub fn retarget(
         &mut self,
         target: T,
@@ -471,19 +473,64 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
                 };
             }
         }
-        let components = sample
+        let thresholds = if matches!(segment_motion.get(), MotionSpec::Spring(_)) {
+            T::rest_thresholds()
+        } else {
+            goal.zero()
+        };
+        let mut components = sample
             .value
             .as_ref()
             .iter()
             .zip(velocity.as_ref())
             .zip(goal.as_ref())
-            .map(|((&position, &velocity), &target)| {
-                Segment::start(position, velocity, target, &segment_motion, shortening)
-            })
-            .collect::<Result<SmallVec<[Segment; 4]>, _>>()
-            .map_err(|error| {
-                AnimationError::NonFiniteTarget(format!("animated value motion: {error}"))
-            })?;
+            .zip(thresholds.as_ref())
+            .enumerate()
+            .map(
+                |(component, (((&position, &velocity), &target), &threshold))| {
+                    let tolerance = if matches!(segment_motion.get(), MotionSpec::Spring(_)) {
+                        crate::simulation::Tolerance::new(threshold, f64::INFINITY).map_err(
+                            |error| {
+                                AnimationError::InvalidSpring(format!(
+                                    "component {component} rest threshold: {error}"
+                                ))
+                            },
+                        )?
+                    } else {
+                        crate::simulation::Tolerance::DEFAULT
+                    };
+                    Segment::start(
+                        position,
+                        velocity,
+                        target,
+                        &segment_motion,
+                        shortening,
+                        tolerance,
+                    )
+                    .map_err(|error| {
+                        AnimationError::NonFiniteTarget(format!("animated value motion: {error}"))
+                    })
+                },
+            )
+            .collect::<Result<SmallVec<[Segment; 4]>, _>>()?;
+        if let Some(start) = components
+            .iter()
+            .filter_map(Segment::rest_start)
+            .reduce(f64::max)
+        {
+            let duration = components
+                .iter()
+                .filter_map(|component| component.rest_duration_at(start))
+                .reduce(f64::min)
+                .expect("BUG: a spring rest start has a duration");
+            for component in &mut components {
+                component
+                    .synchronize_rest(start, duration)
+                    .map_err(|error| {
+                        AnimationError::InvalidSpring(format!("vector rest transition: {error}"))
+                    })?;
+            }
+        }
         drop(segment_motion);
         let deadline = components.iter().filter_map(Segment::curve_duration).max();
         let immediate = components.iter().all(|component| component.is_done(0.0));

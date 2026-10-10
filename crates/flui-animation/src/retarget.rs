@@ -151,6 +151,17 @@ impl SpringRest {
         target: f64,
     ) -> Result<Self, SimulationError> {
         let (start, duration) = simulation.rest_transition();
+        Self::at(simulation, x0, v0, target, start, duration)
+    }
+
+    fn at(
+        simulation: &SpringSimulation,
+        x0: f64,
+        v0: f64,
+        target: f64,
+        start: f64,
+        duration: f64,
+    ) -> Result<Self, SimulationError> {
         let (from, velocity) = if start == 0.0 {
             (x0, v0)
         } else {
@@ -211,6 +222,37 @@ impl SpringRest {
 }
 
 impl Segment {
+    pub(crate) fn rest_start(&self) -> Option<f64> {
+        match self {
+            Self::Spring { rest, .. } => Some(rest.start),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn rest_duration_at(&self, start: f64) -> Option<f64> {
+        match self {
+            Self::Spring { simulation, .. } => Some(simulation.rest_duration_at(start)),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn synchronize_rest(
+        &mut self,
+        start: f64,
+        duration: f64,
+    ) -> Result<(), SimulationError> {
+        if let Self::Spring {
+            simulation,
+            x0,
+            v0,
+            rest,
+        } = self
+        {
+            *rest = SpringRest::at(simulation, *x0, *v0, rest.target, start, duration)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn curve_duration(&self) -> Option<Duration> {
         match self {
             Self::Rest(_) => Some(Duration::ZERO),
@@ -233,6 +275,7 @@ impl Segment {
         target: f64,
         motion: &MotionSpec,
         shortening: f64,
+        tolerance: Tolerance,
     ) -> Result<Self, SimulationError> {
         for position in [x0, target] {
             if !position.is_finite() {
@@ -252,8 +295,7 @@ impl Segment {
         }
         Ok(match motion {
             MotionSpec::Spring(spring) => {
-                let simulation =
-                    SpringSimulation::try_new(*spring, x0, target, v0, Tolerance::DEFAULT)?;
+                let simulation = SpringSimulation::try_new(*spring, x0, target, v0, tolerance)?;
                 let rest = SpringRest::new(&simulation, x0, v0, target)?;
                 Self::Spring {
                     simulation,

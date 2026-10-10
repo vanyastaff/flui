@@ -453,21 +453,36 @@ fn the_spring_rest_boundary_is_c1() {
         frames += 1;
         assert!(frames < 600, "never settled");
     }
-    // Step back to the last unsettled frame and straddle the boundary with a
-    // central difference.
+    // Locate completion through the public trace. A whole frame's midpoint
+    // can already be settled, so its secant is not a local derivative probe.
     let mut before = AnimatedValue::with_motion(0.0_f64, mode.spec()).expect("finite motion");
     before.animate_to(1.0).expect("finite motion");
     before.advance(Duration::from_secs_f64(frame * f64::from(frames - 1)));
     assert!(!before.is_settled());
+    let (mut lower, mut upper) = (0.0, frame);
+    for _ in 0..20 {
+        let midpoint = f64::midpoint(lower, upper);
+        let mut probe = before.clone();
+        probe.advance(Duration::from_secs_f64(midpoint));
+        if probe.is_settled() {
+            upper = midpoint;
+        } else {
+            lower = midpoint;
+        }
+    }
+    let boundary = f64::midpoint(lower, upper);
+    let h = 1e-5;
     let mut after = before.clone();
-    after.advance(Duration::from_secs_f64(frame));
+    after.advance(Duration::from_secs_f64(boundary + h));
     assert!(after.is_settled());
     let mut middle = before.clone();
-    middle.advance(Duration::from_secs_f64(frame / 2.0));
-    let difference = (after.value() - before.value()) / frame;
+    middle.advance(Duration::from_secs_f64(boundary));
+    before.advance(Duration::from_secs_f64(boundary - h));
+    assert!(!before.is_settled());
+    let difference = (after.value() - before.value()) / (2.0 * h);
     let v = middle.velocity()[0];
-    // Central-difference truncation for this spring is |x'''|·h²/24, far
-    // below 1e-4 here; a snap would add up to 1e-3/h = 6e-2.
+    // The local probe is much shorter than the continuous rest interval;
+    // a tolerance-sized snap would instead contribute about 50 units/second.
     assert!(
         (difference - v).abs() <= 1e-4,
         "finite difference {difference} across the rest boundary is not the velocity {v}"

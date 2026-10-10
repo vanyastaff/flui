@@ -337,9 +337,17 @@ impl AnimationController {
             }
             let velocity = velocity?;
             let mut next = Opaque::new(
-                Segment::start(seam.get().value, velocity, target, motion, 1.0).map_err(
-                    |error| AnimationError::NonFiniteTarget(format!("retarget motion: {error}")),
-                )?,
+                Segment::start(
+                    seam.get().value,
+                    velocity,
+                    target,
+                    motion,
+                    1.0,
+                    crate::simulation::Tolerance::DEFAULT,
+                )
+                .map_err(|error| {
+                    AnimationError::NonFiniteTarget(format!("retarget motion: {error}"))
+                })?,
             );
             let mut inner = self.inner.borrow_mut();
             Self::check_run_admission(&inner)?;

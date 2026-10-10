@@ -1,5 +1,23 @@
 # flui-widgets architecture
 
+## Hero rect mappings execute outside flight guards
+
+Hero snapshots its owner-local rect factory before invoking user code. The
+factory, its returned mapping and that mapping's destructor can read the same
+flight without holding the factory mutex. `Animatable<Value = Rect>` allows
+custom mappings to retain owner-local state without worker-thread bounds.
+`hero_rect_mappings_are_owner_local_and_reentrant` drives a mounted navigator
+flight through all three reentry points, verifies the committed shuttle rect,
+and checks that the flight subsequently lands.
+
+The factory snapshot and its returned mapping use the navigator's terminal
+ownership policy. Healthy reads retire both normally; after evaluation fails,
+the opaque mapping is retained during unwind so its destructor cannot replace
+the first failure. `hero_rect_mapping_failures_preserve_recovery` covers factory,
+evaluation and destruction failures, competing evaluation/destruction, healthy
+destruction, and a fresh read and landing through the same flight. A destructor
+that already double-panics within its own aggregate remains outside this policy.
+
 ## Gesture release retains the painted position
 
 Dismissible moves content through `SlideTransition`; its controller's value
@@ -30,6 +48,15 @@ input reads committed size before controller calls, and post-frame snapshots
 provide geometry to deferred collapse. Build never queries the pipeline.
 `a_dismissible_collapses_its_laid_out_size` verifies the initial painted collapse
 extent and single completion delivery.
+
+Resize samples enter that same owner post-frame lane directly from the collapse
+controller listener. Build retains only completion debt; it cannot erase accepted
+resize samples when completion arrives before the next build. Weak listener routes
+avoid retaining the widget after disposal, and delivery resolves current callbacks.
+`resize_delivery_keeps_accepted_ticks_before_completion` admits two samples and
+completion without an intervening build, verifies their order with a healthy or
+panicking resize callback, checks replacement and unmount before delivery, and
+checks that recovery does not repeat delivery.
 
 ## Selected pointer coordinates retain the admitted motion sample
 

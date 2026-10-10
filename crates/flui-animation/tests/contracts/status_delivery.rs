@@ -3,9 +3,7 @@
 //! first panic afterwards, and a hop or a parent swap announces exactly the
 //! status of the animation now in charge.
 //!
-//! Rows that hold today run in the tables. A row whose behaviour is not there
-//! yet is its own `#[ignore = "contract: …"]` test, so `--run-ignored` shows
-//! it failing on the assertion that names the behaviour.
+//! The delivery and recovery rows run in the ordinary suite.
 
 use std::any::Any;
 use std::future::Future;

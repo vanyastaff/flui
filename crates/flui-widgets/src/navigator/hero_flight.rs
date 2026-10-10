@@ -233,8 +233,12 @@ impl FlightInner {
     fn current_rect(&self) -> Rect {
         let endpoints = *self.rect.lock();
         let t = self.proxy.value();
-        let rect = match self.rect_factory.lock().as_ref() {
-            Some(make) => make(endpoints.begin, endpoints.end).transform(t),
+        let factory = Terminal::new(self.rect_factory.lock().clone());
+        let rect = match factory.as_ref() {
+            Some(make) => {
+                let mapping = Terminal::new(make(endpoints.begin, endpoints.end));
+                mapping.transform(t)
+            }
             None => endpoints.transform(t),
         };
         Rect::from_ltwh(

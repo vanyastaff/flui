@@ -265,6 +265,238 @@ pub(crate) fn a_push_eases_on_the_destination_hero_curve() {
     );
 }
 
+struct LocalRectMapping {
+    endpoints: flui_animation::RectTween,
+    hook: Rc<dyn Fn()>,
+    phase: &'static str,
+}
+
+impl flui_animation::Animatable for LocalRectMapping {
+    type Value = Rect;
+
+    fn transform(&self, t: f64) -> Rect {
+        if self.phase == "transform" {
+            (self.hook)();
+        }
+        flui_animation::Animatable::transform(&self.endpoints, t)
+    }
+}
+
+impl Drop for LocalRectMapping {
+    fn drop(&mut self) {
+        if self.phase == "drop" {
+            (self.hook)();
+        }
+    }
+}
+
+fn rect_mapping_reentry(phase: &'static str) {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+    let armed = Rc::new(Cell::new(false));
+    let busy = Rc::new(Cell::new(false));
+    let nested = Rc::new(Cell::new(None));
+    let hook: Rc<dyn Fn()> = {
+        let controller = Arc::downgrade(&controller);
+        let armed = Rc::clone(&armed);
+        let busy = Rc::clone(&busy);
+        let nested = Rc::clone(&nested);
+        Rc::new(move || {
+            if !armed.get() || busy.replace(true) {
+                return;
+            }
+            let controller = controller.upgrade().expect("live owner");
+            let flight = controller.flights().get(&tag("shared")).expect("airborne");
+            nested.set(Some(flight.shuttle_rect()));
+            busy.set(false);
+        })
+    };
+    let transition = fly(
+        &navigator,
+        &mut harness,
+        hero_page("shared", 30.0, 20.0),
+        hero_page_with("shared", 60.0, 45.0, move |hero| {
+            let hook = Rc::clone(&hook);
+            hero.curve(Curves::Linear)
+                .create_rect_tween(move |begin, end| {
+                    if phase == "factory" {
+                        hook();
+                    }
+                    LocalRectMapping {
+                        endpoints: flui_animation::RectTween::new(begin, end),
+                        hook: Rc::clone(&hook),
+                        phase,
+                    }
+                })
+        }),
+    );
+    harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(0.5));
+    let flight = controller.flights().get(&tag("shared")).expect("airborne");
+    armed.set(true);
+    let rect = flight.shuttle_rect();
+    assert_rect_close(
+        nested
+            .get()
+            .expect("owner-local mapping reentered its flight"),
+        rect,
+        "reentrant mapping reads the same committed flight geometry",
+    );
+    assert_rect_close(
+        rect,
+        flight.begin_rect().lerp(flight.target_rect(), 0.5),
+        "custom mapping drives the shuttle",
+    );
+    armed.set(false);
+    harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(1.0));
+    harness.tick();
+    assert_eq!(
+        controller.flights().len(),
+        0,
+        "the flight still lands after reentry"
+    );
+}
+
+#[test]
+fn hero_rect_mappings_are_owner_local_and_reentrant() {
+    use crate::common::child_process;
+
+    if let Some(case) = child_process::selected_case() {
+        let phase = match case.as_str() {
+            "factory" => "factory",
+            "transform" => "transform",
+            "drop" => "drop",
+            _ => panic!("unknown mapping phase"),
+        };
+        rect_mapping_reentry(phase);
+        child_process::pass();
+    }
+    child_process::run_rows(
+        "hero_flight::hero_rect_mappings_are_owner_local_and_reentrant",
+        &["factory", "transform", "drop"],
+    );
+}
+
+struct FailingRectMapping {
+    endpoints: flui_animation::RectTween,
+    armed: Rc<Cell<bool>>,
+    drops: Rc<Cell<usize>>,
+    phase: &'static str,
+}
+
+impl flui_animation::Animatable for FailingRectMapping {
+    type Value = Rect;
+
+    fn transform(&self, t: f64) -> Rect {
+        assert!(
+            !(self.armed.get() && matches!(self.phase, "transform" | "competing")),
+            "mapping evaluation"
+        );
+        flui_animation::Animatable::transform(&self.endpoints, t)
+    }
+}
+
+impl Drop for FailingRectMapping {
+    fn drop(&mut self) {
+        self.drops.set(self.drops.get() + 1);
+        assert!(
+            !(self.armed.get() && matches!(self.phase, "drop" | "competing")),
+            "mapping retirement"
+        );
+    }
+}
+
+fn rect_mapping_failure(phase: &'static str) {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+    let armed = Rc::new(Cell::new(false));
+    let drops = Rc::new(Cell::new(0));
+    let factory_armed = Rc::clone(&armed);
+    let factory_drops = Rc::clone(&drops);
+    let transition = fly(
+        &navigator,
+        &mut harness,
+        hero_page("shared", 30.0, 20.0),
+        hero_page_with("shared", 60.0, 45.0, move |hero| {
+            let armed = Rc::clone(&factory_armed);
+            let drops = Rc::clone(&factory_drops);
+            hero.curve(Curves::Linear)
+                .create_rect_tween(move |begin, end| {
+                    assert!(!(armed.get() && phase == "factory"), "factory evaluation");
+                    FailingRectMapping {
+                        endpoints: flui_animation::RectTween::new(begin, end),
+                        armed: Rc::clone(&armed),
+                        drops: Rc::clone(&drops),
+                        phase,
+                    }
+                })
+        }),
+    );
+    harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(0.5));
+    let flight = controller.flights().get(&tag("shared")).expect("airborne");
+    let before = drops.get();
+    armed.set(true);
+    let result = catch_unwind(AssertUnwindSafe(|| flight.shuttle_rect()));
+    armed.set(false);
+
+    if phase == "healthy" {
+        assert!(result.is_ok(), "healthy mapping retires normally");
+        assert_eq!(drops.get(), before + 1);
+    } else {
+        let expected = match phase {
+            "factory" => "factory evaluation",
+            "transform" | "competing" => "mapping evaluation",
+            "drop" => "mapping retirement",
+            _ => panic!("unknown failure phase"),
+        };
+        let failure = result.expect_err("the authored failure propagates");
+        assert_eq!(failure.downcast_ref::<&str>().copied(), Some(expected));
+        if matches!(phase, "transform" | "competing" | "factory") {
+            assert_eq!(
+                drops.get(),
+                before,
+                "incoming failure retains opaque mapping ownership"
+            );
+        } else {
+            assert_eq!(drops.get(), before + 1);
+        }
+    }
+    assert_rect_close(
+        flight.shuttle_rect(),
+        flight.begin_rect().lerp(flight.target_rect(), 0.5),
+        "the next read recovers through the same flight",
+    );
+    assert!(drops.get() > before, "healthy mapping destruction resumes");
+    harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(1.0));
+    harness.tick();
+    assert_eq!(controller.flights().len(), 0, "the recovered flight lands");
+}
+
+#[test]
+fn hero_rect_mapping_failures_preserve_recovery() {
+    use crate::common::child_process;
+
+    if let Some(case) = child_process::selected_case() {
+        let phase = match case.as_str() {
+            "healthy" => "healthy",
+            "factory" => "factory",
+            "transform" => "transform",
+            "drop" => "drop",
+            "competing" => "competing",
+            _ => panic!("unknown mapping case"),
+        };
+        rect_mapping_failure(phase);
+        child_process::pass();
+    }
+    child_process::run_rows(
+        "hero_flight::hero_rect_mapping_failures_preserve_recovery",
+        &["healthy", "factory", "transform", "drop", "competing"],
+    );
+}
+
 /// A hero that shrinks to nothing along an overshooting curve: the curve passes 1
 /// near the end, which extrapolates the rect past its zero-size end. The shuttle's
 /// width and height stay non-negative on every sampled frame.
