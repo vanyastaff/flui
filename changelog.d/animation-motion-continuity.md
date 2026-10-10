@@ -75,6 +75,10 @@
 
 ### Fixed
 
+- Bind Hero placeholders to their logical flight identity so old cancellation
+  or completion cannot restore a mounted Hero already flying in a replacement
+  transition, including when cleanup reenters or reports an error.
+
 - Release Hero configuration and mounted capabilities on unmount, even when a
   flight retains its handle. Hero render access no longer owns the presentation;
   stale handles cannot freeze or retire a replacement using the same tag.

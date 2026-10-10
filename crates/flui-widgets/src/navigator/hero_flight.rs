@@ -55,7 +55,7 @@ use flui_view::prelude::*;
 use flui_view::{AnimatedView, BoxedView, ViewExt, impl_animated_view};
 use parking_lot::Mutex;
 
-use super::hero::{HeroHandle, HeroTag, RectTweenFactory, ShuttleBuilder};
+use super::hero::{HeroFlightIdentity, HeroHandle, HeroTag, RectTweenFactory, ShuttleBuilder};
 use super::hero_controller::{FlightDirection, HeroFlightManifest};
 use super::lifecycle::{RetiredValues, Terminal, TerminalMap, TerminalVec};
 use super::navigator::UserGestureSignal;
@@ -90,6 +90,7 @@ impl Drop for FlightState {
 /// Everything one in-flight hero shares between its overlay entry, its animation
 /// listeners, and the manager that owns it.
 struct FlightInner {
+    identity: HeroFlightIdentity,
     tag: Terminal<HeroTag>,
 
     /// The half a divert rewrites in place.
@@ -488,8 +489,8 @@ impl HeroFlight {
         // If completed, the destination hero is the one on top and the source hero
         // stays hidden. If dismissed, the animation was triggered but canceled
         // before it finished; the destination hero stays hidden instead.
-        recovery.run(|| from_hero.end_flight(status.is_completed()));
-        recovery.run(|| to_hero.end_flight(status.is_dismissed()));
+        recovery.run(|| from_hero.end_flight_for(&self.inner.identity, status.is_completed()));
+        recovery.run(|| to_hero.end_flight_for(&self.inner.identity, status.is_dismissed()));
         recovery.retire(from_hero);
         recovery.retire(to_hero);
     }
@@ -511,8 +512,8 @@ impl HeroFlight {
         let Some((from_hero, to_hero)) = self.teardown(recovery) else {
             return;
         };
-        recovery.run(|| from_hero.end_flight(false));
-        recovery.run(|| to_hero.end_flight(false));
+        recovery.run(|| from_hero.end_flight_for(&self.inner.identity, false));
+        recovery.run(|| to_hero.end_flight_for(&self.inner.identity, false));
         recovery.retire(from_hero);
         recovery.retire(to_hero);
     }
@@ -620,7 +621,7 @@ impl HeroFlight {
                     retain_path = false;
                     // Different hero: hand the old source its placeholder back and freeze the
                     // new destination, then aim from the old end at the new location.
-                    old_from.end_flight(true);
+                    old_from.end_flight_for(&self.inner.identity, true);
                     let previous = Terminal::new(std::mem::replace(
                         &mut *self.inner.state.borrow_mut(),
                         new_state
@@ -628,7 +629,7 @@ impl HeroFlight {
                             .expect("BUG: a divert commits its manifest once"),
                     ));
                     recovery.retire(previous);
-                    new_to.start_flight(false);
+                    new_to.start_flight_for(&self.inner.identity, false);
                     new_begin = self.inner.rect.get().end;
                     new_end = new.to_rect;
                 }
@@ -661,8 +662,8 @@ impl HeroFlight {
 
                 // End the old heroes' flights keeping their placeholders, then start
                 // the new heroes' flights.
-                old_from.end_flight(true);
-                old_to.end_flight(true);
+                old_from.end_flight_for(&self.inner.identity, true);
+                old_to.end_flight_for(&self.inner.identity, true);
                 // Cancellation inside either placeholder wake or the builder
                 // must restore the newly selected heroes, not the old manifest.
                 let previous = Terminal::new(std::mem::replace(
@@ -672,11 +673,11 @@ impl HeroFlight {
                         .expect("BUG: a divert commits its manifest once"),
                 ));
                 recovery.retire(previous);
-                new_from.start_flight(new_dir == FlightDirection::Push);
+                new_from.start_flight_for(&self.inner.identity, new_dir == FlightDirection::Push);
                 if self.inner.ended.get() {
                     return;
                 }
-                new_to.start_flight(false);
+                new_to.start_flight_for(&self.inner.identity, false);
                 if self.inner.ended.get() {
                     return;
                 }
@@ -1024,6 +1025,7 @@ impl FlightManager {
             });
 
         let inner = Rc::new(FlightInner {
+            identity: HeroFlightIdentity::default(),
             tag: Terminal::new(manifest.tag.clone()),
             state: Terminal::new(RefCell::new(FlightState {
                 direction,
@@ -1072,11 +1074,11 @@ impl FlightManager {
         recovery.run_with(|recovery| {
             // The child stays in the placeholder only for the *from* hero of a push:
             // its subtree is preserved offstage so its state survives.
-            from_hero.start_flight(direction == FlightDirection::Push);
+            from_hero.start_flight_for(&inner.identity, direction == FlightDirection::Push);
             if inner.ended.get() {
                 return;
             }
-            to_hero.start_flight(false);
+            to_hero.start_flight_for(&inner.identity, false);
             if inner.ended.get() {
                 return;
             }
@@ -1412,6 +1414,7 @@ mod terminal_tests {
         let to = HeroHandle::test_handle(&hero);
         let signal = NavigatorHandle::new().user_gesture_signal();
         let inner = FlightInner {
+            identity: HeroFlightIdentity::default(),
             tag: Terminal::new(HeroTag::new(flui_foundation::ValueKey::new("flight"))),
             state: Terminal::new(RefCell::new(FlightState {
                 direction: FlightDirection::Push,
@@ -1537,10 +1540,146 @@ mod terminal_tests {
                 "abort_failure",
                 "abort_competing",
                 "shuttle_clone_reentry",
+                "placeholder_reentry",
+                "placeholder_reentry_failure",
+                "placeholder_reentry_competing",
+                "placeholder_reentry_finish",
+                "placeholder_reentry_dismissed",
+                "placeholder_reentry_before_cleanup",
             ],
         ) else {
             return;
         };
+        if case.starts_with("placeholder_reentry") {
+            let hero = Hero::new(
+                flui_foundation::ValueKey::new("reentered"),
+                crate::SizedBox::new(1.0, 1.0),
+            );
+            let (from, _from_tree) = HeroHandle::test_laid_out(&hero);
+            let (to, _to_tree) = HeroHandle::test_laid_out(&hero);
+            let manifest = HeroFlightManifest {
+                tag: from.tag(),
+                direction: Some(FlightDirection::Push),
+                from_route: crate::navigator::RouteId::next(),
+                to_route: crate::navigator::RouteId::next(),
+                from_rect: Rect::ZERO,
+                to_rect: Rect::ZERO,
+                is_user_gesture_transition: false,
+            };
+            let overlay = OverlayHandle::new();
+            let launch = Rc::new(move |manager: &Rc<FlightManager>| {
+                let plan = FlightPlan {
+                    direction: FlightDirection::Push,
+                    from_hero: Terminal::new(from.clone()),
+                    to_hero: Terminal::new(to.clone()),
+                    to_route_subtree: RenderId::new(1),
+                    overlay: Terminal::new(overlay.clone()),
+                    animation: Terminal::new(Rc::new(flui_animation::ConstantAnimation::new(0.0))),
+                    rect_factory: Terminal::new(None),
+                    shuttle_builder: Terminal::new(None),
+                    is_user_gesture_transition: false,
+                    gesture_signal: Terminal::new(NavigatorHandle::new().user_gesture_signal()),
+                };
+                let mut recovery = flui_foundation::panic::PanicRecovery::new();
+                recovery.run_with(|recovery| {
+                    manager.start(&manifest, plan, &manager.epoch(), recovery);
+                });
+                recovery.finish();
+                manager
+                    .get(&manifest.tag)
+                    .expect("the replacement is admitted")
+            });
+            let old_manager = Rc::new(FlightManager::default());
+            let old = launch(&old_manager);
+            let current_manager = Rc::new(FlightManager::default());
+            let fail = matches!(
+                case.as_str(),
+                "placeholder_reentry_failure" | "placeholder_reentry_competing"
+            );
+            let replacement_manager = Rc::clone(&current_manager);
+            let replacement_launch = Rc::clone(&launch);
+            let admitted_before_cleanup = case == "placeholder_reentry_before_cleanup";
+            if admitted_before_cleanup {
+                launch(&current_manager);
+            }
+            let hook = Rc::new(move || {
+                if !admitted_before_cleanup {
+                    replacement_launch(&replacement_manager);
+                }
+                assert_eq!(replacement_manager.len(), 1);
+                assert!(replacement_manager.flights.lock().values().all(|flight| {
+                    let state = flight.inner.state.borrow();
+                    state.from_hero.placeholder_size().is_some()
+                        && state.to_hero.placeholder_size().is_some()
+                }));
+                assert!(!fail, "first placeholder cancellation failure");
+            });
+            let subscription =
+                flui_animation::StatusSubscription::new(&hook, (), |hook, (), _recovery| hook());
+            let previous = old.inner.subscriptions.borrow_mut().replace(subscription);
+            drop(previous);
+            let mut competing_drops = None;
+            if case == "placeholder_reentry_competing" {
+                if let Some(id) = old.inner.proxy_wake_subscription.take() {
+                    old.inner.proxy.remove_listener(id);
+                }
+                let (capture, drops) = bomb("second placeholder cancellation failure", true);
+                let id = old.inner.proxy.add_listener(Rc::new(move || {
+                    let _capture = &capture;
+                }));
+                old.inner.proxy_wake_subscription.set(Some(id));
+                competing_drops = Some(drops);
+            }
+            let outcome = catch_unwind(AssertUnwindSafe(|| {
+                if case == "placeholder_reentry_finish" {
+                    old_manager.finish(&old, AnimationStatus::Completed);
+                } else if case == "placeholder_reentry_dismissed" {
+                    old_manager.finish(&old, AnimationStatus::Dismissed);
+                } else {
+                    old_manager.finish_all();
+                }
+            }));
+            if fail {
+                assert_failure(
+                    outcome.expect_err("the first failure is resumed"),
+                    "first placeholder cancellation failure",
+                );
+            } else {
+                outcome.expect("healthy retirement completes");
+            }
+            assert_eq!(current_manager.len(), 1);
+            if let Some(drops) = competing_drops {
+                assert_eq!(
+                    drops.load(Ordering::SeqCst),
+                    0,
+                    "the first failure retains competing outgoing captures"
+                );
+            }
+            for current in current_manager.flights.lock().values() {
+                let state = current.inner.state.borrow();
+                for hero in [&state.from_hero, &state.to_hero] {
+                    assert_eq!(
+                        hero.placeholder_size(),
+                        Some(flui_foundation::geometry::Size::new(10.0, 10.0)),
+                        "old cleanup cannot withdraw a replacement flight's placeholder"
+                    );
+                }
+            }
+            current_manager.finish_all();
+            current_manager.drain_retired();
+            old_manager.drain_retired();
+            let next = launch(&current_manager);
+            let (next_from, next_to) = {
+                let state = next.inner.state.borrow();
+                (state.from_hero.clone(), state.to_hero.clone())
+            };
+            assert!(next_from.placeholder_size().is_some() && next_to.placeholder_size().is_some());
+            current_manager.finish_all();
+            assert_eq!(next_from.placeholder_size(), None);
+            assert_eq!(next_to.placeholder_size(), None);
+            current_manager.drain_retired();
+            return;
+        }
         if case == "shuttle_clone_reentry" {
             struct CloneHook(Rc<dyn Fn()>);
             impl Clone for CloneHook {

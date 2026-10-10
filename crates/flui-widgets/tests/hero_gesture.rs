@@ -173,6 +173,69 @@ fn gesture_fixture(
 // 3. Non-opted hero un-hidden (the endFlight else-branch)
 // ============================================================================
 
+pub(crate) fn an_excluding_gesture_restores_pending_programmatic_placeholders() {
+    let navigator = NavigatorHandle::new();
+    navigator.seed_initial(hero_page(false, 40.0, 24.0));
+    let mut harness = mount_navigator(&navigator);
+    let controller = install(&navigator);
+    let destination = navigator.current().expect("the initial Hero page mounted");
+    let route = hero_page(false, 30.0, 18.0).back_gesture(true);
+    let transition = route.transition_handle();
+    let _push = harness.enter_owner_scope(|| navigator.push(route));
+    harness.tick();
+    let source = navigator.current().expect("the covering Hero page mounted");
+    let from = navigator
+        .route_modal(source)
+        .expect("the source modal")
+        .all_heroes()
+        .remove(&hero_tag())
+        .expect("the source Hero mounted");
+    let to = navigator
+        .route_modal(destination)
+        .expect("the destination modal")
+        .all_heroes()
+        .remove(&hero_tag())
+        .expect("the destination Hero mounted");
+    assert_eq!(
+        controller.flights().len(),
+        1,
+        "the programmatic flight started"
+    );
+    assert!(from.placeholder_size().is_some() && to.placeholder_size().is_some());
+    let animation = transition
+        .controller()
+        .expect("the route owns its animation");
+    animation.set_value(1.0);
+    assert_eq!(
+        controller.flights().len(),
+        1,
+        "the shuttle has not drained completion yet"
+    );
+
+    let gesture = BackGestureController::new(navigator, source, animation);
+    for hero in [&from, &to] {
+        assert_eq!(
+            hero.placeholder_size(),
+            None,
+            "gesture exclusion restores the preceding programmatic placeholder"
+        );
+    }
+    harness.tick();
+    for hero in [&from, &to] {
+        assert_eq!(
+            hero.placeholder_size(),
+            None,
+            "deferred completion cannot refreeze an excluded Hero"
+        );
+    }
+    assert_eq!(controller.flights().len(), 0);
+    assert!(
+        !gesture.drag_end(0.0),
+        "the already completed route needs no settling run"
+    );
+    harness.tick();
+}
+
 // ============================================================================
 // 4. Mid-drag return to zero: deferral, not teardown
 // ============================================================================

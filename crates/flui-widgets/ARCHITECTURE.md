@@ -73,6 +73,28 @@ and preserved mounted state through the existing test-access registry seam.
 `reparenting_an_unscoped_hero_adopts_its_first_route` also starts with no scope:
 the inherited lookup miss remains an ancestry dependency until reactivation.
 
+## Hero placeholders belong to logical flights
+
+A placeholder carries the allocation identity of its logical flight alongside
+its geometry and child-preservation role. Mounted Hero identity alone cannot
+authorize cleanup: the same mounted Hero can already belong to a replacement
+flight when an old subscription's cancellation returns. Flight completion and
+abort compare the captured flight identity before changing the placeholder.
+Diversion retains the identity; a new flight allocates a fresh one. A completed
+source keeps a settled placeholder. Unmount clears either state. Gesture
+filtering separately restores an excluded Hero's placeholder, including before
+the previous flight's deferred completion drain. The mounted
+`an_excluding_gesture_restores_pending_programmatic_placeholders` checks this
+ordering and verifies the subsequent drain cannot refreeze the restored Hero.
+
+`hero_flight_terminal_retirement` launches actual replacement flights through
+the private subscription-cancellation seam, both during cleanup and before it.
+It verifies abort, both terminal statuses, first and competing failures, and a
+fresh flight after recovery. Moving cleanup before callouts alone cannot protect
+the replacement already admitted before cleanup; allocation identity also avoids
+a wrapping generation counter. Placeholder borrows contain only framework-owned
+geometry and identity markers and end before rebuild scheduling.
+
 ## Hero rect mappings execute outside flight guards
 
 Hero snapshots its owner-local rect factory before invoking user code. The

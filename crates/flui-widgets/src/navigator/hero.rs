@@ -431,6 +431,21 @@ impl_inherited_view!(HeroScope);
 // The handle
 // ============================================================================
 
+/// Allocation identity of one logical flight, independent of mounted Hero identity.
+#[derive(Clone, Default)]
+pub(super) struct HeroFlightIdentity(Rc<()>);
+
+enum PlaceholderAuthority {
+    Flight(HeroFlightIdentity),
+    Settled,
+}
+
+struct FrozenHero {
+    size: Size,
+    include_child: bool,
+    authority: PlaceholderAuthority,
+}
+
 /// The mutable half of a mounted [`Hero`], shared with whoever holds a
 /// [`HeroHandle`].
 struct HeroInner {
@@ -439,10 +454,9 @@ struct HeroInner {
     /// own render object — `BuildContext::find_render_object` walks strict
     /// *ancestors* and cannot answer it.
     anchor: SubtreeAnchor,
-    /// The frozen placeholder size. `Some` iff in flight.
-    placeholder: Cell<Option<Size>>,
-    /// Whether the placeholder keeps the real child offstage.
-    include_child: Cell<bool>,
+    /// Frozen geometry and the flight allowed to release it. A landed source
+    /// keeps its geometry with settled authority until it unmounts or flies again.
+    placeholder: RefCell<Option<FrozenHero>>,
     /// Weak render access, so measurement cannot keep the presentation alive.
     owner: RefCell<Option<WeakPipelineCell>>,
     /// `setState`. Acquired in `init_state`, fired from a post-frame callback —
@@ -507,8 +521,7 @@ impl HeroHandle {
         Self {
             inner: Rc::new(HeroInner {
                 anchor: SubtreeAnchor::new(),
-                placeholder: Cell::new(None),
-                include_child: Cell::new(true),
+                placeholder: RefCell::new(None),
                 owner: RefCell::new(None),
                 rebuild: RefCell::new(None),
                 configuration: Terminal::new(RefCell::new(Some(Rc::new(view.clone())))),
@@ -554,7 +567,11 @@ impl HeroHandle {
     /// The frozen placeholder size, withdrawn when this hero unmounts.
     #[must_use]
     pub fn placeholder_size(&self) -> Option<Size> {
-        self.inner.placeholder.get()
+        self.inner
+            .placeholder
+            .borrow()
+            .as_ref()
+            .map(|frozen| frozen.size)
     }
 
     /// What the flight's shuttle should show: a fresh inflation of this hero's child.
@@ -625,7 +642,11 @@ impl HeroHandle {
     /// Whether an in-flight hero keeps its child offstage inside the placeholder.
     #[must_use]
     pub fn includes_child(&self) -> bool {
-        self.inner.include_child.get()
+        self.inner
+            .placeholder
+            .borrow()
+            .as_ref()
+            .is_none_or(|frozen| frozen.include_child)
     }
 
     /// The hero's bounding box in `ancestor`'s coordinate space, or `None` when it is
@@ -654,27 +675,71 @@ impl HeroHandle {
     /// `false` otherwise: the source subtree is preserved offstage so its
     /// state survives the flight, while the destination's is not yet needed.
     pub fn start_flight(&self, include_child_in_placeholder: bool) -> Option<Size> {
+        // The temporary test-access seam freezes a settled placeholder without
+        // a running manager. Production flights always supply their identity.
+        self.freeze(PlaceholderAuthority::Settled, include_child_in_placeholder)
+    }
+
+    pub(super) fn start_flight_for(
+        &self,
+        flight: &HeroFlightIdentity,
+        include_child: bool,
+    ) -> Option<Size> {
+        self.freeze(PlaceholderAuthority::Flight(flight.clone()), include_child)
+    }
+
+    fn freeze(&self, authority: PlaceholderAuthority, include_child: bool) -> Option<Size> {
         let render_id = self.render_id()?;
         let size = {
             let owner = self.inner.owner.borrow().as_ref()?.upgrade()?;
             owner.with(|owner| owner.box_size(render_id))?
         };
 
-        self.inner.include_child.set(include_child_in_placeholder);
-        self.inner.placeholder.set(Some(size));
+        *self.inner.placeholder.borrow_mut() = Some(FrozenHero {
+            size,
+            include_child,
+            authority,
+        });
         self.request_rebuild();
         Some(size)
     }
 
-    /// Drop the placeholder and show the child again. Safe to call on a hero that
-    /// is not in flight.
+    /// Restore the placeholder when a Hero is excluded from a gesture transition.
+    /// This can precede the previous flight's deferred completion drain.
     ///
-    /// `keep_placeholder` leaves it frozen — used when a flight ends by being
-    /// diverted into another.
+    /// `keep_placeholder` leaves it frozen. Flight-owned cleanup instead uses
+    /// its identity, so an old flight cannot release a replacement's placeholder.
     pub fn end_flight(&self, keep_placeholder: bool) {
-        if keep_placeholder || self.inner.placeholder.take().is_none() {
+        if keep_placeholder {
             return;
         }
+        let removed = self.inner.placeholder.borrow_mut().take();
+        if removed.is_none() {
+            return;
+        }
+        drop(removed);
+        self.request_rebuild();
+    }
+
+    pub(super) fn end_flight_for(&self, flight: &HeroFlightIdentity, keep_placeholder: bool) {
+        let removed = {
+            let mut placeholder = self.inner.placeholder.borrow_mut();
+            let Some(frozen) = placeholder.as_mut() else {
+                return;
+            };
+            let PlaceholderAuthority::Flight(current) = &frozen.authority else {
+                return;
+            };
+            if !Rc::ptr_eq(&current.0, &flight.0) {
+                return;
+            }
+            if keep_placeholder {
+                frozen.authority = PlaceholderAuthority::Settled;
+                return;
+            }
+            placeholder.take()
+        };
+        drop(removed);
         self.request_rebuild();
     }
 
@@ -1013,8 +1078,7 @@ impl ViewState<Hero> for HeroState {
         // The retained handle becomes inert before registry or configuration
         // retirement can reenter. It cannot keep the presentation alive.
         self.handle.inner.owner.take();
-        self.handle.inner.placeholder.set(None);
-        self.handle.inner.include_child.set(false);
+        self.handle.inner.placeholder.borrow_mut().take();
         self.handle.inner.hero_mode_enabled.set(false);
         let rebuild = Terminal::new(self.handle.inner.rebuild.take());
         let configuration = Terminal::new(self.handle.inner.configuration.borrow_mut().take());
