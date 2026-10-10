@@ -103,6 +103,10 @@
   physical last release; healthy cleanup preserves normal destruction.
 - Keep Hero flight samples owner-local and invoke authored shuttle cloning
   outside flight storage borrows.
+- Preserve the last accepted Hero shuttle geometry when a custom mapping returns
+  non-finite coordinates or overflowing sizes. Reentrant reads and cancellation,
+  including during mapping destruction, cannot publish an obsolete sample;
+  completed flights retain their final accepted geometry.
 
 - Cancel pending Hero creation and queued measurements when their controller is
   replaced. Builder failure or cancellation during creation and diversion restores

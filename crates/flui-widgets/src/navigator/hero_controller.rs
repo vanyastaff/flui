@@ -105,7 +105,7 @@ use flui_foundation::geometry::Size;
 use flui_foundation::geometry::{Matrix4, Rect};
 
 use super::hero::{HeroHandle, HeroTag, RectTweenFactory};
-use super::hero_flight::{FlightEpoch, FlightManager, FlightPlan};
+use super::hero_flight::{FlightEpoch, FlightManager, FlightPlan, finite_shuttle_rect};
 use super::lifecycle::{RetiredMap, RetiredValues, Terminal};
 use super::modal_route::ModalHandle;
 use super::navigator::NavigatorHandle;
@@ -182,8 +182,8 @@ pub struct Measurement {
 /// Whether a flight's two rects are usable.
 ///
 /// This manifest type still carries concrete route-pair geometry, so both rects must be
-/// finite. A non-finite rect would make the future `RectTween` interpolate
-/// `NaN`/`Infinity` and paint the shuttle nowhere.
+/// finite with representable shuttle sizes. Finite corners alone can still
+/// overflow subtraction into an infinite extent.
 ///
 /// **Defensive, and known to be so.** Every rect here is built from
 /// `PipelineOwner::box_size` and `transform_to`, and no reachable FLUI configuration
@@ -192,7 +192,7 @@ pub struct Measurement {
 /// reach it. It is unit-tested directly rather than pretended to be exercised
 /// end-to-end.
 pub(crate) fn is_valid_flight(from_rect: Rect, to_rect: Rect) -> bool {
-    to_rect.is_finite() && from_rect.is_finite()
+    finite_shuttle_rect(to_rect).is_some() && finite_shuttle_rect(from_rect).is_some()
 }
 
 /// Everything known about a flight that *would* start, for one tag.
@@ -882,6 +882,15 @@ impl NavigatorObserver for HeroController {
 #[cfg(test)]
 pub(crate) mod terminal_tests {
     use super::*;
+
+    #[test]
+    fn measured_hero_rectangles_must_fit_the_shuttle_domain() {
+        // Private admission boundary: ordinary measured boxes cannot produce
+        // these finite corners whose positive width is unrepresentable.
+        let overflowing = Rect::from_ltrb(-f64::MAX, 0.0, f64::MAX, 1.0);
+        assert!(!is_valid_flight(overflowing, Rect::ZERO));
+        assert!(!is_valid_flight(Rect::ZERO, overflowing));
+    }
     use std::hash::{Hash, Hasher};
     use std::io::Read;
     use std::panic::{AssertUnwindSafe, catch_unwind};

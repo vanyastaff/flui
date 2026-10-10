@@ -104,6 +104,11 @@ struct FlightInner {
     /// The shuttle's rect-tween endpoints. Re-aimed by
     /// [`FlightInner::on_tick`]; interpolated through [`rect_factory`](Self::rect_factory).
     rect: Cell<RectTween>,
+    /// Last accepted geometry, shared by the shuttle and retained flight readers.
+    geometry: Cell<Rect>,
+    /// Each read owns one publication right. None permanently refuses further
+    /// authored reads after capacity exhaustion instead of reissuing a ticket.
+    geometry_generation: Cell<Option<u64>>,
     /// Logical endpoints are swapped on a reversal, but a custom mapping must
     /// still receive its original endpoint order and mirrored progress.
     rect_reversed: Cell<bool>,
@@ -176,6 +181,22 @@ struct FlightInner {
     shuttle_builder: Terminal<RefCell<Option<ShuttleBuilder>>>,
 }
 
+/// Property-domain admission: finite coordinates, representable non-negative
+/// sizes, and finite reconstructed corners. Finite inverted axes collapse at
+/// their origin, including an otherwise underflowing negative difference.
+pub(crate) fn finite_shuttle_rect(rect: Rect) -> Option<Rect> {
+    if !rect.is_finite() {
+        return None;
+    }
+    let width = rect.width().max(0.0);
+    let height = rect.height().max(0.0);
+    if !width.is_finite() || !height.is_finite() {
+        return None;
+    }
+    let rect = Rect::from_ltwh(rect.min.x, rect.min.y, width, height);
+    rect.is_finite().then_some(rect)
+}
+
 impl FlightInner {
     /// Per-tick re-aim of the tween at the destination.
     ///
@@ -207,6 +228,7 @@ impl FlightInner {
                 let size = rect.end.size();
                 rect.end = Rect::from_ltwh(x, y, size.width, size.height);
                 self.rect.set(rect);
+                let _ = self.geometry_ticket();
             }
         } else if self.fade_from.get().is_none() {
             // The destination hero no longer exists or is no longer the flight's
@@ -225,6 +247,13 @@ impl FlightInner {
         self.opacity.set(opacity);
     }
 
+    /// Reserve publication authority. Exhaustion permanently refuses new reads.
+    fn geometry_ticket(&self) -> Option<u64> {
+        let generation = self.geometry_generation.get()?.checked_add(1);
+        self.geometry_generation.set(generation);
+        generation
+    }
+
     /// The rect the shuttle occupies right now, in the theater's coordinate space.
     ///
     /// Interpolated through the `create_rect_tween` factory when one is set,
@@ -235,26 +264,39 @@ impl FlightInner {
     /// for a shrinking flight turns the rect inside out; the size is clamped to
     /// zero, keeping `min` (ADR-0149: the property owns its domain).
     fn current_rect(&self) -> Rect {
+        if self.ended.get() {
+            return self.geometry.get();
+        }
+        let Some(generation) = self.geometry_ticket() else {
+            return self.geometry.get();
+        };
         let mut endpoints = self.rect.get();
+        let reversed = self.rect_reversed.get();
+        let factory = Terminal::new(self.rect_factory.borrow().clone());
         let mut t = self.proxy.value();
-        if self.rect_reversed.get() {
+        if reversed {
             std::mem::swap(&mut endpoints.begin, &mut endpoints.end);
             t = 1.0 - t;
         }
-        let factory = Terminal::new(self.rect_factory.borrow().clone());
         let rect = match factory.as_ref() {
             Some(make) => {
                 let mapping = Terminal::new(make(endpoints.begin, endpoints.end));
-                mapping.transform(t)
+                let rect = mapping.transform(t);
+                drop(mapping);
+                rect
             }
             None => endpoints.transform(t),
         };
-        Rect::from_ltwh(
-            rect.min.x,
-            rect.min.y,
-            rect.width().max(0.0),
-            rect.height().max(0.0),
-        )
+        // Retirement can reenter, cancel or redirect just like evaluation.
+        // Only validate publication after every authored callout has finished.
+        drop(factory);
+        if !self.ended.get()
+            && self.geometry_generation.get() == Some(generation)
+            && let Some(rect) = finite_shuttle_rect(rect)
+        {
+            self.geometry.set(rect);
+        }
+        self.geometry.get()
     }
 
     fn take_settled_status(&self) -> Option<AnimationStatus> {
@@ -535,6 +577,7 @@ impl HeroFlight {
         plan: FlightPlan,
         recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
     ) {
+        let _ = self.inner.geometry_ticket();
         let FlightPlan {
             direction: new_dir,
             from_hero: new_from,
@@ -1048,6 +1091,11 @@ impl FlightManager {
                 begin: manifest.from_rect,
                 end: manifest.to_rect,
             }),
+            geometry: Cell::new(
+                finite_shuttle_rect(manifest.from_rect)
+                    .expect("BUG: admitted flight geometry fits the shuttle domain"),
+            ),
+            geometry_generation: Cell::new(Some(0)),
             rect_reversed: Cell::new(false),
             rect_factory: Terminal::new(RefCell::new(rect_factory.take_value())),
             opacity: Cell::new(1.0),
@@ -1350,6 +1398,9 @@ pub(crate) struct ShuttleState;
 impl ViewState<Shuttle> for ShuttleState {
     fn build(&self, view: &Shuttle, _ctx: &dyn BuildContext) -> impl IntoView {
         view.flight.on_tick();
+        // Preserve the final accepted sample before logical completion makes
+        // retained flight readers inert.
+        let rect = view.flight.current_rect();
         if let Some(status) = view.flight.take_settled_status()
             && let Some(manager) = view.manager.upgrade()
         {
@@ -1361,7 +1412,6 @@ impl ViewState<Shuttle> for ShuttleState {
             );
         }
 
-        let rect = view.flight.current_rect();
         let opacity = view.flight.opacity.get();
         let child = view.flight.clone_shuttle();
 
@@ -1436,6 +1486,8 @@ mod terminal_tests {
                 begin: Rect::ZERO,
                 end: Rect::ZERO,
             }),
+            geometry: Cell::new(Rect::ZERO),
+            geometry_generation: Cell::new(Some(0)),
             rect_reversed: Cell::new(false),
             rect_factory: Terminal::new(RefCell::new(Some(factory(rect_capture)))),
             opacity: Cell::new(1.0),
@@ -1527,6 +1579,65 @@ mod terminal_tests {
         manager.finish_all();
         assert_eq!(from.placeholder_size(), None);
         assert_eq!(to.placeholder_size(), None);
+    }
+
+    // The terminal counter cannot be reached by ordinary frame driving.
+    fn geometry_capacity_case(reenter: bool) {
+        let (flight, _) = flight(false, false, false);
+        flight.inner.geometry_generation.set(Some(u64::MAX - 1));
+        let candidate = Rect::from_ltwh(10.0, 20.0, 30.0, 40.0);
+        let calls = Rc::new(Cell::new(0));
+        let factory: RectTweenFactory = {
+            let calls = Rc::clone(&calls);
+            let weak = Rc::downgrade(&flight.inner);
+            Rc::new(move |_, _| {
+                calls.set(calls.get() + 1);
+                if reenter {
+                    assert_eq!(
+                        weak.upgrade().expect("live flight").current_rect(),
+                        Rect::ZERO
+                    );
+                }
+                Box::new(RectTween::new(candidate, candidate))
+            })
+        };
+        let previous = flight.inner.rect_factory.borrow_mut().replace(factory);
+        drop(previous);
+        let accepted = if reenter { Rect::ZERO } else { candidate };
+        assert_eq!(flight.shuttle_rect(), accepted);
+        for _ in 0..2 {
+            assert_eq!(
+                flight.shuttle_rect(),
+                accepted,
+                "refusal keeps the accepted geometry"
+            );
+        }
+        assert_eq!(
+            calls.get(),
+            1,
+            "exhausted reads never invoke authored mapping again"
+        );
+    }
+
+    fn last_geometry_ticket_commits_once() {
+        geometry_capacity_case(false);
+    }
+    fn exhausted_nested_read_revokes_outer_publication() {
+        geometry_capacity_case(true);
+    }
+
+    #[test]
+    fn hero_geometry_capacity_refuses_without_reissuing_authority() {
+        crate::support::test_cases::run_cases(
+            "Hero geometry capacity",
+            &[
+                ("last_ticket", last_geometry_ticket_commits_once),
+                (
+                    "nested_refusal",
+                    exhausted_nested_read_revokes_outer_publication,
+                ),
+            ],
+        );
     }
 
     #[test]

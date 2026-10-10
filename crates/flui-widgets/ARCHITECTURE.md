@@ -158,6 +158,29 @@ geometry and identity markers and end before rebuild scheduling.
 
 ## Hero rect mappings execute outside flight guards
 
+The shuttle publishes only finite coordinates and representable non-negative
+sizes. Invalid mapping output preserves the last accepted rect; finite inverted
+axes collapse at their original origin, including a negative difference that
+underflows. Manifest admission applies the same domain before seeding the cache.
+Each read reserves publication authority before sampling. A nested read,
+redirection or re-aim invalidates older authority, and cancellation makes retained
+flight readers inert. Mapping and factory retirement finish before publication
+because their destructors can reenter too. The final frame samples before logical
+completion so retained readers preserve the accepted landing geometry.
+
+`hero_geometry_samples_preserve_the_last_finite_shuttle` drives mounted PageRoute
+flights through NaN, infinity, positive extent overflow, inverted axes and recovery
+on the same flight, then checks its retained landing rect.
+`hero_geometry_reentry_preserves_the_newer_authority` exercises factory,
+evaluation and mapping destruction: a nested accepted read wins; public observer
+detachment rejects the outgoing sample and a subsequent flight lands normally.
+Both use the existing ADR-0083 flight probe shared with the actual shuttle producer.
+The private `measured_hero_rectangles_must_fit_the_shuttle_domain` pins defensive
+manifest admission; ordinary measured boxes do not produce the overflowing fixture.
+`hero_geometry_capacity_refuses_without_reissuing_authority` seeds the private
+terminal counter, verifies one final accepted read and permanent refusal, including
+a nested refusal that revokes the last pending publication.
+
 Hero snapshots its owner-local rect factory before invoking user code. The
 factory, its returned mapping and that mapping's destructor can read the same
 flight without holding a flight storage borrow. `Animatable<Value = Rect>` allows

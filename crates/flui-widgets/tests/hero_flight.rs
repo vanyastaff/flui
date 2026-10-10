@@ -720,3 +720,325 @@ pub(crate) fn a_shrinking_flight_with_overshoot_keeps_a_non_negative_size() {
 // ============================================================================
 // HeroMode
 // ============================================================================
+
+struct SampledHeroPath {
+    endpoints: flui_animation::RectTween,
+    sample: Rc<Cell<Option<Rect>>>,
+}
+
+impl flui_animation::Animatable for SampledHeroPath {
+    type Value = Rect;
+
+    fn transform(&self, t: f64) -> Rect {
+        self.sample
+            .get()
+            .unwrap_or_else(|| flui_animation::Animatable::transform(&self.endpoints, t))
+    }
+}
+
+fn exercise_hero_geometry_sample(sample: Rect, accepted: Option<Rect>) {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+    let replacement = Rc::new(Cell::new(None));
+    let transition = fly(
+        &navigator,
+        &mut harness,
+        hero_page("shared", 30.0, 20.0),
+        hero_page_with("shared", 60.0, 45.0, {
+            let replacement = Rc::clone(&replacement);
+            move |hero| {
+                let replacement = Rc::clone(&replacement);
+                hero.curve(Curves::Linear)
+                    .create_rect_tween(move |begin, end| SampledHeroPath {
+                        endpoints: flui_animation::RectTween::new(begin, end),
+                        sample: Rc::clone(&replacement),
+                    })
+            }
+        }),
+    );
+    let flight = controller.flights().get(&tag("shared")).expect("airborne");
+    let entry = flight.entry_id();
+    harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(0.5));
+    harness.tick();
+    let previous = flight.shuttle_rect();
+    assert!(previous.is_finite() && previous.width() > 0.0 && previous.height() > 0.0);
+
+    replacement.set(Some(sample));
+    harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(0.75));
+    let sampled = flight.shuttle_rect();
+    assert!(
+        sampled.is_finite(),
+        "mapping sample must not publish non-finite coordinates: {sampled:?}"
+    );
+    assert!(
+        sampled.width().is_finite() && sampled.height().is_finite(),
+        "finite corners must not overflow the published size"
+    );
+    assert_rect_close(
+        sampled,
+        accepted.unwrap_or(previous),
+        "invalid mapping preserves the last accepted geometry",
+    );
+    // The same producer is used by the actual overlay's Positioned shuttle.
+    harness.tick();
+    assert_eq!(
+        flight.entry_id(),
+        entry,
+        "invalid geometry does not retire the flight"
+    );
+    assert_eq!(controller.flights().len(), 1);
+
+    replacement.set(None);
+    let next = flight.shuttle_rect();
+    assert_rect_close(
+        next,
+        flight.begin_rect().lerp(flight.target_rect(), 0.75),
+        "the next finite mapping recovers on the same flight",
+    );
+    harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(1.0));
+    harness.tick();
+    assert_eq!(controller.flights().len(), 0, "the recovered flight lands");
+    assert_rect_close(
+        flight.shuttle_rect(),
+        flight.target_rect(),
+        "landing retains the final accepted geometry",
+    );
+}
+
+fn nan_hero_origin() {
+    exercise_hero_geometry_sample(Rect::from_ltrb(f64::NAN, 10.0, 30.0, 40.0), None);
+}
+
+fn nan_hero_extent() {
+    exercise_hero_geometry_sample(Rect::from_ltrb(10.0, 20.0, f64::NAN, 40.0), None);
+}
+
+fn infinite_hero_coordinate() {
+    exercise_hero_geometry_sample(Rect::from_ltrb(10.0, f64::NEG_INFINITY, 30.0, 40.0), None);
+}
+
+fn overflowing_hero_extent() {
+    exercise_hero_geometry_sample(Rect::from_ltrb(-f64::MAX, 20.0, f64::MAX, 40.0), None);
+}
+
+fn overflowing_hero_height() {
+    exercise_hero_geometry_sample(Rect::from_ltrb(10.0, -f64::MAX, 30.0, f64::MAX), None);
+}
+
+fn inverted_finite_hero_extent() {
+    exercise_hero_geometry_sample(
+        Rect::from_ltrb(20.0, 10.0, 5.0, 1.0),
+        Some(Rect::from_ltwh(20.0, 10.0, 0.0, 0.0)),
+    );
+}
+
+fn underflowing_inverted_hero_extent() {
+    exercise_hero_geometry_sample(
+        Rect::from_ltrb(f64::MAX, f64::MAX, -f64::MAX, -f64::MAX),
+        Some(Rect::from_ltwh(f64::MAX, f64::MAX, 0.0, 0.0)),
+    );
+}
+
+pub(crate) fn hero_geometry_samples_preserve_the_last_finite_shuttle() {
+    crate::common::cases::run_cases(
+        "hero geometry samples",
+        &[
+            ("nan_origin", nan_hero_origin),
+            ("nan_extent", nan_hero_extent),
+            ("infinite_coordinate", infinite_hero_coordinate),
+            ("overflowing_extent", overflowing_hero_extent),
+            ("overflowing_height", overflowing_hero_height),
+            ("inverted_finite_extent", inverted_finite_hero_extent),
+            (
+                "underflowing_inverted_extent",
+                underflowing_inverted_hero_extent,
+            ),
+        ],
+    );
+}
+
+struct ReentrantHeroPath {
+    endpoints: flui_animation::RectTween,
+    candidate: Option<Rect>,
+    hook: Rc<dyn Fn()>,
+    phase: &'static str,
+}
+
+impl flui_animation::Animatable for ReentrantHeroPath {
+    type Value = Rect;
+
+    fn transform(&self, t: f64) -> Rect {
+        let candidate = self
+            .candidate
+            .unwrap_or_else(|| flui_animation::Animatable::transform(&self.endpoints, t));
+        if self.phase == "transform" {
+            (self.hook)();
+        }
+        candidate
+    }
+}
+
+impl Drop for ReentrantHeroPath {
+    fn drop(&mut self) {
+        if self.phase == "drop" {
+            (self.hook)();
+        }
+    }
+}
+
+fn exercise_hero_geometry_authority(phase: &'static str, cancel: bool) {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+    let armed = Rc::new(Cell::new(false));
+    let replacement = Rc::new(Cell::new(None));
+    let nested = Rc::new(Cell::new(None));
+    let newer = Rect::from_ltwh(101.0, 109.0, 30.0, 40.0);
+    let hook: Rc<dyn Fn()> = {
+        let armed = Rc::clone(&armed);
+        let replacement = Rc::clone(&replacement);
+        let nested = Rc::clone(&nested);
+        let controller = Arc::downgrade(&controller);
+        Rc::new(move || {
+            if !armed.replace(false) {
+                return;
+            }
+            if cancel {
+                // Public lifecycle cancellation of the same mounted observer;
+                // adding another manual observer would leave this one attached.
+                controller.upgrade().expect("live owner").did_detach();
+            } else {
+                replacement.set(Some(newer));
+                let flight = controller
+                    .upgrade()
+                    .expect("live owner")
+                    .flights()
+                    .get(&tag("shared"))
+                    .expect("airborne");
+                nested.set(Some(flight.shuttle_rect()));
+            }
+        })
+    };
+    let transition = fly(
+        &navigator,
+        &mut harness,
+        hero_page("shared", 30.0, 20.0),
+        hero_page_with("shared", 60.0, 45.0, {
+            let replacement = Rc::clone(&replacement);
+            move |hero| {
+                let replacement = Rc::clone(&replacement);
+                let hook = Rc::clone(&hook);
+                hero.curve(Curves::Linear)
+                    .create_rect_tween(move |begin, end| {
+                        let candidate = replacement.get();
+                        if phase == "factory" {
+                            hook();
+                        }
+                        ReentrantHeroPath {
+                            endpoints: flui_animation::RectTween::new(begin, end),
+                            candidate,
+                            hook: Rc::clone(&hook),
+                            phase,
+                        }
+                    })
+            }
+        }),
+    );
+    harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(0.5));
+    harness.tick();
+    let flight = controller.flights().get(&tag("shared")).expect("airborne");
+    let previous = flight.shuttle_rect();
+    if cancel {
+        replacement.set(Some(newer));
+    }
+    armed.set(true);
+    let outer = harness.enter_owner_scope(|| flight.shuttle_rect());
+    assert!(!armed.get(), "the actual mapping callback ran");
+    if cancel {
+        assert_eq!(
+            controller.flights().len(),
+            0,
+            "the callback withdrew the flight"
+        );
+        assert_rect_close(
+            outer,
+            previous,
+            "cancelled mapping cannot publish its in-flight result",
+        );
+        assert_rect_close(
+            flight.shuttle_rect(),
+            previous,
+            "a retained ended flight keeps its last accepted geometry",
+        );
+        harness.enter_owner_scope(|| controller.did_attach(navigator.clone()));
+        let page = hero_page("shared", 90.0, 75.0);
+        let next = page.transition_handle();
+        let _route = harness.enter_owner_scope(|| navigator.push(page));
+        harness.tick();
+        let recovered = controller
+            .flights()
+            .get(&tag("shared"))
+            .expect("the next flight is admitted");
+        assert!(recovered.shuttle_rect().is_finite());
+        harness.enter_owner_scope(|| next.controller().expect("installed").set_value(1.0));
+        harness.tick();
+        assert_eq!(
+            controller.flights().len(),
+            0,
+            "the next flight lands after cancellation"
+        );
+    } else {
+        assert_eq!(
+            nested.get(),
+            Some(newer),
+            "the newer read committed its mapping"
+        );
+        assert_rect_close(
+            outer,
+            newer,
+            "an outer mapping cannot replace a newer reentrant sample",
+        );
+        assert_rect_close(
+            flight.shuttle_rect(),
+            newer,
+            "the next read retains the accepted geometry",
+        );
+        harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(1.0));
+        harness.tick();
+        assert_eq!(controller.flights().len(), 0, "the recovered flight lands");
+    }
+}
+
+fn reentrant_geometry_factory() {
+    exercise_hero_geometry_authority("factory", false);
+}
+fn reentrant_geometry_transform() {
+    exercise_hero_geometry_authority("transform", false);
+}
+fn reentrant_geometry_retirement() {
+    exercise_hero_geometry_authority("drop", false);
+}
+fn cancelled_geometry_factory() {
+    exercise_hero_geometry_authority("factory", true);
+}
+fn cancelled_geometry_transform() {
+    exercise_hero_geometry_authority("transform", true);
+}
+fn cancelled_geometry_retirement() {
+    exercise_hero_geometry_authority("drop", true);
+}
+
+pub(crate) fn hero_geometry_reentry_preserves_the_newer_authority() {
+    crate::common::cases::run_cases(
+        "hero geometry authority",
+        &[
+            ("reentrant_factory", reentrant_geometry_factory),
+            ("reentrant_transform", reentrant_geometry_transform),
+            ("reentrant_retirement", reentrant_geometry_retirement),
+            ("cancelled_factory", cancelled_geometry_factory),
+            ("cancelled_transform", cancelled_geometry_transform),
+            ("cancelled_retirement", cancelled_geometry_retirement),
+        ],
+    );
+}

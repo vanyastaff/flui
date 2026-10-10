@@ -538,6 +538,8 @@ fn hero_flights() {
             ("hero_flight::a_nonlinear_hero_pop_retraces_the_airborne_push", crate::hero_flight::a_nonlinear_hero_pop_retraces_the_airborne_push),
             ("hero_flight::cancelling_a_hero_mapping_does_not_refreeze_the_previous_page", crate::hero_flight::cancelling_a_hero_mapping_does_not_refreeze_the_previous_page),
             ("hero_flight::a_shrinking_flight_with_overshoot_keeps_a_non_negative_size", crate::hero_flight::a_shrinking_flight_with_overshoot_keeps_a_non_negative_size),
+            ("hero_flight::hero_geometry_samples_preserve_the_last_finite_shuttle", crate::hero_flight::hero_geometry_samples_preserve_the_last_finite_shuttle),
+            ("hero_flight::hero_geometry_reentry_preserves_the_newer_authority", crate::hero_flight::hero_geometry_reentry_preserves_the_newer_authority),
             ("hero_gesture::complete_release_pops_to_the_destination_route_and_the_flight_lands", crate::hero_gesture::complete_release_pops_to_the_destination_route_and_the_flight_lands),
             ("hero_gesture::an_excluding_gesture_restores_pending_programmatic_placeholders", crate::hero_gesture::an_excluding_gesture_restores_pending_programmatic_placeholders),
             ("hero_public::a_hero_push_flight_runs_and_settles", crate::hero_public::a_hero_push_flight_runs_and_settles),
