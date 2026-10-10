@@ -344,9 +344,10 @@ impl TaskStore {
         if self.closed.get() {
             flags.cancelled.store(true, Ordering::Release);
             flags.retired.store(true, Ordering::Release);
-            if let Err(payload) = release_opaque(future) {
-                resume_unwind(payload);
-            }
+            crate::scheduler::execution::retire_with_execution_custody(
+                &self.execution_failure,
+                future,
+            );
             return Some(TaskToken::refused());
         }
 
@@ -818,11 +819,6 @@ impl AsyncDriver {
         }
     }
 
-    /// The live store, unless its UI runtime is gone or retiring.
-    fn live_store(&self) -> Option<Rc<TaskStore>> {
-        self.store.upgrade().filter(|store| !store.closed.get())
-    }
-
     /// Replace the "request a frame" hook. A test probe: production installs
     /// the hook only through [`OwnerFrame::new`](crate::OwnerFrame::new), so a
     /// widget cannot replace its UI runtime's frame hook.
@@ -874,9 +870,10 @@ impl AsyncDriver {
     /// Propagates a panic from a refused future's destructor.
     #[must_use = "dropping the TaskToken immediately cancels the task"]
     pub fn spawn_local(&self, future: BoxedTask) -> TaskToken {
-        match self.live_store() {
-            Some(store) => store.spawn(future),
-            None => refuse(future),
+        match self.store.upgrade() {
+            Some(store) if !store.closed.get() => store.spawn(future),
+            Some(store) => refuse(future, Some(&store.execution_failure)),
+            None => refuse(future, None),
         }
     }
 
@@ -909,9 +906,10 @@ impl AsyncDriver {
     /// As [`spawn_local`](Self::spawn_local), plus a panic from the inline poll.
     #[must_use = "dropping the TaskToken immediately cancels the task"]
     pub fn spawn_local_eager(&self, future: BoxedTask) -> Option<TaskToken> {
-        match self.live_store() {
-            Some(store) => store.spawn_eager(future),
-            None => Some(refuse(future)),
+        match self.store.upgrade() {
+            Some(store) if !store.closed.get() => store.spawn_eager(future),
+            Some(store) => Some(refuse(future, Some(&store.execution_failure))),
+            None => Some(refuse(future, None)),
         }
     }
 
@@ -960,9 +958,18 @@ fn release_opaque<T>(value: T) -> Result<(), RetirePanic> {
 /// afterwards under its own catch, so a panicking subscriber can neither
 /// abort an unwind nor replace the destructor's panic. A diagnostic panic is
 /// retained, never raised.
-fn refuse(future: BoxedTask) -> TaskToken {
+fn refuse(
+    future: BoxedTask,
+    failure_slot: Option<&RefCell<Option<RcWeak<Cell<bool>>>>>,
+) -> TaskToken {
     let token = TaskToken::refused();
-    let released = release_opaque(future);
+    let released = if let Some(slot) = failure_slot {
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::scheduler::execution::retire_with_execution_custody(slot, future);
+        }))
+    } else {
+        release_opaque(future)
+    };
     let diagnostic = catch_unwind(|| {
         tracing::warn!(
             "AsyncDriver: the ui_runtime that owned this driver is gone; dropping the spawned future"
