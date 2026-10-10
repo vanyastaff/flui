@@ -73,7 +73,10 @@ fn first_multidrag_update_reports_observed_transformed_coordinates() {
         let second = PointerId::new(std::num::NonZeroU64::new(22).expect("pointer"));
         let stamp = |mut event: PointerEvent, millis| {
             match &mut event {
-                PointerEvent::Down(button) | PointerEvent::Up(button) => {
+                PointerEvent::Down(button) => {
+                    button.sample.time = EventTime::from_nanos(millis * 1_000_000);
+                }
+                PointerEvent::Up(button) => {
                     button.sample.time = EventTime::from_nanos(millis * 1_000_000)
                 }
                 PointerEvent::Move(movement) => {
