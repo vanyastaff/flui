@@ -60,23 +60,24 @@
 //! make the surviving hero depend on mount order.
 
 use super::lifecycle::Terminal;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use flui_animation::{Animatable, Animation, ArcCurve, Curve, Curves};
 use flui_foundation::geometry::Rect;
 use flui_foundation::geometry::Size;
 use flui_foundation::{RenderId, ViewKey};
 use flui_objects::SubtreeAnchor;
+#[cfg(test)]
 use flui_rendering::pipeline::PipelineCell;
+use flui_rendering::pipeline::WeakPipelineCell;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{RebuildHandle, impl_inherited_view};
-use parking_lot::Mutex;
 
 use super::hero_controller::FlightDirection;
 use crate::__private::AnchoredBox;
@@ -260,7 +261,7 @@ impl HeroRegistry {
     /// Remove `tag`, but only if it still names `handle`.
     ///
     /// The identity check is what makes a *rejected* duplicate harmless: when it
-    /// unmounts it must not evict the hero that won the tag. `Arc::ptr_eq`, not tag
+    /// unmounts it must not evict the hero that won the tag. `Rc::ptr_eq`, not tag
     /// equality, is the question being asked.
     fn deregister(&self, tag: &HeroTag, handle: &HeroHandle) {
         let mut heroes = self.heroes.lock();
@@ -439,37 +440,21 @@ struct HeroInner {
     /// *ancestors* and cannot answer it.
     anchor: SubtreeAnchor,
     /// The frozen placeholder size. `Some` iff in flight.
-    placeholder: Mutex<Option<Size>>,
+    placeholder: Cell<Option<Size>>,
     /// Whether the placeholder keeps the real child offstage.
-    include_child: AtomicBool,
-    /// The render tree, so `start_flight` can read its own committed size.
-    owner: Mutex<Option<PipelineCell>>,
+    include_child: Cell<bool>,
+    /// Weak render access, so measurement cannot keep the presentation alive.
+    owner: RefCell<Option<WeakPipelineCell>>,
     /// `setState`. Acquired in `init_state`, fired from a post-frame callback —
     /// never from `build`/layout/paint.
-    rebuild: Mutex<Option<RebuildHandle>>,
-    /// The hero's current child, for the flight shuttle to inflate afresh.
-    ///
-    /// The default shuttle is the *destination* hero's child, built anew in the
-    /// overlay. Nothing is reparented, so this is a `BoxedView` clone,
-    /// kept current through `did_update_view`.
-    shuttle_child: Terminal<Mutex<BoxedView>>,
-    /// The `create_rect_tween` factory, or `None` for the linear default.
-    /// Read by the controller when it builds a flight.
-    rect_factory: Mutex<Option<RectTweenFactory>>,
-    /// The `flight_shuttle_builder`, or `None` for the default
-    /// shuttle. Read by the controller when it builds a flight.
-    shuttle_builder: Mutex<Option<ShuttleBuilder>>,
-    /// The flight's forward easing. The default is `Curves::FastOutSlowIn`.
-    curve: Terminal<Mutex<ArcCurve>>,
-    /// The reverse easing, or `None` for [`curve`](Self::curve) flipped.
-    reverse_curve: Mutex<Option<ArcCurve>>,
+    rebuild: RefCell<Option<RebuildHandle>>,
+    /// Immutable view facts committed together. Readers keep an owning snapshot
+    /// before authored Clone or Drop can reenter. Unmount withdraws the snapshot.
+    configuration: Terminal<RefCell<Option<Rc<Hero>>>>,
     /// Whether the ambient [`HeroMode`] allows this hero to fly — the AND of the `enabled` flags
     /// of every enclosing scope, sampled each build. `true` with no scope above.
     /// A disabled hero is still registered; the measurement pass skips it.
-    hero_mode_enabled: AtomicBool,
-    /// Defaults to `false`; a pair flies during a gesture-driven transition only
-    /// when **both** ends opt in.
-    transition_on_user_gestures: AtomicBool,
+    hero_mode_enabled: Cell<bool>,
 }
 
 impl Drop for HeroInner {
@@ -477,12 +462,8 @@ impl Drop for HeroInner {
         let tag = self.tag.withdraw();
         let owner = Terminal::new(self.owner.get_mut().take());
         let rebuild = Terminal::new(self.rebuild.get_mut().take());
-        let child = self.shuttle_child.withdraw();
-        let factory = Terminal::new(self.rect_factory.get_mut().take());
-        let builder = Terminal::new(self.shuttle_builder.get_mut().take());
-        let curve = self.curve.withdraw();
-        let reverse = Terminal::new(self.reverse_curve.get_mut().take());
-        drop((tag, owner, rebuild, child, factory, builder, curve, reverse));
+        let configuration = self.configuration.withdraw();
+        drop((tag, owner, rebuild, configuration));
     }
 }
 
@@ -492,7 +473,7 @@ impl Drop for HeroInner {
 /// — nothing can — so the state that a flight mutates lives behind this handle.
 #[derive(Clone)]
 pub struct HeroHandle {
-    inner: Arc<HeroInner>,
+    inner: Rc<HeroInner>,
 }
 
 impl HeroHandle {
@@ -517,7 +498,7 @@ impl HeroHandle {
         let mut owner = owner.into_layout();
         owner.run_layout().expect("a lone anchor lays out");
         let cell = PipelineCell::new(owner.into_idle());
-        *handle.inner.owner.lock() = Some(cell.clone());
+        *handle.inner.owner.borrow_mut() = Some(cell.downgrade());
         (handle, cell)
     }
 
@@ -525,27 +506,22 @@ impl HeroHandle {
     /// keeps the view-derived halves current afterwards.
     fn new(view: &Hero) -> Self {
         Self {
-            inner: Arc::new(HeroInner {
+            inner: Rc::new(HeroInner {
                 tag: Terminal::new(view.tag.clone()),
                 anchor: SubtreeAnchor::new(),
-                placeholder: Mutex::new(None),
-                include_child: AtomicBool::new(true),
-                owner: Mutex::new(None),
-                rebuild: Mutex::new(None),
-                shuttle_child: Terminal::new(Mutex::new(view.child.clone())),
-                rect_factory: Mutex::new(view.rect_factory.clone()),
-                shuttle_builder: Mutex::new(view.shuttle_builder.clone()),
-                curve: Terminal::new(Mutex::new(view.curve.clone())),
-                reverse_curve: Mutex::new(view.reverse_curve.clone()),
-                hero_mode_enabled: AtomicBool::new(true),
-                transition_on_user_gestures: AtomicBool::new(view.transition_on_user_gestures),
+                placeholder: Cell::new(None),
+                include_child: Cell::new(true),
+                owner: RefCell::new(None),
+                rebuild: RefCell::new(None),
+                configuration: Terminal::new(RefCell::new(Some(Rc::new(view.clone())))),
+                hero_mode_enabled: Cell::new(true),
             }),
         }
     }
 
     /// Whether both handles name the same mounted hero.
     fn is(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.inner, &other.inner)
+        Rc::ptr_eq(&self.inner, &other.inner)
     }
 
     /// Whether both handles name the same mounted hero — the "same tag" vs "same
@@ -570,10 +546,10 @@ impl HeroHandle {
         self.inner.anchor.get()
     }
 
-    /// The frozen placeholder size — `Some` exactly while in flight.
+    /// The frozen placeholder size, withdrawn when this hero unmounts.
     #[must_use]
     pub fn placeholder_size(&self) -> Option<Size> {
-        *self.inner.placeholder.lock()
+        self.inner.placeholder.get()
     }
 
     /// What the flight's shuttle should show: a fresh inflation of this hero's child.
@@ -581,47 +557,70 @@ impl HeroHandle {
     /// This is the destination hero's child as-is; there is no `MediaQuery`
     /// padding compensation between the two heroes.
     pub(crate) fn shuttle_child(&self) -> BoxedView {
-        self.inner.shuttle_child.lock().clone()
+        let configuration = Terminal::new(self.inner.configuration.borrow().clone());
+        configuration
+            .as_ref()
+            .map_or_else(|| SizedBox::shrink().boxed(), |view| view.child.clone())
     }
 
     /// This hero's `create_rect_tween` factory, if it set one.
     pub(crate) fn rect_factory(&self) -> Option<RectTweenFactory> {
-        self.inner.rect_factory.lock().clone()
+        self.inner
+            .configuration
+            .borrow()
+            .as_ref()?
+            .rect_factory
+            .clone()
     }
 
     /// This hero's `flight_shuttle_builder`, if it set one.
     pub(crate) fn shuttle_builder(&self) -> Option<ShuttleBuilder> {
-        self.inner.shuttle_builder.lock().clone()
+        self.inner
+            .configuration
+            .borrow()
+            .as_ref()?
+            .shuttle_builder
+            .clone()
     }
 
     /// This hero's forward flight curve.
     pub(crate) fn curve(&self) -> ArcCurve {
-        self.inner.curve.lock().clone()
+        self.inner.configuration.borrow().as_ref().map_or_else(
+            || ArcCurve::new(Curves::FastOutSlowIn),
+            |view| view.curve.clone(),
+        )
     }
 
     /// This hero's reverse flight curve, if it set one. `None` means "the
     /// forward curve, flipped".
     pub(crate) fn reverse_curve(&self) -> Option<ArcCurve> {
-        self.inner.reverse_curve.lock().clone()
+        self.inner
+            .configuration
+            .borrow()
+            .as_ref()?
+            .reverse_curve
+            .clone()
     }
 
     /// Whether the ambient [`HeroMode`] allows this hero to fly.
     pub(crate) fn hero_mode_enabled(&self) -> bool {
-        self.inner.hero_mode_enabled.load(Ordering::Relaxed)
+        self.inner.hero_mode_enabled.get()
     }
 
     /// Whether this hero opts into a gesture-driven (e.g. edge swipe-back)
     /// flight. `false` by default.
     pub(crate) fn transition_on_user_gestures(&self) -> bool {
         self.inner
-            .transition_on_user_gestures
-            .load(Ordering::Relaxed)
+            .configuration
+            .borrow()
+            .as_ref()
+            .is_some_and(|view| view.transition_on_user_gestures)
     }
 
     /// Whether an in-flight hero keeps its child offstage inside the placeholder.
     #[must_use]
     pub fn includes_child(&self) -> bool {
-        self.inner.include_child.load(Ordering::Relaxed)
+        self.inner.include_child.get()
     }
 
     /// The hero's bounding box in `ancestor`'s coordinate space, or `None` when it is
@@ -633,7 +632,7 @@ impl HeroHandle {
     #[must_use]
     pub fn bounding_box_in(&self, ancestor: RenderId) -> Option<Rect> {
         let render_id = self.render_id()?;
-        let owner = self.inner.owner.lock().clone()?;
+        let owner = self.inner.owner.borrow().as_ref()?.upgrade()?;
         owner.with(|owner| {
             let size = owner.box_size(render_id)?;
             let transform = owner.transform_to(render_id, ancestor)?;
@@ -652,14 +651,12 @@ impl HeroHandle {
     pub fn start_flight(&self, include_child_in_placeholder: bool) -> Option<Size> {
         let render_id = self.render_id()?;
         let size = {
-            let owner = self.inner.owner.lock().clone()?;
+            let owner = self.inner.owner.borrow().as_ref()?.upgrade()?;
             owner.with(|owner| owner.box_size(render_id))?
         };
 
-        self.inner
-            .include_child
-            .store(include_child_in_placeholder, Ordering::Relaxed);
-        *self.inner.placeholder.lock() = Some(size);
+        self.inner.include_child.set(include_child_in_placeholder);
+        self.inner.placeholder.set(Some(size));
         self.request_rebuild();
         Some(size)
     }
@@ -670,19 +667,16 @@ impl HeroHandle {
     /// `keep_placeholder` leaves it frozen — used when a flight ends by being
     /// diverted into another.
     pub fn end_flight(&self, keep_placeholder: bool) {
-        {
-            let mut placeholder = self.inner.placeholder.lock();
-            if keep_placeholder || placeholder.is_none() {
-                return;
-            }
-            *placeholder = None;
+        if keep_placeholder || self.inner.placeholder.take().is_none() {
+            return;
         }
         self.request_rebuild();
     }
 
     /// Schedules a rebuild. Inert on an unmounted hero.
     fn request_rebuild(&self) {
-        if let Some(rebuild) = self.inner.rebuild.lock().as_ref() {
+        let rebuild = Terminal::new(self.inner.rebuild.borrow().clone());
+        if let Some(rebuild) = rebuild.as_ref() {
             rebuild.schedule(flui_view::RebuildReason::AnimationTick);
         }
     }
@@ -916,44 +910,36 @@ impl ViewState<Hero> for HeroState {
     /// factory, the shuttle builder, and the flight curves are all read at flight
     /// start, i.e. from the *latest* `Hero` configuration.
     fn did_update_view(&mut self, _old: &Hero, new_view: &Hero) {
-        self.handle
-            .inner
-            .shuttle_child
-            .lock()
-            .clone_from(&new_view.child);
-        self.handle
-            .inner
-            .rect_factory
-            .lock()
-            .clone_from(&new_view.rect_factory);
-        self.handle
-            .inner
-            .shuttle_builder
-            .lock()
-            .clone_from(&new_view.shuttle_builder);
-        self.handle.inner.curve.lock().clone_from(&new_view.curve);
-        self.handle
-            .inner
-            .reverse_curve
-            .lock()
-            .clone_from(&new_view.reverse_curve);
-        self.handle
-            .inner
-            .transition_on_user_gestures
-            .store(new_view.transition_on_user_gestures, Ordering::Relaxed);
+        // Cloning the child invokes authored code. Prepare the entire immutable
+        // configuration first, commit it once, then retire the previous one.
+        let configuration = Rc::new(new_view.clone());
+        let previous = Terminal::new(
+            self.handle
+                .inner
+                .configuration
+                .borrow_mut()
+                .replace(configuration),
+        );
+        drop(previous);
     }
 
     /// Everything a hero needs from outside itself is acquired **here**, in the one
     /// lifecycle hook that has a `LifecycleContext` and is not a frame phase: the route's
     /// registry, the render tree, and the rebuild capability.
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        let _prev = std::mem::replace(&mut *self.handle.inner.owner.lock(), ctx.pipeline_owner());
         let _prev = self
             .handle
             .inner
-            .rebuild
-            .lock()
-            .replace(ctx.rebuild_handle());
+            .owner
+            .replace(ctx.pipeline_owner().map(|owner| owner.downgrade()));
+        let previous = Terminal::new(
+            self.handle
+                .inner
+                .rebuild
+                .borrow_mut()
+                .replace(ctx.rebuild_handle()),
+        );
+        drop(previous);
 
         let registry = ctx.get::<HeroScope, _>(|scope| scope.registry.clone());
         if let Some(registry) = registry {
@@ -967,9 +953,23 @@ impl ViewState<Hero> for HeroState {
     /// The mirror. A registry entry that outlived its hero would hand a controller a
     /// handle whose render node is gone and whose rebuild is inert.
     fn dispose(&mut self) {
-        if let Some(registry) = &self.registry {
-            registry.deregister(self.handle.tag(), &self.handle);
+        // The retained handle becomes inert before registry or configuration
+        // retirement can reenter. It cannot keep the presentation alive.
+        self.handle.inner.owner.take();
+        self.handle.inner.placeholder.set(None);
+        self.handle.inner.include_child.set(false);
+        self.handle.inner.hero_mode_enabled.set(false);
+        let rebuild = Terminal::new(self.handle.inner.rebuild.take());
+        let configuration = Terminal::new(self.handle.inner.configuration.borrow_mut().take());
+        let registry = Terminal::new(self.registry.take());
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        if let Some(registry) = registry.as_ref() {
+            recovery.run(|| registry.deregister(self.handle.tag(), &self.handle));
         }
+        recovery.retire(rebuild);
+        recovery.retire(configuration);
+        recovery.retire(registry);
+        recovery.finish();
     }
 
     /// Builds the anchored box, with the state-preserving custom placeholder. An
@@ -992,10 +992,7 @@ impl ViewState<Hero> for HeroState {
         let hero_mode_enabled = ctx
             .depend_on::<HeroModeScope, _>(|scope| scope.enabled)
             .unwrap_or(true);
-        self.handle
-            .inner
-            .hero_mode_enabled
-            .store(hero_mode_enabled, Ordering::Relaxed);
+        self.handle.inner.hero_mode_enabled.set(hero_mode_enabled);
 
         let anchor = self.handle.inner.anchor.clone();
         let placeholder = self.handle.placeholder_size();

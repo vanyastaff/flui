@@ -522,6 +522,8 @@ fn hero_flights() {
     run_cases(
         "hero_flights",
         &[
+            ("hero::a_retained_hero_handle_does_not_keep_its_presentation_alive", crate::hero::a_retained_hero_handle_does_not_keep_its_presentation_alive as fn()),
+            ("hero::unmount_releases_hero_configuration_despite_a_retained_handle", crate::hero::unmount_releases_hero_configuration_despite_a_retained_handle),
             ("hero::a_hero_child_keeps_its_state_across_a_flight_without_a_global_key", crate::hero::a_hero_child_keeps_its_state_across_a_flight_without_a_global_key as fn()),
             ("hero_flight::a_push_eases_on_the_destination_hero_curve", crate::hero_flight::a_push_eases_on_the_destination_hero_curve),
             ("hero_flight::a_push_flight_interrupted_by_a_pop_diverts_in_place", crate::hero_flight::a_push_flight_interrupted_by_a_pop_diverts_in_place),

@@ -69,6 +69,12 @@
 
 ### Fixed
 
+- Release Hero configuration and mounted capabilities on unmount, even when a
+  flight retains its handle. Hero render access no longer owns the presentation;
+  stale handles cannot freeze or retire a replacement using the same tag.
+- Commit Hero configuration together and run authored child cloning, outgoing
+  destruction and rebuild scheduling outside its storage borrows.
+
 - Refuse further Hero diversion work when its rect mapping cancels the flight,
   preserving restored children when returning to the previous route.
 - Complete Hero teardown and peer cancellation after a subscription-removal

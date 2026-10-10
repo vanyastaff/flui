@@ -31,6 +31,29 @@ and removes the subtree while it is active. Removal withdraws frame registration
 and prevents later delegate builds. The core controller ownership tests separately
 pin cancellation of the run future.
 
+## Hero handles observe the presentation without owning it
+
+A mounted Hero shares owner-local state through `Rc`, `Cell` and `RefCell`
+(ADR-0175). Its render capability is a `WeakPipelineCell`: a retained flight or
+handle cannot keep a closed presentation alive. Immutable `Hero` configuration
+is prepared outside the slot borrow and committed as one `Rc` snapshot. Readers
+snapshot it before authored child cloning; replacement retires it after the
+borrow ends. Rebuild requests likewise snapshot their capability before scheduling.
+
+Disposal withdraws configuration, rebuild capability, render access and the
+placeholder before retiring captures. Registry removal and outgoing retirement
+complete under one per-Hero first-failure context. A completed pop keeps its source
+frozen while mounted; unmount removes that authority even from retained handles.
+
+`a_retained_hero_handle_does_not_keep_its_presentation_alive` mounts a real Hero,
+unmounts it, mounts a replacement with the same tag and closes the presentation.
+It checks stale refusal, independent replacement identity and weak render-owner
+release. `unmount_releases_hero_configuration_despite_a_retained_handle` verifies
+capture destruction and reentry observe the withdrawn registration and inert
+handle. These cases use the existing ADR-0083 test-access registry seam, which
+is not exported to applications. The gesture completion case also measures the
+destination's real child after the source disappears.
+
 ## Hero rect mappings execute outside flight guards
 
 Hero snapshots its owner-local rect factory before invoking user code. The
