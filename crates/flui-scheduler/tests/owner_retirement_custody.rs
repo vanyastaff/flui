@@ -361,6 +361,59 @@ fn owner_retirement_custody_contract() {
                 "eager completion custody",
                 eager_completion_preserves_caught_failure,
             ),
+            (
+                "retired task admission custody",
+                retired_task_admission_preserves_caught_failure,
+            ),
         ],
     );
+}
+
+fn retired_task_admission_preserves_caught_failure() {
+    // Eager polling requires a 'static future; use a weak owner envelope.
+    struct EagerRetiringFuture {
+        owner: Weak<OwnerFrame>,
+        capture: RemovedCapture,
+    }
+    impl Future for EagerRetiringFuture {
+        type Output = ();
+        fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<()> {
+            let _ = &self.capture;
+            let owner = self.owner.upgrade().expect("live owner");
+            catch_nested_refusal_failure(&owner);
+            assert!(owner.retire().is_none());
+            Poll::Pending
+        }
+    }
+    for mode in [0, 1, 2] {
+        let scheduler = UpdateScheduler::new();
+        let owner = Rc::new(OwnerFrame::new(&scheduler).expect("fresh owner"));
+        let driver = owner.async_driver();
+        let drops = Rc::new(Cell::new(0));
+        assert_eq!(owner.pump_background(|| {
+            if mode == 0 {
+                let token = driver.spawn_local_eager(Box::pin(EagerRetiringFuture {
+                    owner: Rc::downgrade(&owner),
+                    capture: RemovedCapture(Rc::clone(&drops)),
+                })).expect("pending poll refuses retired admission");
+                assert!(token.is_cancelled());
+            } else {
+                catch_nested_refusal_failure(&owner);
+                assert!(owner.retire().is_none());
+                let future = Box::pin(RemovedFuture {
+                    capture: RemovedCapture(Rc::clone(&drops)),
+                    ready: false,
+                });
+                let token = if mode == 1 { driver.spawn_local(future) }
+                    else { driver.spawn_local_eager(future).expect("refused eager token") };
+                assert!(token.is_cancelled());
+            }
+        }), Ok(0));
+        assert_eq!(drops.get(), 0, "retired admission retains opaque future, mode {mode}");
+        assert_eq!(driver.pending_task_count(), 0);
+        assert_eq!(owner.pump_background(|| {}), Err(ExecutionError::Retired));
+        drop(owner);
+        let replacement = OwnerFrame::new(&scheduler).expect("replacement owner");
+        assert_eq!(replacement.pump_background(|| {}), Ok(0));
+    }
 }
