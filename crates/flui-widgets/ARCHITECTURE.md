@@ -168,6 +168,17 @@ flight readers inert. Mapping and factory retirement finish before publication
 because their destructors can reenter too. The final frame samples before logical
 completion so retained readers preserve the accepted landing geometry.
 
+A missing destination fades over the remaining uneased route progress, reversed
+for a pop. Spatial easing and rect remapping cannot become fade interval bounds:
+overshoot remains valid for geometry, while opacity has its own bounded domain.
+Diversion replaces the fade clock with the new manifest's route and resets its
+anchor. `disappearing_hero_destination_keeps_a_finite_fade` unmounts a destination
+through its lifecycle rebuild handle, checks gradual fading after curve recovery
+and final zero opacity, and covers push, pop and both direction-changing diversions
+with linear, overshoot, undershoot, NaN and both infinite curve samples.
+Its visible-redirection row restores the destination, diverts the same faded
+shuttle to a new page and checks full opacity followed by normal landing.
+
 `hero_geometry_samples_preserve_the_last_finite_shuttle` drives mounted PageRoute
 flights through NaN, infinity, positive extent overflow, inverted axes and recovery
 on the same flight, then checks its retained landing rect.

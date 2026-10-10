@@ -70,6 +70,8 @@ use crate::{InsertPosition, OverlayEntry, OverlayHandle};
 /// Readers snapshot this set in one short borrow before calling out.
 struct FlightState {
     direction: FlightDirection,
+    /// Route progress before Hero easing, used only by the disappearance fade.
+    progress: Terminal<Rc<dyn Animation<f64>>>,
     from_hero: Terminal<HeroHandle>,
     to_hero: Terminal<HeroHandle>,
     /// The destination route's coordinate root, for the per-tick re-measure.
@@ -84,7 +86,8 @@ impl Drop for FlightState {
     fn drop(&mut self) {
         let from = self.from_hero.withdraw();
         let to = self.to_hero.withdraw();
-        drop((from, to));
+        let progress = self.progress.withdraw();
+        drop((from, to, progress));
     }
 }
 
@@ -119,7 +122,7 @@ struct FlightInner {
     /// The shuttle's opacity, evaluated eagerly. `1.0` until the destination is
     /// lost.
     opacity: Cell<f64>,
-    /// The animation value at which the destination was lost — the left edge of
+    /// The route progress at which the destination was lost — the left edge of
     /// the fade-out interval.
     fade_from: Cell<Option<f64>>,
     /// Whether the destination hero has been lost.
@@ -230,21 +233,30 @@ impl FlightInner {
                 self.rect.set(rect);
                 let _ = self.geometry_ticket();
             }
-        } else if self.fade_from.get().is_none() {
-            // The destination hero no longer exists or is no longer the flight's
-            // destination. Continue flying while fading out.
-            self.fade_from.set(Some(self.proxy.value()));
         }
         self.aborted.set(origin.is_none());
-
-        // Fades out over `Interval(fade_from, 1.0)`, so the opacity is
-        // `1 - interval(t)`.
-        let fade_from = self.fade_from.get();
-        let opacity = match fade_from {
-            Some(from) => 1.0 - Interval::linear(from, 1.0).transform(self.proxy.value()),
-            None => 1.0,
-        };
-        self.opacity.set(opacity);
+        if origin.is_none() {
+            // Spatial easing may overshoot or reject a geometry sample. It is
+            // not a clock: fade over the remaining route time independently.
+            let (progress, direction) = {
+                let state = self.state.borrow();
+                (Terminal::new(Rc::clone(&state.progress)), state.direction)
+            };
+            let t = progress.value();
+            if t.is_finite() {
+                let t = match direction {
+                    FlightDirection::Push => t,
+                    FlightDirection::Pop => 1.0 - t,
+                }
+                .clamp(0.0, 1.0);
+                let from = self.fade_from.get().unwrap_or(t);
+                self.fade_from.set(Some(from));
+                self.opacity
+                    .set(1.0 - Interval::linear(from, 1.0).transform(t));
+            }
+        } else {
+            self.opacity.set(1.0);
+        }
     }
 
     /// Reserve publication authority. Exhaustion permanently refuses new reads.
@@ -585,6 +597,7 @@ impl HeroFlight {
             to_route_subtree: new_subtree,
             overlay: _,
             animation: mut new_anim,
+            progress: new_progress,
             rect_factory: mut new_rect_factory,
             shuttle_builder: mut new_shuttle_builder,
             is_user_gesture_transition: new_is_user_gesture_transition,
@@ -596,6 +609,7 @@ impl HeroFlight {
 
         let mut new_state = Terminal::new(Some(FlightState {
             direction: new_dir,
+            progress: new_progress,
             from_hero: Terminal::new(new_from.clone()),
             to_hero: Terminal::new(new_to.clone()),
             to_route_subtree: new_subtree,
@@ -824,6 +838,9 @@ pub(crate) struct FlightPlan {
     /// for a pop, already wrapped in the manifest's `CurvedAnimation` on the
     /// driving hero's `curve`/`reverse_curve`.
     pub(crate) animation: Terminal<std::rc::Rc<dyn Animation<f64>>>,
+    /// The same route's uneased progress. Opacity owns a bounded time domain;
+    /// it must not inherit the spatial curve or a diversion's rect remapping.
+    pub(crate) progress: Terminal<std::rc::Rc<dyn Animation<f64>>>,
     /// The resolved `create_rect_tween` factory: the destination hero's, else the
     /// controller's default, else `None` (linear).
     pub(crate) rect_factory: Terminal<Option<RectTweenFactory>>,
@@ -1057,6 +1074,7 @@ impl FlightManager {
             to_route_subtree,
             overlay,
             mut animation,
+            progress,
             mut rect_factory,
             mut shuttle_builder,
             is_user_gesture_transition,
@@ -1081,6 +1099,7 @@ impl FlightManager {
             tag: Terminal::new(manifest.tag.clone()),
             state: Terminal::new(RefCell::new(FlightState {
                 direction,
+                progress,
                 from_hero: Terminal::new(from_hero.clone()),
                 to_hero: Terminal::new(to_hero.clone()),
                 to_route_subtree,
@@ -1476,6 +1495,7 @@ mod terminal_tests {
             tag: Terminal::new(HeroTag::new(flui_foundation::ValueKey::new("flight"))),
             state: Terminal::new(RefCell::new(FlightState {
                 direction: FlightDirection::Push,
+                progress: Terminal::new(Rc::new(flui_animation::ConstantAnimation::new(0.0))),
                 from_hero: Terminal::new(from),
                 to_hero: Terminal::new(to),
                 to_route_subtree: RenderId::new(1),
@@ -1540,6 +1560,7 @@ mod terminal_tests {
             to_route_subtree: RenderId::new(1),
             overlay: Terminal::new(overlay.clone()),
             animation: Terminal::new(Rc::new(flui_animation::ConstantAnimation::new(0.0))),
+            progress: Terminal::new(Rc::new(flui_animation::ConstantAnimation::new(0.0))),
             rect_factory: Terminal::new(None),
             shuttle_builder: Terminal::new(None),
             is_user_gesture_transition: false,
@@ -1694,6 +1715,7 @@ mod terminal_tests {
                     to_route_subtree: RenderId::new(1),
                     overlay: Terminal::new(overlay.clone()),
                     animation: Terminal::new(Rc::new(flui_animation::ConstantAnimation::new(0.0))),
+                    progress: Terminal::new(Rc::new(flui_animation::ConstantAnimation::new(0.0))),
                     rect_factory: Terminal::new(None),
                     shuttle_builder: Terminal::new(None),
                     is_user_gesture_transition: false,
@@ -1867,6 +1889,7 @@ mod terminal_tests {
                     to_route_subtree: RenderId::new(1),
                     overlay: Terminal::new(overlay.clone()),
                     animation: Terminal::new(Rc::new(flui_animation::ConstantAnimation::new(0.0))),
+                    progress: Terminal::new(Rc::new(flui_animation::ConstantAnimation::new(0.0))),
                     rect_factory: Terminal::new(None),
                     shuttle_builder: Terminal::new(None),
                     is_user_gesture_transition: false,

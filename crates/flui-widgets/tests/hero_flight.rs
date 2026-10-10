@@ -5,7 +5,7 @@
 //! overlay, what the heroes look like while it flies, where the shuttle is aimed, and
 //! what is left behind when it lands.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -1039,6 +1039,336 @@ pub(crate) fn hero_geometry_reentry_preserves_the_newer_authority() {
             ("cancelled_factory", cancelled_geometry_factory),
             ("cancelled_transform", cancelled_geometry_transform),
             ("cancelled_retirement", cancelled_geometry_retirement),
+        ],
+    );
+}
+
+#[derive(Clone, Debug)]
+struct OverrideHeroCurve {
+    armed: Arc<std::sync::atomic::AtomicBool>,
+    sample: f64,
+}
+
+impl flui_animation::Curve for OverrideHeroCurve {
+    fn transform(&self, t: f64) -> f64 {
+        if self.armed.load(std::sync::atomic::Ordering::SeqCst) {
+            self.sample
+        } else {
+            t
+        }
+    }
+}
+
+#[derive(Clone)]
+struct DisappearingHero {
+    visible: Rc<Cell<bool>>,
+    rebuild: Rc<RefCell<Option<flui_view::RebuildHandle>>>,
+    curve: OverrideHeroCurve,
+}
+
+impl View for DisappearingHero {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+impl StatefulView for DisappearingHero {
+    type State = DisappearingHeroState;
+    fn create_state(&self) -> Self::State {
+        DisappearingHeroState {
+            rebuild: Rc::clone(&self.rebuild),
+        }
+    }
+}
+
+struct DisappearingHeroState {
+    rebuild: Rc<RefCell<Option<flui_view::RebuildHandle>>>,
+}
+impl ViewState<DisappearingHero> for DisappearingHeroState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        *self.rebuild.borrow_mut() = Some(ctx.rebuild_handle());
+    }
+
+    fn build(&self, view: &DisappearingHero, _ctx: &dyn BuildContext) -> impl IntoView {
+        if view.visible.get() {
+            Center::new()
+                .child(
+                    Hero::new(ValueKey::new("shared"), SizedBox::new(60.0, 45.0))
+                        .curve(view.curve.clone()),
+                )
+                .boxed()
+        } else {
+            SizedBox::new(60.0, 45.0).boxed()
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum MissingDestinationPath {
+    Push,
+    Pop,
+    PushToPop,
+    PopToPush,
+}
+
+fn missing_destination_fade_case(
+    sample: Option<f64>,
+    path: MissingDestinationPath,
+    redirect: bool,
+) {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+    let visible = Rc::new(Cell::new(true));
+    let rebuild = Rc::new(RefCell::new(None));
+    let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let page = DisappearingHero {
+        visible: Rc::clone(&visible),
+        rebuild: Rc::clone(&rebuild),
+        curve: OverrideHeroCurve {
+            armed: Arc::clone(&armed),
+            sample: sample.unwrap_or(0.0),
+        },
+    };
+    let curve = page.curve.clone();
+    let disappearing =
+        PageRoute::<i32>::new(move |_, _, _| page.clone().boxed()).transition_duration(TRANSITION);
+    let (transition, pop) = match path {
+        MissingDestinationPath::Push => (
+            fly(
+                &navigator,
+                &mut harness,
+                hero_page("shared", 30.0, 20.0),
+                disappearing,
+            ),
+            false,
+        ),
+        MissingDestinationPath::Pop | MissingDestinationPath::PushToPop => {
+            let transition = fly(
+                &navigator,
+                &mut harness,
+                disappearing,
+                hero_page_with("shared", 30.0, 20.0, move |hero| hero.curve(curve.clone())),
+            );
+            let before = controller
+                .flights()
+                .get(&tag("shared"))
+                .expect("push flight")
+                .entry_id();
+            let t = if matches!(path, MissingDestinationPath::Pop) {
+                1.0
+            } else {
+                0.7
+            };
+            harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(t));
+            harness.tick();
+            assert!(harness.enter_owner_scope(|| navigator.pop()));
+            harness.tick();
+            if matches!(path, MissingDestinationPath::PushToPop) {
+                assert_eq!(
+                    controller
+                        .flights()
+                        .get(&tag("shared"))
+                        .expect("diverted")
+                        .entry_id(),
+                    before,
+                    "push to pop reuses its shuttle"
+                );
+            }
+            (transition, true)
+        }
+        MissingDestinationPath::PopToPush => {
+            let previous = fly(
+                &navigator,
+                &mut harness,
+                hero_page("shared", 30.0, 20.0),
+                hero_page("shared", 40.0, 30.0),
+            );
+            harness.enter_owner_scope(|| previous.controller().expect("installed").set_value(0.7));
+            harness.tick();
+            let entry = controller
+                .flights()
+                .get(&tag("shared"))
+                .expect("push flight")
+                .entry_id();
+            assert!(harness.enter_owner_scope(|| navigator.pop()));
+            harness.tick();
+            harness.enter_owner_scope(|| previous.controller().expect("installed").set_value(0.4));
+            harness.tick();
+            let transition = disappearing.transition_handle();
+            let _next = harness.enter_owner_scope(|| navigator.push(disappearing));
+            harness.tick();
+            assert_eq!(
+                controller
+                    .flights()
+                    .get(&tag("shared"))
+                    .expect("redirected")
+                    .entry_id(),
+                entry,
+                "pop to push reuses its shuttle"
+            );
+            (transition, false)
+        }
+    };
+    let flight = controller.flights().get(&tag("shared")).expect("airborne");
+    harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(0.5));
+    harness.tick();
+    assert_eq!(flight.opacity(), 1.0);
+    let mounted_heroes = harness
+        .elements_of_type(std::any::TypeId::of::<Hero>())
+        .len();
+    armed.store(sample.is_some(), std::sync::atomic::Ordering::SeqCst);
+    visible.set(false);
+    let handle = rebuild
+        .borrow()
+        .as_ref()
+        .expect("mounted destination")
+        .clone();
+    handle.schedule(flui_view::RebuildReason::StateChange);
+    harness.tick();
+    assert_eq!(
+        harness
+            .elements_of_type(std::any::TypeId::of::<Hero>())
+            .len(),
+        mounted_heroes - 1,
+        "{path:?}: the destination Hero actually unmounted"
+    );
+    harness.enter_owner_scope(|| {
+        transition
+            .controller()
+            .expect("installed")
+            .set_value(if pop { 0.4 } else { 0.6 });
+    });
+    harness.tick();
+    assert!(
+        flight.opacity().is_finite() && (0.0..=1.0).contains(&flight.opacity()),
+        "fade publishes valid opacity"
+    );
+    let opacity = flight.opacity();
+    assert!(
+        opacity > 0.0,
+        "spatial overshoot does not instantly hide the shuttle"
+    );
+    assert_eq!(
+        controller.flights().len(),
+        1,
+        "a missing destination still fades in its existing flight"
+    );
+    armed.store(false, std::sync::atomic::Ordering::SeqCst);
+    harness.enter_owner_scope(|| {
+        transition
+            .controller()
+            .expect("installed")
+            .set_value(if pop { 0.25 } else { 0.75 });
+    });
+    harness.tick();
+    assert!(
+        flight.opacity() > 0.0 && flight.opacity() < opacity,
+        "fade advances with route time after the spatial curve recovers"
+    );
+    if redirect {
+        visible.set(true);
+        handle.schedule(flui_view::RebuildReason::StateChange);
+        harness.tick();
+        let next = hero_page("shared", 90.0, 70.0);
+        let next_transition = next.transition_handle();
+        let entry = flight.entry_id();
+        let _next = harness.enter_owner_scope(|| navigator.push(next));
+        harness.tick();
+        let redirected = controller
+            .flights()
+            .get(&tag("shared"))
+            .expect("redirected");
+        assert_eq!(redirected.entry_id(), entry, "the fading shuttle is reused");
+        harness.enter_owner_scope(|| {
+            next_transition
+                .controller()
+                .expect("installed")
+                .set_value(0.5);
+        });
+        harness.tick();
+        assert_eq!(
+            redirected.opacity(),
+            1.0,
+            "a visible new destination restores opacity"
+        );
+        harness.enter_owner_scope(|| {
+            next_transition
+                .controller()
+                .expect("installed")
+                .set_value(1.0);
+        });
+        harness.tick();
+        assert_eq!(controller.flights().len(), 0, "the redirected flight lands");
+        return;
+    }
+    harness.enter_owner_scope(|| {
+        transition
+            .controller()
+            .expect("installed")
+            .set_value(if pop { 0.0 } else { 1.0 });
+    });
+    harness.tick();
+    assert_eq!(
+        controller.flights().len(),
+        0,
+        "the missing-destination flight still lands"
+    );
+    assert_eq!(
+        flight.opacity(),
+        0.0,
+        "retained readers observe the completed fade"
+    );
+}
+
+fn missing_destination_fade_paths(sample: Option<f64>) {
+    for path in [
+        MissingDestinationPath::Push,
+        MissingDestinationPath::Pop,
+        MissingDestinationPath::PushToPop,
+        MissingDestinationPath::PopToPush,
+    ] {
+        missing_destination_fade_case(sample, path, false);
+    }
+}
+
+fn missing_destination_linear() {
+    missing_destination_fade_paths(None);
+}
+fn missing_destination_overshoot() {
+    missing_destination_fade_paths(Some(1.25));
+}
+fn missing_destination_undershoot() {
+    missing_destination_fade_paths(Some(-0.25));
+}
+fn missing_destination_nan() {
+    missing_destination_fade_paths(Some(f64::NAN));
+}
+fn missing_destination_infinity() {
+    missing_destination_fade_paths(Some(f64::INFINITY));
+}
+fn missing_destination_negative_infinity() {
+    missing_destination_fade_paths(Some(f64::NEG_INFINITY));
+}
+
+fn missing_destination_redirects_to_a_visible_hero() {
+    missing_destination_fade_case(None, MissingDestinationPath::Push, true);
+}
+
+pub(crate) fn disappearing_hero_destination_keeps_a_finite_fade() {
+    crate::common::cases::run_cases(
+        "missing destination fade",
+        &[
+            ("linear", missing_destination_linear),
+            (
+                "visible_redirection",
+                missing_destination_redirects_to_a_visible_hero,
+            ),
+            ("overshoot", missing_destination_overshoot),
+            ("undershoot", missing_destination_undershoot),
+            ("nan", missing_destination_nan),
+            ("infinity", missing_destination_infinity),
+            ("negative_infinity", missing_destination_negative_infinity),
         ],
     );
 }

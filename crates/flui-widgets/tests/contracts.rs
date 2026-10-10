@@ -540,6 +540,7 @@ fn hero_flights() {
             ("hero_flight::a_shrinking_flight_with_overshoot_keeps_a_non_negative_size", crate::hero_flight::a_shrinking_flight_with_overshoot_keeps_a_non_negative_size),
             ("hero_flight::hero_geometry_samples_preserve_the_last_finite_shuttle", crate::hero_flight::hero_geometry_samples_preserve_the_last_finite_shuttle),
             ("hero_flight::hero_geometry_reentry_preserves_the_newer_authority", crate::hero_flight::hero_geometry_reentry_preserves_the_newer_authority),
+            ("hero_flight::disappearing_hero_destination_keeps_a_finite_fade", crate::hero_flight::disappearing_hero_destination_keeps_a_finite_fade),
             ("hero_gesture::complete_release_pops_to_the_destination_route_and_the_flight_lands", crate::hero_gesture::complete_release_pops_to_the_destination_route_and_the_flight_lands),
             ("hero_gesture::an_excluding_gesture_restores_pending_programmatic_placeholders", crate::hero_gesture::an_excluding_gesture_restores_pending_programmatic_placeholders),
             ("hero_public::a_hero_push_flight_runs_and_settles", crate::hero_public::a_hero_push_flight_runs_and_settles),

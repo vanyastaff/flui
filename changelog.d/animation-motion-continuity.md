@@ -41,6 +41,10 @@
 
 ### Changed
 
+- Fade a disappeared Hero destination over the remaining route time independently
+  of spatial easing. Overshooting or invalid curve samples cannot poison opacity
+  or strand the shuttle, including after a flight changes direction.
+
 - Missing inherited dependencies refresh on subtree reactivation. Successful
   builds prune unread misses; recovered build failures preserve previous reads.
 

@@ -629,7 +629,7 @@ impl MeasurementPass<'_> {
         // defaults to the forward curve flipped, and a manifest that diverts an
         // airborne flight carries none.
         let curve = curve_hero.curve();
-        let curved = CurvedAnimation::new(route_animation, curve.clone());
+        let curved = CurvedAnimation::new(Rc::clone(&route_animation), curve.clone());
         let curved = if self.flights.is_airborne(&manifest.tag) {
             curved
         } else {
@@ -661,6 +661,7 @@ impl MeasurementPass<'_> {
                 to_route_subtree: to_subtree.render_id,
                 overlay: Terminal::new(self.navigator.overlay().clone()),
                 animation: Terminal::new(animation),
+                progress: Terminal::new(route_animation),
                 rect_factory: Terminal::new(rect_factory),
                 shuttle_builder: Terminal::new(shuttle_builder),
                 is_user_gesture_transition: self.is_user_gesture_transition,
