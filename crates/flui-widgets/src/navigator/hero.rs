@@ -60,7 +60,8 @@
 //! for framework invariants. FLUI logs and keeps the **first** — "last wins" would
 //! make the surviving hero depend on mount order.
 
-use super::lifecycle::Terminal;
+use super::hero_tags::{HeroTags, TagSeat};
+use super::lifecycle::{RetiredMap, RetiredValues, Terminal};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fmt;
@@ -117,6 +118,10 @@ impl HeroTag {
     pub fn new(key: impl ViewKey) -> Self {
         Self(Arc::new(key))
     }
+
+    pub(super) fn key_hash(&self) -> u64 {
+        self.0.key_hash()
+    }
 }
 
 impl PartialEq for HeroTag {
@@ -149,34 +154,34 @@ impl fmt::Debug for HeroTag {
 /// than by an element walk.
 ///
 /// Cloneable and `'static`: the route owns one, the [`HeroScope`] hands clones to its
-/// descendants, and the controller reads it through [`ModalHandle`]. The lock is
-/// private and never escapes — every accessor copies or clones out.
+/// descendants, and the controller reads it through [`ModalHandle`].
+/// Matching runs against owning snapshots, outside the owner-local storage borrow.
 ///
 /// [`ModalHandle`]: super::modal_route::ModalHandle
 #[derive(Default)]
 pub struct HeroRegistry {
-    heroes: Terminal<Arc<super::lifecycle::TerminalMap<HeroTag, HeroHandle>>>,
-    /// Nested `Navigator`s that publish a cross-flight visibility hook here.
-    /// There is no element walk to reach one, so each nested `Navigator`
-    /// registers itself with the nearest enclosing route instead.
-    /// Empty for the common case of no nested navigator inside this route.
-    nested: Terminal<Arc<super::lifecycle::TerminalVec<NestedHeroSource>>>,
+    inner: Terminal<Rc<HeroRegistryInner>>,
+}
+
+#[derive(Default)]
+struct HeroRegistryInner {
+    heroes: Terminal<HeroTags<HeroHandle>>,
+    nested: RefCell<Vec<NestedHeroSource>>,
+}
+
+impl Drop for HeroRegistryInner {
+    fn drop(&mut self) {
+        let heroes = self.heroes.withdraw();
+        let nested = RetiredValues(std::mem::take(self.nested.get_mut()));
+        drop((heroes, nested));
+    }
 }
 
 impl Clone for HeroRegistry {
     fn clone(&self) -> Self {
         Self {
-            heroes: Terminal::new(Arc::clone(&self.heroes)),
-            nested: Terminal::new(Arc::clone(&self.nested)),
+            inner: Terminal::new(Rc::clone(&self.inner)),
         }
-    }
-}
-
-impl Drop for HeroRegistry {
-    fn drop(&mut self) {
-        let heroes = self.heroes.withdraw();
-        let nested = self.nested.withdraw();
-        drop((heroes, nested));
     }
 }
 
@@ -193,16 +198,27 @@ impl HeroRegistry {
     /// invoked, so registering does not itself resolve anything about the nested
     /// stack.
     pub(crate) fn register_nested(&self, source: NestedHeroSource) {
-        self.nested.lock().push(source);
+        self.inner.nested.borrow_mut().push(source);
     }
 
     /// Withdraw a nested `Navigator`'s hook, matched by identity — the mirror of
     /// [`register_nested`](Self::register_nested), called from that
     /// `Navigator`'s `dispose` and whenever it re-publishes elsewhere.
     pub(crate) fn deregister_nested(&self, source: &NestedHeroSource) {
-        let mut nested = std::mem::take(&mut *self.nested.lock());
-        nested.retain(|existing| !existing.is(source));
-        let _prev = std::mem::replace(&mut *self.nested.lock(), nested);
+        let removed = {
+            let mut nested = self.inner.nested.borrow_mut();
+            let mut removed = Vec::new();
+            let mut index = 0;
+            while index < nested.len() {
+                if nested[index].is(source) {
+                    removed.push(nested.remove(index));
+                } else {
+                    index += 1;
+                }
+            }
+            RetiredValues(removed)
+        };
+        drop(removed);
     }
 
     /// Every hero visible for a flight through this route: this route's own,
@@ -219,56 +235,60 @@ impl HeroRegistry {
     /// locally, extended across the registry boundary since there is no
     /// cross-registry visit order to arbitrate by instead.
     ///
-    /// The nested sources are snapshotted out of the lock **before** any of them
-    /// is resolved: `resolve` runs a caller-supplied closure that reads a
-    /// `NavigatorHandle`'s own locks (history, route registries), and a nested
-    /// `Navigator` could — through a future recursive shape or a caller-supplied
-    /// hook — resolve back into this same registry. Holding `self.nested`'s lock
-    /// across that call would risk exactly the lock-held-over-a-handle-querying-
-    /// closure deadlock class the `pop_until`/`push_and_remove_until` fix closed.
+    /// Sources resolve outside borrows. Owning registry identities bound traversal
+    /// when a source resolves to an already visited registry, including itself.
     pub(crate) fn all_heroes(&self) -> HashMap<HeroTag, HeroHandle> {
-        let mut all = self.heroes.lock().clone();
-        let nested_sources: Vec<NestedHeroSource> = self.nested.lock().clone();
-        for nested in &nested_sources {
+        let mut all = RetiredMap(HashMap::new());
+        let mut visited = RetiredValues(Vec::new());
+        self.collect_heroes(&mut visited, &mut all);
+        drop(visited);
+        std::mem::take(&mut all.0)
+    }
+
+    fn collect_heroes(
+        &self,
+        visited: &mut RetiredValues<Self>,
+        all: &mut RetiredMap<HeroTag, HeroHandle>,
+    ) {
+        if visited.0.iter().any(|registry| self.is_same(registry)) {
+            return;
+        }
+        visited.0.push(self.clone());
+        let heroes = self.inner.heroes.snapshot_all();
+        let nested_sources = RetiredValues(self.inner.nested.borrow().clone());
+        for (tag, handle) in heroes.iter() {
+            all.0.entry(tag.clone()).or_insert_with(|| handle.clone());
+        }
+        for nested in &nested_sources.0 {
             let Some(registry) = nested.resolve() else {
                 continue;
             };
-            for (tag, handle) in registry.all_heroes() {
-                all.entry(tag).or_insert(handle);
-            }
+            registry.collect_heroes(visited, all);
         }
-        all
     }
 
     /// Register `handle` under `tag`, keeping the **first** registration.
     ///
-    /// Returns whether it was accepted. See the module docs for why a duplicate
+    /// Returns release authority if accepted. See the module docs for why a duplicate
     /// tag logs and first-wins rather than panicking.
-    fn register(&self, tag: HeroTag, handle: HeroHandle) -> bool {
-        let mut heroes = self.heroes.lock();
-        if heroes.contains_key(&tag) {
+    fn register(&self, tag: HeroTag, handle: HeroHandle) -> Option<TagSeat<HeroHandle>> {
+        let tag = Terminal::new(tag);
+        if let Some(admission) = self.inner.heroes.insert_first(tag.clone(), handle) {
+            Some(admission.commit())
+        } else {
             tracing::warn!(
                 ?tag,
                 "two Hero views share one tag within a single route subtree; the \
                  second is ignored. Within each PageRoute subtree, each Hero must \
                  have a unique tag."
             );
-            return false;
+            None
         }
-        heroes.insert(tag, handle);
-        true
     }
 
-    /// Remove `tag`, but only if it still names `handle`.
-    ///
-    /// The identity check is what makes a *rejected* duplicate harmless: when it
-    /// unmounts it must not evict the hero that won the tag. `Rc::ptr_eq`, not tag
-    /// equality, is the question being asked.
-    fn deregister(&self, tag: &HeroTag, handle: &HeroHandle) {
-        let mut heroes = self.heroes.lock();
-        if heroes.get(tag).is_some_and(|held| held.is(handle)) {
-            heroes.remove(tag);
-        }
+    /// Withdraw exactly one accepted registration without invoking its key.
+    fn deregister(&self, seat: &TagSeat<HeroHandle>) {
+        drop(self.inner.heroes.remove(seat));
     }
 
     /// The handle registered under `tag`, cloned out. Test-facing: production
@@ -276,13 +296,14 @@ impl HeroRegistry {
     /// nested `Navigator`'s heroes.
     #[must_use]
     pub fn get(&self, tag: &HeroTag) -> Option<HeroHandle> {
-        self.heroes.lock().get(tag).cloned()
+        self.inner.heroes.get(tag)
     }
 
     /// Every registered tag, cloned out. The caller matches these against another
     /// route's registry; nothing here depends on the order.
     pub(crate) fn tags(&self) -> Vec<HeroTag> {
-        self.heroes.lock().keys().cloned().collect()
+        let heroes = self.inner.heroes.snapshot_all();
+        heroes.iter().map(|(tag, _)| tag.clone()).collect()
     }
 
     /// How many heroes are registered. Test-facing.
@@ -292,24 +313,338 @@ impl HeroRegistry {
         reason = "a test-facing count; nothing asks whether the registry is empty"
     )]
     pub fn len(&self) -> usize {
-        self.heroes.lock().len()
+        self.inner.heroes.len()
     }
 
     /// Whether both handles name the same registry — the identity
     /// `NavigatorState::sync_nested_hero_registration` checks each build, so an
-    /// unchanged enclosing route costs one `Arc::ptr_eq` instead of a
+    /// unchanged enclosing route costs one `Rc::ptr_eq` instead of a
     /// deregister/register round trip.
     #[must_use]
     pub fn is_same(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.heroes, &other.heroes)
+        Rc::ptr_eq(&self.inner, &other.inner)
     }
 }
 
 impl fmt::Debug for HeroRegistry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let tags = RetiredValues(self.tags());
         f.debug_struct("HeroRegistry")
-            .field("tags", &self.tags())
+            .field("tags", &tags.0)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod registry_tests {
+    use super::*;
+    use std::any::Any;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    type Hook = Rc<dyn Fn(&str)>;
+
+    thread_local! {
+        static HOOK: RefCell<Option<Hook>> = const { RefCell::new(None) };
+        static ENTERING: Cell<bool> = const { Cell::new(false) };
+    }
+
+    fn call_hook(operation: &str) {
+        if ENTERING.replace(true) {
+            return;
+        }
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                ENTERING.set(false);
+            }
+        }
+        let _reset = Reset;
+        let hook = HOOK.with(|slot| slot.borrow().clone());
+        if let Some(hook) = hook {
+            hook(operation);
+        }
+    }
+
+    struct Key {
+        id: u64,
+        fail_drop: bool,
+        drops: Option<Arc<std::sync::atomic::AtomicUsize>>,
+    }
+
+    impl ViewKey for Key {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn key_hash(&self) -> u64 {
+            call_hook("hash");
+            7
+        }
+        fn key_eq(&self, other: &dyn ViewKey) -> bool {
+            call_hook("equality");
+            other
+                .as_any()
+                .downcast_ref::<Self>()
+                .is_some_and(|other| self.id == other.id)
+        }
+        fn clone_key(&self) -> Box<dyn ViewKey> {
+            Box::new(Self {
+                id: self.id,
+                fail_drop: self.fail_drop,
+                drops: self.drops.clone(),
+            })
+        }
+        fn debug_fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            call_hook("debug");
+            write!(f, "Hero key {}", self.id)
+        }
+    }
+
+    impl Drop for Key {
+        fn drop(&mut self) {
+            if let Some(drops) = &self.drops {
+                drops.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            call_hook("drop");
+            assert!(!self.fail_drop, "first Hero key retirement failure");
+        }
+    }
+
+    fn key(id: u64) -> HeroTag {
+        HeroTag::new(Key {
+            id,
+            fail_drop: false,
+            drops: None,
+        })
+    }
+
+    #[test]
+    fn hero_registry_matching_preserves_authority_under_reentry() {
+        let Some(case) = super::super::hero_controller::terminal_tests::children(
+            "navigator::hero::registry_tests::hero_registry_matching_preserves_authority_under_reentry",
+            "FLUI_HERO_MATCH_CASE",
+            &[
+                "replacement",
+                "repeated_mutation",
+                "hash_failure",
+                "equality_failure",
+                "snapshot_retirement",
+                "passive_release",
+                "duplicate_debug",
+                "terminal_healthy",
+                "terminal_failure",
+                "terminal_alias",
+                "terminal_incoming",
+                "terminal_competing",
+            ],
+        ) else {
+            return;
+        };
+        let registry = HeroRegistry::new();
+        let hero = Hero::new(
+            flui_foundation::ValueKey::new("configuration"),
+            SizedBox::shrink(),
+        );
+        let original = HeroHandle::test_handle(&hero);
+        let replacement = HeroHandle::test_handle(&hero);
+        if case.starts_with("terminal_") {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            let counts = [Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0))];
+            for (index, drops) in counts.iter().enumerate() {
+                let fail_drop = case == "terminal_incoming"
+                    || case == "terminal_competing"
+                    || (case == "terminal_failure" && index == 0);
+                registry
+                    .register(
+                        HeroTag::new(Key {
+                            id: u64::try_from(index).expect("two key identities"),
+                            fail_drop,
+                            drops: Some(drops.clone()),
+                        }),
+                        original.clone(),
+                    )
+                    .expect("independent registration accepted");
+            }
+            if case == "terminal_alias" {
+                let alias = registry.clone();
+                drop(registry);
+                assert!(counts.iter().all(|count| count.load(Ordering::SeqCst) == 0));
+                assert_eq!(alias.len(), 2);
+                drop(alias);
+                assert!(counts.iter().all(|count| count.load(Ordering::SeqCst) == 1));
+                return;
+            }
+            let incoming = case == "terminal_incoming";
+            let fails = incoming || case == "terminal_failure" || case == "terminal_competing";
+            let failure = catch_unwind(AssertUnwindSafe(move || {
+                let registry = registry;
+                assert!(!incoming, "incoming Hero registry failure");
+                drop(registry);
+            }));
+            assert_eq!(counts[0].load(Ordering::SeqCst), usize::from(!incoming));
+            if fails {
+                let failure = failure.expect_err("terminal retirement reports its first failure");
+                let expected = if incoming {
+                    "incoming Hero registry failure"
+                } else {
+                    "first Hero key retirement failure"
+                };
+                super::super::hero_controller::terminal_tests::assert_failure(failure, expected);
+                assert_eq!(
+                    counts[1].load(Ordering::SeqCst),
+                    0,
+                    "the outgoing tail preserves the first failure"
+                );
+            } else {
+                failure.expect("healthy retirement succeeds");
+                assert_eq!(
+                    counts[1].load(Ordering::SeqCst),
+                    1,
+                    "healthy retirement releases every key"
+                );
+            }
+            return;
+        }
+        let tag = HeroTag::new(Key {
+            id: 1,
+            fail_drop: case == "snapshot_retirement",
+            drops: None,
+        });
+        let seat = registry
+            .register(tag, original.clone())
+            .expect("the original is accepted");
+        let calls = Rc::new(Cell::new(0));
+        let hook: Hook = {
+            let registry = registry.clone();
+            let replacement = replacement.clone();
+            let seat = seat.clone();
+            let calls = Rc::clone(&calls);
+            let case = case.clone();
+            Rc::new(move |operation| {
+                let count = registry.len();
+                if operation == "drop" && case == "passive_release" {
+                    assert_eq!(count, 0, "withdrawal precedes authored key retirement");
+                }
+                match (case.as_str(), operation) {
+                    ("replacement" | "snapshot_retirement", "equality") if calls.get() == 0 => {
+                        calls.set(1);
+                        registry.deregister(&seat);
+                        registry
+                            .register(key(1), replacement.clone())
+                            .expect("replacement admitted");
+                    }
+                    ("repeated_mutation", "equality") => {
+                        let next = calls.get() + 2;
+                        calls.set(calls.get() + 1);
+                        registry
+                            .register(key(next), replacement.clone())
+                            .expect("independent key admitted");
+                    }
+                    ("hash_failure", "hash") => panic!("authored Hero hash failure"),
+                    ("equality_failure", "equality") => panic!("authored Hero equality failure"),
+                    ("passive_release", "hash" | "equality") => panic!("release invoked a key"),
+                    ("duplicate_debug", "debug") => {
+                        calls.set(calls.get() + 1);
+                    }
+                    _ => {}
+                }
+            })
+        };
+        HOOK.with(|slot| *slot.borrow_mut() = Some(hook));
+        match case.as_str() {
+            "replacement" => {
+                let found = registry
+                    .get(&key(1))
+                    .expect("the replacement remains visible");
+                assert!(
+                    found.is_same(&replacement),
+                    "lookup revalidates replacement identity"
+                );
+                registry.deregister(&seat);
+                assert!(
+                    registry
+                        .get(&key(1))
+                        .expect("stale removal preserves replacement")
+                        .is_same(&replacement)
+                );
+            }
+            "passive_release" => {
+                registry.deregister(&seat);
+                assert_eq!(registry.len(), 0);
+            }
+            "duplicate_debug" => {
+                assert!(registry.register(key(1), replacement.clone()).is_none());
+                let _debug = format!("{registry:?}");
+                assert!(
+                    calls.get() > 0,
+                    "authored formatting can inspect the registry"
+                );
+            }
+            _ => {
+                let failure = catch_unwind(AssertUnwindSafe(|| registry.get(&key(1))))
+                    .expect_err("the authored failure or bounded refusal propagates");
+                let expected = match case.as_str() {
+                    "repeated_mutation" => "Hero tag comparison changed registry repeatedly",
+                    "hash_failure" => "authored Hero hash failure",
+                    "equality_failure" => "authored Hero equality failure",
+                    "snapshot_retirement" => "first Hero key retirement failure",
+                    _ => unreachable!("selected failure case"),
+                };
+                super::super::hero_controller::terminal_tests::assert_failure(failure, expected);
+            }
+        }
+        HOOK.with(|slot| slot.borrow_mut().take());
+        if case == "repeated_mutation" {
+            assert_eq!(calls.get(), 2, "only one fresh comparison is attempted");
+            assert_eq!(
+                registry.len(),
+                3,
+                "independently accepted changes survive refusal"
+            );
+            assert!(registry.get(&key(2)).is_some());
+            assert!(registry.get(&key(3)).is_some());
+        }
+        if case != "passive_release" {
+            let found = registry
+                .get(&key(1))
+                .expect("the next healthy lookup progresses");
+            let expected = if case == "snapshot_retirement" || case == "replacement" {
+                &replacement
+            } else {
+                &original
+            };
+            assert!(found.is_same(expected));
+        }
+    }
+
+    #[test]
+    fn nested_hero_resolution_preserves_local_identity_through_cycles() {
+        let Some(_case) = super::super::hero_controller::terminal_tests::children(
+            "navigator::hero::registry_tests::nested_hero_resolution_preserves_local_identity_through_cycles",
+            "FLUI_HERO_NESTED_CASE",
+            &["cycle"],
+        ) else {
+            return;
+        };
+        let registry = HeroRegistry::new();
+        let tag = HeroTag::new(flui_foundation::ValueKey::new("local"));
+        let hero = Hero::new(
+            flui_foundation::ValueKey::new("local"),
+            SizedBox::new(10.0, 10.0),
+        );
+        let (handle, _tree) = HeroHandle::test_laid_out(&hero);
+        registry.register(tag.clone(), handle.clone());
+        let callback_registry = registry.clone();
+        let source = NestedHeroSource::new(move || Some(callback_registry.clone()));
+        registry.register_nested(source.clone());
+        eprintln!("entered cyclic Hero registry resolution");
+        let all = registry.all_heroes();
+        assert_eq!(all.len(), 1);
+        assert!(
+            all.get(&tag)
+                .expect("the local Hero remains visible")
+                .is_same(&handle)
+        );
+        registry.deregister_nested(&source);
     }
 }
 
@@ -956,13 +1291,14 @@ impl StatefulView for Hero {
 pub struct HeroState {
     handle: Terminal<HeroHandle>,
     /// The current match key and ambient route, including rejected duplicates.
-    /// Cleanup checks mounted identity, so a rejected entry cannot evict its winner.
+    /// Accepted records carry passive release authority; rejected duplicates carry none.
     registry: Option<HeroRegistration>,
 }
 
 struct HeroRegistration {
     registry: Terminal<HeroRegistry>,
     tag: Terminal<HeroTag>,
+    seat: Option<TagSeat<HeroHandle>>,
 }
 
 impl HeroState {
@@ -980,15 +1316,19 @@ impl HeroState {
         let next = registry.map(|registry| HeroRegistration {
             registry: Terminal::new(registry),
             tag: Terminal::new(tag),
+            seat: None,
         });
         let previous = Terminal::new(std::mem::replace(&mut self.registry, next));
         let mut recovery = flui_foundation::panic::PanicRecovery::new();
-        if let Some(previous) = previous.as_ref() {
-            recovery.run(|| previous.registry.deregister(&previous.tag, &self.handle));
+        if let Some(previous) = previous.as_ref()
+            && let Some(seat) = previous.seat.as_ref()
+        {
+            recovery.run(|| previous.registry.deregister(seat));
         }
-        if let Some(next) = self.registry.as_ref() {
+        if let Some(next) = self.registry.as_mut() {
             recovery.run(|| {
-                next.registry
+                next.seat = next
+                    .registry
                     .register(next.tag.clone(), self.handle.clone());
             });
         }
@@ -1084,8 +1424,10 @@ impl ViewState<Hero> for HeroState {
         let configuration = Terminal::new(self.handle.inner.configuration.borrow_mut().take());
         let registry = Terminal::new(self.registry.take());
         let mut recovery = flui_foundation::panic::PanicRecovery::new();
-        if let Some(registry) = registry.as_ref() {
-            recovery.run(|| registry.registry.deregister(&registry.tag, &self.handle));
+        if let Some(registry) = registry.as_ref()
+            && let Some(seat) = registry.seat.as_ref()
+        {
+            recovery.run(|| registry.registry.deregister(seat));
         }
         recovery.retire(rebuild);
         recovery.retire(configuration);

@@ -20,6 +20,184 @@ fn tag(name: &'static str) -> HeroTag {
     HeroTag::new(ValueKey::new(name))
 }
 
+mod registry_reentry {
+    use super::*;
+    use flui_foundation::ViewKey;
+    use flui_widgets::__test_access::{FlightManager, HeroControllerProbe as _};
+    use std::any::Any;
+    use std::cell::{Cell, RefCell};
+    use std::fmt;
+    use std::rc::Rc;
+
+    thread_local! {
+        static REGISTRY: RefCell<Option<HeroRegistry>> = const { RefCell::new(None) };
+        static CALLBACK: Cell<Option<&'static str>> = const { Cell::new(None) };
+        static READS: Cell<usize> = const { Cell::new(0) };
+        static MANAGER: RefCell<Option<Rc<FlightManager>>> = const { RefCell::new(None) };
+    }
+
+    fn inspect(kind: &'static str) {
+        if CALLBACK.get() != Some(kind) {
+            return;
+        }
+        eprintln!("entered Hero tag {kind} reentry");
+        let registry = REGISTRY.with(|slot| {
+            slot.borrow()
+                .as_ref()
+                .expect("the registry is saved")
+                .clone()
+        });
+        let _count = registry.len();
+        let manager = MANAGER.with(|slot| slot.borrow().clone());
+        if let Some(manager) = manager {
+            eprintln!("entered Hero flight tag {kind} reentry");
+            let _count = manager.len();
+        }
+        READS.set(READS.get() + 1);
+    }
+
+    #[derive(Clone)]
+    struct Key(u64);
+
+    impl ViewKey for Key {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn key_hash(&self) -> u64 {
+            inspect("hash");
+            7
+        }
+        fn key_eq(&self, other: &dyn ViewKey) -> bool {
+            inspect("equality");
+            other
+                .as_any()
+                .downcast_ref::<Self>()
+                .is_some_and(|other| self.0 == other.0)
+        }
+        fn clone_key(&self) -> Box<dyn ViewKey> {
+            Box::new(self.clone())
+        }
+        fn debug_fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "reentrant-hero-{}", self.0)
+        }
+    }
+
+    pub(super) fn run() {
+        let Some(case) = crate::common::child_process::selected_case() else {
+            crate::common::child_process::run_rows(
+                "contracts::hero_flights",
+                &["hash", "equality", "flight_hash", "flight_equality"],
+            );
+            return;
+        };
+        let registry = HeroRegistry::new();
+        REGISTRY.with(|slot| *slot.borrow_mut() = Some(registry.clone()));
+        if case == "hash" {
+            CALLBACK.set(Some("hash"));
+        }
+        let mut laid = crate::common::lay_out(
+            HeroScope::new(
+                registry.clone(),
+                Center::new().child(Hero::new(Key(1), SizedBox::new(30.0, 20.0))),
+            ),
+            crate::common::tight(400.0, 400.0),
+        );
+        assert_eq!(registry.len(), 1);
+        if case == "equality" {
+            CALLBACK.set(Some("equality"));
+        }
+        let hero = registry
+            .get(&HeroTag::new(Key(1)))
+            .expect("reentrant lookup finds the mounted Hero");
+        assert!(hero.render_id().is_some());
+        assert!(
+            registry.get(&HeroTag::new(Key(2))).is_none(),
+            "hash collision does not alias identity"
+        );
+        laid.pump_widget(SizedBox::shrink());
+        assert_eq!(registry.len(), 0, "the mounted registration is withdrawn");
+        CALLBACK.set(None);
+        if case.starts_with("flight_") {
+            fly(case.trim_start_matches("flight_"));
+        }
+        assert!(READS.get() > 0, "the authored callback read its registry");
+        REGISTRY.with(|slot| slot.borrow_mut().take());
+        crate::common::child_process::pass();
+    }
+
+    fn fly(operation: &str) {
+        use flui_widgets::VsyncScope;
+        use flui_widgets::navigator::{
+            HeroController, Navigator, NavigatorHandle, NavigatorObserver, PageRoute,
+        };
+        let page = || {
+            PageRoute::<i32>::new(|_ctx, _primary, _secondary| {
+                Center::new()
+                    .child(Hero::new(Key(1), SizedBox::new(30.0, 20.0)))
+                    .boxed()
+            })
+            .transition_duration(std::time::Duration::from_millis(100))
+        };
+        let vsync = flui_animation::Vsync::new();
+        let navigator = NavigatorHandle::new();
+        navigator.seed_initial(page());
+        let mut laid = crate::common::lay_out_animated(
+            VsyncScope::new(vsync.clone(), Navigator::new(navigator.clone())),
+            crate::common::tight(400.0, 400.0),
+            vsync,
+        );
+        let controller = HeroController::new();
+        navigator.add_observer(Arc::clone(&controller) as Arc<dyn NavigatorObserver>);
+        MANAGER.with(|slot| *slot.borrow_mut() = Some(Rc::clone(controller.flights())));
+        CALLBACK.set(Some(if operation == "hash" {
+            "hash"
+        } else {
+            "equality"
+        }));
+        let _push = laid.enter_owner_scope(|| navigator.push(page()));
+        for _ in 0..2 {
+            laid.pump_for(std::time::Duration::from_millis(16));
+        }
+        let manager = controller.flights();
+        assert_eq!(
+            manager.len(),
+            1,
+            "a real route transition starts one flight"
+        );
+        let flight = manager
+            .get(&HeroTag::new(Key(1)))
+            .expect("the in-flight key remains readable");
+        assert!(manager.get(&HeroTag::new(Key(2))).is_none());
+        let owner = laid.pipeline_owner();
+        assert!(
+            owner.with(|owner| owner
+                .render_tree()
+                .iter()
+                .any(|(_, node)| node.debug_name().ends_with("RenderIgnorePointer"))),
+            "the accepted flight builds its shuttle"
+        );
+        for _ in 0..16 {
+            laid.pump_for(std::time::Duration::from_millis(16));
+        }
+        assert_eq!(manager.len(), 0, "the flight lands with reentrant keys");
+        assert!(
+            !owner.with(|owner| owner
+                .render_tree()
+                .iter()
+                .any(|(_, node)| node.debug_name().ends_with("RenderIgnorePointer"))),
+            "landing removes the real shuttle"
+        );
+        drop(flight);
+        laid.pump_widget(SizedBox::shrink());
+        CALLBACK.set(None);
+        MANAGER.with(|slot| slot.borrow_mut().take());
+    }
+}
+
+pub(crate) fn registry_key_callbacks_can_read_their_registry() {
+    registry_reentry::run();
+}
+
 pub(crate) fn changing_a_mounted_hero_tag_moves_its_registration() {
     let registry = HeroRegistry::new();
     let tree = |name, width| {

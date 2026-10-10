@@ -42,7 +42,8 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::rc::Weak;
-use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(test)]
+use std::sync::atomic::Ordering;
 
 use flui_animation::{
     Animatable, Animation, AnimationStatus, Curve, Interval, ProxyAnimation, RectTween,
@@ -53,11 +54,11 @@ use flui_foundation::{ChangeNotifier, Listenable, ListenerId, RenderId};
 use flui_scheduler::PostFrameHandle;
 use flui_view::prelude::*;
 use flui_view::{AnimatedView, BoxedView, ViewExt, impl_animated_view};
-use parking_lot::Mutex;
 
 use super::hero::{HeroFlightIdentity, HeroHandle, HeroTag, RectTweenFactory, ShuttleBuilder};
 use super::hero_controller::{FlightDirection, HeroFlightManifest};
-use super::lifecycle::{RetiredValues, Terminal, TerminalMap, TerminalVec};
+use super::hero_tags::{HeroTags, TagSeat};
+use super::lifecycle::{RetiredValues, Terminal};
 use super::navigator::UserGestureSignal;
 use crate::{IgnorePointer, Opacity, Positioned, Stack, StackFit};
 use crate::{InsertPosition, OverlayEntry, OverlayHandle};
@@ -91,6 +92,7 @@ impl Drop for FlightState {
 /// listeners, and the manager that owns it.
 struct FlightInner {
     identity: HeroFlightIdentity,
+    seat: RefCell<Option<TagSeat<HeroFlight>>>,
     tag: Terminal<HeroTag>,
 
     /// The half a divert rewrites in place.
@@ -376,6 +378,7 @@ impl std::fmt::Debug for HeroFlight {
 }
 
 impl HeroFlight {
+    #[cfg(test)]
     pub(crate) fn tag(&self) -> &HeroTag {
         &self.inner.tag
     }
@@ -818,19 +821,19 @@ pub(crate) struct FlightPlan {
 #[derive(Default)]
 pub struct FlightManager {
     epoch: RefCell<FlightEpoch>,
-    flights: Terminal<TerminalMap<HeroTag, HeroFlight>>,
-    retired: Terminal<TerminalVec<HeroFlight>>,
+    flights: Terminal<HeroTags<HeroFlight>>,
+    retired: RefCell<Vec<HeroFlight>>,
     /// The binding's post-frame capability, captured from the controller. A finished
     /// flight schedules its own end-of-frame drain through this, so cleanup does not
     /// wait for the next transition. `None` before the first launch or on an unmounted
     /// navigator — then the measurement-head backstop is the only path.
-    post_frame: Terminal<Mutex<Option<PostFrameHandle>>>,
+    post_frame: Terminal<RefCell<Option<PostFrameHandle>>>,
     /// One drain per frame: set when a drain is scheduled, cleared when it runs.
-    drain_scheduled: AtomicBool,
+    drain_scheduled: Cell<bool>,
     /// How many drains this manager has actually scheduled — for the coalescing
     /// test. Compiled into every build so the manager has one layout whether or
     /// not the integration tests link it (ADR-0083 §4).
-    drains_scheduled: std::sync::atomic::AtomicUsize,
+    drains_scheduled: Cell<usize>,
 }
 
 /// An owning identity keeps queued measurements distinct after cancellation,
@@ -841,7 +844,7 @@ pub(crate) struct FlightEpoch(Rc<()>);
 impl Drop for FlightManager {
     fn drop(&mut self) {
         let flights = self.flights.withdraw();
-        let retired = self.retired.withdraw();
+        let retired = RetiredValues(std::mem::take(self.retired.get_mut()));
         let post_frame = self.post_frame.withdraw();
         drop((flights, retired, post_frame));
     }
@@ -850,8 +853,8 @@ impl Drop for FlightManager {
 impl std::fmt::Debug for FlightManager {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FlightManager")
-            .field("in_flight", &self.flights.lock().len())
-            .field("retired", &self.retired.lock().len())
+            .field("in_flight", &self.flights.len())
+            .field("retired", &self.retired.borrow().len())
             .finish_non_exhaustive()
     }
 }
@@ -869,7 +872,7 @@ impl FlightManager {
     /// drain a landing flight scheduled, and as a backstop from the measurement pass —
     /// never from an animation listener.
     pub(crate) fn drain_retired(&self) {
-        let retired = std::mem::take(&mut *self.retired.lock());
+        let retired = std::mem::take(&mut *self.retired.borrow_mut());
         drop(RetiredValues(retired));
     }
 
@@ -877,20 +880,21 @@ impl FlightManager {
     /// its own drain. Set from the controller's measurement pass, where the navigator
     /// still resolves it.
     pub(crate) fn set_post_frame(&self, handle: Option<PostFrameHandle>) {
-        *self.post_frame.lock() = handle;
+        let previous = Terminal::new(self.post_frame.replace(handle));
+        drop(previous);
     }
 
     /// How many flights are parked awaiting a safe drop.
     #[must_use]
     pub fn retired_count(&self) -> usize {
-        self.retired.lock().len()
+        self.retired.borrow().len()
     }
 
     /// How many end-of-frame drains have been scheduled — coalescing must keep this at
     /// one per frame no matter how many flights land.
     #[must_use]
     pub fn drains_scheduled(&self) -> usize {
-        self.drains_scheduled.load(Ordering::SeqCst)
+        self.drains_scheduled.get()
     }
 
     /// Queue a single end-of-frame drain of [`retired`](Self::retired).
@@ -900,27 +904,28 @@ impl FlightManager {
     /// before scheduling. The closure holds a `Weak`: a manager dropped before
     /// the frame ends takes its retired flights with it.
     fn schedule_drain(self: &Rc<Self>) {
-        let Some(post_frame) = self.post_frame.lock().clone() else {
+        let Some(post_frame) = self.post_frame.borrow().clone() else {
             return; // No binding capability; the measurement-head drain is the backstop.
         };
-        if self.drain_scheduled.swap(true, Ordering::SeqCst) {
+        if self.drain_scheduled.replace(true) {
             return; // Already scheduled this frame — coalesce.
         }
         let weak = Rc::downgrade(self);
         let schedule_result = post_frame.schedule(move |_timing| {
             if let Some(this) = weak.upgrade() {
-                this.drain_scheduled.store(false, Ordering::SeqCst);
+                this.drain_scheduled.set(false);
                 this.drain_retired();
             }
         });
         if let Err(error) = schedule_result {
-            self.drain_scheduled.store(false, Ordering::SeqCst);
+            self.drain_scheduled.set(false);
             tracing::warn!(
                 ?error,
                 "retired hero flights remain queued because the owner-local post-frame lane is inactive"
             );
         } else {
-            self.drains_scheduled.fetch_add(1, Ordering::SeqCst);
+            self.drains_scheduled
+                .set(self.drains_scheduled.get().saturating_add(1));
         }
     }
 
@@ -931,20 +936,20 @@ impl FlightManager {
         reason = "a test-facing count; nothing asks whether the manager is empty"
     )]
     pub fn len(&self) -> usize {
-        self.flights.lock().len()
+        self.flights.len()
     }
 
     /// The flight for `tag`, if any.
     #[must_use]
     pub fn get(&self, tag: &HeroTag) -> Option<HeroFlight> {
-        self.flights.lock().get(tag).cloned()
+        self.flights.get(tag)
     }
 
     /// Whether a flight for `tag` is already in the air, i.e. the next manifest
     /// for it is a divert. A diverted manifest's animation carries no reverse
     /// curve.
     pub(crate) fn is_airborne(&self, tag: &HeroTag) -> bool {
-        self.flights.lock().contains_key(tag)
+        self.flights.get(tag).is_some()
     }
 
     /// Start a flight, or — when a flight for this tag is already airborne —
@@ -976,7 +981,10 @@ impl FlightManager {
         // Divert redirects the airborne flight in place, keeping its one overlay
         // entry, rather than an end-and-restart. The flight stays in the map under
         // its tag.
-        let existing = self.flights.lock().get(&manifest.tag).cloned();
+        let existing = self.flights.get(&manifest.tag);
+        if !self.is_current(epoch) {
+            return;
+        }
         if let Some(existing) = existing {
             if existing.inner.ended.get() {
                 self.retire(&existing);
@@ -1026,6 +1034,7 @@ impl FlightManager {
 
         let inner = Rc::new(FlightInner {
             identity: HeroFlightIdentity::default(),
+            seat: RefCell::new(None),
             tag: Terminal::new(manifest.tag.clone()),
             state: Terminal::new(RefCell::new(FlightState {
                 direction,
@@ -1062,12 +1071,18 @@ impl FlightManager {
         let flight = HeroFlight {
             inner: Rc::clone(&inner),
         };
-        let previous = Terminal::new(
-            self.flights
-                .lock()
-                .insert(manifest.tag.clone(), flight.clone()),
-        );
-        drop(previous);
+        let Some(admission) = self
+            .flights
+            .insert_first(manifest.tag.clone(), flight.clone())
+        else {
+            // An independent reentrant launch has already claimed this tag.
+            // Its accepted flight remains authoritative.
+            return;
+        };
+        if !self.is_current(epoch) || inner.ended.get() {
+            return;
+        }
+        *inner.seat.borrow_mut() = Some(admission.commit());
 
         // Cancellation must see the pending flight before any user callout.
         let mut initialized = false;
@@ -1228,22 +1243,14 @@ impl FlightManager {
     /// drop, so the flight is freed outside any animation listener (see the
     /// type docs).
     fn retire(self: &Rc<Self>, flight: &HeroFlight) {
-        let removed = {
-            let mut flights = self.flights.lock();
-            if flights
-                .get(flight.tag())
-                .is_some_and(|current| Rc::ptr_eq(&current.inner, &flight.inner))
-            {
-                flights.remove(flight.tag())
-            } else {
-                None
-            }
-        };
+        let seat = flight.inner.seat.borrow_mut().take();
+        let removed = seat.as_ref().and_then(|seat| self.flights.remove(seat));
         if let Some(removed) = removed {
             // Park it — we may be inside its status listener — and schedule the
             // drop for the end of this frame.
-            self.retired.lock().push(removed);
+            self.retired.borrow_mut().push(removed.value().clone());
             self.schedule_drain();
+            drop(removed);
         }
     }
 
@@ -1261,9 +1268,9 @@ impl FlightManager {
     /// first-failure context before that context completes.
     pub(crate) fn finish_all(self: &Rc<Self>) {
         self.epoch.replace(FlightEpoch::default());
-        let all = Terminal::new(self.flights.lock().values().cloned().collect::<Vec<_>>());
+        let all = self.flights.snapshot_all();
         let mut recovery = flui_foundation::panic::PanicRecovery::new();
-        for flight in all.iter() {
+        for (_, flight) in all.iter() {
             recovery.run_with(|recovery| self.abort(flight, recovery));
         }
         recovery.retire(all);
@@ -1279,9 +1286,9 @@ impl FlightManager {
     /// Called from `HeroController::did_stop_user_gesture`. The registry snapshot
     /// releases its guard before querying parents or finishing any flight.
     pub(crate) fn finish_stalled_gesture_pops(self: &Rc<Self>) {
-        let all = Terminal::new(self.flights.lock().values().cloned().collect::<Vec<_>>());
+        let all = self.flights.snapshot_all();
         let mut recovery = flui_foundation::panic::PanicRecovery::new();
-        for flight in all.iter() {
+        for (_, flight) in all.iter() {
             recovery.run_with(|recovery| {
                 if flight.is_stalled_gesture_pop() {
                     self.finish_with_recovery(flight, AnimationStatus::Dismissed, recovery);
@@ -1415,6 +1422,7 @@ mod terminal_tests {
         let signal = NavigatorHandle::new().user_gesture_signal();
         let inner = FlightInner {
             identity: HeroFlightIdentity::default(),
+            seat: RefCell::new(None),
             tag: Terminal::new(HeroTag::new(flui_foundation::ValueKey::new("flight"))),
             state: Terminal::new(RefCell::new(FlightState {
                 direction: FlightDirection::Push,
@@ -1602,18 +1610,21 @@ mod terminal_tests {
             if admitted_before_cleanup {
                 launch(&current_manager);
             }
-            let hook = Rc::new(move || {
-                if !admitted_before_cleanup {
-                    replacement_launch(&replacement_manager);
-                }
-                assert_eq!(replacement_manager.len(), 1);
-                assert!(replacement_manager.flights.lock().values().all(|flight| {
-                    let state = flight.inner.state.borrow();
-                    state.from_hero.placeholder_size().is_some()
-                        && state.to_hero.placeholder_size().is_some()
-                }));
-                assert!(!fail, "first placeholder cancellation failure");
-            });
+            let hook =
+                Rc::new(move || {
+                    if !admitted_before_cleanup {
+                        replacement_launch(&replacement_manager);
+                    }
+                    assert_eq!(replacement_manager.len(), 1);
+                    assert!(replacement_manager.flights.snapshot_all().iter().all(
+                        |(_, flight)| {
+                            let state = flight.inner.state.borrow();
+                            state.from_hero.placeholder_size().is_some()
+                                && state.to_hero.placeholder_size().is_some()
+                        }
+                    ));
+                    assert!(!fail, "first placeholder cancellation failure");
+                });
             let subscription =
                 flui_animation::StatusSubscription::new(&hook, (), |hook, (), _recovery| hook());
             let previous = old.inner.subscriptions.borrow_mut().replace(subscription);
@@ -1655,7 +1666,7 @@ mod terminal_tests {
                     "the first failure retains competing outgoing captures"
                 );
             }
-            for current in current_manager.flights.lock().values() {
+            for (_, current) in current_manager.flights.snapshot_all().iter() {
                 let state = current.inner.state.borrow();
                 for hero in [&state.from_hero, &state.to_hero] {
                     assert_eq!(
@@ -1821,10 +1832,12 @@ mod terminal_tests {
             old.abort(&mut recovery.scope());
             recovery.finish();
             let (current, current_drops) = flight(false, false, false);
-            manager
+            let seat = manager
                 .flights
-                .lock()
-                .insert(current.tag().clone(), current.clone());
+                .insert_first(current.tag().clone(), current.clone())
+                .expect("fixture tag is unique")
+                .commit();
+            *current.inner.seat.borrow_mut() = Some(seat);
             manager.finish(&old, AnimationStatus::Completed);
             assert!(manager.is_airborne(current.tag()));
             let mut recovery = flui_foundation::panic::PanicRecovery::new();
@@ -1857,10 +1870,12 @@ mod terminal_tests {
         );
         if case == "manager_shared_flight" {
             let manager = FlightManager::default();
-            manager
+            let seat = manager
                 .flights
-                .lock()
-                .insert(flight.tag().clone(), flight.clone());
+                .insert_first(flight.tag().clone(), flight.clone())
+                .expect("fixture tag is unique")
+                .commit();
+            *flight.inner.seat.borrow_mut() = Some(seat);
             drop(manager);
             assert!(drops.iter().all(|count| count.load(Ordering::SeqCst) == 0));
             drop(flight);
@@ -1873,11 +1888,16 @@ mod terminal_tests {
         if case.starts_with("manager_") {
             let manager = FlightManager::default();
             let flight = owned_flight.take().expect("owned flight");
-            manager.flights.lock().insert(flight.tag().clone(), flight);
+            let seat = manager
+                .flights
+                .insert_first(flight.tag().clone(), flight.clone())
+                .expect("fixture tag is unique")
+                .commit();
+            *flight.inner.seat.borrow_mut() = Some(seat);
             let competing = case == "manager_competing";
             let (retired, counts) = self::flight(competing, competing, competing);
             retired_drops = Some(counts);
-            manager.retired.lock().push(retired);
+            manager.retired.borrow_mut().push(retired);
             *owned_manager = Some(manager);
         }
         let result = catch_unwind(AssertUnwindSafe(move || {

@@ -75,6 +75,12 @@
 
 ### Fixed
 
+- Run authored Hero key hashing, equality and formatting outside route and flight
+  registry borrows. Revalidate reentrant changes before matching, release by
+  registration identity and preserve the first retirement failure.
+- Bound nested Hero visibility traversal by owning registry identity, preserving
+  local matching when an internal source resolves through a cycle.
+
 - Bind Hero placeholders to their logical flight identity so old cancellation
   or completion cannot restore a mounted Hero already flying in a replacement
   transition, including when cleanup reenters or reports an error.

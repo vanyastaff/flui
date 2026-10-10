@@ -58,9 +58,9 @@ destination's real child after the source disappears.
 
 A Hero's match tag belongs to its current immutable configuration; its mounted
 identity is the shared handle. Tag updates move registration without recreating
-the state. The registration record retains the exact outgoing tag and registry
-for identity-checked removal, including when the incoming tag is a rejected
-duplicate. Scope dependencies notify on registry replacement and refresh after
+the state. The registration record retains its current tag, registry and passive
+release authority. Rejected duplicates have no release authority, and an old
+authority cannot remove a replacement. Scope dependencies notify on registry replacement and refresh after
 GlobalKey reparenting. Old registration is withdrawn before new admission and
 outgoing captures retire outside storage borrows under first-failure recovery.
 
@@ -72,6 +72,33 @@ checks first-wins matching and harmless rejected cleanup.
 and preserved mounted state through the existing test-access registry seam.
 `reparenting_an_unscoped_hero_adopts_its_first_route` also starts with no scope:
 the inherited lookup miss remains an ancestry dependency until reactivation.
+
+## Hero matching runs outside storage borrows
+
+Route registries and flight registries share private owner-local tag storage.
+Authored hashing precedes borrowing; equality runs against owning bucket pins.
+The result revalidates the complete ordered bucket by allocation identity before
+admission or lookup. One fresh comparison is permitted after mutation; a second
+invalidation refuses the requested operation while independently accepted changes
+remain authoritative. This follows the bounded comparison policy of ADR-0126.
+Removal uses cached hash and a typed weak allocation identity, without key callbacks.
+Admission rollback exists before outgoing comparison pins retire. Removed flights
+enter the deferred retirement queue before scheduling or key retirement calls out.
+
+`registry_key_callbacks_can_read_their_registry` mounts real Heroes and drives
+PageRoute flights with authored hashing and equality reading the same route or
+flight registry through the existing test-access seam. It observes a real shuttle
+and subsequent landing. `hero_registry_matching_preserves_authority_under_reentry`
+uses the private registration seam for same-length replacement, repeated mutation,
+hash/equality failure, passive release, formatting reentry and snapshot retirement.
+Its physical last-release cases cover aliases, healthy destruction, an incoming
+unwind, first failure and competing key destructors under terminal ownership.
+
+Nested visibility snapshots sources before resolving them. Traversal retains
+owning registry identities and visits each once, preserving local-first matching
+without recurring through a cycle. The private resolver case
+`nested_hero_resolution_preserves_local_identity_through_cycles` pins this graph
+contract; ordinary application trees do not expose the resolver constructor.
 
 ## Hero placeholders belong to logical flights
 

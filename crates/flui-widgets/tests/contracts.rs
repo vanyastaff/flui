@@ -523,6 +523,7 @@ fn hero_flights() {
         "hero_flights",
         &[
             ("hero::changing_a_mounted_hero_tag_moves_its_registration", crate::hero::changing_a_mounted_hero_tag_moves_its_registration as fn()),
+            ("hero::registry_key_callbacks_can_read_their_registry", crate::hero::registry_key_callbacks_can_read_their_registry),
             ("hero::retagging_to_a_duplicate_preserves_the_existing_winner", crate::hero::retagging_to_a_duplicate_preserves_the_existing_winner as fn()),
             ("hero::replacing_a_hero_scope_moves_the_existing_hero", crate::hero::replacing_a_hero_scope_moves_the_existing_hero),
             ("hero::reparenting_a_hero_moves_registration_without_recreating_it", crate::hero::reparenting_a_hero_moves_registration_without_recreating_it),
