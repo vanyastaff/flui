@@ -106,8 +106,7 @@ fn a_self_reenqueuing_build_task_is_bounded_by_the_reentry_cap_not_hung_forever(
     requeue(scheduler.clone(), Arc::clone(&runs));
 
     // Terminates at all -- the primary regression this test guards -- and
-    // the warning fires exactly once. `execute_frame` runs a full
-    // `handle_draw_frame` reentrant-pass loop identically to `drive_frame`.
+    // the warning fires exactly once during complete owner execution.
     let (_frame_id, log) = flui_testing::log_capture::capture(|| {
         flui_scheduler::OwnerFrame::new(&scheduler)
             .expect("the scheduler has no live owner frame")
@@ -117,7 +116,7 @@ fn a_self_reenqueuing_build_task_is_bounded_by_the_reentry_cap_not_hung_forever(
                 || {},
                 || {},
             )
-            .expect("live owner frame")
+            .expect("live owner frame");
     });
 
     assert_eq!(

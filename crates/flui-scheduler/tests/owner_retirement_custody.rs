@@ -162,7 +162,7 @@ fn callbacks_and_task_polls_refuse_nested_owner_turns() {
     let weak = Rc::downgrade(&owner);
     let observed = Rc::clone(&calls);
     scheduler.schedule_frame_callback(Box::new(move |_| {
-        refuse(&weak.upgrade().expect("transient owner"), &observed)
+        refuse(&weak.upgrade().expect("transient owner"), &observed);
     }));
     let weak = Rc::downgrade(&owner);
     let observed = Rc::clone(&calls);

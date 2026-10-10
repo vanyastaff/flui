@@ -590,7 +590,7 @@ mod tests {
                         || {},
                         || {},
                     )
-                    .expect("live owner frame")
+                    .expect("live owner frame");
             }))
         });
         assert!(panicked.is_err());
@@ -607,7 +607,7 @@ mod tests {
                     || {},
                     || {},
                 )
-                .expect("live owner frame")
+                .expect("live owner frame");
         });
         assert_eq!(
             *log.lock().expect("log"),

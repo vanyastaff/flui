@@ -149,8 +149,7 @@ fn handled_nested_failure_retains_completion_envelope() {
                     panic!("nested body must not run");
                 })
             }))
-            .err()
-            .expect("refused envelope destructor failed");
+            .expect_err("refused envelope destructor failed");
             assert_eq!(
                 flui_foundation::panic::payload_text(&*failure),
                 Some("refused capture failure")

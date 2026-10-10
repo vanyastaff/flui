@@ -2942,7 +2942,7 @@ mod tests {
                     || {},
                     || {},
                 )
-                .expect("live owner frame")
+                .expect("live owner frame");
         });
 
         assert_eq!(
