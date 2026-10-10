@@ -69,6 +69,17 @@ here.
 
 **Test:** `harness_animated_transform_tick_dirty_marking`.
 
+The sample cache stays on the UI owner (ADR-0175): `Rc` shares whole-value
+`Cell` records, without atomic buffers or reader/writer spin loops. A ticket
+precedes each user read; an outgoing reading or delivery cannot overwrite a
+newer record after reentry. Published and delivered records remain separate,
+so a failed invalidation retries even after the value returns to its last
+delivered value. Exhaustion preserves the last sample permanently. The
+private recovery cases `failed_mark_retries`,
+`newer_generation_wins_in_either_commit_order` and
+`restoring_a_delivered_value_while_a_newer_one_is_in_flight_still_marks` pin
+these obligations. A hit visit retains its selected sample independently.
+
 The facade's `a_slide_tick_moves_pixels_without_rebuilding` also drives a
 mounted `SlideTransition` through identity-to-layer and retained-layer ticks.
 GPU interior samples observe the rectangle moving from zero to twenty and
