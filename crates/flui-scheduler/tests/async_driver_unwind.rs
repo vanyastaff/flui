@@ -86,7 +86,7 @@ fn assert_panic(result: std::thread::Result<()>, message: &str) {
 fn assert_next_task(frame: &OwnerFrame) {
     let driver = frame.async_driver();
     let token = driver.spawn_local(Box::pin(async {}));
-    assert_eq!(frame.poll_ready(), 1);
+    assert_eq!(frame.pump_background(|| {}).expect("live owner turn"), 1);
     assert_eq!(driver.pending_task_count(), 0);
     drop(token);
 }
@@ -114,13 +114,13 @@ fn poll_failure(eager: bool, bombs: usize) {
         }));
         assert_panic(
             catch_unwind(AssertUnwindSafe(|| {
-                frame.poll_ready();
+                frame.pump_background(|| {}).expect("live owner turn");
             })),
             "poll failure",
         );
         assert_eq!(driver.pending_task_count(), 1);
         assert_eq!(frame.ready_task_count(), 1);
-        assert_eq!(frame.poll_ready(), 1);
+        assert_eq!(frame.pump_background(|| {}).expect("live owner turn"), 1);
         assert_eq!(sibling_ran.load(Ordering::Relaxed), 1);
         drop((token, sibling));
     }
@@ -136,7 +136,7 @@ fn poll_failure(eager: bool, bombs: usize) {
         .expect("poll waker");
     stale.wake_by_ref();
     assert_eq!(frame.ready_task_count(), 0);
-    assert_eq!(frame.poll_ready(), 0);
+    assert_eq!(frame.pump_background(|| {}).expect("live owner turn"), 0);
     assert_next_task(&frame);
 }
 
@@ -197,7 +197,7 @@ fn retirement(cancel: bool, nested: bool) {
     let sibling = driver.spawn_local(Box::pin(async {}));
     assert_panic(
         catch_unwind(AssertUnwindSafe(|| {
-            frame.poll_ready();
+            frame.pump_background(|| {}).expect("live owner turn");
         })),
         "future destructor",
     );
@@ -205,7 +205,7 @@ fn retirement(cancel: bool, nested: bool) {
     assert_eq!(nested_drops.load(Ordering::Relaxed), 0);
     assert_eq!(driver.pending_task_count(), 1);
     assert_eq!(frame.ready_task_count(), 1);
-    assert_eq!(frame.poll_ready(), 1);
+    assert_eq!(frame.pump_background(|| {}).expect("live owner turn"), 1);
     drop(sibling);
     assert_next_task(&frame);
 }
@@ -354,7 +354,7 @@ fn task_retirement_disarms_sibling_wakers() {
             Poll::Pending
         })))
         .expect("pending sibling");
-    frame.poll_ready();
+    frame.pump_background(|| {}).expect("live owner turn");
     let wakes = Arc::new(AtomicUsize::new(0));
     let count = Arc::clone(&wakes);
     driver.set_request_frame(move || {
@@ -384,10 +384,13 @@ fn eager_poll_cannot_reopen_retired_owner() {
         .expect("refused task token");
     assert!(token.is_cancelled());
     assert_eq!(frame.async_driver().pending_task_count(), 0);
-    assert_eq!(frame.poll_ready(), 0);
+    assert_eq!(
+        frame.pump_background(|| {}),
+        Err(flui_scheduler::ExecutionError::Retired)
+    );
 }
 
-fn foreign_frame_preserves_pending_demand() {
+fn independent_owner_turn_preserves_pending_demand() {
     for direct in [false, true] {
         let scheduler = UpdateScheduler::new();
         let owner = OwnerFrame::new(&scheduler).expect("owner frame");
@@ -400,23 +403,36 @@ fn foreign_frame_preserves_pending_demand() {
             observed.set(true);
         }));
         assert!(scheduler.has_scheduled_frame());
-        assert!(
-            catch_unwind(AssertUnwindSafe(|| {
-                if direct {
-                    scheduler.handle_begin_frame(std::time::Instant::now(), &foreign);
-                } else {
-                    scheduler.execute_frame(&foreign);
-                }
-            }))
-            .is_err()
-        );
+        if direct {
+            assert_eq!(
+                foreign.pump_background(|| {}).expect("foreign owner turn"),
+                0
+            );
+        } else {
+            let now = flui_scheduler::Instant::now();
+            foreign
+                .drive_frame(
+                    now,
+                    flui_scheduler::IdleDeadline::far_future(now),
+                    || {},
+                    || {},
+                )
+                .expect("foreign owner frame");
+        }
         assert!(
             scheduler.has_scheduled_frame(),
-            "rejected owner must not consume demand"
+            "an independent owner must not consume another scheduler's demand"
         );
         assert!(!ran.get());
         assert_eq!(scheduler.frame_count(), 0);
-        scheduler.execute_frame(&owner);
+        owner
+            .drive_frame(
+                flui_scheduler::Instant::now(),
+                flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
+                || {},
+                || {},
+            )
+            .expect("live owner frame");
         assert!(ran.get());
         assert!(!token.is_cancelled());
     }
@@ -531,8 +547,8 @@ fn async_driver_unwind_matrix() {
         ("eager_spawn_hook", eager_spawn_hook),
         ("hook_retirement", hook_retirement),
         (
-            "foreign_frame_preserves_pending_demand",
-            foreign_frame_preserves_pending_demand,
+            "independent_owner_turn_preserves_pending_demand",
+            independent_owner_turn_preserves_pending_demand,
         ),
         (
             "callback_retirement_closes_task_admission",

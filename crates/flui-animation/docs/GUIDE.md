@@ -3,22 +3,24 @@
 Practical guide to using `flui_animation`.
 
 Every `rust` block is compiled as a doctest against the current API. Lines
-starting with `#` are hidden setup (a scheduler, a controller, a
+starting with `#` are hidden setup (a controller, a
 `Result`-returning `main`) that the rendered page leaves out.
 
 ## Setup
 
 ```rust
-use flui_animation::{
-    AnimationController, Animation,
-    Curves, FloatTween, Animatable,
-};
-use flui_scheduler::UpdateScheduler;
-use std::rc::Rc;
+use flui_animation::{AnimationController, Animation};
 use std::time::Duration;
 
-let scheduler = Rc::new(UpdateScheduler::new());
+let controller = AnimationController::builder(Duration::from_millis(300)).build();
+controller.forward().expect("live controller");
+controller.tick_at(Duration::from_millis(150));
+assert_eq!(controller.value(), 0.5);
 ```
+
+`build()` creates a manually sampled controller. In a presentation, retain the
+owner returned by `build_on(Some(&vsync))`; its controller receives the
+presentation's `FrameTick` through that Vsync registry.
 
 ## AnimationController
 
@@ -27,9 +29,7 @@ let scheduler = Rc::new(UpdateScheduler::new());
 ```rust
 # use std::time::Duration;
 # use flui_animation::{AnimationController, AnimationError};
-# use flui_scheduler::UpdateScheduler;
 # fn main() -> Result<(), AnimationError> {
-# let scheduler = UpdateScheduler::new();
 // Simple
 let controller = AnimationController::builder(Duration::from_millis(300)).build();
 
@@ -56,9 +56,7 @@ let controller = AnimationController::builder(
 ```rust
 # use std::time::Duration;
 # use flui_animation::{AnimationController, AnimationError};
-# use flui_scheduler::UpdateScheduler;
 # fn main() -> Result<(), AnimationError> {
-# let scheduler = UpdateScheduler::new();
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 // Forward (toward upper_bound)
 controller.forward()?;
@@ -88,9 +86,7 @@ controller.set_value(0.5);
 ```rust
 # use std::time::Duration;
 # use flui_animation::{AnimationController, AnimationError};
-# use flui_scheduler::UpdateScheduler;
 # fn main() -> Result<(), AnimationError> {
-# let scheduler = UpdateScheduler::new();
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 // Loop: 0→1, 0→1, 0→1, ...
 controller.repeat(false)?;
@@ -110,10 +106,8 @@ controller.stop()?;
 ```rust
 # use std::time::Duration;
 # use flui_animation::{AnimationController, AnimationError};
-# use flui_scheduler::UpdateScheduler;
 use flui_animation::{SpringDescription, SpringSimulation};
 # fn main() -> Result<(), AnimationError> {
-# let scheduler = UpdateScheduler::new();
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 
 // Fling with velocity
@@ -137,9 +131,7 @@ controller.animate_with(sim)?;
 ```rust
 # use std::time::Duration;
 # use flui_animation::AnimationController;
-# use flui_scheduler::UpdateScheduler;
 use flui_animation::Animation;
-# let scheduler = UpdateScheduler::new();
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 
 let value = controller.value();   // Current value
@@ -157,10 +149,8 @@ controller.is_dismissed(); // At lower_bound
 # use std::rc::Rc;
 # use std::time::Duration;
 # use flui_animation::AnimationController;
-# use flui_scheduler::UpdateScheduler;
 use flui_animation::{Animation, AnimationStatus};
 use flui_foundation::Listenable;
-# let scheduler = UpdateScheduler::new();
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 
 // Value changes (the callback owns its own handle to the controller)
@@ -187,8 +177,6 @@ controller.remove_status_listener(id);
 ```rust
 # use std::time::Duration;
 # use flui_animation::{AnimationController, AnimationError};
-# use flui_scheduler::UpdateScheduler;
-# let scheduler = UpdateScheduler::new();
 # let mut owner = AnimationController::builder(Duration::from_millis(300)).build_on(None);
 # let controller = owner.controller().clone();
 owner.dispose();
@@ -390,9 +378,7 @@ Apply curve to animation output:
 # use std::rc::Rc;
 # use std::time::Duration;
 # use flui_animation::{AnimationController, Curves};
-# use flui_scheduler::UpdateScheduler;
 use flui_animation::CurvedAnimation;
-# let scheduler = UpdateScheduler::new();
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 
 let curved = CurvedAnimation::new(
@@ -411,9 +397,7 @@ Map 0–1 to any type:
 # use std::rc::Rc;
 # use std::time::Duration;
 # use flui_animation::{Animation, AnimationController, FloatTween};
-# use flui_scheduler::UpdateScheduler;
 use flui_animation::TweenAnimation;
-# let scheduler = UpdateScheduler::new();
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 
 let animated = TweenAnimation::new(
@@ -431,9 +415,7 @@ let pixels = animated.value(); // 0.0 to 300.0
 # use std::rc::Rc;
 # use std::time::Duration;
 # use flui_animation::{AnimationController};
-# use flui_scheduler::UpdateScheduler;
 use flui_animation::ReverseAnimation;
-# let scheduler = UpdateScheduler::new();
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 
 let reversed = ReverseAnimation::new(Rc::new(controller.clone()));
@@ -451,9 +433,7 @@ Hot-swap parent:
 # use std::rc::Rc;
 # use std::time::Duration;
 # use flui_animation::AnimationController;
-# use flui_scheduler::UpdateScheduler;
 use flui_animation::ProxyAnimation;
-# let scheduler = UpdateScheduler::new();
 # let controller1 = AnimationController::builder(Duration::from_millis(300)).build();
 # let controller2 = AnimationController::builder(Duration::from_millis(300)).build();
 
@@ -487,9 +467,7 @@ Switch at crossover:
 # use std::rc::Rc;
 # use std::time::Duration;
 # use flui_animation::AnimationController;
-# use flui_scheduler::UpdateScheduler;
 use flui_animation::AnimationSwitch;
-# let scheduler = UpdateScheduler::new();
 # let anim1 = AnimationController::builder(Duration::from_millis(300)).build();
 # let anim2 = AnimationController::builder(Duration::from_millis(300)).build();
 
@@ -566,9 +544,7 @@ pixel.
 
 ```rust
 # use std::time::Duration;
-# use flui_scheduler::UpdateScheduler;
 use flui_animation::{AnimationController, AnimationError};
-# let scheduler = UpdateScheduler::new();
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 
 match controller.forward() {
@@ -601,8 +577,6 @@ fn animate(d: Duration) -> Result<AnimationController, AnimationError> {
 ```rust
 # use std::time::Duration;
 # use flui_animation::AnimationController;
-# use flui_scheduler::UpdateScheduler;
-# let scheduler = UpdateScheduler::new();
 # let duration = Duration::from_millis(300);
 let owner = AnimationController::builder(duration).build_on(None);
 let controller = owner.controller();
@@ -619,8 +593,6 @@ controller, it does not copy it.
 # use std::rc::Rc;
 # use std::time::Duration;
 # use flui_animation::{AnimationController, CurvedAnimation, Curves};
-# use flui_scheduler::UpdateScheduler;
-# let scheduler = UpdateScheduler::new();
 let controller = AnimationController::builder(Duration::from_millis(300)).build();
 let curved1 = CurvedAnimation::new(Rc::new(controller.clone()), Curves::EaseIn);
 let curved2 = CurvedAnimation::new(Rc::new(controller.clone()), Curves::EaseOut);
@@ -632,9 +604,7 @@ let curved2 = CurvedAnimation::new(Rc::new(controller.clone()), Curves::EaseOut)
 ```rust
 # use std::time::Duration;
 # use flui_animation::{AnimationController, AnimationError};
-# use flui_scheduler::UpdateScheduler;
 # fn main() -> Result<(), AnimationError> {
-# let scheduler = UpdateScheduler::new();
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 // Don't create new controller each time
 controller.reset()?;
@@ -650,8 +620,6 @@ controller.forward()?;
 # use std::rc::Rc;
 # use std::time::Duration;
 # use flui_animation::{Animation, AnimationController, AnimationStatus};
-# use flui_scheduler::UpdateScheduler;
-# let scheduler = UpdateScheduler::new();
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 // Bad: check every frame
 if controller.status() == AnimationStatus::Completed { /* ... */ }

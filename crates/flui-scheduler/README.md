@@ -8,13 +8,12 @@ render pipeline or event loop.
 
 ## Features
 
-- **Frame Scheduling** - VSync coordination and frame lifecycle management
+- **Frame Scheduling** - Complete owner turns and frame lifecycle management
 - **Priority-based Task Queue** - Execute tasks in priority order (UserInput > Animation > Build > Idle)
-- **Frame Budget Management** - Enforce time limits to maintain target FPS
-- **VSync Integration** - Coordinate with display refresh to avoid tearing
+- **Frame Budget Statistics** - Measure phase durations and bound Idle-priority work
 - **Type-Safe Durations** - Newtype wrappers prevent unit confusion
 - **Type-Safe IDs** - PhantomData markers prevent ID type mixing
-- **Optional Serde Support** - Serialization for all data types
+- **Optional Serde Support** - Serialization for supported duration, priority and statistics values
 
 ## Architecture
 
@@ -50,6 +49,21 @@ the [flui facade's README](../../README.md).
 
 ## Usage
 
+### Migrating performance-mode requests
+
+The scheduler no longer exposes `PerformanceMode`, `PerformanceModeRequestHandle`,
+`request_performance_mode`, `current_performance_mode`, `set_performance_mode`,
+`performance_mode_request_count`, or `debug_assert_no_pending_performance_mode_requests`.
+Remove their imports, requests, handle disposal and mode bookkeeping from callers.
+Persisted application configuration using the removed serde enum needs its own
+application-owned representation if it still serves an application policy.
+
+These requests counted handles and stored a label without changing scheduling,
+polling, latency or power behavior. There is no replacement scheduling hint, and
+removing the API does not claim a performance improvement. Physical presentation
+pacing remains the presentation host's responsibility; task priority continues to
+control logical execution order.
+
 ### Basic Frame Scheduling
 
 ```rust
@@ -57,7 +71,7 @@ use flui_scheduler::{OwnerFrame, Priority, UpdateScheduler};
 
 let scheduler = UpdateScheduler::new();
 // The owner thread's frame state (owner-local post-frame callbacks and
-// async tasks); every frame entry point takes it.
+// async tasks); complete execution belongs to this owner.
 let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
 
 // Schedule a one-time frame callback (animation tick)
@@ -75,8 +89,32 @@ scheduler.add_task(Priority::Build, || {
 });
 
 // Execute frame (called by event loop)
-scheduler.execute_frame(&owner);
+let now = flui_scheduler::Instant::now();
+owner.drive_frame(now, flui_scheduler::IdleDeadline::far_future(now), || {}, || {})
+    .expect("the owner accepts the frame");
 ```
+
+### Migrating execution
+
+`UpdateScheduler` registers work and requests delivery. Its owner executes
+`OwnerFrame::drive_frame(timestamp, deadline, prepare, pipeline)` or
+`OwnerFrame::pump_background(prepare)`. Both return typed admission errors;
+neither accepts another scheduler's owner. Preparation runs after admission,
+before frame phases or ready-task polling.
+
+Replace `execute_frame` and synchronous warm-up calls with a complete owner
+frame, using a no-op pipeline only when no render pipeline is needed. Observe
+frame identity and timing from `current_frame()` inside the pipeline or from
+`end_of_frame()` afterward. Replace manual begin/draw/end/abort sequences and
+`finish_async_pump` plus `poll_ready` with the corresponding complete operation.
+Failures close started frame bookkeeping before propagation; callers cannot
+manually abort an enclosing operation.
+
+The unused idle-callback lane (`schedule_idle_callback`, `execute_idle_callbacks`,
+`has_idle_callbacks`) was removed. `Priority::Idle` tasks remain supported and
+run within the frame's supplied deadline. Direct access to the scheduler's
+`TaskQueue` and manual timing-phase mutation were removed; standalone `TaskQueue`
+is still available as a separate queue, without authority over an owner's frame.
 
 ### Frame Budget Management
 
@@ -238,7 +276,9 @@ let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner 
 match event {
     Event::MainEventsCleared => {
         if scheduler.is_frame_scheduled() {
-            scheduler.execute_frame(&owner);
+            let now = flui_scheduler::Instant::now();
+            owner.drive_frame(now, flui_scheduler::IdleDeadline::far_future(now), || {}, || {})
+                .expect("the owner accepts the frame");
             window.request_redraw();
         }
     }
@@ -265,15 +305,9 @@ match event {
 `FrameBudget` reports timing statistics (jank, phase durations, over-budget)
 against whichever target the caller chose — `UpdateScheduler` itself makes
 no frame-rate assumption and does not act on these statistics to skip work.
-The only thing that ever defers work is `UpdateScheduler::drive_frame`'s own `deadline`
+The only thing that ever defers work is `OwnerFrame::drive_frame`'s own `deadline`
 parameter, and it bounds `Priority::Idle` tasks alone; `Priority::Animation`
 and `Priority::Build` always run to completion.
-
-### Zero-Cost Abstractions
-
-- Typestate pattern: No runtime overhead - states checked at compile time
-- Newtype wrappers: Zero-cost - same as raw `f64`
-- PhantomData markers: Zero-size - no memory overhead
 
 ## Feature Flags
 
@@ -283,11 +317,8 @@ and `Priority::Build` always run to completion.
 
 ## Platform Support
 
-| Platform | VSync Method |
-|----------|--------------|
-| Windows, macOS, Linux | Native vsync via `web-time` |
-| WebAssembly | `performance.now()` |
-| iOS/Android | Platform refresh rate |
+Hosts provide display pacing and sampled timestamps. `web-time` supplies a
+portable monotonic clock; it does not coordinate display refresh or prevent tearing.
 
 `UpdateScheduler`, its callback queues and `OwnerFrame` belong to one UI owner.
 Callbacks accept owner-local captures. Workers request frames through

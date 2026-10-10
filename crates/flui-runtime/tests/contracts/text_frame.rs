@@ -554,6 +554,7 @@ struct ImeGeometryRead {
 #[derive(Clone, StatefulView)]
 struct PartialTextFrame {
     pending: std::rc::Rc<std::cell::Cell<bool>>,
+    hit_test: std::rc::Rc<std::cell::RefCell<Option<flui_interaction::HitTestHandle>>>,
     pending_sizing: flui_painting::TextSizing,
     controller: flui_widgets::TextEditingController,
     focus: std::rc::Rc<flui_interaction::routing::FocusNode>,
@@ -572,19 +573,26 @@ struct PartialTextFrame {
     >,
 }
 
-struct PartialTextFrameState(std::rc::Rc<std::cell::RefCell<Option<flui_view::RebuildHandle>>>);
+struct PartialTextFrameState(
+    std::rc::Rc<std::cell::RefCell<Option<flui_view::RebuildHandle>>>,
+    std::rc::Rc<std::cell::RefCell<Option<flui_interaction::HitTestHandle>>>,
+);
 
 impl StatefulView for PartialTextFrame {
     type State = PartialTextFrameState;
 
     fn create_state(&self) -> Self::State {
-        PartialTextFrameState(std::rc::Rc::clone(&self.rebuild))
+        PartialTextFrameState(
+            std::rc::Rc::clone(&self.rebuild),
+            std::rc::Rc::clone(&self.hit_test),
+        )
     }
 }
 
 impl ViewState<PartialTextFrame> for PartialTextFrameState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         *self.0.borrow_mut() = Some(ctx.rebuild_handle());
+        *self.1.borrow_mut() = ctx.hit_test_handle();
     }
 
     fn build(&self, view: &PartialTextFrame, _: &dyn BuildContext) -> impl IntoView {
@@ -668,6 +676,7 @@ fn parked_partial_text_geometry_is_unavailable_to_the_real_ime_store() {
     )
     .expect("runtime with a pull-model text store host");
     let pending = Rc::new(Cell::new(false));
+    let hit_test = Rc::new(RefCell::new(None));
     let rebuild = Rc::new(RefCell::new(None));
     let store = Rc::new(RefCell::new(None));
     let grant = Rc::new(RefCell::new(None));
@@ -677,6 +686,7 @@ fn parked_partial_text_geometry_is_unavailable_to_the_real_ime_store() {
         .attach_root_widget_with_size(
             &PartialTextFrame {
                 pending: Rc::clone(&pending),
+                hit_test: Rc::clone(&hit_test),
                 pending_sizing: flui_painting::TextSizing::exact([(
                     TextSizeRequest {
                         size: TextSize::new(16.0).expect("authored editable size"),
@@ -708,6 +718,19 @@ fn parked_partial_text_geometry_is_unavailable_to_the_real_ime_store() {
     let focused = native_store_host
         .focused_store()
         .expect("actual mounted editable store");
+    let hit_test = hit_test
+        .borrow()
+        .as_ref()
+        .expect("actual lifecycle hit-test handle")
+        .clone();
+    let initial_hit =
+        runtime.enter(|_| hit_test.hit_test_at(flui_foundation::geometry::Offset::new(1.0, 1.0)));
+    assert!(
+        !initial_hit
+            .expect("complete presentation exposes its hit-test geometry")
+            .is_empty(),
+        "the mounted editable contributes real hit-test targets"
+    );
     let initial_caret = Rc::new(RefCell::new(None));
     let initial = Rc::clone(&initial_caret);
     assert_eq!(
@@ -724,6 +747,14 @@ fn parked_partial_text_geometry_is_unavailable_to_the_real_ime_store() {
         Ok(LockOutcome::Granted)
     );
     assert!(initial_caret.borrow().is_some());
+    let fallback_rect = flui_foundation::geometry::Rect::from_ltwh(-1000.0, -1000.0, 7.0, 11.0);
+    focus.set_rect(fallback_rect);
+    let initial_focus_rect = runtime.enter(|_| focus.rect());
+    assert_ne!(
+        initial_focus_rect, fallback_rect,
+        "a mounted focus provider exposes actual committed geometry"
+    );
+    assert!(initial_focus_rect.width() > 0.0 && initial_focus_rect.height() > 0.0);
     *store.borrow_mut() = Some(focused);
     let pending_reports = Arc::new(AtomicUsize::new(0));
     let reports = Arc::clone(&pending_reports);
@@ -773,11 +804,39 @@ fn parked_partial_text_geometry_is_unavailable_to_the_real_ime_store() {
     );
     assert_eq!(observed.bounds, Err(TextStoreError::NoLayout));
     assert_eq!(observed.index, Err(TextStoreError::NoLayout));
+    assert_eq!(
+        runtime.enter(|_| focus.rect()),
+        fallback_rect,
+        "parked traversal must preserve the caller's fallback instead of reading partial layout"
+    );
+    let unavailable_hit =
+        runtime.enter(|_| hit_test.hit_test_at(flui_foundation::geometry::Offset::new(1.0, 1.0)));
+    assert!(
+        matches!(
+            unavailable_hit,
+            Err(flui_interaction::InteractionDispatchError::TreeBusy)
+        ),
+        "a lifecycle hit-test handle must refuse partially updated geometry while text is parked: {unavailable_hit:?}"
+    );
 
     pending.set(false);
     handle.schedule(flui_foundation::RebuildReason::StateChange);
     assert!(pump(&mut runtime, &mut sink).presented());
     let recovered = Rc::new(RefCell::new(None));
+    let restored_focus_rect = runtime.enter(|_| focus.rect());
+    assert_ne!(
+        restored_focus_rect, fallback_rect,
+        "replacement completion restores actual focus geometry"
+    );
+    assert!(restored_focus_rect.width() > 0.0 && restored_focus_rect.height() > 0.0);
+    let recovered_hit =
+        runtime.enter(|_| hit_test.hit_test_at(flui_foundation::geometry::Offset::new(1.0, 1.0)));
+    assert!(
+        !recovered_hit
+            .expect("replacement layout restores hit-test geometry")
+            .is_empty(),
+        "repair restores the actual mounted target"
+    );
     let result = Rc::clone(&recovered);
     let focused = store.borrow().as_ref().expect("live focused store").clone();
     assert_eq!(
@@ -1754,6 +1813,148 @@ impl ViewState<PreparedSibling> for PreparedSiblingState {
     }
 }
 
+fn a_sibling_animation_admission_replaces_ready_text_before_geometry_publication() {
+    use flui_foundation::Listenable as _;
+    use flui_runtime::ui_runtime::TextSizingSettlement;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    let mut clock = flui_foundation::ManualClock::new();
+    let (mut runtime, _) = prepared_runtime(&clock);
+    let size = Rc::new(Cell::new(20.0));
+    let rebuild = Rc::new(RefCell::new(None));
+    let post_frame = Rc::new(RefCell::new(None));
+    runtime
+        .attach_root_widget_with_size(
+            &PreparedTextProbe {
+                child: ReentrantPreparedText {
+                    size: Rc::clone(&size),
+                    reschedule: Rc::new(Cell::new(false)),
+                    rebuild: Rc::clone(&rebuild),
+                }
+                .boxed(),
+                rebuild: Rc::new(RefCell::new(None)),
+                post_frame: Rc::clone(&post_frame),
+            },
+            400.0,
+            400.0,
+        )
+        .expect("mount target text with its lifecycle rebuild handle");
+    let mut sink = PreparedTextSink::default();
+    assert!(runtime.pump(&mut clock, &mut sink).presented());
+    let sibling = runtime.assemble_presentation(crate::owner_publication::window());
+    let id = runtime.install_presentation(sibling);
+    let animation_slot = Rc::new(RefCell::new(None));
+    runtime
+        .attach_root_widget_with_size_to(
+            id,
+            &PreparedSibling {
+                animation: Rc::clone(&animation_slot),
+                post_frame: Rc::new(RefCell::new(None)),
+                focus: flui_interaction::routing::FocusNode::new(),
+            },
+            400.0,
+            400.0,
+        )
+        .expect("mount sibling with its actual presentation animation registry");
+    assert!(runtime.pump(&mut clock, &mut sink).presented());
+    let animation = animation_slot
+        .borrow()
+        .as_ref()
+        .expect("sibling lifecycle owns its animation")
+        .clone();
+    animation.forward().expect("start sibling animation");
+    let _ = runtime.pump(&mut clock, &mut sink);
+
+    let (_, mut writer) = flui_painting::TextSizing::captured();
+    let completed = Rc::new(Cell::new(0));
+    let completion = Rc::clone(&completed);
+    post_frame
+        .borrow()
+        .as_ref()
+        .expect("target completion handle")
+        .schedule(move |_| {
+            completion.set(completion.get() + 1);
+        })
+        .expect("completion admitted before original pending geometry");
+    assert!(runtime.install_captured_text_sizing_for(runtime.presentation_id(), writer.source()));
+    let _ = runtime.pump(&mut clock, &mut sink);
+    let mut pending = runtime.take_text_sizing_frontiers();
+    assert_eq!(pending.len(), 1);
+    let ready = pending.pop().expect("target's original numeric frontier");
+    assert!(
+        ready
+            .requests()
+            .iter()
+            .all(|request| request.size.value() == 20.0)
+    );
+    answer_prepared_frontier(&ready, &mut writer);
+    assert!(runtime.settle_text_sizing(ready, TextSizingSettlement::Ready));
+
+    let handle = rebuild
+        .borrow()
+        .as_ref()
+        .expect("target lifecycle rebuild handle")
+        .clone();
+    let changed = Rc::new(Cell::new(false));
+    let accepted = Rc::clone(&changed);
+    let listener = animation.add_listener(Rc::new(move || {
+        if !accepted.replace(true) {
+            size.set(22.75);
+            handle.schedule(flui_foundation::RebuildReason::StateChange);
+        }
+    }));
+    clock.advance(Duration::from_millis(20));
+    let _ = runtime.pump(&mut clock, &mut sink);
+    assert!(
+        changed.get(),
+        "sibling tick accepted the new target input in this pump"
+    );
+    assert_eq!(
+        completed.get(),
+        0,
+        "the obsolete ready geometry cannot complete after sibling input admission"
+    );
+    let mut replacement = runtime.take_text_sizing_frontiers();
+    // A fresh next-pump sample is allowed; completing the obsolete geometry is not.
+    if replacement.is_empty() {
+        let _ = runtime.pump(&mut clock, &mut sink);
+        replacement = runtime.take_text_sizing_frontiers();
+    }
+    assert_eq!(
+        replacement.len(),
+        1,
+        "a sibling's pre-phase admission must replace ready obsolete geometry before publication"
+    );
+    let work = replacement
+        .pop()
+        .expect("changed authored size requires its own exact answer");
+    assert_eq!(work.presentation(), runtime.presentation_id());
+    assert!(
+        work.requests()
+            .iter()
+            .all(|request| request.size.value() == 22.75)
+    );
+    animation.remove_listener(listener);
+    animation
+        .stop()
+        .expect("stop sibling after the observed admission");
+    assert!(
+        runtime.close_presentation_entered(id),
+        "close sibling before observing the target's one-sink output"
+    );
+    answer_prepared_frontier(&work, &mut writer);
+    assert!(runtime.settle_text_sizing(work, TextSizingSettlement::Ready));
+    let _ = runtime.pump(&mut clock, &mut sink);
+    sink.assert_text_size("replacement", 34.125);
+    assert_eq!(
+        completed.get(),
+        1,
+        "only repaired geometry discharges the retained completion"
+    );
+}
+
 fn a_waiting_presentation_does_not_suspend_sibling_animation_completion_or_ime() {
     use flui_animation::Animation as _;
     use flui_platform_api::text_store::{
@@ -1874,6 +2075,11 @@ fn registered_text_preparation_preserves_the_actual_presentation_attempt() {
             (
                 "a_same_queued_rebuild_admission_cancels_the_old_preparation_premise",
                 a_same_queued_rebuild_admission_cancels_the_old_preparation_premise as fn(),
+            ),
+            (
+                "a_sibling_animation_admission_replaces_ready_text_before_geometry_publication",
+                a_sibling_animation_admission_replaces_ready_text_before_geometry_publication
+                    as fn(),
             ),
             (
                 "a_dropped_receipt_retries_only_after_its_deadline_and_completes",

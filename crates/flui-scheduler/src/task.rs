@@ -290,6 +290,11 @@ impl std::fmt::Debug for TaskQueue {
 }
 
 impl TaskQueue {
+    /// Detach scheduler-owned work before terminal callback retirement.
+    pub(crate) fn detach_for_retirement(&self) -> impl Iterator<Item = Task> {
+        self.queue.take().into_iter().map(|entry| entry.0)
+    }
+
     /// Create a new task queue
     pub fn new() -> Self {
         Self {

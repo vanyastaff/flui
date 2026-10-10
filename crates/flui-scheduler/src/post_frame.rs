@@ -4,9 +4,8 @@
 //! [`UpdateScheduler`] delegates to it: the post-frame queue and async task
 //! store. A UI runtime (or a headless binding) owns
 //! exactly one and is the only strong owner; every frame entry point takes it
-//! by reference — [`UpdateScheduler::drive_frame`],
-//! [`UpdateScheduler::handle_begin_frame`], [`UpdateScheduler::end_frame`],
-//! [`UpdateScheduler::execute_frame`] — so no frame can poll or drain
+//! through [`OwnerFrame::drive_frame`] and [`OwnerFrame::pump_background`],
+//! so no turn can poll or drain
 //! "nothing".
 //!
 //! All post-frame callbacks share one `Rc` queue; eligible callbacks run in
@@ -94,6 +93,7 @@ pub(crate) struct PostFrameQueue {
     /// Set by retirement: no callback is admitted afterwards.
     closed: Cell<bool>,
     scopes: RefCell<Vec<Weak<PresentationScopeState>>>,
+    execution_failure: RefCell<Option<std::sync::Weak<crate::wake_delivery::FailureSignal>>>,
 }
 
 impl PostFrameQueue {
@@ -111,7 +111,22 @@ impl PostFrameQueue {
             active: RefCell::new(Vec::new()),
             closed: Cell::new(false),
             scopes: RefCell::new(Vec::new()),
+            execution_failure: RefCell::new(None),
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_unlocked(&self) -> bool {
+        let Self {
+            queue,
+            active,
+            closed: _,
+            scopes: _,
+            execution_failure,
+        } = self;
+        queue.try_borrow_mut().is_ok()
+            && active.try_borrow_mut().is_ok()
+            && execution_failure.try_borrow_mut().is_ok()
     }
 }
 
@@ -140,6 +155,17 @@ impl PostFrameStorage {
         *self = Self::Owned(Rc::downgrade(&lane));
         lane
     }
+
+    pub(crate) fn detach_unclaimed_for_retirement(&mut self) -> Vec<PostFrameEntry> {
+        let Self::Unclaimed(lane) = self else {
+            return Vec::new();
+        };
+        lane.closed.set(true);
+        let mut entries = lane.queue.take();
+        entries.extend(lane.active.take());
+        entries.sort_unstable_by_key(|entry| entry.id);
+        entries
+    }
 }
 
 /// The UI runtime's owner-local frame state: its post-frame queue and its async
@@ -153,11 +179,34 @@ impl PostFrameStorage {
 /// `Weak` handles ([`AsyncDriver`], [`PostFrameHandle`]).
 ///
 /// Dropping it [retires](Self::retire) whatever is still queued.
-#[doc(hidden)]
 pub struct OwnerFrame {
-    scheduler: WeakUpdateScheduler,
+    pub(crate) scheduler: WeakUpdateScheduler,
     post_frame: Rc<PostFrameQueue>,
     tasks: Rc<TaskStore>,
+    pub(crate) cleanup: Rc<OwnerCleanup>,
+}
+
+/// Shared cleanup metadata. Only the execution owner retains it persistently;
+/// presentation authorities borrow it weakly and cannot keep any queue alive.
+pub(crate) struct OwnerCleanup {
+    pub(crate) scheduler: WeakUpdateScheduler,
+    post_frame: Weak<PostFrameQueue>,
+    tasks: Weak<TaskStore>,
+    pub(crate) execution: crate::scheduler::execution::ExecutionState,
+}
+
+impl OwnerCleanup {
+    pub(crate) fn bind_owner_failure_signal(
+        &self,
+        signal: Option<std::sync::Weak<crate::wake_delivery::FailureSignal>>,
+    ) {
+        if let Some(lane) = self.post_frame.upgrade() {
+            lane.execution_failure.borrow_mut().clone_from(&signal);
+        }
+        if let Some(tasks) = self.tasks.upgrade() {
+            tasks.bind_execution_failure_signal(signal);
+        }
+    }
 }
 
 impl OwnerFrame {
@@ -194,10 +243,19 @@ impl OwnerFrame {
         }
         let waker = scheduler.frame_waker();
         tasks.set_request_frame(std::sync::Arc::new(move || waker.request_frame()));
+        let post_frame = scheduler.inner_post_frame_storage().borrow_mut().claim();
+        let tasks = Rc::new(tasks);
+        let cleanup = Rc::new(OwnerCleanup {
+            scheduler: scheduler.downgrade(),
+            post_frame: Rc::downgrade(&post_frame),
+            tasks: Rc::downgrade(&tasks),
+            execution: crate::scheduler::execution::ExecutionState::default(),
+        });
         Ok(Self {
             scheduler: scheduler.downgrade(),
-            post_frame: scheduler.inner_post_frame_storage().borrow_mut().claim(),
-            tasks: Rc::new(tasks),
+            post_frame,
+            tasks,
+            cleanup,
         })
     }
 
@@ -222,7 +280,11 @@ impl OwnerFrame {
     /// Retain it for that presentation's lifetime; its handles are weak.
     #[must_use]
     pub fn presentation_scope(&self) -> PresentationFrameScope {
-        PresentationFrameScope::mint(self.scheduler.clone(), &self.post_frame)
+        PresentationFrameScope::mint(
+            self.scheduler.clone(),
+            &self.post_frame,
+            Rc::downgrade(&self.cleanup),
+        )
     }
 
     /// Weak assembly authority for factories which create presentations later.
@@ -232,6 +294,7 @@ impl OwnerFrame {
         PresentationScopeFactory {
             scheduler: self.scheduler.clone(),
             lane: Rc::downgrade(&self.post_frame),
+            cleanup: Rc::downgrade(&self.cleanup),
         }
     }
 
@@ -239,8 +302,8 @@ impl OwnerFrame {
     /// number polled.
     ///
     /// The frame's mid-frame slot calls it from
-    /// [`UpdateScheduler::handle_begin_frame`]; a wake that runs no frame
-    /// calls it after [`UpdateScheduler::finish_async_pump`]. Never from
+    /// the internal begin-frame step; a background turn calls it after
+    /// consuming old demand and preparing runtime policy. Never from
     /// build, layout or paint. Tasks are polled in ascending id order; a task
     /// that completes or is cancelled is removed; a task woken during this
     /// call is polled next time — the driver never spins. Cost scales with
@@ -250,7 +313,7 @@ impl OwnerFrame {
     ///
     /// Propagates a task's poll panic after removing that task and keeping
     /// every unreached sibling indexed for the next poll.
-    pub fn poll_ready(&self) -> usize {
+    pub(crate) fn poll_ready(&self) -> usize {
         debug_assert!(
             self.scheduler.upgrade().is_none_or(
                 |scheduler| scheduler.phase() != crate::SchedulerPhase::PersistentCallbacks
@@ -279,29 +342,55 @@ impl OwnerFrame {
     /// calls it for an owner that did not.
     #[must_use = "the first destructor panic is returned for the owner to raise"]
     pub fn retire(&self) -> Option<RetirePanic> {
-        self.post_frame.closed.set(true);
-        let mut callbacks = self.post_frame.queue.take();
-        callbacks.extend(self.post_frame.active.take());
+        self.cleanup.retire()
+    }
+}
+
+impl OwnerCleanup {
+    pub(crate) fn retire(&self) -> Option<RetirePanic> {
+        self.with_cleanup_custody(|| self.retire_impl())
+    }
+
+    fn retire_impl(&self) -> Option<RetirePanic> {
+        self.execution.retire();
+        let mut callbacks = Vec::new();
+        if let Some(lane) = self.post_frame.upgrade() {
+            lane.closed.set(true);
+            callbacks = lane.queue.take();
+            callbacks.extend(lane.active.take());
+        }
         // Active entries are removed with swap_remove; neither collection
         // alone retains registration order after a partial frame dispatch.
         callbacks.sort_unstable_by_key(|entry| entry.id);
-        let tasks = self.tasks.detach_for_retirement();
+        let tasks = self
+            .tasks
+            .upgrade()
+            .map(|tasks| tasks.detach_for_retirement());
         let mut first: Option<RetirePanic> = None;
         for entry in callbacks {
-            if std::thread::panicking() {
+            if std::thread::panicking() || self.preserving_execution_failure() || first.is_some() {
                 std::mem::forget(entry);
                 continue;
             }
             if let Err(payload) = catch_unwind(AssertUnwindSafe(move || drop(entry))) {
+                self.record_execution_failure();
                 keep_first(&mut first, payload);
             }
         }
-        if let Some(payload) = tasks.retire() {
+        if let Some(tasks) = tasks
+            && let Some(payload) = tasks.retire_preserving_failure(
+                self.preserving_execution_failure() || first.is_some(),
+                &self.execution_failure_signal(),
+            )
+        {
+            self.record_execution_failure();
             keep_first(&mut first, payload);
         }
         first
     }
+}
 
+impl OwnerFrame {
     /// Whether this frame belongs to `scheduler`'s frames.
     pub(crate) fn belongs_to(&self, scheduler: &UpdateScheduler) -> bool {
         self.scheduler
@@ -389,12 +478,15 @@ fn keep_first(first: &mut Option<RetirePanic>, payload: RetirePanic) {
 
 impl Drop for OwnerFrame {
     fn drop(&mut self) {
-        let first = self.retire();
-        // Freed only after retirement: a destructor retirement runs cannot
-        // mint a second owner while this one still holds tasks.
-        if let Some(scheduler) = self.scheduler.upgrade() {
-            scheduler.release_owner_frame();
-        }
+        let first = self.cleanup.with_cleanup_custody(|| {
+            let mut first = self.cleanup.retire_impl();
+            // Freed only after retirement: a destructor retirement runs cannot
+            // mint a second owner while this one still holds tasks.
+            if let Some(payload) = self.cleanup.release_scheduler_after_retirement() {
+                keep_first(&mut first, payload);
+            }
+            first
+        });
         if let Some(payload) = first {
             if std::thread::panicking() {
                 flui_foundation::panic::retain_opaque_payload(payload);
@@ -463,6 +555,7 @@ pub struct PresentationFrameScope {
     scheduler: WeakUpdateScheduler,
     lane: Weak<PostFrameQueue>,
     state: Rc<PresentationScopeState>,
+    cleanup: Weak<OwnerCleanup>,
 }
 
 /// Weak owner-local authority to assemble a presentation completion scope.
@@ -472,6 +565,7 @@ pub struct PresentationFrameScope {
 pub struct PresentationScopeFactory {
     scheduler: WeakUpdateScheduler,
     lane: Weak<PostFrameQueue>,
+    cleanup: Weak<OwnerCleanup>,
 }
 
 impl PresentationScopeFactory {
@@ -485,7 +579,11 @@ impl PresentationScopeFactory {
         if self.scheduler.upgrade().is_none() {
             return Err(PresentationFrameError::Closed);
         }
-        Ok(PresentationFrameScope::mint(self.scheduler.clone(), &lane))
+        Ok(PresentationFrameScope::mint(
+            self.scheduler.clone(),
+            &lane,
+            self.cleanup.clone(),
+        ))
     }
 }
 
@@ -498,7 +596,11 @@ impl std::fmt::Debug for PresentationScopeFactory {
 }
 
 impl PresentationFrameScope {
-    fn mint(scheduler: WeakUpdateScheduler, lane: &Rc<PostFrameQueue>) -> Self {
+    fn mint(
+        scheduler: WeakUpdateScheduler,
+        lane: &Rc<PostFrameQueue>,
+        cleanup: Weak<OwnerCleanup>,
+    ) -> Self {
         let state = Rc::new(PresentationScopeState {
             closed: Cell::new(lane.closed.get()),
             phase: Cell::new(SegmentPhase::Idle),
@@ -511,6 +613,7 @@ impl PresentationFrameScope {
             scheduler,
             lane: Rc::downgrade(lane),
             state,
+            cleanup,
         }
     }
 
@@ -638,12 +741,22 @@ impl PresentationFrameScope {
     /// failure for the runtime's existing recovery scope to preserve.
     #[must_use = "preserve the first retirement failure in the owner's recovery scope"]
     pub fn close(&self) -> Option<RetirePanic> {
+        let Some(cleanup) = self.cleanup.upgrade() else {
+            self.withdraw();
+            return None;
+        };
+        cleanup.with_cleanup_custody(|| self.close_in_custody(&cleanup))
+    }
+
+    fn close_in_custody(&self, cleanup: &OwnerCleanup) -> Option<RetirePanic> {
         let retired = self.detach_callbacks();
         let mut first = None;
         for entry in retired {
-            if std::thread::panicking() {
+            if std::thread::panicking() || first.is_some() || cleanup.preserving_execution_failure()
+            {
                 std::mem::forget(entry);
             } else if let Err(payload) = catch_unwind(AssertUnwindSafe(move || drop(entry))) {
+                cleanup.record_execution_failure();
                 keep_first(&mut first, payload);
             }
         }
@@ -760,8 +873,9 @@ impl PostFrameHandle {
     /// one completion batch.
     ///
     /// The callback may capture `Rc`/`RefCell` state. On error (the owning
-    /// UI runtime is gone or retired) the callback is dropped without running —
-    /// provably: nothing retains it once this call returns `Err`.
+    /// UI runtime is gone or retired) the callback is never invoked. Healthy
+    /// rejection drops it normally; active owner failure custody or an existing
+    /// unwind retains its opaque capture envelope instead.
     ///
     /// Eligible registrations run in callback identity order. A blocked
     /// presentation never holds back a completed sibling or runtime callback.
@@ -769,21 +883,35 @@ impl PostFrameHandle {
         &self,
         callback: impl FnOnce(&FrameTiming) + 'static,
     ) -> Result<(), PostFrameScheduleError> {
-        let lane = self
-            .lane
-            .upgrade()
-            .filter(|lane| !lane.closed.get())
-            .ok_or(PostFrameScheduleError::Closed)?;
-        let scheduler = self
-            .scheduler
-            .upgrade()
-            .ok_or(PostFrameScheduleError::Closed)?;
+        let Some(lane) = self.lane.upgrade() else {
+            let mut recovery = flui_foundation::panic::PanicRecovery::new();
+            recovery.retire(callback);
+            recovery.finish();
+            return Err(PostFrameScheduleError::Closed);
+        };
+        if lane.closed.get() {
+            crate::scheduler::execution::retire_with_execution_custody(
+                &lane.execution_failure,
+                callback,
+            );
+            return Err(PostFrameScheduleError::Closed);
+        }
+        let Some(scheduler) = self.scheduler.upgrade() else {
+            crate::scheduler::execution::retire_with_execution_custody(
+                &lane.execution_failure,
+                callback,
+            );
+            return Err(PostFrameScheduleError::Closed);
+        };
         let mut successor_scope = None;
         let target = if let Some(scope) = &self.scope {
-            let scope = scope
-                .upgrade()
-                .filter(|scope| !scope.closed.get())
-                .ok_or(PostFrameScheduleError::Closed)?;
+            let Some(scope) = scope.upgrade().filter(|scope| !scope.closed.get()) else {
+                crate::scheduler::execution::retire_with_execution_custody(
+                    &lane.execution_failure,
+                    callback,
+                );
+                return Err(PostFrameScheduleError::Closed);
+            };
             let epoch = if scope.phase.get() == SegmentPhase::Running {
                 scope.current.borrow().clone()
             } else {
@@ -871,7 +999,17 @@ mod tests {
             .post_frame_handle()
             .schedule(|_| panic!("post-frame probe"))
             .expect("lane alive");
-        assert!(catch_unwind(AssertUnwindSafe(|| scheduler.execute_frame(&owner))).is_err());
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| owner
+                .drive_frame(
+                    crate::Instant::now(),
+                    crate::IdleDeadline::far_future(crate::Instant::now()),
+                    || {},
+                    || {}
+                )
+                .expect("live owner frame")))
+            .is_err()
+        );
         assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
         let fired = Rc::new(Cell::new(false));
         let callback = Rc::clone(&fired);
@@ -879,7 +1017,14 @@ mod tests {
             .post_frame_handle()
             .schedule(move |_| callback.set(true))
             .expect("gate remains usable");
-        scheduler.execute_frame(&owner);
+        owner
+            .drive_frame(
+                crate::Instant::now(),
+                crate::IdleDeadline::far_future(crate::Instant::now()),
+                || {},
+                || {},
+            )
+            .expect("live owner frame");
         assert!(fired.get());
     }
 
@@ -916,7 +1061,16 @@ mod tests {
             .expect("lane alive");
 
         let (panicked, _) = flui_testing::log_capture::capture(|| {
-            catch_unwind(AssertUnwindSafe(|| scheduler.execute_frame(&owner)))
+            catch_unwind(AssertUnwindSafe(|| {
+                owner
+                    .drive_frame(
+                        crate::Instant::now(),
+                        crate::IdleDeadline::far_future(crate::Instant::now()),
+                        || {},
+                        || {},
+                    )
+                    .expect("live owner frame");
+            }))
         });
         assert!(panicked.is_err());
         assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
@@ -924,8 +1078,16 @@ mod tests {
             log.lock().expect("log").is_empty(),
             "the poisoned frame stops delivery"
         );
-        let (_retry_frame, _) =
-            flui_testing::log_capture::capture(|| scheduler.execute_frame(&owner));
+        let (_retry_frame, _) = flui_testing::log_capture::capture(|| {
+            owner
+                .drive_frame(
+                    crate::Instant::now(),
+                    crate::IdleDeadline::far_future(crate::Instant::now()),
+                    || {},
+                    || {},
+                )
+                .expect("live owner frame");
+        });
         assert_eq!(
             *log.lock().expect("log"),
             [1, 2, 3],
@@ -940,7 +1102,7 @@ mod tests {
 
     /// Retirement drops queued owner-local callbacks once, unrun, keeps the
     /// first destructor panic, and closes the queue to later registrations.
-    fn retirement_drops_queued_callbacks_and_closes_the_queue() {
+    fn retirement_retains_failed_callback_tail_and_closes_the_queue() {
         struct Probe {
             drops: Rc<Cell<usize>>,
             panics: bool,
@@ -975,11 +1137,27 @@ mod tests {
             first.downcast_ref::<&str>().copied(),
             Some("callback capture probe")
         );
-        assert_eq!(drops.get(), 2, "both captures dropped once");
+        assert_eq!(
+            drops.get(),
+            1,
+            "the first failure retains the remaining opaque capture"
+        );
         assert!(!ran.get(), "a retired callback never runs");
         assert_eq!(handle.schedule(|_| {}), Err(PostFrameScheduleError::Closed));
-        scheduler.execute_frame(&owner);
-        assert!(!ran.get());
+        assert_eq!(
+            owner.drive_frame(
+                crate::Instant::now(),
+                crate::IdleDeadline::far_future(crate::Instant::now()),
+                || {},
+                || {}
+            ),
+            Err(crate::ExecutionError::Retired)
+        );
+        assert!(
+            !ran.get(),
+            "a refused frame must not revive retired callbacks"
+        );
+        assert_eq!(drops.get(), 1, "refusal must not retire the retained tail");
     }
 
     #[test]
@@ -996,8 +1174,8 @@ mod tests {
                     post_frame_panic_preserves_uninvoked_mixed_tail_before_reentrant_work as fn(),
                 ),
                 (
-                    "retirement_drops_queued_callbacks_and_closes_the_queue",
-                    retirement_drops_queued_callbacks_and_closes_the_queue as fn(),
+                    "retirement_retains_failed_callback_tail_and_closes_the_queue",
+                    retirement_retains_failed_callback_tail_and_closes_the_queue as fn(),
                 ),
             ],
         );

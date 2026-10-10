@@ -44,10 +44,15 @@ fn test_full_frame_lifecycle() {
     }));
 
     // Execute frame
-    scheduler.execute_frame(
-        &flui_scheduler::OwnerFrame::new(&scheduler)
-            .expect("the scheduler has no live owner frame"),
-    );
+    flui_scheduler::OwnerFrame::new(&scheduler)
+        .expect("the scheduler has no live owner frame")
+        .drive_frame(
+            flui_scheduler::Instant::now(),
+            flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
+            || {},
+            || {},
+        )
+        .expect("live owner frame");
 
     // Verify all callbacks were called
     assert_eq!(transient_called.load(Ordering::SeqCst), 1);
@@ -55,10 +60,15 @@ fn test_full_frame_lifecycle() {
     assert_eq!(post_frame_called.load(Ordering::SeqCst), 1);
 
     // Execute another frame - only persistent should be called again
-    scheduler.execute_frame(
-        &flui_scheduler::OwnerFrame::new(&scheduler)
-            .expect("the scheduler has no live owner frame"),
-    );
+    flui_scheduler::OwnerFrame::new(&scheduler)
+        .expect("the scheduler has no live owner frame")
+        .drive_frame(
+            flui_scheduler::Instant::now(),
+            flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
+            || {},
+            || {},
+        )
+        .expect("live owner frame");
 
     assert_eq!(transient_called.load(Ordering::SeqCst), 1); // Still 1
     assert_eq!(persistent_called.load(Ordering::SeqCst), 2); // Now 2

@@ -75,7 +75,7 @@ fn armed_completion_probe(
 }
 
 /// The invariants every site below must satisfy once a panic from a phase
-/// `drive_frame`/`execute_frame` owns has been caught: the original panic
+/// `OwnerFrame::drive_frame` owns has been caught: the original panic
 /// text (not a secondary one), phase/timestamp/`frame_scheduled` closed,
 /// the frame counted exactly once, and the pre-registered completion
 /// waiter woken exactly once by the abort.
@@ -161,7 +161,9 @@ fn transient_callback_panic_closes_the_frame_and_preserves_its_sibling() {
     }));
 
     let payload = catch_unwind(AssertUnwindSafe(|| {
-        scheduler.drive_frame(&owner, Instant::now(), far_deadline(), || {});
+        owner
+            .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+            .expect("live owner frame");
     }))
     .expect_err("the panic must propagate");
 
@@ -179,7 +181,9 @@ fn transient_callback_panic_closes_the_frame_and_preserves_its_sibling() {
         "not yet reached this frame"
     );
 
-    scheduler.drive_frame(&owner, Instant::now(), far_deadline(), || {});
+    owner
+        .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+        .expect("live owner frame");
     assert_eq!(
         sibling_ran.load(Ordering::SeqCst),
         1,
@@ -224,9 +228,16 @@ fn persistent_callback_panic_closes_the_frame_before_the_pipeline_slot_ever_open
     let pipeline_ran = Arc::new(AtomicUsize::new(0));
     let pipeline_ran_pipe = Arc::clone(&pipeline_ran);
     let payload = catch_unwind(AssertUnwindSafe(|| {
-        scheduler.drive_frame(&owner, Instant::now(), far_deadline(), move || {
-            pipeline_ran_pipe.fetch_add(1, Ordering::SeqCst);
-        });
+        owner
+            .drive_frame(
+                Instant::now(),
+                far_deadline(),
+                || {},
+                move || {
+                    pipeline_ran_pipe.fetch_add(1, Ordering::SeqCst);
+                },
+            )
+            .expect("live owner frame");
     }))
     .expect_err("the panic must propagate");
 
@@ -248,9 +259,16 @@ fn persistent_callback_panic_closes_the_frame_before_the_pipeline_slot_ever_open
     // Persistent callbacks cannot be unregistered by a panic: the SAME
     // callback runs again next frame, and this time it does not panic.
     let pipeline_ran_pipe = Arc::clone(&pipeline_ran);
-    scheduler.drive_frame(&owner, Instant::now(), far_deadline(), move || {
-        pipeline_ran_pipe.fetch_add(1, Ordering::SeqCst);
-    });
+    owner
+        .drive_frame(
+            Instant::now(),
+            far_deadline(),
+            || {},
+            move || {
+                pipeline_ran_pipe.fetch_add(1, Ordering::SeqCst);
+            },
+        )
+        .expect("live owner frame");
     assert_eq!(
         calls.load(Ordering::SeqCst),
         2,
@@ -318,7 +336,9 @@ fn async_future_poll_panic_closes_the_frame() {
     );
 
     let payload = catch_unwind(AssertUnwindSafe(|| {
-        scheduler.drive_frame(&owner, Instant::now(), far_deadline(), || {});
+        owner
+            .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+            .expect("live owner frame");
     }))
     .expect_err("the panic must propagate");
 
@@ -348,7 +368,9 @@ fn async_future_poll_panic_closes_the_frame() {
     // A later frame's async-driver step does not touch the removed slot,
     // and it polls the sibling normally -- exactly once, since one poll
     // (of the two `CountedThenReady` needs) happens per frame.
-    scheduler.drive_frame(&owner, Instant::now(), far_deadline(), || {});
+    owner
+        .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+        .expect("live owner frame");
     assert_eq!(
         owner.async_driver().pending_task_count(),
         pending_before + 1
@@ -374,7 +396,9 @@ fn idle_priority_work_and_post_frame_callbacks_are_not_starved_after_a_panic_rec
     scheduler.schedule_frame_callback(Box::new(|_| panic!("idle-starvation probe")));
 
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        scheduler.drive_frame(&owner, Instant::now(), far_deadline(), || {});
+        owner
+            .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+            .expect("live owner frame");
     }));
 
     let idle_ran = Arc::new(AtomicUsize::new(0));
@@ -388,7 +412,9 @@ fn idle_priority_work_and_post_frame_callbacks_are_not_starved_after_a_panic_rec
         post_frame_ran_cb.fetch_add(1, Ordering::SeqCst);
     }));
 
-    scheduler.drive_frame(&owner, Instant::now(), far_deadline(), || {});
+    owner
+        .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+        .expect("live owner frame");
 
     assert_eq!(
         idle_ran.load(Ordering::SeqCst),
@@ -418,7 +444,9 @@ fn a_post_frame_callback_panic_still_resolves_completed_not_aborted() {
     scheduler.add_post_frame_callback(Box::new(|_timing| panic!("post-frame probe")));
 
     let payload = catch_unwind(AssertUnwindSafe(|| {
-        scheduler.drive_frame(&owner, Instant::now(), far_deadline(), || {});
+        owner
+            .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+            .expect("live owner frame");
     }))
     .expect_err("the post-frame callback's panic must still propagate");
 
@@ -455,7 +483,7 @@ impl Wake for PanicWaker {
     }
 }
 
-/// `drive_frame_impl`'s `Err` arm calls `abort_frame`, which calls
+/// The complete owner's recovery path aborts the frame, which calls
 /// `notify_frame_completion` -- and a panicking waker there is a SECOND,
 /// unrelated panic on top of the pipeline's own. Without containing it,
 /// `abort_frame()` itself panics with the waker's payload before ever
@@ -471,9 +499,14 @@ fn the_original_pipeline_panic_survives_a_panicking_completion_waker_during_abor
     assert!(Pin::new(&mut future).poll(&mut cx).is_pending());
 
     let payload = catch_unwind(AssertUnwindSafe(|| {
-        scheduler.drive_frame(&owner, Instant::now(), far_deadline(), || {
-            panic!("probe frame panic")
-        })
+        owner
+            .drive_frame(
+                Instant::now(),
+                far_deadline(),
+                || {},
+                || panic!("probe frame panic"),
+            )
+            .expect("live owner frame")
     }))
     .expect_err("a panic must still escape drive_frame");
 

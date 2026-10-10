@@ -136,7 +136,9 @@ fn accepts(presentation: &PresentationState, saved: &SavedTextSegment) -> bool {
             .with_build_owner(|owner| owner.accepts_build_premise(&saved.build))
 }
 
-pub(crate) fn reconcile(presentation: &PresentationState, constraints: BoxConstraints) {
+/// Withdraw an obsolete retained attempt and report that its sampled premises
+/// can no longer be used. A caller after the pre-phase defers to a fresh sample.
+pub(crate) fn reconcile(presentation: &PresentationState, constraints: BoxConstraints) -> bool {
     presentation.pipeline().with_mut(|owner| {
         owner.drain_pending_dirty();
     });
@@ -151,6 +153,7 @@ pub(crate) fn reconcile(presentation: &PresentationState, constraints: BoxConstr
         presentation.pipeline().withdraw_layout();
         drop(retired);
     }
+    !compatible
 }
 
 pub(crate) fn can_run(presentation: &PresentationState) -> bool {

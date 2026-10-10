@@ -1079,7 +1079,6 @@ impl HeadlessBinding {
             motion_clock,
             vsync,
             tree,
-            scheduler,
             owner_frame,
             interaction_lane,
             last_layer_tree,
@@ -1112,78 +1111,80 @@ impl HeadlessBinding {
             // 5-8. THE shared frame ordering:
             //
             //      begin (transient + microtasks + ONE async-driver poll)
-            //   -> handle_draw_frame (persistent callbacks)
+            //   -> persistent callbacks
             //   -> the pipeline, below, in the persistent slot
             //   -> end_frame (post-frame callbacks, timing, notify)
             //   -> Idle
             //
-            // The desktop / android / wasm runners call the SAME `UpdateScheduler::drive_frame`
-            // on the production ui_runtime's own owned scheduler; this binding calls it on
-            // its binding-local scheduler. A post-frame callback therefore observes THIS
+            // The desktop / android / wasm runners call the SAME `OwnerFrame::drive_frame`
+            // on the production ui_runtime's frame owner; this binding calls it on
+            // its binding-local owner. A post-frame callback therefore observes THIS
             // frame's committed layout in both, which is what `HeroController` needs.
             //
             // The binding's owner-local tasks are polled by the scheduler's
             // begin frame, before `build_scope`, in its mid-frame slot.
             //
-            // `UpdateScheduler` is `Arc`-backed and `Clone`, so the handle taken here shares
-            // the callback queues with `self.scheduler` — cloning it merely releases
-            // the borrow on `self` for the pipeline closure.
-            let scheduler = scheduler.clone();
             let vsync_time = flui_scheduler::Instant::now();
-            // No `FrameClock` is wired into the headless driver (it
-            // doesn't exist yet — see `UpdateScheduler::drive_frame`'s
-            // doc); a deadline far in the future means Idle-priority
+            // This raw-owner driver has no presentation `FrameClock`;
+            // a deadline far in the future means Idle-priority
             // work is never deferred here, matching this binding's
             // behavior before `drive_frame` took a deadline.
             let idle_deadline = flui_scheduler::IdleDeadline::far_future(vsync_time);
-            scheduler.drive_frame(owner_frame, vsync_time, idle_deadline, || {
-                let (painted_layer_tree, report) = Self::run_pipeline(tree);
-                *last_frame_report = report;
-                *last_frame_painted = painted_layer_tree.is_some();
-                if let Some(layer_tree) = painted_layer_tree {
-                    *last_layer_tree = Some(layer_tree);
-                    *painted_frame_count = painted_frame_count.saturating_add(1);
-                }
+            owner_frame
+                .drive_frame(
+                    vsync_time,
+                    idle_deadline,
+                    || {},
+                    || {
+                        let (painted_layer_tree, report) = Self::run_pipeline(tree);
+                        *last_frame_report = report;
+                        *last_frame_painted = painted_layer_tree.is_some();
+                        if let Some(layer_tree) = painted_layer_tree {
+                            *last_layer_tree = Some(layer_tree);
+                            *painted_frame_count = painted_frame_count.saturating_add(1);
+                        }
 
-                // 7. Re-hit-test every stationary device against the
-                //    tree layout/paint that just committed above,
-                //    still inside this closure's `PersistentCallbacks`
-                //    slot — i.e. BEFORE `end_frame` drains post-frame
-                //    callbacks below, not after `drive_frame` returns.
-                //    Placement matters: production
-                //    (`UiRuntime::render_frame`,
-                //    `crates/flui-runtime/src/ui_runtime/`, invoked from
-                //    `crates/flui-app/src/app/runner.rs`) calls
-                //    `update_all_devices` from inside the SAME
-                //    `drive_frame` pipeline closure it runs its own
-                //    layout/paint step in, so any post-frame work an
-                //    enter/exit callback queues (e.g. a rebuild
-                //    handle) lands in THIS frame's post-frame phase —
-                //    matching the oracle, where
-                //    `_scheduleMouseTrackerUpdate` posts
-                //    `updateAllDevices` from
-                //    `_handlePersistentFrameCallback`, still inside
-                //    the persistent phase, ahead of the post-frame
-                //    queue. Running this after `drive_frame` returns
-                //    would defer that queued work to a LATER pump
-                //    instead. Unconditional and every frame; a
-                //    gesture-only binding has no tree to hit-test, so
-                //    this is a no-op there.
-                if let Some(tree_binding) = tree.as_ref() {
-                    let pipeline_owner = &tree_binding.pipeline_owner;
-                    gestures.mouse_tracker().update_all_devices(|position| {
-                        let mut result = HitTestResult::new();
-                        pipeline_owner.with(|owner| owner.hit_test(position, &mut result));
-                        result
-                    });
-                }
-            });
+                        // 7. Re-hit-test every stationary device against the
+                        //    tree layout/paint that just committed above,
+                        //    still inside this closure's `PersistentCallbacks`
+                        //    slot — i.e. BEFORE `end_frame` drains post-frame
+                        //    callbacks below, not after `drive_frame` returns.
+                        //    Placement matters: production
+                        //    (`UiRuntime::render_frame`,
+                        //    `crates/flui-runtime/src/ui_runtime/`, invoked from
+                        //    `crates/flui-app/src/app/runner.rs`) calls
+                        //    `update_all_devices` from inside the SAME
+                        //    `drive_frame` pipeline closure it runs its own
+                        //    layout/paint step in, so any post-frame work an
+                        //    enter/exit callback queues (e.g. a rebuild
+                        //    handle) lands in THIS frame's post-frame phase —
+                        //    matching the oracle, where
+                        //    `_scheduleMouseTrackerUpdate` posts
+                        //    `updateAllDevices` from
+                        //    `_handlePersistentFrameCallback`, still inside
+                        //    the persistent phase, ahead of the post-frame
+                        //    queue. Running this after `drive_frame` returns
+                        //    would defer that queued work to a LATER pump
+                        //    instead. Unconditional and every frame; a
+                        //    gesture-only binding has no tree to hit-test, so
+                        //    this is a no-op there.
+                        if let Some(tree_binding) = tree.as_ref() {
+                            let pipeline_owner = &tree_binding.pipeline_owner;
+                            gestures.mouse_tracker().update_all_devices(|position| {
+                                let mut result = HitTestResult::new();
+                                pipeline_owner.with(|owner| owner.hit_test(position, &mut result));
+                                result
+                            });
+                        }
+                    },
+                )
+                .expect("BUG: the headless binding's live owner must admit its frame");
         });
     }
 
     /// The pipeline step: build → layout (with the build-during-layout fixpoint)
     /// → paint, plus the lazy-sliver service pass. Runs inside
-    /// [`UpdateScheduler::drive_frame`]'s persistent slot.
+    /// [`OwnerFrame::drive_frame`]'s persistent slot.
     ///
     /// Returns the composited [`LayerTree`] this frame produced — `None` for a
     /// gesture-only binding, and `None` when nothing was dirty enough to

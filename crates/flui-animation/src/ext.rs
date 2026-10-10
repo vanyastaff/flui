@@ -13,11 +13,9 @@ use std::rc::Rc;
 ///
 /// ```
 /// use flui_animation::{AnimatableExt, Animation, AnimationController, FloatTween};
-/// use flui_scheduler::UpdateScheduler;
 /// use std::rc::Rc;
 /// use std::time::Duration;
 ///
-/// let scheduler = UpdateScheduler::new();
 /// let controller = Rc::new(AnimationController::builder(Duration::from_millis(300)).build());
 /// let animation = FloatTween::new(0.0, 100.0).animate(controller as Rc<dyn Animation<f64>>);
 /// assert_eq!(animation.value(), 0.0);

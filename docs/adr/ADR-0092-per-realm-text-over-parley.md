@@ -1,6 +1,6 @@
 # ADR-0092: Text shapes per UI runtime over Parley and crosses the display list as neutral shaped runs
 
-- **Superseded-by:** [ADR-0182](ADR-0182-explicit-numeric-text-sizing.md) for
+- **Superseded-by:** [ADR-0183](ADR-0183-explicit-numeric-text-sizing.md) for
   raw query capability boundaries and fallible text-loan acquisition (§10, 3a).
   Runtime ownership of reusable shaping resources remains in force.
 - **Status:** Accepted. Every gate (§8) is met: gate 1 by a prototype on 2026-09-26, gates 2, 6
@@ -552,7 +552,7 @@ that wires what it adds.
      scoped borrow, taken from `&mut` context, so it cannot hold two loans or lay out a child
      while that loan remains in use through the same typed context.
    - **Raw capability and acquisition supersession:**
-     [ADR-0182](ADR-0182-explicit-numeric-text-sizing.md) replaces the independent
+     [ADR-0183](ADR-0183-explicit-numeric-text-sizing.md) replaces the independent
      source/child-query channels with complete mutable intrinsic, dry-layout and
      dry-baseline contexts. Erased layout lends through `text(&mut self)` without
      source extraction. Both raw and typed hooks therefore borrow one capability

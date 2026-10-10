@@ -1708,7 +1708,14 @@ mod tests {
                 "dispose" => state.dispose(),
                 _ => unreachable!(),
             }
-            scheduler.execute_frame(&owner_frame);
+            owner_frame
+                .drive_frame(
+                    flui_scheduler::Instant::now(),
+                    flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
+                    || {},
+                    || {},
+                )
+                .expect("live owner frame");
             assert_eq!(
                 calls.get(),
                 if change == "replace" { 2 } else { 0 },

@@ -21,7 +21,7 @@ pub(crate) fn a_cross_thread_frame_request_reaches_the_ui_runtimes_platform_wake
     });
 
     let (window, _calls) = counting_window(1);
-    let ui_runtime = UiRuntime::new(
+    let mut ui_runtime = UiRuntime::new(
         window,
         1.0,
         crate::runtime_services::RuntimeHostServices::new(
@@ -35,7 +35,7 @@ pub(crate) fn a_cross_thread_frame_request_reaches_the_ui_runtimes_platform_wake
     .expect("ui_runtime constructs");
     // Clear the `frame_scheduled` latch so the request below is a real
     // false->true transition — the only edge the hook fires on.
-    ui_runtime.scheduler().finish_async_pump();
+    ui_runtime.pump_background();
     let before = wakes.load(AtomicOrdering::Relaxed);
 
     let waker = ui_runtime.scheduler().frame_waker();
@@ -56,7 +56,7 @@ fn counting_ui_runtime(id: u64) -> (UiRuntime, Arc<AtomicU32>) {
         wake_counter.fetch_add(1, AtomicOrdering::Relaxed);
     });
     let (window, _calls) = counting_window(id);
-    let ui_runtime = UiRuntime::new(
+    let mut ui_runtime = UiRuntime::new(
         window,
         1.0,
         crate::runtime_services::RuntimeHostServices::new(
@@ -68,7 +68,7 @@ fn counting_ui_runtime(id: u64) -> (UiRuntime, Arc<AtomicU32>) {
         ),
     )
     .expect("ui_runtime constructs");
-    ui_runtime.scheduler().finish_async_pump();
+    ui_runtime.pump_background();
     (ui_runtime, wakes)
 }
 
@@ -76,7 +76,7 @@ fn counting_ui_runtime(id: u64) -> (UiRuntime, Arc<AtomicU32>) {
 /// worker wakes its own UI runtime once per frame demand, never a sibling, and
 /// does nothing once its UI runtime is gone.
 pub(crate) fn frame_waker_wakes_the_ui_runtime_from_a_worker() {
-    let (ui_runtime, wakes) = counting_ui_runtime(1);
+    let (mut ui_runtime, wakes) = counting_ui_runtime(1);
     let (sibling, sibling_wakes) = counting_ui_runtime(2);
     let sibling_before = sibling_wakes.load(AtomicOrdering::Relaxed);
 
@@ -97,7 +97,7 @@ pub(crate) fn frame_waker_wakes_the_ui_runtime_from_a_worker() {
     );
     assert!(ui_runtime.scheduler().is_frame_scheduled());
 
-    ui_runtime.scheduler().finish_async_pump();
+    ui_runtime.pump_background();
     let worker_waker = waker.clone();
     std::thread::spawn(move || worker_waker.request_frame())
         .join()
@@ -109,7 +109,7 @@ pub(crate) fn frame_waker_wakes_the_ui_runtime_from_a_worker() {
     );
 
     // Cleared, so a waker that kept the scheduler alive would wake it again.
-    ui_runtime.scheduler().finish_async_pump();
+    ui_runtime.pump_background();
     drop(ui_runtime);
     std::thread::spawn(move || waker.request_frame())
         .join()

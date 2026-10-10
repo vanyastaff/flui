@@ -38,11 +38,9 @@ fn update_curve_direction(direction: &RefCell<Option<AnimationStatus>>, status: 
 /// ```
 /// use flui_animation::{AnimationController, CurvedAnimation};
 /// use flui_animation::Curves;
-/// use flui_scheduler::UpdateScheduler;
 /// use std::rc::Rc;
 /// use std::time::Duration;
 ///
-/// let scheduler = UpdateScheduler::new();
 /// let controller = Rc::new(AnimationController::builder(Duration::from_millis(300)).build());
 ///
 /// let curved = CurvedAnimation::new(controller, Curves::EaseInOut);

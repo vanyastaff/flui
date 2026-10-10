@@ -16,7 +16,7 @@ recorded so far.
 
 Default typography preserves authored font sizes, weights, spacing and line
 height. Its sizing intent selects a growth profile independently of those values
-(ADR-0182). This is FLUI's projection of its presets, not a Material scaling
+(ADR-0183). This is FLUI's projection of its presets, not a Material scaling
 formula or a promise of native custom-font identity.
 
 | Preset | Numeric growth profile |

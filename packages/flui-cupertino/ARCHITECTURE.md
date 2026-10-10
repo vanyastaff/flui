@@ -9,7 +9,7 @@ and callbacks are owner-local; the package does not own a reactive graph.
 
 Body and action styles use Body growth; small action uses Callout, tab labels
 Caption2, navigation title Headline, large navigation title LargeTitle, and
-picker/date-time picker Title2 (ADR-0182). Navigation action delegates to the
+picker/date-time picker Title2 (ADR-0183). Navigation action delegates to the
 action style. These profiles resolve numeric size only; authored family,
 weight, spacing and height remain intact.
 

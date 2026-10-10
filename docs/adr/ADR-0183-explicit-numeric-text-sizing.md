@@ -1,4 +1,4 @@
-# ADR-0182: Explicit numeric text sizing
+# ADR-0183: Explicit numeric text sizing
 
 - **Status:** Accepted
 - **Date:** 2026-10-09
@@ -106,7 +106,12 @@ handle. An incomplete segment withholds its callbacks while healthy scopes and
 ordinary host-frame completion remain deliverable. Between segments, scheduling
 through a retained handle creates completion demand without dirtying a clean
 widget tree or submitting another scene. Presentation withdrawal closes callback
-admission before capture retirement. The runtime's
+admission before capture retirement. Standalone presentation retirement borrows
+the owner's weak cleanup authority and establishes the same execution exclusion
+and live first-failure custody as owner retirement. A caught nested failure
+retains remaining opaque captures while healthy sibling debt stays deliverable.
+The cleanup metadata retains no scheduler or queue; the runtime owner is its
+sole persistent strong owner. The runtime's
 `native_text_preparation_does_not_complete_the_presentation` and
 `clean_presentation_completion_keeps_the_tree_clean` pin these consumer paths.
 
@@ -123,7 +128,18 @@ and wake delivery, including an already-pending element. Moving retained work
 between queues does not. Dirty-channel requests are validated and applied before
 compatibility is checked. Source, constraints, DPR or premise replacement
 withdraws old geometry and cancels the obsolete segment. Exhausted witnesses
-permanently refuse compatibility rather than wrap.
+permanently refuse compatibility rather than wrap. Compatibility is rechecked
+immediately before the segment, after pre-phase and earlier sibling callbacks.
+If those callbacks invalidate a retained sample, its replacement waits for a
+fresh next-pump tick rather than combining old animation time with new input.
+Accepted completion debt remains with the replacement.
+
+IME, lifecycle hit-test and focus rectangle readers use only published complete
+layout. A parked or competing checkout produces the reader's existing unavailable
+result instead of exposing partially changed nodes. Focus keeps its explicit
+fallback rectangle; repair restores live geometry. The public
+`parked_text_preparation_does_not_publish_partial_ime_geometry` exercises these
+three readers through the actual mounted editable and later failing paragraph.
 
 The composition root receives an owned numeric frontier after Runtime checkout
 returns. Its native capsule and sole admission writer remain App-owned;

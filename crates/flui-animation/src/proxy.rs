@@ -21,11 +21,9 @@ use std::rc::Rc;
 ///
 /// ```
 /// use flui_animation::{ProxyAnimation, AnimationController, Animation};
-/// use flui_scheduler::UpdateScheduler;
 /// use std::rc::Rc;
 /// use std::time::Duration;
 ///
-/// let scheduler = UpdateScheduler::new();
 /// let controller1 = Rc::new(AnimationController::builder(Duration::from_millis(300)).build());
 ///
 /// let proxy = ProxyAnimation::new(controller1.clone() as Rc<dyn Animation<f64>>);

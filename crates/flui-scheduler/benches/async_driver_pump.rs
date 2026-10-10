@@ -1,4 +1,4 @@
-//! Criterion benchmark: `AsyncDriver::poll_ready`'s per-pump cost, before vs.
+//! Criterion benchmark: `OwnerFrame::pump_background`'s per-turn cost, before vs.
 //! after issue #1056's ready-index rewrite (separating discovery from task
 //! ownership so an idle pump drains an index instead of scanning every
 //! resident task).
@@ -53,11 +53,14 @@ fn empty_pump(c: &mut Criterion) {
         // once (spawn seeds `ready`), making all of them dormant. Every
         // measured iteration after this one polls zero tasks — nothing to
         // re-arm between iterations for this group.
-        assert_eq!(frame.poll_ready(), dormant);
+        assert_eq!(
+            frame.pump_background(|| {}).expect("live owner turn"),
+            dormant
+        );
         assert_eq!(frame.ready_task_count(), 0);
 
         group.bench_with_input(BenchmarkId::from_parameter(dormant), &frame, |b, frame| {
-            b.iter(|| black_box(frame.poll_ready()));
+            b.iter(|| black_box(frame.pump_background(|| {}).expect("live owner turn")));
         });
 
         drop(tokens);
@@ -88,10 +91,13 @@ fn ready_heavy(c: &mut Criterion) {
             }))));
         }
         // Untimed warm-up pump, excluded from the measured distribution.
-        assert_eq!(frame.poll_ready(), ready);
+        assert_eq!(
+            frame.pump_background(|| {}).expect("live owner turn"),
+            ready
+        );
 
         group.bench_with_input(BenchmarkId::from_parameter(ready), &frame, |b, frame| {
-            b.iter(|| black_box(frame.poll_ready()));
+            b.iter(|| black_box(frame.pump_background(|| {}).expect("live owner turn")));
         });
 
         drop(tokens);

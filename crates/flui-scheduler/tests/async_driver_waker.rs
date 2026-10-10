@@ -35,7 +35,7 @@ fn retained_waker_lifecycle(eager: bool, complete: bool) {
             .expect("pending eager task")
     } else {
         let token = driver.spawn_local(future);
-        assert_eq!(frame.poll_ready(), 1);
+        assert_eq!(frame.pump_background(|| {}).expect("live owner turn"), 1);
         token
     };
     let first = observed.lock().expect("waker observations")[0].clone();
@@ -44,7 +44,7 @@ fn retained_waker_lifecycle(eager: bool, complete: bool) {
     first.wake_by_ref();
     clone.wake_by_ref();
     assert_eq!(requests.load(Ordering::Relaxed), before + 1);
-    assert_eq!(frame.poll_ready(), 1);
+    assert_eq!(frame.pump_background(|| {}).expect("live owner turn"), 1);
     let second = observed.lock().expect("waker observations")[1].clone();
     assert!(
         first.will_wake(&second),
@@ -54,7 +54,7 @@ fn retained_waker_lifecycle(eager: bool, complete: bool) {
     if complete {
         finish.store(true, Ordering::Release);
         second.wake_by_ref();
-        assert_eq!(frame.poll_ready(), 1);
+        assert_eq!(frame.pump_background(|| {}).expect("live owner turn"), 1);
     } else {
         token.cancel();
     }
@@ -69,12 +69,12 @@ fn retained_waker_lifecycle(eager: bool, complete: bool) {
         "retired task must not request frames"
     );
     assert_eq!(frame.ready_task_count(), 0);
-    assert_eq!(frame.poll_ready(), 0);
+    assert_eq!(frame.pump_background(|| {}).expect("live owner turn"), 0);
 
     // Retirement must not poison the next task or let old handles target it.
     let next = driver.spawn_local(Box::pin(async {}));
     first.wake_by_ref();
-    assert_eq!(frame.poll_ready(), 1);
+    assert_eq!(frame.pump_background(|| {}).expect("live owner turn"), 1);
     assert_eq!(driver.pending_task_count(), 0);
     drop(next);
     drop(token);
@@ -121,7 +121,7 @@ fn pending_waker_does_not_retain_driver() {
         *task_observed.lock().expect("waker observation") = Some(cx.waker().clone());
         Poll::<()>::Pending
     })));
-    assert_eq!(frame.poll_ready(), 1);
+    assert_eq!(frame.pump_background(|| {}).expect("live owner turn"), 1);
     let waker = observed
         .lock()
         .expect("waker observation")

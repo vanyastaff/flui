@@ -57,7 +57,7 @@ trait depends on `flui-platform-api` instead.
 native capsules remain in the backend and app composition root. Foundation
 requests identify validated authored size and growth profile, and replies carry
 only validated logical sizes. A retained capsule does not authorize publication
-after presentation or capture replacement (ADR-0182).
+after presentation or capture replacement (ADR-0183).
 
 Android copies `DisplayMetrics` before applying the native SP converter and
 dividing by the captured density. UIKit retains the complete trait collection

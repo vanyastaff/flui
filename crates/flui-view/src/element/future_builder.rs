@@ -454,7 +454,7 @@ mod tests {
     }
 
     /// Drives the exact steps a binding's frame drives, in the same order:
-    /// `OwnerFrame::poll_ready()` (the shared async step) then
+    /// `OwnerFrame::pump_background()` (the complete background turn) then
     /// `BuildOwner::build_scope()`. Not a bespoke loop — it is `pump_frame`'s
     /// body minus the parts (clock, gestures, pipeline) a `FutureBuilder` cannot
     /// observe. `flui-view` cannot depend on `flui-testing` (that would cycle).
@@ -494,7 +494,9 @@ mod tests {
 
         /// One frame, in the binding's order.
         fn frame(&mut self) {
-            self.owner_frame.poll_ready();
+            self.owner_frame
+                .pump_background(|| {})
+                .expect("live owner turn");
             self.owner.build_scope(&mut self.tree);
         }
     }

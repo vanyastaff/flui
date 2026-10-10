@@ -2,6 +2,7 @@
 
 - **Status:** Accepted (§2; the other sections are not decisions until adopted)
 - **Date:** 2026-10-06
+- **Superseded-by:** [ADR-0182](ADR-0182-complete-owner-execution.md) for scheduler execution authority and frame-entry API.
 - **Superseded-by:** [ADR-0175](ADR-0175-owner-local-scheduling-and-animation.md)
   for the transitional scheduler ownership and split post-frame queues;
   [ADR-0178](ADR-0178-notification-first-failure-custody.md) for listener failure custody.

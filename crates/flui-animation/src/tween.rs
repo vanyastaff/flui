@@ -22,11 +22,9 @@ use std::rc::Rc;
 /// ```
 /// use flui_animation::{AnimationController, TweenAnimation, Animation};
 /// use flui_animation::FloatTween;
-/// use flui_scheduler::UpdateScheduler;
 /// use std::rc::Rc;
 /// use std::time::Duration;
 ///
-/// let scheduler = UpdateScheduler::new();
 /// let controller = Rc::new(AnimationController::builder(Duration::from_millis(300)).build());
 ///
 /// let tween = FloatTween::new(0.0, 100.0);

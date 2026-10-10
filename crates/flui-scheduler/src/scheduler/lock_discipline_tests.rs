@@ -25,7 +25,7 @@ use super::*;
 /// inside its own invocation and asserts each one is free. Every callback
 /// family drains, clones, or snapshots its queue before invoking user code
 /// -- see `handle_begin_frame`, `handle_draw_frame`, `end_frame_impl`,
-/// `execute_idle_callbacks`, `flush_microtasks`,
+/// `flush_microtasks`,
 /// `handle_app_lifecycle_state_change`, `report_timings`, and
 /// `request_frame_impl`. This is the oracle proving that discipline holds
 /// at the actual call site, not just in the source.
@@ -70,7 +70,17 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
         binding,
         task_queue,
         owner_frame_claimed: _,
+        execution_release,
+        execution_failure,
     } = &*scheduler.inner;
+    assert!(
+        execution_release.try_borrow_mut().is_ok(),
+        "terminal release custody is not borrowed through user code"
+    );
+    assert!(
+        execution_failure.try_borrow_mut().is_ok(),
+        "execution failure receipt is not borrowed through user code"
+    );
 
     let FrameState {
         current_frame,
@@ -78,7 +88,6 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
         budget,
         frame_count: _,
         janky_frame_count: _,
-        warm_up_done: _,
         idle_deadline,
         completion_waiters,
         frame_thread,
@@ -129,7 +138,6 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
         persistent,
         post_frame,
         microtasks,
-        idle,
         lifecycle_listeners,
     } = callbacks;
     assert!(
@@ -144,13 +152,15 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
         post_frame.try_borrow_mut().is_ok(),
         "post_frame is locked during a callback"
     );
+    if let Some(lane) = post_frame.borrow().lane() {
+        assert!(
+            lane.is_unlocked(),
+            "post-frame lane state is borrowed during a callback"
+        );
+    }
     assert!(
         microtasks.try_borrow_mut().is_ok(),
         "microtasks is locked during a callback"
-    );
-    assert!(
-        idle.try_borrow_mut().is_ok(),
-        "idle is locked during a callback"
     );
     assert!(
         lifecycle_listeners.try_borrow_mut().is_ok(),
@@ -162,8 +172,6 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
         timings_callbacks,
         pending_timings,
         last_timings_report,
-        performance_mode_requests: _,
-        current_performance_mode,
     } = binding;
     assert!(
         timings_callbacks.try_borrow_mut().is_ok(),
@@ -176,10 +184,6 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
     assert!(
         last_timings_report.try_borrow_mut().is_ok(),
         "last_timings_report is locked during a callback"
-    );
-    assert!(
-        current_performance_mode.try_borrow_mut().is_ok(),
-        "current_performance_mode is locked during a callback"
     );
     assert!(
         on_frame_scheduled.try_lock().is_some(),
@@ -206,10 +210,21 @@ fn transient_callback_runs_with_no_scheduler_lock_held() {
         let _prev = std::mem::replace(&mut *observed_for_callback.lock(), probe.current_frame());
     }));
 
-    let frame_id = scheduler.handle_begin_frame(
-        Instant::now(),
-        &crate::OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame"),
-    );
+    let owner = crate::OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+    let now = Instant::now();
+    let frame_id = owner
+        .drive_frame(
+            now,
+            super::IdleDeadline::far_future(now),
+            || {},
+            || {
+                scheduler
+                    .current_frame()
+                    .expect("pipeline has an open frame")
+                    .id
+            },
+        )
+        .expect("live owner frame");
 
     assert_eq!(
         observed.lock().map(|timing| timing.id),
@@ -266,9 +281,15 @@ fn completion_waker_runs_with_no_scheduler_lock_held() {
     let mut cx = Context::from_waker(&waker);
     assert!(Pin::new(&mut future).poll(&mut cx).is_pending());
 
-    scheduler.execute_frame(
-        &crate::OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame"),
-    );
+    crate::OwnerFrame::new(&scheduler)
+        .expect("the scheduler has no live owner frame")
+        .drive_frame(
+            crate::Instant::now(),
+            crate::IdleDeadline::far_future(crate::Instant::now()),
+            || {},
+            || {},
+        )
+        .expect("live owner frame");
 
     assert!(
         ran.load(Ordering::Acquire),

@@ -39,7 +39,7 @@ use `try_with_layout`, so releasing a checkout cannot expose partially changed
 render nodes. Document editing remains independent. The runtime's public
 `parked_text_preparation_does_not_publish_partial_ime_geometry` exercises a real
 focused editable, later sibling failure, deferred edit and replacement layout
-([ADR-0182](../../docs/adr/ADR-0182-explicit-numeric-text-sizing.md)).
+([ADR-0183](../../docs/adr/ADR-0183-explicit-numeric-text-sizing.md)).
 
 ### Scroll notification failure cannot starve render invalidation
 

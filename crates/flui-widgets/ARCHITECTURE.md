@@ -2,6 +2,12 @@
 
 ## Inherited presentation data
 
+Focus traversal's lazy rectangle provider reads only published complete layout.
+An incomplete paragraph or competing checkout leaves the node's explicit fallback
+rectangle available; replacement completion restores its live render geometry.
+The runtime's `parked_text_preparation_does_not_publish_partial_ime_geometry`
+also pins the focus and lifecycle hit-test paths through an actual editable.
+
 `MediaQuery` lives in the lower `media_query` module, below text, interaction and
 application composition. Consumers import its crate-root types; the `app` module
 owns the shell and `SafeArea`, not the source of inherited presentation data.

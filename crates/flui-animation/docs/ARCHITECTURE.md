@@ -18,9 +18,7 @@ flui-widgets: animated / transitions
                    │
                    ▼
 flui-animation: Animation<T> / AnimationController / Curve / Simulation
-                   │
-                   ▼
-flui-scheduler: owner frame scheduling
+               DrivenController / Vsync / MotionClock
 ```
 
 ## Module Structure
@@ -283,7 +281,7 @@ fact).
 | `stop`/`set_value` (`stop_running`) | — | `active_run`, canceled |
 | `reset` (`stop_running`) | — | `active_run`, canceled |
 | `dispose` | — | `active_run`, canceled |
-| last controller kernel drop | — | the remaining active run is canceled; no scheduler callback retains a controller cycle |
+| last controller kernel drop | — | the remaining active run is canceled; Vsync keeps only a weak controller reference |
 
 **Publish-before-listeners.** A natural end (`tick_time_based`,
 `tick_simulation`) takes `active_run` and calls

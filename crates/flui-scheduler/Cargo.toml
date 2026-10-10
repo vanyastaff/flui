@@ -7,8 +7,8 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Frame scheduling, task prioritization, and animation coordination for FLUI"
-keywords = ["scheduler", "vsync", "animation", "frame", "ticker"]
+description = "Owner-local frame execution, callbacks, and task prioritization for FLUI"
+keywords = ["scheduler", "vsync", "frame", "tasks", "callbacks"]
 categories = ["gui", "game-development", "rendering"]
 # All root tests/*.rs files are compiled as modules of ONE integration-test
 # binary (tests/main.rs); the per-file auto-discovered targets each linked the

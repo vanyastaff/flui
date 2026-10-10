@@ -216,7 +216,7 @@ Neither sizing authority nor its preparation debt crosses to the raster thread.
 `fixed_and_linear_attempts_retain_multiple_nested_sources` exercise actual dry
 measurement across nested sources with zero warm retention. Their copied
 geometry retains no answer leases, and retirement checks distinguish attempt
-retention from an unbounded cache. ADR-0182 specifies the cross-crate contract.
+retention from an unbounded cache. ADR-0183 specifies the cross-crate contract.
 
 ### Text measurements reject invalid requests without geometry
 
@@ -575,7 +575,7 @@ through two collections.
 
 **Accepted trade-off:** every signature that measures names the context or its
 measurement loan, even where only one UI runtime exists. Text resources remain
-explicit in every build (ADR-0092 §10, superseded in part by ADR-0182).
+explicit in every build (ADR-0092 §10, superseded in part by ADR-0183).
 Locked by `measurement_follows_the_context_it_is_given`,
 `intrinsic_widths_follow_the_context_they_are_asked_through` and
 `a_registration_on_the_collection_invalidates_the_painter_cache`

@@ -74,6 +74,10 @@ substrate driver over raw owners, which the raw-owner suites still use.
   configurations a UI runtime cannot express. Its `pump_frame`, `run_pipeline` and
   `pump_presentation`/`pump_all` go when those suites move to the pump
   (ADR-0083 `## Migration`, move 6b).
+  Its raw-owner frame uses the same complete `OwnerFrame::drive_frame` operation
+  as the production runtime, preserving mid-frame task polling and post-frame
+  observation of committed layout. An admission refusal is a driver invariant
+  failure; it cannot be reported as a successful empty frame.
 - **Only `log_capture` crosses the dev cycles.** `flui-widgets` and
   `flui-runtime` name this crate on dev edges while it depends on both, so
   their unit-test builds compile a second copy of themselves. Their unit

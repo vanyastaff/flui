@@ -60,9 +60,8 @@ impl HitTestProbe for PipelineHitTestProbe {
         position: Offset<f64>,
         result: &mut HitTestResult,
     ) -> Result<(), InteractionDispatchError> {
-        // `try_with`, not `with`: a frame phase holding the tree checked out
-        // is a state this call can legitimately land in, and the shared borrow
-        // `with` takes would panic against it. Reporting the tree busy is the
+        // Incomplete layout and an active checkout both make geometry unavailable.
+        // This call can legitimately land in either state. Reporting the tree busy is the
         // honest answer -- an empty path would read as "the drag is over
         // nothing" and make every target it was over fire a leave.
         // The presentation's own token first: a tree someone else is keeping
@@ -75,7 +74,7 @@ impl HitTestProbe for PipelineHitTestProbe {
             .upgrade()
             .ok_or(InteractionDispatchError::OwnerGone)?;
         pipeline
-            .try_with(|owner| owner.hit_test(position, result))
+            .try_with_layout(|owner| owner.hit_test(position, result))
             .map(|_hit| ())
             .ok_or(InteractionDispatchError::TreeBusy)
     }

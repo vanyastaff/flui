@@ -158,13 +158,9 @@ impl UiRuntime {
             }
         }
 
-        // The async-driver step lives in `UpdateScheduler::handle_begin_frame`'s
-        // mid-frame slot, not here: this pipeline runs in
-        // `PersistentCallbacks`, where `OwnerFrame::poll_ready` debug-asserts it
-        // must never poll (polling here could re-enter a frame-phase-only
-        // capability from inside a woken future). One mid-frame poll per
-        // frame, on the right `UpdateScheduler` instance, is enforced by the
-        // scheduler itself.
+        // OwnerFrame's complete frame operation polls async work once in
+        // the mid-frame slot, before this persistent pipeline. The pipeline
+        // cannot independently poll tasks and re-enter frame capabilities.
 
         let mut last_outcome = FramePaintOutcome::Idle;
         let mut producer = self.presentations.primary().id();
@@ -177,6 +173,15 @@ impl UiRuntime {
         // failure needs).
         let mut any_retry_needed = false;
         for presentation in self.presentations.iter() {
+            // Another presentation's animation/input callback may have changed
+            // this retained attempt after its earlier pre-phase reconciliation.
+            // Do not publish obsolete geometry or combine a retained old tick
+            // with the new inputs: sample a fresh replacement next pump.
+            if super::text_preparation::reconcile(presentation, constraints) {
+                presentation.clock().mark_demand(DemandKind::Dirty);
+                any_retry_needed = true;
+                continue;
+            }
             if !super::text_preparation::can_run(presentation) {
                 continue;
             }
@@ -434,8 +439,9 @@ impl UiRuntime {
     /// input method's lock asked for anywhere inside it (a build, a
     /// post-frame callback, a nested platform pump) is refused (sync) or
     /// queued (async), and no platform edit lands in a tree mid-frame. The
-    /// gates reopen on every exit, a panic's unwind included. The queued
-    /// grants run only after `UpdateScheduler::drive_frame` returned, with the
+    /// gates restore their enclosing state on every exit, a panic's unwind
+    /// included. The queued
+    /// grants run only after `OwnerFrame::drive_frame` returned, with the
     /// scheduler back in `Idle`: an edit a grant makes there marks the tree
     /// dirty and schedules the next frame like any other owner-thread edit,
     /// where the same edit inside the frame would have its visual-update
@@ -443,16 +449,27 @@ impl UiRuntime {
     ///
     /// Crate-private: a host drives a frame only through [`Self::pump`],
     /// which runs its begin, draw and end frame steps inside this drive.
-    pub(crate) fn drive_frame<R>(
+    pub(crate) fn drive_frame(
         &self,
         now: Instant,
         deadline: flui_scheduler::IdleDeadline,
-        pipeline: impl FnOnce() -> R,
-    ) -> R {
-        let commits_closed = TextCommitsClosed::close(self);
+        mut prepare: impl FnMut(),
+        pipeline: impl FnMut() -> bool,
+    ) -> bool {
+        let mut commits_closed = None;
+        let commit_slot = &mut commits_closed;
         let result = self
-            .scheduler
-            .drive_frame(&self.owner_frame, now, deadline, pipeline);
+            .owner_frame
+            .drive_frame(
+                now,
+                deadline,
+                move || {
+                    prepare();
+                    *commit_slot = Some(TextCommitsClosed::close(self));
+                },
+                pipeline,
+            )
+            .expect("BUG: the runtime's live frame owner must admit its frame transaction");
         drop(commits_closed);
         // The commit anchor: each presentation's queued grants, against the
         // stores that queued them.
@@ -1249,30 +1266,47 @@ impl UiRuntime {
 ///
 /// Dropping it restores each presentation's effective barrier, retaining a
 /// native preparation wait on normal return or unwind. Queued grants run at the
-/// anchor after the drive, never from a destructor. Drives do not nest (the
-/// scheduler refuses a second begin-frame inside a frame), so there is no
-/// outer transaction to restore.
+/// anchor after the drive, never from a destructor. A rejected nested drive
+/// restores the enclosing transaction instead of reopening its commits.
 struct TextCommitsClosed<'a> {
-    ui_runtime: &'a UiRuntime,
+    first: Option<(&'a PresentationState, bool)>,
+    remaining: Vec<(&'a PresentationState, bool)>,
 }
 
 impl<'a> TextCommitsClosed<'a> {
     fn close(ui_runtime: &'a UiRuntime) -> Self {
-        for presentation in ui_runtime.presentations.iter() {
+        let mut previous = ui_runtime.presentations.iter().map(|presentation| {
+            // Admission precedes this guard. A preexisting native wait is not
+            // an enclosing frame transaction: completing that wait must reopen
+            // commits instead of restoring the old preparation barrier.
+            let retained = presentation
+                .text_preparation
+                .borrow()
+                .holds_document_barrier();
+            (
+                presentation,
+                presentation.text_input().is_transaction_open() && !retained,
+            )
+        });
+        let first = previous.next();
+        let remaining: Vec<_> = previous.collect();
+        for (presentation, _) in first.iter().chain(&remaining) {
             presentation.text_input().set_transaction_open(true);
         }
-        Self { ui_runtime }
+        Self { first, remaining }
     }
 }
 
 impl Drop for TextCommitsClosed<'_> {
     fn drop(&mut self) {
-        for presentation in self.ui_runtime.presentations.iter() {
+        for (presentation, open) in self.first.iter().chain(&self.remaining) {
             let retained = presentation
                 .text_preparation
                 .borrow()
                 .holds_document_barrier();
-            presentation.text_input().set_transaction_open(retained);
+            presentation
+                .text_input()
+                .set_transaction_open(*open || retained);
         }
     }
 }

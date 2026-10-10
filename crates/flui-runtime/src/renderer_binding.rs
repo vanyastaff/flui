@@ -588,8 +588,9 @@ impl RendererBinding for RenderingBinding {
         // logical pixels too, so the position passes through unscaled
         // — dividing by the DPR here would shrink every hit a second
         // time on scaled displays.
-        self.root_pipeline_owner
-            .with(|owner| owner.hit_test(position, result));
+        let _ = self
+            .root_pipeline_owner
+            .try_with_layout(|owner| owner.hit_test(position, result));
     }
 
     // ---- RendererBinding proper ----
