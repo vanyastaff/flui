@@ -370,6 +370,36 @@ fn worker_wake_keeps_failed_receipt_across_next_healthy_turn() {
         "later healthy owner teardown retires accepted captures normally");
 }
 
+fn late_worker_failure_does_not_contaminate_completed_owner_custody() {
+    let scheduler = UpdateScheduler::new();
+    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let (entered, started) = std::sync::mpsc::channel();
+    let (release, continue_hook) = std::sync::mpsc::channel();
+    let continue_hook = std::sync::Mutex::new(continue_hook);
+    scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
+        entered.send(()).expect("owner awaits worker");
+        continue_hook.lock().expect("hook channel lock").recv().expect("owner releases worker");
+        panic!("late worker hook failure");
+    })));
+    let worker = RefCell::new(None);
+    assert_eq!(owner.pump_background(|| {
+        let waker = scheduler.frame_waker();
+        *worker.borrow_mut() = Some(std::thread::spawn(move || waker.request_frame()));
+        started.recv().expect("worker entered hook");
+        scheduler.set_on_frame_scheduled(None);
+        assert!(owner.retire().is_none());
+    }), Ok(0));
+    release.send(()).expect("worker still waiting");
+    let failure = worker.borrow_mut().take().expect("worker started").join()
+        .expect_err("late worker failure propagates on its own thread");
+    assert_eq!(flui_foundation::panic::payload_text(failure.as_ref()), Some("late worker hook failure"));
+    let drops = Arc::new(AtomicUsize::new(0));
+    let capture = HookCapture(Arc::clone(&drops));
+    assert_eq!(owner.pump_background(move || { let _ = &capture; }), Err(ExecutionError::Retired));
+    assert_eq!(drops.load(Ordering::SeqCst), 1,
+        "late worker failure has no custody over a new healthy refused preparation");
+}
+
 #[test]
 fn owner_background_turn_contract() {
     crate::run_table(
@@ -398,6 +428,10 @@ fn owner_background_turn_contract() {
             (
                 "worker_receipt_survives_next_admission",
                 worker_wake_keeps_failed_receipt_across_next_healthy_turn,
+            ),
+            (
+                "late_worker_failure_keeps_its_own_custody",
+                late_worker_failure_does_not_contaminate_completed_owner_custody,
             ),
         ],
     );
