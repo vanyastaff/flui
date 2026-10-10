@@ -59,6 +59,19 @@ src/
 
 ## Core Abstractions
 
+### Nested value conversion
+
+`TwoWayConverter` is the fixed-width extension contract for custom animation
+values. Its derive concatenates concrete field vectors in declaration order;
+`AnimationVector::COMPONENTS` exposes the sealed array width. One `AnimatedValue`
+owns the entire vector, so nested geometry and color share admission, time,
+retargeting and cancellation. Derived `Lerp` delegates to each field, preserving
+its interpolation contract instead of interpreting scalar color components.
+Generic-dependent widths require a manual representation because stable Rust
+cannot express their sum as an array length. Empty derives are refused.
+`two_way_converter_derive_contract` pins nested conversion, perceptual fading
+and velocity-preserving interruption through an actual Vsync registration.
+
 ### Controller delivery
 
 Controller status transitions and run deliveries share a FIFO committed under

@@ -1,6 +1,7 @@
 #![cfg(test)]
 
-use flui::geometry::{Point, Rect, Size};
+use flui::animation::Animation;
+use flui::geometry::{Offset, Point, Rect, Size};
 use flui::painting::{Canvas, CustomPainter, DrawOp, Paint};
 use flui::prelude::*;
 use flui::rendering::{
@@ -58,6 +59,116 @@ fn custom_painter_records_a_rectangle() {
         Rect::from_origin_size(Point::ZERO, Size::new(24.0, 16.0))
     );
     assert_eq!(paint.color, Color::rgb(10, 20, 30));
+}
+
+#[derive(Debug, Clone, flui::animation::TwoWayConverter)]
+struct Appearance {
+    position: Offset,
+    color: Color,
+}
+
+#[derive(Debug, Clone, flui::animation::TwoWayConverter)]
+struct CardMotion(Appearance, f64);
+
+#[derive(Debug)]
+struct MotionPainter(flui::animation::AnimatedValueView<CardMotion>);
+
+impl CustomPainter for MotionPainter {
+    fn paint(&self, canvas: &mut Canvas, _size: Size) {
+        let sample = self.0.value();
+        canvas.draw_rect(
+            Rect::from_origin_size(
+                Point::ZERO + sample.0.position,
+                Size::new(10.0 + sample.1 * 10.0, 10.0),
+            ),
+            &Paint::fill(sample.0.color),
+        );
+    }
+
+    fn should_repaint(&self, _old: &dyn CustomPainter) -> bool { false }
+    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn repaint(&self) -> Option<Rc<dyn flui::foundation::Listenable>> {
+        Some(Rc::new(self.0.clone()))
+    }
+    fn semantics_builder(&self) -> Option<flui::painting::SemanticsBuilder> { None }
+}
+
+#[test]
+fn nested_custom_motion_repaints_and_retargets_through_the_facade() {
+    use flui::animation::{AnimatedValue, ArcCurve, Linear, MotionSpec, Vsync};
+    use flui::testing::widgets::{LaidOut, lay_out_animated};
+    use flui::widgets::{CustomPaint, VsyncScope};
+
+    fn sample(laid: &LaidOut) -> (Rect, Color) {
+        let rectangles: Vec<_> = laid.draw_ops().into_iter().filter_map(|command| {
+            match command.op {
+                DrawOp::Rect { rect, paint } => Some((rect, paint.color)),
+                _ => None,
+            }
+        }).collect();
+        assert_eq!(rectangles.len(), 1, "one actual rectangle in the submitted scene");
+        rectangles[0]
+    }
+
+    fn assert_paint_only(laid: &mut LaidOut) {
+        let report = laid.with_build_owner_mut(|owner| owner.last_frame_build_report());
+        assert_eq!(report.builds_run, 0, "custom motion only invalidates paint: {report:?}");
+    }
+
+    let vsync = Vsync::new();
+    let mut owner = AnimatedValue::new(
+        CardMotion(Appearance { position: Offset::ZERO, color: Color::rgb(255, 0, 0) }, 0.0),
+        MotionSpec::Curve { duration: Duration::from_secs(1), curve: ArcCurve::new(Linear) },
+        Some(&vsync),
+    ).expect("finite custom motion");
+    let first = owner.animate_to(CardMotion(
+        Appearance { position: Offset::new(20.0, 40.0), color: Color::rgba(0, 0, 255, 0) },
+        1.0,
+    )).expect("first custom motion");
+    let mut laid = lay_out_animated(
+        VsyncScope::new(vsync.clone(), CustomPaint::new()
+            .size(Size::new(100.0, 100.0))
+            .painter(Rc::new(MotionPainter(owner.animation())))),
+        loose(100.0),
+        vsync,
+    );
+    assert_eq!(sample(&laid), (
+        Rect::from_origin_size(Point::ZERO, Size::new(10.0, 10.0)),
+        Color::rgb(255, 0, 0),
+    ));
+    // The harness adopts this external registry after its mounting frame.
+    // Anchor the admitted run before advancing the presentation's time.
+    laid.tick();
+    laid.pump_for(Duration::from_millis(500));
+    assert!(laid.did_paint_last_frame(), "motion wakes the mounted painter");
+    assert_paint_only(&mut laid);
+    let seam = sample(&laid);
+    assert_eq!(seam.0, Rect::from_origin_size(Point::new(10.0, 20.0), Size::new(15.0, 10.0)));
+    assert!(seam.1.r >= 254 && seam.1.b <= 1 && (i16::from(seam.1.a) - 128).abs() <= 1);
+    let velocity = owner.velocity();
+    let second = owner.animate_to(CardMotion(
+        Appearance { position: Offset::new(-20.0, -40.0), color: Color::rgb(0, 255, 0) },
+        2.0,
+    )).expect("interrupted custom motion");
+    assert!(first.is_canceled() && second.is_pending());
+    laid.tick();
+    assert_eq!(sample(&laid), seam, "the submitted frame keeps its seam");
+    laid.pump_for(Duration::from_micros(1));
+    assert_paint_only(&mut laid);
+    let after = sample(&laid);
+    for (delta, incoming) in [
+        (after.0.min.x - seam.0.min.x, velocity[0]),
+        (after.0.min.y - seam.0.min.y, velocity[1]),
+    ] {
+        assert!((delta / 1e-6 - incoming).abs() < 0.001);
+    }
+    laid.pump_for(Duration::from_secs(2));
+    assert_paint_only(&mut laid);
+    assert!(second.is_complete());
+    assert_eq!(sample(&laid), (
+        Rect::from_origin_size(Point::new(-20.0, -40.0), Size::new(30.0, 10.0)),
+        Color::rgb(0, 255, 0),
+    ));
 }
 
 #[derive(Debug, flui::Diagnosticable)]

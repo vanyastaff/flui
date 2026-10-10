@@ -1,32 +1,17 @@
 //! Codegen for `#[derive(TwoWayConverter)]`.
 //!
-//! Generates a `TwoWayConverter` implementation that decomposes a struct of
-//! `f64` fields into a `[f64; N]` vector and rebuilds it, and a matching
-//! componentwise `Lerp`, so the type can be spring-animated by
-//! `flui_animation::AnimatedValue`, tweened, and used as a keyframe value. The
-//! authoring shape is:
-//!
-//! ```rust,ignore
-//! #[derive(Clone, TwoWayConverter)]
-//! struct Translation {
-//!     x: f64,
-//!     y: f64,
-//!     z: f64,
-//! }
-//! ```
-//!
-//! Every field must be `f64` (the scalar component type the spring core
-//! operates on); a non-`f64` field is a compile error pointing at the
-//! offending field.
-//!
-//! ## Generated-code path strategy
+//! Fields implement `TwoWayConverter` and `Lerp`. Their fixed vectors are
+//! flattened in declaration order; interpolation delegates to each field,
+//! preserving contracts such as premultiplied colour interpolation.
+//! Field types must have concrete vector widths: stable Rust cannot sum
+//! generic-dependent associated constants in an array length.
 //!
 //! Runtime paths resolve through the SDK, then the owning crate, then the
-//! `flui` facade, using the shared resolver and honoring Cargo dependency aliases.
+//! facade, honoring Cargo dependency aliases.
 
 use proc_macro2::TokenStream;
-use quote::quote;
-use syn::{Data, DeriveInput, Fields, Index, Type, spanned::Spanned};
+use quote::{quote, quote_spanned};
+use syn::{Data, DeriveInput, Fields, GenericParam, Index, spanned::Spanned, visit::Visit};
 
 /// Entry point for `#[proc_macro_derive(TwoWayConverter)]`.
 pub fn expand(input: &DeriveInput) -> TokenStream {
@@ -34,102 +19,102 @@ pub fn expand(input: &DeriveInput) -> TokenStream {
         Ok(path) => path,
         Err(error) => return error.to_compile_error(),
     };
-    let name = &input.ident;
-    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
-
     let fields = match &input.data {
-        Data::Struct(data) => &data.fields,
-        Data::Enum(_) | Data::Union(_) => {
+        Data::Struct(data) if !data.fields.is_empty() => &data.fields,
+        _ => {
             return syn::Error::new(
                 input.ident.span(),
-                "#[derive(TwoWayConverter)] supports only structs of `f64` fields",
+                "#[derive(TwoWayConverter)] requires a struct with at least one field",
             )
             .to_compile_error();
         }
     };
 
-    // Reject any non-`f64` field with a span-located error.
-    if let Some(err) = first_non_f64_field(fields) {
-        return err.to_compile_error();
-    }
-
-    let count = fields.len();
-    // `to_vector` reads each field; `from_vector` rebuilds the value;
-    // `lerp_to` interpolates each field.
-    let (reads, writes, lerps): (Vec<TokenStream>, Vec<TokenStream>, Vec<TokenStream>) =
-        match fields {
-            Fields::Named(named) => named
-                .named
-                .iter()
-                .enumerate()
-                .map(|(i, f)| {
-                    let ident = f.ident.as_ref().expect("named field has an ident");
-                    (
-                        quote!(self.#ident),
-                        quote!(#ident: v[#i]),
-                        quote!(#ident: {
-                            let value = self.#ident + (other.#ident - self.#ident) * t;
-                            if value.is_finite() { value } else {
-                                self.#ident * (1.0 - t) + other.#ident * t
-                            }
-                        }),
-                    )
-                })
-                .fold(
-                    (Vec::new(), Vec::new(), Vec::new()),
-                    |(mut r, mut w, mut l), (read, write, lerp)| {
-                        r.push(read);
-                        w.push(write);
-                        l.push(lerp);
-                        (r, w, l)
-                    },
-                ),
-            Fields::Unnamed(unnamed) => unnamed
-                .unnamed
-                .iter()
-                .enumerate()
-                .map(|(i, _)| {
-                    let index = Index::from(i);
-                    (
-                        quote!(self.#index),
-                        quote!(v[#i]),
-                        quote!({
-                            let value = self.#index + (other.#index - self.#index) * t;
-                            if value.is_finite() { value } else {
-                                self.#index * (1.0 - t) + other.#index * t
-                            }
-                        }),
-                    )
-                })
-                .fold(
-                    (Vec::new(), Vec::new(), Vec::new()),
-                    |(mut r, mut w, mut l), (read, write, lerp)| {
-                        r.push(read);
-                        w.push(write);
-                        l.push(lerp);
-                        (r, w, l)
-                    },
-                ),
-            Fields::Unit => (Vec::new(), Vec::new(), Vec::new()),
+    let parameters: Vec<_> = input
+        .generics
+        .params
+        .iter()
+        .filter_map(|param| match param {
+            GenericParam::Type(param) => Some(&param.ident),
+            GenericParam::Const(param) => Some(&param.ident),
+            GenericParam::Lifetime(_) => None,
+        })
+        .collect();
+    for field in fields {
+        let mut dependency = GenericDependency {
+            parameters: &parameters,
+            found: false,
         };
-
+        dependency.visit_type(&field.ty);
+        if dependency.found {
+            return syn::Error::new(
+                field.ty.span(),
+                "#[derive(TwoWayConverter)] requires concrete field types; stable Rust cannot sum generic-dependent vector widths",
+            ).to_compile_error();
+        }
+    }
+    let name = &input.ident;
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+    let mut width = quote!(0usize);
+    let mut reads = Vec::new();
+    let mut writes = Vec::new();
+    let mut lerps = Vec::new();
+    for (index, field) in fields.iter().enumerate() {
+        let ty = &field.ty;
+        let member = field.ident.as_ref().map_or_else(
+            || {
+                let index = Index::from(index);
+                quote!(#index)
+            },
+            |ident| quote!(#ident),
+        );
+        let component_count = quote_spanned! {ty.span()=>
+            <<#ty as #runtime::TwoWayConverter>::Vector as #runtime::AnimationVector>::COMPONENTS
+        };
+        let start = width;
+        let end = quote!(#start + #component_count);
+        reads.push(quote_spanned! {ty.span()=>
+            {
+                let field = <#ty as #runtime::TwoWayConverter>::to_vector(&self.#member);
+                vector[#start..#end].copy_from_slice(::core::convert::AsRef::<[f64]>::as_ref(&field));
+            }
+        });
+        let write = quote_spanned! {ty.span()=> {
+            let mut field = [0.0; #component_count];
+            field.copy_from_slice(&vector[#start..#end]);
+            <#ty as #runtime::TwoWayConverter>::from_vector(field)
+        }};
+        let lerp = quote_spanned! {ty.span()=>
+            <#ty as #runtime::Lerp>::lerp_to(&self.#member, &other.#member, t)
+        };
+        if let Some(ident) = &field.ident {
+            writes.push(quote!(#ident: #write));
+            lerps.push(quote!(#ident: #lerp));
+        } else {
+            writes.push(write);
+            lerps.push(lerp);
+        }
+        width = end;
+    }
     let (from_body, lerp_body) = match fields {
         Fields::Named(_) => (quote!(Self { #(#writes),* }), quote!(Self { #(#lerps),* })),
         Fields::Unnamed(_) => (quote!(Self(#(#writes),*)), quote!(Self(#(#lerps),*))),
-        Fields::Unit => (quote!(Self), quote!(Self)),
+        Fields::Unit => unreachable!("nonempty fields checked above"),
     };
 
     quote! {
         impl #impl_generics #runtime::TwoWayConverter for #name #ty_generics #where_clause {
-            type Vector = [f64; #count];
+            type Vector = [f64; #width];
 
             #[inline]
             fn to_vector(&self) -> Self::Vector {
-                [#(#reads),*]
+                let mut vector = [0.0; #width];
+                #(#reads)*
+                vector
             }
 
             #[inline]
-            fn from_vector(v: Self::Vector) -> Self {
+            fn from_vector(vector: Self::Vector) -> Self {
                 #from_body
             }
         }
@@ -139,30 +124,29 @@ pub fn expand(input: &DeriveInput) -> TokenStream {
             fn lerp_to(&self, other: &Self, t: f64) -> Self {
                 if t == 0.0 { return self.clone(); }
                 if t == 1.0 { return other.clone(); }
-                let _ = (other, t);
                 #lerp_body
             }
         }
     }
 }
 
-/// Returns an error located at the first field whose type is not `f64`.
-fn first_non_f64_field(fields: &Fields) -> Option<syn::Error> {
-    fields.iter().find_map(|field| {
-        if is_f64(&field.ty) {
-            None
-        } else {
-            Some(syn::Error::new(
-                field.ty.span(),
-                "#[derive(TwoWayConverter)] requires every field to be `f64` \
-                 (the scalar component type the spring core animates)",
-            ))
-        }
-    })
+/// Walk field syntax rather than comparing type spellings or guessing widths.
+struct GenericDependency<'a> {
+    parameters: &'a [&'a syn::Ident],
+    found: bool,
 }
 
-/// Whether `ty` is exactly `f64` (by the final path segment).
-fn is_f64(ty: &Type) -> bool {
-    matches!(ty, Type::Path(p) if p.qself.is_none()
-        && p.path.segments.last().is_some_and(|seg| seg.ident == "f64"))
+impl<'ast> Visit<'ast> for GenericDependency<'_> {
+    fn visit_path(&mut self, path: &'ast syn::Path) {
+        if path.leading_colon.is_none()
+            && path.segments.first().is_some_and(|segment| {
+                self.parameters
+                    .iter()
+                    .any(|parameter| **parameter == segment.ident)
+            })
+        {
+            self.found = true;
+        }
+        syn::visit::visit_path(self, path);
+    }
 }

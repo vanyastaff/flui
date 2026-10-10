@@ -15,6 +15,9 @@ mod matrix;
 #[path = "geometry/scalar.rs"]
 mod scalar;
 
+#[path = "geometry/lerp.rs"]
+mod lerp;
+
 #[path = "geometry/matrix4_lerp.rs"]
 mod matrix4_lerp;
 

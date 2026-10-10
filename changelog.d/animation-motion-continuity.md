@@ -1,5 +1,8 @@
 ### Added
 
+- Derive `TwoWayConverter` for nested fixed-width values, including geometry
+  and colors, while preserving each field's interpolation contract.
+
 - Browser hosts observe reduced motion before canvas creation and deliver live
   changes through owner turns; wake and quit proxies use the same host signal.
 
@@ -38,6 +41,9 @@
 
 ### Changed
 
+- `TwoWayConverter` derives require at least one motion field; empty unit,
+  named and tuple structs are rejected rather than producing empty vectors.
+
 - `MediaQueryData` gains a `motion` field; exhaustive struct literals must supply
   it or use `..Default::default()`. Essential timers, physical inertia and loading
   indicators retain their timing under reduced motion and host duration scales.
@@ -62,6 +68,10 @@
   leave the callback registered until source closure.
 
 ### Fixed
+
+- Preserve representable scalar and composite geometry interpolation between
+  opposite finite extremes, and retain authored endpoint bits without clamping
+  extrapolated motion.
 
 - Keep accessibility bounds and clips aligned with animated and nested paint
   transforms during full assembly and partial updates; refuse unrepresentable

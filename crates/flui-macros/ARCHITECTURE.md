@@ -5,6 +5,31 @@ owning crates; generated code resolves them from the consuming manifest.
 
 ## Mapping decisions
 
+### Compose fixed-width animation fields
+
+`TwoWayConverter` derives flatten each field's associated `AnimationVector`
+in declaration order. `AnimationVector::COMPONENTS` is the width of its sealed
+scalar array; no type names, memory layout assumptions or heap buffers determine
+the representation. Derived `Lerp` delegates to each field, preserving geometry
+extrapolation and premultiplied color interpolation, and returns exact authored
+endpoints. The shared scalar `Lerp` handles representable extreme differences.
+
+Empty structs are refused because they have no motion components. A field that
+references a type or const parameter is refused at its type span: stable Rust
+cannot sum generic-dependent associated widths into an array length. Unused const
+parameters with concrete fields remain supported. A manual implementation can
+choose a concrete vector representation when a generic author needs one.
+
+`two_way_converter_derive_contract` in `flui-animation` tests named, tuple and
+nested fields, color behavior and actual registered retargeting.
+`trybuild_ui::ui_tests` in `flui-sdk` tests SDK expansion, aliases, concrete const
+generics, empty structs, missing field traits and generic-dependent widths.
+`external_consumers_extend_and_test_through_the_facade` runs a mounted custom
+painter in external projects with both ordinary and renamed facade dependencies.
+Its `nested_custom_motion_repaints_and_retargets_through_the_facade` case reads
+the submitted rectangle's geometry and color, preserves its velocity at a
+retarget seam, and asserts zero element builds on moving frames.
+
 ### Resolve runtime paths through Cargo dependencies
 
 All the derives use `proc-macro-crate` to resolve names in the consumer's

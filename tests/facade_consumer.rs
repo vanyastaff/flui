@@ -196,6 +196,7 @@ fn external_consumers_extend_and_test_through_the_facade() {
         let report = String::from_utf8_lossy(&output.stdout);
         for case in [
             "custom_painter_records_a_rectangle",
+            "nested_custom_motion_repaints_and_retargets_through_the_facade",
             "custom_render_view_mounts_lays_out_and_paints",
             "proxy_macros_forward_live_and_dry_layout",
             "gesture_recognizer_uses_headless_virtual_time",

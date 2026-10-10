@@ -4,6 +4,14 @@ Design notes for the base crate every other FLUI crate builds on: IDs, the share
 
 ## The geometry values (`geometry`)
 
+The `f64` implementation of `Lerp` preserves authored endpoint bits and uses a weighted sum when the
+direct difference overflows. Opposite finite extremes therefore interpolate to
+representable intermediate values; extrapolation and invalid intermediate inputs
+remain visible rather than being clamped. The `Offset`, `Size`, `Rect`, edge and
+radius implementations share this scalar path. The public family
+`scalar_and_composite_lerp_preserve_representable_values` checks finite extreme
+interpolation, signed zero and NaN endpoint bits, extrapolation and NaN propagation.
+
 `flui_foundation::geometry` holds the geometry values every layer shares (ADR-0098): `Point`,
 `Offset`, `Size`, `Rect`, `RRect`/`Radius`, `Edges`/`EdgeInsets`, `Matrix4` (glam inside, no
 glam type in a signature), the one `Axis`, and `canonical_bits` for float-keyed caches. A

@@ -22,12 +22,17 @@ mod sealed {
 /// A fixed array of scalar components. Sealed so sample publication cannot
 /// invoke a user-defined conversion while the controller commits its time.
 pub trait AnimationVector: sealed::Vector + AsRef<[f64]> + AsMut<[f64]> + Copy + 'static {
+    /// Number of scalar components, used to compose nested fixed-width values.
+    const COMPONENTS: usize;
+
     /// A vector with the same width and every component set to zero.
     #[must_use]
     fn zero(self) -> Self;
 }
 
 impl<const N: usize> AnimationVector for [f64; N] {
+    const COMPONENTS: usize = N;
+
     fn zero(self) -> Self {
         [0.0; N]
     }
@@ -48,7 +53,12 @@ pub(crate) trait ValueMotion:
 /// of scalar components, so each component can be animated by its own spring.
 ///
 /// Implement it for a value whose components have independent motion, or derive
-/// it for a struct of scalar fields. Conversions run outside state borrows.
+/// it for a nonempty struct whose fields implement this trait and `Lerp`.
+/// Derived vectors concatenate fields in declaration order, including nested
+/// structs; interpolation preserves each field's `Lerp` contract. Deriving
+/// requires concrete component widths, since stable Rust cannot sum
+/// generic-dependent widths in an array length.
+/// Conversions run outside state borrows.
 pub trait TwoWayConverter: Clone {
     /// The scalar-component representation, e.g. `[f64; 4]` for a colour.
     /// `Copy` so it can be used as a scratch buffer; `AsRef`/`AsMut<[f64]>` so

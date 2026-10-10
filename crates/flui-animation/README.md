@@ -541,6 +541,48 @@ let animated = FloatTween::new(0.0, 100.0).animate(curved);
 
 ---
 
+## Custom value motion
+
+A custom value can combine geometry, color and nested values into one owned
+motion. Derive `TwoWayConverter` for a nonempty `Clone` struct whose fields
+implement `TwoWayConverter` and `Lerp`. Field vectors are concatenated in
+declaration order. Interpolation delegates to each field, so a color keeps its
+premultiplied Oklab behavior rather than becoming four independent channel tweens.
+
+```rust
+use flui_animation::{Lerp, TwoWayConverter};
+use flui_foundation::geometry::Offset;
+use flui_painting::styling::Color;
+
+#[derive(Clone, TwoWayConverter)]
+struct Appearance {
+    position: Offset<f64>,
+    color: Color,
+}
+
+#[derive(Clone, TwoWayConverter)]
+struct CardMotion(Appearance, f64);
+
+let start = CardMotion(Appearance {
+    position: Offset::ZERO,
+    color: Color::rgb(255, 0, 0),
+}, 0.0);
+let end = CardMotion(Appearance {
+    position: Offset::new(20.0, 40.0),
+    color: Color::rgba(0, 0, 255, 0),
+}, 1.0);
+let midpoint = start.lerp_to(&end, 0.5);
+assert_eq!(midpoint.0.position, Offset::new(10.0, 20.0));
+assert!(midpoint.0.color.r >= 254 && midpoint.0.color.b <= 1);
+assert_eq!(midpoint.1, 0.5);
+```
+
+Pass this value to `AnimatedValue` to share registration, admission, time and
+retargeting across its components. Fields need concrete vector widths; stable
+Rust cannot sum generic-dependent widths into an array length. A manual
+`TwoWayConverter` implementation can choose a concrete representation for a
+generic value.
+
 ## Physics Simulations
 
 Every simulation is an immutable value. Constructors validate their input and
