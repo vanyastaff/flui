@@ -373,8 +373,62 @@ fn owner_retirement_custody_contract() {
                 "retired eager admission custody",
                 retired_eager_admission_preserves_caught_failure,
             ),
+            (
+                "healthy teardown after completed caught failure",
+                healthy_teardown_after_completed_caught_failure,
+            ),
+            (
+                "recursive retirement shares caught failure",
+                recursive_retirement_shares_caught_failure,
+            ),
         ],
     );
+}
+
+fn healthy_teardown_after_completed_caught_failure() {
+    let scheduler = UpdateScheduler::new();
+    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let drops = Rc::new(Cell::new(0));
+    assert_eq!(owner.pump_background(|| {
+        catch_nested_refusal_failure(&owner);
+        let capture = RemovedCapture(Rc::clone(&drops));
+        owner.post_frame_handle().schedule(move |_| { let _ = &capture; })
+            .expect("accepted callback");
+    }), Ok(0));
+    assert_eq!(drops.get(), 0, "callback remains accepted beyond its turn");
+    assert!(owner.retire().is_none());
+    assert_eq!(drops.get(), 1, "new healthy teardown retires the callback");
+}
+
+fn recursive_retirement_shares_caught_failure() {
+    struct RecursiveRetirement(Weak<OwnerFrame>);
+    impl Future for RecursiveRetirement {
+        type Output = ();
+        fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<()> {
+            Poll::Pending
+        }
+    }
+    impl Drop for RecursiveRetirement {
+        fn drop(&mut self) {
+            let owner = self.0.upgrade().expect("retiring owner lives");
+            catch_nested_refusal_failure(&owner);
+            assert!(owner.retire().is_none());
+        }
+    }
+    let scheduler = UpdateScheduler::new();
+    let owner = Rc::new(OwnerFrame::new(&scheduler).expect("fresh owner"));
+    let driver = owner.async_driver();
+    let first = driver.spawn_local(Box::pin(RecursiveRetirement(Rc::downgrade(&owner))));
+    let drops = Rc::new(Cell::new(0));
+    let second = driver.spawn_local(Box::pin(RemovedFuture {
+        capture: RemovedCapture(Rc::clone(&drops)),
+        ready: false,
+    }));
+    assert!(owner.retire().is_none());
+    assert_eq!(drops.get(), 0, "recursive retirement cannot reset earlier custody");
+    assert_eq!(driver.pending_task_count(), 0);
+    assert!(first.is_cancelled());
+    assert!(second.is_cancelled());
 }
 
 fn eager_pending_retirement_preserves_caught_failure() {
