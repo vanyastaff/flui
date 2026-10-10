@@ -105,6 +105,10 @@ pub(crate) fn retire_with_execution_custody<T>(
 
 impl Drop for ExecutionPermit<'_> {
     fn drop(&mut self) {
+        // Delivery may still own this turn's receipt, including a healthy one
+        // that fails later on a worker. It must not become the next caller's
+        // custody. Publication is withdrawn before healthy permit completion.
+        self.state.fresh_failure_signal();
         self.state.active.set(false);
     }
 }

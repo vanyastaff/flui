@@ -52,7 +52,7 @@
 //! ```
 
 use std::{
-    cell::{Cell, RefCell},
+    cell::RefCell,
     collections::{HashSet, VecDeque},
     future::Future,
     pin::Pin,
