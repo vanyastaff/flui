@@ -153,7 +153,7 @@ struct LifecycleListener {
 ///
 /// `Completed` and `Aborted` carry the SAME [`FrameTiming`] shape but are
 /// distinguished on purpose: a post-frame callback's own panic still closes
-/// via [`end_frame`](UpdateScheduler::end_frame) and resolves
+/// via [`OwnerFrame::drive_frame`](crate::OwnerFrame::drive_frame) and resolves
 /// `Completed` (the pipeline already committed layout and paint; only the
 /// callback failed), while `Aborted` is the outcome of
 /// the internal frame-abort path alone -- a frame whose
@@ -178,7 +178,7 @@ struct LifecycleListener {
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy)]
 pub enum FrameOutcome {
-    /// The frame closed through [`end_frame`](UpdateScheduler::end_frame):
+    /// The frame closed through [`OwnerFrame::drive_frame`](crate::OwnerFrame::drive_frame):
     /// its post-frame callbacks ran (even if one of them panicked -- see the
     /// type's own doc).
     #[non_exhaustive]
@@ -855,6 +855,7 @@ struct SchedulerInner {
     /// Terminal execution release reports contained cleanup failure to the
     /// caller that still owns its produced output. Ordinary turns use no sink.
     execution_release: RefCell<Option<teardown::ExecutionRelease>>,
+    execution_failure: RefCell<Option<std::rc::Weak<Cell<bool>>>>,
 }
 
 /// Main scheduler for frame and task management
@@ -1113,6 +1114,7 @@ impl UpdateScheduler {
             task_queue,
             owner_frame_claimed: AtomicBool::new(false),
             execution_release: RefCell::new(None),
+            execution_failure: RefCell::new(None),
         });
 
         Self { inner }
@@ -1705,7 +1707,7 @@ impl UpdateScheduler {
         };
 
         if let Some(callback) = removed {
-            drop(callback);
+            execution::retire_with_execution_custody(&self.inner.execution_failure, callback);
             return true; // Found and removed
         }
 
@@ -1876,8 +1878,11 @@ impl UpdateScheduler {
     /// as `request_frame_impl`) and must not deadlock on this mutex.
     pub fn set_on_frame_scheduled(&self, hook: Option<Arc<dyn Fn() + Send + Sync>>) {
         let previous = { std::mem::replace(&mut *self.inner.wake.on_frame_scheduled.lock(), hook) };
-        drop(previous);
-        self.inner.wake.wake_delivery.request(
+        execution::retire_with_execution_custody(&self.inner.execution_failure, previous);
+        let preserve_failure = self.inner.execution_failure.borrow().as_ref()
+            .and_then(std::rc::Weak::upgrade).is_some_and(|signal| signal.get());
+        self.inner.wake.wake_delivery.request_preserving_failure(
+            preserve_failure,
             || false,
             || self.inner.wake.on_frame_scheduled.lock().clone(),
         );
@@ -2114,8 +2119,7 @@ impl UpdateScheduler {
     /// own scope. It is one small allocation, not free (`FrameBudget` carries
     /// a bounded rolling-window frame-time history), and the returned value
     /// is a stats snapshot only: it does not gate anything (see
-    /// [`drive_frame`](crate::OwnerFrame::drive_frame) and
-    /// [`handle_draw_frame`](Self::handle_draw_frame) for the actual
+    /// [`OwnerFrame::drive_frame`](crate::OwnerFrame::drive_frame) for the actual
     /// Idle-slice deadline gate).
     #[must_use]
     pub fn budget_snapshot(&self) -> FrameBudget {
@@ -2321,7 +2325,7 @@ impl UpdateScheduler {
         };
 
         let found = removed.is_some();
-        drop(removed);
+        execution::retire_with_execution_custody(&self.inner.execution_failure, removed);
         found
     }
 

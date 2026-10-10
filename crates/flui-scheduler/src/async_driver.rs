@@ -37,7 +37,8 @@
 //! waker. A wake after the UI runtime is gone upgrades nothing and does nothing.
 //!
 //! Waking is legal from any thread. Polling is not: it happens only inside
-//! [`OwnerFrame::poll_ready`](crate::OwnerFrame::poll_ready), on the owner.
+//! [`OwnerFrame::drive_frame`](crate::OwnerFrame::drive_frame) or
+//! [`OwnerFrame::pump_background`](crate::OwnerFrame::pump_background), on the owner.
 //!
 //! # Readiness index
 //!
@@ -213,10 +214,14 @@ pub(crate) struct TaskStore {
     next_id: Cell<TaskId>,
     /// Set by retirement: no task is admitted afterwards.
     closed: Cell<bool>,
+    execution_failure: RefCell<Option<RcWeak<Cell<bool>>>>,
     shared: Arc<WakeShared>,
 }
 
 impl TaskStore {
+    pub(crate) fn execution_failure_slot(&self) -> &RefCell<Option<RcWeak<Cell<bool>>>> {
+        &self.execution_failure
+    }
     pub(crate) fn new() -> Self {
         Self::with_first_id(1)
     }
@@ -227,6 +232,7 @@ impl TaskStore {
             spare: RefCell::new(Vec::new()),
             next_id: Cell::new(first),
             closed: Cell::new(false),
+            execution_failure: RefCell::new(None),
             shared: Arc::new(WakeShared {
                 ready: Mutex::new(Vec::new()),
                 request_frame: Mutex::new(None),
@@ -326,6 +332,10 @@ impl TaskStore {
         };
         if outcome.is_ready() {
             flags.retired.store(true, Ordering::Release);
+            crate::scheduler::execution::retire_with_execution_custody(
+                &self.execution_failure,
+                future,
+            );
             return None;
         }
 
@@ -468,7 +478,10 @@ impl TaskStore {
             };
             // The finished future's destructor is user code (it may hold a
             // nested `TaskToken`) and runs with no borrow held.
-            drop(finished);
+            crate::scheduler::execution::retire_with_execution_custody(
+                &self.execution_failure,
+                finished,
+            );
         }
 
         // `done` first: if anything below ever panicked, `PumpGuard::drop`
@@ -703,7 +716,10 @@ impl TaskToken {
             // If the task is mid-poll its slot holds `None`, and the pump
             // honours `cancelled` when it tries to re-queue.
             let removed = store.remove(self.id);
-            drop(removed);
+            crate::scheduler::execution::retire_with_execution_custody(
+                &store.execution_failure,
+                removed,
+            );
         }
     }
 }

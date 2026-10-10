@@ -25,13 +25,19 @@ wake recovery repairs delivery debt when the host survives containment.
 
 The owner holds a produced frame result outside later invocation catches.
 Cleanup retains it after a failure, instead of running arbitrary result
-destructors while unwinding. Callable envelopes retire separately; dropping a
-tuple of two hostile envelopes could abort before the boundary sees a failure.
+destructors while unwinding. Preparation and pipeline callable envelopes retire
+separately; dropping a tuple of two hostile envelopes could abort before the
+boundary sees a failure. This does not extend borrowed invocation to consumed
+`FnOnce` transient or post-frame callbacks.
 The same custody covers refused envelopes, completion wakers, diagnostics,
 recovery hooks and owner retirement. A live owner-local failure signal protects
 reentrant cleanup even when user code has caught a nested panic and
 `thread::panicking()` is false. It carries no payload and grants no execution
-authority; the enclosing boundary retains the first payload.
+authority; the enclosing boundary retains the first payload. During admitted
+execution, producer-side callback removal, hook replacement and task retirement
+consult that same live signal before releasing an opaque envelope. The binding
+is weak and scoped to the turn, so it neither extends owner lifetime nor changes
+healthy destruction after the turn ends.
 
 Temporary scheduler release distinguishes an ordinary reference release from
 the actual last strong release. Actual destruction closes weak upgrades before
@@ -68,8 +74,12 @@ recovery behavior.
 
 `owner_callback_contract` observes nested frame/background refusal, permanent
 retirement, produced-result custody and live completion-envelope custody after
-a nested caught failure. Scheduler owner-execution and background tables cover
-admitted preparation and wake recovery. The runtime
+a nested caught failure. `admitted_frame_preparation_contract` and
+`owner_background_turn_contract` cover admitted preparation and wake recovery.
+`owner_retirement_custody_contract` covers finished and cancelled futures,
+callback and lifecycle-listener removal, hook replacement, eager completion,
+and nested frame/background refusal from transient callbacks, task polls and
+post-frame callbacks. The runtime
 `frame_pacing_and_pump_matrix` observes text-store deferred grants and animation
 time through rejected native-style reentry. These are behavioral contracts;
 passing compilation alone does not establish their implementation.
