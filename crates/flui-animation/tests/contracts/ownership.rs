@@ -40,6 +40,22 @@ fn vsync_admission_contract() {
             "a failed attachment wake rolls back before recovery",
             a_failed_attachment_wake_rolls_back_before_recovery,
         ),
+        (
+            "moving a subtree preserves its last sampled motion",
+            moving_a_subtree_preserves_its_last_sampled_motion,
+        ),
+        (
+            "a withdrawn child waits for its new parent",
+            a_withdrawn_child_waits_for_its_new_parent,
+        ),
+        (
+            "a withdrawn ancestor stops its in-flight descendants",
+            a_withdrawn_ancestor_stops_its_in_flight_descendants,
+        ),
+        (
+            "a muted ancestor stops its in-flight descendants",
+            a_muted_ancestor_stops_its_in_flight_descendants,
+        ),
     ]);
 }
 
@@ -204,6 +220,150 @@ fn a_failed_attachment_wake_rolls_back_before_recovery() {
         run.is_complete(),
         "resident work survives admission recovery"
     );
+}
+
+fn moving_a_subtree_preserves_its_last_sampled_motion() {
+    use flui_animation::MotionClock;
+    for origin in [Duration::ZERO, Duration::from_secs(2000)] {
+        for nested in [false, true] {
+            for release_parent in [false, true] {
+                let old = Vsync::new();
+                let moving = Vsync::new();
+                let leaf = Vsync::new();
+                let old_seat = old.attach_child(&moving).expect("old parent");
+                let registry = if nested {
+                    moving.attach_child(&leaf).expect("nested owner");
+                    &leaf
+                } else {
+                    &moving
+                };
+                let owner =
+                    AnimationController::builder(Duration::from_secs(1)).build_on(Some(registry));
+                let controller = owner.controller();
+                let run = controller.forward().expect("resident run");
+                let mut old_clock = MotionClock::new();
+                old.tick_all(&old_clock.frame(Duration::from_secs(100)));
+                old.tick_all(&old_clock.frame(Duration::from_millis(100_400)));
+                let before = controller.value();
+                assert!((before - 0.4).abs() < 1e-10 && run.is_pending());
+                if !release_parent {
+                    old.detach_child(&old_seat);
+                }
+                drop(old);
+                let new = Vsync::new();
+                new.attach_child(&moving).expect("new parent");
+                new.detach_child(&old_seat);
+                let mut new_clock = MotionClock::new();
+                new.tick_all(&new_clock.frame(origin));
+                assert!(
+                    (controller.value() - before).abs() < 1e-10 && run.is_pending(),
+                    "transfer preserves the sample and run: origin={origin:?}, nested={nested}, release={release_parent}, value={}, pending={}",
+                    controller.value(),
+                    run.is_pending()
+                );
+                new.tick_all(&new_clock.frame(origin + Duration::from_millis(100)));
+                assert!(
+                    (controller.value() - 0.5).abs() < 1e-10,
+                    "the new clock advances motion: origin={origin:?}, nested={nested}, release={release_parent}, value={}",
+                    controller.value()
+                );
+                new.tick_all(&new_clock.frame(origin + Duration::from_millis(600)));
+                assert_eq!(controller.value(), 1.0);
+                assert!(
+                    run.is_complete(),
+                    "transfer preserves the original completion future"
+                );
+            }
+        }
+    }
+}
+
+fn a_withdrawn_child_waits_for_its_new_parent() {
+    use flui_animation::MotionClock;
+    use std::rc::Rc;
+    let parent = Vsync::new();
+    let earlier = Vsync::new();
+    let child = Vsync::new();
+    let replacement = Vsync::new();
+    parent.attach_child(&earlier).expect("earlier child");
+    let seat = parent.attach_child(&child).expect("later child");
+    let trigger = AnimationController::builder(Duration::from_millis(400)).build_on(Some(&earlier));
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&child));
+    let run = owner.controller().forward().expect("resident run");
+    trigger.controller().forward().expect("trigger run");
+    let mut clock = MotionClock::new();
+    parent.tick_all(&clock.frame(Duration::from_secs(100)));
+    let outgoing = parent.clone();
+    let incoming = replacement.clone();
+    let moving = child.clone();
+    let _subscription = trigger.controller().subscribe_status(Rc::new(move |_| {
+        outgoing.detach_child(&seat);
+        incoming.attach_child(&moving).expect("new parent");
+    }));
+    parent.tick_all(&clock.frame(Duration::from_millis(100_400)));
+    assert_eq!(
+        owner.controller().value(),
+        0.0,
+        "a stale child snapshot has no frame authority"
+    );
+    assert!(run.is_pending());
+    let mut incoming_clock = MotionClock::new();
+    replacement.tick_all(&incoming_clock.frame(Duration::ZERO));
+    replacement.tick_all(&incoming_clock.frame(Duration::from_millis(100)));
+    assert!((owner.controller().value() - 0.1).abs() < 1e-10);
+}
+
+fn a_withdrawn_ancestor_stops_its_in_flight_descendants() {
+    ancestor_changes_stop_descendants(false);
+}
+
+fn a_muted_ancestor_stops_its_in_flight_descendants() {
+    ancestor_changes_stop_descendants(true);
+}
+
+fn ancestor_changes_stop_descendants(mute: bool) {
+    use flui_animation::MotionClock;
+    use std::rc::Rc;
+    let parent = Vsync::new();
+    let middle = Vsync::new();
+    let leaf = Vsync::new();
+    let replacement = Vsync::new();
+    let seat = parent.attach_child(&middle).expect("middle");
+    middle.attach_child(&leaf).expect("leaf");
+    let trigger = AnimationController::builder(Duration::from_millis(400)).build_on(Some(&leaf));
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&leaf));
+    let run = owner.controller().forward().expect("resident run");
+    trigger.controller().forward().expect("trigger run");
+    let mut clock = MotionClock::new();
+    parent.tick_all(&clock.frame(Duration::from_secs(100)));
+    let outgoing = parent.clone();
+    let incoming = replacement.clone();
+    let moving = middle.clone();
+    let _subscription = trigger.controller().subscribe_status(Rc::new(move |_| {
+        if mute {
+            outgoing.set_muted(true);
+        } else {
+            outgoing.detach_child(&seat);
+            incoming.attach_child(&moving).expect("new parent");
+        }
+    }));
+    parent.tick_all(&clock.frame(Duration::from_millis(100_400)));
+    assert_eq!(
+        owner.controller().value(),
+        0.0,
+        "ancestor withdrawal or mute stops the remaining descendant samples: mute={mute}"
+    );
+    assert!(run.is_pending());
+    if mute {
+        parent.set_muted(false);
+        parent.tick_all(&clock.frame(Duration::from_millis(100_500)));
+        assert!((owner.controller().value() - 0.5).abs() < 1e-10);
+    } else {
+        let mut incoming_clock = MotionClock::new();
+        replacement.tick_all(&incoming_clock.frame(Duration::ZERO));
+        replacement.tick_all(&incoming_clock.frame(Duration::from_millis(100)));
+        assert!((owner.controller().value() - 0.1).abs() < 1e-10);
+    }
 }
 
 #[test]

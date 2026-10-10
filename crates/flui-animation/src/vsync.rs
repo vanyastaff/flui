@@ -115,20 +115,12 @@ pub enum VsyncRegistrationError {
     WouldCycle,
 }
 
-/// Seconds from `start` to `now`, both readings of a nanosecond clock, taken on
-/// that clock's integer grid.
-///
-/// Subtracting the two `f64` readings directly leaves the difference one ulp
-/// off the value a `Duration` of the same length converts to (`0.12 - 0.02` is
-/// `0.09999999999999999`), so a 100 ms run anchored at 20 ms would stop one ulp
-/// short of its end and never complete. Measuring elapsed time in integer
-/// nanoseconds avoids the trap.
 /// One registered controller plus the registry's per-run anchor.
 ///
-/// `run_start_secs` is the virtual instant treated as the current run's
-/// `t = 0`; `last_gen` is the controller's `run_generation` observed when that
-/// anchor was set. `run_start_secs` is `None` until the first tick anchors it,
-/// so registration needs no clock reading.
+/// Registration needs no clock reading: the first sample establishes an anchor.
+/// `last_gen` identifies the run whose anchor and last dispatched tick are stored.
+/// Elapsed arithmetic stays on the clock's integer nanosecond grid, so a run
+/// reaches its exact deadline without subtracting rounded floating-point times.
 ///
 /// Keyed by the registration id (the `u64` inside [`VsyncRegistration`]) in
 /// [`VsyncInner::controllers`] rather than carrying its own id — the map key
@@ -206,6 +198,40 @@ struct VsyncInner {
     closed: bool,
     muted: bool,
     last_tick: Option<FrameTick>,
+    /// Backend identity of the root that supplied the last frame. Weak custody
+    /// neither retains the old presentation nor permits address reuse to alias it.
+    frame_authority: Option<Weak<RefCell<VsyncInner>>>,
+}
+
+/// Borrowed admission chain for one recursive frame delivery. A callback can
+/// withdraw or mute any ancestor while a descendant is being sampled.
+struct FrameWalk<'a> {
+    registry: &'a Vsync,
+    parent: Option<(&'a Self, u64)>,
+}
+
+impl FrameWalk<'_> {
+    fn has_live_parent(&self) -> bool {
+        let Some((parent, slot)) = self.parent else {
+            return true;
+        };
+        let attached = {
+            let inner = self.registry.inner.borrow();
+            inner.parent.as_ref().is_some_and(|seat| {
+                seat.slot == slot
+                    && Weak::ptr_eq(&seat.owner, &Rc::downgrade(&parent.registry.inner))
+            })
+        };
+        attached && parent.is_live()
+    }
+
+    fn is_live(&self) -> bool {
+        let enabled = {
+            let inner = self.registry.inner.borrow();
+            !inner.closed && !inner.muted
+        };
+        enabled && self.has_live_parent()
+    }
 }
 
 impl VsyncInner {
@@ -460,7 +486,7 @@ impl Vsync {
     /// own controllers or to a nested registry's.
     ///
     /// **The clock keeps running.** Run anchors are absolute, so an unmuted
-    /// controller lands where the wall clock says it should be — it does not
+    /// controller lands where its presentation clock says it should be — it does not
     /// resume from where it stopped: a muted clock still runs, only the
     /// callback is withheld.
     pub fn set_muted(&self, muted: bool) {
@@ -568,7 +594,10 @@ impl Vsync {
     /// Advance live controller registrations using a presentation's typed tick.
     ///
     /// A fresh run anchors on its first observed frame. Registration migration
-    /// preserves its last sampled elapsed time. Older ticks hold at this
+    /// preserves its last sampled elapsed time. Moving a child subtree to another
+    /// root also re-anchors on its first delivered frame, without replacing runs.
+    /// Reattaching under the same root retains the existing absolute anchors.
+    /// Older ticks from the same root hold at this
     /// registry's last accepted time; stopped and disposed kernels are skipped.
     ///
     /// State borrows end before sampling user curves or delivering callbacks.
@@ -591,13 +620,50 @@ impl Vsync {
     /// preserving that failure through callback and capture retirement.
     pub fn tick_all(&self, tick: &FrameTick) {
         let mut retirement = Retirement::new();
-        retirement.run_with(|retirement| self.tick_all_with_retirement(*tick, retirement));
+        let authority = Rc::downgrade(&self.inner);
+        retirement.run_with(|retirement| {
+            self.tick_all_with_retirement(*tick, &authority, None, retirement);
+        });
         retirement.finish();
     }
 
-    fn tick_all_with_retirement(&self, tick: FrameTick, retirement: &mut RecoveryScope<'_>) {
-        let (fence, children, muted) = {
+    fn tick_all_with_retirement<'a>(
+        &'a self,
+        tick: FrameTick,
+        authority: &Weak<RefCell<VsyncInner>>,
+        parent: Option<(&'a FrameWalk<'a>, u64)>,
+        retirement: &mut RecoveryScope<'_>,
+    ) {
+        let walk = FrameWalk {
+            registry: self,
+            parent,
+        };
+        if !walk.has_live_parent() {
+            return;
+        }
+        let (fence, children) = {
             let mut inner = self.inner.borrow_mut();
+            if inner
+                .frame_authority
+                .as_ref()
+                .is_some_and(|previous| !Weak::ptr_eq(previous, authority))
+            {
+                inner.last_tick = None;
+                for registered in inner.controllers.values_mut() {
+                    // Published elapsed may precede a failed source's dispatched
+                    // tick. Resume the actual sample, as an individual rebind does.
+                    registered.anchor = RunAnchor::Resume(registered.controller.last_elapsed());
+                    registered.last_gen = registered.controller.run_generation();
+                    registered.last_tick = None;
+                }
+            }
+            if inner
+                .frame_authority
+                .as_ref()
+                .is_none_or(|previous| !Weak::ptr_eq(previous, authority))
+            {
+                inner.frame_authority = Some(authority.clone());
+            }
             inner.last_tick = Some(tick.hold_after(inner.last_tick.unwrap_or(tick)));
             inner.frame = inner.frame.saturating_add(1);
             (
@@ -605,33 +671,41 @@ impl Vsync {
                 inner
                     .children
                     .iter()
-                    .map(|registered| registered.child.clone())
+                    .map(|registered| (registered.slot, registered.child.clone()))
                     .collect::<Vec<_>>(),
-                inner.muted,
             )
         };
 
         // A muted registry delivers no tick — not to its own controllers, not
         // to a nested registry's. The anchors are absolute and left alone, so
         // the clock keeps running underneath: an unmute lands the animation
-        // where the wall clock says.
-        if muted {
+        // where its presentation clock says. A new root first establishes its
+        // own anchors instead of comparing unrelated absolute clock readings.
+        if !walk.is_live() {
             return;
         }
 
-        for child in children {
+        for (slot, child) in children {
+            if !walk.is_live() {
+                break;
+            }
             let child = Terminal::new(child);
             let tick = self
                 .inner
                 .borrow()
                 .last_tick
                 .expect("BUG: registry frame stores its tick before walking children");
-            retirement.run_with(|retirement| child.tick_all_with_retirement(tick, retirement));
+            retirement.run_with(|retirement| {
+                child.tick_all_with_retirement(tick, authority, Some((&walk, slot)), retirement);
+            });
             retirement.retire(child);
         }
 
         let mut cursor = 0u64;
         loop {
+            if !walk.has_live_parent() {
+                break;
+            }
             let step = {
                 let mut inner = self.inner.borrow_mut();
                 let tick = inner
@@ -699,8 +773,6 @@ impl Vsync {
                             },
                         )
                     } else if probe.live_running || resumed {
-                        // `run_start_secs` is `Some` here — set in the branch
-                        // above on this same call if it was `None`.
                         let elapsed = registered.anchor.elapsed(now);
                         registered.last_tick = Some(RegistryTick {
                             frame,

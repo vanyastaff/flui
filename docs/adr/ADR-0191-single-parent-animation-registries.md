@@ -35,6 +35,20 @@ Detachment clears the backreference before retiring child custody. Closing a
 registry closes its attached descendants and withdraws its parent seat before
 cancellation callouts. A refused second parent does not share that closure.
 
+The root supplying a frame is its clock authority. Each registry remembers that
+root weakly. Moving a surviving subtree to another root preserves each controller's
+published elapsed time and run future, then anchors that elapsed on its first
+delivered frame. Old absolute timestamps and dispatched tick history do not carry
+between independent clocks. Detach and reattach under the same root retain the
+existing anchors, including catch-up after mute or an interval without delivery.
+
+A frame walk borrows its ancestor admission chain. Before each child or controller
+delivery it checks that the captured parent seats still exist and ancestors remain
+enabled. Reentrant withdrawal, reattachment or mute stops the affected remainder
+of that old walk; unaffected peers remain deliverable. This needs no additional
+subtree allocation or strong root custody. Validation costs one admission check
+per ancestor; re-anchoring visits resident controllers only when authority changes.
+
 `TickerMode` detaches its old seat before moving under a changed ambient registry.
 Refused admission uses its detached scope: finite motion follows missing-clock
 settlement instead of waiting indefinitely. Diagnostics run outside borrows.
@@ -59,7 +73,10 @@ setup assertions do; expected refusals use the fallible replacement operation.
 
 `vsync_admission_contract` checks policy isolation, duplicate refusal and one
 sample, cycles without mutation, reattachment after detach or parent release,
-stale tokens, and recovery after a failed attachment wake.
+stale tokens, and recovery after a failed attachment wake. Its transfer rows
+cover earlier and later clock origins, nested controllers, expired parents and
+the original completion future. Reentrant rows withdraw a later child or an
+in-flight ancestor, mute an ancestor, and verify progress under the live driver.
 `closing_a_registry_withdraws_kernels_before_delivery` retains nested cancellation,
 first-failure custody and independent presentation progress. Private terminal
 capacity rows continue pinning permanent exhaustion.
