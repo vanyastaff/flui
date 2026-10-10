@@ -17,21 +17,29 @@ fn recursive_turns_preserve_the_admitted_frame() {
         .schedule(move |_| observed.set(true))
         .expect("live owner");
     owner
-        .drive_frame(now, IdleDeadline::far_future(now), || {
-            let phase = scheduler.phase();
-            assert_eq!(
-                owner.drive_frame(now, IdleDeadline::far_future(now), || panic!(
-                    "nested pipeline ran"
-                )),
-                Err(ExecutionError::AlreadyExecuting)
-            );
-            assert_eq!(
-                owner.pump_background(|| panic!("nested preparation ran")),
-                Err(ExecutionError::AlreadyExecuting)
-            );
-            assert_eq!(scheduler.phase(), phase);
-            assert!(!delivered.get());
-        })
+        .drive_frame(
+            now,
+            IdleDeadline::far_future(now),
+            || {},
+            || {
+                let phase = scheduler.phase();
+                assert_eq!(
+                    owner.drive_frame(
+                        now,
+                        IdleDeadline::far_future(now),
+                        || {},
+                        || panic!("nested pipeline ran")
+                    ),
+                    Err(ExecutionError::AlreadyExecuting)
+                );
+                assert_eq!(
+                    owner.pump_background(|| panic!("nested preparation ran")),
+                    Err(ExecutionError::AlreadyExecuting)
+                );
+                assert_eq!(scheduler.phase(), phase);
+                assert!(!delivered.get());
+            },
+        )
         .expect("outer frame completes");
     assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
     assert!(delivered.get());
@@ -46,9 +54,12 @@ fn retired_owner_refuses_without_consuming_demand() {
     scheduler.request_frame();
     let now = Instant::now();
     assert_eq!(
-        owner.drive_frame(now, IdleDeadline::far_future(now), || panic!(
-            "retired pipeline ran"
-        )),
+        owner.drive_frame(
+            now,
+            IdleDeadline::far_future(now),
+            || {},
+            || panic!("retired pipeline ran")
+        ),
         Err(ExecutionError::Retired)
     );
     assert_eq!(
@@ -75,9 +86,12 @@ fn produced_result_is_retained_after_completion_failure() {
         .expect("live owner");
     let now = Instant::now();
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        owner.drive_frame(now, IdleDeadline::far_future(now), || {
-            ResultCapture(drops.clone())
-        })
+        owner.drive_frame(
+            now,
+            IdleDeadline::far_future(now),
+            || {},
+            || ResultCapture(drops.clone()),
+        )
     }))
     .err()
     .expect("callback failure escapes");
@@ -92,7 +106,7 @@ fn produced_result_is_retained_after_completion_failure() {
     );
     assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
     owner
-        .drive_frame(now, IdleDeadline::far_future(now), || ())
+        .drive_frame(now, IdleDeadline::far_future(now), || {}, || ())
         .expect("next frame recovers");
 }
 
@@ -156,7 +170,7 @@ fn handled_nested_failure_retains_completion_envelope() {
     );
     drop(waker);
     let now = Instant::now();
-    let result = owner.drive_frame(now, IdleDeadline::far_future(now), || ());
+    let result = owner.drive_frame(now, IdleDeadline::far_future(now), || {}, || ());
     EXECUTING_OWNER.with(|slot| {
         slot.borrow_mut().take();
     });
@@ -217,7 +231,14 @@ fn callbacks_share_owner_state_and_allow_registration_reentry() {
     scheduler.add_post_frame_callback(Box::new(move |_| {
         callback_events.borrow_mut().push("post_frame");
     }));
-    scheduler.execute_frame(&owner);
+    owner
+        .drive_frame(
+            flui_scheduler::Instant::now(),
+            flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
+            || {},
+            || {},
+        )
+        .expect("live owner frame");
     assert_eq!(
         events.borrow().as_slice(),
         [
@@ -249,7 +270,14 @@ fn post_frame_storage_belongs_to_one_owner_generation() {
         .schedule(move |_| observed.borrow_mut().push("construction"))
         .expect("construction admits work before its first owner");
     let first = OwnerFrame::new(&scheduler).expect("first owner");
-    scheduler.execute_frame(&first);
+    first
+        .drive_frame(
+            flui_scheduler::Instant::now(),
+            flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
+            || {},
+            || {},
+        )
+        .expect("live owner frame");
     assert_eq!(events.borrow().as_slice(), ["construction"]);
 
     let stale = first.post_frame_handle();
@@ -285,7 +313,14 @@ fn post_frame_storage_belongs_to_one_owner_generation() {
         .post_frame_handle()
         .schedule(move |_| observed.borrow_mut().push("replacement"))
         .expect("replacement admits its own work");
-    scheduler.execute_frame(&second);
+    second
+        .drive_frame(
+            flui_scheduler::Instant::now(),
+            flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
+            || {},
+            || {},
+        )
+        .expect("live owner frame");
     assert_eq!(events.borrow().as_slice(), ["construction", "replacement"]);
 }
 

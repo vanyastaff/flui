@@ -63,36 +63,18 @@ tail survival, registration FIFO, and consumption of the failed entry.
 
 ### One recovery boundary closes phase/completion state before any pre-pipeline panic propagates
 
-**Rule:** a caller that catches a panic out of `drive_frame`/
-`execute_frame` must find the scheduler's own
-bookkeeping — phase, `frame_scheduled`, frame count, and every registered
-completion waiter — closed, regardless of which phase inside that call
-raised the panic.
+A caller catching a panic from `OwnerFrame::drive_frame` observes closed
+phase and completion bookkeeping for every frame that began. Admission is
+established before preparation and phase mutation; a refused turn cannot
+abort another turn. `OwnerFrame::pump_background` consumes old demand,
+prepares runtime policy and polls one ready batch without opening a frame.
 
-**Conflict:** issue #1057 found that `drive_frame_impl` only wrapped the
-caller-supplied `pipeline` closure in `catch_unwind`; `handle_begin_frame`
-and `handle_draw_frame` ran outside it. A panic from a transient callback, a
-mid-frame async-driver poll, a persistent callback, or a `Priority::Build`/
-`Animation`/`Idle` task — every one of which runs before the pipeline slot
-ever opens — escaped straight past `abort_frame` and left the phase machine
-stuck at whatever phase it reached (`TransientCallbacks`,
-`MidFrameMicrotasks`, or `PersistentCallbacks`), `frame_scheduled` in
-whatever state it happened to be, and every `end_of_frame()` waiter
-unresolved forever. `execute_frame` had the
-identical gap: they called `handle_begin_frame`/`handle_draw_frame`/
-`end_frame` directly, sharing no recovery boundary with `drive_frame` at
-all.
-
-**Choice:** `drive_frame_impl` now wraps `handle_begin_frame`,
-`handle_draw_frame`, AND `pipeline` in ONE `catch_unwind`; a panic from any
-of the three still runs `abort_frame` before the payload resumes.
-`execute_frame` routes through the SAME
-`drive_frame_impl` with a no-op pipeline (returning the `FrameId`
-`handle_begin_frame` minted alongside the pipeline's own result, since
-`drive_frame_impl` now returns `(FrameId, R)` internally — `drive_frame`
-discards the id to keep its existing `-> R`
-signature) rather than hand-rolling a second, unguarded sequence that could
-silently reopen the same gap later.
+The private execution module keeps the produced pipeline value and callable
+envelopes outside invocation containment, retires outgoing ownership explicitly,
+and preserves the first failure through completion, diagnostics and terminal
+scheduler release (ADR-0182). Producer handles expose registration and demand;
+they cannot begin, draw, finish or abort execution. Frame timing is observed
+through the current frame inside callbacks or through `FrameOutcome` afterward.
 
 **Per-queue policy, so "closed" does not also mean "lossy":** every queue
 this scheduler drains before the pipeline runs now pops one entry at a time
@@ -847,14 +829,14 @@ During an existing unwind the values are retained instead, the same limit
 `late_completion_after_ui_runtime_drop_drops_captures_on_the_owner`,
 `a_leaked_async_driver_holds_no_task_after_the_ui_runtime`);
 `retirement_retains_the_tail_and_keeps_the_first_panic` and
-`retirement_drops_queued_callbacks_and_closes_the_queue` here;
+`retirement_retains_failed_callback_tail_and_closes_the_queue` here;
 `async_driver_unwind_matrix` covers reentrant callback destruction, sibling wakes,
 eager-poll retirement and foreign-owner rejection without consuming frame demand;
 `frame_waker_wakes_the_ui_runtime_from_a_worker` in `flui-runtime`.
 
 ### `AsyncDriver` indexes ready tasks instead of scanning every resident one
 
-**Rule:** `OwnerFrame::poll_ready`'s cost scales with **ready** work (`R`),
+**Rule:** the task-poll step of `OwnerFrame::pump_background` scales with **ready** work (`R`),
 never with resident tasks (`N`). An idle driver holding 100,000 dormant tasks
 touches none of them; a mid-pump panic must not lose a sibling task that pump
 never reached; and a genuinely-ready-but-stale index entry (a cancelled or

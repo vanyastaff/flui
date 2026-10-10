@@ -75,8 +75,32 @@ scheduler.add_task(Priority::Build, || {
 });
 
 // Execute frame (called by event loop)
-scheduler.execute_frame(&owner);
+let now = flui_scheduler::Instant::now();
+owner.drive_frame(now, flui_scheduler::IdleDeadline::far_future(now), || {}, || {})
+    .expect("the owner accepts the frame");
 ```
+
+### Migrating execution
+
+`UpdateScheduler` registers work and requests delivery. Its owner executes
+`OwnerFrame::drive_frame(timestamp, deadline, prepare, pipeline)` or
+`OwnerFrame::pump_background(prepare)`. Both return typed admission errors;
+neither accepts another scheduler's owner. Preparation runs after admission,
+before frame phases or ready-task polling.
+
+Replace `execute_frame` and synchronous warm-up calls with a complete owner
+frame, using a no-op pipeline only when no render pipeline is needed. Observe
+frame identity and timing from `current_frame()` inside the pipeline or from
+`end_of_frame()` afterward. Replace manual begin/draw/end/abort sequences and
+`finish_async_pump` plus `poll_ready` with the corresponding complete operation.
+Failures close started frame bookkeeping before propagation; callers cannot
+manually abort an enclosing operation.
+
+The unused idle-callback lane (`schedule_idle_callback`, `execute_idle_callbacks`,
+`has_idle_callbacks`) was removed. `Priority::Idle` tasks remain supported and
+run within the frame's supplied deadline. Direct access to the scheduler's
+`TaskQueue` and manual timing-phase mutation were removed; standalone `TaskQueue`
+is still available as a separate queue, without authority over an owner's frame.
 
 ### Frame Budget Management
 
@@ -238,7 +262,9 @@ let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner 
 match event {
     Event::MainEventsCleared => {
         if scheduler.is_frame_scheduled() {
-            scheduler.execute_frame(&owner);
+            let now = flui_scheduler::Instant::now();
+            owner.drive_frame(now, flui_scheduler::IdleDeadline::far_future(now), || {}, || {})
+                .expect("the owner accepts the frame");
             window.request_redraw();
         }
     }
@@ -265,7 +291,7 @@ match event {
 `FrameBudget` reports timing statistics (jank, phase durations, over-budget)
 against whichever target the caller chose — `UpdateScheduler` itself makes
 no frame-rate assumption and does not act on these statistics to skip work.
-The only thing that ever defers work is `UpdateScheduler::drive_frame`'s own `deadline`
+The only thing that ever defers work is `OwnerFrame::drive_frame`'s own `deadline`
 parameter, and it bounds `Priority::Idle` tasks alone; `Priority::Animation`
 and `Priority::Build` always run to completion.
 

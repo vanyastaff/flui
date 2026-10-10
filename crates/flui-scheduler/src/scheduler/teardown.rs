@@ -92,7 +92,6 @@ impl Drop for SchedulerInner {
             .get_mut()
             .detach_unclaimed_for_retirement();
         let microtasks = std::mem::take(self.callbacks.microtasks.get_mut());
-        let idle = std::mem::take(self.callbacks.idle.get_mut());
         let listeners = std::mem::take(self.callbacks.lifecycle_listeners.get_mut());
         let timings = std::mem::take(self.binding.timings_callbacks.get_mut());
         let tasks = self.task_queue.detach_for_retirement();
@@ -136,9 +135,6 @@ impl Drop for SchedulerInner {
             retirement.retire(value);
         }
         for value in microtasks {
-            retirement.retire(value);
-        }
-        for value in idle {
             retirement.retire(value);
         }
         for value in listeners {
