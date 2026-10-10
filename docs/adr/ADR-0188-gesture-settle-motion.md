@@ -1,4 +1,4 @@
-# ADR-0182: Gesture velocity and contact ownership across settle
+# ADR-0188: Gesture velocity and contact ownership across settle
 
 Status: Accepted
 
