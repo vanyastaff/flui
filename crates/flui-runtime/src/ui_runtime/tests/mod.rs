@@ -139,7 +139,7 @@ fn coexistence_constraints() -> BoxConstraints {
 /// even resumes, so the frame TRANSACTIONS themselves might never
 /// actually overlap. The rendezvous below fixes that by sitting INSIDE
 /// each UI runtime's own `drive_frame` pipeline closure — which
-/// `UpdateScheduler::handle_draw_frame` guarantees runs during
+/// `OwnerFrame::drive_frame` guarantees runs during
 /// `SchedulerPhase::PersistentCallbacks` (see
 /// `the_production_frame_polls_the_ui_runtimes_async_driver_once_before_the_pipeline`)
 /// — so neither closure can proceed past the rendezvous until BOTH
@@ -176,32 +176,38 @@ pub(crate) fn two_ui_runtimes_two_threads_no_shared_state() {
 
             sender_b.request_redraw();
             let _ = ui_runtime_b.drain_commands();
-            ui_runtime_b.scheduler().drive_frame(
-                ui_runtime_b.owner_frame(),
-                flui_scheduler::Instant::now(),
-                flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
-                || {
-                    // Mid-PersistentCallbacks rendezvous: cannot return
-                    // until ui_runtime A's own closure below has ALSO
-                    // reached this point.
-                    rendezvous_or_timeout("ui_runtime B");
-                    let _ = ui_runtime_b.draw_frame(coexistence_constraints());
-                },
-            );
+            ui_runtime_b
+                .owner_frame()
+                .drive_frame(
+                    flui_scheduler::Instant::now(),
+                    flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
+                    || {},
+                    || {
+                        // Mid-PersistentCallbacks rendezvous: cannot return
+                        // until ui_runtime A's own closure below has ALSO
+                        // reached this point.
+                        rendezvous_or_timeout("ui_runtime B");
+                        let _ = ui_runtime_b.draw_frame(coexistence_constraints());
+                    },
+                )
+                .expect("runtime B frame");
             (wakes_b.load(Ordering::Relaxed), ui_runtime_b.id())
         });
 
         sender_a.request_redraw();
         let _ = ui_runtime_a.drain_commands();
-        ui_runtime_a.scheduler().drive_frame(
-            ui_runtime_a.owner_frame(),
-            flui_scheduler::Instant::now(),
-            flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
-            || {
-                rendezvous_or_timeout("ui_runtime A");
-                let _ = ui_runtime_a.draw_frame(coexistence_constraints());
-            },
-        );
+        ui_runtime_a
+            .owner_frame()
+            .drive_frame(
+                flui_scheduler::Instant::now(),
+                flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
+                || {},
+                || {
+                    rendezvous_or_timeout("ui_runtime A");
+                    let _ = ui_runtime_a.draw_frame(coexistence_constraints());
+                },
+            )
+            .expect("runtime A frame");
 
         handle.join().expect("ui_runtime B's thread did not panic")
     });
@@ -454,6 +460,7 @@ fn frame_pacing_and_pump_matrix() {
             ("frame_pipeline_and_vsync::surface_lost_keeps_needs_redraw_armed_for_a_retry", frame_pipeline_and_vsync::surface_lost_keeps_needs_redraw_armed_for_a_retry as fn()),
             ("pump_transaction::pump_post_frame_callback_observes_this_frames_committed_layout", pump_transaction::pump_post_frame_callback_observes_this_frames_committed_layout as fn()),
             ("presentation_text_input::a_text_store_lock_requested_during_a_frame_is_granted_after_the_drive_returns", presentation_text_input::a_text_store_lock_requested_during_a_frame_is_granted_after_the_drive_returns as fn()),
+            ("super::pump::rejected_nested_pump_preserves_outer_commits_and_animation_time", super::pump::rejected_nested_pump_preserves_outer_commits_and_animation_time as fn()),
             ("presentation_text_input::a_window_with_a_text_store_host_takes_input_through_it", presentation_text_input::a_window_with_a_text_store_host_takes_input_through_it as fn()),
         ],
     );

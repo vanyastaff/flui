@@ -228,11 +228,18 @@ fn mock_source_drives_all_seven_stages_through_the_async_driver() {
     let token = driver.spawn_local(Box::pin(async move {
         *outcome_for_task.lock() = Some(request.await);
     }));
-    assert_eq!(owner_frame.poll_ready(), 1);
+    assert_eq!(
+        owner_frame.pump_background(|| {}).expect("live owner turn"),
+        1
+    );
     assert!(outcome.lock().is_none(), "no delivery before the producer");
 
     source.deliver_all();
-    assert_eq!(owner_frame.poll_ready(), 1, "completion woke the task");
+    assert_eq!(
+        owner_frame.pump_background(|| {}).expect("live owner turn"),
+        1,
+        "completion woke the task"
+    );
 
     // Stage 5 — decoding: the payload arrives typed.
     let delivered = outcome.lock().take().expect("delivery observed");

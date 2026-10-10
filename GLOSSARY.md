@@ -45,3 +45,13 @@ _Avoid_: Formatting region, resolved locale
 The language identity selected for an application's available resources after
 applying its explicit choice or preferred UI languages and fallback policy.
 _Avoid_: System preference, formatting region
+
+**Frame demand**:
+A pending request for a future UI update. It is distinct from the host's
+notification that execution may proceed and from a frame already in progress.
+_Avoid_: Frame wake, frame execution
+
+**Owner retirement**:
+The permanent end of a UI execution owner's task and callback lifetime.
+Closing one presentation does not by itself retire its runtime's owner.
+_Avoid_: Presentation closure, native window closure, pause

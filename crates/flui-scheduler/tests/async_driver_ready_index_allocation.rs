@@ -1,5 +1,5 @@
 //! The actual complexity proof for issue #1056's ready-index rewrite:
-//! [`OwnerFrame::poll_ready`] must cost allocations proportional to *ready*
+//! [`OwnerFrame::pump_background`] must cost allocations proportional to *ready*
 //! work, not resident tasks. `cargo xtask ci` has no bench step, so this test — not
 //! `benches/async_driver_pump.rs` — is the merge-blocking gate.
 //!
@@ -100,7 +100,11 @@ fn poll_ready_costs_zero_extra_allocations_once_warm() {
         // Warm-up: the first pump polls every freshly spawned task once
         // (spawn seeds `ready`), making all of them dormant. Excluded from
         // the measured window, same convention as frame_telemetry's.
-        assert_eq!(frame.poll_ready(), dormant, "the warm-up pump");
+        assert_eq!(
+            frame.pump_background(|| {}).expect("live owner turn"),
+            dormant,
+            "the warm-up pump"
+        );
         assert_eq!(
             frame.ready_task_count(),
             0,
@@ -110,7 +114,11 @@ fn poll_ready_costs_zero_extra_allocations_once_warm() {
         let count_before = read();
         const EMPTY_PUMPS: usize = 20;
         for _ in 0..EMPTY_PUMPS {
-            assert_eq!(frame.poll_ready(), 0, "R=0 must poll nothing");
+            assert_eq!(
+                frame.pump_background(|| {}).expect("live owner turn"),
+                0,
+                "R=0 must poll nothing"
+            );
         }
         let allocations = read() - count_before;
 
@@ -145,12 +153,16 @@ fn poll_ready_costs_zero_extra_allocations_once_warm() {
     }
 
     // Warm-up settles the ready index capacity; spawn already created each waker.
-    assert_eq!(frame.poll_ready(), READY_TASKS, "the warm-up pump");
+    assert_eq!(
+        frame.pump_background(|| {}).expect("live owner turn"),
+        READY_TASKS,
+        "the warm-up pump"
+    );
 
     let count_before = read();
     for _ in 0..STEADY_PUMPS {
         assert_eq!(
-            frame.poll_ready(),
+            frame.pump_background(|| {}).expect("live owner turn"),
             READY_TASKS,
             "every task re-wakes itself every pump"
         );

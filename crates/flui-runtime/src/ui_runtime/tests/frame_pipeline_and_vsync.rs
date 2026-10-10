@@ -66,7 +66,6 @@ pub(crate) fn attach_root_widget_bootstraps_shared_render_tree() {
 /// pipeline runs afterwards, in the persistent slot.
 pub(crate) fn the_production_frame_polls_the_ui_runtimes_async_driver_once_before_the_pipeline() {
     let ui_runtime = UiRuntime::for_test();
-    let scheduler = ui_runtime.scheduler();
 
     let polls = Arc::new(AtomicUsize::new(0));
     let polls_for_task = Arc::clone(&polls);
@@ -86,15 +85,18 @@ pub(crate) fn the_production_frame_polls_the_ui_runtimes_async_driver_once_befor
     let flag = Arc::clone(&polled_before_pipeline);
     let polls_probe = Arc::clone(&polls);
 
-    scheduler.drive_frame(
-        ui_runtime.owner_frame(),
-        flui_scheduler::Instant::now(),
-        flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
-        || {
-            flag.store(polls_probe.load(Ordering::Acquire) == 1, Ordering::Release);
-            let _ = ui_runtime.draw_frame(test_constraints());
-        },
-    );
+    ui_runtime
+        .owner_frame()
+        .drive_frame(
+            flui_scheduler::Instant::now(),
+            flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
+            || {},
+            || {
+                flag.store(polls_probe.load(Ordering::Acquire) == 1, Ordering::Release);
+                let _ = ui_runtime.draw_frame(test_constraints());
+            },
+        )
+        .expect("runtime frame");
 
     assert!(
         polled_before_pipeline.load(Ordering::Acquire),

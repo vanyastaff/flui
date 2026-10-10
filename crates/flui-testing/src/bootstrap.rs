@@ -298,7 +298,7 @@ impl HeadlessBinding {
     ///
     /// It is a **pipeline step, not a whole scheduler frame.**
     /// [`pump_frame`](Self::pump_frame) wraps the same pipeline in
-    /// [`flui_scheduler::UpdateScheduler::drive_frame`], which adds begin-frame
+    /// [`flui_scheduler::OwnerFrame::drive_frame`], which adds begin-frame
     /// work (transient callbacks, microtasks, the async-driver poll), the
     /// stationary-device re-hit-test, and `end_frame`'s post-frame callbacks.
     /// None of those run here. A post-frame callback scheduled from

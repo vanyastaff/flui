@@ -37,7 +37,8 @@
 //! waker. A wake after the UI runtime is gone upgrades nothing and does nothing.
 //!
 //! Waking is legal from any thread. Polling is not: it happens only inside
-//! [`OwnerFrame::poll_ready`](crate::OwnerFrame::poll_ready), on the owner.
+//! [`OwnerFrame::drive_frame`](crate::OwnerFrame::drive_frame) or
+//! [`OwnerFrame::pump_background`](crate::OwnerFrame::pump_background), on the owner.
 //!
 //! # Readiness index
 //!
@@ -213,10 +214,18 @@ pub(crate) struct TaskStore {
     next_id: Cell<TaskId>,
     /// Set by retirement: no task is admitted afterwards.
     closed: Cell<bool>,
+    execution_failure: RefCell<Option<Weak<crate::wake_delivery::FailureSignal>>>,
     shared: Arc<WakeShared>,
 }
 
 impl TaskStore {
+    pub(crate) fn bind_execution_failure_signal(
+        &self,
+        signal: Option<Weak<crate::wake_delivery::FailureSignal>>,
+    ) {
+        self.execution_failure.borrow_mut().clone_from(&signal);
+        self.shared.wake_delivery.bind_failure_signal(signal);
+    }
     pub(crate) fn new() -> Self {
         Self::with_first_id(1)
     }
@@ -227,6 +236,7 @@ impl TaskStore {
             spare: RefCell::new(Vec::new()),
             next_id: Cell::new(first),
             closed: Cell::new(false),
+            execution_failure: RefCell::new(None),
             shared: Arc::new(WakeShared {
                 ready: Mutex::new(Vec::new()),
                 request_frame: Mutex::new(None),
@@ -326,6 +336,10 @@ impl TaskStore {
         };
         if outcome.is_ready() {
             flags.retired.store(true, Ordering::Release);
+            crate::scheduler::execution::retire_with_execution_custody(
+                &self.execution_failure,
+                future,
+            );
             return None;
         }
 
@@ -334,9 +348,10 @@ impl TaskStore {
         if self.closed.get() {
             flags.cancelled.store(true, Ordering::Release);
             flags.retired.store(true, Ordering::Release);
-            if let Err(payload) = release_opaque(future) {
-                resume_unwind(payload);
-            }
+            crate::scheduler::execution::retire_with_execution_custody(
+                &self.execution_failure,
+                future,
+            );
             return Some(TaskToken::refused());
         }
 
@@ -468,7 +483,10 @@ impl TaskStore {
             };
             // The finished future's destructor is user code (it may hold a
             // nested `TaskToken`) and runs with no borrow held.
-            drop(finished);
+            crate::scheduler::execution::retire_with_execution_custody(
+                &self.execution_failure,
+                finished,
+            );
         }
 
         // `done` first: if anything below ever panicked, `PumpGuard::drop`
@@ -532,10 +550,31 @@ impl RetiringTasks {
     /// Drop tasks then the hook, preserving the first failure. During an
     /// existing unwind retain opaque values: an outer catch cannot rescue
     /// double-panicking aggregate drop glue.
-    pub(crate) fn retire(self) -> Option<RetirePanic> {
+    pub(crate) fn retire_preserving_failure(
+        self,
+        preserve_failure: bool,
+        failure_signal: &crate::wake_delivery::FailureSignal,
+    ) -> Option<RetirePanic> {
+        self.retire_impl(preserve_failure, Some(failure_signal))
+    }
+
+    fn retire_impl(
+        self,
+        preserve_failure: bool,
+        failure_signal: Option<&crate::wake_delivery::FailureSignal>,
+    ) -> Option<RetirePanic> {
         let mut first: Option<RetirePanic> = None;
-        let mut keep = |result: Result<(), RetirePanic>| {
-            if let Err(payload) = result {
+        let mut retire = |value| {
+            if preserve_failure
+                || first.is_some()
+                || failure_signal.is_some_and(crate::wake_delivery::FailureSignal::get)
+                || std::thread::panicking()
+            {
+                mem::forget(value);
+            } else if let Err(payload) = release_opaque(value) {
+                if let Some(signal) = failure_signal {
+                    signal.set(true);
+                }
                 if first.is_none() {
                     first = Some(payload);
                 } else {
@@ -545,12 +584,24 @@ impl RetiringTasks {
         };
         for (_, mut task) in self.tasks {
             if let Some(future) = task.future.take() {
-                keep(release_opaque(future));
+                retire(future);
             }
         }
         // Its captures die here, not with the last outstanding waker.
         if let Some(hook) = self.hook {
-            keep(release_opaque(hook));
+            // A hook has a different envelope type than a task future.
+            if preserve_failure
+                || first.is_some()
+                || failure_signal.is_some_and(crate::wake_delivery::FailureSignal::get)
+                || std::thread::panicking()
+            {
+                mem::forget(hook);
+            } else if let Err(payload) = release_opaque(hook) {
+                if let Some(signal) = failure_signal {
+                    signal.set(true);
+                }
+                first = Some(payload);
+            }
         }
         first
     }
@@ -670,7 +721,10 @@ impl TaskToken {
             // If the task is mid-poll its slot holds `None`, and the pump
             // honours `cancelled` when it tries to re-queue.
             let removed = store.remove(self.id);
-            drop(removed);
+            crate::scheduler::execution::retire_with_execution_custody(
+                &store.execution_failure,
+                removed,
+            );
         }
     }
 }
@@ -769,11 +823,6 @@ impl AsyncDriver {
         }
     }
 
-    /// The live store, unless its UI runtime is gone or retiring.
-    fn live_store(&self) -> Option<Rc<TaskStore>> {
-        self.store.upgrade().filter(|store| !store.closed.get())
-    }
-
     /// Replace the "request a frame" hook. A test probe: production installs
     /// the hook only through [`OwnerFrame::new`](crate::OwnerFrame::new), so a
     /// widget cannot replace its UI runtime's frame hook.
@@ -825,9 +874,10 @@ impl AsyncDriver {
     /// Propagates a panic from a refused future's destructor.
     #[must_use = "dropping the TaskToken immediately cancels the task"]
     pub fn spawn_local(&self, future: BoxedTask) -> TaskToken {
-        match self.live_store() {
-            Some(store) => store.spawn(future),
-            None => refuse(future),
+        match self.store.upgrade() {
+            Some(store) if !store.closed.get() => store.spawn(future),
+            Some(store) => refuse(future, Some(&store.execution_failure)),
+            None => refuse(future, None),
         }
     }
 
@@ -860,9 +910,10 @@ impl AsyncDriver {
     /// As [`spawn_local`](Self::spawn_local), plus a panic from the inline poll.
     #[must_use = "dropping the TaskToken immediately cancels the task"]
     pub fn spawn_local_eager(&self, future: BoxedTask) -> Option<TaskToken> {
-        match self.live_store() {
-            Some(store) => store.spawn_eager(future),
-            None => Some(refuse(future)),
+        match self.store.upgrade() {
+            Some(store) if !store.closed.get() => store.spawn_eager(future),
+            Some(store) => Some(refuse(future, Some(&store.execution_failure))),
+            None => Some(refuse(future, None)),
         }
     }
 
@@ -911,9 +962,18 @@ fn release_opaque<T>(value: T) -> Result<(), RetirePanic> {
 /// afterwards under its own catch, so a panicking subscriber can neither
 /// abort an unwind nor replace the destructor's panic. A diagnostic panic is
 /// retained, never raised.
-fn refuse(future: BoxedTask) -> TaskToken {
+fn refuse(
+    future: BoxedTask,
+    failure_slot: Option<&RefCell<Option<Weak<crate::wake_delivery::FailureSignal>>>>,
+) -> TaskToken {
     let token = TaskToken::refused();
-    let released = release_opaque(future);
+    let released = if let Some(slot) = failure_slot {
+        catch_unwind(AssertUnwindSafe(|| {
+            crate::scheduler::execution::retire_with_execution_custody(slot, future);
+        }))
+    } else {
+        release_opaque(future)
+    };
     let diagnostic = catch_unwind(|| {
         tracing::warn!(
             "AsyncDriver: the ui_runtime that owned this driver is gone; dropping the spawned future"
@@ -1041,7 +1101,7 @@ mod tests {
                 };
                 accepted.push((token, polls, finish, waker));
             }
-            assert_eq!(frame.poll_ready(), 2);
+            assert_eq!(frame.pump_background(|| {}).expect("live owner turn"), 2);
             assert_eq!(driver.pending_task_count(), 2);
 
             let rejected_polls = Arc::new(AtomicUsize::new(0));
@@ -1065,7 +1125,7 @@ mod tests {
                         Some("AsyncDriver task identities exhausted; refusing identity reuse")
                     );
                     assert_eq!(driver.pending_task_count(), 2);
-                    assert_eq!(frame.poll_ready(), 0);
+                    assert_eq!(frame.pump_background(|| {}).expect("live owner turn"), 0);
                 }
             }
             assert_eq!(rejected_polls.load(Ordering::Relaxed), 0);
@@ -1078,7 +1138,7 @@ mod tests {
                 .as_ref()
                 .expect("first pending task stores waker")
                 .wake_by_ref();
-            assert_eq!(frame.poll_ready(), 1);
+            assert_eq!(frame.pump_background(|| {}).expect("live owner turn"), 1);
             first.cancel();
             assert_eq!(driver.pending_task_count(), 1);
             let (_, _, finish, waker) = &accepted[1];
@@ -1088,7 +1148,7 @@ mod tests {
                 .as_ref()
                 .expect("sibling stores waker")
                 .wake_by_ref();
-            assert_eq!(frame.poll_ready(), 1);
+            assert_eq!(frame.pump_background(|| {}).expect("live owner turn"), 1);
             assert_eq!(driver.pending_task_count(), 0);
             for eager in [false, true] {
                 let refusal = catch_unwind(AssertUnwindSafe(|| {
@@ -1111,7 +1171,7 @@ mod tests {
         let _token = fresh.async_driver().spawn_local(Box::pin(async move {
             output.store(true, Ordering::Release);
         }));
-        assert_eq!(fresh.poll_ready(), 1);
+        assert_eq!(fresh.pump_background(|| {}).expect("live owner turn"), 1);
         assert!(completed.load(Ordering::Acquire));
         assert_eq!(fresh.async_driver().pending_task_count(), 0);
     }
@@ -1137,7 +1197,9 @@ mod tests {
         let _token = driver.spawn_local(Box::pin(PanicsOnPoll));
         assert_eq!(frame.async_driver().pending_task_count(), before + 1);
 
-        let unwind = catch_unwind(AssertUnwindSafe(|| frame.poll_ready()));
+        let unwind = catch_unwind(AssertUnwindSafe(|| {
+            frame.pump_background(|| {}).expect("live owner turn")
+        }));
         assert!(
             unwind.is_err(),
             "the panic must propagate out of poll_ready"
@@ -1150,7 +1212,7 @@ mod tests {
         );
 
         // A later poll must not touch the removed slot.
-        assert_eq!(frame.poll_ready(), 0);
+        assert_eq!(frame.pump_background(|| {}).expect("live owner turn"), 0);
         assert_eq!(frame.async_driver().pending_task_count(), before);
     }
 
@@ -1171,7 +1233,7 @@ mod tests {
             "spawn requests the frame that will poll the task"
         );
 
-        frame.poll_ready();
+        frame.pump_background(|| {}).expect("live owner turn");
         let waker = waker.lock().clone().expect("waker stored");
 
         for _ in 0..5 {
@@ -1186,7 +1248,7 @@ mod tests {
         assert_eq!(frame.ready_task_count(), 1);
 
         // After a poll clears `ready`, the next wake requests again.
-        frame.poll_ready();
+        frame.pump_background(|| {}).expect("live owner turn");
         waker.wake_by_ref();
         assert_eq!(frames.load(Ordering::Relaxed), 3);
     }
@@ -1212,7 +1274,7 @@ mod tests {
             task.await;
         }));
 
-        frame.poll_ready();
+        frame.pump_background(|| {}).expect("live owner turn");
         let polls_after_first = polls.load(Ordering::Relaxed);
         let waker = waker.lock().clone().expect("waker");
 
@@ -1230,7 +1292,7 @@ mod tests {
         );
         assert_eq!(frame.ready_task_count(), 1);
 
-        frame.poll_ready();
+        frame.pump_background(|| {}).expect("live owner turn");
         assert_eq!(polls.load(Ordering::Relaxed), polls_after_first + 1);
 
         let threads = polled_on.borrow().clone();
@@ -1254,7 +1316,7 @@ mod tests {
             })));
         }
 
-        frame.poll_ready();
+        frame.pump_background(|| {}).expect("live owner turn");
         assert_eq!(*order.borrow(), (0..8).collect::<Vec<_>>());
         // Retain cancellation tokens until every task has been observed.
         drop(tokens);
@@ -1274,11 +1336,11 @@ mod tests {
                 Poll::<()>::Pending
             })));
 
-        assert_eq!(frame.poll_ready(), 1);
+        assert_eq!(frame.pump_background(|| {}).expect("live owner turn"), 1);
         assert_eq!(polls.get(), 1, "one poll, no spin");
         assert_eq!(frame.ready_task_count(), 1, "re-armed for the next frame");
 
-        assert_eq!(frame.poll_ready(), 1);
+        assert_eq!(frame.pump_background(|| {}).expect("live owner turn"), 1);
         assert_eq!(polls.get(), 2);
     }
 
@@ -1299,7 +1361,9 @@ mod tests {
             Poll::<()>::Pending
         })));
 
-        let unwind = catch_unwind(AssertUnwindSafe(|| frame.poll_ready()));
+        let unwind = catch_unwind(AssertUnwindSafe(|| {
+            frame.pump_background(|| {}).expect("live owner turn")
+        }));
         assert!(
             unwind.is_err(),
             "the panic must propagate out of poll_ready"
@@ -1322,7 +1386,7 @@ mod tests {
         );
 
         assert_eq!(
-            frame.poll_ready(),
+            frame.pump_background(|| {}).expect("live owner turn"),
             1,
             "the next pump must poll exactly the stranded third task"
         );
@@ -1353,7 +1417,7 @@ mod tests {
         }));
         // Poll once so the async block actually starts executing (and so
         // constructs `_payload`) before it is cancelled.
-        assert_eq!(frame.poll_ready(), 1);
+        assert_eq!(frame.pump_background(|| {}).expect("live owner turn"), 1);
 
         let unwind = catch_unwind(AssertUnwindSafe(|| token.cancel()));
         assert!(
@@ -1362,10 +1426,9 @@ mod tests {
         );
     }
 
-    /// Retirement drops every remaining future once, under its own catch: a
-    /// panicking destructor neither stops its siblings' nor replaces the first
-    /// failure, and a token or driver used afterwards reaches nothing.
-    fn retirement_drops_every_task_and_keeps_the_first_panic() {
+    /// A failed destructor closes failure custody; later opaque futures are
+    /// retained rather than risking aggregate double-panic destruction.
+    fn retirement_retains_the_tail_and_keeps_the_first_panic() {
         struct Probe {
             drops: Rc<Cell<usize>>,
             panic_with: Option<&'static str>,
@@ -1395,18 +1458,22 @@ mod tests {
                 }))
             })
             .collect();
-        assert_eq!(frame.poll_ready(), 4);
+        assert_eq!(frame.pump_background(|| {}).expect("live owner turn"), 4);
 
         let first = frame.retire().expect("a destructor panicked");
         assert_eq!(
             first.downcast_ref::<String>().map(String::as_str),
             Some("first")
         );
-        assert_eq!(drops.get(), 4, "every capture dropped exactly once");
+        assert_eq!(
+            drops.get(),
+            2,
+            "the healthy prefix and first failing capture retire"
+        );
         assert!(tokens.iter().all(TaskToken::is_cancelled));
         assert!(frame.retire().is_none(), "retirement is idempotent");
         drop(tokens);
-        assert_eq!(drops.get(), 4);
+        assert_eq!(drops.get(), 2);
 
         let late = driver.spawn_local(Box::pin(async {}));
         assert!(late.is_cancelled(), "a retired store admits nothing");
@@ -1427,7 +1494,14 @@ mod tests {
         let _token = first.async_driver().spawn_local(Box::pin(async move {
             counter.fetch_add(1, Ordering::Relaxed);
         }));
-        scheduler.execute_frame(&first);
+        first
+            .drive_frame(
+                crate::Instant::now(),
+                crate::IdleDeadline::far_future(crate::Instant::now()),
+                || {},
+                || {},
+            )
+            .expect("live owner frame");
         assert_eq!(polled.load(Ordering::Relaxed), 1, "the one owner is polled");
 
         let _ = first.retire();
@@ -1440,7 +1514,14 @@ mod tests {
         let second = OwnerFrame::new(&scheduler).expect("the slot frees when the owner drops");
         let _token = second.async_driver().spawn_local(Box::pin(async {}));
         assert!(scheduler.is_frame_scheduled());
-        scheduler.execute_frame(&second);
+        second
+            .drive_frame(
+                crate::Instant::now(),
+                crate::IdleDeadline::far_future(crate::Instant::now()),
+                || {},
+                || {},
+            )
+            .expect("live owner frame");
         assert_eq!(second.async_driver().pending_task_count(), 0);
     }
 
@@ -1482,8 +1563,8 @@ mod tests {
                     cancel_propagates_the_removed_futures_panic as fn(),
                 ),
                 (
-                    "retirement_drops_every_task_and_keeps_the_first_panic",
-                    retirement_drops_every_task_and_keeps_the_first_panic as fn(),
+                    "retirement_retains_the_tail_and_keeps_the_first_panic",
+                    retirement_retains_the_tail_and_keeps_the_first_panic as fn(),
                 ),
                 (
                     "a_scheduler_has_one_live_owner_frame",
