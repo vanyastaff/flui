@@ -46,6 +46,14 @@ if any strong or weak observer still holds the earlier one. A later worker
 failure cannot contaminate a new healthy refusal or admission. Exclusively owned
 receipts are reused; receipt ownership grants no UI authority.
 
+Standalone refused-envelope retirement and explicit owner retirement establish
+the same outermost custody lifetime. They publish the receipt before releasing
+captures, retain temporary scheduler ownership through terminal release, and
+withdraw publication before ending caller custody. Recursive cleanup borrows
+the enclosing scope; catching a nested failure cannot clear it. A later healthy
+refusal starts independently, even after an earlier cleanup returned a failure
+payload or completed with a failure caught by user code.
+
 Temporary scheduler release distinguishes an ordinary reference release from
 the actual last strong release. Actual destruction closes weak upgrades before
 completion delivery and capture retirement, and detaches every opaque queue

@@ -214,6 +214,10 @@ impl OwnerFrame {
     /// calls it for an owner that did not.
     #[must_use = "the first destructor panic is returned for the owner to raise"]
     pub fn retire(&self) -> Option<RetirePanic> {
+        self.with_cleanup_custody(|| self.retire_impl())
+    }
+
+    fn retire_impl(&self) -> Option<RetirePanic> {
         self.execution.retire();
         self.post_frame.closed.set(true);
         let mut callbacks = self.post_frame.queue.take();
@@ -309,12 +313,15 @@ fn keep_first(first: &mut Option<RetirePanic>, payload: RetirePanic) {
 
 impl Drop for OwnerFrame {
     fn drop(&mut self) {
-        let mut first = self.retire();
-        // Freed only after retirement: a destructor retirement runs cannot
-        // mint a second owner while this one still holds tasks.
-        if let Some(payload) = self.release_scheduler_after_retirement() {
-            keep_first(&mut first, payload);
-        }
+        let first = self.with_cleanup_custody(|| {
+            let mut first = self.retire_impl();
+            // Freed only after retirement: a destructor retirement runs cannot
+            // mint a second owner while this one still holds tasks.
+            if let Some(payload) = self.release_scheduler_after_retirement() {
+                keep_first(&mut first, payload);
+            }
+            first
+        });
         if let Some(payload) = first {
             if std::thread::panicking() {
                 flui_foundation::panic::retain_opaque_payload(payload);

@@ -57,10 +57,18 @@ impl ExecutionState {
     }
 
     pub(crate) fn retire(&self) {
-        if !self.active.get() && !self.retired.get() && !std::thread::panicking() {
+        self.retired.set(true);
+    }
+
+    fn enter_cleanup(&self) -> Option<ExecutionPermit<'_>> {
+        if self.active.get() {
+            return None;
+        }
+        if !std::thread::panicking() {
             self.fresh_failure_signal();
         }
-        self.retired.set(true);
+        self.active.set(true);
+        Some(ExecutionPermit { state: self })
     }
 }
 
@@ -176,6 +184,29 @@ impl<'a> Recovery<'a> {
 }
 
 impl OwnerFrame {
+    /// An outermost cleanup has the same publication and completion lifetime
+    /// as a turn. Nested retirement borrows its enclosing failure custody.
+    pub(crate) fn with_cleanup_custody(
+        &self,
+        action: impl FnOnce() -> Option<RetirePanic>,
+    ) -> Option<RetirePanic> {
+        let Some(permit) = self.execution.enter_cleanup() else {
+            return action();
+        };
+        let scheduler = self.scheduler.upgrade();
+        let failure_scope = scheduler.as_ref().map(|scheduler| self.bind_failure_scope(scheduler));
+        let mut recovery = Recovery::new(self);
+        if let Some(Some(payload)) = recovery.attempt(action) {
+            recovery.keep(payload);
+        }
+        if let Some(scheduler) = scheduler {
+            recovery.release_scheduler(scheduler);
+        }
+        drop(failure_scope);
+        drop(permit);
+        recovery.first.take()
+    }
+
     fn bind_failure_scope<'a>(&'a self, scheduler: &UpdateScheduler) -> FailureScope<'a> {
         let signal = Arc::downgrade(&self.execution.failed.borrow());
         *scheduler.inner.execution_failure.borrow_mut() = Some(signal.clone());
@@ -204,19 +235,26 @@ impl OwnerFrame {
     }
 
     fn retire_refused<T>(&self, envelope: T) {
-        if self.preserving_execution_failure() || std::thread::panicking() {
-            std::mem::forget(envelope);
-        } else if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(envelope))) {
-            self.record_execution_failure();
+        let failure = self.with_cleanup_custody(|| {
+            let mut recovery = Recovery::new(self);
+            recovery.retire(envelope);
+            recovery.first.take()
+        });
+        if let Some(payload) = failure {
             resume_unwind(payload);
         }
     }
 
     fn retire_refused_frame<P, F>(&self, prepare: P, pipeline: F) {
-        let mut recovery = Recovery::new(self);
-        recovery.retire(prepare);
-        recovery.retire(pipeline);
-        recovery.finish();
+        let failure = self.with_cleanup_custody(|| {
+            let mut recovery = Recovery::new(self);
+            recovery.retire(prepare);
+            recovery.retire(pipeline);
+            recovery.first.take()
+        });
+        if let Some(payload) = failure {
+            resume_unwind(payload);
+        }
     }
 
     /// Execute one complete frame on this owner's scheduler.
