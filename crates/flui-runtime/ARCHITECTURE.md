@@ -500,6 +500,14 @@ through the runtime frame producer for tween, repeat and spring, including
 exactly-once terminal status and future delivery. The addressed step row above
 also checks a completed run's inspection frame and an independent root rebuild.
 
+Playback requests admitted by an animation listener stay in the owner inbox
+until the next pump's idle boundary. The current traversal retains its selected
+time for every presentation. `step_during_a_tick_applies_next_frame` drives the
+public pump and addressed agent handle with a manual clock: a compound pause
+and step remains unanswered during the current frame, advances only its target
+on the next frame and leaves sibling continuation independent. Moving inbox
+delivery to the end of the current frame fails the pending-answer assertion.
+
 ### `Vsync` ticks in the persistent phase, not among the transient callbacks
 
 Tickers registered with a scheduler are transient frame callbacks, so they run
