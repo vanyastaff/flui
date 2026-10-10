@@ -138,6 +138,9 @@ impl DrivenController {
     /// Release the registry seat, then dispose the controller. Idempotent.
     /// Callouts run only after this owner has committed its retired state.
     pub fn dispose(&mut self) {
+        if matches!(self.seat, Seat::Retired) {
+            return;
+        }
         let mut recovery = Retirement::new();
         self.dispose_with_recovery(&mut recovery.scope());
         recovery.finish();

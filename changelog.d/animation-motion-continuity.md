@@ -69,6 +69,9 @@
 
 ### Fixed
 
+- Skip redundant retirement recovery when an already disposed animation owner
+  is disposed again or subsequently dropped.
+
 - Release the Hero rect-factory guard before calling its factory, mapping or
   destructor, allowing each to reenter the same flight without deadlocking.
 - Preserve a Hero mapping's evaluation failure through opaque mapping retirement;

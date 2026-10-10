@@ -42,6 +42,87 @@ a new clock and repeated one timestamp, so it did not measure sustained active
 frames. Comparisons need baseline and final runs with the same corrected
 workload, release profile and host conditions.
 
+### Same-host registry comparison, 2026-10-10
+
+The corrected workload ran sequentially on Windows x86_64 MSVC, an Intel
+i9-13900K (24 cores, 32 logical processors), with Rust 1.99.0, Criterion 0.8.2
+and the workspace's optimized bench profile. Each row used 10 samples, a
+500 ms warm-up and a one-second measurement. Builds used six jobs; each
+checkout had its own target directory. Other host activity and CPU frequency
+were not controlled.
+
+The baseline was `c297b6c89bc93941e28c738c9dfac3d623a2dae2` from `origin/main`.
+Only its benchmark was changed to use the same advancing-clock workload as
+the candidate, `b241a4f54a7fc2d8b3eb07a24bc2fed417555738`. The two workload
+files were byte-identical. Baseline production code was unchanged. This
+compares against current main, which already has owner-local controllers;
+it does not attribute the performance of the whole owner-local migration.
+
+Criterion median estimates, in microseconds:
+
+| Population / operation | Owners | Baseline | Candidate |
+|---|---:|---:|---:|
+| Stopped frame | 100 | 1.445 | 1.429 |
+| Stopped frame | 1,000 | 28.432 | 27.289 |
+| Stopped frame | 5,000 | 212.185 | 213.512 |
+| Stopped frame | 10,000 | 431.753 | 443.140 |
+| Active frame | 100 | 5.971 | 5.983 |
+| Active frame | 1,000 | 75.052 | 74.843 |
+| Active frame | 5,000 | 495.902 | 485.488 |
+| Active frame | 10,000 | 992.824 | 1,013.251 |
+| Frame with 10% active | 1,000 | 33.283 | 31.135 |
+| Retire all owners | 1,000 | 95.275 | 99.776 |
+| Retire all owners | 10,000 | 1,346.989 | 1,447.577 |
+
+A filtered repeat exposed a benchmark assertion on unmeasured populations.
+Both copies now check post-measurement progress only when the measured loop
+advanced time; their untimed progress and activity checks remain. This changes
+no timed operation. The repeated workload files were again byte-identical.
+Repeat with:
+
+```bash
+cargo bench -p flui-animation --bench vsync_registry --locked -- --noplot 'unregister_all|running_vsync_registry/10000|stopped_vsync_registry/10000'
+```
+
+| Repeated operation | Owners | Baseline | Candidate |
+|---|---:|---:|---:|
+| Stopped frame | 10,000 | 451.371 | 440.448 |
+| Active frame | 10,000 | 1,058.414 | 1,069.997 |
+| Retire all owners | 1,000 | 95.360 | 106.933 |
+| Retire all owners | 10,000 | 1,331.156 | 1,463.162 |
+
+The active 10,000-owner repeat has overlapping 95% median confidence intervals
+(baseline 1,050–1,081 µs, candidate 1,046–1,100 µs). Same-version runs vary
+about 6% on this shared host. Owner retirement was consistently slower in
+the candidate: roughly 5–12% at 1,000 owners and 7–10% at 10,000. The latter
+has broad confidence intervals. These results require profiling retirement;
+they do not establish an improvement for every row. Admission, retarget
+latency and a historical baseline remain separate measurements.
+
+The retirement workload explicitly calls `dispose`, then drops the owner.
+The candidate's repeated `dispose` still constructed recovery and published
+an empty retirement receipt. An already retired owner now returns immediately
+from the public `dispose` entry; first retirement and grouped preparation
+retain their existing closure and delivery paths. The public ownership table's
+`dispose_then_drop_is_one_retirement` checks repeated disposal and exactly one
+run outcome.
+
+Additional sequential Criterion slope estimates (µs) from the same filtered
+workload:
+
+| Owner retirement | 1,000 | 10,000 |
+|---|---:|---:|
+| With the retired-owner return | 92.216 | 1,223.9 |
+| Return removed for control | 94.965 | 1,295.4 |
+| Return restored | 89.912 | 1,151.8 |
+
+The restored run's Criterion comparison with the control reported improvement
+in both rows. The first control comparison had overlapping intervals, however,
+and this shared-host experiment does not establish a fixed speedup percentage.
+The structural result is removal of redundant recovery on repeated disposal;
+these numbers do not replace the remaining admission/retarget or full-frame
+measurements.
+
 ## Measured benchmarks
 
 The benchmark tables below are historical measurements from before the

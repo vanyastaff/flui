@@ -99,16 +99,19 @@ fn running_vsync_registry(criterion: &mut Criterion) {
         vsync.tick_all(&clock.frame(raw)); // anchor every run before the timed loop
         assert_live_progress(&vsync, &mut clock, &mut raw, owners[0].controller());
         let before = owners[0].controller().value();
+        let before_raw = raw;
         group.bench_with_input(BenchmarkId::from_parameter(count), &count, |bench, _| {
             bench.iter(|| {
                 registry_frame(&vsync, &mut clock, &mut raw);
             });
         });
         assert!(owners.iter().all(|owner| owner.controller().is_animating()));
-        assert!(
-            owners[0].controller().value() > before,
-            "the measured loop must advance its active controllers"
-        );
+        if raw > before_raw {
+            assert!(
+                owners[0].controller().value() > before,
+                "the measured loop must advance its active controllers"
+            );
+        }
     }
     group.finish();
 }
@@ -141,6 +144,7 @@ fn mixed_vsync_registry(criterion: &mut Criterion) {
     vsync.tick_all(&clock.frame(raw));
     assert_live_progress(&vsync, &mut clock, &mut raw, owners[0].controller());
     let before = owners[0].controller().value();
+    let before_raw = raw;
     group.bench_function(COUNT.to_string(), |bench| {
         bench.iter(|| {
             registry_frame(&vsync, &mut clock, &mut raw);
@@ -153,10 +157,12 @@ fn mixed_vsync_registry(criterion: &mut Criterion) {
             .count(),
         RUNNING as usize
     );
-    assert!(
-        owners[0].controller().value() > before,
-        "the measured loop must advance its active controllers"
-    );
+    if raw > before_raw {
+        assert!(
+            owners[0].controller().value() > before,
+            "the measured loop must advance its active controllers"
+        );
+    }
     group.finish();
 }
 
