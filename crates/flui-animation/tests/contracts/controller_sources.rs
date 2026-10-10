@@ -1091,6 +1091,10 @@ impl Listenable for TerminalParent {
     }
 }
 impl Animation<f64> for TerminalParent {
+    fn is_animating(&self) -> bool {
+        false
+    }
+
     fn subscribe_status(&self, callback: StatusCallback) -> flui_animation::StatusSubscription {
         self.register();
         let id = {

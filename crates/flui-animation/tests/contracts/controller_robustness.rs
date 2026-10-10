@@ -73,6 +73,52 @@ fn is_animating_after_the_run_completes() {
     assert_is_animating_everywhere(&controller, false);
 }
 
+fn a_constant_phase_does_not_install_a_run() {
+    use flui_animation::{AnimationSwitch, ConstantAnimation, FloatTween, TweenAnimation};
+    use std::rc::Rc;
+    for status in [
+        AnimationStatus::Forward,
+        AnimationStatus::Reverse,
+        AnimationStatus::Completed,
+        AnimationStatus::Dismissed,
+    ] {
+        let constant = ConstantAnimation::with_status(0.5_f64, status);
+        assert!(!constant.is_animating(), "constant {status:?} has no run");
+        let source: Rc<dyn Animation<f64>> = Rc::new(constant);
+        for (name, animation) in [
+            ("source", Rc::clone(&source)),
+            (
+                "proxy",
+                Rc::new(ProxyAnimation::new(Rc::clone(&source))) as Rc<dyn Animation<f64>>,
+            ),
+            (
+                "reverse",
+                Rc::new(ReverseAnimation::new(Rc::clone(&source))),
+            ),
+            (
+                "curve",
+                Rc::new(CurvedAnimation::new(Rc::clone(&source), Linear)),
+            ),
+            (
+                "tween",
+                Rc::new(TweenAnimation::new(
+                    FloatTween::new(10.0, 20.0),
+                    Rc::clone(&source),
+                )),
+            ),
+            (
+                "switch",
+                Rc::new(AnimationSwitch::new(Rc::clone(&source), None)),
+            ),
+        ] {
+            assert!(
+                !animation.is_animating(),
+                "{name} over constant {status:?} has no run"
+            );
+        }
+    }
+}
+
 // --- curved runs ------------------------------------------------------------------
 
 /// A linear curve that answers `NaN` strictly inside `(0.3, 0.7)`.
@@ -338,6 +384,10 @@ fn repeated_frame_time_announces_completion_once() {
 #[test]
 fn controller_robustness_contract() {
     crate::run_table(&[
+        (
+            "a constant phase does not install a run",
+            a_constant_phase_does_not_install_a_run,
+        ),
         (
             "is_animating after the run completes",
             is_animating_after_the_run_completes,

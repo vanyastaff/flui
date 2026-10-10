@@ -1479,6 +1479,10 @@ impl Listenable for SwitchReader {
 }
 
 impl Animation<f64> for SwitchReader {
+    fn is_animating(&self) -> bool {
+        false
+    }
+
     fn value(&self) -> f64 {
         self.read_back(Reentry::Value);
         0.25

@@ -55,6 +55,10 @@ impl Listenable for ReentrantParent {
 }
 
 impl Animation<f64> for ReentrantParent {
+    fn is_animating(&self) -> bool {
+        false
+    }
+
     fn value(&self) -> f64 {
         if matches!(self.reentry, Reentry::Value) {
             self.reenter();

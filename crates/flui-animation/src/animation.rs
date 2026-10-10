@@ -62,12 +62,12 @@ impl AnimationDirection {
 /// use flui_animation::Animation;
 /// use flui_animation::AnimationStatus;
 ///
-/// fn use_animation<T: Clone + Send + Sync + 'static>(animation: &dyn Animation<T>) {
+/// fn use_animation<T: Clone + 'static>(animation: &dyn Animation<T>) {
 ///     let value = animation.value();
 ///     let status = animation.status();
 ///
-///     if status.is_running() {
-///         // Animation is in progress
+///     if animation.is_animating() {
+///         // The source owns a run, including a paused run.
 ///     }
 /// }
 /// ```
@@ -95,11 +95,13 @@ where
         }))
     }
 
-    /// Whether the animation is currently running.
-    #[inline]
-    fn is_animating(&self) -> bool {
-        self.status().is_running()
-    }
+    /// Whether the source owns an active run, including a paused run.
+    ///
+    /// Directional status is independent: a constant or a manually positioned
+    /// animation may report [`AnimationStatus::Forward`] without owning a run.
+    /// Owners report run ownership, combinators forward their source's answer,
+    /// and fixed values return `false`.
+    fn is_animating(&self) -> bool;
 
     /// Whether the animation is completed.
     #[inline]

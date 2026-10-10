@@ -108,6 +108,10 @@ where
         self.status
     }
 
+    fn is_animating(&self) -> bool {
+        false
+    }
+
     fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription {
         drop(callback);
         crate::StatusSubscription::default()

@@ -311,6 +311,9 @@ where
     
     /// Current status (Forward, Reverse, Completed, Dismissed)
     fn status(&self) -> AnimationStatus;
+
+    /// Installed run, independent of directional status; includes paused runs.
+    fn is_animating(&self) -> bool;
     
     /// Listen to status changes
     fn subscribe_status(&self, callback: StatusCallback) -> StatusSubscription;
@@ -322,6 +325,13 @@ Design decisions:
 - **Extends Listenable** — integrates with change notification system
 - **Owner-local** — UI state and callbacks stay on one owner
 - **Debug required** — all animations inspectable
+
+Run ownership is required rather than inferred from status. Owners inspect their
+run, combinators forward their source's answer, and `ConstantAnimation` reports
+`false` for every phase. A manually positioned controller can have a directional
+phase without an installed run. `controller_robustness_contract` verifies the
+constant case through proxy, reverse, curve, tween and switch combinators;
+`is_animating_false_after_set_value` covers manually positioned controllers.
 
 ### Curve Trait
 
