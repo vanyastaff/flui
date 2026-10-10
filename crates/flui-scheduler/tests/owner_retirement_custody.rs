@@ -388,6 +388,7 @@ fn owner_retirement_custody_contract() {
             ("standalone frame refusal ends custody", standalone_frame_refusal_ends_custody),
             ("standalone background refusal ends custody", standalone_background_refusal_ends_custody),
             ("standalone failed retirement ends custody", standalone_failed_retirement_ends_custody),
+            ("standalone retirement publishes producer custody", standalone_retirement_publishes_producer_custody),
         ],
     );
 }
@@ -511,6 +512,37 @@ fn standalone_failed_retirement_ends_custody() {
     assert_eq!(flui_foundation::panic::payload_text(failure.as_ref()),
         Some("standalone retired future failure"));
     assert!(token.is_cancelled());
+    assert_healthy_refusal_retires(&owner);
+}
+
+fn standalone_retirement_publishes_producer_custody() {
+    struct ProducerRemoval {
+        owner: Weak<OwnerFrame>,
+        scheduler: flui_scheduler::WeakUpdateScheduler,
+        callback: flui_scheduler::CallbackId,
+    }
+    impl Drop for ProducerRemoval {
+        fn drop(&mut self) {
+            let owner = self.owner.upgrade().expect("retiring owner lives");
+            catch_nested_refusal_failure(&owner);
+            assert!(self.scheduler.upgrade().expect("scheduler lives")
+                .cancel_frame_callback(self.callback));
+        }
+    }
+    let scheduler = UpdateScheduler::new();
+    let owner = Rc::new(OwnerFrame::new(&scheduler).expect("fresh owner"));
+    let drops = Rc::new(Cell::new(0));
+    let capture = RemovedCapture(Rc::clone(&drops));
+    let callback = scheduler.schedule_frame_callback(Box::new(move |_| { let _ = &capture; }));
+    let capture = ProducerRemoval {
+        owner: Rc::downgrade(&owner),
+        scheduler: scheduler.downgrade(),
+        callback,
+    };
+    owner.post_frame_handle().schedule(move |_| { let _ = &capture; })
+        .expect("queued post-frame envelope");
+    assert!(owner.retire().is_none());
+    assert_eq!(drops.get(), 0, "standalone cleanup shares custody with producer removals");
     assert_healthy_refusal_retires(&owner);
 }
 
