@@ -19,8 +19,8 @@
 //!   track per index
 //! - [`simulation`] - Validated physics: springs, friction and a bouncing
 //!   scroll fling that rest at a precomputed time
-//! - [`AnimatedValue`] - Interruptible spring value with velocity-preserving
-//!   retargeting (`#[derive(TwoWayConverter)]` for custom types)
+//! - [`AnimatedValue`] - An owned value driven by [`MotionSpec`], with
+//!   velocity-preserving retargeting (`#[derive(TwoWayConverter)]` for custom types)
 //! - [`VsyncRetirement`] - Terminal registry withdrawal separates committed
 //!   kernel closure from cancellation delivery and outgoing capture retirement.
 //!   Runtime shutdown prepares every closing presentation before callbacks;

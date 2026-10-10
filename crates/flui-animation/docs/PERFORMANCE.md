@@ -135,7 +135,7 @@ The unchanged production baseline remains `c297b6c89bc93941e28c738c9dfac3d623a2d
 it is not the newest main. Its benchmark and the candidate's were identical
 (SHA-256 `623a1d597cb0fc812ea1495440dc956d7258d310546f0298e07fbc7ad638d62f`).
 Both used the host, profile and sampling settings above. The candidate was
-`4f3fb8ede`, followed by a local change comparing a parent's backend pointers
+`4f3fb8ede776a6369da2b73b471cc507063d10da`, followed by a local change comparing a parent's backend pointers
 directly instead of temporarily constructing a weak handle. A borrowed parent
 keeps that backend alive throughout the comparison. This comparison measures
 all intervening changes; it does not isolate the cost of one repair.
