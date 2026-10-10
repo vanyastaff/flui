@@ -208,16 +208,16 @@ where
 
     /// The text context to measure with: the UI runtime's, lent through the
     /// pipeline for as long as the returned [`TextCx`](crate::TextCx)
-    /// lives, or one of this context's own when the pipeline has none.
+    /// lives.
     ///
     /// Taken from `&mut self`, so a render object cannot lay out a child
     /// while it holds the loan.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// If the UI runtime's context is already lent, which only a measurement that
-    /// re-enters another could cause.
-    pub fn text(&mut self) -> crate::TextCx<'_> {
+    /// Returns [`crate::error::RenderError::TextContextBusy`] when an
+    /// independently held loan already uses the runtime's shared resource.
+    pub fn text(&mut self) -> crate::error::RenderResult<crate::TextCx<'_>> {
         self.inner.text()
     }
 

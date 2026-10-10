@@ -30,8 +30,8 @@ use objc2_foundation::{
 };
 use objc2_quartz_core::CADisplayLink;
 use objc2_ui_kit::{
-    UIHoverGestureRecognizer, UITouch, UITouchType, UIView, UIViewController, UIWindow,
-    UIWindowScene,
+    UIHoverGestureRecognizer, UITouch, UITouchType, UITraitCollection, UITraitEnvironment, UIView,
+    UIViewController, UIWindow, UIWindowScene,
 };
 
 use flui_foundation::geometry::{EdgeInsets, Size};
@@ -57,6 +57,9 @@ enum SamplingAdmission {
 
 pub struct FluiViewIvars {
     callbacks: Arc<WindowCallbacks>,
+    text_sizing: RefCell<Option<crate::CapturedTextSizing>>,
+    text_sizing_authority: RefCell<Arc<AtomicBool>>,
+    owner_signal: std::sync::Weak<crate::shared::owner_signal::OwnerSignal>,
     input: RefCell<TouchInputState>,
     /// Where this view stands in the attach/detach lifecycle: whether it may
     /// report metrics at all, and which window a report belongs to, so a
@@ -87,6 +90,22 @@ define_class!(
     struct FluiView;
 
     impl FluiView {
+        #[unsafe(method(traitCollectionDidChange:))]
+        fn trait_collection_did_change(&self, previous: Option<&UITraitCollection>) {
+            self.pin_for_native_callback();
+            // SAFETY: UIView's implementation receives the borrowed old traits.
+            let _: () = unsafe { msg_send![super(self), traitCollectionDidChange: previous] };
+            crate::shared::panic_boundary::contain_owner_callback(|| self.invalidate_text_sizing());
+        }
+
+        #[unsafe(method(didMoveToWindow))]
+        fn did_move_to_window(&self) {
+            self.pin_for_native_callback();
+            // SAFETY: UIView declares this selector and the receiver is pinned.
+            let _: () = unsafe { msg_send![super(self), didMoveToWindow] };
+            crate::shared::panic_boundary::contain_owner_callback(|| self.invalidate_text_sizing());
+        }
+
         #[unsafe(method(onPencilHover:))]
         fn on_pencil_hover(&self, recognizer: &UIHoverGestureRecognizer) {
             self.pin_for_native_callback();
@@ -177,11 +196,15 @@ impl FluiView {
         mtm: MainThreadMarker,
         callbacks: Arc<WindowCallbacks>,
         metrics: Arc<parking_lot::Mutex<WindowMetrics>>,
+        owner_signal: std::sync::Weak<crate::shared::owner_signal::OwnerSignal>,
     ) -> Retained<Self> {
         let bounds = objc2_ui_kit::UIScreen::mainScreen(mtm).bounds();
         let this = mtm.alloc::<Self>();
         let this = this.set_ivars(FluiViewIvars {
             callbacks,
+            text_sizing: RefCell::new(None),
+            text_sizing_authority: RefCell::new(Arc::new(AtomicBool::new(true))),
+            owner_signal,
             input: RefCell::new(TouchInputState::default()),
             sampling: std::cell::Cell::new(SamplingAdmission::Detached),
             sampling_active: std::cell::Cell::new(false),
@@ -214,6 +237,70 @@ impl FluiView {
         // anything behind it.
         this.setOpaque(true);
         this
+    }
+
+    fn invalidate_text_sizing(&self) {
+        let authority = self
+            .ivars()
+            .text_sizing_authority
+            .replace(Arc::new(AtomicBool::new(true)));
+        authority.store(false, Ordering::Release);
+        let retired = self.ivars().text_sizing.borrow_mut().take();
+        drop(retired);
+        if let Some(signal) = self.ivars().owner_signal.upgrade() {
+            let _ = signal.wake();
+        }
+    }
+
+    fn capture_text_sizing(
+        &self,
+    ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError> {
+        let admission = self.ivars().sampling.get();
+        let SamplingAdmission::Active {
+            window: identity, ..
+        } = admission
+        else {
+            return Err(crate::TextSizingCaptureError::Unavailable);
+        };
+        let window = self
+            .window()
+            .ok_or(crate::TextSizingCaptureError::Unavailable)?;
+        if std::ptr::from_ref::<UIWindow>(&window) as usize != identity {
+            self.invalidate_text_sizing();
+            return Err(crate::TextSizingCaptureError::Unavailable);
+        }
+        let cached = self.ivars().text_sizing.borrow().clone();
+        if let Some(cached) = cached.filter(crate::CapturedTextSizing::is_current) {
+            return Ok(crate::TextSizingCaptureState::Ready(cached));
+        }
+        let authority = Arc::clone(&self.ivars().text_sizing_authority.borrow());
+        let traits =
+            objc2::exception::catch(std::panic::AssertUnwindSafe(|| self.traitCollection()))
+                .map_err(|exception| {
+                    drop(exception);
+                    crate::TextSizingCaptureError::Native {
+                        message: "UIKit trait capture failed".into(),
+                    }
+                })?;
+        let attached = self
+            .window()
+            .is_some_and(|window| std::ptr::from_ref::<UIWindow>(&window) as usize == identity);
+        if !authority.load(Ordering::Acquire)
+            || self.ivars().sampling.get() != admission
+            || !attached
+        {
+            return Err(crate::TextSizingCaptureError::Unavailable);
+        }
+        let capture = crate::CapturedTextSizing::new(
+            Arc::new(crate::text_sizing::NativeSizing::UIKit(
+                super::text_sizing::Snapshot { traits },
+            )),
+            authority,
+            std::thread::current().id(),
+        );
+        let retired = self.ivars().text_sizing.replace(Some(capture.clone()));
+        drop(retired);
+        Ok(crate::TextSizingCaptureState::Ready(capture))
     }
 
     /// Create the per-frame tick, targeting this view's `onDisplayLink:`.
@@ -435,6 +522,8 @@ struct NativeWindow {
 
 impl Drop for NativeWindow {
     fn drop(&mut self) {
+        self.view.ivars().sampling.set(SamplingAdmission::Retiring);
+        self.view.invalidate_text_sizing();
         self.view.invalidate_display_link();
         self.view.removeFromSuperview();
         if let Some(attachment) = self.attachment.get_mut().take() {
@@ -457,14 +546,18 @@ pub struct IOSWindow {
 
 impl IOSWindow {
     /// Allocate a stable view; a scene connection supplies its native container.
-    pub(super) fn new(mtm: MainThreadMarker, id: WindowId) -> Self {
+    pub(super) fn new(
+        mtm: MainThreadMarker,
+        id: WindowId,
+        signal: std::sync::Weak<crate::shared::owner_signal::OwnerSignal>,
+    ) -> Self {
         let callbacks = Arc::new(WindowCallbacks::new());
         let metrics = Arc::new(parking_lot::Mutex::new(WindowMetrics {
             size: Size::new(0.0, 0.0),
             scale: 1.0,
             safe_area: EdgeInsets::ZERO,
         }));
-        let view = FluiView::new(mtm, Arc::clone(&callbacks), Arc::clone(&metrics));
+        let view = FluiView::new(mtm, Arc::clone(&callbacks), Arc::clone(&metrics), signal);
         Self {
             native: NativeOwner::new(
                 NativeWindow {
@@ -566,6 +659,7 @@ impl IOSWindow {
             .ivars()
             .sampling
             .set(SamplingAdmission::Retiring);
+        native.view.invalidate_text_sizing();
         native.view.invalidate_display_link();
         native.view.removeFromSuperview();
         let retired = native.attachment.borrow_mut().take();
@@ -741,6 +835,7 @@ impl IOSWindow {
         if let Some(attachment) = self.native.get(marker).attachment.borrow_mut().as_mut() {
             attachment.retiring = true;
         }
+        self.native.get(marker).view.invalidate_text_sizing();
         self.set_frame_tick_paused(true);
     }
 
@@ -778,7 +873,18 @@ impl std::fmt::Debug for IOSWindow {
     }
 }
 
-impl crate::traits::HostWindow for IOSWindow {}
+impl crate::traits::HostWindow for IOSWindow {
+    fn capture_text_sizing(
+        &self,
+        _owner: crate::traits::OwnerThreadToken,
+    ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError> {
+        let marker = MainThreadMarker::new().ok_or(crate::TextSizingCaptureError::WrongThread)?;
+        if self.closed.load(Ordering::Acquire) {
+            return Err(crate::TextSizingCaptureError::Unavailable);
+        }
+        self.native.get(marker).view.capture_text_sizing()
+    }
+}
 
 impl PlatformWindow for IOSWindow {
     fn close(&self) {

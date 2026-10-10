@@ -138,7 +138,7 @@ impl RenderBox for RenderErrorBox {
                 clippy::cast_possible_truncation,
                 reason = "logical sizes narrow to the shaper's f32 layout space"
             )]
-            let paragraph = ctx.text().shape(&ParagraphSpec {
+            let paragraph = ctx.text()?.shape_fixed(&ParagraphSpec {
                 font_weight_adjustment: 0,
                 spans: &spans,
                 default_style: Some(&style),

@@ -5,6 +5,7 @@ use flui_foundation::{
     ManualClock,
     geometry::{Offset, Size},
 };
+use flui_painting::TextSizing;
 use flui_platform_api::{Distance, PlatformWindow};
 use flui_view::prelude::*;
 use std::{
@@ -94,13 +95,13 @@ impl tracing::Subscriber for Diagnostics {
 }
 
 #[derive(Clone, StatelessView)]
-struct Reader(Rc<RefCell<Vec<(f64, bool)>>>);
+struct Reader(Rc<RefCell<Vec<(TextSizing, bool)>>>);
 impl StatelessView for Reader {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         let media = flui_widgets::MediaQuery::of(ctx);
         self.0
             .borrow_mut()
-            .push((media.text_scale_factor, media.high_contrast));
+            .push((media.text_sizing.clone(), media.high_contrast));
         flui_widgets::ColoredBox::new(flui_painting::styling::Color::RED)
     }
 }
@@ -217,7 +218,7 @@ pub(crate) fn newer_geometry_publication_survives_query_and_diagnostic_reentry()
         );
         assert_eq!(
             observed.borrow().last(),
-            Some(&(3.0, true)),
+            Some(&(TextSizing::linear(3.0).expect("valid scale"), true)),
             "stale query/diagnostic continuation must not overwrite the new inherited publication"
         );
         for event in [
@@ -279,7 +280,7 @@ pub(crate) fn newer_geometry_publication_survives_query_and_diagnostic_reentry()
         );
         assert_eq!(
             observed.borrow().last(),
-            Some(&(1.0, false)),
+            Some(&(TextSizing::linear(1.0).expect("valid scale"), false)),
             "the next healthy publication still reaches its mounted consumer"
         );
     }

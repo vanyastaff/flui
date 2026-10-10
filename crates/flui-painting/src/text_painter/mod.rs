@@ -21,9 +21,17 @@ use crate::parley_text::ParagraphLayout;
 
 pub mod baseline;
 pub mod measure;
+mod measurement;
 pub mod paint;
+mod sizing;
 
 pub use baseline::TextBaseline;
+pub use measurement::TextMeasurement;
+pub use sizing::{
+    TextMeasurementError, TextPreparationPending, TextResolvedSize, TextSizing,
+    TextSizingAdmission, TextSizingAdmissionError, TextSizingCohort, TextSizingConflict,
+    TextSizingSource,
+};
 
 /// Default font size when none is specified.
 pub(crate) const DEFAULT_FONT_SIZE: f64 = 14.0;
@@ -76,8 +84,8 @@ pub struct TextPainter {
     /// The default text direction.
     pub(super) text_direction: Option<TextDirection>,
 
-    /// Text scaling factor for accessibility.
-    pub(super) text_scale_factor: f64,
+    /// An authored authority replaces presentation inheritance, including fixed.
+    pub(super) text_sizing: Option<TextSizing>,
     pub(super) font_weight_adjustment: i32,
 
     /// Maximum number of lines before truncation.
@@ -97,6 +105,9 @@ pub(super) struct TextLayoutCache {
     /// layout from another UI runtime's fonts, or from before a registration, is
     /// measured again.
     pub(super) fonts: crate::text_layout::FontsKey,
+    pub(super) sizing: TextSizing,
+    /// Live resolved answers remain authoritative after warm-cache eviction.
+    pub(super) answers: Vec<TextResolvedSize>,
     /// The min width constraint used for layout.
     pub(super) min_width: f64,
     /// The max width constraint used for layout.
@@ -147,7 +158,7 @@ impl TextPainter {
             text: None,
             text_align: TextAlign::Start,
             text_direction: None,
-            text_scale_factor: 1.0,
+            text_sizing: None,
             font_weight_adjustment: 0,
             max_lines: None,
             ellipsis: None,
@@ -182,6 +193,13 @@ impl TextPainter {
     #[must_use]
     pub fn with_text_scale_factor(mut self, factor: f64) -> Self {
         self.set_text_scale_factor(factor);
+        self
+    }
+
+    /// Replace inherited numeric sizing, or restore inheritance with `None`.
+    #[must_use]
+    pub fn with_text_sizing(mut self, sizing: Option<TextSizing>) -> Self {
+        self.set_text_sizing(sizing);
         self
     }
 
@@ -232,11 +250,20 @@ impl TextPainter {
         self.text_direction
     }
 
-    /// Returns the text scale factor.
+    /// The legacy authored linear factor; fixed or exact authority reports 1.0.
     #[inline]
     #[must_use]
     pub fn text_scale_factor(&self) -> f64 {
-        self.text_scale_factor
+        self.text_sizing
+            .as_ref()
+            .and_then(TextSizing::linear_factor)
+            .unwrap_or(1.0)
+    }
+
+    /// The authored authority override; absent values inherit at measurement.
+    #[must_use]
+    pub fn text_sizing(&self) -> Option<&TextSizing> {
+        self.text_sizing.as_ref()
     }
 
     /// Returns the maximum number of lines.
@@ -275,7 +302,7 @@ impl TextPainter {
             // colour rides on the paragraph command), so a recolour of one
             // span is a layout change here even though the geometry is not.
             (Some(old), Some(new)) => {
-                old.layout_affecting_eq(new) && self.span_colors(old) == self.span_colors(new)
+                old.layout_affecting_eq(new) && Self::span_colors(old) == Self::span_colors(new)
             }
             // Appearing/disappearing text is always a layout change.
             _ => false,
@@ -312,8 +339,15 @@ impl TextPainter {
 
     /// Sets the text scale factor.
     pub fn set_text_scale_factor(&mut self, factor: f64) {
-        if self.text_scale_factor != factor {
-            self.text_scale_factor = factor;
+        self.set_text_sizing(Some(TextSizing::linear_unchecked(factor)));
+    }
+
+    /// Replace inherited numeric sizing, or restore inheritance with `None`.
+    pub fn set_text_sizing(&mut self, sizing: Option<TextSizing>) {
+        let changed = self.text_sizing != sizing;
+        // Same-capture attempt views change ownership, not glyph geometry.
+        self.text_sizing = sizing;
+        if changed {
             self.mark_needs_layout();
         }
     }

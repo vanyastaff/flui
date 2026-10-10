@@ -1,5 +1,5 @@
 //! The Android backend's loop exit must release the window it tracked and
-//! clear the callbacks that pin the embedder's presentation.
+//! revoke its geometry, then clear the callbacks that pin the embedder's presentation.
 //!
 //! # Why a source scan, and what it is *not* evidence of
 //!
@@ -7,11 +7,11 @@
 //! needs a live `AndroidApp`, constructible only by the real Android
 //! runtime, and the Android target is type-checked (the NDK-free `flui-app`
 //! check, and `cargo xtask cross-typecheck`) rather than run. So the site is pinned
-//! textually, and this scan proves exactly one thing: **the release and the
-//! clear are present in the exit region of `run`, in that order, in the
+//! textually, and this scan proves exactly one thing: **the release, geometry
+//! revocation and clear are present in the exit region of `run`, in that order, in the
 //! unfused shape.** Present in the region, never "reached" — nothing here
-//! says a device executes either statement, and a conditional wrapper that
-//! keeps both lines while losing a route (an `if bootstrap_error.is_none()`
+//! says a device executes these statements, and a conditional wrapper that
+//! keeps these lines while losing a route (an `if bootstrap_error.is_none()`
 //! around them) passes this scan. The runtime half of the same claim is
 //! pinned on the primitive both backends call, by the capture-release test
 //! in `shared/handlers.rs`.
@@ -444,7 +444,34 @@ fn window_take_binding(region: &[String]) -> (usize, &str) {
     (take_index, binding)
 }
 
-/// Refuses every way the region can name the binding other than the three
+/// The taken window's geometry is revoked exactly once, before clearing callbacks.
+fn window_revocation_line(
+    region: &[String],
+    take_index: usize,
+    clear_index: usize,
+    binding: &str,
+) -> usize {
+    let revoke_lines = indices_containing(region, ".revoke_geometry()");
+    assert_eq!(
+        revoke_lines.len(),
+        1,
+        "the exit region must contain exactly one geometry revocation"
+    );
+    let revoke_index = revoke_lines[0];
+    let expected = format!("{binding}.revoke_geometry();");
+    assert_eq!(
+        region[revoke_index].trim(),
+        expected,
+        "geometry revocation must be its own statement on the window the take released"
+    );
+    assert!(
+        take_index < revoke_index && revoke_index < clear_index,
+        "the tracked window must be released, its geometry revoked, then its callbacks cleared"
+    );
+    revoke_index
+}
+
+/// Refuses every way the region can name the binding other than the four
 /// lines allowed to.
 ///
 /// A `let` reusing the name is the obvious evasion and it is not the only
@@ -452,7 +479,7 @@ fn window_take_binding(region: &[String]) -> (usize, &str) {
 /// pattern, and a `let` that does not start its line all keep the receiver
 /// tie and the ordering assertions true while the clear reaches a window the
 /// platform never released. So the rule is stated over the binding rather
-/// than over a line prefix — the take, the `if let` unwrap and the clear are
+/// than over a line prefix — the take, the `if let` unwrap, revocation and clear are
 /// the only lines that may name it. That is deliberately conservative and the
 /// conservatism reaches past rebinding: `let window = window;` reaches the
 /// taken window and is refused all the same, a pure read of the name is
@@ -468,6 +495,7 @@ fn window_take_binding(region: &[String]) -> (usize, &str) {
 fn assert_only_the_expected_lines_name_the_binding(
     region: &[String],
     take_index: usize,
+    revoke_index: usize,
     clear_index: usize,
     binding: &str,
 ) {
@@ -478,9 +506,13 @@ fn assert_only_the_expected_lines_name_the_binding(
             continue;
         }
         assert!(
-            index == take_index || index == clear_index || trimmed == unwrap,
+            index == take_index
+                || index == revoke_index
+                || index == clear_index
+                || trimmed == unwrap,
             "the exit region names `{binding}` on line {index} (`{trimmed}`), which is neither \
-             the take (line {take_index}), the clear (line {clear_index}) nor the `{unwrap}` \
+             the take (line {take_index}), revocation (line {revoke_index}), clear (line \
+             {clear_index}) nor the `{unwrap}` \
              unwrap. A second binding of that name leaves every shape assertion true while the \
              clear may reach a window the platform never released"
         );
@@ -542,7 +574,14 @@ fn android_run_clears_the_window_callbacks_between_its_loop_and_the_quit_hook() 
         "the exit path must clear the SAME window it took out of the platform's `window` field: \
          found `{clear_line}`"
     );
-    assert_only_the_expected_lines_name_the_binding(&region, take_index, clear_index, binding);
+    let revoke_index = window_revocation_line(&region, take_index, clear_index, binding);
+    assert_only_the_expected_lines_name_the_binding(
+        &region,
+        take_index,
+        revoke_index,
+        clear_index,
+        binding,
+    );
 }
 
 /// The platform's own reference goes before the clear, so that after the
@@ -559,11 +598,18 @@ fn android_run_releases_its_own_window_reference_before_clearing() {
          in the order the winit and headless close bodies use (their `complete_window_close` / \
          `complete_close`: dispatch close, drop the platform's tracking entry, then clear)"
     );
-    assert_only_the_expected_lines_name_the_binding(&region, take_index, clear_index, binding);
+    let revoke_index = window_revocation_line(&region, take_index, clear_index, binding);
+    assert_only_the_expected_lines_name_the_binding(
+        &region,
+        take_index,
+        revoke_index,
+        clear_index,
+        binding,
+    );
 }
 
-/// The exit region of `run` releases the platform's window reference, then
-/// clears the callbacks, in the unfused shape.
+/// The exit region of `run` releases the platform's window reference, revokes
+/// its geometry, then clears the callbacks, in the unfused shape.
 #[test]
 fn android_run_exit_region_releases_then_clears() {
     android_run_clears_the_window_callbacks_between_its_loop_and_the_quit_hook();

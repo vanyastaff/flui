@@ -14,6 +14,7 @@ use objc2_foundation::{NSNotification, NSNotificationCenter, NSObjectProtocol};
 use objc2_ui_kit::{
     UIAccessibilityBoldTextStatusDidChangeNotification, UIAccessibilityIsBoldTextEnabled,
     UIAccessibilityIsReduceMotionEnabled, UIAccessibilityReduceMotionStatusDidChangeNotification,
+    UIContentSizeCategoryDidChangeNotification,
 };
 
 use crate::{PlatformError, shared::owner_signal::OwnerSignal};
@@ -50,7 +51,7 @@ impl Preferences {
         // token instead of leaving a partially installed observation set.
         let preferences = Self {
             center,
-            observers: RefCell::new(Vec::with_capacity(2)),
+            observers: RefCell::new(Vec::with_capacity(3)),
             active,
         };
         // SAFETY: UIKit owns these immutable notification-name constants.
@@ -58,6 +59,7 @@ impl Preferences {
             [
                 UIAccessibilityBoldTextStatusDidChangeNotification,
                 UIAccessibilityReduceMotionStatusDidChangeNotification,
+                UIContentSizeCategoryDidChangeNotification,
             ]
         };
         for name in names {

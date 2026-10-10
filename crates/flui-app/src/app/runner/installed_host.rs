@@ -365,6 +365,11 @@ impl OwnerEffects for HostState {
         #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
         let _ = turn_recovery;
         let mut first = None;
+        if self.is_current() && turn_recovery == RecoveryState::Healthy {
+            contain(&mut first, || {
+                self.native.refresh_text_sizing(&self.logical, self, false);
+            });
+        }
         self.complete_native(&mut first);
         #[cfg(not(target_arch = "wasm32"))]
         let closed = std::mem::take(&mut *self.closed_presentations.borrow_mut());
@@ -418,6 +423,17 @@ impl OwnerEffects for HostState {
         }
         let wake = APP_RUNTIME.with(|slot| slot.borrow().owner_turn_wake.clone());
         wake.is_some_and(|wake| wake())
+    }
+
+    fn text_sizing(
+        &self,
+        frontier: flui_runtime::owner::TextSizingFrontier,
+        recovery: RecoveryState,
+    ) -> Option<flui_runtime::owner::TextSizingFrontier> {
+        if recovery == RecoveryState::PreservingFailure || !self.is_current() {
+            return Some(frontier);
+        }
+        self.native.resolve_text_sizing(frontier, self)
     }
 }
 

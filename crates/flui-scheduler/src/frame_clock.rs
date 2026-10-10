@@ -125,8 +125,9 @@ bitflags::bitflags! {
         /// `RedrawRequested`, or an explicit embedder request) with no
         /// framework-side dirty state of its own.
         const HOST = 1 << 2;
-        // Bit 3 is reserved for a future media/video-frame demand kind —
-        // deliberately unassigned until a consumer needs it.
+        /// Accepted presentation callbacks need a coherent completion epoch,
+        /// even when no widget or render node is dirty.
+        const COMPLETION = 1 << 3;
     }
 }
 
@@ -145,6 +146,8 @@ pub enum DemandKind {
     Animation,
     /// A direct host/platform request with no framework-side dirty state.
     Host,
+    /// Accepted callbacks need a coherent presentation completion epoch.
+    Completion,
 }
 
 impl From<DemandKind> for DemandMask {
@@ -153,6 +156,7 @@ impl From<DemandKind> for DemandMask {
             DemandKind::Dirty => DemandMask::DIRTY,
             DemandKind::Animation => DemandMask::ANIMATION,
             DemandKind::Host => DemandMask::HOST,
+            DemandKind::Completion => DemandMask::COMPLETION,
         }
     }
 }

@@ -4,18 +4,17 @@
 //! presentation's [`PipelineOwner`](super::PipelineOwner) holds a
 //! [`TextContextHandle`] to it. Layout, intrinsic, dry-layout and
 //! dry-baseline contexts lend it to a render object as a [`TextCx`], a scoped
-//! `&mut TextContext` taken from `&mut` context, so a render object cannot
-//! hold two loans at once through the context API. The raw
-//! [`RenderObject`](crate::traits::RenderObject) methods and the erased layout
-//! context carry the context as a [`TextSource`], an opaque token only this
-//! crate can borrow, so a direct `RenderObject` implementation cannot hold a
-//! loan across a child query either.
+//! loan taken from `&mut` context. Raw query methods and erased layout hooks
+//! receive the same complete mutable capability: a text loan cannot remain in
+//! use across a child query through that context. Drivers keep [`TextSource`]
+//! internally rather than exposing an independent source at those boundaries.
 //!
 //! The one `RefCell` sits between the UI runtime and its pipelines, not on a
 //! render object: it is borrowed once per measurement, on the owner thread,
-//! and a second borrow at the same time is a bug (`BUG:` panic), not a
-//! contended lock. A presentation's layout never drives another's
-//! synchronously, since a `PipelineCell` checkout is not re-entrant.
+//! and an independently captured alias can still try to overlap a loan.
+//! Acquisition then returns [`crate::RenderError::TextContextBusy`], without
+//! poisoning the node or creating native preparation debt. No operation waits
+//! for or automatically retries the competing loan.
 //!
 //! Every loan a pipeline's walk makes records the node it was made for
 //! ([`TextMeasurers`]): those are the nodes whose layout depends on the font
@@ -25,11 +24,11 @@
 
 use std::cell::{RefCell, RefMut};
 use std::fmt;
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 use std::rc::Rc;
 
 use flui_foundation::RenderId;
-use flui_painting::{FontCollection, TextContext};
+use flui_painting::{FontCollection, TextContext, TextMeasurement, TextSizing};
 use rustc_hash::FxHashSet;
 
 /// A UI runtime's text context, shared with each presentation's pipeline.
@@ -83,7 +82,7 @@ impl TextContextHandle {
     /// re-enters another on the same UI runtime could cause.
     #[cfg(any(test, feature = "testing"))]
     pub fn with<R>(&self, f: impl FnOnce(&mut TextContext) -> R) -> R {
-        f(&mut lend(TextSource::unrecorded(&self.0)))
+        f(&mut self.0.borrow_mut())
     }
 
     /// Runs `f` on the context, or returns `None` while it is lent: a caller
@@ -116,13 +115,12 @@ impl TextContextHandle {
 
 impl fmt::Debug for TextContextHandle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut debug = f.debug_struct("TextContextHandle");
-        debug.field("id", &Rc::as_ptr(&self.0));
-        match self.0.try_borrow() {
-            Ok(context) => debug.field("context", &*context),
-            Err(_) => debug.field("context", &"<lent>"),
-        };
-        debug.finish()
+        // Format only copied metadata: the formatter can reenter measurement.
+        let is_lent = self.0.try_borrow_mut().is_err();
+        f.debug_struct("TextContextHandle")
+            .field("id", &Rc::as_ptr(&self.0))
+            .field("lent", &is_lent)
+            .finish()
     }
 }
 
@@ -186,11 +184,20 @@ impl fmt::Debug for TextMeasurers {
 pub(crate) struct TextLender<'a> {
     cell: &'a RefCell<TextContext>,
     measurers: &'a TextMeasurers,
+    sizing: &'a TextSizing,
 }
 
 impl<'a> TextLender<'a> {
-    pub(crate) fn new(cell: &'a RefCell<TextContext>, measurers: &'a TextMeasurers) -> Self {
-        Self { cell, measurers }
+    pub(crate) fn new(
+        cell: &'a RefCell<TextContext>,
+        measurers: &'a TextMeasurers,
+        sizing: &'a TextSizing,
+    ) -> Self {
+        Self {
+            cell,
+            measurers,
+            sizing,
+        }
     }
 
     /// The source `node`'s contexts lend through; a loan records `node`.
@@ -198,16 +205,17 @@ impl<'a> TextLender<'a> {
         TextSource {
             cell: self.cell,
             measured: Some((self.measurers, node)),
+            sizing: Some(self.sizing),
         }
     }
 }
 
 /// The UI runtime's text context as a layout or query walk carries it to a node.
 ///
-/// Opaque outside this crate: a render object passes it on (to a context it
-/// builds) but cannot borrow it. The borrow happens only inside a context's
-/// `text()`, which ties the loan to `&mut` context, so no loan can outlive a
-/// measurement or span a child's.
+/// Driver construction data, opaque outside this crate. Raw query and erased
+/// layout hooks receive complete mutable contexts, without source extraction.
+/// A separately constructed context can share this source; its text acquisition
+/// refuses an overlap with [`crate::RenderError::TextContextBusy`].
 ///
 /// ```compile_fail
 /// fn hold(source: flui_rendering::TextSource<'_>) {
@@ -215,7 +223,7 @@ impl<'a> TextLender<'a> {
 /// }
 /// ```
 ///
-/// A render object can forward the opaque source without opening a loan:
+/// A driver can forward the opaque source without opening a loan:
 ///
 /// ```
 /// fn hold(source: flui_rendering::TextSource<'_>) {
@@ -228,6 +236,7 @@ pub struct TextSource<'a> {
     /// The record a loan goes into and the node it is made for; `None` for a
     /// test's source, which belongs to no walk.
     measured: Option<(&'a TextMeasurers, RenderId)>,
+    sizing: Option<&'a TextSizing>,
 }
 
 impl<'a> TextSource<'a> {
@@ -237,6 +246,7 @@ impl<'a> TextSource<'a> {
         Self {
             cell,
             measured: None,
+            sizing: None,
         }
     }
 
@@ -257,21 +267,40 @@ impl fmt::Debug for TextSource<'_> {
 
 /// The UI runtime's text context lent to one measurement.
 ///
-/// Dereferences to `&mut TextContext`, so a render object passes
-/// `&mut ctx.text()` straight to `TextPainter`.
-pub struct TextCx<'a>(RefMut<'a, TextContext>);
+/// Measurement binds the shared resources to this presentation's sizing policy.
+/// Raw diagnostic shaping explicitly chooses fixed logical sizes.
+pub struct TextCx<'a>(RefMut<'a, TextContext>, TextSizing);
+
+impl TextCx<'_> {
+    /// Measure through this presentation's explicit numeric authority.
+    pub fn measurement(&mut self) -> TextMeasurement<'_> {
+        TextMeasurement::new(&mut self.0, &self.1)
+    }
+
+    /// Resolve one size through an explicit override or this presentation.
+    /// This performs no native call and does not mutate shaping resources.
+    pub fn resolve_size(
+        &self,
+        request: flui_foundation::TextSizeRequest,
+        sizing: Option<&TextSizing>,
+    ) -> Result<flui_painting::TextResolvedSize, flui_painting::TextMeasurementError> {
+        self.1.resolve_with(request, sizing)
+    }
+
+    /// Shape explicitly fixed diagnostic typography without inherited growth.
+    pub fn shape_fixed(
+        &mut self,
+        spec: &flui_painting::parley_text::ParagraphSpec<'_>,
+    ) -> Result<flui_painting::parley_text::ParagraphLayout, flui_painting::TextLayoutError> {
+        self.0.shape(spec)
+    }
+}
 
 impl Deref for TextCx<'_> {
     type Target = TextContext;
 
     fn deref(&self) -> &TextContext {
         &self.0
-    }
-}
-
-impl DerefMut for TextCx<'_> {
-    fn deref_mut(&mut self) -> &mut TextContext {
-        &mut self.0
     }
 }
 
@@ -283,20 +312,15 @@ impl fmt::Debug for TextCx<'_> {
 
 /// Borrows the UI runtime's context for one measurement, and records the node it
 /// is lent to.
-#[expect(
-    clippy::expect_used,
-    reason = "a second loan is a re-entrant measurement, an invariant violation"
-)]
-pub(crate) fn lend(source: TextSource<'_>) -> TextCx<'_> {
+pub(crate) fn lend(source: TextSource<'_>) -> crate::RenderResult<TextCx<'_>> {
+    let context = source
+        .cell()
+        .try_borrow_mut()
+        .map_err(|_| crate::RenderError::TextContextBusy)?;
     if let Some((measurers, node)) = source.measured {
         measurers.note(node);
     }
-    TextCx(
-        source
-            .cell()
-            .try_borrow_mut()
-            .expect("BUG: the ui_runtime's text context is lent to one measurement at a time"),
-    )
+    Ok(TextCx(context, source.sizing.cloned().unwrap_or_default()))
 }
 
 #[cfg(test)]
@@ -320,7 +344,7 @@ mod tests {
     #[test]
     fn a_loan_holds_the_shared_context_until_it_drops() {
         let handle = TextContextHandle::standalone();
-        let lent = lend(handle.source());
+        let lent = lend(handle.source()).expect("uncontended loan");
         assert!(
             handle.cell().try_borrow_mut().is_err(),
             "the loan borrows the shared context"
@@ -337,7 +361,7 @@ mod tests {
     #[test]
     fn try_with_declines_while_the_context_is_lent() {
         let handle = TextContextHandle::standalone();
-        let lent = lend(handle.source());
+        let lent = lend(handle.source()).expect("uncontended loan");
         assert_eq!(handle.try_with(|_| ()), None, "the context is lent");
         drop(lent);
         assert_eq!(handle.try_with(|_| 7), Some(7), "the loan has ended");

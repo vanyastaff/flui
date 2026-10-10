@@ -60,6 +60,19 @@ pub(crate) use sealed::OwnerThreadToken;
 /// A test double that is only ever handed to the framework needs just
 /// [`PlatformWindow`]; one returned from `open_window` needs this too.
 pub trait HostWindow: PlatformWindow {
+    /// Acquire this presentation's native numeric converter on the owner lane.
+    /// Pending acquisition owns a completion wake obligation; no frame path waits.
+    /// The hidden token is minted by `OwnerPlatform::capture_text_sizing`.
+    ///
+    /// # Errors
+    /// Refuses a closed presentation, wrong owner or failed native capture.
+    fn capture_text_sizing(
+        &self,
+        _owner: OwnerThreadToken,
+    ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError> {
+        Ok(crate::TextSizingCaptureState::Unsupported)
+    }
+
     /// This window's accessibility bridge, if the backend exposes one.
     ///
     /// `None` for a backend with no accessibility integration — which is

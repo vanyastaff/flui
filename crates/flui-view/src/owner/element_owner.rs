@@ -397,6 +397,7 @@ impl ElementOwner<'_> {
     /// adding a second heap entry. Fires `on_build_scheduled` for a fresh
     /// entry, or retries a wake that panicked after an earlier commit.
     pub fn schedule_build_for(&mut self, id: ElementId, depth: usize, reason: RebuildReason) {
+        self.external_inbox.note_local_admission();
         let newly_queued = match self.dirty_reasons.entry(id) {
             std::collections::hash_map::Entry::Vacant(entry) => {
                 entry.insert(RebuildReasons::from_reason(reason));

@@ -44,7 +44,7 @@
 //! - **Status-bar tap-to-scroll-to-top.** No primary-scroll-controller or
 //!   scroll-notification-observer substrate in FLUI to wire this through.
 //! - **Text-scaling suppression on the navigation bar.** `MediaQueryData` has
-//!   no no-scaling variant to apply yet — `text_scale_factor` passes through
+//!   no no-scaling variant to apply yet — `text_sizing` passes through
 //!   unchanged.
 
 use flui_sdk::geometry::EdgeInsets;

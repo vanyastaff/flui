@@ -235,6 +235,9 @@ pub struct TextStyle {
     pub background_color: Option<Color>,
     /// Font size.
     pub font_size: Option<f64>,
+    /// Numeric growth intent; absent values inherit independently of size.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub sizing: Option<flui_foundation::TextSizingIntent>,
     /// Font weight.
     pub font_weight: Option<FontWeight>,
     /// Font style.
@@ -281,6 +284,7 @@ impl TextStyle {
     #[must_use]
     pub fn layout_affecting_eq(&self, other: &Self) -> bool {
         self.font_size == other.font_size
+            && self.sizing == other.sizing
             && self.font_weight == other.font_weight
             && self.font_style == other.font_style
             && self.letter_spacing == other.letter_spacing
@@ -303,6 +307,13 @@ impl TextStyle {
     #[inline]
     pub fn with_font_size(mut self, font_size: f64) -> Self {
         self.font_size = Some(font_size);
+        self
+    }
+
+    /// Sets numeric growth intent without selecting a font or authored size.
+    #[must_use]
+    pub fn with_sizing(mut self, sizing: flui_foundation::TextSizingIntent) -> Self {
+        self.sizing = Some(sizing);
         self
     }
 
@@ -376,6 +387,7 @@ impl TextStyle {
             color: other.color.or(self.color),
             background_color: other.background_color.or(self.background_color),
             font_size: other.font_size.or(self.font_size),
+            sizing: other.sizing.or(self.sizing),
             font_weight: other.font_weight.or(self.font_weight),
             font_style: other.font_style.or(self.font_style),
             letter_spacing: other.letter_spacing.or(self.letter_spacing),
