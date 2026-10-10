@@ -48,11 +48,14 @@ receipts are reused; receipt ownership grants no UI authority.
 
 Standalone refused-envelope retirement and explicit owner retirement establish
 the same outermost custody lifetime. They publish the receipt before releasing
-captures, retain temporary scheduler ownership through terminal release, and
+captures, retain any upgraded temporary scheduler through terminal release, and
 withdraw publication before ending caller custody. Recursive cleanup borrows
 the enclosing scope; catching a nested failure cannot clear it. A later healthy
 refusal starts independently, even after an earlier cleanup returned a failure
 payload or completed with a failure caught by user code.
+Task-store custody is published even after scheduler weak authority closes;
+closed execution retires submitted envelopes under that same publication.
+The receipt protects surviving task envelopes without reviving the scheduler.
 
 Temporary scheduler release distinguishes an ordinary reference release from
 the actual last strong release. Actual destruction closes weak upgrades before

@@ -304,7 +304,9 @@ impl OwnerFrame {
                 return Err(error);
             }
         };
-        let Some(scheduler) = self.scheduler.upgrade() else {
+        let scheduler = self.scheduler.upgrade();
+        let failure_scope = self.bind_failure_scope(scheduler.as_ref());
+        let Some(scheduler) = scheduler else {
             self.retire_refused_frame(prepare, pipeline);
             return Err(ExecutionError::SchedulerClosed);
         };
@@ -317,7 +319,6 @@ impl OwnerFrame {
             return Err(ExecutionError::SchedulerClosed);
         }
 
-        let failure_scope = self.bind_failure_scope(Some(&scheduler));
         let mut recovery = Recovery::new(self);
         let mut output = None;
         recovery.attempt(&mut prepare);
@@ -401,7 +402,9 @@ impl OwnerFrame {
                 return Err(error);
             }
         };
-        let Some(scheduler) = self.scheduler.upgrade() else {
+        let scheduler = self.scheduler.upgrade();
+        let failure_scope = self.bind_failure_scope(scheduler.as_ref());
+        let Some(scheduler) = scheduler else {
             self.retire_refused(prepare);
             return Err(ExecutionError::SchedulerClosed);
         };
@@ -412,7 +415,6 @@ impl OwnerFrame {
             recovery.finish();
             return Err(ExecutionError::SchedulerClosed);
         }
-        let failure_scope = self.bind_failure_scope(Some(&scheduler));
         let mut recovery = Recovery::new(self);
         let mut polled = 0;
         recovery.attempt(|| {
