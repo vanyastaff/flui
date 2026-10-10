@@ -1,5 +1,5 @@
 //! The actual complexity proof for issue #1056's ready-index rewrite:
-//! [`OwnerFrame::poll_ready`] must cost allocations proportional to *ready*
+//! [`OwnerFrame::pump_background`] must cost allocations proportional to *ready*
 //! work, not resident tasks. `cargo xtask ci` has no bench step, so this test — not
 //! `benches/async_driver_pump.rs` — is the merge-blocking gate.
 //!
