@@ -11,12 +11,48 @@ host.
 
 ## Invariants
 
+- **Completion belongs to a presentation.** Assembly installs that
+  presentation's weak post-frame handle before mounting elements. An incomplete
+  segment retains its callbacks; only a completed segment makes them eligible.
+  Retained handles scheduled between segments create completion demand, which
+  wakes a clean presentation without rebuilding its widget tree or submitting
+  another scene. Withdrawal closes admission before retiring callback captures.
+  `native_text_preparation_does_not_complete_the_presentation` and
+  `clean_presentation_completion_keeps_the_tree_clean` pin the real pump paths.
+
 - **Invalid authored text waits for changed input.** A typed text-layout error
   withholds scene submission and retains layout debt. The failure handler receives
   the ordinary error; unchanged invalid input does not request a continuous frame
   retry. A pending build or live layout invalidation resumes work. The public
   `invalid_authored_text_waits_for_changed_input_and_then_presents` drives the real
   pump, rebuild handle and sink through rejection and recovery (ADR-0181).
+
+  A competing shared text-context loan also retains layout debt until an explicit
+  input invalidation. It reports `TextContextBusy`, without poisoning the node,
+  requesting native sizing or continuously retrying unchanged work. Releasing
+  the loan alone does not create frame demand.
+  `competing_text_measurement_waits_for_changed_input` pins refusal and subsequent
+  changed-input recovery through the public runtime pump.
+
+  An exact sizing source without a preparation owner likewise cannot progress
+  by repeating unchanged measurements. Its first refusal retains layout and
+  callback debt; changing the inherited provider resumes the presentation.
+  `native_text_preparation_does_not_complete_the_presentation` includes the
+  unavailable-source case and observes one callback after repaired geometry.
+
+- **Registered text preparation resumes the same presentation segment.** The
+  saved segment owns its original tick, host instant, constraints, accepted DPR,
+  numeric policy, multi-source cohort and opaque layout/build premises. Actual
+  admission advances premises before deduplication; retained transport does not.
+  Dirty-channel requests are applied before compatibility is checked. Native
+  service receives an owned frontier after Runtime checkout returns and settles
+  through the exact addressed owner FIFO. Lost receipts retain bounded retry
+  debt; held expired receipts park geometry and permit document edits, while
+  matching late replies can heal. Waiting requires the installed producer's
+  readiness or park cue. Incomplete geometry is unavailable to IME, hit-testing
+  and scene submission. `registered_text_preparation_preserves_the_actual_presentation_attempt`
+  pins fractional continuation and repeated already-pending rebuild admission;
+  `owner_delivery_contract` pins released-checkout service and close fencing.
 
 - **Inherited DPR agrees with the render pipeline.** Initial media data uses
   the pipeline's accepted ratio. Direct updates reject non-positive and
@@ -489,16 +525,21 @@ through the runtime frame producer.
 
 Tickers registered with a scheduler are transient frame callbacks, so they run
 in begin frame, before the microtask flush and before any persistent callback.
-The UI runtime's `Vsync` registry is ticked by `draw_frame_entered` at the start of the draw
-step, which runs in the scheduler's persistent phase: after the transient
+The UI runtime's `Vsync` registry is ticked by `draw_frame_entered` before a new
+presentation segment in the scheduler's persistent phase: after the transient
 callbacks and microtasks, and after any persistent callback registered before
 the pipeline. A controller's listener that schedules a microtask therefore
 sees it flushed at the next frame's begin, not this one's. The two sets are
 disjoint (a controller registered with a scheduler ticks in begin frame, one
 registered with `Vsync` ticks here), so no controller advances twice, and the
-tick still precedes every presentation's build, which is the ordering the
-segment relies on. Moving the tick into begin frame is a separate change.
-**Unasserted:** no test pins this.
+tick precedes that segment's build. Registered text preparation retains its
+original tick and resumes only its layout/fixpoint tail; an intervening pump does
+not advance that controller or reenter its widget build. Healthy presentations
+can enter their own new segments. The public row
+`an_animated_size_resumes_its_original_tick_after_host_service_yields` pins the
+retained tick and resulting fractional glyph/IME geometry. Relative ordering
+against arbitrary scheduler transient callbacks and microtasks remains unasserted.
+Moving the registry tick into begin frame is a separate change.
 
 ### Addressed dispatch retains redraw demand across unwind
 

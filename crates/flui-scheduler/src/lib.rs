@@ -169,7 +169,10 @@ pub use frame_telemetry::{
     FRAME_HISTORY_CAPACITY, FrameSnapshot, InputEpoch, InputEpochId, InputEpochs,
     MAX_COALESCED_INPUT_EPOCHS, PresentOutcome,
 };
-pub use post_frame::{OwnerFrame, OwnerFrameError, PostFrameHandle, PostFrameScheduleError};
+pub use post_frame::{
+    OwnerFrame, OwnerFrameError, PostFrameHandle, PostFrameScheduleError, PresentationFrameError,
+    PresentationFrameScope, PresentationScopeFactory,
+};
 /// The instant type the frame clock is stamped with. `std::time::Instant` on
 /// native, a `performance.now()` shim on wasm32 — re-exported so a binding can
 /// name `UpdateScheduler::drive_frame`'s `vsync_time` without depending on `web_time`.

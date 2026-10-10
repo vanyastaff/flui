@@ -472,6 +472,7 @@ impl UiRuntime {
     pub fn has_pending_work(&self) -> bool {
         self.presentations.iter().any(|presentation| {
             presentation.has_pending_work()
+                || presentation.has_eligible_completion()
                 || presentation.gestures().has_pending_motion()
                 || presentation.gestures().has_pending_deadlines()
         })
@@ -497,6 +498,7 @@ impl UiRuntime {
                 [
                     presentation.gestures().next_deadline(),
                     presentation.gesture_geometry.borrow().next_wake(),
+                    presentation.text_preparation.borrow().next_wake(),
                 ]
             })
             .flatten()

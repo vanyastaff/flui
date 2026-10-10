@@ -25,10 +25,10 @@ pub use flui_painting::paint::{BlendMode, ClipOp, FilterQuality, ImageFilter, Po
 pub use dirty::{DirtyNode, DirtySets, PaintEntry, PaintKind, PaintQueue};
 pub use flui_painting::paint::{BlurStyle, StrokeCap, StrokeJoin, TileMode};
 pub use handle::{RenderInvalidationHandle, SendError as DirtySendError};
-pub use notifier::VisualUpdateNotifier;
+pub use notifier::{DeferredVisualUpdate, VisualUpdateNotifier};
 pub use owner::{
     AttachRenderSubtreesError, AttachRenderSubtreesFailure, DetachRenderSubtreesError,
-    DetachedRenderSubtrees, PipelineCell, PipelineCounters, PipelineOwner,
+    DetachedRenderSubtrees, LayoutPremise, PipelineCell, PipelineCounters, PipelineOwner,
     ReleaseDetachedRenderSubtreesError, ReleaseDetachedRenderSubtreesFailure, WeakPipelineCell,
 };
 pub use phase::{Compositing, Idle, Layout, PaintPhase, PipelinePhase, Semantics};

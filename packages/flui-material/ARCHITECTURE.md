@@ -12,6 +12,27 @@ recorded so far.
 
 ## Mapping decisions
 
+### Typography presets retain explicit numeric growth profiles
+
+Default typography preserves authored font sizes, weights, spacing and line
+height. Its sizing intent selects a growth profile independently of those values
+(ADR-0182). This is FLUI's projection of its presets, not a Material scaling
+formula or a promise of native custom-font identity.
+
+| Preset | Numeric growth profile |
+|---|---|
+| display large, medium, small | LargeTitle |
+| headline large, medium, small | Title1, Title2, Title3 |
+| title large, medium, small | Title3, Headline, Subheadline |
+| label large, medium, small | Callout, Caption1, Caption2 |
+| body large, medium, small | Body, Body, Footnote |
+
+The public `retained_theme_roles_paint_distinct_numeric_sizing_answers` row
+uses mounted theme styles with the same authored size but different profiles,
+reads actual painted glyph sizes, and replaces/removes policy without forcing
+the root to rebuild. Color-only descendants inherit their parent profile;
+explicit profile and Fixed descendants replace it.
+
 ### SnackBar hover pauses only the addressed display timer
 
 Each mounted presenter holds a hover lease for its exact queued entry.

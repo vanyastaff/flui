@@ -81,9 +81,31 @@ impl RenderParagraph {
 
     /// Updates accessibility sizing and invalidates paragraph geometry.
     pub fn set_text_scale_factor(&mut self, factor: f64) -> flui_rendering::RenderUpdateImpact {
-        let previous = self.painter.text_scale_factor();
+        let previous = self.painter.text_sizing().cloned();
         self.painter.set_text_scale_factor(factor);
-        if self.painter.text_scale_factor() == previous {
+        if self.painter.text_sizing() == previous.as_ref() {
+            flui_rendering::RenderUpdateImpact::NONE
+        } else {
+            flui_rendering::RenderUpdateImpact::LAYOUT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS
+        }
+    }
+
+    /// Replace the inherited sizing authority, or restore it with `None`.
+    #[must_use]
+    pub fn with_text_sizing(mut self, sizing: Option<flui_painting::TextSizing>) -> Self {
+        self.painter.set_text_sizing(sizing);
+        self
+    }
+
+    /// Update glyph geometry and accessibility with the selected authority.
+    pub fn set_text_sizing(
+        &mut self,
+        sizing: Option<flui_painting::TextSizing>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        let previous = self.painter.text_sizing().cloned();
+        self.painter.set_text_sizing(sizing);
+        if self.painter.text_sizing() == previous.as_ref() {
             flui_rendering::RenderUpdateImpact::NONE
         } else {
             flui_rendering::RenderUpdateImpact::LAYOUT
@@ -245,8 +267,9 @@ impl RenderBox for RenderParagraph {
     ) -> RenderResult<Size> {
         let constraints = *ctx.constraints();
         let max_width = self.layout_max_width(&constraints);
-        self.painter
-            .layout(&mut ctx.text(), constraints.min_width, max_width)?;
+        ctx.text()?
+            .measurement()
+            .layout(&mut self.painter, constraints.min_width, max_width)?;
         // The text's own size, then clamped into the box constraints.
         Ok(constraints.constrain(self.painter.size()))
     }
@@ -257,9 +280,10 @@ impl RenderBox for RenderParagraph {
         ctx: &mut BoxDryLayoutCtx<'_>,
     ) -> RenderResult<Size> {
         let max_width = self.layout_max_width(&constraints);
-        let text_size = self
-            .painter
-            .dry_size(&mut ctx.text(), constraints.min_width, max_width)?;
+        let text_size =
+            ctx.text()?
+                .measurement()
+                .dry_size(&self.painter, constraints.min_width, max_width)?;
         Ok(constraints.constrain(text_size))
     }
 
@@ -274,8 +298,8 @@ impl RenderBox for RenderParagraph {
             TextBaseline::Alphabetic => PainterBaseline::Alphabetic,
             TextBaseline::Ideographic => PainterBaseline::Ideographic,
         };
-        Ok(self.painter.dry_baseline(
-            &mut ctx.text(),
+        Ok(ctx.text()?.measurement().dry_baseline(
+            &self.painter,
             constraints.min_width,
             max_width,
             painter_baseline,
@@ -290,7 +314,10 @@ impl RenderBox for RenderParagraph {
         _height: f64,
         ctx: &mut BoxIntrinsicsCtx<'_>,
     ) -> RenderResult<f64> {
-        Ok(self.painter.min_intrinsic_width(&mut ctx.text())?)
+        Ok(ctx
+            .text()?
+            .measurement()
+            .min_intrinsic_width(&self.painter)?)
     }
 
     fn compute_max_intrinsic_width(
@@ -298,7 +325,10 @@ impl RenderBox for RenderParagraph {
         _height: f64,
         ctx: &mut BoxIntrinsicsCtx<'_>,
     ) -> RenderResult<f64> {
-        Ok(self.painter.max_intrinsic_width(&mut ctx.text())?)
+        Ok(ctx
+            .text()?
+            .measurement()
+            .max_intrinsic_width(&self.painter)?)
     }
 
     fn compute_min_intrinsic_height(
@@ -306,7 +336,10 @@ impl RenderBox for RenderParagraph {
         width: f64,
         ctx: &mut BoxIntrinsicsCtx<'_>,
     ) -> RenderResult<f64> {
-        Ok(self.painter.intrinsic_height(&mut ctx.text(), width)?)
+        Ok(ctx
+            .text()?
+            .measurement()
+            .intrinsic_height(&self.painter, width)?)
     }
 
     fn compute_max_intrinsic_height(
@@ -314,7 +347,10 @@ impl RenderBox for RenderParagraph {
         width: f64,
         ctx: &mut BoxIntrinsicsCtx<'_>,
     ) -> RenderResult<f64> {
-        Ok(self.painter.intrinsic_height(&mut ctx.text(), width)?)
+        Ok(ctx
+            .text()?
+            .measurement()
+            .intrinsic_height(&self.painter, width)?)
     }
 
     fn compute_distance_to_actual_baseline(

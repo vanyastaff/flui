@@ -8,7 +8,11 @@
 //! `BuildOwner::run_frame_with_layout_builders`, which `mem::take`s the
 //! owner out, runs a typestate phase, and puts it back).
 
-use std::{cell::RefCell, fmt, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    fmt,
+    rc::Rc,
+};
 
 use super::PipelineOwner;
 
@@ -48,12 +52,20 @@ use super::PipelineOwner;
 /// through [`RenderInvalidationHandle`](crate::pipeline::RenderInvalidationHandle) instead -- a
 /// weak, generational, least-privilege handle built for exactly this seam.
 #[derive(Clone)]
-pub struct PipelineCell(Rc<RefCell<PipelineOwner>>);
+pub struct PipelineCell(Rc<PipelineSlot>);
+
+struct PipelineSlot {
+    owner: RefCell<PipelineOwner>,
+    layout_available: Cell<bool>,
+}
 
 impl PipelineCell {
     /// Wraps a fresh, idle [`PipelineOwner`] in an owner-local cell.
     pub fn new(owner: PipelineOwner) -> Self {
-        Self(Rc::new(RefCell::new(owner)))
+        Self(Rc::new(PipelineSlot {
+            owner: RefCell::new(owner),
+            layout_available: Cell::new(true),
+        }))
     }
 
     /// Runs `f` with shared access to the owner.
@@ -76,7 +88,7 @@ impl PipelineCell {
     /// });
     /// ```
     pub fn with<R>(&self, f: impl FnOnce(&PipelineOwner) -> R) -> R {
-        let owner = self.0.borrow();
+        let owner = self.0.owner.borrow();
         f(&owner)
     }
 
@@ -105,7 +117,33 @@ impl PipelineCell {
     /// Do not reach for this to paper over a genuine reentrancy bug —
     /// [`Self::with_mut`]'s panic is load-bearing for the frame pipeline.
     pub fn try_with<R>(&self, f: impl FnOnce(&PipelineOwner) -> R) -> Option<R> {
-        self.0.try_borrow().ok().map(|owner| f(&owner))
+        self.0.owner.try_borrow().ok().map(|owner| f(&owner))
+    }
+
+    /// Read geometry only while the presentation has a complete layout.
+    ///
+    /// A failed or suspended frame may have changed individual render objects
+    /// without completing their ancestors. Such geometry remains unavailable
+    /// even after the owner checkout ends.
+    pub fn try_with_layout<R>(&self, f: impl FnOnce(&PipelineOwner) -> R) -> Option<R> {
+        self.0
+            .layout_available
+            .get()
+            .then(|| self.try_with(f))
+            .flatten()
+    }
+
+    /// Withdraw externally readable geometry before abandoning an incomplete
+    /// presentation segment. Document editing can continue independently.
+    #[doc(hidden)]
+    pub fn withdraw_layout(&self) {
+        self.0.layout_available.set(false);
+    }
+
+    /// Publish geometry after the whole presentation segment completes.
+    #[doc(hidden)]
+    pub fn publish_layout(&self) {
+        self.0.layout_available.set(true);
     }
 
     /// Runs `f` with exclusive access to the owner.
@@ -116,7 +154,7 @@ impl PipelineCell {
     /// cell is already live on the call stack (a reentrant checkout) -- see
     /// the type-level "Reentrancy" docs.
     pub fn with_mut<R>(&self, f: impl FnOnce(&mut PipelineOwner) -> R) -> R {
-        let mut owner = self.0.try_borrow_mut().expect(
+        let mut owner = self.0.owner.try_borrow_mut().expect(
             "BUG: PipelineCell::with_mut called reentrantly -- a with/with_mut borrow from \
              this cell is already live on the call stack",
         );
@@ -146,7 +184,7 @@ impl PipelineCell {
     /// assert!(cell.is_free(), "free again once with_mut returns");
     /// ```
     pub fn is_free(&self) -> bool {
-        self.0.try_borrow_mut().is_ok()
+        self.0.owner.try_borrow_mut().is_ok()
     }
 
     /// Whether `self` and `other` share the same underlying owner (a shallow
@@ -162,8 +200,8 @@ impl PipelineCell {
     /// (no outstanding strong clone) once every `PipelineCell` referencing
     /// it has dropped.
     #[cfg(any(test, feature = "testing"))]
-    pub fn downgrade_for_test(&self) -> std::rc::Weak<RefCell<PipelineOwner>> {
-        Rc::downgrade(&self.0)
+    pub fn downgrade_for_test(&self) -> WeakPipelineCell {
+        self.downgrade()
     }
 }
 
@@ -186,7 +224,7 @@ impl fmt::Debug for PipelineCell {
 /// `upgrade` answers `None` once every strong holder is gone — which for a
 /// presentation's pipeline means the presentation has closed.
 #[derive(Clone, Debug)]
-pub struct WeakPipelineCell(std::rc::Weak<RefCell<PipelineOwner>>);
+pub struct WeakPipelineCell(std::rc::Weak<PipelineSlot>);
 
 impl WeakPipelineCell {
     /// Reclaim a strong handle, or `None` if the tree is gone.

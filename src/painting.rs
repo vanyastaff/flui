@@ -9,7 +9,8 @@ pub use flui_painting::paint::{
     BlendMode, Paint, PaintBuilder, PaintStyle, PointMode, Shader, StrokeCap, StrokeJoin,
 };
 pub use flui_painting::{
-    Alignment, AlignmentDirectional, AlignmentGeometry, BoxFit, BoxShape, FittedSizes, TextBaseline,
+    Alignment, AlignmentDirectional, AlignmentGeometry, BoxFit, BoxShape, FittedSizes,
+    TextBaseline, TextSizing,
 };
 pub use flui_painting::{Canvas, DisplayList, DrawCommand, DrawOp};
 /// Paint, style and text values: paths, shaders, colours, borders, decorations, text styles.

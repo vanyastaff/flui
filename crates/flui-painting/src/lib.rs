@@ -107,7 +107,11 @@ pub use table_border::paint_table_border;
 pub use text_layout::{
     FontCollection, HostFontFeed, HostFonts, TextContext, TextLayoutError, TextLayoutResult,
 };
-pub use text_painter::{Invalidation, TextBaseline, TextPainter};
+pub use text_painter::{
+    Invalidation, TextBaseline, TextMeasurement, TextMeasurementError, TextPainter,
+    TextPreparationPending, TextResolvedSize, TextSizing, TextSizingAdmission,
+    TextSizingAdmissionError, TextSizingCohort, TextSizingConflict, TextSizingSource,
+};
 
 // The paint vocabulary, defined in `crate::paint`.
 pub use crate::paint::{

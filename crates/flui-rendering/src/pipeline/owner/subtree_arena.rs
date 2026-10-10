@@ -1688,14 +1688,15 @@ unsafe fn box_intrinsic_query_borrowed_impl(
                 }
             }
         };
-        entry.render_object().intrinsic_raw(
-            dimension,
-            extent,
+        let mut query = crate::context::BoxIntrinsicsCtx::new(
             child_ids.len(),
             &child_parent_data_refs,
             &mut child_query,
             arena.text.source(id),
-        )
+        );
+        entry
+            .render_object()
+            .intrinsic_raw(dimension, extent, &mut query)
     }?;
 
     entry

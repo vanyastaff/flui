@@ -674,8 +674,10 @@ impl HeadlessHost {
     }
 
     /// The owner-local post-frame handle the UI runtime installed on its build
-    /// owner: a callback scheduled through it runs in the next pump's
-    /// post-frame phase.
+    /// owner: a callback scheduled through it runs in the post-frame phase
+    /// after this presentation has coherent geometry. An incomplete frame
+    /// retains it until repair; an ordinary host-frame callback uses the
+    /// scheduler's unscoped lane instead.
     ///
     /// # Panics
     ///

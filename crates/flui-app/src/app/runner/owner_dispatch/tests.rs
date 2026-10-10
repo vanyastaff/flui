@@ -11,6 +11,7 @@ use flui_foundation::geometry::Offset;
 #[cfg(not(target_os = "ios"))]
 use flui_interaction::HitTestResult;
 use flui_interaction::events::{PointerKind, make_down_event};
+use flui_painting::TextSizing;
 use flui_platform::traits::{PlatformInput, PlatformWindow};
 
 use super::super::host::{
@@ -923,18 +924,18 @@ fn two_ui_runtimes_via_isolated_policy_share_nothing() {
     teardown_platform_ui_runtime();
 }
 
-fn first_build_text_scale(runtime: &mut crate::app::ui_runtime::UiRuntime) -> f64 {
+fn first_build_text_sizing(runtime: &mut crate::app::ui_runtime::UiRuntime) -> TextSizing {
     use flui_view::prelude::*;
 
     #[derive(Clone, StatelessView)]
-    struct InitialPreferences(Rc<RefCell<Vec<f64>>>);
+    struct InitialPreferences(Rc<RefCell<Vec<TextSizing>>>);
 
     impl StatelessView for InitialPreferences {
         fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-            let scale = flui_widgets::MediaQuery::text_scale_factor_of(ctx)
+            let sizing = flui_widgets::MediaQuery::text_sizing_of(ctx)
                 .expect("runtime inherited preferences");
-            self.0.borrow_mut().push(scale);
-            flui_widgets::SizedBox::new(20.0 * scale, 20.0)
+            self.0.borrow_mut().push(sizing);
+            flui_widgets::Text::new("Preference")
         }
     }
 
@@ -953,7 +954,7 @@ fn first_build_text_scale(runtime: &mut crate::app::ui_runtime::UiRuntime) -> f6
     );
     let values = observed.borrow();
     assert_eq!(values.len(), 1, "one initial build");
-    values[0]
+    values[0].clone()
 }
 
 fn deferred_native_reads_preserve_accepted_preferences() {
@@ -976,8 +977,8 @@ fn deferred_native_reads_preserve_accepted_preferences() {
                 1.0,
             )?;
             assert_eq!(
-                first_build_text_scale(&mut runtime),
-                2.0,
+                first_build_text_sizing(&mut runtime),
+                TextSizing::linear(2.0).expect("valid scale"),
                 "deferred read replaced accepted preferences"
             );
             super::super::host::refresh_preferences_with(|_| {
@@ -991,8 +992,8 @@ fn deferred_native_reads_preserve_accepted_preferences() {
                 1.0,
             )?;
             assert_eq!(
-                first_build_text_scale(&mut runtime),
-                3.0,
+                first_build_text_sizing(&mut runtime),
+                TextSizing::linear(3.0).expect("valid scale"),
                 "later native observation was lost"
             );
             teardown_platform_ui_runtime();
@@ -1008,12 +1009,12 @@ fn preferences_wake_each_isolated_window() {
     use std::sync::atomic::Ordering;
 
     #[derive(Clone, StatelessView)]
-    struct Reader(Rc<RefCell<Vec<f64>>>);
+    struct Reader(Rc<RefCell<Vec<TextSizing>>>);
     impl StatelessView for Reader {
         fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-            let scale = flui_widgets::MediaQuery::text_scale_factor_of(ctx).expect("preferences");
-            self.0.borrow_mut().push(scale);
-            flui_widgets::SizedBox::new(20.0 * scale, 20.0)
+            let sizing = flui_widgets::MediaQuery::text_sizing_of(ctx).expect("preferences");
+            self.0.borrow_mut().push(sizing);
+            flui_widgets::Text::new("Preference")
         }
     }
     let _clear = OwnerHostClearGuard::arm();
@@ -1081,7 +1082,13 @@ fn preferences_wake_each_isolated_window() {
         );
         dispatch_platform_ui_runtime(*dispatcher, RuntimeTask::Frame(*frame))
             .expect("requested frame");
-        assert_eq!(&*observed.borrow(), &[1.0, 2.0]);
+        assert_eq!(
+            &*observed.borrow(),
+            &[
+                TextSizing::linear(1.0).expect("valid scale"),
+                TextSizing::linear(2.0).expect("valid scale")
+            ]
+        );
     }
     teardown_platform_ui_runtime();
 }
@@ -1092,12 +1099,12 @@ fn owner_wake_refreshes_installed_preference_consumers() {
     use flui_view::prelude::*;
 
     #[derive(Clone, StatelessView)]
-    struct Reader(Rc<RefCell<Vec<f64>>>);
+    struct Reader(Rc<RefCell<Vec<TextSizing>>>);
     impl StatelessView for Reader {
         fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-            let scale = flui_widgets::MediaQuery::text_scale_factor_of(ctx).expect("preferences");
-            self.0.borrow_mut().push(scale);
-            flui_widgets::SizedBox::new(20.0 * scale, 20.0)
+            let sizing = flui_widgets::MediaQuery::text_sizing_of(ctx).expect("preferences");
+            self.0.borrow_mut().push(sizing);
+            flui_widgets::Text::new("Preference")
         }
     }
     let _clear = OwnerHostClearGuard::arm();
@@ -1142,7 +1149,10 @@ fn owner_wake_refreshes_installed_preference_consumers() {
         .expect("headless bootstrap");
     let (dispatcher, frame) = frame.borrow().expect("installed frame");
     dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame)).expect("initial frame");
-    assert_eq!(&*observed.borrow(), &[2.0]);
+    assert_eq!(
+        &*observed.borrow(),
+        &[TextSizing::linear(2.0).expect("valid scale")]
+    );
     with_owner_platform(|owner| owner.proxy().wake())
         .expect("owner")
         .expect("wake");
@@ -1150,7 +1160,10 @@ fn owner_wake_refreshes_installed_preference_consumers() {
     dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame)).expect("refreshed frame");
     assert_eq!(
         &*observed.borrow(),
-        &[2.0, 1.0],
+        &[
+            TextSizing::linear(2.0).expect("valid scale"),
+            TextSizing::linear(1.0).expect("valid scale")
+        ],
         "owner wake did not deliver the headless source's absent text-scale observation"
     );
     teardown_platform_ui_runtime();
@@ -1209,8 +1222,8 @@ fn obsolete_native_observation_cannot_update_a_replacement_host() {
                         1.0,
                     )?;
                     assert_eq!(
-                        first_build_text_scale(&mut runtime),
-                        3.0,
+                        first_build_text_sizing(&mut runtime),
+                        TextSizing::linear(3.0).expect("valid scale"),
                         "obsolete observation overwrote replacement source"
                     );
                     teardown_platform_ui_runtime();
@@ -1244,7 +1257,10 @@ fn windows_bootstrap_accepts_preferences_before_the_first_window() {
                 test_window(),
                 1.0,
             )?;
-            assert_eq!(first_build_text_scale(&mut runtime), expected);
+            assert_eq!(
+                first_build_text_sizing(&mut runtime),
+                TextSizing::linear(expected).expect("native scale")
+            );
             teardown_platform_ui_runtime();
             proxy.request_quit()?;
             Ok(())
@@ -1273,8 +1289,8 @@ fn bootstrap_keeps_the_host_that_seeded_the_first_build() {
                 1.0,
             )?;
             assert_eq!(
-                first_build_text_scale(&mut runtime),
-                2.0,
+                first_build_text_sizing(&mut runtime),
+                TextSizing::linear(2.0).expect("valid scale"),
                 "first build must use accepted host preferences"
             );
             let installation = prepare_platform_ui_runtime(runtime, window);
@@ -1330,8 +1346,8 @@ fn a_replacement_platform_starts_a_new_preference_owner() {
                 1.0,
             )?;
             assert_eq!(
-                first_build_text_scale(&mut runtime),
-                1.0,
+                first_build_text_sizing(&mut runtime),
+                TextSizing::linear(1.0).expect("valid scale"),
                 "a replacement must not inherit another platform's observations"
             );
             teardown_platform_ui_runtime();
@@ -1436,8 +1452,8 @@ fn platform_replacement_contains_reentrant_retirement() {
                     1.0,
                 )?;
                 assert_eq!(
-                    first_build_text_scale(&mut runtime),
-                    2.5,
+                    first_build_text_sizing(&mut runtime),
+                    TextSizing::linear(2.5).expect("valid scale"),
                     "reentrant updates remain usable after competing retirement failures"
                 );
                 teardown_platform_ui_runtime();

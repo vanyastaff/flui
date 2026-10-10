@@ -1881,7 +1881,7 @@ impl ViewState<EditableText> for EditableTextState {
         };
         let enabled = view.enabled;
         let appearance = FieldAppearance {
-            text_scale_factor: crate::MediaQuery::text_scale_factor_of(ctx).unwrap_or(1.0),
+            text_sizing: crate::MediaQuery::text_sizing_of(ctx),
             font_weight_adjustment: crate::MediaQuery::font_weight_adjustment_of(ctx).unwrap_or(0),
             caret_height: view.caret_height,
             caret_color: view.caret_color,
@@ -2451,7 +2451,7 @@ fn build_key_handler(
 #[derive(Clone, Debug)]
 struct EditableTextRenderView {
     text: String,
-    text_scale_factor: f64,
+    text_sizing: Option<flui_painting::TextSizing>,
     font_weight_adjustment: i32,
     caret_byte_offset: usize,
     show_caret: bool,
@@ -2477,7 +2477,7 @@ impl EditableTextRenderView {
             span = span.with_style(style);
         }
         RenderEditable::new(span, TextDirection::Ltr)
-            .with_text_scale_factor(self.text_scale_factor)
+            .with_text_sizing(self.text_sizing.clone())
             .with_font_weight_adjustment(self.font_weight_adjustment)
             .with_caret_byte_offset(self.caret_byte_offset)
             .with_show_caret(self.show_caret)
@@ -2511,7 +2511,7 @@ impl RenderView for EditableTextRenderView {
             span = span.with_style(style);
         }
         let mut impact = render_object.set_text(span);
-        impact |= render_object.set_text_scale_factor(self.text_scale_factor);
+        impact |= render_object.set_text_sizing(self.text_sizing.clone());
         impact |= render_object.set_font_weight_adjustment(self.font_weight_adjustment);
         impact |= render_object.set_caret_byte_offset(self.caret_byte_offset);
         impact |= render_object.set_show_caret(self.show_caret);
@@ -2544,7 +2544,7 @@ impl_render_view!(EditableTextRenderView);
 /// height belonged.
 #[derive(Clone, Debug)]
 struct FieldAppearance {
-    text_scale_factor: f64,
+    text_sizing: Option<flui_painting::TextSizing>,
     font_weight_adjustment: i32,
     caret_height: Option<f64>,
     caret_color: Color,
@@ -2616,7 +2616,7 @@ fn build_field_view(
         inner_anchor,
         EditableTextRenderView {
             text,
-            text_scale_factor: appearance.text_scale_factor,
+            text_sizing: appearance.text_sizing.clone(),
             font_weight_adjustment: appearance.font_weight_adjustment,
             caret_byte_offset,
             show_caret: focused && !controller.caret_hidden_by_ime(),

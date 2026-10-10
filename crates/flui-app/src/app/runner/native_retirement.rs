@@ -8,6 +8,7 @@ use crate::app::lifecycle_state::preserve_first_lifecycle_panic;
 use super::frame_driver::FrameDriver;
 
 enum RetiredNativeOwner {
+    TextSizing(Rc<super::native_text_sizing::NativeTextSizing>),
     Frame(FrameDriver),
     CloseHandler(CloseRequestHandler),
 }
@@ -17,6 +18,11 @@ enum RetiredNativeOwner {
 pub(in crate::app) struct NativeRetirement(Rc<RefCell<Vec<RetiredNativeOwner>>>);
 
 impl NativeRetirement {
+    pub(super) fn text_sizing(&self, sizing: Rc<super::native_text_sizing::NativeTextSizing>) {
+        self.0
+            .borrow_mut()
+            .push(RetiredNativeOwner::TextSizing(sizing));
+    }
     pub(super) fn frame(&self, driver: FrameDriver) {
         self.0.borrow_mut().push(RetiredNativeOwner::Frame(driver));
     }
@@ -37,6 +43,7 @@ impl NativeRetirement {
         let owners = std::mem::take(&mut *self.0.borrow_mut());
         for owner in owners {
             let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match owner {
+                RetiredNativeOwner::TextSizing(sizing) => drop(sizing),
                 RetiredNativeOwner::Frame(driver) => drop(driver),
                 RetiredNativeOwner::CloseHandler(handler) => drop(handler),
             }))

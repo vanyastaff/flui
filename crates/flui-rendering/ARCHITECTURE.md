@@ -30,6 +30,17 @@ deepest-first element unmount so view lifecycle hooks remain canonical.
 
 ## Mapping decisions
 
+### Incomplete presentation geometry is unavailable
+
+`PipelineCell` carries layout publication readiness independently of its owner
+checkout. A runtime segment failure withdraws it before diagnostics and deferred
+document grants; a completed replacement publishes it again. Geometry readers
+use `try_with_layout`, so releasing a checkout cannot expose partially changed
+render nodes. Document editing remains independent. The runtime's public
+`parked_text_preparation_does_not_publish_partial_ime_geometry` exercises a real
+focused editable, later sibling failure, deferred edit and replacement layout
+([ADR-0182](../../docs/adr/ADR-0182-explicit-numeric-text-sizing.md)).
+
 ### Scroll notification failure cannot starve render invalidation
 
 `ScrollPosition` delivers an accepted pixel change to widget and viewport
@@ -1053,6 +1064,24 @@ computed twice (engine for pixels, rendering for hit-test) because a single comp
 need the downstream engine to write into the upstream owner; the logic lives once in
 `resolve_follower_offset`. Translation only, like the render path.
 
+### Suspended layout distinguishes accepted input from retained work
+
+`LayoutPremise` binds a checked admission stamp to the existing relocation owner
+seal. A live layout mark advances before dirty-queue dedup; insertion/reassemble
+admission and changed root identity do likewise. Generation-validated external
+layout replay uses the same mark path, so a continuation must drain that channel
+before checking compatibility. Taking, retaining or moving admitted dirty roots
+does not advance the stamp. `resume_retained_layout` makes retained debt runnable
+without admitting a new authored change or requesting a frame itself.
+
+The stamp becomes permanently untrackable on checked-counter exhaustion and
+never matches, including itself; work admission and delivery still continue.
+`scheduler_routing_matrix` includes `exhausted_layout_premise_keeps_work_deliverable`.
+Only the initial terminal counter is seeded privately because a public consumer
+cannot reach it in a finite test; actual deduplicated admission, retained-work
+transport and delivery run through the scheduler's ordinary paths. This token
+has no numeric getter or equality relation and uses no new identity registry.
+
 ### Layout contexts lend the UI runtime's text context, one measurement at a time
 
 **Rule.** A `PipelineOwner` holds the UI runtime's `TextContextHandle`
@@ -1064,15 +1093,16 @@ typestate transition calls `take_idle`, whose placeholder shares the handle, so 
 transition that unwinds leaves still measures through it. The layout walk passes the
 cell to every box node it lays out or measures — leaves through `layout_leaf_only`, parents
 through `ErasedBoxLayoutCtx`, box intrinsics asked by a box or a sliver parent — and the
-intrinsic, dry-layout and dry-baseline query walks pass it to `intrinsic_raw`,
-`dry_layout_raw` and `dry_baseline_raw`. A render object sees only a `TextCx`, a scoped
-`&mut TextContext` taken from `&mut` context (`BoxLayoutContext::text`,
+intrinsic, dry-layout and dry-baseline query walks construct complete mutable
+contexts for `intrinsic_raw`, `dry_layout_raw` and `dry_baseline_raw`. A render
+object receives a fallible `TextCx` loan taken from `&mut` context (`BoxLayoutContext::text`,
 `BoxIntrinsicsCtx::text`, `BoxDryLayoutCtx::text`, `BoxDryBaselineCtx::text`), so it cannot
-lay out a child or query one while it holds the loan. The raw methods and
-`BoxLayoutCtxErased::text_source` carry the cell as a `TextSource`, a `Copy` token whose cell
-only this crate can borrow, so a direct `RenderObject` implementation passes it on but cannot
-hold a loan across a child query. Nothing builds a context implicitly: every layout, intrinsic
-and dry-query context is constructed with a `TextSource`, and `layout_leaf_only` takes one.
+lay out a child or query one through the same context while the loan remains in
+use. Raw query hooks receive the same complete context; erased layout exposes
+`text(&mut self)` rather than an independent source-extraction operation. Drivers
+construct layout, intrinsic and dry-query contexts with a `TextSource`, and
+`layout_leaf_only` takes one. A separately captured shared handle or driver source
+can still alias the resource; acquisition then returns `TextContextBusy`.
 Slivers get no text accessor: nothing that measures text is a sliver.
 
 **Why a channel.** The UI runtime owns its text context (no ambient, engine-wide font
@@ -1083,9 +1113,14 @@ out.
 `PipelineOwner::run_frame`, `run_layout` and every binding and harness that drives them, and
 the UI runtime reaches its presentations through `&self`. A lock would put contention on every
 measurement. The `RefCell` sits between the UI runtime and its pipelines, borrowed once per
-measurement on the owner thread; a second borrow at the same time is a `BUG:` panic, which
-only a measurement that synchronously drives another could cause (a `PipelineCell` checkout is
-not re-entrant). A `RefMut` drops on unwind, so a panicking layout releases the loan before the
+measurement on the owner thread. Overlapping independently held loans refuse the
+current operation without poisoning, fabricated geometry, native preparation
+debt or automatic retries. Once the competing loan ends, the same query can make
+progress. `shared_text_alias_refuses_raw_queries_and_recovers` checks all three
+raw query routes through a real paragraph child. Trybuild's
+`text_loan_across_query` and `text_loan_across_erased_layout` reject a live loan
+across a recursive operation through the same capability. A `RefMut` drops on
+unwind, so a panicking layout releases the loan before the
 walk's `catch_unwind` turns it into `Poisoned`. Locked by
 `a_layout_that_panics_while_holding_the_text_context_releases_it`,
 `intrinsic_and_dry_queries_measure_through_the_pipelines_context` and

@@ -24,22 +24,30 @@ update reports layout and semantics invalidation when sizing changes, so the sam
 render object produces updated geometry. Weight changes likewise invalidate layout
 and semantics; EditableText forwards the same inherited adjustment to its painter.
 The common shaping policy runs after authored span inheritance (ADR-0174).
-`Text` composes this path after merging its ambient style. The shared text-scale
-accessor resolves out-of-range
-authored values (including zero, negative, subnormal and non-finite values) to
-`1.0` before either text consumer creates or updates a render object; the
-supported range matches system preferences, `1/64..=64`. Initial sizing is pinned by
+`Text` composes this path after merging its ambient style. `MediaQueryData`
+carries one validated numeric sizing policy rather than a writable scalar.
+The nearest provider replaces the outer policy, including fixed sizing;
+copying parent data preserves its policy while changing another field.
+Without a provider, the render pipeline supplies the policy. Removing a provider
+restores the current outer authority. Raw system text-scale observations retain
+their separate admitted range `1/64..=64`. Initial sizing is pinned by
 `media_text_scaling_changes_the_laid_out_text`; live updates, restoration from
 authored size and nested override retention by
 `a_text_scale_change_relayouts_a_preserved_text_subtree`.
 
 `Icon` resolves its square and glyph from one logical size. Its default stays
 fixed; `IconThemeData::apply_text_scaling` opts both into the nearest inherited
-scale, including an explicit icon-size override. The composed `RichText` uses
-that resolved size without applying inheritance again. Ordinary text retains
+policy, including an explicit icon-size override. `RenderIcon` resolves during
+measurement and shapes the glyph at that admitted size with fixed sizing,
+without applying inheritance again. Ordinary text retains
 its inherited sizing and weight preferences. The public producer row
 `icon_text_sizing_keeps_box_and_glyph_together` checks raster glyph keys and the
-allocated square across live scale changes, fractional sizes and theme policy.
+allocated square across live changes, exact answers, fractional sizes and theme
+policy; tight constraints can allocate a rectangle without changing glyph size.
+The widget's canonical Semantics wrapper publishes an explicitly authored label
+as an image, including a labelled absent glyph. Decorative icons publish no font
+codepoint label. `icon_labels_reach_the_assembled_accessibility_tree` checks the
+assembled tree across label replacement and removal.
 
 `EditableText` subscribes during its own build and carries sizing through its
 appearance value to `RenderEditable`. The editor retains authored styles and

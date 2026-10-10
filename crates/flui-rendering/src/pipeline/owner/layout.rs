@@ -176,7 +176,11 @@ impl PipelineOwner<Layout> {
                             let _ = self.scheduler.exit_phase(PhaseKind::Layout);
                             self.scheduler.retain_layout_batch(
                                 &dirty_nodes[index..],
-                                matches!(e, crate::RenderError::TextLayout(_)),
+                                matches!(
+                                    e,
+                                    crate::RenderError::TextLayout(_)
+                                        | crate::RenderError::TextContextBusy
+                                ),
                             );
                             return Err(e);
                         }
@@ -488,7 +492,7 @@ impl PipelineOwner<Layout> {
             &mut self.render_tree,
             id,
             &self.layout_poison,
-            crate::pipeline::TextLender::new(text.cell(), &self.text_measurers),
+            crate::pipeline::TextLender::new(text.cell(), &self.text_measurers, &self.text_sizing),
             #[cfg(any(test, feature = "testing"))]
             &self.parent_data_seeds,
         )?;

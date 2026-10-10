@@ -9,7 +9,9 @@
 //! [`UpdateScheduler::execute_frame`] — so no frame can poll or drain
 //! "nothing".
 //!
-//! All post-frame callbacks share one registration-ordered `Rc` queue.
+//! All post-frame callbacks share one `Rc` queue; eligible callbacks run in
+//! registration order. Presentation-bound handles wait for that presentation's
+//! coherent logical segment, independently of the host scheduler frame.
 //! [`PostFrameHandle`] holds a weak pointer to that exact queue. Construction
 //! may stage callbacks before the first owner frame; claiming the frame
 //! transfers the strong queue reference to it. A stale handle cannot attach
@@ -32,6 +34,58 @@ pub(crate) type OwnerPostFrameCallback = Box<dyn FnOnce(&FrameTiming) + 'static>
 pub(crate) struct PostFrameEntry {
     pub(crate) id: CallbackId,
     pub(crate) callback: OwnerPostFrameCallback,
+    target: CallbackTarget,
+}
+
+#[derive(Clone)]
+enum CallbackTarget {
+    RuntimeFrame,
+    Presentation {
+        scope: Weak<PresentationScopeState>,
+        epoch: Rc<CompletionEpoch>,
+    },
+}
+
+impl CallbackTarget {
+    fn eligible(&self) -> bool {
+        match self {
+            Self::RuntimeFrame => true,
+            Self::Presentation { scope, epoch } => scope.upgrade().is_some_and(|scope| {
+                !scope.closed.get()
+                    && epoch.completed.get()
+                    && matches!(
+                        scope.phase.get(),
+                        SegmentPhase::Idle | SegmentPhase::Completing
+                    )
+            }),
+        }
+    }
+
+    fn belongs_to(&self, scope: &Rc<PresentationScopeState>) -> bool {
+        matches!(self, Self::Presentation { scope: target, .. } if target.ptr_eq(&Rc::downgrade(scope)))
+    }
+}
+
+#[derive(Default)]
+struct CompletionEpoch {
+    completed: Cell<bool>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SegmentPhase {
+    Idle,
+    Running,
+    Suspended,
+    Servicing,
+    Completing,
+}
+
+struct PresentationScopeState {
+    closed: Cell<bool>,
+    phase: Cell<SegmentPhase>,
+    current: RefCell<Rc<CompletionEpoch>>,
+    next: RefCell<Rc<CompletionEpoch>>,
+    next_demand: Cell<bool>,
 }
 
 pub(crate) struct PostFrameQueue {
@@ -39,14 +93,24 @@ pub(crate) struct PostFrameQueue {
     active: RefCell<Vec<PostFrameEntry>>,
     /// Set by retirement: no callback is admitted afterwards.
     closed: Cell<bool>,
+    scopes: RefCell<Vec<Weak<PresentationScopeState>>>,
 }
 
 impl PostFrameQueue {
+    pub(crate) fn contains(&self, id: CallbackId) -> bool {
+        self.queue
+            .borrow()
+            .iter()
+            .chain(self.active.borrow().iter())
+            .any(|entry| entry.id == id)
+    }
+
     fn new() -> Rc<Self> {
         Rc::new(Self {
             queue: RefCell::new(Vec::new()),
             active: RefCell::new(Vec::new()),
             closed: Cell::new(false),
+            scopes: RefCell::new(Vec::new()),
         })
     }
 }
@@ -148,6 +212,24 @@ impl OwnerFrame {
     #[must_use]
     pub fn post_frame_handle(&self) -> PostFrameHandle {
         PostFrameHandle {
+            scheduler: self.scheduler.clone(),
+            lane: Rc::downgrade(&self.post_frame),
+            scope: None,
+        }
+    }
+
+    /// Mint a completion authority for one presentation assembled by this owner.
+    /// Retain it for that presentation's lifetime; its handles are weak.
+    #[must_use]
+    pub fn presentation_scope(&self) -> PresentationFrameScope {
+        PresentationFrameScope::mint(self.scheduler.clone(), &self.post_frame)
+    }
+
+    /// Weak assembly authority for factories which create presentations later.
+    /// A widget's scoped callback handle cannot mint sibling authorities.
+    #[must_use]
+    pub fn presentation_scope_factory(&self) -> PresentationScopeFactory {
+        PresentationScopeFactory {
             scheduler: self.scheduler.clone(),
             lane: Rc::downgrade(&self.post_frame),
         }
@@ -256,10 +338,28 @@ impl OwnerFrame {
             );
             return Err(PostFrameScheduleError::WrongScheduler);
         }
-        let entries = self.post_frame.queue.take();
-        let ids = entries.iter().map(|entry| entry.id).collect();
-        self.post_frame.active.borrow_mut().extend(entries);
+        let (eligible, blocked): (Vec<_>, Vec<_>) = self
+            .post_frame
+            .queue
+            .take()
+            .into_iter()
+            .partition(|entry| entry.target.eligible());
+        let ids = eligible.iter().map(|entry| entry.id).collect();
+        self.post_frame.queue.borrow_mut().extend(blocked);
+        self.post_frame.active.borrow_mut().extend(eligible);
         Ok(ids)
+    }
+
+    pub(crate) fn finish_post_frame_batch(&self) {
+        self.post_frame.scopes.borrow_mut().retain(|scope| {
+            let Some(scope) = scope.upgrade() else {
+                return false;
+            };
+            if scope.phase.get() == SegmentPhase::Completing {
+                scope.phase.set(SegmentPhase::Idle);
+            }
+            true
+        });
     }
 
     /// Return an uninvoked tail to the already-validated queue. Original IDs
@@ -272,6 +372,9 @@ impl OwnerFrame {
     pub(crate) fn take_active_post_frame(&self, id: CallbackId) -> Option<PostFrameEntry> {
         let mut active = self.post_frame.active.borrow_mut();
         let index = active.iter().position(|entry| entry.id == id)?;
+        if !active[index].target.eligible() {
+            return None;
+        }
         Some(active.swap_remove(index))
     }
 }
@@ -349,7 +452,284 @@ pub enum PostFrameScheduleError {
     WrongScheduler,
 }
 
+/// Owner-local completion authority for one presentation's logical geometry
+/// segment. Host frames may finish while this segment remains suspended.
+///
+/// This is a runtime assembly capability, not a widget capability. Widgets get
+/// its weak [`PostFrameHandle`]. Cancellation retains completion debt: resume
+/// the same authority for a replacement segment, or close the presentation.
+#[doc(hidden)]
+pub struct PresentationFrameScope {
+    scheduler: WeakUpdateScheduler,
+    lane: Weak<PostFrameQueue>,
+    state: Rc<PresentationScopeState>,
+}
+
+/// Weak owner-local authority to assemble a presentation completion scope.
+/// This retains neither the scheduler nor its callback queue.
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct PresentationScopeFactory {
+    scheduler: WeakUpdateScheduler,
+    lane: Weak<PostFrameQueue>,
+}
+
+impl PresentationScopeFactory {
+    /// Mint a fresh presentation authority while the original owner is live.
+    pub fn create(&self) -> Result<PresentationFrameScope, PresentationFrameError> {
+        let lane = self
+            .lane
+            .upgrade()
+            .filter(|lane| !lane.closed.get())
+            .ok_or(PresentationFrameError::Closed)?;
+        if self.scheduler.upgrade().is_none() {
+            return Err(PresentationFrameError::Closed);
+        }
+        Ok(PresentationFrameScope::mint(self.scheduler.clone(), &lane))
+    }
+}
+
+impl std::fmt::Debug for PresentationScopeFactory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PresentationScopeFactory")
+            .field("owner_alive", &(self.lane.strong_count() > 0))
+            .finish_non_exhaustive()
+    }
+}
+
+impl PresentationFrameScope {
+    fn mint(scheduler: WeakUpdateScheduler, lane: &Rc<PostFrameQueue>) -> Self {
+        let state = Rc::new(PresentationScopeState {
+            closed: Cell::new(lane.closed.get()),
+            phase: Cell::new(SegmentPhase::Idle),
+            current: RefCell::new(Rc::default()),
+            next: RefCell::new(Rc::default()),
+            next_demand: Cell::new(false),
+        });
+        lane.scopes.borrow_mut().push(Rc::downgrade(&state));
+        Self {
+            scheduler,
+            lane: Rc::downgrade(lane),
+            state,
+        }
+    }
+
+    /// The weak callback handle for this exact presentation authority.
+    #[must_use]
+    pub fn post_frame_handle(&self) -> PostFrameHandle {
+        PostFrameHandle {
+            scheduler: self.scheduler.clone(),
+            lane: self.lane.clone(),
+            scope: Some(Rc::downgrade(&self.state)),
+        }
+    }
+
+    fn check_live(&self) -> Result<(), PresentationFrameError> {
+        if self.state.closed.get()
+            || self.lane.upgrade().is_none_or(|lane| lane.closed.get())
+            || self.scheduler.upgrade().is_none()
+        {
+            return Err(PresentationFrameError::Closed);
+        }
+        Ok(())
+    }
+
+    /// Begin a new segment. Registrations made while idle already address it.
+    /// A suspended segment must be resumed instead, preserving its debt.
+    pub fn enter_segment(&self) -> Result<(), PresentationFrameError> {
+        self.check_live()?;
+        if self.state.phase.get() != SegmentPhase::Idle {
+            return Err(PresentationFrameError::SegmentActive);
+        }
+        *self.state.current.borrow_mut() = self.state.next.replace(Rc::default());
+        self.state.next_demand.set(false);
+        self.state.phase.set(SegmentPhase::Running);
+        Ok(())
+    }
+
+    /// Accepted successor callbacks need a coherent completion even when the
+    /// presentation has no dirty tree work. Runtime admission must also check
+    /// host eligibility and existing coherent geometry before entering it.
+    #[must_use]
+    pub fn has_completion_demand(&self) -> bool {
+        self.check_live().is_ok() && self.state.next_demand.get()
+    }
+
+    /// Reissue retained successor demand after the host clears its wake latch.
+    /// The runtime calls this only for an eligible presentation; hidden or
+    /// suspended geometry retains its debt without forcing an idle busy loop.
+    pub fn rearm_completion_demand(&self) {
+        if self.has_completion_demand()
+            && let Some(scheduler) = self.scheduler.upgrade()
+        {
+            scheduler.request_frame();
+        }
+    }
+
+    /// Retain the current completion epoch across a host-frame return.
+    pub fn suspend_segment(&self) -> Result<(), PresentationFrameError> {
+        self.check_live()?;
+        if !matches!(
+            self.state.phase.get(),
+            SegmentPhase::Running | SegmentPhase::Servicing
+        ) {
+            return Err(PresentationFrameError::NoRunningSegment);
+        }
+        self.state.phase.set(SegmentPhase::Suspended);
+        Ok(())
+    }
+
+    /// Before detached native service, prevent reentrant registrations from
+    /// joining the retained segment. They belong to its successor.
+    pub fn service_segment(&self) -> Result<(), PresentationFrameError> {
+        self.check_live()?;
+        if !matches!(
+            self.state.phase.get(),
+            SegmentPhase::Running | SegmentPhase::Suspended
+        ) {
+            return Err(PresentationFrameError::NoRunningSegment);
+        }
+        self.state.phase.set(SegmentPhase::Servicing);
+        Ok(())
+    }
+
+    /// Resume the retained epoch, including replacement geometry after
+    /// cancellation. No callback IDs or completion promises are discarded.
+    pub fn resume_segment(&self) -> Result<(), PresentationFrameError> {
+        self.check_live()?;
+        if !matches!(
+            self.state.phase.get(),
+            SegmentPhase::Suspended | SegmentPhase::Servicing
+        ) {
+            return Err(PresentationFrameError::NoSuspendedSegment);
+        }
+        self.state.phase.set(SegmentPhase::Running);
+        Ok(())
+    }
+
+    /// Commit coherent geometry before the host's post-frame dispatch.
+    /// The eligible batch receives that host's `FrameTiming`.
+    pub fn complete_segment(&self) -> Result<(), PresentationFrameError> {
+        self.check_live()?;
+        if self.state.phase.get() != SegmentPhase::Running {
+            return Err(PresentationFrameError::NoRunningSegment);
+        }
+        self.state.current.borrow().completed.set(true);
+        self.state.phase.set(SegmentPhase::Completing);
+        Ok(())
+    }
+
+    /// Withdraw partial geometry while transferring its callback debt to a
+    /// replacement. Resume after installing the replacement's owned inputs.
+    pub fn cancel_segment(&self) -> Result<(), PresentationFrameError> {
+        self.check_live()?;
+        if !matches!(
+            self.state.phase.get(),
+            SegmentPhase::Running | SegmentPhase::Suspended | SegmentPhase::Servicing
+        ) {
+            return Err(PresentationFrameError::NoRunningSegment);
+        }
+        self.state.phase.set(SegmentPhase::Suspended);
+        Ok(())
+    }
+
+    /// Permanently revoke this presentation and retire its queued and active
+    /// callback captures outside all queue guards. Return the first retirement
+    /// failure for the runtime's existing recovery scope to preserve.
+    #[must_use = "preserve the first retirement failure in the owner's recovery scope"]
+    pub fn close(&self) -> Option<RetirePanic> {
+        let retired = self.detach_callbacks();
+        let mut first = None;
+        for entry in retired {
+            if std::thread::panicking() {
+                std::mem::forget(entry);
+            } else if let Err(payload) = catch_unwind(AssertUnwindSafe(move || drop(entry))) {
+                keep_first(&mut first, payload);
+            }
+        }
+        first
+    }
+
+    /// Revoke and retain only this scope's callbacks when the enclosing owner
+    /// already preserves a failure. No capture destructor or diagnostic runs;
+    /// healthy sibling queues remain owned and deliverable.
+    #[doc(hidden)]
+    pub fn close_preserving(&self) {
+        for entry in self.detach_callbacks() {
+            std::mem::forget(entry.callback);
+        }
+    }
+
+    fn detach_callbacks(&self) -> Vec<PostFrameEntry> {
+        self.withdraw();
+        let Some(lane) = self.lane.upgrade() else {
+            return Vec::new();
+        };
+        let mut retired = Vec::new();
+        for storage in [&lane.queue, &lane.active] {
+            let (outgoing, retained): (Vec<_>, Vec<_>) = storage
+                .take()
+                .into_iter()
+                .partition(|entry| entry.target.belongs_to(&self.state));
+            storage.borrow_mut().extend(retained);
+            retired.extend(outgoing);
+        }
+        retired.sort_unstable_by_key(|entry| entry.id);
+        retired
+    }
+
+    /// Revoke completion authority without destroying any callback capture.
+    /// Runtime teardown commits this before closing graph, focus, text and
+    /// gesture authority, then calls [`Self::close`] outside those guards.
+    /// Withdrawal never consumes the later retirement obligation.
+    #[doc(hidden)]
+    pub fn withdraw(&self) {
+        self.state.closed.set(true);
+        self.state.next_demand.set(false);
+    }
+}
+
+impl Drop for PresentationFrameScope {
+    fn drop(&mut self) {
+        if let Some(payload) = self.close() {
+            if std::thread::panicking() {
+                flui_foundation::panic::retain_opaque_payload(payload);
+            } else {
+                std::panic::resume_unwind(payload);
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for PresentationFrameScope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PresentationFrameScope")
+            .field("closed", &self.state.closed.get())
+            .finish_non_exhaustive()
+    }
+}
+
+/// An invalid owner operation on a presentation's logical segment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum PresentationFrameError {
+    /// The presentation, owner frame, or scheduler has retired.
+    #[error("the presentation completion authority is closed")]
+    Closed,
+    /// A retained epoch cannot be silently replaced by a new epoch.
+    #[error("a logical segment is already active; resume it instead")]
+    SegmentActive,
+    /// The requested transition requires an active logical segment.
+    #[error("there is no running logical segment")]
+    NoRunningSegment,
+    /// Resume requires a retained suspended or servicing segment.
+    #[error("there is no suspended logical segment")]
+    NoSuspendedSegment,
+}
+
 /// Schedules owner-local work after a completed frame's layout and paint.
+/// A presentation-bound handle waits for its own logical geometry completion;
+/// an unscoped handle retains host scheduler-frame semantics.
 ///
 /// `!Send`: holds a [`Weak`] pointer directly at its owner frame's `Rc`
 /// queue, so it can capture non-`Send` state (`Rc`/`RefCell`) in the
@@ -359,6 +739,7 @@ pub enum PostFrameScheduleError {
 pub struct PostFrameHandle {
     scheduler: WeakUpdateScheduler,
     lane: Weak<PostFrameQueue>,
+    scope: Option<Weak<PresentationScopeState>>,
 }
 
 impl PostFrameHandle {
@@ -369,16 +750,21 @@ impl PostFrameHandle {
         Self {
             scheduler: scheduler.downgrade(),
             lane: lane.as_ref().map_or_else(Weak::new, Rc::downgrade),
+            scope: None,
         }
     }
-    /// Schedule an owner-local callback after the next completed frame.
+    /// Schedule an owner-local callback after the next eligible completion.
+    /// A presentation registration made during its running segment joins that
+    /// segment. Idle, suspended, servicing and completing registrations target
+    /// the successor segment. Self-registration therefore never runs twice in
+    /// one completion batch.
     ///
     /// The callback may capture `Rc`/`RefCell` state. On error (the owning
     /// UI runtime is gone or retired) the callback is dropped without running —
     /// provably: nothing retains it once this call returns `Err`.
     ///
-    /// Every registration on this owner queue runs in callback identity order,
-    /// including registrations through the scheduler during construction.
+    /// Eligible registrations run in callback identity order. A blocked
+    /// presentation never holds back a completed sibling or runtime callback.
     pub fn schedule(
         &self,
         callback: impl FnOnce(&FrameTiming) + 'static,
@@ -392,12 +778,38 @@ impl PostFrameHandle {
             .scheduler
             .upgrade()
             .ok_or(PostFrameScheduleError::Closed)?;
+        let mut successor_scope = None;
+        let target = if let Some(scope) = &self.scope {
+            let scope = scope
+                .upgrade()
+                .filter(|scope| !scope.closed.get())
+                .ok_or(PostFrameScheduleError::Closed)?;
+            let epoch = if scope.phase.get() == SegmentPhase::Running {
+                scope.current.borrow().clone()
+            } else {
+                successor_scope = Some(scope.clone());
+                scope.next.borrow().clone()
+            };
+            CallbackTarget::Presentation {
+                scope: Rc::downgrade(&scope),
+                epoch,
+            }
+        } else {
+            CallbackTarget::RuntimeFrame
+        };
         scheduler.with_post_frame_registration(|id| {
             lane.queue.borrow_mut().push(PostFrameEntry {
                 id,
                 callback: Box::new(callback),
+                target,
             });
+            if let Some(scope) = &successor_scope {
+                scope.next_demand.set(true);
+            }
         });
+        if successor_scope.is_some() {
+            scheduler.request_frame();
+        }
         Ok(())
     }
 

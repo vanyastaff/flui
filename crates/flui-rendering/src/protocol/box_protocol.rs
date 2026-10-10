@@ -490,9 +490,8 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
     /// Creates a new box layout context with given constraints (no children
     /// access), measuring text through `text`. Direct storage.
     ///
-    /// Only flui-rendering can call this: a [`TextSource`] is lent by a
-    /// pipeline, and nothing outside the crate can build one (the `testing`
-    /// feature's `TextContextHandle::source` aside).
+    /// Drivers supply a [`TextSource`] when constructing a context. Render
+    /// hooks receive the complete context rather than an extractable source.
     pub fn new(constraints: BoxConstraints, text: TextSource<'ctx>) -> Self {
         Self {
             storage: BoxLayoutCtxStorage::Direct {
@@ -509,7 +508,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
     /// Creates a new box layout context with children access, measuring text
     /// through `text`. Direct storage.
     ///
-    /// Only flui-rendering can call this, for the reason [`Self::new`] gives.
+    /// The driver supplies the text source and child state together.
     pub fn with_children(
         constraints: BoxConstraints,
         children: &'ctx mut Vec<ChildState<P>>,
@@ -534,7 +533,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
     /// `layout_child()` lays the child out immediately through the
     /// RenderTree.
     ///
-    /// Only flui-rendering can call this, for the reason [`Self::new`] gives.
+    /// The driver supplies the text source and child callback together.
     pub fn with_layout_callback(
         constraints: BoxConstraints,
         children: &'ctx mut Vec<ChildState<P>>,
@@ -620,12 +619,12 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
     /// The text context to measure with: the UI runtime's, lent through the
     /// pipeline, for as long as the returned [`TextCx`] lives.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// If the UI runtime's context is already lent, which only a measurement that
-    /// re-enters another could cause.
-    pub fn text(&mut self) -> TextCx<'_> {
-        lend_text(BoxLayoutCtxErased::text_source(self))
+    /// Returns [`crate::error::RenderError::TextContextBusy`] when another
+    /// independently owned context already holds the shared text resource.
+    pub fn text(&mut self) -> crate::error::RenderResult<TextCx<'_>> {
+        BoxLayoutCtxErased::text(self)
     }
 
     /// Distance from the top of child `index` to its first baseline of
@@ -843,13 +842,11 @@ pub trait BoxLayoutCtxErased {
     /// Box constraints from parent. Cheap copy (`BoxConstraints` is `Copy`).
     fn constraints(&self) -> BoxConstraints;
 
-    /// The text context of the pipeline that built this context; the typed
-    /// view lends it through `BoxLayoutCtx::text`.
-    ///
-    /// Required, and a [`TextSource`] is built only inside flui-rendering, so
-    /// only flui-rendering implements this trait: every layout context
-    /// measures through a pipeline's text context.
-    fn text_source(&self) -> TextSource<'_>;
+    /// Lends the pipeline's shared text resource for this context's measurement.
+    /// The loan borrows this mutable capability, preventing child queries
+    /// through it until the loan ends. Independently held resource aliases
+    /// return [`crate::error::RenderError::TextContextBusy`].
+    fn text(&mut self) -> crate::error::RenderResult<TextCx<'_>>;
 
     /// Number of children visible to this context.
     fn child_count(&self) -> usize;
@@ -1009,10 +1006,10 @@ pub trait BoxLayoutCtxErased {
 
 impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, A, P> {
     #[inline]
-    fn text_source(&self) -> TextSource<'_> {
-        match &self.storage {
-            BoxLayoutCtxStorage::Direct { text, .. } => *text,
-            BoxLayoutCtxStorage::Proxy { erased, .. } => erased.text_source(),
+    fn text(&mut self) -> crate::error::RenderResult<TextCx<'_>> {
+        match &mut self.storage {
+            BoxLayoutCtxStorage::Direct { text, .. } => lend_text(*text),
+            BoxLayoutCtxStorage::Proxy { erased, .. } => erased.text(),
         }
     }
 
@@ -1371,8 +1368,8 @@ impl BoxLayoutCtxErased for ErasedBoxLayoutCtx<'_> {
         self.constraints
     }
 
-    fn text_source(&self) -> TextSource<'_> {
-        self.text
+    fn text(&mut self) -> crate::error::RenderResult<TextCx<'_>> {
+        lend_text(self.text)
     }
 
     fn descendant_layout_degraded(&self) -> bool {

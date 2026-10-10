@@ -72,7 +72,7 @@ use super::editable_text::{EditObserver, TextChanged, bounds_from_rect, obscure}
 /// the render root, handed to `f`; `None` when the field is not mounted or
 /// laid out, or the pipeline is busy.
 ///
-/// `try_with`, not `with`: a platform query or a pointer event can arrive
+/// `try_with_layout`: a platform query or a pointer event can arrive
 /// while a frame phase holds the pipeline, and "the tree is busy" is a real
 /// answer there, not a panic.
 pub(super) fn with_editable_global<R>(
@@ -82,7 +82,7 @@ pub(super) fn with_editable_global<R>(
 ) -> Option<R> {
     let anchor_id = inner_anchor.get()?;
     owner
-        .try_with(|owner| {
+        .try_with_layout(|owner| {
             let root_id = owner.root_id()?;
             let tree = owner.render_tree();
             let editable_id = *tree.children(anchor_id).first()?;
@@ -601,7 +601,7 @@ impl EditableTextStore {
         let pipeline = self.pipeline.as_ref().ok_or(TextStoreError::NoLayout)?;
         let anchor = self.inner_anchor.get().ok_or(TextStoreError::NoLayout)?;
         pipeline
-            .try_with(|owner| {
+            .try_with_layout(|owner| {
                 let tree = owner.render_tree();
                 let editable = *tree.children(anchor).first()?;
                 let size = tree.get(editable)?.size()?;

@@ -34,13 +34,13 @@ Offset dx=0.00 dy=0.00
     DrawRect rect=(0.00,0.00 900.00x1.00) fill #0000004D xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,710.00,0.00,1.00]
     Restore
     Save
-    Paragraph offset=(0.00,0.00) "\u{f447}" #007AFFFF lines=1 runs=[len=3 family=Name("CupertinoIcons") weight=400 style=Normal size=30.00] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,210.32,712.00,0.00,1.00]
+    Paragraph offset=(0.32,0.00) "\u{f447}" #007AFFFF lines=1 runs=[len=3 family=Name("CupertinoIcons") weight=400 style=Normal size=30.00] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,210.00,712.00,0.00,1.00]
     Restore
     Save
     Paragraph offset=(0.00,0.00) "Home" #007AFFFF lines=1 runs=[len=4 family=SansSerif weight=500 style=Normal size=10.00] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,212.03,744.00,0.00,1.00]
     Restore
     Save
-    Paragraph offset=(0.00,0.00) "\u{f411}" #999999FF lines=1 runs=[len=3 family=Name("CupertinoIcons") weight=400 style=Normal size=30.00] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,660.85,712.00,0.00,1.00]
+    Paragraph offset=(0.85,0.00) "\u{f411}" #999999FF lines=1 runs=[len=3 family=Name("CupertinoIcons") weight=400 style=Normal size=30.00] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,660.00,712.00,0.00,1.00]
     Restore
     Save
     Paragraph offset=(0.00,0.00) "Settings" #999999FF lines=1 runs=[len=8 family=SansSerif weight=500 style=Normal size=10.00] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,657.70,744.00,0.00,1.00]

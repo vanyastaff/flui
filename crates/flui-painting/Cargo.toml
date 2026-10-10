@@ -45,6 +45,7 @@ icu_segmenter = { workspace = true }
 # over fontique's shared collection, swash rasterizes.
 swash = { workspace = true }
 parley = { workspace = true }
+lru = { workspace = true }
 
 [dev-dependencies]
 # Colour property tests and the compile-fail suite.

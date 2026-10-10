@@ -181,6 +181,10 @@ pub mod epoch;
 pub mod frame_stamp;
 // Geometry values: points, offsets, sizes, rectangles, insets, radii, matrices (ADR-0098).
 pub mod geometry;
+pub mod text_sizing;
+pub use text_sizing::{
+    TextScaleProfile, TextSize, TextSizeError, TextSizeRequest, TextSizingIntent,
+};
 pub mod id;
 pub mod key;
 // Panic-payload text extraction and the `BUG:` internal-invariant

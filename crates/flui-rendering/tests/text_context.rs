@@ -2,19 +2,20 @@
 //! dry queries (ADR-0092 §10 step 3), and released on every failure path.
 
 use flui_foundation::Leaf;
-use flui_foundation::geometry::Size;
+use flui_foundation::geometry::{Matrix4, Size};
 use flui_objects::{RenderFlex, RenderParagraph};
 use flui_painting::testing::text_context_lends;
 use flui_painting::typography::{TextDirection, TextSpan};
 use flui_rendering::{
     PipelineOwner, TextContextHandle,
     constraints::BoxConstraints,
-    context::{BoxHitTestContext, BoxLayoutContext},
+    context::{BoxHitTestContext, BoxLayoutContext, FragmentRecorder},
     error::{PoisonPhase, RenderError},
     parent_data::BoxParentData,
+    protocol::{BoxProtocol, Protocol, ProtocolPosition},
     storage::IntrinsicDimension,
     testing::{box_node, inspect, tree},
-    traits::{RenderBox, TextBaseline},
+    traits::{HitTestOutcome, RenderBox, RenderObject, TextBaseline},
 };
 
 fn ui_runtime_text() -> TextContextHandle {
@@ -43,7 +44,7 @@ impl RenderBox for PanicsWithTheTextContextLent {
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
     ) -> flui_rendering::RenderResult<Size> {
-        let _lent = ctx.text();
+        let _lent = ctx.text()?;
         panic!("layout panics while the text context is lent");
     }
 
@@ -77,6 +78,146 @@ fn paragraph(text: &str) -> tree::TreeNode {
         TextDirection::Ltr,
     ))
     .label("paragraph")
+}
+
+/// A direct raw implementor receives one complete query capability.
+#[derive(Debug)]
+struct RawTextQueries;
+
+impl flui_foundation::Diagnosticable for RawTextQueries {}
+
+impl RenderObject<BoxProtocol> for RawTextQueries {
+    fn perform_layout_raw(
+        &mut self,
+        _ctx: &mut <BoxProtocol as Protocol>::LayoutCtxErased<'_>,
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok(Size::ZERO)
+    }
+
+    fn paint_raw(&self, _recorder: &mut FragmentRecorder, _child_count: usize, _size: Size) {}
+
+    fn hit_test_raw(
+        &self,
+        _position: ProtocolPosition<BoxProtocol>,
+        _child_count: usize,
+        _size: Size,
+        _hit_child: &mut dyn FnMut(
+            usize,
+            Option<ProtocolPosition<BoxProtocol>>,
+            Option<Matrix4>,
+        ) -> bool,
+    ) -> HitTestOutcome {
+        HitTestOutcome::miss()
+    }
+
+    fn intrinsic_raw(
+        &self,
+        dimension: IntrinsicDimension,
+        extent: f64,
+        ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
+        ctx.child_intrinsic(0, dimension, extent)
+    }
+
+    fn dry_layout_raw(
+        &self,
+        constraints: BoxConstraints,
+        ctx: &mut flui_rendering::context::BoxDryLayoutCtx<'_>,
+    ) -> flui_rendering::RenderResult<Size> {
+        ctx.child_dry_layout(0, constraints)
+    }
+
+    fn dry_baseline_raw(
+        &self,
+        constraints: BoxConstraints,
+        baseline: TextBaseline,
+        ctx: &mut flui_rendering::context::BoxDryBaselineCtx<'_>,
+    ) -> flui_rendering::RenderResult<Option<f64>> {
+        ctx.child_dry_baseline(0, constraints, baseline)
+    }
+}
+
+fn shared_text_alias_refuses_raw_queries_and_recovers() {
+    let text = ui_runtime_text();
+    let (mut owner, labels) = mount(
+        &text,
+        box_node(RawTextQueries).child(paragraph("the child measures real text")),
+    );
+    let root = owner.root_id().expect("mounted raw parent");
+    let child = labels.get("paragraph").expect("mounted paragraph child");
+    text.with(|_| {
+        for _ in 0..4 {
+            assert!(matches!(
+                owner.box_intrinsic_dimension(root, IntrinsicDimension::MaxWidth, f64::INFINITY),
+                Err(RenderError::TextContextBusy)
+            ));
+            assert!(matches!(
+                owner.box_dry_layout(root, loose()),
+                Err(RenderError::TextContextBusy)
+            ));
+            assert!(matches!(
+                owner.box_dry_baseline(root, loose(), TextBaseline::Alphabetic),
+                Err(RenderError::TextContextBusy)
+            ));
+            assert!(!owner.is_layout_poisoned(root));
+            assert!(!owner.is_layout_poisoned(child));
+        }
+    });
+    assert_eq!(text.try_with(|_| ()), Some(()), "outer loan has ended");
+    assert!(!owner.is_layout_poisoned(root));
+    assert!(!owner.is_layout_poisoned(child));
+
+    let width = owner
+        .box_intrinsic_dimension(root, IntrinsicDimension::MaxWidth, f64::INFINITY)
+        .expect("the same raw parent and child recover after the competing loan ends");
+    assert!(
+        width.is_finite() && width > 0.0,
+        "actual paragraph width: {width}"
+    );
+    let size = owner
+        .box_dry_layout(root, loose())
+        .expect("dry layout recovers");
+    assert!(size.width.is_finite() && size.width > 0.0);
+    assert!(size.height.is_finite() && size.height > 0.0);
+    let baseline = owner
+        .box_dry_baseline(root, loose(), TextBaseline::Alphabetic)
+        .expect("dry baseline recovers")
+        .expect("actual paragraph baseline");
+    assert!(baseline.is_finite() && baseline > 0.0);
+}
+
+fn text_handle_debug_allows_formatter_measurement_reentry() {
+    struct MeasuringWriter<'a> {
+        text: &'a TextContextHandle,
+        painter: flui_painting::TextPainter,
+    }
+
+    impl std::fmt::Write for MeasuringWriter<'_> {
+        fn write_str(&mut self, _value: &str) -> std::fmt::Result {
+            let measured = self.text.try_with(|context| {
+                flui_painting::TextMeasurement::new(context, &flui_painting::TextSizing::fixed())
+                    .layout(&mut self.painter, 0.0, 400.0)
+                    .expect("formatter shapes actual text");
+            });
+            assert!(
+                measured.is_some(),
+                "handle Debug must release its own resource borrow before formatter code"
+            );
+            Ok(())
+        }
+    }
+
+    let text = ui_runtime_text();
+    let mut writer = MeasuringWriter {
+        text: &text,
+        painter: flui_painting::TextPainter::new()
+            .with_text(TextSpan::new("formatter measurement reentry"))
+            .with_text_direction(TextDirection::Ltr),
+    };
+    std::fmt::write(&mut writer, format_args!("{text:?}")).expect("formatting completes");
+    let size = writer.painter.size();
+    assert!(size.width.is_finite() && size.width > 0.0);
+    assert!(size.height.is_finite() && size.height > 0.0);
 }
 
 /// A panic unwinds out of a layout that holds the UI runtime's context. The loan
@@ -253,7 +394,7 @@ impl RenderBox for MeasuresThroughTheContext {
         ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
     ) -> flui_rendering::RenderResult<Size> {
         Ok({
-            let _lent = ctx.text();
+            let _lent = ctx.text()?;
             Size::new(10.0, 10.0)
         })
     }
@@ -619,6 +760,26 @@ fn rejected_tight_text_layout_does_not_stop_the_size_controller() {
 #[test]
 fn rejected_text_layout_is_fallible_through_queries_and_frames() {
     crate::run_table(&[
+        (
+            "shared_text_alias_refuses_raw_queries_and_recovers",
+            shared_text_alias_refuses_raw_queries_and_recovers,
+        ),
+        (
+            "text_handle_debug_allows_formatter_measurement_reentry",
+            text_handle_debug_allows_formatter_measurement_reentry,
+        ),
+        (
+            "numeric_sizing_is_presentation_local",
+            numeric_sizing_is_presentation_local,
+        ),
+        (
+            "numeric_sizing_commits_every_measurement_before_reentrant_wake",
+            numeric_sizing_commits_every_measurement_before_reentrant_wake,
+        ),
+        (
+            "numeric_sizing_retains_wake_capture_across_last_owner_release",
+            numeric_sizing_retains_wake_capture_across_last_owner_release,
+        ),
         ("zero_text_scale_recovers", zero_text_scale_recovers),
         (
             "non_finite_text_scale_recovers",
@@ -697,6 +858,310 @@ fn rejected_text_layout_is_fallible_through_queries_and_frames() {
             shrink_wrapped_page_resize_measures_the_mapped_position,
         ),
     ]);
+}
+
+fn numeric_sizing_commits_every_measurement_before_reentrant_wake() {
+    use flui_foundation::RenderId;
+    use flui_objects::RenderConstrainedBox;
+    use flui_painting::TextSizing;
+    use flui_rendering::PipelineCell;
+    use std::cell::RefCell;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    thread_local! {
+        static PUBLICATION_CELL: RefCell<Option<(PipelineCell, [RenderId; 2])>> = const { RefCell::new(None) };
+    }
+
+    for fail_wake in [false, true] {
+        let text = ui_runtime_text();
+        let spec = box_node(RenderFlex::column())
+            .child(
+                box_node(RenderConstrainedBox::new(BoxConstraints::tight(Size::new(
+                    180.0, 50.0,
+                ))))
+                .child(
+                    box_node(RenderParagraph::new(
+                        TextSpan::new("first paragraph"),
+                        TextDirection::Ltr,
+                    ))
+                    .label("first"),
+                ),
+            )
+            .child(
+                box_node(RenderConstrainedBox::new(BoxConstraints::tight(Size::new(
+                    180.0, 50.0,
+                ))))
+                .child(
+                    box_node(RenderParagraph::new(
+                        TextSpan::new("second independent paragraph"),
+                        TextDirection::Ltr,
+                    ))
+                    .label("second"),
+                ),
+            );
+        let (owner, labels) = mount(&text, spec);
+        let (owner, frame) = owner.run_frame();
+        frame.expect("initial paragraphs frame");
+        let ids = [
+            labels.get("first").expect("first"),
+            labels.get("second").expect("second"),
+        ];
+        let cell = PipelineCell::new(owner);
+        let widths = |owner: &mut PipelineOwner| {
+            ids.map(|id| {
+                owner
+                    .box_intrinsic_dimension(id, IntrinsicDimension::MaxWidth, f64::INFINITY)
+                    .expect("paragraph intrinsic")
+            })
+        };
+        let initial = cell.with_mut(widths);
+        let observed = Arc::new(Mutex::new(None));
+        let seen = Arc::clone(&observed);
+        let healthy_wakes = Arc::new(AtomicUsize::new(0));
+        let successor_wakes = Arc::clone(&healthy_wakes);
+        PUBLICATION_CELL.with(|slot| *slot.borrow_mut() = Some((cell.clone(), ids)));
+        cell.with_mut(|owner| {
+            owner.set_on_need_visual_update(move || {
+                let (cell, ids) = PUBLICATION_CELL.with(|slot| {
+                    slot.borrow()
+                        .as_ref()
+                        .expect("owner-local callback target")
+                        .clone()
+                });
+                let widths = cell.with_mut(|owner| {
+                    let widths = ids.map(|id| {
+                        owner
+                            .box_intrinsic_dimension(
+                                id,
+                                IntrinsicDimension::MaxWidth,
+                                f64::INFINITY,
+                            )
+                            .expect("updated paragraph intrinsic")
+                    });
+                    let wakes = Arc::clone(&successor_wakes);
+                    owner.set_on_need_visual_update(move || {
+                        wakes.fetch_add(1, Ordering::SeqCst);
+                    });
+                    widths
+                });
+                *seen.lock().expect("observation lock") = Some(widths);
+                assert!(!fail_wake, "deferred sizing wake failure");
+            });
+        });
+        let update = cell
+            .with_mut(|owner| owner.set_text_sizing(TextSizing::linear(2.0).expect("valid scale")))
+            .expect("measurement wake");
+        let outcome = catch_unwind(AssertUnwindSafe(|| update.notify()));
+        if fail_wake {
+            let failure = outcome.expect_err("wake failure remains authoritative");
+            assert_eq!(
+                failure.downcast_ref::<&str>(),
+                Some(&"deferred sizing wake failure")
+            );
+        } else {
+            outcome.expect("healthy reentrant wake");
+        }
+        let updated = observed
+            .lock()
+            .expect("observations")
+            .expect("wake observed both paragraphs");
+        for index in 0..2 {
+            assert!(
+                updated[index] > initial[index] * 1.9,
+                "every taken measurement must be invalidated before waking"
+            );
+        }
+        let update = cell
+            .with_mut(|owner| owner.set_text_sizing(TextSizing::linear(3.0).expect("valid scale")))
+            .expect("next publication wake");
+        update.notify();
+        assert_eq!(
+            healthy_wakes.load(Ordering::SeqCst),
+            1,
+            "replacement hook serves the next publication"
+        );
+        let recovered = cell.with_mut(widths);
+        for index in 0..2 {
+            assert!(recovered[index] > updated[index] * 1.4);
+        }
+        PUBLICATION_CELL.with(|slot| slot.borrow_mut().take());
+    }
+}
+
+fn numeric_sizing_retains_wake_capture_across_last_owner_release() {
+    use flui_painting::TextSizing;
+    use flui_rendering::{PipelineCell, pipeline::WeakPipelineCell};
+    use std::cell::RefCell;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    thread_local! {
+        static LAST_OWNER: RefCell<Option<PipelineCell>> = const { RefCell::new(None) };
+        static OWNER_OBSERVER: RefCell<Option<WeakPipelineCell>> = const { RefCell::new(None) };
+    }
+
+    struct Capture {
+        retirements: Arc<AtomicUsize>,
+        fail: bool,
+    }
+    impl Drop for Capture {
+        fn drop(&mut self) {
+            assert!(
+                OWNER_OBSERVER.with(|slot| slot
+                    .borrow()
+                    .as_ref()
+                    .expect("owner observer")
+                    .upgrade()
+                    .is_none()),
+                "capture retires only after the physical owner is gone"
+            );
+            self.retirements.fetch_add(1, Ordering::SeqCst);
+            assert!(!self.fail, "deferred capture retirement failure");
+        }
+    }
+
+    for (invocation_fails, retirement_fails) in
+        [(false, false), (false, true), (true, false), (true, true)]
+    {
+        let text = ui_runtime_text();
+        let (mut owner, labels) = mount(&text, paragraph("retained wake capture"));
+        let id = labels.get("paragraph").expect("paragraph");
+        owner
+            .box_intrinsic_dimension(id, IntrinsicDimension::MaxWidth, f64::INFINITY)
+            .expect("record real text measurement");
+        let cell = PipelineCell::new(owner);
+        let retirements = Arc::new(AtomicUsize::new(0));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let invoked = Arc::clone(&calls);
+        let capture = Capture {
+            retirements: Arc::clone(&retirements),
+            fail: retirement_fails,
+        };
+        OWNER_OBSERVER.with(|slot| *slot.borrow_mut() = Some(cell.downgrade()));
+        LAST_OWNER.with(|slot| *slot.borrow_mut() = Some(cell.clone()));
+        cell.with_mut(|owner| {
+            owner.set_on_need_visual_update(move || {
+                let _capture = &capture;
+                invoked.fetch_add(1, Ordering::SeqCst);
+                let owner = LAST_OWNER
+                    .with(|slot| slot.borrow_mut().take())
+                    .expect("last physical owner");
+                assert!(owner.is_free(), "publication releases the pipeline loan");
+                drop(owner);
+                assert!(!invocation_fails, "deferred invocation failure");
+            });
+        });
+        let update = cell
+            .with_mut(|owner| owner.set_text_sizing(TextSizing::linear(2.0).expect("valid scale")))
+            .expect("staged wake");
+        drop(cell);
+        assert_eq!(
+            retirements.load(Ordering::SeqCst),
+            0,
+            "pending notification owns the capture"
+        );
+        let outcome = catch_unwind(AssertUnwindSafe(|| update.notify()));
+        if invocation_fails || retirement_fails {
+            let failure = outcome.expect_err("first failure propagates after custody settles");
+            let expected = if invocation_fails {
+                "deferred invocation failure"
+            } else {
+                "deferred capture retirement failure"
+            };
+            assert_eq!(failure.downcast_ref::<&str>(), Some(&expected));
+        } else {
+            outcome.expect("healthy invocation and retirement");
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            retirements.load(Ordering::SeqCst),
+            usize::from(!invocation_fails),
+            "a caught invocation failure retains captures instead of entering a competing destructor"
+        );
+        assert!(OWNER_OBSERVER.with(|slot| {
+            slot.borrow()
+                .as_ref()
+                .expect("owner observer")
+                .upgrade()
+                .is_none()
+        }));
+        OWNER_OBSERVER.with(|slot| slot.borrow_mut().take());
+
+        let (mut replacement, labels) = mount(&text, paragraph("next independent presentation"));
+        let id = labels.get("paragraph").expect("replacement paragraph");
+        let normal = replacement
+            .box_intrinsic_dimension(id, IntrinsicDimension::MaxWidth, f64::INFINITY)
+            .expect("replacement measurement");
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let requested = Arc::clone(&wakes);
+        replacement.set_on_need_visual_update(move || {
+            requested.fetch_add(1, Ordering::SeqCst);
+        });
+        replacement
+            .set_text_sizing(TextSizing::linear(2.0).expect("valid scale"))
+            .expect("replacement wake")
+            .notify();
+        assert_eq!(wakes.load(Ordering::SeqCst), 1);
+        let grown = replacement
+            .box_intrinsic_dimension(id, IntrinsicDimension::MaxWidth, f64::INFINITY)
+            .expect("healthy replacement measurement");
+        assert!(grown > normal * 1.9);
+    }
+}
+
+fn numeric_sizing_is_presentation_local() {
+    use flui_foundation::{TextScaleProfile, TextSize, TextSizeRequest};
+    use flui_painting::TextSizing;
+    let text = ui_runtime_text();
+    let (mut first, first_labels) = mount(&text, paragraph("same authored paragraph"));
+    let (mut second, second_labels) = mount(&text, paragraph("same authored paragraph"));
+    let a = first_labels.get("paragraph").expect("first paragraph");
+    let b = second_labels.get("paragraph").expect("second paragraph");
+    let query = |owner: &mut PipelineOwner, id| {
+        owner
+            .box_intrinsic_dimension(id, IntrinsicDimension::MaxWidth, f64::INFINITY)
+            .expect("finite intrinsic")
+    };
+    let normal = query(&mut first, a);
+    assert_eq!(query(&mut second, b), normal);
+    let sizing = TextSizing::exact([(
+        TextSizeRequest {
+            size: TextSize::new(14.0).expect("authored"),
+            profile: TextScaleProfile::Body,
+        },
+        TextSize::new(27.25).expect("answer"),
+    )])
+    .expect("consistent answers");
+    if let Some(update) = first.set_text_sizing(sizing) {
+        update.notify();
+    }
+    let grown = query(&mut first, a);
+    assert!(
+        grown > normal * 1.8,
+        "published exact sizing must alter actual child measurement"
+    );
+    assert_eq!(
+        query(&mut second, b),
+        normal,
+        "shared resources do not share presentation policy"
+    );
+    let dry = first.box_dry_layout(a, loose()).expect("dry layout");
+    let baseline = first
+        .box_dry_baseline(a, loose(), TextBaseline::Alphabetic)
+        .expect("dry baseline")
+        .expect("baseline");
+    let (first, result) = first.run_frame();
+    result.expect("exact answers shape the frame");
+    let geometry = inspect::box_geometry(&first, a).expect("actual paragraph geometry");
+    assert_eq!(geometry, dry);
+    assert!(baseline > 20.0);
 }
 
 /// Real text measurement fails only on the correction pass, after the first

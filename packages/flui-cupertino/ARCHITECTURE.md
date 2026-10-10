@@ -5,6 +5,19 @@ and callbacks are owner-local; the package does not own a reactive graph.
 
 ## Mapping decisions
 
+### Typography defaults select numeric growth independently of authored fonts
+
+Body and action styles use Body growth; small action uses Callout, tab labels
+Caption2, navigation title Headline, large navigation title LargeTitle, and
+picker/date-time picker Title2 (ADR-0182). Navigation action delegates to the
+action style. These profiles resolve numeric size only; authored family,
+weight, spacing and height remain intact.
+
+The public `mounted_text_roles_paint_distinct_numeric_sizing_answers` row resolves
+styles through a mounted CupertinoTheme and checks actual painted glyph sizes
+and restored layout through MediaQuery publication. It does not establish
+UIKit font identity, optical sizing or native execution.
+
 ### Palette resolution shares brightness precedence and contrast dependencies
 
 Standalone dynamic colors, theme materialization and text roles use one private

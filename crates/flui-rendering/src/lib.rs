@@ -200,7 +200,9 @@ pub use context::{
 };
 pub use error::{PoisonPhase, RenderError, RenderResult};
 pub use parent_data::ParentData;
-pub use pipeline::{PipelineCell, PipelineOwner, TextContextHandle, TextCx, TextSource};
+pub use pipeline::{
+    LayoutPremise, PipelineCell, PipelineOwner, TextContextHandle, TextCx, TextSource,
+};
 pub use protocol::{
     // Concrete capabilities
     BoxHitTest,

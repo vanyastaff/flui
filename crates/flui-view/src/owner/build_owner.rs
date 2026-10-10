@@ -40,7 +40,7 @@ use crate::{
 };
 
 pub(crate) use super::external_build_inbox::ExternalBuildInbox;
-use super::external_build_inbox::PendingBuilds;
+use super::external_build_inbox::{BuildPremise, PendingBuilds};
 
 #[cfg(test)]
 thread_local! {
@@ -118,17 +118,11 @@ impl ExternalBuildScheduler {
         ids: impl IntoIterator<Item = ElementId>,
         reason: RebuildReason,
     ) {
-        let any_newly_queued = {
-            let mut inbox = self.inbox.lock();
-            if self.inbox.is_closed() {
-                return;
-            }
-            let mut any_newly_queued = false;
-            for id in ids {
-                any_newly_queued |= inbox.merge(id, RebuildReasons::from_reason(reason));
-            }
-            any_newly_queued
-        };
+        // An iterator can run user code; collect before acquiring the inbox.
+        let ids: Vec<_> = ids.into_iter().collect();
+        let any_newly_queued = self
+            .inbox
+            .admit_batch(&ids, RebuildReasons::from_reason(reason));
         self.inbox
             .request_frame_if_needed(any_newly_queued, self.request_frame.as_deref());
     }
@@ -1011,6 +1005,7 @@ impl BuildOwner {
     /// only knows the sibling slot index (e.g. `setState` via
     /// `ElementCore::schedule_self_build`) cannot mis-order the drain.
     pub fn schedule_build_for(&mut self, id: ElementId, depth: usize, reason: RebuildReason) {
+        self.external_inbox.note_local_admission();
         let newly_queued = match self.dirty_reasons.entry(id) {
             std::collections::hash_map::Entry::Vacant(entry) => {
                 entry.insert(RebuildReasons::from_reason(reason));
@@ -1024,6 +1019,21 @@ impl BuildOwner {
         };
         self.external_inbox
             .request_frame_if_needed(newly_queued, self.on_build_scheduled.as_deref());
+    }
+
+    /// Capture accepted local and external build input for a suspended segment.
+    /// Queue drain, requeue and capped-work transport preserve this premise.
+    #[doc(hidden)]
+    pub fn build_premise(&self) -> BuildPremise {
+        self.external_inbox.premise()
+    }
+
+    /// Whether this owner still accepts the captured build-input premise.
+    /// Closed inboxes and exhausted stamps permanently refuse compatibility.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn accepts_build_premise(&self, saved: &BuildPremise) -> bool {
+        self.external_inbox.accepts_premise(saved)
     }
 
     /// Mark every live element dirty so the next [`build_scope`](Self::build_scope)

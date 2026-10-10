@@ -97,8 +97,21 @@ impl UiRuntime {
         // maps that raw time to its own monotonic animation time.
         let raw = self.raw_frame_time();
         for presentation in self.presentations.iter() {
+            super::text_preparation::reconcile(presentation, constraints);
+            let retained_tick = presentation
+                .text_preparation
+                .borrow()
+                .segment
+                .as_ref()
+                .map(|saved| saved.tick);
+            if let Some(tick) = retained_tick {
+                presentation.sampled_motion_tick.set(Some(tick));
+                presentation.gestures().tick_deadlines();
+                continue;
+            }
             let vsync = presentation.vsync();
             let tick = presentation.motion_tick(raw);
+            presentation.sampled_motion_tick.set(Some(tick));
             let animation_enabled =
                 self.scheduler.frames_enabled() && !presentation.clock().is_hidden();
             // Sampled BEFORE `tick_all`, not after: the tick that completes
@@ -164,6 +177,9 @@ impl UiRuntime {
         // failure needs).
         let mut any_retry_needed = false;
         for presentation in self.presentations.iter() {
+            if !super::text_preparation::can_run(presentation) {
+                continue;
+            }
             // Platform-driven semantics enablement lands here, BEFORE dirty
             // sampling: the activation listener could only flip the host
             // flag and wake the loop (it runs on the adapter's thread), and
@@ -176,17 +192,28 @@ impl UiRuntime {
             // The union is fed into the clock as `Dirty` demand rather than
             // gating directly — the clock decides, the ui_runtime only reports.
             let woken = presentation.take_redraw_pending();
+            let resuming = presentation.text_preparation.borrow().segment.is_some();
             let pending = presentation.has_pending_work();
             let blocked = presentation
                 .renderer()
                 .root_pipeline_owner()
                 .with(PipelineOwner::layout_waits_for_input);
-            if (woken && !blocked) || pending {
+            if (woken && !blocked) || pending || resuming {
                 presentation.clock().mark_demand(DemandKind::Dirty);
             }
+            let completion = presentation.has_eligible_completion();
+            if completion {
+                presentation.clock().mark_demand(DemandKind::Completion);
+            }
 
-            let segment_start = presentation.clock().now();
-            let decision = presentation.clock().poll(segment_start);
+            let host_now = presentation.clock().now();
+            let segment_start = presentation
+                .text_preparation
+                .borrow()
+                .segment
+                .as_ref()
+                .map_or(host_now, |saved| saved.host_time);
+            let decision = presentation.clock().poll(host_now);
             // `flui.pace`: the per-presentation produce decision, the one
             // fact a pacing investigation needs next to the present trace
             // (a wake that ran no segment must never be paced as if it had
@@ -215,8 +242,18 @@ impl UiRuntime {
             // Animation and input clocks still advance while authored text is
             // rejected. Consume their frame demand without remeasuring unchanged
             // input; a build or live layout invalidation resumes the pipeline.
-            if blocked && !pending {
+            if blocked && !pending && !resuming {
                 continue;
+            }
+
+            let scoped =
+                self.scheduler.phase() == flui_scheduler::SchedulerPhase::PersistentCallbacks;
+            if scoped {
+                presentation.begin_completion_segment();
+                if completion && !pending && !woken && !resuming {
+                    presentation.complete_segment();
+                    continue;
+                }
             }
 
             // The presentation-frame transaction boundary (ADR-0048): a
@@ -239,8 +276,29 @@ impl UiRuntime {
             // ADR-0048's consistency audit; nothing here claims full
             // transactionality of mid-segment mutations.
             let attempt = catch_unwind(AssertUnwindSafe(|| {
-                Self::draw_frame_for_presentation(presentation, constraints, &self.text)
+                let now = self.frame_time.get().unwrap_or(segment_start);
+                let fresh = super::text_preparation::admit(presentation, constraints, now);
+                Self::draw_prepared_frame_for_presentation(
+                    presentation,
+                    constraints,
+                    &self.text,
+                    fresh,
+                )
             }));
+
+            // Publish readiness before diagnostics or deferred owner code can
+            // query render objects changed by this attempt.
+            if matches!(&attempt, Ok(Ok(_))) {
+                presentation.pipeline().publish_layout();
+                if scoped {
+                    presentation.complete_segment();
+                }
+            } else {
+                presentation.pipeline().withdraw_layout();
+                if scoped {
+                    presentation.suspend_completion_segment();
+                }
+            }
 
             // Drain exactly once after the entire attempt, outside the
             // catch. This includes recoveries produced by the layout
@@ -256,20 +314,46 @@ impl UiRuntime {
 
             let result = match attempt {
                 Ok(Ok(outcome)) => {
+                    super::text_preparation::finish(presentation);
                     // A terminal clean result resets only after every
                     // contained report from this attempt was delivered.
                     presentation.reset_frame_failure_streak();
                     outcome
                 }
                 Ok(Err(error)) => {
-                    let rejected_input =
-                        matches!(error, flui_rendering::RenderError::TextLayout(_));
+                    if let flui_rendering::RenderError::TextPreparationPending(frontier) = &error {
+                        if super::text_preparation::pending(presentation, frontier.clone()) {
+                            // Native preparation retains its logical segment;
+                            // no scene, tree revision or failure streak is published.
+                            continue;
+                        }
+                        super::text_preparation::finish(presentation);
+                    } else {
+                        super::text_preparation::finish(presentation);
+                    }
+                    if matches!(
+                        error,
+                        flui_rendering::RenderError::TextPreparationPending(_)
+                    ) {
+                        // An unresolved source has no producer to advance this
+                        // layout. Retain its work until the owner changes input.
+                        presentation
+                            .pipeline()
+                            .with_mut(PipelineOwner::defer_layout_until_input);
+                    }
+                    let waits_for_input = matches!(
+                        error,
+                        flui_rendering::RenderError::TextLayout(_)
+                            | flui_rendering::RenderError::TextContextBusy
+                            | flui_rendering::RenderError::TextPreparationPending(_)
+                    );
                     self.report_frame_failure(presentation, FrameFailureKind::Pipeline { error });
                     FramePaintOutcome::Errored {
-                        retry: !rejected_input || presentation.has_pending_work(),
+                        retry: !waits_for_input || presentation.has_pending_work(),
                     }
                 }
                 Err(payload) => {
+                    super::text_preparation::finish(presentation);
                     let failed_phase = presentation.segment_phase();
                     let (message, internal_invariant) =
                         self.frame_failure_detail.get().panic_text(&*payload);
@@ -374,6 +458,7 @@ impl UiRuntime {
         // stores that queued them.
         for presentation in self.presentations.iter() {
             let _ran = presentation.text_input().run_deferred_grants();
+            presentation.rearm_completion();
         }
         result
     }
@@ -393,10 +478,20 @@ impl UiRuntime {
     /// up, changes nothing observable: either both agree nothing is dirty
     /// (skip here, `Idle` there — same outcome, cheaper), or either finds
     /// real work and the segment runs exactly as it always did.
+    #[cfg(test)]
     pub(super) fn draw_frame_for_presentation(
         presentation: &PresentationState,
         constraints: BoxConstraints,
         text: &flui_rendering::TextContextHandle,
+    ) -> Result<FramePaintOutcome, flui_rendering::RenderError> {
+        Self::draw_prepared_frame_for_presentation(presentation, constraints, text, true)
+    }
+
+    fn draw_prepared_frame_for_presentation(
+        presentation: &PresentationState,
+        constraints: BoxConstraints,
+        text: &flui_rendering::TextContextHandle,
+        fresh: bool,
     ) -> Result<FramePaintOutcome, flui_rendering::RenderError> {
         presentation.enter_segment_phase(SegmentPhase::Build);
 
@@ -410,10 +505,12 @@ impl UiRuntime {
         // cleanup: lazy child service below can produce records after the
         // preceding frame's build phase, leaving no pending build to make a
         // conditional call here run on the next frame.
-        presentation.widgets().draw_frame_with_phase_marker(
-            presentation.segment_phase_marker(),
-            SegmentPhase::Finalize,
-        );
+        if fresh {
+            presentation.widgets().draw_frame_with_phase_marker(
+                presentation.segment_phase_marker(),
+                SegmentPhase::Finalize,
+            );
+        }
 
         // Phase 2 & 3: Layout, Compositing, Paint, Semantics through the
         // typestate-driven orchestrator.
@@ -1001,6 +1098,7 @@ impl UiRuntime {
         // only the ordering relative to `mark_rendered()` changed.
         for presentation in self.presentations.iter() {
             if self.scheduler.frames_enabled()
+                && presentation.text_preparation.borrow().segment.is_none()
                 && !presentation.clock().is_hidden()
                 && presentation.vsync().has_running()
                 && !presentation.motion_is_paused()
@@ -1149,8 +1247,8 @@ impl UiRuntime {
 
 /// Every presentation's text-store commits, closed for one frame drive.
 ///
-/// Dropping it reopens them — on a normal return or while a panic unwinds
-/// out of the drive — and does nothing else: the queued grants run at the
+/// Dropping it restores each presentation's effective barrier, retaining a
+/// native preparation wait on normal return or unwind. Queued grants run at the
 /// anchor after the drive, never from a destructor. Drives do not nest (the
 /// scheduler refuses a second begin-frame inside a frame), so there is no
 /// outer transaction to restore.
@@ -1170,7 +1268,11 @@ impl<'a> TextCommitsClosed<'a> {
 impl Drop for TextCommitsClosed<'_> {
     fn drop(&mut self) {
         for presentation in self.ui_runtime.presentations.iter() {
-            presentation.text_input().set_transaction_open(false);
+            let retained = presentation
+                .text_preparation
+                .borrow()
+                .holds_document_barrier();
+            presentation.text_input().set_transaction_open(retained);
         }
     }
 }

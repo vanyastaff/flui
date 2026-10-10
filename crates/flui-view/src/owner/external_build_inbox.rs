@@ -3,7 +3,7 @@
 use std::{
     collections::{HashMap, HashSet},
     sync::{
-        Arc,
+        Arc, Weak,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -18,6 +18,37 @@ struct WakeState {
 }
 
 type WakeToken = Arc<AtomicBool>;
+
+#[derive(Clone, Copy, Debug)]
+enum BuildStamp {
+    Tracked(u64),
+    Untrackable,
+}
+
+impl BuildStamp {
+    fn advance(&mut self) {
+        *self = match *self {
+            Self::Tracked(value) => value
+                .checked_add(1)
+                .map_or(Self::Untrackable, Self::Tracked),
+            Self::Untrackable => Self::Untrackable,
+        };
+    }
+
+    fn compatible(self, saved: Self) -> bool {
+        matches!((self, saved), (Self::Tracked(now), Self::Tracked(previous)) if now == previous)
+    }
+}
+
+/// Opaque accepted build-input premise for a suspended presentation segment.
+/// Local and external admissions share one inbox identity. Exhausted stamps
+/// never match, even themselves; this token intentionally has no equality API.
+#[derive(Clone, Debug)]
+#[must_use]
+pub struct BuildPremise {
+    inbox: Weak<ExternalBuildInbox>,
+    stamp: BuildStamp,
+}
 
 /// Rebuild requests waiting for a drain, kept in the order each id was first
 /// queued.
@@ -90,11 +121,26 @@ impl PendingBuilds {
     }
 }
 
+/// Queue contents and accepted-input identity committed under one guard.
+struct PendingState {
+    builds: PendingBuilds,
+    premise: BuildStamp,
+}
+
+impl Default for PendingState {
+    fn default() -> Self {
+        Self {
+            builds: PendingBuilds::default(),
+            premise: BuildStamp::Tracked(0),
+        }
+    }
+}
+
 /// Shared external work and wake-retry state for one build owner.
 #[derive(Default)]
 pub(crate) struct ExternalBuildInbox {
     closed: AtomicBool,
-    pending: Mutex<PendingBuilds>,
+    pending: Mutex<PendingState>,
     current_wake: Mutex<Option<WakeToken>>,
     wake_state: Mutex<WakeState>,
 }
@@ -107,19 +153,59 @@ impl ExternalBuildInbox {
     pub(crate) fn close(&self) {
         let mut pending = self.pending.lock();
         self.closed.store(true, Ordering::Release);
-        pending.clear();
+        pending.builds.clear();
         drop(pending);
         let token = self.current_wake.lock().take();
         if let Some(token) = token {
             token.store(true, Ordering::Release);
         }
     }
-    pub(crate) fn lock(&self) -> parking_lot::MutexGuard<'_, PendingBuilds> {
-        self.pending.lock()
+    /// Existing-work transport, without admitting a new build premise.
+    pub(crate) fn lock(&self) -> parking_lot::MappedMutexGuard<'_, PendingBuilds> {
+        parking_lot::MutexGuard::map(self.pending.lock(), |state| &mut state.builds)
     }
 
     pub(crate) fn try_len(&self) -> Option<usize> {
-        self.pending.try_lock().map(|pending| pending.len())
+        self.pending.try_lock().map(|pending| pending.builds.len())
+    }
+
+    pub(crate) fn premise(self: &Arc<Self>) -> BuildPremise {
+        let stamp = self.pending.lock().premise;
+        BuildPremise {
+            inbox: Arc::downgrade(self),
+            stamp,
+        }
+    }
+
+    pub(crate) fn accepts_premise(self: &Arc<Self>, saved: &BuildPremise) -> bool {
+        if !Weak::ptr_eq(&Arc::downgrade(self), &saved.inbox) {
+            return false;
+        }
+        let pending = self.pending.lock();
+        !self.is_closed() && pending.premise.compatible(saved.stamp)
+    }
+
+    /// Commit accepted local state independently of dirty-heap deduplication.
+    pub(crate) fn note_local_admission(&self) {
+        let mut pending = self.pending.lock();
+        if !self.is_closed() {
+            pending.premise.advance();
+        }
+    }
+
+    /// Admit one complete batch before waking. A repeated queued element still
+    /// changes the authored premise; queue transport uses `lock` instead.
+    pub(crate) fn admit_batch(&self, ids: &[ElementId], reasons: RebuildReasons) -> bool {
+        let mut pending = self.pending.lock();
+        if self.is_closed() || ids.is_empty() {
+            return false;
+        }
+        pending.premise.advance();
+        let mut newly_queued = false;
+        for &id in ids {
+            newly_queued |= pending.builds.merge(id, reasons);
+        }
+        newly_queued
     }
 
     fn request_token(&self) -> WakeToken {
@@ -210,5 +296,43 @@ impl ExternalBuildInbox {
             }
             return;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BuildStamp, ExternalBuildInbox};
+    use flui_foundation::{ElementId, RebuildReason, RebuildReasons};
+    use std::sync::Arc;
+
+    // A terminal stamp cannot be reached with public scheduling in a finite
+    // test. Seed only the initial counter, then exercise actual admission,
+    // occupied-queue dedup, transport and local scheduling.
+    #[test]
+    fn exhausted_build_premise_keeps_work_deliverable() {
+        let inbox = Arc::new(ExternalBuildInbox::default());
+        inbox.pending.lock().premise = BuildStamp::Tracked(u64::MAX - 1);
+        let first = ElementId::new(1);
+        let second = ElementId::new(2);
+        let reasons = RebuildReasons::from_reason(RebuildReason::StateChange);
+        assert!(inbox.admit_batch(&[first], reasons));
+        let last_tracked = inbox.premise();
+        assert!(inbox.accepts_premise(&last_tracked));
+        assert!(!inbox.admit_batch(&[first], reasons));
+        let exhausted = inbox.premise();
+        assert!(!inbox.accepts_premise(&exhausted));
+        assert!(!inbox.accepts_premise(&last_tracked));
+        let delivered = inbox.lock().take();
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(delivered[0].0, first);
+        inbox.lock().merge(first, reasons);
+        inbox.note_local_admission();
+        assert!(!inbox.accepts_premise(&exhausted));
+        assert!(inbox.admit_batch(&[second], reasons));
+        let delivered = inbox.lock().take();
+        assert_eq!(delivered.len(), 2);
+        assert_eq!(delivered[0].0, first);
+        assert_eq!(delivered[1].0, second);
+        assert!(!inbox.accepts_premise(&inbox.premise()));
     }
 }

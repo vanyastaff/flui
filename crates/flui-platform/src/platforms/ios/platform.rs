@@ -131,6 +131,7 @@ pub struct IOSPlatform {
     preferences: NativeOwner<super::preferences::Preferences>,
     signal: Arc<OwnerSignal>,
     identity: Arc<()>,
+    deadline: Mutex<Option<(Arc<()>, web_time::Instant)>>,
     background_executor: Arc<IOSExecutor>,
     clipboard: Arc<IOSClipboard>,
     capabilities: MobileCapabilities,
@@ -169,6 +170,10 @@ impl IOSPlatform {
                         platform.poll_scene_installation();
                         if quitting {
                             platform.finish_quit();
+                        } else {
+                            crate::shared::panic_boundary::contain_owner_callback(|| {
+                                platform.arm_deadline();
+                            });
                         }
                     }
                 });
@@ -198,6 +203,7 @@ impl IOSPlatform {
             ),
             signal,
             identity,
+            deadline: Mutex::new(None),
             background_executor: Arc::new(IOSExecutor),
             clipboard: Arc::new(IOSClipboard::new()),
             capabilities: MobileCapabilities::ios(),
@@ -277,6 +283,7 @@ impl IOSPlatform {
             return;
         }
         self.signal.close();
+        self.deadline.lock().take();
         self.preferences
             .get(MainThreadMarker::new().expect("BUG: UIKit quit runs on main"))
             .close();
@@ -294,6 +301,59 @@ impl IOSPlatform {
             let callback = self.state().borrow_mut().handler.take();
             crate::shared::panic_boundary::contain_owner_callback(|| drop(callback));
         }
+    }
+
+    fn arm_deadline(&self) {
+        if !self.signal.accepting() {
+            return;
+        }
+        let hook = self.handlers.lock().wake_deadline.clone();
+        let next = hook.and_then(|hook| hook());
+        let ticket = {
+            let mut current = self.deadline.lock();
+            if current.as_ref().map(|(_, deadline)| *deadline) == next {
+                return;
+            }
+            let Some(deadline) = next else {
+                current.take();
+                return;
+            };
+            let ticket = Arc::new(());
+            *current = Some((Arc::clone(&ticket), deadline));
+            ticket
+        };
+        let deadline = next.expect("BUG: an armed ticket retains a deadline");
+        let delay = deadline.saturating_duration_since(web_time::Instant::now());
+        let Ok(when) = dispatch2::DispatchTime::try_from(delay) else {
+            self.deadline.lock().take();
+            tracing::warn!("UIKit owner deadline exceeds dispatch time range");
+            return;
+        };
+        let identity = Arc::clone(&self.identity);
+        let _ = dispatch2::DispatchQueue::main().after(when, move || {
+            crate::shared::panic_boundary::contain_owner_callback(|| {
+                FluiAppDelegate::with_platform(|platform| {
+                    if !Arc::ptr_eq(&platform.identity, &identity) {
+                        return;
+                    }
+                    let admitted = {
+                        let mut current = platform.deadline.lock();
+                        if current
+                            .as_ref()
+                            .is_some_and(|(active, _)| Arc::ptr_eq(active, &ticket))
+                        {
+                            current.take();
+                            true
+                        } else {
+                            false
+                        }
+                    };
+                    if admitted {
+                        let _ = platform.signal.wake();
+                    }
+                });
+            });
+        });
     }
 }
 
@@ -425,6 +485,7 @@ impl Platform for IOSPlatform {
         hook: Box<dyn Fn() -> Option<web_time::Instant> + Send + Sync>,
     ) {
         self.handlers.lock().wake_deadline = Some(Arc::from(hook));
+        let _ = self.signal.wake();
     }
 
     fn app_path(&self) -> Result<PathBuf, PlatformError> {
@@ -612,7 +673,7 @@ impl IOSPlatform {
             return None;
         };
         if let Some(id) = fresh {
-            let window = Arc::new(IOSWindow::new(marker, id));
+            let window = Arc::new(IOSWindow::new(marker, id, Arc::downgrade(&self.signal)));
             let admitted = {
                 let mut state = self.state().borrow_mut();
                 let admitted = self.signal.accepting()

@@ -9,6 +9,25 @@ the dispatch layer moves there too.
 
 ## Invariants
 
+- **Native numeric text preparation is an addressed owner service.** Android
+  and UIKit installation retain one native capsule and the sole numeric admission
+  writer per presentation. Runtime receives its read source before root mounting;
+  scalar preference publication preserves that source. Native acquisition and
+  queries run outside App storage guards and Runtime checkout. Replies verify
+  presentation membership, source and capsule before numeric admission, then
+  settle through the same owner FIFO. Source replacement installs fresh empty
+  authority without an interim scalar frame; retirement fences native delivery.
+  Native deadlines join the owner's earliest wake, independent of visibility.
+  Accepted tickets hold Waiting. Stalled tickets and no-flight errors/retries
+  cue Parked, permitting document edits while geometry remains unavailable;
+  paced observation preserves eventual retry and matching late completion.
+  An actual completion wake may observe a pending receipt before its deadline;
+  an unchanged observation cannot create another wake. The private sampler in
+  `installed_native_text_sizing_delivery` is necessary to inject native acquisition
+  failures and due deadlines on this host. Its rows exercise installed records,
+  actual owner turns, the Runtime frame driver and document grants. They do not
+  establish Android/UIKit SDK conversion or OS-generated change ordering.
+
 - **Native owner replacement establishes the logical host before construction.**
   The shared runtime builder seeds accepted preferences before mounting a root;
   Android/web preparation retains that host through publication.
@@ -132,6 +151,16 @@ the dispatch layer moves there too.
   retry debt reliably even when telemetry acks are full; the UI runtime retains epochs
   and requests a paced full repaint (ADR-0101). Pinned by
   `transient_and_hard_failures_map_consistently_in_lane_and_direct_sink`.
+- **Surface measurement retains its generation.** The raster sink samples
+  physical size and generation together for layout, and submits with that pair.
+  Replacement after measurement cannot make an old scene fresh, even when its
+  dimensions are unchanged. Rejection retains the sample until layout reads the
+  surface again; the mailbox still receives the scene's damage before refusing
+  rendering. `a_surface_change_after_measurement_refuses_the_old_scene` in the
+  private `raster_lane_outcome_matrix` exercises repeated stale submission,
+  same-size replacement, fresh measurement recovery and an ignored zero-size
+  observation through the product sink/mailbox and scripted backend. It proves
+  that boundary, not native callback reachability or GPU output.
 - **A runner's frame is gate → pump → pacing.** Each runner's frame wake carries
   `RuntimeTask::Frame` with its installed surface binding. The concrete driver
   owns its backend resources across wakes; one `UiRuntime::enter` holds the owner-inbox drain
@@ -184,21 +213,22 @@ the dispatch layer moves there too.
   callbacks; only `mark_primary_needs_full_repaint` touches the tree, and it
   lands before the pipeline that repaints. The pump's frame timestamp is the
   wake's own `now`.
-- **The raster lane is held for the whole pump.** The lane (the renderer slot
-  on web) is the pump's sink, so its lock now spans the transaction, begin
-  frame and end frame included, not just the draw step: transient callbacks,
-  microtasks, the async poll and post-frame callbacks run under it. That is
-  safe because nothing in those phases reaches a lane lock on the owner
-  thread synchronously. The other lane lock sites are the frame wake's own
-  `try_lock` (which skips a frame rather than wait), the addressed resize driver's
-  short acquisition of its resize hook, and the surface-status callbacks on Android and
-  iOS, which the platform delivers as their own event, never from inside a
-  UI runtime frame; a same-UI runtime dispatch a callback makes is queued, not run
-  inline. On web, the renderer slot's other users are the driver's resize operation
-  (run from a queued `Resized` dispatch) and the recovery future (spawned,
-  so it runs after the frame callback returns). A new lane lock site
-  reachable from user code inside a frame must be a `try_lock` or live
-  outside the pump.
+- **Native frame callbacks run outside the raster guard.** Desktop, Android
+  and iOS pump through a private `RasterFrame` sink. It retains the surface
+  generation and dimensions sampled for layout and tries the lane only when
+  submitting. Contention returns `Retry` before modifying damage history or
+  admitting a mailbox snapshot. Pre-frame and post-frame device recovery borrow
+  the backend separately; runtime repaint and wake effects run after those
+  guards end. Busy initial admission preserves demand without consuming scheduler
+  phases, and a busy post-frame recovery check wakes after the pump's completion
+  so that completion cannot erase the obligation. The runtime and frame-driver
+  execution leases remain in force: reentrant owner operations join the FIFO.
+  `device_recovery_matrix` exercises real scheduler callbacks, callback resize,
+  contention recovery and successful and failed device recovery through this
+  private host seam; it does not execute native callbacks or a GPU backend.
+  Rendering and device recovery still guard their backend operations. Web uses
+  its borrowed renderer slot across the pump; its resize operations are queued
+  and its recovery future runs after the frame callback returns.
 - **Web runs no frame before its renderer exists.** The web renderer arrives
   asynchronously; until it does, a render wake returns without pumping, so no
   begin, draw or post-frame callback runs, and the UI runtime stays dirty for the
