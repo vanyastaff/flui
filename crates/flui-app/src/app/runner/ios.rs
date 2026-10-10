@@ -294,9 +294,9 @@ where
     // `Arc` clone to share the same retry state.
     let surface_retry_for_callback = Arc::clone(&surface_recreation_retry);
 
-    // 0c. Wire the wall-clock-wake hook to both backoffs. Like Android, this
-    // does NOT fold in ui_runtime-level deadlines — the backend's frame source is
-    // the `CADisplayLink`, and this hook exists to carry the retry deadlines.
+    // 0c. Wire the wall-clock-wake hook to runtime/native-service deadlines and
+    // both recovery backoffs. CADisplayLink drives visible frames; owner wakes
+    // also keep native service and recovery deliverable between those frames.
     owner_platform_installed(|owner| {
         let device_recovery_backoff = Arc::clone(&device_recovery_backoff);
         let surface_recreation_retry = Arc::clone(&surface_recreation_retry);

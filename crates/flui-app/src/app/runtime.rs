@@ -800,13 +800,6 @@ impl AppRuntime {
     /// owner-local means every deadline returned here is advanced by the
     /// same UI runtime frame path that the wake re-enters.
     #[must_use]
-    #[cfg_attr(
-        all(test, target_os = "ios"),
-        expect(
-            dead_code,
-            reason = "iOS does not query runtime wake deadlines; desktop deadline tests are excluded"
-        )
-    )]
     pub(super) fn next_wake(&self) -> Option<web_time::Instant> {
         let runtime = self
             .installed_host
