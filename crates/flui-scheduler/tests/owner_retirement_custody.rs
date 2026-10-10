@@ -333,11 +333,26 @@ fn owner_retirement_custody_contract() {
     crate::run_table(
         "owner retirement custody",
         &[
-            ("closed background publishes task custody", closed_background_publishes_task_custody as fn()),
-            ("closed frame publishes task custody", closed_frame_publishes_task_custody),
-            ("closed scheduler keeps cancelled tail", closed_scheduler_keeps_cancelled_tail as fn()),
-            ("closed scheduler refused task custody", closed_scheduler_refused_task_custody),
-            ("owner drop preserves first failure through terminal release", owner_drop_preserves_first_failure_through_terminal_release),
+            (
+                "closed background publishes task custody",
+                closed_background_publishes_task_custody as fn(),
+            ),
+            (
+                "closed frame publishes task custody",
+                closed_frame_publishes_task_custody,
+            ),
+            (
+                "closed scheduler keeps cancelled tail",
+                closed_scheduler_keeps_cancelled_tail as fn(),
+            ),
+            (
+                "closed scheduler refused task custody",
+                closed_scheduler_refused_task_custody,
+            ),
+            (
+                "owner drop preserves first failure through terminal release",
+                owner_drop_preserves_first_failure_through_terminal_release,
+            ),
             (
                 "finished and cancelled future custody",
                 finished_and_cancelled_futures_preserve_caught_failure_custody as fn(),
@@ -431,9 +446,14 @@ fn closed_execution_publishes_task_custody(frame: bool) {
     impl Drop for ClosedPreparation {
         fn drop(&mut self) {
             catch_nested_refusal_failure(&self.owner.upgrade().expect("owner lives"));
-            assert!(self.driver.spawn_local_eager(Box::pin(RemovedFuture {
-                capture: RemovedCapture(Rc::clone(&self.drops)), ready: true,
-            })).is_none());
+            assert!(
+                self.driver
+                    .spawn_local_eager(Box::pin(RemovedFuture {
+                        capture: RemovedCapture(Rc::clone(&self.drops)),
+                        ready: true,
+                    }))
+                    .is_none()
+            );
         }
     }
     {
@@ -442,19 +462,50 @@ fn closed_execution_publishes_task_custody(frame: bool) {
         let driver = owner.async_driver();
         drop(scheduler);
         let drops = Rc::new(Cell::new(0));
-        let capture = ClosedPreparation { owner: Rc::downgrade(&owner), driver: driver.clone(), drops: Rc::clone(&drops) };
+        let capture = ClosedPreparation {
+            owner: Rc::downgrade(&owner),
+            driver: driver.clone(),
+            drops: Rc::clone(&drops),
+        };
         if frame {
             let now = Instant::now();
-            assert_eq!(owner.drive_frame(now, IdleDeadline::far_future(now),
-                move || { let _ = &capture; }, || {}), Err(ExecutionError::SchedulerClosed));
+            assert_eq!(
+                owner.drive_frame(
+                    now,
+                    IdleDeadline::far_future(now),
+                    move || {
+                        let _ = &capture;
+                    },
+                    || {}
+                ),
+                Err(ExecutionError::SchedulerClosed)
+            );
         } else {
-            assert_eq!(owner.pump_background(move || { let _ = &capture; }), Err(ExecutionError::SchedulerClosed));
+            assert_eq!(
+                owner.pump_background(move || {
+                    let _ = &capture;
+                }),
+                Err(ExecutionError::SchedulerClosed)
+            );
         }
-        assert_eq!(drops.get(), 0, "closed execution still shares eager task custody, frame={frame}");
+        assert_eq!(
+            drops.get(),
+            0,
+            "closed execution still shares eager task custody, frame={frame}"
+        );
         let healthy_drops = Rc::new(Cell::new(0));
         let capture = RemovedCapture(Rc::clone(&healthy_drops));
-        assert_eq!(owner.pump_background(move || { let _ = &capture; }), Err(ExecutionError::SchedulerClosed));
-        assert_eq!(healthy_drops.get(), 1, "next healthy closed execution retires normally");
+        assert_eq!(
+            owner.pump_background(move || {
+                let _ = &capture;
+            }),
+            Err(ExecutionError::SchedulerClosed)
+        );
+        assert_eq!(
+            healthy_drops.get(),
+            1,
+            "next healthy closed execution retires normally"
+        );
         assert_eq!(driver.pending_task_count(), 0);
     }
 }
@@ -473,7 +524,9 @@ fn closed_scheduler_retirement(spawn_refused: bool) {
     }
     impl Future for ClosedOwnerFuture {
         type Output = ();
-        fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<()> { Poll::Pending }
+        fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<()> {
+            Poll::Pending
+        }
     }
     impl Drop for ClosedOwnerFuture {
         fn drop(&mut self) {
@@ -495,19 +548,31 @@ fn closed_scheduler_retirement(spawn_refused: bool) {
     let rejected_drops = Rc::new(Cell::new(0));
     let driver = owner.async_driver();
     let first = driver.spawn_local(Box::pin(ClosedOwnerFuture {
-        owner: Rc::downgrade(&owner), driver: driver.clone(), other: Rc::clone(&other),
-        rejected_drops: Rc::clone(&rejected_drops), spawn_refused,
+        owner: Rc::downgrade(&owner),
+        driver: driver.clone(),
+        other: Rc::clone(&other),
+        rejected_drops: Rc::clone(&rejected_drops),
+        spawn_refused,
     }));
     let tail_drops = Rc::new(Cell::new(0));
     *other.borrow_mut() = Some(driver.spawn_local(Box::pin(RemovedFuture {
-        capture: RemovedCapture(Rc::clone(&tail_drops)), ready: false,
+        capture: RemovedCapture(Rc::clone(&tail_drops)),
+        ready: false,
     })));
     let weak = scheduler.downgrade();
     drop(scheduler);
     assert!(weak.upgrade().is_none());
     assert!(owner.retire().is_none());
-    assert_eq!(tail_drops.get(), 0, "detached cancelled tail retains caught failure custody");
-    assert_eq!(rejected_drops.get(), 0, "closed scheduler still shares task refusal custody");
+    assert_eq!(
+        tail_drops.get(),
+        0,
+        "detached cancelled tail retains caught failure custody"
+    );
+    assert_eq!(
+        rejected_drops.get(),
+        0,
+        "closed scheduler still shares task refusal custody"
+    );
     assert!(first.is_cancelled());
     assert_eq!(driver.pending_task_count(), 0);
     assert_healthy_refusal_retires(&owner);
@@ -522,7 +587,10 @@ fn owner_drop_preserves_first_failure_through_terminal_release() {
         fn drop(&mut self) {
             let last = self.producer.borrow_mut().take();
             drop(last);
-            assert!(self.weak.upgrade().is_some(), "owner cleanup retains its temporary producer");
+            assert!(
+                self.weak.upgrade().is_some(),
+                "owner cleanup retains its temporary producer"
+            );
             panic!("owner drop first failure");
         }
     }
@@ -531,17 +599,36 @@ fn owner_drop_preserves_first_failure_through_terminal_release() {
     let weak = scheduler.downgrade();
     let terminal_drops = Rc::new(Cell::new(0));
     let capture = RemovedCapture(Rc::clone(&terminal_drops));
-    scheduler.schedule_frame_callback(Box::new(move |_| { let _ = &capture; }));
+    scheduler.schedule_frame_callback(Box::new(move |_| {
+        let _ = &capture;
+    }));
     let producer = Rc::new(RefCell::new(Some(scheduler)));
-    let capture = FirstFailure { producer: Rc::clone(&producer), weak: weak.clone() };
-    owner.post_frame_handle().schedule(move |_| { let _ = &capture; })
+    let capture = FirstFailure {
+        producer: Rc::clone(&producer),
+        weak: weak.clone(),
+    };
+    owner
+        .post_frame_handle()
+        .schedule(move |_| {
+            let _ = &capture;
+        })
         .expect("queued owner envelope");
     let failure = catch_unwind(AssertUnwindSafe(|| drop(owner)))
         .expect_err("owner drop propagates first failure after terminal release");
-    assert_eq!(flui_foundation::panic::payload_text(failure.as_ref()), Some("owner drop first failure"));
-    assert!(weak.upgrade().is_none(), "terminal cleanup closes weak authority");
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("owner drop first failure")
+    );
+    assert!(
+        weak.upgrade().is_none(),
+        "terminal cleanup closes weak authority"
+    );
     assert!(producer.borrow().is_none());
-    assert_eq!(terminal_drops.get(), 0, "terminal producer capture retains incoming owner failure");
+    assert_eq!(
+        terminal_drops.get(),
+        0,
+        "terminal producer capture retains incoming owner failure"
+    );
 }
 
 fn healthy_teardown_after_completed_caught_failure() {
