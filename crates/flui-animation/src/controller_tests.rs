@@ -129,6 +129,80 @@ fn exhausted_status_identities_refuse_outside_the_state_borrow() {
     );
 }
 
+#[test]
+fn exhausted_disposed_value_identities_refuse_outside_the_state_borrow() {
+    fn row() {
+        thread_local! {
+            static SOURCE: RefCell<Option<AnimationController>> = const { RefCell::new(None) };
+        }
+        struct Capture(AnimationController, Rc<std::cell::Cell<usize>>);
+        impl Drop for Capture {
+            fn drop(&mut self) {
+                assert!(self.0.value().is_finite());
+                self.1.set(self.1.get() + 1);
+            }
+        }
+        for observer in [false, true] {
+            let mut owner = AnimationController::builder(Duration::from_millis(100)).build_on(None);
+            owner.dispose();
+            let c = owner.controller();
+            c.inner.borrow_mut().next_listener_id = usize::MAX - 1;
+            SOURCE.with(|source| *source.borrow_mut() = Some(c.clone()));
+            let previous_hook = std::panic::take_hook();
+            std::panic::set_hook(Box::new(|_| {
+                SOURCE.with(|source| {
+                    assert!(
+                        source
+                            .borrow()
+                            .as_ref()
+                            .expect("hook source")
+                            .value()
+                            .is_finite()
+                    );
+                });
+            }));
+            let drops = Rc::new(std::cell::Cell::new(0));
+            for exhausted in [false, true, true] {
+                let capture = Capture(c.clone(), Rc::clone(&drops));
+                let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    if observer {
+                        c.add_observer(Rc::new(move |_| {
+                            let _keep = &capture;
+                        }));
+                    } else {
+                        c.add_listener(Rc::new(move || {
+                            let _keep = &capture;
+                        }));
+                    }
+                }));
+                assert_eq!(
+                    failure.is_err(),
+                    exhausted,
+                    "terminal identity refuses permanently"
+                );
+            }
+            std::panic::set_hook(previous_hook);
+            SOURCE.with(|source| source.borrow_mut().take());
+            assert_eq!(
+                drops.get(),
+                1,
+                "healthy refusal retires; failed refusal retains opaque captures"
+            );
+            assert!(!c.is_animating());
+            c.set_value(0.5);
+            assert_eq!(
+                c.value(),
+                0.0,
+                "refusal leaves the disposed controller terminal"
+            );
+        }
+    }
+    child_process::run_single(
+        "controller::tests::exhausted_disposed_value_identities_refuse_outside_the_state_borrow",
+        row,
+    );
+}
+
 fn exhausted_sample_identities_cancel_without_reissuing_a_stale_sample() {
     let c = controller(100);
     let run = c.forward().expect("run");

@@ -2893,13 +2893,16 @@ impl AnimationController {
 
 impl Listenable for AnimationController {
     fn add_observer(&self, observer: flui_foundation::notifier::ListenerObserver) -> ListenerId {
+        let mut observer = Opaque::new(observer);
         let mut inner = self.inner.borrow_mut();
         if inner.disposed {
+            let Some(next_id) = inner.next_listener_id.checked_add(1) else {
+                drop(inner);
+                panic!("BUG: listener identities exhausted");
+            };
             let id = ListenerId::new(inner.next_listener_id);
-            inner.next_listener_id = inner
-                .next_listener_id
-                .checked_add(1)
-                .expect("BUG: listener identities exhausted");
+            inner.next_listener_id = next_id;
+            let observer = observer.take();
             let mut retired = RetiredSources::new();
             retired.value_callbacks.push(Opaque::new(
                 flui_foundation::notifier_generic::NotificationCallback::relay(Rc::new(
@@ -2917,16 +2920,19 @@ impl Listenable for AnimationController {
             return id;
         }
         drop(inner);
-        self.notifier.add_observer(observer)
+        self.notifier.add_observer(observer.take())
     }
     fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
+        let mut callback = Opaque::new(callback);
         let mut inner = self.inner.borrow_mut();
         if inner.disposed {
+            let Some(next_id) = inner.next_listener_id.checked_add(1) else {
+                drop(inner);
+                panic!("BUG: listener identities exhausted");
+            };
             let id = ListenerId::new(inner.next_listener_id);
-            inner.next_listener_id = inner
-                .next_listener_id
-                .checked_add(1)
-                .expect("BUG: listener identities exhausted");
+            inner.next_listener_id = next_id;
+            let callback = callback.take();
             let mut retired = RetiredSources::new();
             retired.value_callbacks.push(Opaque::new(
                 flui_foundation::notifier_generic::NotificationCallback::user(Rc::new(
@@ -2944,7 +2950,7 @@ impl Listenable for AnimationController {
             return id;
         }
         drop(inner);
-        self.notifier.add_listener(callback)
+        self.notifier.add_listener(callback.take())
     }
 
     fn remove_listener(&self, id: ListenerId) {
