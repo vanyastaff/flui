@@ -69,6 +69,11 @@
 
 ### Fixed
 
+- Cancel pending Hero creation and queued measurements when their controller is
+  replaced. Builder failure or cancellation during creation and diversion restores
+  the selected heroes; remaining matched launches preserve the first failure.
+- Refuse stale Hero retirement when another flight has reused its tag.
+
 - Reversing an airborne Hero flight retraces its custom rect mapping without
   switching paths; redirection to a different hero selects the new path.
 

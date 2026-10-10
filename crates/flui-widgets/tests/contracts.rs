@@ -529,6 +529,10 @@ fn hero_flights() {
             ("hero_flight::a_shrinking_flight_with_overshoot_keeps_a_non_negative_size", crate::hero_flight::a_shrinking_flight_with_overshoot_keeps_a_non_negative_size),
             ("hero_gesture::complete_release_pops_to_the_destination_route_and_the_flight_lands", crate::hero_gesture::complete_release_pops_to_the_destination_route_and_the_flight_lands),
             ("hero_public::a_hero_push_flight_runs_and_settles", crate::hero_public::a_hero_push_flight_runs_and_settles),
+            ("hero_public::replacing_the_hero_observer_inside_its_builder_cancels_the_flight", crate::hero_public::replacing_the_hero_observer_inside_its_builder_cancels_the_flight),
+            ("hero_public::replacing_the_hero_observer_cancels_queued_measurement", crate::hero_public::replacing_the_hero_observer_cancels_queued_measurement),
+            ("hero_public::a_failed_hero_builder_restores_its_child_and_allows_a_fresh_flight", crate::hero_public::a_failed_hero_builder_restores_its_child_and_allows_a_fresh_flight),
+            ("hero_public::hero_builder_cancellation_and_failure_account_for_the_matched_tail", crate::hero_public::hero_builder_cancellation_and_failure_account_for_the_matched_tail),
         ],
     );
 }

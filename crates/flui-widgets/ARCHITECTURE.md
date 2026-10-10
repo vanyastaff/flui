@@ -1722,12 +1722,30 @@ mean guessing a flight plan the replacement never measured.
   costs nothing and keeps the drop outside the animation listener family, the
   one invariant the type docs rest on.
 
-**Replacement test:** with two same-tagged hero pages pushed so the auto observer
-launches a real programmatic flight, installing a manual controller returns the
-overlay count to its pre-flight value, leaves the replacement controller with no
-inherited flight, and clears both heroes' placeholders; deleting the
-`finish_all` call from `did_detach` would leave the overlay count one entry high
-and both placeholders set. **Unasserted:** no test pins this.
+Detachment withdraws the navigator and replaces the manager's admission identity
+before cancellation calls out. A queued measurement holds its original identity
+and cannot launch after replacement. A pending flight is registered before its
+placeholder wakes or shuttle builder runs; cancellation can therefore restore it
+before it publishes an overlay entry. A divert commits its new hero pair before
+freezing that pair or invoking its builder, so cancellation restores the selected
+destination. Retirement compares the flight identity as well as its tag, so a
+stale terminal delivery cannot remove a replacement using the same tag.
+
+Matched launches share failure custody. A failed builder restores its selected
+heroes, and the remaining matched launches are attempted before the first failure
+propagates. Detachment refuses that remaining tail. This does not promise recovery
+from arbitrary failures inside user-owned aggregate destructors.
+
+**Tests:** `replacing_the_hero_observer_inside_its_builder_cancels_the_flight`
+checks initial creation and diversion through a mounted Navigator, verifies the
+destination accepts taps after cancellation and then launches a fresh flight.
+`replacing_the_hero_observer_cancels_queued_measurement` pins queued cancellation.
+`a_failed_hero_builder_restores_its_child_and_allows_a_fresh_flight` checks builder
+failure on initial creation and diversion, real hit testing and fresh admission.
+`hero_builder_cancellation_and_failure_account_for_the_matched_tail` checks
+cancellation, a healthy tail and competing builder failures.
+`hero_flight_terminal_retirement` pins stale retirement through the private
+terminal-delivery seam, along with opaque ownership cleanup.
 
 ### 19. Word and grapheme movement use ICU4X (UAX #29), not dictionary segmentation
 

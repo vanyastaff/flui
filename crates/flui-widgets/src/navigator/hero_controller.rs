@@ -106,7 +106,7 @@ use flui_foundation::geometry::{Matrix4, Rect};
 use parking_lot::Mutex;
 
 use super::hero::{HeroHandle, HeroTag, RectTweenFactory};
-use super::hero_flight::{FlightManager, FlightPlan};
+use super::hero_flight::{FlightEpoch, FlightManager, FlightPlan};
 use super::lifecycle::{RetiredMap, RetiredValues, Terminal, TerminalVec};
 use super::modal_route::ModalHandle;
 use super::navigator::NavigatorHandle;
@@ -346,6 +346,7 @@ impl HeroController {
         let Some(navigator) = self.navigator() else {
             return; // Detached.
         };
+        let epoch = self.flights.epoch();
         // No previous top route: nothing to fly from.
         let (Some(from), Some(to)) = (from, to) else {
             return;
@@ -396,6 +397,7 @@ impl HeroController {
                 .is_some_and(Size::is_finite)
         {
             let pass = MeasurementPass {
+                epoch,
                 navigator: &navigator,
                 source: &source,
                 destination: &destination,
@@ -436,6 +438,7 @@ impl HeroController {
         let source = Terminal::new(source);
         let schedule_result = post_frame.schedule(move |_timing| {
             let pass = MeasurementPass {
+                epoch,
                 navigator: &navigator,
                 source: &source,
                 destination: &measured_destination,
@@ -477,6 +480,7 @@ impl HeroController {
 /// A struct rather than a seven-argument function: it is the closure's payload, and
 /// each field is one input to the flight manifest.
 struct MeasurementPass<'a> {
+    epoch: FlightEpoch,
     navigator: &'a NavigatorHandle,
     source: &'a ModalHandle,
     destination: &'a ModalHandle,
@@ -553,6 +557,9 @@ impl MeasurementPass<'_> {
         // A no-op when the sync fast path never flipped it. Geometry stays committed until the next layout, so
         // measuring after this is safe either way.
         self.destination.set_offstage(false);
+        if !self.flights.is_current(&self.epoch) {
+            return Vec::new();
+        }
 
         // Retired flights are dropped here, outside every animation listener — see
         // `FlightManager`'s type docs for why that matters.
@@ -565,14 +572,18 @@ impl MeasurementPass<'_> {
             .set_post_frame(self.navigator.post_frame_handle());
 
         let mut started = RetiredValues(self.collect_manifests());
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
         for matched in &started.0 {
-            self.launch(&matched.manifest, &matched.from, &matched.to);
+            recovery.run_with(|recovery| {
+                self.launch(&matched.manifest, &matched.from, &matched.to, recovery);
+            });
         }
         let mut remaining = Terminal::new(std::mem::take(&mut started.0).into_iter());
         let mut manifests = Terminal::new(Vec::new());
         for mut matched in remaining.by_ref() {
             manifests.push(matched.manifest.take_value());
         }
+        recovery.finish();
         manifests.take_value()
     }
 
@@ -581,7 +592,13 @@ impl MeasurementPass<'_> {
     /// A manifest with **no direction** never flies. The measurement is still
     /// recorded, because a manifest is measurement data, independent of whether a
     /// flight launches.
-    fn launch(&self, manifest: &HeroFlightManifest, from_hero: &HeroHandle, to_hero: &HeroHandle) {
+    fn launch(
+        &self,
+        manifest: &HeroFlightManifest,
+        from_hero: &HeroHandle,
+        to_hero: &HeroHandle,
+        recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
+    ) {
         let Some(direction) = manifest.direction else {
             return;
         };
@@ -639,6 +656,8 @@ impl MeasurementPass<'_> {
                 is_user_gesture_transition: self.is_user_gesture_transition,
                 gesture_signal: Terminal::new(self.navigator.user_gesture_signal()),
             },
+            &self.epoch,
+            recovery,
         );
     }
 
@@ -768,7 +787,8 @@ impl NavigatorObserver for HeroController {
     /// A controller that keeps observing a detached navigator would schedule
     /// against a dead binding.
     fn did_detach(&self) {
-        // Retire every flight still in the air before dropping the navigator slot.
+        // Withdraw the navigator before cancellation can reenter this observer,
+        // then invalidate queued measurements and retire pending/airborne flights.
         // A detached controller can no longer service a flight's end-of-flight
         // drain — the shuttle retires a flight only through a live `FlightManager`
         // — so leaving flights airborne would strand their overlay entries and
@@ -776,8 +796,9 @@ impl NavigatorObserver for HeroController {
         // `add_observer`/`remove_observer` while the navigator stays alive, so a
         // controller does not live as long as its navigator. Recorded in
         // `ARCHITECTURE.md` §18.
+        let previous = Terminal::new(self.navigator.lock().take());
         self.flights.finish_all();
-        let _prev = self.navigator.lock().take();
+        drop(previous);
     }
 
     /// The **only** route callback this controller overrides.
