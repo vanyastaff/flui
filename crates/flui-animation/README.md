@@ -365,13 +365,14 @@ so one controller drives many elements.
 ### Tween Composition
 
 ```rust
-use flui_animation::{ChainedTween, CurveTween, Curves, FloatTween, ReverseTween};
+use flui_animation::{Animatable, Curve, Curves, FloatTween, ReverseTween};
 let tween = FloatTween::new(0.0, 100.0);
-// Chain: a curve, then a value tween
-let curved = ChainedTween::new(CurveTween::new(Curves::EaseIn), tween);
+let eased = tween.transform(Curves::EaseIn.transform(0.5));
+assert!(eased < 50.0);
 
 // Reverse direction
 let reversed = ReverseTween::new(tween);
+assert_eq!(reversed.transform(0.25), 75.0);
 ```
 
 ### CurveTween

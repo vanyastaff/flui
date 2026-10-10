@@ -399,13 +399,15 @@ element `i` of `n` the delay `step · |origin − i|` (`First`, `Last`,
 ### Chaining and Composition
 
 ```rust
-use flui_animation::{ChainedTween, CurveTween, Curves, FloatTween, ReverseTween};
+use flui_animation::{Animatable, Curve, Curves, FloatTween, ReverseTween};
 let tween = FloatTween::new(0.0, 100.0);
 // A curve, then a value tween
-let eased = ChainedTween::new(CurveTween::new(Curves::EaseIn), tween);
+let eased = tween.transform(Curves::EaseIn.transform(0.5));
+assert!(eased < 50.0);
 
 // Reverse
 let reversed = ReverseTween::new(tween);
+assert_eq!(reversed.transform(0.25), 75.0);
 ```
 
 ---

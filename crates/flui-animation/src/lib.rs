@@ -183,9 +183,9 @@ pub use curve::{
 };
 pub use status::{AnimationBehavior, AnimationStatus};
 pub use tween_types::{
-    AlignmentTween, Animatable, BorderRadiusTween, ChainedTween, ColorTween, ConstantTween,
-    CurveTween, EdgeInsetsTween, FloatTween, IntTween, Matrix4Tween, OffsetTween, RectTween,
-    ReverseTween, SizeTween, StepTween, Tween,
+    AlignmentTween, Animatable, BorderRadiusTween, ColorTween, ConstantTween, CurveTween,
+    EdgeInsetsTween, FloatTween, IntTween, Matrix4Tween, OffsetTween, RectTween, ReverseTween,
+    SizeTween, StepTween, Tween,
 };
 
 // Every `rust` block in the crate's prose docs compiles as a doctest.

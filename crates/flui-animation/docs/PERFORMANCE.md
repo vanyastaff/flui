@@ -326,14 +326,21 @@ them. What matters for cost is what each type holds:
 
 | Type | Holds |
 |------|-------|
-| `AnimationController` | two `Rc`s (state behind one `parking_lot::Mutex`, and the value notifier); `clone()` shares the controller |
-| `CurvedAnimation<C>` | the curve(s) and one `Rc` of links: the parent `Rc<dyn Animation<f64>>`, a notifier, a curve-direction `Mutex` and two parent subscriptions (value and status) |
-| `TweenAnimation<A>` | the parent `Rc<dyn Animation<f64>>`, the animatable, a notifier and a parent subscription |
-| `ReverseAnimation` | the parent `Rc<dyn Animation<f64>>`, a notifier and a parent subscription |
+| `AnimationController` | two `Rc`s: owner-local state in a `RefCell` and the value notifier; `clone()` shares both |
+| `CurvedAnimation<C>` | curve values owned by each clone, shared `Rc<Cell<Option<AnimationStatus>>>` for the entering direction, and shared parent links |
+| `TweenAnimation<A>` | the animatable owned by each clone and shared parent links |
+| `ReverseAnimation` | shared parent links |
 | `ConstantAnimation<T>` | the value and a status; no notifier, since it never changes |
 | `Cubic`, `ElasticOutCurve`, `Interval<C>` | plain `f64` parameters (plus the inner curve) |
 | `Steps` | step count and jump placement |
 | `Keyframes<T>` | starting value, total duration and an immutable boxed segment slice |
+
+`ParentLinks` shares a parent `Rc<dyn Animation<f64>>`, separate value and status
+notifiers, and one subscription to each parent channel. Wrapper clones share
+those links rather than installing another subscription pair. Final retirement
+withdraws both outgoing channels before detaching the parent subscriptions;
+authored callback destruction occurs outside notifier borrows. These are
+owner-local capabilities (ADR-0175), so their cost has no per-animation lock.
 
 ---
 

@@ -911,26 +911,19 @@ TweenAnimation<ColorTween> (maps to Color)
         ▼ Animation<Color>
 ```
 
-Each wrapper stores parent as `Rc<dyn Animation<f64>>`:
+The wrappers share a private `ParentLinks` allocation containing the parent,
+separate value/status notifiers and one subscription to each parent channel.
+Cloning a wrapper shares these links; final retirement withdraws outgoing
+callbacks before detaching the subscriptions. Curves and animatables remain
+owned by each value clone and follow terminal retirement when authored
+destruction fails.
 
-```rust
-pub struct CurvedAnimation<C: Curve> {
-    parent: Rc<dyn Animation<f64>>,
-    curve: C,
-    reverse_curve: Option<C>,
-}
-
-impl<C: Curve> Animation<f64> for CurvedAnimation<C> {
-    fn value(&self) -> f64 {
-        let t = self.parent.value();
-        self.curve.transform(t)
-    }
-    
-    fn status(&self) -> AnimationStatus {
-        self.parent.status()  // Pass through
-    }
-}
-```
+`CurvedAnimation` also shares the run's entering direction in an owner-local
+`Cell`. A direction change during that run keeps the selected curve; resting
+status clears the selection so the next run can choose its forward or reverse
+curve. Value evaluation and authored destruction execute after storage borrows
+end. `TweenAnimation` maps the sampled parent value, while `ReverseAnimation`
+mirrors both value and status.
 
 ## UI ownership
 
