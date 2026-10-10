@@ -381,6 +381,10 @@ fn owner_retirement_custody_contract() {
                 "recursive retirement shares caught failure",
                 recursive_retirement_shares_caught_failure,
             ),
+            (
+                "completed retirement ends caller custody",
+                completed_retirement_ends_caller_failure_custody,
+            ),
         ],
     );
 }
@@ -398,6 +402,27 @@ fn healthy_teardown_after_completed_caught_failure() {
     assert_eq!(drops.get(), 0, "callback remains accepted beyond its turn");
     assert!(owner.retire().is_none());
     assert_eq!(drops.get(), 1, "new healthy teardown retires the callback");
+}
+
+fn completed_retirement_ends_caller_failure_custody() {
+    let scheduler = UpdateScheduler::new();
+    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    assert_eq!(owner.pump_background(|| {
+        catch_nested_refusal_failure(&owner);
+        assert!(owner.retire().is_none());
+    }), Ok(0));
+    let drops = Rc::new(Cell::new(0));
+    let capture = RemovedCapture(Rc::clone(&drops));
+    assert_eq!(owner.pump_background(move || { let _ = &capture; }),
+        Err(ExecutionError::Retired));
+    assert_eq!(drops.get(), 1, "later healthy refused preparation retires normally");
+    let prepare = RemovedCapture(Rc::clone(&drops));
+    let pipeline = RemovedCapture(Rc::clone(&drops));
+    let now = Instant::now();
+    assert_eq!(owner.drive_frame(now, IdleDeadline::far_future(now),
+        move || { let _ = &prepare; }, move || { let _ = &pipeline; }),
+        Err(ExecutionError::Retired));
+    assert_eq!(drops.get(), 3, "later healthy refused frame retires both envelopes");
 }
 
 fn recursive_retirement_shares_caught_failure() {
