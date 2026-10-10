@@ -39,6 +39,7 @@
 //! * **No navigator size.** `Positioned` takes `left`/`top`/`width`/`height`
 //!   directly, so the rect needs no conversion against the navigator's size.
 
+use std::cell::Cell;
 use std::rc::Rc;
 use std::rc::Weak;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -100,6 +101,9 @@ struct FlightInner {
     /// The shuttle's rect-tween endpoints. Re-aimed by
     /// [`FlightInner::on_tick`]; interpolated through [`rect_factory`](Self::rect_factory).
     rect: Terminal<Mutex<RectTween>>,
+    /// Logical endpoints are swapped on a reversal, but a custom mapping must
+    /// still receive its original endpoint order and mirrored progress.
+    rect_reversed: Cell<bool>,
     /// The `create_rect_tween` factory this flight interpolates with, or `None` for the
     /// linear default. Behind a lock because a divert can swap the
     /// destination hero, and with it the factory.
@@ -231,8 +235,12 @@ impl FlightInner {
     /// for a shrinking flight turns the rect inside out; the size is clamped to
     /// zero, keeping `min` (ADR-0149: the property owns its domain).
     fn current_rect(&self) -> Rect {
-        let endpoints = *self.rect.lock();
-        let t = self.proxy.value();
+        let mut endpoints = *self.rect.lock();
+        let mut t = self.proxy.value();
+        if self.rect_reversed.get() {
+            std::mem::swap(&mut endpoints.begin, &mut endpoints.end);
+            t = 1.0 - t;
+        }
         let factory = Terminal::new(self.rect_factory.lock().clone());
         let rect = match factory.as_ref() {
             Some(make) => {
@@ -531,6 +539,7 @@ impl HeroFlight {
         // shuttle is rebuilt — decided per branch, applied afterwards.
         let new_parent: Terminal<std::rc::Rc<dyn Animation<f64>>>;
         let (new_begin, new_end): (Rect, Rect);
+        let retain_path: bool;
         let mut new_shuttle: Terminal<Option<BoxedView>> = Terminal::new(None);
 
         match (old_dir, new_dir) {
@@ -543,11 +552,9 @@ impl HeroFlight {
                 );
                 // The proxy's parent becomes the reverse of the new animation.
                 new_parent = Terminal::new(Rc::new(ReverseAnimation::new(new_anim.take_value())));
-                // The tween is reversed. FLUI has only a **linear** `RectTween`, for
-                // which reversing the tween and swapping begin/end are identical
-                // (`lerp(a,b,1-t) == lerp(b,a,t)`). A non-linear path (an arc tween)
-                // would need a real reversed tween to stay symmetric; when an arc
-                // tween lands, this must become one.
+                // Retain the mapping and reverse its evaluation. Reconstructing
+                // an arbitrary path with swapped endpoints need not retrace it.
+                retain_path = true;
                 let rect = self.inner.rect.lock();
                 new_begin = rect.end;
                 new_end = rect.begin;
@@ -574,12 +581,14 @@ impl HeroFlight {
                 )));
 
                 if old_from.is_same(&new_to) {
+                    retain_path = true;
                     // Same hero: begin from the old end, end at the old
                     // begin — the reverse of the reverse, without a new destination.
                     let rect = self.inner.rect.lock();
                     new_begin = rect.end;
                     new_end = rect.begin;
                 } else {
+                    retain_path = false;
                     // Different hero: hand the old source its placeholder back and freeze the
                     // new destination, then aim from the old end at the new location.
                     old_from.end_flight(true);
@@ -592,6 +601,7 @@ impl HeroFlight {
             // A push or a pop flight is heading to a new route: push→push or
             // pop→pop, all four heroes distinct.
             (_, _) => {
+                retain_path = false;
                 debug_assert!(
                     !old_from.is_same(&new_from) && !old_to.is_same(&new_to),
                     "BUG: a same-direction divert connects four distinct heroes \
@@ -636,17 +646,25 @@ impl HeroFlight {
             rect.begin = new_begin;
             rect.end = new_end;
         }
+        self.inner
+            .rect_reversed
+            .set(retain_path && !self.inner.rect_reversed.get());
         *self.inner.fade_from.lock() = None;
         self.inner.aborted.store(false, Ordering::Relaxed);
-        // Re-read the new manifest's hooks: a divert can swap the destination hero
-        // and, with it, its `create_rect_tween` / `flight_shuttle_builder`. The
+        // A new destination selects a new rect factory. Reversing the same pair
+        // retains the original factory so the shuttle follows its existing path.
+        // Re-read the new manifest's shuttle builder. The
         // same-direction branch above already rebuilt the shuttle with the new
         // builder; the other branches keep the existing shuttle, so the stored
         // builder only matters for a later same-tag divert.
-        let old_factory = Terminal::new(std::mem::replace(
-            &mut *self.inner.rect_factory.lock(),
-            new_rect_factory.take_value(),
-        ));
+        let old_factory = Terminal::new(if retain_path {
+            None
+        } else {
+            std::mem::replace(
+                &mut *self.inner.rect_factory.lock(),
+                new_rect_factory.take_value(),
+            )
+        });
         let old_builder = Terminal::new(std::mem::replace(
             &mut *self.inner.shuttle_builder.lock(),
             new_shuttle_builder.take_value(),
@@ -919,6 +937,7 @@ impl FlightManager {
                 begin: manifest.from_rect,
                 end: manifest.to_rect,
             })),
+            rect_reversed: Cell::new(false),
             rect_factory: Terminal::new(Mutex::new(rect_factory.take_value())),
             opacity: Terminal::new(Mutex::new(1.0)),
             fade_from: Terminal::new(Mutex::new(None)),
@@ -1247,6 +1266,7 @@ mod terminal_tests {
                 begin: Rect::ZERO,
                 end: Rect::ZERO,
             })),
+            rect_reversed: Cell::new(false),
             rect_factory: Terminal::new(Mutex::new(Some(factory(rect_capture)))),
             opacity: Terminal::new(Mutex::new(1.0)),
             fade_from: Terminal::new(Mutex::new(None)),

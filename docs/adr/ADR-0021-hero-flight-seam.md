@@ -170,8 +170,10 @@ Listed above: registry instead of element walk; first-wins duplicate tags; no fo
 for the shuttle builder; state-preserving `placeholder`; auto-default controller; announcements
 before observer callbacks; persistent callbacks before the pipeline; `did_change_top` without
 Flutter's `isCurrent` assert (a re-entrant push can deliver it for a route no longer top;
-introspection returns `None` for it). Also: the reverse tween is a begin/end swap, exact only
-for linear tweens — an arc tween must switch to a true reverse tween.
+introspection returns `None` for it). Reversing an airborne flight between the same heroes
+retains its selected rect factory and evaluates it with the original endpoint order at
+mirrored progress. This retraces arbitrary custom mappings as well as linear tweens;
+a different destination selects a new mapping.
 
 **Not carried:** user-gesture flights (`transitionOnUserGestures`,
 `didStart/StopUserGesture`; FLUI has no back-swipe), cross-navigator flights, `MediaQuery`

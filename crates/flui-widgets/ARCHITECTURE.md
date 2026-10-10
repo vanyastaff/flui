@@ -41,6 +41,13 @@ custom mappings to retain owner-local state without worker-thread bounds.
 flight through all three reentry points, verifies the committed shuttle rect,
 and checks that the flight subsequently lands.
 
+Reversing a flight between the same heroes retains its rect factory and evaluates
+the original endpoint order at mirrored progress. Swapping endpoints alone
+does not reverse an arbitrary mapping. A different destination selects a new
+forward mapping. `a_nonlinear_hero_pop_retraces_the_airborne_push` checks several
+points on an asymmetric path, a conflicting return-side factory, redirection to
+a third hero and subsequent landing through a mounted navigator.
+
 The factory snapshot and its returned mapping use the navigator's terminal
 ownership policy. Healthy reads retire both normally; after evaluation fails,
 the opaque mapping is retained during unwind so its destructor cannot replace

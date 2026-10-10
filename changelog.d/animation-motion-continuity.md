@@ -69,6 +69,9 @@
 
 ### Fixed
 
+- Reversing an airborne Hero flight retraces its custom rect mapping without
+  switching paths; redirection to a different hero selects the new path.
+
 - Skip redundant retirement recovery when an already disposed animation owner
   is disposed again or subsequently dropped.
 

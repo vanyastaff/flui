@@ -807,6 +807,8 @@ impl Hero {
     /// a linear [`RectTween`](flui_animation::RectTween). When both this and the
     /// [`HeroController`](super::hero_controller::HeroController)'s default are set,
     /// this one wins.
+    /// Reversing an airborne flight between the same heroes retraces the selected
+    /// mapping, retaining its factory and evaluating it at mirrored progress.
     #[must_use]
     pub fn create_rect_tween<F, A>(mut self, factory: F) -> Self
     where

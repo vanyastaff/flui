@@ -183,6 +183,114 @@ pub(crate) fn a_push_flight_interrupted_by_a_pop_diverts_in_place() {
     );
 }
 
+struct AsymmetricHeroPath {
+    endpoints: flui_animation::RectTween,
+    bend: f64,
+}
+
+impl flui_animation::Animatable for AsymmetricHeroPath {
+    type Value = Rect;
+
+    fn transform(&self, t: f64) -> Rect {
+        let rect = flui_animation::Animatable::transform(&self.endpoints, t);
+        Rect::from_ltwh(
+            rect.min_x() + self.bend * t * t * (1.0 - t),
+            rect.min_y(),
+            rect.width(),
+            rect.height(),
+        )
+    }
+}
+
+pub(crate) fn a_nonlinear_hero_pop_retraces_the_airborne_push() {
+    for source_bend in [None, Some(-120.0)] {
+        let navigator = seeded_navigator();
+        let controller = install(&navigator);
+        let mut harness = mount_navigator(&navigator);
+        let transition = fly(
+            &navigator,
+            &mut harness,
+            hero_page_with("shared", 30.0, 20.0, move |hero| {
+                let hero = hero.curve(Curves::Linear);
+                match source_bend {
+                    Some(bend) => hero.create_rect_tween(move |begin, end| AsymmetricHeroPath {
+                        endpoints: flui_animation::RectTween { begin, end },
+                        bend,
+                    }),
+                    None => hero,
+                }
+            }),
+            hero_page_with("shared", 60.0, 45.0, |hero| {
+                hero.curve(Curves::Linear)
+                    .create_rect_tween(|begin, end| AsymmetricHeroPath {
+                        endpoints: flui_animation::RectTween { begin, end },
+                        bend: 160.0,
+                    })
+            }),
+        );
+        let route_animation = transition.controller().expect("installed");
+        let push = controller.flights().get(&tag("shared")).expect("airborne");
+        let entry = push.entry_id();
+        let samples = [0.2, 0.4, 0.7].map(|t| {
+            harness.enter_owner_scope(|| route_animation.set_value(t));
+            (t, push.shuttle_rect())
+        });
+
+        assert!(harness.enter_owner_scope(|| navigator.pop()));
+        harness.tick();
+        let pop = controller.flights().get(&tag("shared")).expect("returning");
+        assert_eq!(pop.entry_id(), entry, "the same shuttle returns");
+        for (t, expected) in samples.into_iter().rev() {
+            harness.enter_owner_scope(|| route_animation.set_value(t));
+            assert_rect_close(pop.shuttle_rect(), expected, "pop retraces the push path");
+        }
+        if source_bend.is_some() {
+            let next_page = hero_page_with("shared", 90.0, 75.0, |hero| {
+                hero.curve(Curves::Linear)
+                    .create_rect_tween(|begin, end| AsymmetricHeroPath {
+                        endpoints: flui_animation::RectTween { begin, end },
+                        bend: -240.0,
+                    })
+            });
+            let next_transition = next_page.transition_handle();
+            let _next = harness.enter_owner_scope(|| navigator.push(next_page));
+            harness.tick();
+            let next_animation = next_transition.controller().expect("installed");
+            harness.enter_owner_scope(|| next_animation.set_value(0.5));
+            let redirected = controller
+                .flights()
+                .get(&tag("shared"))
+                .expect("redirected");
+            assert_eq!(
+                redirected.entry_id(),
+                entry,
+                "redirection keeps the shuttle"
+            );
+            // The new push covers the unfinished 0.2→1.0 interval; halfway is 0.6.
+            let expected = flui_animation::Animatable::transform(
+                &AsymmetricHeroPath {
+                    endpoints: flui_animation::RectTween {
+                        begin: redirected.begin_rect(),
+                        end: redirected.target_rect(),
+                    },
+                    bend: -240.0,
+                },
+                0.6,
+            );
+            assert_rect_close(
+                redirected.shuttle_rect(),
+                expected,
+                "a new destination selects its own forward path",
+            );
+            harness.enter_owner_scope(|| next_animation.set_value(1.0));
+        } else {
+            harness.enter_owner_scope(|| route_animation.set_value(0.0));
+        }
+        harness.tick();
+        assert_eq!(controller.flights().len(), 0, "the flight lands");
+    }
+}
+
 // ============================================================================
 // Cleanup — retired flights are drained deterministically
 // ============================================================================
