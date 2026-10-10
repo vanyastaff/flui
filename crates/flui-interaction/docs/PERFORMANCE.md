@@ -134,6 +134,54 @@ against static dispatch on the new implementation. Weak-member resolution
 must keep a strong fixture owner alive; measuring dead weak references would
 exercise withdrawal instead of arbitration.
 
+## Trace provenance and replay
+
+`pointer_resampler_bench` already replays an owned `&[PointerEvent]` through the
+public `PointerEventResampler` admission, `sample` and `stop` interfaces. Its
+`frame_trace` fixture uses source timestamps for admission ordering and a
+synthetic 60 Hz display schedule. The 60/240 Hz sources follow a known linear
+1000 px/s trajectory, with separate Up and Cancel terminals. These are generated
+fixtures, not device recordings. They contain no measured OS arrival delays,
+frame stalls, sensor noise or native coalescing distribution. Their wall-clock
+Criterion time measures the CPU work of replay, not input-to-display latency.
+
+Run the existing fixture witnesses without collecting new timing estimates:
+
+```text
+cargo bench --locked -p flui-interaction --bench pointer_resampler_bench -- --test
+```
+
+Criterion test mode executes each benchmark once; the fixture's delivery
+witnesses run before it. For measured replay cost, use a saved baseline on the
+same host and toolchain, with the same setup/retirement and batching policy:
+
+```text
+cargo bench --locked -p flui-interaction --bench pointer_resampler_bench -- resampler/frame_trace --save-baseline trace_before
+cargo bench --locked -p flui-interaction --bench pointer_resampler_bench -- resampler/frame_trace --baseline trace_before
+```
+
+A new explicit workload can reuse this owned-event seam without introducing a
+recording service or public replay API. Before treating it as representative,
+retain its origin and expected observations outside the public repository:
+
+- Device and backend, capture revision, source timestamp unit/epoch, logical
+  coordinate conversion and any anonymization or sample reduction.
+- Source times and actual arrival times separately, plus frame targets and any
+  stalls. Source-time replay alone cannot reproduce delivery bursts caused by
+  delayed native dispatch; preserve arrival batching when testing that claim.
+- Pointer identity reuse, contact boundaries, coalesced/predicted histories and
+  terminal reasons. Keep observed readings separate from predictions.
+- An independent delivery oracle: terminal count/order, retained measured
+  readings and known coordinates or motion. A recorded irregular trajectory
+  cannot reuse the linear fixture's 1000 px/s oracle unchanged.
+
+Test the literal sequence first through the existing public integration seam,
+then time that same workload with its ownership and lifetime unchanged.
+For mounted gesture, focus or teardown claims, use `GestureBinding` or the
+runtime/widget path: a resampler microbenchmark cannot establish those behaviors.
+Native message execution and physical input have separate acceptance boundaries
+in [ARCHITECTURE.md](ARCHITECTURE.md#native-input-evidence).
+
 ## Complete pinned measurement
 
 The matched measurement on 2026-10-08 used Windows 11 Pro 10.0.26200,
