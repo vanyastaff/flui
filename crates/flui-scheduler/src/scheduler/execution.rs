@@ -92,7 +92,7 @@ impl Drop for FailureScope<'_> {
             scheduler.inner.execution_failure.borrow_mut().take();
             scheduler.inner.wake.wake_delivery.bind_failure_signal(None);
         }
-        self.owner.bind_task_failure_signal(None);
+        self.owner.bind_owner_failure_signal(None);
     }
 }
 
@@ -217,7 +217,7 @@ impl OwnerFrame {
                 .wake_delivery
                 .bind_failure_signal(Some(signal.clone()));
         }
-        self.bind_task_failure_signal(Some(signal));
+        self.bind_owner_failure_signal(Some(signal));
         FailureScope {
             scheduler: self.scheduler.clone(),
             owner: self,

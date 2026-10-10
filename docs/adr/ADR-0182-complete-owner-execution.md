@@ -53,9 +53,12 @@ withdraw publication before ending caller custody. Recursive cleanup borrows
 the enclosing scope; catching a nested failure cannot clear it. A later healthy
 refusal starts independently, even after an earlier cleanup returned a failure
 payload or completed with a failure caught by user code.
-Task-store custody is published even after scheduler weak authority closes;
+Task-store and post-frame-lane custody are published even after scheduler weak authority closes;
 closed execution retires submitted envelopes under that same publication.
-The receipt protects surviving task envelopes without reviving the scheduler.
+The receipt protects surviving task envelopes and rejected post-frame captures
+without reviving the scheduler. A healthy rejection still retires its callback
+normally; a missing lane has no surviving owner custody and follows ordinary
+unwind retention.
 
 Temporary scheduler release distinguishes an ordinary reference release from
 the actual last strong release. Actual destruction closes weak upgrades before

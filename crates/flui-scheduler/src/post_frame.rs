@@ -38,6 +38,7 @@ pub(crate) struct PostFrameQueue {
     active: RefCell<Vec<PostFrameEntry>>,
     /// Set by retirement: no callback is admitted afterwards.
     closed: Cell<bool>,
+    execution_failure: RefCell<Option<std::sync::Weak<crate::wake_delivery::FailureSignal>>>,
 }
 
 impl PostFrameQueue {
@@ -46,6 +47,7 @@ impl PostFrameQueue {
             queue: RefCell::new(Vec::new()),
             active: RefCell::new(Vec::new()),
             closed: Cell::new(false),
+            execution_failure: RefCell::new(None),
         })
     }
 }
@@ -107,10 +109,11 @@ pub struct OwnerFrame {
 }
 
 impl OwnerFrame {
-    pub(crate) fn bind_task_failure_signal(
+    pub(crate) fn bind_owner_failure_signal(
         &self,
         signal: Option<std::sync::Weak<crate::wake_delivery::FailureSignal>>,
     ) {
+        *self.post_frame.execution_failure.borrow_mut() = signal.clone();
         self.tasks.bind_execution_failure_signal(signal);
     }
     /// Owner-local frame state for `scheduler`'s frames. Task wakes request a
@@ -404,8 +407,9 @@ impl PostFrameHandle {
     /// Schedule an owner-local callback after the next completed frame.
     ///
     /// The callback may capture `Rc`/`RefCell` state. On error (the owning
-    /// UI runtime is gone or retired) the callback is dropped without running —
-    /// provably: nothing retains it once this call returns `Err`.
+    /// UI runtime is gone or retired) the callback is never invoked. Healthy
+    /// rejection drops it normally; active owner failure custody or an existing
+    /// unwind retains its opaque capture envelope instead.
     ///
     /// Every registration on this owner queue runs in callback identity order,
     /// including registrations through the scheduler during construction.
@@ -413,15 +417,26 @@ impl PostFrameHandle {
         &self,
         callback: impl FnOnce(&FrameTiming) + 'static,
     ) -> Result<(), PostFrameScheduleError> {
-        let lane = self
-            .lane
-            .upgrade()
-            .filter(|lane| !lane.closed.get())
-            .ok_or(PostFrameScheduleError::Closed)?;
-        let scheduler = self
-            .scheduler
-            .upgrade()
-            .ok_or(PostFrameScheduleError::Closed)?;
+        let Some(lane) = self.lane.upgrade() else {
+            let mut recovery = flui_foundation::panic::PanicRecovery::new();
+            recovery.retire(callback);
+            recovery.finish();
+            return Err(PostFrameScheduleError::Closed);
+        };
+        if lane.closed.get() {
+            crate::scheduler::execution::retire_with_execution_custody(
+                &lane.execution_failure,
+                callback,
+            );
+            return Err(PostFrameScheduleError::Closed);
+        }
+        let Some(scheduler) = self.scheduler.upgrade() else {
+            crate::scheduler::execution::retire_with_execution_custody(
+                &lane.execution_failure,
+                callback,
+            );
+            return Err(PostFrameScheduleError::Closed);
+        };
         scheduler.with_post_frame_registration(|id| {
             lane.queue.borrow_mut().push(PostFrameEntry {
                 id,
