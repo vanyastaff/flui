@@ -22,6 +22,26 @@ running, so it is not an idle-frame benchmark.
 
 The historical timing tables below do not measure the current policy path.
 
+## Registry workload validation
+
+The registry benchmark retains one `MotionClock` and advances a 60 Hz timestamp
+on every iteration. Active and stopped populations both cover 100, 1,000, 5,000
+and 10,000 owners. Active runs last 136 years of virtual time; untimed checks
+verify progress on successive frames and that the measured loop leaves them
+running. The mixed population retains exactly 100 active owners out of 1,000.
+Active results include sampling and delivery, not just registry lookup.
+
+Validate the workloads without collecting performance measurements with:
+
+```bash
+cargo bench --profile dev -p flui-animation --bench vsync_registry -- --test
+```
+
+This smoke run is not a timing result. Earlier migrated benchmark code created
+a new clock and repeated one timestamp, so it did not measure sustained active
+frames. Comparisons need baseline and final runs with the same corrected
+workload, release profile and host conditions.
+
 ## Measured benchmarks
 
 The benchmark tables below are historical measurements from before the
@@ -33,7 +53,8 @@ standalone prototype; those experiments are not committed, and the command
 below does not reproduce their attribution percentages or the 15,000–30,000
 controller samples. Absolute numbers are machine-relative and both hosts below
 were shared with other builds, so read them as orders of magnitude and as a
-regression baseline, not as a hardware promise. Run the committed targets with:
+historical context, not as a current regression baseline or hardware promise.
+Run the committed targets with:
 
 ```bash
 cargo bench -p flui-animation --bench animation_bench --bench vsync_registry
