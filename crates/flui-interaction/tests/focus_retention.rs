@@ -134,6 +134,68 @@ fn geometric_focus_navigation_pins_ranking_and_admission() {
     }
 }
 
+fn bounded_focus_reentry_publishes_in_order_and_recovers() {
+    let manager = FocusManager::new();
+    let nodes = [FocusNode::new(), FocusNode::new()];
+    let attachments: Vec<_> = nodes
+        .iter()
+        .map(|node| manager.root_scope().attach_node(node).expect("attach"))
+        .collect();
+    let bouncing = Rc::new(Cell::new(true));
+    let edges = Rc::new(RefCell::new(Vec::new()));
+    let observed = Rc::clone(&edges);
+    let enabled = Rc::clone(&bouncing);
+    let targets = nodes.each_ref().map(Rc::downgrade);
+    let first_id = targets[0].upgrade().expect("attached node").id();
+    let listener = manager.add_listener(Rc::new(move |_, current| {
+        let current = current.expect("fixture always requests a node");
+        observed.borrow_mut().push(current.id());
+        // A fixture ceiling keeps a missing framework budget from hanging
+        // the process; reaching it is a failure, not successful settlement.
+        if enabled.get() && observed.borrow().len() < 128 {
+            let next = usize::from(current.id() == first_id);
+            let _ = targets[next]
+                .upgrade()
+                .expect("attached target")
+                .request_focus();
+            assert!(
+                current.has_primary_focus(),
+                "reentrant request waits for publication"
+            );
+        }
+    }));
+    let _ = nodes[0].request_focus();
+    assert!(
+        (2..128).contains(&edges.borrow().len()),
+        "the framework bounds a nonsettling chain before the fixture ceiling"
+    );
+    assert!(
+        edges
+            .borrow()
+            .iter()
+            .enumerate()
+            .all(|(index, node)| *node == nodes[index % 2].id())
+    );
+    let settled = manager.primary_focus().expect("a committed destination");
+    assert_eq!(
+        Some(&settled.id()),
+        edges.borrow().last(),
+        "primary agrees with the final published edge"
+    );
+    let next = usize::from(settled.id() == nodes[0].id());
+    bouncing.set(false);
+    edges.borrow_mut().clear();
+    let _ = nodes[next].request_focus();
+    assert_eq!(
+        edges.borrow().as_slice(),
+        &[nodes[next].id()],
+        "the next outer call has no stale tail"
+    );
+    assert!(nodes[next].has_primary_focus());
+    manager.remove_listener(listener);
+    drop(attachments);
+}
+
 type CommitDiagnosticAction = (bool, Rc<dyn Fn()>);
 thread_local! {
     static COMMIT_DIAGNOSTIC: RefCell<Option<CommitDiagnosticAction>> = const { RefCell::new(None) };
@@ -1464,6 +1526,10 @@ fn assert_queued_focus_recovery(from_node: bool, competing: bool) {
 #[test]
 fn caught_callback_failures_leave_captures_with_their_owner() {
     let cases: &[(&str, fn())] = &[
+        (
+            "bounded focus reentry ordering and healthy recovery",
+            bounded_focus_reentry_publishes_in_order_and_recovers,
+        ),
         (
             "commit diagnostics, competing observers and reentrant FIFO",
             commit_diagnostics_preserve_focus_round_and_queued_requests,
