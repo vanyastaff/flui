@@ -482,6 +482,18 @@ fn a_failed_component_keeps_the_whole_published_sample() {
 fn owning_animated_value_contract() {
     crate::run_table(&[
         (
+            "owner retirement joins every delivery channel",
+            owner_retirement_joins_every_delivery_channel,
+        ),
+        (
+            "owner retirement keeps its first destructor failure",
+            owner_retirement_keeps_its_first_destructor_failure,
+        ),
+        (
+            "retired owner cleanup passes a stale settlement fence",
+            retired_owner_cleanup_passes_a_stale_settlement_fence,
+        ),
+        (
             "invalid rest threshold preserves run",
             invalid_rest_thresholds_preserve_the_accepted_run,
         ),
@@ -550,6 +562,326 @@ fn owning_animated_value_contract() {
             grouped_registry_migration_commits_before_delivery,
         ),
     ]);
+}
+
+fn owner_retirement_joins_every_delivery_channel() {
+    use flui_foundation::Listenable;
+    use std::{
+        future::Future,
+        pin::Pin,
+        sync::Arc,
+        task::{Context, Wake, Waker},
+    };
+
+    #[derive(Clone)]
+    struct Target {
+        position: f64,
+        drops: Option<Rc<Cell<usize>>>,
+    }
+    impl Drop for Target {
+        fn drop(&mut self) {
+            if let Some(drops) = &self.drops {
+                drops.set(drops.get() + 1);
+            }
+        }
+    }
+    impl TwoWayConverter for Target {
+        type Vector = [f64; 1];
+        fn to_vector(&self) -> Self::Vector {
+            [self.position]
+        }
+        fn from_vector([position]: Self::Vector) -> Self {
+            Self {
+                position,
+                drops: None,
+            }
+        }
+        fn rest_thresholds() -> Self::Vector {
+            [0.001]
+        }
+    }
+
+    thread_local! {
+        static OWNER: RefCell<Option<AnimatedValue<Target>>> = const { RefCell::new(None) };
+    }
+    fn release_owner() {
+        let outgoing = OWNER.with(|owner| owner.borrow_mut().take());
+        drop(outgoing);
+    }
+    fn fail() {
+        panic!("owner retirement delivery failure");
+    }
+    fn healthy() {}
+    struct ProbeWake(fn());
+    impl Wake for ProbeWake {
+        fn wake(self: Arc<Self>) {
+            self.wake_by_ref();
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            (self.0)();
+        }
+    }
+
+    let mut observed = Vec::new();
+    let mut expected = Vec::new();
+    for channel in ["value", "status", "continuation", "waiter"] {
+        for earlier_failure in [false, true] {
+            let registry = Vsync::new();
+            let mut clock = MotionClock::new();
+            let drops = Rc::new(Cell::new(0));
+            let tail = Rc::new(Cell::new(0));
+            let mut value = AnimatedValue::new(
+                Target {
+                    position: 0.0,
+                    drops: None,
+                },
+                curve(Curves::Linear),
+                Some(&registry),
+            )
+            .unwrap();
+            let run = value
+                .animate_to(Target {
+                    position: 1.0,
+                    drops: Some(Rc::clone(&drops)),
+                })
+                .unwrap();
+            registry.tick_all(&clock.frame(Duration::ZERO));
+            let view = value.animation();
+            assert!(OWNER.with(|owner| owner.replace(Some(value))).is_none());
+            let first: fn() = if earlier_failure { fail } else { healthy };
+            let mut subscriptions = Vec::new();
+            let mut waiters = Vec::new();
+            match channel {
+                "value" => {
+                    view.add_listener(Rc::new(first));
+                    view.add_listener(Rc::new(release_owner));
+                }
+                "status" => {
+                    subscriptions.push(view.subscribe_status(Rc::new(move |_| first())));
+                    subscriptions.push(view.subscribe_status(Rc::new(|_| release_owner())));
+                }
+                "continuation" => {
+                    run.when_complete_or_cancel(move |_| first());
+                    run.when_complete_or_cancel(|_| release_owner());
+                }
+                "waiter" => {
+                    for action in [first, release_owner] {
+                        let wake = Waker::from(Arc::new(ProbeWake(action)));
+                        let mut future = run.clone();
+                        assert!(
+                            Pin::new(&mut future)
+                                .poll(&mut Context::from_waker(&wake))
+                                .is_pending()
+                        );
+                        waiters.push((future, wake));
+                    }
+                }
+                _ => unreachable!("every delivery channel is listed above"),
+            }
+            run.when_complete_or_cancel({
+                let tail = Rc::clone(&tail);
+                move |outcome| {
+                    assert_eq!(outcome.is_err(), channel == "value");
+                    tail.set(tail.get() + 1);
+                }
+            });
+            drop(view);
+            let elapsed = if channel == "value" {
+                Duration::from_millis(250)
+            } else {
+                Duration::from_secs(1)
+            };
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                registry.tick_all(&clock.frame(elapsed));
+            }));
+            assert_eq!(outcome.is_err(), earlier_failure, "{channel}");
+            if let Err(payload) = outcome {
+                assert_eq!(
+                    flui_foundation::panic::payload_text(&*payload),
+                    Some("owner retirement delivery failure")
+                );
+            }
+            assert!(OWNER.with(|owner| owner.borrow().is_none()));
+            assert!(registry.is_empty());
+            assert_eq!(run.is_canceled(), channel == "value");
+            assert_eq!(tail.get(), 1, "the accepted future tail finishes");
+            for (mut future, wake) in waiters {
+                assert!(
+                    Pin::new(&mut future)
+                        .poll(&mut Context::from_waker(&wake))
+                        .is_ready()
+                );
+            }
+            drop(subscriptions);
+
+            let fresh_drops = Rc::new(Cell::new(0));
+            let mut fresh = AnimatedValue::new(
+                Target {
+                    position: 0.0,
+                    drops: None,
+                },
+                curve(Curves::Linear),
+                Some(&registry),
+            )
+            .unwrap();
+            let fresh_run = fresh
+                .animate_to(Target {
+                    position: 2.0,
+                    drops: Some(Rc::clone(&fresh_drops)),
+                })
+                .unwrap();
+            registry.tick_all(&clock.frame(Duration::from_secs(2)));
+            registry.tick_all(&clock.frame(Duration::from_secs(3)));
+            assert!(fresh_run.is_complete());
+            drop(fresh);
+            assert!(registry.is_empty());
+            assert_eq!(
+                fresh_drops.get(),
+                1,
+                "fresh healthy cleanup remains healthy"
+            );
+            observed.push((channel, earlier_failure, drops.get()));
+            expected.push((channel, earlier_failure, usize::from(!earlier_failure)));
+        }
+    }
+    assert_eq!(
+        observed, expected,
+        "opaque owner targets retire under the enclosing delivery's failure custody"
+    );
+}
+
+fn owner_retirement_keeps_its_first_destructor_failure() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    struct CurveCapture(Arc<AtomicUsize>);
+    impl flui_animation::Curve for CurveCapture {
+        fn transform(&self, t: f64) -> f64 {
+            t
+        }
+    }
+    impl Drop for CurveCapture {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            panic!("motion retirement failure");
+        }
+    }
+    #[derive(Clone)]
+    struct TargetCapture(Rc<Cell<usize>>);
+    impl TwoWayConverter for TargetCapture {
+        type Vector = [f64; 1];
+        fn to_vector(&self) -> Self::Vector {
+            [0.0]
+        }
+        fn from_vector(_: Self::Vector) -> Self {
+            unreachable!("the resting target is never converted")
+        }
+        fn rest_thresholds() -> Self::Vector {
+            [0.001]
+        }
+    }
+    impl Drop for TargetCapture {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+            panic!("competing target retirement");
+        }
+    }
+    let registry = Vsync::new();
+    let motion_drops = Arc::new(AtomicUsize::new(0));
+    let target_drops = Rc::new(Cell::new(0));
+    let value = AnimatedValue::new(
+        TargetCapture(Rc::clone(&target_drops)),
+        curve(CurveCapture(Arc::clone(&motion_drops))),
+        Some(&registry),
+    )
+    .unwrap();
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(value)))
+        .expect_err("the first destructor failure propagates");
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*failure),
+        Some("motion retirement failure")
+    );
+    assert_eq!(motion_drops.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        target_drops.get(),
+        0,
+        "remaining opaque resources are retained"
+    );
+    assert!(registry.is_empty());
+    let mut fresh = AnimatedValue::new(0.0_f64, curve(Curves::Linear), Some(&registry)).unwrap();
+    let run = fresh.animate_to(1.0).unwrap();
+    let mut clock = MotionClock::new();
+    registry.tick_all(&clock.frame(Duration::ZERO));
+    registry.tick_all(&clock.frame(Duration::from_secs(1)));
+    assert!(run.is_complete());
+    drop(fresh);
+    assert!(registry.is_empty());
+}
+
+fn retired_owner_cleanup_passes_a_stale_settlement_fence() {
+    use flui_foundation::Listenable;
+
+    struct Capture(Rc<Cell<usize>>);
+    impl Drop for Capture {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+    let registry = Vsync::new();
+    let mut value = AnimatedValue::new(0.0_f64, curve(Curves::Linear), Some(&registry)).unwrap();
+    let first_run = value.animate_to(1.0).unwrap();
+    let view = value.animation();
+    let mut clock = MotionClock::new();
+    registry.tick_all(&clock.frame(Duration::ZERO));
+    registry.tick_all(&clock.frame(Duration::from_millis(250)));
+    let storage = Rc::new(RefCell::new(None::<AnimatedValue<f64>>));
+    let next_run = Rc::new(RefCell::new(None));
+    let drops = Rc::new(Cell::new(0));
+    let capture = Capture(Rc::clone(&drops));
+    view.add_listener(Rc::new(move || {
+        let _keep = &capture;
+    }));
+    let first = view.subscribe_status({
+        let storage = Rc::downgrade(&storage);
+        let next_run = Rc::clone(&next_run);
+        Rc::new(move |status| {
+            if status != AnimationStatus::Completed {
+                return;
+            }
+            let storage = storage.upgrade().unwrap();
+            let mut owner = storage.borrow_mut().take().unwrap();
+            let run = owner.animate_to(0.0).unwrap();
+            next_run.replace(Some(run));
+            assert!(storage.replace(Some(owner)).is_none());
+        })
+    });
+    let second = view.subscribe_status({
+        let storage = Rc::downgrade(&storage);
+        Rc::new(move |status| {
+            if status != AnimationStatus::Completed {
+                return;
+            }
+            let storage = storage.upgrade().unwrap();
+            let outgoing = storage.borrow_mut().take();
+            drop(outgoing);
+        })
+    });
+    drop(view);
+    let publication = VsyncUpdate::prepare(|update| {
+        update.rebind(&mut value, None);
+    });
+    storage.replace(Some(value));
+    publication.publish().unwrap();
+    drop((first, second));
+    assert!(storage.borrow().is_none() && registry.is_empty() && first_run.is_complete());
+    assert!(next_run.borrow().as_ref().unwrap().is_canceled());
+    assert_eq!(
+        drops.get(),
+        1,
+        "a retired owner's resources must not remain behind a stale settlement fence"
+    );
 }
 
 fn grouped_registry_migration_commits_before_delivery() {

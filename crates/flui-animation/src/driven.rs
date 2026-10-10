@@ -25,16 +25,24 @@ pub struct DrivenController {
 
 /// Logical closure is committed before this custody invokes or retires code.
 pub(crate) struct DrivenRetirement {
+    controller: Terminal<AnimationController>,
     publication: Option<crate::controller::ValuePublication>,
     registry: Terminal<Option<Vsync>>,
 }
 
 impl DrivenRetirement {
     pub(crate) fn publish(self, recovery: &mut RecoveryScope<'_>) {
+        let registry = self.registry;
+        if registry.get().is_some() {
+            self.controller
+                .retire_with_delivery(move |scope| scope.retire(registry), recovery);
+        } else {
+            recovery.retire(registry);
+        }
         if let Some(publication) = self.publication {
             publication.publish(recovery);
         }
-        recovery.retire(self.registry);
+        recovery.retire(self.controller);
     }
 }
 
@@ -85,6 +93,7 @@ impl DrivenController {
         if matches!(self.seat, Seat::Retired) {
             return (
                 DrivenRetirement {
+                    controller: Terminal::new(self.controller.clone()),
                     publication: None,
                     registry: Terminal::new(None),
                 },
@@ -96,6 +105,7 @@ impl DrivenController {
         {
             return (
                 DrivenRetirement {
+                    controller: Terminal::new(self.controller.clone()),
                     publication: None,
                     registry: Terminal::new(None),
                 },
@@ -128,6 +138,7 @@ impl DrivenController {
         };
         (
             DrivenRetirement {
+                controller: Terminal::new(self.controller.clone()),
                 publication: Some(self.controller.prepare_clock_bound(self.is_bound())),
                 registry: Terminal::new(outgoing_registry),
             },
@@ -165,6 +176,7 @@ impl DrivenController {
             Seat::Unbound | Seat::Retired => None,
         };
         DrivenRetirement {
+            controller: Terminal::new(self.controller.clone()),
             publication: self.controller.prepare_dispose(),
             registry: Terminal::new(outgoing_registry),
         }

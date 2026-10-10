@@ -118,7 +118,10 @@ enum ControllerDelivery {
     ),
     Run(Terminal<RunDelivery>),
     Retire(RetiredSources),
+    RetireOwned(Terminal<RetirementAction>),
 }
+
+type RetirementAction = Box<dyn FnOnce(&mut RecoveryScope<'_>)>;
 
 enum TickSource {
     Repeat(RepeatRun),
@@ -1925,20 +1928,7 @@ impl AnimationController {
     ) -> bool {
         let (source, identity, warn) = {
             let mut inner = self.inner.borrow_mut();
-            if inner.disposed
-                || inner.active_run.is_none()
-                || inner.run_generation != generation
-                || match reason {
-                    SettleReason::Clock => {
-                        inner.clock_binding != ClockBinding::Missing
-                            && !inner.current_duration().is_zero()
-                    }
-                    SettleReason::ReducedMotion => {
-                        inner.behavior != crate::AnimationBehavior::Normal
-                    }
-                    SettleReason::ExhaustedClock => false,
-                }
-            {
+            if !inner.accepts_settlement(generation, &reason) {
                 return false;
             }
             let warn = inner.clock_binding == ClockBinding::Missing && !inner.missing_clock_warned;
@@ -2532,6 +2522,19 @@ impl AnimationController {
 }
 
 impl AnimationControllerInner {
+    fn accepts_settlement(&self, generation: u64, reason: &SettleReason) -> bool {
+        !self.disposed
+            && self.active_run.is_some()
+            && self.run_generation == generation
+            && match reason {
+                SettleReason::Clock => {
+                    self.clock_binding == ClockBinding::Missing || self.current_duration().is_zero()
+                }
+                SettleReason::ReducedMotion => self.behavior == crate::AnimationBehavior::Normal,
+                SettleReason::ExhaustedClock => true,
+            }
+    }
+
     fn tick_source(&self) -> TickSource {
         if let Some(run) = self.repeat {
             TickSource::Repeat(run)

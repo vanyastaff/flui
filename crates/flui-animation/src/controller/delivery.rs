@@ -2,11 +2,32 @@
 
 use super::{
     AnimationController, AnimationControllerInner, AnimationStatus, ControllerDelivery,
-    RetiredSources, RunDelivery, Terminal, ValueChange,
+    RetiredSources, RetirementAction, RunDelivery, Terminal, ValueChange,
 };
 use flui_foundation::panic::RecoveryScope;
 
 impl AnimationController {
+    /// Logical teardown has already committed. Physical custody waits for the
+    /// active value, status, continuation or waiter round to finish catching its
+    /// first failure. An idle controller owns and drains this cleanup itself.
+    pub(crate) fn retire_with_delivery(
+        &self,
+        action: impl FnOnce(&mut RecoveryScope<'_>) + 'static,
+        recovery: &mut RecoveryScope<'_>,
+    ) {
+        let action = Terminal::new(Box::new(action) as RetirementAction);
+        let mut inner = self.inner.borrow_mut();
+        inner
+            .pending_delivery
+            .push_back(ControllerDelivery::RetireOwned(action));
+        let drain = !inner.delivering;
+        inner.delivering = true;
+        drop(inner);
+        if drain {
+            self.drain_delivery(recovery);
+        }
+    }
+
     /// Commit delivery debt without invoking or retiring user code. Grouped
     /// admissions publish only after every participating owner is installed.
     pub(super) fn enqueue_delivery(
@@ -61,7 +82,8 @@ impl AnimationController {
                 if settled
                     && matches!(
                         inner.pending_delivery.front(),
-                        Some(ControllerDelivery::SettleRun(_))
+                        Some(ControllerDelivery::SettleRun(generation))
+                            if inner.accepts_settlement(*generation, &super::SettleReason::Clock)
                     )
                 {
                     inner.delivering = false;
@@ -121,6 +143,13 @@ impl AnimationController {
                     });
                 }
                 ControllerDelivery::Retire(retired) => retirement.retire(retired),
+                ControllerDelivery::RetireOwned(action) => {
+                    if retirement.has_failure() {
+                        retirement.retire(action);
+                    } else {
+                        retirement.run_with(|recovery| action.into_inner()(recovery));
+                    }
+                }
             }
         }
     }

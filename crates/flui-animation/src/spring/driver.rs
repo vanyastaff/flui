@@ -169,7 +169,7 @@ pub struct AnimatedValue<T: TwoWayConverter + 'static> {
     motion: Terminal<MotionSpec>,
     target: Terminal<Rc<T>>,
     target_vector: T::Vector,
-    visible_target: Rc<RefCell<Terminal<Rc<T>>>>,
+    visible_target: Terminal<Rc<RefCell<Terminal<Rc<T>>>>>,
     published: Rc<Cell<Sample<T::Vector>>>,
     deadline: Option<Duration>,
     reversal: Reversal<T::Vector>,
@@ -225,7 +225,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
             motion,
             target: initial,
             target_vector: vector,
-            visible_target,
+            visible_target: Terminal::new(visible_target),
             published,
             deadline: None,
             reversal: Reversal {
@@ -685,14 +685,23 @@ impl<T: TwoWayConverter + 'static> fmt::Debug for AnimatedValue<T> {
 
 impl<T: TwoWayConverter + 'static> Drop for AnimatedValue<T> {
     fn drop(&mut self) {
+        let controller = self.driven.controller().clone();
         let mut driven = self.driven.withdraw();
         let target = self.target.withdraw();
         let motion = self.motion.withdraw();
+        let visible_target = self.visible_target.withdraw();
+        let publication = driven.get_mut().prepare_dispose();
         let mut recovery = Retirement::new();
-        recovery.run(|| driven.get_mut().dispose());
-        recovery.retire(motion);
-        recovery.retire(target);
-        recovery.retire(driven);
+        controller.retire_with_delivery(
+            move |scope| {
+                scope.retire(motion);
+                scope.retire(target);
+                scope.retire(visible_target);
+                scope.retire(driven);
+            },
+            &mut recovery.scope(),
+        );
+        publication.publish(&mut recovery.scope());
         recovery.finish();
     }
 }

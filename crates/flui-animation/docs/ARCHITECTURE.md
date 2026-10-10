@@ -81,6 +81,20 @@ Callback custody remains alive through the round and retires in registration
 order under the existing first-failure policy. Vsync continues its admitted frame
 peers after a controller or child-registry failure, then resumes that failure.
 
+Owning controller and typed-value teardown closes admission before user cleanup.
+Outgoing registry, motion and exact-target custody joins this FIFO, including
+release inside a continuation or waiter whose failure has not yet returned to
+the controller. Healthy cleanup retires resources individually; a caught failure
+retains their opaque custody. The public rows
+`owner_retirement_joins_every_delivery_channel`,
+`owner_retirement_keeps_its_first_destructor_failure` and
+`reentrant_owner_retirement_joins_registry_custody` pin closure, failure priority,
+healthy tails and subsequent recovery (ADR-0178).
+
+`retired_owner_cleanup_passes_a_stale_settlement_fence` verifies that a stale
+instant-settlement request cannot defer a retired owner's cancellation and
+healthy cleanup. Only an eligible new settlement is limited to the next round.
+
 `status_delivery_contract` pins ordering, A to B to A, late subscription, published
 outcomes and subsequent frames. `status_delivery_failure_custody` covers hostile
 captures and competing payloads in a bounded child process. The current ownership

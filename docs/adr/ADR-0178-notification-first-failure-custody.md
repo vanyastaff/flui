@@ -66,6 +66,15 @@ swaps admit queued value and status notifications with committed status
 membership; reentrant swaps append so the last committed parent's status is
 the last announced status.
 
+Driven-controller and typed-value teardown withdraws the seat and closes the
+kernel before retiring outgoing ownership. Registry captures, motion and exact
+target storage join the controller's committed delivery FIFO. If teardown runs
+inside a value listener, status listener, continuation or waiter, physical
+retirement waits until that enclosing round has captured its first failure.
+Opaque custody is then retained after a failure; healthy resources retire
+individually through the same borrowed recovery. This requires no ambient
+failure flag, and cleanup metadata does not allocate on a steady-state frame.
+
 Wrapper lifetime belongs to a shared owner allocation, independently of the
 temporary storage references a notification needs. Final owner destruction
 withdraws channel membership before parent detachments and capture retirement.
@@ -137,6 +146,20 @@ delivery code passes this case; a heap-spilling recovery stack fails it.
 The public hook read, registry query, stop/replace/dispose and last-controller
 drop tests pin ticker admission and lifetime. Callback failures do not change
 already-published completion or cancellation outcomes.
+
+`owner_retirement_joins_every_delivery_channel` checks last-owner release through
+all four delivery channels, healthy destruction, exceptional target retention
+and a fresh healthy owner after recovery. `owner_retirement_keeps_its_first_destructor_failure`
+checks competing motion and target destruction. `reentrant_owner_retirement_joins_registry_custody`
+checks the outgoing registry captures when a bound owner is released by its
+controller's value listener. Reverting the corresponding production cleanup
+hunks fails the public regression rows.
+
+The once-per-round settlement fence applies only to a still-eligible run. A
+stale settlement record is consumed without deferring cancellation or owned
+retirement behind it. `retired_owner_cleanup_passes_a_stale_settlement_fence`
+checks reentrant replacement followed by owner release; restoring the
+unconditional fence leaves healthy resources retained and fails the row.
 
 Containment starts once control returns from user code. A callback or aggregate
 whose destructors double-panic before reaching containment can still abort under

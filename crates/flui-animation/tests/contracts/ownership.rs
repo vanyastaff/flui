@@ -529,6 +529,10 @@ fn an_unbound_controller_settles_every_run_kind_at_once() {
 fn driven_controller_owns_its_seat_and_run() {
     crate::run_table(&[
         (
+            "reentrant owner retirement joins registry custody",
+            reentrant_owner_retirement_joins_registry_custody,
+        ),
+        (
             "registry closure withdraws kernels before cancellation delivery",
             closing_a_registry_withdraws_kernels_before_delivery,
         ),
@@ -581,6 +585,60 @@ fn driven_controller_owns_its_seat_and_run() {
             dropping_the_last_owner_from_its_own_listener_mid_frame,
         ),
     ]);
+}
+
+fn reentrant_owner_retirement_joins_registry_custody() {
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    struct Capture(Rc<Cell<usize>>);
+    impl Drop for Capture {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+    let mut observed = Vec::new();
+    for earlier_failure in [false, true] {
+        let registry = Vsync::new();
+        let drops = Rc::new(Cell::new(0));
+        let capture = Capture(Rc::clone(&drops));
+        registry.set_frame_requester(Some(Rc::new(move || {
+            let _keep = &capture;
+        })));
+        let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
+        let controller = owner.controller().clone();
+        let run = controller.forward().unwrap();
+        let storage = Rc::new(RefCell::new(Some(owner)));
+        controller.add_listener(Rc::new(move || {
+            assert!(!earlier_failure, "earlier driven listener failure");
+        }));
+        controller.add_listener({
+            let storage = Rc::downgrade(&storage);
+            Rc::new(move || {
+                let storage = storage.upgrade().unwrap();
+                let outgoing = storage.borrow_mut().take();
+                drop(outgoing);
+            })
+        });
+        drop(registry);
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            controller.set_value(0.25);
+        }));
+        assert_eq!(outcome.is_err(), earlier_failure);
+        if let Err(payload) = outcome {
+            assert_eq!(
+                flui_foundation::panic::payload_text(&*payload),
+                Some("earlier driven listener failure")
+            );
+        }
+        assert!(storage.borrow().is_none() && run.is_canceled());
+        observed.push((earlier_failure, drops.get()));
+    }
+    assert_eq!(
+        observed,
+        [(false, 1), (true, 0)],
+        "registry captures retain the active controller delivery's first-failure custody"
+    );
 }
 
 fn closing_a_registry_withdraws_kernels_before_delivery() {
