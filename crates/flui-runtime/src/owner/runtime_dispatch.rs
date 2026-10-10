@@ -187,9 +187,6 @@ impl RuntimeWork {
                 runtime.enter(UiRuntime::fonts_changed);
             }
             Self::Runtime(_, RuntimeOperation::Background) => {
-                runtime.enter(|runtime| {
-                    runtime.drain_owner_inbox();
-                });
                 runtime.pump_background();
             }
             Self::Runtime(id, RuntimeOperation::Lifecycle(state)) => {

@@ -224,8 +224,9 @@ impl UiRuntime {
         })
     }
 
-    /// A wake that runs no frame: clear the scheduler's frame latch, then
-    /// poll the UI runtime's ready async tasks once. No begin frame, no tickers, no pipeline,
+    /// A wake that runs no frame: clear the scheduler's frame latch, drain
+    /// commands and service geometry, then poll ready async tasks once.
+    /// No begin frame, no tickers, no pipeline,
     /// no present. Hosts call it for a wake whose gate found frames disabled
     /// (the app is hidden, paused or detached), and iOS for every owner turn,
     /// which only commits commands and polls, frames enabled or not.
@@ -234,7 +235,9 @@ impl UiRuntime {
     /// none runs here; polling first would let a future that schedules a
     /// frame find the latch still set, fire no wake, and starve until
     /// unrelated input arrives. The owner performs the complete background
-    /// operation, servicing geometry between demand consumption and polling.
+    /// operation. Command application, geometry service and redraw acknowledgment
+    /// run after admission and demand consumption, before polling. Preparation
+    /// failure preserves ready tasks and retries their wake delivery.
     pub fn pump_background(&mut self) {
         let mut turn = None;
         self.enter(|ui_runtime| {
@@ -242,10 +245,11 @@ impl UiRuntime {
                 .owner_frame
                 .pump_background(|| {
                     turn = Some(ui_runtime.begin_geometry_turn());
-                    ui_runtime.service_gesture_geometry(turn.as_ref().expect("BUG: admitted preparation installed its turn"));
+                    ui_runtime.drain_owner_inbox();
                 })
                 .expect("BUG: the runtime's live frame owner must admit its background turn");
         });
+        drop(turn);
     }
 
     /// Commit the owner inbox at the Idle boundary and report whether the
