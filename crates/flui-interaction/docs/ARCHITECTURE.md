@@ -66,7 +66,7 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   reserving capacity does not remove those obligations. The public
   `gesture_lifecycle_matrix` covers held release and pointer reuse, while
   `binding_input_contract_matrix` covers capped contacts, refused tails and
-  lifecycle reset. Neither cap limits arbitrary members per admitted contact.
+  lifecycle reset. The binding's contact cap does not limit members per contact.
 - **Terminal lane retirement commits before user destruction (ADR-0127).**
   Closing withdraws executable callbacks and opaque route ownership before
   retiring them outside borrows. Healthy retirement releases resources; after
