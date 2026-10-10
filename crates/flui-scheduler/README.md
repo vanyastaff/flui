@@ -50,6 +50,21 @@ the [flui facade's README](../../README.md).
 
 ## Usage
 
+### Migrating performance-mode requests
+
+The scheduler no longer exposes `PerformanceMode`, `PerformanceModeRequestHandle`,
+`request_performance_mode`, `current_performance_mode`, `set_performance_mode`,
+`performance_mode_request_count`, or `debug_assert_no_pending_performance_mode_requests`.
+Remove their imports, requests, handle disposal and mode bookkeeping from callers.
+Persisted application configuration using the removed serde enum needs its own
+application-owned representation if it still serves an application policy.
+
+These requests counted handles and stored a label without changing scheduling,
+polling, latency or power behavior. There is no replacement scheduling hint, and
+removing the API does not claim a performance improvement. Physical presentation
+pacing remains the presentation host's responsibility; task priority continues to
+control logical execution order.
+
 ### Basic Frame Scheduling
 
 ```rust

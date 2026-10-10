@@ -59,7 +59,7 @@ use std::{
     rc::Rc,
     sync::{
         Arc, Weak,
-        atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
     },
     task::{Context, Poll, Waker},
 };
@@ -70,7 +70,7 @@ use web_time::{Duration, Instant};
 
 use crate::{
     budget::FrameBudget,
-    config::{PerformanceMode, PerformanceModeRequestHandle, TimingsCallback},
+    config::TimingsCallback,
     duration::{FrameDuration, Milliseconds},
     frame::{
         AppLifecycleState, FrameId, FramePhase, FrameTiming, OneShotFrameCallback,
@@ -824,21 +824,16 @@ struct CallbackState {
     lifecycle_listeners: RefCell<Vec<LifecycleListener>>,
 }
 
-/// Binding integration state (performance, timings, epoch)
+/// Application lifecycle and frame timing reporting state.
 struct BindingState {
     /// Application lifecycle state
     lifecycle_state: AtomicU8,
-    /// Epoch start for time dilation
     /// Timings callbacks for performance reporting
     timings_callbacks: RefCell<Vec<TimingsCallback>>,
     /// Pending frame timings awaiting report
     pending_timings: RefCell<Vec<FrameTiming>>,
     /// Last timings report time
     last_timings_report: RefCell<Instant>,
-    /// Active performance mode request count
-    performance_mode_requests: AtomicU32,
-    /// Current performance mode
-    current_performance_mode: RefCell<PerformanceMode>,
 }
 
 /// Cross-thread demand and its platform hook contain no UI callback storage.
@@ -1129,8 +1124,6 @@ impl UpdateScheduler {
                 timings_callbacks: RefCell::new(Vec::new()),
                 pending_timings: RefCell::new(Vec::new()),
                 last_timings_report: RefCell::new(Instant::now()),
-                performance_mode_requests: AtomicU32::new(0),
-                current_performance_mode: RefCell::new(PerformanceMode::Normal),
             },
             task_queue,
             owner_frame_claimed: AtomicBool::new(false),
@@ -2935,32 +2928,6 @@ impl UpdateScheduler {
         self.current_vsync_time().unwrap_or_else(Instant::now)
     }
 
-    /// Request a performance mode
-    ///
-    /// Returns a handle that releases the request when dropped.
-    pub fn request_performance_mode(&self, _mode: PerformanceMode) -> PerformanceModeRequestHandle {
-        self.inner
-            .binding
-            .performance_mode_requests
-            .fetch_add(1, Ordering::AcqRel);
-
-        // Weak, not a strong clone: this handle is an external RAII object
-        // the caller may hold arbitrarily long, unlike `Ticker`'s callback
-        // (which lives inside the scheduler's OWN transient queue and would
-        // form a cycle). A dead scheduler has nothing left to release the
-        // request from, so upgrade failure is a silent no-op.
-        let weak = self.downgrade();
-        PerformanceModeRequestHandle::new(move || {
-            if let Some(scheduler) = weak.upgrade() {
-                scheduler
-                    .inner
-                    .binding
-                    .performance_mode_requests
-                    .fetch_sub(1, Ordering::AcqRel);
-            }
-        })
-    }
-
     /// Add a timings callback for receiving frame performance reports
     pub fn add_timings_callback(&self, callback: TimingsCallback) {
         self.inner
@@ -3025,37 +2992,11 @@ impl UpdateScheduler {
             .elapsed()
     }
 
-    /// Get the current performance mode
-    ///
-    /// The mode is determined by the highest-priority active request.
-    pub fn current_performance_mode(&self) -> PerformanceMode {
-        *self.inner.binding.current_performance_mode.borrow_mut()
-    }
-
-    /// Set the current performance mode directly
-    ///
-    /// This is typically called internally when performance mode requests
-    /// change, but can also be called by the platform integration layer.
-    pub fn set_performance_mode(&self, mode: PerformanceMode) {
-        *self.inner.binding.current_performance_mode.borrow_mut() = mode;
-    }
-
     /// Debug assert: no transient callbacks are pending
     ///
     /// Returns `true` if there are no pending transient callbacks.
     pub fn debug_assert_no_transient_callbacks(&self, _reason: &str) -> bool {
         self.inner.callbacks.transient.borrow_mut().is_empty()
-    }
-
-    /// Debug assert: no pending performance mode requests
-    ///
-    /// Returns `true` if all performance mode requests have been released.
-    pub fn debug_assert_no_pending_performance_mode_requests(&self, _reason: &str) -> bool {
-        self.inner
-            .binding
-            .performance_mode_requests
-            .load(Ordering::Acquire)
-            == 0
     }
 
     // =========================================================================
@@ -3122,14 +3063,6 @@ impl UpdateScheduler {
     /// Check if there are pending idle callbacks.
     pub fn has_idle_callbacks(&self) -> bool {
         !self.inner.callbacks.idle.borrow_mut().is_empty()
-    }
-
-    /// Get the number of active performance mode requests.
-    pub fn performance_mode_request_count(&self) -> u32 {
-        self.inner
-            .binding
-            .performance_mode_requests
-            .load(Ordering::Acquire)
     }
 }
 
