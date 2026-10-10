@@ -219,7 +219,7 @@ impl FrameWalk<'_> {
             let inner = self.registry.inner.borrow();
             inner.parent.as_ref().is_some_and(|seat| {
                 seat.slot == slot
-                    && Weak::ptr_eq(&seat.owner, &Rc::downgrade(&parent.registry.inner))
+                    && std::ptr::eq(seat.owner.as_ptr(), Rc::as_ptr(&parent.registry.inner))
             })
         };
         attached && parent.is_live()
@@ -737,10 +737,10 @@ impl Vsync {
                     inner.controllers.range_mut(cursor..fence).next()
                 {
                     cursor = id + 1;
-                    // One lock instead of two: `walk_probe` reads
+                    // One borrow instead of two: `walk_probe` reads
                     // `run_generation` AND `live_running` (which folds in
                     // `disposed` — see its own doc) under a single
-                    // controller lock.
+                    // controller borrow.
                     let probe = registered.controller.walk_probe();
                     let now = tick.time(probe.behavior);
                     let exhausted = now.as_duration() == Duration::MAX;
@@ -834,8 +834,8 @@ enum RegistryWalkStep {
     Finished,
     /// The controller at this position is not running; skip it and continue.
     NotRunning,
-    /// The controller is running; tick it with the given elapsed seconds
-    /// once the registry lock guarding this step is released.
+    /// The controller is running; tick it with the given elapsed duration
+    /// once the registry borrow guarding this step is released.
     Running(AnimationController, Duration),
     Settling(AnimationController, u64, crate::controller::SettleReason),
 }

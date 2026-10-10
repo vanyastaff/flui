@@ -243,11 +243,9 @@ impl NonFiniteOutcome {
     }
 }
 
-/// Single-lock snapshot for [`Vsync`](crate::vsync::Vsync)'s per-frame walk:
-/// the run-generation counter and whether this controller currently holds
-/// the frame loop open, both read under ONE controller lock by
-/// [`AnimationController::walk_probe`]. See `docs/PERFORMANCE.md`'s Vsync
-/// section for the measured per-controller cost.
+/// Snapshot for [`Vsync`](crate::vsync::Vsync)'s per-frame walk, collected
+/// under one shared controller borrow. Run identity, playback and motion
+/// policy are inspected together before the registry chooses a sample.
 pub(crate) struct WalkProbe {
     /// The controller's [`AnimationController::run_generation`] at the time
     /// of the probe.
@@ -476,7 +474,7 @@ struct AnimationControllerInner {
     /// run-ending path (`tick_time_based`, `tick_simulation`,
     /// `stop_running`) takes it and completes or cancels it. Never touch
     /// this field with `=` — a direct assignment drops whatever value was
-    /// here before, inline, under whatever lock is held at that statement;
+    /// here before, inline, under whatever borrow is held at that statement;
     /// always go through `.replace()`/`.take()` and bind the returned
     /// `Option<RunCompleter>` so its displaced value reaches
     /// [`AnimationController::finish`] instead. `Option<T>` does not
@@ -949,7 +947,7 @@ impl AnimationController {
     /// reset always has a value to land on. Cancels the active run's
     /// [`AnimationRunFuture`] with
     /// [`RunCanceled`](crate::RunCanceled), delivered
-    /// with no controller lock held.
+    /// with no controller borrow held.
     ///
     /// # Errors
     ///
@@ -1669,10 +1667,10 @@ impl AnimationController {
         direction: AnimationDirection,
     ) -> Result<AnimationRunFuture, AnimationError> {
         // `Simulation::x` is arbitrary caller code, evaluated BEFORE taking
-        // the lock: running it under `inner`'s guard (as a `lock, evaluate,
+        // a borrow: running it under `inner`'s guard (as a `borrow, evaluate,
         // proceed` shape would) lets a caller whose `x` re-enters this same
         // controller — directly, or through anything reachable from it —
-        // deadlock on the non-reentrant `parking_lot::Mutex`. A simulation
+        // panic on a conflicting `RefCell` borrow. A simulation
         // that starts non-finite would otherwise also install a run whose
         // `is_done` may never fire — refused below, before any mutation,
         // exactly like every other non-finite entry point.
@@ -1775,7 +1773,7 @@ impl AnimationController {
         self.inner.borrow().run_generation
     }
 
-    /// One-lock snapshot for [`Vsync`](crate::vsync::Vsync)'s per-frame walk —
+    /// One-borrow snapshot for [`Vsync`](crate::vsync::Vsync)'s per-frame walk —
     /// see [`WalkProbe`]'s own doc for the perf rationale.
     ///
     /// `live_running` is `!disposed && active_run.is_some()` — **not**
@@ -1795,7 +1793,7 @@ impl AnimationController {
     ///   silently overwriting what `set_value` had just set.
     ///
     /// `active_run.is_some()` is the actual, always-consistent fact: every
-    /// run-starting method installs it in the same locked region it sets a
+    /// run-starting method installs it in the same mutable borrow it sets a
     /// running status in, and every run-ending path (`stop_running` for
     /// `stop`/`set_value`/`reset`, and `dispose`) clears it. Folding in
     /// `!disposed` this way is also what keeps a disposed-but-not-yet-
@@ -2508,7 +2506,7 @@ impl AnimationController {
         }
     }
 
-    /// Commit status, run delivery and outgoing custody before unlocking.
+    /// Commit status, run delivery and outgoing custody before releasing the borrow.
     /// The outermost finish owns the FIFO drain, including work admitted by
     /// value listeners, status listeners, continuations and destructors.
     /// Status precedes the corresponding run delivery (ADR-0064); accepted

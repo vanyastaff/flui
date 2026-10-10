@@ -55,7 +55,7 @@ The baseline was `c297b6c89bc93941e28c738c9dfac3d623a2dae2` from `origin/main`.
 Only its benchmark was changed to use the same advancing-clock workload as
 the candidate, `b241a4f54a7fc2d8b3eb07a24bc2fed417555738`. The two workload
 files were byte-identical. Baseline production code was unchanged. This
-compares against current main, which already has owner-local controllers;
+compares against that historical main, which already has owner-local controllers;
 it does not attribute the performance of the whole owner-local migration.
 
 Criterion median estimates, in microseconds:
@@ -122,6 +122,54 @@ and this shared-host experiment does not establish a fixed speedup percentage.
 The structural result is removal of redundant recovery on repeated disposal;
 these numbers do not replace the remaining admission/retarget or full-frame
 measurements.
+
+### Nested admission validation, 2026-10-10
+
+The same benchmark now places 100 or 1,000 active owners at the leaf of a
+registry chain, with depths 1, 8 and 32. The root receives each advancing
+frame. Untimed checks verify leaf progress and that runs remain active.
+This includes the live ancestor checks that prevent a callback from moving
+or muting an ancestor while the old frame continues sampling its descendants.
+
+The unchanged production baseline remains `c297b6c89bc93941e28c738c9dfac3d623a2dae2`;
+it is not the newest main. Its benchmark and the candidate's were identical
+(SHA-256 `623a1d597cb0fc812ea1495440dc956d7258d310546f0298e07fbc7ad638d62f`).
+Both used the host, profile and sampling settings above. The candidate was
+`4f3fb8ede`, followed by a local change comparing a parent's backend pointers
+directly instead of temporarily constructing a weak handle. A borrowed parent
+keeps that backend alive throughout the comparison. This comparison measures
+all intervening changes; it does not isolate the cost of one repair.
+
+Criterion time estimates in microseconds (95% intervals in parentheses):
+
+| Active owners | Depth | Historical baseline | Candidate | Direct pointer comparison |
+|---:|---:|---:|---:|---:|
+| 100 | 1 | 6.10 (6.04–6.16) | 6.73 (6.68–6.78) | 6.55 (6.52–6.57) |
+| 100 | 8 | 6.28 (6.23–6.33) | 8.39 (8.36–8.42) | 8.01 (7.96–8.05) |
+| 100 | 32 | 7.23 (7.16–7.33) | 19.39 (19.24–19.63) | 17.02 (16.86–17.18) |
+| 1,000 | 1 | 76.77 (76.21–77.24) | 89.07 (83.70–95.94) | 93.75 (92.69–95.00) |
+| 1,000 | 8 | 77.02 (76.24–77.52) | 96.48 (96.06–97.24) | 105.17 (103.70–107.61) |
+| 1,000 | 32 | 78.94 (78.00–80.05) | 150.03 (148.97–150.70) | 141.30 (140.57–141.95) |
+
+Live admission validation costs O(owners × depth). The deeper rows improved
+after removing temporary weak handles, but shallower 1,000-owner rows became
+slower in the subsequent run. CPU frequency and other activity were uncontrolled;
+these measurements do not establish a uniform speedup. The historical baseline
+also lacks the repaired stale-walk behavior, so its faster timings cannot replace
+the correctness checks.
+
+In the same sequence, retirement of 1,000 owners took 101.25 µs on the baseline,
+136.32 µs on the candidate and 135.50 µs after the pointer change; 10,000 owners
+took 1,364.8, 1,663.1 and 1,642.6 µs respectively. This is a remaining profiling
+concern. The earlier redundant-disposal optimization does not establish parity
+after subsequent failure-custody changes. Full-frame cost, admission and retarget
+latency remain separate measurements.
+
+Reproduce these workloads with:
+
+```bash
+cargo bench -p flui-animation --bench vsync_registry --locked -- --noplot 'nested_vsync_registry|running_vsync_registry/10000|stopped_vsync_registry/10000|unregister_all'
+```
 
 ## Measured benchmarks
 
