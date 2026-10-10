@@ -223,7 +223,7 @@ impl UiRuntime {
         let deadline = clock.idle_deadline(now);
         let mut frame_time = None;
         let mut geometry_turn = None;
-        self.enter(|ui_runtime| {
+        let outcome = self.enter(|ui_runtime| {
             // Begin, draw and end frame run as the ui_runtime's text-store
             // transaction, with the commit anchor after it (ADR-0027 §3).
             let presented = ui_runtime.drive_frame(
@@ -245,7 +245,10 @@ impl UiRuntime {
                 || ui_runtime.render_frame(sink),
             );
             FrameOutcome::new(presented)
-        })
+        });
+        drop(geometry_turn);
+        drop(frame_time);
+        outcome
     }
 
     /// A wake that runs no frame: clear the scheduler's frame latch, drain
