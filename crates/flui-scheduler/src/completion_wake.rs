@@ -1,5 +1,6 @@
 //! Frame-completion wake ownership, failure priority and contained reporting.
 use std::any::Any;
+use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::task::Waker;
 
@@ -23,22 +24,40 @@ pub(crate) fn retain_reported(payload: Payload, context: &'static str) {
     flui_foundation::panic::retain_opaque_payload(payload);
 }
 
-pub(crate) struct WakeBatch {
+pub(crate) struct WakeBatch<'a> {
     first: Option<Payload>,
     context: &'static str,
     preserve_failure: bool,
+    failure_signal: Option<&'a Cell<bool>>,
 }
 
-impl WakeBatch {
+impl<'a> WakeBatch<'a> {
     pub(crate) const fn new(context: &'static str, preserve_failure: bool) -> Self {
         Self {
             first: None,
             context,
             preserve_failure,
+            failure_signal: None,
+        }
+    }
+
+    pub(crate) const fn with_failure_signal(
+        context: &'static str,
+        preserve_failure: bool,
+        failure_signal: &'a Cell<bool>,
+    ) -> Self {
+        Self {
+            first: None,
+            context,
+            preserve_failure,
+            failure_signal: Some(failure_signal),
         }
     }
 
     fn failed(&mut self, payload: Payload) {
+        if let Some(signal) = self.failure_signal {
+            signal.set(true);
+        }
         report(payload.as_ref(), self.context);
         if self.first.is_none() {
             self.first = Some(payload);
@@ -47,13 +66,21 @@ impl WakeBatch {
         }
     }
 
+    pub(crate) fn into_failure(self) -> Option<Payload> {
+        self.first
+    }
+
     pub(crate) fn wake(&mut self, waker: Waker) {
         let called = catch_unwind(AssertUnwindSafe(|| waker.wake_by_ref()));
         if let Err(payload) = called {
             // Keep the owning opaque executor envelope outside the invocation.
             std::mem::forget(waker);
             self.failed(payload);
-        } else if self.preserve_failure || self.first.is_some() || std::thread::panicking() {
+        } else if self.preserve_failure
+            || self.first.is_some()
+            || self.failure_signal.is_some_and(Cell::get)
+            || std::thread::panicking()
+        {
             std::mem::forget(waker);
         } else if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(waker))) {
             self.failed(payload);

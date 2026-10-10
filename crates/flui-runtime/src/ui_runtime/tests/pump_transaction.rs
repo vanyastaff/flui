@@ -3,7 +3,7 @@
 //! returns — and `pump_background`, the frames-disabled wake.
 //!
 //! Each test drives the pump itself, never a hand-assembled
-//! `UpdateScheduler::drive_frame` around `draw_frame`, so each fails against a pump
+//! `OwnerFrame::drive_frame` around `draw_frame`, so each fails against a pump
 //! that skips or reorders the phase it names.
 
 use std::time::Duration;

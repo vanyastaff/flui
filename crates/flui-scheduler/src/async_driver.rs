@@ -532,10 +532,36 @@ impl RetiringTasks {
     /// Drop tasks then the hook, preserving the first failure. During an
     /// existing unwind retain opaque values: an outer catch cannot rescue
     /// double-panicking aggregate drop glue.
+    #[cfg(test)]
     pub(crate) fn retire(self) -> Option<RetirePanic> {
+        self.retire_impl(false, None)
+    }
+
+    pub(crate) fn retire_preserving_failure(
+        self,
+        preserve_failure: bool,
+        failure_signal: &Cell<bool>,
+    ) -> Option<RetirePanic> {
+        self.retire_impl(preserve_failure, Some(failure_signal))
+    }
+
+    fn retire_impl(
+        self,
+        preserve_failure: bool,
+        failure_signal: Option<&Cell<bool>>,
+    ) -> Option<RetirePanic> {
         let mut first: Option<RetirePanic> = None;
-        let mut keep = |result: Result<(), RetirePanic>| {
-            if let Err(payload) = result {
+        let mut retire = |value| {
+            if preserve_failure
+                || first.is_some()
+                || failure_signal.is_some_and(Cell::get)
+                || std::thread::panicking()
+            {
+                mem::forget(value);
+            } else if let Err(payload) = release_opaque(value) {
+                if let Some(signal) = failure_signal {
+                    signal.set(true);
+                }
                 if first.is_none() {
                     first = Some(payload);
                 } else {
@@ -545,12 +571,24 @@ impl RetiringTasks {
         };
         for (_, mut task) in self.tasks {
             if let Some(future) = task.future.take() {
-                keep(release_opaque(future));
+                retire(future);
             }
         }
         // Its captures die here, not with the last outstanding waker.
         if let Some(hook) = self.hook {
-            keep(release_opaque(hook));
+            // A hook has a different envelope type than a task future.
+            if preserve_failure
+                || first.is_some()
+                || failure_signal.is_some_and(Cell::get)
+                || std::thread::panicking()
+            {
+                mem::forget(hook);
+            } else if let Err(payload) = release_opaque(hook) {
+                if let Some(signal) = failure_signal {
+                    signal.set(true);
+                }
+                first = Some(payload);
+            }
         }
         first
     }
@@ -1362,10 +1400,9 @@ mod tests {
         );
     }
 
-    /// Retirement drops every remaining future once, under its own catch: a
-    /// panicking destructor neither stops its siblings' nor replaces the first
-    /// failure, and a token or driver used afterwards reaches nothing.
-    fn retirement_drops_every_task_and_keeps_the_first_panic() {
+    /// A failed destructor closes failure custody; later opaque futures are
+    /// retained rather than risking aggregate double-panic destruction.
+    fn retirement_retains_the_tail_and_keeps_the_first_panic() {
         struct Probe {
             drops: Rc<Cell<usize>>,
             panic_with: Option<&'static str>,
@@ -1402,11 +1439,15 @@ mod tests {
             first.downcast_ref::<String>().map(String::as_str),
             Some("first")
         );
-        assert_eq!(drops.get(), 4, "every capture dropped exactly once");
+        assert_eq!(
+            drops.get(),
+            2,
+            "the healthy prefix and first failing capture retire"
+        );
         assert!(tokens.iter().all(TaskToken::is_cancelled));
         assert!(frame.retire().is_none(), "retirement is idempotent");
         drop(tokens);
-        assert_eq!(drops.get(), 4);
+        assert_eq!(drops.get(), 2);
 
         let late = driver.spawn_local(Box::pin(async {}));
         assert!(late.is_cancelled(), "a retired store admits nothing");
@@ -1482,8 +1523,8 @@ mod tests {
                     cancel_propagates_the_removed_futures_panic as fn(),
                 ),
                 (
-                    "retirement_drops_every_task_and_keeps_the_first_panic",
-                    retirement_drops_every_task_and_keeps_the_first_panic as fn(),
+                    "retirement_retains_the_tail_and_keeps_the_first_panic",
+                    retirement_retains_the_tail_and_keeps_the_first_panic as fn(),
                 ),
                 (
                     "a_scheduler_has_one_live_owner_frame",

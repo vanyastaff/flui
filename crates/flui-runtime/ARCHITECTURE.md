@@ -155,8 +155,10 @@ host.
   frame time and the time `Vsync` controllers tick at, though a scheduler
   `Ticker` still reads the wall clock (see "`Vsync` controllers tick at the
   frame's timestamp" below).
-  A wake with frames disabled runs `UiRuntime::pump_background` instead: clear
-  the frame latch, then poll the async driver, no frame. Whether a wake
+  Scheduler execution runs through `OwnerFrame::drive_frame`. A wake with
+  frames disabled runs `OwnerFrame::pump_background` instead: consume old
+  demand, service runtime gesture geometry, then poll ready tasks once, no frame.
+  Whether a wake
   becomes a pump is the host's per-backend wake gate (ADR-0058), not the
   UI runtime's. Pinned by `ui_runtime/tests/pump_transaction.rs`, each test failing
   against a pump that skips or reorders the phase it names; `flui-app`'s
@@ -266,6 +268,21 @@ host.
   impl for `ManualClock`, which a trait impl cannot gate per caller.
 
 ## Mapping decisions
+
+### Rejected execution restores enclosing text and clock transactions
+
+The runtime maps owner execution refusals to an invariant failure: its live
+driver owns scheduler and frame owner together, so terminal refusal is not an
+ordinary frame that presented nothing. Timestamp and text-commit guards restore
+their enclosing values on every exit. Rejected execution never reaches the
+successful deferred-grant anchor. The internal frame helper returns only a
+presentation boolean, so no opaque pipeline output survives into grant cleanup.
+
+`rejected_nested_pump_preserves_outer_commits_and_animation_time` observes queued
+store grants, synchronous lock exclusion and animation progress after refusal.
+It uses the internal pump producer because safe public `pump(&mut self)` cannot
+express native callback recursion. Guard restoration is private implementation;
+the observations cross the text-store and animation interfaces.
 
 ### Native gesture geometry belongs to one accepted coordinate context
 

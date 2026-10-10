@@ -145,13 +145,9 @@ impl UiRuntime {
             }
         }
 
-        // The async-driver step lives in `UpdateScheduler::handle_begin_frame`'s
-        // mid-frame slot, not here: this pipeline runs in
-        // `PersistentCallbacks`, where `OwnerFrame::poll_ready` debug-asserts it
-        // must never poll (polling here could re-enter a frame-phase-only
-        // capability from inside a woken future). One mid-frame poll per
-        // frame, on the right `UpdateScheduler` instance, is enforced by the
-        // scheduler itself.
+        // OwnerFrame's complete frame operation polls async work once in
+        // the mid-frame slot, before this persistent pipeline. The pipeline
+        // cannot independently poll tasks and re-enter frame capabilities.
 
         let mut last_outcome = FramePaintOutcome::Idle;
         let mut producer = self.presentations.primary().id();
@@ -350,8 +346,9 @@ impl UiRuntime {
     /// input method's lock asked for anywhere inside it (a build, a
     /// post-frame callback, a nested platform pump) is refused (sync) or
     /// queued (async), and no platform edit lands in a tree mid-frame. The
-    /// gates reopen on every exit, a panic's unwind included. The queued
-    /// grants run only after `UpdateScheduler::drive_frame` returned, with the
+    /// gates restore their enclosing state on every exit, a panic's unwind
+    /// included. The queued
+    /// grants run only after `OwnerFrame::drive_frame` returned, with the
     /// scheduler back in `Idle`: an edit a grant makes there marks the tree
     /// dirty and schedules the next frame like any other owner-thread edit,
     /// where the same edit inside the frame would have its visual-update
@@ -359,16 +356,17 @@ impl UiRuntime {
     ///
     /// Crate-private: a host drives a frame only through [`Self::pump`],
     /// which runs its begin, draw and end frame steps inside this drive.
-    pub(crate) fn drive_frame<R>(
+    pub(crate) fn drive_frame(
         &self,
         now: Instant,
         deadline: flui_scheduler::IdleDeadline,
-        pipeline: impl FnOnce() -> R,
-    ) -> R {
+        pipeline: impl FnMut() -> bool,
+    ) -> bool {
         let commits_closed = TextCommitsClosed::close(self);
         let result = self
-            .scheduler
-            .drive_frame(&self.owner_frame, now, deadline, pipeline);
+            .owner_frame
+            .drive_frame(now, deadline, pipeline)
+            .expect("BUG: the runtime's live frame owner must admit its frame transaction");
         drop(commits_closed);
         // The commit anchor: each presentation's queued grants, against the
         // stores that queued them.
@@ -1149,28 +1147,35 @@ impl UiRuntime {
 
 /// Every presentation's text-store commits, closed for one frame drive.
 ///
-/// Dropping it reopens them — on a normal return or while a panic unwinds
+/// Dropping it restores them — on a normal return or while a panic unwinds
 /// out of the drive — and does nothing else: the queued grants run at the
-/// anchor after the drive, never from a destructor. Drives do not nest (the
-/// scheduler refuses a second begin-frame inside a frame), so there is no
-/// outer transaction to restore.
+/// anchor after the drive, never from a destructor. A rejected nested drive
+/// restores the enclosing transaction instead of reopening its commits.
 struct TextCommitsClosed<'a> {
-    ui_runtime: &'a UiRuntime,
+    previous: Vec<(&'a flui_interaction::TextInputOwner, bool)>,
 }
 
 impl<'a> TextCommitsClosed<'a> {
     fn close(ui_runtime: &'a UiRuntime) -> Self {
-        for presentation in ui_runtime.presentations.iter() {
-            presentation.text_input().set_transaction_open(true);
+        let previous: Vec<_> = ui_runtime
+            .presentations
+            .iter()
+            .map(|presentation| {
+                let input = presentation.text_input();
+                (input, input.is_transaction_open())
+            })
+            .collect();
+        for (input, _) in &previous {
+            input.set_transaction_open(true);
         }
-        Self { ui_runtime }
+        Self { previous }
     }
 }
 
 impl Drop for TextCommitsClosed<'_> {
     fn drop(&mut self) {
-        for presentation in self.ui_runtime.presentations.iter() {
-            presentation.text_input().set_transaction_open(false);
+        for (input, open) in &self.previous {
+            input.set_transaction_open(*open);
         }
     }
 }

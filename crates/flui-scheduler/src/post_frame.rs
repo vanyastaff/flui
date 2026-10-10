@@ -76,6 +76,17 @@ impl PostFrameStorage {
         *self = Self::Owned(Rc::downgrade(&lane));
         lane
     }
+
+    pub(crate) fn detach_unclaimed_for_retirement(&mut self) -> Vec<PostFrameEntry> {
+        let Self::Unclaimed(lane) = self else {
+            return Vec::new();
+        };
+        lane.closed.set(true);
+        let mut entries = lane.queue.take();
+        entries.extend(lane.active.take());
+        entries.sort_unstable_by_key(|entry| entry.id);
+        entries
+    }
 }
 
 /// The UI runtime's owner-local frame state: its post-frame queue and its async
@@ -91,9 +102,10 @@ impl PostFrameStorage {
 /// Dropping it [retires](Self::retire) whatever is still queued.
 #[doc(hidden)]
 pub struct OwnerFrame {
-    scheduler: WeakUpdateScheduler,
+    pub(crate) scheduler: WeakUpdateScheduler,
     post_frame: Rc<PostFrameQueue>,
     tasks: Rc<TaskStore>,
+    pub(crate) execution: crate::scheduler::execution::ExecutionState,
 }
 
 impl OwnerFrame {
@@ -134,6 +146,7 @@ impl OwnerFrame {
             scheduler: scheduler.downgrade(),
             post_frame: scheduler.inner_post_frame_storage().borrow_mut().claim(),
             tasks: Rc::new(tasks),
+            execution: crate::scheduler::execution::ExecutionState::default(),
         })
     }
 
@@ -197,6 +210,7 @@ impl OwnerFrame {
     /// calls it for an owner that did not.
     #[must_use = "the first destructor panic is returned for the owner to raise"]
     pub fn retire(&self) -> Option<RetirePanic> {
+        self.execution.retire();
         self.post_frame.closed.set(true);
         let mut callbacks = self.post_frame.queue.take();
         callbacks.extend(self.post_frame.active.take());
@@ -206,15 +220,20 @@ impl OwnerFrame {
         let tasks = self.tasks.detach_for_retirement();
         let mut first: Option<RetirePanic> = None;
         for entry in callbacks {
-            if std::thread::panicking() {
+            if std::thread::panicking() || self.preserving_execution_failure() || first.is_some() {
                 std::mem::forget(entry);
                 continue;
             }
             if let Err(payload) = catch_unwind(AssertUnwindSafe(move || drop(entry))) {
+                self.record_execution_failure();
                 keep_first(&mut first, payload);
             }
         }
-        if let Some(payload) = tasks.retire() {
+        if let Some(payload) = tasks.retire_preserving_failure(
+            self.preserving_execution_failure() || first.is_some(),
+            self.execution_failure_signal(),
+        ) {
+            self.record_execution_failure();
             keep_first(&mut first, payload);
         }
         first
@@ -286,11 +305,11 @@ fn keep_first(first: &mut Option<RetirePanic>, payload: RetirePanic) {
 
 impl Drop for OwnerFrame {
     fn drop(&mut self) {
-        let first = self.retire();
+        let mut first = self.retire();
         // Freed only after retirement: a destructor retirement runs cannot
         // mint a second owner while this one still holds tasks.
-        if let Some(scheduler) = self.scheduler.upgrade() {
-            scheduler.release_owner_frame();
+        if let Some(payload) = self.release_scheduler_after_retirement() {
+            keep_first(&mut first, payload);
         }
         if let Some(payload) = first {
             if std::thread::panicking() {
