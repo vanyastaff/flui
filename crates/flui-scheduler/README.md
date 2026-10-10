@@ -8,13 +8,12 @@ render pipeline or event loop.
 
 ## Features
 
-- **Frame Scheduling** - VSync coordination and frame lifecycle management
+- **Frame Scheduling** - Complete owner turns and frame lifecycle management
 - **Priority-based Task Queue** - Execute tasks in priority order (UserInput > Animation > Build > Idle)
-- **Frame Budget Management** - Enforce time limits to maintain target FPS
-- **VSync Integration** - Coordinate with display refresh to avoid tearing
+- **Frame Budget Statistics** - Measure phase durations and bound Idle-priority work
 - **Type-Safe Durations** - Newtype wrappers prevent unit confusion
 - **Type-Safe IDs** - PhantomData markers prevent ID type mixing
-- **Optional Serde Support** - Serialization for all data types
+- **Optional Serde Support** - Serialization for supported duration, priority and statistics values
 
 ## Architecture
 
@@ -72,7 +71,7 @@ use flui_scheduler::{OwnerFrame, Priority, UpdateScheduler};
 
 let scheduler = UpdateScheduler::new();
 // The owner thread's frame state (owner-local post-frame callbacks and
-// async tasks); every frame entry point takes it.
+// async tasks); complete execution belongs to this owner.
 let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
 
 // Schedule a one-time frame callback (animation tick)
@@ -310,12 +309,6 @@ The only thing that ever defers work is `OwnerFrame::drive_frame`'s own `deadlin
 parameter, and it bounds `Priority::Idle` tasks alone; `Priority::Animation`
 and `Priority::Build` always run to completion.
 
-### Zero-Cost Abstractions
-
-- Typestate pattern: No runtime overhead - states checked at compile time
-- Newtype wrappers: Zero-cost - same as raw `f64`
-- PhantomData markers: Zero-size - no memory overhead
-
 ## Feature Flags
 
 | Feature | Description |
@@ -324,11 +317,8 @@ and `Priority::Build` always run to completion.
 
 ## Platform Support
 
-| Platform | VSync Method |
-|----------|--------------|
-| Windows, macOS, Linux | Native vsync via `web-time` |
-| WebAssembly | `performance.now()` |
-| iOS/Android | Platform refresh rate |
+Hosts provide display pacing and sampled timestamps. `web-time` supplies a
+portable monotonic clock; it does not coordinate display refresh or prevent tearing.
 
 `UpdateScheduler`, its callback queues and `OwnerFrame` belong to one UI owner.
 Callbacks accept owner-local captures. Workers request frames through

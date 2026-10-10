@@ -11,7 +11,7 @@ use std::task::Poll;
 use flui_scheduler::{ExecutionError, IdleDeadline, Instant, OwnerFrame, UpdateScheduler};
 
 fn background_batches_are_bounded_with_frames_disabled() {
-    let scheduler = UpdateScheduler::new();
+    let mut scheduler = UpdateScheduler::new();
     let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
     scheduler.set_frames_enabled(false);
     let visual_calls = Rc::new(Cell::new(0));

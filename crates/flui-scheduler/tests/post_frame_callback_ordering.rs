@@ -207,9 +207,10 @@ fn retiring_owner_cancels_the_active_local_tail() {
             !ran.get(),
             "retirement cancels callbacks already snapshotted for this frame"
         );
-        owner
-            .drive_frame(Instant::now(), far_deadline(), || {}, || {})
-            .expect("live owner frame");
+        assert_eq!(
+            owner.drive_frame(Instant::now(), far_deadline(), || {}, || {}),
+            Err(flui_scheduler::ExecutionError::Retired)
+        );
         assert!(
             !ran.get(),
             "an abandoned frame cannot restore a retired local tail"
