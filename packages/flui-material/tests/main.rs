@@ -124,6 +124,10 @@ fn action_component_contracts() {
             ink_well::disabled_ink_well_does_not_fire_a_tap_callback,
         ),
         (
+            "ink_well::press highlight lasts its delay under reduced motion",
+            ink_well::press_highlight_lasts_its_delay_under_reduced_motion,
+        ),
+        (
             "ink_well::pointer and keyboard activation write the owning signal",
             ink_well::pointer_and_keyboard_activation_write_the_owning_signal,
         ),
@@ -236,10 +240,14 @@ fn text_input_contracts() {
 #[test]
 fn overlay_contracts() {
     common::run_cases(&[
+        ("snack_bar_keeps_its_display_duration_under_reduced_motion", snack_bar::snack_bar_keeps_its_display_duration_under_reduced_motion),
         ("unmounting_a_hovered_snack_bar_releases_its_timer_pause", snack_bar::unmounting_a_hovered_snack_bar_releases_its_timer_pause),
         ("snack_bar_display_timer_pauses_while_hovered", snack_bar::snack_bar_display_timer_pauses_while_hovered),
         ("drawer::drawer_settling_uses_the_captured_fling_profile", drawer::drawer_settling_uses_the_captured_fling_profile),
         ("drawer::open_drawer_settling_uses_the_captured_fling_profile", drawer::open_drawer_settling_uses_the_captured_fling_profile),
+        ("drawer::a_drawer_release_keeps_finger_speed", drawer::a_drawer_release_keeps_finger_speed),
+        ("drawer::drawer_slides_without_rebuilding_per_frame", drawer::drawer_slides_without_rebuilding_per_frame),
+        ("drawer::incoming_end_drawer_scrim_covers_the_outgoing_start_panel", drawer::incoming_end_drawer_scrim_covers_the_outgoing_start_panel),
         (
         "snack_bar::a completion panic still advances the accepted snack bar queue",
         snack_bar::a_completion_panic_still_advances_the_accepted_snack_bar_queue,

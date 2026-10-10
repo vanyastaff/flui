@@ -12,6 +12,22 @@ recorded so far.
 
 ## Mapping decisions
 
+### Replacing a display timer retires its outgoing owner
+
+The messenger installs and starts the new display owner before retiring the
+outgoing one. Retirement withdraws its registry seat, cancels its run and
+releases status captures outside state borrows. Saved controller observers
+cannot revive the retired timer or deliver its old timeout.
+
+`a_second_display_timer_retires_the_first` exercises the existing mounted
+Messenger fault seam in the completion-recovery table. It delivers a second
+entrance completion without an intervening timer cancellation, observes
+registry reentry from cancellation, capture retirement, one replacement
+timeout and unmount withdrawal. This replacement seam is private: public
+queue advancement cancels before the next entrance. The public
+`snack_bar_keeps_its_display_duration_under_reduced_motion` separately checks
+the mounted presentation's visible interval and Timeout delivery.
+
 ### SnackBar hover pauses only the addressed display timer
 
 Each mounted presenter holds a hover lease for its exact queued entry.
@@ -296,6 +312,22 @@ updates before invoking the action.
 
 ### Drawer release uses admitted gesture policy
 
+Panel translation and scrim opacity consume the controller through
+`SlideTransition` and `FadeTransition`. Value ticks update retained render
+layers; only status changes request a controller rebuild to mount or remove
+the open surface. `drawer_slides_without_rebuilding_per_frame` dispatches a
+real edge drag, observes movement and effective scrim alpha in the committed
+scene, and checks the frame build report on opening and closing frames for
+both edges. Its frames do not dirty the logical root. It also checks panel
+tap delivery and scrim dismissal.
+
+One gesture owner survives the edge strip opening into the panel. It changes
+only its child and hit extent, preserving the captured contact through rendered
+frames. `a_drawer_release_keeps_finger_speed` pumps between moves and measures
+painted position and release speed on both sides, including a viewport narrower
+than the authored panel. The common `fling_across` admission converts velocity
+using that extent (ADR-0188).
+
 Both the closed edge strip and open panel settle from the admitted signed
 horizontal component of `DragEndDetails::fling_velocity()` (ADR-0172), before
 normalizing by the actual panel width. The drawer's authored fling threshold
@@ -403,3 +435,22 @@ reopen it. Actual material geometry pins the constrained panel width.
 `retained_drawer_recomputes_its_extent_after_a_collapsed_resize` keeps a contact
 across a zero-width resize, then uses the retained handle and a new contact
 after resizing to 100 pixels.
+
+### A drawer threshold changes scaffold structure only when two slots reorder
+
+Drawer callbacks commit the handle's opened state and forward the application
+callback independently of rebuilding Scaffold. Its child order depends only
+on the end drawer's opened state when both drawer slots exist. Only a change
+to that ordering schedules a scaffold rebuild; a single drawer crossing its
+halfway threshold updates render-owned slide and scrim geometry directly.
+DrawerController's status subscription still mounts and removes its panel.
+
+`drawer_slides_without_rebuilding_per_frame` observes captured pointer moves
+and virtual settling frames through the mounted tree. It asserts no builds
+for single-drawer movement across halfway, sixteen pixels of panel movement
+per input sample and matching scrim opacity, followed by panel and scrim taps.
+`incoming_end_drawer_scrim_covers_the_outgoing_start_panel` keeps the old
+panel visibly covering a tested point while the new drawer enters. Its tap
+must reach the incoming scrim and close that drawer, without reaching the
+outgoing panel's callback. Disabling the ordering update makes that callback
+receive the tap instead.

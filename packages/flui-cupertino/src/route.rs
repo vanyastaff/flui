@@ -136,6 +136,11 @@ fn cupertino_page_transitions(
     secondary: &RouteAnimation,
     child: BoxedView,
 ) -> BoxedView {
+    if flui_sdk::widgets::MediaQuery::motion_of(ctx)
+        == Some(flui_sdk::animation::MotionPolicy::Reduce)
+    {
+        return child;
+    }
     // Whether a pop gesture is in progress: read fresh every build off the same
     // ambient `NavigatorHandle` `modal_route.rs` itself resolves the back
     // gesture detector through.

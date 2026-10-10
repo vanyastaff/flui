@@ -1,0 +1,123 @@
+# ADR-0184: Presentation clocks resolve host motion and application policy
+
+- **Status:** Accepted
+- **Date:** 2026-10-09
+- **Related:** [ADR-0172](ADR-0172-host-owned-system-preferences.md),
+  [ADR-0176](ADR-0176-presentation-animation-playback.md),
+  [ADR-0179](ADR-0179-controller-registration-ownership.md)
+
+## Decision
+
+The existing host `SystemPreferences` snapshot is the sole motion observation.
+There is no second window subscription or platform motion producer. Each UI
+runtime retains an application `MotionPreference`: FollowSystem, Reduce or Full.
+Missing host motion means NoPreference. FollowSystem resolves host Reduce to
+Reduce and positive duration scales to Full with a scaled Normal timeline.
+Application Full uses authored durations; application Reduce always reduces.
+
+Each presentation owns its `MotionClock`. The clock preserves its debug/playback
+timeline and projects a separate Normal timeline. Normal duration scales compose
+with debug playback; Preserve ignores host scales and application policy while
+still honoring debug playback. Changes rebase at the last accepted frame, without
+sampling controllers or invoking user callbacks. Time remains monotonic and
+saturates at `Duration::MAX`.
+
+An exhausted timeline cannot deliver another positive interval. Its registry
+therefore settles finite work, including later admissions, and parks infinite
+work without continuation. A parked Normal run resumes only under Full with
+time available. Preserve can resume under either policy once its selected
+timeline has time available, such as after rebinding to a fresh registry.
+This applies to the selected timeline: exhausting Normal leaves Preserve's
+independent clock available. `tiny_scale_saturates_and_completes_once` verifies
+both the original finite run and a later admission.
+
+Every `FrameTick` carries both timelines and resolved policy. The Vsync traversal
+forwards the same tick through nested registries. Under Reduce it settles Normal
+work outside the registry borrow: finite runs complete at their terminal value;
+finite repeats land at the last leg's endpoint; infinite repeats park at their
+first leg's start and retain their future. Parked work requests no continuation.
+Full resumes parked work from a fresh zero-time anchor. A reentrant replacement
+waits until the next frame. Existing retirement and first-failure custody apply
+to listeners, futures and simulation sources.
+
+Wake demand includes pending settlement and parked resumption independently of
+continuous animation demand. Unmuting, replacing a frame requester or attaching
+a child requests this work even when playback is paused. Ancestor policy reaches
+children that did not observe the changed tick while muted. Completed work and
+repeats parked under Reduce request no further frames.
+
+Rebinding a parked owner requests an initial policy sample on its destination
+registry. An unticked destination must observe its first policy before it can
+decide whether to remain parked. Once it has observed a tick, Normal under Full
+or Preserve under either policy requests a fresh anchor unless the selected
+timeline is exhausted. A shared probe query
+classifies this one-frame obligation for both registry gates and owner admission.
+
+Runtime projection commits every presentation's clock before publication or wake
+callbacks. Changed policy or scale requests a frame, including when a repeat is
+parked or playback is paused. The resolved policy is published as
+`MediaQueryData::motion`; repeated host observations do not republish it.
+Application overrides apply before runners mount their first root and seed later
+presentations in the same runtime.
+
+Controllers default to Normal, including unbounded controllers. Physical scroll
+and viewer inertia, loading indicators, snackbar display timers and press-delay
+timers explicitly use Preserve. Cupertino route composition reads the inherited
+policy and returns its static child under Reduce.
+
+## Alternatives
+
+Per-widget reduction would let a forgotten consumer keep moving and duplicate
+policy resolution. Scaling all animation time would also scale essential timers
+and physical inertia. A separate window producer would duplicate the accepted
+host preference and its delivery/recovery protocol. Presentation clocks and the
+registry traversal already own these responsibilities and their lifetime.
+
+## Compatibility and evidence
+
+`MediaQueryData` is publicly constructible. Adding `motion` breaks exhaustive
+struct literals; literals using `..Default::default()` keep working. This is an
+intentional pre-1.0 change. `AppConfig` is already non-exhaustive. Package users
+reach AnimationBehavior and MotionPolicy through the SDK's animation module;
+`tests/surface.rs` pins these actual consumer imports.
+
+`motion_policy_resolves_preference_against_the_system` covers all nine policy
+combinations. `normal_and_preserve_use_distinct_duration_timelines` covers nested
+registries and both scale directions. `reduced_motion_settles_finite_and_paused_runs_once`
+covers reverse and finite repeat endpoints, including paused clocks and runs.
+`reduced_motion_admission_wakes_a_paused_run` pins new work admitted after paused
+playback has already taken effect, through both direct and nested registries.
+`parked_repeat_resumes_from_zero_under_full` pins parking and fresh resumption.
+`rebinding_a_parked_repeat_requests_its_new_policy_sample` covers fresh and
+already-ticked destinations through direct and nested registrations.
+`preserve_repeat_resumes_after_rebinding_under_reduce` checks Preserve after
+an absent or exhausted origin, with fresh and already-ticked Reduce destinations.
+`policy_flips_mid_run` distinguishes an observed Reduce tick from a policy
+superseded before the frame. `simulation_settle_grid` checks analytic friction
+rest, the exact spring endpoint, first completed and last finite grid probes,
+and preservation of the published value when every grid probe is non-finite.
+`preserve_runs_identically_under_any_policy` compares real controllers against
+an independent Full registry across random policy, scale and playback changes.
+`normal_timeline_integrates_inverse_scale_over_any_partition` compares sampled
+controller output with an exact integer integral.
+`muted_registry_settles_on_unmute` verifies both child and ancestor gates,
+paused playback, replacement requesters, settlement and parked resumption.
+`reduced_settle_preserves_peer_delivery_and_reentrant_runs` checks competing
+callback failures and the next frame after containment.
+`reduced_settle_retires_simulation_sources_after_delivery` checks reentrant
+destruction, competing listener/destructor failures and recovery. Under
+[ADR-0127](ADR-0127-exceptional-path-retention.md), a listener failure retains
+outgoing user ownership instead of invoking a competing destructor; successful
+delivery retires the source outside borrows, after completing its run.
+`system_motion_change_reaches_media_query_and_the_clock` drives host publication,
+actual runtime frames, duplicate observations, late runtime seeds and later
+presentation overrides. Removing clock projection makes that test fail.
+`cupertino_route_does_not_slide_under_reduced_motion` checks that a pushed
+page accepts input at its final position on its first frame.
+`implicit_opacity_settles_under_reduce` observes the actual runtime's submitted
+opacity layer before and after a policy change. Material's
+`press_highlight_lasts_its_delay_under_reduced_motion` and
+`snack_bar_keeps_its_display_duration_under_reduced_motion` exercise preserved
+timers through the headless application's override, ordinary frames and input.
+`motion_lab_buttons_drive_independent_property_deadlines_and_reduce` drives the
+interactive example's exact tree and observes its committed painted geometry.

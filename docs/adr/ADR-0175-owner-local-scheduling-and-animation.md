@@ -55,6 +55,23 @@ first-failure context. An outgoing capture observes a kernel that refuses new
 runs; an earlier cancellation failure retains that opaque registry instead of
 invoking its destructors. Healthy cancellation continuations still finish.
 
+A presentation also withdraws animation authority independently of widget tree
+destruction. `Vsync::prepare_close` permanently closes the registry and attached
+descendant identities, withdraws seats and frame routes, and closes their kernels
+before returning `VsyncRetirement`. A shared descendant closes for all its
+parents; unrelated parent controllers remain live. Saved handles refuse new
+registration with `VsyncRegistrationError::Closed`, and a disposed owner cannot
+revive its kernel by rebinding. Cancellation outcomes are committed during
+preparation; their callbacks and outgoing captures are delivered afterwards.
+
+Whole-runtime close prepares every presentation before its first teardown
+callout. Addressed close prepares only that presentation. This remains required
+when exceptional close retains an opaque widget tree: retained owners must not
+keep an animation run live. Receipt publication borrows enclosing first-failure
+custody; explicit finish and drop complete accepted cancellation tails. Incoming
+unwind or a previously caught failure retains opaque captures without replacing
+the authoritative failure. Healthy close retires them normally.
+
 Rebinding commits the new seat and withdraws the old registration before clock
 transition delivery. The outgoing registry remains owned until the kernel has
 installed its new clock binding and finished settlement or frame demand. Clock
@@ -63,6 +80,14 @@ an outgoing capture cannot interrupt installation of the accepted binding.
 After a delivery failure, opaque outgoing ownership follows ADR-0178's retention
 policy. `driven_controller_owns_its_seat_and_run` covers outgoing retirement,
 competing delivery failures, healthy settlement tails and subsequent runs.
+
+An owner with several controllers stages their migrations through `VsyncUpdate`.
+All registrations commit before the first clock callout. `prepare` separates this
+commit from `VsyncPublication` delivery without exposing controller borrows;
+widgets restore temporarily extracted owner storage before publication. Explicit
+publication and drop finish the accepted delivery tail. During unwind, drop
+preserves the incoming failure. Switcher and Dismissible consume this contract;
+their lifecycle fault boundary may retire the actor after propagation.
 
 `FrameWaker` and task `Waker` remain the cross-thread capabilities. A frame waker
 holds a weak reference to wake infrastructure containing the phase, enablement,
@@ -96,6 +121,12 @@ logical closure and first-failure custody.
 The controller source matrix pins outcome delivery and registration withdrawal
 before capture retirement. Mounted implicit widgets and route transitions pin
 registry replacement and unmount through their actual lifecycle paths.
+`stopping_the_realm_mid_animation_cancels_every_run` checks mounted runtime
+shutdown, refusal by every closing kernel inside the first cancellation,
+competing cancellation failures, incoming unwind and addressed sibling progress.
+`closing_a_registry_withdraws_kernels_before_delivery`, a row of
+`driven_controller_owns_its_seat_and_run`, checks nested/shared registry closure,
+saved handles, retirement reentry, receipt drop and failure custody.
 
 This decision does not adopt the rest of ADR-0136's draft thread-boundary
 ledger, its proposed gate, parallel layout or animation mutation admission

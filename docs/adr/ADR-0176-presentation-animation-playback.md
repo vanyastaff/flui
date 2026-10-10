@@ -19,15 +19,69 @@ and admits explicit forward steps. A zero rate pauses ordinary progression.
 Controllers apply their own playback rate to elapsed animation time, preserving
 the current sample when that rate changes. There is no process-wide multiplier.
 
+A controller's velocity is measured per input animation second at the last
+accepted sample. A curved run reports the signed span times the curve derivative,
+divided by run duration and multiplied by its applied controller rate. Paused
+and stopped runs report zero. Derivative callbacks run outside state borrows;
+replacement, stopping or a nested sample invalidates the old derivative read,
+which reports zero. Source retirement retains the enclosing first failure.
+Non-finite or unrepresentable derivatives report zero; regrouping the finite
+factors preserves representable products at extreme rates and durations.
+
+Position, raw elapsed time, local elapsed time and applied controller rate
+commit together after the source returns a finite position and its sample
+identity survives. A source panic or rejected position leaves the previous
+sample authoritative. A failed completion query also leaves it intact. A pending
+rate remains deliverable on the next successful sample, while a newer rate
+requested during source evaluation remains pending for a subsequent sample.
+Reserving a sample identity before source evaluation still invalidates an outer
+sample when the same controller is ticked reentrantly.
+
+Retargeting prepares replacement motion from the last published position and
+velocity. Admission commits the new run before cancelling the displaced future.
+Curve segments correct both endpoints with Hermite terms: inherited velocity at
+the interruption and zero velocity at exact arrival. Replacement continues from
+the published frame origin, so its first frame advances without a new hold.
+
+An interruptible spring run completes at the exact target at rest, independent
+of the frame that observes completion. Its native trajectory lasts until the
+physical rest threshold, followed by a cubic Hermite transition preserving
+the incoming position and velocity. The transition lasts at most one inverse
+natural frequency; its inherited velocity displacement is capped by the
+position tolerance. Stopping at the threshold would freeze a frame-dependent
+near-target value and cut off residual velocity. Continuing the analytic tail
+after completion would require frames for a run already reported as stopped.
+The finite transition keeps completion, frame demand and published values
+consistent. This applies to interruptible motion; standalone simulation rest
+semantics remain those of the physics contract.
+
+Typed `AnimatedValue` motion shares the controller's admission, sample identity
+and delivery machinery. One owner registers all components; cloneable observers
+retain the published value without prolonging motion. Generated components stage
+outside controller borrows and commit one vector with the accepted clock. Identity
+checks between position and velocity callouts stop displaced sampling. Exact
+target representation survives settling even when its vector loses information.
+
+Implicit opacity, padding and rotation consume that observed motion directly.
+Programmatic scroll commands retarget their existing driver, synchronizing only
+external position writes. A moving position asked to stop where it currently is
+retains its incoming velocity and brakes; equality is an immediate fast path only
+at rest. Scroll and page methods use `ArcCurve`, matching the motion contract.
+
 The runtime's exact window agent port admits `MotionRequest` through the same
 owner inbox and close fence as semantics operations. The owner validates the
 whole request before changing rate or time. An invalid rate applies neither
 field and answers the existing `invalid_argument` error. Accepted state is
 replied before calling the platform wake hook.
 
-An explicit step creates demand for its presentation. A paused registry alone
-does not create ongoing animation demand. Testing's extra presentations expose
-the same clock operations and keep their own rates and origins.
+An explicit step creates host demand for its presentation, independent of the
+animation continuation bit. Each runtime pump reconciles that continuation
+against the presentation's current gates and active runs before producing a
+frame. Pausing or disabling animation withdraws only its continuation; an
+accepted step or independent widget build remains deliverable.
+A paused registry alone does not create ongoing animation demand. Testing's
+extra presentations expose the same clock operations and keep their own rates
+and origins.
 
 Run admission, playback-rate changes and registration migration request their
 first sample through the live registry seat. The controller queues this demand
@@ -67,8 +121,34 @@ request before any forced pump; removing run-admission demand fails both.
 `driven_controller_owns_its_seat_and_run` covers same-status restarts, rate pause
 and resume, nested mute, migration, competing wake/listener failures, hook
 replacement and reentrant capture retirement.
+`curved_run_velocity_is_the_curve_slope` checks the owning controller against
+independent Bézier derivatives in both directions and at different rates.
+The `retarget_seams` table covers linear endpoints, zero duration, pausing,
+discontinuous curves, invalid slopes and extreme representable products.
+`controller_sources_allow_reentry_and_preserve_run_ownership` covers derivative
+reentry, stale-read refusal, competing failures and a subsequent successful run.
+`controller_retarget_is_c0_and_c1_at_the_seam` covers rejected and panicking
+positions, a failed completion query, retained pending rates and a subsequent
+run. `controller_retarget_frame_boundaries` compares the next registered sample
+after a rejected frame with an independently driven controller whose time starts
+at the last published seam.
 `closed_presentation_animation_cannot_wake_a_surviving_window` proves that a
 saved clock cannot schedule a sibling after owner teardown.
+
+`owning_animated_value_contract` covers atomic components, owner release during
+sampling, exact-target delivery, reentrant conversion and retained deadlines.
+Owning implicit property motion admits finite components only. Non-finite initial
+optional properties are omitted; a non-finite update preserves the previous
+numeric goals and their motion. This is admission to owning motion, independent
+of ADR-0149's `Lerp` input domain. Container properties have independent owners
+under the same presentation registry and notify one inner builder through weak
+relays. Matrix targets keep ADR-0149 decomposition: replacement re-anchors the
+displayed matrix with C⁰ continuity and runs separate curve or spring progress.
+
+The mounted widget velocity rows exercise opacity, padding, alignment, container size and rotation through
+their render, layout and transform producers. Painted container alpha continuity
+is measured within its 8-bit quantization. The two mounted scroll replacement
+rows assert pixel velocity continuity, exact settlement and activity completion.
 
 The wire schema golden and additivity gate cover published protocol shapes.
 Required fields on a newly introduced response type do not change older

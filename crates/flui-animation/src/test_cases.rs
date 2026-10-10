@@ -7,7 +7,9 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 /// Exercise the production retirement seam for private raw-kernel scenarios.
 pub(crate) fn dispose_controller(controller: &crate::AnimationController) {
     let mut recovery = crate::animation::Retirement::new();
-    controller.dispose(&mut recovery.scope());
+    if let Some(publication) = controller.prepare_dispose() {
+        publication.publish(&mut recovery.scope());
+    }
     recovery.finish();
 }
 

@@ -75,6 +75,35 @@ fn width(laid: &crate::common::LaidOut) -> f64 {
     laid.size(laid.current_root()).width
 }
 
+pub(crate) fn an_active_size_run_migrates_between_registries() {
+    let old = Vsync::new();
+    let next = Vsync::new();
+    let tree = |registry, side| {
+        VsyncScope::new(
+            registry,
+            AnimatedSize::new(RUN).child(SizedBox::new(side, side)),
+        )
+    };
+    let mut laid = lay_out_animated(tree(old.clone(), 20.0), loose(200.0), old.clone());
+    laid.pump_widget(tree(old.clone(), 100.0));
+    laid.pump_for(FRAME);
+    laid.pump_for(FRAME);
+    let before = width(&laid);
+    assert!(before > 20.0 && before < 100.0);
+    assert!(old.has_running());
+
+    laid.pump_widget(tree(next.clone(), 100.0));
+    assert!(old.is_empty(), "size owner withdraws its preceding seat");
+    laid.adopt_vsync(next.clone());
+    laid.pump_for(Duration::ZERO);
+    assert!((width(&laid) - before).abs() < 1e-8);
+    laid.pump_for(FRAME);
+    assert!(width(&laid) > before && width(&laid) < 100.0);
+    assert!(next.has_running());
+    laid.pump_widget(SizedBox::shrink());
+    assert!(next.is_empty(), "unmount withdraws the active size run");
+}
+
 pub(crate) fn animated_size_interpolates_to_a_new_child_size_over_frames() {
     let vsync = Vsync::new();
     let side = Arc::new(Mutex::new(20.0));
@@ -126,4 +155,154 @@ pub(crate) fn animated_size_interpolates_to_a_new_child_size_over_frames() {
         "the run ends at the new 100px width, got {}",
         samples[4],
     );
+}
+
+pub(crate) fn animated_size_completion_writes_a_signal_after_build() {
+    use crate::common::{ProbeSignals, SignalProbe};
+    use flui_view::SignalWriteExt;
+    use std::cell::Cell;
+
+    let side = Rc::new(Cell::new(20.0));
+    let probe = {
+        let side = Rc::clone(&side);
+        SignalProbe::new(move |ProbeSignals { count, .. }| {
+            AnimatedSize::new(RUN)
+                .on_end(move |cx| count.update(cx, |value| *value += 1))
+                .child(SizedBox::square(side.get()))
+        })
+    };
+    let vsync = Vsync::new();
+    let mut app = lay_out_animated(
+        VsyncScope::new(vsync.clone(), probe.view()),
+        loose(200.0),
+        vsync,
+    );
+    assert_eq!(probe.value(), Ok(0), "mount does not complete a run");
+
+    for (target, completions) in [(100.0, 1), (40.0, 2)] {
+        side.set(target);
+        app.pump();
+        assert_eq!(probe.value(), Ok(completions - 1));
+        let ((), log) = flui_testing::log_capture::capture(|| {
+            for _ in 0..8 {
+                app.pump_for(FRAME);
+            }
+        });
+        assert_eq!(probe.value(), Ok(completions), "each run completes once");
+        assert!(
+            !log.contains("refused"),
+            "completion write was refused: {log}"
+        );
+        assert!((width(&app) - target).abs() < 1.0);
+        app.tick();
+        app.pump_for(RUN);
+        assert_eq!(probe.value(), Ok(completions), "no completion replay");
+    }
+}
+
+pub(crate) fn size_completion_keeps_owner_event_order_and_lifetime() {
+    use crate::common::{ProbeSignals, SignalProbe};
+    use flui_animation::MotionClock;
+    use flui_view::{SignalWriteExt, ViewExt};
+    use std::cell::{Cell, RefCell};
+
+    for delivery in ["ordered", "replaced", "late", "unmounted", "panicking"] {
+        let side = Rc::new(Cell::new(20.0));
+        let generation = Rc::new(Cell::new(1));
+        let mounted = Rc::new(Cell::new(true));
+        let panic_pending = Rc::new(Cell::new(delivery == "panicking"));
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let probe = {
+            let side = Rc::clone(&side);
+            let generation = Rc::clone(&generation);
+            let mounted = Rc::clone(&mounted);
+            let panic_pending = Rc::clone(&panic_pending);
+            let events = Rc::clone(&events);
+            SignalProbe::new(move |ProbeSignals { count, .. }| {
+                if !mounted.get() {
+                    return SizedBox::shrink().boxed();
+                }
+                let generation = generation.get();
+                let events = Rc::clone(&events);
+                let panic_pending = Rc::clone(&panic_pending);
+                let size = AnimatedSize::new(RUN).child(SizedBox::square(side.get()));
+                if delivery == "late" && generation == 1 {
+                    return size.boxed();
+                }
+                size.on_end(move |cx| {
+                    events.borrow_mut().push((generation, "completion"));
+                    assert!(!panic_pending.replace(false), "size completion failure");
+                    count.update(cx, |value| *value += 1)
+                })
+                .boxed()
+            })
+        };
+        let registry = Vsync::new();
+        let mut app = lay_out_animated(
+            VsyncScope::new(registry.clone(), probe.view()),
+            loose(200.0),
+            registry.clone(),
+        );
+        side.set(100.0);
+        app.pump();
+        let mut clock = MotionClock::new();
+        for millis in [20, 120] {
+            registry.tick_all(&clock.frame(Duration::from_millis(millis)));
+        }
+        assert!(!registry.has_running(), "the real resize run completed");
+        assert!(
+            events.borrow().is_empty(),
+            "effects wait for the owner frame"
+        );
+        let peer_events = Rc::clone(&events);
+        app.post_frame_handle()
+            .schedule(move |_| peer_events.borrow_mut().push((0, "peer")))
+            .expect("admit the event after completion");
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            match delivery {
+                "replaced" | "late" => generation.set(2),
+                "unmounted" => mounted.set(false),
+                _ => {}
+            }
+            app.pump();
+        }));
+        assert_eq!(result.is_err(), delivery == "panicking");
+        if let Err(payload) = result {
+            assert_eq!(
+                payload.downcast_ref::<&str>(),
+                Some(&"size completion failure")
+            );
+            assert_eq!(*events.borrow(), [(1, "completion")]);
+            app.tick();
+        }
+        let expected = if delivery == "unmounted" {
+            vec![(0, "peer")]
+        } else {
+            vec![(generation.get(), "completion"), (0, "peer")]
+        };
+        assert_eq!(*events.borrow(), expected, "delivery={delivery}");
+        if delivery == "unmounted" {
+            assert!(registry.is_empty());
+            app.pump_for(RUN);
+            assert_eq!(*events.borrow(), expected, "no removed-owner completion");
+        } else {
+            assert!((width(&app) - 100.0).abs() < 1.0);
+            let before = probe.value().expect("mounted signal");
+            side.set(40.0);
+            app.pump();
+            for millis in [140, 240] {
+                registry.tick_all(&clock.frame(Duration::from_millis(millis)));
+            }
+            app.tick();
+            assert_eq!(
+                probe.value(),
+                Ok(before + 1),
+                "next completion after recovery"
+            );
+            assert!((width(&app) - 40.0).abs() < 1.0);
+            let completed_events = events.borrow().clone();
+            app.tick();
+            assert_eq!(*events.borrow(), completed_events, "no replay");
+        }
+    }
 }

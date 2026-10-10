@@ -35,6 +35,7 @@ enum Method {
     Velocity,
     Done,
     Curve,
+    Slope,
 }
 
 struct Hook {
@@ -105,6 +106,18 @@ impl Curve for CustomCurve {
     }
 }
 
+struct CustomSlope(Rc<Hook>);
+impl Curve for CustomSlope {
+    fn transform(&self, t: f64) -> f64 {
+        t
+    }
+
+    fn slope(&self, _: f64) -> f64 {
+        self.0.run();
+        1.0
+    }
+}
+
 fn poll(future: &mut AnimationRunFuture) -> Poll<Result<(), RunCanceled>> {
     Pin::new(future).poll(&mut Context::from_waker(Waker::noop()))
 }
@@ -127,19 +140,31 @@ fn exercise(method: Method, action: Action) {
                 Rc::new(CustomCurve(hook)),
             )
             .expect("curved run")
+    } else if matches!(method, Method::Slope) {
+        controller
+            .animate_to_curved(1.0, Some(Duration::from_secs(1)), CustomSlope(hook))
+            .expect("curved run with a slope hook")
     } else {
         controller
             .animate_with(CustomSimulation { hook, method })
             .expect("simulation run")
     };
-    if matches!(method, Method::Velocity) {
-        assert_eq!(controller.velocity(), 1.0);
+    if matches!(method, Method::Velocity | Method::Slope) {
+        assert_eq!(
+            controller.velocity(),
+            if matches!(action, Action::Read) {
+                1.0
+            } else {
+                0.0
+            },
+            "a derivative cannot publish a sample invalidated by user code"
+        );
     } else {
         controller.tick_at(std::time::Duration::from_secs_f64(0.25));
     }
     match action {
         Action::Read => {
-            if !matches!(method, Method::Velocity) {
+            if !matches!(method, Method::Velocity | Method::Slope) {
                 assert_eq!(controller.value(), 0.25);
             }
             controller.tick_at(std::time::Duration::from_secs_f64(1.0));
@@ -186,6 +211,27 @@ fn position_may_read() {
 }
 fn velocity_may_read() {
     exercise(Method::Velocity, Action::Read);
+}
+fn velocity_may_replace() {
+    exercise(Method::Velocity, Action::Replace);
+}
+fn velocity_may_stop() {
+    exercise(Method::Velocity, Action::Stop);
+}
+fn nested_velocity_tick_wins() {
+    exercise(Method::Velocity, Action::Nested);
+}
+fn slope_may_read() {
+    exercise(Method::Slope, Action::Read);
+}
+fn slope_may_replace() {
+    exercise(Method::Slope, Action::Replace);
+}
+fn slope_may_stop() {
+    exercise(Method::Slope, Action::Stop);
+}
+fn nested_slope_tick_wins() {
+    exercise(Method::Slope, Action::Nested);
 }
 fn completion_may_read() {
     exercise(Method::Done, Action::Read);
@@ -294,6 +340,103 @@ struct HostileSimulation {
     _second: Bomb,
     initial: bool,
 }
+
+struct HostileSlope {
+    hook: Rc<Hook>,
+    _first: Bomb,
+    _second: Bomb,
+}
+
+impl Curve for HostileSlope {
+    fn transform(&self, t: f64) -> f64 {
+        t
+    }
+
+    fn slope(&self, _: f64) -> f64 {
+        self.hook.run();
+        1.0
+    }
+}
+
+fn slope_failure_keeps_custody(status_fails: bool, retarget: bool) {
+    let mut owner =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = owner.controller().clone();
+    let drops = Rc::new(AtomicUsize::new(0));
+    let mut original = controller
+        .animate_to_curved(
+            1.0,
+            Some(Duration::from_secs(1)),
+            HostileSlope {
+                hook: Rc::new(Hook {
+                    controller: controller.clone(),
+                    action: Action::PanicAfterStop,
+                    armed: AtomicBool::new(true),
+                    replacement: Rc::new(Mutex::new(None)),
+                }),
+                _first: Bomb(drops.clone()),
+                _second: Bomb(drops.clone()),
+            },
+        )
+        .expect("live curve");
+    let callback = status_fails
+        .then(|| controller.subscribe_status(Rc::new(|_| panic!("authoritative status failure"))));
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if retarget {
+            let _run = controller
+                .retarget(
+                    0.8,
+                    &flui_animation::MotionSpec::Curve {
+                        duration: Duration::from_secs(1),
+                        curve: flui_animation::ArcCurve::new(flui_animation::Curves::Linear),
+                    },
+                )
+                .expect("motion admission");
+        } else {
+            let _velocity = controller.velocity();
+        }
+    }))
+    .expect_err("derivative hook fails");
+    assert_eq!(
+        failure.downcast_ref::<&str>().copied(),
+        Some(if status_fails {
+            "authoritative status failure"
+        } else {
+            "authoritative sample failure"
+        })
+    );
+    std::mem::forget(failure);
+    assert_eq!(
+        drops.load(Ordering::SeqCst),
+        0,
+        "failed source stays in custody"
+    );
+    assert!(matches!(poll(&mut original), Poll::Ready(Err(_))));
+    if let Some(callback) = callback {
+        drop(callback);
+    }
+    let mut next = controller.forward().expect("recovery run");
+    controller.tick_at(Duration::from_secs(1));
+    assert_eq!(controller.value(), 1.0);
+    assert_eq!(poll(&mut next), Poll::Ready(Ok(())));
+    owner.dispose();
+}
+
+fn slope_failure_retains_hostile_source() {
+    slope_failure_keeps_custody(false, false);
+}
+
+fn slope_cancellation_failure_retains_hostile_source() {
+    slope_failure_keeps_custody(true, false);
+}
+
+fn retarget_failure_retains_hostile_source() {
+    slope_failure_keeps_custody(false, true);
+}
+
+fn retarget_cancellation_failure_retains_hostile_source() {
+    slope_failure_keeps_custody(true, true);
+}
 impl Simulation for HostileSimulation {
     fn x(&self, time: f64) -> f64 {
         assert!(!self.initial, "authoritative initial sample failure");
@@ -398,18 +541,20 @@ fn callback_retirement_may_reenter() {
         controller: controller.clone(),
         drops: drops.clone(),
     };
-    let id = controller.add_status_listener(std::rc::Rc::new(move |_| {
+    let id = controller.subscribe_status(std::rc::Rc::new(move |_| {
         let _owned = &probe;
     }));
-    controller.remove_status_listener(id);
+    drop(id);
     assert_eq!(drops.load(Ordering::SeqCst), 1);
     let probe = SourceDrop {
         controller: controller.clone(),
         drops: drops.clone(),
     };
-    controller.add_status_listener(std::rc::Rc::new(move |_| {
-        let _owned = &probe;
-    }));
+    controller
+        .subscribe_status(std::rc::Rc::new(move |_| {
+            let _owned = &probe;
+        }))
+        .detach();
     lifecycle.dispose();
     assert_eq!(drops.load(Ordering::SeqCst), 2);
 }
@@ -432,17 +577,16 @@ fn status_failure_retains_retired_source_and_callback() {
     let mut original = controller.animate_with(source).expect("source installed");
     let callback_id = Rc::new(Mutex::new(None));
     let callback_id_read = callback_id.clone();
-    let callback_controller = controller.clone();
     let first = Bomb(drops.clone());
     let second = Bomb(drops.clone());
-    let id = controller.add_status_listener(std::rc::Rc::new(move |_| {
+    let id = controller.subscribe_status(std::rc::Rc::new(move |_| {
         let _opaque = (&first, &second);
         let id = callback_id_read
             .lock()
             .expect("callback id")
             .take()
             .expect("registered id");
-        callback_controller.remove_status_listener(id);
+        drop(id);
         panic!("authoritative status failure");
     }));
     *callback_id.lock().expect("install callback id") = Some(id);
@@ -528,9 +672,11 @@ fn retirement_failure_retains_later_callback_envelope() {
     let drops = Rc::new(AtomicUsize::new(0));
     let first = Bomb(drops.clone());
     let second = Bomb(drops.clone());
-    controller.add_status_listener(std::rc::Rc::new(move |_| {
-        let _opaque = (&first, &second);
-    }));
+    controller
+        .subscribe_status(std::rc::Rc::new(move |_| {
+            let _opaque = (&first, &second);
+        }))
+        .detach();
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| owner.dispose()));
     let payload = outcome.expect_err("source retirement fails");
     assert_eq!(
@@ -595,22 +741,30 @@ fn terminal_fixture(
     match kind {
         TerminalOwner::Controller => {
             let controller = AnimationController::builder(Duration::from_secs(1)).build();
-            controller.add_status_listener(std::rc::Rc::new(move |_| {
-                let _capture = &first;
-            }));
-            controller.add_status_listener(std::rc::Rc::new(move |_| {
-                let _capture = &second;
-            }));
+            controller
+                .subscribe_status(std::rc::Rc::new(move |_| {
+                    let _capture = &first;
+                }))
+                .detach();
+            controller
+                .subscribe_status(std::rc::Rc::new(move |_| {
+                    let _capture = &second;
+                }))
+                .detach();
             Box::new(controller)
         }
         TerminalOwner::Proxy => {
             let proxy = ProxyAnimation::new(std::rc::Rc::new(ConstantAnimation::completed(0.5)));
-            proxy.add_status_listener(std::rc::Rc::new(move |_| {
-                let _capture = &first;
-            }));
-            proxy.add_status_listener(std::rc::Rc::new(move |_| {
-                let _capture = &second;
-            }));
+            proxy
+                .subscribe_status(std::rc::Rc::new(move |_| {
+                    let _capture = &first;
+                }))
+                .detach();
+            proxy
+                .subscribe_status(std::rc::Rc::new(move |_| {
+                    let _capture = &second;
+                }))
+                .detach();
             Box::new(proxy)
         }
         TerminalOwner::Curved => Box::new(
@@ -625,12 +779,16 @@ fn terminal_fixture(
                 std::rc::Rc::new(ConstantAnimation::completed(0.75)),
                 Some(std::rc::Rc::new(ConstantAnimation::completed(0.25))),
             );
-            switch.add_status_listener(std::rc::Rc::new(move |_| {
-                let _capture = &first;
-            }));
-            switch.add_status_listener(std::rc::Rc::new(move |_| {
-                let _capture = &second;
-            }));
+            switch
+                .subscribe_status(std::rc::Rc::new(move |_| {
+                    let _capture = &first;
+                }))
+                .detach();
+            switch
+                .subscribe_status(std::rc::Rc::new(move |_| {
+                    let _capture = &second;
+                }))
+                .detach();
             Box::new(switch)
         }
     }
@@ -717,9 +875,11 @@ fn shared_terminal_owners_keep_independent_aliases_live() {
         drops: drops.clone(),
         panics: false,
     };
-    controller.add_status_listener(std::rc::Rc::new(move |_| {
-        let _capture = &probe;
-    }));
+    controller
+        .subscribe_status(std::rc::Rc::new(move |_| {
+            let _capture = &probe;
+        }))
+        .detach();
     drop(controller);
     assert!(drops.lock().expect("alias observations").is_empty());
     alias.forward().expect("surviving controller");
@@ -736,9 +896,11 @@ fn shared_terminal_owners_keep_independent_aliases_live() {
     let alias = proxy.clone();
     let observed = Rc::new(AtomicUsize::new(0));
     let callback_observed = observed.clone();
-    alias.add_status_listener(std::rc::Rc::new(move |_| {
-        callback_observed.fetch_add(1, Ordering::SeqCst);
-    }));
+    alias
+        .subscribe_status(std::rc::Rc::new(move |_| {
+            callback_observed.fetch_add(1, Ordering::SeqCst);
+        }))
+        .detach();
     drop(proxy);
     let _run = parent.forward().expect("parent run");
     assert_eq!(observed.load(Ordering::SeqCst), 1);
@@ -762,9 +924,10 @@ fn driven_terminal_cancels_before_retiring_callback() {
     let driven = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
     driven
         .controller()
-        .add_status_listener(std::rc::Rc::new(move |_| {
+        .subscribe_status(std::rc::Rc::new(move |_| {
             let _capture = &probe;
-        }));
+        }))
+        .detach();
     let observer = driven.controller().clone();
     let run = observer.forward().expect("live driven run");
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(driven)))
@@ -793,9 +956,10 @@ fn driven_terminal_cancels_before_retiring_callback() {
     let driven = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
     driven
         .controller()
-        .add_status_listener(std::rc::Rc::new(move |_| {
+        .subscribe_status(std::rc::Rc::new(move |_| {
             let _capture = &probe;
-        }));
+        }))
+        .detach();
     let run = driven.controller().forward().expect("live driven run");
     run.when_complete_or_cancel(|outcome| {
         assert!(outcome.is_err());
@@ -848,6 +1012,23 @@ fn driven_terminal_cancels_before_retiring_callback() {
 }
 
 struct TerminalParent {
+    state: Rc<TerminalParentState>,
+}
+
+impl std::ops::Deref for TerminalParent {
+    type Target = TerminalParentState;
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
+}
+
+impl std::ops::DerefMut for TerminalParent {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        Rc::get_mut(&mut self.state).expect("configure parent before subscription")
+    }
+}
+
+struct TerminalParentState {
     values: Mutex<Vec<(ListenerId, ListenerCallback)>>,
     statuses: Mutex<Vec<(ListenerId, StatusCallback)>>,
     removed: Rc<Mutex<Vec<&'static str>>>,
@@ -865,7 +1046,7 @@ impl std::fmt::Debug for TerminalParent {
         f.debug_struct("TerminalParent").finish_non_exhaustive()
     }
 }
-impl TerminalParent {
+impl TerminalParentState {
     fn register(&self) {
         let index = self.registrations.fetch_add(1, Ordering::SeqCst) + 1;
         assert!(
@@ -910,6 +1091,26 @@ impl Listenable for TerminalParent {
     }
 }
 impl Animation<f64> for TerminalParent {
+    fn subscribe_status(&self, callback: StatusCallback) -> flui_animation::StatusSubscription {
+        self.register();
+        let id = {
+            let mut statuses = self.statuses.lock().expect("parent statuses");
+            let id = ListenerId::new(statuses.len() + 1);
+            statuses.push((id, callback));
+            id
+        };
+        flui_animation::StatusSubscription::new(&self.state, id, |source, id, recovery| {
+            let removed = {
+                let mut statuses = source.statuses.lock().expect("parent statuses");
+                statuses
+                    .iter()
+                    .position(|(candidate, _)| *candidate == id)
+                    .map(|i| statuses.remove(i))
+            };
+            recovery.run(|| source.removed("status removal"));
+            removed
+        })
+    }
     fn value(&self) -> f64 {
         assert!(!self.fail_value, "parent value failure");
         self.sample
@@ -921,38 +1122,22 @@ impl Animation<f64> for TerminalParent {
         );
         AnimationStatus::Completed
     }
-    fn add_status_listener(&self, callback: StatusCallback) -> ListenerId {
-        self.register();
-        let mut statuses = self.statuses.lock().expect("parent statuses");
-        let id = ListenerId::new(statuses.len() + 1);
-        statuses.push((id, callback));
-        id
-    }
-    fn remove_status_listener(&self, id: ListenerId) {
-        let removed = {
-            let mut statuses = self.statuses.lock().expect("parent statuses");
-            statuses
-                .iter()
-                .position(|(candidate, _)| *candidate == id)
-                .map(|i| statuses.remove(i))
-        };
-        drop(removed);
-        self.removed("status removal");
-    }
 }
 fn terminal_parent(fail_removal: bool) -> std::rc::Rc<TerminalParent> {
     std::rc::Rc::new(TerminalParent {
-        values: Mutex::new(Vec::new()),
-        statuses: Mutex::new(Vec::new()),
-        removed: Rc::new(Mutex::new(Vec::new())),
-        fail_removal,
-        registrations: AtomicUsize::new(0),
-        fail_registration_at: 0,
-        fail_value: false,
-        sample: 0.5,
-        fail_status: AtomicBool::new(false),
-        probe: None,
-        reenter: Mutex::new(None),
+        state: Rc::new(TerminalParentState {
+            values: Mutex::new(Vec::new()),
+            statuses: Mutex::new(Vec::new()),
+            removed: Rc::new(Mutex::new(Vec::new())),
+            fail_removal,
+            registrations: AtomicUsize::new(0),
+            fail_registration_at: 0,
+            fail_value: false,
+            sample: 0.5,
+            fail_status: AtomicBool::new(false),
+            probe: None,
+            reenter: Mutex::new(None),
+        }),
     })
 }
 fn parent_subscriptions_detach_all_after_failure() {
@@ -1480,7 +1665,30 @@ fn controller_sources_allow_reentry_and_preserve_run_ownership() {
             retirement_failure_retains_later_callback_envelope,
         ),
         ("position may read", position_may_read),
+        (
+            "retarget failure retains hostile source",
+            retarget_failure_retains_hostile_source,
+        ),
+        (
+            "retarget cancellation failure retains hostile source",
+            retarget_cancellation_failure_retains_hostile_source,
+        ),
         ("velocity may read", velocity_may_read),
+        ("velocity may replace", velocity_may_replace),
+        ("velocity may stop", velocity_may_stop),
+        ("nested velocity tick wins", nested_velocity_tick_wins),
+        ("slope may read", slope_may_read),
+        ("slope may replace", slope_may_replace),
+        ("slope may stop", slope_may_stop),
+        ("nested slope tick wins", nested_slope_tick_wins),
+        (
+            "slope failure retains hostile source",
+            slope_failure_retains_hostile_source,
+        ),
+        (
+            "slope cancellation failure retains hostile source",
+            slope_cancellation_failure_retains_hostile_source,
+        ),
         ("completion may read", completion_may_read),
         ("completion may replace", completion_may_replace),
         ("completion may stop", completion_may_stop),

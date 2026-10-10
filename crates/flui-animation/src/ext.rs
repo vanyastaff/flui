@@ -20,16 +20,16 @@ use std::rc::Rc;
 /// let animation = FloatTween::new(0.0, 100.0).animate(controller as Rc<dyn Animation<f64>>);
 /// assert_eq!(animation.value(), 0.0);
 /// ```
-pub trait AnimatableExt<T>: Animatable<T> + Sized {
+pub trait AnimatableExt: Animatable + Sized {
     /// Creates a [`TweenAnimation`] that reads this animatable at the
     /// parent's value.
-    fn animate(self, parent: Rc<dyn Animation<f64>>) -> TweenAnimation<T, Self>
+    fn animate(self, parent: Rc<dyn Animation<f64>>) -> TweenAnimation<Self>
     where
         Self: fmt::Debug + Clone + 'static,
-        T: Clone + fmt::Debug + 'static,
+        Self::Value: Clone + fmt::Debug + 'static,
     {
         TweenAnimation::new(self, parent)
     }
 }
 
-impl<T, A: Animatable<T>> AnimatableExt<T> for A {}
+impl<A: Animatable> AnimatableExt for A {}

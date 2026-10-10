@@ -73,6 +73,7 @@ pub struct AnimationControllerBuilder {
     bounds: Option<ValueRange>,
     reverse_duration: Option<Duration>,
     initial_value: Option<f64>,
+    behavior: crate::AnimationBehavior,
 }
 
 impl AnimationControllerBuilder {
@@ -84,6 +85,7 @@ impl AnimationControllerBuilder {
             bounds: Some(ValueRange::UNIT),
             reverse_duration: None,
             initial_value: None,
+            behavior: crate::AnimationBehavior::Normal,
         }
     }
 
@@ -116,11 +118,22 @@ impl AnimationControllerBuilder {
         self
     }
 
+    /// Choose whether system motion policy applies to this controller.
+    #[must_use]
+    pub fn behavior(mut self, behavior: crate::AnimationBehavior) -> Self {
+        self.behavior = behavior;
+        self
+    }
+
     /// Build a controller sampled explicitly through `tick_at(Duration)`.
     #[must_use]
     pub fn build(self) -> AnimationController {
-        let controller =
-            AnimationController::from_config(self.duration, self.bounds, self.initial_value);
+        let controller = AnimationController::from_config(
+            self.duration,
+            self.bounds,
+            self.initial_value,
+            self.behavior,
+        );
         if let Some(duration) = self.reverse_duration {
             controller.set_reverse_duration(duration);
         }

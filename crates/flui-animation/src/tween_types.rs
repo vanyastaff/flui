@@ -23,9 +23,15 @@ use flui_painting::Alignment;
 use flui_painting::styling::{BorderRadius, Color};
 
 /// A value that can be animated.
-pub trait Animatable<T> {
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` cannot be animated",
+    label = "implement `Animatable` or use a `Tween<T>`"
+)]
+pub trait Animatable {
+    /// The value produced by this mapping.
+    type Value;
     /// Returns the value of this object at the given animation value.
-    fn transform(&self, t: f64) -> T;
+    fn transform(&self, t: f64) -> Self::Value;
 }
 
 /// A tween that linearly interpolates between a `begin` and `end` value of any
@@ -52,7 +58,8 @@ impl<V> Tween<V> {
     }
 }
 
-impl<V: Lerp> Animatable<V> for Tween<V> {
+impl<V: Lerp> Animatable for Tween<V> {
+    type Value = V;
     fn transform(&self, t: f64) -> V {
         if t == 0.0 {
             return self.begin.clone();
@@ -103,7 +110,8 @@ impl IntTween {
     }
 }
 
-impl Animatable<i32> for IntTween {
+impl Animatable for IntTween {
+    type Value = i32;
     #[expect(
         clippy::cast_possible_truncation,
         reason = "rounded f64 to i32; the cast saturates"
@@ -137,7 +145,8 @@ impl StepTween {
     }
 }
 
-impl Animatable<i32> for StepTween {
+impl Animatable for StepTween {
+    type Value = i32;
     #[expect(
         clippy::cast_possible_truncation,
         reason = "floored f64 to i32; the cast saturates"
@@ -167,7 +176,8 @@ impl<T: Clone> ConstantTween<T> {
     }
 }
 
-impl<T: Clone> Animatable<T> for ConstantTween<T> {
+impl<T: Clone> Animatable for ConstantTween<T> {
+    type Value = T;
     fn transform(&self, _t: f64) -> T {
         self.value.clone()
     }
@@ -178,25 +188,22 @@ impl<T: Clone> Animatable<T> for ConstantTween<T> {
 /// The reversed tween starts at the end value and goes to the begin value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct ReverseTween<T, A: Animatable<T>> {
+pub struct ReverseTween<A: Animatable> {
     /// The tween to reverse.
     pub tween: A,
-    _phantom: std::marker::PhantomData<T>,
 }
 
-impl<T, A: Animatable<T>> ReverseTween<T, A> {
+impl<A: Animatable> ReverseTween<A> {
     /// Creates a new reversed tween.
     #[must_use]
     pub fn new(tween: A) -> Self {
-        Self {
-            tween,
-            _phantom: std::marker::PhantomData,
-        }
+        Self { tween }
     }
 }
 
-impl<T, A: Animatable<T>> Animatable<T> for ReverseTween<T, A> {
-    fn transform(&self, t: f64) -> T {
+impl<A: Animatable> Animatable for ReverseTween<A> {
+    type Value = A::Value;
+    fn transform(&self, t: f64) -> Self::Value {
         self.tween.transform(1.0 - t)
     }
 }
@@ -274,7 +281,8 @@ impl<C: Curve> CurveTween<C> {
     }
 }
 
-impl<C: Curve> Animatable<f64> for CurveTween<C> {
+impl<C: Curve> Animatable for CurveTween<C> {
+    type Value = f64;
     #[inline]
     fn transform(&self, t: f64) -> f64 {
         self.curve.transform(t.clamp(0.0, 1.0))
@@ -324,13 +332,14 @@ impl<A, B> ChainedTween<A, B> {
     }
 }
 
-impl<T, A, B> Animatable<T> for ChainedTween<A, B>
+impl<A, B> Animatable for ChainedTween<A, B>
 where
-    A: Animatable<f64>,
-    B: Animatable<T>,
+    A: Animatable<Value = f64>,
+    B: Animatable,
 {
+    type Value = B::Value;
     #[inline]
-    fn transform(&self, t: f64) -> T {
+    fn transform(&self, t: f64) -> Self::Value {
         let curved_t = self.first.transform(t);
         self.second.transform(curved_t)
     }

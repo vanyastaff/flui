@@ -3,9 +3,7 @@
 //! first panic afterwards, and a hop or a parent swap announces exactly the
 //! status of the animation now in charge.
 //!
-//! Rows that hold today run in the tables. A row whose behaviour is not there
-//! yet is its own `#[ignore = "contract: …"]` test, so `--run-ignored` shows
-//! it failing on the assertion that names the behaviour.
+//! The delivery and recovery rows run in the ordinary suite.
 
 use std::any::Any;
 use std::future::Future;
@@ -18,9 +16,23 @@ use std::time::Duration;
 use crate::child_process;
 use flui_animation::{
     Animation, AnimationController, AnimationStatus, AnimationSwitch, ConstantAnimation,
-    DrivenController, ProxyAnimation, StatusCallback, Vsync, curve::Curve,
+    DrivenController, ProxyAnimation, StatusCallback, StatusSubscription, Vsync, curve::Curve,
 };
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
+
+enum Subscription {
+    Value(ListenerId),
+    Status(StatusSubscription),
+}
+
+impl Subscription {
+    fn remove(self, source: &dyn Animation<f64>) {
+        match self {
+            Self::Value(id) => source.remove_listener(id),
+            Self::Status(subscription) => drop(subscription),
+        }
+    }
+}
 
 use AnimationStatus::{Completed, Dismissed, Forward, Reverse};
 
@@ -96,11 +108,13 @@ fn running(registry: &Vsync, panic: Option<&'static str>) -> DrivenController {
 
 fn panicking_status_listener_does_not_starve_later_listeners() {
     let controller = controller();
-    controller.add_status_listener(std::rc::Rc::new(|_| panic_any("status listener")));
+    controller
+        .subscribe_status(std::rc::Rc::new(|_| panic_any("status listener")))
+        .detach();
     let (second, listener) = recorder();
-    controller.add_status_listener(listener);
+    controller.subscribe_status(listener).detach();
     let (third, listener) = recorder();
-    controller.add_status_listener(listener);
+    controller.subscribe_status(listener).detach();
 
     let started = catch_unwind(AssertUnwindSafe(|| controller.forward()));
 
@@ -127,10 +141,14 @@ fn panicking_status_listener_does_not_starve_later_listeners() {
 
 fn competing_status_listener_panics_re_raise_the_first() {
     let controller = controller();
-    controller.add_status_listener(std::rc::Rc::new(|_| panic_any("first")));
-    controller.add_status_listener(std::rc::Rc::new(|_| panic_any("second")));
+    controller
+        .subscribe_status(std::rc::Rc::new(|_| panic_any("first")))
+        .detach();
+    controller
+        .subscribe_status(std::rc::Rc::new(|_| panic_any("second")))
+        .detach();
     let (last, listener) = recorder();
-    controller.add_status_listener(listener);
+    controller.subscribe_status(listener).detach();
 
     let started = catch_unwind(AssertUnwindSafe(|| controller.forward()));
 
@@ -232,12 +250,14 @@ fn panicking_status_listener_leaves_the_next_frame_ticking() {
     let controller = controller();
     let (log, record) = recorder();
     let armed = AtomicBool::new(true);
-    controller.add_status_listener(std::rc::Rc::new(move |status| {
-        if armed.swap(false, Ordering::SeqCst) {
-            panic_any("first status");
-        }
-        record(status);
-    }));
+    controller
+        .subscribe_status(std::rc::Rc::new(move |status| {
+            if armed.swap(false, Ordering::SeqCst) {
+                panic_any("first status");
+            }
+            record(status);
+        }))
+        .detach();
 
     let _ = catch_unwind(AssertUnwindSafe(|| controller.forward()));
     controller.tick_at(std::time::Duration::from_secs_f64(0.5));
@@ -343,18 +363,17 @@ fn vsync_walk_after_a_panic_ticks_every_controller() {
 
 fn status_listener_removed_by_an_earlier_listener_is_skipped() {
     let controller = controller();
-    let target: std::rc::Rc<Mutex<Option<(AnimationController, ListenerId)>>> =
-        std::rc::Rc::default();
+    let target: std::rc::Rc<Mutex<Option<StatusSubscription>>> = std::rc::Rc::default();
     let pending = std::rc::Rc::clone(&target);
-    controller.add_status_listener(std::rc::Rc::new(move |_| {
-        let removal = pending.lock().expect("removal slot").take();
-        if let Some((controller, id)) = removal {
-            controller.remove_status_listener(id);
-        }
-    }));
+    controller
+        .subscribe_status(std::rc::Rc::new(move |_| {
+            let removal = pending.lock().expect("removal slot").take();
+            drop(removal);
+        }))
+        .detach();
     let (removed, listener) = recorder();
-    let id = controller.add_status_listener(listener);
-    *target.lock().expect("removal slot") = Some((controller.clone(), id));
+    let id = controller.subscribe_status(listener);
+    *target.lock().expect("removal slot") = Some(id);
 
     let _run = controller.forward().expect("run starts");
 
@@ -371,14 +390,16 @@ fn controller_disposed_mid_fan_out_calls_no_further_listener() {
     let controller = owner.controller().clone();
     let slot: std::rc::Rc<Mutex<Option<DrivenController>>> = std::rc::Rc::default();
     let pending = std::rc::Rc::clone(&slot);
-    controller.add_status_listener(std::rc::Rc::new(move |_| {
-        let owner = pending.lock().expect("dispose slot").take();
-        if let Some(mut owner) = owner {
-            owner.dispose();
-        }
-    }));
+    controller
+        .subscribe_status(std::rc::Rc::new(move |_| {
+            let owner = pending.lock().expect("dispose slot").take();
+            if let Some(mut owner) = owner {
+                owner.dispose();
+            }
+        }))
+        .detach();
     let (later, listener) = recorder();
-    controller.add_status_listener(listener);
+    controller.subscribe_status(listener).detach();
     *slot.lock().expect("dispose slot") = Some(owner);
 
     let _run = controller.forward().expect("run starts");
@@ -404,16 +425,18 @@ fn reversing_on_completed_keeps_commit_order() {
     let controller = controller();
     let slot: std::rc::Rc<Mutex<Option<AnimationController>>> = std::rc::Rc::default();
     let pending = std::rc::Rc::clone(&slot);
-    controller.add_status_listener(std::rc::Rc::new(move |status| {
-        if status == Completed {
-            let owner = pending.lock().expect("reverse slot").take();
-            if let Some(controller) = owner {
-                let _run = controller.reverse().expect("reverse from a listener");
+    controller
+        .subscribe_status(std::rc::Rc::new(move |status| {
+            if status == Completed {
+                let owner = pending.lock().expect("reverse slot").take();
+                if let Some(controller) = owner {
+                    let _run = controller.reverse().expect("reverse from a listener");
+                }
             }
-        }
-    }));
+        }))
+        .detach();
     let (observer, listener) = recorder();
-    controller.add_status_listener(listener);
+    controller.subscribe_status(listener).detach();
     *slot.lock().expect("reverse slot") = Some(controller.clone());
 
     let _run = controller.forward().expect("run starts");
@@ -434,18 +457,22 @@ fn reentrant_transitions_keep_the_return_to_the_original_status() {
     let slot = std::rc::Rc::new(Mutex::new(Some(controller.clone())));
     let pending = std::rc::Rc::clone(&slot);
     let (late, late_listener) = recorder();
-    controller.add_status_listener(std::rc::Rc::new(move |status| {
-        if status == Forward {
-            let owner = pending.lock().expect("reentrant owner").take();
-            if let Some(owner) = owner {
-                owner.add_status_listener(std::rc::Rc::clone(&late_listener));
-                let _reverse = owner.reverse_from(Some(0.5)).expect("nested reverse");
-                let _forward = owner.forward().expect("nested forward");
+    controller
+        .subscribe_status(std::rc::Rc::new(move |status| {
+            if status == Forward {
+                let owner = pending.lock().expect("reentrant owner").take();
+                if let Some(owner) = owner {
+                    owner
+                        .subscribe_status(std::rc::Rc::clone(&late_listener))
+                        .detach();
+                    let _reverse = owner.reverse_from(Some(0.5)).expect("nested reverse");
+                    let _forward = owner.forward().expect("nested forward");
+                }
             }
-        }
-    }));
+        }))
+        .detach();
     let (observer, listener) = recorder();
-    controller.add_status_listener(listener);
+    controller.subscribe_status(listener).detach();
 
     let _run = controller.forward().expect("outer forward");
 
@@ -472,24 +499,28 @@ fn reentrant_completion_delivers_its_outcome_before_the_next_status() {
     let run = controller.forward().expect("original run");
     let order = Arc::new(Mutex::new(Vec::new()));
     let slot = std::rc::Rc::new(Mutex::new(Some(controller.clone())));
-    controller.add_status_listener(std::rc::Rc::new(move |status| {
-        if status == Completed {
-            let owner = slot.lock().expect("reverse owner").take();
-            if let Some(owner) = owner {
-                let _next = owner.reverse().expect("replacement run");
-                panic_any("completion listener");
+    controller
+        .subscribe_status(std::rc::Rc::new(move |status| {
+            if status == Completed {
+                let owner = slot.lock().expect("reverse owner").take();
+                if let Some(owner) = owner {
+                    let _next = owner.reverse().expect("replacement run");
+                    panic_any("completion listener");
+                }
             }
-        }
-    }));
+        }))
+        .detach();
     let sink = Arc::clone(&order);
-    controller.add_status_listener(std::rc::Rc::new(move |status| {
-        sink.lock().expect("delivery order").push(match status {
-            Completed => "completed status",
-            Reverse => "reverse status",
-            Dismissed => "dismissed status",
-            _ => "unexpected status",
-        });
-    }));
+    controller
+        .subscribe_status(std::rc::Rc::new(move |status| {
+            sink.lock().expect("delivery order").push(match status {
+                Completed => "completed status",
+                Reverse => "reverse status",
+                Dismissed => "dismissed status",
+                _ => "unexpected status",
+            });
+        }))
+        .detach();
     let sink = Arc::clone(&order);
     run.when_complete_or_cancel(move |outcome| {
         assert!(outcome.is_ok(), "replacement cannot cancel a completed run");
@@ -546,17 +577,19 @@ fn status_failure_retains_removed_captures_and_competing_payloads() {
     let controller = lifecycle.controller().clone();
     let drops = Arc::new(AtomicUsize::new(0));
     let armed = AtomicBool::new(true);
-    controller.add_status_listener(std::rc::Rc::new(move |_| {
-        if armed.swap(false, Ordering::SeqCst) {
-            panic_any("first status failure");
-        }
-    }));
+    controller
+        .subscribe_status(std::rc::Rc::new(move |_| {
+            if armed.swap(false, Ordering::SeqCst) {
+                panic_any("first status failure");
+            }
+        }))
+        .detach();
     let capture = HostileOwnership {
         _first: DropFailure(Arc::clone(&drops)),
         _second: DropFailure(Arc::clone(&drops)),
     };
     let payload_drops = Arc::clone(&drops);
-    let failed = controller.add_status_listener(std::rc::Rc::new(move |_| {
+    let failed = controller.subscribe_status(std::rc::Rc::new(move |_| {
         let _ = &capture;
         panic_any(HostileOwnership {
             _first: DropFailure(Arc::clone(&payload_drops)),
@@ -565,25 +598,23 @@ fn status_failure_retains_removed_captures_and_competing_payloads() {
     }));
     let removal = std::rc::Rc::new(Mutex::new(None));
     let pending = std::rc::Rc::clone(&removal);
-    controller.add_status_listener(std::rc::Rc::new(move |_| {
-        let removal = pending.lock().expect("capture removal").take();
-        if let Some((owner, removed)) = removal {
-            let owner: AnimationController = owner;
-            owner.remove_status_listener(failed);
-            owner.remove_status_listener(removed);
-        }
-    }));
+    controller
+        .subscribe_status(std::rc::Rc::new(move |_| {
+            let removal = pending.lock().expect("capture removal").take();
+            drop(removal);
+        }))
+        .detach();
     let capture = HostileOwnership {
         _first: DropFailure(Arc::clone(&drops)),
         _second: DropFailure(Arc::clone(&drops)),
     };
-    let removed = controller.add_status_listener(std::rc::Rc::new(move |_| {
+    let removed = controller.subscribe_status(std::rc::Rc::new(move |_| {
         let _ = &capture;
         panic_any("removed listener must be skipped");
     }));
-    *removal.lock().expect("capture removal") = Some((controller.clone(), removed));
+    *removal.lock().expect("capture removal") = Some((failed, removed));
     let (tail, listener) = recorder();
-    controller.add_status_listener(listener);
+    controller.subscribe_status(listener).detach();
 
     let failure = catch_unwind(AssertUnwindSafe(|| controller.forward()))
         .expect_err("first failure resumes after the healthy tail");
@@ -766,20 +797,26 @@ fn dropping_wrapper_silences_its_tail(kind: &str) {
             let parent = lifecycle.controller().clone();
             let failure_id = failed.then(|| {
                 if status {
-                    parent.add_status_listener(std::rc::Rc::new(|_| {
-                        panic_any("first parent failure")
-                    }))
+                    Subscription::Status(
+                        parent.subscribe_status(std::rc::Rc::new(|_| {
+                            panic_any("first parent failure")
+                        })),
+                    )
                 } else {
-                    parent.add_listener(std::rc::Rc::new(|| panic_any("first parent failure")))
+                    Subscription::Value(
+                        parent.add_listener(std::rc::Rc::new(|| panic_any("first parent failure"))),
+                    )
                 }
             });
             let wrapper = make_wrapper(std::rc::Rc::new(parent.clone()), kind);
             let owner = std::rc::Rc::new(std::cell::RefCell::new(None));
             let retire = owner.clone();
             if status {
-                wrapper.add_status_listener(std::rc::Rc::new(move |_| {
-                    drop(retire.borrow_mut().take());
-                }));
+                wrapper
+                    .subscribe_status(std::rc::Rc::new(move |_| {
+                        drop(retire.borrow_mut().take());
+                    }))
+                    .detach();
             } else {
                 wrapper.add_listener(std::rc::Rc::new(move || drop(retire.borrow_mut().take())));
             }
@@ -791,10 +828,12 @@ fn dropping_wrapper_silences_its_tail(kind: &str) {
             let tail = std::rc::Rc::new(std::cell::Cell::new(0));
             let observed = tail.clone();
             if status {
-                wrapper.add_status_listener(std::rc::Rc::new(move |_| {
-                    let _ = &captures;
-                    observed.set(observed.get() + 1);
-                }));
+                wrapper
+                    .subscribe_status(std::rc::Rc::new(move |_| {
+                        let _ = &captures;
+                        observed.set(observed.get() + 1);
+                    }))
+                    .detach();
             } else {
                 wrapper.add_listener(std::rc::Rc::new(move || {
                     let _ = &captures;
@@ -823,11 +862,7 @@ fn dropping_wrapper_silences_its_tail(kind: &str) {
             );
             assert_eq!(drops.load(Ordering::SeqCst), 0);
             if let Some(id) = failure_id {
-                if status {
-                    parent.remove_status_listener(id);
-                } else {
-                    parent.remove_listener(id);
-                }
+                id.remove(&parent);
             }
             if status {
                 parent.tick_at(std::time::Duration::from_secs_f64(1.0));
@@ -849,9 +884,13 @@ fn wrapper_keeps_parent_failure_custody(status: bool, kind: &str) {
         AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
     let parent = lifecycle.controller().clone();
     let failure_id = if status {
-        parent.add_status_listener(std::rc::Rc::new(|_| panic_any("first parent failure")))
+        Subscription::Status(
+            parent.subscribe_status(std::rc::Rc::new(|_| panic_any("first parent failure"))),
+        )
     } else {
-        parent.add_listener(std::rc::Rc::new(|| panic_any("first parent failure")))
+        Subscription::Value(
+            parent.add_listener(std::rc::Rc::new(|| panic_any("first parent failure"))),
+        )
     };
     let source: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(parent.clone());
     let wrapper = make_wrapper(source, kind);
@@ -865,10 +904,10 @@ fn wrapper_keeps_parent_failure_custody(status: bool, kind: &str) {
             _second: DropFailure(captures.clone()),
         };
         if status {
-            let id = wrapper.add_status_listener(std::rc::Rc::new(move |_| {
+            let id = wrapper.subscribe_status(std::rc::Rc::new(move |_| {
                 let _ = &capture;
             }));
-            wrapper.remove_status_listener(id);
+            drop(id);
         } else {
             let id = wrapper.add_listener(std::rc::Rc::new(move || {
                 let _ = &capture;
@@ -877,14 +916,16 @@ fn wrapper_keeps_parent_failure_custody(status: bool, kind: &str) {
         }
     };
     let removal_id = if status {
-        wrapper.add_status_listener(std::rc::Rc::new(move |_| retire()))
+        Subscription::Status(wrapper.subscribe_status(std::rc::Rc::new(move |_| retire())))
     } else {
-        wrapper.add_listener(std::rc::Rc::new(retire))
+        Subscription::Value(wrapper.add_listener(std::rc::Rc::new(retire)))
     };
     let calls = std::rc::Rc::new(std::cell::Cell::new(0));
     let observed = calls.clone();
     if status {
-        wrapper.add_status_listener(std::rc::Rc::new(move |_| observed.set(observed.get() + 1)));
+        wrapper
+            .subscribe_status(std::rc::Rc::new(move |_| observed.set(observed.get() + 1)))
+            .detach();
     } else {
         wrapper.add_listener(std::rc::Rc::new(move || observed.set(observed.get() + 1)));
     }
@@ -903,13 +944,11 @@ fn wrapper_keeps_parent_failure_custody(status: bool, kind: &str) {
         0,
         "wrapper retirement preserves parent custody"
     );
+    failure_id.remove(&parent);
+    removal_id.remove(&*wrapper);
     if status {
-        parent.remove_status_listener(failure_id);
-        wrapper.remove_status_listener(removal_id);
         parent.tick_at(std::time::Duration::from_secs_f64(1.0));
     } else {
-        parent.remove_listener(failure_id);
-        wrapper.remove_listener(removal_id);
         parent.set_value(1.0);
     }
     assert_eq!(calls.get(), 2, "next notification still arrives");
@@ -956,7 +995,9 @@ fn relay_retirement_case(inside_child: bool, kind: &str, status: bool, competing
         }
     });
     if status {
-        child.add_status_listener(std::rc::Rc::new(move |_| fail()));
+        child
+            .subscribe_status(std::rc::Rc::new(move |_| fail()))
+            .detach();
     } else {
         child.add_listener(fail);
     }
@@ -977,7 +1018,9 @@ fn relay_retirement_case(inside_child: bool, kind: &str, status: bool, competing
         parent.remove_listener(id);
     });
     if status {
-        removal_source.add_status_listener(std::rc::Rc::new(move |_| retire()));
+        removal_source
+            .subscribe_status(std::rc::Rc::new(move |_| retire()))
+            .detach();
     } else {
         removal_source.add_listener(retire);
     }
@@ -989,7 +1032,9 @@ fn relay_retirement_case(inside_child: bool, kind: &str, status: bool, competing
             }
         });
         if status {
-            parent.add_status_listener(std::rc::Rc::new(move |_| second_failure()));
+            parent
+                .subscribe_status(std::rc::Rc::new(move |_| second_failure()))
+                .detach();
         } else {
             parent.add_listener(second_failure);
         }
@@ -998,7 +1043,9 @@ fn relay_retirement_case(inside_child: bool, kind: &str, status: bool, competing
     let observed = calls.clone();
     let tail = std::rc::Rc::new(move || observed.set(observed.get() + 1));
     if status {
-        parent.add_status_listener(std::rc::Rc::new(move |_| tail()));
+        parent
+            .subscribe_status(std::rc::Rc::new(move |_| tail()))
+            .detach();
     } else {
         parent.add_listener(tail);
     }
@@ -1080,16 +1127,18 @@ fn removed_value_capture_custody(mode: &str) {
     };
     let failure_id = if mode == "status" {
         let id =
-            controller.add_status_listener(std::rc::Rc::new(|_| panic_any("first status failure")));
-        controller.add_status_listener(std::rc::Rc::new(move |_| retire()));
-        id
+            controller.subscribe_status(std::rc::Rc::new(|_| panic_any("first status failure")));
+        controller
+            .subscribe_status(std::rc::Rc::new(move |_| retire()))
+            .detach();
+        Subscription::Status(id)
     } else {
         let id = controller.add_listener(std::rc::Rc::new(|| panic_any("first value failure")));
         if mode == "peer" {
             controller.remove_listener(id);
         }
         controller.add_listener(std::rc::Rc::new(retire));
-        id
+        Subscription::Value(id)
     };
     let calls = std::rc::Rc::new(std::cell::Cell::new(0));
     let observed = calls.clone();
@@ -1131,11 +1180,7 @@ fn removed_value_capture_custody(mode: &str) {
         0,
         "outgoing value captures keep first-failure custody"
     );
-    if mode == "status" {
-        controller.remove_status_listener(failure_id);
-    } else {
-        controller.remove_listener(failure_id);
-    }
+    failure_id.remove(&controller);
     peer.remove_listener(peer_failure);
     controller.tick_at(std::time::Duration::from_secs_f64(1.0));
     assert_eq!(controller.status(), Completed);
@@ -1159,28 +1204,32 @@ fn status_failure_retains_a_reentrantly_removed_new_subscription() {
     let controller = lifecycle.controller().clone();
     let drops = Arc::new(AtomicUsize::new(0));
     let armed = AtomicBool::new(true);
-    controller.add_status_listener(std::rc::Rc::new(move |_| {
-        if armed.swap(false, Ordering::SeqCst) {
-            panic_any("first status failure");
-        }
-    }));
+    controller
+        .subscribe_status(std::rc::Rc::new(move |_| {
+            if armed.swap(false, Ordering::SeqCst) {
+                panic_any("first status failure");
+            }
+        }))
+        .detach();
     let owner = std::rc::Rc::new(Mutex::new(Some(controller.clone())));
     let captures = Arc::clone(&drops);
-    controller.add_status_listener(std::rc::Rc::new(move |_| {
-        let owner = owner.lock().expect("late subscription owner").take();
-        if let Some(owner) = owner {
-            let capture = HostileOwnership {
-                _first: DropFailure(Arc::clone(&captures)),
-                _second: DropFailure(Arc::clone(&captures)),
-            };
-            let id = owner.add_status_listener(std::rc::Rc::new(move |_| {
-                let _ = &capture;
-            }));
-            owner.remove_status_listener(id);
-        }
-    }));
+    controller
+        .subscribe_status(std::rc::Rc::new(move |_| {
+            let owner = owner.lock().expect("late subscription owner").take();
+            if let Some(owner) = owner {
+                let capture = HostileOwnership {
+                    _first: DropFailure(Arc::clone(&captures)),
+                    _second: DropFailure(Arc::clone(&captures)),
+                };
+                let id = owner.subscribe_status(std::rc::Rc::new(move |_| {
+                    let _ = &capture;
+                }));
+                drop(id);
+            }
+        }))
+        .detach();
     let (tail, listener) = recorder();
-    controller.add_status_listener(listener);
+    controller.subscribe_status(listener).detach();
     let failure =
         catch_unwind(AssertUnwindSafe(|| controller.forward())).expect_err("status failure");
     assert_eq!(payload_text(failure.as_ref()), Some("first status failure"));
@@ -1213,11 +1262,13 @@ fn install_hostile_continuation(
 }
 
 fn fail_on_completion(controller: &AnimationController) {
-    controller.add_status_listener(std::rc::Rc::new(|status| {
-        if status == Completed {
-            panic_any("first status failure");
-        }
-    }));
+    controller
+        .subscribe_status(std::rc::Rc::new(|status| {
+            if status == Completed {
+                panic_any("first status failure");
+            }
+        }))
+        .detach();
 }
 
 fn status_failure_retains_completed_run_captures() {
@@ -1228,7 +1279,7 @@ fn status_failure_retains_completed_run_captures() {
     fail_on_completion(&controller);
     let calls = install_hostile_continuation(&controller, &drops);
     let (tail, listener) = recorder();
-    controller.add_status_listener(listener);
+    controller.subscribe_status(listener).detach();
     let failure = catch_unwind(AssertUnwindSafe(|| {
         controller.tick_at(std::time::Duration::from_secs_f64(1.0));
     }))
@@ -1390,7 +1441,7 @@ struct SwitchReader {
     switch: Mutex<Option<AnimationSwitch>>,
     reentry: Reentry,
     values: ChangeNotifier,
-    statuses: ChangeNotifier,
+    statuses: std::rc::Rc<ChangeNotifier>,
 }
 
 impl SwitchReader {
@@ -1436,11 +1487,15 @@ impl Animation<f64> for SwitchReader {
         self.read_back(Reentry::Status);
         Forward
     }
-    fn add_status_listener(&self, _callback: StatusCallback) -> ListenerId {
-        self.statuses.add_listener(std::rc::Rc::new(|| {}))
-    }
-    fn remove_status_listener(&self, id: ListenerId) {
-        self.statuses.remove_listener(id);
+
+    fn subscribe_status(&self, callback: StatusCallback) -> flui_animation::StatusSubscription {
+        let id = self.statuses.add_listener(std::rc::Rc::new(move || {
+            let _keep = &callback;
+        }));
+        flui_animation::StatusSubscription::new(&self.statuses, id, |source, id, recovery| {
+            source.inherit_failure(recovery);
+            source.take_listener(id)
+        })
     }
 }
 
@@ -1449,7 +1504,7 @@ fn switch_reader(reentry: Reentry) -> AnimationSwitch {
         switch: Mutex::new(None),
         reentry,
         values: ChangeNotifier::new(),
-        statuses: ChangeNotifier::new(),
+        statuses: std::rc::Rc::new(ChangeNotifier::new()),
     });
     let switch = AnimationSwitch::new(parent.clone(), None);
     *parent.switch.lock().expect("switch slot") = Some(switch.clone());
@@ -1486,7 +1541,7 @@ fn switch_hop_announces_the_new_train_status() {
         Some(std::rc::Rc::new(ConstantAnimation::completed(0.5))),
     );
     let (log, listener) = recorder();
-    switch.add_status_listener(listener);
+    switch.subscribe_status(listener).detach();
 
     train.set_value(0.6);
 
@@ -1542,7 +1597,7 @@ fn set_parent_moves_every_notification_to_the_new_parent_once() {
     let proxy = ProxyAnimation::new(std::rc::Rc::new(a.clone()));
     let values = counter(&proxy);
     let (log, listener) = recorder();
-    proxy.add_status_listener(listener);
+    proxy.subscribe_status(listener).detach();
 
     proxy.set_parent(std::rc::Rc::new(b.clone()));
     assert_eq!(count(&values), 1, "one value notification per set_parent");
@@ -1583,7 +1638,7 @@ fn reentrant_set_parent_last_commit_wins() {
     }));
     let values = counter(&proxy);
     let (log, listener) = recorder();
-    proxy.add_status_listener(listener);
+    proxy.subscribe_status(listener).detach();
     *slot.lock().expect("swap slot") = Some((proxy.clone(), c.clone()));
 
     proxy.set_parent(std::rc::Rc::new(b.clone()));

@@ -74,20 +74,15 @@ impl Animation<f64> for ReverseAnimation {
         self.links.parent.is_animating()
     }
 
-    fn add_status_listener(&self, callback: StatusCallback) -> ListenerId {
-        self.links
-            .status_notifier
-            .add(Rc::new(move |status| callback(*status)))
+    fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription {
+        self.links.subscribe_status(callback)
     }
 
-    fn add_status_observer(&self, observer: crate::animation::StatusObserver) -> ListenerId {
-        self.links
-            .status_notifier
-            .add_with_recovery(Rc::new(move |status, recovery| observer(*status, recovery)))
-    }
-
-    fn remove_status_listener(&self, id: ListenerId) {
-        self.links.status_notifier.remove_even_if_disposed(id);
+    fn subscribe_status_observer(
+        &self,
+        observer: crate::animation::StatusObserver,
+    ) -> crate::StatusSubscription {
+        self.links.subscribe_status_observer(observer)
     }
 }
 

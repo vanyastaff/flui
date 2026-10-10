@@ -39,12 +39,14 @@ fn reads_inside_a_status_listener_see_the_commit() {
     let observed = Arc::new(Mutex::new(None));
     let sink = Arc::clone(&observed);
     let reader = controller.clone();
-    controller.add_status_listener(std::rc::Rc::new(move |status| {
-        if status == AnimationStatus::Completed {
-            *sink.lock().expect("observed read") =
-                Some((reader.value(), reader.status(), format!("{reader:?}")));
-        }
-    }));
+    controller
+        .subscribe_status(std::rc::Rc::new(move |status| {
+            if status == AnimationStatus::Completed {
+                *sink.lock().expect("observed read") =
+                    Some((reader.value(), reader.status(), format!("{reader:?}")));
+            }
+        }))
+        .detach();
     let _run = controller.forward().expect("run starts");
     controller.tick_at(std::time::Duration::from_secs_f64(1.0));
 
@@ -62,18 +64,20 @@ fn nested_commit_is_not_overwritten() {
     let nested = Arc::new(Mutex::new(None));
     let sink = Arc::clone(&nested);
     let slot = std::rc::Rc::new(Mutex::new(Some(controller.clone())));
-    controller.add_status_listener(std::rc::Rc::new(move |status| {
-        if status != AnimationStatus::Completed {
-            return;
-        }
-        let owner = slot.lock().expect("retarget slot").take();
-        if let Some(controller) = owner {
-            let _run = controller
-                .animate_to(0.3, Some(Duration::from_secs(1)))
-                .expect("retarget from a listener");
-            *sink.lock().expect("nested commit") = Some(controller.status());
-        }
-    }));
+    controller
+        .subscribe_status(std::rc::Rc::new(move |status| {
+            if status != AnimationStatus::Completed {
+                return;
+            }
+            let owner = slot.lock().expect("retarget slot").take();
+            if let Some(controller) = owner {
+                let _run = controller
+                    .animate_to(0.3, Some(Duration::from_secs(1)))
+                    .expect("retarget from a listener");
+                *sink.lock().expect("nested commit") = Some(controller.status());
+            }
+        }))
+        .detach();
     let _run = controller.forward().expect("run starts");
 
     controller.tick_at(std::time::Duration::from_secs_f64(1.0));
@@ -153,13 +157,15 @@ fn last_owner_released_from_its_own_listener_mid_walk() {
     second.add_listener(std::rc::Rc::new(count));
 
     let owners = std::rc::Rc::new(Mutex::new(Some(vec![first_owner, second_owner])));
-    first.add_status_listener(std::rc::Rc::new(move |status| {
-        if status != AnimationStatus::Completed {
-            return;
-        }
-        let released = owners.lock().expect("owners").take();
-        drop(released);
-    }));
+    first
+        .subscribe_status(std::rc::Rc::new(move |status| {
+            if status != AnimationStatus::Completed {
+                return;
+            }
+            let released = owners.lock().expect("owners").take();
+            drop(released);
+        }))
+        .detach();
     drop(first);
 
     vsync.tick_all(

@@ -1,11 +1,22 @@
 //! `AnimationController` - The primary animation driver.
 
+mod delivery;
+mod motion;
+mod policy;
+mod sample;
+
+pub(crate) use motion::{ValuePublication, ValueSeam};
+use policy::MotionRunState;
+pub(crate) use policy::SettleReason;
+use sample::{SampleIdentity, SampleTime};
+
 use crate::AnimationRunFuture;
 use crate::PlaybackRate;
 use crate::animation::StatusObserver;
 use crate::animation::{Animation, AnimationDirection, Retirement, StatusCallback, Terminal};
 use crate::curve::Curve;
 use crate::error::AnimationError;
+use crate::retarget::Segment;
 use crate::run_future::{RunCompleter, RunDelivery};
 use crate::simulation::{Simulation, SpringDescription, SpringSimulation, SpringType, Tolerance};
 use crate::status::AnimationStatus;
@@ -109,11 +120,6 @@ enum ControllerDelivery {
     Retire(RetiredSources),
 }
 
-struct SampleIdentity {
-    generation: u64,
-    epoch: u64,
-}
-
 enum TickSource {
     Repeat(RepeatRun),
     Simulation(SimulationRun),
@@ -128,6 +134,8 @@ enum TickSource {
 #[derive(Clone)]
 enum SimulationRun {
     Custom(Rc<dyn Simulation>),
+    Motion(Rc<Segment>),
+    Value(Rc<dyn crate::spring::ValueMotion>),
     Fling {
         source: Rc<dyn Simulation>,
         bound: f64,
@@ -151,15 +159,17 @@ impl StatusListener {
 }
 
 impl SimulationRun {
-    fn source(&self) -> &Rc<dyn Simulation> {
+    fn source(&self) -> &dyn Simulation {
         match self {
-            Self::Custom(source) | Self::Fling { source, .. } => source,
+            Self::Custom(source) | Self::Fling { source, .. } => source.as_ref(),
+            Self::Motion(source) => source.as_ref(),
+            Self::Value(source) => source.as_ref(),
         }
     }
 
     fn reached_bound(&self, sample: f64) -> bool {
         match self {
-            Self::Custom(_) => false,
+            Self::Custom(_) | Self::Motion(_) | Self::Value(_) => false,
             Self::Fling {
                 bound, direction, ..
             } => match direction {
@@ -209,10 +219,24 @@ pub(crate) struct WalkProbe {
     /// The controller's [`AnimationController::run_generation`] at the time
     /// of the probe.
     pub(crate) generation: u64,
+    pub(crate) start: RunStart,
     /// Whether the walk should tick this controller: running AND not
     /// disposed. `status` alone cannot tell the two apart — see
     /// [`AnimationController::walk_probe`]'s own doc.
     pub(crate) live_running: bool,
+    pub(crate) behavior: crate::AnimationBehavior,
+    pub(crate) has_run: bool,
+    pub(crate) parked: bool,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum RunStart {
+    Fresh,
+    /// The published seam in the source run's raw elapsed coordinates.
+    Continue {
+        generation: u64,
+        elapsed: Duration,
+    },
 }
 
 /// The configuration a live `repeat`/`repeat_with` run needs to sample its
@@ -328,6 +352,8 @@ struct AnimationControllerInner {
 
     /// Duration of forward animation.
     duration: Duration,
+    behavior: crate::AnimationBehavior,
+    motion_state: MotionRunState,
 
     /// Duration of reverse animation (defaults to `duration`).
     reverse_duration: Option<Duration>,
@@ -354,9 +380,8 @@ struct AnimationControllerInner {
     /// Target value for the current run.
     target_value: f64,
 
-    /// Most recent raw elapsed time seen by
-    /// [`AnimationController::tick_at`], so `velocity()` can report the
-    /// in-progress rate without a fresh tick.
+    /// Raw and local time of the last published position sample. A rejected
+    /// or panicking source leaves both times and its applied rate unchanged.
     last_elapsed: Duration,
     local_elapsed: Duration,
     playback_rate: PlaybackRate,
@@ -374,6 +399,7 @@ struct AnimationControllerInner {
     /// twice (forward → reverse) is ticked from the second run's start instead
     /// of a stale anchor. Never reset; stable across `tick_at`.
     run_generation: u64,
+    run_start: RunStart,
 
     /// Invalidates outer samples when the same run is ticked reentrantly.
     sample_epoch: u64,
@@ -467,6 +493,7 @@ impl AnimationController {
         duration: Duration,
         bounds: Option<crate::ValueRange>,
         initial: Option<f64>,
+        behavior: crate::AnimationBehavior,
     ) -> Self {
         let (lower, upper, default) = bounds
             .map_or((f64::NEG_INFINITY, f64::INFINITY, 0.0), |range| {
@@ -476,7 +503,7 @@ impl AnimationController {
             .filter(|value| value.is_finite())
             .unwrap_or(default)
             .clamp(lower, upper);
-        Self::new_inner(duration, lower, upper, value)
+        Self::new_inner(duration, lower, upper, value, behavior)
     }
 
     pub(crate) fn last_elapsed(&self) -> Duration {
@@ -498,7 +525,7 @@ impl AnimationController {
             .retain(|candidate| candidate != route);
     }
 
-    pub(crate) fn set_clock_bound(&self, bound: bool, retirement: &mut RecoveryScope<'_>) {
+    pub(crate) fn prepare_clock_bound(&self, bound: bool) -> ValuePublication {
         let mut inner = self.inner.borrow_mut();
         inner.clock_binding = if bound {
             ClockBinding::Bound
@@ -512,14 +539,8 @@ impl AnimationController {
                 .push_back(ControllerDelivery::RequestFrame);
         }
         let status = inner.status;
-        self.finish_with_retirement(
-            status,
-            ValueChange::Unchanged,
-            None,
-            RetiredSources::new(),
-            inner,
-            retirement,
-        );
+        let drain = Self::enqueue_delivery(status, None, RetiredSources::new(), inner);
+        ValuePublication::unchanged(self.clone(), drain)
     }
 
     /// The one place every constructor builds the inner state: `value`,
@@ -542,6 +563,7 @@ impl AnimationController {
         lower_bound: f64,
         upper_bound: f64,
         initial_value: f64,
+        behavior: crate::AnimationBehavior,
     ) -> Self {
         let notifier = Rc::new(ChangeNotifier::new());
 
@@ -549,6 +571,8 @@ impl AnimationController {
             value: initial_value,
             status: AnimationStatus::Dismissed,
             duration,
+            behavior,
+            motion_state: MotionRunState::Active,
             reverse_duration: None,
             lower_bound,
             upper_bound,
@@ -569,6 +593,7 @@ impl AnimationController {
             settle_pending: false,
             missing_clock_warned: false,
             run_generation: 0,
+            run_start: RunStart::Fresh,
             sample_epoch: 0,
             run_duration: None,
             disposed: false,
@@ -1446,6 +1471,35 @@ impl AnimationController {
         self.fling_with(velocity, None)
     }
 
+    /// Drive toward a bound with a gesture velocity in pixels per second.
+    /// `extent` is the positive pixel length corresponding to the controller's range.
+    ///
+    /// # Errors
+    /// Returns [`AnimationError::InvalidExtent`] for non-finite or non-positive
+    /// extents. Non-finite input or unrepresentable converted velocity returns
+    /// [`AnimationError::NonFiniteTarget`]. Other refusals match [`Self::fling`].
+    pub fn fling_across(
+        &self,
+        velocity: f64,
+        extent: f64,
+    ) -> Result<AnimationRunFuture, AnimationError> {
+        let inner = self.inner.borrow_mut();
+        Self::check_run_admission(&inner)?;
+        if !extent.is_finite() || extent <= 0.0 {
+            return Err(AnimationError::InvalidExtent);
+        }
+        let span = inner.upper_bound - inner.lower_bound;
+        let converted = crate::retarget::rate(velocity, span, extent);
+        if !velocity.is_finite() || !span.is_finite() || !converted.is_finite() {
+            let error = AnimationError::NonFiniteTarget(format!(
+                "gesture velocity {velocity} across extent {extent} and range {span} must yield a finite velocity"
+            ));
+            return Err(Self::warn_non_finite_target(inner, error));
+        }
+        drop(inner);
+        self.fling(converted)
+    }
+
     /// Drive the animation with a custom spring and initial velocity.
     ///
     /// # Errors
@@ -1632,37 +1686,15 @@ impl AnimationController {
         Ok(future)
     }
 
-    /// Get the current velocity of the animation (0.0 if not running).
-    #[must_use]
-    pub fn velocity(&self) -> f64 {
-        let source;
-        let cycle;
-        let rate;
-        {
-            let inner = self.inner.borrow_mut();
-            if inner.active_run.is_none() {
-                return 0.0;
-            }
-            cycle = inner.cycle_elapsed_secs();
-            rate = inner.playback_rate.get();
-            if let Some(simulation) = &inner.simulation {
-                source = Opaque::new(Rc::clone(simulation.source()));
-            } else {
-                let duration = inner.current_duration();
-                return if duration.is_zero() {
-                    0.0
-                } else {
-                    (inner.target_value - inner.start_value) / duration.as_secs_f64() * rate
-                };
-            }
-        }
-        source.get().dx(cycle) * rate
-    }
-
     /// Apply `rate` at the next sample, preserving the local run time there.
     ///
     /// A paused run stays installed and keeps its completion future. A bound
     /// controller requests the sample that applies this change.
+    ///
+    /// `controller_rate_preserves_elapsed_and_paused_delivery` covers tween,
+    /// curve, repeat and spring seams. The property contract
+    /// `controller_local_time_is_the_integral_of_its_rate` compares samples
+    /// against an independent piecewise integral, including repeated time.
     pub fn set_playback_rate(&self, rate: PlaybackRate) {
         let mut inner = self.inner.borrow_mut();
         if inner.disposed || inner.pending_rate.unwrap_or(inner.playback_rate) == rate {
@@ -1746,8 +1778,13 @@ impl AnimationController {
         let inner = self.inner.borrow();
         WalkProbe {
             generation: inner.run_generation,
+            start: inner.run_start,
+            behavior: inner.behavior,
+            has_run: !inner.disposed && inner.active_run.is_some(),
+            parked: inner.motion_state == MotionRunState::Parked,
             live_running: !inner.disposed
                 && inner.active_run.is_some()
+                && inner.motion_state == MotionRunState::Active
                 && (!inner.playback_rate.is_paused() || inner.pending_rate.is_some()),
         }
     }
@@ -1774,6 +1811,7 @@ impl AnimationController {
         let source;
         let identity;
         let cycle;
+        let time;
         {
             let mut inner = self.inner.borrow_mut();
             if inner.disposed || inner.active_run.is_none() || elapsed < inner.last_elapsed {
@@ -1799,23 +1837,8 @@ impl AnimationController {
                 });
                 return;
             };
-            inner.last_elapsed = elapsed;
-            let span = elapsed.saturating_sub(inner.rate_epoch_elapsed);
-            let scaled = if inner.playback_rate == PlaybackRate::NORMAL {
-                span
-            } else if inner.playback_rate.is_paused() {
-                Duration::ZERO
-            } else {
-                Duration::try_from_secs_f64(span.as_secs_f64() * inner.playback_rate.get())
-                    .unwrap_or(Duration::MAX)
-            };
-            inner.local_elapsed = inner.rate_epoch_local.saturating_add(scaled);
-            cycle = inner.local_elapsed.as_secs_f64();
-            if let Some(rate) = inner.pending_rate.take() {
-                inner.rate_epoch_elapsed = elapsed;
-                inner.rate_epoch_local = inner.local_elapsed;
-                inner.playback_rate = rate;
-            }
+            time = SampleTime::capture(&inner, elapsed);
+            cycle = time.local_elapsed.as_secs_f64();
             inner.sample_epoch = epoch;
             identity = SampleIdentity {
                 generation: inner.run_generation,
@@ -1825,13 +1848,20 @@ impl AnimationController {
         }
         retirement.run_with(|retirement| match source.get() {
             TickSource::Repeat(run) => {
-                let inner = self.inner.borrow_mut();
+                let mut inner = self.inner.borrow_mut();
                 if !inner.matches_sample(&identity) {
                     return;
                 }
+                time.commit(&mut inner);
                 self.tick_repeat(inner, *run, cycle, retirement);
             }
             TickSource::Simulation(simulation) => {
+                if let SimulationRun::Value(source) = simulation
+                    && !source
+                        .stage_sample(cycle, &|| self.inner.borrow().matches_sample(&identity))
+                {
+                    return;
+                }
                 let sampled = simulation.source().x(cycle);
                 // A position callback may stop or replace the run. Do not call
                 // another method on its stale source after that decision.
@@ -1841,9 +1871,15 @@ impl AnimationController {
                 }
                 let is_done = sampled.is_finite()
                     && (simulation.reached_bound(sampled) || simulation.source().is_done(cycle));
-                let inner = self.inner.borrow_mut();
+                let mut inner = self.inner.borrow_mut();
                 if !inner.matches_sample(&identity) {
                     return;
+                }
+                if sampled.is_finite() {
+                    time.commit(&mut inner);
+                    if let SimulationRun::Value(source) = simulation {
+                        source.commit_sample(inner.local_elapsed);
+                    }
                 }
                 self.tick_simulation(inner, sampled, is_done, retirement);
             }
@@ -1866,9 +1902,12 @@ impl AnimationController {
                     let eased = curve.as_ref().map_or(t, |curve| curve.transform(t));
                     start + (target - start) * eased
                 };
-                let inner = self.inner.borrow_mut();
+                let mut inner = self.inner.borrow_mut();
                 if !inner.matches_sample(&identity) {
                     return;
+                }
+                if value.is_finite() {
+                    time.commit(&mut inner);
                 }
                 self.tick_time_based(inner, t, value, retirement);
             }
@@ -1878,14 +1917,27 @@ impl AnimationController {
 
     /// Settle an admitted run without reading a wall clock or invoking its curve.
     /// Reentrant replacement invalidates the source before the next callout.
-    fn settle_run(&self, generation: u64, recovery: &mut RecoveryScope<'_>) -> bool {
+    pub(crate) fn settle_run(
+        &self,
+        generation: u64,
+        reason: SettleReason,
+        recovery: &mut RecoveryScope<'_>,
+    ) -> bool {
         let (source, identity, warn) = {
             let mut inner = self.inner.borrow_mut();
             if inner.disposed
                 || inner.active_run.is_none()
                 || inner.run_generation != generation
-                || (inner.clock_binding != ClockBinding::Missing
-                    && !inner.current_duration().is_zero())
+                || match reason {
+                    SettleReason::Clock => {
+                        inner.clock_binding != ClockBinding::Missing
+                            && !inner.current_duration().is_zero()
+                    }
+                    SettleReason::ReducedMotion => {
+                        inner.behavior != crate::AnimationBehavior::Normal
+                    }
+                    SettleReason::ExhaustedClock => false,
+                }
             {
                 return false;
             }
@@ -1931,6 +1983,13 @@ impl AnimationController {
                     inner.local_elapsed = Duration::ZERO;
                     inner.rate_epoch_elapsed = Duration::ZERO;
                     inner.rate_epoch_local = Duration::ZERO;
+                    if matches!(
+                        reason,
+                        SettleReason::ReducedMotion | SettleReason::ExhaustedClock
+                    ) {
+                        inner.motion_state = MotionRunState::Parked;
+                        inner.run_start = RunStart::Fresh;
+                    }
                     self.finish_with_retirement(
                         AnimationStatus::Forward,
                         ValueChange::Notify,
@@ -1942,6 +2001,22 @@ impl AnimationController {
                 }
             }
             TickSource::Simulation(simulation) => {
+                if let SimulationRun::Value(source) = simulation {
+                    let inner = self.inner.borrow_mut();
+                    if inner.matches_sample(&identity) {
+                        source.settle();
+                        self.tick_simulation(inner, 0.0, true, recovery);
+                    }
+                    return;
+                }
+                if matches!(simulation, SimulationRun::Motion(_)) {
+                    let inner = self.inner.borrow_mut();
+                    if inner.matches_sample(&identity) {
+                        let target = inner.target_value;
+                        self.tick_simulation(inner, target, true, recovery);
+                    }
+                    return;
+                }
                 let mut last_finite = self.inner.borrow().value;
                 for exponent in 0..=8 {
                     let time = 0.25 * f64::from(1u32 << exponent);
@@ -2237,11 +2312,11 @@ impl AnimationController {
 
     /// Close the kernel and cancel its run under the owning lifecycle's recovery.
     /// The owner withdraws its seat before entering this idempotent drain.
-    pub(crate) fn dispose(&self, retirement: &mut RecoveryScope<'_>) {
+    pub(crate) fn prepare_dispose(&self) -> Option<ValuePublication> {
         let mut retired = RetiredSources::new();
         let mut inner = self.inner.borrow_mut();
         if inner.disposed {
-            return;
+            return None;
         }
         let delivery = inner.active_run.take().map(RunCompleter::cancel);
         inner.clear_run_modes(&mut retired);
@@ -2259,14 +2334,12 @@ impl AnimationController {
                 .map(Opaque::new),
         );
         let status = inner.status;
-        self.finish_with_retirement(
-            status,
-            ValueChange::Unchanged,
-            delivery,
-            retired,
-            inner,
-            retirement,
-        );
+        let drain = Self::enqueue_delivery(status, delivery, retired, inner);
+        Some(ValuePublication::unchanged(self.clone(), drain))
+    }
+
+    pub(crate) fn is_disposed(&self) -> bool {
+        self.inner.borrow().disposed
     }
 
     fn check_disposed(inner: &AnimationControllerInner) -> Result<(), AnimationError> {
@@ -2357,6 +2430,7 @@ impl AnimationController {
 
     /// Establish a fresh run epoch before publishing its callbacks.
     fn begin_run(inner: &mut AnimationControllerInner) {
+        inner.run_start = RunStart::Fresh;
         inner.last_elapsed = Duration::ZERO;
         inner.local_elapsed = Duration::ZERO;
         inner.rate_epoch_elapsed = Duration::ZERO;
@@ -2416,75 +2490,6 @@ impl AnimationController {
         }
     }
 
-    /// The outermost caller drains accepted work; reentry only appends to it.
-    fn drain_delivery(&self, retirement: &mut RecoveryScope<'_>) {
-        let mut settled = false;
-        loop {
-            let delivery = {
-                let mut inner = self.inner.borrow_mut();
-                if settled
-                    && matches!(
-                        inner.pending_delivery.front(),
-                        Some(ControllerDelivery::SettleRun(_))
-                    )
-                {
-                    inner.delivering = false;
-                    return;
-                }
-                let Some(delivery) = inner.pending_delivery.pop_front() else {
-                    inner.delivering = false;
-                    return;
-                };
-                delivery
-            };
-            match delivery {
-                ControllerDelivery::RequestFrame => {
-                    if self.walk_probe().live_running {
-                        let routes = self.inner.borrow().frame_routes.clone();
-                        for route in routes {
-                            route.request_frame(retirement);
-                        }
-                    }
-                }
-                ControllerDelivery::SettleRun(generation) => {
-                    retirement.run_with(|retirement| {
-                        settled |= self.settle_run(generation, retirement);
-                    });
-                }
-                ControllerDelivery::Status(status, listeners) => {
-                    for (id, callback) in &listeners {
-                        let live = {
-                            let inner = self.inner.borrow_mut();
-                            !inner.disposed
-                                && inner
-                                    .status_listeners
-                                    .iter()
-                                    .any(|(candidate, _)| candidate == id)
-                        };
-                        if live {
-                            retirement.run_with(|recovery| callback.get().invoke(status, recovery));
-                        }
-                    }
-                    for (_, callback) in listeners {
-                        retirement.retire(callback);
-                    }
-                }
-                ControllerDelivery::Run(delivery) => {
-                    let retain = retirement.has_failure();
-                    retirement.run(|| {
-                        let delivery = delivery.into_inner();
-                        if retain {
-                            delivery.deliver_after_failure();
-                        } else {
-                            delivery.deliver();
-                        }
-                    });
-                }
-                ControllerDelivery::Retire(retired) => retirement.retire(retired),
-            }
-        }
-    }
-
     /// Commit status, run delivery and outgoing custody before unlocking.
     /// The outermost finish owns the FIFO drain, including work admitted by
     /// value listeners, status listeners, continuations and destructors.
@@ -2518,35 +2523,11 @@ impl AnimationController {
         value_change: ValueChange,
         delivery: Option<RunDelivery>,
         retired: RetiredSources,
-        mut inner: std::cell::RefMut<'_, AnimationControllerInner>,
+        inner: std::cell::RefMut<'_, AnimationControllerInner>,
         retirement: &mut RecoveryScope<'_>,
     ) {
-        inner.enqueue_status_change(status);
-        if let Some(delivery) = delivery {
-            inner
-                .pending_delivery
-                .push_back(ControllerDelivery::Run(Terminal::new(delivery)));
-        }
-        inner
-            .pending_delivery
-            .push_back(ControllerDelivery::Retire(retired));
-        if inner.settle_pending {
-            inner.settle_pending = false;
-            let generation = inner.run_generation;
-            inner
-                .pending_delivery
-                .push_back(ControllerDelivery::SettleRun(generation));
-        }
-        let drain = !inner.delivering;
-        inner.delivering = true;
-        drop(inner);
-        if value_change == ValueChange::Notify {
-            retirement
-                .run_with(|retirement| self.notifier.notify_listeners_with_recovery(retirement));
-        }
-        if drain {
-            self.drain_delivery(retirement);
-        }
+        let drain = Self::enqueue_delivery(status, delivery, retired, inner);
+        self.publish_delivery(value_change, drain, retirement);
     }
 }
 
@@ -2576,6 +2557,7 @@ impl AnimationControllerInner {
     /// Clear repeat/simulation/per-run-duration/curve modes (used when a new
     /// explicit run begins).
     fn clear_run_modes(&mut self, retired: &mut RetiredSources) {
+        self.motion_state = MotionRunState::Active;
         self.repeat = None;
         self.run_duration = None;
         if let Some(simulation) = self.simulation.take() {
@@ -2833,16 +2815,18 @@ impl Animation<f64> for AnimationController {
         self.inner.borrow_mut().status
     }
 
-    fn add_status_listener(&self, callback: StatusCallback) -> ListenerId {
+    fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription {
         self.register_status_listener(StatusListener::User(callback))
+            .map_or_else(crate::StatusSubscription::default, |id| {
+                crate::StatusSubscription::new(&self.inner, id, Self::withdraw_status_listener)
+            })
     }
 
-    fn add_status_observer(&self, observer: StatusObserver) -> ListenerId {
+    fn subscribe_status_observer(&self, observer: StatusObserver) -> crate::StatusSubscription {
         self.register_status_listener(StatusListener::Relay(observer))
-    }
-
-    fn remove_status_listener(&self, id: ListenerId) {
-        self.unregister_status_listener(id);
+            .map_or_else(crate::StatusSubscription::default, |id| {
+                crate::StatusSubscription::new(&self.inner, id, Self::withdraw_status_listener)
+            })
     }
 
     /// Whether the controller is currently driving a run.
@@ -2854,14 +2838,9 @@ impl Animation<f64> for AnimationController {
 }
 
 impl AnimationController {
-    fn register_status_listener(&self, callback: StatusListener) -> ListenerId {
+    fn register_status_listener(&self, callback: StatusListener) -> Option<ListenerId> {
         let mut callback = Opaque::new(callback);
         let mut inner = self.inner.borrow_mut();
-        let id = ListenerId::new(inner.next_listener_id);
-        inner.next_listener_id = inner
-            .next_listener_id
-            .checked_add(1)
-            .expect("BUG: listener identities exhausted");
         if inner.disposed {
             if inner.delivering {
                 let mut retired = RetiredSources::new();
@@ -2873,16 +2852,26 @@ impl AnimationController {
                 drop(inner);
                 drop(callback);
             }
-            return id;
+            return None;
         }
+        let Some(next_id) = inner.next_listener_id.checked_add(1) else {
+            drop(inner);
+            panic!("BUG: listener identities exhausted");
+        };
+        let id = ListenerId::new(inner.next_listener_id);
+        inner.next_listener_id = next_id;
         inner.status_listeners.push((id, callback.take()));
-        id
+        Some(id)
     }
 
-    fn unregister_status_listener(&self, id: ListenerId) {
+    fn withdraw_status_listener(
+        source: &RefCell<AnimationControllerInner>,
+        id: ListenerId,
+        _recovery: &mut RecoveryScope<'_>,
+    ) -> Option<Opaque<StatusListener>> {
         let mut retired;
         {
-            let mut inner = self.inner.borrow_mut();
+            let mut inner = source.borrow_mut();
             retired = inner
                 .status_listeners
                 .iter()
@@ -2898,7 +2887,7 @@ impl AnimationController {
                     .push_back(ControllerDelivery::Retire(sources));
             }
         }
-        drop(retired);
+        retired
     }
 }
 

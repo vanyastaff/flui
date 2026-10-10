@@ -227,6 +227,7 @@ struct SecondaryWindowInstallConfig {
     close_request_handler: Option<CloseRequestHandler>,
     frame_failure_detail: FrameFailureDetail,
     pointer_resampling: flui_runtime::presentation::PointerResampling,
+    motion_preference: flui_runtime::MotionPreference,
 }
 
 /// A resolved `Pending`-arm window waiting for installation.
@@ -778,6 +779,7 @@ pub(super) fn open_secondary_window_impl(
         close_request_handler: config.close_request_handler.clone(),
         frame_failure_detail: config.frame_failure_detail,
         pointer_resampling: config.pointer_resampling,
+        motion_preference: config.motion_preference,
     };
 
     match open {
@@ -850,6 +852,7 @@ where
                 close_request_handler: config.close_request_handler.clone(),
                 frame_failure_detail: config.frame_failure_detail,
                 pointer_resampling: config.pointer_resampling,
+                motion_preference: config.motion_preference,
             };
             let reload = crate::app::hot_reload::WorkerReload::from_config(&config);
             let host = APP_RUNTIME.with(|slot| slot.borrow().main_host_lifecycle);
@@ -1007,6 +1010,7 @@ fn finish_open_secondary_window(
                 )
                 .map_err(mount_error)?;
                 ui_runtime.set_frame_failure_detail(config.frame_failure_detail);
+                ui_runtime.set_motion_preference(config.motion_preference);
                 // No frame-failure handler is installed here. Under
                 // `open_secondary_window`'s current contract this ui_runtime has no
                 // root widget or renderer, so secondary handler ownership is
@@ -1173,6 +1177,7 @@ mod tests {
                     close_request_handler: None,
                     frame_failure_detail: AppConfig::new().frame_failure_detail,
                     pointer_resampling: AppConfig::new().pointer_resampling,
+                    motion_preference: AppConfig::new().motion_preference,
                 };
                 PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
                     queue.borrow_mut().push(PendingCompletion {

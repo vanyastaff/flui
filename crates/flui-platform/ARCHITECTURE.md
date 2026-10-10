@@ -174,6 +174,68 @@ not an actual OS preference change or a rendered native application's update.
 
 ### Native gesture sampling follows public API refresh limits
 
+Browser motion observation and owner delivery follow ADR-0185. One host-owned
+media query invalidates the existing signal; its callback runs on a later
+microtask and remains independent of canvas creation. The public WASM case
+`browser_motion_observations_wake_replace_and_retire_their_owner` covers the
+adapter's initial observation, delivery, replacement and retirement through a
+controlled JS boundary. It is not an actual OS-setting change test.
+
+The same host observation set also reads motion. AppKit samples
+`NSWorkspace::accessibilityDisplayShouldReduceMotion` on its existing owner-lane
+timer. The same timer also serves the macOS winit fallback: `WinitApp` owns the
+source and the platform stores only a weak lookup. Reads lease it outside platform state;
+no AppKit query is added to `about_to_wait`. Shutdown and unwinding fence the
+signal before retiring that source. `winit_preferences_probe` checks initial
+native observations, foreign-thread refusal and reentrant retirement without a
+user window. It requires a macOS main-thread process; local cross-compilation
+does not establish that the probe passes.
+
+Android reads `Settings.Global.ANIMATOR_DURATION_SCALE` through the
+Activity's ContentResolver during preference sampling, validates it before
+publication, and leaves geometry-only queries independent of that setting.
+UIKit retains both bold-text and reduced-motion notification tokens on one
+owner; notifications only wake that owner, which samples the getters and checks
+admission before publishing. Successful registrations acquire ownership
+immediately so partial registration unwinds retire earlier tokens. Closure makes
+all callbacks inert before taking tokens out of the borrow and removing them.
+These sources feed the existing ADR-0172 delivery path and ADR-0184 projection.
+Local cross-target clippy compiles these native paths; it does not execute their
+OS getters or external-setting notifications.
+
+Linux winit owners use one Settings portal connection on the existing background
+executor. Setting and service-owner subscriptions precede the initial read;
+the accepted snapshot is committed before waking the owner. Initial bootstrap
+waits at most 500ms before `on_ready`; unavailable or stalled observations stay
+unknown and can recover later. No D-Bus call runs in the frame path. Successful
+unsigned `org.freedesktop.appearance/reduced-motion` values map 1 to Reduce and
+other values to NoPreference. A missing key permits the GNOME
+`org.gnome.desktop.interface/enable-animations` fallback; transient errors
+preserve the last accepted snapshot. Settings v1 uses its double-variant `Read`
+reply. Healthy observations use notifications; failed reads retain a bounded
+retry that unrelated notifications cannot postpone. Service-owner changes
+refresh the same observation set. Shutdown fences owner admission before
+cancelling the task, whose state holds no strong owner/source cycle.
+
+The process-isolated `linux_preferences` table runs through public
+`WinitPlatform` owner capabilities with a private session bus. It checks initial
+sampling without a window, live changes, unknown values, unsupported observations,
+GNOME and legacy portal reads, service replacement, failed-read recovery without
+another notification, foreign-thread refusal and reentrant capture retirement.
+`libtest-mimic` keeps execution on winit's required main thread and supplies the
+Cargo/nextest protocol. `linux_preferences_probe` runs the same fixture scenarios
+manually. These tests execute Linux D-Bus and winit, but do not change a desktop's
+actual OS settings or establish live behavior of the other native platforms.
+
+Thread-safe residual handles may outlive the event-loop owner. The background
+executor's final shared owner requests nonblocking runtime shutdown, so releasing
+a retired proxy inside another async runtime or inside the executor's own task
+cannot invoke Tokio's blocking runtime destructor. This retains normal runtime
+cancellation of queued async work; already executing blocking work finishes
+independently. `background_executor_retirement` exercises both contexts through
+the public executor, and the Linux table's `late-proxy` case covers the actual
+preference source and stopped host.
+
 AppKit observes `NSEvent::doubleClickInterval` on the application owner lane.
 Android observes public `ViewConfiguration` timeouts and physical touch/fling
 metrics using the Activity context and its resource density; its presentation

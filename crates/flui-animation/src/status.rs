@@ -92,49 +92,32 @@ impl AnimationStatus {
     }
 }
 
-/// Configures how an animation should behave when animations are globally
-/// disabled (e.g. the platform's reduce-motion accessibility setting).
+/// Selects a controller's timeline and response to presentation motion policy.
 ///
-/// This is a policy carrier: `AnimationController` does not read it itself —
-/// the accessibility/bindings layer consults it when deciding whether to
-/// fast-forward (`Normal`) or run unchanged (`Preserve`) under a
-/// disable-animations setting.
+/// The controller builder stores this immutable configuration. Its presentation's
+/// registry selects the corresponding timeline and applies reduced-motion
+/// settlement when delivering a frame.
 ///
 /// # Examples
 ///
 /// ```
-/// use flui_animation::AnimationBehavior;
+/// use std::time::Duration;
+/// use flui_animation::{AnimationBehavior, AnimationController};
 ///
-/// let behavior = AnimationBehavior::Normal;
-/// assert!(!behavior.should_preserve());
+/// // A display timer keeps its authored duration under reduced motion.
+/// let timer = AnimationController::builder(Duration::from_secs(3))
+///     .behavior(AnimationBehavior::Preserve)
+///     .build();
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum AnimationBehavior {
-    /// The animation will run normally.
+    /// Honor reduced motion and the host duration scale.
     #[default]
     Normal,
 
-    /// The animation will preserve its state when not in view.
-    ///
-    /// This is useful for animations that should not tick when the widget
-    /// is not visible, but should resume when it becomes visible again.
+    /// Keep authored timing under any host motion setting or application policy.
+    /// Debug playback controls and registry muting still apply.
     Preserve,
-}
-
-impl AnimationBehavior {
-    /// Returns true if the animation should preserve its state.
-    #[inline]
-    #[must_use]
-    pub const fn should_preserve(&self) -> bool {
-        matches!(self, AnimationBehavior::Preserve)
-    }
-
-    /// Returns true if the animation should run normally.
-    #[inline]
-    #[must_use]
-    pub const fn is_normal(&self) -> bool {
-        matches!(self, AnimationBehavior::Normal)
-    }
 }

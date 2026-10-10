@@ -185,24 +185,117 @@ pub(crate) fn agent_playback_drives_independent_windows_and_one_paused_step_fram
         a_frames + 1,
         "a paused run cannot keep producing after its explicit step"
     );
+    edit(&b_window, MotionRequest::new().with_step_ms(50));
+    let _ = runtime.render_frame(&mut sink);
+    assert_eq!(
+        runtime
+            .presentations
+            .get(b)
+            .expect("B")
+            .clock()
+            .produced_count(),
+        b_frames + 1,
+        "an explicit inspection frame survives after its animation completed"
+    );
+    assert_eq!(
+        runtime
+            .presentations
+            .get(a)
+            .expect("A")
+            .clock()
+            .produced_count(),
+        a_frames + 1,
+        "the host request remains addressed"
+    );
+    let _ = runtime.render_frame(&mut sink);
+    assert_eq!(
+        runtime
+            .presentations
+            .get(b)
+            .expect("B")
+            .clock()
+            .produced_count(),
+        b_frames + 1,
+        "a host inspection request is consumed once"
+    );
+    runtime.widgets().schedule_root_rebuild();
+    let _ = runtime.render_frame(&mut sink);
+    assert_eq!(
+        runtime
+            .presentations
+            .get(a)
+            .expect("A")
+            .clock()
+            .produced_count(),
+        a_frames + 2,
+        "pausing animation leaves an independent widget build deliverable"
+    );
+    assert_eq!(a_owner.controller().value(), 0.6);
 }
 
 pub(crate) fn gated_presentations_hold_samples_then_catch_up_when_visible() {
-    use flui_animation::{Animation as _, AnimationController};
+    use flui_animation::simulation::{SpringDescription, SpringSimulation, Tolerance};
+    use flui_animation::{Animation as _, AnimationController, AnimationStatus};
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
     use std::time::Duration;
 
-    for hidden in [true, false] {
+    for (hidden, kind) in [true, false].into_iter().flat_map(|hidden| {
+        ["tween", "repeat", "finite repeat", "spring"].map(|kind| (hidden, kind))
+    }) {
         let runtime = mount_root_here();
         let owner =
             AnimationController::builder(Duration::from_secs(1)).build_on(Some(&runtime.vsync()));
         let controller = owner.controller();
-        controller.forward().expect("fresh run");
+        let run = match kind {
+            "repeat" | "finite repeat" => controller.repeat_with(
+                None,
+                None,
+                false,
+                None,
+                (kind == "finite repeat").then_some(3),
+            ),
+            "spring" => controller.animate_with(
+                SpringSimulation::try_new(
+                    SpringDescription::new(1.0, 100.0, 20.0).expect("critical spring"),
+                    0.0,
+                    1.0,
+                    0.0,
+                    Tolerance::DEFAULT,
+                )
+                .expect("finite spring"),
+            ),
+            _ => controller.forward(),
+        }
+        .expect("fresh run");
+        let outcomes = Rc::new(RefCell::new(Vec::new()));
+        run.when_complete_or_cancel({
+            let outcomes = Rc::clone(&outcomes);
+            move |outcome| outcomes.borrow_mut().push(outcome)
+        });
+        let completions = Rc::new(Cell::new(0));
+        let _subscription = controller.subscribe_status(Rc::new({
+            let completions = Rc::clone(&completions);
+            move |status| {
+                if status == AnimationStatus::Completed {
+                    completions.set(completions.get() + 1);
+                }
+            }
+        }));
         let mut sink = ScriptedSink::always_presents();
         runtime.set_now_secs_for_test(0.0);
         let _ = runtime.render_frame(&mut sink);
         runtime.set_now_secs_for_test(0.25);
         let _ = runtime.render_frame(&mut sink);
-        assert!((controller.value() - 0.25).abs() < 1e-9);
+        let expected = if kind == "spring" {
+            1.0 - 3.5 * (-2.5_f64).exp()
+        } else {
+            0.25
+        };
+        assert!((controller.value() - expected).abs() < 1e-9, "{kind}");
+        assert!(run.is_pending());
+        let held_value = controller.value();
+        let held_status = controller.status();
 
         let mut scheduler = runtime.scheduler().clone();
         if hidden {
@@ -210,14 +303,24 @@ pub(crate) fn gated_presentations_hold_samples_then_catch_up_when_visible() {
         } else {
             scheduler.set_frames_enabled(false);
         }
+        let held_frames = runtime.presentations.primary().clock().produced_count();
         for time in [0.5, 1.0, 2.0] {
             runtime.set_now_secs_for_test(time);
             let _ = runtime.render_frame(&mut sink);
             assert!(
-                (controller.value() - 0.25).abs() < 1e-9,
-                "hidden={hidden}: gated frames cannot invoke the controller"
+                (controller.value() - held_value).abs() < 1e-9,
+                "hidden={hidden}, {kind}: gated frames cannot invoke the controller"
             );
             assert!(controller.is_animating());
+            assert_eq!(controller.status(), held_status);
+            assert!(run.is_pending());
+            assert!(outcomes.borrow().is_empty());
+            assert_eq!(completions.get(), 0);
+            assert_eq!(
+                runtime.presentations.primary().clock().produced_count(),
+                held_frames,
+                "hidden={hidden}, {kind}: gated animation cannot demand a frame"
+            );
         }
 
         if hidden {
@@ -227,12 +330,38 @@ pub(crate) fn gated_presentations_hold_samples_then_catch_up_when_visible() {
         }
         runtime.set_now_secs_for_test(2.1);
         let _ = runtime.render_frame(&mut sink);
-        assert_eq!(
-            controller.value(),
-            1.0,
-            "visibility resumes at current timeline time"
+        let repeating = matches!(kind, "repeat" | "finite repeat");
+        let expected = if repeating { 0.1 } else { 1.0 };
+        assert!(
+            (controller.value() - expected).abs() < 1e-9,
+            "hidden={hidden}, {kind}: first visible frame includes the hidden interval"
         );
-        assert!(!controller.is_animating());
+        assert_eq!(controller.is_animating(), repeating);
+        assert_eq!(run.is_pending(), repeating);
+        assert_eq!(completions.get(), usize::from(!repeating));
+        assert_eq!(
+            &*outcomes.borrow(),
+            if repeating { &[][..] } else { &[Ok(())][..] }
+        );
+
+        runtime.set_now_secs_for_test(3.1);
+        let _ = runtime.render_frame(&mut sink);
+        runtime.set_now_secs_for_test(3.2);
+        let _ = runtime.render_frame(&mut sink);
+        if kind == "repeat" {
+            assert!((controller.value() - 0.2).abs() < 1e-9);
+            assert!(run.is_pending());
+            assert_eq!(completions.get(), 0);
+            drop(owner);
+            assert!(run.is_canceled());
+            assert_eq!(outcomes.borrow().len(), 1, "one owner cancellation");
+            assert!(outcomes.borrow()[0].is_err());
+        } else {
+            assert_eq!(controller.value(), 1.0);
+            assert!(run.is_complete());
+            assert_eq!(completions.get(), 1, "no terminal status replay: {kind}");
+            assert_eq!(&*outcomes.borrow(), &[Ok(())], "one completion: {kind}");
+        }
     }
 }
 

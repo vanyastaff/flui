@@ -286,13 +286,15 @@ pub fn derive_diagnosticable(input: TokenStream) -> TokenStream {
         .into()
 }
 
-/// Emit `impl TwoWayConverter` and a componentwise `impl Lerp` for a struct
-/// of `f64` fields, so the type can be spring-animated by
+/// Emit `impl TwoWayConverter` and a fieldwise `impl Lerp` for a nonempty struct,
+/// so the type can be spring-animated by
 /// `flui_animation::AnimatedValue`, tweened, and used as a
 /// `flui_animation::Keyframes` value.
 ///
-/// Every field must be `f64`; a non-`f64` field is a compile error. The type
-/// must also be `Clone` (both traits' supertrait).
+/// Each field must implement `TwoWayConverter` and `Lerp`, with a concrete
+/// vector width. Nested values are flattened in declaration order, and each
+/// field retains its interpolation contract. Generic-dependent widths cannot
+/// be summed in an array length on stable Rust. The struct must be `Clone`.
 ///
 /// # Example
 ///

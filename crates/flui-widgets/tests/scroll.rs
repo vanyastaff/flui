@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::common::{LaidOut, lay_out, tight};
-use flui_animation::{Curves, Vsync};
+use flui_animation::{ArcCurve, Curves, Vsync};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::view::ScrollDirection;
 use flui_view::{IntoView, ViewExt};
@@ -364,6 +364,14 @@ fn fling_scoped(widget: Scrollable, vsync: Vsync, constraints: BoxConstraints) -
 /// animation frames — confirming that the fling animation controller is wired
 /// to the scroll controller and the vsync is driving it.
 pub(crate) fn scrollable_fling_advances_offset_past_release() {
+    exercise_fling_registry(false);
+}
+
+pub(crate) fn an_active_fling_migrates_between_registries() {
+    exercise_fling_registry(true);
+}
+
+fn exercise_fling_registry(migrate: bool) {
     let controller = ScrollController::new();
     // Large extent prevents the fling from hitting the boundary on the first
     // frame — we want to observe forward motion, not clamping.
@@ -374,7 +382,7 @@ pub(crate) fn scrollable_fling_advances_offset_past_release() {
         .controller(controller.clone())
         .child(SizedBox::new(300.0, 5000.0));
 
-    let mut scoped = fling_scoped(widget, vsync, tight(300.0, 300.0));
+    let mut scoped = fling_scoped(widget.clone(), vsync.clone(), tight(300.0, 300.0));
 
     // Upward drag well past the 18 px slop to establish a recognizable fling
     // velocity. The first move crosses slop (on_pan_start). The second fires
@@ -405,6 +413,34 @@ pub(crate) fn scrollable_fling_advances_offset_past_release() {
          release={pixels_at_release:.1}, now={:.1}",
         controller.pixels()
     );
+    if migrate {
+        let before = controller.pixels();
+        assert!(vsync.has_running());
+        let next = Vsync::new();
+        scoped.pump_widget(VsyncScope::new(next.clone(), widget));
+        assert!(
+            vsync.is_empty(),
+            "fling owner withdraws its old registry seat"
+        );
+        scoped.adopt_vsync(next.clone());
+        scoped.pump_for(Duration::ZERO);
+        assert!((controller.pixels() - before).abs() < 1e-8);
+        scoped.pump_for(Duration::from_millis(16));
+        assert!(
+            controller.pixels() > before,
+            "the transferred fling continues scrolling"
+        );
+        assert!(next.has_running());
+        scoped.pump_widget(SizedBox::shrink());
+        assert!(next.is_empty());
+        let retired = controller.pixels();
+        scoped.pump_for(Duration::from_secs(1));
+        assert_eq!(
+            controller.pixels(),
+            retired,
+            "removed fling stops publishing scroll offsets"
+        );
+    }
 }
 
 /// Bouncing physics allows the drag to carry the scroll position past
@@ -458,17 +494,54 @@ pub(crate) fn bouncing_physics_fling_springs_back_after_overscroll() {
 // Scrollable — animate_to (ADR-0037)
 // ============================================================================
 
-/// `jump_to` called while an `animate_to` is in flight must cancel it
-/// SYNCHRONOUSLY — a subsequent frame must not resume driving toward the
-/// original target, and must not even transiently show a stale fling-tick
-/// value before the cancellation "catches up" (see `ScrollController`'s
-/// `stop_hook` field docs for the one-frame race a merely QUEUED
-/// cancellation would otherwise leave open, since `flui-testing::pump_frame`
-/// ticks registered controllers before draining the rebuild queue that
-/// services a queued command).
-///
-/// `jump_to` first cancels whatever activity currently owns the position
-/// (goes idle) before touching the pixel offset.
+pub(crate) fn scrollable_retarget_preserves_the_position_velocity() {
+    assert_scroll_retarget_preserves_velocity(|_| 100.0);
+}
+
+pub(crate) fn scrollable_retarget_at_the_current_position_brakes_continuously() {
+    assert_scroll_retarget_preserves_velocity(std::convert::identity);
+}
+
+fn assert_scroll_retarget_preserves_velocity(target: fn(f64) -> f64) {
+    let controller = ScrollController::new();
+    let registry = Vsync::new();
+    let widget = Scrollable::new()
+        .controller(controller.clone())
+        .child(SizedBox::new(300.0, 5000.0));
+    let mut laid = fling_scoped(widget, registry, tight(300.0, 300.0));
+    controller.animate_to(
+        1000.0,
+        Duration::from_secs(1),
+        ArcCurve::new(Curves::Linear),
+    );
+    laid.pump_for(Duration::from_millis(1));
+    laid.pump_for(Duration::from_millis(250));
+    let h = Duration::from_micros(100);
+    let previous = controller.pixels();
+    laid.pump_for(h);
+    let seam = controller.pixels();
+    let arriving = (seam - previous) / h.as_secs_f64();
+    assert!(arriving > 100.0, "the mounted position was moving");
+    let target = target(seam);
+    controller.animate_to(
+        target,
+        Duration::from_secs(1),
+        ArcCurve::new(Curves::EaseIn),
+    );
+    assert!((controller.pixels() - seam).abs() < 1e-12);
+    assert!(controller.position().is_scrolling());
+    laid.pump_for(h);
+    let departing = (controller.pixels() - seam) / h.as_secs_f64();
+    assert!(
+        (departing - arriving).abs() < 1.0,
+        "scroll retarget must inherit velocity: before {arriving}, after {departing}"
+    );
+    laid.pump_for(Duration::from_secs(2));
+    assert_eq!(controller.pixels(), target);
+    assert!(!controller.position().is_scrolling());
+}
+
+/// Jumping cancels before another frame can publish the displaced run's value.
 pub(crate) fn scrollable_jump_to_during_animate_to_cancels_it_synchronously() {
     let controller = ScrollController::new();
     controller.update_dimensions(300.0, 0.0, 4700.0);
@@ -483,7 +556,7 @@ pub(crate) fn scrollable_jump_to_during_animate_to_cancels_it_synchronously() {
     controller.animate_to(
         1000.0,
         Duration::from_millis(300),
-        std::rc::Rc::new(Curves::Linear),
+        ArcCurve::new(Curves::Linear),
     );
     // Three pumps of warm-up, one more than a direct `animate_with` fling:
     // `animate_to` queues a command, and pump 1's rebuild services it after
@@ -622,7 +695,7 @@ pub(crate) fn dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_ti
     scroll.animate_to(
         1000.0,
         Duration::from_millis(300),
-        std::rc::Rc::new(Curves::Linear),
+        ArcCurve::new(Curves::Linear),
     );
     advance_scroll_run(&mut laid);
     assert!(scroll.pixels() > 0.0 && scroll.pixels() < 1000.0);
@@ -658,7 +731,7 @@ pub(crate) fn dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_ti
     scroll.animate_to(
         4000.0,
         Duration::from_millis(300),
-        std::rc::Rc::new(Curves::Linear),
+        ArcCurve::new(Curves::Linear),
     );
     advance_scroll_run(&mut laid);
     assert!(
@@ -1139,7 +1212,7 @@ pub(crate) fn a_fast_gesture_while_refreshing_does_not_start_a_fling() {
     );
 }
 
-pub(crate) fn a_refresh_controller_swap_retires_the_old_fling_and_drives_the_new_position() {
+pub(crate) fn a_refresh_scroll_controller_swap_retires_the_old_fling_and_drives_the_new_position() {
     let a = ScrollController::new();
     let b = ScrollController::new();
     for scroll in [&a, &b] {
@@ -1485,7 +1558,7 @@ fn advance_scroll_run(laid: &mut LaidOut) {
     }
 }
 
-pub(crate) fn replacing_vsync_retires_old_motion_and_drives_fresh_contacts() {
+pub(crate) fn replacing_vsync_releases_old_seats_and_drives_fresh_contacts() {
     use flui_foundation::geometry::EdgeInsets;
     use flui_widgets::{InteractiveViewer, TransformationController};
 
@@ -1562,6 +1635,11 @@ pub(crate) fn replacing_vsync_retires_old_motion_and_drives_fresh_contacts() {
         }));
         let replacement = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             laid.pump_widget(VsyncScope::new(second.clone(), child.clone()));
+            if family == "scrollable" && fail_stop {
+                // Clock transfer preserves scrolling. Explicit cancellation
+                // still exercises the one-shot activity failure and recovery.
+                scroll.jump_to(pixels());
+            }
         }));
         if let Err(payload) = replacement {
             assert!(fail_stop, "healthy clock replacement must not unwind");
@@ -1574,7 +1652,7 @@ pub(crate) fn replacing_vsync_retires_old_motion_and_drives_fresh_contacts() {
         assert_eq!(
             attempted.get(),
             usize::from(fail_stop),
-            "{family}: replacement reaches the one-shot activity failure"
+            "{family}: retirement reaches the one-shot activity failure"
         );
         let replaced = pixels();
         // Repeating the accepted new registry cannot hide a seat left on the
@@ -2143,6 +2221,40 @@ pub(crate) fn notched_wheel_accumulates_distance_and_eases_out_in_150ms() {
     );
 }
 
+pub(crate) fn a_notched_wheel_run_migrates_with_its_accepted_destination() {
+    use flui_platform_api::pointer::ScrollPrecision::Notched;
+    let scroll = ScrollController::new();
+    let old = Vsync::new();
+    let next = Vsync::new();
+    let mut laid = crate::common::lay_out_animated(
+        animated_scroll_content(&scroll, &old),
+        tight(300.0, 300.0),
+        old.clone(),
+    );
+    dispatch_typed_wheel(&laid, Notched, 100.0);
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(30));
+    let before = scroll.pixels();
+    assert!(before > 0.0 && before < 100.0);
+    assert!(old.has_running());
+    laid.pump_widget(animated_scroll_content(&scroll, &next));
+    assert!(old.is_empty());
+    laid.adopt_vsync(next.clone());
+    laid.pump_for(Duration::ZERO);
+    assert!((scroll.pixels() - before).abs() < 1e-8);
+    laid.pump_for(Duration::from_millis(16));
+    assert!(scroll.pixels() > before);
+    // A subsequent notch accumulates against the retained destination, not
+    // the intermediate painted position at registry replacement.
+    dispatch_typed_wheel(&laid, Notched, 50.0);
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(150));
+    assert_eq!(scroll.pixels(), 150.0);
+    assert!(!scroll.position().is_scrolling());
+    laid.pump_widget(SizedBox::shrink());
+    assert!(next.is_empty());
+}
+
 pub(crate) fn precise_and_unknown_wheels_interrupt_synthetic_motion_once() {
     use flui_platform_api::pointer::ScrollPrecision::{Notched, Precise, Unknown};
     for precision in [Precise, Unknown] {
@@ -2303,7 +2415,7 @@ pub(crate) fn a_scrollable_swap_stops_old_motion_and_retires_its_jump_hook() {
     old.animate_to(
         1000.0,
         Duration::from_millis(300),
-        std::rc::Rc::new(Curves::Linear),
+        ArcCurve::new(Curves::Linear),
     );
     advance_scroll_run(&mut laid);
     assert!(old.pixels() > 0.0);
@@ -2319,7 +2431,7 @@ pub(crate) fn a_scrollable_swap_stops_old_motion_and_retires_its_jump_hook() {
     new.animate_to(
         900.0,
         Duration::from_millis(300),
-        std::rc::Rc::new(Curves::Linear),
+        ArcCurve::new(Curves::Linear),
     );
     advance_scroll_run(&mut laid);
     let before = new.pixels();
@@ -2344,7 +2456,7 @@ pub(crate) fn a_same_position_scrollable_rebuild_preserves_motion() {
     scroll.animate_to(
         1000.0,
         Duration::from_millis(300),
-        std::rc::Rc::new(Curves::Linear),
+        ArcCurve::new(Curves::Linear),
     );
     advance_scroll_run(&mut laid);
     let before = scroll.pixels();
@@ -2396,7 +2508,7 @@ pub(crate) fn retiring_one_scrollable_preserves_a_later_owners_jump_hook() {
     scroll.animate_to(
         900.0,
         Duration::from_millis(300),
-        std::rc::Rc::new(Curves::Linear),
+        ArcCurve::new(Curves::Linear),
     );
     advance_scroll_run(&mut second);
     assert!(scroll.pixels() > before, "next command still progresses");
@@ -2660,8 +2772,22 @@ pub(crate) fn bouncing_fling_into_the_edge_overscrolls_and_returns() {
 /// the build phase every frame, driven by pointer events between frames.
 struct RefreshHarness {
     binding: flui_testing::HeadlessBinding,
+    mounted: flui_testing::Mounted,
     scroll: ScrollController,
     refresh: RefreshController,
+    content_builds: Rc<Cell<usize>>,
+}
+
+#[derive(Clone, flui_view::prelude::StatelessView)]
+struct RefreshContent {
+    builds: Rc<Cell<usize>>,
+}
+
+impl flui_view::StatelessView for RefreshContent {
+    fn build(&self, _ctx: &dyn flui_view::BuildContext) -> impl IntoView {
+        self.builds.set(self.builds.get() + 1);
+        SizedBox::new(300.0, 5000.0)
+    }
 }
 
 const REFRESH_FRAME: Duration = Duration::from_nanos(16_666_667);
@@ -2671,15 +2797,18 @@ impl RefreshHarness {
         let scroll = ScrollController::new();
         scroll.update_dimensions(300.0, 0.0, 4700.0);
         let refresh = RefreshController::new();
+        let content_builds = Rc::new(Cell::new(0));
         let mut binding = flui_testing::HeadlessBinding::new();
         let root = flui_widgets::GestureArenaScope::new(
             binding.arena().clone(),
             flui_widgets::FocusRoot::new(VsyncScope::new(
                 binding.vsync().clone(),
-                refresh_content(&scroll, &refresh),
+                refresh_content(&scroll, &refresh).child(RefreshContent {
+                    builds: Rc::clone(&content_builds),
+                }),
             )),
         );
-        let _ = binding.mount_root(
+        let mounted = binding.mount_root(
             &root,
             flui_testing::MountOwners::fresh(),
             flui_testing::MountOptions::tight(300.0, 300.0),
@@ -2687,8 +2816,10 @@ impl RefreshHarness {
         binding.pump_frame(REFRESH_FRAME);
         Self {
             binding,
+            mounted,
             scroll,
             refresh,
+            content_builds,
         }
     }
 
@@ -2704,10 +2835,46 @@ impl RefreshHarness {
         binding.dispatch_pointer(&event, |position| binding.hit_test(position));
     }
 
+    fn replace_refresh(&mut self, refresh: RefreshController) {
+        let root = flui_widgets::GestureArenaScope::new(
+            self.binding.arena().clone(),
+            flui_widgets::FocusRoot::new(VsyncScope::new(
+                self.binding.vsync().clone(),
+                refresh_content(&self.scroll, &refresh).child(RefreshContent {
+                    builds: Rc::clone(&self.content_builds),
+                }),
+            )),
+        );
+        self.binding.swap_root_view(
+            self.mounted.root_element,
+            &flui_view::RootRenderView::new(root, 300.0, 300.0),
+        );
+        self.refresh = refresh;
+        self.frame();
+    }
+
     /// Pumps one frame and returns how many elements it rebuilt.
     fn frame(&mut self) -> usize {
         self.binding.pump_frame(REFRESH_FRAME);
         self.binding.last_frame_report().build.elements_built
+    }
+
+    fn paints_indicator(&self) -> bool {
+        self.binding
+            .layer_tree()
+            .expect("committed refresh scene")
+            .iter()
+            .any(|(_, node)| {
+                if let flui_rendering::layer::Layer::Picture(picture) = node.layer() {
+                    picture.picture().iter().any(|command| {
+                        matches!(&command.op,
+                    flui_painting::display_list::DrawOp::Arc { paint, .. }
+                    if paint.color == flui_painting::styling::Color::rgba(33, 150, 243, 204))
+                    })
+                } else {
+                    false
+                }
+            })
     }
 
     /// Where the content's top edge is painted, in root coordinates.
@@ -2765,12 +2932,79 @@ pub(crate) fn refresh_indicator_drag_scrolls_without_rebuilding() {
     }
 }
 
+/// A retained overlay follows its replacement refresh source and withdraws
+/// delivery from the previous source, without rebuilding scroll content.
+pub(crate) fn refresh_controller_replacement_rebinds_the_retained_indicator() {
+    use flui_testing::PointerPhase::{Down, Move, Up};
+
+    for initially_refreshing in [false, true] {
+        let mut harness = RefreshHarness::mount();
+        if initially_refreshing {
+            harness.pointer(Down, 40.0);
+            harness.pointer(Move, 140.0);
+            harness.pointer(Up, 140.0);
+            harness.frame();
+            assert!(harness.paints_indicator());
+        }
+        let retired = harness.refresh.clone();
+        harness.replace_refresh(RefreshController::new());
+        assert!(!harness.paints_indicator(), "the replacement starts idle");
+        assert_eq!(harness.frame(), 0, "configuration replacement settles");
+        let content_builds = harness.content_builds.get();
+
+        retired.finish();
+        assert_eq!(
+            harness.frame(),
+            0,
+            "the old source cannot rebuild the overlay"
+        );
+        assert!(!harness.paints_indicator());
+
+        harness.pointer(Down, 40.0);
+        harness.pointer(Move, 140.0);
+        assert_eq!(harness.frame(), 0, "new pull distance does not rebuild");
+        harness.pointer(Up, 140.0);
+        assert!(
+            harness.refresh.is_refreshing(),
+            "the gesture uses the new source"
+        );
+        harness.frame();
+        assert!(
+            harness.paints_indicator(),
+            "new phase delivery paints its arc"
+        );
+        assert_eq!(harness.frame(), 0);
+        assert_eq!(harness.content_builds.get(), content_builds);
+
+        retired.finish();
+        assert_eq!(
+            harness.frame(),
+            0,
+            "old completion cannot hide the new indicator"
+        );
+        assert!(harness.paints_indicator());
+        harness.refresh.finish();
+        harness.frame();
+        assert!(
+            !harness.paints_indicator(),
+            "new completion removes the arc"
+        );
+        assert_eq!(harness.frame(), 0);
+        assert_eq!(harness.content_builds.get(), content_builds);
+    }
+}
+
 /// A pull changes only the pull distance: no rebuild, while an external
 /// listener still hears every change. Entering and leaving the refreshing
 /// phase rebuilds, once each.
 pub(crate) fn refresh_indicator_rebuilds_only_on_a_phase_change() {
     use flui_testing::PointerPhase::{Down, Move, Up};
     let mut harness = RefreshHarness::mount();
+    let content_builds = harness.content_builds.get();
+    assert!(
+        !harness.paints_indicator(),
+        "idle content has no loading arc"
+    );
     let heard = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let counter = Arc::clone(&heard);
     let _subscription = harness
@@ -2801,10 +3035,28 @@ pub(crate) fn refresh_indicator_rebuilds_only_on_a_phase_change() {
         "entering the refreshing phase rebuilds"
     );
     assert_eq!(harness.frame(), 0, "and then settles");
+    assert!(
+        harness.paints_indicator(),
+        "the refreshing frame paints its loading arc"
+    );
+    assert_eq!(
+        harness.content_builds.get(),
+        content_builds,
+        "starting refresh rebuilds only the indicator"
+    );
 
     harness.refresh.finish();
     assert!(harness.frame() > 0, "leaving the refreshing phase rebuilds");
     assert_eq!(harness.frame(), 0, "and then settles");
+    assert!(
+        !harness.paints_indicator(),
+        "completion removes the loading arc"
+    );
+    assert_eq!(
+        harness.content_builds.get(),
+        content_builds,
+        "finishing refresh rebuilds only the indicator"
+    );
 }
 fn nested_fling_content(
     outer: &ScrollController,

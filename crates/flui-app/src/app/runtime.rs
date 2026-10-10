@@ -283,11 +283,7 @@ pub(crate) struct AppRuntime {
         not(target_arch = "wasm32")
     ))]
     pub(super) quit_notification: QuitNotification,
-    #[cfg(all(
-        not(target_os = "android"),
-        not(target_os = "ios"),
-        not(target_arch = "wasm32")
-    ))]
+    #[cfg(all(not(target_os = "android"), not(target_os = "ios")))]
     pub(super) loop_identity: Arc<()>,
     #[cfg(all(
         not(target_os = "android"),
@@ -423,11 +419,7 @@ impl AppRuntime {
                 not(target_arch = "wasm32")
             ))]
             quit_notification: QuitNotification::Active,
-            #[cfg(all(
-                not(target_os = "android"),
-                not(target_os = "ios"),
-                not(target_arch = "wasm32")
-            ))]
+            #[cfg(all(not(target_os = "android"), not(target_os = "ios")))]
             loop_identity: Arc::new(()),
             #[cfg(all(
                 not(target_os = "android"),

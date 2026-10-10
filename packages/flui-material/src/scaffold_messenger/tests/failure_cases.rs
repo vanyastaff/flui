@@ -125,11 +125,12 @@ fn exercise_with_secondary(
     handle
         .shared
         .entry_controller
-        .add_status_listener(std::rc::Rc::new(move |status| {
+        .subscribe_status(std::rc::Rc::new(move |status| {
             if status == AnimationStatus::Forward {
                 forward_handle.schedule(flui_sdk::view::RebuildReason::AnimationTick);
             }
-        }));
+        }))
+        .detach();
     let mut fanout = Vec::new();
     for _ in 0..2 {
         let armed = Arc::clone(&armed);
@@ -333,6 +334,129 @@ fn bounded_child(case: &str) {
     let _ = std::fs::remove_file(marker);
     assert!(result, "Messenger child {case} aborted, failed, or stalled");
 }
+fn a_second_display_timer_retires_the_first() {
+    use flui_sdk::animation::{Animation as _, MotionClock};
+
+    struct RetiredCapture(Rc<Cell<usize>>);
+    impl Drop for RetiredCapture {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+
+    let (mut harness, handle) = mounted_handle();
+    let closed = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&closed);
+    handle
+        .show_snack_bar(snack_bar("replacement").duration(Duration::from_millis(800)))
+        .on_closed(move |_cx, reason| seen.borrow_mut().push(reason));
+    handle.shared.entry_controller.set_value(1.0);
+    harness.tick();
+    let registry = handle
+        .shared
+        .vsync
+        .borrow()
+        .clone()
+        .expect("mounted registry");
+    let first = handle
+        .shared
+        .duration_controller
+        .borrow()
+        .as_ref()
+        .expect("first display timer")
+        .controller()
+        .clone();
+    let first_run = first.forward().expect("first timer remains live");
+    let retired_callbacks = Rc::new(Cell::new(0));
+    first
+        .subscribe_status(Rc::new({
+            let capture = RetiredCapture(Rc::clone(&retired_callbacks));
+            move |_| {
+                let _ = &capture;
+            }
+        }))
+        .detach();
+    let seats = registry.len();
+    let mut clock = MotionClock::new();
+    registry.tick_all(&clock.frame(Duration::ZERO));
+    registry.tick_all(&clock.frame(Duration::from_millis(400)));
+    assert!((first.value() - 0.5).abs() < 1e-9);
+    let canceled = Rc::new(Cell::new(0));
+    let seats_at_cancel = Rc::new(Cell::new(None));
+    first_run.when_complete_or_cancel({
+        let canceled = Rc::clone(&canceled);
+        let seats_at_cancel = Rc::clone(&seats_at_cancel);
+        let registry = registry.clone();
+        let tick = clock.frame(Duration::from_millis(400));
+        move |outcome| {
+            assert!(outcome.is_err());
+            seats_at_cancel.set(Some(registry.len()));
+            registry.tick_all(&tick);
+            canceled.set(canceled.get() + 1);
+        }
+    });
+    // The public queue cancels before starting another entry. This private
+    // mounted seam delivers a second Completed without that cancellation.
+    handle
+        .shared
+        .handle_entry_status(AnimationStatus::Completed, ReconcileOrigin::Direct);
+    assert!(
+        first_run.is_canceled(),
+        "replacement cancels the old accepted run"
+    );
+    assert!(
+        first.forward().is_err(),
+        "a saved observer cannot revive its retired owner"
+    );
+    assert!(!first.is_animating());
+    assert_eq!(
+        retired_callbacks.get(),
+        1,
+        "retirement releases status captures while an observer survives"
+    );
+    assert_eq!(
+        canceled.get(),
+        1,
+        "cancellation can reenter the same registry once"
+    );
+    assert_eq!(
+        seats_at_cancel.get(),
+        Some(seats),
+        "the old seat is withdrawn before cancellation"
+    );
+    assert_eq!(
+        registry.len(),
+        seats,
+        "replacement retains one display registration"
+    );
+    registry.tick_all(&clock.frame(Duration::from_millis(400)));
+    registry.tick_all(&clock.frame(Duration::from_millis(800)));
+    harness.tick();
+    assert!(
+        closed.borrow().is_empty(),
+        "the retired timer's old deadline cannot close the entry"
+    );
+    registry.tick_all(&clock.frame(Duration::from_millis(1200)));
+    harness.tick();
+    registry.tick_all(&clock.frame(Duration::from_millis(1200)));
+    registry.tick_all(&clock.frame(Duration::from_millis(1450)));
+    harness.tick();
+    assert_eq!(&*closed.borrow(), &[SnackBarClosedReason::Timeout]);
+    registry.tick_all(&clock.frame(Duration::from_secs(3)));
+    harness.tick();
+    assert_eq!(
+        &*closed.borrow(),
+        &[SnackBarClosedReason::Timeout],
+        "no retired completion replay"
+    );
+    assert_eq!(canceled.get(), 1);
+    drop(harness);
+    assert!(
+        registry.is_empty(),
+        "unmount withdraws the remaining mounted owners"
+    );
+}
+
 pub(super) fn run() {
     if let Ok(case) = std::env::var("FLUI_MESSENGER_CHILD") {
         match case.as_str() {
@@ -346,6 +470,10 @@ pub(super) fn run() {
     }
     let mut failures = Vec::new();
     for (name, row) in [
+        (
+            "replacement retires the first display timer",
+            a_second_display_timer_retires_the_first as fn(),
+        ),
         ("completion alone", completion_alone as fn()),
         ("forward wake alone", forward_alone),
         ("fanout wake alone", fanout_alone),

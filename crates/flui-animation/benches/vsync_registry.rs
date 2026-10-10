@@ -1,9 +1,9 @@
 //! Criterion benchmarks for [`Vsync`]'s registry resolution cost.
 //!
-//! These measure `tick_all`'s per-controller lookup cost in isolation — not
-//! the animation math `tick_at` itself, which `animation_bench.rs`'s
-//! `controller_tick` group already prices — across a growing resident
-//! population, both stopped and running, plus the cost of tearing a whole
+//! These measure a presentation clock and `tick_all` across a growing resident
+//! population, both stopped and running. Active frames include controller
+//! sampling and delivery; `animation_bench.rs` also isolates one controller.
+//! They also measure the cost of tearing a whole
 //! subtree's registrations down at once. Run with
 //! `cargo bench -p flui-animation --bench vsync_registry`; the tables in
 //! `docs/PERFORMANCE.md` are sourced from here, not estimated.
@@ -18,7 +18,34 @@ use std::time::Duration;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 
-use flui_animation::{AnimationController, Vsync};
+use flui_animation::{Animation, AnimationController, MotionClock, Vsync};
+
+const FRAME: Duration = Duration::from_nanos(16_666_667);
+// The same 136-year run used by the single-controller benchmarks. Criterion
+// cannot finish it by advancing one virtual frame per measured iteration.
+const NEVER_ENDING: Duration = Duration::from_secs(u32::MAX as u64);
+
+fn registry_frame(vsync: &Vsync, clock: &mut MotionClock, raw: &mut Duration) {
+    *raw = raw
+        .checked_add(FRAME)
+        .expect("benchmark timeline exhausted");
+    vsync.tick_all(&clock.frame(black_box(*raw)));
+}
+
+fn assert_live_progress(
+    vsync: &Vsync,
+    clock: &mut MotionClock,
+    raw: &mut Duration,
+    controller: &AnimationController,
+) {
+    registry_frame(vsync, clock, raw);
+    let before = controller.value();
+    registry_frame(vsync, clock, raw);
+    assert!(
+        controller.value() > before,
+        "a registry benchmark must sample new animation time on every iteration"
+    );
+}
 
 /// A registry of `count` stopped, never-started controllers: the walk's
 /// lookup cost with no animation work at all, the shape the tables in
@@ -37,15 +64,12 @@ fn stopped_vsync_registry(criterion: &mut Criterion) {
         }
         black_box(&owners);
         assert_eq!(vsync.len(), count);
-        vsync.tick_all(
-            &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)),
-        );
+        let mut clock = MotionClock::new();
+        let mut raw = Duration::ZERO;
+        vsync.tick_all(&clock.frame(raw));
         group.bench_with_input(BenchmarkId::from_parameter(count), &count, |bench, _| {
             bench.iter(|| {
-                vsync.tick_all(
-                    &flui_animation::MotionClock::new()
-                        .frame(std::time::Duration::from_secs_f64(black_box(1.0))),
-                );
+                registry_frame(&vsync, &mut clock, &mut raw);
             });
         });
     }
@@ -53,36 +77,41 @@ fn stopped_vsync_registry(criterion: &mut Criterion) {
 }
 
 /// Every controller running a long forward leg that never completes during
-/// the sample window: the walk cost when the per-controller bookkeeping
-/// (generation check, anchor, running-status read) is on top of the lookup,
-/// not skipped by it.
+/// the sample window, sampled at a new 60 Hz timestamp on every iteration.
+/// Admission and progress checks happen outside the measured loop.
 fn running_vsync_registry(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("running_vsync_registry");
     group.sample_size(10);
     group.warm_up_time(Duration::from_millis(500));
     group.measurement_time(Duration::from_secs(1));
-    for count in [100, 1_000] {
+    for count in [100, 1_000, 5_000, 10_000] {
         let vsync = Vsync::new();
         let mut owners = Vec::with_capacity(count);
         for _ in 0..count {
-            let owner =
-                AnimationController::builder(Duration::from_secs(3600)).build_on(Some(&vsync));
+            let owner = AnimationController::builder(NEVER_ENDING).build_on(Some(&vsync));
             owner.controller().forward().unwrap();
             owners.push(owner);
         }
         black_box(&owners);
         assert_eq!(vsync.len(), count);
-        vsync.tick_all(
-            &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)),
-        ); // anchor every run before the timed loop
+        let mut clock = MotionClock::new();
+        let mut raw = Duration::ZERO;
+        vsync.tick_all(&clock.frame(raw)); // anchor every run before the timed loop
+        assert_live_progress(&vsync, &mut clock, &mut raw, owners[0].controller());
+        let before = owners[0].controller().value();
+        let before_raw = raw;
         group.bench_with_input(BenchmarkId::from_parameter(count), &count, |bench, _| {
             bench.iter(|| {
-                vsync.tick_all(
-                    &flui_animation::MotionClock::new()
-                        .frame(std::time::Duration::from_secs_f64(black_box(1.0))),
-                );
+                registry_frame(&vsync, &mut clock, &mut raw);
             });
         });
+        assert!(owners.iter().all(|owner| owner.controller().is_animating()));
+        if raw > before_raw {
+            assert!(
+                owners[0].controller().value() > before,
+                "the measured loop must advance its active controllers"
+            );
+        }
     }
     group.finish();
 }
@@ -102,7 +131,7 @@ fn mixed_vsync_registry(criterion: &mut Criterion) {
     let vsync = Vsync::new();
     let mut owners = Vec::with_capacity(COUNT as usize);
     for i in 0..COUNT {
-        let owner = AnimationController::builder(Duration::from_secs(3600)).build_on(Some(&vsync));
+        let owner = AnimationController::builder(NEVER_ENDING).build_on(Some(&vsync));
         if i < RUNNING {
             owner.controller().forward().unwrap();
         }
@@ -110,17 +139,30 @@ fn mixed_vsync_registry(criterion: &mut Criterion) {
     }
     black_box(&owners);
     assert_eq!(vsync.len(), COUNT as usize);
-    vsync.tick_all(
-        &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)),
-    );
+    let mut clock = MotionClock::new();
+    let mut raw = Duration::ZERO;
+    vsync.tick_all(&clock.frame(raw));
+    assert_live_progress(&vsync, &mut clock, &mut raw, owners[0].controller());
+    let before = owners[0].controller().value();
+    let before_raw = raw;
     group.bench_function(COUNT.to_string(), |bench| {
         bench.iter(|| {
-            vsync.tick_all(
-                &flui_animation::MotionClock::new()
-                    .frame(std::time::Duration::from_secs_f64(black_box(1.0))),
-            );
+            registry_frame(&vsync, &mut clock, &mut raw);
         });
     });
+    assert_eq!(
+        owners
+            .iter()
+            .filter(|owner| owner.controller().is_animating())
+            .count(),
+        RUNNING as usize
+    );
+    if raw > before_raw {
+        assert!(
+            owners[0].controller().value() > before,
+            "the measured loop must advance its active controllers"
+        );
+    }
     group.finish();
 }
 

@@ -21,6 +21,10 @@
 //!   scroll fling that rest at a precomputed time
 //! - [`AnimatedValue`] - Interruptible spring value with velocity-preserving
 //!   retargeting (`#[derive(TwoWayConverter)]` for custom types)
+//! - [`VsyncRetirement`] - Terminal registry withdrawal separates committed
+//!   kernel closure from cancellation delivery and outgoing capture retirement.
+//!   Runtime shutdown prepares every closing presentation before callbacks;
+//!   retained widget owners cannot keep their runs active (ADR-0175).
 //! - [`AnimationError`] - Error type for animation operations
 //!
 //! ## Persistent Object Pattern
@@ -129,6 +133,7 @@ pub mod vsync;
 // Data types
 pub mod curve;
 pub mod status;
+mod status_subscription;
 pub mod tween_types;
 
 // Re-exports from animation modules
@@ -141,7 +146,10 @@ pub use driven::DrivenController;
 pub use error::AnimationError;
 pub use ext::AnimatableExt;
 pub use keyframes::{Keyframes, KeyframesBuilder, KeyframesError};
-pub use motion::{AnimationTime, FrameTick, InvalidPlaybackRate, MotionClock, PlaybackRate};
+pub use motion::{
+    AnimationTime, FrameTick, InvalidPlaybackRate, MotionClock, MotionPolicy, MotionPreference,
+    PlaybackRate,
+};
 pub use proxy::ProxyAnimation;
 pub use retarget::MotionSpec;
 pub use reverse::ReverseAnimation;
@@ -151,8 +159,12 @@ pub use simulation::{
     SimulationBounds, SimulationError, SimulationParameter, SpringDescription, SpringSimulation,
     SpringType, Tolerance,
 };
-pub use spring::{AnimatedValue, TwoWayConverter};
+pub use spring::{
+    AnimatedValue, AnimatedValueView, AnimationVector, MotionUpdate, TwoWayConverter,
+    VsyncPublication, VsyncUpdate,
+};
 pub use stagger::{Stagger, StaggerOrigin};
+pub use status_subscription::StatusSubscription;
 // `#[derive(TwoWayConverter)]` generates `TwoWayConverter` and `Lerp` impls. It
 // shares the trait's name but lives in the macro namespace (the serde
 // `Serialize` trait+derive pattern), so one `use flui_animation::TwoWayConverter`
@@ -161,7 +173,7 @@ pub use flui_foundation::geometry::Lerp;
 pub use flui_macros::TwoWayConverter;
 pub use switch::AnimationSwitch;
 pub use tween::{TweenAnimation, animate};
-pub use vsync::{Vsync, VsyncRegistration, VsyncRegistrationError};
+pub use vsync::{Vsync, VsyncRegistration, VsyncRegistrationError, VsyncRetirement};
 
 // Re-exports from data type modules
 pub use curve::{

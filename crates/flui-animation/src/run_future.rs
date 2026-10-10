@@ -396,6 +396,13 @@ pub struct RunCompleter {
 }
 
 impl RunCompleter {
+    pub(crate) fn future(&self) -> AnimationRunFuture {
+        AnimationRunFuture {
+            inner: Rc::clone(&self.inner),
+            registration: None,
+        }
+    }
+
     /// Publish `target`, returning the continuations to run iff this call
     /// performed the (once-only) transition — `None` means the future was
     /// already resolved by an earlier call, so there is nothing left to

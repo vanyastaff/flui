@@ -45,7 +45,7 @@ struct ProxyOwner<T: Clone + 'static> {
     notifier: Terminal<Rc<ChangeNotifier>>,
     parent_sub: RefCell<Terminal<Rc<ParentSubscription>>>,
     status_listeners: Terminal<Rc<flui_foundation::Notifier<AnimationStatus>>>,
-    status_sub: RefCell<Terminal<Rc<ParentSubscription>>>,
+    status_sub: RefCell<Terminal<crate::StatusSubscription>>,
     delivering: Cell<bool>,
     pending: RefCell<VecDeque<ProxyDelivery<T>>>,
     retired: RefCell<
@@ -58,7 +58,7 @@ enum ProxyDelivery<T: Clone + 'static> {
         parent: Terminal<Rc<dyn Animation<T>>>,
         previous: Terminal<Rc<dyn Animation<T>>>,
         value_sub: Terminal<Rc<ParentSubscription>>,
-        status_sub: Terminal<Rc<ParentSubscription>>,
+        status_sub: Terminal<crate::StatusSubscription>,
     },
     Value,
     Status(AnimationStatus, Vec<ListenerId>),
@@ -73,14 +73,16 @@ impl<T: Clone + 'static> Drop for ProxyOwner<T> {
         let parent = self.parent.get_mut().withdraw();
         let notifier = self.notifier.withdraw();
         let value_sub = self.parent_sub.get_mut().withdraw();
-        let status_sub = self.status_sub.get_mut().withdraw();
+        let mut status_sub = self.status_sub.get_mut().withdraw();
         let listeners = self.status_listeners.withdraw();
         let pending = self.pending.get_mut().drain(..).collect::<Vec<_>>();
         let retired = std::mem::take(self.retired.get_mut());
         let callbacks = listeners.dispose_and_take_callbacks();
         let value_callbacks = notifier.dispose_and_take_listeners();
         value_sub.detach(&mut retirement.scope());
-        status_sub.detach(&mut retirement.scope());
+        status_sub
+            .get_mut()
+            .cancel_with_recovery(&mut retirement.scope());
         retirement.retire(value_sub);
         retirement.retire(status_sub);
         retirement.retire(parent);
@@ -204,10 +206,10 @@ where
                     parent,
                     previous,
                     value_sub,
-                    status_sub,
+                    mut status_sub,
                 } => {
                     value_sub.detach(retirement);
-                    status_sub.detach(retirement);
+                    status_sub.get_mut().cancel_with_recovery(retirement);
                     retirement.retire(value_sub);
                     retirement.retire(status_sub);
                     retirement.retire(parent);
@@ -233,6 +235,18 @@ where
     }
 }
 
+impl<T: Clone + 'static> ProxyAnimation<T> {
+    /// Withdraw a value listener within an enclosing framework cleanup round.
+    /// Its outgoing captures retire through that round's first-failure context.
+    #[doc(hidden)]
+    pub fn remove_listener_with_recovery(&self, id: ListenerId, recovery: &mut RecoveryScope<'_>) {
+        let callback = Terminal::new(self.inner.notifier.take_listener(id));
+        self.inner.status_listeners.inherit_failure(recovery);
+        self.inner.notifier.inherit_failure(recovery);
+        recovery.retire(callback);
+    }
+}
+
 impl<T> Animation<T> for ProxyAnimation<T>
 where
     T: Clone + fmt::Debug + 'static,
@@ -251,35 +265,42 @@ where
         self.parent().is_animating()
     }
 
-    fn add_status_listener(&self, callback: StatusCallback) -> ListenerId {
-        self.inner
+    fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription {
+        let id = self
+            .inner
             .status_listeners
-            .add(Rc::new(move |status| callback(*status)))
+            .add(Rc::new(move |status| callback(*status)));
+        crate::StatusSubscription::new(&self.inner, id, ProxyOwner::withdraw_status)
     }
 
-    fn add_status_observer(&self, observer: crate::animation::StatusObserver) -> ListenerId {
-        self.inner
+    fn subscribe_status_observer(
+        &self,
+        observer: crate::animation::StatusObserver,
+    ) -> crate::StatusSubscription {
+        let id = self
+            .inner
             .status_listeners
-            .add_with_recovery(Rc::new(move |status, recovery| observer(*status, recovery)))
+            .add_with_recovery(Rc::new(move |status, recovery| observer(*status, recovery)));
+        crate::StatusSubscription::new(&self.inner, id, ProxyOwner::withdraw_status)
     }
+}
 
-    fn remove_status_listener(&self, id: ListenerId) {
-        if self.inner.delivering.get() {
-            if let Some(callback) = self.inner.status_listeners.take_callback(id) {
-                self.inner
-                    .retired
-                    .borrow_mut()
-                    .push(Terminal::new(callback));
+impl<T: Clone + 'static> ProxyOwner<T> {
+    fn withdraw_status(
+        &self,
+        id: ListenerId,
+        recovery: &mut RecoveryScope<'_>,
+    ) -> Option<Rc<flui_foundation::notifier_generic::NotificationCallback<AnimationStatus>>> {
+        let callback = self.status_listeners.take_callback(id);
+        if self.delivering.get() {
+            if let Some(callback) = callback {
+                self.retired.borrow_mut().push(Terminal::new(callback));
             }
+            None
         } else {
-            let callback = self.inner.status_listeners.take_callback(id);
-            let mut recovery = Retirement::new();
-            self.inner
-                .status_listeners
-                .inherit_failure(&mut recovery.scope());
-            self.inner.notifier.inherit_failure(&mut recovery.scope());
-            recovery.retire(callback);
-            recovery.finish();
+            self.status_listeners.inherit_failure(recovery);
+            self.notifier.inherit_failure(recovery);
+            callback
         }
     }
 }
@@ -297,13 +318,8 @@ where
     }
 
     fn remove_listener(&self, id: ListenerId) {
-        let callback = self.inner.notifier.take_listener(id);
         let mut recovery = Retirement::new();
-        self.inner
-            .status_listeners
-            .inherit_failure(&mut recovery.scope());
-        self.inner.notifier.inherit_failure(&mut recovery.scope());
-        recovery.retire(callback);
+        self.remove_listener_with_recovery(id, &mut recovery.scope());
         recovery.finish();
     }
 
@@ -350,9 +366,11 @@ mod tests {
 
         let seen = Rc::new(RefCell::new(Vec::new()));
         let seen2 = Rc::clone(&seen);
-        let _id = proxy.add_status_listener(Rc::new(move |status| {
-            seen2.borrow_mut().push(status);
-        }));
+        proxy
+            .subscribe_status(Rc::new(move |status| {
+                seen2.borrow_mut().push(status);
+            }))
+            .detach();
 
         // Dismissed -> Completed across the swap must fire once with the new
         // status.

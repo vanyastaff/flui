@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Weak, atomic::Ordering};
 
 use parking_lot::Mutex;
 use wasm_bindgen::JsCast;
@@ -12,7 +12,7 @@ use wasm_bindgen::prelude::*;
 use crate::{
     data_transfer::{DataTransferSource, NullDataTransferSource},
     error::PlatformError,
-    shared::{PlatformHandlers, WindowCallbacks},
+    shared::{PlatformHandlers, WindowCallbacks, owner_signal::OwnerSignal},
     traits::{
         Clipboard, HostWindow, OpenWindowError, OwnerPlatform, Platform, PlatformCapabilities,
         PlatformDisplay, PlatformExecutor, PlatformReadyCallback, WebCapabilities,
@@ -33,6 +33,8 @@ type RafClosureSlot = Rc<RefCell<Option<Closure<dyn FnMut()>>>>;
 /// Web/WASM platform implementation
 pub struct WebPlatform {
     state: Arc<Mutex<WebState>>,
+    signal: Arc<OwnerSignal>,
+    preferences: RefCell<Option<super::preferences::Preferences>>,
 }
 
 struct WebState {
@@ -43,6 +45,7 @@ struct WebState {
     /// Window callbacks for RAF loop frame dispatch.
     /// Set when `open_window` creates the single browser window.
     window_callbacks: Option<Arc<WindowCallbacks>>,
+    owner: Weak<WebPlatform>,
 }
 
 // SAFETY: WASM is single-threaded — no data races possible
@@ -68,10 +71,31 @@ impl WebPlatform {
             clipboard: Arc::new(WebClipboard::new()),
             is_running: false,
             window_callbacks: None,
+            owner: Weak::new(),
         };
-
+        let state = Arc::new(Mutex::new(state));
+        let weak = Arc::downgrade(&state);
+        let signal = OwnerSignal::new(Arc::new(move || {
+            let weak = weak.clone();
+            // spawn_local posts a microtask even when the future is ready.
+            // Admission stays committed before any owner callback can run.
+            js_sys::futures::spawn_local(async move {
+                let owner = weak
+                    .upgrade()
+                    .and_then(|state| state.lock().owner.upgrade());
+                if let Some(owner) = owner
+                    && owner.signal.drive()
+                {
+                    owner.quit();
+                }
+            });
+            Ok(())
+        }));
+        let preferences = super::preferences::Preferences::new(&signal)?;
         Ok(Self {
-            state: Arc::new(Mutex::new(state)),
+            state,
+            signal,
+            preferences: RefCell::new(preferences),
         })
     }
 
@@ -165,6 +189,41 @@ impl WebPlatform {
 }
 
 impl Platform for WebPlatform {
+    fn preferences(&self) -> Result<flui_platform_api::SystemPreferences, PlatformError> {
+        if !self.signal.accepting() {
+            return Err(PlatformError::Preferences {
+                message: "browser preference owner has stopped".into(),
+            });
+        }
+        let observation = self.preferences.borrow().as_ref().map(|source| {
+            (
+                source.query.clone(),
+                source.no_preference.clone(),
+                Arc::clone(&source.active),
+            )
+        });
+        let Some((query, no_preference, active)) = observation else {
+            return Ok(flui_platform_api::SystemPreferences::default());
+        };
+        let motion = if query.matches() {
+            Some(flui_platform_api::MotionPreference::Reduce)
+        } else if no_preference.matches() {
+            Some(flui_platform_api::MotionPreference::NoPreference)
+        } else {
+            None
+        };
+        if !active.load(Ordering::Acquire) || !self.signal.accepting() {
+            return Err(PlatformError::Preferences {
+                message: "browser preference owner stopped during sampling".into(),
+            });
+        }
+        let preferences = flui_platform_api::SystemPreferences::default();
+        Ok(match motion {
+            Some(motion) => preferences.with_motion(motion),
+            None => preferences,
+        })
+    }
+
     fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
         self.with_state(|s| s.background_executor.clone())
     }
@@ -175,13 +234,19 @@ impl Platform for WebPlatform {
         self.with_state(|s| s.is_running = true);
 
         let platform = Arc::new(*self);
+        platform.with_state(|state| state.owner = Arc::downgrade(&platform));
+        platform
+            .signal
+            .start()
+            .map_err(|error| PlatformError::Init {
+                message: error.to_string(),
+            })?;
 
-        // No owner lane on this backend: every `OwnerPlatform::open_window`
-        // call creates directly and is always `Ready` (ADR-0039 §1).
-        // wasm is single-threaded, so `PlatformProxy` staying inert here is
-        // moot rather than a real limitation (ADR-0039 "wasm posture").
-        let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::new(
-            Arc::clone(&platform) as Arc<dyn Platform>
+        // Window creation is direct and always Ready. Wake and quit use the
+        // shared owner signal, posted to the browser microtask queue.
+        let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::with_signal(
+            Arc::clone(&platform) as Arc<dyn Platform>,
+            Arc::clone(&platform.signal),
         ));
 
         // Call on_ready synchronously — browser event loop is already
@@ -191,6 +256,7 @@ impl Platform for WebPlatform {
             Arc::clone(&platform) as Arc<dyn Platform>,
             hooks,
         ))
+        .inspect_err(|_| platform.quit())
         .map_err(PlatformError::bootstrap)?;
 
         // Start the RAF loop
@@ -202,6 +268,9 @@ impl Platform for WebPlatform {
 
     fn quit(&self) {
         tracing::info!("Web platform quit requested");
+        self.signal.close();
+        let preferences = self.preferences.borrow_mut().take();
+        drop(preferences);
         let callback = self.with_state(|state| {
             state.is_running = false;
             state.handlers.quit.take()

@@ -384,6 +384,9 @@ impl Lerp for Volatile {
 
 impl TwoWayConverter for Volatile {
     type Vector = [f64; 1];
+    fn rest_thresholds() -> Self::Vector {
+        [0.001]
+    }
     fn to_vector(&self) -> [f64; 1] {
         [self.0]
     }

@@ -44,19 +44,11 @@
 //!
 //! ## Why status edges are polled, not pushed, from the controller
 //!
-//! `AnimationController::add_status_listener` requires its callback to be
-//! `Send + Sync` (`StatusCallback = Arc<dyn Fn(AnimationStatus) + Send +
-//! Sync>`) because the controller itself is a general-purpose, thread-safe
-//! primitive. `MessengerCore` is deliberately **not** `Send`/`Sync` — it is
-//! `Rc`-based, owner-affine, the same reasoning
-//! `crate::drawer::DrawerHandle`'s module doc gives (and its queue's
-//! `on_closed` slots are plain `Box<dyn FnOnce(..)>`, not `+ Send`, matching
-//! every other UI callback in this crate). So the controllers' own listeners
-//! (installed in `ScaffoldMessengerHandle::attach`/
-//! `MessengerCore::start_display_timer`) do the ONE thing a `Send + Sync`
-//! closure can safely do without capturing `Rc` state: reschedule
-//! [`ScaffoldMessenger`]'s own rebuild via a plain `RebuildHandle` (itself
-//! `Send + Sync`).
+//! Animation callbacks and `MessengerCore` both belong to the UI owner. Status
+//! listeners installed in `ScaffoldMessengerHandle::attach` and
+//! `MessengerCore::start_display_timer` schedule a rebuild. Queue mutation is
+//! reconciled at the public operation or build boundary below, where completion
+//! callbacks can observe the operation's committed queue state.
 //!
 //! The actual state-machine translation — "did a controller's status change
 //! since we last looked, and if so what does that mean for the queue" —
@@ -65,7 +57,7 @@
 //! (`show_snack_bar`/`hide_current`/`remove_current`/`clear`) so an explicit
 //! call observes its own effect immediately (no frame boundary needed — the
 //! "remove twice rapidly" test below asserts on this), and from
-//! [`ScaffoldMessengerState::build`] (scheduled by the Send-safe listeners)
+//! [`ScaffoldMessengerState::build`] (scheduled by the status listeners)
 //! for the natural case where a controller settles purely from ticking, with
 //! no explicit API call in between. `reconcile` loops until a full pass
 //! detects no further change, so it correctly drains a multi-step cascade
@@ -108,7 +100,7 @@
 //!   which only ever run from event-handler call stacks. `on_closed` fires
 //!   immediately here — removal completes synchronously, in the same call.
 //! - **`ReconcileOrigin::Build`** — from [`ScaffoldMessengerState::build`],
-//!   reached when the Send-safe controller listeners scheduled a rebuild for
+//!   reached when the controller listeners scheduled a rebuild for
 //!   a PURELY tick-driven status settle (no explicit API call in between —
 //!   e.g. the entrance animation finishing, or the display timer expiring
 //!   and starting the exit reverse, which later settles on its own). Firing
@@ -409,7 +401,7 @@ struct MessengerCore {
     entry_owner: RefCell<Option<DrivenController>>,
     attached: Cell<bool>,
     /// [`ScaffoldMessenger`]'s own rebuild handle — cloned into both
-    /// controllers' Send-safe "reschedule" listeners, so a purely
+    /// controllers' status listeners, so a purely
     /// tick-driven status settle (no explicit API call in between) still
     /// reaches [`Self::reconcile`] via [`ScaffoldMessengerState::build`].
     /// `None` until [`ScaffoldMessengerHandle::attach`] runs.
@@ -610,15 +602,18 @@ impl MessengerCore {
         };
         let vsync = self.vsync.borrow().clone();
         let owner = AnimationController::builder(front.snack_bar.configured_duration())
+            .behavior(flui_sdk::animation::AnimationBehavior::Preserve)
             .build_on(vsync.as_ref());
         let controller = owner.controller().clone();
         if front.hovered_presenters.get() != 0 {
             controller.set_playback_rate(PlaybackRate::PAUSED);
         }
         if let Some(rebuild) = self.rebuild.borrow().clone() {
-            controller.add_status_listener(std::rc::Rc::new(move |_status| {
-                rebuild.schedule(flui_sdk::view::RebuildReason::AnimationTick);
-            }));
+            controller
+                .subscribe_status(std::rc::Rc::new(move |_status| {
+                    rebuild.schedule(flui_sdk::view::RebuildReason::AnimationTick);
+                }))
+                .detach();
         }
         self.last_duration_status.set(AnimationStatus::Dismissed);
         let outgoing = self.duration_controller.borrow_mut().replace(owner);
@@ -744,7 +739,7 @@ impl ScaffoldMessengerHandle {
     }
 
     /// Wires the ambient `Vsync`, installs the entrance controller's
-    /// Send-safe "reschedule [`ScaffoldMessenger`]'s rebuild" listener, and
+    /// listener scheduling [`ScaffoldMessenger`]'s rebuild, and
     /// acquires the binding's post-frame capability (ADR-0021) — see
     /// [`Self::new`]'s doc for why this is deferred out of construction, and
     /// the module docs' "Deferring `on_closed` out of the build phase"
@@ -756,9 +751,10 @@ impl ScaffoldMessengerHandle {
         let rebuild_for_listener = rebuild.clone();
         self.shared
             .entry_controller
-            .add_status_listener(std::rc::Rc::new(move |_status| {
+            .subscribe_status(std::rc::Rc::new(move |_status| {
                 rebuild_for_listener.schedule(flui_sdk::view::RebuildReason::AnimationTick);
-            }));
+            }))
+            .detach();
         let _prev = self.shared.rebuild.borrow_mut().replace(rebuild);
         *self.shared.post_frame.borrow_mut() = ctx.post_frame_handle();
 
@@ -812,7 +808,7 @@ impl ScaffoldMessengerHandle {
 
     /// Re-runs the state-machine reconciliation for a purely tick-driven
     /// settle — called from [`ScaffoldMessengerState::build`] whenever the
-    /// Send-safe listeners scheduled a rebuild. Any `on_closed` this
+    /// Status listeners scheduled a rebuild. Any `on_closed` this
     /// reaches is deferred, never fired inline mid-`build` — see the module
     /// docs' "Deferring `on_closed` out of the build phase" section.
     pub(crate) fn reconcile_after_tick_driven_settle(&self) {
@@ -1075,7 +1071,7 @@ impl ViewState<ScaffoldMessenger> for ScaffoldMessengerState {
     }
 
     fn build(&self, view: &ScaffoldMessenger, _ctx: &dyn BuildContext) -> impl IntoView {
-        // Absorbs any tick-driven status settle the Send-safe listeners
+        // Absorbs any tick-driven status settle the status listeners
         // scheduled this rebuild for — see the module docs' "Deferring
         // `on_closed` out of the build phase" section for why any
         // `on_closed` this reaches is deferred, not fired inline here.

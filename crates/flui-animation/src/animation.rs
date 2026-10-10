@@ -81,23 +81,19 @@ where
     /// Returns the current status of the animation.
     fn status(&self) -> AnimationStatus;
 
-    /// Add a status listener (called when animation starts, completes, etc.).
-    ///
-    /// Returns a listener ID that can be used to remove the listener later.
-    fn add_status_listener(&self, callback: StatusCallback) -> ListenerId;
+    /// Observe status changes until the returned source-bound guard is dropped.
+    /// The guard must not extend the animation owner's lifetime.
+    fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription;
 
-    /// Register a framework relay in this animation's status channel.
+    /// Register a relay borrowing the enclosing delivery's recovery context.
     #[doc(hidden)]
-    fn add_status_observer(&self, observer: StatusObserver) -> ListenerId {
-        self.add_status_listener(Rc::new(move |status| {
+    fn subscribe_status_observer(&self, observer: StatusObserver) -> crate::StatusSubscription {
+        self.subscribe_status(Rc::new(move |status| {
             let mut recovery = Retirement::new();
             recovery.run_with(|recovery| observer(status, recovery));
             recovery.finish();
         }))
     }
-
-    /// Remove a status listener.
-    fn remove_status_listener(&self, id: ListenerId);
 
     /// Whether the animation is currently running.
     #[inline]
@@ -191,7 +187,7 @@ impl<T> Terminal<T> {
             .expect("BUG: a live animation owns its field")
     }
 
-    fn get_mut(&mut self) -> &mut T {
+    pub(crate) fn get_mut(&mut self) -> &mut T {
         self.0
             .as_mut()
             .expect("BUG: a live animation owns its field")
@@ -247,7 +243,7 @@ pub(crate) struct ParentLinks {
     pub(crate) notifier: Terminal<Rc<ChangeNotifier>>,
     pub(crate) status_notifier: Terminal<Rc<flui_foundation::Notifier<AnimationStatus>>>,
     value_sub: Terminal<Rc<ParentSubscription>>,
-    status_sub: Terminal<Rc<ParentSubscription>>,
+    status_sub: Terminal<crate::StatusSubscription>,
 }
 
 impl ParentLinks {
@@ -273,6 +269,35 @@ impl ParentLinks {
         self.notifier.inherit_failure(recovery);
         self.status_notifier.inherit_failure(recovery);
     }
+
+    pub(crate) fn subscribe_status(
+        self: &Rc<Self>,
+        callback: StatusCallback,
+    ) -> crate::StatusSubscription {
+        let id = self
+            .status_notifier
+            .add(Rc::new(move |status| callback(*status)));
+        crate::StatusSubscription::new(self, id, Self::withdraw_status)
+    }
+
+    pub(crate) fn subscribe_status_observer(
+        self: &Rc<Self>,
+        observer: StatusObserver,
+    ) -> crate::StatusSubscription {
+        let id = self
+            .status_notifier
+            .add_with_recovery(Rc::new(move |status, recovery| observer(*status, recovery)));
+        crate::StatusSubscription::new(self, id, Self::withdraw_status)
+    }
+
+    fn withdraw_status(
+        &self,
+        id: ListenerId,
+        recovery: &mut RecoveryScope<'_>,
+    ) -> Option<Rc<flui_foundation::notifier_generic::NotificationCallback<AnimationStatus>>> {
+        self.inherit_failure(recovery);
+        self.status_notifier.take_callback(id)
+    }
 }
 
 impl Drop for ParentLinks {
@@ -283,11 +308,13 @@ impl Drop for ParentLinks {
         let notifier = self.notifier.withdraw();
         let statuses = self.status_notifier.withdraw();
         let value_sub = self.value_sub.withdraw();
-        let status_sub = self.status_sub.withdraw();
+        let mut status_sub = self.status_sub.withdraw();
         let values = notifier.dispose_and_take_listeners();
         let callbacks = statuses.dispose_and_take_callbacks();
         value_sub.detach(&mut recovery.scope());
-        status_sub.detach(&mut recovery.scope());
+        status_sub
+            .get_mut()
+            .cancel_with_recovery(&mut recovery.scope());
         for callback in values {
             recovery.retire(Terminal::new(callback));
         }
@@ -331,13 +358,11 @@ pub(crate) fn link_parent_status<T: Clone + 'static>(
     parent: &Rc<dyn Animation<T>>,
     notifier: &Rc<flui_foundation::Notifier<AnimationStatus>>,
     map: impl Fn(AnimationStatus) -> AnimationStatus + 'static,
-) -> Rc<ParentSubscription> {
+) -> crate::StatusSubscription {
     let weak = Rc::downgrade(notifier);
-    let id = parent.add_status_observer(Rc::new(move |status, recovery| {
+    parent.subscribe_status_observer(Rc::new(move |status, recovery| {
         if let Some(notifier) = weak.upgrade() {
             notifier.notify_with_recovery(&map(status), recovery);
         }
-    }));
-    let parent = Rc::clone(parent);
-    ParentSubscription::new(move || parent.remove_status_listener(id))
+    }))
 }

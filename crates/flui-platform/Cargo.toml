@@ -161,6 +161,8 @@ objc2-app-kit = { workspace = true, features = [
     "NSWindow",
     "NSResponder",
     "NSEvent",
+    "NSAccessibility",
+    "NSWorkspace",
     "NSScreen",
     "NSPasteboard",
     "NSGraphics",
@@ -248,11 +250,13 @@ web-sys = { version = "0.3", features = [
 console_error_panic_hook = "0.1"
 
 # AT-SPI bridge for Linux, behind the `a11y` feature. Off by default because it
-# brings ~66 crates (zbus, atspi, an async executor) -- AT-SPI *is* D-Bus, so
-# there is no lighter path, but an application that does not want a
-# screen-reader bridge should not link a D-Bus stack.
+# brings the AT-SPI bridge and its async stack. Linux winit preferences also
+# use D-Bus, independently of whether the screen-reader bridge is enabled.
 [target.'cfg(target_os = "linux")'.dependencies]
 accesskit_unix = { version = "0.24", optional = true }
+zbus = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["macros"] }
 
 # iOS native backend (UIKit + Metal). `objc2` is the maintained Objective-C
 # binding stack — the `objc` crate the macOS backend still uses has not
@@ -344,13 +348,14 @@ desktop = ["dep:winit"]
 # Per-OS accessibility bridges (AT-SPI on Linux, UIA on Windows,
 # NSAccessibility on macOS) -- one feature, target-gated dependencies, so a
 # build only ever links its own OS's stack. Off by default: see the Linux
-# dependency note above for why ~66 crates should be an opt-in rather than a
-# default.
+# dependency note above for why the bridge remains an opt-in.
 a11y = ["dep:accesskit_unix", "dep:accesskit_windows", "dep:accesskit_macos"]
 
 # winit fallback backend — primary on Linux until native Wayland/X11 lands
 # (roadmap Cross.P); optional on Windows/macOS.
 winit-backend = [
+    "dep:zbus",
+    "dep:futures-util",
     "dep:winit",
     "dep:arboard",
     "dep:crossbeam-channel",
@@ -391,6 +396,29 @@ tracing-subscriber = { workspace = true }
 # Exact diagnostics for owner capabilities and retired public names.
 trybuild = { workspace = true }
 
+# Browser API fixtures mutate JS globals and therefore have their own process.
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test.workspace = true
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+libtest-mimic.workspace = true
+
+# Main-thread winit ownership plus one private D-Bus service per process.
+# libtest-mimic supplies the Cargo/nextest protocol without a custom parser.
+[[test]]
+name = "linux_preferences"
+path = "tests/linux_preferences.rs"
+harness = false
+required-features = ["winit-backend"]
+
+[[example]]
+name = "linux_preferences_probe"
+required-features = ["winit-backend"]
+
+[[test]]
+name = "wasm32"
+path = "tests/wasm32.rs"
+
 # Nested Cargo stays separate from the native platform contract binary.
 [[test]]
 name = "compiler_guards"
@@ -399,6 +427,10 @@ path = "tests/compiler_guards.rs"
 [[test]]
 name = "platform_it"
 path = "tests/main.rs"
+
+[[example]]
+name = "winit_preferences_probe"
+required-features = ["winit-backend"]
 
 # Deliberately its own process: these tests WRITE the process-wide
 # `FLUI_HEADLESS` env var (`unsafe env::set_var`/`remove_var`) to exercise

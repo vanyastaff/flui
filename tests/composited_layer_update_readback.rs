@@ -481,6 +481,98 @@ fn canvas_clip_stays_in_its_run_when_paint_child_splits_the_picture() {
     );
 }
 
+/// A running widget drives both identity-to-layer and retained-layer updates.
+/// Interior pixel samples distinguish motion from a stale transform; no frame
+/// in the measurement dirties the mounted element tree itself.
+fn a_slide_tick_moves_pixels_without_rebuilding() {
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    use flui_animation::ext::AnimatableExt;
+    use flui_animation::{Animation, AnimationController, Tween};
+    use flui_objects::TranslationFraction;
+    use flui_painting::{Alignment, styling::Color};
+    use flui_testing::{HeadlessBinding, MountOptions, MountOwners};
+    use flui_widgets::{
+        Align, ColoredBox, FocusRoot, GestureArenaScope, SizedBox, SlideTransition,
+    };
+
+    let mut binding = HeadlessBinding::new();
+    let owner =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(binding.vsync()));
+    let scalar: Rc<dyn Animation<f64>> = Rc::new(owner.controller().clone());
+    let position = Rc::new(
+        Tween::new(
+            TranslationFraction::ZERO,
+            TranslationFraction::new(2.0, 0.0),
+        )
+        .animate(scalar),
+    );
+    let root = GestureArenaScope::new(
+        binding.arena().clone(),
+        FocusRoot::new(Align::new(Alignment::TOP_LEFT).child(SlideTransition::new(
+            position,
+            SizedBox::new(40.0, 40.0).child(ColoredBox::new(Color::rgb(255, 0, 0))),
+        ))),
+    );
+    let _mounted = binding.mount_root(
+        &root,
+        MountOwners::fresh(),
+        MountOptions::tight(200.0, 200.0),
+    );
+    binding.pump_frame(Duration::ZERO);
+    let renderer = pollster::block_on(HeadlessRenderer::new()).expect("GPU adapter for readback");
+    let rasterize = |binding: &HeadlessBinding| {
+        renderer
+            .render_layer_tree(binding.layer_tree().expect("mounted slide scene"), SURFACE)
+            .expect("rasterizing the moving slide")
+    };
+    let pixel = |pixels: &[u8], x: usize| {
+        let index = (20 * 200 + x) * 4;
+        [
+            pixels[index],
+            pixels[index + 1],
+            pixels[index + 2],
+            pixels[index + 3],
+        ]
+    };
+    let initial = rasterize(&binding);
+    assert_eq!(pixel(&initial, 20), [255, 0, 0, 255]);
+    assert_eq!(pixel(&initial, 60), [255, 255, 255, 255]);
+
+    owner.controller().forward().expect("fresh slide run");
+    binding.pump_frame(Duration::ZERO);
+    for (elapsed, old_pixel, new_pixel) in [
+        (0.25, [255, 0, 0, 255], [255, 255, 255, 255]),
+        (0.5, [255, 255, 255, 255], [255, 0, 0, 255]),
+    ] {
+        binding.pump_frame(Duration::from_millis(250));
+        assert!((owner.controller().value() - elapsed).abs() < 1e-9);
+        let pixels = rasterize(&binding);
+        assert_eq!(
+            pixel(&pixels, 10),
+            [255, 255, 255, 255],
+            "the origin clears at {elapsed}"
+        );
+        assert_eq!(
+            pixel(&pixels, 50),
+            [255, 0, 0, 255],
+            "the shifted box appears at {elapsed}"
+        );
+        assert_eq!(
+            pixel(&pixels, 30),
+            old_pixel,
+            "outgoing interior at {elapsed}"
+        );
+        assert_eq!(
+            pixel(&pixels, 70),
+            new_pixel,
+            "incoming interior at {elapsed}"
+        );
+        assert_eq!(binding.last_frame_report().build.elements_built, 0);
+    }
+}
+
 /// Runs every row, then panics once naming each row that failed.
 fn run_cases(family: &str, cases: &[(&str, fn())]) {
     let mut failures = Vec::new();
@@ -508,8 +600,9 @@ fn run_cases(family: &str, cases: &[(&str, fn())]) {
 }
 
 /// GPU readbacks for the composited-layer update path: opacity, transform and clip
-/// updates rasterize exactly as a repaint does, and a canvas clip stays in its run when
-/// `paint_child` splits the picture. One software rasterizer, so the rows run in turn.
+/// updates rasterize exactly as a repaint does, a canvas clip stays in its run when
+/// `paint_child` splits the picture, and a running slide moves pixels without
+/// rebuilding. The rows run in turn on the available GPU adapter.
 #[test]
 fn composited_layer_update_readbacks() {
     run_cases(
@@ -530,6 +623,10 @@ fn composited_layer_update_readbacks() {
             (
                 "canvas_clip_stays_in_its_run_when_paint_child_splits_the_picture",
                 canvas_clip_stays_in_its_run_when_paint_child_splits_the_picture,
+            ),
+            (
+                "a_slide_tick_moves_pixels_without_rebuilding",
+                a_slide_tick_moves_pixels_without_rebuilding,
             ),
         ],
     );

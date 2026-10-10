@@ -3,9 +3,7 @@
 //! value, extreme durations and times never panic or poison the timeline, and
 //! a disposed controller neither changes nor keeps what it is handed.
 //!
-//! Rows that hold today run in the table. A row whose behaviour is not there
-//! yet is its own `#[ignore = "contract: …"]` test, so `--run-ignored` shows
-//! it failing on the assertion that names the behaviour.
+//! The contract rows run in the ordinary suite.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};
@@ -222,9 +220,11 @@ fn disposed_controller_drops_a_late_status_listener() {
     owner.dispose();
     let probe = Arc::new(());
     let capture = Arc::clone(&probe);
-    let _id = controller.add_status_listener(std::rc::Rc::new(move |_| {
-        let _ = &capture;
-    }));
+    controller
+        .subscribe_status(std::rc::Rc::new(move |_| {
+            let _ = &capture;
+        }))
+        .detach();
     assert_eq!(
         Arc::strong_count(&probe),
         1,
@@ -312,9 +312,11 @@ fn repeated_frame_time_announces_completion_once() {
     let controller = owner.controller();
     let statuses = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&statuses);
-    controller.add_status_listener(std::rc::Rc::new(move |status| {
-        sink.lock().expect("status log").push(status);
-    }));
+    controller
+        .subscribe_status(std::rc::Rc::new(move |status| {
+            sink.lock().expect("status log").push(status);
+        }))
+        .detach();
     vsync.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)),
     );

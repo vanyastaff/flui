@@ -39,9 +39,11 @@
 //! * **No navigator size.** `Positioned` takes `left`/`top`/`width`/`height`
 //!   directly, so the rect needs no conversion against the navigator's size.
 
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::rc::Weak;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+#[cfg(test)]
+use std::sync::atomic::Ordering;
 
 use flui_animation::{
     Animatable, Animation, AnimationStatus, Curve, Interval, ProxyAnimation, RectTween,
@@ -52,11 +54,11 @@ use flui_foundation::{ChangeNotifier, Listenable, ListenerId, RenderId};
 use flui_scheduler::PostFrameHandle;
 use flui_view::prelude::*;
 use flui_view::{AnimatedView, BoxedView, ViewExt, impl_animated_view};
-use parking_lot::Mutex;
 
-use super::hero::{HeroHandle, HeroTag, RectTweenFactory, ShuttleBuilder};
+use super::hero::{HeroFlightIdentity, HeroHandle, HeroTag, RectTweenFactory, ShuttleBuilder};
 use super::hero_controller::{FlightDirection, HeroFlightManifest};
-use super::lifecycle::{RetiredValues, Terminal, TerminalMap, TerminalVec};
+use super::hero_tags::{HeroTags, TagSeat};
+use super::lifecycle::{RetiredValues, Terminal};
 use super::navigator::UserGestureSignal;
 use crate::{IgnorePointer, Opacity, Positioned, Stack, StackFit};
 use crate::{InsertPosition, OverlayEntry, OverlayHandle};
@@ -65,9 +67,11 @@ use crate::{InsertPosition, OverlayEntry, OverlayHandle};
 /// flight runs, which two heroes it connects, and the coordinate space its
 /// destination lives in.
 ///
-/// Behind one `Mutex` so `on_tick`, `finish`, and `divert` all see a coherent set.
+/// Readers snapshot this set in one short borrow before calling out.
 struct FlightState {
     direction: FlightDirection,
+    /// Route progress before Hero easing, used only by the disappearance fade.
+    progress: Terminal<Rc<dyn Animation<f64>>>,
     from_hero: Terminal<HeroHandle>,
     to_hero: Terminal<HeroHandle>,
     /// The destination route's coordinate root, for the per-tick re-measure.
@@ -82,42 +86,53 @@ impl Drop for FlightState {
     fn drop(&mut self) {
         let from = self.from_hero.withdraw();
         let to = self.to_hero.withdraw();
-        drop((from, to));
+        let progress = self.progress.withdraw();
+        drop((from, to, progress));
     }
 }
 
 /// Everything one in-flight hero shares between its overlay entry, its animation
 /// listeners, and the manager that owns it.
 struct FlightInner {
+    identity: HeroFlightIdentity,
+    seat: RefCell<Option<TagSeat<HeroFlight>>>,
     tag: Terminal<HeroTag>,
 
     /// The half a divert rewrites in place.
-    state: Terminal<Mutex<FlightState>>,
+    state: Terminal<RefCell<FlightState>>,
 
     /// The animation the shuttle reads, already reversed for a pop. Its **parent** is repointed by a divert;
     /// the proxy object itself, and the listeners on it, never change.
     proxy: Terminal<Rc<ProxyAnimation<f64>>>,
     /// The shuttle's rect-tween endpoints. Re-aimed by
     /// [`FlightInner::on_tick`]; interpolated through [`rect_factory`](Self::rect_factory).
-    rect: Terminal<Mutex<RectTween>>,
+    rect: Cell<RectTween>,
+    /// Last accepted geometry, shared by the shuttle and retained flight readers.
+    geometry: Cell<Rect>,
+    /// Each read owns one publication right. None permanently refuses further
+    /// authored reads after capacity exhaustion instead of reissuing a ticket.
+    geometry_generation: Cell<Option<u64>>,
+    /// Logical endpoints are swapped on a reversal, but a custom mapping must
+    /// still receive its original endpoint order and mirrored progress.
+    rect_reversed: Cell<bool>,
     /// The `create_rect_tween` factory this flight interpolates with, or `None` for the
-    /// linear default. Behind a lock because a divert can swap the
-    /// destination hero, and with it the factory.
-    rect_factory: Terminal<Mutex<Option<RectTweenFactory>>>,
+    /// linear default. A divert can select a new destination and factory;
+    /// reads snapshot the factory before invoking it.
+    rect_factory: Terminal<RefCell<Option<RectTweenFactory>>>,
     /// The shuttle's opacity, evaluated eagerly. `1.0` until the destination is
     /// lost.
-    opacity: Terminal<Mutex<f64>>,
-    /// The animation value at which the destination was lost — the left edge of
+    opacity: Cell<f64>,
+    /// The route progress at which the destination was lost — the left edge of
     /// the fade-out interval.
-    fade_from: Terminal<Mutex<Option<f64>>>,
+    fade_from: Cell<Option<f64>>,
     /// Whether the destination hero has been lost.
-    aborted: AtomicBool,
+    aborted: Cell<bool>,
     /// Guards a re-entrant animation-update teardown.
-    ended: AtomicBool,
+    ended: Cell<bool>,
 
-    entry: Terminal<Mutex<Option<OverlayEntry>>>,
-    subscriptions: Terminal<Mutex<Option<ListenerId>>>,
-    /// A Send+Sync-safe read of this flight's navigator's user-gesture state
+    entry: Terminal<RefCell<Option<OverlayEntry>>>,
+    subscriptions: Terminal<RefCell<Option<flui_animation::StatusSubscription>>>,
+    /// This flight's navigator's user-gesture state.
     /// Fixed for the flight's whole life — every divert stays within the same
     /// controller, hence the same navigator.
     gesture_signal: Terminal<UserGestureSignal>,
@@ -132,7 +147,7 @@ struct FlightInner {
     wake: Terminal<Rc<ChangeNotifier>>,
     /// The forwarding subscription feeding [`wake`](Self::wake) from
     /// [`proxy`](Self::proxy)'s own value changes.
-    proxy_wake_subscription: Terminal<Mutex<Option<ListenerId>>>,
+    proxy_wake_subscription: Cell<Option<ListenerId>>,
     /// The forwarding subscription feeding [`wake`](Self::wake) from
     /// [`gesture_signal`](Self::gesture_signal)'s notifier — the same
     /// listener that replays a terminal status parked mid-gesture. Registered
@@ -150,24 +165,39 @@ struct FlightInner {
     /// (owned by this same struct), which simply drops the registry along
     /// with itself; only a registration on someone else's longer-lived
     /// notifier can leak a closure this way.
-    gesture_wake_subscription: Terminal<Mutex<Option<ListenerId>>>,
+    gesture_wake_subscription: Cell<Option<ListenerId>>,
     /// Terminal status reported by the data-plane animation listener.
     ///
-    /// `0` means "none", `1` means dismissed, and `2` means completed. The
-    /// listener that writes this field must stay `Send + Sync`, so it cannot
-    /// capture [`FlightInner`] or [`FlightManager`]. The owner-local shuttle
-    /// drains the flag from `build`. Written only while no user gesture is in
+    /// The listener captures this cell rather than the flight or manager;
+    /// it cannot keep their ownership graph alive. The shuttle drains the
+    /// status from `build`. Written only while no user gesture is in
     /// progress on this flight's navigator — a terminal status arriving mid-
     /// gesture is parked instead (see
     /// [`gesture_wake_subscription`](Self::gesture_wake_subscription)).
-    settled_status: Terminal<Rc<AtomicU8>>,
+    settled_status: Rc<Cell<Option<AnimationStatus>>>,
     /// The in-flight widget, inflated once at start and rebuilt on a divert. Either the resolved `flight_shuttle_builder`'s output or, when none is
     /// set, a fresh copy of the destination hero's child.
-    shuttle: Terminal<Mutex<Option<BoxedView>>>,
+    shuttle: Terminal<RefCell<Option<Rc<BoxedView>>>>,
     /// The resolved `flight_shuttle_builder`, retained so a divert can rebuild
-    /// the shuttle from the new destination. Behind a lock because a divert can
-    /// swap it for the new manifest's builder.
-    shuttle_builder: Terminal<Mutex<Option<ShuttleBuilder>>>,
+    /// the shuttle from the new destination. A divert replaces the builder;
+    /// invocation and retirement happen outside the slot's borrow.
+    shuttle_builder: Terminal<RefCell<Option<ShuttleBuilder>>>,
+}
+
+/// Property-domain admission: finite coordinates, representable non-negative
+/// sizes, and finite reconstructed corners. Finite inverted axes collapse at
+/// their origin, including an otherwise underflowing negative difference.
+pub(crate) fn finite_shuttle_rect(rect: Rect) -> Option<Rect> {
+    if !rect.is_finite() {
+        return None;
+    }
+    let width = rect.width().max(0.0);
+    let height = rect.height().max(0.0);
+    if !width.is_finite() || !height.is_finite() {
+        return None;
+    }
+    let rect = Rect::from_ltwh(rect.min.x, rect.min.y, width, height);
+    rect.is_finite().then_some(rect)
 }
 
 impl FlightInner {
@@ -182,10 +212,10 @@ impl FlightInner {
     /// currently is. Re-basing `begin` on the current rect would make the shuttle
     /// accelerate every time the destination twitched.
     fn on_tick(&self) {
-        let destination = if self.aborted.load(Ordering::Relaxed) {
+        let destination = if self.aborted.get() {
             None
         } else {
-            let state = self.state.lock();
+            let state = self.state.borrow();
             let (to_hero, subtree) = (state.to_hero.clone(), state.to_route_subtree);
             drop(state);
             to_hero.bounding_box_in(subtree)
@@ -195,30 +225,45 @@ impl FlightInner {
             .filter(|(x, y)| x.is_finite() && y.is_finite());
 
         if let Some((x, y)) = origin {
-            let mut rect = self.rect.lock();
+            let mut rect = self.rect.get();
             if rect.end.min_x() != x || rect.end.min_y() != y {
                 // The *origin* is re-read, the size is the one that was measured.
                 let size = rect.end.size();
                 rect.end = Rect::from_ltwh(x, y, size.width, size.height);
-            }
-        } else {
-            // The destination hero no longer exists or is no longer the flight's
-            // destination. Continue flying while fading out.
-            let mut fade_from = self.fade_from.lock();
-            if fade_from.is_none() {
-                *fade_from = Some(self.proxy.value());
+                self.rect.set(rect);
+                let _ = self.geometry_ticket();
             }
         }
-        self.aborted.store(origin.is_none(), Ordering::Relaxed);
+        self.aborted.set(origin.is_none());
+        if origin.is_none() {
+            // Spatial easing may overshoot or reject a geometry sample. It is
+            // not a clock: fade over the remaining route time independently.
+            let (progress, direction) = {
+                let state = self.state.borrow();
+                (Terminal::new(Rc::clone(&state.progress)), state.direction)
+            };
+            let t = progress.value();
+            if t.is_finite() {
+                let t = match direction {
+                    FlightDirection::Push => t,
+                    FlightDirection::Pop => 1.0 - t,
+                }
+                .clamp(0.0, 1.0);
+                let from = self.fade_from.get().unwrap_or(t);
+                self.fade_from.set(Some(from));
+                self.opacity
+                    .set(1.0 - Interval::linear(from, 1.0).transform(t));
+            }
+        } else {
+            self.opacity.set(1.0);
+        }
+    }
 
-        // Fades out over `Interval(fade_from, 1.0)`, so the opacity is
-        // `1 - interval(t)`.
-        let fade_from = *self.fade_from.lock();
-        let opacity = match fade_from {
-            Some(from) => 1.0 - Interval::linear(from, 1.0).transform(self.proxy.value()),
-            None => 1.0,
-        };
-        *self.opacity.lock() = opacity;
+    /// Reserve publication authority. Exhaustion permanently refuses new reads.
+    fn geometry_ticket(&self) -> Option<u64> {
+        let generation = self.geometry_generation.get()?.checked_add(1);
+        self.geometry_generation.set(generation);
+        generation
     }
 
     /// The rect the shuttle occupies right now, in the theater's coordinate space.
@@ -231,25 +276,52 @@ impl FlightInner {
     /// for a shrinking flight turns the rect inside out; the size is clamped to
     /// zero, keeping `min` (ADR-0149: the property owns its domain).
     fn current_rect(&self) -> Rect {
-        let endpoints = *self.rect.lock();
-        let t = self.proxy.value();
-        let rect = match self.rect_factory.lock().as_ref() {
-            Some(make) => make(endpoints.begin, endpoints.end).transform(t),
+        if self.ended.get() {
+            return self.geometry.get();
+        }
+        let Some(generation) = self.geometry_ticket() else {
+            return self.geometry.get();
+        };
+        let mut endpoints = self.rect.get();
+        let reversed = self.rect_reversed.get();
+        let factory = Terminal::new(self.rect_factory.borrow().clone());
+        let mut t = self.proxy.value();
+        if reversed {
+            std::mem::swap(&mut endpoints.begin, &mut endpoints.end);
+            t = 1.0 - t;
+        }
+        let rect = match factory.as_ref() {
+            Some(make) => {
+                let mapping = Terminal::new(make(endpoints.begin, endpoints.end));
+                let rect = mapping.transform(t);
+                drop(mapping);
+                rect
+            }
             None => endpoints.transform(t),
         };
-        Rect::from_ltwh(
-            rect.min.x,
-            rect.min.y,
-            rect.width().max(0.0),
-            rect.height().max(0.0),
-        )
+        // Retirement can reenter, cancel or redirect just like evaluation.
+        // Only validate publication after every authored callout has finished.
+        drop(factory);
+        if !self.ended.get()
+            && self.geometry_generation.get() == Some(generation)
+            && let Some(rect) = finite_shuttle_rect(rect)
+        {
+            self.geometry.set(rect);
+        }
+        self.geometry.get()
     }
 
     fn take_settled_status(&self) -> Option<AnimationStatus> {
-        match self.settled_status.swap(0, Ordering::AcqRel) {
-            1 => Some(AnimationStatus::Dismissed),
-            2 => Some(AnimationStatus::Completed),
-            _ => None,
+        self.settled_status.take()
+    }
+
+    fn clone_shuttle(&self) -> BoxedView {
+        // BoxedView::clone calls the authored view's Clone implementation.
+        // Keep the configuration alive and release the slot before invoking it.
+        let shuttle = Terminal::new(self.shuttle.borrow().clone());
+        match shuttle.as_ref() {
+            Some(shuttle) => (**shuttle).clone(),
+            None => crate::SizedBox::shrink().boxed(),
         }
     }
 }
@@ -257,11 +329,11 @@ impl FlightInner {
 impl Drop for FlightInner {
     /// A flight normally tears down through [`HeroFlight::finish`], which
     /// removes every subscription this struct opened. But nothing guarantees
-    /// `finish` ever runs before the last `Arc<FlightInner>` drops — a
+    /// `finish` ever runs before the last `Rc<FlightInner>` drops — a
     /// `FlightManager` torn down with a flight still airborne, or every
     /// `HeroController`/observer holding one detached mid-flight, both drop
     /// this struct directly. Without this, [`gesture_wake_subscription`]'s
-    /// closure (and everything it captured — a clone of this very `Arc`'s
+    /// closure (and everything it captured — a clone of this very `Rc`'s
     /// dependencies) would stay registered in the *navigator's* longer-lived
     /// notifier forever: a leak, not merely a stale listener, because nothing
     /// else will ever remove it.
@@ -272,21 +344,17 @@ impl Drop for FlightInner {
     ///
     /// [`gesture_wake_subscription`]: FlightInner::gesture_wake_subscription
     fn drop(&mut self) {
-        self.ended.store(true, Ordering::SeqCst);
+        self.ended.set(true);
         let tag = self.tag.withdraw();
         let state = self.state.withdraw();
         let proxy = self.proxy.withdraw();
-        let rect = self.rect.withdraw();
         let factory = self.rect_factory.withdraw();
-        let opacity = self.opacity.withdraw();
-        let fade = self.fade_from.withdraw();
         let entry = self.entry.withdraw();
         let subscriptions = self.subscriptions.withdraw();
         let gesture = self.gesture_signal.withdraw();
         let wake = self.wake.withdraw();
-        let proxy_subscription = self.proxy_wake_subscription.withdraw();
-        let gesture_subscription = self.gesture_wake_subscription.withdraw();
-        let settled = self.settled_status.withdraw();
+        let proxy_subscription = self.proxy_wake_subscription.take();
+        let gesture_subscription = self.gesture_wake_subscription.take();
         let shuttle = self.shuttle.withdraw();
         let builder = self.shuttle_builder.withdraw();
 
@@ -295,36 +363,30 @@ impl Drop for FlightInner {
         if std::thread::panicking() {
             return;
         }
-        let status_id = subscriptions.lock().take();
-        if let Some(status_id) = status_id {
-            proxy.remove_status_listener(status_id);
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        let mut status_subscription = Terminal::new(subscriptions.borrow_mut().take());
+        if let Some(subscription) = status_subscription.as_mut() {
+            subscription.cancel_with_recovery(&mut recovery.scope());
         }
-        let id = proxy_subscription.lock().take();
-        if let Some(id) = id {
-            proxy.remove_listener(id);
+        recovery.retire(status_subscription);
+        if let Some(id) = proxy_subscription {
+            proxy.remove_listener_with_recovery(id, &mut recovery.scope());
         }
-        let id = gesture_subscription.lock().take();
-        if let Some(id) = id {
-            gesture.notifier().remove_listener(id);
+        if let Some(id) = gesture_subscription {
+            let callback = Terminal::new(gesture.notifier().take_listener(id));
+            recovery.retire(callback);
         }
-        drop((
-            tag,
-            state,
-            proxy,
-            rect,
-            factory,
-            opacity,
-            fade,
-            entry,
-            subscriptions,
-            gesture,
-            wake,
-            proxy_subscription,
-            gesture_subscription,
-            settled,
-            shuttle,
-            builder,
-        ));
+        recovery.retire(tag);
+        recovery.retire(state);
+        recovery.retire(proxy);
+        recovery.retire(factory);
+        recovery.retire(entry);
+        recovery.retire(subscriptions);
+        recovery.retire(gesture);
+        recovery.retire(wake);
+        recovery.retire(shuttle);
+        recovery.retire(builder);
+        recovery.finish();
     }
 }
 
@@ -370,6 +432,7 @@ impl std::fmt::Debug for HeroFlight {
 }
 
 impl HeroFlight {
+    #[cfg(test)]
     pub(crate) fn tag(&self) -> &HeroTag {
         &self.inner.tag
     }
@@ -377,7 +440,7 @@ impl HeroFlight {
     /// The overlay entry this flight presents its shuttle in, while it has one.
     #[must_use]
     pub fn entry_id(&self) -> Option<crate::OverlayEntryId> {
-        self.inner.entry.lock().as_ref().map(OverlayEntry::id)
+        self.inner.entry.borrow().as_ref().map(OverlayEntry::id)
     }
 
     /// The tween's current evaluation — where the shuttle is.
@@ -389,25 +452,25 @@ impl HeroFlight {
     /// The tween's destination, re-aimed by every tick.
     #[must_use]
     pub fn target_rect(&self) -> Rect {
-        self.inner.rect.lock().end
+        self.inner.rect.get().end
     }
 
     /// The tween's origin. Re-aiming the destination must never move it.
     #[must_use]
     pub fn begin_rect(&self) -> Rect {
-        self.inner.rect.lock().begin
+        self.inner.rect.get().begin
     }
 
     /// The shuttle's current opacity.
     #[must_use]
     pub fn opacity(&self) -> f64 {
-        *self.inner.opacity.lock()
+        self.inner.opacity.get()
     }
 
     /// Which way the flight currently runs — a divert can flip it.
     #[must_use]
     pub fn direction(&self) -> FlightDirection {
-        self.inner.state.lock().direction
+        self.inner.state.borrow().direction
     }
 
     /// Whether this is a gesture-driven pop whose proxy never left
@@ -415,10 +478,11 @@ impl HeroFlight {
     /// never moved, so no status transition ever fired to report it, and
     /// nothing else will end this flight on its own.
     fn is_stalled_gesture_pop(&self) -> bool {
-        let state = self.inner.state.lock();
-        state.is_user_gesture_transition
-            && state.direction == FlightDirection::Pop
-            && self.inner.proxy.is_dismissed()
+        let gesture_pop = {
+            let state = self.inner.state.borrow();
+            state.is_user_gesture_transition && state.direction == FlightDirection::Pop
+        };
+        gesture_pop && self.inner.proxy.is_dismissed()
     }
 
     /// Tear this flight down and hand the two heroes back for the caller to
@@ -427,49 +491,65 @@ impl HeroFlight {
     ///
     /// Idempotent: detaching the proxy re-fires its status listener, and a
     /// diverted flight is ended by the manager before its own listener would.
-    fn teardown(&self) -> Option<(Terminal<HeroHandle>, Terminal<HeroHandle>)> {
-        if self.inner.ended.swap(true, Ordering::SeqCst) {
+    fn teardown(
+        &self,
+        recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
+    ) -> Option<(Terminal<HeroHandle>, Terminal<HeroHandle>)> {
+        if self.inner.ended.replace(true) {
             return None;
         }
 
-        let status_id = self.inner.subscriptions.lock().take();
-        if let Some(status_id) = status_id {
-            self.inner.proxy.remove_status_listener(status_id);
+        let heroes = {
+            let state = self.inner.state.borrow();
+            (
+                Terminal::new(state.from_hero.clone()),
+                Terminal::new(state.to_hero.clone()),
+            )
+        };
+        let mut status_subscription = Terminal::new(self.inner.subscriptions.borrow_mut().take());
+        let proxy_subscription = self.inner.proxy_wake_subscription.take();
+        let gesture_subscription = self.inner.gesture_wake_subscription.take();
+        let entry = Terminal::new(self.inner.entry.borrow_mut().take());
+
+        if let Some(subscription) = status_subscription.as_mut() {
+            subscription.cancel_with_recovery(recovery);
         }
-        let id = self.inner.proxy_wake_subscription.lock().take();
-        if let Some(id) = id {
-            self.inner.proxy.remove_listener(id);
+        recovery.retire(status_subscription);
+        if let Some(id) = proxy_subscription {
+            self.inner.proxy.remove_listener_with_recovery(id, recovery);
         }
-        let id = self.inner.gesture_wake_subscription.lock().take();
-        if let Some(id) = id {
-            self.inner.gesture_signal.notifier().remove_listener(id);
+        if let Some(id) = gesture_subscription {
+            let callback = Terminal::new(self.inner.gesture_signal.notifier().take_listener(id));
+            recovery.retire(callback);
         }
 
-        if let Some(entry) = self.inner.entry.lock().take()
+        if let Some(entry) = entry.as_ref()
             && entry.is_attached()
         {
-            entry.remove();
+            recovery.run(|| entry.remove());
         }
-
-        let state = self.inner.state.lock();
-        Some((
-            Terminal::new(state.from_hero.clone()),
-            Terminal::new(state.to_hero.clone()),
-        ))
+        recovery.retire(entry);
+        Some(heroes)
     }
 
     /// End the flight on a terminal animation status, minus the ended callback —
     /// the manager does that half.
-    fn finish(&self, status: AnimationStatus) {
-        let Some((from_hero, to_hero)) = self.teardown() else {
+    fn finish(
+        &self,
+        status: AnimationStatus,
+        recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
+    ) {
+        let Some((from_hero, to_hero)) = self.teardown(recovery) else {
             return;
         };
 
         // If completed, the destination hero is the one on top and the source hero
         // stays hidden. If dismissed, the animation was triggered but canceled
         // before it finished; the destination hero stays hidden instead.
-        from_hero.end_flight(status.is_completed());
-        to_hero.end_flight(status.is_dismissed());
+        recovery.run(|| from_hero.end_flight_for(&self.inner.identity, status.is_completed()));
+        recovery.run(|| to_hero.end_flight_for(&self.inner.identity, status.is_dismissed()));
+        recovery.retire(from_hero);
+        recovery.retire(to_hero);
     }
 
     /// Tear this flight down with no terminal animation status to decide the
@@ -485,23 +565,31 @@ impl HeroFlight {
     /// were the controller owned by the navigator for its whole life, leaving the
     /// placeholders frozen would be harmless, since the tree would be torn down
     /// anyway. Recorded in `ARCHITECTURE.md`.
-    fn abort(&self) {
-        let Some((from_hero, to_hero)) = self.teardown() else {
+    fn abort(&self, recovery: &mut flui_foundation::panic::RecoveryScope<'_>) {
+        let Some((from_hero, to_hero)) = self.teardown(recovery) else {
             return;
         };
-        from_hero.end_flight(false);
-        to_hero.end_flight(false);
+        recovery.run(|| from_hero.end_flight_for(&self.inner.identity, false));
+        recovery.run(|| to_hero.end_flight_for(&self.inner.identity, false));
+        recovery.retire(from_hero);
+        recovery.retire(to_hero);
     }
 
     /// A second transition for this tag started while the flight was airborne. Redirect the **same** flight — same
     /// object, same overlay entry — rather than end it and start a fresh one.
     ///
     /// Called from `FlightManager::start`, i.e. from the measurement pass, never from a
-    /// status listener. It still must not hold a flight lock across
+    /// status listener. It still must not hold a flight borrow across
     /// [`ProxyAnimation::set_parent`], which fires `on_tick` synchronously; so every
     /// branch computes first, mutates the guarded fields, and repoints the proxy
-    /// **last** with no lock held.
-    fn divert(&self, new: &HeroFlightManifest, plan: FlightPlan) {
+    /// **last** with no borrow held.
+    fn divert(
+        &self,
+        new: &HeroFlightManifest,
+        plan: FlightPlan,
+        recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
+    ) {
+        let _ = self.inner.geometry_ticket();
         let FlightPlan {
             direction: new_dir,
             from_hero: new_from,
@@ -509,6 +597,7 @@ impl HeroFlight {
             to_route_subtree: new_subtree,
             overlay: _,
             animation: mut new_anim,
+            progress: new_progress,
             rect_factory: mut new_rect_factory,
             shuttle_builder: mut new_shuttle_builder,
             is_user_gesture_transition: new_is_user_gesture_transition,
@@ -518,8 +607,17 @@ impl HeroFlight {
             gesture_signal: _,
         } = plan;
 
+        let mut new_state = Terminal::new(Some(FlightState {
+            direction: new_dir,
+            progress: new_progress,
+            from_hero: Terminal::new(new_from.clone()),
+            to_hero: Terminal::new(new_to.clone()),
+            to_route_subtree: new_subtree,
+            is_user_gesture_transition: new_is_user_gesture_transition,
+        }));
+
         let (old_dir, old_from, old_to) = {
-            let state = self.inner.state.lock();
+            let state = self.inner.state.borrow();
             (
                 state.direction,
                 Terminal::new(state.from_hero.clone()),
@@ -531,6 +629,7 @@ impl HeroFlight {
         // shuttle is rebuilt — decided per branch, applied afterwards.
         let new_parent: Terminal<std::rc::Rc<dyn Animation<f64>>>;
         let (new_begin, new_end): (Rect, Rect);
+        let retain_path: bool;
         let mut new_shuttle: Terminal<Option<BoxedView>> = Terminal::new(None);
 
         match (old_dir, new_dir) {
@@ -543,12 +642,10 @@ impl HeroFlight {
                 );
                 // The proxy's parent becomes the reverse of the new animation.
                 new_parent = Terminal::new(Rc::new(ReverseAnimation::new(new_anim.take_value())));
-                // The tween is reversed. FLUI has only a **linear** `RectTween`, for
-                // which reversing the tween and swapping begin/end are identical
-                // (`lerp(a,b,1-t) == lerp(b,a,t)`). A non-linear path (an arc tween)
-                // would need a real reversed tween to stay symmetric; when an arc
-                // tween lands, this must become one.
-                let rect = self.inner.rect.lock();
+                // Retain the mapping and reverse its evaluation. Reconstructing
+                // an arbitrary path with swapped endpoints need not retrace it.
+                retain_path = true;
+                let rect = self.inner.rect.get();
                 new_begin = rect.end;
                 new_end = rect.begin;
                 // Same heroes keep flying: no placeholder changes.
@@ -574,17 +671,26 @@ impl HeroFlight {
                 )));
 
                 if old_from.is_same(&new_to) {
+                    retain_path = true;
                     // Same hero: begin from the old end, end at the old
                     // begin — the reverse of the reverse, without a new destination.
-                    let rect = self.inner.rect.lock();
+                    let rect = self.inner.rect.get();
                     new_begin = rect.end;
                     new_end = rect.begin;
                 } else {
+                    retain_path = false;
                     // Different hero: hand the old source its placeholder back and freeze the
                     // new destination, then aim from the old end at the new location.
-                    old_from.end_flight(true);
-                    new_to.start_flight(false);
-                    new_begin = self.inner.rect.lock().end;
+                    old_from.end_flight_for(&self.inner.identity, true);
+                    let previous = Terminal::new(std::mem::replace(
+                        &mut *self.inner.state.borrow_mut(),
+                        new_state
+                            .take()
+                            .expect("BUG: a divert commits its manifest once"),
+                    ));
+                    recovery.retire(previous);
+                    new_to.start_flight_for(&self.inner.identity, false);
+                    new_begin = self.inner.rect.get().end;
                     new_end = new.to_rect;
                 }
             }
@@ -592,6 +698,7 @@ impl HeroFlight {
             // A push or a pop flight is heading to a new route: push→push or
             // pop→pop, all four heroes distinct.
             (_, _) => {
+                retain_path = false;
                 debug_assert!(
                     !old_from.is_same(&new_from) && !old_to.is_same(&new_to),
                     "BUG: a same-direction divert connects four distinct heroes \
@@ -600,6 +707,9 @@ impl HeroFlight {
                 // Begin from where the shuttle is right now; end at the new
                 // destination's location.
                 new_begin = self.inner.current_rect();
+                if self.inner.ended.get() {
+                    return;
+                }
                 new_end = new.to_rect;
 
                 // The shuttle builder wants the raw route animation, so clone before the
@@ -612,10 +722,25 @@ impl HeroFlight {
 
                 // End the old heroes' flights keeping their placeholders, then start
                 // the new heroes' flights.
-                old_from.end_flight(true);
-                old_to.end_flight(true);
-                new_from.start_flight(new_dir == FlightDirection::Push);
-                new_to.start_flight(false);
+                old_from.end_flight_for(&self.inner.identity, true);
+                old_to.end_flight_for(&self.inner.identity, true);
+                // Cancellation inside either placeholder wake or the builder
+                // must restore the newly selected heroes, not the old manifest.
+                let previous = Terminal::new(std::mem::replace(
+                    &mut *self.inner.state.borrow_mut(),
+                    new_state
+                        .take()
+                        .expect("BUG: a divert commits its manifest once"),
+                ));
+                recovery.retire(previous);
+                new_from.start_flight_for(&self.inner.identity, new_dir == FlightDirection::Push);
+                if self.inner.ended.get() {
+                    return;
+                }
+                new_to.start_flight_for(&self.inner.identity, false);
+                if self.inner.ended.get() {
+                    return;
+                }
 
                 // Rebuild the shuttle from the new destination, through the new
                 // manifest's shuttle builder if it set one, else the default fresh
@@ -630,52 +755,71 @@ impl HeroFlight {
             }
         }
 
-        // Apply the guarded fields — locks released before the proxy repoint below.
-        {
-            let mut rect = self.inner.rect.lock();
-            rect.begin = new_begin;
-            rect.end = new_end;
+        if self.inner.ended.get() {
+            recovery.retire(new_shuttle);
+            return;
         }
-        *self.inner.fade_from.lock() = None;
-        self.inner.aborted.store(false, Ordering::Relaxed);
-        // Re-read the new manifest's hooks: a divert can swap the destination hero
-        // and, with it, its `create_rect_tween` / `flight_shuttle_builder`. The
+
+        // Commit the samples and slots before repointing the proxy below.
+        self.inner.rect.set(RectTween {
+            begin: new_begin,
+            end: new_end,
+        });
+        self.inner
+            .rect_reversed
+            .set(retain_path && !self.inner.rect_reversed.get());
+        self.inner.fade_from.set(None);
+        self.inner.aborted.set(false);
+        // A new destination selects a new rect factory. Reversing the same pair
+        // retains the original factory so the shuttle follows its existing path.
+        // Re-read the new manifest's shuttle builder. The
         // same-direction branch above already rebuilt the shuttle with the new
         // builder; the other branches keep the existing shuttle, so the stored
         // builder only matters for a later same-tag divert.
-        let old_factory = Terminal::new(std::mem::replace(
-            &mut *self.inner.rect_factory.lock(),
-            new_rect_factory.take_value(),
-        ));
+        let old_factory = Terminal::new(if retain_path {
+            None
+        } else {
+            std::mem::replace(
+                &mut *self.inner.rect_factory.borrow_mut(),
+                new_rect_factory.take_value(),
+            )
+        });
         let old_builder = Terminal::new(std::mem::replace(
-            &mut *self.inner.shuttle_builder.lock(),
+            &mut *self.inner.shuttle_builder.borrow_mut(),
             new_shuttle_builder.take_value(),
         ));
         if let Some(shuttle) = new_shuttle.take() {
-            let previous = Terminal::new(self.inner.shuttle.lock().replace(shuttle));
-            drop(previous);
+            let previous = Terminal::new(self.inner.shuttle.borrow_mut().replace(Rc::new(shuttle)));
+            recovery.retire(previous);
         }
-        {
-            let mut state = self.inner.state.lock();
-            state.direction = new_dir;
-            state.from_hero = new_from;
-            state.to_hero = new_to;
-            state.to_route_subtree = new_subtree;
-            state.is_user_gesture_transition = new_is_user_gesture_transition;
+        if let Some(state) = new_state.take() {
+            let previous = Terminal::new(std::mem::replace(
+                &mut *self.inner.state.borrow_mut(),
+                state,
+            ));
+            recovery.retire(previous);
         }
 
         // `manifest = newManifest` is the last line of `divert`; the proxy repoint is
-        // the visible effect. No flight lock is held here, so the `on_tick` it fires
+        // the visible effect. No flight borrow is held here, so the `on_tick` it fires
         // reads the state just written.
         let mut new_parent = new_parent;
         self.inner.proxy.set_parent(new_parent.take_value());
-        drop((old_factory, old_builder));
+        recovery.retire(old_factory);
+        recovery.retire(old_builder);
 
         // Rebuild the overlay entry for the replaced shuttle. Harmless for the
         // other branches, but only the same-direction branch changed it.
-        if let Some(entry) = self.inner.entry.lock().as_ref() {
+        let entry = Terminal::new(self.inner.entry.borrow().clone());
+        if let Some(entry) = entry.as_ref() {
             entry.mark_needs_build();
         }
+        recovery.retire(entry);
+        recovery.retire(old_from);
+        recovery.retire(old_to);
+        recovery.retire(new_from);
+        recovery.retire(new_to);
+        recovery.retire(new_rect_factory);
     }
 }
 
@@ -694,6 +838,9 @@ pub(crate) struct FlightPlan {
     /// for a pop, already wrapped in the manifest's `CurvedAnimation` on the
     /// driving hero's `curve`/`reverse_curve`.
     pub(crate) animation: Terminal<std::rc::Rc<dyn Animation<f64>>>,
+    /// The same route's uneased progress. Opacity owns a bounded time domain;
+    /// it must not inherit the spatial curve or a diversion's rect remapping.
+    pub(crate) progress: Terminal<std::rc::Rc<dyn Animation<f64>>>,
     /// The resolved `create_rect_tween` factory: the destination hero's, else the
     /// controller's default, else `None` (linear).
     pub(crate) rect_factory: Terminal<Option<RectTweenFactory>>,
@@ -733,25 +880,31 @@ pub(crate) struct FlightPlan {
 /// `pub` only so `crate::__test_access` can re-export it (ADR-0083 §4).
 #[derive(Default)]
 pub struct FlightManager {
-    flights: Terminal<TerminalMap<HeroTag, HeroFlight>>,
-    retired: Terminal<TerminalVec<HeroFlight>>,
+    epoch: RefCell<FlightEpoch>,
+    flights: Terminal<HeroTags<HeroFlight>>,
+    retired: RefCell<Vec<HeroFlight>>,
     /// The binding's post-frame capability, captured from the controller. A finished
     /// flight schedules its own end-of-frame drain through this, so cleanup does not
     /// wait for the next transition. `None` before the first launch or on an unmounted
     /// navigator — then the measurement-head backstop is the only path.
-    post_frame: Terminal<Mutex<Option<PostFrameHandle>>>,
+    post_frame: Terminal<RefCell<Option<PostFrameHandle>>>,
     /// One drain per frame: set when a drain is scheduled, cleared when it runs.
-    drain_scheduled: AtomicBool,
+    drain_scheduled: Cell<bool>,
     /// How many drains this manager has actually scheduled — for the coalescing
     /// test. Compiled into every build so the manager has one layout whether or
     /// not the integration tests link it (ADR-0083 §4).
-    drains_scheduled: std::sync::atomic::AtomicUsize,
+    drains_scheduled: Cell<usize>,
 }
+
+/// An owning identity keeps queued measurements distinct after cancellation,
+/// even when the same controller attaches again. No counter can wrap or reissue it.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct FlightEpoch(Rc<()>);
 
 impl Drop for FlightManager {
     fn drop(&mut self) {
         let flights = self.flights.withdraw();
-        let retired = self.retired.withdraw();
+        let retired = RetiredValues(std::mem::take(self.retired.get_mut()));
         let post_frame = self.post_frame.withdraw();
         drop((flights, retired, post_frame));
     }
@@ -760,18 +913,26 @@ impl Drop for FlightManager {
 impl std::fmt::Debug for FlightManager {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FlightManager")
-            .field("in_flight", &self.flights.lock().len())
-            .field("retired", &self.retired.lock().len())
+            .field("in_flight", &self.flights.len())
+            .field("retired", &self.retired.borrow().len())
             .finish_non_exhaustive()
     }
 }
 
 impl FlightManager {
+    pub(crate) fn epoch(&self) -> FlightEpoch {
+        self.epoch.borrow().clone()
+    }
+
+    pub(crate) fn is_current(&self, epoch: &FlightEpoch) -> bool {
+        Rc::ptr_eq(&self.epoch.borrow().0, &epoch.0)
+    }
+
     /// Free everything the retired flights were holding. Runs from the end-of-frame
     /// drain a landing flight scheduled, and as a backstop from the measurement pass —
     /// never from an animation listener.
     pub(crate) fn drain_retired(&self) {
-        let retired = std::mem::take(&mut *self.retired.lock());
+        let retired = std::mem::take(&mut *self.retired.borrow_mut());
         drop(RetiredValues(retired));
     }
 
@@ -779,51 +940,52 @@ impl FlightManager {
     /// its own drain. Set from the controller's measurement pass, where the navigator
     /// still resolves it.
     pub(crate) fn set_post_frame(&self, handle: Option<PostFrameHandle>) {
-        *self.post_frame.lock() = handle;
+        let previous = Terminal::new(self.post_frame.replace(handle));
+        drop(previous);
     }
 
     /// How many flights are parked awaiting a safe drop.
     #[must_use]
     pub fn retired_count(&self) -> usize {
-        self.retired.lock().len()
+        self.retired.borrow().len()
     }
 
     /// How many end-of-frame drains have been scheduled — coalescing must keep this at
     /// one per frame no matter how many flights land.
     #[must_use]
     pub fn drains_scheduled(&self) -> usize {
-        self.drains_scheduled.load(Ordering::SeqCst)
+        self.drains_scheduled.get()
     }
 
     /// Queue a single end-of-frame drain of [`retired`](Self::retired).
     ///
-    /// **Not re-entrant.** `PostFrameHandle::schedule` only pushes onto the lane's
-    /// post-frame queue; the closure runs at `end_frame`, long after `fan_out_status`
-    /// has returned, so nothing here drops a flight while its listener is still on the
-    /// stack. The closure holds a `Weak`: a manager dropped before the frame ends
-    /// simply takes its retired flights with it.
+    /// The drain runs in the post-frame lane. Admission can call a wake hook,
+    /// so the coalescing marker is committed and all storage guards are released
+    /// before scheduling. The closure holds a `Weak`: a manager dropped before
+    /// the frame ends takes its retired flights with it.
     fn schedule_drain(self: &Rc<Self>) {
-        let Some(post_frame) = self.post_frame.lock().clone() else {
+        let Some(post_frame) = self.post_frame.borrow().clone() else {
             return; // No binding capability; the measurement-head drain is the backstop.
         };
-        if self.drain_scheduled.swap(true, Ordering::SeqCst) {
+        if self.drain_scheduled.replace(true) {
             return; // Already scheduled this frame — coalesce.
         }
         let weak = Rc::downgrade(self);
         let schedule_result = post_frame.schedule(move |_timing| {
             if let Some(this) = weak.upgrade() {
-                this.drain_scheduled.store(false, Ordering::SeqCst);
+                this.drain_scheduled.set(false);
                 this.drain_retired();
             }
         });
         if let Err(error) = schedule_result {
-            self.drain_scheduled.store(false, Ordering::SeqCst);
+            self.drain_scheduled.set(false);
             tracing::warn!(
                 ?error,
                 "retired hero flights remain queued because the owner-local post-frame lane is inactive"
             );
         } else {
-            self.drains_scheduled.fetch_add(1, Ordering::SeqCst);
+            self.drains_scheduled
+                .set(self.drains_scheduled.get().saturating_add(1));
         }
     }
 
@@ -834,20 +996,20 @@ impl FlightManager {
         reason = "a test-facing count; nothing asks whether the manager is empty"
     )]
     pub fn len(&self) -> usize {
-        self.flights.lock().len()
+        self.flights.len()
     }
 
     /// The flight for `tag`, if any.
     #[must_use]
     pub fn get(&self, tag: &HeroTag) -> Option<HeroFlight> {
-        self.flights.lock().get(tag).cloned()
+        self.flights.get(tag)
     }
 
     /// Whether a flight for `tag` is already in the air, i.e. the next manifest
     /// for it is a divert. A diverted manifest's animation carries no reverse
     /// curve.
     pub(crate) fn is_airborne(&self, tag: &HeroTag) -> bool {
-        self.flights.lock().contains_key(tag)
+        self.flights.get(tag).is_some()
     }
 
     /// Start a flight, or — when a flight for this tag is already airborne —
@@ -855,23 +1017,48 @@ impl FlightManager {
     ///
     /// `plan.animation` is the **destination** route's primary animation for a
     /// push, the **source** route's for a pop.
-    pub(crate) fn start(self: &Rc<Self>, manifest: &HeroFlightManifest, plan: FlightPlan) {
-        self.start_reserving(manifest, plan, crate::OverlayEntryId::next);
+    pub(crate) fn start(
+        self: &Rc<Self>,
+        manifest: &HeroFlightManifest,
+        plan: FlightPlan,
+        epoch: &FlightEpoch,
+        recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
+    ) {
+        self.start_reserving(manifest, plan, epoch, recovery, crate::OverlayEntryId::next);
     }
 
     fn start_reserving(
         self: &Rc<Self>,
         manifest: &HeroFlightManifest,
         plan: FlightPlan,
+        epoch: &FlightEpoch,
+        recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
         reserve_entry: impl FnOnce() -> crate::OverlayEntryId,
     ) {
+        if !self.is_current(epoch) {
+            return;
+        }
         // Divert redirects the airborne flight in place, keeping its one overlay
         // entry, rather than an end-and-restart. The flight stays in the map under
         // its tag.
-        let existing = self.flights.lock().get(&manifest.tag).cloned();
-        if let Some(existing) = existing {
-            existing.divert(manifest, plan);
+        let existing = self.flights.get(&manifest.tag);
+        if !self.is_current(epoch) {
             return;
+        }
+        if let Some(existing) = existing {
+            if existing.inner.ended.get() {
+                self.retire(&existing);
+            } else {
+                let mut diverted = false;
+                recovery.run_with(|recovery| {
+                    existing.divert(manifest, plan, recovery);
+                    diverted = true;
+                });
+                if !diverted && !existing.inner.ended.get() {
+                    self.abort(&existing, recovery);
+                }
+                return;
+            }
         }
 
         // The shuttle's overlay identity is reserved before either hero becomes
@@ -887,6 +1074,7 @@ impl FlightManager {
             to_route_subtree,
             overlay,
             mut animation,
+            progress,
             mut rect_factory,
             mut shuttle_builder,
             is_user_gesture_transition,
@@ -906,148 +1094,214 @@ impl FlightManager {
             });
 
         let inner = Rc::new(FlightInner {
+            identity: HeroFlightIdentity::default(),
+            seat: RefCell::new(None),
             tag: Terminal::new(manifest.tag.clone()),
-            state: Terminal::new(Mutex::new(FlightState {
+            state: Terminal::new(RefCell::new(FlightState {
                 direction,
+                progress,
                 from_hero: Terminal::new(from_hero.clone()),
                 to_hero: Terminal::new(to_hero.clone()),
                 to_route_subtree,
                 is_user_gesture_transition,
             })),
             proxy: Terminal::new(Rc::new(ProxyAnimation::new(parent.take_value()))),
-            rect: Terminal::new(Mutex::new(RectTween {
+            rect: Cell::new(RectTween {
                 begin: manifest.from_rect,
                 end: manifest.to_rect,
-            })),
-            rect_factory: Terminal::new(Mutex::new(rect_factory.take_value())),
-            opacity: Terminal::new(Mutex::new(1.0)),
-            fade_from: Terminal::new(Mutex::new(None)),
-            aborted: AtomicBool::new(false),
-            ended: AtomicBool::new(false),
-            entry: Terminal::new(Mutex::new(None)),
-            subscriptions: Terminal::new(Mutex::new(None)),
+            }),
+            geometry: Cell::new(
+                finite_shuttle_rect(manifest.from_rect)
+                    .expect("BUG: admitted flight geometry fits the shuttle domain"),
+            ),
+            geometry_generation: Cell::new(Some(0)),
+            rect_reversed: Cell::new(false),
+            rect_factory: Terminal::new(RefCell::new(rect_factory.take_value())),
+            opacity: Cell::new(1.0),
+            fade_from: Cell::new(None),
+            aborted: Cell::new(false),
+            ended: Cell::new(false),
+            entry: Terminal::new(RefCell::new(None)),
+            subscriptions: Terminal::new(RefCell::new(None)),
             gesture_signal: Terminal::new(gesture_signal.clone()),
             wake: Terminal::new(Rc::new(ChangeNotifier::new())),
-            proxy_wake_subscription: Terminal::new(Mutex::new(None)),
-            gesture_wake_subscription: Terminal::new(Mutex::new(None)),
-            settled_status: Terminal::new(Rc::new(AtomicU8::new(0))),
-            shuttle: Terminal::new(Mutex::new(None)),
-            shuttle_builder: Terminal::new(Mutex::new(shuttle_builder.take_value())),
+            proxy_wake_subscription: Cell::new(None),
+            gesture_wake_subscription: Cell::new(None),
+            settled_status: Rc::new(Cell::new(None)),
+            shuttle: Terminal::new(RefCell::new(None)),
+            shuttle_builder: Terminal::new(RefCell::new(shuttle_builder.take_value())),
         });
 
-        // The child stays in the placeholder only for the *from* hero of a push:
-        // its subtree is preserved offstage so its state survives.
-        from_hero.start_flight(direction == FlightDirection::Push);
-        to_hero.start_flight(false);
-
-        // The resolved `flight_shuttle_builder`'s output, or — the default — a fresh copy
-        // of the **destination** hero's child. Nothing is reparented.
-        *inner.shuttle.lock() = Some(inflate_shuttle(
-            inner.shuttle_builder.lock().as_ref(),
-            &shuttle_animation,
-            direction,
-            &from_hero,
-            &to_hero,
-        ));
-
-        let entry = {
-            let inner = Rc::clone(&inner);
-            let manager = Rc::downgrade(self);
-            OverlayEntry::with_reserved_id(entry_id, move |_ctx| {
-                Shuttle {
-                    flight: Rc::clone(&inner),
-                    manager: manager.clone(),
-                }
-                .boxed()
-            })
-        };
-        overlay.insert(&entry, &InsertPosition::Top);
-        let _prev = inner.entry.lock().replace(entry);
-
+        if !self.is_current(epoch) {
+            return;
+        }
         let flight = HeroFlight {
             inner: Rc::clone(&inner),
         };
+        let Some(admission) = self
+            .flights
+            .insert_first(manifest.tag.clone(), flight.clone())
+        else {
+            // An independent reentrant launch has already claimed this tag.
+            // Its accepted flight remains authoritative.
+            return;
+        };
+        if !self.is_current(epoch) || inner.ended.get() {
+            return;
+        }
+        *inner.seat.borrow_mut() = Some(admission.commit());
 
-        // The per-tick `on_tick` is served by the shuttle's `AnimatedView`
-        // rebuild: every value tick marks the owner-local subtree
-        // dirty, and `ShuttleState::build` runs `on_tick` before reading the rect.
-        // The shuttle listens to `wake`, not `proxy` directly — forward every proxy
-        // tick into it so that stays true.
-        let proxy_to_wake = Rc::clone(&inner.wake);
-        let proxy_wake_id = inner
-            .proxy
-            .add_listener(std::rc::Rc::new(move || proxy_to_wake.notify_listeners()));
-        *inner.proxy_wake_subscription.lock() = Some(proxy_wake_id);
+        // Cancellation must see the pending flight before any user callout.
+        let mut initialized = false;
+        recovery.run_with(|recovery| {
+            // The child stays in the placeholder only for the *from* hero of a push:
+            // its subtree is preserved offstage so its state survives.
+            from_hero.start_flight_for(&inner.identity, direction == FlightDirection::Push);
+            if inner.ended.get() {
+                return;
+            }
+            to_hero.start_flight_for(&inner.identity, false);
+            if inner.ended.get() {
+                return;
+            }
 
-        // The status listener must remain a data-plane callback. It records only a
-        // tiny terminal-status flag; the owner-local shuttle drains the flag and
-        // calls back into the manager.
-        //
-        // While a user gesture is in progress on this flight's navigator, a terminal status is *not*
-        // recorded here — the gesture-notifier listener registered below (armed
-        // once, for the flight's whole life) picks it up when the gesture ends,
-        // reading the proxy's status fresh at that time rather than trusting
-        // whatever it was at the moment it was skipped.
-        let settled_status = Rc::clone(&inner.settled_status);
-        let listener_gesture_signal = gesture_signal.clone();
-        let status_id = inner
-            .proxy
-            .add_status_listener(std::rc::Rc::new(move |status| {
-                // Only terminal statuses matter: forward/reverse is exactly the
-                // complement of dismissed/completed.
-                if listener_gesture_signal.in_progress() {
-                    return;
-                }
-                match status {
-                    AnimationStatus::Dismissed => settled_status.store(1, Ordering::Release),
-                    AnimationStatus::Completed => settled_status.store(2, Ordering::Release),
-                    _ => {}
-                }
-            }));
-        *inner.subscriptions.lock() = Some(status_id);
+            // The resolved `flight_shuttle_builder`'s output, or — the default — a fresh copy
+            // of the **destination** hero's child. Nothing is reparented.
+            let builder = Terminal::new(inner.shuttle_builder.borrow().clone());
+            let mut shuttle = Terminal::new(inflate_shuttle(
+                builder.as_ref(),
+                &shuttle_animation,
+                direction,
+                &from_hero,
+                &to_hero,
+            ));
+            recovery.retire(builder);
+            if inner.ended.get() {
+                recovery.retire(shuttle);
+                return;
+            }
+            *inner.shuttle.borrow_mut() = Some(Rc::new(shuttle.take_value()));
 
-        // The deferred-replay half of the gesture deferral: fires on every 0→1/1→0 transition of the navigator's gesture state, for the
-        // flight's whole life. Must stay `Send + Sync` exactly like the status
-        // listener above — it can only touch the same data-plane primitives
-        // (`proxy`, `settled_status`, `wake`, all `Send + Sync`), never
-        // `Arc<FlightInner>`/`Arc<FlightManager>` as a whole (both hold owner-local,
-        // `Rc`-based view state). Writing `settled_status` alone would not be seen:
-        // nothing about `proxy` itself changed on a gesture-end, so the owner-local
-        // shuttle needs telling to rebuild and drain it — hence also waking.
-        let settled_status = Rc::clone(&inner.settled_status);
-        let proxy_for_replay = Rc::clone(&inner.proxy);
-        let gesture_to_wake = Rc::clone(&inner.wake);
-        let replay_gesture_signal = gesture_signal.clone();
-        let gesture_wake_id = gesture_signal
-            .notifier()
-            .add_listener(std::rc::Rc::new(move || {
-                if !replay_gesture_signal.in_progress() {
-                    // Read the status fresh, not whatever status was skipped when it
-                    // was parked.
-                    match proxy_for_replay.status() {
-                        AnimationStatus::Dismissed => settled_status.store(1, Ordering::Release),
-                        AnimationStatus::Completed => settled_status.store(2, Ordering::Release),
-                        _ => {} // Still animating; nothing to replay.
+            let entry = {
+                let inner = Rc::clone(&inner);
+                let manager = Rc::downgrade(self);
+                OverlayEntry::with_reserved_id(entry_id, move |_ctx| {
+                    Shuttle {
+                        flight: Rc::clone(&inner),
+                        manager: manager.clone(),
                     }
-                }
-                gesture_to_wake.notify_listeners();
-            }));
-        *inner.gesture_wake_subscription.lock() = Some(gesture_wake_id);
+                    .boxed()
+                })
+            };
+            let _prev = inner.entry.borrow_mut().replace(entry.clone());
+            overlay.insert(&entry, &InsertPosition::Top);
+            if inner.ended.get() {
+                return;
+            }
 
-        let _prev = self.flights.lock().insert(manifest.tag.clone(), flight);
+            // The per-tick `on_tick` is served by the shuttle's `AnimatedView`
+            // rebuild: every value tick marks the owner-local subtree
+            // dirty, and `ShuttleState::build` runs `on_tick` before reading the rect.
+            // The shuttle listens to `wake`, not `proxy` directly — forward every proxy
+            // tick into it so that stays true.
+            let proxy_to_wake = Rc::clone(&inner.wake);
+            let proxy_wake_id = inner
+                .proxy
+                .add_listener(std::rc::Rc::new(move || proxy_to_wake.notify_listeners()));
+            inner.proxy_wake_subscription.set(Some(proxy_wake_id));
+
+            // The status listener must remain a data-plane callback. It records only a
+            // tiny terminal-status flag; the owner-local shuttle drains the flag and
+            // calls back into the manager.
+            //
+            // While a user gesture is in progress on this flight's navigator, a terminal status is *not*
+            // recorded here — the gesture-notifier listener registered below (armed
+            // once, for the flight's whole life) picks it up when the gesture ends,
+            // reading the proxy's status fresh at that time rather than trusting
+            // whatever it was at the moment it was skipped.
+            let settled_status = Rc::clone(&inner.settled_status);
+            let listener_gesture_signal = gesture_signal.clone();
+            let status_subscription =
+                inner
+                    .proxy
+                    .subscribe_status(std::rc::Rc::new(move |status| {
+                        // Only terminal statuses matter: forward/reverse is exactly the
+                        // complement of dismissed/completed.
+                        if listener_gesture_signal.in_progress() {
+                            return;
+                        }
+                        match status {
+                            AnimationStatus::Dismissed => {
+                                settled_status.set(Some(AnimationStatus::Dismissed));
+                            }
+                            AnimationStatus::Completed => {
+                                settled_status.set(Some(AnimationStatus::Completed));
+                            }
+                            _ => {}
+                        }
+                    }));
+            *inner.subscriptions.borrow_mut() = Some(status_subscription);
+
+            // Gesture-end replay reads the current proxy status, then wakes the
+            // owner-local shuttle to drain it. The callback captures no flight
+            // or manager, so it cannot keep their ownership graph alive.
+            let settled_status = Rc::clone(&inner.settled_status);
+            let proxy_for_replay = Rc::clone(&inner.proxy);
+            let gesture_to_wake = Rc::clone(&inner.wake);
+            let replay_gesture_signal = gesture_signal.clone();
+            let gesture_wake_id =
+                gesture_signal
+                    .notifier()
+                    .add_listener(std::rc::Rc::new(move || {
+                        if !replay_gesture_signal.in_progress() {
+                            // Read the status fresh, not whatever status was skipped when it
+                            // was parked.
+                            match proxy_for_replay.status() {
+                                AnimationStatus::Dismissed => {
+                                    settled_status.set(Some(AnimationStatus::Dismissed));
+                                }
+                                AnimationStatus::Completed => {
+                                    settled_status.set(Some(AnimationStatus::Completed));
+                                }
+                                _ => {} // Still animating; nothing to replay.
+                            }
+                        }
+                        gesture_to_wake.notify_listeners();
+                    }));
+            inner.gesture_wake_subscription.set(Some(gesture_wake_id));
+            initialized = true;
+        });
+        if !initialized && !inner.ended.get() {
+            self.abort(&flight, recovery);
+        }
     }
 
     /// Drop the flight from the registry. Called from the flight's own status listener, so the flight
     /// is *retired*, not dropped — see the type docs.
     fn finish(self: &Rc<Self>, flight: &HeroFlight, status: AnimationStatus) {
-        flight.finish(status);
-        self.retire(flight);
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        recovery.run_with(|recovery| self.finish_with_recovery(flight, status, recovery));
+        recovery.finish();
+    }
+
+    fn finish_with_recovery(
+        self: &Rc<Self>,
+        flight: &HeroFlight,
+        status: AnimationStatus,
+        recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
+    ) {
+        recovery.run_with(|recovery| flight.finish(status, recovery));
+        recovery.run(|| self.retire(flight));
     }
 
     /// [`HeroFlight::abort`], then the same retire-and-drain `finish` uses.
-    fn abort(self: &Rc<Self>, flight: &HeroFlight) {
-        flight.abort();
-        self.retire(flight);
+    fn abort(
+        self: &Rc<Self>,
+        flight: &HeroFlight,
+        recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
+    ) {
+        recovery.run_with(|recovery| flight.abort(recovery));
+        recovery.run(|| self.retire(flight));
     }
 
     /// Drop the flight from the registry and park it for a safe end-of-frame
@@ -1056,12 +1310,14 @@ impl FlightManager {
     /// drop, so the flight is freed outside any animation listener (see the
     /// type docs).
     fn retire(self: &Rc<Self>, flight: &HeroFlight) {
-        let removed = self.flights.lock().remove(flight.tag());
+        let seat = flight.inner.seat.borrow_mut().take();
+        let removed = seat.as_ref().and_then(|seat| self.flights.remove(seat));
         if let Some(removed) = removed {
             // Park it — we may be inside its status listener — and schedule the
             // drop for the end of this frame.
-            self.retired.lock().push(removed);
+            self.retired.borrow_mut().push(removed.value().clone());
             self.schedule_drain();
+            drop(removed);
         }
     }
 
@@ -1074,14 +1330,18 @@ impl FlightManager {
     /// no longer service a flight's end-of-flight drain (the shuttle retires a
     /// flight only through a live `FlightManager`), so leaving flights airborne
     /// would strand their overlay entries and their shuttle's painting forever.
-    /// Owner-local, never from inside an animation listener, so aborting (which
-    /// parks a flight) is safe here, unlike the data-plane status listeners in
-    /// [`start`](Self::start).
+    /// Owner-local cancellation parks outgoing flights for the deferred drain,
+    /// preserving any callback still using them. Every flight joins the same
+    /// first-failure context before that context completes.
     pub(crate) fn finish_all(self: &Rc<Self>) {
-        let all: Vec<HeroFlight> = self.flights.lock().values().cloned().collect();
-        for flight in all {
-            self.abort(&flight);
+        self.epoch.replace(FlightEpoch::default());
+        let all = self.flights.snapshot_all();
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        for (_, flight) in all.iter() {
+            recovery.run_with(|recovery| self.abort(flight, recovery));
         }
+        recovery.retire(all);
+        recovery.finish();
     }
 
     /// The manual sweep for `HeroController::did_stop_user_gesture`:
@@ -1090,21 +1350,20 @@ impl FlightManager {
     /// through the same [`finish`](Self::finish) path a real terminal status
     /// would use.
     ///
-    /// Called directly from `HeroController::did_stop_user_gesture` — owner-local,
-    /// never from inside an animation listener — so calling `finish` here (which
-    /// may drop the flight) is unconditionally safe, unlike the data-plane status
-    /// listeners in [`start`](Self::start).
+    /// Called from `HeroController::did_stop_user_gesture`. The registry snapshot
+    /// releases its guard before querying parents or finishing any flight.
     pub(crate) fn finish_stalled_gesture_pops(self: &Rc<Self>) {
-        let stalled: Vec<HeroFlight> = self
-            .flights
-            .lock()
-            .values()
-            .filter(|flight| flight.is_stalled_gesture_pop())
-            .cloned()
-            .collect();
-        for flight in stalled {
-            self.finish(&flight, AnimationStatus::Dismissed);
+        let all = self.flights.snapshot_all();
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        for (_, flight) in all.iter() {
+            recovery.run_with(|recovery| {
+                if flight.is_stalled_gesture_pop() {
+                    self.finish_with_recovery(flight, AnimationStatus::Dismissed, recovery);
+                }
+            });
         }
+        recovery.retire(all);
+        recovery.finish();
     }
 }
 
@@ -1158,6 +1417,9 @@ pub(crate) struct ShuttleState;
 impl ViewState<Shuttle> for ShuttleState {
     fn build(&self, view: &Shuttle, _ctx: &dyn BuildContext) -> impl IntoView {
         view.flight.on_tick();
+        // Preserve the final accepted sample before logical completion makes
+        // retained flight readers inert.
+        let rect = view.flight.current_rect();
         if let Some(status) = view.flight.take_settled_status()
             && let Some(manager) = view.manager.upgrade()
         {
@@ -1169,14 +1431,8 @@ impl ViewState<Shuttle> for ShuttleState {
             );
         }
 
-        let rect = view.flight.current_rect();
-        let opacity = *view.flight.opacity.lock();
-        let child = view
-            .flight
-            .shuttle
-            .lock()
-            .clone()
-            .unwrap_or_else(|| crate::SizedBox::shrink().boxed());
+        let opacity = view.flight.opacity.get();
+        let child = view.flight.clone_shuttle();
 
         // `Positioned(… child: IgnorePointer(child: Opacity(…)))`. `Opacity`, not a
         // fade transition: the opacity is evaluated eagerly in
@@ -1217,7 +1473,7 @@ mod terminal_tests {
             std::rc::Rc::new(flui_animation::ConstantAnimation::new(0.0));
         let proxy = Rc::new(ProxyAnimation::new(parent));
         let (callback, callback_drops) = bomb("subscription retirement", callback_panics);
-        let subscription = proxy.add_status_listener(std::rc::Rc::new(move |_| {
+        let subscription = proxy.subscribe_status(std::rc::Rc::new(move |_| {
             let _capture = &callback;
         }));
         let (rect_capture, rect_drops) = bomb("rect factory retirement", factory_panics);
@@ -1234,33 +1490,39 @@ mod terminal_tests {
         let to = HeroHandle::test_handle(&hero);
         let signal = NavigatorHandle::new().user_gesture_signal();
         let inner = FlightInner {
+            identity: HeroFlightIdentity::default(),
+            seat: RefCell::new(None),
             tag: Terminal::new(HeroTag::new(flui_foundation::ValueKey::new("flight"))),
-            state: Terminal::new(Mutex::new(FlightState {
+            state: Terminal::new(RefCell::new(FlightState {
                 direction: FlightDirection::Push,
+                progress: Terminal::new(Rc::new(flui_animation::ConstantAnimation::new(0.0))),
                 from_hero: Terminal::new(from),
                 to_hero: Terminal::new(to),
                 to_route_subtree: RenderId::new(1),
                 is_user_gesture_transition: false,
             })),
             proxy: Terminal::new(proxy),
-            rect: Terminal::new(Mutex::new(RectTween {
+            rect: Cell::new(RectTween {
                 begin: Rect::ZERO,
                 end: Rect::ZERO,
-            })),
-            rect_factory: Terminal::new(Mutex::new(Some(factory(rect_capture)))),
-            opacity: Terminal::new(Mutex::new(1.0)),
-            fade_from: Terminal::new(Mutex::new(None)),
-            aborted: AtomicBool::new(false),
-            ended: AtomicBool::new(false),
-            entry: Terminal::new(Mutex::new(None)),
-            subscriptions: Terminal::new(Mutex::new(Some(subscription))),
+            }),
+            geometry: Cell::new(Rect::ZERO),
+            geometry_generation: Cell::new(Some(0)),
+            rect_reversed: Cell::new(false),
+            rect_factory: Terminal::new(RefCell::new(Some(factory(rect_capture)))),
+            opacity: Cell::new(1.0),
+            fade_from: Cell::new(None),
+            aborted: Cell::new(false),
+            ended: Cell::new(false),
+            entry: Terminal::new(RefCell::new(None)),
+            subscriptions: Terminal::new(RefCell::new(Some(subscription))),
             gesture_signal: Terminal::new(signal),
             wake: Terminal::new(Rc::new(ChangeNotifier::new())),
-            proxy_wake_subscription: Terminal::new(Mutex::new(None)),
-            gesture_wake_subscription: Terminal::new(Mutex::new(None)),
-            settled_status: Terminal::new(Rc::new(AtomicU8::new(0))),
-            shuttle: Terminal::new(Mutex::new(None)),
-            shuttle_builder: Terminal::new(Mutex::new(Some(builder))),
+            proxy_wake_subscription: Cell::new(None),
+            gesture_wake_subscription: Cell::new(None),
+            settled_status: Rc::new(Cell::new(None)),
+            shuttle: Terminal::new(RefCell::new(None)),
+            shuttle_builder: Terminal::new(RefCell::new(Some(builder))),
         };
         (
             HeroFlight {
@@ -1298,6 +1560,7 @@ mod terminal_tests {
             to_route_subtree: RenderId::new(1),
             overlay: Terminal::new(overlay.clone()),
             animation: Terminal::new(Rc::new(flui_animation::ConstantAnimation::new(0.0))),
+            progress: Terminal::new(Rc::new(flui_animation::ConstantAnimation::new(0.0))),
             rect_factory: Terminal::new(None),
             shuttle_builder: Terminal::new(None),
             is_user_gesture_transition: false,
@@ -1306,9 +1569,13 @@ mod terminal_tests {
         let manager = Rc::new(FlightManager::default());
         let exhausted = std::sync::atomic::AtomicU64::new(0);
         let failure = catch_unwind(AssertUnwindSafe(|| {
-            manager.start_reserving(&manifest, plan(), || {
-                crate::OverlayEntryId::from_counter(&exhausted)
+            let mut recovery = flui_foundation::panic::PanicRecovery::new();
+            recovery.run_with(|recovery| {
+                manager.start_reserving(&manifest, plan(), &manager.epoch(), recovery, || {
+                    crate::OverlayEntryId::from_counter(&exhausted)
+                });
             });
+            recovery.finish();
         }))
         .expect_err("the shuttle's overlay identity is refused");
         assert_failure(failure, "overlay entry identity space exhausted: 0");
@@ -1325,12 +1592,73 @@ mod terminal_tests {
         assert_eq!(manager.len(), 0);
         assert_eq!(overlay.ids_bottom_to_top(), Vec::new());
 
-        manager.start(&manifest, plan());
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        recovery.run_with(|recovery| manager.start(&manifest, plan(), &manager.epoch(), recovery));
+        recovery.finish();
         assert!(from.placeholder_size().is_some() && to.placeholder_size().is_some());
         assert_eq!(manager.len(), 1);
         manager.finish_all();
         assert_eq!(from.placeholder_size(), None);
         assert_eq!(to.placeholder_size(), None);
+    }
+
+    // The terminal counter cannot be reached by ordinary frame driving.
+    fn geometry_capacity_case(reenter: bool) {
+        let (flight, _) = flight(false, false, false);
+        flight.inner.geometry_generation.set(Some(u64::MAX - 1));
+        let candidate = Rect::from_ltwh(10.0, 20.0, 30.0, 40.0);
+        let calls = Rc::new(Cell::new(0));
+        let factory: RectTweenFactory = {
+            let calls = Rc::clone(&calls);
+            let weak = Rc::downgrade(&flight.inner);
+            Rc::new(move |_, _| {
+                calls.set(calls.get() + 1);
+                if reenter {
+                    assert_eq!(
+                        weak.upgrade().expect("live flight").current_rect(),
+                        Rect::ZERO
+                    );
+                }
+                Box::new(RectTween::new(candidate, candidate))
+            })
+        };
+        let previous = flight.inner.rect_factory.borrow_mut().replace(factory);
+        drop(previous);
+        let accepted = if reenter { Rect::ZERO } else { candidate };
+        assert_eq!(flight.shuttle_rect(), accepted);
+        for _ in 0..2 {
+            assert_eq!(
+                flight.shuttle_rect(),
+                accepted,
+                "refusal keeps the accepted geometry"
+            );
+        }
+        assert_eq!(
+            calls.get(),
+            1,
+            "exhausted reads never invoke authored mapping again"
+        );
+    }
+
+    fn last_geometry_ticket_commits_once() {
+        geometry_capacity_case(false);
+    }
+    fn exhausted_nested_read_revokes_outer_publication() {
+        geometry_capacity_case(true);
+    }
+
+    #[test]
+    fn hero_geometry_capacity_refuses_without_reissuing_authority() {
+        crate::support::test_cases::run_cases(
+            "Hero geometry capacity",
+            &[
+                ("last_ticket", last_geometry_ticket_commits_once),
+                (
+                    "nested_refusal",
+                    exhausted_nested_read_revokes_outer_publication,
+                ),
+            ],
+        );
     }
 
     #[test]
@@ -1348,10 +1676,321 @@ mod terminal_tests {
                 "manager_healthy",
                 "manager_competing",
                 "manager_shared_flight",
+                "stale_retirement",
+                "abort_failure",
+                "abort_competing",
+                "shuttle_clone_reentry",
+                "placeholder_reentry",
+                "placeholder_reentry_failure",
+                "placeholder_reentry_competing",
+                "placeholder_reentry_finish",
+                "placeholder_reentry_dismissed",
+                "placeholder_reentry_before_cleanup",
             ],
         ) else {
             return;
         };
+        if case.starts_with("placeholder_reentry") {
+            let hero = Hero::new(
+                flui_foundation::ValueKey::new("reentered"),
+                crate::SizedBox::new(1.0, 1.0),
+            );
+            let (from, _from_tree) = HeroHandle::test_laid_out(&hero);
+            let (to, _to_tree) = HeroHandle::test_laid_out(&hero);
+            let manifest = HeroFlightManifest {
+                tag: from.tag(),
+                direction: Some(FlightDirection::Push),
+                from_route: crate::navigator::RouteId::next(),
+                to_route: crate::navigator::RouteId::next(),
+                from_rect: Rect::ZERO,
+                to_rect: Rect::ZERO,
+                is_user_gesture_transition: false,
+            };
+            let overlay = OverlayHandle::new();
+            let launch = Rc::new(move |manager: &Rc<FlightManager>| {
+                let plan = FlightPlan {
+                    direction: FlightDirection::Push,
+                    from_hero: Terminal::new(from.clone()),
+                    to_hero: Terminal::new(to.clone()),
+                    to_route_subtree: RenderId::new(1),
+                    overlay: Terminal::new(overlay.clone()),
+                    animation: Terminal::new(Rc::new(flui_animation::ConstantAnimation::new(0.0))),
+                    progress: Terminal::new(Rc::new(flui_animation::ConstantAnimation::new(0.0))),
+                    rect_factory: Terminal::new(None),
+                    shuttle_builder: Terminal::new(None),
+                    is_user_gesture_transition: false,
+                    gesture_signal: Terminal::new(NavigatorHandle::new().user_gesture_signal()),
+                };
+                let mut recovery = flui_foundation::panic::PanicRecovery::new();
+                recovery.run_with(|recovery| {
+                    manager.start(&manifest, plan, &manager.epoch(), recovery);
+                });
+                recovery.finish();
+                manager
+                    .get(&manifest.tag)
+                    .expect("the replacement is admitted")
+            });
+            let old_manager = Rc::new(FlightManager::default());
+            let old = launch(&old_manager);
+            let current_manager = Rc::new(FlightManager::default());
+            let fail = matches!(
+                case.as_str(),
+                "placeholder_reentry_failure" | "placeholder_reentry_competing"
+            );
+            let replacement_manager = Rc::clone(&current_manager);
+            let replacement_launch = Rc::clone(&launch);
+            let admitted_before_cleanup = case == "placeholder_reentry_before_cleanup";
+            if admitted_before_cleanup {
+                launch(&current_manager);
+            }
+            let hook =
+                Rc::new(move || {
+                    if !admitted_before_cleanup {
+                        replacement_launch(&replacement_manager);
+                    }
+                    assert_eq!(replacement_manager.len(), 1);
+                    assert!(replacement_manager.flights.snapshot_all().iter().all(
+                        |(_, flight)| {
+                            let state = flight.inner.state.borrow();
+                            state.from_hero.placeholder_size().is_some()
+                                && state.to_hero.placeholder_size().is_some()
+                        }
+                    ));
+                    assert!(!fail, "first placeholder cancellation failure");
+                });
+            let subscription =
+                flui_animation::StatusSubscription::new(&hook, (), |hook, (), _recovery| hook());
+            let previous = old.inner.subscriptions.borrow_mut().replace(subscription);
+            drop(previous);
+            let mut competing_drops = None;
+            if case == "placeholder_reentry_competing" {
+                if let Some(id) = old.inner.proxy_wake_subscription.take() {
+                    old.inner.proxy.remove_listener(id);
+                }
+                let (capture, drops) = bomb("second placeholder cancellation failure", true);
+                let id = old.inner.proxy.add_listener(Rc::new(move || {
+                    let _capture = &capture;
+                }));
+                old.inner.proxy_wake_subscription.set(Some(id));
+                competing_drops = Some(drops);
+            }
+            let outcome = catch_unwind(AssertUnwindSafe(|| {
+                if case == "placeholder_reentry_finish" {
+                    old_manager.finish(&old, AnimationStatus::Completed);
+                } else if case == "placeholder_reentry_dismissed" {
+                    old_manager.finish(&old, AnimationStatus::Dismissed);
+                } else {
+                    old_manager.finish_all();
+                }
+            }));
+            if fail {
+                assert_failure(
+                    outcome.expect_err("the first failure is resumed"),
+                    "first placeholder cancellation failure",
+                );
+            } else {
+                outcome.expect("healthy retirement completes");
+            }
+            assert_eq!(current_manager.len(), 1);
+            if let Some(drops) = competing_drops {
+                assert_eq!(
+                    drops.load(Ordering::SeqCst),
+                    0,
+                    "the first failure retains competing outgoing captures"
+                );
+            }
+            for (_, current) in current_manager.flights.snapshot_all().iter() {
+                let state = current.inner.state.borrow();
+                for hero in [&state.from_hero, &state.to_hero] {
+                    assert_eq!(
+                        hero.placeholder_size(),
+                        Some(flui_foundation::geometry::Size::new(10.0, 10.0)),
+                        "old cleanup cannot withdraw a replacement flight's placeholder"
+                    );
+                }
+            }
+            current_manager.finish_all();
+            current_manager.drain_retired();
+            old_manager.drain_retired();
+            let next = launch(&current_manager);
+            let (next_from, next_to) = {
+                let state = next.inner.state.borrow();
+                (state.from_hero.clone(), state.to_hero.clone())
+            };
+            assert!(next_from.placeholder_size().is_some() && next_to.placeholder_size().is_some());
+            current_manager.finish_all();
+            assert_eq!(next_from.placeholder_size(), None);
+            assert_eq!(next_to.placeholder_size(), None);
+            current_manager.drain_retired();
+            return;
+        }
+        if case == "shuttle_clone_reentry" {
+            struct CloneHook(Rc<dyn Fn()>);
+            impl Clone for CloneHook {
+                fn clone(&self) -> Self {
+                    (self.0)();
+                    Self(Rc::clone(&self.0))
+                }
+            }
+            impl View for CloneHook {
+                fn create_element(&self) -> flui_view::element::ElementKind {
+                    flui_view::element::ElementKind::stateless(self)
+                }
+            }
+            impl StatelessView for CloneHook {
+                fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+                    crate::SizedBox::shrink()
+                }
+            }
+            let (flight, drops) = flight(false, false, false);
+            let calls = Rc::new(Cell::new(0));
+            let callback_calls = Rc::clone(&calls);
+            let weak = Rc::downgrade(&flight.inner);
+            let view = CloneHook(Rc::new(move || {
+                let inner = weak.upgrade().expect("the shuttle's flight is live");
+                let previous = Terminal::new(inner.shuttle.borrow_mut().take());
+                callback_calls.set(callback_calls.get() + 1);
+                drop(previous);
+            }));
+            *flight.inner.shuttle.borrow_mut() = Some(Rc::new(view.boxed()));
+            let child = flight.inner.clone_shuttle();
+            assert_eq!(
+                calls.get(),
+                1,
+                "authored Clone can withdraw its configuration"
+            );
+            drop((child, flight));
+            assert!(drops.iter().all(|count| count.load(Ordering::SeqCst) == 1));
+            return;
+        }
+        if case.starts_with("abort_") {
+            let manager = Rc::new(FlightManager::default());
+            let launch = |name: &'static str| {
+                let hero = Hero::new(
+                    flui_foundation::ValueKey::new(name),
+                    crate::SizedBox::new(1.0, 1.0),
+                );
+                let (from, from_tree) = HeroHandle::test_laid_out(&hero);
+                let (to, to_tree) = HeroHandle::test_laid_out(&hero);
+                let manifest = HeroFlightManifest {
+                    tag: from.tag(),
+                    direction: Some(FlightDirection::Push),
+                    from_route: crate::navigator::RouteId::next(),
+                    to_route: crate::navigator::RouteId::next(),
+                    from_rect: Rect::ZERO,
+                    to_rect: Rect::ZERO,
+                    is_user_gesture_transition: false,
+                };
+                let overlay = OverlayHandle::new();
+                let plan = FlightPlan {
+                    direction: FlightDirection::Push,
+                    from_hero: Terminal::new(from.clone()),
+                    to_hero: Terminal::new(to.clone()),
+                    to_route_subtree: RenderId::new(1),
+                    overlay: Terminal::new(overlay.clone()),
+                    animation: Terminal::new(Rc::new(flui_animation::ConstantAnimation::new(0.0))),
+                    progress: Terminal::new(Rc::new(flui_animation::ConstantAnimation::new(0.0))),
+                    rect_factory: Terminal::new(None),
+                    shuttle_builder: Terminal::new(None),
+                    is_user_gesture_transition: false,
+                    gesture_signal: Terminal::new(NavigatorHandle::new().user_gesture_signal()),
+                };
+                let mut recovery = flui_foundation::panic::PanicRecovery::new();
+                recovery.run_with(|recovery| {
+                    manager.start(&manifest, plan, &manager.epoch(), recovery);
+                });
+                recovery.finish();
+                let flight = manager.get(&manifest.tag).expect("the flight was admitted");
+                (flight, from, to, from_tree, to_tree, overlay)
+            };
+            let (flight, from, to, _from_tree, _to_tree, overlay) = launch("failed");
+            let (_peer, peer_from, peer_to, _peer_from_tree, _peer_to_tree, peer_overlay) =
+                launch("healthy");
+            let removed = Rc::new(Cell::new(0));
+            let subscription =
+                flui_animation::StatusSubscription::new(&removed, (), |removed, (), _recovery| {
+                    removed.set(removed.get() + 1);
+                    panic!("first Hero cancellation failure");
+                });
+            let previous = flight
+                .inner
+                .subscriptions
+                .borrow_mut()
+                .replace(subscription);
+            drop(previous);
+            if let Some(id) = flight.inner.proxy_wake_subscription.take() {
+                flight.inner.proxy.remove_listener(id);
+            }
+            let (capture, capture_drops) = bomb(
+                "second Hero cancellation failure",
+                case == "abort_competing",
+            );
+            let id = flight.inner.proxy.add_listener(Rc::new(move || {
+                let _capture = &capture;
+            }));
+            flight.inner.proxy_wake_subscription.set(Some(id));
+            let failure = catch_unwind(AssertUnwindSafe(|| manager.finish_all()))
+                .expect_err("cancellation reports its first failure after restoration");
+            assert_failure(failure, "first Hero cancellation failure");
+            for hero in [&from, &to, &peer_from, &peer_to] {
+                assert_eq!(
+                    hero.placeholder_size(),
+                    None,
+                    "every selected hero is restored"
+                );
+            }
+            assert_eq!(manager.len(), 0);
+            assert_eq!(overlay.ids_bottom_to_top(), []);
+            assert_eq!(peer_overlay.ids_bottom_to_top(), []);
+            assert_eq!(removed.get(), 1, "the failing cancellation is not replayed");
+            assert_eq!(
+                capture_drops.load(Ordering::SeqCst),
+                0,
+                "outgoing captures retain the first failure"
+            );
+            manager.finish_all();
+            manager.drain_retired();
+            let (_fresh, fresh_from, fresh_to, _fresh_from_tree, _fresh_to_tree, fresh_overlay) =
+                launch("failed");
+            manager.finish_all();
+            assert_eq!(fresh_from.placeholder_size(), None);
+            assert_eq!(fresh_to.placeholder_size(), None);
+            assert_eq!(fresh_overlay.ids_bottom_to_top(), []);
+            manager.drain_retired();
+            return;
+        }
+        if case == "stale_retirement" {
+            let manager = Rc::new(FlightManager::default());
+            let (old, old_drops) = flight(false, false, false);
+            let mut recovery = flui_foundation::panic::PanicRecovery::new();
+            old.abort(&mut recovery.scope());
+            recovery.finish();
+            let (current, current_drops) = flight(false, false, false);
+            let seat = manager
+                .flights
+                .insert_first(current.tag().clone(), current.clone())
+                .expect("fixture tag is unique")
+                .commit();
+            *current.inner.seat.borrow_mut() = Some(seat);
+            manager.finish(&old, AnimationStatus::Completed);
+            assert!(manager.is_airborne(current.tag()));
+            let mut recovery = flui_foundation::panic::PanicRecovery::new();
+            manager.abort(&current, &mut recovery.scope());
+            recovery.finish();
+            manager.drain_retired();
+            drop((old, current, manager));
+            assert!(
+                old_drops
+                    .iter()
+                    .all(|count| count.load(Ordering::SeqCst) == 1)
+            );
+            assert!(
+                current_drops
+                    .iter()
+                    .all(|count| count.load(Ordering::SeqCst) == 1)
+            );
+            return;
+        }
         let incoming = case == "incoming_unwind";
         let failure = matches!(
             case.as_str(),
@@ -1365,10 +2004,12 @@ mod terminal_tests {
         );
         if case == "manager_shared_flight" {
             let manager = FlightManager::default();
-            manager
+            let seat = manager
                 .flights
-                .lock()
-                .insert(flight.tag().clone(), flight.clone());
+                .insert_first(flight.tag().clone(), flight.clone())
+                .expect("fixture tag is unique")
+                .commit();
+            *flight.inner.seat.borrow_mut() = Some(seat);
             drop(manager);
             assert!(drops.iter().all(|count| count.load(Ordering::SeqCst) == 0));
             drop(flight);
@@ -1381,11 +2022,16 @@ mod terminal_tests {
         if case.starts_with("manager_") {
             let manager = FlightManager::default();
             let flight = owned_flight.take().expect("owned flight");
-            manager.flights.lock().insert(flight.tag().clone(), flight);
+            let seat = manager
+                .flights
+                .insert_first(flight.tag().clone(), flight.clone())
+                .expect("fixture tag is unique")
+                .commit();
+            *flight.inner.seat.borrow_mut() = Some(seat);
             let competing = case == "manager_competing";
             let (retired, counts) = self::flight(competing, competing, competing);
             retired_drops = Some(counts);
-            manager.retired.lock().push(retired);
+            manager.retired.borrow_mut().push(retired);
             *owned_manager = Some(manager);
         }
         let result = catch_unwind(AssertUnwindSafe(move || {

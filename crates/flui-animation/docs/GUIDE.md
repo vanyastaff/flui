@@ -22,6 +22,52 @@ assert_eq!(controller.value(), 0.5);
 owner returned by `build_on(Some(&vsync))`; its controller receives the
 presentation's `FrameTick` through that Vsync registry.
 
+## Motion preferences
+
+Use `AppConfig::with_motion_preference` to choose FollowSystem, Reduce or Full
+for an application. Widgets read the resolved `MediaQuery::motion_of`; they
+do not subscribe to another host preference producer. Under FollowSystem,
+Normal motion takes the host duration scale into account. Preserve motion
+keeps authored timing, including while the resolved policy is Reduce.
+
+This standalone example drives the same registry policy used by runtime
+frames. Policy changes take effect on a tick, so listeners see committed
+controller state rather than a synchronous sample during configuration.
+
+```rust
+use std::time::Duration;
+use flui_animation::{Animation, AnimationBehavior, AnimationController,
+    MotionClock, MotionPreference, Vsync};
+
+let vsync = Vsync::new();
+let mut clock = MotionClock::new();
+clock.set_preference(MotionPreference::Reduce);
+let transition = AnimationController::builder(Duration::from_secs(1))
+    .build_on(Some(&vsync));
+let timer = AnimationController::builder(Duration::from_secs(3))
+    .behavior(AnimationBehavior::Preserve)
+    .build_on(Some(&vsync));
+let _ = transition.controller().forward().expect("live transition");
+let _ = timer.controller().forward().expect("live timer");
+vsync.tick_all(&clock.frame(Duration::ZERO));
+assert_eq!(transition.controller().value(), 1.0);
+assert_eq!(timer.controller().value(), 0.0);
+vsync.tick_all(&clock.frame(Duration::from_secs(1)));
+assert!((timer.controller().value() - 1.0 / 3.0).abs() < 1e-9);
+```
+
+A finite repeat settles at its last leg's endpoint. An infinite Normal
+repeat parks at its first leg's start and keeps its run future pending;
+Full resumes it from a new zero-time anchor. A saturated selected timeline
+also settles finite work and parks infinite work; that timeline cannot
+resume until the owner is rebound to a registry with time available.
+
+For interactive inspection, run the workspace `motion_lab` example with
+`--full`, `--reduce` or `--system`. On Windows, `--system` follows the existing
+host Animation effects preference while the window is open. In headless
+tests, `HeadlessHost::set_motion_preference` and `LaidOut::set_motion_preference`
+use the runtime's application override path; pump a frame after changing it.
+
 ## AnimationController
 
 ### Creating
@@ -161,14 +207,14 @@ let id = controller.add_listener(Rc::new(move || {
 controller.remove_listener(id);
 
 // Status changes
-let id = controller.add_status_listener(Rc::new(|status| {
+let subscription = controller.subscribe_status(Rc::new(|status| {
     match status {
         AnimationStatus::Completed => println!("done"),
         AnimationStatus::Dismissed => println!("reset"),
         _ => {}
     }
 }));
-controller.remove_status_listener(id);
+drop(subscription);
 # drop(controller);
 ```
 
@@ -625,7 +671,7 @@ controller.forward()?;
 if controller.status() == AnimationStatus::Completed { /* ... */ }
 
 // Good: react to changes
-controller.add_status_listener(Rc::new(|status| {
+let _subscription = controller.subscribe_status(Rc::new(|status| {
     if status == AnimationStatus::Completed { /* ... */ }
 }));
 # drop(controller);

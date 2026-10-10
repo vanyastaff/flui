@@ -741,6 +741,8 @@ pub trait BuildContextExt: BuildContext {
     /// derived value `R` — typically a cloned `Data` field. Registers
     /// a dependency: when the InheritedView's data changes, this
     /// Element rebuilds.
+    /// A missed lookup also records dependence on ancestry: reactivation after
+    /// reparenting refreshes lifecycle dependencies before the next build.
     ///
     /// Callback form chosen over `Option<&T>` to preserve the
     /// declarative-build invariant (Constitution Principle 5) and avoid

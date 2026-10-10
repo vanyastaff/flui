@@ -73,6 +73,354 @@ pub fn open_drawer_settling_uses_the_captured_fling_profile() {
     drawer_settling_uses_profile(true);
 }
 
+pub fn a_drawer_release_keeps_finger_speed() {
+    use flui_sdk::painting::Color;
+    use flui_sdk::widgets::ColoredBox;
+    let color = Color::rgb(17, 83, 149);
+    let painted_x = |laid: &common::LaidOut| {
+        drawer_scene_sample(laid.layer_tree().expect("committed scene"), color).0
+    };
+    for (configured, viewport, end) in [
+        (150.0, 400.0, false),
+        (1200.0, 1320.0, false),
+        (304.0, 100.0, false),
+        (150.0, 400.0, true),
+        (1200.0, 1320.0, true),
+    ] {
+        let vsync = Vsync::new();
+        let drawer = Drawer::new()
+            .width(configured)
+            .child(SizedBox::height(400.0).child(ColoredBox::new(color)));
+        let scaffold = if end {
+            Scaffold::new().end_drawer(drawer)
+        } else {
+            Scaffold::new().drawer(drawer)
+        };
+        let mut laid = lay_out_animated(
+            themed_animated(scaffold, &vsync),
+            tight(viewport, 400.0),
+            vsync,
+        );
+        let sign = if end { -1.0 } else { 1.0 };
+        let mut x = if end { viewport - 5.0 } else { 5.0 };
+        laid.dispatch_pointer_down(x, 200.0);
+        for _ in 0..5 {
+            x += sign * 15.0;
+            laid.dispatch_pointer_move_after(x, 200.0, Duration::from_millis(10));
+            laid.pump();
+        }
+        laid.pump();
+        let seam = painted_x(&laid);
+        laid.dispatch_pointer_up(x, 200.0);
+        laid.pump();
+        assert!((painted_x(&laid) - seam).abs() < 1e-9);
+        let step = Duration::from_micros(100);
+        let mut samples = Vec::new();
+        for _ in 0..3 {
+            laid.pump_for(step);
+            samples.push(painted_x(&laid));
+        }
+        let pair = samples
+            .windows(2)
+            .find(|pair| pair[1] != pair[0])
+            .expect("the drawer moves after release");
+        let speed = (pair[1] - pair[0]) / step.as_secs_f64();
+        assert!(
+            (speed - sign * 1500.0).abs() < 150.0,
+            "configured {configured}, viewport {viewport}, end {end}: painted speed {speed}"
+        );
+        laid.pump_widget(SizedBox::shrink());
+    }
+}
+
+/// Observe the authored rectangle in the committed scene, including the
+/// compositor ancestors that move and fade a retained picture.
+fn drawer_scene_sample(
+    tree: &flui_layer::LayerTree,
+    color: flui_sdk::painting::Color,
+) -> (f64, f64) {
+    use flui_layer::Layer;
+    use flui_sdk::geometry::Point;
+    use flui_sdk::painting::DrawOp;
+    for (_, node) in tree.iter() {
+        let Layer::Picture(picture) = node.layer() else {
+            continue;
+        };
+        for command in picture.picture() {
+            let DrawOp::Rect { rect, paint } = &command.op else {
+                continue;
+            };
+            if (paint.color.r, paint.color.g, paint.color.b) != (color.r, color.g, color.b) {
+                continue;
+            }
+            let (x, y) = command.transform.transform_point(rect.left(), rect.top());
+            let mut point = Point::new(x, y);
+            let mut alpha = f64::from(paint.color.a) / 255.0;
+            let mut parent = node.parent();
+            while let Some(id) = parent {
+                let ancestor = tree.get(id).expect("scene parent exists");
+                match ancestor.layer() {
+                    Layer::Transform(layer) => point = layer.transform_point(point),
+                    Layer::Offset(layer) => point += layer.offset(),
+                    Layer::Opacity(layer) => {
+                        point += layer.offset();
+                        alpha *= layer.alpha();
+                    }
+                    _ => {}
+                }
+                parent = ancestor.parent();
+            }
+            return (point.x, alpha);
+        }
+    }
+    panic!("authored rectangle must exist in the committed scene");
+}
+
+pub fn drawer_slides_without_rebuilding_per_frame() {
+    use flui_sdk::geometry::Offset;
+    use flui_sdk::painting::Color;
+    use flui_sdk::widgets::{ColoredBox, FocusRoot, GestureArenaScope};
+    use flui_testing::{HeadlessBinding, MountOptions, MountOwners, PointerScript};
+
+    for (end, settling_frames, panel_tap, both) in [
+        (false, 0, false, false),
+        (true, 0, false, false),
+        (false, 0, true, false),
+        (true, 0, true, false),
+        (false, 8, true, false),
+        (true, 8, true, false),
+        (true, 8, true, true),
+    ] {
+        let mut binding = HeadlessBinding::new();
+        let taps = Rc::new(std::cell::Cell::new(0));
+        let tapped = Rc::clone(&taps);
+        let marker = Color::rgb(17, 83, 149);
+        let scrim = Color::rgba(63, 11, 109, 180);
+        let drawer = Drawer::new().width(150.0).child(
+            GestureDetector::new()
+                .on_tap(move |_| tapped.set(tapped.get() + 1))
+                .child(SizedBox::height(400.0).child(ColoredBox::new(marker))),
+        );
+        let scaffold = if both {
+            Scaffold::new().drawer(Drawer::new()).end_drawer(drawer)
+        } else if end {
+            Scaffold::new().end_drawer(drawer)
+        } else {
+            Scaffold::new().drawer(drawer)
+        }
+        .drawer_scrim_color(scrim);
+        let root = GestureArenaScope::new(
+            binding.arena().clone(),
+            FocusRoot::new(themed_animated(scaffold, binding.vsync())),
+        );
+        let _ = binding.mount_root(
+            &root,
+            MountOwners::fresh(),
+            MountOptions::tight(400.0, 400.0),
+        );
+        binding.pump_frame(FRAME);
+        let start = if end { 395.0 } else { 5.0 };
+        let finish = start + if end { -80.0 } else { 80.0 };
+        let drag = PointerScript::drag(
+            Offset::new(start, 200.0),
+            Offset::new(finish, 200.0),
+            5,
+            Duration::from_millis(10),
+        );
+        let mut previous_at = Duration::ZERO;
+        for (index, event) in drag.events().iter().enumerate() {
+            binding.pump_frame(event.at.saturating_sub(previous_at));
+            previous_at = event.at;
+            // The early moves win the gesture arena and mount the panel.
+            // Later moves update render geometry even across the open-state
+            // threshold. Two slots additionally need one ordering update.
+            let before = (4..=5).contains(&index).then(|| {
+                drawer_scene_sample(binding.layer_tree().expect("dragging panel"), marker).0
+            });
+            binding.dispatch_pointer(&event.to_event(), |position| binding.hit_test(position));
+            if let Some(before) = before {
+                binding.pump_frame(Duration::ZERO);
+                if !(both && index == 5) {
+                    assert_eq!(
+                        binding.last_frame_report().build.elements_built,
+                        0,
+                        "end {end}, move {index}, prior panel x {before}: an interior pointer move must not rebuild the drawer: {:?}",
+                        binding.last_frame_report().build
+                    );
+                }
+                assert!(
+                    !binding.vsync().has_running(),
+                    "drag geometry is observed before a settling run starts"
+                );
+                let scene = binding.layer_tree().expect("committed dragging panel");
+                let x = drawer_scene_sample(scene, marker).0;
+                let directed_travel = (x - before) * if end { -1.0 } else { 1.0 };
+                assert!(
+                    (directed_travel - 16.0).abs() < 1e-6,
+                    "panel follows this pointer move: {directed_travel}"
+                );
+                let value = if end {
+                    (400.0 - x) / 150.0
+                } else {
+                    (x + 150.0) / 150.0
+                };
+                let alpha = drawer_scene_sample(scene, scrim).1;
+                assert!(
+                    (alpha - value * f64::from(scrim.a) / 255.0).abs() <= 1.0 / 255.0,
+                    "dragged panel and scrim consume the same value"
+                );
+            }
+        }
+        assert!(
+            binding.vsync().has_running(),
+            "the release must start a settling animation"
+        );
+        // Consume the status change that mounts the panel before measuring
+        // running frames. pump_frame never dirties the logical root itself.
+        binding.pump_frame(FRAME);
+        let mut previous =
+            drawer_scene_sample(binding.layer_tree().expect("mounted panel"), marker).0;
+        for _ in 0..settling_frames {
+            binding.pump_frame(FRAME);
+            let report = binding.last_frame_report();
+            assert_eq!(
+                report.build.elements_built, 0,
+                "end {end}: running drawer rebuilt: {:?}",
+                report.build
+            );
+            let scene = binding.layer_tree().expect("committed drawer scene");
+            let x = drawer_scene_sample(scene, marker).0;
+            assert!(
+                (x - previous) * if end { -1.0 } else { 1.0 } > 0.0,
+                "the panel must move toward its open edge"
+            );
+            let value = if end {
+                (400.0 - x) / 150.0
+            } else {
+                (x + 150.0) / 150.0
+            };
+            let alpha = drawer_scene_sample(scene, scrim).1;
+            assert!(
+                (alpha - value * f64::from(scrim.a) / 255.0).abs() <= 1.0 / 255.0,
+                "scrim alpha follows the same motion"
+            );
+            previous = x;
+        }
+        if settling_frames == 0 {
+            let open_fraction = if end {
+                (400.0 - previous) / 150.0
+            } else {
+                (previous + 150.0) / 150.0
+            };
+            assert!(
+                (0.3..0.6).contains(&open_fraction),
+                "hit testing is exercised on a partly revealed panel"
+            );
+        }
+        if panel_tap {
+            binding.replay(&PointerScript::tap(Offset::new(
+                if end { 380.0 } else { 20.0 },
+                200.0,
+            )));
+            assert_eq!(taps.get(), 1, "the visible panel receives its tap");
+        }
+        binding.replay(&PointerScript::tap(Offset::new(
+            if both {
+                5.0
+            } else if end {
+                20.0
+            } else {
+                380.0
+            },
+            200.0,
+        )));
+        binding.pump_frame(FRAME);
+        let before_close =
+            drawer_scene_sample(binding.layer_tree().expect("closing panel"), marker).0;
+        binding.pump_frame(FRAME);
+        let after_close =
+            drawer_scene_sample(binding.layer_tree().expect("closing panel"), marker).0;
+        assert!(
+            (after_close - before_close) * if end { 1.0 } else { -1.0 } > 0.0,
+            "scrim tap closes the panel"
+        );
+        assert_eq!(
+            binding.last_frame_report().build.elements_built,
+            0,
+            "closing value ticks do not rebuild"
+        );
+    }
+}
+
+pub fn incoming_end_drawer_scrim_covers_the_outgoing_start_panel() {
+    use flui_sdk::painting::Color;
+    use flui_sdk::widgets::ColoredBox;
+
+    let vsync = Vsync::new();
+    let slot = Rc::new(RefCell::new(None));
+    let taps = Rc::new(std::cell::Cell::new(0));
+    let tapped = Rc::clone(&taps);
+    let start_marker = Color::rgb(31, 79, 127);
+    let end_marker = Color::rgb(173, 43, 89);
+    let scaffold = Scaffold::new()
+        .drawer(
+            Drawer::new().width(150.0).child(
+                GestureDetector::new()
+                    .on_tap(move |_| tapped.set(tapped.get() + 1))
+                    .child(SizedBox::height(400.0).child(ColoredBox::new(start_marker))),
+            ),
+        )
+        .end_drawer(
+            Drawer::new()
+                .width(150.0)
+                .child(SizedBox::height(400.0).child(ColoredBox::new(end_marker))),
+        )
+        .body(HandleProbe {
+            slot: Rc::clone(&slot),
+            on_tap: Rc::new(|_| {}),
+        });
+    let mut laid = lay_out_animated(
+        themed_animated(scaffold, &vsync),
+        tight(400.0, 400.0),
+        vsync,
+    );
+    let handle = slot.borrow().clone().expect("mounted drawer handle");
+    laid.enter_owner_scope(|| handle.open_drawer());
+    for _ in 0..FLING_SETTLE_PUMPS {
+        laid.pump_for(FRAME);
+    }
+    laid.dispatch_pointer_down(20.0, 200.0);
+    laid.dispatch_pointer_up(20.0, 200.0);
+    assert_eq!(taps.get(), 1, "the open start panel receives this point");
+
+    laid.enter_owner_scope(|| handle.open_end_drawer());
+    laid.pump_for(FRAME);
+    laid.pump_for(FRAME);
+    let scene = laid.layer_tree().expect("both panels are still painted");
+    let start_x = drawer_scene_sample(scene, start_marker).0;
+    let end_x = drawer_scene_sample(scene, end_marker).0;
+    assert!(
+        start_x < 0.0 && start_x + 150.0 > 20.0,
+        "the outgoing start panel still covers the tested point: {start_x}"
+    );
+    assert!(
+        (250.0..400.0).contains(&end_x),
+        "the incoming end panel is not settled: {end_x}"
+    );
+    assert!(handle.is_end_drawer_open());
+    laid.dispatch_pointer_down(20.0, 200.0);
+    laid.dispatch_pointer_up(20.0, 200.0);
+    assert_eq!(
+        taps.get(),
+        1,
+        "the incoming scrim intercepts the still-visible outgoing panel"
+    );
+    assert!(
+        !handle.is_end_drawer_open(),
+        "the same tap closes the incoming drawer"
+    );
+}
+
 fn drawer_settling_uses_profile(initially_open: bool) {
     for (min, max) in [(50.0, 100.0), (5000.0, 5000.0)] {
         let profile = |min, max| {

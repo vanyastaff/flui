@@ -95,19 +95,18 @@
 // integration tests read through `crate::__test_access::HeroControllerProbe`
 // (ADR-0083 §4) to assert the measurement pass.
 
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_animation::{Animatable, Animation, AnimationStatus, ArcCurve, Curve, CurvedAnimation};
 use flui_foundation::geometry::Size;
 use flui_foundation::geometry::{Matrix4, Rect};
-use parking_lot::Mutex;
 
 use super::hero::{HeroHandle, HeroTag, RectTweenFactory};
-use super::hero_flight::{FlightManager, FlightPlan};
-use super::lifecycle::{RetiredMap, RetiredValues, Terminal, TerminalVec};
+use super::hero_flight::{FlightEpoch, FlightManager, FlightPlan, finite_shuttle_rect};
+use super::lifecycle::{RetiredMap, RetiredValues, Terminal};
 use super::modal_route::ModalHandle;
 use super::navigator::NavigatorHandle;
 use super::observer::NavigatorObserver;
@@ -183,8 +182,8 @@ pub struct Measurement {
 /// Whether a flight's two rects are usable.
 ///
 /// This manifest type still carries concrete route-pair geometry, so both rects must be
-/// finite. A non-finite rect would make the future `RectTween` interpolate
-/// `NaN`/`Infinity` and paint the shuttle nowhere.
+/// finite with representable shuttle sizes. Finite corners alone can still
+/// overflow subtraction into an infinite extent.
 ///
 /// **Defensive, and known to be so.** Every rect here is built from
 /// `PipelineOwner::box_size` and `transform_to`, and no reachable FLUI configuration
@@ -193,7 +192,7 @@ pub struct Measurement {
 /// reach it. It is unit-tested directly rather than pretended to be exercised
 /// end-to-end.
 pub(crate) fn is_valid_flight(from_rect: Rect, to_rect: Rect) -> bool {
-    to_rect.is_finite() && from_rect.is_finite()
+    finite_shuttle_rect(to_rect).is_some() && finite_shuttle_rect(from_rect).is_some()
 }
 
 /// Everything known about a flight that *would* start, for one tag.
@@ -232,14 +231,12 @@ pub struct HeroFlightManifest {
 pub struct HeroController {
     /// The observed navigator. `None` before
     /// attach and after detach, which is what makes a stale controller inert.
-    navigator: Terminal<Mutex<Option<NavigatorHandle>>>,
+    navigator: Terminal<RefCell<Option<NavigatorHandle>>>,
     /// How many post-frame measurements have been *scheduled*. One per eligible
     /// push/pop, never one per observer callback.
-    scheduled: Terminal<Arc<AtomicUsize>>,
-    /// What those callbacks resolved, in order.
-    measurements: Terminal<Arc<Mutex<Vec<Measurement>>>>,
-    /// One per tag that both routes share and that measured to a finite rect.
-    manifests: Terminal<Arc<TerminalVec<HeroFlightManifest>>>,
+    scheduled: Cell<usize>,
+    /// Shared with queued measurements until their physical last release.
+    recordings: Terminal<Rc<HeroRecordings>>,
     /// One flight per tag in the air.
     flights: Terminal<Rc<FlightManager>>,
     /// The fallback rect-tween factory for heroes that set none of their own.
@@ -247,31 +244,49 @@ pub struct HeroController {
     default_rect_factory: Terminal<Option<RectTweenFactory>>,
 }
 
+#[derive(Default)]
+struct HeroRecordings {
+    measurements: RefCell<Vec<Measurement>>,
+    manifests: RefCell<Vec<HeroFlightManifest>>,
+}
+
+impl HeroRecordings {
+    fn record_manifests(&self, manifests: Vec<HeroFlightManifest>) {
+        self.manifests.borrow_mut().extend(manifests);
+    }
+
+    fn manifests(&self) -> Vec<HeroFlightManifest> {
+        // HeroTag clones its Arc identity; this copies no authored key code.
+        self.manifests.borrow().clone()
+    }
+}
+
+impl Drop for HeroRecordings {
+    fn drop(&mut self) {
+        let measurements = Terminal::new(std::mem::take(self.measurements.get_mut()));
+        let manifests = RetiredValues(std::mem::take(self.manifests.get_mut()));
+        drop(manifests);
+        drop(measurements);
+    }
+}
+
 impl Drop for HeroController {
     fn drop(&mut self) {
         // Withdraw the complete controller before releasing any owner. Shared
         // recordings and flights retire only at their own physical last owner.
         let navigator = self.navigator.withdraw();
-        let scheduled = self.scheduled.withdraw();
-        let measurements = self.measurements.withdraw();
-        let manifests = self.manifests.withdraw();
+        let recordings = self.recordings.withdraw();
         let flights = self.flights.withdraw();
         let factory = self.default_rect_factory.withdraw();
-        drop((
-            navigator,
-            scheduled,
-            measurements,
-            manifests,
-            flights,
-            factory,
-        ));
+        drop((navigator, recordings, flights, factory));
     }
 }
 
 impl std::fmt::Debug for HeroController {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let attached = self.navigator.borrow().is_some();
         f.debug_struct("HeroController")
-            .field("attached", &self.navigator.lock().is_some())
+            .field("attached", &attached)
             .finish_non_exhaustive()
     }
 }
@@ -296,33 +311,33 @@ impl HeroController {
     pub fn with_rect_tween<F, A>(factory: F) -> Arc<Self>
     where
         F: Fn(Rect, Rect) -> A + 'static,
-        A: Animatable<Rect> + Send + Sync + 'static,
+        A: Animatable<Value = Rect> + 'static,
     {
         let mut controller = Self::default();
         controller.default_rect_factory = Terminal::new(Some(Rc::new(move |begin, end| {
-            Box::new(factory(begin, end)) as Box<dyn Animatable<Rect> + Send + Sync>
+            Box::new(factory(begin, end)) as Box<dyn Animatable<Value = Rect>>
         })));
         Arc::new(controller)
     }
 
     /// The navigator this controller observes, or `None` when detached.
     pub(crate) fn navigator(&self) -> Option<NavigatorHandle> {
-        self.navigator.lock().clone()
+        self.navigator.borrow().clone()
     }
 
     /// How many post-frame measurements have been scheduled.
     pub(crate) fn scheduled_count(&self) -> usize {
-        self.scheduled.load(Ordering::SeqCst)
+        self.scheduled.get()
     }
 
     /// Everything the post-frame callbacks resolved, in order.
     pub(crate) fn measurements(&self) -> Vec<Measurement> {
-        self.measurements.lock().clone()
+        self.recordings.measurements.borrow().clone()
     }
 
     /// The flights that started, one per shared tag. Recorded even after they land.
     pub(crate) fn manifests(&self) -> Vec<HeroFlightManifest> {
-        self.manifests.lock().clone()
+        self.recordings.manifests()
     }
 
     /// The flights currently in the air.
@@ -335,7 +350,7 @@ impl HeroController {
     ///
     /// Runs **inside an observer callback** (`did_change_top` or
     /// `did_start_user_gesture`), so it does exactly three kinds of work:
-    /// registry lookups behind their own mutexes, a same-frame geometry read
+    /// owner-local registry lookups, a same-frame geometry read
     /// (the sync fast path only, never `history` mutation), and scheduling.
     fn maybe_start(
         &self,
@@ -346,6 +361,7 @@ impl HeroController {
         let Some(navigator) = self.navigator() else {
             return; // Detached.
         };
+        let epoch = self.flights.epoch();
         // No previous top route: nothing to fly from.
         let (Some(from), Some(to)) = (from, to) else {
             return;
@@ -396,6 +412,7 @@ impl HeroController {
                 .is_some_and(Size::is_finite)
         {
             let pass = MeasurementPass {
+                epoch,
                 navigator: &navigator,
                 source: &source,
                 destination: &destination,
@@ -407,7 +424,7 @@ impl HeroController {
                 default_rect_factory: &self.default_rect_factory,
             };
             let started = pass.start_transition();
-            self.manifests.lock().extend(started);
+            self.recordings.record_manifests(started);
             return;
         }
 
@@ -427,8 +444,7 @@ impl HeroController {
 
         // The queued closure is an owning framework envelope too: each
         // independent capture must retain itself after another capture fails.
-        let measurements = Terminal::new(Arc::clone(&self.measurements));
-        let manifests = Terminal::new(Arc::clone(&self.manifests));
+        let recordings = Terminal::new(Rc::clone(&self.recordings));
         let flights = Terminal::new(Rc::clone(&self.flights));
         let default_rect_factory = Terminal::new(self.default_rect_factory.clone());
         let measured_destination = Terminal::new(destination.clone());
@@ -436,6 +452,7 @@ impl HeroController {
         let source = Terminal::new(source);
         let schedule_result = post_frame.schedule(move |_timing| {
             let pass = MeasurementPass {
+                epoch,
                 navigator: &navigator,
                 source: &source,
                 destination: &measured_destination,
@@ -446,7 +463,7 @@ impl HeroController {
                 flights: &flights,
                 default_rect_factory: &default_rect_factory,
             };
-            pass.run(&measurements, &manifests);
+            pass.run(&recordings);
         });
         if let Err(error) = schedule_result {
             tracing::warn!(
@@ -459,7 +476,7 @@ impl HeroController {
         // Only hide the destination after its restoring measurement is guaranteed
         // to be queued. A failed local-lane registration must never strand it.
         destination.set_offstage(to_animation.value() == 0.0);
-        self.scheduled.fetch_add(1, Ordering::SeqCst);
+        self.scheduled.set(self.scheduled.get().saturating_add(1));
     }
 }
 
@@ -477,6 +494,7 @@ impl HeroController {
 /// A struct rather than a seven-argument function: it is the closure's payload, and
 /// each field is one input to the flight manifest.
 struct MeasurementPass<'a> {
+    epoch: FlightEpoch,
     navigator: &'a NavigatorHandle,
     source: &'a ModalHandle,
     destination: &'a ModalHandle,
@@ -502,11 +520,7 @@ struct MatchedHeroes {
 }
 
 impl MeasurementPass<'_> {
-    fn run(
-        &self,
-        measurements: &Mutex<Vec<Measurement>>,
-        manifests: &Mutex<Vec<HeroFlightManifest>>,
-    ) {
+    fn run(&self, recordings: &HeroRecordings) {
         // The navigator may have left the tree while we waited.
         if !self.navigator.is_mounted() {
             return;
@@ -531,7 +545,7 @@ impl MeasurementPass<'_> {
             _ => (None, None),
         };
 
-        measurements.lock().push(Measurement {
+        recordings.measurements.borrow_mut().push(Measurement {
             direction: self.direction,
             from: self.from,
             to: self.to,
@@ -541,7 +555,7 @@ impl MeasurementPass<'_> {
         });
 
         let started = self.start_transition();
-        manifests.lock().extend(started);
+        recordings.record_manifests(started);
     }
 
     /// The manifest-collection-and-launch core, from putting the destination back
@@ -553,6 +567,9 @@ impl MeasurementPass<'_> {
         // A no-op when the sync fast path never flipped it. Geometry stays committed until the next layout, so
         // measuring after this is safe either way.
         self.destination.set_offstage(false);
+        if !self.flights.is_current(&self.epoch) {
+            return Vec::new();
+        }
 
         // Retired flights are dropped here, outside every animation listener — see
         // `FlightManager`'s type docs for why that matters.
@@ -565,14 +582,18 @@ impl MeasurementPass<'_> {
             .set_post_frame(self.navigator.post_frame_handle());
 
         let mut started = RetiredValues(self.collect_manifests());
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
         for matched in &started.0 {
-            self.launch(&matched.manifest, &matched.from, &matched.to);
+            recovery.run_with(|recovery| {
+                self.launch(&matched.manifest, &matched.from, &matched.to, recovery);
+            });
         }
         let mut remaining = Terminal::new(std::mem::take(&mut started.0).into_iter());
         let mut manifests = Terminal::new(Vec::new());
         for mut matched in remaining.by_ref() {
             manifests.push(matched.manifest.take_value());
         }
+        recovery.finish();
         manifests.take_value()
     }
 
@@ -581,7 +602,13 @@ impl MeasurementPass<'_> {
     /// A manifest with **no direction** never flies. The measurement is still
     /// recorded, because a manifest is measurement data, independent of whether a
     /// flight launches.
-    fn launch(&self, manifest: &HeroFlightManifest, from_hero: &HeroHandle, to_hero: &HeroHandle) {
+    fn launch(
+        &self,
+        manifest: &HeroFlightManifest,
+        from_hero: &HeroHandle,
+        to_hero: &HeroHandle,
+        recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
+    ) {
         let Some(direction) = manifest.direction else {
             return;
         };
@@ -602,7 +629,7 @@ impl MeasurementPass<'_> {
         // defaults to the forward curve flipped, and a manifest that diverts an
         // airborne flight carries none.
         let curve = curve_hero.curve();
-        let curved = CurvedAnimation::new(route_animation, curve.clone());
+        let curved = CurvedAnimation::new(Rc::clone(&route_animation), curve.clone());
         let curved = if self.flights.is_airborne(&manifest.tag) {
             curved
         } else {
@@ -634,11 +661,14 @@ impl MeasurementPass<'_> {
                 to_route_subtree: to_subtree.render_id,
                 overlay: Terminal::new(self.navigator.overlay().clone()),
                 animation: Terminal::new(animation),
+                progress: Terminal::new(route_animation),
                 rect_factory: Terminal::new(rect_factory),
                 shuttle_builder: Terminal::new(shuttle_builder),
                 is_user_gesture_transition: self.is_user_gesture_transition,
                 gesture_signal: Terminal::new(self.navigator.user_gesture_signal()),
             },
+            &self.epoch,
+            recovery,
         );
     }
 
@@ -751,8 +781,9 @@ impl NavigatorObserver for HeroController {
     /// navigator's heroes do not fly rather than the controller silently pointing at
     /// the wrong one. `did_detach` frees it for reuse.
     fn did_attach(&self, navigator: NavigatorHandle) {
-        let mut slot = self.navigator.lock();
-        if let Some(existing) = slot.as_ref()
+        let mut navigator = Terminal::new(navigator);
+        let existing = Terminal::new(self.navigator());
+        if let Some(existing) = existing.as_ref()
             && existing.is_mounted()
             && !existing.is_same(&navigator)
         {
@@ -762,13 +793,18 @@ impl NavigatorObserver for HeroController {
             );
             return;
         }
-        *slot = Some(navigator);
+        let previous = Terminal::new(self.navigator.replace(Some(navigator.take_value())));
+        // Commit the replacement before the last outgoing handle can retire
+        // routes. Their authored captures may read or replace this attachment.
+        drop(existing);
+        drop(previous);
     }
 
     /// A controller that keeps observing a detached navigator would schedule
     /// against a dead binding.
     fn did_detach(&self) {
-        // Retire every flight still in the air before dropping the navigator slot.
+        // Withdraw the navigator before cancellation can reenter this observer,
+        // then invalidate queued measurements and retire pending/airborne flights.
         // A detached controller can no longer service a flight's end-of-flight
         // drain — the shuttle retires a flight only through a live `FlightManager`
         // — so leaving flights airborne would strand their overlay entries and
@@ -776,8 +812,9 @@ impl NavigatorObserver for HeroController {
         // `add_observer`/`remove_observer` while the navigator stays alive, so a
         // controller does not live as long as its navigator. Recorded in
         // `ARCHITECTURE.md` §18.
+        let previous = Terminal::new(self.navigator.borrow_mut().take());
         self.flights.finish_all();
-        let _prev = self.navigator.lock().take();
+        drop(previous);
     }
 
     /// The **only** route callback this controller overrides.
@@ -846,10 +883,20 @@ impl NavigatorObserver for HeroController {
 #[cfg(test)]
 pub(crate) mod terminal_tests {
     use super::*;
+
+    #[test]
+    fn measured_hero_rectangles_must_fit_the_shuttle_domain() {
+        // Private admission boundary: ordinary measured boxes cannot produce
+        // these finite corners whose positive width is unrepresentable.
+        let overflowing = Rect::from_ltrb(-f64::MAX, 0.0, f64::MAX, 1.0);
+        assert!(!is_valid_flight(overflowing, Rect::ZERO));
+        assert!(!is_valid_flight(Rect::ZERO, overflowing));
+    }
     use std::hash::{Hash, Hasher};
     use std::io::Read;
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::process::{Command, Stdio};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
     #[derive(Clone, Debug)]
@@ -965,25 +1012,39 @@ pub(crate) mod terminal_tests {
         let first_failure = matches!(case.as_str(), "manifest_failure" | "competing");
         let (key, key_drops) = bomb("manifest retirement", first_failure || incoming);
         let (capture, capture_drops) = bomb("factory retirement", case == "competing" || incoming);
+        let (tail, tail_drops) = bomb("healthy manifest tail", false);
         let mut controller = HeroController::default();
         controller.default_rect_factory = Terminal::new(Some(factory(capture)));
-        controller.manifests.lock().push(HeroFlightManifest {
-            tag: HeroTag::new(flui_foundation::ValueKey::new(key)),
-            direction: None,
-            from_route: RouteId::next(),
-            to_route: RouteId::next(),
-            from_rect: Rect::ZERO,
-            to_rect: Rect::ZERO,
-            is_user_gesture_transition: false,
-        });
+        controller.recordings.record_manifests(vec![
+            HeroFlightManifest {
+                tag: HeroTag::new(flui_foundation::ValueKey::new(key)),
+                direction: None,
+                from_route: RouteId::next(),
+                to_route: RouteId::next(),
+                from_rect: Rect::ZERO,
+                to_rect: Rect::ZERO,
+                is_user_gesture_transition: false,
+            },
+            HeroFlightManifest {
+                tag: HeroTag::new(flui_foundation::ValueKey::new(tail)),
+                direction: None,
+                from_route: RouteId::next(),
+                to_route: RouteId::next(),
+                from_rect: Rect::ZERO,
+                to_rect: Rect::ZERO,
+                is_user_gesture_transition: false,
+            },
+        ]);
         if case == "shared_manifest" {
-            let alias = controller.manifests.clone();
+            let alias = Rc::clone(&controller.recordings);
             drop(controller);
             assert_eq!(key_drops.load(Ordering::SeqCst), 0);
             assert_eq!(capture_drops.load(Ordering::SeqCst), 1);
-            assert_eq!(alias.lock().len(), 1);
+            assert_eq!(tail_drops.load(Ordering::SeqCst), 0);
+            assert_eq!(alias.manifests.borrow().len(), 2);
             drop(alias);
             assert_eq!(key_drops.load(Ordering::SeqCst), 1);
+            assert_eq!(tail_drops.load(Ordering::SeqCst), 1);
             return;
         }
         let result = catch_unwind(AssertUnwindSafe(move || {
@@ -1003,6 +1064,10 @@ pub(crate) mod terminal_tests {
             assert_eq!(key_drops.load(Ordering::SeqCst), 1);
             assert_eq!(capture_drops.load(Ordering::SeqCst), 1);
         }
+        assert_eq!(
+            tail_drops.load(Ordering::SeqCst),
+            usize::from(!incoming && !first_failure)
+        );
         // Independent healthy work still retires normally after containment.
         let (capture, drops) = bomb("recovery", false);
         let mut next = HeroController::default();

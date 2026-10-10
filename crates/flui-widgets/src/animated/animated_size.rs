@@ -18,21 +18,18 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use flui_animation::curve::{ArcCurve, Curve};
-use flui_animation::{Animation, AnimationController, AnimationStatus, Curves, DrivenController};
-use flui_foundation::ListenerId;
+use flui_animation::{
+    Animation, AnimationController, AnimationStatus, Curves, DrivenController, StatusSubscription,
+};
 use flui_objects::RenderAnimatedSize;
 use flui_painting::Alignment;
 use flui_painting::paint::Clip;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
-use flui_view::{
-    Child, EventCx, EventOutcome, IntoView, PostFrameHandle, RenderView, ViewState, WriterSource,
-    impl_render_view,
-};
+use flui_view::{Child, EventCx, EventOutcome, IntoView, RenderView, ViewState, impl_render_view};
 
 type EndCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
 
@@ -141,11 +138,7 @@ impl std::fmt::Debug for AnimatedSize {
 /// a `Vsync`/`UpdateScheduler` itself).
 pub struct AnimatedSizeState {
     controller: DrivenController,
-    status_listener_id: Option<ListenerId>,
-    completed_runs: Rc<AtomicU64>,
-    delivered_completed_runs: Cell<u64>,
-    writer: Option<WriterSource>,
-    post_frame: Option<PostFrameHandle>,
+    status_subscription: Option<StatusSubscription>,
     mounted: Rc<Cell<bool>>,
     on_end: Rc<RefCell<Option<EndCallback>>>,
     child: Child,
@@ -171,11 +164,7 @@ impl StatefulView for AnimatedSize {
         }
         AnimatedSizeState {
             controller,
-            status_listener_id: None,
-            completed_runs: Rc::new(AtomicU64::new(0)),
-            delivered_completed_runs: Cell::new(0),
-            writer: None,
-            post_frame: None,
+            status_subscription: None,
             mounted: Rc::new(Cell::new(true)),
             on_end: Rc::new(RefCell::new(self.on_end.clone())),
             child: self.child.clone(),
@@ -185,15 +174,36 @@ impl StatefulView for AnimatedSize {
 
 impl ViewState<AnimatedSize> for AnimatedSizeState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.writer = Some(ctx.writer_source());
-        self.post_frame = ctx.post_frame_handle();
-        let completed_runs = Rc::clone(&self.completed_runs);
-        let rebuild = ctx.rebuild_handle();
-        self.status_listener_id = Some(self.controller.controller().add_status_listener(
+        let writer = ctx.writer_source();
+        let post_frame = ctx.post_frame_handle();
+        let mounted = Rc::clone(&self.mounted);
+        let callback = Rc::clone(&self.on_end);
+        self.status_subscription = Some(self.controller.controller().subscribe_status(
             std::rc::Rc::new(move |status| {
-                if status == AnimationStatus::Completed {
-                    completed_runs.fetch_add(1, Ordering::SeqCst);
-                    rebuild.schedule(flui_view::RebuildReason::AnimationTick);
+                if status != AnimationStatus::Completed || !mounted.get() {
+                    return;
+                }
+                if let Some(post_frame) = &post_frame {
+                    let writer = writer.clone();
+                    let mounted = Rc::clone(&mounted);
+                    let callback = Rc::clone(&callback);
+                    if let Err(error) = post_frame.schedule(move |_| {
+                        if mounted.get() {
+                            let on_end = callback.borrow().clone();
+                            if let Some(on_end) = on_end {
+                                writer.write(|cx| on_end(cx));
+                            }
+                        }
+                    }) {
+                        tracing::warn!(
+                            ?error,
+                            "AnimatedSize: completion dropped because the owner post-frame lane is closed"
+                        );
+                    }
+                } else if callback.borrow().is_some() {
+                    tracing::warn!(
+                        "AnimatedSize: completion dropped because there is no owner post-frame lane"
+                    );
                 }
             }),
         ));
@@ -208,42 +218,6 @@ impl ViewState<AnimatedSize> for AnimatedSizeState {
     }
 
     fn build(&self, view: &AnimatedSize, _ctx: &dyn BuildContext) -> impl IntoView {
-        let completed_runs = self.completed_runs.load(Ordering::SeqCst);
-        let delivered_runs = self.delivered_completed_runs.get();
-        if completed_runs > delivered_runs {
-            self.delivered_completed_runs.set(completed_runs);
-            if self.on_end.borrow().is_some() {
-                if let Some(post_frame) = &self.post_frame {
-                    let writer = self
-                        .writer
-                        .clone()
-                        .expect("BUG: AnimatedSize initialized before build");
-                    let mounted = self.mounted.clone();
-                    let callback = self.on_end.clone();
-                    if let Err(error) = post_frame.schedule(move |_| {
-                        for _ in delivered_runs..completed_runs {
-                            if !mounted.get() {
-                                break;
-                            }
-                            let on_end = callback.borrow().clone();
-                            if let Some(on_end) = on_end {
-                                writer.write(|cx| on_end(cx));
-                            }
-                        }
-                    }) {
-                        tracing::warn!(
-                            ?error,
-                            "AnimatedSize: completion dropped because the owner post-frame lane is closed"
-                        );
-                    }
-                } else {
-                    tracing::warn!(
-                        "AnimatedSize: completion dropped because there is no owner post-frame lane"
-                    );
-                }
-            }
-        }
-
         AnimatedSizeRenderView {
             controller: self.controller.controller().clone(),
             curve: view.curve.clone(),
@@ -268,9 +242,7 @@ impl ViewState<AnimatedSize> for AnimatedSizeState {
 
     fn dispose(&mut self) {
         self.mounted.set(false);
-        if let Some(id) = self.status_listener_id.take() {
-            self.controller.controller().remove_status_listener(id);
-        }
+        drop(self.status_subscription.take());
         self.controller.dispose();
     }
 }

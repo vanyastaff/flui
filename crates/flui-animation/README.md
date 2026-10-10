@@ -8,6 +8,34 @@ rendered page leaves out.
 
 ## Core Concepts
 
+### Presentation motion policy
+
+Application `MotionPreference` is `FollowSystem` (the default), `Reduce` or
+`Full`. Each presentation resolves it against the host's `SystemPreferences`.
+The runtime updates its clock and publishes `MediaQuery::motion_of` before
+the next frame. Application Full uses authored durations even when the host
+requests reduced motion or a duration scale.
+
+Controllers default to `AnimationBehavior::Normal`. Under Reduce, a finite
+run settles at its terminal value on the next registry tick; an infinite
+repeat parks without completing its future or requesting continuous frames.
+Full resumes a parked repeat with a fresh time anchor. Under FollowSystem,
+a positive host duration scale multiplies Normal durations.
+
+Select `AnimationBehavior::Preserve` for physical inertia, activity indicators
+and essential timers. It keeps authored timing under motion preferences;
+debug playback and registry muting still apply. Changing policy commits clock
+state without sampling controllers or invoking their listeners.
+
+The [guide](docs/GUIDE.md#motion-preferences) gives an executable clock example.
+The interactive `motion_lab` example at the workspace root compares property
+interruption, independent deadlines, gestures and preserved timers:
+
+```bash
+cargo run --example motion_lab --features material -- --full
+cargo run --example motion_lab --features material -- --reduce
+```
+
 ### The Animation Model
 
 In FLUI an `Animation<T>` produces values of type `T` over time. The animation itself doesn't know about time—it's sampled by a presentation registry or manually.
@@ -156,12 +184,12 @@ let id = controller.add_listener(Rc::new(|| println!("value changed")));
 controller.remove_listener(id);
 
 // Status changes
-let id = controller.add_status_listener(Rc::new(|status| {
+let subscription = controller.subscribe_status(Rc::new(|status| {
     if status == AnimationStatus::Completed {
         println!("done");
     }
 }));
-controller.remove_status_listener(id);
+drop(subscription);
 # drop(controller);
 ```
 
@@ -255,7 +283,7 @@ assert!((flipped.transform(0.0) - 0.0).abs() < 1e-9);
 
 ## Tweens
 
-An `Animatable<T>` transforms `t ∈ [0, 1]` into a value of type `T`.
+An `Animatable` transforms `t ∈ [0, 1]` into its associated `Value` type.
 
 A `Tween<T>` is an `Animatable` with explicit `begin` and `end` values.
 
@@ -486,6 +514,48 @@ let animated = FloatTween::new(0.0, 100.0).animate(curved);
 ```
 
 ---
+
+## Custom value motion
+
+A custom value can combine geometry, color and nested values into one owned
+motion. Derive `TwoWayConverter` for a nonempty `Clone` struct whose fields
+implement `TwoWayConverter` and `Lerp`. Field vectors are concatenated in
+declaration order. Interpolation delegates to each field, so a color keeps its
+premultiplied Oklab behavior rather than becoming four independent channel tweens.
+
+```rust
+use flui_animation::{Lerp, TwoWayConverter};
+use flui_foundation::geometry::Offset;
+use flui_painting::styling::Color;
+
+#[derive(Clone, TwoWayConverter)]
+struct Appearance {
+    position: Offset<f64>,
+    color: Color,
+}
+
+#[derive(Clone, TwoWayConverter)]
+struct CardMotion(Appearance, f64);
+
+let start = CardMotion(Appearance {
+    position: Offset::ZERO,
+    color: Color::rgb(255, 0, 0),
+}, 0.0);
+let end = CardMotion(Appearance {
+    position: Offset::new(20.0, 40.0),
+    color: Color::rgba(0, 0, 255, 0),
+}, 1.0);
+let midpoint = start.lerp_to(&end, 0.5);
+assert_eq!(midpoint.0.position, Offset::new(10.0, 20.0));
+assert!(midpoint.0.color.r >= 254 && midpoint.0.color.b <= 1);
+assert_eq!(midpoint.1, 0.5);
+```
+
+Pass this value to `AnimatedValue` to share registration, admission, time and
+retargeting across its components. Fields need concrete vector widths; stable
+Rust cannot sum generic-dependent widths into an array length. A manual
+`TwoWayConverter` implementation can choose a concrete representation for a
+generic value.
 
 ## Physics Simulations
 

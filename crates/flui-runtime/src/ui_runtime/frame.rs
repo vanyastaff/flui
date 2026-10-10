@@ -125,6 +125,11 @@ impl UiRuntime {
             // once that clobber happens.
             let was_running =
                 animation_enabled && vsync.has_running() && !presentation.motion_is_paused();
+            if !was_running {
+                // Reconcile the previous pump's continuation before polling
+                // this frame. Other demand sources remain independently owned.
+                presentation.clock().clear_demand(DemandKind::Animation);
+            }
             if animation_enabled {
                 vsync.tick_all(&tick);
             }

@@ -76,9 +76,14 @@ ADR-0125).
 `reverse_maps_status`.
 
 **R8 (последний владелец).** КОГДА слушатель освобождает последний handle источника
-(контроллер, proxy, switch), на который подписан, СИСТЕМА ДОЛЖНА завершить раздачу текущего статуса
-остальным слушателям без panic и deadlock; захваты освобождаются после раздачи вне замков.
-Тест: `status_listener_removal`, строки `listener_drops_last_{controller,proxy,switch}`.
+(контроллер, proxy, switch), на который подписан, СИСТЕМА ДОЛЖНА закрыть каналы и
+не вызывать оставшихся слушателей; захваты освобождаются вне заимствований состояния.
+Временные ссылки раздачи и отмены подписки не продлевают жизнь логического владельца.
+Решение закреплено в ADR-0178 и ADR-0180; оно заменяет прежнее требование черновика
+о доставке хвоста после уничтожения последнего владельца.
+Тест: `owning_status_subscription_contract`, строка
+`capture_retirement_releasing_the_last_wrapper_silences_reentry`, и матрицы
+`status_delivery_failure_custody`.
 
 ## Отказы
 **R9 (D-01, раунд и первый отказ).** КОГДА слушатель статуса паникует, СИСТЕМА ДОЛЖНА поймать
@@ -102,7 +107,7 @@ payload удерживаются и логируются; следующий `ti
 
 ## AnimationSwitch
 **R11 (D-02).** КОГДА родитель switch'а (пользовательская `Animation`) из `value()`/`status()`/
-`add_status_listener` обращается к самому switch'у (`value`, `status`, `current`, подписка, `Debug`),
+`subscribe_status` обращается к самому switch'у (`value`, `status`, `current`, подписка, `Debug`),
 СИСТЕМА ДОЛЖНА завершиться без deadlock и без panic заимствования.
 Тест: `switch_contract` (child process), строки `parent_value_reads_switch`,
 `parent_status_subscribes_switch`, `debug_reenters`.

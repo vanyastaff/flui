@@ -12,6 +12,8 @@ mod data_transfer;
 mod display;
 mod events;
 mod platform;
+#[cfg(target_os = "linux")]
+mod preferences;
 mod window;
 
 pub use clipboard::ArboardClipboard;

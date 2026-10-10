@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+ --> tests/ui/thread_boundary/vsync_scope_maybe_of_in_build_does_not_compile.rs:5:34
+  |
+5 |     let _ = VsyncScope::maybe_of(ctx);
+  |             -------------------- ^^^ expected trait `LifecycleContext`, found trait `BuildContext`
+  |             |
+  |             arguments to this function are incorrect
+  |
+  = note: expected reference `&dyn LifecycleContext`
+             found reference `&dyn BuildContext`
+note: associated function defined here
+ --> crates/flui-widgets/src/animated/vsync_scope.rs
+  |
+  |     pub fn maybe_of(ctx: &dyn LifecycleContext) -> Option<Vsync> {
+  |            ^^^^^^^^

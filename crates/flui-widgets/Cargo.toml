@@ -223,7 +223,6 @@ globals = [
     { item = "overlay::entry::OverlayEntryId::counter::COUNTER", grant = "ADR-0097", class = "counter", reason = "Overlay entry identities, advanced by try_update with a permanent exhaustion sentinel" },
     { item = "animated::animated_switcher::DEFAULT_LAYOUT_BUILDER", grant = "ADR-0097", class = "immutable", reason = "the shared default layout builder, so an unchanged default compares equal across rebuilds" },
     { item = "animated::animated_switcher::DEFAULT_TRANSITION_BUILDER", grant = "ADR-0097", class = "immutable", reason = "the shared default transition builder, so an unchanged default compares equal across rebuilds" },
-    { item = "animated::implicitly_animated::default_curve::DEFAULT", grant = "ADR-0097", class = "immutable", reason = "the shared default curve, built once" },
     { item = "image::decode_cache::CACHE", exit = "ADR-0097", reason = "the process-wide decoded-image cache; it becomes UI runtime-owned" },
     { item = "navigator::navigator::NAVIGATOR_COMMAND_TARGETS", exit = "ADR-0093", reason = "the owner thread's navigator command routing table" },
 ]

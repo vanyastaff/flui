@@ -1,7 +1,8 @@
 //! The owner of a controller's registration on a frame registry.
 
-use crate::animation::Retirement;
+use crate::animation::{Retirement, Terminal};
 use crate::{AnimationController, Vsync, VsyncRegistration, VsyncRegistrationError};
+use flui_foundation::panic::RecoveryScope;
 
 enum Seat {
     Bound {
@@ -20,6 +21,21 @@ enum Seat {
 pub struct DrivenController {
     controller: AnimationController,
     seat: Seat,
+}
+
+/// Logical closure is committed before this custody invokes or retires code.
+pub(crate) struct DrivenRetirement {
+    publication: Option<crate::controller::ValuePublication>,
+    registry: Terminal<Option<Vsync>>,
+}
+
+impl DrivenRetirement {
+    pub(crate) fn publish(self, recovery: &mut RecoveryScope<'_>) {
+        if let Some(publication) = self.publication {
+            publication.publish(recovery);
+        }
+        recovery.retire(self.registry);
+    }
 }
 
 impl DrivenController {
@@ -42,8 +58,8 @@ impl DrivenController {
 
     /// Whether this owner currently holds a registry seat.
     #[must_use]
-    pub const fn is_bound(&self) -> bool {
-        matches!(self.seat, Seat::Bound { .. })
+    pub fn is_bound(&self) -> bool {
+        matches!(&self.seat, Seat::Bound { registration, .. } if registration.is_registered())
     }
 
     /// Move to another registry, preserving the last sampled run elapsed time.
@@ -52,13 +68,39 @@ impl DrivenController {
     /// # Errors
     /// Returns permanent registration exhaustion after releasing the old seat.
     pub fn rebind(&mut self, vsync: Option<&Vsync>) -> Result<(), VsyncRegistrationError> {
+        let mut recovery = Retirement::new();
+        let (publication, result) = self.prepare_rebind(vsync);
+        publication.publish(&mut recovery.scope());
+        recovery.finish();
+        result
+    }
+
+    pub(crate) fn prepare_rebind(
+        &mut self,
+        vsync: Option<&Vsync>,
+    ) -> (DrivenRetirement, Result<(), VsyncRegistrationError>) {
+        if self.controller.is_disposed() {
+            return (self.prepare_dispose(), Ok(()));
+        }
         if matches!(self.seat, Seat::Retired) {
-            return Ok(());
+            return (
+                DrivenRetirement {
+                    publication: None,
+                    registry: Terminal::new(None),
+                },
+                Ok(()),
+            );
         }
         if let (Seat::Bound { vsync: old, .. }, Some(new)) = (&self.seat, vsync)
             && old.is_same(new)
         {
-            return Ok(());
+            return (
+                DrivenRetirement {
+                    publication: None,
+                    registry: Terminal::new(None),
+                },
+                Ok(()),
+            );
         }
         let admission = vsync.map(|vsync| {
             vsync
@@ -74,46 +116,58 @@ impl DrivenController {
             None => (Seat::Unbound, Ok(())),
         };
         let outgoing = std::mem::replace(&mut self.seat, next);
-        let mut retirement = Retirement::new();
         let outgoing_registry = match outgoing {
             Seat::Bound {
                 vsync,
                 registration,
             } => {
-                retirement.run(|| vsync.unregister(&registration));
+                vsync.unregister(&registration);
                 Some(vsync)
             }
             Seat::Unbound | Seat::Retired => None,
         };
-        retirement.run_with(|retirement| {
-            self.controller.set_clock_bound(self.is_bound(), retirement);
-        });
-        retirement.retire(outgoing_registry);
-        retirement.finish();
-        result
+        (
+            DrivenRetirement {
+                publication: Some(self.controller.prepare_clock_bound(self.is_bound())),
+                registry: Terminal::new(outgoing_registry),
+            },
+            result,
+        )
     }
 
     /// Release the registry seat, then dispose the controller. Idempotent.
     /// Callouts run only after this owner has committed its retired state.
     pub fn dispose(&mut self) {
-        let outgoing = std::mem::replace(&mut self.seat, Seat::Retired);
-        if matches!(outgoing, Seat::Retired) {
+        if matches!(self.seat, Seat::Retired) {
             return;
         }
         let mut recovery = Retirement::new();
+        self.dispose_with_recovery(&mut recovery.scope());
+        recovery.finish();
+    }
+
+    pub(crate) fn dispose_with_recovery(&mut self, recovery: &mut RecoveryScope<'_>) {
+        self.prepare_dispose().publish(recovery);
+    }
+
+    pub(crate) fn prepare_dispose(&mut self) -> DrivenRetirement {
+        let outgoing = std::mem::replace(&mut self.seat, Seat::Retired);
         let outgoing_registry = match outgoing {
             Seat::Bound {
                 vsync,
                 registration,
             } => {
-                recovery.run(|| vsync.unregister(&registration));
+                // The owning controller remains strong here. Removing its
+                // registry clone and weak route cannot retire user captures.
+                vsync.unregister(&registration);
                 Some(vsync)
             }
             Seat::Unbound | Seat::Retired => None,
         };
-        recovery.run_with(|recovery| self.controller.dispose(recovery));
-        recovery.retire(outgoing_registry);
-        recovery.finish();
+        DrivenRetirement {
+            publication: self.controller.prepare_dispose(),
+            registry: Terminal::new(outgoing_registry),
+        }
     }
 }
 

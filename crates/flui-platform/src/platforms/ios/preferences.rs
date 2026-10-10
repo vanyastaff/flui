@@ -8,18 +8,21 @@ use std::sync::{
 };
 
 use block2::RcBlock;
-use flui_platform_api::{SystemPreferences, TextWeightPreference};
+use flui_platform_api::{MotionPreference, SystemPreferences, TextWeightPreference};
 use objc2::{MainThreadMarker, rc::Retained, runtime::ProtocolObject};
 use objc2_foundation::{NSNotification, NSNotificationCenter, NSObjectProtocol};
 use objc2_ui_kit::{
     UIAccessibilityBoldTextStatusDidChangeNotification, UIAccessibilityIsBoldTextEnabled,
+    UIAccessibilityIsReduceMotionEnabled, UIAccessibilityReduceMotionStatusDidChangeNotification,
 };
 
 use crate::{PlatformError, shared::owner_signal::OwnerSignal};
 
+type ObserverToken = Retained<ProtocolObject<dyn NSObjectProtocol>>;
+
 pub(super) struct Preferences {
     center: Retained<NSNotificationCenter>,
-    observer: RefCell<Option<Retained<ProtocolObject<dyn NSObjectProtocol>>>>,
+    observers: RefCell<Vec<ObserverToken>>,
     active: Arc<AtomicBool>,
 }
 
@@ -42,23 +45,34 @@ impl Preferences {
                 }
             });
         });
-        // SAFETY: this is UIKit's notification name, with no object filter or
-        // queue. The block captures only Send+Sync atomics and a weak signal;
-        // it accepts the supplied notification without dereferencing it. The
-        // retained token is removed by this owner before its callback retires.
-        let observer = unsafe {
-            center.addObserverForName_object_queue_usingBlock(
-                Some(UIAccessibilityBoldTextStatusDidChangeNotification),
-                None,
-                None,
-                &callback,
-            )
-        };
-        Self {
+        // Own each token as soon as registration succeeds. If a later
+        // registration unwinds, Drop closes admission and removes the earlier
+        // token instead of leaving a partially installed observation set.
+        let preferences = Self {
             center,
-            observer: RefCell::new(Some(observer)),
+            observers: RefCell::new(Vec::with_capacity(2)),
             active,
+        };
+        // SAFETY: UIKit owns these immutable notification-name constants.
+        let names = unsafe {
+            [
+                UIAccessibilityBoldTextStatusDidChangeNotification,
+                UIAccessibilityReduceMotionStatusDidChangeNotification,
+            ]
+        };
+        for name in names {
+            // SAFETY: each documented notification uses no object filter or
+            // queue. The block captures only Send+Sync atomics and a weak
+            // signal and never dereferences its argument. This owner retains
+            // every successful token and removes it after closing admission.
+            let observer = unsafe {
+                preferences
+                    .center
+                    .addObserverForName_object_queue_usingBlock(Some(name), None, None, &callback)
+            };
+            preferences.observers.borrow_mut().push(observer);
         }
+        preferences
     }
 
     pub(super) fn sample(
@@ -71,22 +85,29 @@ impl Preferences {
             });
         }
         let enabled = UIAccessibilityIsBoldTextEnabled();
+        let motion = if UIAccessibilityIsReduceMotionEnabled() {
+            MotionPreference::Reduce
+        } else {
+            MotionPreference::NoPreference
+        };
         if !self.active.load(Ordering::Acquire) {
             return Err(PlatformError::Preferences {
                 message: "UIKit preference source closed during sampling".into(),
             });
         }
-        Ok(SystemPreferences::default().with_text_weight(if enabled {
-            TextWeightPreference::Bold
-        } else {
-            TextWeightPreference::NoPreference
-        }))
+        Ok(SystemPreferences::default()
+            .with_text_weight(if enabled {
+                TextWeightPreference::Bold
+            } else {
+                TextWeightPreference::NoPreference
+            })
+            .with_motion(motion))
     }
 
     pub(super) fn close(&self) {
         self.active.store(false, Ordering::Release);
-        let observer = self.observer.borrow_mut().take();
-        if let Some(observer) = observer {
+        let observers = std::mem::take(&mut *self.observers.borrow_mut());
+        for observer in observers {
             let observer_ref: &ProtocolObject<dyn NSObjectProtocol> = &observer;
             // SAFETY: this is the exact retained token returned by this center's
             // registration. Admission is closed and no borrow survives removal;

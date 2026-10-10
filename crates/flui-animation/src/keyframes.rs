@@ -553,7 +553,8 @@ fn discard<V>(value: V) {
     }
 }
 
-impl<T: Lerp + TwoWayConverter> Animatable<T> for Keyframes<T> {
+impl<T: Lerp + TwoWayConverter> Animatable for Keyframes<T> {
+    type Value = T;
     /// Reads the track at progress `t` of [`total`](Keyframes::total):
     /// `t` is clamped into `[0, 1]` and NaN reads as 0.
     fn transform(&self, t: f64) -> T {

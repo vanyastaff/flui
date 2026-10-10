@@ -2487,20 +2487,17 @@ impl flui_foundation::Listenable for ScriptedAnimation {
 }
 
 impl Animation<f64> for ScriptedAnimation {
+    fn subscribe_status(
+        &self,
+        callback: flui_animation::StatusCallback,
+    ) -> flui_animation::StatusSubscription {
+        self.controller.subscribe_status(callback)
+    }
     fn value(&self) -> f64 {
         *self.value.lock().expect("unpoisoned")
     }
     fn status(&self) -> flui_animation::AnimationStatus {
         self.controller.status()
-    }
-    fn add_status_listener(
-        &self,
-        callback: flui_animation::StatusCallback,
-    ) -> flui_foundation::ListenerId {
-        self.controller.add_status_listener(callback)
-    }
-    fn remove_status_listener(&self, id: flui_foundation::ListenerId) {
-        self.controller.remove_status_listener(id);
     }
 }
 
@@ -2598,21 +2595,18 @@ impl flui_foundation::Listenable for CountingAnimation {
 }
 
 impl Animation<f64> for CountingAnimation {
+    fn subscribe_status(
+        &self,
+        callback: flui_animation::StatusCallback,
+    ) -> flui_animation::StatusSubscription {
+        self.controller.subscribe_status(callback)
+    }
     fn value(&self) -> f64 {
         self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.controller.value()
     }
     fn status(&self) -> flui_animation::AnimationStatus {
         self.controller.status()
-    }
-    fn add_status_listener(
-        &self,
-        callback: flui_animation::StatusCallback,
-    ) -> flui_foundation::ListenerId {
-        self.controller.add_status_listener(callback)
-    }
-    fn remove_status_listener(&self, id: flui_foundation::ListenerId) {
-        self.controller.remove_status_listener(id);
     }
 }
 

@@ -7,6 +7,7 @@
 // target. `unwrap` in test/example code: a panic IS the failure report
 // (docs/PANIC-POLICY.md); style items here are ship-wave debt.
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::{
     sync::{
         Arc,
@@ -16,8 +17,13 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(not(target_arch = "wasm32"))]
 use flui_platform::executor::BackgroundExecutor;
 
+#[cfg(target_arch = "wasm32")]
+fn main() {}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn main() {
     // Initialize tracing for observability
     tracing_subscriber::fmt()
@@ -39,6 +45,7 @@ fn main() {
 }
 
 /// Example 1: Background executor for CPU-intensive work
+#[cfg(not(target_arch = "wasm32"))]
 fn example_background_cpu_work() {
     println!("\n--- Example 1: Background CPU Work ---");
 
@@ -76,6 +83,7 @@ fn example_background_cpu_work() {
 }
 
 /// Example 2: Parallel background tasks
+#[cfg(not(target_arch = "wasm32"))]
 fn example_parallel_background_tasks() {
     println!("\n--- Example 2: Parallel Background Tasks ---");
 
@@ -111,6 +119,7 @@ fn example_parallel_background_tasks() {
 }
 
 /// Example 3: Async/await integration with Tokio
+#[cfg(not(target_arch = "wasm32"))]
 fn example_async_await_integration() {
     println!("\n--- Example 3: Async/Await Integration ---");
 
@@ -145,6 +154,7 @@ fn example_async_await_integration() {
 }
 
 /// Simulated async computation
+#[cfg(not(target_arch = "wasm32"))]
 async fn async_compute() -> u32 {
     tokio::task::yield_now().await;
     42

@@ -30,6 +30,7 @@ workspace = true
 # Core FLUI types
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
+flui-platform-api.workspace = true
 # `#[derive(TwoWayConverter)]` — re-exported for user-defined animatable types.
 flui-macros = { path = "../flui-macros", version = "=0.2.0-dev" }
 

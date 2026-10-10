@@ -1,5 +1,328 @@
 # flui-widgets architecture
 
+## Grouped animation ownership
+
+Switcher transfers all current and outgoing controller seats in one Vsync update
+before exposing migration to callbacks. `switching_entries_finish_migration_before_a_wake_failure`
+observes the committed registrations inside a failing wake and verifies disposal
+of the faulted lifecycle actor followed by a fresh working cross-fade.
+
+Completed Switcher entries leave the outgoing collection before any cancellation
+or authored destruction. Cached transition snapshots retain `Rc` ownership under
+the collection borrow, then clone authored views after releasing it. Each entry
+keeps independent curve, child and transition ownership in terminal slots, while
+its driver always performs logical cancellation, including during incoming unwind.
+Collection cleanup therefore withdraws the remaining drivers after a first
+failure without invoking the opaque capture tail. Lifecycle disposal withdraws
+both current and outgoing entries before retiring either collection.
+
+`outgoing_switcher_retirement_preserves_independent_captures` exercises an actual
+mounted cross-fade, outgoing-child destruction and a subsequent healthy switch.
+The private `switcher_entry_retirement_preserves_logical_cleanup` matrix isolates
+physical entry destruction: healthy, child and transition failure, competing
+destructors, incoming unwind and independent entry tails. It also verifies every
+registry seat and run future is cancelled, followed by healthy retirement.
+
+Dismissible restores its shared collapse owner before publishing that same
+batched migration. `collapse_owner_storage_is_committed_before_migration_callouts`
+uses the private storage seam to check reentrant access, failure propagation and
+completion through the retained owner. The mounted row
+`a_collapsing_dismissible_survives_a_migration_wake_failure` separately verifies
+the lifecycle fault boundary retires both owners and a fresh collapse completes.
+
+## Floating header snap ownership
+
+Floating headers share scroll-edge state between their activity listener and
+build through an owner-local cell. The listener commits the latest command
+before requesting a rebuild; neither a borrow nor a lock spans that request.
+Command epochs refuse permanently at exhaustion and retain the last admitted
+command, verified by `exhausted_snap_epochs_never_reissue_a_command` with a
+private counter seed.
+
+The host owns its snap controller and rebinds it through lifecycle dependency
+changes. `an_active_floating_snap_migrates_and_unmounts` exercises floating and
+pinned-floating headers through real pointer release, checks continuous reveal
+across a registry replacement, advances the unfinished snap from the new registry,
+and removes the subtree while it is active. Removal withdraws frame registration
+and prevents later delegate builds. The core controller ownership tests separately
+pin cancellation of the run future.
+
+## Hero handles observe the presentation without owning it
+
+A mounted Hero shares owner-local state through `Rc`, `Cell` and `RefCell`
+(ADR-0175). Its render capability is a `WeakPipelineCell`: a retained flight or
+handle cannot keep a closed presentation alive. Immutable `Hero` configuration
+is prepared outside the slot borrow and committed as one `Rc` snapshot. Readers
+snapshot it before authored child cloning; replacement retires it after the
+borrow ends. Rebuild requests likewise snapshot their capability before scheduling.
+
+Disposal withdraws configuration, rebuild capability, render access and the
+placeholder before retiring captures. Registry removal and outgoing retirement
+complete under one per-Hero first-failure context. A completed pop keeps its source
+frozen while mounted; unmount removes that authority even from retained handles.
+
+`a_retained_hero_handle_does_not_keep_its_presentation_alive` mounts a real Hero,
+unmounts it, mounts a replacement with the same tag and closes the presentation.
+It checks stale refusal, independent replacement identity and weak render-owner
+release. `unmount_releases_hero_configuration_despite_a_retained_handle` verifies
+capture destruction and reentry observe the withdrawn registration and inert
+handle. These cases use the existing ADR-0083 test-access registry seam, which
+is not exported to applications. The gesture completion case also measures the
+destination's real child after the source disappears.
+
+## Hero registration follows mounted identity
+
+A Hero's match tag belongs to its current immutable configuration; its mounted
+identity is the shared handle. Tag updates move registration without recreating
+the state. The registration record retains its current tag, registry and passive
+release authority. Rejected duplicates have no release authority, and an old
+authority cannot remove a replacement. Scope dependencies notify on registry replacement and refresh after
+GlobalKey reparenting. Old registration is withdrawn before new admission and
+outgoing captures retire outside storage borrows under first-failure recovery.
+
+`changing_a_mounted_hero_tag_moves_its_registration` measures the updated child
+through the same handle. `retagging_to_a_duplicate_preserves_the_existing_winner`
+checks first-wins matching and harmless rejected cleanup.
+`replacing_a_hero_scope_moves_the_existing_hero` and
+`reparenting_a_hero_moves_registration_without_recreating_it` verify scope adoption
+and preserved mounted state through the existing test-access registry seam.
+`reparenting_an_unscoped_hero_adopts_its_first_route` also starts with no scope:
+the inherited lookup miss remains an ancestry dependency until reactivation.
+
+## Hero matching runs outside storage borrows
+
+Route registries and flight registries share private owner-local tag storage.
+Authored hashing precedes borrowing; equality runs against owning bucket pins.
+The result revalidates the complete ordered bucket by allocation identity before
+admission or lookup. One fresh comparison is permitted after mutation; a second
+invalidation refuses the requested operation while independently accepted changes
+remain authoritative. This follows the bounded comparison policy of ADR-0126.
+Removal uses cached hash and a typed weak allocation identity, without key callbacks.
+Admission rollback exists before outgoing comparison pins retire. Removed flights
+enter the deferred retirement queue before scheduling or key retirement calls out.
+
+`registry_key_callbacks_can_read_their_registry` mounts real Heroes and drives
+PageRoute flights with authored hashing and equality reading the same route or
+flight registry through the existing test-access seam. It observes a real shuttle
+and subsequent landing. `hero_registry_matching_preserves_authority_under_reentry`
+uses the private registration seam for same-length replacement, repeated mutation,
+hash/equality failure, passive release, formatting reentry and snapshot retirement.
+Its physical last-release cases cover aliases, healthy destruction, an incoming
+unwind, first failure and competing key destructors under terminal ownership.
+
+Nested visibility snapshots sources before resolving them. Traversal retains
+owning registry identities and visits each once, preserving local-first matching
+without recurring through a cycle. The private resolver case
+`nested_hero_resolution_preserves_local_identity_through_cycles` pins this graph
+contract; ordinary application trees do not expose the resolver constructor.
+
+## Hero controller attachment and recording ownership
+
+The controller's attachment and diagnostic counter are owner-local cells. One
+`Rc` recording owner shares measurements and manifests with queued post-frame
+callbacks. `HeroTag` cloning retains its `Arc` identity and invokes no authored
+key code. Physical recording retirement withdraws both collections before
+destroying manifests; the existing terminal policy preserves an opaque tail
+after the first failure.
+
+Attachment commits its replacement before releasing outgoing navigator handles.
+`replacing_a_hero_navigator_retires_routes_after_attachment` seeds an ordinary
+`SimpleRoute` whose capture destructor reads the same controller, installs a
+third attachment or fails. It verifies the committed replacement, independent
+handle lifetime and the next healthy detach/attach. The private
+`hero_controller_terminal_retirement` matrix additionally covers recording
+aliases, healthy destruction, first and competing failures, incoming unwind
+and a manifest tail that must remain retained after failure.
+
+## Hero placeholders belong to logical flights
+
+A placeholder carries the allocation identity of its logical flight alongside
+its geometry and child-preservation role. Mounted Hero identity alone cannot
+authorize cleanup: the same mounted Hero can already belong to a replacement
+flight when an old subscription's cancellation returns. Flight completion and
+abort compare the captured flight identity before changing the placeholder.
+Diversion retains the identity; a new flight allocates a fresh one. A completed
+source keeps a settled placeholder. Unmount clears either state. Gesture
+filtering separately restores an excluded Hero's placeholder, including before
+the previous flight's deferred completion drain. The mounted
+`an_excluding_gesture_restores_pending_programmatic_placeholders` checks this
+ordering and verifies the subsequent drain cannot refreeze the restored Hero.
+
+`hero_flight_terminal_retirement` launches actual replacement flights through
+the private subscription-cancellation seam, both during cleanup and before it.
+It verifies abort, both terminal statuses, first and competing failures, and a
+fresh flight after recovery. Moving cleanup before callouts alone cannot protect
+the replacement already admitted before cleanup; allocation identity also avoids
+a wrapping generation counter. Placeholder borrows contain only framework-owned
+geometry and identity markers and end before rebuild scheduling.
+
+## Hero rect mappings execute outside flight guards
+
+The shuttle publishes only finite coordinates and representable non-negative
+sizes. Invalid mapping output preserves the last accepted rect; finite inverted
+axes collapse at their original origin, including a negative difference that
+underflows. Manifest admission applies the same domain before seeding the cache.
+Each read reserves publication authority before sampling. A nested read,
+redirection or re-aim invalidates older authority, and cancellation makes retained
+flight readers inert. Mapping and factory retirement finish before publication
+because their destructors can reenter too. The final frame samples before logical
+completion so retained readers preserve the accepted landing geometry.
+
+A missing destination fades over the remaining uneased route progress, reversed
+for a pop. Spatial easing and rect remapping cannot become fade interval bounds:
+overshoot remains valid for geometry, while opacity has its own bounded domain.
+Diversion replaces the fade clock with the new manifest's route and resets its
+anchor. `disappearing_hero_destination_keeps_a_finite_fade` unmounts a destination
+through its lifecycle rebuild handle, checks gradual fading after curve recovery
+and final zero opacity, and covers push, pop and both direction-changing diversions
+with linear, overshoot, undershoot, NaN and both infinite curve samples.
+Its visible-redirection row restores the destination, diverts the same faded
+shuttle to a new page and checks full opacity followed by normal landing.
+
+`hero_geometry_samples_preserve_the_last_finite_shuttle` drives mounted PageRoute
+flights through NaN, infinity, positive extent overflow, inverted axes and recovery
+on the same flight, then checks its retained landing rect.
+`hero_geometry_reentry_preserves_the_newer_authority` exercises factory,
+evaluation and mapping destruction: a nested accepted read wins; public observer
+detachment rejects the outgoing sample and a subsequent flight lands normally.
+Both use the existing ADR-0083 flight probe shared with the actual shuttle producer.
+The private `measured_hero_rectangles_must_fit_the_shuttle_domain` pins defensive
+manifest admission; ordinary measured boxes do not produce the overflowing fixture.
+`hero_geometry_capacity_refuses_without_reissuing_authority` seeds the private
+terminal counter, verifies one final accepted read and permanent refusal, including
+a nested refusal that revokes the last pending publication.
+
+Hero snapshots its owner-local rect factory before invoking user code. The
+factory, its returned mapping and that mapping's destructor can read the same
+flight without holding a flight storage borrow. `Animatable<Value = Rect>` allows
+custom mappings to retain owner-local state without worker-thread bounds.
+`hero_rect_mappings_are_owner_local_and_reentrant` drives a mounted navigator
+flight through all three reentry points, verifies the committed shuttle rect,
+and checks that the flight subsequently lands.
+
+The flight's rect, opacity, fade anchor and lifecycle flags use owner-local
+`Cell` storage. Terminal status is `Cell<Option<AnimationStatus>>`, shared with
+the relays that report it. Coherent manifest facts and owning slots use short
+`RefCell` borrows. The shuttle configuration has an `Rc` snapshot because
+`BoxedView::clone` executes the authored view's `Clone`; cloning and retiring
+that configuration happen after the slot borrow ends.
+
+Diversion rechecks cancellation after rect mapping returns, before freezing its
+selected heroes. `cancelling_a_hero_mapping_does_not_refreeze_the_previous_page`
+cancels through factory, transform and mapping destruction, then returns to the
+previous page and verifies actual taps reach its restored child.
+
+Teardown withdraws its cancellation rights and snapshots both heroes before
+calling out. Subscription cancellation, overlay removal and each placeholder
+restoration share one first-failure context with registry retirement. Controller
+detachment completes the remaining flights before resuming a cancellation
+failure. `hero_flight_terminal_retirement` uses the private cancellation seam
+to pin single and competing failures, peer restoration, fresh admission and
+authored shuttle cloning which withdraws its own configuration. Physical last
+release withdraws owned fields before the same cleanup protocol; incoming unwind
+retains opaque owners under the navigator's existing policy. ADR-0178 governs
+the cancellation bridge to the animation and foundation layers.
+
+Reversing a flight between the same heroes retains its rect factory and evaluates
+the original endpoint order at mirrored progress. Swapping endpoints alone
+does not reverse an arbitrary mapping. A different destination selects a new
+forward mapping. `a_nonlinear_hero_pop_retraces_the_airborne_push` checks several
+points on an asymmetric path, a conflicting return-side factory, redirection to
+a third hero and subsequent landing through a mounted navigator.
+
+The factory snapshot and its returned mapping use the navigator's terminal
+ownership policy. Healthy reads retire both normally; after evaluation fails,
+the opaque mapping is retained during unwind so its destructor cannot replace
+the first failure. `hero_rect_mapping_failures_preserve_recovery` covers factory,
+evaluation and destruction failures, competing evaluation/destruction, healthy
+destruction, and a fresh read and landing through the same flight. A destructor
+that already double-panics within its own aggregate remains outside this policy.
+
+## Gesture release retains the painted position
+
+Dismissible moves content through `SlideTransition`; its controller's value
+listener rebuilds only when background presence or movement sign changes.
+An owner-local event source snapshots `on_update` payloads independently of
+build and delivers them through the existing post-frame lane using the latest
+callback. Its configuration contains only direction and threshold data, and
+the controller retains a weak route to that source. Collapse remains a layout
+phase with its own rebuilds. `dismissible_slides_without_rebuilding_per_frame`
+uses public frame reports for drag and return frames on both axes and signs,
+and verifies that update events continue on each moving frame.
+`dismissal_updates_follow_owner_lifetime` queues several pointer updates before
+one frame and verifies ordered delivery through writable event contexts,
+callback replacement, cancellation on unmount, and accepted tail delivery
+after a callback panic. Capture retirement during configuration replacement
+follows lifecycle substitution; retirement by the last queued event follows
+post-frame propagation. Neither path delivers updates to the removed actor.
+The same table verifies the original failure, competing post-frame failures,
+healthy tail delivery and fresh drag input after recovery.
+
+Dismissible preserves the dragged side while a reverse release moves back
+toward the origin. Physical velocity uses `AnimationController::fling_across`
+(ADR-0188). `a_dismissible_release_keeps_finger_speed_on_any_width` measures
+painted coordinates before and after release and the first frame velocity for
+both axes and release directions under tight, loose and unbounded incoming
+constraints. Lifecycle retains the Listener identity and presentation pipeline;
+input reads committed size before controller calls, and post-frame snapshots
+provide geometry to deferred collapse. Build never queries the pipeline.
+`a_dismissible_collapses_its_laid_out_size` verifies the initial painted collapse
+extent and single completion delivery.
+
+Resize samples enter that same owner post-frame lane directly from the collapse
+controller listener. Build retains only completion debt; it cannot erase accepted
+resize samples when completion arrives before the next build. Weak listener routes
+avoid retaining the widget after disposal, and delivery resolves current callbacks.
+`resize_delivery_keeps_accepted_ticks_before_completion` admits two samples and
+completion without an intervening build, verifies their order with a healthy or
+panicking resize callback, checks replacement and unmount before delivery, and
+checks that recovery does not repeat delivery.
+
+## Selected pointer coordinates retain the admitted motion sample
+
+A selected hit path carries its global-to-local mapping through delivery.
+Changing the animation after selection does not remap that pointer event;
+the next selection observes the new committed sample.
+`a_moving_slide_preserves_selected_pointer_coordinates` drives an owner-bound
+slide, changes its public sample between selection and delivery, and observes
+actual `Listener` local and root coordinates in LTR and RTL without rebuilding.
+Removing the transition's hit transform makes this acceptance row fail.
+
+## Independent implicit property motion
+
+`AnimatedContainer` uses the same independent property ownership for alignment,
+insets, Oklab color and both sizes. Its transform has separate normalized motion
+and a concrete `TransformTween` using ADR-0149 decomposition. Changing color
+does not restart size or transform. Matrix replacement guarantees C⁰ continuity;
+numeric components retain C¹ motion. Absent endpoints snap. Non-finite initial
+optional properties are omitted; non-finite live targets preserve the existing
+numeric update as a whole. Plain `Lerp` keeps its own NaN contract.
+
+`container_retarget_preserves_the_laid_out_size_velocity` measures both axes
+with layout quantization included in its tolerance. The painted alpha row
+`container_color_retarget_preserves_painted_alpha_progress` reads display-list
+paint within 8-bit color precision. `container_property_motion_settles_and_unmounts_independently`
+observes curve and spring exact settlement after a color-only update and registry
+withdrawal on unmount. `non_finite_container_targets_preserve_the_last_admitted_layout`
+pins initial omission and delivery of previously admitted size goals after refusal.
+
+`AnimatedAlign` owns alignment and optional factor motion independently. Each
+property uses typed `AnimatedValue` components under the presentation's Vsync;
+one weakly connected notification channel dirties its inner `AnimatedBuilder`.
+Retargeting alignment does not restart a factor's run or extend its deadline.
+Present factors preserve their physical velocities; appearing and disappearing
+factors snap because there is no value to interpolate on the absent side.
+Unset factors reach `Align` as unset, preserving constraints-fill semantics.
+Negative factor overshoot clamps to zero at layout. Non-finite targets refuse
+the whole numeric update before any property's motion is changed.
+
+`align_retarget_preserves_the_laid_out_velocity` observes position differences
+through actual layout. `align_changes_leave_an_unchanged_factor_on_its_original_deadline`
+pins independent progress. `align_spring_settles_and_optional_factors_snap_independently`
+covers exact spring settlement, absent factors and unmount withdrawal.
+`invalid_align_targets_preserve_all_running_layout_properties` verifies rejected
+numeric updates keep both old layout trajectories deliverable.
+
 ## Inherited presentation data
 
 `MediaQuery` lives in the lower `media_query` module, below text, interaction and
@@ -7,6 +330,12 @@ application composition. Consumers import its crate-root types; the `app` module
 owns the shell and `SafeArea`, not the source of inherited presentation data.
 The module DAG enforces this direction. Field-specific dependency behavior is
 pinned by `a_size_only_change_rebuilds_size_and_whole_readers_only`.
+
+`MediaQuery::motion_of` observes the presentation's resolved policy, while
+controllers obey the clock rather than an inherited subtree override. Physical
+scroll and viewer inertia and the activity indicator explicitly use Preserve;
+ordinary transitions remain Normal (ADR-0184). Runtime publication is pinned by
+`system_motion_change_reaches_media_query_and_the_clock`.
 
 `WidgetsApp` resolves supported resources from ordered `preferred_locales`,
 subscribing only to that media field when no explicit locale is authored.
@@ -132,10 +461,19 @@ their query signature and open the viewer's lifecycle-acquired `WriterSource`
 only for the interaction notifications. `PopScope` preserves synchronous
 navigation outcome delivery and the existing observer ordering.
 
-Animation listeners accept owner-local captures. `AnimatedSize` observes
-completion counts during build but invokes `on_end` after the frame.
-`Dismissible` likewise calculates transitions with layout constraints, then
-queues the event payloads on the owner-local post-frame lane; its fully-slid
+Animation listeners accept owner-local captures. Each `AnimatedSize` completed
+status admits one event directly to the owner post-frame lane, before later
+owner events. Build has no completion counter or delivery responsibility.
+Delivery resolves the current `on_end` and opens its writable event context;
+unmount cancels delivery. A callback failure leaves the lane's accepted tail
+for the next frame rather than an internal completion loop dropping it.
+`size_completion_keeps_owner_event_order_and_lifetime` checks ordering,
+callback replacement and late installation, unmount, failure recovery and
+painted endpoints; `animated_size_completion_writes_a_signal_after_build`
+pins writable delivery after the frame.
+`Dismissible` snapshots movement payloads from its controller listener and
+collapse transitions from committed layout geometry, then queues events on
+the owner-local post-frame lane; its fully-slid
 input-time completion bypass remains synchronous. Animation-listener
 notifications are never delivered synchronously to user code: user effects must
 not execute during a FLUI build. Deferred events use the latest configured
@@ -243,6 +581,21 @@ find one with `rg <name> tests/`.
 
 ## Mapping decisions
 
+### Programmatic scroll replacement preserves the published velocity
+
+`ScrollController::animate_to` services its command through the existing owning
+scroll driver and `AnimationController::retarget`. A controller already tracking
+the pixel position keeps its sample, velocity and frame origin; only an external
+position write requires synchronization. A target equal to the current position
+short-circuits only at rest. While moving, the driver brakes continuously and
+then settles exactly at that target. Scroll and page controllers accept the same
+`ArcCurve` handle used by `MotionSpec`.
+
+`scrollable_retarget_preserves_the_position_velocity` and
+`scrollable_retarget_at_the_current_position_brakes_continuously` compare mounted
+pixel-position intervals across replacement, then assert the exact final
+position and ended scrolling activity.
+
 ### Implicit retarget captures the displayed sample before changing easing
 
 When a target changes, implicit animations read their current value or eased
@@ -260,8 +613,24 @@ through rendered opacity, layout and a transform layer. The container row also
 keeps an unchanged height continuous. The separate row
 `changing_only_the_curve_keeps_the_existing_deadline` pins the original completion
 deadline. It does not prove position or velocity continuity for curve-only
-changes. Transferring velocity into replacement motion remains part of the
-retarget design.
+changes. Container and alignment still use the shared progress path described above.
+
+Opacity, padding and rotation own `AnimatedValue` motion rather than reconstructing
+a tween over normalized progress. Target and curve changes are admitted together;
+each component inherits its last published velocity. Opacity keeps the same
+render proxy; padding's builder keeps a stable observed stream and reads its
+component sample for layout. Rotation's stable proxy observes angular motion in
+turns. All three expose curve and spring configuration, and
+retain the owning registration until state disposal. Non-finite initial values
+use transparent opacity or zero insets; invalid later targets retain the admitted
+run. Padding clamps sampled insets to non-negative values at the layout boundary.
+`opacity_retarget_preserves_the_painted_velocity` and
+`padding_retarget_preserves_the_laid_out_velocity` compare the actual producer's
+position intervals on either side of interruption;
+`rotation_retarget_preserves_the_painted_velocity` does the same through the
+transform layer. Changing to the shorter rotation path retains the incoming
+velocity, brakes and settles at the nearest equivalent; the public
+`animated_rotation_retargets_on_a_path_change` row pins that behavior.
 
 ### Focused document selection uses the normal action chain
 
@@ -1535,12 +1904,30 @@ mean guessing a flight plan the replacement never measured.
   costs nothing and keeps the drop outside the animation listener family, the
   one invariant the type docs rest on.
 
-**Replacement test:** with two same-tagged hero pages pushed so the auto observer
-launches a real programmatic flight, installing a manual controller returns the
-overlay count to its pre-flight value, leaves the replacement controller with no
-inherited flight, and clears both heroes' placeholders; deleting the
-`finish_all` call from `did_detach` would leave the overlay count one entry high
-and both placeholders set. **Unasserted:** no test pins this.
+Detachment withdraws the navigator and replaces the manager's admission identity
+before cancellation calls out. A queued measurement holds its original identity
+and cannot launch after replacement. A pending flight is registered before its
+placeholder wakes or shuttle builder runs; cancellation can therefore restore it
+before it publishes an overlay entry. A divert commits its new hero pair before
+freezing that pair or invoking its builder, so cancellation restores the selected
+destination. Retirement compares the flight identity as well as its tag, so a
+stale terminal delivery cannot remove a replacement using the same tag.
+
+Matched launches share failure custody. A failed builder restores its selected
+heroes, and the remaining matched launches are attempted before the first failure
+propagates. Detachment refuses that remaining tail. This does not promise recovery
+from arbitrary failures inside user-owned aggregate destructors.
+
+**Tests:** `replacing_the_hero_observer_inside_its_builder_cancels_the_flight`
+checks initial creation and diversion through a mounted Navigator, verifies the
+destination accepts taps after cancellation and then launches a fresh flight.
+`replacing_the_hero_observer_cancels_queued_measurement` pins queued cancellation.
+`a_failed_hero_builder_restores_its_child_and_allows_a_fresh_flight` checks builder
+failure on initial creation and diversion, real hit testing and fresh admission.
+`hero_builder_cancellation_and_failure_account_for_the_matched_tail` checks
+cancellation, a healthy tail and competing builder failures.
+`hero_flight_terminal_retirement` pins stale retirement through the private
+terminal-delivery seam, along with opaque ownership cleanup.
 
 ### 19. Word and grapheme movement use ICU4X (UAX #29), not dictionary segmentation
 
@@ -2189,9 +2576,23 @@ position's metrics and replaces the fling listener's target. Reconfiguration
 with the same position preserves the active run. The listener is removed and
 replaced outside any controller or position guard; its captured handles can
 retire without holding those locks. The rows
-`a_refresh_controller_swap_retires_the_old_fling_and_drives_the_new_position`
+`a_refresh_scroll_controller_swap_retires_the_old_fling_and_drives_the_new_position`
 and `rebuilding_refresh_content_with_the_same_position_preserves_its_fling`
 use virtual frames to observe actual position changes.
+
+Refresh-phase observation belongs to a private overlay view. Entering and
+leaving refresh invalidates that overlay without rebuilding the viewport,
+content or gesture handlers. `refresh_indicator_rebuilds_only_on_a_phase_change`
+counts builds in the actual content and observes the loading arc's appearance
+and removal in the committed scene; scroll and pull frames remain free of
+element rebuilds.
+
+`refresh_controller_replacement_rebinds_the_retained_indicator` changes the
+refresh source while idle or refreshing. The old source's completion cannot
+invalidate the retained overlay; a new real pull and release must show its
+loading arc, and only completion on the replacement removes it. The row also
+observes content build counts and unchanged pull frames. Removing the overlay's
+replacement subscription makes the new refreshing phase lose its painted arc.
 
 The design follows this widget's synchronous completion and logical-pixel
 threshold contract. As a comparison after choosing it, Flutter's
@@ -2245,16 +2646,28 @@ unchanged pixels through later frames and fresh-contact recovery.
 
 The three gesture inertia drivers in `Scrollable`, `RefreshIndicator` and
 `InteractiveViewer` depend on the ambient `VsyncScope` during lifecycle hooks.
-Same registry identity preserves motion. A changed registry commits the new
-identity and stops the old trajectory at its sampled position before rebinding
-the `DrivenController`, which owns registration and retirement. Stopping first
-prevents clock removal from settling an old finite run into its endpoint.
+Same registry identity preserves motion. `Scrollable` transfers an accepted
+trajectory between live registries without cancelling it. Losing its clock stops
+at the sampled position before rebinding, preventing unbound settlement from
+jumping the scroll position. Refresh and viewer clock replacement retire their
+old trajectories before rebinding their `DrivenController` owners.
 Admitted contacts keep their gesture profile. The public row
-`replacing_vsync_retires_old_motion_and_drives_fresh_contacts` observes retired
+`replacing_vsync_releases_old_seats_and_drives_fresh_contacts` observes retired
 clock immobility and fresh motion on the new clock. Viewer stops at a boundary
 only when containment refuses proposed displacement; a repeated accepted frame
 sample preserves the trajectory. `a_repeated_frame_does_not_cancel_viewer_inertia`
 checks zero elapsed time followed by real progression and recovery.
+
+`an_active_fling_migrates_between_registries` checks continuity, new-clock
+progression and withdrawal during an active fling.
+`a_notched_wheel_run_migrates_with_its_accepted_destination` additionally verifies
+that the next wheel packet accumulates against the retained goal. The size row
+`an_active_size_run_migrates_between_registries` observes actual layout width;
+`switching_entries_migrate_their_incoming_and_outgoing_runs` observes both painted
+fade factors and outgoing-child retirement. The Dismissible rows
+`a_returning_dismissible_migrates_between_registries` and
+`a_collapsing_dismissible_migrates_between_registries` measure painted return
+coordinates on both axes and collapse height, including completion exactly once.
 
 Viewer focal inertia requires a live bound driver. Without one, release retains
 the current scene transform and still reports the measured interaction velocity;

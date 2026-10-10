@@ -107,13 +107,14 @@ impl SecondaryParent {
 
 /// State shared between the route and its animation status listener.
 ///
-/// The listener is `Arc<dyn Fn(AnimationStatus)> + 'static` and cannot borrow the
-/// route, so everything it touches lives here behind an `Arc`.
+/// The listener owns its status queue and wake handle. The route processes the
+/// queued statuses through this shared owner-local state.
 struct TransitionInner {
     controller: RefCell<Option<DrivenController>>,
+    status_subscription: RefCell<Option<flui_animation::StatusSubscription>>,
     disposed: Cell<bool>,
     binding: super::lifecycle::Terminal<RouteBindingSlot>,
-    /// Statuses reported by the `Send + Sync` animation listener, awaiting
+    /// Statuses reported by the animation listener, awaiting
     /// owner-local application.
     pending_statuses: Rc<RefCell<Vec<AnimationStatus>>>,
     /// Data-only owner wake for status changes that do not produce a value tick,
@@ -152,6 +153,7 @@ struct TransitionInner {
 impl Drop for TransitionInner {
     fn drop(&mut self) {
         let controller = self.controller.get_mut().take();
+        let mut subscription = self.status_subscription.get_mut().take();
         let binding = self.binding.withdraw();
         let wake = super::lifecycle::Terminal::new(self.status_wake.get_mut().take());
         let secondary = self.secondary.withdraw();
@@ -161,6 +163,9 @@ impl Drop for TransitionInner {
         ));
         let completed = self.completed.withdraw();
         let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        if let Some(subscription) = &mut subscription {
+            subscription.cancel_with_recovery(&mut recovery.scope());
+        }
         recovery.run(|| drop(controller));
         recovery.retire((binding, wake, secondary, parent, completed));
         recovery.finish();
@@ -296,6 +301,7 @@ impl<T> TransitionRoute<T> {
             group: TransitionGroup::Default,
             inner: super::lifecycle::Terminal::new(Rc::new(TransitionInner {
                 controller: RefCell::new(None),
+                status_subscription: RefCell::new(None),
                 disposed: Cell::new(false),
                 binding: super::lifecycle::Terminal::new(binding),
                 pending_statuses: Rc::new(RefCell::new(Vec::new())),
@@ -657,12 +663,21 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
 
         let pending_statuses = Rc::clone(&self.inner.pending_statuses);
         let status_wake = self.inner.status_wake.borrow_mut().clone();
-        controller.add_status_listener(std::rc::Rc::new(move |status| {
+        let subscription = controller.subscribe_status(std::rc::Rc::new(move |status| {
             pending_statuses.borrow_mut().push(status);
             if let Some(wake) = &status_wake {
                 wake.notify_listeners();
             }
         }));
+        let mut outgoing_subscription = self
+            .inner
+            .status_subscription
+            .borrow_mut()
+            .replace(subscription);
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        if let Some(subscription) = &mut outgoing_subscription {
+            subscription.cancel_with_recovery(&mut recovery.scope());
+        }
 
         // Publish the primary animation so the route below can coordinate.
         if let Some(binding) = self.inner.binding.get() {
@@ -687,7 +702,8 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
         }
 
         let outgoing = self.inner.controller.borrow_mut().replace(owner);
-        drop(outgoing);
+        recovery.run(|| drop(outgoing));
+        recovery.finish();
     }
 
     /// Drive the controller forward and hand the navigator the resulting future.
@@ -770,7 +786,13 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
         self.set_secondary(SecondaryParent::Dismissed, always_dismissed());
 
         let outgoing = self.inner.controller.borrow_mut().take();
-        drop(outgoing);
+        let mut subscription = self.inner.status_subscription.borrow_mut().take();
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        if let Some(subscription) = &mut subscription {
+            subscription.cancel_with_recovery(&mut recovery.scope());
+        }
+        recovery.run(|| drop(outgoing));
+        recovery.finish();
     }
 }
 

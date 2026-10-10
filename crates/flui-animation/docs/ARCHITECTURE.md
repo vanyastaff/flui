@@ -34,7 +34,7 @@ src/
 ├── vsync.rs          # Vsync registry: drives many controllers per frame
 │
 ├── curved.rs         # CurvedAnimation (applies curve)
-├── tween.rs          # TweenAnimation<T> (maps to type T)
+├── tween.rs          # TweenAnimation<A> (maps through Animatable A)
 ├── reverse.rs        # ReverseAnimation (inverts value)
 ├── proxy.rs          # ProxyAnimation (hot-swappable parent)
 ├── constant.rs       # ConstantAnimation (fixed value)
@@ -44,7 +44,8 @@ src/
 ├── tween_types.rs    # Animatable, Tween, all tween types
 ├── status.rs         # AnimationStatus, AnimationBehavior
 ├── simulation.rs     # Simulation trait, Spring, Friction, bounded and bouncing scroll
-├── spring.rs         # AnimatedValue, TwoWayConverter
+├── spring.rs         # TwoWayConverter, fixed component arrays
+├── spring/driver.rs  # AnimatedValue owner, AnimatedValueView, vector sample commits
 ├── retarget.rs       # Interruptible scalar motion segments
 │
 ├── keyframes.rs      # Keyframes, KeyframesBuilder, KeyframesError
@@ -55,6 +56,19 @@ src/
 ```
 
 ## Core Abstractions
+
+### Nested value conversion
+
+`TwoWayConverter` is the fixed-width extension contract for custom animation
+values. Its derive concatenates concrete field vectors in declaration order;
+`AnimationVector::COMPONENTS` exposes the sealed array width. One `AnimatedValue`
+owns the entire vector, so nested geometry and color share admission, time,
+retargeting and cancellation. Derived `Lerp` delegates to each field, preserving
+its interpolation contract instead of interpreting scalar color components.
+Generic-dependent widths require a manual representation because stable Rust
+cannot express their sum as an array length. Empty derives are refused.
+`two_way_converter_derive_contract` pins nested conversion, perceptual fading
+and velocity-preserving interruption through an actual Vsync registration.
 
 ### Controller delivery
 
@@ -71,6 +85,161 @@ peers after a controller or child-registry failure, then resumes that failure.
 outcomes and subsequent frames. `status_delivery_failure_custody` covers hostile
 captures and competing payloads in a bounded child process. The current ownership
 and foundation value-notifier policies retain their separate contracts.
+
+### Published samples and run anchors
+
+Retarget continuation carries the source run generation and the raw elapsed
+time of its published seam. A recent registry dispatch also records its generation
+and elapsed time. Matching both coordinates lets the next tick advance from the
+published seam even when an intervening dispatch failed. Replacing a run several
+times before another sample preserves those source coordinates. An idle run
+anchors on its first observed frame instead.
+
+The registry frame counter saturates. At its terminal value, continuation
+eligibility is disabled and replacement runs use a fresh anchor; admitted runs
+still advance on subsequent ticks. `vsync_nesting_and_reentrancy` includes the
+private terminal-counter case. The public `controller_retarget_frame_boundaries`
+table covers repeated replacements, completion callbacks, idle intervals,
+rejected frames and both cross-controller visit orders.
+
+Retarget preparation retries one invalidated seam. Repeated reentry refuses
+with `AnimationError::ReentrantMotion`, preserving the latest installed run;
+silently replacing its velocity with zero would violate the seam contract.
+Invalid results from displaced sources are discarded before another callout.
+Curve motion corrects both departure and arrival velocity: it inherits the seam
+velocity and approaches zero before the controller stops. A curve's nonzero
+endpoint derivative would otherwise be cut off at completion.
+`controller_retarget_is_c0_and_c1_at_the_seam` covers retry, refusal and the last
+position interval before rest.
+
+Interruptible spring motion retains the native analytic trajectory until the
+physical simulation's distance and speed rest threshold. Stopping there would
+freeze an arbitrary near-target sample and cut off its residual velocity.
+A cubic Hermite transition instead inherits that position and velocity, then
+arrives exactly at the target with zero velocity. Its duration is
+`min(1 / omega, distance_tolerance / abs(velocity))`, with the second term
+omitted for zero velocity. The remaining displacement is bounded by
+`distance_tolerance * 31 / 27`; both joins preserve position and velocity.
+Completion occurs at the computed threshold plus that duration, independently
+of the observing frame. Standalone physics simulations retain their own rest
+contract. `a_controller_spring_arrives_at_rest_independently_of_frames` uses
+the registry and different frame partitions; the public
+`a_controller_spring_enters_and_leaves_rest_continuously` probes both joins
+with position differences and an independent early-trajectory reference.
+
+### Owning vector motion
+
+`TwoWayConverter::rest_thresholds` specifies one positive finite distance per
+component in its vector's own units ([ADR-0186](../../../docs/adr/ADR-0186-typed-animation-rest-thresholds.md)).
+Geometry uses 0.01 logical pixels; scalar, alignment and premultiplied Oklab
+components use 0.001. Speed limits derive from each spring's natural rate.
+Derived values concatenate field thresholds without converting error values
+through nonlinear value conversion. Curve motion ignores spring thresholds.
+Preparation validates thresholds before admission, so invalid distances retain
+the previous run and refuse a coordinated update without admitting a prefix.
+`owning_animated_value_contract` covers distinct geometry/scalar completion and
+single/grouped refusal; `two_way_converter_derive_contract` proves that nested
+geometry retains its own completion timing inside a nested vector. A vector's
+spring components share the latest native rest start and the shortest permitted
+rest interval. This keeps premultiplied color relationships intact while
+respecting every component's distance bound. The color fade case in
+`tolerance_constructors_validate_and_scale_with_dpr` verifies its visible hue.
+
+`AnimatedValue<T>` owns one `DrivenController` for all its scalar components.
+`VsyncUpdate` stages property owners and plain controller owners together. It
+commits every new seat before delivering any clock transition. `prepare` returns
+an owned `VsyncPublication` without controller borrows, so a widget can restore
+temporarily extracted owner storage before a reentrant callback observes it.
+Explicit publication and ordinary drop complete the accepted tail. Drop during
+unwind preserves the incoming failure while still delivering settlement.
+`grouped_registry_migration_commits_before_delivery` in the public owning-value
+table verifies immediate delivery, ordinary drop and unwind, with live and absent
+clocks and competing callback failures.
+
+The controller's generated value-motion branch evaluates components outside
+its borrow, stages one vector sample and publishes that sample together with
+elapsed time only after its sample identity survives. The commit copies fixed
+arrays: `AnimationVector` is sealed to `[f64; N]`, so user implementations of
+`AsMut` cannot run inside the controller borrow. A failed later component leaves
+the whole previous sample and clock authoritative. The sample identity is checked
+between each component's position and velocity callouts. Owner release, replacement
+or a nested frame stops the displaced sample before the next framework callout.
+
+Target and motion preparation invoke converters and curves outside borrows.
+Admission commits the exact target, component sample, motion and reversal state
+before status, cancellation or value callbacks. Repeating a motion-equivalent
+target retains the run's future and deadline, while notifying observers of its
+exact target representation (transparent color channels can differ). A curve-only
+update uses the current segment's remaining deadline; explicitly changing its
+duration configures a new segment duration. `retarget(target, motion)` admits
+both changes in one transaction.
+
+`AnimatedValueView<T>` observes the published sample and controller; it owns no
+registry seat or moving source. Dropping or disposing the owner unregisters and
+cancels, even when views survive. Views keep the last sample; at rest they keep
+the exact target, including components not recoverable from its motion vector.
+Reading an exact target clones its `Rc` under the target borrow, then invokes
+`T::clone` after releasing that borrow. Conversion from a sampled vector likewise
+runs without state guards. Outgoing targets and curves retire separately under
+the controller's enclosing first-failure custody.
+
+`owning_animated_value_contract` covers component publication before cancellation,
+repeated configuration deadlines, unbound settlement, surviving observers,
+converter and target-clone reentry, component failure, owner release inside a curve
+and exact-target delivery.
+The existing physical properties use replayed public Vsync traces for independent
+derivative probes; there is no production `advance(dt)` or owner clone.
+`a_steady_state_frame_allocates_nothing` measures a running scalar controller
+and a running four-component owner in one registry, including observer value
+reads and four listeners on each. Every measured component must advance; the
+run-start negative control verifies that the allocation counter is live.
+
+### Source-bound status removal
+
+`StatusSubscription` holds weak source ownership, a `Copy` registration token and
+a removal function pointer. Dropping it withdraws that registration; `detach`
+disables removal without touching the source's callback. Custom sources construct
+the same guard and receive the borrowed recovery context during withdrawal. The
+remover returns outgoing callback custody after committing membership changes.
+The guard releases its temporary source reference before retiring that custody
+through the context. Capture destruction can therefore release the last owner
+and reenter only after its channels close. Deferred delivery custody stays in
+the source's existing queue. The private guard envelope contains no user captures.
+
+`Animation<T>::subscribe_status` exposes that ownership contract through the
+common observation surface. Its framework relay variant borrows the current
+delivery recovery context. Parent links and switch hops retain status guards;
+they cancel them through that same context after releasing state borrows.
+Framework owners in higher layers use `cancel_with_recovery` when status cleanup
+belongs to an already-started retirement round. This preserves its first failure
+and opaque capture policy rather than starting independent cleanup.
+
+Controller withdrawal commits removal under its existing state borrow. During
+delivery, callback retirement joins its existing FIFO; outside delivery it runs
+after releasing the borrow. The guard neither owns a second channel nor keeps the
+controller owner alive. Scrollable activity and AnimatedSize completion callbacks
+retain the owning subscription beside their driven controller.
+
+Disposed controller and switch status admission returns an inert guard and
+retires rejected captures outside state borrows, using any established delivery
+failure. The controller refuses before minting an identity. A live exhausted
+counter refuses permanently after releasing the borrow; panic hooks can read
+the public source. `exhausted_status_identities_refuse_outside_the_state_borrow`
+pins hook reentry, permanent refusal and delivery to the last admitted callback.
+
+Reverse, curved and tween subscriptions identify their shared `ParentLinks`
+owner, while proxy and switch subscriptions identify their respective owners.
+An owning guard survives a parent replacement or a switch hop without delegating
+its removal token to the active parent. It does not extend wrapper lifetime:
+the last wrapper clone closes both channels even if a guard survives. Withdrawal
+inherits both channel failure histories before retiring captures; proxy removal
+during delivery joins the existing deferred retirement queue.
+
+`owning_status_subscription_contract` uses bounded child-process rows for source
+and channel independence, detach, source teardown, custom-source construction,
+self/later removal during delivery, reentrant capture retirement, first-failure
+custody, recovery, disposed admission, shared wrapper lifetime, proxy replacement
+and switch hops.
 
 ### Registration tokens and removal
 
@@ -112,8 +281,7 @@ where
     fn status(&self) -> AnimationStatus;
     
     /// Listen to status changes
-    fn add_status_listener(&self, callback: StatusCallback) -> ListenerId;
-    fn remove_status_listener(&self, id: ListenerId);
+    fn subscribe_status(&self, callback: StatusCallback) -> StatusSubscription;
 }
 ```
 
@@ -137,21 +305,25 @@ pub trait Curve {
 }
 ```
 
-### Animatable<T> and Tween<T> Traits
+### Animatable mappings and Tween values
 
 ```rust
-/// Maps t ∈ [0,1] → value of type T
-pub trait Animatable<T> {
-    fn transform(&self, t: f64) -> T;
+/// Maps progress to one associated value type.
+pub trait Animatable {
+    type Value;
+    fn transform(&self, t: f64) -> Self::Value;
 }
 
-/// Animatable with explicit begin/end
-pub trait Tween<T>: Animatable<T> {
-    fn begin(&self) -> &T;
-    fn end(&self) -> &T;
-    fn lerp(&self, t: f64) -> T;
+/// A concrete linear mapping between two Lerp values.
+pub struct Tween<V> {
+    pub begin: V,
+    pub end: V,
 }
 ```
+
+`TweenAnimation<A>` retains the mapping and its parent subscription, exposing
+`A::Value` through `Animation`. A mapping specifies its output once; consumers
+such as Hero accept `Animatable<Value = Rect>`, including owner-local captures.
 
 ### Simulation Trait
 
@@ -734,7 +906,7 @@ AnimationController (produces 0.0 → 1.0)
 CurvedAnimation (applies easing curve)
         │
         ▼ Rc<dyn Animation<f64>>
-TweenAnimation<Color> (maps to Color)
+TweenAnimation<ColorTween> (maps to Color)
         │
         ▼ Animation<Color>
 ```

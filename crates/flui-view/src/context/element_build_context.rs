@@ -265,6 +265,7 @@ impl BuildContext for ElementBuildContext {
         // matched InheritedElement's dependent map so a later provider update
         // whose `changed_fields` intersects that mask schedules us for rebuild.
         let Some(ancestor_id) = self.find_inherited_provider(type_id) else {
+            self.owner.write().register_inherited_miss(self.element_id);
             return false;
         };
 
@@ -648,8 +649,8 @@ impl LifecycleContext for ElementBuildContext {
 /// while still recording within the same `build_scope` iteration, before
 /// the next dirty element is processed.
 pub(crate) struct DependentRecord {
-    /// The `InheritedElement` the dependent read from.
-    pub(crate) provider: ElementId,
+    /// The provider read from, or an ancestry-dependent lookup that missed.
+    pub(crate) provider: Option<ElementId>,
     /// The element that read it (and must rebuild when it changes).
     pub(crate) dependent: ElementId,
     /// The dependent's tree depth (for dirty-heap ordering).
@@ -836,7 +837,15 @@ impl BuildContext for BuildCtx<'_> {
         mask: crate::view::FieldSet,
         callback: &mut dyn FnMut(&dyn Any),
     ) -> bool {
-        let Some(provider_id) = self.find_inherited_provider(type_id) else {
+        let provider_id = self.find_inherited_provider(type_id);
+        self.dep_sink.lock().push(DependentRecord {
+            provider: provider_id,
+            dependent: self.element_id,
+            depth: self.depth,
+            mask,
+            lifecycle: false,
+        });
+        let Some(provider_id) = provider_id else {
             return false;
         };
         let Some(accessor) = self
@@ -857,13 +866,6 @@ impl BuildContext for BuildCtx<'_> {
         // dependent, so a later inherited change reschedules it and it recovers.
         // Recording only after the callback would drop the registration on that
         // panic and strand the element on the `ErrorView`.
-        self.dep_sink.lock().push(DependentRecord {
-            provider: provider_id,
-            dependent: self.element_id,
-            depth: self.depth,
-            mask,
-            lifecycle: false,
-        });
         callback(accessor.view_as_any());
         true
     }

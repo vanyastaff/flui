@@ -1079,6 +1079,220 @@ pub(crate) fn assistive_scroll_actions_move_a_scrollable() {
 // Published bounds are physical pixels
 // ===========================================================================
 
+/// Running slides publish their current bounds, including unchanged
+/// transformed ancestors reconstructed for a partial semantics pass.
+pub(crate) fn animated_slide_publishes_bounds_at_its_current_sample() {
+    use flui_animation::ext::AnimatableExt;
+    use flui_animation::{Animation, AnimationController, Tween, Vsync};
+    use flui_foundation::geometry::Matrix4;
+    use flui_objects::TranslationFraction;
+    use flui_painting::Alignment;
+    use flui_painting::typography::TextDirection;
+    use flui_view::ViewExt;
+    use flui_widgets::{Align, SlideTransition, Transform, VsyncScope};
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    for (direction, anchored) in [
+        (TextDirection::Ltr, false),
+        (TextDirection::Rtl, false),
+        (TextDirection::Ltr, true),
+        (TextDirection::Rtl, true),
+    ] {
+        let vsync = Vsync::new();
+        let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
+        let scalar: Rc<dyn Animation<f64>> = Rc::new(owner.controller().clone());
+        let position = Rc::new(
+            Tween::new(
+                TranslationFraction::ZERO,
+                TranslationFraction::new(2.0, 1.0),
+            )
+            .animate(scalar),
+        );
+        let slide = SlideTransition::new(
+            position,
+            Semantics::new()
+                .container(true)
+                .button(true)
+                .label("Moving control")
+                .child(SizedBox::new(40.0, 40.0)),
+        )
+        .text_direction(direction);
+        // The nested boundary is the partial pass's anchor. Its unchanged
+        // ancestors still contribute translation and scale to every graft.
+        let (content, x, y, sx, sy) = if anchored {
+            (
+                Transform::new(
+                    Matrix4::translation(10.0, 5.0, 0.0) * Matrix4::scaling(1.25, 1.5, 1.0),
+                )
+                .child(
+                    Semantics::new()
+                        .container(true)
+                        .label("Motion group")
+                        .child(slide),
+                )
+                .boxed(),
+                90.0,
+                85.0,
+                1.25,
+                1.5,
+            )
+        } else {
+            (slide.boxed(), 80.0, 80.0, 1.0, 1.0)
+        };
+        let mut laid = crate::common::lay_out_animated(
+            VsyncScope::new(vsync.clone(), Align::new(Alignment::CENTER).child(content)),
+            crate::common::tight(200.0, 200.0),
+            vsync,
+        );
+        laid.enable_semantics();
+        laid.tick();
+        assert_rect_near(
+            effective_bounds(
+                &laid.a11y_tree().expect("semantics enabled"),
+                "Moving control",
+            ),
+            (x, y, x + 40.0 * sx, y + 40.0 * sy),
+            "initial control",
+        );
+        owner.controller().forward().expect("fresh slide run");
+        laid.tick();
+        for elapsed in [0.25, 0.5] {
+            laid.pump_for(Duration::from_millis(250));
+            assert!((owner.controller().value() - elapsed).abs() < 1e-9);
+            let dx = sx
+                * 80.0
+                * elapsed
+                * if direction == TextDirection::Rtl {
+                    -1.0
+                } else {
+                    1.0
+                };
+            let dy = sy * 40.0 * elapsed;
+            assert_rect_near(
+                effective_bounds(
+                    &laid.a11y_tree().expect("moving semantics"),
+                    "Moving control",
+                ),
+                (x + dx, y + dy, x + 40.0 * sx + dx, y + 40.0 * sy + dy),
+                "current animation sample",
+            );
+        }
+    }
+}
+
+pub(crate) fn animated_scale_and_rotation_publish_clipped_bounds() {
+    use flui_animation::ext::AnimatableExt;
+    use flui_animation::{Animation, AnimationController, Tween, Vsync};
+    use flui_painting::Alignment;
+    use flui_view::ViewExt;
+    use flui_widgets::{
+        Align, ClipRect, RotationTransition, ScaleTransition, Transform, VsyncScope,
+    };
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    for (rotation, clipped, expected) in [
+        (false, false, (40.0, 70.0, 160.0, 130.0)),
+        (false, true, (60.0, 80.0, 140.0, 120.0)),
+        (true, false, (80.0, 60.0, 120.0, 140.0)),
+        (true, true, (80.0, 80.0, 120.0, 120.0)),
+    ] {
+        let vsync = Vsync::new();
+        let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
+        let scalar: Rc<dyn Animation<f64>> = Rc::new(owner.controller().clone());
+        let child = Semantics::new()
+            .container(true)
+            .button(true)
+            .label("Projected control")
+            .child(SizedBox::new(40.0, 20.0));
+        let transition = if rotation {
+            RotationTransition::new(Rc::new(Tween::new(0.0, 0.5).animate(scalar)), child).boxed()
+        } else {
+            ScaleTransition::new(Rc::new(Tween::new(1.0, 2.0).animate(scalar)), child).boxed()
+        };
+        let content = if clipped {
+            ClipRect::new().child(transition).boxed()
+        } else {
+            transition
+        };
+        let mut laid = crate::common::lay_out_animated(
+            VsyncScope::new(
+                vsync.clone(),
+                Align::new(Alignment::CENTER).child(Transform::scale(2.0, 2.0).child(content)),
+            ),
+            crate::common::tight(200.0, 200.0),
+            vsync,
+        );
+        laid.enable_semantics();
+        laid.tick();
+        assert_rect_near(
+            effective_bounds(
+                &laid.a11y_tree().expect("initial semantics"),
+                "Projected control",
+            ),
+            (60.0, 80.0, 140.0, 120.0),
+            "scaled ancestor",
+        );
+        owner.controller().forward().expect("fresh projected run");
+        laid.tick();
+        laid.pump_for(Duration::from_millis(500));
+        assert_rect_near(
+            effective_bounds(
+                &laid.a11y_tree().expect("projected semantics"),
+                "Projected control",
+            ),
+            expected,
+            "rotated or scaled control under a transformed clip",
+        );
+    }
+}
+
+pub(crate) fn unrepresentable_projected_bounds_are_withdrawn_and_recover() {
+    use flui_foundation::geometry::Matrix4;
+    use flui_painting::Alignment;
+    use flui_widgets::{Align, Transform};
+
+    let view = |scale| {
+        Align::new(Alignment::CENTER).child(
+            Transform::new(Matrix4::scaling(scale, scale, 1.0)).child(
+                Semantics::new()
+                    .container(true)
+                    .label("Finite projection")
+                    .child(SizedBox::new(40.0, 20.0)),
+            ),
+        )
+    };
+    let mut laid = lay_out(view(1.0), crate::common::tight(200.0, 200.0));
+    laid.enable_semantics();
+    laid.tick();
+    assert_rect_near(
+        effective_bounds(
+            &laid.a11y_tree().expect("initial semantics"),
+            "Finite projection",
+        ),
+        (80.0, 90.0, 120.0, 110.0),
+        "initial finite projection",
+    );
+    laid.pump_widget(view(f64::MAX));
+    assert!(
+        laid.a11y_tree()
+            .expect("overflow semantics")
+            .find_by_label("Finite projection")
+            .is_err(),
+        "finite matrix entries whose corner arithmetic overflows cannot publish a bound"
+    );
+    laid.pump_widget(view(1.0));
+    assert_rect_near(
+        effective_bounds(
+            &laid.a11y_tree().expect("recovered semantics"),
+            "Finite projection",
+        ),
+        (80.0, 90.0, 120.0, 110.0),
+        "recovered finite projection",
+    );
+}
+
 /// Where an AccessKit adapter places the labelled node: its bounds under
 /// its own transform and every ancestor's, which AccessKit defines as
 /// physical pixels relative to the window's client area.

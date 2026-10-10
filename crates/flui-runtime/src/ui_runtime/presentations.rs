@@ -187,6 +187,7 @@ impl UiRuntime {
         let presentation_id = presentation.id();
         let snapshot = self.preferences.borrow().clone();
         let unknown = flui_platform_api::SystemPreferences::default();
+        presentation.set_motion_preference(self.motion_preference.get());
         super::preferences::publish(
             &presentation,
             snapshot

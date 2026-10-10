@@ -29,9 +29,9 @@
 //!
 //! # Failure keeps the cache
 //!
-//! Marks are fallible sends ([`RenderInvalidationHandle`]) that may wake a
-//! frame on another thread before they return, so a tick publishes the new
-//! sample *before* marking: the frame a mark wakes always reads it. Delivery
+//! Marks are fallible sends ([`RenderInvalidationHandle`]) that request the
+//! owner's next frame, so a tick publishes the new sample *before* marking.
+//! Render samples stay on the UI owner (ADR-0175). Delivery
 //! is tracked apart from the sample: the cache also keeps the last sample
 //! whose marks were all sent, and the next tick classifies against that one,
 //! so a failed send leaves the debt in place and is retried even when the
@@ -49,10 +49,9 @@
 //! handle and a `Weak` to the node's proxy handle: a strong capture would form
 //! a proxy â†’ listener â†’ proxy cycle that outlives the tree.
 
+use std::cell::Cell;
 use std::f64::consts::TAU;
 use std::rc::{Rc, Weak};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering, fence};
 
 use flui_animation::{Animation, ProxyAnimation};
 use flui_foundation::geometry::{Matrix4, Offset, Size};
@@ -127,132 +126,30 @@ struct Versioned {
     value: (f64, f64),
 }
 
-/// One buffer of a [`Register`]: a sequence counter (odd while written)
-/// guarding a generation and a two-word value.
-#[derive(Debug, Default)]
-struct Slot {
-    sequence: AtomicU64,
-    generation: AtomicU64,
-    first: AtomicU64,
-    second: AtomicU64,
-}
-
-impl Slot {
-    /// A consistent read, or `None` when a write overlapped it.
-    fn try_read(&self) -> Option<Versioned> {
-        let start = self.sequence.load(Ordering::Acquire);
-        if !start.is_multiple_of(2) {
-            return None;
-        }
-        let generation = self.generation.load(Ordering::Relaxed);
-        let first = self.first.load(Ordering::Relaxed);
-        let second = self.second.load(Ordering::Relaxed);
-        fence(Ordering::Acquire);
-        (self.sequence.load(Ordering::Relaxed) == start).then_some(Versioned {
-            generation,
-            value: (f64::from_bits(first), f64::from_bits(second)),
-        })
+/// Publishes a newer reading without letting reentry restore an older one.
+/// No user code runs between the generation check and the whole-value store.
+fn publish_newer(cell: &Cell<Versioned>, entry: Versioned) -> Option<u64> {
+    let previous = cell.get();
+    if entry.generation <= previous.generation {
+        return None;
     }
-
-    /// Writes `entry` with the sequence odd for the duration.
-    fn write(&self, entry: Versioned) {
-        self.sequence.fetch_add(1, Ordering::Relaxed);
-        fence(Ordering::Release);
-        self.generation.store(entry.generation, Ordering::Relaxed);
-        self.first.store(entry.value.0.to_bits(), Ordering::Relaxed);
-        self.second
-            .store(entry.value.1.to_bits(), Ordering::Relaxed);
-        self.sequence.fetch_add(1, Ordering::Release);
-    }
-}
-
-/// A two-word value that concurrent writers publish in generation order and
-/// a paint or hit-test walk reads without a lock.
-///
-/// # Protocol
-///
-/// Two [`Slot`]s; `current` names the one holding the newest published
-/// entry. Writers exclude each other with the `writing` flag, taken by
-/// compare-exchange, held for a few stores and never across user code; a
-/// reader never touches it. The holder compares its generation with the
-/// current entry's: an older or equal one is discarded, so the published
-/// generation only grows and an older reading never replaces a newer one.
-/// A newer entry is written into the slot that is *not* current, then
-/// `current` flips to it with `Release`.
-///
-/// A reader loads `current` and reads that slot under its sequence. A writer
-/// stalled mid-write owns only the slot that is not current, so it never
-/// blocks a reader. A read fails only when two newer entries were published
-/// while it ran (the second reusing its slot), so every reader retry follows
-/// another writer's completed publication, never a stalled one.
-#[derive(Debug, Default)]
-struct Register {
-    writing: AtomicBool,
-    slots: [Slot; 2],
-    current: AtomicUsize,
-}
-
-impl Register {
-    fn new(entry: Versioned) -> Self {
-        let register = Self::default();
-        register.slots[0].write(entry);
-        register
-    }
-
-    fn load(&self) -> Versioned {
-        loop {
-            let current = self.current.load(Ordering::Acquire);
-            if let Some(entry) = self.slots[current].try_read() {
-                return entry;
-            }
-            std::hint::spin_loop();
-        }
-    }
-
-    /// Publishes `entry` unless a newer-or-equal generation already is.
-    /// Returns the generation it replaced, or `None` when it was discarded.
-    fn publish(&self, entry: Versioned) -> Option<u64> {
-        while self
-            .writing
-            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .is_err()
-        {
-            std::hint::spin_loop();
-        }
-        let current = self.current.load(Ordering::Relaxed);
-        let newest = self.slots[current]
-            .try_read()
-            .expect("BUG: only the `writing` holder writes a slot, and never the current one");
-        let published = (entry.generation > newest.generation).then_some(newest.generation);
-        if published.is_some() {
-            let next = 1 - current;
-            self.slots[next].write(entry);
-            self.current.store(next, Ordering::Release);
-        }
-        self.writing.store(false, Ordering::Release);
-        published
-    }
+    cell.set(entry);
+    Some(previous.generation)
 }
 
 /// The published sample, the last delivered sample and the size they are
 /// mapped against.
 ///
-/// Atomics because the render tree is `Send` today and the tick listener
-/// must be `Send + Sync`, so two notifications of one animation may commit
-/// concurrently. Each commit takes a [`ticket`](Self::ticket) *before*
-/// reading the animation, so the newest ticket's reading was taken after
-/// every mutation already notified: generation order is reading order, and
-/// the newest generation holds the final value. Both samples are
-/// [`Register`]s ordered by that generation; the published one is written
-/// with `Release` before any mark can wake a frame. The size is written only
-/// by layout, so `Relaxed` suffices for it.
+/// Reads and callbacks run on the UI owner. Each commit takes a
+/// [`ticket`](Self::ticket) before calling the animation: a reentrant newer
+/// reading supersedes the outgoing one. Published and delivered records stay
+/// separate so a failed mark leaves delivery debt even after A -> B -> A.
 #[derive(Debug)]
 struct SampleCell {
-    tickets: AtomicU64,
-    published: Register,
-    delivered: Register,
-    width: AtomicU64,
-    height: AtomicU64,
+    tickets: Cell<u64>,
+    published: Cell<Versioned>,
+    delivered: Cell<Versioned>,
+    size: Cell<Size>,
 }
 
 impl SampleCell {
@@ -262,11 +159,10 @@ impl SampleCell {
             value: sample,
         };
         Self {
-            tickets: AtomicU64::new(0),
-            published: Register::new(seed),
-            delivered: Register::new(seed),
-            width: AtomicU64::new(0),
-            height: AtomicU64::new(0),
+            tickets: Cell::new(0),
+            published: Cell::new(seed),
+            delivered: Cell::new(seed),
+            size: Cell::new(Size::ZERO),
         }
     }
 
@@ -274,26 +170,22 @@ impl SampleCell {
     /// that exhausted `u64` keeps its last sample rather than reissuing an
     /// older generation.
     fn ticket(&self) -> u64 {
-        self.tickets
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_add(1))
-            .map_or(u64::MAX, |n| n + 1)
+        let next = self.tickets.get().saturating_add(1);
+        self.tickets.set(next);
+        next
     }
 
     /// The published sample, never a mix of two writes.
     fn sample(&self) -> (f64, f64) {
-        self.published.load().value
+        self.published.get().value
     }
 
     fn size(&self) -> Size {
-        Size::new(
-            f64::from_bits(self.width.load(Ordering::Relaxed)),
-            f64::from_bits(self.height.load(Ordering::Relaxed)),
-        )
+        self.size.get()
     }
 
     fn store_size(&self, size: Size) {
-        self.width.store(size.width.to_bits(), Ordering::Relaxed);
-        self.height.store(size.height.to_bits(), Ordering::Relaxed);
+        self.size.set(size);
     }
 }
 
@@ -360,7 +252,7 @@ fn scalar_sample(value: &f64) -> (f64, f64) {
     (*value, 0.0)
 }
 
-/// The node's animation, held behind an `Arc` the node alone owns so the tick
+/// The node's animation, held behind an `Rc` the node alone owns so the tick
 /// listener can capture a `Weak` to it.
 #[derive(Debug)]
 enum Source {
@@ -378,22 +270,22 @@ impl Source {
 
     fn subscribe(
         &self,
-        cell: &Arc<SampleCell>,
+        cell: &Rc<SampleCell>,
         kind: Kind,
         handle: &RenderInvalidationHandle,
     ) -> ListenerId {
         fn listen<T>(
             proxy: &Rc<ProxyAnimation<T>>,
             read: fn(&T) -> (f64, f64),
-            cell: &Arc<SampleCell>,
+            cell: &Rc<SampleCell>,
             kind: Kind,
             handle: &RenderInvalidationHandle,
         ) -> ListenerId
         where
-            T: Clone + Send + Sync + std::fmt::Debug + 'static,
+            T: Clone + std::fmt::Debug + 'static,
         {
             let weak: Weak<ProxyAnimation<T>> = Rc::downgrade(proxy);
-            let cell = Arc::clone(cell);
+            let cell = Rc::clone(cell);
             let handle = handle.clone();
             proxy.add_listener(std::rc::Rc::new(move || {
                 if let Some(proxy) = weak.upgrade() {
@@ -438,10 +330,10 @@ fn commit(
     };
     let entry = Versioned { generation, value };
     // Published first: a mark may run (or wake) the frame that reads it.
-    let Some(replaced) = cell.published.publish(entry) else {
+    let Some(replaced) = publish_newer(&cell.published, entry) else {
         return false;
     };
-    let delivered = cell.delivered.load();
+    let delivered = cell.delivered.get();
     let old = delivered.value;
     // A replaced publication newer than the delivery record is in flight (or
     // its marks failed): a frame may already show it, so equality with the
@@ -450,7 +342,7 @@ fn commit(
     if !in_flight && old.0.to_bits() == value.0.to_bits() && old.1.to_bits() == value.1.to_bits() {
         // This generation owes no marks. Record its completed delivery so a
         // later equal notification cannot mistake it for outstanding work.
-        let _ = cell.delivered.publish(entry);
+        let _ = publish_newer(&cell.delivered, entry);
         return false;
     }
     let size = cell.size();
@@ -473,7 +365,7 @@ fn commit(
     }
     // Ordered like the published sample: an older commit finishing late
     // cannot replace a newer delivery record.
-    let _ = cell.delivered.publish(entry);
+    let _ = publish_newer(&cell.delivered, entry);
     true
 }
 
@@ -484,20 +376,24 @@ fn commit(
 /// rule, why a pure translation gets a layer, and the failure contract. Layout
 /// is the child's: the transform is paint-, hit-test- and semantics-only.
 ///
-/// ```rust,ignore
-/// let proxy = ProxyAnimation::new(Arc::new(controller) as Arc<dyn Animation<f64>>);
-/// let node = RenderAnimatedTransform::new(TransformMotion::Scale { scale: proxy });
+/// ```rust
+/// use std::{rc::Rc, time::Duration};
+/// use flui_animation::{Animation, AnimationController, ProxyAnimation};
+/// use flui_objects::{RenderAnimatedTransform, TransformMotion};
+///
+/// let controller = AnimationController::builder(Duration::from_millis(300)).build();
+/// let proxy = ProxyAnimation::new(Rc::new(controller) as Rc<dyn Animation<f64>>);
+/// let _node = RenderAnimatedTransform::new(TransformMotion::Scale { scale: proxy });
 /// ```
 pub struct RenderAnimatedTransform {
     source: Source,
     kind: Kind,
-    cell: Arc<SampleCell>,
+    cell: Rc<SampleCell>,
     /// The sample `hit_test_transform` chose for the current hit-test visit,
     /// consumed by the `hit_test` that follows it, so a tick between the two
     /// hooks cannot pair one matrix on the hit entry with another for the
     /// child's position.
-    hit_sample: Slot,
-    hit_sample_armed: AtomicBool,
+    hit_sample: Cell<Option<(f64, f64)>>,
     transform_hit_tests: bool,
     has_child: bool,
     listener_id: Option<ListenerId>,
@@ -528,9 +424,8 @@ impl RenderAnimatedTransform {
         Self {
             source,
             kind,
-            cell: Arc::new(SampleCell::new(seed)),
-            hit_sample: Slot::default(),
-            hit_sample_armed: AtomicBool::new(false),
+            cell: Rc::new(SampleCell::new(seed)),
+            hit_sample: Cell::new(None),
             transform_hit_tests: true,
             has_child: false,
             listener_id: None,
@@ -574,23 +469,14 @@ impl RenderAnimatedTransform {
     /// Records the sample this hit-test visit uses; see `hit_sample`.
     fn arm_hit_sample(&self) -> (f64, f64) {
         let sample = self.cell.sample();
-        self.hit_sample.write(Versioned {
-            generation: 0,
-            value: sample,
-        });
-        self.hit_sample_armed.store(true, Ordering::Release);
+        self.hit_sample.set(Some(sample));
         sample
     }
 
     /// The sample `hit_test_transform` recorded for this visit, or a fresh
     /// read when `hit_test` runs alone.
     fn take_hit_sample(&self) -> (f64, f64) {
-        if self.hit_sample_armed.swap(false, Ordering::AcqRel)
-            && let Some(entry) = self.hit_sample.try_read()
-        {
-            return entry.value;
-        }
-        self.cell.sample()
+        self.hit_sample.take().unwrap_or_else(|| self.cell.sample())
     }
 }
 
@@ -754,6 +640,8 @@ mod tests {
     use flui_animation::AnimationController;
     use flui_rendering::pipeline::PipelineOwner;
     use flui_rendering::protocol::BoxProtocol;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
 
     /// An owner with one scale node, the handle bound to it, and the owner's
@@ -803,38 +691,8 @@ mod tests {
         );
     }
 
-    // A mark wakes the frame, which may run on another thread before the
-    // send returns. Modelled by a wake that reads the cache synchronously,
-    // as that frame would: it must observe the new sample.
-    #[test]
-    fn frame_woken_by_a_mark_reads_the_new_sample() {
-        let cell = Arc::new(scale_cell());
-        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let (_owner, handle) = owner_with_handle({
-            let cell = Arc::clone(&cell);
-            let seen = Arc::clone(&seen);
-            move || seen.lock().expect("unpoisoned").push(cell.sample())
-        });
-        seen.lock().expect("unpoisoned").clear();
-        assert!(commit(
-            &cell,
-            Kind::Scale,
-            cell.ticket(),
-            (0.5, 0.0),
-            &handle
-        ));
-        let seen = seen.lock().expect("unpoisoned");
-        assert!(!seen.is_empty(), "the mark must have woken a frame");
-        assert!(
-            seen.iter().all(|&sample| sample == (0.5, 0.0)),
-            "every woken frame must read the new sample: {seen:?}"
-        );
-    }
-
-    // Two notifications of one animation commit concurrently; whichever
-    // finishes last, the reading taken last (the newer ticket) stays
-    // published and delivered. The older-finishing-last order is also the
-    // attach catch-up race: its ticket precedes a listener's that read later.
+    // A user read or invalidation hook can reenter. The newer ticket stays
+    // published and delivered even if the outgoing call returns last.
     #[test]
     fn newer_generation_wins_in_either_commit_order() {
         let (_owner, handle) = owner_with_handle(|| {});
@@ -857,13 +715,31 @@ mod tests {
                 "older finishes last = {older_finishes_last}: the newer reading must stay published"
             );
             assert_eq!(
-                cell.delivered.load(),
+                cell.delivered.get(),
                 Versioned {
                     generation: newer,
                     value: (0.25, 0.0)
                 },
                 "older finishes last = {older_finishes_last}: delivery must record the newer commit"
             );
+        }
+
+        let cell = scale_cell();
+        cell.tickets.set(u64::MAX - 1);
+        assert!(commit(
+            &cell,
+            Kind::Scale,
+            cell.ticket(),
+            (0.5, 0.0),
+            &handle
+        ));
+        for value in [(0.25, 0.0), (1.0, 0.0)] {
+            assert!(
+                !commit(&cell, Kind::Scale, cell.ticket(), value, &handle),
+                "exhaustion must permanently refuse newer readings"
+            );
+            assert_eq!(cell.sample(), (0.5, 0.0));
+            assert_eq!(cell.delivered.get().value, (0.5, 0.0));
         }
     }
 
@@ -882,13 +758,13 @@ mod tests {
             generation: cell.ticket(),
             value: b,
         };
-        assert!(cell.published.publish(stalled).is_some());
+        assert!(publish_newer(&cell.published, stalled).is_some());
         assert!(
             commit(&cell, Kind::Scale, cell.ticket(), a, &handle),
             "the restored value owes marks while B's delivery is in flight"
         );
-        assert!(cell.delivered.publish(stalled).is_none());
-        assert_eq!(cell.delivered.load().value, a);
+        assert!(publish_newer(&cell.delivered, stalled).is_none());
+        assert_eq!(cell.delivered.get().value, a);
     }
 
     fn rotation_node(turns: f64) -> RenderAnimatedTransform {
@@ -990,10 +866,14 @@ mod tests {
             self.0.store(true, Ordering::SeqCst);
             flui_animation::AnimationStatus::Dismissed
         }
-        fn add_status_listener(&self, _: flui_animation::StatusCallback) -> ListenerId {
-            self.1.add_listener(std::rc::Rc::new(|| {}))
+
+        fn subscribe_status(
+            &self,
+            callback: flui_animation::StatusCallback,
+        ) -> flui_animation::StatusSubscription {
+            drop(callback);
+            flui_animation::StatusSubscription::default()
         }
-        fn remove_status_listener(&self, _: ListenerId) {}
     }
 
     // Debug formats the cache, never the animation.
@@ -1013,75 +893,5 @@ mod tests {
             !called.load(Ordering::SeqCst),
             "Debug ran the animation: {text}"
         );
-    }
-
-    // A writer preempted mid-write must not stall a paint-time read: it owns
-    // only the slot that is not current.
-    #[test]
-    fn stalled_writer_does_not_block_readers() {
-        let cell = Arc::new(scale_cell());
-        let register = &cell.published;
-        register.writing.store(true, Ordering::SeqCst);
-        let idle = 1 - register.current.load(Ordering::SeqCst);
-        register.slots[idle].sequence.fetch_add(1, Ordering::SeqCst);
-        let (sender, receiver) = std::sync::mpsc::channel();
-        let reader = Arc::clone(&cell);
-        std::thread::spawn(move || {
-            let _ = sender.send(reader.sample());
-        });
-        assert_eq!(
-            receiver.recv_timeout(Duration::from_secs(2)),
-            Ok((1.0, 0.0)),
-            "a read during a stalled write must return the last published sample"
-        );
-    }
-
-    // Concurrent writers with interleaved tickets, a concurrent reader:
-    // every read is a value some writer published, and the newest ticket's
-    // value ends published.
-    #[test]
-    fn concurrent_writers_publish_the_newest_reading() {
-        const PER_WRITER: u64 = 2_000;
-        let cell = Arc::new(scale_cell());
-        let (_owner, handle) = owner_with_handle(|| {});
-        let done = Arc::new(AtomicBool::new(false));
-        let reader = {
-            let cell = Arc::clone(&cell);
-            let done = Arc::clone(&done);
-            std::thread::spawn(move || {
-                while !done.load(Ordering::Acquire) {
-                    let (first, second) = cell.sample();
-                    // Writers publish (n, -n): a torn read breaks the pair.
-                    assert!(
-                        first == 1.0 && second == 0.0 || first == -second,
-                        "torn read ({first}, {second})"
-                    );
-                }
-            })
-        };
-        let writers: Vec<_> = (0..2)
-            .map(|_| {
-                let cell = Arc::clone(&cell);
-                let handle = handle.clone();
-                std::thread::spawn(move || {
-                    for _ in 0..PER_WRITER {
-                        let generation = cell.ticket();
-                        #[expect(clippy::cast_precision_loss, reason = "test values stay small")]
-                        let n = generation as f64;
-                        commit(&cell, Kind::Scale, generation, (n, -n), &handle);
-                    }
-                })
-            })
-            .collect();
-        for writer in writers {
-            writer.join().expect("writer must not panic");
-        }
-        done.store(true, Ordering::Release);
-        reader
-            .join()
-            .expect("reader must not observe a torn sample");
-        #[expect(clippy::cast_precision_loss, reason = "test values stay small")]
-        let last = (2 * PER_WRITER) as f64;
-        assert_eq!(cell.sample(), (last, -last));
     }
 }

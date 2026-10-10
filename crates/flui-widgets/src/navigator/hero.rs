@@ -15,7 +15,8 @@
 //! from an observer callback is exactly what a previous change deliberately removed.
 //!
 //! So the direction is inverted. Each `Hero` **registers itself** with the nearest
-//! enclosing [`HeroScope`] in `init_state` and deregisters in `dispose`. The registry
+//! enclosing [`HeroScope`] through lifecycle dependencies, moves its registration
+//! when the scope or match tag changes, and deregisters in `dispose`. The registry
 //! is owned by the route (`ModalInner`), reachable by `RouteId` through the
 //! navigator's modal registry, and the controller reads it as pure data. No
 //! `GlobalKey`, no tree re-entry, no downcast.
@@ -59,24 +60,26 @@
 //! for framework invariants. FLUI logs and keeps the **first** — "last wins" would
 //! make the surviving hero depend on mount order.
 
-use super::lifecycle::Terminal;
+use super::hero_tags::{HeroTags, TagSeat};
+use super::lifecycle::{RetiredMap, RetiredValues, Terminal};
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use flui_animation::{Animatable, Animation, ArcCurve, Curve, Curves};
 use flui_foundation::geometry::Rect;
 use flui_foundation::geometry::Size;
 use flui_foundation::{RenderId, ViewKey};
 use flui_objects::SubtreeAnchor;
+#[cfg(test)]
 use flui_rendering::pipeline::PipelineCell;
+use flui_rendering::pipeline::WeakPipelineCell;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{RebuildHandle, impl_inherited_view};
-use parking_lot::Mutex;
 
 use super::hero_controller::FlightDirection;
 use crate::__private::AnchoredBox;
@@ -84,9 +87,8 @@ use crate::{Offstage, SizedBox, Stack, TickerMode};
 
 /// Builds the [`RectTween`](flui_animation::RectTween)-like path a hero's shuttle
 /// follows. The default is a linear `RectTween`. Erased and `Rc`-shared because hero customization is UI-owner
-/// local; the returned animation object stays `Send + Sync` for now.
-pub(crate) type RectTweenFactory =
-    Rc<dyn Fn(Rect, Rect) -> Box<dyn Animatable<Rect> + Send + Sync>>;
+/// local, including the returned mapping and its captures.
+pub(crate) type RectTweenFactory = Rc<dyn Fn(Rect, Rect) -> Box<dyn Animatable<Value = Rect>>>;
 
 /// Builds the widget shown in flight instead of the default (a fresh copy of the
 /// destination hero's child). The builder receives the flight animation, the
@@ -115,6 +117,10 @@ impl HeroTag {
     /// newtype. Accepts anything the framework already knows how to compare.
     pub fn new(key: impl ViewKey) -> Self {
         Self(Arc::new(key))
+    }
+
+    pub(super) fn key_hash(&self) -> u64 {
+        self.0.key_hash()
     }
 }
 
@@ -148,34 +154,34 @@ impl fmt::Debug for HeroTag {
 /// than by an element walk.
 ///
 /// Cloneable and `'static`: the route owns one, the [`HeroScope`] hands clones to its
-/// descendants, and the controller reads it through [`ModalHandle`]. The lock is
-/// private and never escapes — every accessor copies or clones out.
+/// descendants, and the controller reads it through [`ModalHandle`].
+/// Matching runs against owning snapshots, outside the owner-local storage borrow.
 ///
 /// [`ModalHandle`]: super::modal_route::ModalHandle
 #[derive(Default)]
 pub struct HeroRegistry {
-    heroes: Terminal<Arc<super::lifecycle::TerminalMap<HeroTag, HeroHandle>>>,
-    /// Nested `Navigator`s that publish a cross-flight visibility hook here.
-    /// There is no element walk to reach one, so each nested `Navigator`
-    /// registers itself with the nearest enclosing route instead.
-    /// Empty for the common case of no nested navigator inside this route.
-    nested: Terminal<Arc<super::lifecycle::TerminalVec<NestedHeroSource>>>,
+    inner: Terminal<Rc<HeroRegistryInner>>,
+}
+
+#[derive(Default)]
+struct HeroRegistryInner {
+    heroes: Terminal<HeroTags<HeroHandle>>,
+    nested: RefCell<Vec<NestedHeroSource>>,
+}
+
+impl Drop for HeroRegistryInner {
+    fn drop(&mut self) {
+        let heroes = self.heroes.withdraw();
+        let nested = RetiredValues(std::mem::take(self.nested.get_mut()));
+        drop((heroes, nested));
+    }
 }
 
 impl Clone for HeroRegistry {
     fn clone(&self) -> Self {
         Self {
-            heroes: Terminal::new(Arc::clone(&self.heroes)),
-            nested: Terminal::new(Arc::clone(&self.nested)),
+            inner: Terminal::new(Rc::clone(&self.inner)),
         }
-    }
-}
-
-impl Drop for HeroRegistry {
-    fn drop(&mut self) {
-        let heroes = self.heroes.withdraw();
-        let nested = self.nested.withdraw();
-        drop((heroes, nested));
     }
 }
 
@@ -192,16 +198,27 @@ impl HeroRegistry {
     /// invoked, so registering does not itself resolve anything about the nested
     /// stack.
     pub(crate) fn register_nested(&self, source: NestedHeroSource) {
-        self.nested.lock().push(source);
+        self.inner.nested.borrow_mut().push(source);
     }
 
     /// Withdraw a nested `Navigator`'s hook, matched by identity — the mirror of
     /// [`register_nested`](Self::register_nested), called from that
     /// `Navigator`'s `dispose` and whenever it re-publishes elsewhere.
     pub(crate) fn deregister_nested(&self, source: &NestedHeroSource) {
-        let mut nested = std::mem::take(&mut *self.nested.lock());
-        nested.retain(|existing| !existing.is(source));
-        let _prev = std::mem::replace(&mut *self.nested.lock(), nested);
+        let removed = {
+            let mut nested = self.inner.nested.borrow_mut();
+            let mut removed = Vec::new();
+            let mut index = 0;
+            while index < nested.len() {
+                if nested[index].is(source) {
+                    removed.push(nested.remove(index));
+                } else {
+                    index += 1;
+                }
+            }
+            RetiredValues(removed)
+        };
+        drop(removed);
     }
 
     /// Every hero visible for a flight through this route: this route's own,
@@ -218,56 +235,60 @@ impl HeroRegistry {
     /// locally, extended across the registry boundary since there is no
     /// cross-registry visit order to arbitrate by instead.
     ///
-    /// The nested sources are snapshotted out of the lock **before** any of them
-    /// is resolved: `resolve` runs a caller-supplied closure that reads a
-    /// `NavigatorHandle`'s own locks (history, route registries), and a nested
-    /// `Navigator` could — through a future recursive shape or a caller-supplied
-    /// hook — resolve back into this same registry. Holding `self.nested`'s lock
-    /// across that call would risk exactly the lock-held-over-a-handle-querying-
-    /// closure deadlock class the `pop_until`/`push_and_remove_until` fix closed.
+    /// Sources resolve outside borrows. Owning registry identities bound traversal
+    /// when a source resolves to an already visited registry, including itself.
     pub(crate) fn all_heroes(&self) -> HashMap<HeroTag, HeroHandle> {
-        let mut all = self.heroes.lock().clone();
-        let nested_sources: Vec<NestedHeroSource> = self.nested.lock().clone();
-        for nested in &nested_sources {
+        let mut all = RetiredMap(HashMap::new());
+        let mut visited = RetiredValues(Vec::new());
+        self.collect_heroes(&mut visited, &mut all);
+        drop(visited);
+        std::mem::take(&mut all.0)
+    }
+
+    fn collect_heroes(
+        &self,
+        visited: &mut RetiredValues<Self>,
+        all: &mut RetiredMap<HeroTag, HeroHandle>,
+    ) {
+        if visited.0.iter().any(|registry| self.is_same(registry)) {
+            return;
+        }
+        visited.0.push(self.clone());
+        let heroes = self.inner.heroes.snapshot_all();
+        let nested_sources = RetiredValues(self.inner.nested.borrow().clone());
+        for (tag, handle) in heroes.iter() {
+            all.0.entry(tag.clone()).or_insert_with(|| handle.clone());
+        }
+        for nested in &nested_sources.0 {
             let Some(registry) = nested.resolve() else {
                 continue;
             };
-            for (tag, handle) in registry.all_heroes() {
-                all.entry(tag).or_insert(handle);
-            }
+            registry.collect_heroes(visited, all);
         }
-        all
     }
 
     /// Register `handle` under `tag`, keeping the **first** registration.
     ///
-    /// Returns whether it was accepted. See the module docs for why a duplicate
+    /// Returns release authority if accepted. See the module docs for why a duplicate
     /// tag logs and first-wins rather than panicking.
-    fn register(&self, tag: HeroTag, handle: HeroHandle) -> bool {
-        let mut heroes = self.heroes.lock();
-        if heroes.contains_key(&tag) {
+    fn register(&self, tag: HeroTag, handle: HeroHandle) -> Option<TagSeat<HeroHandle>> {
+        let tag = Terminal::new(tag);
+        if let Some(admission) = self.inner.heroes.insert_first(tag.clone(), handle) {
+            Some(admission.commit())
+        } else {
             tracing::warn!(
                 ?tag,
                 "two Hero views share one tag within a single route subtree; the \
                  second is ignored. Within each PageRoute subtree, each Hero must \
                  have a unique tag."
             );
-            return false;
+            None
         }
-        heroes.insert(tag, handle);
-        true
     }
 
-    /// Remove `tag`, but only if it still names `handle`.
-    ///
-    /// The identity check is what makes a *rejected* duplicate harmless: when it
-    /// unmounts it must not evict the hero that won the tag. `Arc::ptr_eq`, not tag
-    /// equality, is the question being asked.
-    fn deregister(&self, tag: &HeroTag, handle: &HeroHandle) {
-        let mut heroes = self.heroes.lock();
-        if heroes.get(tag).is_some_and(|held| held.is(handle)) {
-            heroes.remove(tag);
-        }
+    /// Withdraw exactly one accepted registration without invoking its key.
+    fn deregister(&self, seat: &TagSeat<HeroHandle>) {
+        drop(self.inner.heroes.remove(seat));
     }
 
     /// The handle registered under `tag`, cloned out. Test-facing: production
@@ -275,13 +296,14 @@ impl HeroRegistry {
     /// nested `Navigator`'s heroes.
     #[must_use]
     pub fn get(&self, tag: &HeroTag) -> Option<HeroHandle> {
-        self.heroes.lock().get(tag).cloned()
+        self.inner.heroes.get(tag)
     }
 
     /// Every registered tag, cloned out. The caller matches these against another
     /// route's registry; nothing here depends on the order.
     pub(crate) fn tags(&self) -> Vec<HeroTag> {
-        self.heroes.lock().keys().cloned().collect()
+        let heroes = self.inner.heroes.snapshot_all();
+        heroes.iter().map(|(tag, _)| tag.clone()).collect()
     }
 
     /// How many heroes are registered. Test-facing.
@@ -291,24 +313,338 @@ impl HeroRegistry {
         reason = "a test-facing count; nothing asks whether the registry is empty"
     )]
     pub fn len(&self) -> usize {
-        self.heroes.lock().len()
+        self.inner.heroes.len()
     }
 
     /// Whether both handles name the same registry — the identity
     /// `NavigatorState::sync_nested_hero_registration` checks each build, so an
-    /// unchanged enclosing route costs one `Arc::ptr_eq` instead of a
+    /// unchanged enclosing route costs one `Rc::ptr_eq` instead of a
     /// deregister/register round trip.
     #[must_use]
     pub fn is_same(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.heroes, &other.heroes)
+        Rc::ptr_eq(&self.inner, &other.inner)
     }
 }
 
 impl fmt::Debug for HeroRegistry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let tags = RetiredValues(self.tags());
         f.debug_struct("HeroRegistry")
-            .field("tags", &self.tags())
+            .field("tags", &tags.0)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod registry_tests {
+    use super::*;
+    use std::any::Any;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    type Hook = Rc<dyn Fn(&str)>;
+
+    thread_local! {
+        static HOOK: RefCell<Option<Hook>> = const { RefCell::new(None) };
+        static ENTERING: Cell<bool> = const { Cell::new(false) };
+    }
+
+    fn call_hook(operation: &str) {
+        if ENTERING.replace(true) {
+            return;
+        }
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                ENTERING.set(false);
+            }
+        }
+        let _reset = Reset;
+        let hook = HOOK.with(|slot| slot.borrow().clone());
+        if let Some(hook) = hook {
+            hook(operation);
+        }
+    }
+
+    struct Key {
+        id: u64,
+        fail_drop: bool,
+        drops: Option<Arc<std::sync::atomic::AtomicUsize>>,
+    }
+
+    impl ViewKey for Key {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn key_hash(&self) -> u64 {
+            call_hook("hash");
+            7
+        }
+        fn key_eq(&self, other: &dyn ViewKey) -> bool {
+            call_hook("equality");
+            other
+                .as_any()
+                .downcast_ref::<Self>()
+                .is_some_and(|other| self.id == other.id)
+        }
+        fn clone_key(&self) -> Box<dyn ViewKey> {
+            Box::new(Self {
+                id: self.id,
+                fail_drop: self.fail_drop,
+                drops: self.drops.clone(),
+            })
+        }
+        fn debug_fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            call_hook("debug");
+            write!(f, "Hero key {}", self.id)
+        }
+    }
+
+    impl Drop for Key {
+        fn drop(&mut self) {
+            if let Some(drops) = &self.drops {
+                drops.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            call_hook("drop");
+            assert!(!self.fail_drop, "first Hero key retirement failure");
+        }
+    }
+
+    fn key(id: u64) -> HeroTag {
+        HeroTag::new(Key {
+            id,
+            fail_drop: false,
+            drops: None,
+        })
+    }
+
+    #[test]
+    fn hero_registry_matching_preserves_authority_under_reentry() {
+        let Some(case) = super::super::hero_controller::terminal_tests::children(
+            "navigator::hero::registry_tests::hero_registry_matching_preserves_authority_under_reentry",
+            "FLUI_HERO_MATCH_CASE",
+            &[
+                "replacement",
+                "repeated_mutation",
+                "hash_failure",
+                "equality_failure",
+                "snapshot_retirement",
+                "passive_release",
+                "duplicate_debug",
+                "terminal_healthy",
+                "terminal_failure",
+                "terminal_alias",
+                "terminal_incoming",
+                "terminal_competing",
+            ],
+        ) else {
+            return;
+        };
+        let registry = HeroRegistry::new();
+        let hero = Hero::new(
+            flui_foundation::ValueKey::new("configuration"),
+            SizedBox::shrink(),
+        );
+        let original = HeroHandle::test_handle(&hero);
+        let replacement = HeroHandle::test_handle(&hero);
+        if case.starts_with("terminal_") {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            let counts = [Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0))];
+            for (index, drops) in counts.iter().enumerate() {
+                let fail_drop = case == "terminal_incoming"
+                    || case == "terminal_competing"
+                    || (case == "terminal_failure" && index == 0);
+                registry
+                    .register(
+                        HeroTag::new(Key {
+                            id: u64::try_from(index).expect("two key identities"),
+                            fail_drop,
+                            drops: Some(drops.clone()),
+                        }),
+                        original.clone(),
+                    )
+                    .expect("independent registration accepted");
+            }
+            if case == "terminal_alias" {
+                let alias = registry.clone();
+                drop(registry);
+                assert!(counts.iter().all(|count| count.load(Ordering::SeqCst) == 0));
+                assert_eq!(alias.len(), 2);
+                drop(alias);
+                assert!(counts.iter().all(|count| count.load(Ordering::SeqCst) == 1));
+                return;
+            }
+            let incoming = case == "terminal_incoming";
+            let fails = incoming || case == "terminal_failure" || case == "terminal_competing";
+            let failure = catch_unwind(AssertUnwindSafe(move || {
+                let registry = registry;
+                assert!(!incoming, "incoming Hero registry failure");
+                drop(registry);
+            }));
+            assert_eq!(counts[0].load(Ordering::SeqCst), usize::from(!incoming));
+            if fails {
+                let failure = failure.expect_err("terminal retirement reports its first failure");
+                let expected = if incoming {
+                    "incoming Hero registry failure"
+                } else {
+                    "first Hero key retirement failure"
+                };
+                super::super::hero_controller::terminal_tests::assert_failure(failure, expected);
+                assert_eq!(
+                    counts[1].load(Ordering::SeqCst),
+                    0,
+                    "the outgoing tail preserves the first failure"
+                );
+            } else {
+                failure.expect("healthy retirement succeeds");
+                assert_eq!(
+                    counts[1].load(Ordering::SeqCst),
+                    1,
+                    "healthy retirement releases every key"
+                );
+            }
+            return;
+        }
+        let tag = HeroTag::new(Key {
+            id: 1,
+            fail_drop: case == "snapshot_retirement",
+            drops: None,
+        });
+        let seat = registry
+            .register(tag, original.clone())
+            .expect("the original is accepted");
+        let calls = Rc::new(Cell::new(0));
+        let hook: Hook = {
+            let registry = registry.clone();
+            let replacement = replacement.clone();
+            let seat = seat.clone();
+            let calls = Rc::clone(&calls);
+            let case = case.clone();
+            Rc::new(move |operation| {
+                let count = registry.len();
+                if operation == "drop" && case == "passive_release" {
+                    assert_eq!(count, 0, "withdrawal precedes authored key retirement");
+                }
+                match (case.as_str(), operation) {
+                    ("replacement" | "snapshot_retirement", "equality") if calls.get() == 0 => {
+                        calls.set(1);
+                        registry.deregister(&seat);
+                        registry
+                            .register(key(1), replacement.clone())
+                            .expect("replacement admitted");
+                    }
+                    ("repeated_mutation", "equality") => {
+                        let next = calls.get() + 2;
+                        calls.set(calls.get() + 1);
+                        registry
+                            .register(key(next), replacement.clone())
+                            .expect("independent key admitted");
+                    }
+                    ("hash_failure", "hash") => panic!("authored Hero hash failure"),
+                    ("equality_failure", "equality") => panic!("authored Hero equality failure"),
+                    ("passive_release", "hash" | "equality") => panic!("release invoked a key"),
+                    ("duplicate_debug", "debug") => {
+                        calls.set(calls.get() + 1);
+                    }
+                    _ => {}
+                }
+            })
+        };
+        HOOK.with(|slot| *slot.borrow_mut() = Some(hook));
+        match case.as_str() {
+            "replacement" => {
+                let found = registry
+                    .get(&key(1))
+                    .expect("the replacement remains visible");
+                assert!(
+                    found.is_same(&replacement),
+                    "lookup revalidates replacement identity"
+                );
+                registry.deregister(&seat);
+                assert!(
+                    registry
+                        .get(&key(1))
+                        .expect("stale removal preserves replacement")
+                        .is_same(&replacement)
+                );
+            }
+            "passive_release" => {
+                registry.deregister(&seat);
+                assert_eq!(registry.len(), 0);
+            }
+            "duplicate_debug" => {
+                assert!(registry.register(key(1), replacement.clone()).is_none());
+                let _debug = format!("{registry:?}");
+                assert!(
+                    calls.get() > 0,
+                    "authored formatting can inspect the registry"
+                );
+            }
+            _ => {
+                let failure = catch_unwind(AssertUnwindSafe(|| registry.get(&key(1))))
+                    .expect_err("the authored failure or bounded refusal propagates");
+                let expected = match case.as_str() {
+                    "repeated_mutation" => "Hero tag comparison changed registry repeatedly",
+                    "hash_failure" => "authored Hero hash failure",
+                    "equality_failure" => "authored Hero equality failure",
+                    "snapshot_retirement" => "first Hero key retirement failure",
+                    _ => unreachable!("selected failure case"),
+                };
+                super::super::hero_controller::terminal_tests::assert_failure(failure, expected);
+            }
+        }
+        HOOK.with(|slot| slot.borrow_mut().take());
+        if case == "repeated_mutation" {
+            assert_eq!(calls.get(), 2, "only one fresh comparison is attempted");
+            assert_eq!(
+                registry.len(),
+                3,
+                "independently accepted changes survive refusal"
+            );
+            assert!(registry.get(&key(2)).is_some());
+            assert!(registry.get(&key(3)).is_some());
+        }
+        if case != "passive_release" {
+            let found = registry
+                .get(&key(1))
+                .expect("the next healthy lookup progresses");
+            let expected = if case == "snapshot_retirement" || case == "replacement" {
+                &replacement
+            } else {
+                &original
+            };
+            assert!(found.is_same(expected));
+        }
+    }
+
+    #[test]
+    fn nested_hero_resolution_preserves_local_identity_through_cycles() {
+        let Some(_case) = super::super::hero_controller::terminal_tests::children(
+            "navigator::hero::registry_tests::nested_hero_resolution_preserves_local_identity_through_cycles",
+            "FLUI_HERO_NESTED_CASE",
+            &["cycle"],
+        ) else {
+            return;
+        };
+        let registry = HeroRegistry::new();
+        let tag = HeroTag::new(flui_foundation::ValueKey::new("local"));
+        let hero = Hero::new(
+            flui_foundation::ValueKey::new("local"),
+            SizedBox::new(10.0, 10.0),
+        );
+        let (handle, _tree) = HeroHandle::test_laid_out(&hero);
+        registry.register(tag.clone(), handle.clone());
+        let callback_registry = registry.clone();
+        let source = NestedHeroSource::new(move || Some(callback_registry.clone()));
+        registry.register_nested(source.clone());
+        eprintln!("entered cyclic Hero registry resolution");
+        let all = registry.all_heroes();
+        assert_eq!(all.len(), 1);
+        assert!(
+            all.get(&tag)
+                .expect("the local Hero remains visible")
+                .is_same(&handle)
+        );
+        registry.deregister_nested(&source);
     }
 }
 
@@ -354,9 +690,9 @@ impl fmt::Debug for NestedHeroSource {
 /// Provides a route's [`HeroRegistry`] to the heroes inside it.
 ///
 /// The ambient-lookup pattern `VsyncScope` already uses: an
-/// `InheritedView` a descendant reads **once**, in `init_state`. It never notifies —
-/// the registry handle is fixed for the scope's lifetime — so a `Hero` never rebuilds
-/// because of it.
+/// `InheritedView` a descendant tracks through lifecycle dependencies. Replacing
+/// the registry notifies mounted heroes, including subtrees retaken by a
+/// `GlobalKey`, so registration follows the current enclosing route.
 ///
 /// This replaces both an element walk and a "which navigator owns this hero"
 /// check: a hero registers with the route it is lexically inside, and can reach
@@ -419,8 +755,8 @@ impl InheritedView for HeroScope {
         &*self.child
     }
 
-    fn update_should_notify(&self, _old: &Self) -> bool {
-        false
+    fn update_should_notify(&self, old: &Self) -> bool {
+        !self.registry.is_same(&old.registry)
     }
 }
 
@@ -430,60 +766,52 @@ impl_inherited_view!(HeroScope);
 // The handle
 // ============================================================================
 
+/// Allocation identity of one logical flight, independent of mounted Hero identity.
+#[derive(Clone, Default)]
+pub(super) struct HeroFlightIdentity(Rc<()>);
+
+enum PlaceholderAuthority {
+    Flight(HeroFlightIdentity),
+    Settled,
+}
+
+struct FrozenHero {
+    size: Size,
+    include_child: bool,
+    authority: PlaceholderAuthority,
+}
+
 /// The mutable half of a mounted [`Hero`], shared with whoever holds a
 /// [`HeroHandle`].
 struct HeroInner {
-    tag: Terminal<HeroTag>,
     /// The hero's own render node, published on `attach` and cleared on `detach` —
     /// the same mechanism `RenderSubtreeAnchor` uses. This is how a hero finds its
     /// own render object — `BuildContext::find_render_object` walks strict
     /// *ancestors* and cannot answer it.
     anchor: SubtreeAnchor,
-    /// The frozen placeholder size. `Some` iff in flight.
-    placeholder: Mutex<Option<Size>>,
-    /// Whether the placeholder keeps the real child offstage.
-    include_child: AtomicBool,
-    /// The render tree, so `start_flight` can read its own committed size.
-    owner: Mutex<Option<PipelineCell>>,
+    /// Frozen geometry and the flight allowed to release it. A landed source
+    /// keeps its geometry with settled authority until it unmounts or flies again.
+    placeholder: RefCell<Option<FrozenHero>>,
+    /// Weak render access, so measurement cannot keep the presentation alive.
+    owner: RefCell<Option<WeakPipelineCell>>,
     /// `setState`. Acquired in `init_state`, fired from a post-frame callback —
     /// never from `build`/layout/paint.
-    rebuild: Mutex<Option<RebuildHandle>>,
-    /// The hero's current child, for the flight shuttle to inflate afresh.
-    ///
-    /// The default shuttle is the *destination* hero's child, built anew in the
-    /// overlay. Nothing is reparented, so this is a `BoxedView` clone,
-    /// kept current through `did_update_view`.
-    shuttle_child: Terminal<Mutex<BoxedView>>,
-    /// The `create_rect_tween` factory, or `None` for the linear default.
-    /// Read by the controller when it builds a flight.
-    rect_factory: Mutex<Option<RectTweenFactory>>,
-    /// The `flight_shuttle_builder`, or `None` for the default
-    /// shuttle. Read by the controller when it builds a flight.
-    shuttle_builder: Mutex<Option<ShuttleBuilder>>,
-    /// The flight's forward easing. The default is `Curves::FastOutSlowIn`.
-    curve: Terminal<Mutex<ArcCurve>>,
-    /// The reverse easing, or `None` for [`curve`](Self::curve) flipped.
-    reverse_curve: Mutex<Option<ArcCurve>>,
+    rebuild: RefCell<Option<RebuildHandle>>,
+    /// Immutable view facts committed together. Readers keep an owning snapshot
+    /// before authored Clone or Drop can reenter. Unmount withdraws the snapshot.
+    configuration: Terminal<RefCell<Option<Rc<Hero>>>>,
     /// Whether the ambient [`HeroMode`] allows this hero to fly — the AND of the `enabled` flags
     /// of every enclosing scope, sampled each build. `true` with no scope above.
     /// A disabled hero is still registered; the measurement pass skips it.
-    hero_mode_enabled: AtomicBool,
-    /// Defaults to `false`; a pair flies during a gesture-driven transition only
-    /// when **both** ends opt in.
-    transition_on_user_gestures: AtomicBool,
+    hero_mode_enabled: Cell<bool>,
 }
 
 impl Drop for HeroInner {
     fn drop(&mut self) {
-        let tag = self.tag.withdraw();
         let owner = Terminal::new(self.owner.get_mut().take());
         let rebuild = Terminal::new(self.rebuild.get_mut().take());
-        let child = self.shuttle_child.withdraw();
-        let factory = Terminal::new(self.rect_factory.get_mut().take());
-        let builder = Terminal::new(self.shuttle_builder.get_mut().take());
-        let curve = self.curve.withdraw();
-        let reverse = Terminal::new(self.reverse_curve.get_mut().take());
-        drop((tag, owner, rebuild, child, factory, builder, curve, reverse));
+        let configuration = self.configuration.withdraw();
+        drop((owner, rebuild, configuration));
     }
 }
 
@@ -493,7 +821,7 @@ impl Drop for HeroInner {
 /// — nothing can — so the state that a flight mutates lives behind this handle.
 #[derive(Clone)]
 pub struct HeroHandle {
-    inner: Arc<HeroInner>,
+    inner: Rc<HeroInner>,
 }
 
 impl HeroHandle {
@@ -518,7 +846,7 @@ impl HeroHandle {
         let mut owner = owner.into_layout();
         owner.run_layout().expect("a lone anchor lays out");
         let cell = PipelineCell::new(owner.into_idle());
-        *handle.inner.owner.lock() = Some(cell.clone());
+        *handle.inner.owner.borrow_mut() = Some(cell.downgrade());
         (handle, cell)
     }
 
@@ -526,27 +854,20 @@ impl HeroHandle {
     /// keeps the view-derived halves current afterwards.
     fn new(view: &Hero) -> Self {
         Self {
-            inner: Arc::new(HeroInner {
-                tag: Terminal::new(view.tag.clone()),
+            inner: Rc::new(HeroInner {
                 anchor: SubtreeAnchor::new(),
-                placeholder: Mutex::new(None),
-                include_child: AtomicBool::new(true),
-                owner: Mutex::new(None),
-                rebuild: Mutex::new(None),
-                shuttle_child: Terminal::new(Mutex::new(view.child.clone())),
-                rect_factory: Mutex::new(view.rect_factory.clone()),
-                shuttle_builder: Mutex::new(view.shuttle_builder.clone()),
-                curve: Terminal::new(Mutex::new(view.curve.clone())),
-                reverse_curve: Mutex::new(view.reverse_curve.clone()),
-                hero_mode_enabled: AtomicBool::new(true),
-                transition_on_user_gestures: AtomicBool::new(view.transition_on_user_gestures),
+                placeholder: RefCell::new(None),
+                owner: RefCell::new(None),
+                rebuild: RefCell::new(None),
+                configuration: Terminal::new(RefCell::new(Some(Rc::new(view.clone())))),
+                hero_mode_enabled: Cell::new(true),
             }),
         }
     }
 
     /// Whether both handles name the same mounted hero.
     fn is(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.inner, &other.inner)
+        Rc::ptr_eq(&self.inner, &other.inner)
     }
 
     /// Whether both handles name the same mounted hero — the "same tag" vs "same
@@ -557,8 +878,15 @@ impl HeroHandle {
         self.is(other)
     }
 
-    pub(crate) fn tag(&self) -> &HeroTag {
-        &self.inner.tag
+    #[cfg(test)]
+    pub(crate) fn tag(&self) -> HeroTag {
+        self.inner
+            .configuration
+            .borrow()
+            .as_ref()
+            .expect("BUG: a flight fixture has a live Hero configuration")
+            .tag
+            .clone()
     }
 
     /// The hero's render node, or `None` before it attaches and after it detaches.
@@ -571,10 +899,14 @@ impl HeroHandle {
         self.inner.anchor.get()
     }
 
-    /// The frozen placeholder size — `Some` exactly while in flight.
+    /// The frozen placeholder size, withdrawn when this hero unmounts.
     #[must_use]
     pub fn placeholder_size(&self) -> Option<Size> {
-        *self.inner.placeholder.lock()
+        self.inner
+            .placeholder
+            .borrow()
+            .as_ref()
+            .map(|frozen| frozen.size)
     }
 
     /// What the flight's shuttle should show: a fresh inflation of this hero's child.
@@ -582,47 +914,74 @@ impl HeroHandle {
     /// This is the destination hero's child as-is; there is no `MediaQuery`
     /// padding compensation between the two heroes.
     pub(crate) fn shuttle_child(&self) -> BoxedView {
-        self.inner.shuttle_child.lock().clone()
+        let configuration = Terminal::new(self.inner.configuration.borrow().clone());
+        configuration
+            .as_ref()
+            .map_or_else(|| SizedBox::shrink().boxed(), |view| view.child.clone())
     }
 
     /// This hero's `create_rect_tween` factory, if it set one.
     pub(crate) fn rect_factory(&self) -> Option<RectTweenFactory> {
-        self.inner.rect_factory.lock().clone()
+        self.inner
+            .configuration
+            .borrow()
+            .as_ref()?
+            .rect_factory
+            .clone()
     }
 
     /// This hero's `flight_shuttle_builder`, if it set one.
     pub(crate) fn shuttle_builder(&self) -> Option<ShuttleBuilder> {
-        self.inner.shuttle_builder.lock().clone()
+        self.inner
+            .configuration
+            .borrow()
+            .as_ref()?
+            .shuttle_builder
+            .clone()
     }
 
     /// This hero's forward flight curve.
     pub(crate) fn curve(&self) -> ArcCurve {
-        self.inner.curve.lock().clone()
+        self.inner.configuration.borrow().as_ref().map_or_else(
+            || ArcCurve::new(Curves::FastOutSlowIn),
+            |view| view.curve.clone(),
+        )
     }
 
     /// This hero's reverse flight curve, if it set one. `None` means "the
     /// forward curve, flipped".
     pub(crate) fn reverse_curve(&self) -> Option<ArcCurve> {
-        self.inner.reverse_curve.lock().clone()
+        self.inner
+            .configuration
+            .borrow()
+            .as_ref()?
+            .reverse_curve
+            .clone()
     }
 
     /// Whether the ambient [`HeroMode`] allows this hero to fly.
     pub(crate) fn hero_mode_enabled(&self) -> bool {
-        self.inner.hero_mode_enabled.load(Ordering::Relaxed)
+        self.inner.hero_mode_enabled.get()
     }
 
     /// Whether this hero opts into a gesture-driven (e.g. edge swipe-back)
     /// flight. `false` by default.
     pub(crate) fn transition_on_user_gestures(&self) -> bool {
         self.inner
-            .transition_on_user_gestures
-            .load(Ordering::Relaxed)
+            .configuration
+            .borrow()
+            .as_ref()
+            .is_some_and(|view| view.transition_on_user_gestures)
     }
 
     /// Whether an in-flight hero keeps its child offstage inside the placeholder.
     #[must_use]
     pub fn includes_child(&self) -> bool {
-        self.inner.include_child.load(Ordering::Relaxed)
+        self.inner
+            .placeholder
+            .borrow()
+            .as_ref()
+            .is_none_or(|frozen| frozen.include_child)
     }
 
     /// The hero's bounding box in `ancestor`'s coordinate space, or `None` when it is
@@ -634,7 +993,7 @@ impl HeroHandle {
     #[must_use]
     pub fn bounding_box_in(&self, ancestor: RenderId) -> Option<Rect> {
         let render_id = self.render_id()?;
-        let owner = self.inner.owner.lock().clone()?;
+        let owner = self.inner.owner.borrow().as_ref()?.upgrade()?;
         owner.with(|owner| {
             let size = owner.box_size(render_id)?;
             let transform = owner.transform_to(render_id, ancestor)?;
@@ -651,39 +1010,78 @@ impl HeroHandle {
     /// `false` otherwise: the source subtree is preserved offstage so its
     /// state survives the flight, while the destination's is not yet needed.
     pub fn start_flight(&self, include_child_in_placeholder: bool) -> Option<Size> {
+        // The temporary test-access seam freezes a settled placeholder without
+        // a running manager. Production flights always supply their identity.
+        self.freeze(PlaceholderAuthority::Settled, include_child_in_placeholder)
+    }
+
+    pub(super) fn start_flight_for(
+        &self,
+        flight: &HeroFlightIdentity,
+        include_child: bool,
+    ) -> Option<Size> {
+        self.freeze(PlaceholderAuthority::Flight(flight.clone()), include_child)
+    }
+
+    fn freeze(&self, authority: PlaceholderAuthority, include_child: bool) -> Option<Size> {
         let render_id = self.render_id()?;
         let size = {
-            let owner = self.inner.owner.lock().clone()?;
+            let owner = self.inner.owner.borrow().as_ref()?.upgrade()?;
             owner.with(|owner| owner.box_size(render_id))?
         };
 
-        self.inner
-            .include_child
-            .store(include_child_in_placeholder, Ordering::Relaxed);
-        *self.inner.placeholder.lock() = Some(size);
+        *self.inner.placeholder.borrow_mut() = Some(FrozenHero {
+            size,
+            include_child,
+            authority,
+        });
         self.request_rebuild();
         Some(size)
     }
 
-    /// Drop the placeholder and show the child again. Safe to call on a hero that
-    /// is not in flight.
+    /// Restore the placeholder when a Hero is excluded from a gesture transition.
+    /// This can precede the previous flight's deferred completion drain.
     ///
-    /// `keep_placeholder` leaves it frozen — used when a flight ends by being
-    /// diverted into another.
+    /// `keep_placeholder` leaves it frozen. Flight-owned cleanup instead uses
+    /// its identity, so an old flight cannot release a replacement's placeholder.
     pub fn end_flight(&self, keep_placeholder: bool) {
-        {
-            let mut placeholder = self.inner.placeholder.lock();
-            if keep_placeholder || placeholder.is_none() {
+        if keep_placeholder {
+            return;
+        }
+        let removed = self.inner.placeholder.borrow_mut().take();
+        if removed.is_none() {
+            return;
+        }
+        drop(removed);
+        self.request_rebuild();
+    }
+
+    pub(super) fn end_flight_for(&self, flight: &HeroFlightIdentity, keep_placeholder: bool) {
+        let removed = {
+            let mut placeholder = self.inner.placeholder.borrow_mut();
+            let Some(frozen) = placeholder.as_mut() else {
+                return;
+            };
+            let PlaceholderAuthority::Flight(current) = &frozen.authority else {
+                return;
+            };
+            if !Rc::ptr_eq(&current.0, &flight.0) {
                 return;
             }
-            *placeholder = None;
-        }
+            if keep_placeholder {
+                frozen.authority = PlaceholderAuthority::Settled;
+                return;
+            }
+            placeholder.take()
+        };
+        drop(removed);
         self.request_rebuild();
     }
 
     /// Schedules a rebuild. Inert on an unmounted hero.
     fn request_rebuild(&self) {
-        if let Some(rebuild) = self.inner.rebuild.lock().as_ref() {
+        let rebuild = Terminal::new(self.inner.rebuild.borrow().clone());
+        if let Some(rebuild) = rebuild.as_ref() {
             rebuild.schedule(flui_view::RebuildReason::AnimationTick);
         }
     }
@@ -691,8 +1089,9 @@ impl HeroHandle {
 
 impl fmt::Debug for HeroHandle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mounted = self.inner.configuration.borrow().is_some();
         f.debug_struct("HeroHandle")
-            .field("tag", &self.inner.tag)
+            .field("mounted", &mounted)
             .field("render_id", &self.render_id())
             .field("placeholder", &self.placeholder_size())
             .finish()
@@ -808,14 +1207,16 @@ impl Hero {
     /// a linear [`RectTween`](flui_animation::RectTween). When both this and the
     /// [`HeroController`](super::hero_controller::HeroController)'s default are set,
     /// this one wins.
+    /// Reversing an airborne flight between the same heroes retraces the selected
+    /// mapping, retaining its factory and evaluating it at mirrored progress.
     #[must_use]
     pub fn create_rect_tween<F, A>(mut self, factory: F) -> Self
     where
         F: Fn(Rect, Rect) -> A + 'static,
-        A: Animatable<Rect> + Send + Sync + 'static,
+        A: Animatable<Value = Rect> + 'static,
     {
         self.rect_factory = Some(Rc::new(move |begin, end| {
-            Box::new(factory(begin, end)) as Box<dyn Animatable<Rect> + Send + Sync>
+            Box::new(factory(begin, end)) as Box<dyn Animatable<Value = Rect>>
         }));
         self
     }
@@ -889,9 +1290,51 @@ impl StatefulView for Hero {
 /// `<Hero as StatefulView>::State` and carries no public API of its own.
 pub struct HeroState {
     handle: Terminal<HeroHandle>,
-    /// The route's registry, resolved once from the ambient [`HeroScope`]. `None` for
-    /// a `Hero` mounted outside any route, which is inert rather than an error.
-    registry: Option<HeroRegistry>,
+    /// The current match key and ambient route, including rejected duplicates.
+    /// Accepted records carry passive release authority; rejected duplicates carry none.
+    registry: Option<HeroRegistration>,
+}
+
+struct HeroRegistration {
+    registry: Terminal<HeroRegistry>,
+    tag: Terminal<HeroTag>,
+    seat: Option<TagSeat<HeroHandle>>,
+}
+
+impl HeroState {
+    fn sync_registration(&mut self, registry: Option<HeroRegistry>, tag: HeroTag) {
+        if self
+            .registry
+            .as_ref()
+            .zip(registry.as_ref())
+            .is_some_and(|(old, next)| old.registry.is_same(next) && *old.tag == tag)
+            || (self.registry.is_none() && registry.is_none())
+        {
+            return;
+        }
+
+        let next = registry.map(|registry| HeroRegistration {
+            registry: Terminal::new(registry),
+            tag: Terminal::new(tag),
+            seat: None,
+        });
+        let previous = Terminal::new(std::mem::replace(&mut self.registry, next));
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        if let Some(previous) = previous.as_ref()
+            && let Some(seat) = previous.seat.as_ref()
+        {
+            recovery.run(|| previous.registry.deregister(seat));
+        }
+        if let Some(next) = self.registry.as_mut() {
+            recovery.run(|| {
+                next.seat = next
+                    .registry
+                    .register(next.tag.clone(), self.handle.clone());
+            });
+        }
+        recovery.retire(previous);
+        recovery.finish();
+    }
 }
 
 impl Drop for HeroState {
@@ -915,60 +1358,81 @@ impl ViewState<Hero> for HeroState {
     /// factory, the shuttle builder, and the flight curves are all read at flight
     /// start, i.e. from the *latest* `Hero` configuration.
     fn did_update_view(&mut self, _old: &Hero, new_view: &Hero) {
-        self.handle
-            .inner
-            .shuttle_child
-            .lock()
-            .clone_from(&new_view.child);
-        self.handle
-            .inner
-            .rect_factory
-            .lock()
-            .clone_from(&new_view.rect_factory);
-        self.handle
-            .inner
-            .shuttle_builder
-            .lock()
-            .clone_from(&new_view.shuttle_builder);
-        self.handle.inner.curve.lock().clone_from(&new_view.curve);
-        self.handle
-            .inner
-            .reverse_curve
-            .lock()
-            .clone_from(&new_view.reverse_curve);
-        self.handle
-            .inner
-            .transition_on_user_gestures
-            .store(new_view.transition_on_user_gestures, Ordering::Relaxed);
+        // Cloning the child invokes authored code. Prepare the entire immutable
+        // configuration first, commit it once, then retire the previous one.
+        let configuration = Rc::new(new_view.clone());
+        let previous = Terminal::new(
+            self.handle
+                .inner
+                .configuration
+                .borrow_mut()
+                .replace(configuration),
+        );
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        let registry = self
+            .registry
+            .as_ref()
+            .map(|entry| (*entry.registry).clone());
+        recovery.run(|| self.sync_registration(registry, new_view.tag.clone()));
+        recovery.retire(previous);
+        recovery.finish();
     }
 
-    /// Everything a hero needs from outside itself is acquired **here**, in the one
-    /// lifecycle hook that has a `LifecycleContext` and is not a frame phase: the route's
-    /// registry, the render tree, and the rebuild capability.
+    /// Acquire render and rebuild capabilities during mount, and establish the
+    /// route dependency that subsequent lifecycle changes refresh.
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        let _prev = std::mem::replace(&mut *self.handle.inner.owner.lock(), ctx.pipeline_owner());
         let _prev = self
             .handle
             .inner
-            .rebuild
-            .lock()
-            .replace(ctx.rebuild_handle());
+            .owner
+            .replace(ctx.pipeline_owner().map(|owner| owner.downgrade()));
+        let previous = Terminal::new(
+            self.handle
+                .inner
+                .rebuild
+                .borrow_mut()
+                .replace(ctx.rebuild_handle()),
+        );
+        drop(previous);
 
-        let registry = ctx.get::<HeroScope, _>(|scope| scope.registry.clone());
-        if let Some(registry) = registry {
-            // A rejected duplicate keeps its handle but is not stored, and `dispose`'s
-            // identity check means it will not evict the winner.
-            registry.register(self.handle.tag().clone(), self.handle.clone());
-            self.registry = Some(registry);
+        self.did_change_dependencies(ctx);
+    }
+
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        let registry = ctx.depend_on::<HeroScope, _>(|scope| scope.registry.clone());
+        let tag = self
+            .handle
+            .inner
+            .configuration
+            .borrow()
+            .as_ref()
+            .map(|view| view.tag.clone());
+        if let Some(tag) = tag {
+            self.sync_registration(registry, tag);
         }
     }
 
     /// The mirror. A registry entry that outlived its hero would hand a controller a
     /// handle whose render node is gone and whose rebuild is inert.
     fn dispose(&mut self) {
-        if let Some(registry) = &self.registry {
-            registry.deregister(self.handle.tag(), &self.handle);
+        // The retained handle becomes inert before registry or configuration
+        // retirement can reenter. It cannot keep the presentation alive.
+        self.handle.inner.owner.take();
+        self.handle.inner.placeholder.borrow_mut().take();
+        self.handle.inner.hero_mode_enabled.set(false);
+        let rebuild = Terminal::new(self.handle.inner.rebuild.take());
+        let configuration = Terminal::new(self.handle.inner.configuration.borrow_mut().take());
+        let registry = Terminal::new(self.registry.take());
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        if let Some(registry) = registry.as_ref()
+            && let Some(seat) = registry.seat.as_ref()
+        {
+            recovery.run(|| registry.registry.deregister(seat));
         }
+        recovery.retire(rebuild);
+        recovery.retire(configuration);
+        recovery.retire(registry);
+        recovery.finish();
     }
 
     /// Builds the anchored box, with the state-preserving custom placeholder. An
@@ -991,10 +1455,7 @@ impl ViewState<Hero> for HeroState {
         let hero_mode_enabled = ctx
             .depend_on::<HeroModeScope, _>(|scope| scope.enabled)
             .unwrap_or(true);
-        self.handle
-            .inner
-            .hero_mode_enabled
-            .store(hero_mode_enabled, Ordering::Relaxed);
+        self.handle.inner.hero_mode_enabled.set(hero_mode_enabled);
 
         let anchor = self.handle.inner.anchor.clone();
         let placeholder = self.handle.placeholder_size();

@@ -9,6 +9,14 @@ substrate driver over raw owners, which the raw-owner suites still use.
 
 ## Invariants
 
+- **Application motion preference uses the runtime's publication path.**
+  `HeadlessHost::set_motion_preference` and the widget harness's matching method
+  call `UiRuntime::set_motion_preference` inside the owner entry. The runtime
+  updates presentation clocks and inherited data; the harness owns no second
+  policy resolver. Material's `press_highlight_lasts_its_delay_under_reduced_motion`
+  and `snack_bar_keeps_its_display_duration_under_reduced_motion` drive real
+  mounted timers through this entry and observe both retained duration and expiry.
+
 - **Extra presentation motion clocks remain independent.** An owning controller
   registers through `build_on` and remains alive for the scripted run. The
   harness has no manual controller-registration shortcut. Editing an extra

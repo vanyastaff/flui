@@ -9,11 +9,12 @@
 // checked against their source.
 #![expect(clippy::unreadable_literal, reason = "published reference values")]
 
+use crate::motion_trace::AnimatedValue;
 use flui_animation::simulation::{
     BouncingScrollSimulation, FrictionSimulation, Simulation, SimulationBounds, SimulationError,
     SimulationParameter, SpringDescription, SpringSimulation, SpringType, Tolerance,
 };
-use flui_animation::{AnimatedValue, Animation, AnimationController, AnimationStatus};
+use flui_animation::{Animation, AnimationController, AnimationStatus};
 use proptest::prelude::*;
 use std::f64::consts::{PI, TAU};
 use std::time::Duration;

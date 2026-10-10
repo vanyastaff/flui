@@ -21,6 +21,18 @@ use crate::{task::Task, traits::PlatformExecutor};
 /// claim a full-core pool per platform instance.
 const WORKER_THREADS: usize = 2;
 
+/// Shared executor handles may release their final owner from an async task.
+/// Runtime's default Drop waits for workers and therefore cannot run there.
+struct RuntimeOwner(OnceLock<Runtime>);
+
+impl Drop for RuntimeOwner {
+    fn drop(&mut self) {
+        if let Some(runtime) = self.0.take() {
+            runtime.shutdown_background();
+        }
+    }
+}
+
 /// Background executor for multi-threaded async tasks
 ///
 /// Spawns tasks on a multi-threaded tokio runtime. Returns [`Task<T>`] handles
@@ -30,16 +42,19 @@ const WORKER_THREADS: usize = 2;
 ///
 /// - **Lazy**: constructing the executor starts no threads; the runtime is
 ///   built on the first call that needs it (spawn/timer/block/handle). A
-///   platform that constructs this executor but never uses it — every
-///   FLUI-managed run since the unified execution services (issue #557) —
-///   pays nothing.
+///   platform that constructs this executor but never uses it pays nothing.
+///   Linux preference observation uses it for D-Bus IO.
 /// - **Worker threads**: `WORKER_THREADS` (2 — small and fixed rather than
 ///   core-count sized; see that private const's doc for why)
 /// - **Thread names**: `flui-platform-bg-N` for identification in profilers
 /// - **Runtime features**: All async features enabled (I/O, timers, etc.)
+/// - **Retirement**: the final shared owner requests shutdown without blocking
+///   its caller, including on an async lane. Queued async work is cancelled as
+///   with normal runtime shutdown; already executing blocking work finishes
+///   independently. Keep an executor owner alive while its tasks must run.
 #[derive(Clone)]
 pub struct BackgroundExecutor {
-    runtime: Arc<OnceLock<Runtime>>,
+    runtime: Arc<RuntimeOwner>,
 }
 
 impl BackgroundExecutor {
@@ -47,7 +62,7 @@ impl BackgroundExecutor {
     /// until the first call that needs the runtime.
     pub fn new() -> Self {
         BackgroundExecutor {
-            runtime: Arc::new(OnceLock::new()),
+            runtime: Arc::new(RuntimeOwner(OnceLock::new())),
         }
     }
 
@@ -58,7 +73,7 @@ impl BackgroundExecutor {
     /// Panics if the runtime cannot be created (extremely rare — would
     /// indicate system resource exhaustion or OS-level threading issues).
     fn runtime(&self) -> &Runtime {
-        self.runtime.get_or_init(|| {
+        self.runtime.0.get_or_init(|| {
             tracing::info!(
                 worker_threads = WORKER_THREADS,
                 "starting the platform background runtime on first use"

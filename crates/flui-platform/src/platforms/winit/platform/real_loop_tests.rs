@@ -47,6 +47,20 @@ fn options(title: impl Into<String>) -> WindowOptions {
     }
 }
 
+/// Manual WinitApp fixtures need the same owner signal as run_event_loop.
+fn install_test_owner_signal(platform: &WinitPlatform, event_loop: &EventLoop<()>) {
+    let proxy = event_loop.create_proxy();
+    *platform.owner_signal.lock() = Some(crate::shared::owner_signal::OwnerSignal::new(Arc::new(
+        move || {
+            proxy
+                .send_event(())
+                .map_err(|error| crate::PlatformError::EventLoop {
+                    message: error.to_string(),
+                })
+        },
+    )));
+}
+
 /// Polls (bounded, 2s) until the owner has reached `Running` — the point
 /// at which `resumed()` has returned and the owner lane accepts
 /// deferred, post-bootstrap requests. Real wall-clock, not simulated:
@@ -761,6 +775,7 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
 fn winit_lane_dropped_after_delivery_unwinds_and_leaves_the_window_gone() {
     let platform = Arc::new(WinitPlatform::new());
     let event_loop = build_test_event_loop();
+    install_test_owner_signal(&platform, &event_loop);
     let event_loop_proxy = event_loop.create_proxy();
     let wake_owner: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
         let _ = event_loop_proxy.send_event(());
@@ -868,7 +883,7 @@ fn winit_lane_dropped_after_delivery_unwinds_and_leaves_the_window_gone() {
 
     let mut app = WinitApp {
         platform: Arc::clone(&platform),
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
         preference_source: None,
         on_ready: None,
         control: receiver,
@@ -992,6 +1007,7 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
 
     let platform = Arc::new(WinitPlatform::new());
     let event_loop = build_test_event_loop();
+    install_test_owner_signal(&platform, &event_loop);
     let event_loop_proxy = event_loop.create_proxy();
     let wake_owner: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
         let _ = event_loop_proxy.send_event(());
@@ -1076,7 +1092,7 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
     let mut app = ExitObserver {
         inner: WinitApp {
             platform: Arc::clone(&platform),
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
             preference_source: None,
             on_ready: None,
             control: receiver,

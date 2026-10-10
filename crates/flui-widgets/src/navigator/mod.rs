@@ -85,6 +85,7 @@ pub(crate) mod hero;
 pub(crate) mod hero_controller;
 mod hero_controller_scope;
 pub(crate) mod hero_flight;
+mod hero_tags;
 mod history;
 pub(crate) mod lifecycle;
 pub(crate) mod local_history;

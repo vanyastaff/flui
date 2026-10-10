@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-07-28
+- **Superseded-by:** [ADR-0185](ADR-0185-browser-host-motion-delivery.md) for §7's browser registration posture only.
 
 ## Context
 
@@ -202,8 +203,9 @@ coalesces bursts, runs callbacks outside locks, runs re-entrant wakes on a
 later turn, and contains callback and cleanup panics at the native boundary.
 Quit immediately fences wake and window admission. AppKit wakes through GCD;
 Win32 through a dedicated message-only window and class (not the visible
-windows' procedure); headless exposes an owner-local manual driver; mobile and
-web report registration as unsupported.
+windows' procedure); headless exposes an owner-local manual driver; mobile
+backends retain their separate registration posture. The browser's former
+unsupported registration posture is superseded by ADR-0185.
 
 **Pending secondary windows belong to the loop**, not to the first UI runtime's
 async driver. Liveness is reserved before native creation; ready requests are

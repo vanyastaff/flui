@@ -103,6 +103,196 @@ fn manual_clock_ui_runtime(clock: &ManualClock) -> UiRuntime {
     .expect("runtime")
 }
 
+pub(crate) fn a_stopping_realm_ticks_no_presentation() {
+    use flui_animation::Curve;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    struct CountedCurve(Rc<Cell<usize>>);
+    impl Curve for CountedCurve {
+        fn transform(&self, time: f64) -> f64 {
+            self.0.set(self.0.get() + 1);
+            time
+        }
+        fn slope(&self, _: f64) -> f64 {
+            1.0
+        }
+    }
+
+    let mut clock = ManualClock::new();
+    let mut runtime = manual_clock_ui_runtime(&clock);
+    runtime
+        .attach_root_widget(&flui_widgets::SizedBox::square(10.0))
+        .expect("primary root");
+    let mut sink = ScriptedSink::always_presents();
+    let _ = runtime.pump(&mut clock, &mut sink);
+    let secondary = runtime.install_second_presentation_for_test();
+    runtime
+        .attach_root_widget_to_for_test(secondary, &flui_widgets::SizedBox::square(10.0))
+        .expect("secondary root");
+    let _ = runtime.pump(&mut clock, &mut sink);
+    let primary_owner =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&runtime.vsync()));
+    let secondary_owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(
+        &runtime
+            .presentations
+            .get(secondary)
+            .expect("secondary")
+            .vsync(),
+    ));
+    let samples = Rc::new(Cell::new(0));
+    for owner in [&primary_owner, &secondary_owner] {
+        owner
+            .controller()
+            .animate_to_curved(1.0, None, CountedCurve(Rc::clone(&samples)))
+            .expect("live curve");
+    }
+    let _ = runtime.pump(&mut clock, &mut sink);
+    clock.advance(Duration::from_millis(250));
+    let _ = runtime.pump(&mut clock, &mut sink);
+    assert!((primary_owner.controller().value() - 0.25).abs() < 1e-9);
+    assert!((secondary_owner.controller().value() - 0.25).abs() < 1e-9);
+    let sampled = samples.get();
+    assert!(sampled >= 2, "both sources were reached before stopping");
+    runtime.stop_presentations();
+    runtime.update_host_lifecycle(flui_scheduler::AppLifecycleState::Resumed);
+    for _ in 0..3 {
+        clock.advance(Duration::from_secs(1));
+        let _ = runtime.pump(&mut clock, &mut sink);
+        assert_eq!(
+            samples.get(),
+            sampled,
+            "stopping withdraws every presentation's tick authority"
+        );
+        assert!((primary_owner.controller().value() - 0.25).abs() < 1e-9);
+        assert!((secondary_owner.controller().value() - 0.25).abs() < 1e-9);
+    }
+}
+
+pub(crate) fn step_during_a_tick_applies_next_frame() {
+    use flui_foundation::Listenable as _;
+    use flui_protocol::MotionRequest;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    for address_primary in [true, false] {
+        let mut clock = ManualClock::new();
+        let mut runtime = manual_clock_ui_runtime(&clock);
+        let primary = runtime.presentation_id();
+        runtime
+            .attach_root_widget(&flui_widgets::SizedBox::square(10.0))
+            .expect("primary root");
+        let mut sink = ScriptedSink::always_presents();
+        let _ = runtime.pump(&mut clock, &mut sink);
+        let secondary = runtime.install_second_presentation_for_test();
+        runtime
+            .attach_root_widget_to_for_test(secondary, &flui_widgets::SizedBox::square(10.0))
+            .expect("secondary root");
+        let _ = runtime.pump(&mut clock, &mut sink);
+        let target = if address_primary { primary } else { secondary };
+        let window = runtime.dev_agent_window(target).expect("addressed agent");
+        let primary_owner =
+            AnimationController::builder(Duration::from_secs(1)).build_on(Some(&runtime.vsync()));
+        let secondary_owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(
+            &runtime
+                .presentations
+                .get(secondary)
+                .expect("secondary")
+                .vsync(),
+        ));
+        primary_owner.controller().forward().expect("primary run");
+        secondary_owner
+            .controller()
+            .forward()
+            .expect("secondary run");
+        let _ = runtime.pump(&mut clock, &mut sink);
+        let armed = Rc::new(Cell::new(true));
+        let reply = Rc::new(RefCell::new(None));
+        primary_owner.controller().add_listener(Rc::new({
+            let armed = Rc::clone(&armed);
+            let reply = Rc::clone(&reply);
+            move || {
+                if armed.replace(false) {
+                    let answer = window
+                        .motion(MotionRequest::new().with_rate(0.0).with_step_ms(100))
+                        .expect("admitted during traversal");
+                    *reply.borrow_mut() = Some(answer);
+                }
+            }
+        }));
+        clock.advance(Duration::from_millis(250));
+        let _ = runtime.pump(&mut clock, &mut sink);
+        assert!(!armed.get(), "listener admitted the command");
+        assert!((primary_owner.controller().value() - 0.25).abs() < 1e-9);
+        assert!((secondary_owner.controller().value() - 0.25).abs() < 1e-9);
+        assert!(
+            reply
+                .borrow_mut()
+                .as_mut()
+                .expect("queued answer")
+                .try_take()
+                .is_none(),
+            "a command admitted during traversal remains pending until the next pump"
+        );
+        let addressed_frames = runtime
+            .presentations
+            .get(target)
+            .expect("target")
+            .clock()
+            .produced_count();
+        clock.advance(Duration::from_millis(250));
+        let _ = runtime.pump(&mut clock, &mut sink);
+        let accepted = reply
+            .borrow_mut()
+            .as_mut()
+            .expect("answer")
+            .try_take()
+            .expect("answered at the next idle boundary")
+            .expect("valid compound request");
+        assert_eq!(accepted.rate, 0.0);
+        assert!((accepted.time_ms - 350.0).abs() < 1e-9);
+        let (addressed, sibling) = if address_primary {
+            (primary_owner.controller(), secondary_owner.controller())
+        } else {
+            (secondary_owner.controller(), primary_owner.controller())
+        };
+        assert!((addressed.value() - 0.35).abs() < 1e-9);
+        assert!((sibling.value() - 0.5).abs() < 1e-9);
+        assert_eq!(
+            runtime
+                .presentations
+                .get(target)
+                .expect("target")
+                .clock()
+                .produced_count(),
+            addressed_frames + 1
+        );
+        clock.advance(Duration::from_millis(250));
+        let _ = runtime.pump(&mut clock, &mut sink);
+        assert!((addressed.value() - 0.35).abs() < 1e-9);
+        assert!((sibling.value() - 0.75).abs() < 1e-9);
+        assert_eq!(
+            runtime
+                .presentations
+                .get(target)
+                .expect("target")
+                .clock()
+                .produced_count(),
+            addressed_frames + 1,
+            "the addressed step consumes one frame; sibling continuation cannot revive it"
+        );
+        assert!(
+            reply
+                .borrow_mut()
+                .as_mut()
+                .expect("consumed answer")
+                .try_take()
+                .is_none(),
+            "the accepted reply is delivered once"
+        );
+    }
+}
+
 /// Forest isolation needs a private installation seam; input and frames still
 /// use the actual addressed ingress, cached route and owner pump.
 #[test]

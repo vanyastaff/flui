@@ -41,7 +41,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::Duration;
 
-use flui_animation::Curve;
+use flui_animation::ArcCurve;
 use flui_animation::simulation::{Simulation, SpringDescription, SpringSimulation};
 use flui_foundation::geometry::Axis;
 use flui_foundation::{Listenable, ListenerId};
@@ -302,12 +302,7 @@ impl PageController {
     /// last/first real page instead of overshooting past it — see
     /// [`next_page`](Self::next_page)/[`previous_page`](Self::previous_page)'s
     /// docs for the resulting end-of-range behavior.
-    pub fn animate_to_page(
-        &self,
-        page: usize,
-        duration: Duration,
-        curve: std::rc::Rc<dyn Curve + Send + Sync>, // see PopPacing's doc (navigator/binding.rs) — same erased easing-curve boundary
-    ) {
+    pub fn animate_to_page(&self, page: usize, duration: Duration, curve: ArcCurve) {
         let page_f = page as f64;
         let position = self.scroll.position();
         if position.set_cached_page_while_collapsed(page_f) {
@@ -335,11 +330,7 @@ impl PageController {
     /// [`ScrollController::animate_to`] clamps the resulting pixel target to
     /// `max_scroll_extent`, so the run visibly stops AT the last page instead
     /// of scrolling past it.
-    pub fn next_page(
-        &self,
-        duration: Duration,
-        curve: std::rc::Rc<dyn Curve + Send + Sync>, // see PopPacing's doc (navigator/binding.rs) — same erased easing-curve boundary
-    ) {
+    pub fn next_page(&self, duration: Duration, curve: ArcCurve) {
         let Some(page) = self.page() else { return };
         self.animate_to_page((page.round() + 1.0).max(0.0) as usize, duration, curve);
     }
@@ -351,11 +342,7 @@ impl PageController {
     /// [`animate_to_page`](Self::animate_to_page)'s delegated `animate_to`
     /// clamps to `min_scroll_extent` regardless. A no-op before the first
     /// layout.
-    pub fn previous_page(
-        &self,
-        duration: Duration,
-        curve: std::rc::Rc<dyn Curve + Send + Sync>, // see PopPacing's doc (navigator/binding.rs) — same erased easing-curve boundary
-    ) {
+    pub fn previous_page(&self, duration: Duration, curve: ArcCurve) {
         let Some(page) = self.page() else { return };
         self.animate_to_page((page.round() - 1.0).max(0.0) as usize, duration, curve);
     }

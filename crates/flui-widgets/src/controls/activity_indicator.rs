@@ -152,7 +152,9 @@ impl StatefulView for ActivityIndicator {
 
     fn create_state(&self) -> Self::State {
         ActivityIndicatorState {
-            controller: AnimationController::builder(CYCLE).build_on(None),
+            controller: AnimationController::builder(CYCLE)
+                .behavior(flui_animation::AnimationBehavior::Preserve)
+                .build_on(None),
             motion: Arc::new(Motion::new()),
         }
     }

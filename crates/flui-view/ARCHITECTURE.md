@@ -10,6 +10,23 @@ behaviour taxonomy and remains a sibling appendix.
 
 ## Mapping decisions
 
+### Missing inherited providers remain ancestry dependencies
+
+A `depend_on` lookup that returns `None` still depends on the element's ancestry
+([ADR-0187](../../docs/adr/ADR-0187-missing-inherited-dependencies.md)). The build
+owner records lifecycle and build misses in sparse sets; no provider or forward
+notification edge is invented. Deactivation transfers those reads to the existing
+reactivation marker. Permanent teardown removes all three kinds of authority.
+Lifecycle misses persist like lifecycle masks. Successful builds replace their
+missing read set; contained failures preserve the previously accepted set and add
+new reads. `get` keeps its existing non-subscribing lookup contract.
+
+`missing_inherited_reads_refresh_lifecycle_and_survive_build_recovery` exercises
+both public context paths, repeated activation and failure before a previous read.
+Mounted widget cases `reparenting_an_unscoped_hero_adopts_its_first_route` and
+`reparenting_refreshes_a_build_time_miss_but_prunes_an_unread_one` verify first-scope
+adoption, preserved state, new child geometry and removal of an unread dependency.
+
 ### Local-state and element-depth authority
 
 `StateCell` and `StateHandle` keep their state and rebuild trigger owner-local;

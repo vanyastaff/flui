@@ -22,7 +22,7 @@ struct ReentrantParent {
     proxy: Mutex<Option<Weak<ProxyAnimation<f64>>>>,
     reentry: Reentry,
     values: ChangeNotifier,
-    statuses: ChangeNotifier,
+    statuses: Rc<ChangeNotifier>,
 }
 
 impl ReentrantParent {
@@ -67,11 +67,15 @@ impl Animation<f64> for ReentrantParent {
         }
         AnimationStatus::Forward
     }
-    fn add_status_listener(&self, _callback: StatusCallback) -> ListenerId {
-        self.statuses.add_listener(std::rc::Rc::new(|| {}))
-    }
-    fn remove_status_listener(&self, id: ListenerId) {
-        self.statuses.remove_listener(id);
+
+    fn subscribe_status(&self, callback: StatusCallback) -> flui_animation::StatusSubscription {
+        let id = self.statuses.add_listener(Rc::new(move || {
+            let _keep = &callback;
+        }));
+        flui_animation::StatusSubscription::new(&self.statuses, id, |source, id, recovery| {
+            source.inherit_failure(recovery);
+            source.take_listener(id)
+        })
     }
 }
 
@@ -80,7 +84,7 @@ fn fixture(reentry: Reentry) -> (Rc<ProxyAnimation<f64>>, Rc<AtomicUsize>) {
         proxy: Mutex::new(None),
         reentry,
         values: ChangeNotifier::new(),
-        statuses: ChangeNotifier::new(),
+        statuses: Rc::new(ChangeNotifier::new()),
     });
     let proxy = Rc::new(ProxyAnimation::new(parent.clone()));
     *parent.proxy.lock().expect("set parent hook") = Some(Rc::downgrade(&proxy));
@@ -163,9 +167,11 @@ fn old_parent_removal_keeps_committed_notification_order() {
     let (proxy, changes) = fixture(Reentry::Removal);
     let statuses = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let observed = statuses.clone();
-    proxy.add_status_listener(std::rc::Rc::new(move |status| {
-        observed.borrow_mut().push(status);
-    }));
+    proxy
+        .subscribe_status(std::rc::Rc::new(move |status| {
+            observed.borrow_mut().push(status);
+        }))
+        .detach();
     proxy.set_parent(std::rc::Rc::new(ConstantAnimation::completed(1.0)));
     assert_eq!(
         proxy.value(),

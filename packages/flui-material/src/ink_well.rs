@@ -528,24 +528,24 @@ fn begin_press_deactivation(
         return;
     };
 
-    let owner = AnimationController::builder(PRESS_DEACTIVATION_DELAY).build_on(Some(&vsync));
+    let owner = AnimationController::builder(PRESS_DEACTIVATION_DELAY)
+        .behavior(flui_sdk::animation::AnimationBehavior::Preserve)
+        .build_on(Some(&vsync));
     let controller = owner.controller().clone();
 
-    // The status listener only needs to be `Send + Sync` (its bound), so it
-    // captures the `Send + Sync` states controller and rebuild handle by
-    // value — NOT `pending` (an owner-local `Rc<RefCell<_>>`, deliberately
-    // left untouched here; the next press's `cancel_pending_deactivation`
-    // call disposes this controller then, which is safe to call on an
-    // already-completed controller since `AnimationController::dispose` is
-    // idempotent).
+    // Completion changes the pressed state. The next press withdraws and
+    // disposes the pending timer through cancel_pending_deactivation.
     let states_for_listener = states.clone();
     let rebuild_for_listener = rebuild.clone();
-    controller.add_status_listener(std::rc::Rc::new(move |status| {
-        if status == AnimationStatus::Completed {
-            states_for_listener.update(WidgetState::Pressed, false);
-            rebuild_for_listener.schedule(flui_sdk::view::RebuildReason::AnimationTick);
-        }
-    }));
+    // This callback lives until its owned timer is canceled or retired.
+    controller
+        .subscribe_status(std::rc::Rc::new(move |status| {
+            if status == AnimationStatus::Completed {
+                states_for_listener.update(WidgetState::Pressed, false);
+                rebuild_for_listener.schedule(flui_sdk::view::RebuildReason::AnimationTick);
+            }
+        }))
+        .detach();
 
     if let Err(error) = controller.forward_from(Some(0.0)) {
         tracing::debug!(?error, "InkWell press-deactivation timer failed to start");

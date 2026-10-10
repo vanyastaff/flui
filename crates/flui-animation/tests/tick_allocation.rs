@@ -1,8 +1,9 @@
 //! A steady-state frame of a running animation must not allocate.
 //!
-//! One `Vsync::tick_all` that advances a live controller with four value
-//! listeners and a status listener is the per-frame cost every animating
-//! widget pays, so it runs with a counting `#[global_allocator]` here. That
+//! One `Vsync::tick_all` advances a live scalar controller, four-component
+//! insets and a seven-component nested geometry/color value, each with four
+//! value listeners. Observer conversion and scalar keyframe evaluation are
+//! included in the measured window with a counting `#[global_allocator]`. That
 //! allocator is process-wide, which is why this file is a test target of its
 //! own rather than a module of `tests/main.rs`.
 //!
@@ -18,8 +19,22 @@ use std::hint::black_box;
 
 use std::time::Duration;
 
-use flui_animation::{Animation, AnimationController, ReverseAnimation, Vsync};
+use flui_animation::{
+    AnimatedValue, Animation, AnimationController, ArcCurve, Curves, Keyframes, MotionClock,
+    MotionSpec, ReverseAnimation, TwoWayConverter, Vsync,
+};
 use flui_foundation::Listenable;
+use flui_foundation::geometry::{EdgeInsets, Offset};
+use flui_painting::styling::Color;
+
+#[derive(Clone, TwoWayConverter)]
+struct Appearance {
+    position: Offset<f64>,
+    color: Color,
+}
+
+#[derive(Clone, TwoWayConverter)]
+struct CardMotion(Appearance, f64);
 
 // `Cell<usize>` in a const-initialised thread-local has no drop glue and no
 // lazy init, so reading it cannot itself allocate or run during TLS teardown.
@@ -85,18 +100,77 @@ fn a_steady_state_frame_allocates_nothing() {
             black_box(());
         }));
     }
-    controller.add_status_listener(std::rc::Rc::new(|status| {
-        black_box(status);
-    }));
+    controller
+        .subscribe_status(std::rc::Rc::new(|status| {
+            black_box(status);
+        }))
+        .detach();
     let _run = controller.forward().expect("forward on a live controller");
+    let mut vector = AnimatedValue::new(
+        EdgeInsets::ZERO,
+        MotionSpec::Curve {
+            duration: Duration::from_secs(3600),
+            curve: ArcCurve::new(Curves::Linear),
+        },
+        Some(&vsync),
+    )
+    .expect("finite vector with a live registry");
+    let stream = vector.animation();
+    for _ in 0..4 {
+        stream.add_listener(std::rc::Rc::new(|| {
+            black_box(());
+        }));
+    }
+    let _vector_run = vector
+        .animate_to(EdgeInsets::new(10.0, 20.0, 30.0, 40.0))
+        .expect("finite vector target");
+
+    // Seven components exceed the component run's inline segment storage.
+    // Admission may allocate; sampling and rebuilding this value may not.
+    let mut nested = AnimatedValue::new(
+        CardMotion(
+            Appearance {
+                position: Offset::ZERO,
+                color: Color::rgb(255, 0, 0),
+            },
+            1.0,
+        ),
+        MotionSpec::Curve {
+            duration: Duration::from_secs(3600),
+            curve: ArcCurve::new(Curves::Linear),
+        },
+        Some(&vsync),
+    )
+    .expect("finite nested value with a live registry");
+    let nested_stream = nested.animation();
+    let nested_deliveries = std::rc::Rc::new(Cell::new(0usize));
+    for _ in 0..4 {
+        let delivered = nested_deliveries.clone();
+        nested_stream.add_listener(std::rc::Rc::new(move || {
+            delivered.set(delivered.get() + 1);
+        }));
+    }
+    let _nested_run = nested
+        .animate_to(CardMotion(
+            Appearance {
+                position: Offset::new(10.0, 20.0),
+                color: Color::rgba(255, 0, 0, 0),
+            },
+            2.0,
+        ))
+        .expect("finite nested target");
+    let track = Keyframes::builder(0.0, Duration::from_secs(3600))
+        .cubic(1.0, Duration::from_mins(30))
+        .cubic(0.0, Duration::from_mins(30))
+        .build()
+        .expect("finite scalar keyframe track");
 
     // Warmup: the first frame anchors the run; later ones settle any
     // one-time lazy initialisation outside the measured path.
     let mut now = 0.0_f64;
+    let mut clock = MotionClock::new();
     for _ in 0..16 {
-        vsync.tick_all(
-            &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(now)),
-        );
+        vsync.tick_all(&clock.frame(Duration::from_secs_f64(now)));
         now += FRAME;
     }
 
@@ -106,15 +180,20 @@ fn a_steady_state_frame_allocates_nothing() {
     let mut total_bytes = 0usize;
     let mut worst_frame_bytes = 0usize;
     let start_value = controller.value();
+    let start_insets = vector.value();
+    let start_nested = nested_stream.value();
+    let deliveries_before = nested_deliveries.get();
+    let start_track = track.value_at(Duration::from_secs_f64(now));
     for _ in 0..FRAMES {
         let calls_before = read(&ALLOC_COUNT);
         let bytes_before = read(&ALLOC_BYTES);
 
-        vsync.tick_all(
-            &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(now)),
-        );
+        vsync.tick_all(&clock.frame(Duration::from_secs_f64(now)));
         now += FRAME;
 
+        black_box(stream.value());
+        black_box(nested_stream.value());
+        black_box(track.value_at(Duration::from_secs_f64(now)));
         let calls = read(&ALLOC_COUNT) - calls_before;
         let bytes = read(&ALLOC_BYTES) - bytes_before;
         total_calls += calls;
@@ -129,6 +208,26 @@ fn a_steady_state_frame_allocates_nothing() {
         controller.status().is_running() && controller.value() > start_value,
         "the measured frames must advance a live run, or they priced an early return"
     );
+    let final_insets = vector.value();
+    assert!(
+        !vector.is_settled()
+            && final_insets.top > start_insets.top
+            && final_insets.right > start_insets.right
+            && final_insets.bottom > start_insets.bottom
+            && final_insets.left > start_insets.left,
+        "the measured vector must advance every component of its live run"
+    );
+    let final_nested = nested_stream.value();
+    assert!(
+        !nested.is_settled()
+            && final_nested.0.position.dx > start_nested.0.position.dx
+            && final_nested.0.position.dy > start_nested.0.position.dy
+            && final_nested.0.color.a < start_nested.0.color.a
+            && final_nested.1 > start_nested.1,
+        "the nested geometry, color and scalar must advance during measurement"
+    );
+    assert_eq!(nested_deliveries.get() - deliveries_before, 4 * FRAMES);
+    assert!(track.value_at(Duration::from_secs_f64(now)) > start_track);
     eprintln!(
         "tick_allocation: {FRAMES} frames -- {total_calls} allocating calls, {total_bytes} \
          bytes, {worst_frame_bytes} bytes on the worst frame, {frames_with_allocation} frames \

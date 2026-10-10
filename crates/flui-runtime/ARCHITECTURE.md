@@ -11,6 +11,15 @@ host.
 
 ## Invariants
 
+- **Motion follows one host observation.** Presentation clocks resolve the
+  runtime's application override against accepted `SystemPreferences` before
+  publication callbacks. Both current and later presentations inherit it.
+  Normal runs use the duration-scale timeline and settle under Reduce; Preserve
+  keeps authored timing. Changed motion wakes parked work, while duplicate host
+  observations do not republish inherited data (ADR-0184).
+  `system_motion_change_reaches_media_query_and_the_clock` exercises actual
+  frame sampling, inherited publication and late presentation seeds.
+
 - **Invalid authored text waits for changed input.** A typed text-layout error
   withholds scene submission and retains layout debt. The failure handler receives
   the ordinary error; unchanged invalid input does not request a continuous frame
@@ -506,10 +515,30 @@ paused frame production and one addressed step frame without sibling demand.
 and closed-window refusal through the public agent handle.
 
 Hidden presentations and disabled frames do not invoke controllers or create
-animation continuation demand. Their clocks still observe raw time, so the
-first visible frame catches up instead of replaying hidden frames.
+animation continuation demand. Each pump withdraws stale animation demand when
+the presentation cannot advance a running animation. Explicit agent steps use
+host demand, so an accepted inspection frame survives pausing or completion;
+independent widget-build demand remains deliverable.
+Their clocks still observe raw time, so the first visible frame catches up
+instead of replaying hidden frames.
 `gated_presentations_hold_samples_then_catch_up_when_visible` pins both gates
-through the runtime frame producer.
+through the runtime frame producer for tween, repeat and spring, including
+exactly-once terminal status and future delivery. The addressed step row above
+also checks a completed run's inspection frame and an independent root rebuild.
+
+Playback requests admitted by an animation listener stay in the owner inbox
+until the next pump's idle boundary. The current traversal retains its selected
+time for every presentation. `step_during_a_tick_applies_next_frame` drives the
+public pump and addressed agent handle with a manual clock: a compound pause
+and step remains unanswered during the current frame, advances only its target
+on the next frame and leaves sibling continuation independent. Moving inbox
+delivery to the end of the current frame fails the pending-answer assertion.
+
+Stopping is terminal for frame eligibility even if the host later reports
+`Resumed`. `a_stopping_realm_ticks_no_presentation` retains active registry
+owners in two presentations, stops through the public runtime entry and pumps
+past both deadlines. Source evaluation and displayed values stay held; removing
+the stop entry's lifecycle commit fails the same scenario.
 
 ### `Vsync` ticks in the persistent phase, not among the transient callbacks
 
@@ -739,6 +768,17 @@ window and the accessibility bridge are framework-owned and are released in
 either mode. A healthy close drops everything normally, and a lifecycle drain
 still runs every eligible callback before propagating its first failure. Tested
 by `presentation_close_retirement_failures_preserve_focus_ime_and_siblings`.
+
+Animation authority is withdrawn independently of retained tree ownership.
+Each presentation prepares terminal registry closure before other teardown
+callouts, then publishes cancellation after its capabilities are withdrawn.
+Whole-runtime close prepares every presentation before delivering the first
+cancellation; addressed close leaves sibling registries live. Saved animation
+observers refuse new runs even if exceptional retention keeps their widget
+owner allocated. The retirement receipt borrows the enclosing failure policy
+and completes healthy cancellation tails without invoking opaque destructors
+after a failure. `stopping_the_realm_mid_animation_cancels_every_run` pins these
+ordering, outcome, reentry and competing-failure contracts (ADR-0175).
 
 Accessibility input uses the whole-request translator of ADR-0124 before
 presentation inbox admission, preserving numeric values and explicit

@@ -21,7 +21,9 @@
 //! # NaN
 //!
 //! Types with a NaN representation (the `f64` geometry, [`Angle`]) carry a NaN `t`
-//! or a NaN endpoint through to the result. Types without one decide for
+//! or a NaN endpoint through intermediate samples. Exact endpoint samples
+//! retain the selected endpoint, including its signed zero or NaN payload.
+//! Types without one decide for
 //! themselves and document it (`Color` and the integer tweens return their
 //! beginning value).
 //!
@@ -62,7 +64,29 @@ impl<T: Lerp> MaybeLerp for T {
 impl Lerp for f64 {
     #[inline]
     fn lerp_to(&self, other: &Self, t: f64) -> Self {
-        self + (other - self) * t
+        if t == 0.0 {
+            return *self;
+        }
+        if t == 1.0 {
+            return *other;
+        }
+        let span = other - self;
+        let value = self + span * t;
+        if value.is_finite() {
+            return value;
+        }
+        if span.is_finite() {
+            // An extrapolation can overflow the separate product even though
+            // adding the starting value brings it back into range.
+            let fused = span.mul_add(t, *self);
+            if fused.is_finite() {
+                return fused;
+            }
+        }
+        // Opposite finite endpoints can overflow their difference while
+        // their weighted sum remains representable. Genuine overflow and
+        // invalid input still remain visible to the consuming property.
+        self * (1.0 - t) + other * t
     }
 }
 
@@ -71,26 +95,29 @@ impl Lerp for Offset<f64> {
     fn lerp_to(&self, other: &Self, t: f64) -> Self {
         // Computed manually rather than via `Offset::lerp`, which clamps `t` and
         // would flatten spring/elastic overshoot.
-        Offset::new(
-            self.dx + (other.dx - self.dx) * t,
-            self.dy + (other.dy - self.dy) * t,
-        )
+        Offset::new(self.dx.lerp_to(&other.dx, t), self.dy.lerp_to(&other.dy, t))
     }
 }
 
 impl Lerp for Size<f64> {
     #[inline]
     fn lerp_to(&self, other: &Self, t: f64) -> Self {
-        // `Size::lerp` already extrapolates (no clamp).
-        Size::lerp(*self, *other, t)
+        Size::new(
+            self.width.lerp_to(&other.width, t),
+            self.height.lerp_to(&other.height, t),
+        )
     }
 }
 
 impl Lerp for Rect<f64> {
     #[inline]
     fn lerp_to(&self, other: &Self, t: f64) -> Self {
-        // `Rect::lerp` already extrapolates (no clamp).
-        Rect::lerp(*self, *other, t)
+        Rect::from_ltrb(
+            self.min.x.lerp_to(&other.min.x, t),
+            self.min.y.lerp_to(&other.min.y, t),
+            self.max.x.lerp_to(&other.max.x, t),
+            self.max.y.lerp_to(&other.max.y, t),
+        )
     }
 }
 
@@ -98,10 +125,10 @@ impl Lerp for Edges<f64> {
     #[inline]
     fn lerp_to(&self, other: &Self, t: f64) -> Self {
         Edges {
-            top: self.top + (other.top - self.top) * t,
-            right: self.right + (other.right - self.right) * t,
-            bottom: self.bottom + (other.bottom - self.bottom) * t,
-            left: self.left + (other.left - self.left) * t,
+            top: self.top.lerp_to(&other.top, t),
+            right: self.right.lerp_to(&other.right, t),
+            bottom: self.bottom.lerp_to(&other.bottom, t),
+            left: self.left.lerp_to(&other.left, t),
         }
     }
 }
@@ -109,10 +136,7 @@ impl Lerp for Edges<f64> {
 impl Lerp for Radius<f64> {
     #[inline]
     fn lerp_to(&self, other: &Self, t: f64) -> Self {
-        Radius::new(
-            self.x + (other.x - self.x) * t,
-            self.y + (other.y - self.y) * t,
-        )
+        Radius::new(self.x.lerp_to(&other.x, t), self.y.lerp_to(&other.y, t))
     }
 }
 
