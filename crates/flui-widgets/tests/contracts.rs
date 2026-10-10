@@ -522,6 +522,10 @@ fn hero_flights() {
     run_cases(
         "hero_flights",
         &[
+            ("hero::changing_a_mounted_hero_tag_moves_its_registration", crate::hero::changing_a_mounted_hero_tag_moves_its_registration as fn()),
+            ("hero::retagging_to_a_duplicate_preserves_the_existing_winner", crate::hero::retagging_to_a_duplicate_preserves_the_existing_winner as fn()),
+            ("hero::replacing_a_hero_scope_moves_the_existing_hero", crate::hero::replacing_a_hero_scope_moves_the_existing_hero),
+            ("hero::reparenting_a_hero_moves_registration_without_recreating_it", crate::hero::reparenting_a_hero_moves_registration_without_recreating_it),
             ("hero::a_retained_hero_handle_does_not_keep_its_presentation_alive", crate::hero::a_retained_hero_handle_does_not_keep_its_presentation_alive as fn()),
             ("hero::unmount_releases_hero_configuration_despite_a_retained_handle", crate::hero::unmount_releases_hero_configuration_despite_a_retained_handle),
             ("hero::a_hero_child_keeps_its_state_across_a_flight_without_a_global_key", crate::hero::a_hero_child_keeps_its_state_across_a_flight_without_a_global_key as fn()),

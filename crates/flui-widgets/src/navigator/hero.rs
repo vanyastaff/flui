@@ -15,7 +15,8 @@
 //! from an observer callback is exactly what a previous change deliberately removed.
 //!
 //! So the direction is inverted. Each `Hero` **registers itself** with the nearest
-//! enclosing [`HeroScope`] in `init_state` and deregisters in `dispose`. The registry
+//! enclosing [`HeroScope`] through lifecycle dependencies, moves its registration
+//! when the scope or match tag changes, and deregisters in `dispose`. The registry
 //! is owned by the route (`ModalInner`), reachable by `RouteId` through the
 //! navigator's modal registry, and the controller reads it as pure data. No
 //! `GlobalKey`, no tree re-entry, no downcast.
@@ -354,9 +355,9 @@ impl fmt::Debug for NestedHeroSource {
 /// Provides a route's [`HeroRegistry`] to the heroes inside it.
 ///
 /// The ambient-lookup pattern `VsyncScope` already uses: an
-/// `InheritedView` a descendant reads **once**, in `init_state`. It never notifies —
-/// the registry handle is fixed for the scope's lifetime — so a `Hero` never rebuilds
-/// because of it.
+/// `InheritedView` a descendant tracks through lifecycle dependencies. Replacing
+/// the registry notifies mounted heroes, including subtrees retaken by a
+/// `GlobalKey`, so registration follows the current enclosing route.
 ///
 /// This replaces both an element walk and a "which navigator owns this hero"
 /// check: a hero registers with the route it is lexically inside, and can reach
@@ -419,8 +420,8 @@ impl InheritedView for HeroScope {
         &*self.child
     }
 
-    fn update_should_notify(&self, _old: &Self) -> bool {
-        false
+    fn update_should_notify(&self, old: &Self) -> bool {
+        !self.registry.is_same(&old.registry)
     }
 }
 
@@ -433,7 +434,6 @@ impl_inherited_view!(HeroScope);
 /// The mutable half of a mounted [`Hero`], shared with whoever holds a
 /// [`HeroHandle`].
 struct HeroInner {
-    tag: Terminal<HeroTag>,
     /// The hero's own render node, published on `attach` and cleared on `detach` —
     /// the same mechanism `RenderSubtreeAnchor` uses. This is how a hero finds its
     /// own render object — `BuildContext::find_render_object` walks strict
@@ -459,11 +459,10 @@ struct HeroInner {
 
 impl Drop for HeroInner {
     fn drop(&mut self) {
-        let tag = self.tag.withdraw();
         let owner = Terminal::new(self.owner.get_mut().take());
         let rebuild = Terminal::new(self.rebuild.get_mut().take());
         let configuration = self.configuration.withdraw();
-        drop((tag, owner, rebuild, configuration));
+        drop((owner, rebuild, configuration));
     }
 }
 
@@ -507,7 +506,6 @@ impl HeroHandle {
     fn new(view: &Hero) -> Self {
         Self {
             inner: Rc::new(HeroInner {
-                tag: Terminal::new(view.tag.clone()),
                 anchor: SubtreeAnchor::new(),
                 placeholder: Cell::new(None),
                 include_child: Cell::new(true),
@@ -532,8 +530,15 @@ impl HeroHandle {
         self.is(other)
     }
 
-    pub(crate) fn tag(&self) -> &HeroTag {
-        &self.inner.tag
+    #[cfg(test)]
+    pub(crate) fn tag(&self) -> HeroTag {
+        self.inner
+            .configuration
+            .borrow()
+            .as_ref()
+            .expect("BUG: a flight fixture has a live Hero configuration")
+            .tag
+            .clone()
     }
 
     /// The hero's render node, or `None` before it attaches and after it detaches.
@@ -684,8 +689,9 @@ impl HeroHandle {
 
 impl fmt::Debug for HeroHandle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mounted = self.inner.configuration.borrow().is_some();
         f.debug_struct("HeroHandle")
-            .field("tag", &self.inner.tag)
+            .field("mounted", &mounted)
             .field("render_id", &self.render_id())
             .field("placeholder", &self.placeholder_size())
             .finish()
@@ -884,9 +890,46 @@ impl StatefulView for Hero {
 /// `<Hero as StatefulView>::State` and carries no public API of its own.
 pub struct HeroState {
     handle: Terminal<HeroHandle>,
-    /// The route's registry, resolved once from the ambient [`HeroScope`]. `None` for
-    /// a `Hero` mounted outside any route, which is inert rather than an error.
-    registry: Option<HeroRegistry>,
+    /// The current match key and ambient route, including rejected duplicates.
+    /// Cleanup checks mounted identity, so a rejected entry cannot evict its winner.
+    registry: Option<HeroRegistration>,
+}
+
+struct HeroRegistration {
+    registry: Terminal<HeroRegistry>,
+    tag: Terminal<HeroTag>,
+}
+
+impl HeroState {
+    fn sync_registration(&mut self, registry: Option<HeroRegistry>, tag: HeroTag) {
+        if self
+            .registry
+            .as_ref()
+            .zip(registry.as_ref())
+            .is_some_and(|(old, next)| old.registry.is_same(next) && *old.tag == tag)
+            || (self.registry.is_none() && registry.is_none())
+        {
+            return;
+        }
+
+        let next = registry.map(|registry| HeroRegistration {
+            registry: Terminal::new(registry),
+            tag: Terminal::new(tag),
+        });
+        let previous = Terminal::new(std::mem::replace(&mut self.registry, next));
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        if let Some(previous) = previous.as_ref() {
+            recovery.run(|| previous.registry.deregister(&previous.tag, &self.handle));
+        }
+        if let Some(next) = self.registry.as_ref() {
+            recovery.run(|| {
+                next.registry
+                    .register(next.tag.clone(), self.handle.clone());
+            });
+        }
+        recovery.retire(previous);
+        recovery.finish();
+    }
 }
 
 impl Drop for HeroState {
@@ -920,12 +963,18 @@ impl ViewState<Hero> for HeroState {
                 .borrow_mut()
                 .replace(configuration),
         );
-        drop(previous);
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        let registry = self
+            .registry
+            .as_ref()
+            .map(|entry| (*entry.registry).clone());
+        recovery.run(|| self.sync_registration(registry, new_view.tag.clone()));
+        recovery.retire(previous);
+        recovery.finish();
     }
 
-    /// Everything a hero needs from outside itself is acquired **here**, in the one
-    /// lifecycle hook that has a `LifecycleContext` and is not a frame phase: the route's
-    /// registry, the render tree, and the rebuild capability.
+    /// Acquire render and rebuild capabilities during mount, and establish the
+    /// route dependency that subsequent lifecycle changes refresh.
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let _prev = self
             .handle
@@ -941,12 +990,20 @@ impl ViewState<Hero> for HeroState {
         );
         drop(previous);
 
-        let registry = ctx.get::<HeroScope, _>(|scope| scope.registry.clone());
-        if let Some(registry) = registry {
-            // A rejected duplicate keeps its handle but is not stored, and `dispose`'s
-            // identity check means it will not evict the winner.
-            registry.register(self.handle.tag().clone(), self.handle.clone());
-            self.registry = Some(registry);
+        self.did_change_dependencies(ctx);
+    }
+
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        let registry = ctx.depend_on::<HeroScope, _>(|scope| scope.registry.clone());
+        let tag = self
+            .handle
+            .inner
+            .configuration
+            .borrow()
+            .as_ref()
+            .map(|view| view.tag.clone());
+        if let Some(tag) = tag {
+            self.sync_registration(registry, tag);
         }
     }
 
@@ -964,7 +1021,7 @@ impl ViewState<Hero> for HeroState {
         let registry = Terminal::new(self.registry.take());
         let mut recovery = flui_foundation::panic::PanicRecovery::new();
         if let Some(registry) = registry.as_ref() {
-            recovery.run(|| registry.deregister(self.handle.tag(), &self.handle));
+            recovery.run(|| registry.registry.deregister(&registry.tag, &self.handle));
         }
         recovery.retire(rebuild);
         recovery.retire(configuration);

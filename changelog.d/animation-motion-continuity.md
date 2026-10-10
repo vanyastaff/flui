@@ -41,6 +41,9 @@
 
 ### Changed
 
+- Mounted Hero registration follows tag updates, HeroScope replacement and
+  GlobalKey reparenting while preserving mounted state and first-wins matching.
+
 - `TwoWayConverter` derives require at least one motion field; empty unit,
   named and tuple structs are rejected rather than producing empty vectors.
 

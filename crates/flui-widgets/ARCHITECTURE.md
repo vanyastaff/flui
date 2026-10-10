@@ -54,6 +54,23 @@ handle. These cases use the existing ADR-0083 test-access registry seam, which
 is not exported to applications. The gesture completion case also measures the
 destination's real child after the source disappears.
 
+## Hero registration follows mounted identity
+
+A Hero's match tag belongs to its current immutable configuration; its mounted
+identity is the shared handle. Tag updates move registration without recreating
+the state. The registration record retains the exact outgoing tag and registry
+for identity-checked removal, including when the incoming tag is a rejected
+duplicate. Scope dependencies notify on registry replacement and refresh after
+GlobalKey reparenting. Old registration is withdrawn before new admission and
+outgoing captures retire outside storage borrows under first-failure recovery.
+
+`changing_a_mounted_hero_tag_moves_its_registration` measures the updated child
+through the same handle. `retagging_to_a_duplicate_preserves_the_existing_winner`
+checks first-wins matching and harmless rejected cleanup.
+`replacing_a_hero_scope_moves_the_existing_hero` and
+`reparenting_a_hero_moves_registration_without_recreating_it` verify scope adoption
+and preserved mounted state through the existing test-access registry seam.
+
 ## Hero rect mappings execute outside flight guards
 
 Hero snapshots its owner-local rect factory before invoking user code. The

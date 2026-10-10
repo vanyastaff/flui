@@ -20,6 +20,182 @@ fn tag(name: &'static str) -> HeroTag {
     HeroTag::new(ValueKey::new(name))
 }
 
+pub(crate) fn changing_a_mounted_hero_tag_moves_its_registration() {
+    let registry = HeroRegistry::new();
+    let tree = |name, width| {
+        HeroScope::new(
+            registry.clone(),
+            Center::new().child(Hero::new(ValueKey::new(name), SizedBox::new(width, 20.0))),
+        )
+    };
+    let mut laid = crate::common::lay_out(tree("old", 30.0), crate::common::tight(400.0, 400.0));
+    let original = registry
+        .get(&tag("old"))
+        .expect("the original Hero mounted");
+    laid.pump_widget(tree("new", 45.0));
+    assert!(
+        registry.get(&tag("old")).is_none(),
+        "retagging withdraws the old match key"
+    );
+    let updated = registry
+        .get(&tag("new"))
+        .expect("the new tag names the mounted Hero");
+    assert!(
+        updated.is_same(&original),
+        "a match tag change preserves mounted identity"
+    );
+    let render = updated.render_id().expect("the updated Hero is laid out");
+    assert_eq!(
+        laid.pipeline_owner().with(|owner| owner.box_size(render)),
+        Some(flui_foundation::geometry::Size::new(45.0, 20.0))
+    );
+}
+
+pub(crate) fn retagging_to_a_duplicate_preserves_the_existing_winner() {
+    let registry = HeroRegistry::new();
+    let tree = |name: Option<&'static str>| {
+        let second = name.map_or_else(
+            || SizedBox::shrink().boxed(),
+            |name| Hero::new(ValueKey::new(name), SizedBox::new(50.0, 20.0)).boxed(),
+        );
+        HeroScope::new(
+            registry.clone(),
+            flui_widgets::Row::new((
+                Hero::new(ValueKey::new("winner"), SizedBox::new(30.0, 20.0)),
+                second,
+            )),
+        )
+    };
+    let mut laid = crate::common::lay_out(tree(Some("old")), crate::common::tight(400.0, 100.0));
+    let winner = registry
+        .get(&tag("winner"))
+        .expect("the first Hero mounted");
+    let moved = registry.get(&tag("old")).expect("the second Hero mounted");
+    laid.pump_widget(tree(Some("winner")));
+    assert!(registry.get(&tag("old")).is_none());
+    assert!(
+        registry
+            .get(&tag("winner"))
+            .expect("the winner remains")
+            .is_same(&winner)
+    );
+    assert!(!winner.is_same(&moved));
+    assert_eq!(registry.len(), 1);
+    laid.pump_widget(tree(None));
+    assert!(
+        registry
+            .get(&tag("winner"))
+            .expect("rejected duplicate cleanup preserves the winner")
+            .is_same(&winner)
+    );
+    assert!(winner.start_flight(true).is_some());
+}
+
+pub(crate) fn replacing_a_hero_scope_moves_the_existing_hero() {
+    let old = HeroRegistry::new();
+    let next = HeroRegistry::new();
+    let tree = |registry| {
+        HeroScope::new(
+            registry,
+            Hero::new(ValueKey::new("shared"), SizedBox::new(30.0, 20.0)),
+        )
+    };
+    let mut laid = crate::common::lay_out(tree(old.clone()), crate::common::tight(400.0, 400.0));
+    let original = old
+        .get(&tag("shared"))
+        .expect("the original scope registered its Hero");
+    laid.pump_widget(tree(next.clone()));
+    assert!(
+        old.get(&tag("shared")).is_none(),
+        "the former scope cannot invite the moved Hero"
+    );
+    let moved = next
+        .get(&tag("shared"))
+        .expect("the new scope receives the Hero");
+    assert!(moved.is_same(&original));
+    assert!(
+        moved.start_flight(true).is_some(),
+        "the migrated handle still measures its mounted node"
+    );
+}
+
+pub(crate) fn reparenting_a_hero_moves_registration_without_recreating_it() {
+    #[derive(Clone)]
+    struct KeyedHero {
+        key: flui_view::GlobalKey<KeyedHeroState>,
+        inits: std::rc::Rc<std::cell::Cell<usize>>,
+    }
+    struct KeyedHeroState(std::rc::Rc<std::cell::Cell<usize>>);
+    impl View for KeyedHero {
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::stateful(self)
+        }
+        fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
+            Some(&self.key)
+        }
+    }
+    impl StatefulView for KeyedHero {
+        type State = KeyedHeroState;
+        fn create_state(&self) -> Self::State {
+            KeyedHeroState(std::rc::Rc::clone(&self.inits))
+        }
+    }
+    impl ViewState<KeyedHero> for KeyedHeroState {
+        fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
+            self.0.set(self.0.get() + 1);
+        }
+        fn build(&self, _view: &KeyedHero, _ctx: &dyn BuildContext) -> impl IntoView {
+            Hero::new(ValueKey::new("shared"), SizedBox::new(30.0, 20.0))
+        }
+    }
+    let left = HeroRegistry::new();
+    let right = HeroRegistry::new();
+    let key = flui_view::GlobalKey::new();
+    let inits = std::rc::Rc::new(std::cell::Cell::new(0));
+    let tree = |moved| {
+        let child = KeyedHero {
+            key: key.clone(),
+            inits: std::rc::Rc::clone(&inits),
+        }
+        .boxed();
+        let empty = SizedBox::shrink().boxed();
+        let (left_child, right_child) = if moved {
+            (empty, child)
+        } else {
+            (child, empty)
+        };
+        flui_widgets::Row::new((
+            HeroScope::new(left.clone(), left_child),
+            HeroScope::new(right.clone(), right_child),
+        ))
+    };
+    let mut laid = crate::common::lay_out(tree(false), crate::common::tight(400.0, 100.0));
+    let original = left
+        .get(&tag("shared"))
+        .expect("the left scope registered the Hero");
+    laid.pump_widget(tree(true));
+    assert!(
+        left.get(&tag("shared")).is_none(),
+        "the departed scope cannot invite the Hero"
+    );
+    let moved = right
+        .get(&tag("shared"))
+        .expect("the right scope registered the reparented Hero");
+    assert!(
+        moved.is_same(&original),
+        "GlobalKey retakes the existing Hero subtree"
+    );
+    moved
+        .start_flight(true)
+        .expect("the moved Hero remains measurable");
+    laid.pump();
+    assert_eq!(
+        inits.get(),
+        1,
+        "GlobalKey does not recreate the mounted subtree"
+    );
+}
+
 pub(crate) fn a_retained_hero_handle_does_not_keep_its_presentation_alive() {
     for flying in [false, true] {
         let registry = HeroRegistry::new();

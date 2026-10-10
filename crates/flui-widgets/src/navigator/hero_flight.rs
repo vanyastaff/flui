@@ -1590,7 +1590,7 @@ mod terminal_tests {
                 let (from, from_tree) = HeroHandle::test_laid_out(&hero);
                 let (to, to_tree) = HeroHandle::test_laid_out(&hero);
                 let manifest = HeroFlightManifest {
-                    tag: from.tag().clone(),
+                    tag: from.tag(),
                     direction: Some(FlightDirection::Push),
                     from_route: crate::navigator::RouteId::next(),
                     to_route: crate::navigator::RouteId::next(),
