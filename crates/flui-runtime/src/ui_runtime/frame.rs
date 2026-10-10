@@ -360,12 +360,17 @@ impl UiRuntime {
         &self,
         now: Instant,
         deadline: flui_scheduler::IdleDeadline,
+        mut prepare: impl FnMut(),
         pipeline: impl FnMut() -> bool,
     ) -> bool {
-        let commits_closed = TextCommitsClosed::close(self);
+        let mut commits_closed = None;
+        let commit_slot = &mut commits_closed;
         let result = self
             .owner_frame
-            .drive_frame(now, deadline, pipeline)
+            .drive_frame(now, deadline, move || {
+                prepare();
+                *commit_slot = Some(TextCommitsClosed::close(self));
+            }, pipeline)
             .expect("BUG: the runtime's live frame owner must admit its frame transaction");
         drop(commits_closed);
         // The commit anchor: each presentation's queued grants, against the
@@ -1152,29 +1157,31 @@ impl UiRuntime {
 /// anchor after the drive, never from a destructor. A rejected nested drive
 /// restores the enclosing transaction instead of reopening its commits.
 struct TextCommitsClosed<'a> {
-    previous: Vec<(&'a flui_interaction::TextInputOwner, bool)>,
+    first: Option<(&'a flui_interaction::TextInputOwner, bool)>,
+    remaining: Vec<(&'a flui_interaction::TextInputOwner, bool)>,
 }
 
 impl<'a> TextCommitsClosed<'a> {
     fn close(ui_runtime: &'a UiRuntime) -> Self {
-        let previous: Vec<_> = ui_runtime
+        let mut previous = ui_runtime
             .presentations
             .iter()
             .map(|presentation| {
                 let input = presentation.text_input();
                 (input, input.is_transaction_open())
-            })
-            .collect();
-        for (input, _) in &previous {
+            });
+        let first = previous.next();
+        let remaining: Vec<_> = previous.collect();
+        for (input, _) in first.iter().chain(&remaining) {
             input.set_transaction_open(true);
         }
-        Self { previous }
+        Self { first, remaining }
     }
 }
 
 impl Drop for TextCommitsClosed<'_> {
     fn drop(&mut self) {
-        for (input, open) in &self.previous {
+        for (input, open) in self.first.iter().chain(&self.remaining) {
             input.set_transaction_open(*open);
         }
     }
