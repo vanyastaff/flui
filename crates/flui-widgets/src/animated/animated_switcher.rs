@@ -22,9 +22,8 @@
 //! delivery: [`AnimatedSize`](crate::AnimatedSize) admits its completion effects
 //! directly to the owner post-frame lane.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use flui_animation::curve::{ArcCurve, Curve};
@@ -41,6 +40,7 @@ use flui_view::{
 };
 
 use crate::animated::vsync_scope::VsyncScope;
+use crate::support::retirement::Terminal;
 use crate::{FadeTransition, Stack};
 
 /// A custom transition for [`AnimatedSwitcher`]: wraps an incoming/outgoing
@@ -265,19 +265,19 @@ struct ChildEntry {
     /// `controller`, eased by `switch_in_curve` going forward and
     /// `switch_out_curve` going backward — what `transition_builder`
     /// actually animates against.
-    curved: CurvedAnimation<ArcCurve>,
+    curved: Terminal<CurvedAnimation<ArcCurve>>,
     status_subscription: Option<flui_animation::StatusSubscription>,
     /// Flipped by the status-listener callback when `controller` reaches
     /// [`AnimationStatus::Dismissed`] (a completed reverse run). Read — and
     /// acted on — by [`AnimatedSwitcherState::build`]'s sweep; see the
     /// module docs for why the listener cannot dispose the entry itself.
-    dismissed: Rc<AtomicBool>,
+    dismissed: Rc<Cell<bool>>,
     /// The child widget this entry was built from, used to detect a
     /// same-entry rebuild (`View::can_update`) and to re-run
     /// `transition_builder` on demand.
-    widget_child: BoxedView,
+    widget_child: Terminal<BoxedView>,
     /// The cached, already-built (and stably keyed) transition widget.
-    transition: BoxedView,
+    transition: Terminal<Rc<BoxedView>>,
 }
 
 impl ChildEntry {
@@ -302,6 +302,7 @@ impl ChildEntry {
     ) -> Self {
         // No ticker: `Vsync` drives this controller once registered (see
         // `ChildEntry::register`).
+        let child = Terminal::new(child);
         let controller = AnimationController::builder(duration).build_on(vsync);
         if let Some(reverse_duration) = reverse_duration {
             controller
@@ -310,8 +311,9 @@ impl ChildEntry {
         }
         let parent: std::rc::Rc<dyn Animation<f64>> =
             std::rc::Rc::new(controller.controller().clone());
-        let curved =
-            CurvedAnimation::new(parent, switch_in_curve).with_reverse_curve(switch_out_curve);
+        let curved = Terminal::new(
+            CurvedAnimation::new(parent, switch_in_curve).with_reverse_curve(switch_out_curve),
+        );
 
         if animate {
             // A new entry animates in.
@@ -329,9 +331,9 @@ impl ChildEntry {
             controller,
             curved,
             status_subscription: None,
-            dismissed: Rc::new(AtomicBool::new(false)),
+            dismissed: Rc::new(Cell::new(false)),
             widget_child: child,
-            transition,
+            transition: Terminal::new(Rc::new(transition)),
         }
     }
 
@@ -347,7 +349,7 @@ impl ChildEntry {
         self.status_subscription = Some(self.controller.controller().subscribe_status(
             std::rc::Rc::new(move |status| {
                 if status == AnimationStatus::Dismissed {
-                    dismissed.store(true, Ordering::Release);
+                    dismissed.set(true);
                     rebuild.schedule(flui_view::RebuildReason::AnimationTick);
                 }
             }),
@@ -365,12 +367,14 @@ impl ChildEntry {
     }
 
     fn update_transition(&mut self, transition_builder: &AnimatedSwitcherTransitionBuilder) {
-        self.transition = Self::build_transition(
+        let transition = Self::build_transition(
             self.child_number,
             &self.widget_child,
             &self.curved,
             transition_builder,
         );
+        let previous = std::mem::replace(&mut self.transition, Terminal::new(Rc::new(transition)));
+        drop(previous);
     }
 
     fn build_transition(
@@ -392,12 +396,22 @@ impl ChildEntry {
     }
 }
 
+impl Drop for ChildEntry {
+    fn drop(&mut self) {
+        // Logical cancellation still runs during incoming unwind. Independent
+        // authored values use terminal slots, so generated field cleanup cannot
+        // run their destructors after the first failure. Vec cleanup consequently
+        // withdraws every remaining driver without retiring its opaque captures.
+        self.dispose();
+    }
+}
+
 impl std::fmt::Debug for ChildEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ChildEntry")
             .field("child_number", &self.child_number)
             .field("status", &self.controller.controller().status())
-            .field("dismissed", &self.dismissed.load(Ordering::Acquire))
+            .field("dismissed", &self.dismissed.get())
             .finish_non_exhaustive()
     }
 }
@@ -419,9 +433,10 @@ pub struct AnimatedSwitcherState {
 
 impl std::fmt::Debug for AnimatedSwitcherState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let outgoing_count = self.outgoing_entries.borrow().len();
         f.debug_struct("AnimatedSwitcherState")
             .field("has_current_entry", &self.current_entry.is_some())
-            .field("outgoing_count", &self.outgoing_entries.borrow().len())
+            .field("outgoing_count", &outgoing_count)
             .finish_non_exhaustive()
     }
 }
@@ -520,31 +535,37 @@ impl ViewState<AnimatedSwitcher> for AnimatedSwitcherState {
         // Sweep entries whose reverse run dismissed since the last build — see
         // the module docs for why this cannot happen inside the status
         // listener itself.
-        self.outgoing_entries.borrow_mut().retain_mut(|entry| {
-            if entry.dismissed.load(Ordering::Acquire) {
-                entry.dispose();
-                false
-            } else {
-                true
-            }
-        });
+        let dismissed: Vec<_> = self
+            .outgoing_entries
+            .borrow_mut()
+            .extract_if(.., |entry| entry.dismissed.get())
+            .collect();
+        drop(dismissed);
 
         let current_child_number = self.current_entry.as_ref().map(|entry| entry.child_number);
         let current_transition = self
             .current_entry
             .as_ref()
-            .map(|entry| entry.transition.clone());
+            .map(|entry| Rc::clone(&entry.transition));
         // An outgoing entry sharing the current entry's key is suppressed from
         // the previous children: the same `child_number` never appears in both
         // lists at once.
-        let previous_transitions: Vec<BoxedView> = self
-            .outgoing_entries
-            .borrow()
-            .iter()
-            .filter(|entry| Some(entry.child_number) != current_child_number)
-            .map(|entry| entry.transition.clone())
-            .collect();
+        let previous_transitions: Vec<_> = {
+            let outgoing = self.outgoing_entries.borrow();
+            outgoing
+                .iter()
+                .filter(|entry| Some(entry.child_number) != current_child_number)
+                .map(|entry| Rc::clone(&entry.transition))
+                .collect()
+        };
 
+        // Snapshot ownership under the borrow; authored View::clone runs only
+        // after the entry collection is available again.
+        let current_transition = current_transition.map(|transition| transition.as_ref().clone());
+        let previous_transitions = previous_transitions
+            .into_iter()
+            .map(|transition| transition.as_ref().clone())
+            .collect();
         (view.layout_builder)(current_transition, previous_transitions)
     }
 
@@ -563,7 +584,7 @@ impl ViewState<AnimatedSwitcher> for AnimatedSwitcherState {
         // A new entry is needed when a child appeared or disappeared, or when
         // the new child cannot update the current entry's child in place.
         let needs_new_entry = match (new_view.child.as_ref(), self.current_entry.as_ref()) {
-            (Some(new_child), Some(entry)) => !new_child.can_update(&entry.widget_child),
+            (Some(new_child), Some(entry)) => !new_child.can_update(&*entry.widget_child),
             (Some(_), None) | (None, Some(_)) => true,
             (None, None) => false,
         };
@@ -575,17 +596,171 @@ impl ViewState<AnimatedSwitcher> for AnimatedSwitcherState {
             (new_view.child.clone(), self.current_entry.as_mut())
         {
             // Same entry, updated in place — no transition restart.
-            entry.widget_child = new_child;
+            let previous = std::mem::replace(&mut entry.widget_child, Terminal::new(new_child));
+            drop(previous);
             entry.update_transition(&new_view.transition_builder);
         }
     }
 
     fn dispose(&mut self) {
-        if let Some(entry) = self.current_entry.as_mut() {
-            entry.dispose();
+        let current = self.current_entry.take();
+        let outgoing = std::mem::take(self.outgoing_entries.get_mut());
+        drop(current);
+        drop(outgoing);
+    }
+}
+
+#[cfg(test)]
+mod retirement_tests {
+    use super::*;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    #[derive(Clone)]
+    struct Capture {
+        drops: Rc<Cell<usize>>,
+        armed: Rc<Cell<bool>>,
+        fails: bool,
+        label: &'static str,
+    }
+
+    impl View for Capture {
+        fn create_element(&self) -> ElementKind {
+            ElementKind::stateless(self)
         }
-        for entry in self.outgoing_entries.get_mut() {
-            entry.dispose();
+    }
+
+    impl StatelessView for Capture {
+        fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+            crate::SizedBox::new(10.0, 10.0)
+        }
+    }
+
+    impl Drop for Capture {
+        fn drop(&mut self) {
+            if self.armed.get() {
+                self.drops.set(self.drops.get() + 1);
+                assert!(!self.fails, "{}", self.label);
+            }
+        }
+    }
+
+    // A mounted actor contains build failures. The private entry seam isolates
+    // physical destruction, including an incoming unwind and independent tails.
+    fn exercise(child_failure: bool, transition_failure: bool, incoming: bool) {
+        let vsync = Vsync::new();
+        let armed = Rc::new(Cell::new(false));
+        let drops: [Rc<Cell<usize>>; 4] = std::array::from_fn(|_| Rc::new(Cell::new(0)));
+        let mut entries = Vec::new();
+        let mut futures = Vec::new();
+        for index in 0..2 {
+            let transition = Capture {
+                drops: drops[index * 2 + 1].clone(),
+                armed: armed.clone(),
+                fails: transition_failure,
+                label: "switcher transition retirement",
+            };
+            let builder: AnimatedSwitcherTransitionBuilder =
+                Rc::new(move |_child, _animation| transition.clone().boxed());
+            let entry = ChildEntry::new(
+                Capture {
+                    drops: drops[index * 2].clone(),
+                    armed: armed.clone(),
+                    fails: child_failure,
+                    label: "switcher child retirement",
+                }
+                .boxed(),
+                index as u64,
+                Duration::from_secs(1),
+                None,
+                ArcCurve::new(Curves::Linear),
+                ArcCurve::new(Curves::Linear),
+                &builder,
+                true,
+                Some(&vsync),
+            );
+            futures.push(
+                entry
+                    .controller
+                    .controller()
+                    .forward()
+                    .expect("live entry starts"),
+            );
+            entries.push(entry);
+        }
+        armed.set(true);
+        let outcome = catch_unwind(AssertUnwindSafe(move || {
+            let _entries = entries;
+            assert!(!incoming, "switcher incoming failure");
+        }));
+        let expected_failure = if incoming {
+            Some("switcher incoming failure")
+        } else if child_failure {
+            Some("switcher child retirement")
+        } else if transition_failure {
+            Some("switcher transition retirement")
+        } else {
+            None
+        };
+        match expected_failure {
+            Some(expected) => {
+                let failure = outcome.expect_err("authored retirement must fail");
+                assert_eq!(
+                    flui_foundation::panic::payload_text(failure.as_ref()),
+                    Some(expected)
+                );
+            }
+            None => assert!(outcome.is_ok()),
+        }
+        let expected_drops = if incoming {
+            [0, 0, 0, 0]
+        } else if child_failure {
+            [1, 0, 0, 0]
+        } else if transition_failure {
+            [1, 1, 0, 0]
+        } else {
+            [1, 1, 1, 1]
+        };
+        assert_eq!(drops.each_ref().map(|count| count.get()), expected_drops);
+        assert!(
+            vsync.is_empty(),
+            "every driver releases its seat, including the tail"
+        );
+        assert!(
+            futures
+                .iter()
+                .all(flui_animation::AnimationRunFuture::is_canceled)
+        );
+    }
+
+    fn healthy() {
+        exercise(false, false, false);
+    }
+    fn child_failure() {
+        exercise(true, false, false);
+        healthy();
+    }
+    fn transition_failure() {
+        exercise(false, true, false);
+        healthy();
+    }
+    fn competing() {
+        exercise(true, true, false);
+        healthy();
+    }
+    fn incoming() {
+        exercise(true, true, true);
+        healthy();
+    }
+
+    crate::support::child_process::child_test! {
+        fn switcher_entry_retirement_preserves_logical_cleanup() {
+            crate::support::test_cases::run_cases("switcher entry retirement", &[
+                ("healthy", healthy),
+                ("child_failure", child_failure),
+                ("transition_failure", transition_failure),
+                ("competing", competing),
+                ("incoming", incoming),
+            ]);
         }
     }
 }

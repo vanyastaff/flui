@@ -571,6 +571,7 @@ fn animation_and_visibility() {
             ("animated_size::size_completion_keeps_owner_event_order_and_lifetime", crate::animated_size::size_completion_keeps_owner_event_order_and_lifetime),
             ("implicit_animations::switching_entries_migrate_their_incoming_and_outgoing_runs", crate::implicit_animations::switching_entries_migrate_their_incoming_and_outgoing_runs),
             ("implicit_animations::switching_entries_finish_migration_before_a_wake_failure", crate::implicit_animations::switching_entries_finish_migration_before_a_wake_failure),
+            ("implicit_animations::outgoing_switcher_retirement_preserves_independent_captures", crate::implicit_animations::outgoing_switcher_retirement_preserves_independent_captures),
             ("scroll::an_active_fling_migrates_between_registries", crate::scroll::an_active_fling_migrates_between_registries),
             ("scroll::a_notched_wheel_run_migrates_with_its_accepted_destination", crate::scroll::a_notched_wheel_run_migrates_with_its_accepted_destination),
             ("dismissible::a_returning_dismissible_migrates_between_registries", crate::dismissible::a_returning_dismissible_migrates_between_registries),

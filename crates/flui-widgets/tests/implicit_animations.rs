@@ -880,6 +880,141 @@ pub(crate) fn switching_entries_finish_migration_before_a_wake_failure() {
     exercise_switching_registry(true);
 }
 
+pub(crate) fn outgoing_switcher_retirement_preserves_independent_captures() {
+    let Some(case) = crate::common::child_process::selected_case() else {
+        crate::common::child_process::run_rows(
+            "contracts::animation_and_visibility",
+            &["switcher_outgoing_retirement"],
+        );
+        return;
+    };
+    assert_eq!(case, "switcher_outgoing_retirement");
+
+    use flui_view::{BoxedView, StatelessView, ValueKey, View};
+    use flui_widgets::AnimatedSwitcher;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    #[derive(Clone)]
+    struct ObservedView {
+        key: ValueKey<u64>,
+        role: &'static str,
+        child: BoxedView,
+        armed: Rc<Cell<bool>>,
+        fail_once: Rc<Cell<bool>>,
+        drops: Rc<RefCell<Vec<(&'static str, bool)>>>,
+    }
+    impl View for ObservedView {
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::stateless(self)
+        }
+        fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
+            Some(&self.key)
+        }
+    }
+    impl StatelessView for ObservedView {
+        fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+            self.child.clone()
+        }
+    }
+    impl Drop for ObservedView {
+        fn drop(&mut self) {
+            if !self.armed.get() {
+                return;
+            }
+            let panicking = std::thread::panicking();
+            self.drops.borrow_mut().push((self.role, panicking));
+            assert!(
+                !(self.role == "outgoing child" && self.fail_once.replace(false)),
+                "outgoing switcher capture failed"
+            );
+        }
+    }
+
+    let registry = Vsync::new();
+    let armed = Rc::new(Cell::new(false));
+    let fail_once = Rc::new(Cell::new(true));
+    let drops = Rc::new(RefCell::new(Vec::new()));
+    let template = AnimatedSwitcher::new(RUN).transition_builder({
+        let (armed, fail_once, drops) = (armed.clone(), fail_once.clone(), drops.clone());
+        move |child, animation| {
+            ObservedView {
+                key: ValueKey::new(99),
+                role: "transition",
+                child: AnimatedSwitcher::default_transition_builder(child, animation),
+                armed: armed.clone(),
+                fail_once: fail_once.clone(),
+                drops: drops.clone(),
+            }
+            .boxed()
+        }
+    });
+    let tree = |replacement| {
+        VsyncScope::new(
+            registry.clone(),
+            template.clone().child(ObservedView {
+                key: ValueKey::new(u64::from(replacement)),
+                role: if replacement {
+                    "incoming child"
+                } else {
+                    "outgoing child"
+                },
+                child: SizedBox::new(100.0, 100.0).boxed(),
+                armed: armed.clone(),
+                fail_once: fail_once.clone(),
+                drops: drops.clone(),
+            }),
+        )
+    };
+    let mut laid = lay_out_animated(tree(false), tight(100.0, 100.0), registry.clone());
+    laid.pump_widget(tree(true));
+    for _ in 0..4 {
+        laid.pump_for(FRAME);
+    }
+    assert_eq!(
+        laid.find_all_by_render_type("RenderAnimatedOpacity").len(),
+        2
+    );
+    armed.set(true);
+    let mut result = Ok(());
+    for _ in 0..4 {
+        result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            laid.pump_for(FRAME);
+        }));
+        if result.is_err() || !fail_once.get() {
+            break;
+        }
+    }
+    armed.set(false);
+    assert!(!fail_once.get(), "the actual outgoing capture must retire");
+    if let Err(failure) = result {
+        assert_eq!(
+            flui_foundation::panic::payload_text(failure.as_ref()),
+            Some("outgoing switcher capture failed")
+        );
+    }
+    assert!(
+        !drops
+            .borrow()
+            .iter()
+            .any(|(role, panicking)| *role == "transition" && *panicking),
+        "an independent transition cannot retire during the outgoing child failure: {:?}",
+        drops.borrow()
+    );
+    laid.pump_widget(SizedBox::new(100.0, 100.0));
+    assert!(registry.is_empty(), "faulted switcher owners are withdrawn");
+    laid.pump_widget(tree(false));
+    laid.pump_widget(tree(true));
+    for _ in 0..6 {
+        laid.pump_for(FRAME);
+    }
+    assert_eq!(
+        laid.find_all_by_render_type("RenderAnimatedOpacity").len(),
+        1
+    );
+    crate::common::child_process::pass();
+}
+
 fn exercise_switching_registry(fail_wake: bool) {
     use flui_widgets::{AnimatedSwitcher, ColoredBox};
 

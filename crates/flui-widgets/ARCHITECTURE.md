@@ -7,6 +7,22 @@ before exposing migration to callbacks. `switching_entries_finish_migration_befo
 observes the committed registrations inside a failing wake and verifies disposal
 of the faulted lifecycle actor followed by a fresh working cross-fade.
 
+Completed Switcher entries leave the outgoing collection before any cancellation
+or authored destruction. Cached transition snapshots retain `Rc` ownership under
+the collection borrow, then clone authored views after releasing it. Each entry
+keeps independent curve, child and transition ownership in terminal slots, while
+its driver always performs logical cancellation, including during incoming unwind.
+Collection cleanup therefore withdraws the remaining drivers after a first
+failure without invoking the opaque capture tail. Lifecycle disposal withdraws
+both current and outgoing entries before retiring either collection.
+
+`outgoing_switcher_retirement_preserves_independent_captures` exercises an actual
+mounted cross-fade, outgoing-child destruction and a subsequent healthy switch.
+The private `switcher_entry_retirement_preserves_logical_cleanup` matrix isolates
+physical entry destruction: healthy, child and transition failure, competing
+destructors, incoming unwind and independent entry tails. It also verifies every
+registry seat and run future is cancelled, followed by healthy retirement.
+
 Dismissible restores its shared collapse owner before publishing that same
 batched migration. `collapse_owner_storage_is_committed_before_migration_callouts`
 uses the private storage seam to check reentrant access, failure propagation and

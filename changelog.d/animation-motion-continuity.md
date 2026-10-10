@@ -189,6 +189,9 @@
 - Commit all Switcher and Dismissible controller bindings before migration wakes;
   restore shared collapse ownership before callback reentry. `VsyncUpdate::prepare`
   returns a publication whose explicit delivery or drop completes the accepted tail.
+- Retire completed Switcher entries outside the outgoing collection borrow;
+  preserve the first destructor failure while cancelling remaining drivers and
+  retaining independent child and transition captures during unwind.
 - Use component-specific spring rest distances through
   `TwoWayConverter::rest_thresholds`; derived values compose their fields'
   distances. Manual converters must implement the new method with positive finite
