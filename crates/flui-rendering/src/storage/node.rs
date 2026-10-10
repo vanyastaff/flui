@@ -199,6 +199,11 @@ impl RenderNode {
         with_entry!(self, entry => entry.local_invalidation())
     }
 
+    /// Close admission before any member of the selected batch calls user code.
+    pub(crate) fn begin_detachment(&mut self) -> bool {
+        with_entry!(self, entry => entry.begin_detachment())
+    }
+
     /// Tree-lifecycle hook (ADR-0013): tears down whatever `attach`
     /// subscribed to, called before this node is removed from the tree.
     ///

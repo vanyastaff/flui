@@ -306,6 +306,20 @@ impl PipelineOwner<Idle> {
         let nodes = self.preflight_detach(root_ids)?;
         let membership: FxHashSet<_> = nodes.iter().map(|record| record.render_id).collect();
 
+        // Revocation is batch-wide and invokes no user code. Parent-data
+        // cleanup, membership wakes and detach hooks can all read peer handles.
+        for record in &nodes {
+            let withdrawn = self
+                .render_tree
+                .get_mut(record.render_id)
+                .expect("BUG: detach preflight guaranteed every recorded node remains live")
+                .begin_detachment();
+            debug_assert!(
+                withdrawn,
+                "detach preflight guaranteed an attached interval"
+            );
+        }
+
         for &root_id in root_ids {
             if let Some(parent_id) = self.render_tree.parent(root_id) {
                 self.render_tree.drop_child(parent_id, root_id);

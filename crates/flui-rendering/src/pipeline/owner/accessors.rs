@@ -619,11 +619,16 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             return 0;
         }
 
-        // ADR-0013: detach every node in the subtree before eviction —
-        // a render object that subscribed to a `Listenable` in `attach`
-        // gets a chance to unsubscribe here. Not a correctness
-        // prerequisite (the handle it holds is generational and already
-        // goes silent once the node is gone), but the clean stop.
+        // Withdraw the entire subtree before any user-owned parent data or
+        // detach hook can submit through a saved peer handle (ADR-0190).
+        for &subtree_id in &subtree {
+            if let Some(node) = self.render_tree.get_mut(subtree_id) {
+                let _ = node.begin_detachment();
+            }
+        }
+
+        // ADR-0013: detach every node before eviction so attach-time
+        // subscriptions can unsubscribe while their storage still exists.
         for &subtree_id in &subtree {
             if let Some(node) = self.render_tree.get_mut(subtree_id) {
                 let _ = node.clear_parent_data();

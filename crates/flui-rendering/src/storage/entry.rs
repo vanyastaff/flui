@@ -33,6 +33,7 @@ use crate::protocol::{Protocol, ProtocolConstraints, ProtocolGeometry, RenderObj
 enum AttachmentState {
     Detached(Option<AttachmentEpoch>),
     Attached(AttachmentEpoch),
+    Detaching(AttachmentEpoch),
 }
 
 impl AttachmentState {
@@ -40,14 +41,14 @@ impl AttachmentState {
         match self {
             Self::Detached(None) => Some(AttachmentEpoch::FIRST),
             Self::Detached(Some(previous)) => Some(previous.next()),
-            Self::Attached(_) => None,
+            Self::Attached(_) | Self::Detaching(_) => None,
         }
     }
 
     fn epoch(self) -> Option<AttachmentEpoch> {
         match self {
             Self::Attached(epoch) => Some(epoch),
-            Self::Detached(_) => None,
+            Self::Detached(_) | Self::Detaching(_) => None,
         }
     }
 
@@ -212,14 +213,24 @@ impl<P: Protocol> RenderEntry<P> {
         true
     }
 
-    pub(crate) fn end_attachment(&mut self) -> bool {
+    /// Withdraw admission without calling user code. The whole selected batch
+    /// enters this state before its first parent-data or render-object cleanup.
+    pub(crate) fn begin_detachment(&mut self) -> bool {
         let AttachmentState::Attached(epoch) = self.attachment else {
             return false;
         };
-        self.attachment = AttachmentState::Detached(Some(epoch));
+        self.attachment = AttachmentState::Detaching(epoch);
         if let Some(handle) = self.local_invalidation.take() {
             handle.withdraw();
         }
+        true
+    }
+
+    pub(crate) fn end_attachment(&mut self) -> bool {
+        let AttachmentState::Detaching(epoch) = self.attachment else {
+            return false;
+        };
+        self.attachment = AttachmentState::Detached(Some(epoch));
         true
     }
 

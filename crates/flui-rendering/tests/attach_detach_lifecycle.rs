@@ -37,6 +37,7 @@ struct LifecycleLog {
     paint_count: Arc<AtomicUsize>,
     captured_handle: Rc<RefCell<Option<LocalRenderInvalidationHandle>>>,
     peer_drop: Option<Rc<PeerDropLog>>,
+    peer_detach: Option<Rc<PeerDropLog>>,
 }
 
 #[derive(Default, Debug)]
@@ -44,6 +45,21 @@ struct PeerDropLog {
     handles: RefCell<Vec<LocalRenderInvalidationHandle>>,
     attempts: Cell<usize>,
     unexpected: Cell<usize>,
+}
+
+impl PeerDropLog {
+    fn check_withdrawn(&self) {
+        let handles = self.handles.borrow().clone();
+        for handle in handles {
+            self.attempts.set(self.attempts.get() + 1);
+            if !matches!(
+                handle.mark_needs_paint(),
+                Err(flui_rendering::pipeline::DirtySendError::OwnerGone)
+            ) {
+                self.unexpected.set(self.unexpected.get() + 1);
+            }
+        }
+    }
 }
 
 impl LifecycleLog {
@@ -75,16 +91,7 @@ impl Drop for LifecycleProbe {
         let Some(peers) = &self.log.peer_drop else {
             return;
         };
-        let handles = peers.handles.borrow().clone();
-        for handle in handles {
-            peers.attempts.set(peers.attempts.get() + 1);
-            if !matches!(
-                handle.mark_needs_paint(),
-                Err(flui_rendering::pipeline::DirtySendError::OwnerGone)
-            ) {
-                peers.unexpected.set(peers.unexpected.get() + 1);
-            }
-        }
+        peers.check_withdrawn();
     }
 }
 
@@ -115,7 +122,169 @@ impl RenderBox for LifecycleProbe {
 
     fn detach(&mut self) {
         self.log.detach_count.fetch_add(1, Ordering::SeqCst);
+        if let Some(peers) = &self.log.peer_detach {
+            peers.check_withdrawn();
+        }
     }
+}
+
+#[derive(Debug)]
+struct LifecycleContainer(LifecycleProbe);
+
+impl flui_foundation::Diagnosticable for LifecycleContainer {}
+
+impl RenderBox for LifecycleContainer {
+    type Arity = flui_foundation::Variable;
+    type ParentData = BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        _ctx: &mut BoxLayoutContext<'_, Self::Arity, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok(self.0.size)
+    }
+
+    fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
+        RenderBox::attach(&mut self.0, handle);
+    }
+
+    fn detach(&mut self) {
+        RenderBox::detach(&mut self.0);
+    }
+}
+
+#[derive(Clone, Debug)]
+struct RetirementParentData {
+    peers: Rc<PeerDropLog>,
+    detaches: Rc<Cell<usize>>,
+    drops: Rc<Cell<usize>>,
+}
+
+impl flui_rendering::parent_data::ParentData for RetirementParentData {
+    fn detach(&mut self) {
+        self.detaches.set(self.detaches.get() + 1);
+        self.peers.check_withdrawn();
+    }
+}
+
+impl Drop for RetirementParentData {
+    fn drop(&mut self) {
+        self.drops.set(self.drops.get() + 1);
+        self.peers.check_withdrawn();
+    }
+}
+
+pub(crate) fn subtree_cleanup_withdraws_all_selected_handles_before_user_code() {
+    // The public wake hook is Send + Sync; its owner-local observations stay
+    // on the invoking thread rather than weakening the capability's type.
+    thread_local! {
+        static PEERS: RefCell<Option<Rc<PeerDropLog>>> = const { RefCell::new(None) };
+    }
+    let mut outcomes = Vec::new();
+    for relocate in [false, true] {
+        let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+        let peers = Rc::new(PeerDropLog::default());
+        let root_log = LifecycleLog {
+            peer_detach: Some(Rc::clone(&peers)),
+            ..LifecycleLog::default()
+        };
+        let child_log = LifecycleLog {
+            peer_detach: Some(Rc::clone(&peers)),
+            ..LifecycleLog::default()
+        };
+        let parent = owner.insert(Box::new(LifecycleContainer(LifecycleProbe {
+            log: LifecycleLog::default(),
+            size: Size::new(40.0, 40.0),
+        })) as BoxedRenderObject);
+        let root = owner
+            .insert_child_render_object(
+                parent,
+                Box::new(LifecycleContainer(LifecycleProbe {
+                    log: root_log.clone(),
+                    size: Size::new(40.0, 40.0),
+                })) as BoxedRenderObject,
+            )
+            .expect("live parent");
+        let child = owner
+            .insert_child_render_object(root, probe(child_log.clone()))
+            .expect("live container");
+        let survivor_log = LifecycleLog::default();
+        owner
+            .insert_child_render_object(parent, probe(survivor_log.clone()))
+            .expect("live parent");
+        let old_handles = [root_log.captured_handle(), child_log.captured_handle()];
+        peers
+            .handles
+            .borrow_mut()
+            .extend(old_handles.iter().cloned());
+        let detaches = Rc::new(Cell::new(0));
+        let drops = Rc::new(Cell::new(0));
+        owner
+            .render_tree_mut()
+            .get_mut(root)
+            .expect("live root")
+            .set_parent_data(Box::new(RetirementParentData {
+                peers: Rc::clone(&peers),
+                detaches: Rc::clone(&detaches),
+                drops: Rc::clone(&drops),
+            }));
+        owner.set_on_need_visual_update(|| {
+            let observed = PEERS.with(|saved| saved.borrow_mut().take());
+            if let Some(observed) = observed {
+                observed.check_withdrawn();
+                PEERS.with(|saved| *saved.borrow_mut() = Some(observed));
+            }
+        });
+        PEERS.with(|saved| *saved.borrow_mut() = Some(Rc::clone(&peers)));
+        let token = if relocate {
+            Some(
+                owner
+                    .detach_render_subtrees(&[root])
+                    .expect("attached subtree"),
+            )
+        } else {
+            assert_eq!(owner.remove_render_object(root), 2);
+            None
+        };
+        owner.set_on_need_visual_update(|| {});
+        let outgoing = PEERS.with(|saved| saved.borrow_mut().take());
+        drop(outgoing);
+        assert!(
+            peers.attempts.get() >= 8,
+            "parent-data detach and Drop and both render hooks ran"
+        );
+        outcomes.push((relocate, peers.unexpected.get()));
+        assert_eq!((detaches.get(), drops.get()), (1, 1));
+        assert_eq!(root_log.detach_count.load(Ordering::SeqCst), 1);
+        assert_eq!(child_log.detach_count.load(Ordering::SeqCst), 1);
+        survivor_log
+            .captured_handle()
+            .mark_needs_paint()
+            .expect("outside subtree stays attached");
+        if let Some(token) = token {
+            owner.adopt_render_child(parent, root);
+            owner
+                .attach_render_subtrees(token)
+                .expect("same subtree, fresh intervals");
+            for handle in [root_log.captured_handle(), child_log.captured_handle()] {
+                handle
+                    .mark_needs_paint()
+                    .expect("new attachment accepts work");
+            }
+            for handle in old_handles {
+                assert!(matches!(
+                    handle.mark_needs_paint(),
+                    Err(flui_rendering::pipeline::DirtySendError::OwnerGone)
+                ));
+            }
+            assert!(owner.render_tree().get(child).is_some());
+        }
+    }
+    assert_eq!(
+        outcomes,
+        [(false, 0), (true, 0)],
+        "all selected handles must refuse before any cleanup or membership wake"
+    );
 }
 
 fn probe(log: LifecycleLog) -> BoxedRenderObject {

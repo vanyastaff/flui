@@ -41,6 +41,13 @@ The inbox retires before user-owned pipeline resources. Wake delivery holds no
 strong inbox reference, so releasing the pipeline from its wake revokes all peer
 attachments before any user destructor can submit new work.
 
+Subtree removal and relocation first withdraw every selected attachment, then
+change membership and run parent-data and render-object cleanup. Withdrawal
+cannot call user code. A private detaching state refuses reattachment until
+that node's detach hook is ready to run; the hook receives an already-closed
+interval. This makes peer handles refuse during the first cleanup, including
+membership wakes, while nodes outside the selected batch remain attached.
+
 External producers retain `RenderInvalidationHandle`, its `Send + Sync` boundary,
 and explicit bounded-channel backpressure. Both lanes converge on canonical
 pipeline invalidation; neither mutates an in-flight render walk.
@@ -77,6 +84,12 @@ phase wake failures, first-failure priority, and fresh-frame progress.
 `owner_release_withdraws_peer_handles_before_user_drop` exercises saved peer
 handles from user destructors during direct owner release and release inside
 an active wake.
+
+`subtree_cleanup_withdraws_all_selected_handles_before_user_code` exercises
+parent-data detach and destruction, render hooks and membership wakes during
+removal and relocation. It also checks surviving attachments and fresh handles
+after reattachment. Restoring per-node withdrawal after parent-data cleanup
+fails both rows because selected peer handles still admit work.
 
 ## Compatibility
 

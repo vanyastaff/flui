@@ -43,6 +43,11 @@ The public `lifecycle_matrix` rows
 coalescing, removal and owner release.
 `owner_release_withdraws_peer_handles_before_user_drop` checks that all peer
 admission ends before user destructors, including owner release from a wake.
+`subtree_cleanup_withdraws_all_selected_handles_before_user_code` pins batch-wide
+withdrawal before parent-data cleanup, membership wakes and render detach hooks.
+Removal and relocation close every selected interval first; detaching nodes
+cannot reattach until their lifecycle hook runs. Unselected nodes stay attached,
+and relocation later reopens fresh intervals.
 
 ### Semantics geometry follows committed paint transforms
 
