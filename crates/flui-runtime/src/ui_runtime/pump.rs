@@ -231,8 +231,9 @@ impl UiRuntime {
     /// (the app is hidden, paused or detached), and iOS for every owner turn,
     /// which only commits commands and polls, frames enabled or not.
     ///
-    /// The order is load-bearing. Only a begin frame clears the latch, and
-    /// none runs here; polling first would let a future that schedules a
+    /// The order is load-bearing. No begin frame consumes the old demand
+    /// here, so the background operation must do it before preparation and
+    /// polling. Polling first would let a future that schedules a
     /// frame find the latch still set, fire no wake, and starve until
     /// unrelated input arrives. The owner performs the complete background
     /// operation. Command application, geometry service and redraw acknowledgment
