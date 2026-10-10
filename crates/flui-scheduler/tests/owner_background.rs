@@ -305,13 +305,13 @@ fn healthy_wake_retirement_observes_newly_caught_failure() {
         let _ = &hook_capture;
         let (owner, weak) =
             RECOVERY_OWNER.with(|slot| slot.borrow().as_ref().expect("owner scope").clone());
+        weak.upgrade().expect("scheduler live").set_on_frame_scheduled(None);
         let capture = HostileCapture(Arc::clone(&observed));
         let failure = catch_unwind(AssertUnwindSafe(|| {
             owner.pump_background(move || { let _ = &capture; })
         })).expect_err("nested refused envelope fails");
         assert_eq!(flui_foundation::panic::payload_text(failure.as_ref()),
             Some("rejected recovery capture was destroyed"));
-        weak.upgrade().expect("scheduler live").set_on_frame_scheduled(None);
     })));
     assert_eq!(owner.pump_background(|| scheduler.request_frame()), Ok(0));
     assert_eq!(rejected_drops.load(Ordering::SeqCst), 1);
