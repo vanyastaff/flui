@@ -32,6 +32,9 @@ mod update_scheduler_reshape;
 #[path = "owner_callbacks.rs"]
 mod owner_callbacks;
 
+#[path = "owner_execution.rs"]
+mod owner_execution;
+
 #[path = "owner_background.rs"]
 mod owner_background;
 
