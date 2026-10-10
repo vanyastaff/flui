@@ -142,6 +142,8 @@ struct ResamplerInner {
     event_queue: VecDeque<BufferedEvent>,
     /// Prepared output remains deliverable until consumed or explicitly cleared.
     pending_output: VecDeque<OutputBatch>,
+    /// Admission reserves reusable storage; live frozen prefixes prevent reuse.
+    output_pool: Vec<OutputBatch>,
     /// Whether the pointer is currently down
     is_down: bool,
     /// Whether the pointer is being tracked
@@ -166,6 +168,14 @@ type OutputBatch = Arc<Mutex<VecDeque<PointerEvent>>>;
 /// newly prepared batches never join this prefix after its admission.
 pub(crate) struct PreparedEvents {
     batches: SmallVec<[OutputBatch; 4]>,
+    owner: Arc<Mutex<ResamplerInner>>,
+}
+
+impl Drop for PreparedEvents {
+    fn drop(&mut self) {
+        self.batches.clear();
+        self.owner.lock().reclaim_output();
+    }
 }
 
 impl PreparedEvents {
@@ -226,14 +236,55 @@ fn is_sequence_boundary(event: &PointerEvent) -> bool {
 }
 
 impl ResamplerInner {
-    fn prepared_events(&mut self, emitted: SmallVec<[PointerEvent; 4]>) -> PreparedEvents {
+    fn reclaim_output(&mut self) {
         self.pending_output.retain(|batch| !batch.lock().is_empty());
+        let idle = self
+            .output_pool
+            .iter()
+            .enumerate()
+            .filter(|(_, batch)| Arc::strong_count(batch) == 1)
+            .max_by_key(|(_, batch)| batch.lock().capacity())
+            .map(|(index, _)| index);
+        let mut index = 0;
+        self.output_pool.retain(|batch| {
+            let keep = Some(index) == idle || Arc::strong_count(batch) != 1;
+            index += 1;
+            keep
+        });
+    }
+
+    fn reserve_output(&mut self, capacity: usize) -> usize {
+        self.reclaim_output();
+        // The pool's sole Arc cannot acquire another owner without this inner
+        // lock. In particular, an empty but still frozen prefix is not reusable.
+        let index = self
+            .output_pool
+            .iter()
+            .position(|batch| Arc::strong_count(batch) == 1)
+            .unwrap_or_else(|| {
+                self.output_pool.push(Arc::new(Mutex::new(VecDeque::new())));
+                self.output_pool.len() - 1
+            });
+        self.output_pool[index].lock().reserve(capacity);
+        self.pending_output.reserve(1);
+        index
+    }
+
+    fn prepared_events(
+        &mut self,
+        emitted: SmallVec<[PointerEvent; 4]>,
+        owner: &Arc<Mutex<Self>>,
+    ) -> PreparedEvents {
+        self.reclaim_output();
         if !emitted.is_empty() {
-            self.pending_output
-                .push_back(Arc::new(Mutex::new(emitted.into_iter().collect())));
+            let index = self.reserve_output(emitted.len());
+            let batch = &self.output_pool[index];
+            batch.lock().extend(emitted);
+            self.pending_output.push_back(Arc::clone(batch));
         }
         PreparedEvents {
             batches: self.pending_output.iter().cloned().collect(),
+            owner: Arc::clone(owner),
         }
     }
 
@@ -258,6 +309,7 @@ impl ResamplerInner {
             && !self.coalesce_one_move()
             && !self.drop_oldest_droppable();
         self.event_queue.push_back(BufferedEvent { event, stamp });
+        self.reserve_output(self.event_queue.len().saturating_add(1));
         overflow.then_some(self.pointer_id)
     }
 
@@ -362,6 +414,7 @@ impl PointerEventResampler {
                 pointer_id,
                 event_queue: VecDeque::new(),
                 pending_output: VecDeque::new(),
+                output_pool: vec![Arc::new(Mutex::new(VecDeque::new()))],
                 is_down: false,
                 is_tracked: false,
                 anchor: None,
@@ -480,20 +533,20 @@ impl PointerEventResampler {
 
             // Skip if not tracking or no events
             if !inner.is_tracked || inner.event_queue.is_empty() {
-                return inner.prepared_events(SmallVec::new());
+                return inner.prepared_events(SmallVec::new(), &self.inner);
             }
 
             // Enforce minimum sample interval
             if let Some(last_time) = inner.last_sample_time {
                 let Some(elapsed) = sample_time.checked_duration_since(last_time) else {
                     let pointer_id = inner.pointer_id;
-                    let emitted = inner.prepared_events(SmallVec::new());
+                    let emitted = inner.prepared_events(SmallVec::new(), &self.inner);
                     drop(inner);
                     tracing::warn!(?pointer_id, "ignoring a regressed pointer sample time");
                     return emitted;
                 };
                 if elapsed < MIN_SAMPLE_INTERVAL {
-                    return inner.prepared_events(SmallVec::new());
+                    return inner.prepared_events(SmallVec::new(), &self.inner);
                 }
             }
 
@@ -555,7 +608,7 @@ impl PointerEventResampler {
                 }
             }
 
-            inner.prepared_events(emitted)
+            inner.prepared_events(emitted, &self.inner)
         }
     }
 
@@ -582,7 +635,7 @@ impl PointerEventResampler {
                 let at = inner.timestamp(buffered.stamp);
                 inner.emit(buffered.event, at, &mut emitted);
             }
-            inner.prepared_events(emitted)
+            inner.prepared_events(emitted, &self.inner)
         };
         for event in emitted.deliveries() {
             callback(event);
@@ -598,7 +651,7 @@ impl PointerEventResampler {
             let at = inner.timestamp(buffered.stamp);
             inner.emit(buffered.event, at, &mut emitted);
         }
-        inner.prepared_events(emitted)
+        inner.prepared_events(emitted, &self.inner)
     }
 
     /// Stops resampling and flushes all remaining events
@@ -626,7 +679,7 @@ impl PointerEventResampler {
             inner.last_stamp = None;
             inner.last_emitted_nanos = 0;
             inner.event_clock_base = None;
-            inner.prepared_events(emitted)
+            inner.prepared_events(emitted, &self.inner)
         };
 
         for event in emitted.deliveries() {

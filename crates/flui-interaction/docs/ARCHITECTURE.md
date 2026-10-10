@@ -71,6 +71,12 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   observer failures require subsequent healthy driving or explicit cancellation.
   Shared queues commit each packet once; concurrent driver callbacks have no
   completion-order guarantee, so ordered UI delivery remains owner-synchronous.
+  Source admission reserves reusable shared batch storage. A live frozen prefix
+  prevents its batch identity from being reused even after cancellation; retiring
+  prefixes releases unused pool storage while keeping one idle buffer. The public
+  `resolved_route_move_invocation_allocates_no_heap_after_setup` pins unchanged-time
+  measured Sample/Stop delivery without allocation after admission and the
+  saturated source enqueue allocation bound.
 - **The binding owns mounted gesture progression.** `GestureBinding` admits
   at most 32 simultaneous contacts, retains each admitted Down route, closes
   its arena after routing Down, and sweeps or abandons its exact generation on
