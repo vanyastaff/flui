@@ -1,22 +1,15 @@
-//! Interruptible, velocity-preserving animation of fixed-width values.
+//! Conversion between UI values and fixed-width scalar components.
 //!
-//! Each `AnimatedValue<T>` owns one frame registration for all its components.
-//! Its observer implements `Animation<T>`, retaining the last published value
-//! without owning or prolonging the run.
-
-mod driver;
-
-pub use driver::{AnimatedValue, AnimatedValueView, MotionUpdate, VsyncPublication, VsyncUpdate};
+//! [`TwoWayConverter`] separates value representation from motion and ownership.
+//! [`crate::AnimatedValue`] applies curves or springs to these components.
 
 use flui_foundation::geometry::{EdgeInsets, Offset, Size};
 use flui_painting::Alignment;
 use flui_painting::styling::{Color, PremultipliedOklab};
-use std::time::Duration;
 
 mod sealed {
     pub trait Vector {}
     impl<const N: usize> Vector for [f64; N] {}
-    pub trait GeneratedMotion {}
 }
 
 /// A fixed array of scalar components. Sealed so sample publication cannot
@@ -38,19 +31,8 @@ impl<const N: usize> AnimationVector for [f64; N] {
     }
 }
 
-/// Only generated component runs can publish vector state inside a sample
-/// commit. Staging invokes curves outside controller borrows; publication and
-/// settlement only move Copy arrays.
-pub(crate) trait ValueMotion:
-    sealed::GeneratedMotion + crate::simulation::Simulation
-{
-    fn stage_sample(&self, time: f64, current: &dyn Fn() -> bool) -> bool;
-    fn commit_sample(&self, elapsed: Duration);
-    fn settle(&self);
-}
-
 /// A value that can be decomposed into, and rebuilt from, a fixed-width vector
-/// of scalar components, so each component can be animated by its own spring.
+/// of scalar components, so each component can follow its own motion segment.
 ///
 /// Implement it for a value whose components have independent motion, or derive
 /// it for a nonempty struct whose fields implement this trait and `Lerp`.
@@ -62,7 +44,7 @@ pub(crate) trait ValueMotion:
 pub trait TwoWayConverter: Clone {
     /// The scalar-component representation, e.g. `[f64; 4]` for a colour.
     /// `Copy` so it can be used as a scratch buffer; `AsRef`/`AsMut<[f64]>` so
-    /// the spring core can iterate components generically.
+    /// the motion core can iterate components generically.
     type Vector: AnimationVector;
 
     /// Decompose into scalar components.

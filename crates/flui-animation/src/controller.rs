@@ -145,7 +145,7 @@ enum SimulationRun {
         /// an unchanged spring's analytic or exact-rest suffix.
         elapsed_offset: f64,
     },
-    Value(Rc<dyn crate::spring::ValueMotion>),
+    Value(Rc<dyn crate::animated_value::ValueMotion>),
     Fling {
         source: Rc<dyn Simulation>,
         bound: f64,
@@ -917,14 +917,12 @@ impl AnimationController {
     /// - [`AnimationStatus::Dismissed`] at (or below) the lower bound, or when
     ///   the active run direction was [`Reverse`](AnimationDirection::Reverse)
     ///
-    /// Using a non-running status is critical for frame drivers that poll
-    /// `status().is_running()` (e.g. `Vsync::tick_all`) — a running status
-    /// after `stop()` would allow the driver to continue ticking a stale or
-    /// cleared simulation and produce non-finite pixel values.
+    /// This phase does not prove endpoint arrival or successful completion.
+    /// Frame drivers query [`Animation::is_animating`] for run ownership.
     ///
     /// Cancels the active run's [`AnimationRunFuture`] with
     /// [`RunCanceled`](crate::RunCanceled),
-    /// delivered with no controller lock held.
+    /// delivered with no controller borrow held.
     ///
     /// # Errors
     ///
@@ -1782,7 +1780,7 @@ impl AnimationController {
     /// see [`WalkProbe`]'s own doc for the perf rationale.
     ///
     /// `live_running` is `!disposed && active_run.is_some()` — **not**
-    /// `status.is_running()`, which is the wrong "is a run installed"
+    /// `status.is_directional()`, which is the wrong "is a run installed"
     /// predicate for two independent reasons:
     /// - [Owning disposal](crate::DrivenController::dispose) leaves `status` untouched,
     ///   so a controller disposed mid-run keeps whatever
@@ -1792,7 +1790,7 @@ impl AnimationController {
     ///   ([`settled_status_keep_direction`](AnimationControllerInner::settled_status_keep_direction))
     ///   even though it already called `stop_running()` and cleared
     ///   `active_run`. A `Vsync`-driven controller that receives a
-    ///   `set_value` mid-run would otherwise still read `status.is_running()
+    ///   `set_value` mid-run would otherwise still read `status.is_directional()
     ///   == true`, and the NEXT `tick_all` would recompute its value from
     ///   the stale, already-stopped run's `start_value`/`target_value`,
     ///   silently overwriting what `set_value` had just set.
@@ -2710,11 +2708,9 @@ impl AnimationControllerInner {
 
     /// Status at a settled value, mapping non-bound stops by direction.
     ///
-    /// Used only by [`stop`](AnimationController::stop) — FLUI's own
-    /// frame-driver contract: a bound reached mid-frame must report the bound it
-    /// actually reached, not the run's nominal direction, so a driver
-    /// polling `status().is_running()` sees a real settle rather than a
-    /// direction that never touched the value. Every RUN END instead uses
+    /// Used only by [`stop`](AnimationController::stop): reached bounds choose
+    /// their corresponding phase; an interior stop uses the run's direction.
+    /// Every run end instead uses
     /// [`AnimationDirection::settled_status`], which has no bound check —
     /// see that method's own doc.
     fn settled_status_directed(&self) -> AnimationStatus {
@@ -2732,13 +2728,11 @@ impl AnimationControllerInner {
 
     /// Status at a settled value, keeping the running status for non-bound stops.
     ///
-    /// Used only by [`set_value`](AnimationController::set_value), for the
-    /// same frame-driver reason as
-    /// [`settled_status_directed`](Self::settled_status_directed): a 120Hz
-    /// gesture drag calling `set_value` every frame must report the bound it
-    /// is actually at, not a manufactured settle for an interior value still
-    /// under a live gesture. This is also exactly why a *running* status
-    /// (`AnimationStatus::is_running`) is not proof that a run is
+    /// Used only by [`set_value`](AnimationController::set_value): direct
+    /// manipulation preserves direction at an interior value and selects the
+    /// corresponding phase at a bound. Consumers can distinguish a drag from
+    /// a settled phase without requiring a run. A directional phase
+    /// (`AnimationStatus::is_directional`) is not proof that a run is
     /// installed: `set_value` reaches this branch at an interior value
     /// AFTER `stop_running()` has already cleared `active_run` — see
     /// [`walk_probe`](AnimationController::walk_probe)'s doc.

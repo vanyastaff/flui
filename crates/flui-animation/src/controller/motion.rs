@@ -196,7 +196,7 @@ impl AnimationController {
     pub(crate) fn start_value_motion<R>(
         &self,
         seam: &ValueSeam,
-        source: Rc<dyn crate::spring::ValueMotion>,
+        source: Rc<dyn crate::animated_value::ValueMotion>,
         immediate: bool,
         commit: impl FnOnce() -> R,
         recovery: &mut RecoveryScope<'_>,

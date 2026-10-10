@@ -182,7 +182,7 @@ fn bench_live_tick(
         });
     });
     assert!(
-        controller.status().is_running(),
+        controller.status().is_directional(),
         "the {variant} run must still be live after the benchmark, or it priced a finished run"
     );
 }
@@ -258,7 +258,7 @@ fn controller_tick(c: &mut Criterion) {
     group.bench_function("curved_value", |b| {
         b.iter(|| black_box(curved.value()));
     });
-    assert!(parent_controller.status().is_running());
+    assert!(parent_controller.status().is_directional());
     drop(curved);
     drop(parent_controller);
 

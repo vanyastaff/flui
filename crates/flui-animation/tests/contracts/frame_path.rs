@@ -92,7 +92,7 @@ fn nested_commit_is_not_overwritten() {
         nested,
         "the nested commit stays published"
     );
-    assert!(controller.status().is_running());
+    assert!(controller.status().is_directional());
     assert_eq!(
         controller.value(),
         1.0,

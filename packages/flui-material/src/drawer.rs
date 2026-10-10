@@ -731,13 +731,11 @@ impl ViewState<DrawerController> for DrawerControllerState {
     }
 
     fn did_update_view(&mut self, old_view: &DrawerController, new_view: &DrawerController) {
-        // Check the controller's status, not its ticker-based
-        // `isAnimating`. Setting `AnimationController.value` during a drag
-        // stops the ticker but intentionally leaves an interior value in a
-        // directional status. That distinction prevents Scaffold's
-        // threshold callback from feeding `is_open` back into this state and
-        // snapping an in-progress drag to an endpoint.
-        if self.core.controller.status().is_running() {
+        // Direct manipulation keeps an interior value in a directional phase
+        // without owning a run. Preserve that phase while dragging so Scaffold's
+        // threshold callback cannot feed `is_open` back into this state and snap
+        // the panel to an endpoint.
+        if self.core.controller.status().is_directional() {
             return;
         }
         if new_view.is_open != old_view.is_open {

@@ -109,6 +109,7 @@ extern crate self as flui_animation;
 #[cfg(test)]
 mod test_cases;
 
+pub mod animated_value;
 pub mod animation;
 pub mod builder;
 pub mod constant;
@@ -124,10 +125,10 @@ pub mod retarget;
 pub mod reverse;
 mod run_future;
 pub mod simulation;
-pub mod spring;
 pub mod stagger;
 pub mod switch;
 pub mod tween;
+pub mod value_conversion;
 pub mod vsync;
 
 // Data types
@@ -137,6 +138,9 @@ mod status_subscription;
 pub mod tween_types;
 
 // Re-exports from animation modules
+pub use animated_value::{
+    AnimatedValue, AnimatedValueView, MotionUpdate, VsyncPublication, VsyncUpdate,
+};
 pub use animation::{Animation, AnimationDirection, StatusCallback};
 pub use builder::{AnimationControllerBuilder, ValueRange};
 pub use constant::{ALWAYS_COMPLETE, ALWAYS_DISMISSED, ConstantAnimation};
@@ -159,12 +163,9 @@ pub use simulation::{
     SimulationBounds, SimulationError, SimulationParameter, SpringDescription, SpringSimulation,
     SpringType, Tolerance,
 };
-pub use spring::{
-    AnimatedValue, AnimatedValueView, AnimationVector, MotionUpdate, TwoWayConverter,
-    VsyncPublication, VsyncUpdate,
-};
 pub use stagger::{Stagger, StaggerOrigin};
 pub use status_subscription::StatusSubscription;
+pub use value_conversion::{AnimationVector, TwoWayConverter};
 // `#[derive(TwoWayConverter)]` generates `TwoWayConverter` and `Lerp` impls. It
 // shares the trait's name but lives in the macro namespace (the serde
 // `Serialize` trait+derive pattern), so one `use flui_animation::TwoWayConverter`

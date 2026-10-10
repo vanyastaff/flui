@@ -36,8 +36,8 @@ use std::time::Duration;
 use flui_foundation::geometry::Lerp;
 
 use crate::curve::{ArcCurve, Curve};
-use crate::spring::TwoWayConverter;
 use crate::tween_types::Animatable;
+use crate::value_conversion::TwoWayConverter;
 
 /// A track of keyframes timed by [`Duration`]; see the
 /// [module documentation](self) for the evaluation rules.

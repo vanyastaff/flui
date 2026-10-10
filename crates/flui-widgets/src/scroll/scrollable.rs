@@ -1056,7 +1056,7 @@ impl ViewState<Scrollable> for ScrollableState {
                             .filter(|motion| {
                                 motion.generation.get().is_none_or(|generation| {
                                     generation == fling_wheel.run_generation()
-                                        && fling_wheel.status().is_running()
+                                        && fling_wheel.status().is_directional()
                                 })
                             })
                             .map_or(pixels, |motion| motion.target)
@@ -1113,7 +1113,7 @@ impl ViewState<Scrollable> for ScrollableState {
                             Rc::new(Curves::EaseOut),
                         );
                         if is_current() {
-                            if started.is_ok() && fling_wheel.status().is_running() {
+                            if started.is_ok() && fling_wheel.status().is_directional() {
                                 motion.generation.set(Some(fling_wheel.run_generation()));
                                 position.set_is_scrolling(true);
                                 if !is_current() {
@@ -1157,7 +1157,7 @@ impl ViewState<Scrollable> for ScrollableState {
                                 .schedule(move |_timing| {
                                     // A subsequent notch may have started after
                                     // this immediate tick but before the frame.
-                                    if !motion_end.status().is_running() {
+                                    if !motion_end.status().is_directional() {
                                         pulse_end.set_is_scrolling(false);
                                     }
                                 })

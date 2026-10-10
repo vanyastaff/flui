@@ -1,6 +1,11 @@
 //! Animation status and behavior types.
 
-/// The status of an animation.
+/// An animation's directional phase, independent of run ownership and value.
+///
+/// Manual position changes and constant values may have a directional phase
+/// without a run. A stopped run can have a settled phase at an interior value.
+/// Use [`crate::Animation::is_animating`] for an installed run, the value for
+/// position and [`crate::AnimationRunFuture`] for its completion or cancellation.
 ///
 /// # Examples
 ///
@@ -8,67 +13,69 @@
 /// use flui_animation::AnimationStatus;
 ///
 /// let status = AnimationStatus::Forward;
-/// assert!(status.is_running());
+/// assert!(status.is_directional());
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Default)]
 #[non_exhaustive]
 pub enum AnimationStatus {
-    /// The animation is stopped at the beginning.
+    /// The reverse-settled phase, also used for the lower bound.
     #[default]
     Dismissed,
 
-    /// The animation is running from beginning to end.
+    /// The forward directional phase; it does not imply an installed run.
     Forward,
 
-    /// The animation is running backwards, from end to beginning.
+    /// The reverse directional phase; it does not imply an installed run.
     Reverse,
 
-    /// The animation is stopped at the end.
+    /// The forward-settled phase, also used for the upper bound.
     Completed,
 }
 
 impl AnimationStatus {
-    /// Returns true if the animation is running (forward or reverse).
+    /// Whether the phase is [`Forward`](Self::Forward) or [`Reverse`](Self::Reverse).
+    /// This does not imply an installed run.
     #[inline]
     #[must_use]
-    pub const fn is_running(&self) -> bool {
+    pub const fn is_directional(&self) -> bool {
         matches!(self, AnimationStatus::Forward | AnimationStatus::Reverse)
     }
 
-    /// Returns true if the animation is stopped (dismissed or completed).
+    /// Whether the phase is [`Dismissed`](Self::Dismissed) or [`Completed`](Self::Completed).
+    /// This does not imply arrival at a value's endpoint or successful completion.
     #[inline]
     #[must_use]
-    pub const fn is_stopped(&self) -> bool {
+    pub const fn is_settled(&self) -> bool {
         matches!(
             self,
             AnimationStatus::Dismissed | AnimationStatus::Completed
         )
     }
 
-    /// Returns true if the animation is at the beginning (dismissed).
+    /// Whether the phase is [`Dismissed`](Self::Dismissed).
     #[inline]
     #[must_use]
     pub const fn is_dismissed(&self) -> bool {
         matches!(self, AnimationStatus::Dismissed)
     }
 
-    /// Returns true if the animation is at the end (completed).
+    /// Whether the phase is [`Completed`](Self::Completed).
     #[inline]
     #[must_use]
     pub const fn is_completed(&self) -> bool {
         matches!(self, AnimationStatus::Completed)
     }
 
-    /// Returns true if the animation is running forward.
+    /// Whether the phase is [`Forward`](Self::Forward).
     #[inline]
     #[must_use]
     pub const fn is_forward(&self) -> bool {
         matches!(self, AnimationStatus::Forward)
     }
 
-    /// Returns true if the animation is running in reverse.
+    /// Whether the phase is [`Reverse`](Self::Reverse).
     #[inline]
     #[must_use]
     pub const fn is_reverse(&self) -> bool {

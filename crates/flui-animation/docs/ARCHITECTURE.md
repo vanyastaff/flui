@@ -44,8 +44,10 @@ src/
 ├── tween_types.rs    # Animatable, Tween, all tween types
 ├── status.rs         # AnimationStatus, AnimationBehavior
 ├── simulation.rs     # Simulation trait, Spring, Friction, bounded and bouncing scroll
-├── spring.rs         # TwoWayConverter, fixed component arrays
-├── spring/driver.rs  # AnimatedValue owner, AnimatedValueView, vector sample commits
+├── value_conversion.rs # TwoWayConverter, fixed component arrays
+├── animated_value.rs # AnimatedValue owner, AnimatedValueView, vector sample commits
+├── animated_value/motion_update.rs # Coordinated changes to value motion
+├── animated_value/vsync_update.rs # Coordinated registry migration and publication
 ├── retarget.rs       # Interruptible scalar motion segments
 │
 ├── keyframes.rs      # Keyframes, KeyframesBuilder, KeyframesError
@@ -555,7 +557,7 @@ still check `is_at_upper_bound`/`is_at_lower_bound` first, falling back to
 direction only for a non-bound stop. This is FLUI's own frame-driver
 contract: a scroll gesture's every-frame `set_value` must
 report the bound it actually reached, not the gesture's nominal direction,
-so a driver polling `status().is_running()` sees a real settle.
+so a driver polling `status().is_directional()` sees a real settle.
 
 ### `settle_at_target` also covers zero-duration runs, and gates value notification on real movement
 
@@ -593,14 +595,14 @@ disposed mid-run therefore keeps whatever status it had (e.g. `Forward`):
 controller may already be disposed, and a manufactured settled status would
 be visible there.
 
-**`status().is_running()` is not proof a run is installed; `active_run.is_some()`
+**`status().is_directional()` is not proof a run is installed; `active_run.is_some()`
 is.** Two independent paths leave `status` reporting a RUNNING value
 (`Forward`/`Reverse`) with no run actually installed: a mid-run `dispose()`
 (above), and `set_value` at an interior value. `set_value` calls
 `stop_running()`, clearing `active_run`, but still reports a directional
 running status (`AnimationControllerInner::settled_status_keep_direction`).
 
-A `Vsync`-driven controller polled on `status().is_running()` after a
+A `Vsync`-driven controller polled on `status().is_directional()` after a
 mid-run `set_value` would therefore look like it still has a run to
 advance. The NEXT `tick_all` would then recompute its value from the
 stale, already-stopped run's `start_value`/`target_value`, silently
@@ -610,7 +612,7 @@ overwriting what `set_value` had just set.
 `!disposed && active_run.is_some()`, the two facts that are always
 consistent with "is there a run to advance". Both
 `AnimationController::tick_at`'s own guard and `Vsync::has_running`/
-`tick_all` read it instead of bare `status().is_running()`.
+`tick_all` read it instead of bare `status().is_directional()`.
 
 ### Repeat sampling is a pure function of elapsed time
 
@@ -743,7 +745,7 @@ neither infinite bound ever "at", reports **`Forward`**.
 general case.
 
 The recorded cost: a never-run unbounded controller reports
-`status().is_running() == true` from the moment it is constructed. The
+`status().is_directional() == true` from the moment it is constructed. The
 real "is a run installed" fact stays `is_animating()`/the internal
 `active_run`, never `status`, exactly as
 [`AnimationController::walk_probe`]'s own doc already documented before
@@ -861,7 +863,7 @@ still running. A refused start (a non-finite target reaching this call)
 must not park the scrollable in "scrolling" forever, and a start that
 settles SYNCHRONOUSLY (target already equals the just-synced current
 value) already reported its own end through the fling status listener
-installed above; checking `is_running()` rather than firing
+installed above; checking `is_directional()` rather than firing
 unconditionally on `Ok` keeps that already-correct settle from being
 clobbered back to `true`.
 

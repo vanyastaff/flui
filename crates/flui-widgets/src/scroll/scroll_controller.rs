@@ -498,7 +498,7 @@ impl ScrollController {
                 if fling
                     .retarget(target_pixels, &MotionSpec::Curve { duration, curve })
                     .is_ok()
-                    && fling.status().is_running()
+                    && fling.status().is_directional()
                 {
                     self.position().set_is_scrolling(true);
                 }
@@ -625,7 +625,7 @@ mod tests {
                 .animate_to(1_000_000.0, None)
                 .expect("fling_stub is not disposed, animate_to() must succeed");
             assert!(
-                fling.status().is_running(),
+                fling.status().is_directional(),
                 "sanity: animate_to() leaves the fling controller running, so the \
              stop() fired from jump_to's hook below is a genuine status \
              transition (not a no-op the listener would never see)"

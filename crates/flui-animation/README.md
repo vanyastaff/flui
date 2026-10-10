@@ -58,21 +58,21 @@ The separation allows:
 
 | Variant | Meaning |
 |---------|---------|
-| `Dismissed` | Settled after a reverse run or a reset; the value is the lower bound only if the run finished (a `stop` mid-reverse leaves it between the bounds) |
+| `Dismissed` | Reverse-settled phase or a value at the lower bound; an interior stop also uses this phase |
 | `Forward` | Forward directional status; a run may be active or stopped between the bounds |
 | `Reverse` | Reverse directional status; a run may be active or stopped between the bounds |
-| `Completed` | Settled after a forward run; the value is the upper bound only if the run finished (a `stop` mid-forward leaves it between the bounds) |
+| `Completed` | Forward-settled phase or a value at the upper bound; an interior stop also uses this phase |
 
 ```rust
 use flui_animation::AnimationStatus;
 
-assert!(AnimationStatus::Forward.is_running());
-assert!(AnimationStatus::Completed.is_stopped());
+assert!(AnimationStatus::Forward.is_directional());
+assert!(AnimationStatus::Completed.is_settled());
 assert_eq!(AnimationStatus::Forward.flip(), AnimationStatus::Reverse);
 ```
 
 Status indicates direction, not position or whether a run is active. Use
-`Animation::is_animating` to check activity: `AnimationStatus::is_running`
+`Animation::is_animating` to check activity: `AnimationStatus::is_directional`
 only identifies the `Forward` and `Reverse` status variants. A `Completed`
 animation at value 1.0 that starts reversing becomes `Reverse` immediately,
 even before the value changes; `set_value` and disposal can leave a directional

@@ -1,9 +1,14 @@
-//! One owning frame registration for a vector of interruptible components.
+//! Interruptible value motion with one owning frame registration.
+//!
+//! [`AnimatedValue`] owns a coordinated curve or spring run over fixed-width
+//! components. [`AnimatedValueView`] observes published samples without extending
+//! the owner's lifetime. Motion changes and registry changes commit through the
+//! corresponding update types before delivering notifications.
 
-mod binding;
-mod update;
-pub use binding::{VsyncPublication, VsyncUpdate};
-pub use update::MotionUpdate;
+mod motion_update;
+mod vsync_update;
+pub use motion_update::MotionUpdate;
+pub use vsync_update::{VsyncPublication, VsyncUpdate};
 
 use std::cell::{Cell, RefCell};
 use std::fmt;
@@ -14,15 +19,28 @@ use flui_foundation::panic::RecoveryScope;
 use flui_foundation::{Listenable, ListenerCallback, ListenerId};
 use smallvec::SmallVec;
 
-use super::{AnimationVector, TwoWayConverter, ValueMotion};
 use crate::animation::{Retirement, StatusObserver, Terminal};
 use crate::curve::Curve;
 use crate::retarget::Segment;
 use crate::simulation::Simulation;
+use crate::value_conversion::{AnimationVector, TwoWayConverter};
 use crate::{
     Animation, AnimationController, AnimationError, AnimationRunFuture, AnimationStatus, ArcCurve,
     Curves, DrivenController, MotionSpec, StatusCallback, Vsync, VsyncRegistrationError,
 };
+
+mod sealed {
+    pub trait GeneratedMotion {}
+}
+
+/// Only generated component runs can publish vector state inside a sample
+/// commit. Staging invokes curves outside controller borrows; publication and
+/// settlement only move Copy arrays.
+pub(crate) trait ValueMotion: sealed::GeneratedMotion + Simulation {
+    fn stage_sample(&self, time: f64, current: &dyn Fn() -> bool) -> bool;
+    fn commit_sample(&self, elapsed: Duration);
+    fn settle(&self);
+}
 
 #[derive(Clone, Copy)]
 struct Sample<V> {
@@ -53,7 +71,7 @@ impl<V: AnimationVector> Simulation for ComponentRun<V> {
     }
 }
 
-impl<V: AnimationVector> super::sealed::GeneratedMotion for ComponentRun<V> {}
+impl<V: AnimationVector> sealed::GeneratedMotion for ComponentRun<V> {}
 
 impl<V: AnimationVector> ValueMotion for ComponentRun<V> {
     fn stage_sample(&self, time: f64, current: &dyn Fn() -> bool) -> bool {

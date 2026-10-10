@@ -205,7 +205,7 @@ fn a_steady_state_frame_allocates_nothing() {
     }
 
     assert!(
-        controller.status().is_running() && controller.value() > start_value,
+        controller.status().is_directional() && controller.value() > start_value,
         "the measured frames must advance a live run, or they priced an early return"
     );
     let final_insets = vector.value();
@@ -282,7 +282,7 @@ fn a_steady_state_frame_allocates_nothing() {
         let calls = read(&ALLOC_COUNT) - calls_before;
         let bytes = read(&ALLOC_BYTES) - bytes_before;
         assert_eq!(delivered.get() - deliveries_before, FRAMES);
-        assert!(controller.status().is_running() && leaf.value() != start_value);
+        assert!(controller.status().is_directional() && leaf.value() != start_value);
         assert_eq!(
             calls, 0,
             "{depth} animation relays allocated {calls} times ({bytes} bytes)"

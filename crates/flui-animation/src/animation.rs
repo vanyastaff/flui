@@ -78,7 +78,7 @@ where
     /// Returns the current value of the animation.
     fn value(&self) -> T;
 
-    /// Returns the current status of the animation.
+    /// Returns the directional phase, independent of run ownership and value.
     fn status(&self) -> AnimationStatus;
 
     /// Observe status changes until the returned source-bound guard is dropped.
@@ -103,25 +103,26 @@ where
     /// and fixed values return `false`.
     fn is_animating(&self) -> bool;
 
-    /// Whether the animation is completed.
+    /// Whether the phase is [`AnimationStatus::Completed`].
+    /// This does not imply endpoint arrival or successful run completion.
     #[inline]
     fn is_completed(&self) -> bool {
         self.status().is_completed()
     }
 
-    /// Whether the animation is dismissed (at beginning).
+    /// Whether the phase is [`AnimationStatus::Dismissed`].
     #[inline]
     fn is_dismissed(&self) -> bool {
         self.status().is_dismissed()
     }
 
-    /// Whether the animation is running forward.
+    /// Whether the phase is [`AnimationStatus::Forward`].
     #[inline]
     fn is_forward(&self) -> bool {
         self.status().is_forward()
     }
 
-    /// Whether the animation is running in reverse.
+    /// Whether the phase is [`AnimationStatus::Reverse`].
     #[inline]
     fn is_reverse(&self) -> bool {
         self.status().is_reverse()

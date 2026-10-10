@@ -532,7 +532,7 @@ impl Vsync {
     /// which nothing here provides.
     ///
     /// Reads the controller's crate-private `walk_probe().live_running`, not
-    /// bare `status().is_running()`: a controller `dispose()`d mid-run keeps
+    /// bare `status().is_directional()`: a controller `dispose()`d mid-run keeps
     /// whatever running status it had (`dispose()` deliberately leaves
     /// `status` untouched), so `live_running` is what tells this apart from
     /// a genuinely live run — otherwise a disposed-but-not-yet-unregistered
