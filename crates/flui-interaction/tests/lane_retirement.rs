@@ -1,0 +1,656 @@
+//! Terminal lane ownership follows ADR-0127 through the public dispatch seam.
+
+use std::cell::{Cell, RefCell};
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::rc::Rc;
+
+use flui_foundation::geometry::Offset;
+use flui_interaction::events::{PointerKind, make_down_event};
+use flui_interaction::routing::{
+    EventPropagation, MouseRegionCallbacks, MouseTracker, MouseTrackerAnnotation,
+};
+use flui_interaction::{
+    HitTestEntry, InteractionDispatchError, InteractionDispatchHandle, InteractionLane, RenderId,
+};
+use flui_painting::paint::{Path, Shader};
+use flui_painting::styling::Color;
+
+#[derive(Clone, Copy, Debug)]
+enum Family {
+    Pointer,
+    MouseEnter,
+    MouseExit,
+    MouseHover,
+    Scroll,
+    PanZoom,
+    Clip,
+    Mask,
+    Payload,
+    Route,
+}
+
+const FAMILIES: [Family; 10] = [
+    Family::Pointer,
+    Family::MouseEnter,
+    Family::MouseExit,
+    Family::MouseHover,
+    Family::Scroll,
+    Family::PanZoom,
+    Family::Clip,
+    Family::Mask,
+    Family::Payload,
+    Family::Route,
+];
+
+struct Capture {
+    log: Rc<RefCell<Vec<&'static str>>>,
+    name: &'static str,
+    fails: bool,
+    reenter: Option<Box<dyn Fn()>>,
+}
+
+impl Drop for Capture {
+    fn drop(&mut self) {
+        self.log.borrow_mut().push(self.name);
+        if let Some(reenter) = &self.reenter {
+            reenter();
+        }
+        if self.fails {
+            std::panic::panic_any(self.name);
+        }
+    }
+}
+
+fn capture(log: &Rc<RefCell<Vec<&'static str>>>, name: &'static str, fails: bool) -> Capture {
+    Capture {
+        log: Rc::clone(log),
+        name,
+        fails,
+        reenter: None,
+    }
+}
+
+fn register(handle: &InteractionDispatchHandle, family: Family, capture: Capture) {
+    match family {
+        Family::Pointer | Family::Route => {
+            let target = handle
+                .register_pointer(move |_| {
+                    let _ = &capture;
+                })
+                .expect("pointer");
+            if matches!(family, Family::Route) {
+                handle
+                    .resolve_pointer_route(&[
+                        HitTestEntry::new(RenderId::new(1)).pointer_target(target)
+                    ])
+                    .expect("saved route");
+                handle
+                    .unregister_pointer(target)
+                    .expect("route owns capture");
+            }
+        }
+        Family::MouseEnter | Family::MouseExit | Family::MouseHover => {
+            let callback = Rc::new(move |_, _| {
+                let _ = &capture;
+            });
+            let mut callbacks = MouseRegionCallbacks::default();
+            match family {
+                Family::MouseEnter => callbacks.on_enter = Some(callback),
+                Family::MouseExit => callbacks.on_exit = Some(callback),
+                _ => callbacks.on_hover = Some(callback),
+            }
+            handle.register_mouse_region(callbacks).expect("mouse");
+        }
+        Family::Scroll => {
+            handle
+                .register_scroll(move |_| {
+                    let _ = &capture;
+                    EventPropagation::Continue
+                })
+                .expect("scroll");
+        }
+        Family::PanZoom => {
+            handle
+                .register_pan_zoom(move |_| {
+                    let _ = &capture;
+                    EventPropagation::Continue
+                })
+                .expect("pan zoom");
+        }
+        Family::Clip => {
+            handle
+                .register_path_clipper(move |_| {
+                    let _ = &capture;
+                    Path::new()
+                })
+                .expect("clipper");
+        }
+        Family::Mask => {
+            handle
+                .register_shader_mask(move |_| {
+                    let _ = &capture;
+                    Shader::solid(Color::BLACK)
+                })
+                .expect("shader");
+        }
+        Family::Payload => {
+            handle
+                .register_local_payload(Rc::new(capture))
+                .expect("payload");
+        }
+    }
+}
+
+fn assert_surviving_lane(lane: &InteractionLane) {
+    let handle = lane.dispatch_handle();
+    let delivered = Rc::new(Cell::new(0));
+    lane.enter(|| {
+        let count = Rc::clone(&delivered);
+        let target = handle
+            .register_pointer(move |_| count.set(count.get() + 1))
+            .expect("survivor target");
+        let token = handle
+            .resolve_pointer_route(&[HitTestEntry::new(RenderId::new(1)).pointer_target(target)])
+            .expect("survivor route")
+            .token();
+        let event = make_down_event(Offset::ZERO, PointerKind::Touch).expect("event");
+        assert!(
+            handle
+                .invoke_pointer_route(token, &event)
+                .expect("dispatch")
+                .is_none()
+        );
+        assert_eq!(delivered.get(), 1);
+        handle.release_route(token).expect("release");
+        handle.unregister_pointer(target).expect("unregister");
+    });
+}
+
+fn healthy_every_storage_family() {
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = lane.dispatch_handle();
+    lane.enter(|| {
+        for family in FAMILIES {
+            register(&handle, family, capture(&log, "healthy", false));
+        }
+    });
+    drop(lane);
+    assert_eq!(log.borrow().as_slice(), ["healthy"; 10]);
+    assert_eq!(
+        handle.check_ui_runtime(),
+        Err(InteractionDispatchError::OwnerGone)
+    );
+}
+
+fn failures_across_storage_families() {
+    for family in FAMILIES {
+        for competing in [false, true] {
+            let survivor = InteractionLane::try_new().expect("survivor");
+            let log = Rc::new(RefCell::new(Vec::new()));
+            let lane = InteractionLane::try_new().expect("lane");
+            let handle = lane.dispatch_handle();
+            lane.enter(|| {
+                register(&handle, family, capture(&log, "first", true));
+                register(&handle, family, capture(&log, "tail", competing));
+            });
+            let failure = catch_unwind(AssertUnwindSafe(|| drop(lane))).expect_err("first failure");
+            assert_eq!(failure.downcast_ref::<&str>(), Some(&"first"), "{family:?}");
+            assert_eq!(
+                log.borrow().as_slice(),
+                ["first"],
+                "{family:?}: tail retained"
+            );
+            assert_eq!(
+                handle.check_ui_runtime(),
+                Err(InteractionDispatchError::OwnerGone)
+            );
+            assert_surviving_lane(&survivor);
+        }
+    }
+}
+
+fn first_failure_covers_later_storage_families() {
+    let survivor = InteractionLane::try_new().expect("survivor");
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = lane.dispatch_handle();
+    lane.enter(|| {
+        register(&handle, Family::Route, capture(&log, "first", true));
+        for family in FAMILIES {
+            register(&handle, family, capture(&log, "tail", true));
+        }
+    });
+    let failure = catch_unwind(AssertUnwindSafe(|| drop(lane))).expect_err("first route failure");
+    assert_eq!(failure.downcast_ref::<&str>(), Some(&"first"));
+    assert_eq!(log.borrow().as_slice(), ["first"]);
+    assert_surviving_lane(&survivor);
+}
+
+fn mouse_callbacks_retire_individually() {
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let lane = InteractionLane::try_new().expect("lane");
+    lane.enter(|| {
+        let first = capture(&log, "enter", true);
+        let second = capture(&log, "exit", true);
+        let third = capture(&log, "hover", true);
+        lane.dispatch_handle()
+            .register_mouse_region(MouseRegionCallbacks {
+                on_enter: Some(Rc::new(move |_, _| {
+                    let _ = &first;
+                })),
+                on_exit: Some(Rc::new(move |_, _| {
+                    let _ = &second;
+                })),
+                on_hover: Some(Rc::new(move |_, _| {
+                    let _ = &third;
+                })),
+            })
+            .expect("mouse callbacks");
+    });
+    let failure = catch_unwind(AssertUnwindSafe(|| drop(lane))).expect_err("enter failure");
+    assert_eq!(failure.downcast_ref::<&str>(), Some(&"enter"));
+    assert_eq!(log.borrow().as_slice(), ["enter"]);
+}
+
+fn existing_unwind_retains_every_family() {
+    let survivor = InteractionLane::try_new().expect("survivor");
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let failure = catch_unwind(AssertUnwindSafe(|| {
+        let lane = InteractionLane::try_new().expect("lane");
+        lane.enter(|| {
+            for family in FAMILIES {
+                register(
+                    &lane.dispatch_handle(),
+                    family,
+                    capture(&log, "unsafe drop", true),
+                );
+            }
+        });
+        std::panic::panic_any("body failure");
+    }))
+    .expect_err("body failure");
+    assert_eq!(failure.downcast_ref::<&str>(), Some(&"body failure"));
+    assert!(log.borrow().is_empty());
+    assert_surviving_lane(&survivor);
+}
+
+fn non_last_payload_owners_are_released() {
+    for unwind in [false, true] {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let saved = Rc::new(capture(&log, "saved", false));
+        let failure = catch_unwind(AssertUnwindSafe(|| {
+            let lane = InteractionLane::try_new().expect("lane");
+            lane.enter(|| {
+                for _ in 0..2 {
+                    lane.dispatch_handle()
+                        .register_local_payload(saved.clone())
+                        .expect("shared payload");
+                }
+                if !unwind {
+                    register(
+                        &lane.dispatch_handle(),
+                        Family::Pointer,
+                        capture(&log, "first", true),
+                    );
+                }
+            });
+            if unwind {
+                std::panic::panic_any("body failure");
+            }
+            drop(lane);
+        }))
+        .expect_err("failure");
+        assert_eq!(
+            failure.downcast_ref::<&str>(),
+            Some(&if unwind { "body failure" } else { "first" })
+        );
+        drop(saved);
+        assert_eq!(
+            log.borrow().last(),
+            Some(&"saved"),
+            "remaining external owner releases normally"
+        );
+    }
+}
+
+fn non_last_mouse_callbacks_are_released() {
+    for unwind in [false, true] {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let saved_capture = capture(&log, "saved", false);
+        let saved: flui_interaction::routing::MouseEnterCallback = Rc::new(move |_, _| {
+            let _ = &saved_capture;
+        });
+        let failure = catch_unwind(AssertUnwindSafe(|| {
+            let lane = InteractionLane::try_new().expect("lane");
+            lane.enter(|| {
+                lane.dispatch_handle()
+                    .register_mouse_region(MouseRegionCallbacks {
+                        on_enter: Some(Rc::clone(&saved)),
+                        on_exit: Some(Rc::clone(&saved)),
+                        on_hover: Some(Rc::clone(&saved)),
+                    })
+                    .expect("shared callbacks");
+                if !unwind {
+                    register(
+                        &lane.dispatch_handle(),
+                        Family::Pointer,
+                        capture(&log, "first", true),
+                    );
+                }
+            });
+            if unwind {
+                std::panic::panic_any("body failure");
+            }
+            drop(lane);
+        }))
+        .expect_err("failure");
+        assert_eq!(
+            failure.downcast_ref::<&str>(),
+            Some(&if unwind { "body failure" } else { "first" })
+        );
+        drop(saved);
+        assert_eq!(log.borrow().last(), Some(&"saved"));
+    }
+}
+
+fn retirement_reentry_observes_closed_lane() {
+    for fails in [false, true] {
+        let survivor = Rc::new(InteractionLane::try_new().expect("survivor"));
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let observed = Rc::new(Cell::new(false));
+        let observer = Rc::clone(&observed);
+        let surviving = Rc::clone(&survivor);
+        let closed = handle.clone();
+        let mut value = capture(&log, "reenter", fails);
+        value.reenter = Some(Box::new(move || {
+            assert_eq!(
+                closed.check_ui_runtime(),
+                Err(InteractionDispatchError::OwnerGone)
+            );
+            assert_eq!(
+                closed.register_pointer(|_| {}),
+                Err(InteractionDispatchError::OwnerGone)
+            );
+            assert_surviving_lane(&surviving);
+            observer.set(true);
+        }));
+        lane.enter(|| register(&handle, Family::Payload, value));
+        let result = catch_unwind(AssertUnwindSafe(|| drop(lane)));
+        if fails {
+            assert_eq!(
+                result
+                    .expect_err("reentrant destructor failure")
+                    .downcast_ref::<&str>(),
+                Some(&"reenter")
+            );
+        } else {
+            result.expect("healthy reentrant destructor");
+        }
+        assert!(observed.get());
+        assert_eq!(log.borrow().as_slice(), ["reenter"]);
+        assert_surviving_lane(&survivor);
+    }
+}
+
+pub(super) fn activation_restores_exact_owner() {
+    let outer = InteractionLane::try_new().expect("outer");
+    let inner = InteractionLane::try_new().expect("inner");
+    let outer_handle = outer.dispatch_handle();
+    let inner_handle = inner.dispatch_handle();
+    assert_eq!(
+        outer_handle.check_ui_runtime(),
+        Err(InteractionDispatchError::InactiveRuntime)
+    );
+    let foreign_thread = outer_handle.clone();
+    assert_eq!(
+        std::thread::spawn(move || foreign_thread.check_ui_runtime())
+            .join()
+            .expect("thread"),
+        Err(InteractionDispatchError::WrongThread)
+    );
+    outer.enter(|| {
+        inner.enter(|| assert_eq!(inner_handle.check_ui_runtime(), Ok(())));
+        assert_eq!(outer_handle.check_ui_runtime(), Ok(()));
+        let target = outer_handle.register_pointer(|_| {}).expect("outer target");
+        let failure = catch_unwind(AssertUnwindSafe(|| {
+            inner.enter(|| {
+                assert_eq!(
+                    outer_handle.check_ui_runtime(),
+                    Err(InteractionDispatchError::WrongRuntime)
+                );
+                assert_eq!(
+                    inner_handle.unregister_pointer(target),
+                    Err(InteractionDispatchError::WrongRuntime)
+                );
+                assert_eq!(inner_handle.check_ui_runtime(), Ok(()));
+                std::panic::panic_any("nested activation");
+            })
+        }))
+        .expect_err("nested failure");
+        assert_eq!(failure.downcast_ref::<&str>(), Some(&"nested activation"));
+        assert_eq!(outer_handle.check_ui_runtime(), Ok(()));
+        assert_eq!(
+            inner_handle.check_ui_runtime(),
+            Err(InteractionDispatchError::WrongRuntime)
+        );
+        outer_handle
+            .unregister_pointer(target)
+            .expect("foreign attempt left target intact");
+    });
+    assert_eq!(
+        inner_handle.check_ui_runtime(),
+        Err(InteractionDispatchError::InactiveRuntime)
+    );
+    assert_surviving_lane(&outer);
+    assert_surviving_lane(&inner);
+}
+
+fn saved_mouse_cell_releases_with_its_surviving_owner() {
+    for unwind in [false, true] {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let tracker = MouseTracker::new();
+        let region = RenderId::new(1);
+        let failure = catch_unwind(AssertUnwindSafe(|| {
+            let lane = InteractionLane::try_new().expect("lane");
+            lane.enter(|| {
+                let saved = capture(&log, "saved mouse", false);
+                let target = lane
+                    .dispatch_handle()
+                    .register_mouse_region(MouseRegionCallbacks {
+                        on_enter: Some(Rc::new(move |_, _| {
+                            let _ = &saved;
+                        })),
+                        ..MouseRegionCallbacks::default()
+                    })
+                    .expect("mouse target");
+                tracker.register_annotation(MouseTrackerAnnotation::new(region, target));
+                if !unwind {
+                    register(
+                        &lane.dispatch_handle(),
+                        Family::Pointer,
+                        capture(&log, "first", true),
+                    );
+                }
+            });
+            if unwind {
+                std::panic::panic_any("body failure");
+            }
+            drop(lane);
+        }))
+        .expect_err("failure");
+        assert_eq!(
+            failure.downcast_ref::<&str>(),
+            Some(&if unwind { "body failure" } else { "first" })
+        );
+        assert!(
+            !log.borrow().contains(&"saved mouse"),
+            "tracker still owns callback"
+        );
+        tracker.unregister_annotation(region);
+        assert_eq!(
+            log.borrow().last(),
+            Some(&"saved mouse"),
+            "non-last lane cell was released"
+        );
+    }
+}
+
+fn saved_routes_are_stale_after_exceptional_retirement() {
+    let survivor = InteractionLane::try_new().expect("survivor");
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = lane.dispatch_handle();
+    let calls = Rc::new(Cell::new(0));
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let token = lane.enter(|| {
+        register(&handle, Family::Pointer, capture(&log, "first", true));
+        let count = Rc::clone(&calls);
+        let target = handle
+            .register_pointer(move |_| count.set(count.get() + 1))
+            .expect("target");
+        handle
+            .resolve_pointer_route(&[HitTestEntry::new(RenderId::new(1)).pointer_target(target)])
+            .expect("route")
+            .token()
+    });
+    let failure = catch_unwind(AssertUnwindSafe(|| drop(lane))).expect_err("first failure");
+    assert_eq!(failure.downcast_ref::<&str>(), Some(&"first"));
+    let event = make_down_event(Offset::ZERO, PointerKind::Touch).expect("event");
+    assert!(matches!(
+        handle.invoke_pointer_route(token, &event),
+        Err(InteractionDispatchError::OwnerGone)
+    ));
+    survivor.enter(|| {
+        assert!(matches!(
+            survivor
+                .dispatch_handle()
+                .invoke_pointer_route(token, &event),
+            Err(InteractionDispatchError::WrongRuntime)
+        ));
+    });
+    assert_eq!(
+        calls.get(),
+        0,
+        "saved identity cannot deliver to retired captures"
+    );
+    assert_surviving_lane(&survivor);
+}
+
+fn competing_payloads() {
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = lane.dispatch_handle();
+    lane.enter(|| {
+        for name in ["first", "second"] {
+            handle
+                .register_local_payload(Rc::new(Capture {
+                    log: Rc::clone(&log),
+                    name,
+                    fails: true,
+                    reenter: None,
+                }))
+                .expect("payload");
+        }
+    });
+    let failure = catch_unwind(AssertUnwindSafe(|| drop(lane)))
+        .expect_err("first destructor failure propagates");
+    assert_eq!(failure.downcast_ref::<&str>(), Some(&"first"));
+    assert_eq!(*log.borrow(), ["first"], "the failing tail is retained");
+}
+
+#[test]
+fn lane_terminal_retirement_contract() {
+    if std::env::var_os("FLUI_LANE_RETIREMENT_CHILD").is_some() {
+        let cases: &[(&str, fn())] = &[
+            ("healthy_every_storage_family", healthy_every_storage_family),
+            ("competing_payloads", competing_payloads),
+            (
+                "failures_across_storage_families",
+                failures_across_storage_families,
+            ),
+            (
+                "first_failure_covers_later_storage_families",
+                first_failure_covers_later_storage_families,
+            ),
+            (
+                "mouse_callbacks_retire_individually",
+                mouse_callbacks_retire_individually,
+            ),
+            (
+                "existing_unwind_retains_every_family",
+                existing_unwind_retains_every_family,
+            ),
+            (
+                "non_last_payload_owners_are_released",
+                non_last_payload_owners_are_released,
+            ),
+            (
+                "non_last_mouse_callbacks_are_released",
+                non_last_mouse_callbacks_are_released,
+            ),
+            (
+                "saved_mouse_cell_releases_with_its_surviving_owner",
+                saved_mouse_cell_releases_with_its_surviving_owner,
+            ),
+            (
+                "saved_routes_are_stale_after_exceptional_retirement",
+                saved_routes_are_stale_after_exceptional_retirement,
+            ),
+            (
+                "retirement_reentry_observes_closed_lane",
+                retirement_reentry_observes_closed_lane,
+            ),
+        ];
+        for &(name, case) in cases {
+            if let Err(failure) = catch_unwind(case) {
+                eprintln!("lane retirement case `{name}` failed");
+                std::panic::resume_unwind(failure);
+            }
+        }
+        return;
+    }
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+    let mut child = Command::new(std::env::current_exe().expect("test executable"))
+        .args([
+            "--exact",
+            "lane_retirement::lane_terminal_retirement_contract",
+            "--nocapture",
+        ])
+        .env("FLUI_LANE_RETIREMENT_CHILD", "competing")
+        .env("RUST_BACKTRACE", "0")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("retirement child");
+    let mut stdout = child.stdout.take().expect("child stdout");
+    let mut stderr = child.stderr.take().expect("child stderr");
+    let output = std::thread::spawn(move || {
+        let mut text = String::new();
+        stdout.read_to_string(&mut text).expect("stdout");
+        text
+    });
+    let errors = std::thread::spawn(move || {
+        let mut text = String::new();
+        stderr.read_to_string(&mut text).expect("stderr");
+        text
+    });
+    let started = Instant::now();
+    while child.try_wait().expect("child status").is_none() {
+        if started.elapsed() > Duration::from_secs(60) {
+            child.kill().expect("kill stalled child");
+            panic!("lane retirement child did not make progress within 60 seconds");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let status = child.wait().expect("child exit");
+    assert!(
+        status.success(),
+        "retirement child failed:\n{}\n{}",
+        output.join().expect("stdout reader"),
+        errors.join().expect("stderr reader")
+    );
+}

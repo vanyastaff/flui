@@ -11,6 +11,8 @@ mod multi_tap;
 #[path = "interaction_lane.rs"]
 mod interaction_lane;
 
+mod lane_retirement;
+
 #[path = "text_input_retirement.rs"]
 mod text_input_retirement;
 

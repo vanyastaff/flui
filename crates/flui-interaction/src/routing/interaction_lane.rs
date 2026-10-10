@@ -1136,38 +1136,67 @@ impl Drop for InteractionLane {
         let shader_mask_targets = self.inner.shader_mask_targets.take();
         let payload_targets = self.inner.payload_targets.take();
 
-        let mut routes: Vec<_> = routes.into_iter().collect();
-        routes.sort_unstable_by_key(|(id, _)| *id);
-        drop(routes);
-
-        let mut targets: Vec<_> = targets.into_iter().collect();
-        targets.sort_unstable_by_key(|(id, _)| *id);
-        drop(targets);
-
-        let mut mouse_targets: Vec<_> = mouse_targets.into_iter().collect();
-        mouse_targets.sort_unstable_by_key(|(id, _)| *id);
-        drop(mouse_targets);
-
-        let mut scroll_targets: Vec<_> = scroll_targets.into_iter().collect();
-        scroll_targets.sort_unstable_by_key(|(id, _)| *id);
-        drop(scroll_targets);
-
-        let mut pan_zoom_targets: Vec<_> = pan_zoom_targets.into_iter().collect();
-        pan_zoom_targets.sort_unstable_by_key(|(id, _)| *id);
-        drop(pan_zoom_targets);
-
-        let mut path_clip_targets: Vec<_> = path_clip_targets.into_iter().collect();
-        path_clip_targets.sort_unstable_by_key(|(id, _)| *id);
-        drop(path_clip_targets);
-
-        let mut shader_mask_targets: Vec<_> = shader_mask_targets.into_iter().collect();
-        shader_mask_targets.sort_unstable_by_key(|(id, _)| *id);
-        drop(shader_mask_targets);
-
-        let mut payload_targets: Vec<_> = payload_targets.into_iter().collect();
-        payload_targets.sort_unstable_by_key(|(id, _)| *id);
-        drop(payload_targets);
+        // Registry removal and every storage withdrawal precede user Drop.
+        // One boundary carries the first failure across all storage families;
+        // catch_unwind alone would lose it before retiring the next family.
+        let mut failure = crate::__runtime::ClosePanic::new();
+        for route in ordered_lane_values(routes) {
+            match Rc::try_unwrap(route) {
+                Ok(mut route) => {
+                    for entry in std::mem::take(&mut route.entries) {
+                        if entry
+                            .owner
+                            .as_ref()
+                            .is_some_and(|owner| owner.retains_withdrawn())
+                        {
+                            entry.handler_cell.retain();
+                        } else {
+                            failure.retire(entry.handler_cell);
+                        }
+                    }
+                }
+                Err(shared) => failure.retire(shared),
+            }
+        }
+        for target in ordered_lane_values(targets) {
+            failure.retire(target);
+        }
+        for cell in ordered_lane_values(mouse_targets) {
+            match Rc::try_unwrap(cell) {
+                Ok(cell) => {
+                    // The three callbacks are separate owners, not one user
+                    // aggregate: a failure in enter must not drop exit/hover.
+                    let callbacks = cell.current.into_inner();
+                    failure.retire(callbacks.on_enter);
+                    failure.retire(callbacks.on_exit);
+                    failure.retire(callbacks.on_hover);
+                }
+                Err(shared) => failure.retire(shared),
+            }
+        }
+        for target in ordered_lane_values(scroll_targets) {
+            failure.retire(target);
+        }
+        for target in ordered_lane_values(pan_zoom_targets) {
+            failure.retire(target);
+        }
+        for target in ordered_lane_values(path_clip_targets) {
+            failure.retire(target);
+        }
+        for target in ordered_lane_values(shader_mask_targets) {
+            failure.retire(target);
+        }
+        for payload in ordered_lane_values(payload_targets) {
+            failure.retire(payload);
+        }
+        failure.finish();
     }
+}
+
+fn ordered_lane_values<K: Ord + Copy, V>(values: HashMap<K, V>) -> impl Iterator<Item = V> {
+    let mut values: Vec<_> = values.into_iter().collect();
+    values.sort_unstable_by_key(|(id, _)| *id);
+    values.into_iter().map(|(_, value)| value)
 }
 
 struct LaneActivation<'lane> {
