@@ -191,7 +191,7 @@ panic there costs nothing structurally — the same callback (including the
 one that panicked) simply runs again next frame, same as always.
 
 **The frame's post-frame callbacks do not run** for an aborted frame —
-unchanged from before this issue; see `abort_frame`'s own doc. **Completion
+see the private abort cleanup. **Completion
 waiters are woken with the aborted frame's outcome** — an aborted frame is a
 frame that finished, badly, and `end_of_frame()` must not hang forever
 because of it. It resolves `Ok(FrameOutcome::Aborted { timing })`, distinct
@@ -204,12 +204,12 @@ issue #1162 shaped it this way.
 this recovery could be catching a panic from has even run,
 `handle_begin_frame` has already cleared `frame_scheduled` back to `false`
 unconditionally (before the transient-callback loop), so it reads `false`
-once `abort_frame` returns — the same as after any other completed frame.
-`abort_frame` deliberately does **not** re-arm it: doing so would hot-loop
+once abort cleanup returns — the same as after any other completed frame.
+Abort cleanup deliberately does **not** re-arm it: doing so would hot-loop
 a caller that keeps re-driving a deterministically panicking frame. A
 caller that catches the resumed panic and decides to keep going owns
 calling `request_frame()` itself, exactly as it would after any other frame
-that produced no visible work. See `drive_frame`/`abort_frame`'s own docs.
+that produced no visible work. See `OwnerFrame::drive_frame`'s contract.
 
 **The async zombie-slot fix (`AsyncDriver::poll_ready`):** a panic inside
 `future.poll` used to leave that task's slot in `Inner::tasks` holding
@@ -254,15 +254,15 @@ did not choose to isolate.
 Two distinct sites can themselves panic while THIS issue's own recovery
 runs, both discovered by review after the first pass shipped:
 
-- `drive_frame_impl`'s `Err` arm calls `abort_frame`, which calls
+- `OwnerFrame::drive_frame` catches failure and calls `abort_frame_impl`, which calls
   `notify_frame_completion` — and a panicking waker there is a second panic
   on top of the pipeline's (or `handle_begin_frame`/`handle_draw_frame`'s)
-  own. `abort_frame` is now called inside its OWN `catch_unwind`; a
+  own. Abort cleanup runs inside its own `catch_unwind`; a
   secondary panic is traced at `error` level and the ORIGINAL payload is
   what `resume_unwind`s, always — measured before the fix: the escaped
   panic was the waker's, not the frame's, silently losing whichever failure
   the frame was actually reporting.
-- `end_frame_impl`'s CLEAN path (`drive_frame`'s `Ok` arm) calls
+- The successful `end_frame` path inside `OwnerFrame::drive_frame` calls
   `notify_frame_completion` OUTSIDE the post-frame callback's own
   `catch_unwind`, so a panicking waker there used to escape straight past
   the phase reset at the end of that function, leaving the scheduler stuck
@@ -528,27 +528,22 @@ That predicate has two halves, and only the first belongs to the registry:
 - **Survival.** No registry predicate can decide whether an issued demand
   still stands. A demand is revoked without any drain when `frame_scheduled`
   is cleared with a live waiter still registered, and it has a second
-  clearer besides `handle_begin_frame`: the public `finish_async_pump`. If
+  clearer besides `handle_begin_frame`: background preparation inside
+  `OwnerFrame::pump_background`. If
   nothing else acted, a later push would then see that live entry, stay
   silent, and both wait forever. Two independent mechanisms recover it,
   covering the two ways the revoke is reached:
 
-  - **`finish_async_pump` re-issues the demand itself (issue #1162)**, at
+  - **Background preparation re-issues the demand**, at
     the exact point that would otherwise drop it: once the latch is clear,
     it checks `frames_enabled` and the registry's own `has_live_waiter()`
     and calls `request_frame()` if both hold. This is the leg that matters
     when frames are ALREADY enabled at the moment the pump runs — no
     disable→enable edge ever happens for such a waiter to ride, so nothing
-    but the pump's own re-check can recover it. Not reachable off a
-    runner's own decide-then-pump order, though: every `flui-app` runner
-    calls `finish_async_pump` only from `wake_action`'s `PumpAsync` arm,
-    chosen iff `!frames_enabled` at that same read, immediately followed by
-    this call on the same thread with nothing in between — so `frames_enabled`
-    still reads false when the runner's own pump reaches the re-check. What
-    DOES reach this leg with `frames_enabled` true: `finish_async_pump`
-    called directly, out of `wake_action`'s order (an embedder or a test
-    bypassing it), or a cross-thread enable landing in the store-buffering
-    window this doc's own **Ordering:** note names below. See the
+    but the pump's own re-check can recover it. The complete public background
+    operation is also available to embedders while frames are enabled; raw
+    demand consumption is private. A concurrent frames-enabled edge can
+    race this preparation. See the
     `end_of_frame` resolves an outcome, and a dropped scheduler resolves
     `Err(SchedulerClosed)` entry's own **Ordering:** note for why this needs
     `SeqCst`, not `Acquire`/`Release`.
@@ -561,20 +556,14 @@ That predicate has two halves, and only the first belongs to the registry:
     `lifecycle_reenable_edge_schedules_exactly_one_frame`. That is the edge a
     real app crosses, and the sequence is reachable rather than theoretical:
     frames enabled, a demand issued, lifecycle goes `Hidden`, a `PumpAsync`
-    tick revokes the latch through `finish_async_pump` with no drain, later
+    tick revokes the latch through background preparation with no drain, later
     registrations stay silent behind the still-live waiter, and the resume
-    edge is what recovers them. `set_frames_enabled(true)` gained the same
+    edge is what recovers them. `set_frames_enabled(true)` uses the same
     re-request so the public setter mirrors the lifecycle path rather than
-    being a second way to reach the stranded state. It has **zero production
-    callers** today (the only non-test call in the workspace passes `false`,
-    and it is itself inside a `#[cfg(test)]` module), so do not read its
-    caller count as a measure of whether this argument holds.
+    being a second way to reach the stranded state.
 
-  Before issue #1162, only the second leg existed, which is why a live
-  waiter stranded while frames stayed enabled the whole time (no disable, no
-  re-enable, just a `PumpAsync` cycle) had no recovery path at all — named
-  as a reachable, not theoretical, gap on `finish_async_pump`'s own doc and
-  closed by the first leg above.
+  Both mechanisms are required: a background turn can consume demand without
+  a disable/enable edge, and a disabled turn cannot deliver a visual frame.
 
 **Alternatives considered:**
 
@@ -673,8 +662,8 @@ the owner, never drive a frame inline.
 
 **Rule:** [`FrameCompletionFuture::Output`](src/scheduler.rs) is
 `Result<FrameOutcome, SchedulerClosed>`, never a bare `FrameTiming`. A frame
-that closed through `end_frame_impl` resolves `Ok(FrameOutcome::Completed { timing })`;
-one that closed through `abort_frame` resolves `Ok(FrameOutcome::Aborted { timing })`;
+that closed through `end_frame` resolves `Ok(FrameOutcome::Completed { timing })`;
+one that closed through abort cleanup resolves `Ok(FrameOutcome::Aborted { timing })`;
 and every waiter still registered when the scheduler's last strong handle
 drops resolves `Err(SchedulerClosed)`. Polling again after `Ready` repeats the
 same value rather than hanging.
@@ -757,14 +746,14 @@ A task on the UI runtime's own `OwnerFrame` that captured a clone holds the
 scheduler until the UI runtime retires the owner frame at teardown; the owner
 frame is not part of the scheduler, so that is no longer a self-cycle.
 
-**Ordering: the same issue also closed a `finish_async_pump` wake-loss hazard,
-and it needed `SeqCst`, not `Acquire`/`Release`.** A live `end_of_frame`
+**Ordering: background demand consumption needs `SeqCst`, not
+`Acquire`/`Release`.** A live `end_of_frame`
 waiter whose demand survives a disable→enable edge with `frame_scheduled`
 already latched `true` fires no NEW wake on that edge (the false→true
 transition `request_frame_impl` needs never happens, since the latch was
-never cleared by disabling frames), so a LATER `finish_async_pump` cycle that
+never cleared by disabling frames), so a later background turn that
 unconditionally clears the same latch would silently drop the demand with no
-mechanism left to re-issue it. The fix is `finish_async_pump`
+mechanism left to re-issue it. Background preparation recovers it by
 re-checking `frames_enabled && completion_waiters.has_live_waiter()` after
 clearing the latch and re-issuing the demand itself — see the "Survival"
 paragraph above for the full mechanism and its sibling (the frames-enabled
