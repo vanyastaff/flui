@@ -63,8 +63,6 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use flui_animation::curve::{Curve, Interval};
@@ -474,17 +472,18 @@ struct DragState {
     resize_controller: RefCell<Option<DrivenController>>,
     resize_listener_id: RefCell<Option<ListenerId>>,
 
-    /// Completion debt is counted separately from value delivery so collapse
+    /// Completion debt is retained separately from value delivery so collapse
     /// starts after the completion build observes committed card geometry.
-    move_completed_runs: Arc<AtomicU64>,
-    delivered_move_completions: Cell<u64>,
+    move_completion_pending: Cell<bool>,
+    resize_completion: Cell<ResizeCompletion>,
+}
 
-    /// Bumped by the resize controller's listener on every non-final tick.
-    resize_progress_ticks: Arc<AtomicU64>,
-    delivered_resize_ticks: Cell<u64>,
-    /// Set by the resize controller's listener once it observes completion.
-    resize_completed: Arc<AtomicBool>,
-    delivered_resize_dismissal: Cell<bool>,
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum ResizeCompletion {
+    #[default]
+    Waiting,
+    Pending,
+    Delivered,
 }
 
 impl DragState {
@@ -563,7 +562,7 @@ struct ResolvedConfig {
     resize_duration: Option<Duration>,
     cross_axis_end_offset: f64,
     on_dismissed: Option<DirectionDelivery>,
-    on_resize: Option<Rc<dyn Fn()>>,
+    resize_events: std::rc::Weak<DismissEvents>,
 }
 
 #[derive(Clone)]
@@ -746,13 +745,15 @@ impl ViewState<Dismissible> for DismissibleState {
             }),
         ));
 
-        let move_completed_runs = Arc::clone(&self.drag.move_completed_runs);
+        let drag = Rc::downgrade(&self.drag);
         let rebuild_for_status = rebuild.clone();
         drop(self.move_status_subscription.take());
         self.move_status_subscription = Some(self.move_controller.controller().subscribe_status(
             std::rc::Rc::new(move |status| {
-                if status == AnimationStatus::Completed {
-                    move_completed_runs.fetch_add(1, Ordering::Relaxed);
+                if status == AnimationStatus::Completed
+                    && let Some(drag) = drag.upgrade()
+                {
+                    drag.move_completion_pending.set(true);
                     rebuild_for_status.schedule(flui_view::RebuildReason::AnimationTick);
                 }
             }),
@@ -831,7 +832,7 @@ impl ViewState<Dismissible> for DismissibleState {
                 Rc::new(move |direction| direct_events.dispatch(DismissEvent::Dismissed(direction)))
                     as DirectionDelivery
             }),
-            on_resize: None,
+            resize_events: Rc::downgrade(&events),
         });
         let mut deferred = (*resolved).clone();
         let dismiss_events = events.clone();
@@ -839,11 +840,6 @@ impl ViewState<Dismissible> for DismissibleState {
             Rc::new(move |direction| dismiss_events.defer(DismissEvent::Dismissed(direction)))
                 as DirectionDelivery
         });
-        let resize_events = events.clone();
-        deferred.on_resize = view
-            .on_resize
-            .as_ref()
-            .map(|_| Rc::new(move || resize_events.defer(DismissEvent::Resize)) as Rc<dyn Fn()>);
         let deferred = Rc::new(deferred);
         let behavior = view.behavior;
         let direction = view.direction;
@@ -864,7 +860,7 @@ impl ViewState<Dismissible> for DismissibleState {
         // Resolve completion from committed geometry, then deliver user
         // effects after this frame rather than writing signals in build.
         deliver_move_completion(&drag, &move_controller, &deferred, vsync.as_ref(), &rebuild);
-        deliver_resize_progress(&drag, &deferred);
+        deliver_resize_completion(&drag, &deferred);
         events.queue_update(&drag, move_controller.value());
 
         if let Some(resize_controller) = drag.resize_controller.borrow().as_ref() {
@@ -1016,46 +1012,11 @@ impl ViewState<Dismissible> for DismissibleState {
 // Gesture handlers — free functions called from the `'static` closures `build()` reconstructs.
 // ============================================================================
 
-/// Marks whatever `move_completed_runs` currently holds as already
-/// "delivered", discarding any `Completed` transition a direct `set_value`
-/// call (in `handle_drag_start`/`handle_drag_update`) might just have caused
-/// — without running the actual completion behavior for it.
-///
-/// **The bug this fixes:** `move_controller.set_value(...)` clamps to
-/// `[0.0, 1.0]`, and a drag whose extent reaches (or overshoots) 100% of
-/// `overall_extent` therefore lands the controller at the upper bound —
-/// which `AnimationController` reports as `Completed`, *mid-drag*, well
-/// before `handle_drag_end` ever runs. The right behavior is to discard
-/// exactly this case — a `Completed` event that fires while still dragging is
-/// dropped outright, never queued for later.
-///
-/// That check cannot live *in the listener*: the listener
-/// registered in `init_state` must be `Send + Sync` (`flui_foundation::ListenerCallback`),
-/// so it can only touch the `Arc<AtomicU64>` `move_completed_runs` counter,
-/// never the `Cell<bool>` `drag_underway` flag (see `DragState`'s own doc on
-/// why). Bumping the counter unconditionally and
-/// leaving `deliver_move_completion`'s build()-driven consumer to skip
-/// delivery *while* `drag_underway` was still true — but skipping is not
-/// discarding: the bump stayed on the counter, unconsumed. The very next
-/// time `deliver_move_completion` ran with `drag_underway` false again (e.g.
-/// after the user dragged back below threshold and released, which
-/// correctly springs back via `.reverse()`), it saw a "new" completion it
-/// had never delivered and ran the collapse + `on_dismissed` anyway — a
-/// false dismissal.
-///
-/// The fix moves the discard to the only place that reliably knows
-/// `drag_underway` is true: right here, synchronously after every direct
-/// `set_value`, in the same call stack that might have just caused the
-/// bump. Marking it "delivered" immediately means `deliver_move_completion`
-/// can never later mistake it for a real, undelivered completion. The
-/// legitimate "released exactly at 100%" dismissal does not depend on this
-/// counter at all: `handle_drag_end` calls [`run_move_completion`] directly
-/// and unconditionally when `move_controller.is_completed()` holds at the
-/// exact moment of release, which never consults the status
-/// listener.
+/// Direct drag samples can reach the upper bound before release. Clear their
+/// completion debt synchronously so dragging back cannot trigger a later collapse.
+/// Release at the bound runs completion directly from `handle_drag_end`.
 fn discard_transient_move_completion(drag: &DragState) {
-    let completed_runs = drag.move_completed_runs.load(Ordering::Relaxed);
-    drag.delivered_move_completions.set(completed_runs);
+    drag.move_completion_pending.set(false);
 }
 
 /// Begins a drag (no confirm-dismiss guard — see module docs limit #1).
@@ -1158,12 +1119,8 @@ fn handle_drag_end(
         return;
     };
     if move_controller.is_completed() {
-        // The direct bypass for a drag released exactly at 100%. Calls
-        // `run_move_completion` unconditionally, NOT the counter-gated
-        // `deliver_move_completion`: a drag released exactly at 100% never
-        // bumped `move_completed_runs` in the first place (see
-        // `discard_transient_move_completion`), so gating on that counter here
-        // would wrongly skip this legitimate completion.
+        // Direct drag samples have already discarded their completion debt.
+        // Release at the bound therefore starts collapse directly.
         run_move_completion(drag, move_controller, resolved, vsync, rebuild, size);
         return;
     }
@@ -1212,12 +1169,11 @@ fn handle_drag_end(
     }
 }
 
-/// The actual completion behavior, run unconditionally (no counter/latch gate
-/// of any kind). Two call sites reach this:
+/// Starts the completion behavior. Two call sites reach this:
 ///
 /// - `handle_drag_end`'s direct bypass, when `move_controller.is_completed()`
 ///   holds at the exact moment of release.
-/// - [`deliver_move_completion`], the deferred, counter-gated path for a
+/// - [`deliver_move_completion`], the deferred path for a
 ///   `.forward()`/`.fling()` run that settles to `Completed` sometime AFTER
 ///   release, driven by the status listener.
 ///
@@ -1225,7 +1181,7 @@ fn handle_drag_end(
 /// direct-bypass site is reached only once per release, and the deferred
 /// site only ever observes a completion the direct-bypass site did not
 /// already consume (see `discard_transient_move_completion`'s doc for why a
-/// mid-drag `Completed` never reaches the deferred path's counter at all).
+/// mid-drag `Completed` never leaves deferred completion debt).
 // the six pieces of state the completion needs are not otherwise grouped
 fn run_move_completion(
     drag: &Rc<DragState>,
@@ -1256,21 +1212,24 @@ fn run_move_completion(
             }
         }
         Some(duration) => {
-            start_resize_animation(drag, duration, vsync, rebuild, size);
+            start_resize_animation(
+                drag,
+                duration,
+                vsync,
+                rebuild,
+                size,
+                &resolved.resize_events,
+            );
         }
     }
 }
 
 /// The deferred half of completion handling: reacts to `move_controller` completing
 /// AFTER release (a `.forward()`/`.fling()` run settling), observed via the
-/// status listener registered in `init_state` and the `move_completed_runs` /
-/// `delivered_move_completions` counter pair. Idempotent: a call that finds
-/// nothing new to deliver is a no-op. Never reached for a mid-drag
-/// `Completed` event — those are discarded at the source (see
-/// `discard_transient_move_completion`) — nor does it need its own
-/// `drag_underway` check for that reason: by the time this runs,
-/// `move_completed_runs` only ever counts completions the drag was not
-/// underway for.
+/// status listener registered in `init_state`. Retain debt until committed
+/// geometry is available, then consume it before starting collapse. Direct drag
+/// samples discard their transient completions through
+/// `discard_transient_move_completion`.
 // mirrors `run_move_completion`'s arity — see its own note
 fn deliver_move_completion(
     drag: &Rc<DragState>,
@@ -1279,14 +1238,13 @@ fn deliver_move_completion(
     vsync: Option<&Vsync>,
     rebuild: &RebuildHandle,
 ) {
-    let completed_runs = drag.move_completed_runs.load(Ordering::Relaxed);
-    if completed_runs <= drag.delivered_move_completions.get() {
+    if !drag.move_completion_pending.get() {
         return;
     }
     let Some(size) = drag.laid_out_size.get() else {
         return;
     };
-    drag.delivered_move_completions.set(completed_runs);
+    drag.move_completion_pending.set(false);
     run_move_completion(drag, move_controller, resolved, vsync, rebuild, size);
 }
 
@@ -1299,6 +1257,7 @@ fn start_resize_animation(
     vsync: Option<&Vsync>,
     rebuild: &RebuildHandle,
     size_prior_to_collapse: Size,
+    events: &std::rc::Weak<DismissEvents>,
 ) {
     if drag.resize_controller.borrow().is_some() {
         return;
@@ -1309,16 +1268,24 @@ fn start_resize_animation(
     let resize_controller = AnimationController::builder(duration).build_on(vsync);
 
     let resize_ref = resize_controller.controller().clone();
-    let progress_ticks = Arc::clone(&drag.resize_progress_ticks);
-    let completed_flag = Arc::clone(&drag.resize_completed);
+    let weak_drag = Rc::downgrade(drag);
+    let events = events.clone();
     let rebuild_for_resize = rebuild.clone();
     let listener_id = resize_controller
         .controller()
         .add_listener(std::rc::Rc::new(move || {
+            let Some(drag) = weak_drag.upgrade() else {
+                return;
+            };
             if resize_ref.is_completed() {
-                completed_flag.store(true, Ordering::Relaxed);
-            } else {
-                progress_ticks.fetch_add(1, Ordering::Relaxed);
+                if drag.resize_completion.get() == ResizeCompletion::Waiting {
+                    drag.resize_completion.set(ResizeCompletion::Pending);
+                }
+            } else if let Some(events) = events.upgrade()
+                && events.mounted.get()
+                && events.callbacks.borrow().resize.is_some()
+            {
+                events.defer(DismissEvent::Resize);
             }
             rebuild_for_resize.schedule(flui_view::RebuildReason::AnimationTick);
         }));
@@ -1331,32 +1298,19 @@ fn start_resize_animation(
         .replace(resize_controller);
 }
 
-/// Fires `on_resize` for every delivered progress tick, or `on_dismissed`
-/// once when the resize controller completes.
-fn deliver_resize_progress(drag: &Rc<DragState>, resolved: &Rc<ResolvedConfig>) {
-    if drag.resize_completed.load(Ordering::Relaxed) {
-        if !drag.delivered_resize_dismissal.get() {
-            drag.delivered_resize_dismissal.set(true);
-            let direction = extent_to_direction(
-                drag.drag_extent.get(),
-                resolved.direction,
-                resolved.text_direction,
-            );
-            if let Some(on_dismissed) = &resolved.on_dismissed {
-                on_dismissed(direction);
-            }
-        }
+/// Queues completion after the resize samples already admitted to the owner lane.
+fn deliver_resize_completion(drag: &Rc<DragState>, resolved: &Rc<ResolvedConfig>) {
+    if drag.resize_completion.get() != ResizeCompletion::Pending {
         return;
     }
-    let ticks = drag.resize_progress_ticks.load(Ordering::Relaxed);
-    let delivered = drag.delivered_resize_ticks.get();
-    if ticks > delivered {
-        drag.delivered_resize_ticks.set(ticks);
-        if let Some(on_resize) = &resolved.on_resize {
-            for _ in delivered..ticks {
-                on_resize();
-            }
-        }
+    drag.resize_completion.set(ResizeCompletion::Delivered);
+    let direction = extent_to_direction(
+        drag.drag_extent.get(),
+        resolved.direction,
+        resolved.text_direction,
+    );
+    if let Some(on_dismissed) = &resolved.on_dismissed {
+        on_dismissed(direction);
     }
 }
 

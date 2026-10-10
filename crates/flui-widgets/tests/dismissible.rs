@@ -760,3 +760,125 @@ pub(crate) fn a_dismissible_collapses_its_laid_out_size() {
     laid.pump_for(Duration::from_secs(1));
     assert_eq!(dismissed.get(), 1);
 }
+
+pub(crate) fn resize_delivery_keeps_accepted_ticks_before_completion() {
+    use crate::common::SignalProbe;
+    use flui_animation::MotionClock;
+    use flui_view::ViewExt;
+    use std::cell::RefCell;
+
+    for delivery in [
+        UpdateDelivery::Ordered,
+        UpdateDelivery::Panicking,
+        UpdateDelivery::Replaced,
+        UpdateDelivery::Unmounted,
+    ] {
+        let panicking = matches!(delivery, UpdateDelivery::Panicking);
+        let delivered = Rc::new(RefCell::new(Vec::new()));
+        let panic_pending = Rc::new(Cell::new(false));
+        let generation = Rc::new(Cell::new(1));
+        let show = Rc::new(Cell::new(true));
+        let probe = {
+            let delivered = Rc::clone(&delivered);
+            let panic_pending = Rc::clone(&panic_pending);
+            let generation = Rc::clone(&generation);
+            let show = Rc::clone(&show);
+            SignalProbe::new(move |_| {
+                if !show.get() {
+                    return flui_widgets::SizedBox::shrink().boxed();
+                }
+                let generation = generation.get();
+                let resize_output = Rc::clone(&delivered);
+                let dismiss_output = Rc::clone(&delivered);
+                let panic_on_resize = Rc::clone(&panic_pending);
+                Dismissible::new(
+                    flui_widgets::SizedBox::new(150.0, 100.0)
+                        .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+                )
+                .on_resize(move |_| {
+                    resize_output.borrow_mut().push((generation, "resize"));
+                    assert!(
+                        !panic_on_resize.replace(false),
+                        "intentional resize callback panic"
+                    );
+                })
+                .on_dismissed(move |_, _| {
+                    dismiss_output.borrow_mut().push((generation, "dismissed"));
+                })
+                .boxed()
+            })
+        };
+        let vsync = Vsync::new();
+        let mut laid = lay_out_animated(
+            VsyncScope::new(vsync.clone(), probe.view()),
+            tight(150.0, 100.0),
+            vsync.clone(),
+        );
+        laid.dispatch_pointer_down(10.0, 50.0);
+        for step in 1..=12 {
+            laid.dispatch_pointer_move_after(
+                10.0 + f64::from(step) * 20.0,
+                50.0,
+                Duration::from_millis(10),
+            );
+        }
+        laid.dispatch_pointer_up(250.0, 50.0);
+        laid.pump();
+        delivered.borrow_mut().clear();
+        panic_pending.set(panicking);
+
+        // Pointer moves spent 120ms. The initial pump anchored the 300ms
+        // collapse there. Accept two non-final samples and then completion
+        // without letting a build consume the intervening notifications.
+        let mut clock = MotionClock::new();
+        for millis in [170, 220, 420] {
+            vsync.tick_all(&clock.frame(Duration::from_millis(millis)));
+        }
+        assert!(
+            delivered.borrow().is_empty(),
+            "effects wait for the owner frame"
+        );
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match delivery {
+            UpdateDelivery::Replaced => {
+                generation.set(2);
+                laid.pump();
+            }
+            UpdateDelivery::Unmounted => {
+                show.set(false);
+                laid.pump();
+            }
+            _ => laid.tick(),
+        }));
+        assert_eq!(result.is_err(), panicking);
+        if panicking {
+            let payload = result.expect_err("the resize failure propagates");
+            assert_eq!(
+                payload.downcast_ref::<&str>().copied(),
+                Some("intentional resize callback panic")
+            );
+            assert_eq!(*delivered.borrow(), [(1, "resize")]);
+            // The owner lane preserves the accepted tail for the next frame
+            // when a callback fails; it does not run more effects in that frame.
+            laid.tick();
+        }
+        let expected: Vec<_> = if matches!(delivery, UpdateDelivery::Unmounted) {
+            Vec::new()
+        } else {
+            let generation = generation.get();
+            ["resize", "resize", "dismissed"]
+                .map(|event| (generation, event))
+                .to_vec()
+        };
+        assert_eq!(
+            *delivered.borrow(),
+            expected,
+            "completion must follow accepted non-final samples, including after a callback panic"
+        );
+        laid.pump_for(Duration::from_secs(1));
+        assert_eq!(
+            delivered.borrow().len(),
+            expected.len(),
+            "recovery cannot repeat delivery"
+        );
+    }
+}

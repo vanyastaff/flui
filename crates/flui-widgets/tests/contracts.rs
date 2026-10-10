@@ -546,6 +546,7 @@ fn animation_and_visibility() {
             ("dismissible::dismissible_slides_without_rebuilding_per_frame", crate::dismissible::dismissible_slides_without_rebuilding_per_frame as fn()),
             ("dismissible::dismissal_updates_follow_owner_lifetime", crate::dismissible::dismissal_updates_follow_owner_lifetime as fn()),
             ("dismissible::a_dismissible_collapses_its_laid_out_size", crate::dismissible::a_dismissible_collapses_its_laid_out_size as fn()),
+            ("dismissible::resize_delivery_keeps_accepted_ticks_before_completion", crate::dismissible::resize_delivery_keeps_accepted_ticks_before_completion as fn()),
             ("animated_size::animated_size_interpolates_to_a_new_child_size_over_frames", crate::animated_size::animated_size_interpolates_to_a_new_child_size_over_frames as fn()),
             ("implicit_animations::animated_container_interpolates_size_over_frames", crate::implicit_animations::animated_container_interpolates_size_over_frames),
             ("implicit_animations::swapping_the_scope_registry_preserves_an_implicit_run", crate::implicit_animations::swapping_the_scope_registry_preserves_an_implicit_run),
