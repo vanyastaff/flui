@@ -75,6 +75,11 @@
 
 ### Fixed
 
+- Commit a Hero controller's replacement Navigator before retiring outgoing
+  routes, so route-capture destructors can read or replace the attachment.
+  Controller recordings use owner-local storage and retain their independent
+  aliases and failure-safe retirement tails.
+
 - Run authored Hero key hashing, equality and formatting outside route and flight
   registry borrows. Revalidate reentrant changes before matching, release by
   registration identity and preserve the first retirement failure.

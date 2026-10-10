@@ -22,6 +22,7 @@ fn navigator_failure_containment_and_reentrancy() {
             ("navigator_public::push_named_typed_with_the_wrong_result_type_errors_disposes_the_route_and_changes_nothing", crate::navigator_public::push_named_typed_with_the_wrong_result_type_errors_disposes_the_route_and_changes_nothing),
             ("navigator_public::a_route_key_carries_its_result_type_from_registration_to_delivery", crate::navigator_public::a_route_key_carries_its_result_type_from_registration_to_delivery),
             ("hero_controller::a_hero_controller_does_not_deadlock_the_observer_callback", crate::hero_controller::a_hero_controller_does_not_deadlock_the_observer_callback),
+            ("hero_controller::replacing_a_hero_navigator_retires_routes_after_attachment", crate::hero_controller::replacing_a_hero_navigator_retires_routes_after_attachment),
             ("hero_seam::an_observer_may_push_from_did_push_without_deadlocking", crate::hero_seam::an_observer_may_push_from_did_push_without_deadlocking),
             ("transition_route::status_listener_does_not_hold_a_lock_across_the_binding_call", crate::transition_route::status_listener_does_not_hold_a_lock_across_the_binding_call),
             ("transition_route::pop_mid_push_cancels_the_push_future_inside_the_flush_and_ends_popping", crate::transition_route::pop_mid_push_cancels_the_push_future_inside_the_flush_and_ends_popping),

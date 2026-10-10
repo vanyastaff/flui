@@ -100,6 +100,24 @@ without recurring through a cycle. The private resolver case
 `nested_hero_resolution_preserves_local_identity_through_cycles` pins this graph
 contract; ordinary application trees do not expose the resolver constructor.
 
+## Hero controller attachment and recording ownership
+
+The controller's attachment and diagnostic counter are owner-local cells. One
+`Rc` recording owner shares measurements and manifests with queued post-frame
+callbacks. `HeroTag` cloning retains its `Arc` identity and invokes no authored
+key code. Physical recording retirement withdraws both collections before
+destroying manifests; the existing terminal policy preserves an opaque tail
+after the first failure.
+
+Attachment commits its replacement before releasing outgoing navigator handles.
+`replacing_a_hero_navigator_retires_routes_after_attachment` seeds an ordinary
+`SimpleRoute` whose capture destructor reads the same controller, installs a
+third attachment or fails. It verifies the committed replacement, independent
+handle lifetime and the next healthy detach/attach. The private
+`hero_controller_terminal_retirement` matrix additionally covers recording
+aliases, healthy destruction, first and competing failures, incoming unwind
+and a manifest tail that must remain retained after failure.
+
 ## Hero placeholders belong to logical flights
 
 A placeholder carries the allocation identity of its logical flight alongside
