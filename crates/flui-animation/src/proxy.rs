@@ -237,6 +237,18 @@ where
     }
 }
 
+impl<T: Clone + 'static> ProxyAnimation<T> {
+    /// Withdraw a value listener within an enclosing framework cleanup round.
+    /// Its outgoing captures retire through that round's first-failure context.
+    #[doc(hidden)]
+    pub fn remove_listener_with_recovery(&self, id: ListenerId, recovery: &mut RecoveryScope<'_>) {
+        let callback = Terminal::new(self.inner.notifier.take_listener(id));
+        self.inner.status_listeners.inherit_failure(recovery);
+        self.inner.notifier.inherit_failure(recovery);
+        recovery.retire(callback);
+    }
+}
+
 impl<T> Animation<T> for ProxyAnimation<T>
 where
     T: Clone + fmt::Debug + 'static,
@@ -308,13 +320,8 @@ where
     }
 
     fn remove_listener(&self, id: ListenerId) {
-        let callback = self.inner.notifier.take_listener(id);
         let mut recovery = Retirement::new();
-        self.inner
-            .status_listeners
-            .inherit_failure(&mut recovery.scope());
-        self.inner.notifier.inherit_failure(&mut recovery.scope());
-        recovery.retire(callback);
+        self.remove_listener_with_recovery(id, &mut recovery.scope());
         recovery.finish();
     }
 

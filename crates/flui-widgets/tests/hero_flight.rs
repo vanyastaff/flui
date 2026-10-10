@@ -398,6 +398,93 @@ impl Drop for LocalRectMapping {
     }
 }
 
+pub(crate) fn cancelling_a_hero_mapping_does_not_refreeze_the_previous_page() {
+    struct PassiveHeroObserver;
+    impl NavigatorObserver for PassiveHeroObserver {
+        fn observes_hero_flights(&self) -> bool {
+            true
+        }
+    }
+
+    let frame = Duration::from_millis(16);
+    for phase in ["factory", "transform", "drop"] {
+        let vsync = flui_animation::Vsync::new();
+        let navigator = NavigatorHandle::new();
+        navigator.seed_initial(hero_page("shared", 30.0, 20.0));
+        let mut laid = crate::common::lay_out_animated(
+            flui_widgets::VsyncScope::new(vsync.clone(), Navigator::new(navigator.clone())),
+            crate::common::tight(400.0, 400.0),
+            vsync,
+        );
+        let armed = Rc::new(Cell::new(false));
+        let cancelled = Rc::new(Cell::new(false));
+        let taps = Rc::new(Cell::new(0));
+        let hook: Rc<dyn Fn()> = {
+            let navigator = navigator.clone();
+            let armed = Rc::clone(&armed);
+            let cancelled = Rc::clone(&cancelled);
+            Rc::new(move || {
+                if armed.replace(false) {
+                    cancelled.set(true);
+                    navigator.add_observer(Arc::new(PassiveHeroObserver));
+                }
+            })
+        };
+        let page = PageRoute::<i32>::new({
+            let taps = Rc::clone(&taps);
+            move |_ctx, _primary, _secondary| {
+                let taps = Rc::clone(&taps);
+                let hook = Rc::clone(&hook);
+                Center::new()
+                    .child(
+                        Hero::new(
+                            ValueKey::new("shared"),
+                            flui_widgets::GestureDetector::new()
+                                .behavior(flui_widgets::HitTestBehavior::Opaque)
+                                .on_tap(move |_| taps.set(taps.get() + 1))
+                                .child(SizedBox::new(60.0, 45.0)),
+                        )
+                        .curve(Curves::Linear)
+                        .create_rect_tween(move |begin, end| {
+                            if phase == "factory" {
+                                hook();
+                            }
+                            LocalRectMapping {
+                                endpoints: flui_animation::RectTween::new(begin, end),
+                                hook: Rc::clone(&hook),
+                                phase,
+                            }
+                        }),
+                    )
+                    .into_view()
+                    .boxed()
+            }
+        })
+        .transition_duration(TRANSITION);
+        let _push = laid.enter_owner_scope(|| navigator.push(page));
+        laid.pump_for(frame);
+        laid.pump_for(frame);
+        let post_frame = laid.post_frame_handle();
+        let _divert = laid.enter_owner_scope(|| {
+            post_frame
+                .schedule(move |_| armed.set(true))
+                .expect("the mounted presentation accepts the callback");
+            navigator.push(hero_page("shared", 90.0, 75.0))
+        });
+        laid.pump_for(frame);
+        assert!(cancelled.get(), "the {phase} callout cancelled the divert");
+        laid.pump_for(frame);
+        assert!(laid.enter_owner_scope(|| navigator.pop()));
+        for _ in 0..24 {
+            laid.pump_for(frame);
+        }
+        laid.dispatch_pointer_down(200.0, 200.0);
+        laid.dispatch_pointer_up(200.0, 200.0);
+        laid.pump_for(frame);
+        assert_eq!(taps.get(), 1, "{phase}: the restored page accepts taps");
+    }
+}
+
 fn rect_mapping_reentry(phase: &'static str) {
     let navigator = seeded_navigator();
     let controller = install(&navigator);

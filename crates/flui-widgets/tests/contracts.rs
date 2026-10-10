@@ -526,6 +526,7 @@ fn hero_flights() {
             ("hero_flight::a_push_eases_on_the_destination_hero_curve", crate::hero_flight::a_push_eases_on_the_destination_hero_curve),
             ("hero_flight::a_push_flight_interrupted_by_a_pop_diverts_in_place", crate::hero_flight::a_push_flight_interrupted_by_a_pop_diverts_in_place),
             ("hero_flight::a_nonlinear_hero_pop_retraces_the_airborne_push", crate::hero_flight::a_nonlinear_hero_pop_retraces_the_airborne_push),
+            ("hero_flight::cancelling_a_hero_mapping_does_not_refreeze_the_previous_page", crate::hero_flight::cancelling_a_hero_mapping_does_not_refreeze_the_previous_page),
             ("hero_flight::a_shrinking_flight_with_overshoot_keeps_a_non_negative_size", crate::hero_flight::a_shrinking_flight_with_overshoot_keeps_a_non_negative_size),
             ("hero_gesture::complete_release_pops_to_the_destination_route_and_the_flight_lands", crate::hero_gesture::complete_release_pops_to_the_destination_route_and_the_flight_lands),
             ("hero_public::a_hero_push_flight_runs_and_settles", crate::hero_public::a_hero_push_flight_runs_and_settles),

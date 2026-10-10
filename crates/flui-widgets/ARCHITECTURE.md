@@ -35,11 +35,34 @@ pin cancellation of the run future.
 
 Hero snapshots its owner-local rect factory before invoking user code. The
 factory, its returned mapping and that mapping's destructor can read the same
-flight without holding the factory mutex. `Animatable<Value = Rect>` allows
+flight without holding a flight storage borrow. `Animatable<Value = Rect>` allows
 custom mappings to retain owner-local state without worker-thread bounds.
 `hero_rect_mappings_are_owner_local_and_reentrant` drives a mounted navigator
 flight through all three reentry points, verifies the committed shuttle rect,
 and checks that the flight subsequently lands.
+
+The flight's rect, opacity, fade anchor and lifecycle flags use owner-local
+`Cell` storage. Terminal status is `Cell<Option<AnimationStatus>>`, shared with
+the relays that report it. Coherent manifest facts and owning slots use short
+`RefCell` borrows. The shuttle configuration has an `Rc` snapshot because
+`BoxedView::clone` executes the authored view's `Clone`; cloning and retiring
+that configuration happen after the slot borrow ends.
+
+Diversion rechecks cancellation after rect mapping returns, before freezing its
+selected heroes. `cancelling_a_hero_mapping_does_not_refreeze_the_previous_page`
+cancels through factory, transform and mapping destruction, then returns to the
+previous page and verifies actual taps reach its restored child.
+
+Teardown withdraws its cancellation rights and snapshots both heroes before
+calling out. Subscription cancellation, overlay removal and each placeholder
+restoration share one first-failure context with registry retirement. Controller
+detachment completes the remaining flights before resuming a cancellation
+failure. `hero_flight_terminal_retirement` uses the private cancellation seam
+to pin single and competing failures, peer restoration, fresh admission and
+authored shuttle cloning which withdraws its own configuration. Physical last
+release withdraws owned fields before the same cleanup protocol; incoming unwind
+retains opaque owners under the navigator's existing policy. ADR-0178 governs
+the cancellation bridge to the animation and foundation layers.
 
 Reversing a flight between the same heroes retains its rect factory and evaluates
 the original endpoint order at mirrored progress. Swapping endpoints alone

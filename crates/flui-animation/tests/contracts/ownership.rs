@@ -1297,3 +1297,85 @@ fn proxy_parented_to_a_capturing_switch_is_freed() {
         "the proxy, the switch and on_switched are released"
     );
 }
+
+#[test]
+fn proxy_listener_removal_joins_its_enclosing_cleanup() {
+    use std::cell::Cell;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::rc::Rc;
+
+    struct Capture {
+        proxy: Rc<ProxyAnimation<f64>>,
+        drops: Rc<Cell<usize>>,
+        reentrant_calls: Rc<Cell<usize>>,
+        panics: bool,
+    }
+    impl Drop for Capture {
+        fn drop(&mut self) {
+            self.drops.set(self.drops.get() + 1);
+            let calls = Rc::clone(&self.reentrant_calls);
+            self.proxy
+                .add_listener(Rc::new(move || calls.set(calls.get() + 1)));
+            assert!(!self.panics, "outgoing proxy capture failure");
+        }
+    }
+
+    for case in ["healthy", "earlier_failure", "competing"] {
+        let parent = controller();
+        let proxy = Rc::new(ProxyAnimation::new(Rc::new(parent.clone())));
+        let drops = Rc::new(Cell::new(0));
+        let calls = Rc::new(Cell::new(0));
+        let reentrant_calls = Rc::new(Cell::new(0));
+        let capture = Capture {
+            proxy: Rc::clone(&proxy),
+            drops: Rc::clone(&drops),
+            reentrant_calls: Rc::clone(&reentrant_calls),
+            panics: case == "competing",
+        };
+        let observed = Rc::clone(&calls);
+        let id = proxy.add_listener(Rc::new(move || {
+            let _capture = &capture;
+            observed.set(observed.get() + 1);
+        }));
+        parent.set_value(0.25);
+        assert_eq!(calls.get(), 1);
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            let mut recovery = flui_foundation::panic::PanicRecovery::new();
+            if case != "healthy" {
+                recovery.run(|| panic!("first cleanup failure"));
+            }
+            proxy.remove_listener_with_recovery(id, &mut recovery.scope());
+            recovery.finish();
+        }));
+        if case == "healthy" {
+            outcome.expect("healthy cleanup supports capture reentry");
+        } else {
+            let failure = outcome.expect_err("the enclosing failure remains authoritative");
+            assert_eq!(
+                failure.downcast_ref::<&str>(),
+                Some(&"first cleanup failure")
+            );
+        }
+        assert_eq!(drops.get(), usize::from(case == "healthy"));
+        parent.set_value(0.5);
+        assert_eq!(
+            calls.get(),
+            1,
+            "withdrawal precedes outgoing capture retirement"
+        );
+        assert_eq!(reentrant_calls.get(), usize::from(case == "healthy"));
+
+        let (fresh_drops, fresh_capture) = drop_probe();
+        let fresh_id = proxy.add_listener(Rc::new(move || {
+            let _capture = &fresh_capture;
+        }));
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        proxy.remove_listener_with_recovery(fresh_id, &mut recovery.scope());
+        recovery.finish();
+        assert_eq!(
+            fresh_drops.load(Ordering::SeqCst),
+            1,
+            "fresh cleanup retires normally"
+        );
+    }
+}

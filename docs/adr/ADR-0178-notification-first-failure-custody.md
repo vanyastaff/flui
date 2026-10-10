@@ -87,6 +87,16 @@ Animation uses these methods to commit value-listener removal and disposal
 immediately while placing outgoing custody into its existing delivery FIFO.
 Disposed controllers refuse later mutations and listener admission.
 
+Framework cleanup rounds also lend this custody to subscription cancellation.
+`StatusSubscription::cancel_with_recovery` withdraws its removal authority before
+calling the source. `ProxyAnimation::remove_listener_with_recovery` withdraws a
+value listener and retires its outgoing capture within the same borrowed scope;
+ordinary `Listenable::remove_listener` uses this path with its own outer recovery.
+Hero teardown uses these seams alongside `ChangeNotifier::take_listener` so one
+failed cancellation cannot skip overlay withdrawal, placeholder restoration or
+the remaining flights. Outgoing owners retire through that same context;
+cancellation and restoration complete before it resumes its first failure.
+
 Ticker start and stop also join that FIFO. The run and its completer are committed
 before a platform wake hook runs, and no controller borrow is held across the
 hook. A stale queued start checks the installed run's generation and liveness.
@@ -110,6 +120,14 @@ inside the child's healthy tail, with single and competing callback failures.
 The same family verifies last-owner release from both notification channels,
 healthy and failed tails, and the next parent notification.
 The tests fail when the production behavior is reverted.
+
+`proxy_listener_removal_joins_its_enclosing_cleanup` checks healthy capture
+reentry, removal after an earlier failure, competing capture destruction and
+fresh healthy cleanup. Hero's private `hero_flight_terminal_retirement` matrix
+injects subscription-removal failures into the production teardown path, checks
+both heroes and a peer flight are restored, and then admits and cancels a fresh
+flight. The private seam supplies a cancellation failure which the route-owned
+proxy's built-in status relay does not expose to an application.
 
 `a_steady_state_frame_allocates_nothing` also measures a running controller
 forwarding through five reverse wrappers to a live leaf listener. Every measured

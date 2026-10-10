@@ -69,6 +69,14 @@
 
 ### Fixed
 
+- Refuse further Hero diversion work when its rect mapping cancels the flight,
+  preserving restored children when returning to the previous route.
+- Complete Hero teardown and peer cancellation after a subscription-removal
+  failure. Captures share the enclosing first-failure custody, including at
+  physical last release; healthy cleanup preserves normal destruction.
+- Keep Hero flight samples owner-local and invoke authored shuttle cloning
+  outside flight storage borrows.
+
 - Cancel pending Hero creation and queued measurements when their controller is
   replaced. Builder failure or cancellation during creation and diversion restores
   the selected heroes; remaining matched launches preserve the first failure.
