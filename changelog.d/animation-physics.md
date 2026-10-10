@@ -2,12 +2,11 @@
 
 - `flui-animation`: `SpringDescription` stores a validated natural frequency and
   damping ratio with private fields. `SpringDescription::new`,
-  `with_duration_and_bounce` and `with_response_and_damping` return
+  `with_damping_ratio`, `with_duration_and_bounce` and `with_response_and_damping` return
   `Result<_, SimulationError>`, and the perceptual constructors take a
   `Duration`; an undamped or non-finite spring is refused in debug and release.
   `SpringSimulation::try_new` takes a `Tolerance` and returns `Result`;
-  `SpringSimulation::new` and `SpringDescription::with_damping_ratio` remain for
-  constants and panic on non-finite or non-positive input; where `try_new`
+  `SpringSimulation::new` remains for constants and panics on non-finite input; where `try_new`
   would refuse finite inputs as unrepresentable, `SpringSimulation::new`
   returns a spring already at rest at `end`.
 - `flui-animation`: every spring `try_new` builds publishes finite samples at

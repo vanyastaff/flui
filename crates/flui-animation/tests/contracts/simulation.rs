@@ -186,7 +186,7 @@ fn bounds_refuse_unordered_and_nan() {
 // --- bouncing -----------------------------------------------------------------
 
 fn edge_spring() -> SpringDescription {
-    SpringDescription::with_damping_ratio(1.0, 500.0, 0.75)
+    SpringDescription::with_damping_ratio(1.0, 500.0, 0.75).expect("admitted scroll spring")
 }
 
 /// A fling from `position` at `velocity` that the friction carries past `edge`.

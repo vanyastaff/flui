@@ -50,6 +50,7 @@ fn reference(omega: f64, zeta: f64, x0: f64, v0: f64, t: f64) -> (f64, f64) {
 
 fn spring(omega: f64, zeta: f64) -> SpringDescription {
     SpringDescription::with_damping_ratio(1.0, omega * omega, zeta)
+        .expect("admitted reference spring")
 }
 
 /// A tolerance small enough that no reference row is at rest yet.
@@ -180,9 +181,31 @@ fn response_overflows() {
         1e300,
     ));
 }
-fn damping_ratio_zero_panics() {
-    let refused = std::panic::catch_unwind(|| SpringDescription::with_damping_ratio(1.0, 1.0, 0.0));
-    assert!(refused.is_err(), "an undamped spring must be refused");
+fn damping_ratio_refusal_does_not_unwind() {
+    for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0, 0.0] {
+        for (mass, stiffness, ratio, parameter) in [
+            (value, 100.0, 1.0, SimulationParameter::Mass),
+            (1.0, value, 1.0, SimulationParameter::Stiffness),
+            (1.0, 100.0, value, SimulationParameter::DampingRatio),
+        ] {
+            let refused = std::panic::catch_unwind(|| {
+                SpringDescription::with_damping_ratio(mass, stiffness, ratio)
+            })
+            .expect("invalid runtime spring parameters must return an error without unwinding");
+            assert_refused(refused, parameter);
+        }
+    }
+    for (mass, stiffness, ratio) in [(1e-300, 1e300, 1.0), (1.0, 1.0, 1e300)] {
+        assert_overflow(SpringDescription::with_damping_ratio(
+            mass, stiffness, ratio,
+        ));
+    }
+    let recovered =
+        SpringDescription::with_damping_ratio(1.0, 100.0, 1.0).expect("valid input after refusal");
+    let simulation = SpringSimulation::try_new(recovered, 0.0, 1.0, 0.0, Tolerance::DEFAULT)
+        .expect("refusal does not prevent later motion");
+    assert!(simulation.x(0.1) > 0.0 && simulation.x(0.1) < 1.0);
+    assert!(simulation.is_done(10.0));
 }
 fn simulation_start_nan() {
     assert_refused(
@@ -238,7 +261,10 @@ fn spring_constructors_refuse_outside_the_admitted_domain() {
         ("damping fraction negative", damping_fraction_negative),
         ("damping fraction zero", damping_fraction_zero),
         ("response overflows", response_overflows),
-        ("damping ratio zero panics", damping_ratio_zero_panics),
+        (
+            "damping ratio refusal does not unwind",
+            damping_ratio_refusal_does_not_unwind,
+        ),
         ("simulation start nan", simulation_start_nan),
         ("simulation end infinite", simulation_end_infinite),
         ("simulation velocity nan", simulation_velocity_nan),
@@ -859,7 +885,8 @@ fn assert_finite_and_resting(label: &str, sim: &SpringSimulation) {
 /// `ω_d·t` passes `f64::MAX` long before an almost undamped, very stiff
 /// spring rests.
 fn phase_past_f64_range() {
-    let spring = SpringDescription::with_damping_ratio(1.0, 1e308, 1e-308);
+    let spring =
+        SpringDescription::with_damping_ratio(1.0, 1e308, 1e-308).expect("admitted spring");
     if let Ok(sim) = SpringSimulation::try_new(spring, 1.0, 0.0, 0.0, Tolerance::DEFAULT) {
         assert_finite_and_resting("phase", &sim);
     }
@@ -867,7 +894,7 @@ fn phase_past_f64_range() {
 
 /// The signed coefficients cancel, but their absolute sum overflows.
 fn rest_envelope_past_f64_range() {
-    let spring = SpringDescription::with_damping_ratio(1.0, 1.0, 1.0);
+    let spring = SpringDescription::with_damping_ratio(1.0, 1.0, 1.0).expect("admitted spring");
     let sim = SpringSimulation::try_new(spring, 1e308, 0.0, -1e308, Tolerance::DEFAULT)
         .expect("the displacement and its rates are finite");
     assert_finite_and_resting("envelope", &sim);
@@ -876,7 +903,7 @@ fn rest_envelope_past_f64_range() {
 
 /// The displacement is finite but `end + displacement` is not.
 fn position_past_f64_range() {
-    let spring = SpringDescription::with_damping_ratio(1.0, 1e-6, 1.0);
+    let spring = SpringDescription::with_damping_ratio(1.0, 1e-6, 1.0).expect("admitted spring");
     let sim = SpringSimulation::try_new(spring, f64::MAX, f64::MAX, 1e307, Tolerance::DEFAULT)
         .expect("the displacement and its rates are finite");
     assert_finite_and_resting("translation", &sim);
@@ -886,7 +913,7 @@ fn position_past_f64_range() {
 /// The infallible constructor rests at `end` at once instead of panicking
 /// when the motion's constants overflow.
 fn infallible_constructor_rests_on_overflow() {
-    let spring = SpringDescription::with_damping_ratio(1.0, 1e308, 1.0);
+    let spring = SpringDescription::with_damping_ratio(1.0, 1e308, 1.0).expect("admitted spring");
     let sim = SpringSimulation::new(spring, 1e308, 1.1e308, 1.0);
     assert!(sim.is_done(0.0));
     assert_eq!((sim.x(0.0), sim.dx(0.0)), (1.1e308, 0.0));
@@ -902,7 +929,7 @@ fn fling_with_overflowing_spring_does_not_panic() {
                 .build()
         })
         .expect("finite range");
-    let spring = SpringDescription::with_damping_ratio(1.0, 1e308, 1.0);
+    let spring = SpringDescription::with_damping_ratio(1.0, 1e308, 1.0).expect("admitted spring");
     let flung = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         controller.fling_with(1.0, Some(spring)).is_ok()
     }));

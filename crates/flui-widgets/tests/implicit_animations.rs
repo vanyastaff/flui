@@ -325,7 +325,8 @@ pub(crate) fn container_property_motion_settles_and_unmounts_independently() {
                 .curve(curve.clone());
             if spring {
                 container = container.spring(
-                    flui_animation::SpringDescription::with_damping_ratio(1.0, 100.0, 1.0),
+                    flui_animation::SpringDescription::with_damping_ratio(1.0, 100.0, 1.0)
+                        .expect("admitted spring"),
                 );
             }
             VsyncScope::new(registry.clone(), container)
@@ -691,7 +692,8 @@ pub(crate) fn align_spring_settles_and_optional_factors_snap_independently() {
     let registry = Vsync::new();
     let tree = |alignment, width: Option<f64>| {
         let mut align = AnimatedAlign::new(alignment, SizedBox::square(10.0)).spring(
-            flui_animation::SpringDescription::with_damping_ratio(1.0, 100.0, 1.0),
+            flui_animation::SpringDescription::with_damping_ratio(1.0, 100.0, 1.0)
+                .expect("admitted spring"),
         );
         if let Some(width) = width {
             align = align.width_factor(width);

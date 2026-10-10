@@ -81,6 +81,7 @@ fn curve_spec(curve: (f64, f64, f64, f64), millis: u64) -> MotionSpec {
 /// `ω` in rad/s and `ζ` for a unit mass.
 fn spring(omega: f64, zeta: f64) -> SpringDescription {
     SpringDescription::with_damping_ratio(1.0, omega * omega, zeta)
+        .expect("admitted reference spring")
 }
 
 /// The right derivative of `value()` at the current instant, from probes `h`

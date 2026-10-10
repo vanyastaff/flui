@@ -155,11 +155,11 @@ controller.fling(1.0)?;   // velocity toward upper_bound
 controller.fling(-1.0)?;  // velocity toward lower_bound
 
 // Custom spring: fling needs a non-oscillating (ratio >= 1) spring
-let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0);
+let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0).expect("valid spring");
 controller.fling_with(1.0, Some(spring))?;
 
 // Arbitrary simulation, oscillating springs included
-let bouncy = SpringDescription::with_damping_ratio(1.0, 500.0, 0.7);
+let bouncy = SpringDescription::with_damping_ratio(1.0, 500.0, 0.7).expect("valid spring");
 let sim = SpringSimulation::new(bouncy, 0.0, 1.0, 2.0);
 controller.animate_with(sim)?;
 # drop(controller);
@@ -584,8 +584,8 @@ let physical = SpringDescription::new(1.0, 500.0, 10.0)?;
 let perceptual = SpringDescription::with_duration_and_bounce(Duration::from_millis(500), 0.3)?;
 assert_eq!(perceptual.spring_type(), SpringType::Underdamped);
 
-// A constant spring from a damping ratio; panics on invalid input.
-let critical = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0);
+// A damping ratio uses the same fallible contract as the physical coefficients.
+let critical = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0)?;
 assert_eq!(critical.spring_type(), SpringType::CriticallyDamped);
 
 assert!(SpringDescription::new(1.0, 500.0, 0.0).is_err()); // never rests
@@ -600,7 +600,7 @@ assert!(SpringDescription::new(1.0, 500.0, 0.0).is_err()); // never rests
 use flui_animation::simulation::{Simulation, SpringDescription, SpringSimulation, Tolerance};
 
 # fn main() -> Result<(), flui_animation::simulation::SimulationError> {
-let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 0.7);
+let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 0.7)?;
 let sim = SpringSimulation::try_new(spring, 0.0, 1.0, 0.0, Tolerance::DEFAULT)?;
 
 assert_eq!(sim.x(0.0), 0.0);
@@ -647,7 +647,7 @@ use flui_animation::simulation::{
 
 # fn main() -> Result<(), flui_animation::simulation::SimulationError> {
 let bounds = SimulationBounds::new(0.0, 100.0)?;
-let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 0.75);
+let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 0.75)?;
 let sim = BouncingScrollSimulation::new(spring, 0.135, 90.0, 2000.0, bounds, Tolerance::DEFAULT)?;
 assert!(sim.is_done(10.0));
 assert_eq!(sim.x(10.0), 100.0);
@@ -712,7 +712,7 @@ dropping the owner unregisters and cancels the run. A manual controller from
 ## Validation
 
 Simulation constructors return `Err(SimulationError)` on invalid input
-(`SpringDescription::new`, `with_duration_and_bounce`,
+(`SpringDescription::new`, `with_damping_ratio`, `with_duration_and_bounce`,
 `with_response_and_damping`, `SpringSimulation::try_new`,
 `FrictionSimulation::new`, `BoundedFrictionSimulation::new`,
 `BouncingScrollSimulation::new`, `SimulationBounds::new`, `Tolerance::new`,
@@ -721,7 +721,6 @@ panic instead:
 
 | Constructor | Panics if |
 |-------------|-----------|
-| `SpringDescription::with_damping_ratio` | mass, stiffness or ratio is NaN, infinite or ≤ 0 |
 | `SpringSimulation::new` | start, end or velocity is not finite |
 | `Steps::new` | count = 0, or count = 1 with `JumpAt::None` |
 | `Interval::new` | begin/end not finite or outside [0,1], end < begin |

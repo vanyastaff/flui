@@ -50,7 +50,9 @@ use crate::simulation::{
 ///     duration: Duration::from_millis(200),
 ///     curve: ArcCurve::new(Curves::EaseInOut),
 /// };
-/// let sprung = MotionSpec::Spring(SpringDescription::with_damping_ratio(1.0, 100.0, 1.0));
+/// let sprung = MotionSpec::Spring(
+///     SpringDescription::with_damping_ratio(1.0, 100.0, 1.0).unwrap(),
+/// );
 /// assert_ne!(eased, sprung);
 /// ```
 #[non_exhaustive]

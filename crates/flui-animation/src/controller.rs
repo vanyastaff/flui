@@ -35,6 +35,7 @@ const BOUND_EPSILON: f64 = 1e-6;
 /// Default spring for fling animations.
 fn default_fling_spring() -> SpringDescription {
     SpringDescription::with_damping_ratio(1.0, 500.0, 1.0)
+        .expect("BUG: default fling spring is in the admitted domain")
 }
 
 /// Default tolerance for fling animations.
@@ -1639,7 +1640,7 @@ impl AnimationController {
     /// # use flui_animation::simulation::SpringDescription;
     /// # use std::time::Duration;
     /// let controller = AnimationController::builder(Duration::from_millis(300)).build();
-    /// let spring = SpringDescription::with_damping_ratio(1.0, 300.0, 0.5);
+    /// let spring = SpringDescription::with_damping_ratio(1.0, 300.0, 0.5).unwrap();
     /// let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0);
     /// controller.animate_with(sim).unwrap();
     /// ```

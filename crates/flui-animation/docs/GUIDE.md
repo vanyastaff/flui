@@ -161,7 +161,7 @@ controller.fling(1.0)?;   // toward upper_bound
 controller.fling(-1.0)?;  // toward lower_bound
 
 // Custom spring (fling refuses an oscillating spring)
-let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0);
+let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0).expect("valid spring");
 controller.fling_with(1.0, Some(spring))?;
 
 // Arbitrary simulation
@@ -545,8 +545,8 @@ use std::time::Duration;
 let physical = SpringDescription::new(1.0, 500.0, 10.0)?; // mass, stiffness, damping
 let perceptual = SpringDescription::with_duration_and_bounce(Duration::from_millis(500), 0.3)?;
 let response = SpringDescription::with_response_and_damping(Duration::from_millis(300), 0.8)?;
-// For constants: panics on invalid input.
-let critical = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0);
+// A damping ratio uses the same fallible contract as the physical coefficients.
+let critical = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0)?;
 # let _ = (physical, perceptual, response, critical);
 # Ok(())
 # }
@@ -558,7 +558,7 @@ let critical = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0);
 use flui_animation::simulation::{Simulation, SpringDescription, SpringSimulation, Tolerance};
 
 # fn main() -> Result<(), flui_animation::simulation::SimulationError> {
-let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 0.7);
+let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 0.7)?;
 let sim = SpringSimulation::try_new(spring, 0.0, 1.0, 0.0, Tolerance::DEFAULT)?;
 assert!(sim.dx(0.1).is_finite()); // velocity at t = 0.1 s
 assert!(sim.is_done(5.0));

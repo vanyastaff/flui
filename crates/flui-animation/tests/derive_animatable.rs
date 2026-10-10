@@ -137,7 +137,9 @@ fn nested_springs_keep_each_fields_rest_units() {
 
     let registry = Vsync::new();
     let mut clock = MotionClock::new();
-    let motion = MotionSpec::Spring(SpringDescription::with_damping_ratio(1.0, 100.0, 1.0));
+    let motion = MotionSpec::Spring(
+        SpringDescription::with_damping_ratio(1.0, 100.0, 1.0).expect("admitted spring"),
+    );
     let mut owner = AnimatedValue::new(
         NestedAppearance(
             Appearance {

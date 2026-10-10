@@ -114,7 +114,8 @@ impl PageScrollPhysics {
         Self {
             viewport_fraction,
             boundary: Arc::new(ClampingScrollPhysics::new()),
-            spring: SpringDescription::with_damping_ratio(0.5, 100.0, 1.1),
+            spring: SpringDescription::with_damping_ratio(0.5, 100.0, 1.1)
+                .expect("BUG: default page spring is in the admitted domain"),
             velocity_tolerance_px_per_sec: 20.0,
         }
     }

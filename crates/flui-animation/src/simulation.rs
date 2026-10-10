@@ -378,32 +378,30 @@ impl SpringDescription {
     /// damping: `1.0` settles fastest without overshoot, `< 1.0` bounces,
     /// `> 1.0` creeps.
     ///
-    /// Meant for constant springs; [`new`](Self::new) is the fallible form.
+    /// # Errors
     ///
-    /// # Panics
-    ///
-    /// When an input is NaN, infinite or not positive, or `Ï‰` is not
-    /// representable.
+    /// [`SimulationError::OutOfRange`] naming the first input that is NaN,
+    /// infinite or not positive; [`SimulationError::Overflow`] when the derived
+    /// frequency or damping constants are not representable.
     ///
     /// # Examples
     ///
     /// ```
     /// use flui_animation::simulation::{SpringDescription, SpringType};
     ///
-    /// let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0);
+    /// let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0)?;
     /// assert_eq!(spring.spring_type(), SpringType::CriticallyDamped);
+    /// # Ok::<(), flui_animation::simulation::SimulationError>(())
     /// ```
-    #[must_use]
-    pub fn with_damping_ratio(mass: f64, stiffness: f64, ratio: f64) -> Self {
-        let spring = positive(SimulationParameter::Mass, mass).and_then(|mass| {
-            let stiffness = positive(SimulationParameter::Stiffness, stiffness)?;
-            let ratio = positive(SimulationParameter::DampingRatio, ratio)?;
-            Self::from_omega_zeta(stiffness.sqrt() / mass.sqrt(), ratio)
-        });
-        match spring {
-            Ok(spring) => spring,
-            Err(error) => panic!("invalid spring: {error}"),
-        }
+    pub fn with_damping_ratio(
+        mass: f64,
+        stiffness: f64,
+        ratio: f64,
+    ) -> Result<Self, SimulationError> {
+        let mass = positive(SimulationParameter::Mass, mass)?;
+        let stiffness = positive(SimulationParameter::Stiffness, stiffness)?;
+        let ratio = positive(SimulationParameter::DampingRatio, ratio)?;
+        Self::from_omega_zeta(stiffness.sqrt() / mass.sqrt(), ratio)
     }
 
     /// A spring that completes a perceptual `duration` with `bounce`, the
@@ -595,9 +593,10 @@ impl SpringSimulation {
     /// ```
     /// use flui_animation::simulation::{Simulation, SpringDescription, SpringSimulation};
     ///
-    /// let spring = SpringDescription::with_damping_ratio(1.0, 300.0, 0.5);
+    /// let spring = SpringDescription::with_damping_ratio(1.0, 300.0, 0.5)?;
     /// let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0);
     /// assert_eq!(sim.x(0.0), 0.0);
+    /// # Ok::<(), flui_animation::simulation::SimulationError>(())
     /// ```
     #[must_use]
     pub fn new(spring: SpringDescription, start: f64, end: f64, velocity: f64) -> Self {
@@ -1410,7 +1409,7 @@ impl BouncingScrollSimulation {
     ///     BouncingScrollSimulation, Simulation, SimulationBounds, SpringDescription, Tolerance,
     /// };
     ///
-    /// let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 0.75);
+    /// let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 0.75)?;
     /// let bounds = SimulationBounds::new(0.0, 100.0)?;
     /// let sim = BouncingScrollSimulation::new(spring, 0.135, 90.0, 2000.0, bounds, Tolerance::DEFAULT)?;
     /// let overscroll = (1..200).map(|i| sim.x(f64::from(i) * 0.01)).fold(f64::MIN, f64::max);

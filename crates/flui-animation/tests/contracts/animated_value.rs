@@ -84,7 +84,7 @@ fn repeated_configuration_keeps_the_remaining_deadline() {
 }
 
 fn clockless_motion_and_snap_publish_the_exact_target() {
-    let spring = SpringDescription::with_damping_ratio(1.0, 100.0, 0.5);
+    let spring = SpringDescription::with_damping_ratio(1.0, 100.0, 0.5).expect("admitted spring");
     for motion in [curve(Curves::EaseIn), MotionSpec::Spring(spring)] {
         let mut value = AnimatedValue::new(Offset::ZERO, motion, None).unwrap();
         let run = value.animate_to(Offset::new(3.0, -7.0)).unwrap();
@@ -99,7 +99,9 @@ fn clockless_motion_and_snap_publish_the_exact_target() {
 fn geometry_reaches_rest_before_normalized_components() {
     let registry = Vsync::new();
     let mut clock = MotionClock::new();
-    let motion = MotionSpec::Spring(SpringDescription::with_damping_ratio(1.0, 100.0, 1.0));
+    let motion = MotionSpec::Spring(
+        SpringDescription::with_damping_ratio(1.0, 100.0, 1.0).expect("admitted spring"),
+    );
     let mut geometry = AnimatedValue::new(Offset::ZERO, motion.clone(), Some(&registry)).unwrap();
     let mut normalized = AnimatedValue::new(0.0, motion, Some(&registry)).unwrap();
     let geometry_run = geometry.animate_to(Offset::new(1.0, -1.0)).unwrap();
@@ -155,7 +157,9 @@ fn refused_threshold<const CASE: usize>() {
     registry.tick_all(&clock.frame(Duration::from_millis(250)));
     let seam = (owner.value().0, owner.velocity());
     let healthy_seam = (healthy.value(), healthy.velocity());
-    let spring = MotionSpec::Spring(SpringDescription::with_damping_ratio(1.0, 100.0, 1.0));
+    let spring = MotionSpec::Spring(
+        SpringDescription::with_damping_ratio(1.0, 100.0, 1.0).expect("admitted spring"),
+    );
     assert!(matches!(
         owner.retarget(InvalidThreshold(2.0), spring),
         Err(AnimationError::InvalidSpring(_))
@@ -167,7 +171,9 @@ fn refused_threshold<const CASE: usize>() {
         update.retarget(
             &mut owner,
             InvalidThreshold(2.0),
-            MotionSpec::Spring(SpringDescription::with_damping_ratio(1.0, 100.0, 1.0)),
+            MotionSpec::Spring(
+                SpringDescription::with_damping_ratio(1.0, 100.0, 1.0).expect("admitted spring"),
+            ),
         )
     });
     assert!(matches!(refused, Err(AnimationError::InvalidSpring(_))));
