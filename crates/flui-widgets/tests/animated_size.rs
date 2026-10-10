@@ -156,3 +156,46 @@ pub(crate) fn animated_size_interpolates_to_a_new_child_size_over_frames() {
         samples[4],
     );
 }
+
+pub(crate) fn animated_size_completion_writes_a_signal_after_build() {
+    use crate::common::{ProbeSignals, SignalProbe};
+    use flui_view::SignalWriteExt;
+    use std::cell::Cell;
+
+    let side = Rc::new(Cell::new(20.0));
+    let probe = {
+        let side = Rc::clone(&side);
+        SignalProbe::new(move |ProbeSignals { count, .. }| {
+            AnimatedSize::new(RUN)
+                .on_end(move |cx| count.update(cx, |value| *value += 1))
+                .child(SizedBox::square(side.get()))
+        })
+    };
+    let vsync = Vsync::new();
+    let mut app = lay_out_animated(
+        VsyncScope::new(vsync.clone(), probe.view()),
+        loose(200.0),
+        vsync,
+    );
+    assert_eq!(probe.value(), Ok(0), "mount does not complete a run");
+
+    for (target, completions) in [(100.0, 1), (40.0, 2)] {
+        side.set(target);
+        app.pump();
+        assert_eq!(probe.value(), Ok(completions - 1));
+        let ((), log) = flui_testing::log_capture::capture(|| {
+            for _ in 0..8 {
+                app.pump_for(FRAME);
+            }
+        });
+        assert_eq!(probe.value(), Ok(completions), "each run completes once");
+        assert!(
+            !log.contains("refused"),
+            "completion write was refused: {log}"
+        );
+        assert!((width(&app) - target).abs() < 1.0);
+        app.tick();
+        app.pump_for(RUN);
+        assert_eq!(probe.value(), Ok(completions), "no completion replay");
+    }
+}
