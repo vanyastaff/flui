@@ -320,6 +320,49 @@ fn healthy_wake_retirement_observes_newly_caught_failure() {
     assert_eq!(owner.pump_background(|| {}), Ok(0));
 }
 
+fn worker_wake_keeps_failed_receipt_across_next_healthy_turn() {
+    let scheduler = UpdateScheduler::new();
+    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let hook_drops = Arc::new(AtomicUsize::new(0));
+    let hook_capture = HookCapture(Arc::clone(&hook_drops));
+    let (entered, started) = std::sync::mpsc::channel();
+    let (release, continue_hook) = std::sync::mpsc::channel();
+    let continue_hook = std::sync::Mutex::new(continue_hook);
+    scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
+        let _ = &hook_capture;
+        entered.send(()).expect("owner awaits worker");
+        continue_hook.lock().expect("hook channel lock")
+            .recv().expect("owner releases worker");
+    })));
+    let worker = RefCell::new(None);
+    let failure_drops = Arc::new(AtomicUsize::new(0));
+    assert_eq!(owner.pump_background(|| {
+        let waker = scheduler.frame_waker();
+        *worker.borrow_mut() = Some(std::thread::spawn(move || waker.request_frame()));
+        started.recv().expect("worker entered hook");
+        // Delivery owns the final hook before failure custody begins.
+        scheduler.set_on_frame_scheduled(None);
+        let capture = HostileCapture(Arc::clone(&failure_drops));
+        assert!(catch_unwind(AssertUnwindSafe(|| {
+            owner.pump_background(move || { let _ = &capture; })
+        })).is_err());
+    }), Ok(0));
+    let healthy_drops = Arc::new(AtomicUsize::new(0));
+    assert_eq!(owner.pump_background(|| {
+        let capture = HookCapture(Arc::clone(&healthy_drops));
+        let id = scheduler.schedule_frame_callback(Box::new(move |_| { let _ = &capture; }));
+        assert!(scheduler.cancel_frame_callback(id));
+    }), Ok(0));
+    // Release before assertions so a failing assertion never strands a worker.
+    release.send(()).expect("worker still waiting");
+    worker.borrow_mut().take().expect("worker started").join().expect("worker wake");
+    assert_eq!(failure_drops.load(Ordering::SeqCst), 1);
+    assert_eq!(hook_drops.load(Ordering::SeqCst), 0,
+        "old failed receipt survives a newer healthy admission");
+    assert_eq!(healthy_drops.load(Ordering::SeqCst), 1,
+        "new healthy receipt keeps ordinary capture destruction");
+}
+
 #[test]
 fn owner_background_turn_contract() {
     crate::run_table(
@@ -344,6 +387,10 @@ fn owner_background_turn_contract() {
             (
                 "new_failure_during_healthy_wake",
                 healthy_wake_retirement_observes_newly_caught_failure,
+            ),
+            (
+                "worker_receipt_survives_next_admission",
+                worker_wake_keeps_failed_receipt_across_next_healthy_turn,
             ),
         ],
     );
