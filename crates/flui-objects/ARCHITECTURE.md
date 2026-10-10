@@ -168,7 +168,7 @@ real element tree and checks preserved render IDs and child state.
 
 ### Text objects measure through the context their layout lends
 
-`RenderParagraph` and `RenderEditable` pass `&mut ctx.text()` to every
+`RenderParagraph` and `RenderEditable` acquire fallible `ctx.text()?` loans for every
 `TextPainter` measurement: `perform_layout`, the four intrinsics,
 `compute_dry_layout` and `compute_dry_baseline`. The context is the UI runtime's
 `TextContext`, lent by the pipeline (flui-rendering's "Layout contexts lend the

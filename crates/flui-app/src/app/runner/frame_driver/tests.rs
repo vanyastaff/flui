@@ -511,6 +511,7 @@ fn native_operation_retains_owners_after_the_last_external_handle_is_released() 
             .publish(
                 address,
                 PreparedNativeWindow {
+                    text_sizing: None,
                     registration: PreparedWindowRegistration::new(&window),
                     frame: Some(frame),
                     close: Some(close),

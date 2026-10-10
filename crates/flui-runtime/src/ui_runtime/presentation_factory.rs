@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use flui_interaction::InteractionDispatchHandle;
 use flui_platform_api::{Clipboard, Storage};
-use flui_scheduler::{AsyncDriver, ClockSource, PostFrameHandle, WeakUpdateScheduler};
+use flui_scheduler::{AsyncDriver, ClockSource, PresentationScopeFactory, WeakUpdateScheduler};
 use flui_view::GlobalKeyScope;
 
 use super::{UiCommandSender, UiRuntime};
@@ -16,7 +16,7 @@ use crate::presentation::{PresentationState, PresentationWindow, RuntimeCapabili
 pub struct PresentationFactory {
     global_key_scope: GlobalKeyScope,
     async_driver: AsyncDriver,
-    post_frame_handle: PostFrameHandle,
+    completion_factory: PresentationScopeFactory,
     interaction_dispatch_handle: InteractionDispatchHandle,
     scheduler: WeakUpdateScheduler,
     wake: Arc<dyn Fn() + Send + Sync>,
@@ -41,7 +41,7 @@ impl UiRuntime {
         PresentationFactory {
             global_key_scope: self.global_key_scope.clone(),
             async_driver: self.owner_frame.async_driver(),
-            post_frame_handle: self.owner_frame.post_frame_handle(),
+            completion_factory: self.owner_frame.presentation_scope_factory(),
             interaction_dispatch_handle: self.interaction_lane.dispatch_handle(),
             scheduler: self.scheduler.downgrade(),
             wake: Arc::clone(&self.wake),
@@ -69,6 +69,9 @@ impl PresentationFactory {
         };
         let (_, presentation_id) = crate::runtime_services::next_identity();
         let device_pixel_ratio = window.window().scale_factor();
+        let Ok(completion_scope) = self.completion_factory.create() else {
+            return Err(window);
+        };
         let command_sender = UiCommandSender {
             presentation_id,
             ..self.sender.clone()
@@ -80,7 +83,7 @@ impl PresentationFactory {
             RuntimeCapabilities {
                 global_key_scope: self.global_key_scope.clone(),
                 async_driver: self.async_driver.clone(),
-                post_frame_handle: self.post_frame_handle.clone(),
+                completion_scope,
                 interaction_dispatch_handle: self.interaction_dispatch_handle.clone(),
                 scheduler: &scheduler,
                 wake: Arc::clone(&self.wake),

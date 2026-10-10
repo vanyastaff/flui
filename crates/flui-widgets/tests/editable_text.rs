@@ -789,7 +789,7 @@ pub(crate) fn inherited_text_sizing_updates_editable_glyphs_and_caret() {
     let field = |scale| {
         MediaQuery::new(
             MediaQueryData {
-                text_scale_factor: scale,
+                text_sizing: flui_painting::TextSizing::linear(scale).expect("valid test policy"),
                 ..MediaQueryData::default()
             },
             crate::media_query_fields::StaticChild {
@@ -800,15 +800,45 @@ pub(crate) fn inherited_text_sizing_updates_editable_glyphs_and_caret() {
         )
     };
     let geometry = |harness: &crate::common::harness::Harness| {
-        with_render_editable(harness, |render| {
+        use flui_platform_api::text_store::{
+            LockGrant, LockOutcome, LockTiming, Utf16Offset, Utf16Range,
+        };
+        use std::cell::RefCell;
+
+        let result = with_render_editable(harness, |render| {
             (
                 render.local_rect_for_range(0..4).expect("laid out glyphs"),
                 render.local_rect_for_range(4..4).expect("laid out caret"),
             )
         })
-        .expect("mounted editable")
+        .expect("mounted editable");
+        let slot = Rc::new(RefCell::new(None));
+        let sink = Rc::clone(&slot);
+        let store = harness.active_text_store().expect("focused input store");
+        assert_eq!(
+            store.request_lock(
+                LockGrant::read(move |session| {
+                    *sink.borrow_mut() = Some(
+                        session
+                            .rect_for_range(Utf16Range::collapsed(Utf16Offset::new(4)))
+                            .expect("actual IME caret geometry")
+                            .bounds,
+                    );
+                }),
+                LockTiming::Sync
+            ),
+            Ok(LockOutcome::Granted)
+        );
+        let ime = slot.take().expect("IME grant ran");
+        assert!(
+            (ime.size.height - result.1.height()).abs() < 0.001,
+            "IME and painted caret use the same text sizing"
+        );
+        result
     };
-    let mut harness = crate::common::harness::mount(field(2.0));
+    let mut harness = crate::common::harness::mount_with_ime(field(2.0));
+    let _ = focus.request_focus();
+    harness.tick();
     let initially_enlarged = geometry(&harness);
     harness.swap_root(field(1.0));
     let original = geometry(&harness);
@@ -827,19 +857,46 @@ pub(crate) fn inherited_text_sizing_updates_editable_glyphs_and_caret() {
     );
     harness.swap_root(field(1.0));
     assert_eq!(geometry(&harness), original);
-    for invalid in [
-        0.0,
-        -1.0,
-        f64::MAX,
-        f64::INFINITY,
-        f64::NAN,
-        f64::from_bits(1),
+
+    use flui_foundation::{TextScaleProfile, TextSize, TextSizeRequest};
+    use flui_painting::TextSizing;
+    let exact = |answer| {
+        TextSizing::exact([(
+            TextSizeRequest {
+                size: TextSize::new(16.0).expect("authored size"),
+                profile: TextScaleProfile::Body,
+            },
+            TextSize::new(answer).expect("resolved size"),
+        )])
+        .expect("one exact answer")
+    };
+    let policy_field = |text_sizing| {
+        MediaQuery::new(
+            MediaQueryData {
+                text_sizing,
+                ..MediaQueryData::default()
+            },
+            crate::media_query_fields::StaticChild {
+                inner: EditableText::new(controller.clone(), Rc::clone(&focus))
+                    .text_style(TextStyle::default().with_font_size(16.0))
+                    .boxed(),
+            },
+        )
+    };
+    for (policy, ratio) in [
+        (exact(24.0), 1.5),
+        (exact(40.0), 2.5),
+        (TextSizing::fixed(), 1.0),
     ] {
-        harness.swap_root(field(invalid));
-        assert_eq!(
-            geometry(&harness),
-            original,
-            "invalid inherited scale {invalid}"
+        harness.swap_root(policy_field(policy));
+        let resolved = geometry(&harness);
+        assert!(
+            (resolved.1.height() - original.1.height() * ratio).abs() < 0.001,
+            "exact and removed policies resize the actual caret"
+        );
+        assert!(
+            (resolved.1.origin().x - original.1.origin().x * ratio).abs() < 0.02,
+            "IME insertion position follows resolved glyph advances"
         );
     }
     assert_eq!(controller.text(), "mmmm");
@@ -872,7 +929,8 @@ pub(crate) fn inherited_text_sizing_updates_editable_glyphs_and_caret() {
             };
             MediaQuery::new(
                 MediaQueryData {
-                    text_scale_factor: scale,
+                    text_sizing: flui_painting::TextSizing::linear(scale)
+                        .expect("valid test policy"),
                     ..MediaQueryData::default()
                 },
                 inner,

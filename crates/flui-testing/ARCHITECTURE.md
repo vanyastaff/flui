@@ -51,6 +51,14 @@ substrate driver over raw owners, which the raw-owner suites still use.
   next pump frames and runs the grants the unwound one queued. Pinned by
   `tests/headless_host.rs`, `host::tests` and the failure tests in
   `tests/runtime_driver.rs`.
+- **Presentation completion requires coherent geometry.** A scoped callback
+  accepted through `HeadlessHost::post_frame_handle` waits across a failed frame,
+  runs after repair and remains consumed if that callback itself unwinds.
+  `an_incomplete_frame_retains_callbacks_until_repair_and_recovers_after_their_unwind`
+  pins all three boundaries. The scheduler's unscoped host-frame lane remains
+  deliverable during a presentation failure; the invocation count in
+  `a_contained_frame_failure_stays_authoritative_over_a_later_post_frame_panic`
+  proves its unwind competes with the contained failure in the same pump.
 - **The UI runtime root is attached once.** The widget harness attaches one
   harness root that builds whatever tree its slot holds; a root swap
   replaces the slot and rebuilds that root, so the UI runtime's root scopes stay

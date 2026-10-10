@@ -2,7 +2,7 @@
 //!
 //! ## Implemented subset
 //!
-//! `size`, `device_pixel_ratio`, `text_scale_factor`, `font_weight_adjustment`, `padding`,
+//! `size`, `device_pixel_ratio`, `text_sizing`, `font_weight_adjustment`, `padding`,
 //! `view_insets`, `platform_brightness`, `high_contrast`, `preferred_locales` — presentation and
 //! preference fields for layout and theming.
 //!
@@ -41,7 +41,7 @@ use std::sync::Arc;
 ///
 /// - [`size`](Self::size)
 /// - [`device_pixel_ratio`](Self::device_pixel_ratio)
-/// - [`text_scale_factor`](Self::text_scale_factor) (a flat `f64`, not a scaler object)
+/// - [`text_sizing`](Self::text_sizing)
 /// - [`font_weight_adjustment`](Self::font_weight_adjustment)
 /// - [`padding`](Self::padding)
 /// - [`view_insets`](Self::view_insets)
@@ -60,11 +60,10 @@ pub struct MediaQueryData {
     /// `3.0` on some high-DPI phones). Always positive and finite.
     pub device_pixel_ratio: f64,
 
-    /// User-configured font scaling factor. `1.0` is the system default;
-    /// values above `1.0` enlarge text for accessibility.
-    /// Text consumers resolve values outside `1/64..=64` to `1.0` through
-    /// [`MediaQuery::text_scale_factor_of`], including NaN and infinities.
-    pub text_scale_factor: f64,
+    /// Numeric sizing authority applied after authored span inheritance.
+    /// The nearest provider replaces the outer policy, including when fixed.
+    /// Copy the parent data to preserve its policy while overriding another field.
+    pub text_sizing: flui_painting::TextSizing,
 
     /// Signed adjustment applied after authored text-style inheritance. Zero
     /// preserves authored weights. Text shaping bounds adjusted weights to
@@ -104,7 +103,7 @@ impl Default for MediaQueryData {
         Self {
             size: Size::new(800.0, 600.0),
             device_pixel_ratio: 1.0,
-            text_scale_factor: 1.0,
+            text_sizing: flui_painting::TextSizing::fixed(),
             font_weight_adjustment: 0,
             padding: EdgeInsets::ZERO,
             view_insets: EdgeInsets::ZERO,
@@ -203,17 +202,12 @@ impl MediaQuery {
         })
     }
 
-    /// The effective text scale factor, depending on `text_scale_factor` only.
-    /// Values outside `1/64..=64` fall back to `1.0`, matching the supported
-    /// system-preference range even for directly authored nested providers.
+    /// The nearest numeric sizing policy, depending on `text_sizing` only.
+    /// No provider means that the render pipeline's policy is inherited.
     #[must_use]
-    pub fn text_scale_factor_of(ctx: &dyn BuildContext) -> Option<f64> {
-        Self::depend_on_fields(ctx, MediaQueryData::FIELD_TEXT_SCALE_FACTOR, |d| {
-            if (1.0 / 64.0..=64.0).contains(&d.text_scale_factor) {
-                d.text_scale_factor
-            } else {
-                1.0
-            }
+    pub fn text_sizing_of(ctx: &dyn BuildContext) -> Option<flui_painting::TextSizing> {
+        Self::depend_on_fields(ctx, MediaQueryData::FIELD_TEXT_SIZING, |d| {
+            d.text_sizing.clone()
         })
     }
 

@@ -47,7 +47,11 @@ failure cannot contaminate a new healthy refusal or admission. Exclusively owned
 receipts are reused; receipt ownership grants no UI authority.
 
 Standalone refused-envelope retirement and explicit owner retirement establish
-the same outermost custody lifetime. They publish the receipt before releasing
+the same outermost custody lifetime. Presentation capture retirement uses that
+same implementation through weak owner-local cleanup metadata (ADR-0183); it
+cannot retain the scheduler or task queues, and nested owner execution is refused
+until retirement and temporary scheduler release finish. Cleanup publishes the
+receipt before releasing
 captures, retain any upgraded temporary scheduler through terminal release, and
 withdraw publication before ending caller custody. Recursive cleanup borrows
 the enclosing scope; catching a nested failure cannot clear it. A later healthy

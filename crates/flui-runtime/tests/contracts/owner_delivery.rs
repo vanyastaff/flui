@@ -7,6 +7,7 @@ use flui_runtime::owner::{
     PublicationError, RuntimeDispatcher, RuntimeOperation,
 };
 use flui_runtime::ui_runtime::UiRuntime;
+use flui_view::prelude::*;
 
 use crate::owner_publication::{runtime, window};
 
@@ -664,11 +665,571 @@ fn runtime_background_work_shares_frame_order_without_an_extra_frame() {
     );
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TextServiceCase {
+    Ready,
+    Close,
+    Replace,
+    Drop,
+    Panic,
+    Unavailable,
+}
+
+#[derive(Clone, StatefulView)]
+struct DeliveredAuthoredText {
+    size: Rc<Cell<f64>>,
+    rebuild: Rc<RefCell<Option<flui_view::RebuildHandle>>>,
+}
+
+struct DeliveredAuthoredTextState(Rc<RefCell<Option<flui_view::RebuildHandle>>>);
+
+impl StatefulView for DeliveredAuthoredText {
+    type State = DeliveredAuthoredTextState;
+
+    fn create_state(&self) -> Self::State {
+        DeliveredAuthoredTextState(Rc::clone(&self.rebuild))
+    }
+}
+
+impl ViewState<DeliveredAuthoredText> for DeliveredAuthoredTextState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        *self.0.borrow_mut() = Some(ctx.rebuild_handle());
+    }
+
+    fn build(&self, view: &DeliveredAuthoredText, _: &dyn BuildContext) -> impl IntoView {
+        let text = if view.size.get() == 14.0 {
+            "native sizing owner"
+        } else {
+            "replacement text"
+        };
+        flui_widgets::Text::new(text)
+            .style(flui_painting::typography::TextStyle::default().with_font_size(view.size.get()))
+    }
+}
+
+fn detached_text_service_returns_the_runtime_before_native_reentry(case: TextServiceCase) {
+    struct Sink<'a> {
+        scenes: &'a Cell<usize>,
+        painted: &'a RefCell<Vec<(String, Vec<f64>)>>,
+    }
+    impl flui_runtime::sink::FrameSink for Sink<'_> {
+        fn surface_size(&mut self) -> (u32, u32) {
+            (400, 400)
+        }
+        fn submit(&mut self, scene: flui_layer::Scene) -> flui_runtime::sink::SubmitVerdict {
+            let mut registry = flui_painting::glyphs::FontRegistry::with_owned_sources();
+            let mut painted = Vec::new();
+            for (_, node) in scene.tree().iter() {
+                let flui_layer::Layer::Picture(picture) = node.layer() else {
+                    continue;
+                };
+                for command in picture.picture() {
+                    let flui_painting::DrawOp::Paragraph { paragraph, .. } = &command.op else {
+                        continue;
+                    };
+                    let mut sizes = Vec::new();
+                    for run in paragraph.runs() {
+                        let key = registry.prepare_run(&run).expect("actual submitted font");
+                        sizes.extend(
+                            run.placed_glyphs(key, (0.0, 0.0), 1.0)
+                                .map(|glyph| f64::from(glyph.key.size())),
+                        );
+                    }
+                    painted.push((paragraph.text().to_owned(), sizes));
+                }
+            }
+            self.painted.replace(painted);
+            self.scenes.set(self.scenes.get() + 1);
+            flui_runtime::sink::SubmitVerdict::Presented
+        }
+    }
+    struct Effects {
+        owner: OwnerHost,
+        admission: RefCell<flui_painting::TextSizingAdmission>,
+        scenes: Cell<usize>,
+        requests: Cell<usize>,
+        painted: RefCell<Vec<(String, Vec<f64>)>>,
+        case: TextServiceCase,
+        authored_size: Rc<Cell<f64>>,
+        rebuild: Rc<RefCell<Option<flui_view::RebuildHandle>>>,
+    }
+    impl OwnerEffects for Effects {
+        fn runtime_lifecycle(
+            &self,
+            _: flui_foundation::UiRuntimeId,
+            _: flui_scheduler::AppLifecycleState,
+        ) {
+        }
+        fn runtimes_stopped(&self, _: flui_runtime::owner::RecoveryState) {}
+        fn retire_host(&self, _: &[PresentationAddress], _: flui_runtime::owner::RecoveryState) {}
+        fn commit_install(
+            &self,
+            _: flui_runtime::owner::InstallToken,
+            _: flui_runtime::owner::RecoveryState,
+        ) -> Option<flui_runtime::owner::InstallInitialization> {
+            panic!("this fixture publishes its owner before frame delivery");
+        }
+        fn finish_install(
+            &self,
+            _: PresentationAddress,
+            _: flui_runtime::owner::InitializationOutcome,
+            _: flui_runtime::owner::RecoveryState,
+        ) {
+        }
+        fn cancel_install(
+            &self,
+            _: flui_runtime::owner::InstallToken,
+            _: flui_runtime::owner::RecoveryState,
+        ) {
+        }
+        fn resize_surface(
+            &self,
+            _: PresentationAddress,
+            _: flui_foundation::geometry::Size<f64>,
+            _: f64,
+        ) {
+        }
+        fn frame(&self, _: PresentationAddress, runtime: &mut UiRuntime) {
+            let _ = runtime.pump(
+                &mut flui_runtime::pump::SampledClock(web_time::Instant::now()),
+                &mut Sink {
+                    scenes: &self.scenes,
+                    painted: &self.painted,
+                },
+            );
+        }
+        fn retire_presentation(&self, _: PresentationAddress, _: Option<PresentationAddress>) {}
+        fn after_turn(&self, _: flui_runtime::owner::RecoveryState) {}
+        fn request_continuation(&self) -> bool {
+            true
+        }
+        fn text_sizing(
+            &self,
+            frontier: flui_runtime::owner::TextSizingFrontier,
+            _: flui_runtime::owner::RecoveryState,
+        ) -> Option<flui_runtime::owner::TextSizingFrontier> {
+            self.requests.set(self.requests.get() + 1);
+            assert_eq!(self.scenes.get(), 0, "partial geometry was not submitted");
+            let proposal = self
+                .owner
+                .prepare_presentation(frontier.address(), window())
+                .expect("native service can assemble a sibling");
+            let publication = self
+                .owner
+                .publication(proposal)
+                .expect("runtime checkout returned before native service");
+            drop(publication);
+            if self.case == TextServiceCase::Close {
+                self.owner
+                    .presentation_dispatcher(frontier.address())
+                    .expect("current native service target")
+                    .close(self)
+                    .expect("native reentry closes the exact presentation");
+                assert_eq!(
+                    frontier.settle(flui_runtime::ui_runtime::TextSizingSettlement::Ready, self),
+                    Err(DispatchError::PresentationClosing),
+                    "a late numeric reply cannot cross close admission"
+                );
+            } else {
+                if self.requests.get() == 1 {
+                    if self.case == TextServiceCase::Drop {
+                        return None;
+                    }
+                    assert!(
+                        self.case != TextServiceCase::Panic,
+                        "native sizing service failed after receiving the frontier"
+                    );
+                    if self.case == TextServiceCase::Replace {
+                        let size = Rc::clone(&self.authored_size);
+                        let rebuild = Rc::clone(&self.rebuild);
+                        assert_eq!(
+                            self.owner
+                                .presentation_dispatcher(frontier.address())
+                                .expect("addressed authored replacement")
+                                .test_callback(
+                                    Box::new(move |_| {
+                                        size.set(22.75);
+                                        let handle = rebuild
+                                            .borrow()
+                                            .as_ref()
+                                            .expect("mounted authored state's lifecycle handle")
+                                            .clone();
+                                        handle
+                                            .schedule(flui_foundation::RebuildReason::StateChange);
+                                    }),
+                                    self
+                                ),
+                            Ok(Delivery::Queued),
+                            "authored input is accepted before the old numeric settlement"
+                        );
+                    }
+                }
+                let answers: Vec<_> = frontier
+                    .requests()
+                    .iter()
+                    .map(|request| {
+                        (
+                            *request,
+                            flui_foundation::TextSize::new(request.size.value() * 1.5)
+                                .expect("finite native answer"),
+                        )
+                    })
+                    .collect();
+                self.admission
+                    .borrow_mut()
+                    .admit(answers)
+                    .expect("host admits into its sole numeric source");
+                frontier
+                    .settle(flui_runtime::ui_runtime::TextSizingSettlement::Ready, self)
+                    .expect("same owner accepts the detached reply");
+            }
+            None
+        }
+    }
+    struct DefaultEffects<'a>(&'a Effects);
+    impl OwnerEffects for DefaultEffects<'_> {
+        fn runtime_lifecycle(
+            &self,
+            id: flui_foundation::UiRuntimeId,
+            state: flui_scheduler::AppLifecycleState,
+        ) {
+            self.0.runtime_lifecycle(id, state);
+        }
+        fn runtimes_stopped(&self, recovery: flui_runtime::owner::RecoveryState) {
+            self.0.runtimes_stopped(recovery);
+        }
+        fn retire_host(
+            &self,
+            addresses: &[PresentationAddress],
+            recovery: flui_runtime::owner::RecoveryState,
+        ) {
+            self.0.retire_host(addresses, recovery);
+        }
+        fn commit_install(
+            &self,
+            token: flui_runtime::owner::InstallToken,
+            recovery: flui_runtime::owner::RecoveryState,
+        ) -> Option<flui_runtime::owner::InstallInitialization> {
+            self.0.commit_install(token, recovery)
+        }
+        fn finish_install(
+            &self,
+            address: PresentationAddress,
+            outcome: flui_runtime::owner::InitializationOutcome,
+            recovery: flui_runtime::owner::RecoveryState,
+        ) {
+            self.0.finish_install(address, outcome, recovery);
+        }
+        fn cancel_install(
+            &self,
+            token: flui_runtime::owner::InstallToken,
+            recovery: flui_runtime::owner::RecoveryState,
+        ) {
+            self.0.cancel_install(token, recovery);
+        }
+        fn resize_surface(
+            &self,
+            address: PresentationAddress,
+            size: flui_foundation::geometry::Size<f64>,
+            scale: f64,
+        ) {
+            self.0.resize_surface(address, size, scale);
+        }
+        fn frame(&self, address: PresentationAddress, runtime: &mut UiRuntime) {
+            self.0.frame(address, runtime);
+        }
+        fn retire_presentation(
+            &self,
+            address: PresentationAddress,
+            surviving: Option<PresentationAddress>,
+        ) {
+            self.0.retire_presentation(address, surviving);
+        }
+        fn after_turn(&self, recovery: flui_runtime::owner::RecoveryState) {
+            self.0.after_turn(recovery);
+        }
+        fn request_continuation(&self) -> bool {
+            self.0.request_continuation()
+        }
+        // Deliberately inherit OwnerEffects::text_sizing's default refusal.
+    }
+    let owner = OwnerHost::new();
+    let host = flui_testing::RecordingTextStoreHost::new();
+    let focus = flui_interaction::routing::FocusNode::new();
+    let authored_size = Rc::new(Cell::new(14.0));
+    let rebuild = Rc::new(RefCell::new(None));
+    let runtime = if case == TextServiceCase::Unavailable {
+        UiRuntime::new(
+            window().with_text_store_host(Some(host.clone())),
+            1.0,
+            flui_runtime::ui_runtime::RuntimeHostServices::new(
+                std::sync::Arc::new(|| {}),
+                std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                std::sync::Arc::new(flui_platform_api::InMemoryClipboard::new()),
+                &flui_painting::FontCollection::new(),
+                flui_scheduler::ClockSource::Platform,
+            ),
+        )
+        .expect("runtime with real text-store host")
+    } else {
+        runtime()
+    };
+    if case == TextServiceCase::Unavailable {
+        runtime
+            .attach_root_widget_with_size(
+                &flui_widgets::EditableText::new(
+                    flui_widgets::TextEditingController::with_text("native sizing owner"),
+                    Rc::clone(&focus),
+                )
+                .text_style(flui_painting::typography::TextStyle::default().with_font_size(14.0)),
+                400.0,
+                400.0,
+            )
+            .expect("mount real editable document");
+    } else if case == TextServiceCase::Replace {
+        runtime
+            .attach_root_widget_with_size(
+                &DeliveredAuthoredText {
+                    size: Rc::clone(&authored_size),
+                    rebuild: Rc::clone(&rebuild),
+                },
+                400.0,
+                400.0,
+            )
+            .expect("mount retained authored state before native delivery");
+    } else {
+        runtime
+            .attach_root_widget_with_size(
+                &flui_widgets::Text::new("native sizing owner"),
+                400.0,
+                400.0,
+            )
+            .expect("mount actual text before native delivery");
+    }
+    let address = install(&owner, runtime);
+    let (_, admission) = flui_painting::TextSizing::captured();
+    let effects = Effects {
+        owner: owner.clone(),
+        admission: RefCell::new(admission),
+        scenes: Cell::new(0),
+        requests: Cell::new(0),
+        painted: RefCell::new(Vec::new()),
+        case,
+        authored_size,
+        rebuild,
+    };
+    let defaults = DefaultEffects(&effects);
+    let dispatcher = owner.frame_dispatcher(address).expect("frame authority");
+    if case == TextServiceCase::Unavailable {
+        dispatcher
+            .deliver(&defaults)
+            .expect("commit original editable geometry");
+        let _ = focus.request_focus();
+        dispatcher
+            .deliver(&defaults)
+            .expect("attach the focused native text store");
+        assert!(host.focused_store().is_some());
+        effects.scenes.set(0);
+        effects.painted.borrow_mut().clear();
+    }
+    let source = effects.admission.borrow().source();
+    let delivery_effects: &dyn OwnerEffects = if case == TextServiceCase::Unavailable {
+        &defaults
+    } else {
+        &effects
+    };
+    owner
+        .presentation_dispatcher(address)
+        .expect("captured policy authority")
+        .install_captured_text_sizing(source.clone(), delivery_effects)
+        .expect("install the native owner's read source");
+    let delivered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        dispatcher.deliver(delivery_effects)
+    }));
+    if case == TextServiceCase::Panic {
+        let failure = delivered.expect_err("native failure remains authoritative");
+        assert_eq!(
+            failure.downcast_ref::<&str>(),
+            Some(&"native sizing service failed after receiving the frontier")
+        );
+    } else {
+        delivered
+            .expect("healthy detached effect")
+            .expect("drive missing text");
+    }
+    assert_eq!(
+        effects.requests.get(),
+        usize::from(case != TextServiceCase::Unavailable)
+    );
+    assert_eq!(effects.scenes.get(), 0);
+    if case == TextServiceCase::Unavailable {
+        use flui_platform_api::text_store::{
+            LockGrant, LockOutcome, LockTiming, TextStoreError, Utf16Offset, Utf16Range,
+        };
+        for _ in 0..3 {
+            dispatcher
+                .deliver(&defaults)
+                .expect("unchanged unavailable source remains parked");
+        }
+        assert_eq!(effects.scenes.get(), 0);
+        let store = host
+            .focused_store()
+            .expect("park retains document editing authority");
+        assert_eq!(
+            store.request_lock(
+                LockGrant::read_write(|session| {
+                    assert_eq!(
+                        session.rect_for_range(Utf16Range::collapsed(Utf16Offset::new(0))),
+                        Err(TextStoreError::NoLayout)
+                    );
+                    let end = session.document_len();
+                    session
+                        .replace(
+                            Utf16Range::new(Utf16Offset::new(0), end)
+                                .expect("the whole document is an ordered range"),
+                            "edited document",
+                        )
+                        .expect("document edit can repair parked geometry");
+                }),
+                LockTiming::Sync
+            ),
+            Ok(LockOutcome::Granted)
+        );
+        dispatcher
+            .deliver(&defaults)
+            .expect("changed document remains unavailable without a producer");
+        assert_eq!(effects.scenes.get(), 0);
+        owner
+            .presentation_dispatcher(address)
+            .expect("exact native readiness target")
+            .service_text_sizing_source(&source, &effects)
+            .expect("actual native authority now accepts the frontier");
+        dispatcher
+            .deliver(&effects)
+            .expect("edited document resumes after numeric admission");
+        assert_eq!(effects.scenes.get(), 1);
+        assert_eq!(
+            effects.requests.get(),
+            1,
+            "default effects never called an invented native producer"
+        );
+        let painted = effects.painted.borrow();
+        let (_, sizes) = painted
+            .iter()
+            .find(|(text, _)| text == "edited document")
+            .expect("edited document reaches submitted geometry");
+        assert_ne!(sizes.as_slice(), [] as [f64; 0]);
+        assert!(sizes.iter().all(|size| (*size - 21.0).abs() < 0.001));
+        return;
+    }
+    if case == TextServiceCase::Close {
+        assert!(matches!(
+            dispatcher.deliver(&effects),
+            Err(DispatchError::UnknownPresentation | DispatchError::UnknownRuntime)
+        ));
+    } else {
+        if matches!(case, TextServiceCase::Drop | TextServiceCase::Panic) {
+            owner
+                .presentation_dispatcher(address)
+                .expect("retained native authority")
+                .service_text_sizing_source(&source, &effects)
+                .expect("explicit ready opportunity recovers the accepted tail");
+        }
+        dispatcher.deliver(&effects).expect("resume admitted text");
+        if case == TextServiceCase::Replace {
+            assert_eq!(
+                effects.scenes.get(),
+                0,
+                "old receipt cannot submit obsolete authored geometry"
+            );
+            assert_eq!(
+                effects.requests.get(),
+                2,
+                "replacement has its own authored frontier"
+            );
+            dispatcher
+                .deliver(&effects)
+                .expect("complete replacement text");
+        }
+        assert_eq!(effects.scenes.get(), 1);
+        let painted = effects.painted.borrow();
+        let (text, expected_size) = if case == TextServiceCase::Replace {
+            ("replacement text", 34.125)
+        } else {
+            ("native sizing owner", 21.0)
+        };
+        let (_, sizes) = painted
+            .iter()
+            .find(|(actual, _)| actual == text)
+            .expect("intended text was actually submitted");
+        assert_ne!(sizes.as_slice(), [] as [f64; 0]);
+        assert!(
+            sizes
+                .iter()
+                .all(|size| (*size - expected_size).abs() < 0.001)
+        );
+        assert_eq!(
+            effects.requests.get(),
+            if matches!(
+                case,
+                TextServiceCase::Replace | TextServiceCase::Drop | TextServiceCase::Panic
+            ) {
+                2
+            } else {
+                1
+            },
+            "the accepted frontier settled once"
+        );
+    }
+}
+
+fn detached_text_service_can_publish_after_checkout() {
+    detached_text_service_returns_the_runtime_before_native_reentry(TextServiceCase::Ready);
+}
+
+fn detached_text_service_reentry_cannot_settle_a_closed_presentation() {
+    detached_text_service_returns_the_runtime_before_native_reentry(TextServiceCase::Close);
+}
+
+fn detached_text_service_cannot_commit_obsolete_authored_text() {
+    detached_text_service_returns_the_runtime_before_native_reentry(TextServiceCase::Replace);
+}
+
+fn detached_text_service_recovers_dropped_and_panicking_receipts() {
+    for case in [TextServiceCase::Drop, TextServiceCase::Panic] {
+        detached_text_service_returns_the_runtime_before_native_reentry(case);
+    }
+}
+
+fn default_text_service_parks_geometry_but_allows_document_repair() {
+    detached_text_service_returns_the_runtime_before_native_reentry(TextServiceCase::Unavailable);
+}
+
 #[test]
 fn owner_delivery_contract() {
     crate::table_test::run_table(
         "owner_delivery_contract",
         &[
+            (
+                "default_text_service_parks_geometry_but_allows_document_repair",
+                default_text_service_parks_geometry_but_allows_document_repair as fn(),
+            ),
+            (
+                "detached_text_service_cannot_commit_obsolete_authored_text",
+                detached_text_service_cannot_commit_obsolete_authored_text as fn(),
+            ),
+            (
+                "detached_text_service_recovers_dropped_and_panicking_receipts",
+                detached_text_service_recovers_dropped_and_panicking_receipts as fn(),
+            ),
+            (
+                "detached_text_service_can_publish_after_checkout",
+                detached_text_service_can_publish_after_checkout as fn(),
+            ),
+            (
+                "detached_text_service_reentry_cannot_settle_a_closed_presentation",
+                detached_text_service_reentry_cannot_settle_a_closed_presentation as fn(),
+            ),
             (
                 "runtime_background_work_shares_frame_order_without_an_extra_frame",
                 runtime_background_work_shares_frame_order_without_an_extra_frame as fn(),

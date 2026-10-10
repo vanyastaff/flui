@@ -36,6 +36,7 @@ pub struct AndroidWindow {
     owner: std::thread::ThreadId,
     owner_signal: Weak<crate::shared::owner_signal::OwnerSignal>,
     geometry_live: Arc<AtomicBool>,
+    text_sizing: Arc<super::text_sizing::Acquisition>,
 }
 
 impl std::fmt::Debug for AndroidWindow {
@@ -61,6 +62,7 @@ impl AndroidWindow {
             owner: std::thread::current().id(),
             owner_signal,
             geometry_live: Arc::new(AtomicBool::new(true)),
+            text_sizing: super::text_sizing::Acquisition::new(),
         }
     }
 
@@ -74,6 +76,18 @@ impl AndroidWindow {
     /// even if an old handle still keeps the shared AndroidApp alive.
     pub(crate) fn revoke_geometry(&self) {
         self.geometry_live.store(false, Ordering::Release);
+        self.text_sizing.invalidate();
+    }
+
+    pub(crate) fn invalidate_text_sizing(&self) {
+        self.text_sizing.invalidate();
+        if let Some(signal) = self.owner_signal.upgrade() {
+            let _ = signal.wake();
+        }
+    }
+
+    pub(crate) fn fence_text_sizing(&self) {
+        self.text_sizing.fence();
     }
 
     /// Read whether a redraw is pending without consuming it. The event loop
@@ -106,7 +120,27 @@ fn take_deliverable_redraw_request(redraw_requested: &AtomicBool, execution_runn
     execution_running && redraw_requested.swap(false, Ordering::SeqCst)
 }
 
-impl crate::traits::HostWindow for AndroidWindow {}
+impl crate::traits::HostWindow for AndroidWindow {
+    fn capture_text_sizing(
+        &self,
+        _owner: crate::traits::OwnerThreadToken,
+    ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError> {
+        if self.owner != std::thread::current().id() {
+            return Err(crate::TextSizingCaptureError::WrongThread);
+        }
+        if !self.geometry_live.load(Ordering::Acquire)
+            || self.app.native_window().is_none()
+            || !self
+                .owner_signal
+                .upgrade()
+                .is_some_and(|signal| signal.accepting())
+        {
+            return Err(crate::TextSizingCaptureError::Unavailable);
+        }
+        self.text_sizing
+            .poll(&self.app, &self.owner_signal, self.owner)
+    }
+}
 
 impl PlatformWindow for AndroidWindow {
     // Android hosts exactly one `AndroidApp` surface for the process's

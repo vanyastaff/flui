@@ -179,6 +179,8 @@ pub use flui_platform_api::{
     SystemPreferences, WheelPreferences, WheelStep,
 };
 pub mod error;
+mod text_sizing;
+pub use text_sizing::{CapturedTextSizing, TextSizingCaptureError, TextSizingCaptureState};
 #[cfg(not(target_arch = "wasm32"))]
 pub mod executor;
 pub mod platforms;

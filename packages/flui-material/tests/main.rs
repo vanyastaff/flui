@@ -383,6 +383,10 @@ fn surface_contracts() {
 fn theme_and_app_contracts() {
     common::run_cases(&[
         (
+            "theme::retained theme roles paint distinct numeric sizing answers",
+            theme::retained_theme_roles_paint_distinct_numeric_sizing_answers,
+        ),
+        (
             "material_app::contrast selects authored themes in a retained app",
             material_app::contrast_selects_authored_themes_in_a_retained_app,
         ),

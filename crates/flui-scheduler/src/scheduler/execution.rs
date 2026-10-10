@@ -7,6 +7,7 @@ use std::sync::{Arc, Weak};
 
 use super::{IdleDeadline, UpdateScheduler, request_frame_impl_preserving_failure};
 use crate::async_driver::RetirePanic;
+use crate::post_frame::OwnerCleanup;
 use crate::wake_delivery::FailureSignal;
 use crate::{Instant, OwnerFrame, SchedulerPhase};
 
@@ -81,7 +82,7 @@ struct ExecutionPermit<'a> {
 /// Producer retirement borrows the accepted turn's failure custody weakly.
 struct FailureScope<'a> {
     scheduler: crate::WeakUpdateScheduler,
-    owner: &'a OwnerFrame,
+    owner: &'a OwnerCleanup,
 }
 
 impl Drop for FailureScope<'_> {
@@ -122,12 +123,12 @@ impl Drop for ExecutionPermit<'_> {
 }
 
 struct Recovery<'a> {
-    owner: &'a OwnerFrame,
+    owner: &'a OwnerCleanup,
     first: Option<RetirePanic>,
 }
 
 impl<'a> Recovery<'a> {
-    fn new(owner: &'a OwnerFrame) -> Self {
+    fn new(owner: &'a OwnerCleanup) -> Self {
         Self { owner, first: None }
     }
 
@@ -183,7 +184,7 @@ impl<'a> Recovery<'a> {
     }
 }
 
-impl OwnerFrame {
+impl OwnerCleanup {
     /// An outermost cleanup has the same publication and completion lifetime
     /// as a turn. Nested retirement borrows its enclosing failure custody.
     pub(crate) fn with_cleanup_custody(
@@ -242,10 +243,27 @@ impl OwnerFrame {
         recovery.release_scheduler(scheduler);
         recovery.first.take()
     }
+}
+
+impl OwnerFrame {
+    pub(crate) fn with_cleanup_custody(
+        &self,
+        action: impl FnOnce() -> Option<RetirePanic>,
+    ) -> Option<RetirePanic> {
+        self.cleanup.with_cleanup_custody(action)
+    }
+
+    pub(crate) fn record_execution_failure(&self) {
+        self.cleanup.record_execution_failure();
+    }
+
+    pub(crate) fn execution_failure_signal(&self) -> Arc<FailureSignal> {
+        self.cleanup.execution_failure_signal()
+    }
 
     fn retire_refused<T>(&self, envelope: T) {
         let failure = self.with_cleanup_custody(|| {
-            let mut recovery = Recovery::new(self);
+            let mut recovery = Recovery::new(&self.cleanup);
             recovery.retire(envelope);
             recovery.first.take()
         });
@@ -256,7 +274,7 @@ impl OwnerFrame {
 
     fn retire_refused_frame<P, F>(&self, prepare: P, pipeline: F) {
         let failure = self.with_cleanup_custody(|| {
-            let mut recovery = Recovery::new(self);
+            let mut recovery = Recovery::new(&self.cleanup);
             recovery.retire(prepare);
             recovery.retire(pipeline);
             recovery.first.take()
@@ -297,7 +315,7 @@ impl OwnerFrame {
         mut prepare: impl FnMut(),
         mut pipeline: impl FnMut() -> R,
     ) -> Result<R, ExecutionError> {
-        let permit = match self.execution.enter() {
+        let permit = match self.cleanup.execution.enter() {
             Ok(permit) => permit,
             Err(error) => {
                 self.retire_refused_frame(prepare, pipeline);
@@ -305,13 +323,13 @@ impl OwnerFrame {
             }
         };
         let scheduler = self.scheduler.upgrade();
-        let failure_scope = self.bind_failure_scope(scheduler.as_ref());
+        let failure_scope = self.cleanup.bind_failure_scope(scheduler.as_ref());
         let Some(scheduler) = scheduler else {
             self.retire_refused_frame(prepare, pipeline);
             return Err(ExecutionError::SchedulerClosed);
         };
         if scheduler.inner.wake.closed.load(Ordering::Acquire) {
-            let mut recovery = Recovery::new(self);
+            let mut recovery = Recovery::new(&self.cleanup);
             recovery.retire(prepare);
             recovery.retire(pipeline);
             recovery.release_scheduler(scheduler);
@@ -319,7 +337,7 @@ impl OwnerFrame {
             return Err(ExecutionError::SchedulerClosed);
         }
 
-        let mut recovery = Recovery::new(self);
+        let mut recovery = Recovery::new(&self.cleanup);
         let mut output = None;
         recovery.attempt(&mut prepare);
         let span = if recovery.first.is_none() {
@@ -395,7 +413,7 @@ impl OwnerFrame {
     /// Propagates the first preparation, poll or cleanup failure. Opaque
     /// callable ownership is retained once failure custody begins.
     pub fn pump_background(&self, mut prepare: impl FnMut()) -> Result<usize, ExecutionError> {
-        let permit = match self.execution.enter() {
+        let permit = match self.cleanup.execution.enter() {
             Ok(permit) => permit,
             Err(error) => {
                 self.retire_refused(prepare);
@@ -403,19 +421,19 @@ impl OwnerFrame {
             }
         };
         let scheduler = self.scheduler.upgrade();
-        let failure_scope = self.bind_failure_scope(scheduler.as_ref());
+        let failure_scope = self.cleanup.bind_failure_scope(scheduler.as_ref());
         let Some(scheduler) = scheduler else {
             self.retire_refused(prepare);
             return Err(ExecutionError::SchedulerClosed);
         };
         if scheduler.inner.wake.closed.load(Ordering::Acquire) {
-            let mut recovery = Recovery::new(self);
+            let mut recovery = Recovery::new(&self.cleanup);
             recovery.retire(prepare);
             recovery.release_scheduler(scheduler);
             recovery.finish();
             return Err(ExecutionError::SchedulerClosed);
         }
-        let mut recovery = Recovery::new(self);
+        let mut recovery = Recovery::new(&self.cleanup);
         let mut polled = 0;
         recovery.attempt(|| {
             scheduler.finish_async_pump();

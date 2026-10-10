@@ -222,8 +222,8 @@ pub use test_only_global_key_registry::{
 };
 // Tree management
 pub use owner::{
-    BuildOwner, DuplicateGlobalKey, ElementOwner, FrameBuildReport, GlobalKeyScope, LifecycleHook,
-    RebuildHandle, RebuildReason, RebuildReasons, RecoveredAt, RecoveredPanic,
+    BuildOwner, BuildPremise, DuplicateGlobalKey, ElementOwner, FrameBuildReport, GlobalKeyScope,
+    LifecycleHook, RebuildHandle, RebuildReason, RebuildReasons, RecoveredAt, RecoveredPanic,
 };
 // Ergonomic local-state cells built on `RebuildHandle` (see `state_cell.rs`).
 pub use reactive::{

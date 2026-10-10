@@ -109,10 +109,19 @@ pub enum RenderError {
         message: Box<str>,
     },
 
+    /// Another independently held loan is using the runtime's text resource.
+    /// The current operation is refused without poisoning or native preparation
+    /// debt; it can be repeated after the competing loan ends.
+    #[error("the runtime's text context is already lent")]
+    TextContextBusy,
+
     /// Text preparation or shaping refused the current layout request.
     /// This is an ordinary input/geometry error, not a caught render panic.
     #[error(transparent)]
     TextLayout(#[from] flui_painting::TextLayoutError),
+    /// Numeric sizing answers are unavailable for this captured preference.
+    #[error(transparent)]
+    TextPreparationPending(#[from] flui_painting::TextPreparationPending),
 
     /// A scroll input changed while its layout proposal was being measured.
     /// Retry against the accepted input; the proposal has not been published.
@@ -421,10 +430,27 @@ pub enum RenderError {
 /// Result type alias for render operations.
 pub type RenderResult<T> = Result<T, RenderError>;
 
+impl From<flui_painting::TextMeasurementError> for RenderError {
+    fn from(error: flui_painting::TextMeasurementError) -> Self {
+        match error {
+            flui_painting::TextMeasurementError::Layout(error) => Self::TextLayout(error),
+            flui_painting::TextMeasurementError::Pending(pending) => {
+                Self::TextPreparationPending(pending)
+            }
+        }
+    }
+}
+
 impl RenderError {
     /// An ordinary layout refusal must propagate without a poisoned stand-in.
     pub(crate) fn is_recoverable_layout_error(&self) -> bool {
-        matches!(self, Self::TextLayout(_) | Self::ViewportOffsetChanged)
+        matches!(
+            self,
+            Self::TextContextBusy
+                | Self::TextLayout(_)
+                | Self::TextPreparationPending(_)
+                | Self::ViewportOffsetChanged
+        )
     }
 
     /// Creates an invalid constraints error with a message.

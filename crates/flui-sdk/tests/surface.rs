@@ -34,7 +34,8 @@ mod measured {
     };
     use flui_sdk::foundation::{
         ChangeNotifier as _, ElementId as _, Listenable as _, ListenerCallback as _,
-        ListenerId as _, RebuildReason as _, ViewKey as _,
+        ListenerId as _, RebuildReason as _, TextScaleProfile as _, TextSizingIntent as _,
+        ViewKey as _,
     };
     use flui_sdk::geometry::{EdgeInsets as _, RRect as _, Radius as _};
     use flui_sdk::hooks::FrameSnapshot as _;
@@ -48,7 +49,9 @@ mod measured {
     };
     use flui_sdk::painting::{Canvas as _, DrawOp as _};
     use flui_sdk::painting::{Clip as _, Paint as _, Path as _};
-    use flui_sdk::painting::{FontWeight as _, TextDirection as _, TextStyle as _};
+    use flui_sdk::painting::{
+        FontWeight as _, TextDirection as _, TextSizing as _, TextStyle as _,
+    };
     use flui_sdk::pipeline::{
         PathClipConfiguration as _, RenderPhysicalShape as _, TranslationFraction as _,
     };
@@ -131,6 +134,7 @@ fn the_re_exports_are_the_facades_types() {
         |x| x;
     let _: fn(flui::painting::Canvas) -> flui_sdk::painting::Canvas = |x| x;
     let _: fn(flui::painting::DrawOp) -> flui_sdk::painting::DrawOp = |x| x;
+    let _: fn(flui::painting::TextSizing) -> flui_sdk::painting::TextSizing = |x| x;
     let _: fn(flui::platform::Brightness) -> flui_sdk::platform::Brightness = |x| x;
     let _: fn(flui::platform::InvalidLocale) -> flui_sdk::platform::InvalidLocale = |x| x;
     let _: fn(flui::rendering::RenderUpdateImpact) -> flui_sdk::rendering::RenderUpdateImpact =
@@ -183,6 +187,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_painting::Alignment;",
         "pub use flui_painting::Canvas;",
         "pub use flui_painting::DrawOp;",
+        "pub use flui_painting::TextSizing;",
         "pub use flui_painting::paint::Clip;",
         "pub use flui_painting::paint::Paint;",
         "pub use flui_painting::paint::Path;",

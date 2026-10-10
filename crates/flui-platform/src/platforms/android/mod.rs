@@ -44,6 +44,7 @@
 
 pub mod input;
 mod preferences;
+pub(crate) mod text_sizing;
 pub mod window;
 
 use std::{
@@ -413,6 +414,14 @@ impl Platform for AndroidPlatform {
             let wake_deadline_hook = platform.handlers.lock().wake_deadline.clone();
             let wake_deadline = wake_deadline_hook.and_then(|hook| hook());
             let deadline_due = is_deadline_due(wake_deadline, web_time::Instant::now());
+            if deadline_due {
+                // Owner services remain deliverable while execution gates frames.
+                let _ = platform.owner_signal.wake();
+                if platform.owner_signal.drive() {
+                    platform.running.store(false, Ordering::Relaxed);
+                    continue;
+                }
+            }
 
             // Check if we should render before polling. Pending sources are
             // gated on `resumed`; otherwise a due deadline would force a 0ms
@@ -491,7 +500,9 @@ impl Platform for AndroidPlatform {
                                 should_call_ready = true;
                             }
 
-                            if let Some(ref w) = *platform.window.lock() {
+                            let window = platform.window.lock().clone();
+                            if let Some(w) = window {
+                                w.invalidate_text_sizing();
                                 w.callbacks().dispatch_surface_status_change(true);
                             }
                         }
@@ -506,7 +517,9 @@ impl Platform for AndroidPlatform {
                             // still valid: `AppCmd::TermWindow` is applied
                             // after this callback returns, so a surface that
                             // outlives it does too.
-                            if let Some(ref w) = *platform.window.lock() {
+                            let window = platform.window.lock().clone();
+                            if let Some(w) = window {
+                                w.invalidate_text_sizing();
                                 w.callbacks().dispatch_surface_status_change(false);
                             }
                         }
@@ -528,7 +541,9 @@ impl Platform for AndroidPlatform {
                             }
 
                             // Dispatch close before stopping
-                            if let Some(ref w) = *platform.window.lock() {
+                            let window = platform.window.lock().clone();
+                            if let Some(w) = window {
+                                w.revoke_geometry();
                                 w.callbacks().dispatch_close();
                             }
 
@@ -558,6 +573,10 @@ impl Platform for AndroidPlatform {
                         }
                         MainEvent::ConfigChanged { .. } => {
                             tracing::debug!("Android: Config changed");
+                            let window = platform.window.lock().clone();
+                            if let Some(window) = window {
+                                window.invalidate_text_sizing();
+                            }
                             platform.refresh_scroll_factors();
                             if let Err(error) = platform.refresh_preferences() {
                                 tracing::warn!(%error, "Android configuration query failed");
@@ -677,6 +696,7 @@ impl Platform for AndroidPlatform {
         // spawns one thread per activity).
         let window = platform.window.lock().take();
         if let Some(window) = window {
+            window.revoke_geometry();
             window.callbacks().clear();
             tracing::debug!("Android: loop exited; window released and its callbacks cleared");
         }
@@ -693,6 +713,12 @@ impl Platform for AndroidPlatform {
 
     fn quit(&self) {
         tracing::info!("Android: quit requested");
+        let window = self.window.lock().clone();
+        if let Some(window) = window {
+            // A foreign quit fences leases immediately; native retirement stays
+            // on the app owner when its loop exits.
+            window.fence_text_sizing();
+        }
         self.execution_resumed.store(false, Ordering::SeqCst);
         self.running.store(false, Ordering::Relaxed);
         let _ = self.owner_signal.request_quit();

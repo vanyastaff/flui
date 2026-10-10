@@ -84,6 +84,14 @@ pub(super) enum RuntimeWork {
         super::presentation_dispatch::PendingWindowState,
     ),
     Frame(PresentationAddress),
+    TextSizingInstall(PresentationAddress, flui_painting::TextSizingSource),
+    TextSizingService(PresentationAddress, flui_painting::TextSizingSource),
+    TextSizingWithdraw(PresentationAddress, flui_painting::TextSizingSource),
+    TextSizingSettled(
+        PresentationAddress,
+        crate::ui_runtime::TextSizingWork,
+        crate::ui_runtime::TextSizingSettlement,
+    ),
     Runtime(UiRuntimeId, RuntimeOperation),
     Preferences(UiRuntimeId, super::SystemPreferencesSnapshot),
     #[cfg(feature = "test-support")]
@@ -115,6 +123,10 @@ impl RuntimeWork {
             | Self::Close(address)
             | Self::Observation(address, _)
             | Self::WindowState(address, _)
+            | Self::TextSizingInstall(address, _)
+            | Self::TextSizingService(address, _)
+            | Self::TextSizingWithdraw(address, _)
+            | Self::TextSizingSettled(address, _, _)
             | Self::Input { address, .. } => state.authorizer(*address),
             Self::Runtime(id, _) | Self::Preferences(id, _) => state.runtime_index(*id),
             #[cfg(feature = "test-support")]
@@ -131,6 +143,10 @@ impl RuntimeWork {
             | Self::Close(address)
             | Self::Observation(address, _)
             | Self::WindowState(address, _)
+            | Self::TextSizingInstall(address, _)
+            | Self::TextSizingService(address, _)
+            | Self::TextSizingWithdraw(address, _)
+            | Self::TextSizingSettled(address, _, _)
             | Self::Input { address, .. } => state.presentation_index(*address),
             Self::Runtime(id, _) | Self::Preferences(id, _) => state.runtime_index(*id),
             #[cfg(feature = "test-support")]
@@ -173,6 +189,26 @@ impl RuntimeWork {
                 runtime.enter(|runtime| state.apply(runtime, address, effects));
             }
             Self::Frame(address) => effects.frame(address, runtime),
+            Self::TextSizingInstall(address, source) => {
+                runtime.enter(|runtime| {
+                    runtime.install_captured_text_sizing_for(address.presentation_id, source);
+                });
+            }
+            Self::TextSizingService(address, source) => {
+                runtime.enter(|runtime| {
+                    runtime.service_text_sizing_source_for(address.presentation_id, &source);
+                });
+            }
+            Self::TextSizingWithdraw(address, source) => {
+                runtime.enter(|runtime| {
+                    runtime.withdraw_captured_text_sizing_for(address.presentation_id, &source);
+                });
+            }
+            Self::TextSizingSettled(_, work, outcome) => {
+                runtime.enter(|runtime| {
+                    runtime.settle_text_sizing(work, outcome);
+                });
+            }
             Self::Input {
                 address,
                 input,

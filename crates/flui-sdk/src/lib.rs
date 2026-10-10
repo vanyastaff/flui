@@ -74,6 +74,7 @@ pub mod painting {
     pub use flui_painting::Alignment;
     pub use flui_painting::Canvas;
     pub use flui_painting::DrawOp;
+    pub use flui_painting::TextSizing;
     pub use flui_painting::paint::Clip;
     pub use flui_painting::paint::Paint;
     pub use flui_painting::paint::Path;

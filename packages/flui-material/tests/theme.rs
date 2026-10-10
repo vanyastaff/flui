@@ -86,3 +86,168 @@ pub fn theme_of_panicking_accessor_returns_ancestor_theme_data() {
     assert_eq!(got.brightness(), Brightness::Dark);
     assert_eq!(got.color_scheme.primary, sentinel);
 }
+
+#[derive(Clone, Debug, StatelessView)]
+struct PaintedThemeRoles;
+
+impl StatelessView for PaintedThemeRoles {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        use flui_painting::typography::TextSpan;
+        use flui_sdk::foundation::{TextScaleProfile, TextSizingIntent};
+        use flui_sdk::painting::TextStyle;
+        use flui_sdk::widgets::{Column, RichText, Text};
+
+        let theme = Theme::of(ctx).text_theme;
+        let title = theme.title_small.expect("Material title style");
+        let label = theme.label_large.expect("Material label style");
+        let body = theme.body_medium.expect("Material body style");
+        let nested = TextSpan::new("A")
+            .with_style(title.clone().with_color(Color::BLACK))
+            .with_child(TextSpan::new("B").with_style(TextStyle::default().with_color(Color::RED)))
+            .with_child(
+                TextSpan::new("C").with_style(
+                    TextStyle::default()
+                        .with_color(Color::GREEN)
+                        .with_sizing(TextSizingIntent::Profile(TextScaleProfile::Body)),
+                ),
+            )
+            .with_child(
+                TextSpan::new("D").with_style(
+                    TextStyle::default()
+                        .with_color(Color::BLUE)
+                        .with_sizing(TextSizingIntent::Fixed),
+                ),
+            );
+        Column::new(vec![
+            Text::new("title role").style(title).boxed(),
+            Text::new("label role").style(label).boxed(),
+            Text::new("body role").style(body).boxed(),
+            RichText::new(nested).boxed(),
+        ])
+    }
+}
+
+/// Theme roles with equal authored sizes must retain different growth profiles
+/// through style merging, measurement and the submitted paragraph glyphs.
+pub fn retained_theme_roles_paint_distinct_numeric_sizing_answers() {
+    use flui_painting::glyphs::FontRegistry;
+    use flui_painting::{DrawOp, TextSizing};
+    use flui_sdk::foundation::{TextScaleProfile, TextSize, TextSizeRequest};
+    use flui_sdk::widgets::{MediaQuery, MediaQueryData};
+
+    let view = |text_sizing| {
+        MediaQuery::new(
+            MediaQueryData {
+                text_sizing,
+                ..MediaQueryData::default()
+            },
+            Theme::new(ThemeData::light(), PaintedThemeRoles),
+        )
+    };
+    let mut laid = lay_out(view(TextSizing::fixed()), loose(1000.0));
+    let names = ["title role", "label role", "body role", "ABCD"];
+    let ids = names.map(|name| laid.find_text(name).expect("painted theme paragraph"));
+    let original_heights = ids.map(|id| laid.size(id).height);
+    let exact = |answers: [f64; 3]| {
+        TextSizing::exact(
+            [
+                TextScaleProfile::Subheadline,
+                TextScaleProfile::Callout,
+                TextScaleProfile::Body,
+            ]
+            .into_iter()
+            .zip(answers)
+            .map(|(profile, answer)| {
+                (
+                    TextSizeRequest {
+                        size: TextSize::new(14.0).expect("authored size"),
+                        profile,
+                    },
+                    TextSize::new(answer).expect("answer size"),
+                )
+            }),
+        )
+        .expect("one answer per role")
+    };
+    for (policy, expected) in [
+        (exact([21.0, 28.0, 35.0]), [21.0, 28.0, 35.0]),
+        (exact([24.0, 30.0, 36.0]), [24.0, 30.0, 36.0]),
+        (TextSizing::fixed(), [14.0; 3]),
+        (
+            TextSizing::linear(1.5).expect("valid linear policy"),
+            [21.0; 3],
+        ),
+        (TextSizing::fixed(), [14.0; 3]),
+    ] {
+        // Author the nearest provider, as an application does. This exercises
+        // package role propagation, not native preference publication.
+        laid.pump_widget(view(policy));
+        assert!(
+            laid.did_paint_last_frame(),
+            "policy publication must repaint"
+        );
+        let mut registry = FontRegistry::new();
+        let mut observed = [false; 4];
+        let mut nested_colors = [false; 4];
+        for command in laid.draw_ops() {
+            let DrawOp::Paragraph {
+                paragraph, color, ..
+            } = command.op
+            else {
+                continue;
+            };
+            let Some(index) = names.iter().position(|name| *name == paragraph.text()) else {
+                continue;
+            };
+            for run in paragraph.runs() {
+                let key = registry.prepare_run(&run).expect("painted face");
+                for glyph in run.placed_glyphs(key, (0.0, 0.0), 1.0) {
+                    assert_ne!(glyph.key.glyph_id(), 0, "actual theme glyph must exist");
+                    let wanted = if index < 3 {
+                        expected[index]
+                    } else {
+                        let color_index = [Color::BLACK, Color::RED, Color::GREEN, Color::BLUE]
+                            .iter()
+                            .position(|expected_color| {
+                                *expected_color == glyph.color.unwrap_or(color)
+                            })
+                            .expect("nested span color survives shaping");
+                        nested_colors[color_index] = true;
+                        [expected[0], expected[0], expected[2], 14.0][color_index]
+                    };
+                    assert_eq!(
+                        f64::from(glyph.key.size()),
+                        wanted,
+                        "painted role {}",
+                        names[index]
+                    );
+                    observed[index] = true;
+                }
+            }
+        }
+        assert_eq!(observed, [true; 4], "all theme text must reach paint");
+        assert_eq!(
+            nested_colors, [true; 4],
+            "all inherited and override spans must paint"
+        );
+        for (index, id) in ids.into_iter().enumerate() {
+            assert_eq!(
+                laid.find_text(names[index]),
+                Some(id),
+                "publication retains the render object"
+            );
+            let height = laid.size(id).height;
+            if expected == [14.0; 3] {
+                assert!(
+                    (height - original_heights[index]).abs() < 0.01,
+                    "removal restores authored geometry"
+                );
+            } else {
+                assert!(
+                    height > original_heights[index],
+                    "resolved sizes affect layout"
+                );
+            }
+        }
+    }
+}

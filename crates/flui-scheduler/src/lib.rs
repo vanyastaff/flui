@@ -172,11 +172,11 @@ pub use frame_telemetry::{
     FRAME_HISTORY_CAPACITY, FrameSnapshot, InputEpoch, InputEpochId, InputEpochs,
     MAX_COALESCED_INPUT_EPOCHS, PresentOutcome,
 };
-pub use post_frame::{OwnerFrame, OwnerFrameError, PostFrameHandle, PostFrameScheduleError};
+pub use post_frame::{
+    OwnerFrame, OwnerFrameError, PostFrameHandle, PostFrameScheduleError, PresentationFrameError,
+    PresentationFrameScope, PresentationScopeFactory,
+};
 pub use scheduler::execution::ExecutionError;
-/// The instant type the frame clock is stamped with. `std::time::Instant` on
-/// native, a `performance.now()` shim on wasm32 — re-exported so a binding can
-/// name `OwnerFrame::drive_frame`'s timestamp without depending on `web_time`.
 mod post_frame;
 
 mod completion_wake;
@@ -185,6 +185,9 @@ mod wake_delivery;
 #[cfg(test)]
 mod table_test;
 
+/// The instant type the frame clock is stamped with. `std::time::Instant` on
+/// native, a `performance.now()` shim on wasm32 — re-exported so a binding can
+/// name `OwnerFrame::drive_frame`'s timestamp without depending on `web_time`.
 pub use web_time::Instant;
 // Re-exports - Duration types
 pub use duration::{BudgetPercentage, FrameDuration, Microseconds, Milliseconds, Seconds};

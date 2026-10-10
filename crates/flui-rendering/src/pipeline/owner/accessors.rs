@@ -12,22 +12,98 @@ use flui_foundation::geometry::{Matrix4, Offset};
 use crate::{
     RenderUpdateImpact,
     constraints::{BoxConstraints, SliverConstraints, SliverGeometry},
-    pipeline::{dirty::DirtyNode, handle::DirtyKind, phase::PipelinePhase},
+    pipeline::{
+        dirty::DirtyNode,
+        handle::DirtyKind,
+        phase::{Idle, PipelinePhase},
+    },
     protocol::{BoxProtocol, MainAxisPosition, SliverProtocol},
     storage::RenderNode,
 };
 
-use super::{PipelineOwner, subtree_arena::ensure_stack};
+use super::{LayoutPremise, PipelineOwner, subtree_arena::ensure_stack};
+
+impl PipelineOwner<Idle> {
+    /// Withhold retained layout when its external input cannot progress.
+    /// A live layout invalidation makes the retained work runnable again.
+    #[doc(hidden)]
+    pub fn defer_layout_until_input(&mut self) {
+        self.scheduler.defer_layout_until_input();
+    }
+
+    /// Resume retained layout after its input becomes ready. The caller drives
+    /// the resumed attempt; this neither admits new input nor requests a wake.
+    #[doc(hidden)]
+    pub fn resume_retained_layout(&mut self) {
+        self.scheduler.resume_retained_layout();
+    }
+}
 
 // ============================================================================
 // Phase-agnostic accessors / setters / insertion
 // ============================================================================
 
 impl<Phase: PipelinePhase> PipelineOwner<Phase> {
+    /// Capture the accepted layout-input premise for a suspended segment.
+    /// Drain pending invalidations first: queued external requests become live
+    /// changes only after generation-validated replay.
+    #[doc(hidden)]
+    pub fn layout_premise(&self) -> LayoutPremise {
+        LayoutPremise {
+            owner: std::rc::Rc::clone(&self.relocation_owner_seal),
+            stamp: self.scheduler.layout_stamp(),
+        }
+    }
+
+    /// Whether this owner still accepts the captured layout-input premise.
+    /// Exhaustion permanently refuses compatibility rather than wrapping.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn accepts_layout_premise(&self, saved: &LayoutPremise) -> bool {
+        std::rc::Rc::ptr_eq(&self.relocation_owner_seal, &saved.owner)
+            && self.scheduler.layout_stamp().compatible(saved.stamp)
+    }
+
     /// Returns the unique identifier for this pipeline owner.
     #[inline]
     pub fn id(&self) -> u64 {
         self.id
+    }
+
+    /// Returns this presentation's current numeric text-sizing authority.
+    #[inline]
+    pub fn text_sizing(&self) -> &flui_painting::TextSizing {
+        &self.text_sizing
+    }
+
+    /// Publish numeric text sizing for this presentation only.
+    /// Shared shaping and font resources retain no sizing authority.
+    /// Commit every measured node before returning an owned wake. Deliver it
+    /// after releasing the owner and any other publication guards.
+    #[must_use = "deliver the deferred wake outside the pipeline loan"]
+    pub fn set_text_sizing(
+        &mut self,
+        sizing: flui_painting::TextSizing,
+    ) -> Option<crate::pipeline::DeferredVisualUpdate> {
+        let changed = self.text_sizing != sizing;
+        // An attempt view can change while the capture's geometry stays equal.
+        self.text_sizing = sizing;
+        if !changed {
+            return self
+                .has_dirty_nodes()
+                .then(|| self.notifier.read().deferred_visual_update());
+        }
+        let measured = self.text_measurers.take();
+        for id in measured {
+            if self.render_tree.get(id).is_some() {
+                self.scheduler
+                    .commit_needs_layout(&mut self.render_tree, id, &mut |visited| {
+                        self.layout_poison.unpoison(visited);
+                    });
+            }
+        }
+        self.has_dirty_nodes()
+            .then(|| self.notifier.read().deferred_visual_update())
     }
 
     /// Sets the callback for when a visual update is needed.
@@ -206,6 +282,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 
     /// Sets the root render object ID.
     pub fn set_root_id(&mut self, id: Option<RenderId>) {
+        if id != self.root_id {
+            self.scheduler.invalidate_layout_premise();
+        }
         self.root_id = id;
     }
 

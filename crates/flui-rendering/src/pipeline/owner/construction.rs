@@ -65,6 +65,7 @@ impl PipelineOwner<Idle> {
             // applies whatever changed, with nothing recorded to lay out.
             fonts_seen: text.fonts_generation().unwrap_or(0),
             text_measurers: crate::pipeline::TextMeasurers::default(),
+            text_sizing: flui_painting::TextSizing::default(),
             text,
             id: PIPELINE_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
             relocation_owner_seal: std::rc::Rc::new(super::relocation::RelocationOwnerSeal),

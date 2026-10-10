@@ -63,6 +63,31 @@ note: required by a bound in `require_thread_spawnable`
  5 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
    |                                ^^^^ required by this bound in `require_thread_spawnable`
 
+error[E0277]: `std::rc::Weak<flui_scheduler::post_frame::PresentationScopeState>` cannot be sent between threads safely
+  --> tests/ui/thread_boundary/owner_state_stays_on_its_thread.rs:16:30
+   |
+16 |     require_thread_spawnable(post_frame);
+   |     ------------------------ ^^^^^^^^^^ `std::rc::Weak<flui_scheduler::post_frame::PresentationScopeState>` cannot be sent between threads safely
+   |     |
+   |     required by a bound introduced by this call
+   |
+   = help: within `PostFrameHandle`, the trait `Send` is not implemented for `std::rc::Weak<flui_scheduler::post_frame::PresentationScopeState>`
+note: required because it appears within the type `Option<std::rc::Weak<flui_scheduler::post_frame::PresentationScopeState>>`
+  --> $RUST/core/src/option.rs
+   |
+   | pub enum Option<T> {
+   |          ^^^^^^
+note: required because it appears within the type `PostFrameHandle`
+  --> crates/flui-scheduler/src/post_frame.rs
+   |
+   | pub struct PostFrameHandle {
+   |            ^^^^^^^^^^^^^^^
+note: required by a bound in `require_thread_spawnable`
+  --> tests/ui/thread_boundary/owner_state_stays_on_its_thread.rs:5:32
+   |
+ 5 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+   |                                ^^^^ required by this bound in `require_thread_spawnable`
+
 error[E0277]: `Rc<flui::flui_animation::run_future::AnimationRunFutureInner>` cannot be sent between threads safely
   --> tests/ui/thread_boundary/owner_state_stays_on_its_thread.rs:17:30
    |

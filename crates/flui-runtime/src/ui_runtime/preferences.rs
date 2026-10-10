@@ -168,31 +168,29 @@ fn refresh(
     };
     // Commit retry debt before native/user code; never lend the projection cell
     // or the preference snapshot's RefCell through this boundary.
-    let query = catch_unwind(AssertUnwindSafe(|| {
-        presentation
-            .with_window(|window| window.gesture_geometry())
-            .unwrap_or(Err(PreferenceQueryError::Unavailable))
-    }));
-    let mut first_failure = None;
+    let mut recovery = flui_foundation::panic::PanicRecovery::new();
+    let mut query = None;
+    recovery.run(|| {
+        query = Some(
+            presentation
+                .with_window(|window| window.gesture_geometry())
+                .unwrap_or(Err(PreferenceQueryError::Unavailable)),
+        );
+    });
     let mut diagnostic = None;
     let geometry = {
         let mut state = presentation.gesture_geometry.borrow_mut();
         if !Rc::ptr_eq(&state.barrier, &attempt.barrier) || presentation.closing_requested.get() {
             drop(state);
-            if let Err(failure) = query {
-                resume_unwind(failure);
-            }
+            recovery.finish();
             return;
         }
-        match query {
-            Ok(query) => {
-                diagnostic = state.accept(
-                    presentation.gestures().default_settings(),
-                    values.gestures(),
-                    query,
-                );
-            }
-            Err(failure) => first_failure = Some(failure),
+        if let Some(query) = query {
+            diagnostic = state.accept(
+                presentation.gestures().default_settings(),
+                values.gestures(),
+                query,
+            );
         }
         state.geometry()
     };
@@ -207,14 +205,8 @@ fn refresh(
         .wheel_preferences
         .replace(values.wheel().clone());
     if let Some(diagnostic) = diagnostic {
-        let failure = catch_unwind(AssertUnwindSafe(
+        recovery.run(
             || tracing::warn!(%diagnostic, "gesture preference projection retained its fallback"),
-        ))
-        .err();
-        crate::lifecycle_state::preserve_first_lifecycle_panic(
-            &mut first_failure,
-            failure,
-            "gesture preference diagnostic",
         );
     }
     let current = Rc::ptr_eq(
@@ -222,9 +214,21 @@ fn refresh(
         &attempt.barrier,
     ) && !presentation.closing_requested.get();
     if barrier && current {
-        let failure = catch_unwind(AssertUnwindSafe(|| {
-            presentation.media_query.update(|data| {
-                data.text_scale_factor = values.text_scale().unwrap_or(1.0);
+        recovery.run_with(|scope| {
+            let sizing = presentation
+                .text_preparation
+                .borrow()
+                .installed_policy()
+                .unwrap_or_else(|| {
+                    flui_painting::TextSizing::linear(values.text_scale().unwrap_or(1.0))
+                        .expect("BUG: accepted system preferences contain a valid text scale")
+                });
+            let visual_update = presentation
+                .renderer()
+                .root_pipeline_owner()
+                .with_mut(|owner| owner.set_text_sizing(sizing.clone()));
+            let rebuild = presentation.media_query.commit(|data| {
+                data.text_sizing = sizing;
                 data.font_weight_adjustment = match values.text_weight() {
                     Some(flui_platform_api::TextWeightPreference::Bold) => 300,
                     Some(flui_platform_api::TextWeightPreference::Adjustment(value)) => value.get(),
@@ -233,17 +237,18 @@ fn refresh(
                 data.high_contrast = values.high_contrast().unwrap_or(false);
                 data.preferred_locales = values.locales().map(Into::into);
             });
-        }))
-        .err();
-        crate::lifecycle_state::preserve_first_lifecycle_panic(
-            &mut first_failure,
-            failure,
-            "system preferences publication",
-        );
+            if let Some(visual_update) = visual_update {
+                visual_update.notify_with(scope);
+            }
+            if let Some(handle) = rebuild.as_ref() {
+                scope.run(|| handle.schedule(flui_view::RebuildReason::StateChange));
+            }
+            scope.retire(rebuild);
+        });
     }
     // A slow failed getter/diagnostic must not return an already overdue retry.
     // This pacing is separate from the structural per-operation turn budget.
-    let failure = catch_unwind(AssertUnwindSafe(|| {
+    recovery.run(|| {
         let completed = MonotonicClock::now(presentation.clock().source());
         let mut state = presentation.gesture_geometry.borrow_mut();
         if let Some(debt) = state
@@ -253,16 +258,8 @@ fn refresh(
         {
             debt.deadline = debt.deadline.max(completed + debt.delay);
         }
-    }))
-    .err();
-    crate::lifecycle_state::preserve_first_lifecycle_panic(
-        &mut first_failure,
-        failure,
-        "gesture geometry retry pacing",
-    );
-    if let Some(failure) = first_failure {
-        resume_unwind(failure);
-    }
+    });
+    recovery.finish();
 }
 
 impl UiRuntime {

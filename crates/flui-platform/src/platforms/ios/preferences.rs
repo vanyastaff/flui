@@ -13,13 +13,14 @@ use objc2::{MainThreadMarker, rc::Retained, runtime::ProtocolObject};
 use objc2_foundation::{NSNotification, NSNotificationCenter, NSObjectProtocol};
 use objc2_ui_kit::{
     UIAccessibilityBoldTextStatusDidChangeNotification, UIAccessibilityIsBoldTextEnabled,
+    UIContentSizeCategoryDidChangeNotification,
 };
 
 use crate::{PlatformError, shared::owner_signal::OwnerSignal};
 
 pub(super) struct Preferences {
     center: Retained<NSNotificationCenter>,
-    observer: RefCell<Option<Retained<ProtocolObject<dyn NSObjectProtocol>>>>,
+    observers: RefCell<Vec<Retained<ProtocolObject<dyn NSObjectProtocol>>>>,
     active: Arc<AtomicBool>,
 }
 
@@ -46,17 +47,20 @@ impl Preferences {
         // queue. The block captures only Send+Sync atomics and a weak signal;
         // it accepts the supplied notification without dereferencing it. The
         // retained token is removed by this owner before its callback retires.
-        let observer = unsafe {
-            center.addObserverForName_object_queue_usingBlock(
-                Some(UIAccessibilityBoldTextStatusDidChangeNotification),
-                None,
-                None,
-                &callback,
-            )
+        let observers = unsafe {
+            [
+                UIAccessibilityBoldTextStatusDidChangeNotification,
+                UIContentSizeCategoryDidChangeNotification,
+            ]
+            .into_iter()
+            .map(|name| {
+                center.addObserverForName_object_queue_usingBlock(Some(name), None, None, &callback)
+            })
+            .collect()
         };
         Self {
             center,
-            observer: RefCell::new(Some(observer)),
+            observers: RefCell::new(observers),
             active,
         }
     }
@@ -85,8 +89,8 @@ impl Preferences {
 
     pub(super) fn close(&self) {
         self.active.store(false, Ordering::Release);
-        let observer = self.observer.borrow_mut().take();
-        if let Some(observer) = observer {
+        let observers = std::mem::take(&mut *self.observers.borrow_mut());
+        for observer in observers {
             let observer_ref: &ProtocolObject<dyn NSObjectProtocol> = &observer;
             // SAFETY: this is the exact retained token returned by this center's
             // registration. Admission is closed and no borrow survives removal;

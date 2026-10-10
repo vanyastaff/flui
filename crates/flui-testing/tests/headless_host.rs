@@ -6,7 +6,7 @@ use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use flui_foundation::geometry::Size;
@@ -171,38 +171,45 @@ fn assert_progress_after_unwind(ui_runtime: &mut HeadlessHost) -> flui_runtime::
     outcome
 }
 
-/// A panic that unwinds out of the pump after the UI runtime contained a failure
-/// in the same pump does not replace it: the contained failure is raised.
-/// Once the cause is gone, the UI runtime frames again.
-///
-/// Fails against a driver that resumes the later unwind (the post-frame
-/// callback's text would be raised) or that loses the report when the pump
-/// unwinds.
+/// An incomplete presentation retains its completion callbacks. Repair makes
+/// them eligible; their later failure belongs to that repaired pump, and does
+/// not replay the original pipeline failure or prevent subsequent completion.
 #[test]
-fn a_contained_failure_stays_authoritative_over_a_later_unwind() {
+fn an_incomplete_frame_retains_callbacks_until_repair_and_recovers_after_their_unwind() {
     let (mut ui_runtime, armed) = tripwire_ui_runtime(true);
-    schedule_post_frame_panic(&ui_runtime);
+    let invocations = Arc::new(AtomicUsize::new(0));
+    let called = Arc::clone(&invocations);
+    ui_runtime
+        .post_frame_handle()
+        .schedule(move |_timing| {
+            called.fetch_add(1, Ordering::SeqCst);
+            panic!("post-frame callback panicked");
+        })
+        .expect("the presentation's completion lane is alive");
 
     let raised = catch_unwind(AssertUnwindSafe(|| ui_runtime.pump(Duration::ZERO)))
-        .expect_err("the pump fails twice and raises once");
+        .expect_err("the incomplete pump raises its pipeline failure");
 
     let text = panic_text(&*raised);
     assert!(
         text.contains("frame pipeline failed"),
-        "the first failure of the pump is raised, got {text:?}"
+        "the incomplete pump's failure is raised, got {text:?}"
     );
     assert!(
         !text.contains("post-frame callback panicked"),
-        "the later unwind must not replace the first failure, got {text:?}"
+        "an incomplete presentation does not run completion callbacks, got {text:?}"
     );
+    assert_eq!(invocations.load(Ordering::SeqCst), 0);
+    assert_eq!(ui_runtime.sink().submits(), 0);
 
     armed.store(false, Ordering::SeqCst);
-    let outcome = assert_progress_after_unwind(&mut ui_runtime);
-    assert!(
-        outcome.presented(),
-        "the tripwire, still waiting for paint, presents once disarmed"
-    );
+    let raised = catch_unwind(AssertUnwindSafe(|| ui_runtime.pump(Duration::ZERO)))
+        .expect_err("repair delivers the retained callback's own failure");
+    assert_eq!(panic_text(&*raised), "post-frame callback panicked");
+    assert_eq!(invocations.load(Ordering::SeqCst), 1);
     assert_eq!(ui_runtime.sink().submits(), 1);
+    let _ = assert_progress_after_unwind(&mut ui_runtime);
+    assert_eq!(invocations.load(Ordering::SeqCst), 1);
 }
 
 /// With nothing contained, a panic that unwinds out of the pump is raised as

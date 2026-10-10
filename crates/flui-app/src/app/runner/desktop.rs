@@ -641,15 +641,14 @@ impl DesktopFrameDriver {
         // the frame (the frame runs anyway, see
         // `pump_with_device_recovery`'s doc for why), and AFTER when
         // the wgpu device-lost callback fired mid-frame.
-        let outcome = if let Some(mut lane) = lane_frame.try_lock() {
-            pump_with_device_recovery(ui_runtime, &mut *lane, device_recovery_backoff, now)
+        let outcome = if let Some(outcome) =
+            pump_with_device_recovery(ui_runtime, lane_frame, device_recovery_backoff, now)
+        {
+            outcome
         } else {
-            // A reentrant frame dispatch that slipped past the
-            // empty-slot drain protection upstream: skip this nested
-            // frame rather than deadlock mid-pump; the outer dispatch
-            // still completes its own. The pacing tail below still
-            // arms its fallback for it.
-            tracing::error!("frame skipped: raster lane already held by an outer frame dispatch");
+            // The busy lane refused admission without consuming frame work.
+            // The recovery helper retains demand; this tail paces its retry.
+            tracing::error!("frame skipped: raster lane busy at frame admission");
             FrameRecoveryOutcome {
                 presented: false,
                 just_failed: false,

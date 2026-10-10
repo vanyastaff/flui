@@ -23,6 +23,8 @@
 //! dead runtime are droppable by identity, not by convention.
 
 pub(crate) mod preferences;
+pub(crate) mod text_preparation;
+pub use text_preparation::{TextSizingSettlement, TextSizingWork};
 mod presentation_factory;
 pub use presentation_factory::PresentationFactory;
 mod presentation_lifecycle;

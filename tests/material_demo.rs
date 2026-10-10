@@ -177,7 +177,7 @@ impl MountedDemo {
         );
     }
 
-    /// The unique `RenderParagraph` node whose plain-text content is `text`.
+    /// The unique paragraph or icon whose plain-text content is `text`.
     fn find_text(&self, text: &str) -> Option<RenderId> {
         self.pipeline_owner.with(|owner| {
             let mut found = None;
@@ -185,13 +185,13 @@ impl MountedDemo {
                 let Some(diagnostics) = owner.debug_node_diagnostics(id) else {
                     continue;
                 };
-                if diagnostics.name() != Some("RenderParagraph") {
+                if !matches!(diagnostics.name(), Some("RenderParagraph" | "RenderIcon")) {
                     continue;
                 }
                 if diagnostics.get_property("text") == Some(text) {
                     assert!(
                         found.is_none(),
-                        "multiple RenderParagraph nodes contain {text:?}"
+                        "multiple text-producing render nodes contain {text:?}"
                     );
                     found = Some(id);
                 }

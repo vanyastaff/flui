@@ -98,6 +98,10 @@ fn component_contracts() {
 fn theme_and_color_resolution() {
     common::run_cases(&[
         (
+            "theme::mounted text roles paint distinct numeric sizing answers",
+            theme::mounted_text_roles_paint_distinct_numeric_sizing_answers,
+        ),
+        (
             "colors::authored and nested colors ignore outer contrast",
             colors::authored_and_nested_colors_ignore_outer_contrast,
         ),

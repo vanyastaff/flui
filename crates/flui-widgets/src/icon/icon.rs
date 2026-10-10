@@ -1,28 +1,27 @@
 //! [`Icon`] — draws a single glyph from an icon font.
 
+use flui_objects::RenderIcon;
 use flui_painting::styling::Color;
-use flui_painting::typography::{FontVariation, TextDirection, TextSpan, TextStyle};
+use flui_painting::typography::{FontVariation, TextStyle};
+use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::StatelessView;
-use flui_view::{BuildContext, IntoView};
+use flui_view::{BuildContext, IntoView, RenderView, impl_render_view};
 
-use crate::MediaQuery;
 use crate::icon::{IconData, IconTheme, IconThemeData};
-use crate::layout::{Center, SizedBox};
-use crate::text::RichText;
+use crate::{MediaQuery, Semantics};
 
 /// A graphical icon drawn from a glyph in an icon font, described by an
 /// [`IconData`].
 ///
 /// `build` resolves the ambient
-/// [`IconTheme`], picks an effective size, and — when an icon is set —
-/// composes `SizedBox::square(size) → Center → RichText(TextSpan(codepoint))`.
+/// [`IconTheme`] and supplies authored inputs to a leaf [`RenderIcon`].
 /// The box and glyph keep that logical size by default. With
 /// [`IconThemeData::apply_text_scaling`] enabled, both use the nearest
-/// [`MediaQuery`]'s text scale once.
+/// [`MediaQuery`]'s text sizing policy once, during measurement.
 ///
 /// # Glyphs
 ///
-/// The codepoint reaches a [`RichText`] / `RenderParagraph`, and the bounded
+/// The codepoint reaches [`RenderIcon`], and the bounded
 /// `size × size` box is exact and font-independent. The glyph comes from
 /// [`IconData::font_family`]. With its default `bundled-fonts` feature,
 /// `flui-painting` embeds the Material Icons (family `"Material Icons"`) and
@@ -40,9 +39,7 @@ use crate::text::RichText;
 ///   composition step not wired into this build path yet.
 /// - **Ambient `Directionality`**: `Icon` does not read
 ///   `Directionality::of` yet, so it always renders left-to-right
-///   ([`TextDirection::Ltr`]).
-/// - **`Semantics`/`ExcludeSemantics`** wrapping (`semantic_label` is stored
-///   but not yet surfaced to the accessibility tree).
+///   ([`flui_painting::typography::TextDirection::Ltr`]).
 /// - **`IconThemeData::opacity`** folding into the resolved color.
 /// - Font weight, blend mode, and per-call shadow/text-direction
 ///   overrides are not supported yet.
@@ -89,9 +86,8 @@ impl Icon {
 
     /// Set the accessibility label announced for this icon.
     ///
-    /// Stored on the widget even though the `Semantics` wrapper that would
-    /// surface it to the accessibility tree is not wired yet (see the type
-    /// docs).
+    /// A labelled icon contributes image semantics, including when no glyph is
+    /// set. An unlabelled icon is decorative and contributes no glyph label.
     #[must_use]
     pub fn semantic_label(mut self, semantic_label: impl Into<String>) -> Self {
         self.semantic_label = Some(semantic_label.into());
@@ -119,9 +115,7 @@ impl Icon {
     /// Build the [`TextStyle`] `icon`'s glyph paints with, at the resolved
     /// `size`, against the resolved ambient `theme`.
     ///
-    /// Split out from `build` so the style-construction logic (`font_size`,
-    /// `height`, color resolution, font-variation axes) is unit-testable
-    /// without a live [`BuildContext`].
+    /// Numeric growth is deferred to the render object; this retains the authored size.
     fn style_for(&self, icon: &IconData, size: f64, theme: &IconThemeData) -> TextStyle {
         TextStyle {
             color: self.color.or(theme.color),
@@ -140,31 +134,62 @@ impl StatelessView for Icon {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         let theme = IconTheme::of(ctx);
         let size = self.size.or(theme.size).unwrap_or(24.0);
-        let size = if theme.apply_text_scaling.unwrap_or(false) {
-            size * MediaQuery::text_scale_factor_of(ctx).unwrap_or(1.0)
-        } else {
-            size
+        let icon = ResolvedIcon {
+            size,
+            glyph: self
+                .data
+                .as_ref()
+                .and_then(|icon| char::from_u32(icon.code_point)),
+            style: self.data.as_ref().map_or_else(TextStyle::default, |icon| {
+                self.style_for(icon, size, &theme)
+            }),
+            sizing: if theme.apply_text_scaling.unwrap_or(false) {
+                MediaQuery::text_sizing_of(ctx)
+            } else {
+                Some(flui_painting::TextSizing::fixed())
+            },
+            weight_adjustment: MediaQuery::font_weight_adjustment_of(ctx).unwrap_or(0),
         };
-
-        // A missing `icon` renders as empty `size × size`
-        // space. Same shape for a codepoint that isn't a valid Unicode scalar
-        // value (see `IconData::code_point_string`) — there is nothing to
-        // shape either way.
-        let Some(icon) = self.data.as_ref() else {
-            return SizedBox::square(size);
-        };
-        let Some(code_point_string) = icon.code_point_string() else {
-            return SizedBox::square(size);
-        };
-
-        let style = self.style_for(icon, size, &theme);
-
-        // Ambient `Directionality` is not read yet (see type docs) — a
-        // faithful port would resolve `Directionality::of(ctx)` here.
-        let rich_text = RichText::new(TextSpan::styled(code_point_string, style))
-            .direction(TextDirection::Ltr)
-            .unscaled();
-
-        SizedBox::square(size).child(Center::new().child(rich_text))
+        let mut semantics = Semantics::new();
+        if let Some(label) = self.semantic_label.as_ref() {
+            semantics = semantics.label(label.clone()).image(true);
+        }
+        semantics.child(icon)
     }
 }
+
+#[derive(Clone, Debug)]
+struct ResolvedIcon {
+    size: f64,
+    glyph: Option<char>,
+    style: TextStyle,
+    sizing: Option<flui_painting::TextSizing>,
+    weight_adjustment: i32,
+}
+
+impl RenderView for ResolvedIcon {
+    type Protocol = BoxProtocol;
+    type RenderObject = RenderIcon;
+
+    fn create_render_object(&self, _ctx: &flui_view::RenderObjectContext<'_>) -> RenderIcon {
+        RenderIcon::new(self.size, self.glyph, self.style.clone())
+            .with_text_sizing(self.sizing.clone())
+            .with_font_weight_adjustment(self.weight_adjustment)
+    }
+
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        object: &mut RenderIcon,
+    ) -> flui_rendering::RenderUpdateImpact {
+        object.update(
+            self.size,
+            self.glyph,
+            self.style.clone(),
+            self.sizing.clone(),
+            self.weight_adjustment,
+        )
+    }
+}
+
+impl_render_view!(ResolvedIcon);

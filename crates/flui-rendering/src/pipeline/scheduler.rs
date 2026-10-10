@@ -43,6 +43,28 @@ use super::{
 // PhaseKind — the three phase flags DirtyTracker tracks
 // ============================================================================
 
+/// Accepted layout-input changes, independent of queued-work transport.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum LayoutStamp {
+    Tracked(u64),
+    Untrackable,
+}
+
+impl LayoutStamp {
+    fn advance(&mut self) {
+        *self = match *self {
+            Self::Tracked(value) => value
+                .checked_add(1)
+                .map_or(Self::Untrackable, Self::Tracked),
+            Self::Untrackable => Self::Untrackable,
+        };
+    }
+
+    pub(super) fn compatible(self, saved: Self) -> bool {
+        matches!((self, saved), (Self::Tracked(now), Self::Tracked(previous)) if now == previous)
+    }
+}
+
 /// Identifies one of the three pipeline phases that set a `debug_doing_*`
 /// flag.
 ///
@@ -103,6 +125,9 @@ pub(super) struct DirtyTracker {
     /// the last, usually empty, pass; ADR-0074 §8 telemetry).
     layout_drained_total: u64,
 
+    /// A continuation's premise changes on admission, even when queues dedup.
+    layout_stamp: LayoutStamp,
+
     /// Rejected layout retains its work until a live layout invalidation.
     blocked_layout: Option<RenderId>,
 
@@ -122,6 +147,7 @@ impl DirtyTracker {
             debug_doing_paint: false,
             debug_doing_semantics: false,
             layout_drained_total: 0,
+            layout_stamp: LayoutStamp::Tracked(0),
             blocked_layout: None,
             notifier,
         }
@@ -199,6 +225,18 @@ impl DirtyTracker {
         id: RenderId,
         on_invalidated: &mut dyn FnMut(RenderId),
     ) {
+        if self.commit_needs_layout(tree, id, on_invalidated) {
+            self.notifier.read().fire_need_visual_update();
+        }
+    }
+
+    /// Commit the complete invalidation walk without entering user code.
+    pub(super) fn commit_needs_layout(
+        &mut self,
+        tree: &mut RenderTree,
+        id: RenderId,
+        on_invalidated: &mut dyn FnMut(RenderId),
+    ) -> bool {
         let mut current = id;
         loop {
             // Snapshot the per-node decision under a short-lived borrow so
@@ -207,8 +245,11 @@ impl DirtyTracker {
             let step = {
                 let Some(node) = tree.get_mut(current) else {
                     // Stale reference (e.g. node removed mid-frame). Stop.
-                    return;
+                    return false;
                 };
+                if current == id {
+                    self.invalidate_layout_premise();
+                }
                 // Idempotent flag set — the AtomicRenderFlags fetch-or is a
                 // no-op when the bit is already set. The walk does NOT
                 // short-circuit on "already marked": even with the
@@ -241,14 +282,7 @@ impl DirtyTracker {
                 // dedup check so multiple marks-in-same-frame don't push
                 // duplicate entries.
                 let resumed = self.blocked_layout.take().is_some();
-                if self.dirty.needs_layout.push(DirtyNode::new(current, depth)) || resumed {
-                    // Wake the platform: an idle event loop must produce a
-                    // frame for this invalidation.
-                    // Fired only on a NEW boundary entry — an existing entry
-                    // means a frame is already scheduled.
-                    self.notifier.read().fire_need_visual_update();
-                }
-                return;
+                return self.dirty.needs_layout.push(DirtyNode::new(current, depth)) || resumed;
             }
             // `parent.is_none()` is folded into `is_boundary` above, so
             // reaching this branch guarantees `Some(_)`.
@@ -320,6 +354,7 @@ impl DirtyTracker {
     /// is true (mid-phase routing); otherwise into `dirty.needs_layout`.
     /// Fires the wake only on a new entry.
     pub(super) fn add_node_needing_layout(&mut self, node_id: RenderId, depth: usize) {
+        self.invalidate_layout_premise();
         let resumed = self.blocked_layout.take().is_some();
         let target = if self.debug_doing_layout {
             &mut self.mid_layout_marks.needs_layout
@@ -770,6 +805,29 @@ impl DirtyTracker {
         self.blocked_layout.is_some()
     }
 
+    pub(super) fn layout_stamp(&self) -> LayoutStamp {
+        self.layout_stamp
+    }
+
+    pub(super) fn invalidate_layout_premise(&mut self) {
+        self.layout_stamp.advance();
+    }
+
+    /// Resume existing debt after readiness, without admitting new authored input.
+    pub(super) fn resume_retained_layout(&mut self) {
+        self.blocked_layout = None;
+    }
+
+    /// Retain queued layout without repeatedly measuring unavailable input.
+    pub(super) fn defer_layout_until_input(&mut self) {
+        self.blocked_layout = self
+            .dirty
+            .needs_layout
+            .as_slice()
+            .first()
+            .map(|node| node.id);
+    }
+
     /// Dirty layout entries drained by every `run_layout` so far.
     pub(super) fn layout_drained_total(&self) -> u64 {
         self.layout_drained_total
@@ -918,6 +976,10 @@ mod tests {
                 "mid_phase_layout_marks_route_to_side_queue_then_drain_back",
                 mid_phase_layout_marks_route_to_side_queue_then_drain_back,
             ),
+            (
+                "exhausted_layout_premise_keeps_work_deliverable",
+                exhausted_layout_premise_keeps_work_deliverable,
+            ),
         ];
         for &(name, case) in cases {
             if let Err(payload) = std::panic::catch_unwind(case) {
@@ -925,6 +987,39 @@ mod tests {
                 std::panic::resume_unwind(payload);
             }
         }
+    }
+
+    // A public consumer cannot reach the terminal counter in a finite test.
+    // Only its initial stamp is seeded privately; real admission and transport
+    // paths must continue delivering work while compatibility stays refused.
+    fn exhausted_layout_premise_keeps_work_deliverable() {
+        let (mut tracker, _) = super::DirtyTracker::new_test_pair();
+        tracker.layout_stamp = super::LayoutStamp::Tracked(u64::MAX - 1);
+        let first = flui_foundation::RenderId::new(1);
+        let second = flui_foundation::RenderId::new(2);
+        tracker.add_node_needing_layout(first, 0);
+        let last_tracked = tracker.layout_stamp();
+        assert!(tracker.layout_stamp().compatible(last_tracked));
+        tracker.add_node_needing_layout(first, 0);
+        let exhausted = tracker.layout_stamp();
+        assert!(!tracker.layout_stamp().compatible(exhausted));
+        assert!(!tracker.layout_stamp().compatible(last_tracked));
+        let batch = tracker.take_layout_batch_shallow_first();
+        assert_eq!(
+            batch.len(),
+            1,
+            "duplicate admission keeps one deliverable root"
+        );
+        tracker.retain_layout_batch(&batch, true);
+        tracker.resume_retained_layout();
+        assert!(!tracker.layout_waits_for_input());
+        assert!(!tracker.layout_stamp().compatible(exhausted));
+        tracker.add_node_needing_layout(second, 1);
+        let delivered = tracker.take_layout_batch_shallow_first();
+        assert_eq!(delivered.len(), 2);
+        assert_eq!(delivered[0].id, first);
+        assert_eq!(delivered[1].id, second);
+        assert!(!tracker.layout_stamp().compatible(tracker.layout_stamp()));
     }
 
     /// A repaint raised mid-paint for a boundary ALREADY queued as an update

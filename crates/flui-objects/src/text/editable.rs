@@ -155,9 +155,31 @@ impl RenderEditable {
 
     /// Updates text sizing and invalidates glyph, selection and caret geometry.
     pub fn set_text_scale_factor(&mut self, factor: f64) -> flui_rendering::RenderUpdateImpact {
-        let previous = self.painter.text_scale_factor();
+        let previous = self.painter.text_sizing().cloned();
         self.painter.set_text_scale_factor(factor);
-        if self.painter.text_scale_factor() == previous {
+        if self.painter.text_sizing() == previous.as_ref() {
+            flui_rendering::RenderUpdateImpact::NONE
+        } else {
+            flui_rendering::RenderUpdateImpact::LAYOUT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS
+        }
+    }
+
+    /// Replace the inherited sizing authority, or restore it with `None`.
+    #[must_use]
+    pub fn with_text_sizing(mut self, sizing: Option<flui_painting::TextSizing>) -> Self {
+        self.painter.set_text_sizing(sizing);
+        self
+    }
+
+    /// Update text, caret and accessibility geometry with the selected authority.
+    pub fn set_text_sizing(
+        &mut self,
+        sizing: Option<flui_painting::TextSizing>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        let previous = self.painter.text_sizing().cloned();
+        self.painter.set_text_sizing(sizing);
+        if self.painter.text_sizing() == previous.as_ref() {
             flui_rendering::RenderUpdateImpact::NONE
         } else {
             flui_rendering::RenderUpdateImpact::LAYOUT
@@ -706,7 +728,9 @@ impl RenderBox for RenderEditable {
     ) -> RenderResult<Size> {
         let constraints = *ctx.constraints();
         let (min_width, max_width) = self.text_width_constraints(&constraints);
-        self.painter.layout(&mut ctx.text(), min_width, max_width)?;
+        ctx.text()?
+            .measurement()
+            .layout(&mut self.painter, min_width, max_width)?;
         let size = self.size_for_text(&constraints, self.painter.size());
         let caret_position =
             TextPosition::downstream(self.safe_caret_offset(self.caret_byte_offset));
@@ -732,9 +756,10 @@ impl RenderBox for RenderEditable {
         ctx: &mut BoxDryLayoutCtx<'_>,
     ) -> RenderResult<Size> {
         let (min_width, max_width) = self.text_width_constraints(&constraints);
-        let text_size = self
-            .painter
-            .dry_size(&mut ctx.text(), min_width, max_width)?;
+        let text_size = ctx
+            .text()?
+            .measurement()
+            .dry_size(&self.painter, min_width, max_width)?;
         Ok(self.size_for_text(&constraints, text_size))
     }
 
@@ -749,9 +774,12 @@ impl RenderBox for RenderEditable {
             TextBaseline::Alphabetic => PainterBaseline::Alphabetic,
             TextBaseline::Ideographic => PainterBaseline::Ideographic,
         };
-        Ok(self
-            .painter
-            .dry_baseline(&mut ctx.text(), min_width, max_width, painter_baseline)?)
+        Ok(ctx.text()?.measurement().dry_baseline(
+            &self.painter,
+            min_width,
+            max_width,
+            painter_baseline,
+        )?)
     }
 
     fn compute_min_intrinsic_width(
@@ -759,7 +787,11 @@ impl RenderBox for RenderEditable {
         _height: f64,
         ctx: &mut BoxIntrinsicsCtx<'_>,
     ) -> RenderResult<f64> {
-        Ok(self.painter.min_intrinsic_width(&mut ctx.text())? + self.caret_margin())
+        Ok(ctx
+            .text()?
+            .measurement()
+            .min_intrinsic_width(&self.painter)?
+            + self.caret_margin())
     }
 
     fn compute_max_intrinsic_width(
@@ -767,7 +799,11 @@ impl RenderBox for RenderEditable {
         _height: f64,
         ctx: &mut BoxIntrinsicsCtx<'_>,
     ) -> RenderResult<f64> {
-        Ok(self.painter.max_intrinsic_width(&mut ctx.text())? + self.caret_margin())
+        Ok(ctx
+            .text()?
+            .measurement()
+            .max_intrinsic_width(&self.painter)?
+            + self.caret_margin())
     }
 
     fn compute_min_intrinsic_height(
@@ -775,9 +811,10 @@ impl RenderBox for RenderEditable {
         width: f64,
         ctx: &mut BoxIntrinsicsCtx<'_>,
     ) -> RenderResult<f64> {
-        Ok(self
-            .painter
-            .intrinsic_height(&mut ctx.text(), self.intrinsic_text_width(width))?
+        Ok(ctx
+            .text()?
+            .measurement()
+            .intrinsic_height(&self.painter, self.intrinsic_text_width(width))?
             .max(self.caret_height.unwrap_or(0.0)))
     }
 
@@ -786,9 +823,10 @@ impl RenderBox for RenderEditable {
         width: f64,
         ctx: &mut BoxIntrinsicsCtx<'_>,
     ) -> RenderResult<f64> {
-        Ok(self
-            .painter
-            .intrinsic_height(&mut ctx.text(), self.intrinsic_text_width(width))?
+        Ok(ctx
+            .text()?
+            .measurement()
+            .intrinsic_height(&self.painter, self.intrinsic_text_width(width))?
             .max(self.caret_height.unwrap_or(0.0)))
     }
 

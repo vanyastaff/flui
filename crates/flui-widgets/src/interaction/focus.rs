@@ -1005,7 +1005,7 @@ impl ViewState<Focus> for FocusState {
 /// Wire `node`'s rect to `anchor`'s render node: measured lazily at traversal
 /// time against committed layout — `box_size` + `transform_to` the render
 /// root, the `HeroHandle::bounding_box_in` shape. `None` (fall back to the
-/// stored rect) while unmounted or before first layout.
+/// stored rect) while unmounted, checked out, or awaiting complete layout.
 pub fn install_rect_provider(
     node: &Rc<FocusNode>,
     anchor: &SubtreeAnchor,
@@ -1016,12 +1016,14 @@ pub fn install_rect_provider(
     let provider: flui_interaction::RectProvider = Rc::new(move || {
         let render_id = anchor.get()?;
         let owner = owner.as_ref()?;
-        owner.with(|owner| {
-            let size = owner.box_size(render_id)?;
-            let root = owner.root_id()?;
-            let transform = owner.transform_to(render_id, root)?;
-            Some(transform.transform_rect(&Rect::from_ltwh(0.0, 0.0, size.width, size.height)))
-        })
+        owner
+            .try_with_layout(|owner| {
+                let size = owner.box_size(render_id)?;
+                let root = owner.root_id()?;
+                let transform = owner.transform_to(render_id, root)?;
+                Some(transform.transform_rect(&Rect::from_ltwh(0.0, 0.0, size.width, size.height)))
+            })
+            .flatten()
     });
     let registration = node.register_rect_provider(Rc::clone(&provider));
     (provider, registration)

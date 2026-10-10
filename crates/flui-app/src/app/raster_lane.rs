@@ -29,9 +29,10 @@
 //! counter (ADR-0045 decision 4):
 //!
 //! - a platform resize mints eagerly via [`RasterHandle::resize`] and the
-//!   returned value is stored in [`LaneStamp::surface_generation`] so the
-//!   very next frame is stamped with it, before the pump has even applied
-//!   the resize (generation-forward, no handshake);
+//!   returned value is stored in [`LaneStamp`] so the next layout measurement
+//!   observes it, before the pump has even applied the resize
+//!   (generation-forward, no handshake). A scene already measured keeps its
+//!   earlier sample and is rejected rather than restamped;
 //! - a mid-render surface loss mints inside the pump's render-failure path;
 //!   the lane observes the rejection ([`PumpOutcome::SurfaceOutdated`]) and
 //!   re-adopts [`flui_engine::SurfaceState::required_generation`] before the retry;
@@ -84,9 +85,9 @@ pub(crate) struct LaneStamp {
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Clone, Copy)]
 struct LaneStampInner {
-    /// The [`flui_foundation::SurfaceGeneration`] the next submitted frame
-    /// is stamped with — the latest value minted through the mailbox's one
-    /// counter that this side has observed.
+    /// The authoritative [`flui_foundation::SurfaceGeneration`] available to
+    /// the next measurement: the latest value minted through the mailbox's
+    /// one counter that this side has observed.
     surface_generation: flui_foundation::SurfaceGeneration,
     /// The platform-authoritative physical surface size (ADR-0045
     /// decision 1's owner-affine surface-size cell): written by the
@@ -99,8 +100,8 @@ struct LaneStampInner {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl LaneStamp {
-    fn surface_generation(&self) -> flui_foundation::SurfaceGeneration {
-        self.inner.lock().surface_generation
+    fn sample(&self) -> LaneStampInner {
+        *self.inner.lock()
     }
 
     fn set_surface_generation(&self, generation: flui_foundation::SurfaceGeneration) {
@@ -129,14 +130,14 @@ pub(crate) struct RasterResizeHook {
 #[cfg(not(target_arch = "wasm32"))]
 impl RasterResizeHook {
     /// Coalesces a resize into the mailbox, adopts the minted generation
-    /// for the next frame's stamp, and records the platform's new size as
+    /// for the next measurement, and records the platform's new size as
     /// the layout authority.
     ///
     /// The mint and the stamp adoption are two separate critical sections
     /// (the mailbox's own lock, then this stamp's); that is safe for the
     /// same reason [`RasterHandle::resize`]'s own doc gives — a frame is
-    /// always stamped with whatever this side most recently observed, and
-    /// an interleaving that stamps an older mint is ordinary staleness the
+    /// stamped with the generation its measurement observed, and
+    /// an interleaving that samples an older mint is ordinary staleness the
     /// pump rejects, never a false accept.
     pub(crate) fn apply(&self, width: u32, height: u32) {
         // A zero-sized resize (a minimized window) mints nothing and is not
@@ -153,7 +154,7 @@ impl RasterResizeHook {
             width,
             height,
             surface_generation = ?generation,
-            "raster lane: resize requested, next frame stamps the minted generation"
+            "raster lane: resize requested, next measurement observes the minted generation"
         );
     }
 }
@@ -224,11 +225,12 @@ impl<B: RasterBackend> RasterLane<B> {
         let generation = handle
             .resize(width, height)
             .unwrap_or(flui_foundation::SurfaceGeneration::ZERO);
+        let initial_surface = LaneStampInner {
+            surface_generation: generation,
+            physical_size: (width, height),
+        };
         let stamp = Arc::new(LaneStamp {
-            inner: Mutex::new(LaneStampInner {
-                surface_generation: generation,
-                physical_size: (width, height),
-            }),
+            inner: Mutex::new(initial_surface),
         });
         let mut lane = Self {
             owner,
@@ -316,20 +318,20 @@ impl<B: RasterBackend> RasterLane<B> {
 
     /// Stamps, submits, and synchronously pumps one frame, classifying the
     /// outcome for the UI runtime's frame transaction.
-    fn submit_and_pump(&mut self, scene: Scene) -> SubmitVerdict {
+    fn submit_sampled(&mut self, scene: Scene, surface: LaneStampInner) -> SubmitVerdict {
         self.epoch = self.epoch.next();
         let epoch = self.epoch;
         let stamp = FrameStamp::new(
             self.address,
             epoch,
-            self.stamp.surface_generation(),
+            surface.surface_generation,
             // The windowed backend owns a private GPU stack per renderer,
             // so both sides of the resource-generation compare sit at
             // `ZERO` — the typed "no shared GPU services bound" state that
             // axis's own doc defines, not a bypass of the check.
             GpuResourceGeneration::ZERO,
         );
-        let damage = self.damage.diff(&scene, self.stamp.physical_size());
+        let damage = self.damage.diff(&scene, surface.physical_size);
         let snapshot = SceneSnapshot::new(stamp, damage, scene);
         if let Err(error) = self.handle.submit(snapshot) {
             // Inline, the owner lives in this very struct, so
@@ -432,16 +434,53 @@ impl<B: RasterBackend> RasterLane<B> {
             }
         }
     }
+
+    /// Submits a test scene that was prepared for the current surface.
+    #[cfg(test)]
+    fn submit_and_pump(&mut self, scene: Scene) -> SubmitVerdict {
+        self.submit_sampled(scene, self.stamp.sample())
+    }
+}
+
+/// A frame retains its measurement while borrowing the lane only for submission.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct RasterFrame<'a, B: RasterBackend> {
+    lane: &'a Mutex<RasterLane<B>>,
+    stamp: Arc<LaneStamp>,
+    measured_surface: LaneStampInner,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl<B: RasterBackend> FrameSink for RasterLane<B> {
+impl<'a, B: RasterBackend> RasterFrame<'a, B> {
+    /// Admission retains the runners' nonblocking busy-lane gate. The returned
+    /// guard is used for pre-frame recovery and released before owner callbacks.
+    pub(crate) fn try_new(
+        lane: &'a Mutex<RasterLane<B>>,
+    ) -> Option<(Self, parking_lot::MutexGuard<'a, RasterLane<B>>)> {
+        let guard = lane.try_lock()?;
+        let frame = Self {
+            lane,
+            stamp: Arc::clone(&guard.stamp),
+            measured_surface: guard.stamp.sample(),
+        };
+        Some((frame, guard))
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<B: RasterBackend> FrameSink for RasterFrame<'_, B> {
     fn surface_size(&mut self) -> (u32, u32) {
-        self.stamp.physical_size()
+        self.measured_surface = self.stamp.sample();
+        self.measured_surface.physical_size
     }
 
     fn submit(&mut self, scene: Scene) -> SubmitVerdict {
-        self.submit_and_pump(scene)
+        let Some(mut lane) = self.lane.try_lock() else {
+            // Nothing was admitted or diffed. The runtime retains its epochs
+            // and requests a full repaint for the next ordinary opportunity.
+            return SubmitVerdict::Retry;
+        };
+        lane.submit_sampled(scene, self.measured_surface)
     }
 }
 
@@ -449,8 +488,8 @@ impl<B: RasterBackend> FrameSink for RasterLane<B> {
 /// [`RasterBackend`] on the calling thread with no stamping and no
 /// generation checks.
 ///
-/// Two [`FrameSink`]s exist, both production paths: [`RasterLane`], the
-/// raster-mailbox path the desktop and Android runners drive (ADR-0045's
+/// Two [`FrameSink`]s exist, both production paths: [`RasterFrame`], the
+/// raster-mailbox path the desktop, Android and iOS runners drive (ADR-0045's
 /// inline lane), and this one, still used by the web runner (whose renderer
 /// arrives asynchronously and recovers across an `.await`, a shape the lane
 /// does not yet accommodate) and by tests that pin the UI runtime's frame
@@ -794,6 +833,53 @@ mod tests {
         });
     }
 
+    fn a_surface_change_after_measurement_refuses_the_old_scene() {
+        for replacement in [(800, 600), (640, 480)] {
+            let lane = Mutex::new(RasterLane::new(
+                ScriptedBackend::presenting(),
+                test_address(),
+                640,
+                480,
+            ));
+            let resize = lane.lock().resize_hook();
+            let (mut frame, guard) = RasterFrame::try_new(&lane).expect("idle lane admits a frame");
+            drop(guard);
+            assert_eq!(FrameSink::surface_size(&mut frame), (640, 480));
+            let old_scenes = [test_scene(), test_scene()];
+            resize.apply(replacement.0, replacement.1);
+
+            for scene in old_scenes {
+                assert_eq!(
+                    FrameSink::submit(&mut frame, scene),
+                    SubmitVerdict::SurfaceStale,
+                    "an old scene stays stale until layout observes the replacement"
+                );
+                lane.lock().with_backend(|backend| {
+                    assert_eq!(backend.render_calls, 0, "the old scene must not render");
+                });
+            }
+
+            assert_eq!(FrameSink::surface_size(&mut frame), replacement);
+            assert_eq!(
+                FrameSink::submit(&mut frame, test_scene()),
+                SubmitVerdict::Presented,
+                "a freshly measured scene can make progress"
+            );
+            lane.lock()
+                .with_backend(|backend| assert_eq!(backend.render_calls, 1));
+
+            assert_eq!(FrameSink::surface_size(&mut frame), replacement);
+            resize.apply(0, 0);
+            assert_eq!(
+                FrameSink::submit(&mut frame, test_scene()),
+                SubmitVerdict::Presented,
+                "an ignored zero-size observation does not replace the surface"
+            );
+            lane.lock()
+                .with_backend(|backend| assert_eq!(backend.render_calls, 2));
+        }
+    }
+
     fn transient_and_hard_failures_map_consistently_in_lane_and_direct_sink() {
         for (make_error, expected) in [
             (
@@ -830,6 +916,10 @@ mod tests {
         crate::table_test::run_table(
             "raster_lane_outcome_matrix",
             &[
+                (
+                    "a_surface_change_after_measurement_refuses_the_old_scene",
+                    a_surface_change_after_measurement_refuses_the_old_scene as fn(),
+                ),
                 (
                     "transient_and_hard_failures_map_consistently_in_lane_and_direct_sink",
                     transient_and_hard_failures_map_consistently_in_lane_and_direct_sink as fn(),

@@ -540,6 +540,16 @@ fn text_contract() {
     run_cases(
         "text",
         &[
+            ("exact_profiles_reach_every_measurement_and_painted_run", text_layout_pipeline::exact_profiles_reach_every_measurement_and_painted_run),
+            ("exact_frontier_is_complete_and_does_not_publish_stale_geometry", text_layout_pipeline::exact_frontier_is_complete_and_does_not_publish_stale_geometry),
+            ("captured_answers_reach_retained_clones_without_reshaping_old_geometry", text_layout_pipeline::captured_answers_reach_retained_clones_without_reshaping_old_geometry),
+            ("captured_live_geometry_rejects_conflicts_after_warm_eviction", text_layout_pipeline::captured_live_geometry_rejects_conflicts_after_warm_eviction),
+            ("captured_cohorts_converge_beyond_warm_capacity_and_retire_history", text_layout_pipeline::captured_cohorts_converge_beyond_warm_capacity_and_retire_history),
+            ("captured_cohorts_do_not_pin_other_attempts_history", text_layout_pipeline::captured_cohorts_do_not_pin_other_attempts_history),
+            ("captured_attempts_retain_nested_sources_across_frontiers", text_layout_pipeline::captured_attempts_retain_nested_sources_across_frontiers),
+            ("fixed_and_linear_attempts_retain_multiple_nested_sources", text_layout_pipeline::fixed_and_linear_attempts_retain_multiple_nested_sources),
+            ("captured_debug_releases_infrastructure_before_formatter_reentry", text_layout_pipeline::captured_debug_releases_infrastructure_before_formatter_reentry),
+            ("captured_cache_hits_pin_the_current_attempt_before_font_invalidation", text_layout_pipeline::captured_cache_hits_pin_the_current_attempt_before_font_invalidation),
             (
                 "changing_to_an_invalid_scale_cannot_reuse_successful_geometry",
                 text_layout_pipeline::changing_to_an_invalid_scale_cannot_reuse_successful_geometry,

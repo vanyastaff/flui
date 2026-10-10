@@ -27,8 +27,8 @@ use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_scheduler::{
-    AsyncDriver, ClockSource, FrameClock, PostFrameHandle, UpdateScheduler,
-    input_to_present_histogram, produce_to_present_histogram,
+    AsyncDriver, ClockSource, FrameClock, PresentationFrameError, PresentationFrameScope,
+    UpdateScheduler, input_to_present_histogram, produce_to_present_histogram,
 };
 use flui_semantics::platform::PlatformAccessibility;
 use flui_semantics::{
@@ -46,6 +46,7 @@ use crate::held_input::HeldPointerQueue;
 use crate::performance_stats::PerformanceStats;
 use crate::renderer_binding::RenderingBinding;
 use crate::semantics_host::SemanticsHost;
+use crate::ui_runtime::text_preparation::TextPreparation;
 
 fn format_millis(duration: Duration) -> String {
     format!("{:.1}ms", duration.as_secs_f64() * 1_000.0)
@@ -65,10 +66,8 @@ pub(crate) struct RuntimeCapabilities<'a> {
     /// the presentation-teardown contract for the consequence of that when
     /// this presentation closes).
     pub(crate) async_driver: AsyncDriver,
-    /// The UI runtime's owner-local post-frame callback capability — addresses
-    /// the UI runtime's [`flui_scheduler::OwnerFrame`] directly, so it can
-    /// capture `Rc`/`RefCell` widget state.
-    pub(crate) post_frame_handle: PostFrameHandle,
+    /// Completion authority for this presentation's coherent geometry.
+    pub(crate) completion_scope: PresentationFrameScope,
     /// The UI runtime's interaction dispatch lane.
     pub(crate) interaction_dispatch_handle: InteractionDispatchHandle,
     /// The UI runtime's own scheduler — borrowed only for the duration of
@@ -298,6 +297,8 @@ pub struct PresentationState {
     /// Recognizers read it at admission; active sequences keep owned snapshots.
     pub(super) gesture_settings: flui_interaction::GestureSettingsSource,
     pub(crate) gesture_geometry: RefCell<crate::ui_runtime::preferences::GeometryProjection>,
+    pub(crate) text_preparation: RefCell<TextPreparation>,
+    pub(crate) sampled_motion_tick: Cell<Option<FrameTick>>,
     pub(super) window_visible: Cell<bool>,
     pub(super) window_focused: Cell<bool>,
     pub(super) window_execution: Cell<flui_platform_api::WindowExecutionState>,
@@ -308,6 +309,8 @@ pub struct PresentationState {
     /// presentation's own close, which retires them.
     withdrawn_dispatch: RefCell<Option<flui_interaction::__runtime::DispatchCustody>>,
     pipeline: PipelineCell,
+    /// Only the legacy test-only, scheduler-free constructor lacks this owner.
+    completion_scope: Option<PresentationFrameScope>,
     /// This presentation's liveness, as a token others may watch weakly.
     ///
     /// Dropping the presentation drops it, which is the point: nothing else
@@ -640,6 +643,7 @@ impl PresentationState {
             pointer_resampling,
         } = window.into();
         let pipeline = PipelineCell::new(PipelineOwner::new(capabilities.text));
+        pipeline.withdraw_layout();
         if let Some(device_pixel_ratio) = device_pixel_ratio {
             pipeline.with_mut(|owner| owner.set_device_pixel_ratio(device_pixel_ratio));
         }
@@ -663,7 +667,7 @@ impl PresentationState {
         widgets.with_build_owner_mut(|owner| {
             owner.set_global_key_scope(capabilities.global_key_scope);
             owner.set_async_driver(capabilities.async_driver);
-            owner.set_post_frame_handle(capabilities.post_frame_handle);
+            owner.set_post_frame_handle(capabilities.completion_scope.post_frame_handle());
             owner.set_interaction_dispatch_handle(interaction_dispatch.clone());
             owner.set_text_input_handle(text_input.handle());
             owner.set_clipboard_handle(flui_interaction::ClipboardHandle::new(
@@ -786,6 +790,9 @@ impl PresentationState {
             close_mode: Cell::new(flui_interaction::__runtime::CloseMode::Ordinary),
             withdrawn_dispatch: RefCell::new(None),
             pipeline,
+            completion_scope: Some(capabilities.completion_scope),
+            text_preparation: RefCell::new(TextPreparation::default()),
+            sampled_motion_tick: Cell::new(None),
             alive: RefCell::new(Some(alive)),
             window: Arc::downgrade(&window),
             accessibility: accessibility.as_ref().map(Arc::downgrade),
@@ -880,6 +887,9 @@ impl PresentationState {
             close_mode: Cell::new(flui_interaction::__runtime::CloseMode::Ordinary),
             withdrawn_dispatch: RefCell::new(None),
             pipeline,
+            completion_scope: None,
+            text_preparation: RefCell::new(TextPreparation::default()),
+            sampled_motion_tick: Cell::new(None),
             alive: RefCell::new(Some(alive)),
             window: Arc::downgrade(&window),
             accessibility: accessibility.as_ref().map(Arc::downgrade),
@@ -955,6 +965,60 @@ impl PresentationState {
     #[must_use]
     pub(crate) fn pipeline(&self) -> &PipelineCell {
         &self.pipeline
+    }
+
+    pub(crate) fn begin_completion_segment(&self) {
+        if let Some(scope) = &self.completion_scope {
+            match scope.enter_segment() {
+                Ok(()) => {}
+                Err(PresentationFrameError::SegmentActive) => scope
+                    .resume_segment()
+                    .expect("BUG: a retained presentation completion is suspended"),
+                Err(error) => panic!("BUG: live presentation cannot enter completion: {error}"),
+            }
+        }
+    }
+
+    pub(crate) fn complete_segment(&self) {
+        if let Some(scope) = &self.completion_scope {
+            scope
+                .complete_segment()
+                .expect("BUG: completing a running presentation segment");
+        }
+    }
+
+    pub(crate) fn service_completion_segment(&self) {
+        if let Some(scope) = &self.completion_scope {
+            scope
+                .service_segment()
+                .expect("BUG: servicing a suspended presentation segment");
+        }
+    }
+
+    pub(crate) fn suspend_completion_segment(&self) {
+        if let Some(scope) = &self.completion_scope {
+            scope
+                .cancel_segment()
+                .expect("BUG: incomplete presentation retains its completion");
+        }
+    }
+
+    pub(crate) fn has_eligible_completion(&self) -> bool {
+        !self.clock.is_hidden()
+            && self.alive.borrow().is_some()
+            && self
+                .completion_scope
+                .as_ref()
+                .is_some_and(PresentationFrameScope::has_completion_demand)
+            && self.pipeline.try_with_layout(|_| ()).is_some()
+    }
+
+    pub(crate) fn rearm_completion(&self) {
+        if self.has_eligible_completion()
+            && let Some(scope) = &self.completion_scope
+        {
+            scope.rearm_completion_demand();
+        }
     }
 
     #[must_use]
@@ -1340,7 +1404,10 @@ impl PresentationState {
             presented_revision <= tree_revision,
             "BUG: presented tree revision exceeds terminal tree revision"
         );
-        if presented_revision == tree_revision {
+        if presented_revision == tree_revision
+            && !self.text_preparation.borrow().holds_document_barrier()
+            && self.text_preparation.borrow().segment.is_none()
+        {
             FrameCommitState::Committed
         } else {
             FrameCommitState::Uncommitted {
@@ -1667,6 +1734,12 @@ impl PresentationState {
             return;
         }
         self.lifecycle.set(PresentationLifecycle::Closing);
+        self.pipeline.withdraw_layout();
+        let saved_text = std::mem::take(&mut *self.text_preparation.borrow_mut());
+        failure.release(saved_text);
+        if let Some(scope) = &self.completion_scope {
+            scope.withdraw();
+        }
         let window = self.window.upgrade();
         let bridge = self.accessibility.as_ref().and_then(Weak::upgrade);
         // Every capability is withdrawn before any capture is destroyed: a
@@ -1719,6 +1792,7 @@ impl PresentationState {
         // graph, keys, agent, focus and text input already closed.
         let mode = failure.mode();
         failure.invoke(|| close_gestures(&self.gestures, mode));
+        self.retire_completion_scope(&mut failure);
         // Every presentation authority is revoked: the withdrawn keys retire,
         // one at a time, so a failing destructor retains the rest.
         for key in withdrawn_keys {
@@ -1785,6 +1859,10 @@ impl PresentationState {
         ) {
             return Vec::new();
         }
+        self.pipeline.withdraw_layout();
+        if let Some(scope) = &self.completion_scope {
+            scope.withdraw();
+        }
         if self.withdrawn_dispatch.borrow().is_none()
             && let Some(custody) = self.withdraw_interaction(Some(lane), self.close_mode.get())
         {
@@ -1820,6 +1898,21 @@ impl PresentationState {
         failure.invoke(|| close_focus(&self.focus, CloseMode::PreservingFailure));
         failure.invoke(|| close_text_input(&self.text_input, CloseMode::PreservingFailure));
         failure.invoke(|| self.close_interaction_with_mode(lane, CloseMode::PreservingFailure));
+        self.retire_completion_scope(failure);
+    }
+
+    fn retire_completion_scope(&self, failure: &mut PresentationCloseRecovery<'_>) {
+        if let Some(scope) = &self.completion_scope {
+            if failure.preserving() {
+                scope.close_preserving();
+            } else {
+                failure.invoke(|| {
+                    if let Some(payload) = scope.close() {
+                        std::panic::resume_unwind(payload);
+                    }
+                });
+            }
+        }
     }
 }
 

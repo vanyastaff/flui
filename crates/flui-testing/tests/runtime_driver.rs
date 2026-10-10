@@ -11,7 +11,7 @@ use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use flui_foundation::geometry::Size;
 use flui_interaction::routing::FocusNode;
@@ -379,10 +379,14 @@ fn the_harness_makes_progress_after_a_contained_failure() {
 /// callback's text is raised) or loses the report when the pump unwinds.
 #[test]
 fn a_contained_frame_failure_stays_authoritative_over_a_later_post_frame_panic() {
-    let (mut laid, _armed) = armed_tripwire();
-    laid.post_frame_handle()
-        .schedule(|_timing| panic!("post-frame callback panicked"))
-        .expect("the ui_runtime's post-frame lane is alive");
+    let (mut laid, armed) = armed_tripwire();
+    let invocations = Arc::new(AtomicUsize::new(0));
+    let called = Arc::clone(&invocations);
+    laid.scheduler()
+        .add_post_frame_callback(Box::new(move |_timing| {
+            called.fetch_add(1, Ordering::SeqCst);
+            panic!("post-frame callback panicked");
+        }));
 
     let raised = catch_unwind(AssertUnwindSafe(|| laid.tick()))
         .expect_err("the frame fails twice and raises once");
@@ -393,6 +397,20 @@ fn a_contained_frame_failure_stays_authoritative_over_a_later_post_frame_panic()
         !text.contains("post-frame callback panicked"),
         "got {text:?}"
     );
+    assert_eq!(
+        invocations.load(Ordering::SeqCst),
+        1,
+        "the unscoped host callback competes in this same pump"
+    );
+    let painted = laid.painted_frame_count();
+    armed.store(false, Ordering::SeqCst);
+    laid.tick();
+    assert!(
+        laid.did_paint_last_frame(),
+        "repair presents after both failures"
+    );
+    assert_eq!(laid.painted_frame_count(), painted + 1);
+    assert_eq!(invocations.load(Ordering::SeqCst), 1);
 }
 
 /// A post-frame panic that unwinds out of a harness pump leaves the harness

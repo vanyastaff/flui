@@ -57,6 +57,15 @@ pub trait OwnerEffects {
     );
     /// Complete application work after runtime checkout has returned.
     fn after_turn(&self, recovery: RecoveryState);
+    /// Resolve one owned numeric frontier after every runtime loan has ended.
+    /// Return it when no native producer accepts it; the owner then parks it.
+    fn text_sizing(
+        &self,
+        frontier: super::TextSizingFrontier,
+        _recovery: RecoveryState,
+    ) -> Option<super::TextSizingFrontier> {
+        Some(frontier)
+    }
     /// Request another owner opportunity without fabricating a frame delivery.
     fn request_continuation(&self) -> bool;
 }
@@ -525,7 +534,7 @@ impl OwnerCore {
                     let Ok(mut lease) = RuntimeLease::checkout(self, &work) else {
                         continue;
                     };
-                    let failure = catch_unwind(AssertUnwindSafe(|| {
+                    let mut failure = catch_unwind(AssertUnwindSafe(|| {
                         work.run(
                             self,
                             lease
@@ -536,7 +545,48 @@ impl OwnerCore {
                         );
                     }))
                     .err();
+                    let runtime = lease
+                        .runtime
+                        .as_deref()
+                        .expect("BUG: active lease retains its runtime until return");
+                    let id = runtime.id();
+                    let frontiers = if failure.is_none() && first_failure.is_none() {
+                        runtime.take_text_sizing_frontiers()
+                    } else {
+                        Vec::new()
+                    };
                     drop(lease);
+                    self.state.borrow_mut().claim = DeliveryClaim::Completing;
+                    for work in frontiers {
+                        let frontier = super::TextSizingFrontier::new(self, id, work);
+                        if failure.is_some()
+                            || self.state.borrow().authorizer(frontier.address()).is_err()
+                        {
+                            let retired = catch_unwind(AssertUnwindSafe(|| drop(frontier))).err();
+                            preserve_first_lifecycle_panic(
+                                &mut failure,
+                                retired,
+                                "numeric preparation receipt retirement",
+                            );
+                            continue;
+                        }
+                        let delivery = catch_unwind(AssertUnwindSafe(|| {
+                            if let Some(frontier) = effects
+                                .text_sizing(frontier, RecoveryState::current(&first_failure))
+                            {
+                                let _ = frontier.settle(
+                                    crate::ui_runtime::TextSizingSettlement::Unavailable,
+                                    effects,
+                                );
+                            }
+                        }))
+                        .err();
+                        preserve_first_lifecycle_panic(
+                            &mut failure,
+                            delivery,
+                            "native text preparation",
+                        );
+                    }
                     failure
                 }
             };

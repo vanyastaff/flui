@@ -265,7 +265,7 @@ accesskit_unix = { version = "0.24", optional = true }
 #   - `objc2-quartz-core`'s `CADisplayLink` is the per-frame signal; QuartzCore
 #     rather than UIKit because `CADisplayLink` is declared there.
 [target.'cfg(target_os = "ios")'.dependencies]
-objc2 = { version = "0.6.4", features = ["std"] }
+objc2 = { version = "0.6.4", features = ["std", "exception"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "block2",
     "NSOperation",
@@ -287,6 +287,10 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "NSRunLoop",
 ] }
 objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
+    "UIFont",
+    "UIFontDescriptor",
+    "UIFontMetrics",
+    "UIContentSizeCategory",
     "UIAccessibility",
     "objc2-core-foundation",
     "UIApplication",
