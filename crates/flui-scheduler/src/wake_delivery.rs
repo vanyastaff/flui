@@ -186,7 +186,7 @@ impl WakeDelivery {
                     std::mem::forget(compensation_hook);
                 } else if let Err(payload) =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        drop(compensation_hook)
+                        drop(compensation_hook);
                     }))
                 {
                     if let Some(signal) = &failure_signal {

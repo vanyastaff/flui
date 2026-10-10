@@ -368,10 +368,10 @@ impl OwnerFrame {
             recovery.attempt(|| drop(span));
         }
         recovery.release_scheduler(scheduler);
-        if recovery.first.is_some() {
-            if let Some(value) = output.take() {
-                std::mem::forget(value);
-            }
+        if recovery.first.is_some()
+            && let Some(value) = output.take()
+        {
+            std::mem::forget(value);
         }
         drop(failure_scope);
         recovery.finish();

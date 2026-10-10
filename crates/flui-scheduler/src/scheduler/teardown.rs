@@ -34,8 +34,7 @@ impl UpdateScheduler {
             failure: Rc::clone(&failure),
         });
         drop(self);
-        let payload = failure.borrow_mut().take();
-        payload
+        failure.borrow_mut().take()
     }
 }
 

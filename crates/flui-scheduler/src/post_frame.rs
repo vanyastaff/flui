@@ -53,7 +53,12 @@ impl PostFrameQueue {
 
     #[cfg(test)]
     pub(crate) fn is_unlocked(&self) -> bool {
-        let Self { queue, active, closed: _, execution_failure } = self;
+        let Self {
+            queue,
+            active,
+            closed: _,
+            execution_failure,
+        } = self;
         queue.try_borrow_mut().is_ok()
             && active.try_borrow_mut().is_ok()
             && execution_failure.try_borrow_mut().is_ok()
@@ -121,7 +126,10 @@ impl OwnerFrame {
         &self,
         signal: Option<std::sync::Weak<crate::wake_delivery::FailureSignal>>,
     ) {
-        *self.post_frame.execution_failure.borrow_mut() = signal.clone();
+        self.post_frame
+            .execution_failure
+            .borrow_mut()
+            .clone_from(&signal);
         self.tasks.bind_execution_failure_signal(signal);
     }
     /// Owner-local frame state for `scheduler`'s frames. Task wakes request a

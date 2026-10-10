@@ -223,7 +223,7 @@ impl TaskStore {
         &self,
         signal: Option<Weak<crate::wake_delivery::FailureSignal>>,
     ) {
-        *self.execution_failure.borrow_mut() = signal.clone();
+        self.execution_failure.borrow_mut().clone_from(&signal);
         self.shared.wake_delivery.bind_failure_signal(signal);
     }
     pub(crate) fn new() -> Self {
