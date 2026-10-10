@@ -10,7 +10,7 @@ use super::{
 };
 use crate::retarget::Segment;
 use crate::run_future::RunCompleter;
-use crate::{AnimationError, AnimationRunFuture, MotionSpec};
+use crate::{AnimationError, AnimationRunFuture, MotionSpec, Simulation};
 
 struct Seam {
     value: f64,
@@ -75,6 +75,32 @@ fn continuation(inner: &AnimationControllerInner) -> RunStart {
 }
 
 impl Seam {
+    fn continuing_spring(&self, target: f64, motion: &MotionSpec) -> Option<SimulationRun> {
+        let MotionSpec::Spring(description) = motion else {
+            return None;
+        };
+        let Some(TickSource::Simulation(
+            run @ SimulationRun::Motion {
+                source,
+                elapsed_offset,
+            },
+        )) = &self.source
+        else {
+            return None;
+        };
+        let elapsed_offset = elapsed_offset + self.cycle;
+        if !elapsed_offset.is_finite()
+            || !source.matches_spring(target, *description)
+            || run.x(self.cycle) != self.value
+        {
+            return None;
+        }
+        Some(SimulationRun::Motion {
+            source: Rc::clone(source),
+            elapsed_offset,
+        })
+    }
+
     fn capture(inner: &AnimationControllerInner) -> Self {
         Self {
             value: inner.value,
@@ -103,7 +129,7 @@ impl Seam {
         }
         let velocity = match &self.source {
             None => 0.0,
-            Some(TickSource::Simulation(source)) => source.source().dx(self.cycle),
+            Some(TickSource::Simulation(source)) => source.dx(self.cycle),
             Some(TickSource::Repeat(_)) => self.span / self.duration.as_secs_f64(),
             Some(TickSource::Time { curve, .. }) => {
                 if self.duration.is_zero() {
@@ -246,7 +272,7 @@ impl AnimationController {
         let mut velocity = 0.0;
         recovery.run(|| {
             velocity = match source.get() {
-                TickSource::Simulation(simulation) => simulation.source().dx(cycle) * playback,
+                TickSource::Simulation(simulation) => simulation.dx(cycle) * playback,
                 TickSource::Repeat(_) => {
                     crate::retarget::rate(span, playback, duration.as_secs_f64())
                 }
@@ -337,17 +363,25 @@ impl AnimationController {
             }
             let velocity = velocity?;
             let mut next = Opaque::new(
-                Segment::start(
-                    seam.get().value,
-                    velocity,
-                    target,
-                    motion,
-                    1.0,
-                    crate::simulation::Tolerance::DEFAULT,
-                )
-                .map_err(|error| {
-                    AnimationError::NonFiniteTarget(format!("retarget motion: {error}"))
-                })?,
+                if let Some(continuation) = seam.get().continuing_spring(target, motion) {
+                    continuation
+                } else {
+                    let source = Segment::start(
+                        seam.get().value,
+                        velocity,
+                        target,
+                        motion,
+                        1.0,
+                        crate::simulation::Tolerance::DEFAULT,
+                    )
+                    .map_err(|error| {
+                        AnimationError::NonFiniteTarget(format!("retarget motion: {error}"))
+                    })?;
+                    SimulationRun::Motion {
+                        source: Rc::new(source),
+                        elapsed_offset: 0.0,
+                    }
+                },
             );
             let mut inner = self.inner.borrow_mut();
             Self::check_run_admission(&inner)?;
@@ -357,7 +391,8 @@ impl AnimationController {
                 recovery.retire(seam);
                 continue;
             }
-            let immediate = matches!(next.get(), Segment::Rest(_));
+            let immediate = matches!(next.get(), SimulationRun::Motion { source, .. }
+                if matches!(source.as_ref(), Segment::Rest(_)));
             let mut retired = RetiredSources::new();
             inner.clear_run_modes(&mut retired);
             inner.start_value = seam.get().value;
@@ -368,7 +403,7 @@ impl AnimationController {
                 AnimationDirection::Forward
             };
             inner.status = inner.direction.running_status();
-            inner.simulation = Some(SimulationRun::Motion(Rc::new(next.take())));
+            inner.simulation = Some(next.take());
             Self::begin_run(&mut inner);
             inner.run_start = seam.get().origin;
             if immediate {

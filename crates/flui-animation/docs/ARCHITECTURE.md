@@ -141,6 +141,16 @@ the registry and different frame partitions; the public
 `a_controller_spring_enters_and_leaves_rest_continuously` probes both joins
 with position differences and an independent early-trajectory reference.
 
+Retargeting a scalar controller to the same target with the same spring replaces
+the run future while continuing the existing physical trajectory. A flat elapsed
+offset carries its analytic and exact-rest suffix; repeated replacements do not
+nest simulations or recompute the rest deadline. If bounds changed the published
+value, the new segment instead starts from that actual value.
+`same_scalar_spring_target_keeps_the_rest_trajectory` compares uninterrupted and
+repeatedly retargeted public traces, velocities and completion for underdamped,
+critical and overdamped springs across their rest intervals. Rebuilding the
+segment at every identical target fails that row.
+
 ### Owning vector motion
 
 `TwoWayConverter::rest_thresholds` specifies one positive finite distance per

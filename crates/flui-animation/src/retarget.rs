@@ -222,6 +222,11 @@ impl SpringRest {
 }
 
 impl Segment {
+    pub(crate) fn matches_spring(&self, target: f64, description: SpringDescription) -> bool {
+        matches!(self, Self::Spring { simulation, rest, .. }
+            if rest.target == target && simulation.matches_description(description))
+    }
+
     pub(crate) fn rest_start(&self) -> Option<f64> {
         match self {
             Self::Spring { rest, .. } => Some(rest.start),

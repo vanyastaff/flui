@@ -137,7 +137,13 @@ enum TickSource {
 #[derive(Clone)]
 enum SimulationRun {
     Custom(Rc<dyn Simulation>),
-    Motion(Rc<Segment>),
+    Motion {
+        source: Rc<Segment>,
+        /// Animation seconds already consumed from this physical trajectory
+        /// before the current run's seam. Future replacement does not restart
+        /// an unchanged spring's analytic or exact-rest suffix.
+        elapsed_offset: f64,
+    },
     Value(Rc<dyn crate::spring::ValueMotion>),
     Fling {
         source: Rc<dyn Simulation>,
@@ -165,20 +171,43 @@ impl SimulationRun {
     fn source(&self) -> &dyn Simulation {
         match self {
             Self::Custom(source) | Self::Fling { source, .. } => source.as_ref(),
-            Self::Motion(source) => source.as_ref(),
+            Self::Motion { source, .. } => source.as_ref(),
             Self::Value(source) => source.as_ref(),
         }
     }
 
     fn reached_bound(&self, sample: f64) -> bool {
         match self {
-            Self::Custom(_) | Self::Motion(_) | Self::Value(_) => false,
+            Self::Custom(_) | Self::Motion { .. } | Self::Value(_) => false,
             Self::Fling {
                 bound, direction, ..
             } => match direction {
                 AnimationDirection::Forward => sample >= *bound,
                 AnimationDirection::Reverse => sample <= *bound,
             },
+        }
+    }
+}
+
+impl Simulation for SimulationRun {
+    fn x(&self, time: f64) -> f64 {
+        self.source().x(self.source_time(time))
+    }
+
+    fn dx(&self, time: f64) -> f64 {
+        self.source().dx(self.source_time(time))
+    }
+
+    fn is_done(&self, time: f64) -> bool {
+        self.source().is_done(self.source_time(time))
+    }
+}
+
+impl SimulationRun {
+    fn source_time(&self, time: f64) -> f64 {
+        match self {
+            Self::Motion { elapsed_offset, .. } => time + elapsed_offset,
+            _ => time,
         }
     }
 }
@@ -1865,7 +1894,7 @@ impl AnimationController {
                 {
                     return;
                 }
-                let sampled = simulation.source().x(cycle);
+                let sampled = simulation.x(cycle);
                 // A position callback may stop or replace the run. Do not call
                 // another method on its stale source after that decision.
                 let current = { self.inner.borrow_mut().matches_sample(&identity) };
@@ -1873,7 +1902,7 @@ impl AnimationController {
                     return;
                 }
                 let is_done = sampled.is_finite()
-                    && (simulation.reached_bound(sampled) || simulation.source().is_done(cycle));
+                    && (simulation.reached_bound(sampled) || simulation.is_done(cycle));
                 let mut inner = self.inner.borrow_mut();
                 if !inner.matches_sample(&identity) {
                     return;
@@ -1999,7 +2028,7 @@ impl AnimationController {
                     }
                     return;
                 }
-                if matches!(simulation, SimulationRun::Motion(_)) {
+                if matches!(simulation, SimulationRun::Motion { .. }) {
                     let inner = self.inner.borrow_mut();
                     if inner.matches_sample(&identity) {
                         let target = inner.target_value;
@@ -2010,14 +2039,13 @@ impl AnimationController {
                 let mut last_finite = self.inner.borrow().value;
                 for exponent in 0..=8 {
                     let time = 0.25 * f64::from(1u32 << exponent);
-                    let sample = simulation.source().x(time);
+                    let sample = simulation.x(time);
                     if !self.inner.borrow().matches_sample(&identity) {
                         return;
                     }
                     if sample.is_finite() {
                         last_finite = sample;
-                        let done =
-                            simulation.reached_bound(sample) || simulation.source().is_done(time);
+                        let done = simulation.reached_bound(sample) || simulation.is_done(time);
                         if !self.inner.borrow().matches_sample(&identity) {
                             return;
                         }

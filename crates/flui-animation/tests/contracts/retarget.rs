@@ -1730,6 +1730,10 @@ fn controller_spring_seam() {
 fn controller_retarget_frame_boundaries() {
     crate::run_table(&[
         (
+            "same_scalar_spring_target_keeps_the_rest_trajectory",
+            same_scalar_spring_target_keeps_the_rest_trajectory,
+        ),
+        (
             "repeated_retargets_before_a_frame_share_the_seam",
             repeated_retargets_before_a_frame_share_the_seam,
         ),
@@ -1754,6 +1758,82 @@ fn controller_retarget_frame_boundaries() {
             retargeting_another_controller_preserves_its_frame_origin,
         ),
     ]);
+}
+
+fn same_scalar_spring_target_keeps_the_rest_trajectory() {
+    use flui_animation::{Animation, MotionClock};
+    let mut differences = Vec::new();
+    for zeta in [0.5, 1.0, 2.0] {
+        let motion = MotionSpec::Spring(spring(10.0, zeta));
+        for seam_ms in (100..=6000).step_by(10) {
+            let registry = Vsync::new();
+            let mut clock = MotionClock::new();
+            let baseline = AnimationController::builder(Duration::from_secs(1))
+                .initial_value(1.0)
+                .unbounded()
+                .build_on(Some(&registry));
+            let interrupted = AnimationController::builder(Duration::from_secs(1))
+                .initial_value(1.0)
+                .unbounded()
+                .build_on(Some(&registry));
+            let baseline_run = baseline
+                .controller()
+                .retarget(0.0, &motion)
+                .expect("initial spring");
+            let old = interrupted
+                .controller()
+                .retarget(0.0, &motion)
+                .expect("initial spring");
+            registry.tick_all(&clock.frame(Duration::ZERO));
+            registry.tick_all(&clock.frame(Duration::from_millis(seam_ms)));
+            if !baseline.controller().is_animating() {
+                continue;
+            }
+            assert_eq!(
+                (
+                    baseline.controller().value(),
+                    baseline.controller().velocity()
+                ),
+                (
+                    interrupted.controller().value(),
+                    interrupted.controller().velocity()
+                ),
+            );
+            let mut replacement = old;
+            for delta in [0, 4, 8, 12] {
+                if baseline.controller().is_animating() {
+                    let next = interrupted
+                        .controller()
+                        .retarget(0.0, &motion)
+                        .expect("same target and spring");
+                    assert!(
+                        replacement.is_canceled(),
+                        "retarget replaces the run's future"
+                    );
+                    replacement = next;
+                }
+                registry.tick_all(&clock.frame(Duration::from_millis(seam_ms + delta + 4)));
+            }
+            let left = (
+                baseline.controller().value(),
+                baseline.controller().velocity(),
+                baseline_run.is_complete(),
+            );
+            let right = (
+                interrupted.controller().value(),
+                interrupted.controller().velocity(),
+                replacement.is_complete(),
+            );
+            if !close(left.0, right.0, 1e-10) || !close(left.1, right.1, 1e-10) || left.2 != right.2
+            {
+                differences.push((zeta, seam_ms, left, right));
+            }
+        }
+    }
+    assert!(
+        differences.is_empty(),
+        "same spring target changed its remaining trajectory or deadline: {differences:?}"
+    );
 }
 
 fn repeated_retargets_before_a_frame_share_the_seam() {

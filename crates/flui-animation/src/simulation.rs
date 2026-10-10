@@ -574,6 +574,10 @@ enum Roots {
 }
 
 impl SpringSimulation {
+    pub(crate) fn matches_description(&self, description: SpringDescription) -> bool {
+        self.omega == description.omega && self.zeta == description.zeta
+    }
+
     /// A spring from `start` to `end` with initial `velocity`, resting within
     /// [`Tolerance::DEFAULT`].
     ///
