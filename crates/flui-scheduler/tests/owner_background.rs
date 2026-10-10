@@ -348,10 +348,14 @@ fn worker_wake_keeps_failed_receipt_across_next_healthy_turn() {
         })).is_err());
     }), Ok(0));
     let healthy_drops = Arc::new(AtomicUsize::new(0));
+    let teardown_drops = Arc::new(AtomicUsize::new(0));
     assert_eq!(owner.pump_background(|| {
         let capture = HookCapture(Arc::clone(&healthy_drops));
         let id = scheduler.schedule_frame_callback(Box::new(move |_| { let _ = &capture; }));
         assert!(scheduler.cancel_frame_callback(id));
+        let capture = HookCapture(Arc::clone(&teardown_drops));
+        owner.post_frame_handle().schedule(move |_| { let _ = &capture; })
+            .expect("live post-frame lane");
     }), Ok(0));
     // Release before assertions so a failing assertion never strands a worker.
     release.send(()).expect("worker still waiting");
@@ -361,6 +365,9 @@ fn worker_wake_keeps_failed_receipt_across_next_healthy_turn() {
         "old failed receipt survives a newer healthy admission");
     assert_eq!(healthy_drops.load(Ordering::SeqCst), 1,
         "new healthy receipt keeps ordinary capture destruction");
+    assert!(owner.retire().is_none());
+    assert_eq!(teardown_drops.load(Ordering::SeqCst), 1,
+        "later healthy owner teardown retires accepted captures normally");
 }
 
 #[test]
