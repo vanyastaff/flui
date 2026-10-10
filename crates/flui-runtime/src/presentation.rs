@@ -403,6 +403,8 @@ pub struct PresentationState {
     /// This presentation's controller registry. Handles share owner-local state;
     /// the presentation keeps its driver binding for its whole lifetime.
     vsync: Vsync,
+    /// Kernels close before any teardown callout; delivery outlives opaque trees.
+    animation_retirement: RefCell<Option<flui_animation::VsyncRetirement>>,
     /// This presentation's animation clock: maps the UI runtime's raw frame time
     /// to the monotonic animation time [`Self::vsync`] is ticked with.
     /// Borrowed only inside [`Self::motion_tick`], never across user code.
@@ -807,6 +809,7 @@ impl PresentationState {
             performance_overlay: RefCell::new(None),
             redraw_pending: Cell::new(false),
             vsync,
+            animation_retirement: RefCell::new(None),
             motion_clock: RefCell::new(MotionClock::new()),
             clock: frame_clock,
             last_segment_span: Cell::new(None),
@@ -901,6 +904,7 @@ impl PresentationState {
             performance_overlay: RefCell::new(None),
             redraw_pending: Cell::new(false),
             vsync: Vsync::new(),
+            animation_retirement: RefCell::new(None),
             motion_clock: RefCell::new(MotionClock::new()),
             clock: FrameClock::new(),
             last_segment_span: Cell::new(None),
@@ -1654,6 +1658,7 @@ impl PresentationState {
         mode: flui_interaction::__runtime::CloseMode,
         lane: Option<&flui_interaction::InteractionLane>,
     ) {
+        self.withdraw_animation();
         use flui_interaction::__runtime::{
             close_focus, close_gestures, close_mouse_tracker, close_text_input,
         };
@@ -1675,6 +1680,7 @@ impl PresentationState {
             if failure.preserving() {
                 self.withdraw_retained_ownership(&mut failure, lane);
             }
+            self.finish_animation(&mut failure);
             failure.finish();
             return;
         }
@@ -1759,6 +1765,7 @@ impl PresentationState {
             });
         }
 
+        self.finish_animation(&mut failure);
         if !failure.preserving() {
             failure.invoke(|| self.widgets.withdraw_root_owner(false));
             failure.run(|| self.widgets.detach_root_widget());
@@ -1790,6 +1797,7 @@ impl PresentationState {
         &self,
         lane: &flui_interaction::InteractionLane,
     ) -> Vec<flui_view::__runtime::WithdrawnKey> {
+        self.withdraw_animation();
         use flui_view::__runtime::BindingRuntime as _;
         if matches!(
             self.lifecycle.get(),
@@ -1811,6 +1819,27 @@ impl PresentationState {
         flui_interaction::__runtime::withdraw_focus(&self.focus);
         flui_interaction::__runtime::withdraw_text_input(&self.text_input);
         keys
+    }
+
+    fn withdraw_animation(&self) {
+        if self.animation_retirement.borrow().is_none() {
+            let retirement = self.vsync.prepare_close();
+            self.animation_retirement.replace(Some(retirement));
+        }
+    }
+
+    fn finish_animation(&self, failure: &mut PresentationCloseRecovery<'_>) {
+        let retirement = self.animation_retirement.borrow_mut().take();
+        if let Some(retirement) = retirement {
+            if failure.preserving() {
+                let mut recovery = flui_foundation::panic::PanicRecovery::new();
+                recovery.inherit_failure();
+                retirement.publish_with(&mut recovery.scope());
+                failure.invoke(|| recovery.finish());
+            } else {
+                failure.invoke(|| retirement.finish());
+            }
+        }
     }
 
     /// Withdraws the root owner and closes every input owner in preserving

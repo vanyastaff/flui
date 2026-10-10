@@ -21,6 +21,10 @@
 //!   scroll fling that rest at a precomputed time
 //! - [`AnimatedValue`] - Interruptible spring value with velocity-preserving
 //!   retargeting (`#[derive(TwoWayConverter)]` for custom types)
+//! - [`VsyncRetirement`] - Terminal registry withdrawal separates committed
+//!   kernel closure from cancellation delivery and outgoing capture retirement.
+//!   Runtime shutdown prepares every closing presentation before callbacks;
+//!   retained widget owners cannot keep their runs active (ADR-0175).
 //! - [`AnimationError`] - Error type for animation operations
 //!
 //! ## Persistent Object Pattern
@@ -173,7 +177,7 @@ pub use flui_foundation::geometry::Lerp;
 pub use flui_macros::TwoWayConverter;
 pub use switch::AnimationSwitch;
 pub use tween::{TweenAnimation, animate};
-pub use vsync::{Vsync, VsyncRegistration, VsyncRegistrationError};
+pub use vsync::{Vsync, VsyncRegistration, VsyncRegistrationError, VsyncRetirement};
 
 // Re-exports from data type modules
 pub use curve::{

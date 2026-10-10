@@ -723,6 +723,17 @@ either mode. A healthy close drops everything normally, and a lifecycle drain
 still runs every eligible callback before propagating its first failure. Tested
 by `presentation_close_retirement_failures_preserve_focus_ime_and_siblings`.
 
+Animation authority is withdrawn independently of retained tree ownership.
+Each presentation prepares terminal registry closure before other teardown
+callouts, then publishes cancellation after its capabilities are withdrawn.
+Whole-runtime close prepares every presentation before delivering the first
+cancellation; addressed close leaves sibling registries live. Saved animation
+observers refuse new runs even if exceptional retention keeps their widget
+owner allocated. The retirement receipt borrows the enclosing failure policy
+and completes healthy cancellation tails without invoking opaque destructors
+after a failure. `stopping_the_realm_mid_animation_cancels_every_run` pins these
+ordering, outcome, reentry and competing-failure contracts (ADR-0175).
+
 Accessibility input uses the whole-request translator of ADR-0124 before
 presentation inbox admission, preserving numeric values and explicit
 expand/collapse requests. Payload admission remains with the current semantics

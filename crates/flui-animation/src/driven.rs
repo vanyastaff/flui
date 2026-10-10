@@ -58,8 +58,8 @@ impl DrivenController {
 
     /// Whether this owner currently holds a registry seat.
     #[must_use]
-    pub const fn is_bound(&self) -> bool {
-        matches!(self.seat, Seat::Bound { .. })
+    pub fn is_bound(&self) -> bool {
+        matches!(&self.seat, Seat::Bound { registration, .. } if registration.is_registered())
     }
 
     /// Move to another registry, preserving the last sampled run elapsed time.
@@ -79,6 +79,9 @@ impl DrivenController {
         &mut self,
         vsync: Option<&Vsync>,
     ) -> (DrivenRetirement, Result<(), VsyncRegistrationError>) {
+        if self.controller.is_disposed() {
+            return (self.prepare_dispose(), Ok(()));
+        }
         if matches!(self.seat, Seat::Retired) {
             return (
                 DrivenRetirement {

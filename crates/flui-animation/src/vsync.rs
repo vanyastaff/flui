@@ -35,6 +35,9 @@ use crate::controller::RunStart;
 use crate::{AnimationTime, FrameTick};
 use std::time::Duration;
 
+mod retirement;
+pub use retirement::VsyncRetirement;
+
 /// Opaque identity for one admission to a [`Vsync`] registry.
 ///
 /// [`Vsync::attach_child`] returns a token for [`Vsync::detach_child`]. Controller
@@ -54,6 +57,12 @@ impl PartialEq for VsyncRegistration {
 impl Eq for VsyncRegistration {}
 
 impl VsyncRegistration {
+    pub(crate) fn is_registered(&self) -> bool {
+        self.owner
+            .upgrade()
+            .is_some_and(|owner| owner.borrow().controllers.contains_key(&self.slot))
+    }
+
     pub(crate) fn requires_sample(&self, probe: &crate::controller::WalkProbe) -> bool {
         let Some(owner) = self.owner.upgrade() else {
             return false;
@@ -95,6 +104,9 @@ pub enum VsyncRegistrationError {
     /// The registry permanently consumed its available registration identities.
     #[error("Vsync registration capacity exhausted")]
     Exhausted,
+    /// The owning presentation permanently closed this registry.
+    #[error("Vsync registry is closed")]
+    Closed,
 }
 
 /// Seconds from `start` to `now`, both readings of a nanosecond clock, taken on
@@ -185,6 +197,7 @@ struct VsyncInner {
     parents: Vec<VsyncRegistration>,
     request_frame: Option<Rc<dyn Fn()>>,
     next_id: u64,
+    closed: bool,
     muted: bool,
     last_tick: Option<FrameTick>,
 }
@@ -221,7 +234,14 @@ impl Vsync {
     /// # Panics
     /// Propagates the first callback or capture-retirement failure after recovery.
     pub fn set_frame_requester(&self, request_frame: Option<Rc<dyn Fn()>>) {
-        let outgoing = std::mem::replace(&mut self.inner.borrow_mut().request_frame, request_frame);
+        let outgoing = {
+            let mut inner = self.inner.borrow_mut();
+            if inner.closed {
+                request_frame
+            } else {
+                std::mem::replace(&mut inner.request_frame, request_frame)
+            }
+        };
         let mut retirement = Retirement::new();
         if self.has_frame_demand(None) {
             Self::request_frame_from(&self.inner, &mut retirement.scope());
@@ -263,6 +283,9 @@ impl Vsync {
     ) -> Result<VsyncRegistration, VsyncRegistrationError> {
         let last_gen = controller.run_generation();
         let mut inner = self.inner.borrow_mut();
+        if inner.closed {
+            return Err(VsyncRegistrationError::Closed);
+        }
         let id = inner
             .reserve_slot()
             .ok_or(VsyncRegistrationError::Exhausted)?;
@@ -308,8 +331,11 @@ impl Vsync {
     /// A cycle would hang the tick walk; nesting a registry under itself (or
     /// under one of its own descendants) is a caller bug, so it is refused and
     /// logged rather than linked.
-    /// A registry whose identities are exhausted also refuses attachment.
+    /// An exhausted or closed registry refuses attachment, as does a closed child.
     pub fn attach_child(&self, child: &Vsync) -> Option<VsyncRegistration> {
+        if child.inner.borrow().closed {
+            return None;
+        }
         if child.contains(self) {
             tracing::error!(
                 "BUG: a Vsync registry cannot be nested inside itself or its own \
@@ -318,6 +344,9 @@ impl Vsync {
             return None;
         }
         let mut inner = self.inner.borrow_mut();
+        if inner.closed {
+            return None;
+        }
         let slot = inner.reserve_slot()?;
         inner.children.push(RegisteredChild {
             slot,

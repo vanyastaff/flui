@@ -147,3 +147,7 @@
   `TwoWayConverter::rest_thresholds`; derived values compose their fields'
   distances. Manual converters must implement the new method with positive finite
   distances in their vector units. Invalid distances preserve the previous run.
+- Cancel every presentation's animation before runtime shutdown callbacks,
+  including when an earlier cancellation fails and widget owners are retained.
+  Closed Vsync registries refuse registration with `VsyncRegistrationError::Closed`;
+  saved observers cannot start a new run or revive a closed kernel by rebinding.

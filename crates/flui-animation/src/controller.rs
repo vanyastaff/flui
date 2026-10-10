@@ -2340,6 +2340,10 @@ impl AnimationController {
         Some(ValuePublication::unchanged(self.clone(), drain))
     }
 
+    pub(crate) fn is_disposed(&self) -> bool {
+        self.inner.borrow().disposed
+    }
+
     fn check_disposed(inner: &AnimationControllerInner) -> Result<(), AnimationError> {
         if inner.disposed {
             Err(AnimationError::Disposed)

@@ -529,6 +529,10 @@ fn an_unbound_controller_settles_every_run_kind_at_once() {
 fn driven_controller_owns_its_seat_and_run() {
     crate::run_table(&[
         (
+            "registry closure withdraws kernels before cancellation delivery",
+            closing_a_registry_withdraws_kernels_before_delivery,
+        ),
+        (
             "disposal closes the kernel before registry retirement",
             disposal_closes_the_kernel_before_retiring_the_registry,
         ),
@@ -577,6 +581,198 @@ fn driven_controller_owns_its_seat_and_run() {
             dropping_the_last_owner_from_its_own_listener_mid_frame,
         ),
     ]);
+}
+
+fn closing_a_registry_withdraws_kernels_before_delivery() {
+    use flui_animation::{AnimationError, MotionClock, VsyncRegistrationError};
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    #[derive(Clone, Copy)]
+    enum Delivery {
+        Finish,
+        Drop,
+        Incoming,
+        HeldFailure,
+    }
+
+    struct HookCapture {
+        registry: Vsync,
+        retired: Rc<Cell<usize>>,
+        failure: bool,
+    }
+    impl Drop for HookCapture {
+        fn drop(&mut self) {
+            self.registry.prepare_close().finish();
+            let mut fresh = AnimationController::builder(Duration::from_secs(1)).build_on(None);
+            assert_eq!(
+                fresh.rebind(Some(&self.registry)),
+                Err(VsyncRegistrationError::Closed)
+            );
+            self.retired.set(self.retired.get() + 1);
+            assert!(!self.failure, "requester retirement");
+        }
+    }
+
+    for delivery in [
+        Delivery::Finish,
+        Delivery::Drop,
+        Delivery::Incoming,
+        Delivery::HeldFailure,
+    ] {
+        for (callback_failure, capture_failure) in
+            [(false, false), (true, false), (false, true), (true, true)]
+        {
+            let root = Vsync::new();
+            let child = Vsync::new();
+            let independent = Vsync::new();
+            root.attach_child(&child).expect("nested clock");
+            independent
+                .attach_child(&child)
+                .expect("shared descendant identity");
+            let retired = Rc::new(Cell::new(0));
+            let wakes = Rc::new(Cell::new(0));
+            let capture = HookCapture {
+                registry: root.clone(),
+                retired: Rc::clone(&retired),
+                failure: capture_failure,
+            };
+            let wake_count = Rc::clone(&wakes);
+            root.set_frame_requester(Some(Rc::new(move || {
+                std::hint::black_box(&capture);
+                wake_count.set(wake_count.get() + 1);
+            })));
+            let mut first =
+                AnimationController::builder(Duration::from_secs(1)).build_on(Some(&root));
+            let second =
+                AnimationController::builder(Duration::from_secs(1)).build_on(Some(&child));
+            let peer =
+                AnimationController::builder(Duration::from_secs(1)).build_on(Some(&independent));
+            let peer_run = peer.controller().forward().expect("independent run");
+            let observers = [first.controller().clone(), second.controller().clone()];
+            let mut runs = [
+                observers[0].forward().expect("root run"),
+                observers[1].forward().expect("nested run"),
+            ];
+            let outcomes = Rc::new(RefCell::new(Vec::new()));
+            for (index, run) in runs.iter().enumerate() {
+                let observers = observers.clone();
+                let root = root.clone();
+                let child = child.clone();
+                let outcomes = Rc::clone(&outcomes);
+                run.when_complete_or_cancel(move |result| {
+                    assert!(result.is_err());
+                    assert!(root.is_empty() && child.is_empty());
+                    for observer in &observers {
+                        assert!(matches!(observer.forward(), Err(AnimationError::Disposed)));
+                    }
+                    root.prepare_close().finish();
+                    outcomes.borrow_mut().push(index);
+                    assert!(!(callback_failure && index == 0), "first cancellation");
+                });
+            }
+            let previous_wakes = wakes.get();
+            let receipt = root.prepare_close();
+            assert!(outcomes.borrow().is_empty(), "withdrawal runs no callback");
+            for run in &mut runs {
+                assert!(
+                    matches!(
+                        Pin::new(run).poll(&mut Context::from_waker(Waker::noop())),
+                        Poll::Ready(Err(_))
+                    ),
+                    "cancellation outcome commits before callback delivery"
+                );
+            }
+            assert!(root.is_empty() && child.is_empty());
+            assert!(!first.is_bound() && !second.is_bound());
+            assert!(independent.has_running());
+            assert!(root.attach_child(&independent).is_none());
+            assert!(independent.attach_child(&root).is_none());
+            let rejected_drops = Rc::new(Cell::new(0));
+            let rejected = HookCapture {
+                registry: root.clone(),
+                retired: Rc::clone(&rejected_drops),
+                failure: capture_failure,
+            };
+            let rejected_wakes = Rc::clone(&wakes);
+            let rejection = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                root.set_frame_requester(Some(Rc::new(move || {
+                    std::hint::black_box(&rejected);
+                    rejected_wakes.set(rejected_wakes.get() + 1);
+                })));
+            }));
+            assert_eq!(rejection.is_err(), capture_failure);
+            if let Err(failure) = rejection {
+                assert_eq!(
+                    failure.downcast_ref::<&str>(),
+                    Some(&"requester retirement")
+                );
+            }
+            assert_eq!(
+                rejected_drops.get(),
+                1,
+                "rejected hook retires outside borrows"
+            );
+            let mut fresh = AnimationController::builder(Duration::from_secs(1)).build_on(None);
+            assert_eq!(
+                fresh.rebind(Some(&root)),
+                Err(VsyncRegistrationError::Closed)
+            );
+            assert_eq!(
+                fresh.rebind(Some(&child)),
+                Err(VsyncRegistrationError::Closed)
+            );
+            first
+                .rebind(Some(&independent))
+                .expect("retired owner stays retired");
+            assert!(!first.is_bound());
+            let result =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match delivery {
+                    Delivery::Finish => receipt.finish(),
+                    Delivery::Drop => drop(receipt),
+                    Delivery::Incoming => {
+                        let _receipt = receipt;
+                        std::panic::panic_any("outer unwind");
+                    }
+                    Delivery::HeldFailure => {
+                        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+                        recovery.run(|| std::panic::panic_any("held failure"));
+                        receipt.publish_with(&mut recovery.scope());
+                        recovery.finish();
+                    }
+                }));
+            let expected = match delivery {
+                Delivery::Incoming => Some("outer unwind"),
+                Delivery::HeldFailure => Some("held failure"),
+                _ if callback_failure => Some("first cancellation"),
+                _ if capture_failure => Some("requester retirement"),
+                _ => None,
+            };
+            assert_eq!(result.is_err(), expected.is_some());
+            if let Err(failure) = result {
+                assert_eq!(failure.downcast_ref::<&str>().copied(), expected);
+            }
+            assert_eq!(
+                *outcomes.borrow(),
+                [0, 1],
+                "healthy cancellation tail remains deliverable"
+            );
+            let preserving =
+                callback_failure || matches!(delivery, Delivery::Incoming | Delivery::HeldFailure);
+            assert_eq!(retired.get(), usize::from(!preserving));
+            for run in &mut runs {
+                assert!(matches!(
+                    Pin::new(run).poll(&mut Context::from_waker(Waker::noop())),
+                    Poll::Ready(Err(_))
+                ));
+            }
+            root.tick_all(&MotionClock::new().frame(Duration::from_secs(2)));
+            assert_eq!(wakes.get(), previous_wakes, "a closed clock cannot wake");
+            assert!(peer.controller().is_animating());
+            drop(peer_run);
+            drop(peer);
+        }
+    }
 }
 
 fn counted_registry() -> (Vsync, std::rc::Rc<std::cell::Cell<usize>>) {
