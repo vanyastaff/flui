@@ -362,14 +362,34 @@ fn owner_retirement_custody_contract() {
                 eager_completion_preserves_caught_failure,
             ),
             (
-                "retired task admission custody",
-                retired_task_admission_preserves_caught_failure,
+                "eager pending retirement custody",
+                eager_pending_retirement_preserves_caught_failure,
+            ),
+            (
+                "retired lazy admission custody",
+                retired_lazy_admission_preserves_caught_failure,
+            ),
+            (
+                "retired eager admission custody",
+                retired_eager_admission_preserves_caught_failure,
             ),
         ],
     );
 }
 
-fn retired_task_admission_preserves_caught_failure() {
+fn eager_pending_retirement_preserves_caught_failure() {
+    retired_task_admission_preserves_caught_failure(0);
+}
+
+fn retired_lazy_admission_preserves_caught_failure() {
+    retired_task_admission_preserves_caught_failure(1);
+}
+
+fn retired_eager_admission_preserves_caught_failure() {
+    retired_task_admission_preserves_caught_failure(2);
+}
+
+fn retired_task_admission_preserves_caught_failure(mode: u8) {
     // Eager polling requires a 'static future; use a weak owner envelope.
     struct EagerRetiringFuture {
         owner: Weak<OwnerFrame>,
@@ -385,7 +405,7 @@ fn retired_task_admission_preserves_caught_failure() {
             Poll::Pending
         }
     }
-    for mode in [0, 1, 2] {
+    {
         let scheduler = UpdateScheduler::new();
         let owner = Rc::new(OwnerFrame::new(&scheduler).expect("fresh owner"));
         let driver = owner.async_driver();
