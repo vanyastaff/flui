@@ -2140,7 +2140,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
             Err(PreferenceQueryError::Unavailable);
         owner
             .update_preferences(
-                SystemPreferences::default().with_high_contrast(hook_present),
+                SystemPreferences::default().with_high_contrast(!hook_present),
                 &effects,
             )
             .expect("create real geometry retry debt");
