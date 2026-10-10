@@ -2952,6 +2952,10 @@ impl flui_foundation::Listenable for ScriptedAnimation {
 }
 
 impl Animation<f64> for ScriptedAnimation {
+    fn is_animating(&self) -> bool {
+        self.controller.is_animating()
+    }
+
     fn subscribe_status(
         &self,
         callback: flui_animation::StatusCallback,
@@ -3060,6 +3064,10 @@ impl flui_foundation::Listenable for CountingAnimation {
 }
 
 impl Animation<f64> for CountingAnimation {
+    fn is_animating(&self) -> bool {
+        self.controller.is_animating()
+    }
+
     fn subscribe_status(
         &self,
         callback: flui_animation::StatusCallback,

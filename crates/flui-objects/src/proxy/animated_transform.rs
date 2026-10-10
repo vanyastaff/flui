@@ -858,6 +858,10 @@ mod tests {
     }
 
     impl Animation<f64> for Probe {
+        fn is_animating(&self) -> bool {
+            false
+        }
+
         fn value(&self) -> f64 {
             self.0.store(true, Ordering::SeqCst);
             1.0
