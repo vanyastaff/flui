@@ -2,6 +2,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::future::Future;
+use std::io::Read;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::pin;
 use std::rc::Rc;
@@ -142,6 +143,68 @@ fn callable_retirement_preserves_the_first_failure() {
     }
 }
 
+fn invocation_failure_retains_both_callable_envelopes() {
+    for fail_preparation in [true, false] {
+        let scheduler = UpdateScheduler::new();
+        let owner = OwnerFrame::new(&scheduler).expect("owner");
+        let post_frame = owner.post_frame_handle();
+        let preparation_drops = Rc::new(Cell::new(0));
+        let pipeline_drops = Rc::new(Cell::new(0));
+        let preparation = HostileCapture {
+            name: "preparation destructor",
+            drops: Rc::clone(&preparation_drops),
+        };
+        let pipeline = HostileCapture {
+            name: "pipeline destructor",
+            drops: Rc::clone(&pipeline_drops),
+        };
+        let delivered = Rc::new(Cell::new(false));
+        let prepare_delivery = Rc::clone(&delivered);
+        let pipeline_delivery = Rc::clone(&delivered);
+        let prepare_handle = &post_frame;
+        let pipeline_handle = &post_frame;
+        let now = Instant::now();
+        let failure = catch_unwind(AssertUnwindSafe(|| {
+            owner.drive_frame(
+                now,
+                IdleDeadline::far_future(now),
+                move || {
+                    std::hint::black_box(&preparation);
+                    if fail_preparation {
+                        let observed = Rc::clone(&prepare_delivery);
+                        prepare_handle
+                            .schedule(move |_| observed.set(true))
+                            .expect("accepted work before preparation failure");
+                        panic!("preparation invocation");
+                    }
+                },
+                move || {
+                    std::hint::black_box(&pipeline);
+                    let observed = Rc::clone(&pipeline_delivery);
+                    pipeline_handle
+                        .schedule(move |_| observed.set(true))
+                        .expect("accepted work before pipeline failure");
+                    panic!("pipeline invocation");
+                },
+            )
+        }))
+        .expect_err("invocation must fail");
+        let expected = if fail_preparation {
+            "preparation invocation"
+        } else {
+            "pipeline invocation"
+        };
+        assert_eq!(failure.downcast_ref::<&str>(), Some(&expected));
+        assert_eq!(preparation_drops.get(), 0);
+        assert_eq!(pipeline_drops.get(), 0);
+        assert!(!delivered.get(), "failure does not invoke the accepted tail");
+        owner
+            .drive_frame(now, IdleDeadline::far_future(now), || {}, || {})
+            .expect("next healthy frame");
+        assert!(delivered.get(), "accepted tail remains deliverable");
+    }
+}
+
 struct TerminalCapture {
     weak: WeakUpdateScheduler,
     drops: Rc<Cell<usize>>,
@@ -243,6 +306,10 @@ fn admitted_frame_preparation_contract() {
             callable_retirement_preserves_the_first_failure,
         ),
         (
+            "invocation_failure_retains_both_callable_envelopes",
+            invocation_failure_retains_both_callable_envelopes,
+        ),
+        (
             "terminal_release_closes_authority_and_preserves_result_custody",
             terminal_release_closes_authority_and_preserves_result_custody,
         ),
@@ -257,25 +324,46 @@ fn admitted_frame_preparation_contract() {
     }
     let mut failures = Vec::new();
     for (name, _) in cases {
-        let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+        let mut child = std::process::Command::new(std::env::current_exe().expect("test executable"))
             .args([
                 "owner_execution::admitted_frame_preparation_contract",
                 "--exact",
                 "--nocapture",
             ])
             .env("FLUI_OWNER_EXECUTION_CASE", name)
-            .output()
+            .env("RUST_BACKTRACE", "0")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
             .expect("child test process");
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        if !output.status.success()
+        let mut stdout = child.stdout.take().expect("stdout pipe");
+        let mut stderr = child.stderr.take().expect("stderr pipe");
+        let stdout_reader = std::thread::spawn(move || {
+            let mut text = String::new();
+            stdout.read_to_string(&mut text).expect("child stdout");
+            text
+        });
+        let stderr_reader = std::thread::spawn(move || {
+            let mut text = String::new();
+            stderr.read_to_string(&mut text).expect("child stderr");
+            text
+        });
+        let started = std::time::Instant::now();
+        while child.try_wait().expect("child status").is_none() {
+            if started.elapsed() > std::time::Duration::from_secs(10) {
+                child.kill().expect("kill hung child");
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let status = child.wait().expect("child exit");
+        let stdout = stdout_reader.join().expect("stdout reader");
+        let stderr = stderr_reader.join().expect("stderr reader");
+        if !status.success()
             || !stdout.contains("running 1 test")
             || !stdout.contains("test result: ok. 1 passed; 0 failed;")
         {
-            failures.push(format!(
-                "{name}: {}\n{}",
-                stdout,
-                String::from_utf8_lossy(&output.stderr)
-            ));
+            failures.push(format!("{name}: {status}\n{stdout}\n{stderr}"));
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
