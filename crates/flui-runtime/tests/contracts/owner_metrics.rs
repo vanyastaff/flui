@@ -2127,6 +2127,13 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
     scheduler.set_frames_enabled(false);
     let frames_before = scheduler.frame_count();
     let submissions_before = effects.sink.borrow().submitted;
+    let retry_deadline = || {
+        let deadline = Rc::new(Cell::new(None));
+        let observed = Rc::clone(&deadline);
+        target.test_callback(Box::new(move |runtime| observed.set(runtime.next_wake())), &effects)
+            .expect("observe the affected runtime's public wake deadline");
+        deadline.get().expect("affected runtime retains geometry retry debt")
+    };
     for hook_present in [false, true] {
         let wakes = Arc::new(AtomicUsize::new(0));
         scheduler.set_on_frame_scheduled(None);
@@ -2144,7 +2151,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
                 &effects,
             )
             .expect("create real geometry retry debt");
-        let due = owner.next_wake().expect("wake").expect("retry before poll");
+        let due = retry_deadline();
         clock.advance(due.duration_since(clock.now()));
         let calls_before = window.calls.load(Ordering::Relaxed);
         let polls = Rc::new(Cell::new(0));
@@ -2195,7 +2202,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         assert_eq!(polls.get(), 0, "sibling execution cannot poll this runtime's task");
 
         *window.answer.lock().expect("successful preparation script") = Ok(geometry(2.0, 2.0));
-        let due = owner.next_wake().expect("recovery wake").expect("retry after panic");
+        let due = retry_deadline();
         clock.advance(due.duration_since(clock.now()));
         let wake_before = replacement_wakes.load(Ordering::SeqCst);
         background.deliver(flui_runtime::owner::RuntimeOperation::Background, &effects)
@@ -2228,14 +2235,16 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
     let before = window.calls.load(Ordering::Relaxed);
     target.close(&effects).expect("close with pending retry");
     clock.advance(Duration::from_secs(2));
+    sibling_turn.deliver(flui_runtime::owner::RuntimeOperation::Background, &effects)
+        .expect("closing the failed presentation leaves its sibling live");
+    owner.presentation_dispatcher(sibling_address).expect("surviving sibling")
+        .close(&effects).expect("close surviving sibling");
     assert_eq!(owner.next_wake().expect("closed deadlines"), None);
     assert_eq!(
         window.calls.load(Ordering::Relaxed),
         before,
         "retired address cannot retry its query"
     );
-    sibling_turn.deliver(flui_runtime::owner::RuntimeOperation::Background, &effects)
-        .expect("closing the failed presentation leaves its sibling live");
     owner.shutdown(&effects);
 }
 
