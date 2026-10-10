@@ -333,6 +333,9 @@ fn owner_retirement_custody_contract() {
     crate::run_table(
         "owner retirement custody",
         &[
+            ("closed scheduler keeps cancelled tail", closed_scheduler_keeps_cancelled_tail as fn()),
+            ("closed scheduler refused task custody", closed_scheduler_refused_task_custody),
+            ("owner drop preserves first failure through terminal release", owner_drop_preserves_first_failure_through_terminal_release),
             (
                 "finished and cancelled future custody",
                 finished_and_cancelled_futures_preserve_caught_failure_custody as fn(),
@@ -403,6 +406,95 @@ fn owner_retirement_custody_contract() {
             ),
         ],
     );
+}
+
+fn closed_scheduler_keeps_cancelled_tail() {
+    closed_scheduler_retirement(false);
+}
+
+fn closed_scheduler_refused_task_custody() {
+    closed_scheduler_retirement(true);
+}
+
+fn closed_scheduler_retirement(spawn_refused: bool) {
+    struct ClosedOwnerFuture {
+        owner: Weak<OwnerFrame>,
+        driver: flui_scheduler::AsyncDriver,
+        other: Rc<RefCell<Option<TaskToken>>>,
+        rejected_drops: Rc<Cell<usize>>,
+        spawn_refused: bool,
+    }
+    impl Future for ClosedOwnerFuture {
+        type Output = ();
+        fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<()> { Poll::Pending }
+    }
+    impl Drop for ClosedOwnerFuture {
+        fn drop(&mut self) {
+            catch_nested_refusal_failure(&self.owner.upgrade().expect("owner still lives"));
+            let token = self.other.borrow_mut().take().expect("other token");
+            token.cancel();
+            if self.spawn_refused {
+                let token = self.driver.spawn_local(Box::pin(RemovedFuture {
+                    capture: RemovedCapture(Rc::clone(&self.rejected_drops)),
+                    ready: false,
+                }));
+                assert!(token.is_cancelled());
+            }
+        }
+    }
+    let scheduler = UpdateScheduler::new();
+    let owner = Rc::new(OwnerFrame::new(&scheduler).expect("fresh owner"));
+    let other = Rc::new(RefCell::new(None));
+    let rejected_drops = Rc::new(Cell::new(0));
+    let driver = owner.async_driver();
+    let first = driver.spawn_local(Box::pin(ClosedOwnerFuture {
+        owner: Rc::downgrade(&owner), driver: driver.clone(), other: Rc::clone(&other),
+        rejected_drops: Rc::clone(&rejected_drops), spawn_refused,
+    }));
+    let tail_drops = Rc::new(Cell::new(0));
+    *other.borrow_mut() = Some(driver.spawn_local(Box::pin(RemovedFuture {
+        capture: RemovedCapture(Rc::clone(&tail_drops)), ready: false,
+    })));
+    let weak = scheduler.downgrade();
+    drop(scheduler);
+    assert!(weak.upgrade().is_none());
+    assert!(owner.retire().is_none());
+    assert_eq!(tail_drops.get(), 0, "detached cancelled tail retains caught failure custody");
+    assert_eq!(rejected_drops.get(), 0, "closed scheduler still shares task refusal custody");
+    assert!(first.is_cancelled());
+    assert_eq!(driver.pending_task_count(), 0);
+    assert_healthy_refusal_retires(&owner);
+}
+
+fn owner_drop_preserves_first_failure_through_terminal_release() {
+    struct FirstFailure {
+        producer: Rc<RefCell<Option<UpdateScheduler>>>,
+        weak: flui_scheduler::WeakUpdateScheduler,
+    }
+    impl Drop for FirstFailure {
+        fn drop(&mut self) {
+            let last = self.producer.borrow_mut().take();
+            drop(last);
+            assert!(self.weak.upgrade().is_some(), "owner cleanup retains its temporary producer");
+            panic!("owner drop first failure");
+        }
+    }
+    let scheduler = UpdateScheduler::new();
+    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let weak = scheduler.downgrade();
+    let terminal_drops = Rc::new(Cell::new(0));
+    let capture = RemovedCapture(Rc::clone(&terminal_drops));
+    scheduler.schedule_frame_callback(Box::new(move |_| { let _ = &capture; }));
+    let producer = Rc::new(RefCell::new(Some(scheduler)));
+    let capture = FirstFailure { producer: Rc::clone(&producer), weak: weak.clone() };
+    owner.post_frame_handle().schedule(move |_| { let _ = &capture; })
+        .expect("queued owner envelope");
+    let failure = catch_unwind(AssertUnwindSafe(|| drop(owner)))
+        .expect_err("owner drop propagates first failure after terminal release");
+    assert_eq!(flui_foundation::panic::payload_text(failure.as_ref()), Some("owner drop first failure"));
+    assert!(weak.upgrade().is_none(), "terminal cleanup closes weak authority");
+    assert!(producer.borrow().is_none());
+    assert_eq!(terminal_drops.get(), 0, "terminal producer capture retains incoming owner failure");
 }
 
 fn healthy_teardown_after_completed_caught_failure() {
