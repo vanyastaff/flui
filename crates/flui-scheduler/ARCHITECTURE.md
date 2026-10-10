@@ -836,8 +836,8 @@ is neither polled nor drained.
 
 **Teardown order:** `OwnerFrame::retire` closes both admission lanes, detaches their
 ownership and disables every task waker and the frame hook before user destruction.
-It drops the post-frame queue, then the
-tasks, each under its own catch, keeping the first panic; the UI runtime calls it
+It retires the post-frame queue, then the
+tasks, keeping the first panic and retaining the remaining opaque tail; the UI runtime calls it
 after closing its presentations and before resuming any earlier failure.
 During an existing unwind the values are retained instead, the same limit
 `TaskToken`'s `Drop` states.
@@ -846,7 +846,7 @@ During an existing unwind the values are retained instead, the same limit
 `crates/flui-testing/tests/async_driver.rs` (`owner_local_future_completes_after_a_worker_wake`,
 `late_completion_after_ui_runtime_drop_drops_captures_on_the_owner`,
 `a_leaked_async_driver_holds_no_task_after_the_ui_runtime`);
-`retirement_drops_every_task_and_keeps_the_first_panic` and
+`retirement_retains_the_tail_and_keeps_the_first_panic` and
 `retirement_drops_queued_callbacks_and_closes_the_queue` here;
 `async_driver_unwind_matrix` covers reentrant callback destruction, sibling wakes,
 eager-poll retirement and foreign-owner rejection without consuming frame demand;

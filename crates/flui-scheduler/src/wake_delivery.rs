@@ -24,8 +24,21 @@ impl WakeDelivery {
     pub(crate) fn request(
         &self,
         fresh: impl FnOnce() -> bool,
+        read_hook: impl FnMut() -> Option<Arc<dyn Fn() + Send + Sync>>,
+    ) {
+        self.request_preserving_failure(false, fresh, read_hook);
+    }
+
+    /// A recovery delivery borrows an earlier operation's failure custody.
+    /// A successful hook can uninstall itself, so its captures also need
+    /// retention even when this delivery catches no new failure.
+    pub(crate) fn request_preserving_failure(
+        &self,
+        preserve_failure: bool,
+        fresh: impl FnOnce() -> bool,
         mut read_hook: impl FnMut() -> Option<Arc<dyn Fn() + Send + Sync>>,
     ) {
+        let preserve_failure = preserve_failure || std::thread::panicking();
         let thread = std::thread::current().id();
         let (mut token, hook) = {
             let mut state = self.state.lock();
@@ -113,6 +126,14 @@ impl WakeDelivery {
                 token = next;
                 compensation_hook = Some(next_hook);
             } else {
+                if preserve_failure {
+                    std::mem::forget(hook);
+                    std::mem::forget(compensation_hook);
+                    if let Some(payload) = first_panic {
+                        flui_foundation::panic::retain_opaque_payload(payload);
+                    }
+                    return;
+                }
                 if let Some(payload) = first_panic {
                     // A hook can uninstall itself before panicking. Its opaque
                     // capture bundle may have panicking aggregate drop glue,

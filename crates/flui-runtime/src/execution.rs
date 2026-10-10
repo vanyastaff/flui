@@ -971,7 +971,7 @@ mod tests {
         let _token = owner_frame.async_driver().spawn_local(Box::pin(async move {
             done_for_task.store(true, Ordering::Release);
         }));
-        assert_eq!(owner_frame.poll_ready(), 1);
+        assert_eq!(owner_frame.pump_background(|| {}).expect("owner turn"), 1);
         assert!(
             done.load(Ordering::Acquire),
             "the frame lane must complete without waiting for pool capacity"

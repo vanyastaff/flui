@@ -5,23 +5,123 @@ use super::{DrainReport, UiRuntime};
 use crate::pump::{FrameClockSource, FrameOutcome};
 use crate::sink::FrameSink;
 
-/// Publishes a pump's frame timestamp for the frame's duration and clears it
-/// on the way out, the unwinding way included, so a panicking frame cannot
-/// leave the next un-pumped `draw_frame` reading a stale frame clock.
+/// Publishes a pump's frame timestamp for the frame's duration and restores it
+/// on the way out, the unwinding way included. Rejected nested execution
+/// restores its enclosing timestamp rather than clearing the outer frame.
 struct FrameTimeGuard<'a> {
     ui_runtime: &'a UiRuntime,
+    previous: Option<web_time::Instant>,
+}
+
+/// Native callback reentry cannot be expressed through the safe public
+/// `pump(&mut self)` interface. This case reaches the same internal producer,
+/// while observing public text-store grants and animation progress.
+#[cfg(test)]
+pub(super) fn rejected_nested_pump_preserves_outer_commits_and_animation_time() {
+    use flui_animation::{Animation as _, AnimationController};
+    use flui_platform_api::text_store::{
+        InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextStore, TextStoreError,
+    };
+    use std::{cell::Cell, panic::AssertUnwindSafe, rc::Rc, sync::Arc, time::Duration};
+
+    let input: Arc<dyn flui_platform_api::PlatformTextInput> =
+        Arc::new(flui_platform::FakeTextInput::new());
+    let runtime = Rc::new(UiRuntime::for_test_with_text_input(Some(input)));
+    runtime
+        .enter(|runtime| runtime.attach_root_widget(&flui_widgets::SizedBox::square(10.0)))
+        .expect("root attaches");
+    let store = InMemoryTextStore::new("abc");
+    let erased: Rc<dyn TextStore> = store.clone();
+    let _client = runtime
+        .text_input_handle()
+        .attach(flui_interaction::TextInputClient::new(erased))
+        .expect("text store attaches");
+    let owner =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&runtime.vsync()));
+    let controller = owner.controller();
+    controller.forward().expect("animation starts");
+
+    let run = |time| {
+        let turn = runtime.begin_geometry_turn();
+        runtime.pump_entered(
+            &mut crate::pump::SampledClock(time),
+            &mut crate::testing::ScriptedSink::always_presents(),
+            &turn,
+        )
+    };
+    let first = runtime.start + Duration::from_secs(1);
+    let _ = run(first);
+
+    let grants = Rc::new(Cell::new(0));
+    let observed_grants = Rc::clone(&grants);
+    let observed_store = store.clone();
+    let weak_runtime = Rc::downgrade(&runtime);
+    runtime
+        .scheduler
+        .add_persistent_frame_callback(Rc::new(move |_| {
+            let runtime = weak_runtime.upgrade().expect("outer pump owns runtime");
+            let count = Rc::clone(&observed_grants);
+            assert_eq!(
+                observed_store.request_lock(
+                    LockGrant::read_write(move |_| count.set(count.get() + 1)),
+                    LockTiming::Async,
+                ),
+                Ok(LockOutcome::Deferred),
+            );
+            let nested = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                let turn = runtime.begin_geometry_turn();
+                runtime.pump_entered(
+                    &mut crate::pump::SampledClock(first + Duration::from_secs(5)),
+                    &mut crate::testing::ScriptedSink::always_presents(),
+                    &turn,
+                )
+            }));
+            let failure = nested.expect_err("recursive runtime execution is refused");
+            assert!(
+                failure.downcast_ref::<String>().is_some_and(|message| {
+                    message.contains("must admit its frame transaction")
+                }),
+                "the runtime maps owner admission refusal to its invariant failure",
+            );
+            assert_eq!(observed_grants.get(), 0, "rejection runs no commit anchor");
+            assert_eq!(
+                observed_store.request_lock(LockGrant::read(|_| {}), LockTiming::Sync),
+                Err(TextStoreError::SyncLockUnavailable),
+                "the outer frame still excludes native commits",
+            );
+        }));
+
+    let _ = run(first + Duration::from_millis(500));
+    assert_eq!(
+        grants.get(),
+        1,
+        "the outer frame runs the queued grant once"
+    );
+    assert_eq!(
+        store.request_lock(LockGrant::read(|_| {}), LockTiming::Sync),
+        Ok(LockOutcome::Granted),
+        "the completed outer frame reopens commits",
+    );
+    let value = controller.value();
+    assert!(
+        (value - 0.5).abs() < 1e-9,
+        "outer animation time survives: {value}"
+    );
 }
 
 impl<'a> FrameTimeGuard<'a> {
     fn publish(ui_runtime: &'a UiRuntime, frame_time: web_time::Instant) -> Self {
-        ui_runtime.frame_time.set(Some(frame_time));
-        Self { ui_runtime }
+        let previous = ui_runtime.frame_time.replace(Some(frame_time));
+        Self {
+            ui_runtime,
+            previous,
+        }
     }
 }
 
 impl Drop for FrameTimeGuard<'_> {
     fn drop(&mut self) {
-        self.ui_runtime.frame_time.set(None);
+        self.ui_runtime.frame_time.set(self.previous);
     }
 }
 
@@ -120,13 +220,15 @@ impl UiRuntime {
     /// The order is load-bearing. Only a begin frame clears the latch, and
     /// none runs here; polling first would let a future that schedules a
     /// frame find the latch still set, fire no wake, and starve until
-    /// unrelated input arrives (see `UpdateScheduler::finish_async_pump`).
+    /// unrelated input arrives. The owner performs the complete background
+    /// operation, servicing geometry between demand consumption and polling.
     pub fn pump_background(&mut self) {
         let turn = self.begin_geometry_turn();
         self.enter(|ui_runtime| {
-            ui_runtime.scheduler.finish_async_pump();
-            ui_runtime.service_gesture_geometry(&turn);
-            ui_runtime.owner_frame.poll_ready();
+            ui_runtime
+                .owner_frame
+                .pump_background(|| ui_runtime.service_gesture_geometry(&turn))
+                .expect("BUG: the runtime's live frame owner must admit its background turn");
         });
     }
 

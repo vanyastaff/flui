@@ -52,7 +52,7 @@
 //! ```
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::{HashSet, VecDeque},
     future::Future,
     pin::Pin,
@@ -80,6 +80,7 @@ use crate::{
     task::{Priority, TaskQueue},
 };
 
+pub(crate) mod execution;
 mod identity;
 mod post_frame_dispatch;
 mod teardown;
@@ -873,6 +874,9 @@ struct SchedulerInner {
     /// lives: a scheduler has at most one, so the owner a frame drive polls is
     /// the only one tasks can be admitted to.
     owner_frame_claimed: AtomicBool,
+    /// Terminal execution release reports contained cleanup failure to the
+    /// caller that still owns its produced output. Ordinary turns use no sink.
+    execution_release: RefCell<Option<teardown::ExecutionRelease>>,
 }
 
 /// Main scheduler for frame and task management
@@ -1026,10 +1030,15 @@ impl std::fmt::Debug for FrameWaker {
 /// Factored out so both callers can hand it plain field references
 /// (`&FrameState`, `&BindingState`) rather than duplicating coalescing logic.
 fn request_frame_impl(wake: &WakeShared) {
+    request_frame_impl_preserving_failure(wake, false);
+}
+
+fn request_frame_impl_preserving_failure(wake: &WakeShared, preserve_failure: bool) {
     if wake.closed.load(Ordering::Acquire) {
         return;
     }
-    wake.wake_delivery.request(
+    wake.wake_delivery.request_preserving_failure(
+        preserve_failure,
         || !wake.frame_scheduled.swap(true, Ordering::SeqCst),
         || wake.on_frame_scheduled.lock().clone(),
     );
@@ -1127,6 +1136,7 @@ impl UpdateScheduler {
             },
             task_queue,
             owner_frame_claimed: AtomicBool::new(false),
+            execution_release: RefCell::new(None),
         });
 
         Self { inner }
@@ -1205,7 +1215,6 @@ impl UpdateScheduler {
     /// # Panics
     ///
     /// Panics before consuming frame demand if `owner` belongs to another scheduler.
-    #[tracing::instrument(skip(self, owner))]
     pub fn handle_begin_frame(&self, vsync_time: Instant, owner: &crate::OwnerFrame) -> FrameId {
         assert!(
             owner.belongs_to(self),
@@ -1363,7 +1372,6 @@ impl UpdateScheduler {
     /// deadline set and Idle work always runs too.
     /// A deadline can defer low-priority work; it can never skip a frame or
     /// starve logical (Animation/Build) work.
-    #[tracing::instrument(skip(self))]
     pub fn handle_draw_frame(&self) {
         // Phase 3: PersistentCallbacks (the pipeline's slot)
         self.set_scheduler_phase(SchedulerPhase::PersistentCallbacks);
@@ -1476,7 +1484,6 @@ impl UpdateScheduler {
     /// `PersistentCallbacks` (i.e. `handle_draw_frame` ran). To finish a frame
     /// *without* running its post-frame callbacks, use
     /// [`abort_frame`](Self::abort_frame).
-    #[tracing::instrument(skip(self, owner))]
     pub fn end_frame(&self, owner: &crate::OwnerFrame) {
         // Phase 4: PostFrameCallbacks
         self.set_scheduler_phase(SchedulerPhase::PostFrameCallbacks);
@@ -1521,6 +1528,9 @@ impl UpdateScheduler {
             // would corrupt the sort below. On a mismatch the take traces the
             // error and the owner-local queue is left untouched.
             let callback_result = self.dispatch_post_frame_callbacks(owner, &timing);
+            if callback_result.is_err() {
+                owner.record_execution_failure();
+            }
 
             // Notify frame completion futures. Caught here, alongside
             // `callback_result`, rather than left to propagate bare: a
@@ -1534,6 +1544,7 @@ impl UpdateScheduler {
                 self.notify_frame_completion(
                     FrameOutcome::Completed { timing },
                     callback_result.is_err(),
+                    Some(owner.execution_failure_signal()),
                 );
             }));
 
@@ -1640,7 +1651,7 @@ impl UpdateScheduler {
         self.inner.callbacks.cancelled.borrow_mut().clear();
 
         if let Some(timing) = timing {
-            self.notify_frame_completion(FrameOutcome::Aborted { timing }, preserve_failure);
+            self.notify_frame_completion(FrameOutcome::Aborted { timing }, preserve_failure, None);
         }
 
         tracing::warn!("frame aborted; its post-frame callbacks were not run");
@@ -2755,11 +2766,23 @@ impl UpdateScheduler {
     /// re-raised too -- `resume_unwind` takes one payload -- so it is routed
     /// through [`discard_panic_payload`] instead, retaining the opaque payload
     /// without invoking its possibly-panicking destruction.
-    fn notify_frame_completion(&self, outcome: FrameOutcome, preserve_failure: bool) {
+    fn notify_frame_completion(
+        &self,
+        outcome: FrameOutcome,
+        preserve_failure: bool,
+        failure_signal: Option<&Cell<bool>>,
+    ) {
         let waiters = self.inner.frame.completion_waiters.borrow_mut().drain();
 
-        let mut delivery =
-            crate::completion_wake::WakeBatch::new("frame completion", preserve_failure);
+        let mut delivery = if let Some(signal) = failure_signal {
+            crate::completion_wake::WakeBatch::with_failure_signal(
+                "frame completion",
+                preserve_failure,
+                signal,
+            )
+        } else {
+            crate::completion_wake::WakeBatch::new("frame completion", preserve_failure)
+        };
         for notifier in waiters {
             // `upgrade()` at loop-body scope, never inside the
             // `completion_waiters` block above: the temporary `Arc` it

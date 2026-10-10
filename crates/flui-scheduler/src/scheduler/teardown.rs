@@ -1,86 +1,165 @@
-//! Last-owner completion delivery and contained waker retirement.
+//! Terminal scheduler retirement after its last strong UI reference is gone.
 
-use super::{SchedulerClosed, SchedulerInner};
+use std::cell::{Cell, RefCell};
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::rc::Rc;
 
-/// Resolves every still-pending [`end_of_frame`](super::UpdateScheduler::end_of_frame)
-/// waiter with `Err(`[`SchedulerClosed`]`)` when the last strong
-/// [`super::UpdateScheduler`] handle is dropped, so a caller awaiting one never
-/// hangs forever with no frame left to run and resolve it.
-///
-/// # Why `get_mut`, not `lock()`, is sound with no runtime check
-///
-/// `Drop::drop` hands this `&mut SchedulerInner`, and the reason that is
-/// sound is `Arc`, not the borrow: this runs only once the strong count has
-/// reached zero, and `Arc`'s own release/acquire ordering means this
-/// destructor observes every prior mutation through any dropped clone — no
-/// other thread can be mid-registration or mid-notification against this
-/// same registry at this point. So teardown takes no lock at all.
-///
-/// # Why the `Some(Err(SchedulerClosed))` write below needs no `is_none()` guard
-///
-/// `drain()` performs `mem::take`, removing every entry it returns from the
-/// registry — so every entry this loop reaches is, by construction, one
-/// `notify_frame_completion` never reached first (a delivered completion
-/// already took its entry out of the registry, via that same `drain`, long
-/// before this ran). `completed` is therefore always `None` here; a runtime
-/// check would be dead code testing a fact the type already proves.
-///
-/// # May run on a foreign thread
-///
-/// A [`super::FrameWaker::request_frame`] can itself be the call that drops its own
-/// `upgrade()`d temporary strong reference — making THIS the final release,
-/// on whichever thread that wake happened to run on. Everything this touches
-/// (`FrameCompletionRegistry`, `FrameCompletionState`, `Waker`) is
-/// `Send + Sync`, so that is sound, but it means this must never assume it
-/// runs on the scheduler's "home" thread.
-///
-/// # Never `resume_unwind`
-///
-/// A panic raised from a destructor while the thread is already unwinding
-/// aborts the process with no diagnostic. Wakers are borrowed for invocation,
-/// retaining their owning envelopes on failure or existing unwind. Ordinary
-/// retirement and telemetry have separate catches; caught opaque payloads
-/// are retained, and this delivery loop never resumes a caught failure.
-///
-/// # What this cannot reach
-///
-/// This runs only once every strong [`super::UpdateScheduler`] reference is gone —
-/// the ordinary `Arc` rule, nothing special to this type. A task holding its
-/// OWN strong clone (captured into an `async` block spawned on the UI runtime's
-/// [`AsyncDriver`](crate::AsyncDriver), say) defers this for as long as that
-/// task is still pending, and a live strong clone anywhere else — an embedder
-/// holding one, another thread's handle — does the same. The scheduler's
-/// wake capability never causes that: a [`super::FrameWaker`] (the hook an
-/// [`OwnerFrame`](crate::OwnerFrame) installs for its task wakes) holds only a
-/// `Weak<SchedulerInner>`, precisely so a pending task cannot keep the
-/// scheduler it belongs to alive through this destructor. See this crate's `ARCHITECTURE.md` "The teardown lifetime
-/// guarantee remains partial" paragraph in the #1162 mapping entry for the full
-/// argument.
+use super::{SchedulerClosed, SchedulerInner, UpdateScheduler};
+use crate::async_driver::RetirePanic;
+
+pub(super) struct ExecutionRelease {
+    pub(super) preserve_failure: bool,
+    pub(super) failure_signal: Rc<Cell<bool>>,
+    pub(super) failure: Rc<RefCell<Option<RetirePanic>>>,
+}
+
+impl UpdateScheduler {
+    /// Only a terminal release allocates a result sink. Actual destruction
+    /// happens after Rc closes weak upgrades, before any user cleanup runs.
+    pub(crate) fn release_execution(
+        self,
+        preserve_failure: bool,
+        failure_signal: Rc<Cell<bool>>,
+    ) -> Option<RetirePanic> {
+        if Rc::strong_count(&self.inner) != 1 {
+            drop(self);
+            return None;
+        }
+        let failure = Rc::new(RefCell::new(None));
+        *self.inner.execution_release.borrow_mut() = Some(ExecutionRelease {
+            preserve_failure,
+            failure_signal,
+            failure: Rc::clone(&failure),
+        });
+        drop(self);
+        let payload = failure.borrow_mut().take();
+        payload
+    }
+}
+
+struct Retirement<'a> {
+    preserve_failure: bool,
+    signal: &'a Cell<bool>,
+    first: Option<RetirePanic>,
+}
+
+impl Retirement<'_> {
+    fn observe(&mut self, payload: RetirePanic) {
+        self.signal.set(true);
+        if self.preserve_failure || self.first.is_some() {
+            flui_foundation::panic::retain_opaque_payload(payload);
+        } else {
+            self.first = Some(payload);
+        }
+    }
+
+    fn retire<T>(&mut self, value: T) {
+        if self.preserve_failure
+            || self.first.is_some()
+            || self.signal.get()
+            || std::thread::panicking()
+        {
+            std::mem::forget(value);
+        } else if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(value))) {
+            self.observe(payload);
+        }
+    }
+}
+
 impl Drop for SchedulerInner {
     fn drop(&mut self) {
         self.wake
             .closed
             .store(true, std::sync::atomic::Ordering::Release);
+        let execution = self.execution_release.get_mut().take();
+        let local_signal = Cell::new(false);
+        let signal = execution
+            .as_ref()
+            .map_or(&local_signal, |release| release.failure_signal.as_ref());
+        let incoming = std::thread::panicking()
+            || execution
+                .as_ref()
+                .is_some_and(|release| release.preserve_failure);
+
+        // Detach every opaque collection before invocation or retirement. Rc's
+        // strong count is already zero: callback reentry cannot revive the UI
+        // scheduler or register work into collections being destroyed.
+        let transient = std::mem::take(self.callbacks.transient.get_mut());
+        let persistent = std::mem::take(self.callbacks.persistent.get_mut());
+        let post_frame = self
+            .callbacks
+            .post_frame
+            .get_mut()
+            .detach_unclaimed_for_retirement();
+        let microtasks = std::mem::take(self.callbacks.microtasks.get_mut());
+        let idle = std::mem::take(self.callbacks.idle.get_mut());
+        let listeners = std::mem::take(self.callbacks.lifecycle_listeners.get_mut());
+        let timings = std::mem::take(self.binding.timings_callbacks.get_mut());
+        let tasks = self.task_queue.detach_for_retirement();
+        let hook = self.wake.on_frame_scheduled.lock().take();
         let waiters = self.frame.completion_waiters.get_mut().drain();
-        let mut delivery = crate::completion_wake::WakeBatch::new("scheduler teardown", false);
+        let mut delivery = crate::completion_wake::WakeBatch::with_failure_signal(
+            "scheduler teardown",
+            incoming,
+            signal,
+        );
 
         for notifier in waiters {
-            // A failed upgrade means the future was already dropped
-            // (cancelled) before teardown reached it — an ordinary outcome,
-            // not an error, exactly as in `notify_frame_completion`.
             let Some(state) = notifier.state.upgrade() else {
                 continue;
             };
-
             let waker = {
                 let mut state = state.lock();
                 state.completed = Some(Err(SchedulerClosed));
                 state.waker.take()
             };
-            let Some(waker) = waker else { continue };
-
-            delivery.wake(waker);
+            if let Some(waker) = waker {
+                delivery.wake(waker);
+            }
         }
-        delivery.finish(false);
+
+        let mut retirement = Retirement {
+            preserve_failure: incoming,
+            signal,
+            first: None,
+        };
+        if let Some(payload) = delivery.into_failure() {
+            retirement.observe(payload);
+        }
+        for value in transient {
+            retirement.retire(value);
+        }
+        for value in persistent {
+            retirement.retire(value);
+        }
+        for value in post_frame {
+            retirement.retire(value);
+        }
+        for value in microtasks {
+            retirement.retire(value);
+        }
+        for value in idle {
+            retirement.retire(value);
+        }
+        for value in listeners {
+            retirement.retire(value);
+        }
+        for value in timings {
+            retirement.retire(value);
+        }
+        for value in tasks {
+            retirement.retire(value);
+        }
+        retirement.retire(hook);
+
+        if let Some(payload) = retirement.first {
+            if let Some(release) = &execution {
+                *release.failure.borrow_mut() = Some(payload);
+            } else {
+                // Ordinary Drop cannot re-raise into a potentially unwinding
+                // owner. Explicit execution release receives the failure above.
+                crate::completion_wake::retain_reported(payload, "scheduler teardown");
+            }
+        }
     }
 }
