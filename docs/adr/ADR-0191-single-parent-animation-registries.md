@@ -35,8 +35,10 @@ Detachment clears the backreference before retiring child custody. Closing a
 registry closes its attached descendants and withdraws its parent seat before
 cancellation callouts. A refused second parent does not share that closure.
 
-The root supplying a frame is its clock authority. Each registry remembers that
-root weakly. Moving a surviving subtree to another root preserves each controller's
+The ultimate live parent identifies a registry's clock authority, including when
+an embedder directly ticks an attached subtree. Choosing a different delivery
+entry point does not transfer ownership. Each registry remembers its root weakly.
+Moving a surviving subtree to another root preserves each controller's
 published elapsed time and run future, then anchors that elapsed on its first
 delivered frame. Old absolute timestamps and dispatched tick history do not carry
 between independent clocks. Detach and reattach under the same root retain the
@@ -75,7 +77,8 @@ setup assertions do; expected refusals use the fallible replacement operation.
 sample, cycles without mutation, reattachment after detach or parent release,
 stale tokens, and recovery after a failed attachment wake. Its transfer rows
 cover earlier and later clock origins, nested controllers, expired parents and
-the original completion future. Reentrant rows withdraw a later child or an
+the original completion future. Direct subtree ticks preserve the same authority
+and deadline. Reentrant rows withdraw a later child or an
 in-flight ancestor, mute an ancestor, and verify progress under the live driver.
 `closing_a_registry_withdraws_kernels_before_delivery` retains nested cancellation,
 first-failure custody and independent presentation progress. Private terminal

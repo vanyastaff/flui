@@ -56,6 +56,10 @@ fn vsync_admission_contract() {
             "a muted ancestor stops its in-flight descendants",
             a_muted_ancestor_stops_its_in_flight_descendants,
         ),
+        (
+            "direct child frames retain their parent clock authority",
+            direct_child_frames_retain_their_parent_clock_authority,
+        ),
     ]);
 }
 
@@ -275,6 +279,37 @@ fn moving_a_subtree_preserves_its_last_sampled_motion() {
                 );
             }
         }
+    }
+}
+
+fn direct_child_frames_retain_their_parent_clock_authority() {
+    use flui_animation::MotionClock;
+    for depth in [1, 3] {
+        let root = Vsync::new();
+        let mut child = root.clone();
+        for _ in 0..depth {
+            let next = Vsync::new();
+            child
+                .attach_child(&next)
+                .expect("child belongs to this presentation");
+            child = next;
+        }
+        let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&child));
+        let controller = owner.controller();
+        let run = controller.forward().expect("resident run");
+        let mut clock = MotionClock::new();
+        root.tick_all(&clock.frame(Duration::from_secs(100)));
+        root.tick_all(&clock.frame(Duration::from_millis(100_200)));
+        child.tick_all(&clock.frame(Duration::from_millis(100_400)));
+        assert!(
+            (controller.value() - 0.4).abs() < 1e-10,
+            "choosing a child entry point does not transfer presentation ownership: {}",
+            controller.value()
+        );
+        root.tick_all(&clock.frame(Duration::from_millis(100_500)));
+        assert!((controller.value() - 0.5).abs() < 1e-10 && run.is_pending());
+        root.tick_all(&clock.frame(Duration::from_secs(101)));
+        assert!(run.is_complete());
     }
 }
 

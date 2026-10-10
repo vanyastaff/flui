@@ -198,7 +198,7 @@ struct VsyncInner {
     closed: bool,
     muted: bool,
     last_tick: Option<FrameTick>,
-    /// Backend identity of the root that supplied the last frame. Weak custody
+    /// Backend identity of the ultimate live parent at the last frame. Weak custody
     /// neither retains the old presentation nor permits address reuse to alias it.
     frame_authority: Option<Weak<RefCell<VsyncInner>>>,
 }
@@ -620,11 +620,27 @@ impl Vsync {
     /// preserving that failure through callback and capture retirement.
     pub fn tick_all(&self, tick: &FrameTick) {
         let mut retirement = Retirement::new();
-        let authority = Rc::downgrade(&self.inner);
+        let authority = self.frame_authority();
         retirement.run_with(|retirement| {
             self.tick_all_with_retirement(*tick, &authority, None, retirement);
         });
         retirement.finish();
+    }
+
+    /// A directly ticked subtree retains the clock authority of its live parent
+    /// chain. Single-parent acyclic admission bounds this upward traversal.
+    fn frame_authority(&self) -> Weak<RefCell<VsyncInner>> {
+        let mut registry = Rc::clone(&self.inner);
+        loop {
+            let parent = {
+                let inner = registry.borrow();
+                inner.parent.as_ref().and_then(|seat| seat.owner.upgrade())
+            };
+            let Some(parent) = parent else {
+                return Rc::downgrade(&registry);
+            };
+            registry = parent;
+        }
     }
 
     fn tick_all_with_retirement<'a>(
