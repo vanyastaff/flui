@@ -181,6 +181,7 @@ pub(crate) fn two_ui_runtimes_two_threads_no_shared_state() {
                 .drive_frame(
                     flui_scheduler::Instant::now(),
                     flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
+                    || {},
                     || {
                         // Mid-PersistentCallbacks rendezvous: cannot return
                         // until ui_runtime A's own closure below has ALSO
@@ -200,6 +201,7 @@ pub(crate) fn two_ui_runtimes_two_threads_no_shared_state() {
             .drive_frame(
                 flui_scheduler::Instant::now(),
                 flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
+                || {},
                 || {
                     rendezvous_or_timeout("ui_runtime A");
                     let _ = ui_runtime_a.draw_frame(coexistence_constraints());

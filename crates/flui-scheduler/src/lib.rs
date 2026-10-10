@@ -155,7 +155,7 @@ pub use async_driver::{AsyncDriver, BoxedTask, TaskToken};
 pub use budget::{
     AllPhaseStats, BudgetPolicy, FrameBudget, FrameBudgetBuilder, PhaseStats, SharedBudget,
 };
-pub use config::{PerformanceMode, PerformanceModeRequestHandle, TimingsCallback};
+pub use config::TimingsCallback;
 /// [`FrameSnapshot::presentation`]'s type — re-exported so a consumer of
 /// this crate's frame telemetry (e.g. `flui-devtools`' `timeline` feature)
 /// can name it without an extra, redundant direct dependency on

@@ -70,7 +70,9 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
         binding,
         task_queue,
         owner_frame_claimed: _,
+        execution_release,
     } = &*scheduler.inner;
+    assert!(execution_release.try_borrow_mut().is_ok(), "terminal release custody is not borrowed through user code");
 
     let FrameState {
         current_frame,
@@ -156,8 +158,6 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
         timings_callbacks,
         pending_timings,
         last_timings_report,
-        performance_mode_requests: _,
-        current_performance_mode,
     } = binding;
     assert!(
         timings_callbacks.try_borrow_mut().is_ok(),
@@ -170,10 +170,6 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
     assert!(
         last_timings_report.try_borrow_mut().is_ok(),
         "last_timings_report is locked during a callback"
-    );
-    assert!(
-        current_performance_mode.try_borrow_mut().is_ok(),
-        "current_performance_mode is locked during a callback"
     );
     assert!(
         on_frame_scheduled.try_lock().is_some(),
