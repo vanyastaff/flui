@@ -62,7 +62,7 @@ impl Snapshot {
                             JValue::Object(self.metrics.as_ref()),
                         ],
                     )
-                    .and_then(|value| value.f());
+                    .and_then(jni::JValueOwned::f);
                 if result.is_err() {
                     env.exception_clear();
                 }

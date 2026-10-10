@@ -108,7 +108,7 @@ pub(super) fn drive_native_text_sizing() {
             if APP_RUNTIME.with(|slot| slot.borrow().installed_host.same_host(&host)) {
                 super::installed_host::contain(&mut first, || {
                     host.native()
-                        .refresh_text_sizing(host.logical(), host.effects(), true)
+                        .refresh_text_sizing(host.logical(), host.effects(), true);
                 });
             }
             super::installed_host::finish(first);
