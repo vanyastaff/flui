@@ -374,6 +374,46 @@ revision. Inspect source inclusions with `rg 'include_str!' crates/flui-interact
 The classifier treats crate READMEs and nested crate documentation as source-impacting
 paths, so this guide needs no `DOCS_ONLY` exemption.
 
+### Native input evidence
+
+The public native window contract lives in
+[`flui-platform/tests/contract.rs`](../../flui-platform/tests/contract.rs).
+On Windows, select one existing child row through its environment variable;
+the top-level test exits after running that row. In PowerShell:
+
+```powershell
+$env:FLUI_NATIVE_WINDOW_CONTRACT_CHILD = 'fractional_native_wheel_packets_preserve_observed_precision_and_source'
+try {
+    cargo nextest run --locked -p flui-platform --test platform_it test_window_lifecycle_contract --no-capture --build-jobs 6 -j 1
+} finally {
+    Remove-Item Env:FLUI_NATIVE_WINDOW_CONTRACT_CHILD
+}
+```
+
+This row posts by-value mouse and wheel messages to an owned hidden HWND and
+pumps the native window procedure. It observes source identity, signed units
+and fractional precision without foreground activation or global injection.
+It proves message translation and delivery, not physical wheel classification.
+The separate `synthetic_touch_and_pen_reach_native_pointer_dispatch` row uses
+Windows synthetic pointer injection into a shown owned window. It requires an
+interactive, unobscured desktop and successful activation; `CANNOT_VERIFY`
+must remain an unavailable result, never be reported as a passed input check.
+Synthetic pen/touch execution does not certify a physical pen or touch sensor.
+
+`cargo xtask device windows-input` drives a real counter through OS mouse and
+keyboard input and UI Automation, with foreground and hit-target checks. It
+requires Windows with an interactive desktop and does not exercise pen/touch.
+`cargo xtask live-smoke` uses XTEST under Xvfb on Linux; its `--wayland` variant
+uses headless weston for teardown. Both variants are Linux-only; an explicit
+skip on another host is not execution evidence. Cross-typecheck and wasm-check
+are compilation evidence only.
+
+Retain the exact revision, command, exit status, verdict and output outside the
+repository. For physical claims, also retain device/backend identity and the
+actual exercise: contact/hover, sensor values, multi-contact, capture loss and
+terminal recovery as applicable. Input traces need the provenance described
+in [PERFORMANCE.md](PERFORMANCE.md#trace-provenance-and-replay).
+
 ## Observability
 
 The observability substrate lives at [`crate::observability`](../src/observability.rs) (re-exported at
@@ -400,7 +440,7 @@ the app boundary; the crate does not install one. Filter via
 - **Concurrency models must match ownership.** The executable arena is
   owner-local; a parallel `add` / `resolve` model would test an unsupported
   execution contract. Deferred data-plane synchronization needs its own model.
-- **Bench fidelity pass: realistic workloads.** Current benches use synthetic events; recorded traces would need a recording format, which this crate does not have (`testing` holds only the `input` event builders).
+- **Bench fidelity: measured input bursts.** Current benches use synthetic events. The existing owned-event resampler replay is sufficient for explicit fixtures; physical throughput and latency claims additionally require device provenance and recorded arrival/frame schedules. See [trace provenance and replay](PERFORMANCE.md#trace-provenance-and-replay) before extending the workload. No general-purpose recording format is required for a literal owned-event fixture.
 - **Re-export the `pub mod observability` at `crate::prelude`** once the devtools substrate is stable — currently only the `GestureEvent` / `SPAN_*` items are re-exported at the crate root.
 
 ## Index of in-crate companion documents
