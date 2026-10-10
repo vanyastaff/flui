@@ -71,6 +71,14 @@ fn component_contracts() {
             button::tap_callback_writes_a_signal_and_rebuilds_its_reader,
         ),
         (
+            "button::an active press fade migrates and retires",
+            button::an_active_button_press_fade_migrates_and_retires,
+        ),
+        (
+            "button::an active release fade migrates and retires",
+            button::an_active_button_release_fade_migrates_and_retires,
+        ),
+        (
             "button::cupertino button with text child announces one labelled button node",
             button::cupertino_button_with_text_child_announces_one_labelled_button_node,
         ),

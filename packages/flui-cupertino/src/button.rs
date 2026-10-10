@@ -1,8 +1,7 @@
-//! [`CupertinoButton`] — the iOS (17) Human Interface Guidelines button.
+//! [`CupertinoButton`] — a themed button with a tap-fade sequence.
 //!
-//! Every geometry constant (padding, border radius, minimum size, tinted
-//! opacity, fade timing) follows the iOS HIG per-[`CupertinoButtonSize`]
-//! tables — pinned by a const-table test in `tests/button.rs`.
+//! [`CupertinoButtonSize`] selects padding, border radius and minimum
+//! geometry; theme and brightness determine its foreground and fill.
 //!
 //! ## Honest reduction: one recognized tap, not a real down/move/up sequence
 //!
@@ -389,9 +388,7 @@ fn resolve_foreground_color(
 
 /// Starts the press-in fade on tap, returning the run's [`AnimationRunFuture`] so
 /// the caller can chain the release fade onto it — `None` if it did not
-/// start a run at all. Extracted from the `on_tap` closure so "does a tap
-/// with `pressed_opacity: None` actually start the controller" is
-/// unit-testable without mounting a render tree (see the tests below).
+/// start a run at all.
 ///
 /// `pressed_opacity: None` means [`CupertinoButton::pressed_opacity`]'s
 /// contract — "disables the fade animation entirely". Driving the controller
@@ -419,10 +416,7 @@ fn start_press_fade(
 
 /// Starts the release fade once `press_fade` genuinely completes — never on
 /// cancellation (a second tap superseding this one must not start a
-/// release for the one it displaced). Extracted from the `on_tap` closure
-/// for the same reason as [`start_press_fade`]: a direct, controller-only
-/// unit test proves "the release starts exactly once per tap" without
-/// mounting a render tree.
+/// release for the one it displaced).
 ///
 /// Chained on `press_fade`'s own [`AnimationRunFuture`] (ADR-0064), not a status
 /// listener: a status listener has no way to tell "the press fade just
@@ -449,9 +443,8 @@ fn chain_release_fade(controller: &AnimationController, press_fade: AnimationRun
 /// Persistent state behind [`CupertinoButton`] — see [`StatefulView`]/
 /// [`ViewState`].
 pub struct CupertinoButtonState {
-    /// `None` when there is no ambient [`VsyncScope`] — see the module doc's
-    /// press-fade section; the button still responds to taps, it just has no
-    /// clock to animate the fade against.
+    /// Acquired during initialization and withdrawn during disposal. The
+    /// owner follows the ambient registry through dependency changes.
     controller: Option<DrivenController>,
     rebuild: Option<RebuildHandle>,
 }
