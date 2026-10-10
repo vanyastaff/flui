@@ -12,6 +12,22 @@ recorded so far.
 
 ## Mapping decisions
 
+### Replacing a display timer retires its outgoing owner
+
+The messenger installs and starts the new display owner before retiring the
+outgoing one. Retirement withdraws its registry seat, cancels its run and
+releases status captures outside state borrows. Saved controller observers
+cannot revive the retired timer or deliver its old timeout.
+
+`a_second_display_timer_retires_the_first` exercises the existing mounted
+Messenger fault seam in the completion-recovery table. It delivers a second
+entrance completion without an intervening timer cancellation, observes
+registry reentry from cancellation, capture retirement, one replacement
+timeout and unmount withdrawal. This replacement seam is private: public
+queue advancement cancels before the next entrance. The public
+`snack_bar_keeps_its_display_duration_under_reduced_motion` separately checks
+the mounted presentation's visible interval and Timeout delivery.
+
 ### SnackBar hover pauses only the addressed display timer
 
 Each mounted presenter holds a hover lease for its exact queued entry.
