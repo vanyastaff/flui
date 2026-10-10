@@ -333,6 +333,9 @@ fn owner_retirement_custody_contract() {
     crate::run_table(
         "owner retirement custody",
         &[
+            ("active retired post-frame rejection custody", active_retired_post_frame_rejection_custody as fn()),
+            ("closed scheduler post-frame rejection custody", closed_scheduler_post_frame_rejection_custody),
+            ("standalone retired post-frame rejection custody", standalone_retired_post_frame_rejection_custody),
             (
                 "closed background publishes task custody",
                 closed_background_publishes_task_custody as fn(),
@@ -423,6 +426,74 @@ fn owner_retirement_custody_contract() {
             ),
         ],
     );
+}
+
+fn assert_healthy_post_frame_rejection_retires(handle: &flui_scheduler::PostFrameHandle) {
+    let drops = Rc::new(Cell::new(0));
+    let capture = RemovedCapture(Rc::clone(&drops));
+    assert_eq!(handle.schedule(move |_| { let _ = &capture; }),
+        Err(flui_scheduler::PostFrameScheduleError::Closed));
+    assert_eq!(drops.get(), 1, "fresh healthy post-frame rejection retires its capture");
+}
+
+fn active_retired_post_frame_rejection_custody() {
+    let scheduler = UpdateScheduler::new();
+    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let handle = owner.post_frame_handle();
+    let drops = Rc::new(Cell::new(0));
+    assert_eq!(owner.pump_background(|| {
+        catch_nested_refusal_failure(&owner);
+        assert!(owner.retire().is_none());
+        let capture = RemovedCapture(Rc::clone(&drops));
+        assert_eq!(handle.schedule(move |_| { let _ = &capture; }),
+            Err(flui_scheduler::PostFrameScheduleError::Closed));
+    }), Ok(0));
+    assert_eq!(drops.get(), 0, "retired lane retains rejected capture under active custody");
+    assert_healthy_post_frame_rejection_retires(&handle);
+}
+
+struct RejectingPostFrameCapture {
+    owner: Weak<OwnerFrame>,
+    handle: flui_scheduler::PostFrameHandle,
+    drops: Rc<Cell<usize>>,
+}
+impl Drop for RejectingPostFrameCapture {
+    fn drop(&mut self) {
+        catch_nested_refusal_failure(&self.owner.upgrade().expect("owner lives"));
+        let capture = RemovedCapture(Rc::clone(&self.drops));
+        assert_eq!(self.handle.schedule(move |_| { let _ = &capture; }),
+            Err(flui_scheduler::PostFrameScheduleError::Closed));
+    }
+}
+
+fn closed_scheduler_post_frame_rejection_custody() {
+    let scheduler = UpdateScheduler::new();
+    let owner = Rc::new(OwnerFrame::new(&scheduler).expect("fresh owner"));
+    let handle = owner.post_frame_handle();
+    let drops = Rc::new(Cell::new(0));
+    let capture = RejectingPostFrameCapture {
+        owner: Rc::downgrade(&owner), handle: handle.clone(), drops: Rc::clone(&drops),
+    };
+    drop(scheduler);
+    assert_eq!(owner.pump_background(move || { let _ = &capture; }),
+        Err(ExecutionError::SchedulerClosed));
+    assert_eq!(drops.get(), 0, "live lane retains rejection after scheduler closure");
+    assert_healthy_post_frame_rejection_retires(&handle);
+}
+
+fn standalone_retired_post_frame_rejection_custody() {
+    let scheduler = UpdateScheduler::new();
+    let owner = Rc::new(OwnerFrame::new(&scheduler).expect("fresh owner"));
+    let handle = owner.post_frame_handle();
+    let drops = Rc::new(Cell::new(0));
+    let capture = RejectingPostFrameCapture {
+        owner: Rc::downgrade(&owner), handle: handle.clone(), drops: Rc::clone(&drops),
+    };
+    handle.schedule(move |_| { let _ = &capture; }).expect("accepted owner envelope");
+    drop(scheduler);
+    assert!(owner.retire().is_none());
+    assert_eq!(drops.get(), 0, "standalone closed retirement shares post-frame custody");
+    assert_healthy_post_frame_rejection_retires(&handle);
 }
 
 fn closed_scheduler_keeps_cancelled_tail() {
