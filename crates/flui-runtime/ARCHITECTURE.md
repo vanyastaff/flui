@@ -157,7 +157,9 @@ host.
   frame's timestamp" below).
   Scheduler execution runs through `OwnerFrame::drive_frame`. A wake with
   frames disabled runs `OwnerFrame::pump_background` instead: consume old
-  demand, service runtime gesture geometry, then poll ready tasks once, no frame.
+  demand, drain commands and service runtime gesture geometry, acknowledge the
+  drained redraw request, then poll ready tasks once, no frame. Preparation runs
+  inside owner admission; the host background dispatcher does no prior drain.
   Whether a wake
   becomes a pump is the host's per-backend wake gate (ADR-0058), not the
   UI runtime's. Pinned by `ui_runtime/tests/pump_transaction.rs`, each test failing
@@ -311,6 +313,9 @@ does not create redraw or synthetic-frame debt, and closing removes the
 presentation's obligation. Strong barrier identities refuse stale query or
 diagnostic continuations without a wrapping generation counter. Containment
 preserves the first query, publication or pacing failure through recovery.
+Background preparation failure leaves ready futures unpolled and restores their
+wake delivery. Recovery adopts geometry before the next task batch, while
+self-wakes remain pending for a subsequent background turn with frames disabled.
 
 The public `owner_metrics_contract` rows
 `native_geometry_controls_admission_and_retries_without_a_frame` and
