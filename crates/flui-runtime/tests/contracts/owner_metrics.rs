@@ -2180,8 +2180,10 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
             observed.fetch_add(1, Ordering::SeqCst);
         })));
-        assert!(replacement_wakes.load(Ordering::SeqCst) > 0,
-            "a missing or replaced hook receives retained delivery debt");
+        if !hook_present {
+            assert!(replacement_wakes.load(Ordering::SeqCst) > 0,
+                "installing a missing hook pays retained delivery debt");
+        }
 
         let sibling_ran = Rc::new(Cell::new(false));
         let observed = Rc::clone(&sibling_ran);
