@@ -295,7 +295,7 @@ fn a_withdrawn_child_waits_for_its_new_parent() {
     parent.tick_all(&clock.frame(Duration::from_secs(100)));
     let outgoing = parent.clone();
     let incoming = replacement.clone();
-    let moving = child.clone();
+    let moving = child;
     let _subscription = trigger.controller().subscribe_status(Rc::new(move |_| {
         outgoing.detach_child(&seat);
         incoming.attach_child(&moving).expect("new parent");
@@ -338,7 +338,7 @@ fn ancestor_changes_stop_descendants(mute: bool) {
     parent.tick_all(&clock.frame(Duration::from_secs(100)));
     let outgoing = parent.clone();
     let incoming = replacement.clone();
-    let moving = middle.clone();
+    let moving = middle;
     let _subscription = trigger.controller().subscribe_status(Rc::new(move |_| {
         if mute {
             outgoing.set_muted(true);
