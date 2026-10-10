@@ -1,6 +1,6 @@
 //! # FLUI UpdateScheduler
 //!
-//! Frame scheduling, task prioritization, and animation coordination for FLUI.
+//! Owner-local frame execution, callbacks, and task prioritization for FLUI.
 //!
 //! `UpdateScheduler` owns *logical* time only — the phase machine, callback
 //! queues, and the priority task queue — and makes no refresh-rate, display,
@@ -14,7 +14,8 @@
 //! ```text
 //! Application
 //!     ↓
-//! UpdateScheduler (orchestrates frames)
+//! OwnerFrame (executes complete frame and background turns)
+//!     └─ UpdateScheduler (admits work and observes logical frame state)
 //!     ├─ TaskQueue (priority-based execution)
 //!     └─ FrameBudget (phase-duration stats)
 //!

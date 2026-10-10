@@ -1,8 +1,8 @@
 //! Complete owner turns, including admission and outgoing ownership custody.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::sync::atomic::Ordering;
 
 use super::{IdleDeadline, UpdateScheduler, request_frame_impl_preserving_failure};
@@ -53,6 +53,38 @@ impl ExecutionState {
 /// explicitly retired before this permit leaves scope.
 struct ExecutionPermit<'a> {
     state: &'a ExecutionState,
+}
+
+/// Producer retirement borrows the accepted turn's failure custody weakly.
+struct FailureScope<'a> {
+    scheduler: crate::WeakUpdateScheduler,
+    tasks: &'a RefCell<Option<Weak<Cell<bool>>>>,
+}
+
+impl Drop for FailureScope<'_> {
+    fn drop(&mut self) {
+        // Upgrade implies another strong owner already exists. This owner-local
+        // metadata cleanup calls no user code, so its temporary cannot be last.
+        if let Some(scheduler) = self.scheduler.upgrade() {
+            scheduler.inner.execution_failure.borrow_mut().take();
+        }
+        self.tasks.borrow_mut().take();
+    }
+}
+
+pub(crate) fn retire_with_execution_custody<T>(
+    slot: &RefCell<Option<Weak<Cell<bool>>>>,
+    value: T,
+) {
+    let signal = slot.borrow().as_ref().and_then(Weak::upgrade);
+    if std::thread::panicking() || signal.as_ref().is_some_and(|signal| signal.get()) {
+        std::mem::forget(value);
+    } else if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(value))) {
+        if let Some(signal) = signal {
+            signal.set(true);
+        }
+        resume_unwind(payload);
+    }
 }
 
 impl Drop for ExecutionPermit<'_> {
@@ -125,6 +157,12 @@ impl<'a> Recovery<'a> {
 }
 
 impl OwnerFrame {
+    fn bind_failure_scope<'a>(&'a self, scheduler: &UpdateScheduler) -> FailureScope<'a> {
+        *scheduler.inner.execution_failure.borrow_mut() = Some(Rc::downgrade(&self.execution.failed));
+        let tasks = self.task_execution_failure_slot();
+        *tasks.borrow_mut() = Some(Rc::downgrade(&self.execution.failed));
+        FailureScope { scheduler: scheduler.downgrade(), tasks }
+    }
     pub(crate) fn record_execution_failure(&self) {
         self.execution.failed.set(true);
     }
@@ -212,6 +250,7 @@ impl OwnerFrame {
             return Err(ExecutionError::SchedulerClosed);
         }
 
+        let failure_scope = self.bind_failure_scope(&scheduler);
         let mut recovery = Recovery::new(self);
         let mut output = None;
         recovery.attempt(&mut prepare);
@@ -266,6 +305,7 @@ impl OwnerFrame {
                 std::mem::forget(value);
             }
         }
+        drop(failure_scope);
         recovery.finish();
         drop(permit);
         Ok(output.expect("BUG: a successful frame invoked its pipeline"))
@@ -305,6 +345,7 @@ impl OwnerFrame {
             recovery.finish();
             return Err(ExecutionError::SchedulerClosed);
         }
+        let failure_scope = self.bind_failure_scope(&scheduler);
         let mut recovery = Recovery::new(self);
         let mut polled = 0;
         recovery.attempt(|| {
@@ -321,6 +362,7 @@ impl OwnerFrame {
             });
         }
         recovery.release_scheduler(scheduler);
+        drop(failure_scope);
         recovery.finish();
         drop(permit);
         Ok(polled)

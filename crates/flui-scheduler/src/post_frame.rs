@@ -99,7 +99,6 @@ impl PostFrameStorage {
 /// `Weak` handles ([`AsyncDriver`], [`PostFrameHandle`]).
 ///
 /// Dropping it [retires](Self::retire) whatever is still queued.
-#[doc(hidden)]
 pub struct OwnerFrame {
     pub(crate) scheduler: WeakUpdateScheduler,
     post_frame: Rc<PostFrameQueue>,
@@ -108,6 +107,9 @@ pub struct OwnerFrame {
 }
 
 impl OwnerFrame {
+    pub(crate) fn task_execution_failure_slot(&self) -> &RefCell<Option<std::rc::Weak<Cell<bool>>>> {
+        self.tasks.execution_failure_slot()
+    }
     /// Owner-local frame state for `scheduler`'s frames. Task wakes request a
     /// frame through `scheduler`'s [`FrameWaker`](crate::FrameWaker).
     ///
