@@ -90,7 +90,8 @@ fn exercise_button_fade_migration(releasing: bool) {
     laid.pump_widget(tree(next.clone()));
     assert!(old.is_empty(), "the retained button withdraws its old seat");
     assert_eq!(next.len(), 1);
-    laid.adopt_vsync(next.clone());
+    laid.adopt_vsync(next.clone())
+        .expect("replacement clock admission");
     laid.pump_for(Duration::ZERO);
     let migrated = laid.opacity(fade);
     assert!((migrated - before).abs() < 1e-9, "{before} -> {migrated}");

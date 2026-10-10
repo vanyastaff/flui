@@ -647,7 +647,8 @@ pub(crate) fn a_returning_dismissible_migrates_between_registries() {
 
         laid.pump_widget(VsyncScope::new(next.clone(), card));
         assert!(old.is_empty(), "the movement owner withdraws its old seat");
-        laid.adopt_vsync(next.clone());
+        laid.adopt_vsync(next.clone())
+            .expect("replacement clock admission");
         laid.pump_for(Duration::ZERO);
         assert!((painted_card_axis(&laid, vertical) - before).abs() < 1e-8);
         laid.pump_for(Duration::from_millis(16));
@@ -887,7 +888,8 @@ fn exercise_collapse_registry(migrate: bool, fail_wake: bool) {
             vsync.is_empty(),
             "both movement and collapse owners migrate"
         );
-        laid.adopt_vsync(next.clone());
+        laid.adopt_vsync(next.clone())
+            .expect("replacement clock admission");
         assert!(
             next.has_running(),
             "failure retains the accepted collapse owner"

@@ -21,6 +21,192 @@ use flui_animation::{
 use flui_foundation::Listenable;
 
 #[test]
+fn vsync_admission_contract() {
+    crate::run_table(&[
+        (
+            "second parent cannot apply its motion policy to an existing owner",
+            second_parent_cannot_apply_its_motion_policy_to_an_existing_owner,
+        ),
+        ("duplicate child is refused", duplicate_child_is_refused),
+        (
+            "cycles are refused without changing the tree",
+            cycles_are_refused_without_changing_the_tree,
+        ),
+        (
+            "a surviving child can move after parent release",
+            a_surviving_child_can_move_after_parent_release,
+        ),
+        (
+            "a failed attachment wake rolls back before recovery",
+            a_failed_attachment_wake_rolls_back_before_recovery,
+        ),
+    ]);
+}
+
+fn second_parent_cannot_apply_its_motion_policy_to_an_existing_owner() {
+    use flui_animation::{AnimatedValue, ArcCurve, MotionClock, MotionPreference, MotionSpec};
+    let normal = Vsync::new();
+    let reduced = Vsync::new();
+    let child = Vsync::new();
+    normal.attach_child(&child).expect("first parent");
+    let admission = reduced.attach_child(&child);
+    let mut normal_clock = MotionClock::new();
+    let mut reduced_clock = MotionClock::new();
+    reduced_clock.set_preference(MotionPreference::Reduce);
+    let mut value = AnimatedValue::new(
+        0.0_f64,
+        MotionSpec::Curve {
+            duration: Duration::from_secs(1),
+            curve: ArcCurve::new(Curves::EaseInOut),
+        },
+        Some(&child),
+    )
+    .expect("finite motion");
+    let run = value.animate_to(1.0).expect("finite target");
+    normal.tick_all(&normal_clock.frame(Duration::ZERO));
+    normal.tick_all(&normal_clock.frame(Duration::from_millis(250)));
+    let before = value.value();
+    assert!(before > 0.0 && before < 1.0 && run.is_pending());
+    reduced.tick_all(&reduced_clock.frame(Duration::from_millis(250)));
+    assert_eq!(
+        (
+            admission == Err(flui_animation::VsyncRegistrationError::AlreadyAttached),
+            value.value(),
+            run.is_pending()
+        ),
+        (true, before, true),
+        "the second presentation must neither gain ownership nor settle the first presentation's motion"
+    );
+}
+
+fn duplicate_child_is_refused() {
+    use flui_animation::MotionClock;
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let parent = Vsync::new();
+    let child = Vsync::new();
+    let first = parent.attach_child(&child).expect("first admission");
+    let duplicate = parent.attach_child(&child);
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&child));
+    let samples = Rc::new(Cell::new(0));
+    let observed = Rc::clone(&samples);
+    owner
+        .controller()
+        .add_listener(Rc::new(move || observed.set(observed.get() + 1)));
+    let run = owner.controller().forward().expect("finite run");
+    let mut clock = MotionClock::new();
+    parent.tick_all(&clock.frame(Duration::ZERO));
+    samples.set(0);
+    parent.tick_all(&clock.frame(Duration::from_millis(250)));
+    assert_eq!(
+        (
+            duplicate == Err(flui_animation::VsyncRegistrationError::AlreadyAttached),
+            samples.get()
+        ),
+        (true, 1),
+        "an admitted child is sampled once and duplicate attachment is refused"
+    );
+    parent.detach_child(&first);
+    let replacement = parent.attach_child(&child).expect("reattach after detach");
+    parent.detach_child(&first);
+    parent.tick_all(&clock.frame(Duration::from_secs(1)));
+    assert!(
+        run.is_complete(),
+        "an old seat must not detach the replacement"
+    );
+    parent.detach_child(&replacement);
+}
+
+fn cycles_are_refused_without_changing_the_tree() {
+    use flui_animation::{MotionClock, VsyncRegistrationError};
+    let root = Vsync::new();
+    let middle = Vsync::new();
+    let leaf = Vsync::new();
+    root.attach_child(&middle).expect("middle");
+    middle.attach_child(&leaf).expect("leaf");
+    for (parent, child) in [(&root, &root), (&leaf, &root), (&leaf, &middle)] {
+        assert_eq!(
+            parent.attach_child(child),
+            Err(VsyncRegistrationError::WouldCycle)
+        );
+    }
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&leaf));
+    let run = owner.controller().forward().expect("resident run");
+    let mut clock = MotionClock::new();
+    root.tick_all(&clock.frame(Duration::ZERO));
+    root.tick_all(&clock.frame(Duration::from_secs(1)));
+    assert!(
+        run.is_complete(),
+        "refusals leave the existing tree deliverable"
+    );
+    leaf.prepare_close().finish();
+    assert_eq!(
+        root.attach_child(&leaf),
+        Err(VsyncRegistrationError::Closed)
+    );
+}
+
+fn a_surviving_child_can_move_after_parent_release() {
+    use flui_animation::MotionClock;
+    let child = Vsync::new();
+    let old = Vsync::new();
+    let old_seat = old.attach_child(&child).expect("first parent");
+    drop(old);
+    let new = Vsync::new();
+    let new_seat = new
+        .attach_child(&child)
+        .expect("expired parent is not an attachment");
+    new.detach_child(&old_seat);
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&child));
+    let run = owner.controller().forward().expect("finite run");
+    let mut clock = MotionClock::new();
+    new.tick_all(&clock.frame(Duration::ZERO));
+    new.tick_all(&clock.frame(Duration::from_secs(1)));
+    assert!(run.is_complete());
+    new.detach_child(&new_seat);
+}
+
+fn a_failed_attachment_wake_rolls_back_before_recovery() {
+    use flui_animation::{MotionClock, VsyncRegistrationError};
+    use std::rc::Rc;
+    let parent = Vsync::new();
+    let child = Vsync::new();
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&child));
+    let run = owner
+        .controller()
+        .forward()
+        .expect("resident run demands a frame");
+    let observed = child.clone();
+    parent.set_frame_requester(Some(Rc::new(move || {
+        assert_eq!(
+            Vsync::new().attach_child(&observed),
+            Err(VsyncRegistrationError::AlreadyAttached),
+            "the first attachment commits before its wake"
+        );
+        panic!("attachment wake failure");
+    })));
+    let failure =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| parent.attach_child(&child)))
+            .expect_err("wake failure propagates after rollback");
+    assert_eq!(
+        failure.downcast_ref::<&str>(),
+        Some(&"attachment wake failure")
+    );
+    parent.set_frame_requester(None);
+    let replacement = Vsync::new();
+    replacement
+        .attach_child(&child)
+        .expect("failed attachment released the parent slot");
+    let mut clock = MotionClock::new();
+    replacement.tick_all(&clock.frame(Duration::ZERO));
+    replacement.tick_all(&clock.frame(Duration::from_secs(1)));
+    assert!(
+        run.is_complete(),
+        "resident work survives admission recovery"
+    );
+}
+
+#[test]
 fn reentrant_settles_leave_the_next_run_for_a_later_entry() {
     const TEST: &str = "ownership::reentrant_settles_leave_the_next_run_for_a_later_entry";
     let Some(case) = child_process::selected_case() else {
@@ -687,7 +873,7 @@ fn closing_a_registry_withdraws_kernels_before_delivery() {
             root.attach_child(&child).expect("nested clock");
             independent
                 .attach_child(&child)
-                .expect("shared descendant identity");
+                .expect_err("another presentation cannot own this descendant");
             let retired = Rc::new(Cell::new(0));
             let wakes = Rc::new(Cell::new(0));
             let capture = HookCapture {
@@ -744,8 +930,14 @@ fn closing_a_registry_withdraws_kernels_before_delivery() {
             assert!(root.is_empty() && child.is_empty());
             assert!(!first.is_bound() && !second.is_bound());
             assert!(independent.has_running());
-            assert!(root.attach_child(&independent).is_none());
-            assert!(independent.attach_child(&root).is_none());
+            assert_eq!(
+                root.attach_child(&independent),
+                Err(VsyncRegistrationError::Closed)
+            );
+            assert_eq!(
+                independent.attach_child(&root),
+                Err(VsyncRegistrationError::Closed)
+            );
             let rejected_drops = Rc::new(Cell::new(0));
             let rejected = HookCapture {
                 registry: root.clone(),

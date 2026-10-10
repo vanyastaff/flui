@@ -30,7 +30,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_animation::Vsync;
+use flui_animation::{Vsync, VsyncRegistrationError};
 use flui_foundation::RenderId;
 use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::Matrix4;
@@ -445,9 +445,16 @@ fn resolve_logical_render_root(host: &WidgetHost, logical_root_type: TypeId) -> 
 /// handle here, so the scope a descendant reads and the registry the harness
 /// drives are one and the same. A widget below no scope of its own registers
 /// with the UI runtime's registry, which the UI runtime ticks itself.
+///
+/// # Panics
+/// Panics when `vsync` is closed, already belongs to another parent, or refuses
+/// admission. Test setup must provide an admissible registry; later replacement
+/// through [`LaidOut::adopt_vsync`] returns a typed error.
 pub fn lay_out_animated(root: impl View, constraints: BoxConstraints, vsync: Vsync) -> LaidOut {
     let laid = lay_out(root, constraints);
-    laid.host.adopt_vsync(vsync);
+    laid.host
+        .adopt_vsync(vsync)
+        .expect("animated harness requires an open registry without another parent");
     laid
 }
 
@@ -839,8 +846,13 @@ impl LaidOut {
     /// Adopt `vsync`: every frame ticks it at the frame's time, beside the
     /// UI runtime's own registry. Descendants must receive the same handle through
     /// their `VsyncScope`. Replaces a registry adopted before.
-    pub fn adopt_vsync(&mut self, vsync: Vsync) {
-        self.host.adopt_vsync(vsync);
+    /// Re-adopting the same registry is a no-op. A refused replacement keeps
+    /// the current registry attached and its pending runs deliverable.
+    ///
+    /// # Errors
+    /// Returns the child admission refusal from [`Vsync::attach_child`].
+    pub fn adopt_vsync(&mut self, vsync: Vsync) -> Result<(), VsyncRegistrationError> {
+        self.host.adopt_vsync(vsync)
     }
 
     /// Advance `dt` of virtual time and drive a frame — the animation-frame

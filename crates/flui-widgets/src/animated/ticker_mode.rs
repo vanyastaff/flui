@@ -109,8 +109,8 @@ impl StatefulView for TickerMode {
 pub struct TickerModeState {
     registry: Vsync,
     /// The ambient registry this one is nested under, and the id it holds
-    /// there. `None` when no `VsyncScope` is above — then this registry has no
-    /// driver, and `build` deliberately does **not** hand it to the subtree.
+    /// there. `None` when no `VsyncScope` is above or admission was refused —
+    /// then `build` supplies a detached scope with missing-clock settlement.
     parent: Option<(Vsync, VsyncRegistration)>,
 }
 
@@ -139,8 +139,9 @@ impl TickerModeState {
         let Some(parent) = ambient else {
             return;
         };
-        if let Some(id) = parent.attach_child(&self.registry) {
-            self.parent = Some((parent, id));
+        match parent.attach_child(&self.registry) {
+            Ok(id) => self.parent = Some((parent, id)),
+            Err(error) => tracing::warn!(%error, "ticker mode has no parent clock"),
         }
     }
 

@@ -214,7 +214,7 @@ fn exercise_floating_snap(pinned: bool, migrate_and_unmount: bool) {
         VsyncScope::new(vsync.clone(), scrollable.clone()),
         tight(300.0, 300.0),
     );
-    laid.adopt_vsync(vsync.clone());
+    laid.adopt_vsync(vsync.clone()).expect("clock admission");
 
     // Scroll deep: the floating header scrolls away entirely.
     controller.jump_to(200.0);
@@ -276,7 +276,8 @@ fn exercise_floating_snap(pinned: bool, migrate_and_unmount: bool) {
         let next = Vsync::new();
         laid.pump_widget(VsyncScope::new(next.clone(), scrollable));
         assert!(vsync.is_empty(), "migration withdraws the preceding seats");
-        laid.adopt_vsync(next.clone());
+        laid.adopt_vsync(next.clone())
+            .expect("replacement clock admission");
         laid.pump_for(Duration::ZERO);
         let migrated = builds.borrow().last().expect("header built").0;
         assert!(

@@ -355,7 +355,7 @@ pub(crate) fn a_remaining_touch_continues_scroll_without_an_intermediate_fling()
 fn fling_scoped(widget: Scrollable, vsync: Vsync, constraints: BoxConstraints) -> LaidOut {
     let wrapped = VsyncScope::new(vsync.clone(), widget);
     let mut scoped = lay_out(wrapped, constraints);
-    scoped.adopt_vsync(vsync);
+    scoped.adopt_vsync(vsync).expect("clock admission");
     scoped
 }
 
@@ -422,7 +422,9 @@ fn exercise_fling_registry(migrate: bool) {
             vsync.is_empty(),
             "fling owner withdraws its old registry seat"
         );
-        scoped.adopt_vsync(next.clone());
+        scoped
+            .adopt_vsync(next.clone())
+            .expect("replacement clock admission");
         scoped.pump_for(Duration::ZERO);
         assert!((controller.pixels() - before).abs() < 1e-8);
         scoped.pump_for(Duration::from_millis(16));
@@ -1310,7 +1312,7 @@ fn nested_scrollables(outer: &ScrollController, inner: &ScrollController, vsync:
 
     let wrapped = VsyncScope::new(vsync.clone(), outer_scrollable);
     let mut scoped = lay_out(wrapped, tight(300.0, 300.0));
-    scoped.adopt_vsync(vsync);
+    scoped.adopt_vsync(vsync).expect("clock admission");
     scoped
 }
 
@@ -2239,7 +2241,8 @@ pub(crate) fn a_notched_wheel_run_migrates_with_its_accepted_destination() {
     assert!(old.has_running());
     laid.pump_widget(animated_scroll_content(&scroll, &next));
     assert!(old.is_empty());
-    laid.adopt_vsync(next.clone());
+    laid.adopt_vsync(next.clone())
+        .expect("replacement clock admission");
     laid.pump_for(Duration::ZERO);
     assert!((scroll.pixels() - before).abs() < 1e-8);
     laid.pump_for(Duration::from_millis(16));

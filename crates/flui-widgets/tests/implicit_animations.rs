@@ -862,7 +862,8 @@ pub(crate) fn swapping_the_scope_registry_preserves_an_implicit_run() {
         "the retained widget releases its old registry"
     );
     assert_eq!(new.len(), 1);
-    laid.adopt_vsync(new.clone());
+    laid.adopt_vsync(new.clone())
+        .expect("replacement clock admission");
     laid.pump_for(Duration::ZERO);
     assert!((laid.opacity(laid.current_root()) - displayed).abs() < 1e-9);
     laid.pump_for(FRAME);
@@ -1075,7 +1076,8 @@ fn exercise_switching_registry(fail_wake: bool) {
         laid.pump_widget(SizedBox::shrink());
         laid.pump_widget(tree(next.clone(), false));
         laid.pump_widget(tree(next.clone(), true));
-        laid.adopt_vsync(next.clone());
+        laid.adopt_vsync(next.clone())
+            .expect("replacement clock admission");
         laid.pump_for(FRAME);
         laid.pump_for(FRAME);
         fades = laid.find_all_by_render_type("RenderAnimatedOpacity");
@@ -1087,7 +1089,8 @@ fn exercise_switching_registry(fail_wake: bool) {
         samples = fades.iter().map(|id| laid.opacity(*id)).collect();
         assert!(samples.iter().all(|value| *value > 0.0 && *value < 1.0));
     }
-    laid.adopt_vsync(next.clone());
+    laid.adopt_vsync(next.clone())
+        .expect("replacement clock admission");
     laid.pump_for(Duration::ZERO);
     for (id, before) in fades.iter().zip(&samples) {
         assert!((laid.opacity(*id) - before).abs() < 1e-8);
@@ -1115,14 +1118,29 @@ fn exercise_switching_registry(fail_wake: bool) {
 }
 
 pub(crate) fn a_detached_ticker_mode_lands_an_implicit_run() {
-    let tree = |target| {
-        VsyncScope::detached(flui_widgets::TickerMode::new(
-            AnimatedOpacity::new(target, SizedBox::new(100.0, 50.0)).duration(RUN),
-        ))
-    };
-    let mut laid = crate::common::lay_out(tree(0.0), tight(100.0, 50.0));
-    laid.pump_widget(tree(1.0));
-    assert_eq!(laid.opacity(laid.current_root()), 1.0);
+    for closed_parent in [false, true] {
+        let parent = Vsync::new();
+        if closed_parent {
+            parent.prepare_close().finish();
+        }
+        let tree = |target| {
+            let mode = flui_widgets::TickerMode::new(
+                AnimatedOpacity::new(target, SizedBox::new(100.0, 50.0)).duration(RUN),
+            );
+            if closed_parent {
+                VsyncScope::new(parent.clone(), mode)
+            } else {
+                VsyncScope::detached(mode)
+            }
+        };
+        let mut laid = crate::common::lay_out(tree(0.0), tight(100.0, 50.0));
+        laid.pump_widget(tree(1.0));
+        assert_eq!(
+            laid.opacity(laid.current_root()),
+            1.0,
+            "absent or refused parent clocks must settle the implicit run"
+        );
+    }
 }
 
 #[derive(Clone)]

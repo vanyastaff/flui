@@ -211,7 +211,8 @@ pub(crate) fn scope_replacement_moves_an_existing_route_without_restarting_it() 
     laid.pump_widget(tree(new.clone()));
     assert!(old.is_empty(), "the existing route releases its old clock");
     assert_eq!(new.len(), 1, "the existing route acquires the new clock");
-    laid.adopt_vsync(new.clone());
+    laid.adopt_vsync(new.clone())
+        .expect("replacement clock admission");
     laid.pump_for(Duration::ZERO);
     assert_eq!(
         controller.value(),

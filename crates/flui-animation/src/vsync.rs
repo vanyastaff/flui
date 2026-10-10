@@ -97,7 +97,7 @@ impl Hash for VsyncRegistration {
     }
 }
 
-/// A controller could not be admitted to a virtual frame registry.
+/// A controller or child could not be admitted to a virtual frame registry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum VsyncRegistrationError {
@@ -107,6 +107,12 @@ pub enum VsyncRegistrationError {
     /// The owning presentation permanently closed this registry.
     #[error("Vsync registry is closed")]
     Closed,
+    /// The child already belongs to a live parent, including this parent.
+    #[error("Vsync child already has a parent")]
+    AlreadyAttached,
+    /// Attaching the child would make an ancestor its own descendant.
+    #[error("Vsync attachment would create a cycle")]
+    WouldCycle,
 }
 
 /// Seconds from `start` to `now`, both readings of a nanosecond clock, taken on
@@ -194,7 +200,7 @@ struct VsyncInner {
     /// children's. A nested unmuted registry cannot re-enable a muted
     /// ancestor, because the ancestor never forwards the tick.
     children: Vec<RegisteredChild>,
-    parents: Vec<VsyncRegistration>,
+    parent: Option<VsyncRegistration>,
     request_frame: Option<Rc<dyn Fn()>>,
     next_id: u64,
     closed: bool,
@@ -251,19 +257,25 @@ impl Vsync {
     }
 
     fn request_frame_from(owner: &Rc<RefCell<VsyncInner>>, retirement: &mut RecoveryScope<'_>) {
-        let (request, parents) = {
+        let (request, parent) = {
             let mut inner = owner.borrow_mut();
             if inner.muted {
                 return;
             }
-            inner.parents.retain(VsyncRegistration::owner_is_alive);
-            (inner.request_frame.clone(), inner.parents.clone())
+            if inner
+                .parent
+                .as_ref()
+                .is_some_and(|parent| !parent.owner_is_alive())
+            {
+                inner.parent = None;
+            }
+            (inner.request_frame.clone(), inner.parent.clone())
         };
         if let Some(request) = request {
             retirement.run(|| request());
             retirement.retire(request);
         }
-        for parent in parents {
+        if let Some(parent) = parent {
             parent.request_frame(retirement);
         }
     }
@@ -328,26 +340,35 @@ impl Vsync {
     /// Nest `child` under this registry: [`tick_all`](Self::tick_all) forwards
     /// to it — unless this registry is [`muted`](Self::set_muted).
     ///
-    /// A cycle would hang the tick walk; nesting a registry under itself (or
-    /// under one of its own descendants) is a caller bug, so it is refused and
-    /// logged rather than linked.
-    /// An exhausted or closed registry refuses attachment, as does a closed child.
-    pub fn attach_child(&self, child: &Vsync) -> Option<VsyncRegistration> {
-        if child.inner.borrow().closed {
-            return None;
+    /// A registry has at most one live parent. Failure changes neither edge nor
+    /// registration identity; detach the existing seat before moving a child.
+    /// A released parent does not prevent a surviving child from attaching again.
+    ///
+    /// # Errors
+    /// Returns [`VsyncRegistrationError::Closed`] if either registry is closed,
+    /// [`VsyncRegistrationError::WouldCycle`] for self or ancestor attachment,
+    /// [`VsyncRegistrationError::AlreadyAttached`] for a live existing parent,
+    /// or [`VsyncRegistrationError::Exhausted`] for permanent identity exhaustion.
+    pub fn attach_child(&self, child: &Vsync) -> Result<VsyncRegistration, VsyncRegistrationError> {
+        if self.inner.borrow().closed || child.inner.borrow().closed {
+            return Err(VsyncRegistrationError::Closed);
         }
-        if child.contains(self) {
-            tracing::error!(
-                "BUG: a Vsync registry cannot be nested inside itself or its own \
-                 descendant; the child is not attached and its controllers will not tick"
-            );
-            return None;
+        if self.has_ancestor(child) {
+            return Err(VsyncRegistrationError::WouldCycle);
+        }
+        if child
+            .inner
+            .borrow()
+            .parent
+            .as_ref()
+            .is_some_and(VsyncRegistration::owner_is_alive)
+        {
+            return Err(VsyncRegistrationError::AlreadyAttached);
         }
         let mut inner = self.inner.borrow_mut();
-        if inner.closed {
-            return None;
-        }
-        let slot = inner.reserve_slot()?;
+        let slot = inner
+            .reserve_slot()
+            .ok_or(VsyncRegistrationError::Exhausted)?;
         inner.children.push(RegisteredChild {
             slot,
             child: child.clone(),
@@ -357,7 +378,7 @@ impl Vsync {
             slot,
         };
         drop(inner);
-        child.inner.borrow_mut().parents.push(registration.clone());
+        child.inner.borrow_mut().parent = Some(registration.clone());
         let mut retirement = Retirement::new();
         let tick = self.inner.borrow().last_tick;
         if child.has_frame_demand(tick) {
@@ -367,7 +388,7 @@ impl Vsync {
             retirement.run(|| self.detach_child(&registration));
         }
         retirement.finish();
-        Some(registration)
+        Ok(registration)
     }
 
     /// Detach the child registry previously attached under `id`. Idempotent.
@@ -386,12 +407,11 @@ impl Vsync {
         // Removing one child preserves the remaining registration order. Its
         // last controller captures must retire after releasing the parent guard.
         if let Some(removed) = removed {
-            removed
-                .child
-                .inner
-                .borrow_mut()
-                .parents
-                .retain(|parent| parent != id);
+            let mut child = removed.child.inner.borrow_mut();
+            if child.parent.as_ref() == Some(id) {
+                child.parent = None;
+            }
+            drop(child);
             drop(removed);
         }
     }
@@ -404,19 +424,29 @@ impl Vsync {
         Rc::ptr_eq(&self.inner, &other.inner)
     }
 
-    /// Whether `other` is this registry or one of its (transitive) children.
-    fn contains(&self, other: &Vsync) -> bool {
-        if Rc::ptr_eq(&self.inner, &other.inner) {
-            return true;
+    /// Upward traversal needs no descendant snapshot or frame-path cycle stack:
+    /// the owner-local tree admits every edge only after this check.
+    fn has_ancestor(&self, other: &Vsync) -> bool {
+        let mut ancestor = Some(self.clone());
+        while let Some(current) = ancestor {
+            if current.is_same(other) {
+                return true;
+            }
+            ancestor = current
+                .inner
+                .borrow()
+                .parent
+                .as_ref()
+                .and_then(|parent| parent.owner.upgrade())
+                .map(|inner| Vsync { inner });
+            debug_assert!(
+                ancestor
+                    .as_ref()
+                    .is_none_or(|parent| !parent.is_same(&current)),
+                "BUG: every admitted registry edge is acyclic"
+            );
         }
-        let children: Vec<Vsync> = self
-            .inner
-            .borrow_mut()
-            .children
-            .iter()
-            .map(|registered| registered.child.clone())
-            .collect();
-        children.iter().any(|child| child.contains(other))
+        false
     }
 
     /// Whether this registry is muted — its controllers and every nested
@@ -794,11 +824,11 @@ mod tests {
         outer.attach_child(&inner).expect("nested");
 
         assert!(
-            inner.attach_child(&outer).is_none(),
+            inner.attach_child(&outer) == Err(VsyncRegistrationError::WouldCycle),
             "nesting an ancestor under its own descendant is refused"
         );
         assert!(
-            outer.attach_child(&outer).is_none(),
+            outer.attach_child(&outer) == Err(VsyncRegistrationError::WouldCycle),
             "and so is nesting a registry under itself"
         );
 
@@ -895,7 +925,10 @@ mod tests {
                     handle.try_register_resuming(&refused, Duration::ZERO),
                     Err(VsyncRegistrationError::Exhausted)
                 );
-                assert!(handle.attach_child(&Vsync::new()).is_none());
+                assert_eq!(
+                    handle.attach_child(&Vsync::new()),
+                    Err(VsyncRegistrationError::Exhausted)
+                );
             }
             registry.tick_all(
                 &crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)),
@@ -936,7 +969,7 @@ mod tests {
                 Err(VsyncRegistrationError::Exhausted)
             );
             assert!(
-                registry.attach_child(&child).is_none(),
+                registry.attach_child(&child) == Err(VsyncRegistrationError::Exhausted),
                 "removal cannot reset exhaustion"
             );
 

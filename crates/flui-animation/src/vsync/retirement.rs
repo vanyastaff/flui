@@ -40,7 +40,7 @@ impl Vsync {
     ///
     /// Seats, parent links and frame hooks are withdrawn, and controller kernels
     /// refuse new runs before this returns. Saved handles cannot revive admission.
-    /// Closing a shared descendant closes that identity for all its parents.
+    /// Closing an attached descendant also withdraws its seat from its parent.
     /// Cancellation callbacks and outgoing capture retirement are deferred to the
     /// returned receipt; repeated preparation is an empty, idempotent retirement.
     pub fn prepare_close(&self) -> VsyncRetirement {
@@ -56,7 +56,7 @@ impl Vsync {
     }
 
     fn withdraw(&self, retirement: &mut VsyncRetirement) {
-        let (outgoing, parents) = {
+        let (outgoing, parent) = {
             let mut inner = self.inner.borrow_mut();
             if inner.closed {
                 return;
@@ -68,15 +68,15 @@ impl Vsync {
                     children: std::mem::take(&mut inner.children),
                     requester: inner.request_frame.take(),
                 }),
-                std::mem::take(&mut inner.parents),
+                inner.parent.take(),
             )
         };
         // `self` and outgoing child custody keep the removed registries strong;
         // detaching these framework links cannot destroy a last user capture.
-        for parent in parents {
-            if let Some(owner) = parent.owner.upgrade() {
-                Vsync { inner: owner }.detach_child(&parent);
-            }
+        if let Some(parent) = parent
+            && let Some(owner) = parent.owner.upgrade()
+        {
+            Vsync { inner: owner }.detach_child(&parent);
         }
         for (slot, registered) in &outgoing.controllers {
             registered

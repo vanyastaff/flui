@@ -94,7 +94,8 @@ pub(crate) fn an_active_size_run_migrates_between_registries() {
 
     laid.pump_widget(tree(next.clone(), 100.0));
     assert!(old.is_empty(), "size owner withdraws its preceding seat");
-    laid.adopt_vsync(next.clone());
+    laid.adopt_vsync(next.clone())
+        .expect("replacement clock admission");
     laid.pump_for(Duration::ZERO);
     assert!((width(&laid) - before).abs() < 1e-8);
     laid.pump_for(FRAME);

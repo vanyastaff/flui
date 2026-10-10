@@ -267,6 +267,14 @@ and switch hops.
 
 ### Registration tokens and removal
 
+Child registries form a tree. One optional weak parent seat prevents conflicting
+presentation policies and duplicate child sampling. `attach_child` preflights
+closed state, ancestor cycles, existing parent and identity capacity before
+committing either edge. Refusals are typed; upward cycle checking allocates no
+descendant snapshot. Wake failure withdraws the new edge before recovery.
+The public `vsync_admission_contract` pins these rules and reattachment; existing
+closure rows retain nested first-failure and independent-owner coverage (ADR-0191).
+
 A `VsyncRegistration` names the registry that issued it (a weak identity) and
 one slot from a monotonic namespace that controllers and children share
 (ADR-0125). Removal borrows the token: a token from another registry, or one

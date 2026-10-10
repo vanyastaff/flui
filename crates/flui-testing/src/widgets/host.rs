@@ -13,7 +13,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_animation::{Vsync, VsyncRegistration};
+use flui_animation::{Vsync, VsyncRegistration, VsyncRegistrationError};
 use flui_foundation::{ElementId, ManualClock};
 use flui_interaction::events::PointerEvent;
 use flui_platform_api::PlatformInput;
@@ -42,7 +42,7 @@ pub(super) struct WidgetHost {
     pipeline: PipelineCell,
     /// A registry the caller built its own `VsyncScope` over, ticked at each
     /// frame's time alongside the UI runtime's.
-    adopted_vsync: RefCell<Option<VsyncRegistration>>,
+    adopted_vsync: RefCell<Option<(Vsync, VsyncRegistration)>>,
     /// Scenes the sink held before the last pump, to tell whether it painted.
     submits_before_last_pump: u64,
 }
@@ -157,13 +157,23 @@ impl WidgetHost {
     }
 
     /// Replace the adopted registry.
-    pub(super) fn adopt_vsync(&self, vsync: Vsync) {
-        let parent = self.ui_runtime.ui_runtime().vsync();
-        let registration = parent.attach_child(&vsync);
-        let outgoing = self.adopted_vsync.replace(registration);
-        if let Some(outgoing) = outgoing {
-            parent.detach_child(&outgoing);
+    pub(super) fn adopt_vsync(&self, vsync: Vsync) -> Result<(), VsyncRegistrationError> {
+        let unchanged = self
+            .adopted_vsync
+            .borrow()
+            .as_ref()
+            .is_some_and(|(current, _)| current.is_same(&vsync));
+        if unchanged {
+            return Ok(());
         }
+        let parent = self.ui_runtime.ui_runtime().vsync();
+        let registration = parent.attach_child(&vsync)?;
+        let outgoing = self.adopted_vsync.replace(Some((vsync, registration)));
+        if let Some((registry, seat)) = outgoing {
+            parent.detach_child(&seat);
+            drop(registry);
+        }
+        Ok(())
     }
 
     pub(super) fn ui_runtime(&self) -> &HeadlessHost {

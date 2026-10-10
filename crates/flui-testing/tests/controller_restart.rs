@@ -18,6 +18,54 @@ use flui_testing::HeadlessBinding;
 /// One frame's worth of virtual time at 20ms — five of these span the 100ms run.
 const FRAME: Duration = Duration::from_millis(20);
 
+pub(crate) fn widget_registry_adoption_preserves_its_driver_on_refusal() {
+    use flui_animation::{Vsync, VsyncRegistrationError};
+    use flui_testing::widgets::{lay_out_animated, tight};
+    use flui_widgets::SizedBox;
+    let current = Vsync::new();
+    let mut laid = lay_out_animated(
+        SizedBox::new(40.0, 24.0),
+        tight(40.0, 24.0),
+        current.clone(),
+    );
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&current));
+    let run = owner.controller().forward().expect("resident run");
+    laid.adopt_vsync(current).expect("same registry is a no-op");
+    let foreign_parent = Vsync::new();
+    let foreign_child = Vsync::new();
+    let foreign_seat = foreign_parent
+        .attach_child(&foreign_child)
+        .expect("foreign owner");
+    assert_eq!(
+        laid.adopt_vsync(foreign_child.clone()),
+        Err(VsyncRegistrationError::AlreadyAttached)
+    );
+    let closed = Vsync::new();
+    closed.prepare_close().finish();
+    assert_eq!(
+        laid.adopt_vsync(closed),
+        Err(VsyncRegistrationError::Closed)
+    );
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_secs(1));
+    assert!(
+        run.is_complete(),
+        "refused replacements preserve the current driver"
+    );
+    foreign_parent.detach_child(&foreign_seat);
+    laid.adopt_vsync(foreign_child.clone())
+        .expect("released child can be adopted");
+    let replacement =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&foreign_child));
+    let next = replacement
+        .controller()
+        .forward()
+        .expect("new registry run");
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_secs(1));
+    assert!(next.is_complete());
+}
+
 pub(crate) fn adopting_a_registry_revokes_the_previous_driver_binding() {
     let mut binding = HeadlessBinding::new();
     let old_registry = binding.vsync().clone();

@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-08
-- **Superseded-by:** [ADR-0182](ADR-0182-complete-owner-execution.md) for scheduler execution authority and complete-turn entry points.
+- **Superseded-by:** [ADR-0182](ADR-0182-complete-owner-execution.md) for scheduler execution authority and complete-turn entry points; [ADR-0191](ADR-0191-single-parent-animation-registries.md) for shared descendant topology.
 - **Supersedes:** ADR-0136's transitional statement that `UpdateScheduler`
   remains `Send`, and its transitional split post-frame queues.
 - **Supersedes:** ADR-0064's scheduler ticker surface and explicit-disposal
@@ -58,8 +58,8 @@ invoking its destructors. Healthy cancellation continuations still finish.
 A presentation also withdraws animation authority independently of widget tree
 destruction. `Vsync::prepare_close` permanently closes the registry and attached
 descendant identities, withdraws seats and frame routes, and closes their kernels
-before returning `VsyncRetirement`. A shared descendant closes for all its
-parents; unrelated parent controllers remain live. Saved handles refuse new
+before returning `VsyncRetirement`. Descendants have one parent by ADR-0191;
+unrelated presentation controllers remain live. Saved handles refuse new
 registration with `VsyncRegistrationError::Closed`, and a disposed owner cannot
 revive its kernel by rebinding. Cancellation outcomes are committed during
 preparation; their callbacks and outgoing captures are delivered afterwards.
@@ -125,7 +125,7 @@ registry replacement and unmount through their actual lifecycle paths.
 shutdown, refusal by every closing kernel inside the first cancellation,
 competing cancellation failures, incoming unwind and addressed sibling progress.
 `closing_a_registry_withdraws_kernels_before_delivery`, a row of
-`driven_controller_owns_its_seat_and_run`, checks nested/shared registry closure,
+`driven_controller_owns_its_seat_and_run`, checks nested registry closure,
 saved handles, retirement reentry, receipt drop and failure custody.
 
 This decision does not adopt the rest of ADR-0136's draft thread-boundary
