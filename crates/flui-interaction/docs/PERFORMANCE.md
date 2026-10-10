@@ -3,6 +3,11 @@
 Cost bounds, benchmark fixtures and measurements for `flui_interaction`.
 Microbenchmark timings describe the measured fixtures, not a frame-time guarantee.
 
+Prepared resampler output uses shared batches and a mutex acquisition per consumed
+packet so a failed observer cannot discard its tail. This path also allocates a
+shared batch for each nonempty prepared prefix. Earlier resampler timings describe
+the earlier batch implementation; they do not measure this delivery protocol.
+
 ## Pointer path
 
 `GestureBinding` handles one pointer sequence like this:

@@ -14,6 +14,9 @@
 //!   Boundaries can grow the queue past that threshold. This is not a hard
 //!   memory bound: standalone callers must sample or stop regularly, including
 //!   when feeding repeated contacts without moves.
+//!   Prepared output is separate delivery debt: repeated observer failures can
+//!   grow it beyond the source threshold, including through measured moves.
+//!   A healthy driver must consume that debt, or explicit `clear` cancel it.
 //!
 //! This is particularly beneficial for:
 //! - Devices with low-frequency sensors
@@ -123,6 +126,9 @@ struct Anchor {
 /// A cheap shared handle (`Arc<Mutex<_>>`): clones address the same
 /// queue, so the owner can sample while user callbacks re-enter it. No
 /// lock is held while a callback runs.
+/// Prepared events are consumed once across handles. Concurrent drivers run
+/// their callbacks on their own threads without a callback-completion ordering
+/// guarantee; ordered UI observation requires synchronous owner driving.
 #[derive(Debug, Clone)]
 pub struct PointerEventResampler {
     inner: Arc<Mutex<ResamplerInner>>,
@@ -134,6 +140,8 @@ struct ResamplerInner {
     pointer_id: PointerId,
     /// Queue of buffered events, in arrival order.
     event_queue: VecDeque<BufferedEvent>,
+    /// Prepared output remains deliverable until consumed or explicitly cleared.
+    pending_output: VecDeque<OutputBatch>,
     /// Whether the pointer is currently down
     is_down: bool,
     /// Whether the pointer is being tracked
@@ -150,6 +158,25 @@ struct ResamplerInner {
     /// The [`Instant`] at which the event clock read zero, estimated from
     /// the smallest delivery latency seen (`arrival - event time`).
     event_clock_base: Option<Instant>,
+}
+
+type OutputBatch = Arc<Mutex<VecDeque<PointerEvent>>>;
+
+/// One frozen output prefix. Nested drivers can consume its shared debt, but
+/// newly prepared batches never join this prefix after its admission.
+pub(crate) struct PreparedEvents {
+    batches: SmallVec<[OutputBatch; 4]>,
+}
+
+impl PreparedEvents {
+    /// Commit each event before handing it to an observer. A panicking observer
+    /// consumes that event only; the unvisited tail stays in the shared queue.
+    /// Dropping this lazy iterator early preserves all events it did not yield.
+    pub(crate) fn deliveries(&self) -> impl Iterator<Item = PointerEvent> + '_ {
+        self.batches
+            .iter()
+            .flat_map(|batch| std::iter::from_fn(move || batch.lock().pop_front()))
+    }
 }
 
 /// The event's own time in nanoseconds, if it carries a usable one.
@@ -199,6 +226,17 @@ fn is_sequence_boundary(event: &PointerEvent) -> bool {
 }
 
 impl ResamplerInner {
+    fn prepared_events(&mut self, emitted: SmallVec<[PointerEvent; 4]>) -> PreparedEvents {
+        self.pending_output.retain(|batch| !batch.lock().is_empty());
+        if !emitted.is_empty() {
+            self.pending_output
+                .push_back(Arc::new(Mutex::new(emitted.into_iter().collect())));
+        }
+        PreparedEvents {
+            batches: self.pending_output.iter().cloned().collect(),
+        }
+    }
+
     /// Queue the event and return the diagnostic owed after unlocking.
     fn enqueue(&mut self, event: PointerEvent, stamp: Stamp) -> Option<PointerId> {
         match &event {
@@ -323,6 +361,7 @@ impl PointerEventResampler {
             inner: Arc::new(Mutex::new(ResamplerInner {
                 pointer_id,
                 event_queue: VecDeque::new(),
+                pending_output: VecDeque::new(),
                 is_down: false,
                 is_tracked: false,
                 anchor: None,
@@ -351,8 +390,9 @@ impl PointerEventResampler {
     /// clock by the event's own time (see the module's "Time" section).
     ///
     /// Events are buffered and will be processed during the next `sample()`
-    /// call. `Down`, `Up`, `Cancel` and other non-move events are never
-    /// dropped; a full queue coalesces moves instead.
+    /// call. Sequence boundaries (`Down`, `Up`, `Cancel`, `Enter`, `Leave`)
+    /// are never dropped; a full queue coalesces adjacent moves or discards
+    /// its oldest non-boundary event.
     pub fn add_event(&self, event: PointerEvent) {
         self.add_event_with_arrival(event, Instant::now());
     }
@@ -411,10 +451,14 @@ impl PointerEventResampler {
     ///   `(sample_time - last) / (next - last)`; it is skipped when the
     ///   position did not change.
     /// - A sample time earlier than the previous one, or less than 1 ms after
-    ///   it, emits nothing.
+    ///   it, prepares no new output. Previously prepared delivery debt remains
+    ///   consumable even when sampling does not advance or tracking was reset.
     ///
     /// The callback runs after the resampler's state is committed, with no
-    /// lock held, so it may re-enter this resampler.
+    /// lock held. A panic consumes the current packet and leaves the unvisited
+    /// tail for the next healthy driver. Nested driving consumes older output
+    /// before its newly prepared prefix; adding alone waits for another drive.
+    /// Explicit [`Self::clear`] cancels remaining source and output debt.
     pub fn sample<F>(&self, sample_time: Instant, next_sample_time: Instant, mut callback: F)
     where
         F: FnMut(PointerEvent),
@@ -424,24 +468,32 @@ impl PointerEventResampler {
             return;
         }
 
-        let emitted = {
+        let emitted = self.prepare_sample(sample_time);
+        for event in emitted.deliveries() {
+            callback(event);
+        }
+    }
+
+    fn prepare_sample(&self, sample_time: Instant) -> PreparedEvents {
+        {
             let mut inner = self.inner.lock();
 
             // Skip if not tracking or no events
             if !inner.is_tracked || inner.event_queue.is_empty() {
-                return;
+                return inner.prepared_events(SmallVec::new());
             }
 
             // Enforce minimum sample interval
             if let Some(last_time) = inner.last_sample_time {
                 let Some(elapsed) = sample_time.checked_duration_since(last_time) else {
                     let pointer_id = inner.pointer_id;
+                    let emitted = inner.prepared_events(SmallVec::new());
                     drop(inner);
                     tracing::warn!(?pointer_id, "ignoring a regressed pointer sample time");
-                    return;
+                    return emitted;
                 };
                 if elapsed < MIN_SAMPLE_INTERVAL {
-                    return;
+                    return inner.prepared_events(SmallVec::new());
                 }
             }
 
@@ -503,14 +555,7 @@ impl PointerEventResampler {
                 }
             }
 
-            emitted
-        };
-
-        // User dispatch happens only after the state transaction is complete.
-        // Re-entrant callbacks may therefore add/clear/stop without deadlocking
-        // or mutating the batch currently being emitted.
-        for event in emitted {
-            callback(event);
+            inner.prepared_events(emitted)
         }
     }
 
@@ -524,7 +569,7 @@ impl PointerEventResampler {
         boundary: EventTime,
         mut callback: impl FnMut(PointerEvent),
     ) {
-        let emitted: SmallVec<[PointerEvent; 4]> = {
+        let emitted = {
             let mut inner = self.inner.lock();
             let mut emitted = SmallVec::new();
             while inner.event_queue.front().is_some_and(|buffered| {
@@ -537,34 +582,35 @@ impl PointerEventResampler {
                 let at = inner.timestamp(buffered.stamp);
                 inner.emit(buffered.event, at, &mut emitted);
             }
-            emitted
+            inner.prepared_events(emitted)
         };
-        for event in emitted {
+        for event in emitted.deliveries() {
             callback(event);
         }
     }
 
     /// Commit the accepted measured prefix without advancing frame sampling or
     /// ending the contact. The binding freezes all prefixes before dispatch.
-    pub(crate) fn take_pending_events(&self) -> SmallVec<[PointerEvent; 4]> {
+    pub(crate) fn prepare_pending_events(&self) -> PreparedEvents {
         let mut inner = self.inner.lock();
         let mut emitted = SmallVec::new();
         while let Some(buffered) = inner.event_queue.pop_front() {
             let at = inner.timestamp(buffered.stamp);
             inner.emit(buffered.event, at, &mut emitted);
         }
-        emitted
+        inner.prepared_events(emitted)
     }
 
     /// Stops resampling and flushes all remaining events
     ///
     /// Invokes the callback with every buffered event, in order, and resets
-    /// the resampler for the next sequence.
+    /// the resampler for the next sequence. Prepared output remains pending if
+    /// the callback panics; a subsequent sample or stop can deliver its tail.
     pub fn stop<F>(&self, mut callback: F)
     where
         F: FnMut(PointerEvent),
     {
-        let emitted: SmallVec<[PointerEvent; 4]> = {
+        let emitted = {
             let mut inner = self.inner.lock();
             let mut emitted = SmallVec::new();
             while let Some(buffered) = inner.event_queue.pop_front() {
@@ -580,10 +626,10 @@ impl PointerEventResampler {
             inner.last_stamp = None;
             inner.last_emitted_nanos = 0;
             inner.event_clock_base = None;
-            emitted
+            inner.prepared_events(emitted)
         };
 
-        for event in emitted {
+        for event in emitted.deliveries() {
             callback(event);
         }
     }
@@ -598,16 +644,22 @@ impl PointerEventResampler {
         self.inner.lock().is_tracked
     }
 
-    /// Checks if there are pending events in the queue
+    /// Whether source events or previously prepared output remain deliverable.
     pub fn has_pending_events(&self) -> bool {
-        !self.inner.lock().event_queue.is_empty()
+        self.pending_event_count() != 0
     }
 
-    /// Number of input events waiting for a sampling window.
+    /// Number of source events and prepared output packets waiting for delivery.
     #[inline]
     #[must_use]
     pub fn pending_event_count(&self) -> usize {
-        self.inner.lock().event_queue.len()
+        let inner = self.inner.lock();
+        inner.event_queue.len()
+            + inner
+                .pending_output
+                .iter()
+                .map(|batch| batch.lock().len())
+                .sum::<usize>()
     }
 
     /// Returns the pointer ID this resampler tracks
@@ -615,10 +667,15 @@ impl PointerEventResampler {
         self.inner.lock().pointer_id
     }
 
-    /// Clears all buffered events
+    /// Cancel all source events and not-yet-consumed output, including a frozen
+    /// prefix currently being driven. A packet already passed to a callback
+    /// remains consumed. Events admitted after clear belong to a later prefix.
     pub fn clear(&self) {
         let mut inner = self.inner.lock();
         inner.event_queue.clear();
+        for batch in inner.pending_output.drain(..) {
+            batch.lock().clear();
+        }
         inner.anchor = None;
     }
 }

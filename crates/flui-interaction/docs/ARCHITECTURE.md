@@ -30,7 +30,7 @@ them. Compile-time assertions in `src/lib.rs` cover only those data types.
 | Arena slots | `Rc<RefCell<BTreeMap<..>>>` and per-slot `RefCell` | exact owner-local slot transactions; callbacks and user destruction run after releasing borrows |
 | Recognizer state | `Cell` / `RefCell` behind `Rc` identity | synchronous owner-local mutation; callback configuration is immutable |
 | Pointer router / interaction lane | `Rc` + `RefCell` | explicitly owner-local executable callbacks |
-| Pointer resampler | `Arc<parking_lot::Mutex<ResamplerInner>>` | shared data queue with pressure coalescing; sampling materializes a batch and unlocks before dispatch |
+| Pointer resampler | `Arc<parking_lot::Mutex<ResamplerInner>>` and shared output batches | source pressure coalescing and frozen delivery prefixes; no lock crosses a callback |
 | Focus manager | `Rc` + `RefCell` / `Cell`, one per presentation | owner-local focus tree and listeners |
 
 Negative compiler fixtures reject transfer of executable recognizers, builders
@@ -54,6 +54,23 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   recovery. `GestureArena::with_capacity` reserves deferred-resolution storage,
   not contact admission; `gesture_lifecycle_matrix` admits and settles contacts
   beyond both that reservation and the binding's limit.
+- **Prepared output survives a failed observer.** Sampling commits source state
+  into shared output batches before calling user code. Each packet is consumed
+  before its callback; a callback panic leaves the unvisited tail deliverable by
+  a subsequent healthy sample or stop, including through a clone after stop
+  reset tracking. Nested driving consumes older output before newly prepared
+  packets, while an outer frozen prefix cannot acquire newer work. The binding
+  uses that same lazy delivery prefix before button edges and observing input.
+  Explicit `clear` cancels source and unconsumed output; dropping an output
+  iterator alone preserves debt. `has_pending_events` and `pending_event_count`
+  include prepared output. The public
+  `resampler_interpolates_on_event_time_and_never_drops_terminals` pins failed
+  Down delivery with Up/Cancel tails, shared and independent recovery, clear,
+  and reentrant Move ordering before button or pending-input observation.
+  The source pressure threshold does not cap prepared output debt; repeated
+  observer failures require subsequent healthy driving or explicit cancellation.
+  Shared queues commit each packet once; concurrent driver callbacks have no
+  completion-order guarantee, so ordered UI delivery remains owner-synchronous.
 - **The binding owns mounted gesture progression.** `GestureBinding` admits
   at most 32 simultaneous contacts, retains each admitted Down route, closes
   its arena after routing Down, and sweeps or abandons its exact generation on
