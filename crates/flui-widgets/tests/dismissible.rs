@@ -578,37 +578,93 @@ pub(crate) fn cancelling_a_fully_slid_card_restores_it_without_dismissal() {
     cancelled_card(DismissDirection::Horizontal, 250.0);
 }
 
+/// Read the card's painted leading edge through its complete ancestor transform.
+fn painted_card_axis(laid: &crate::common::LaidOut, vertical: bool) -> f64 {
+    use flui_rendering::layer::Layer;
+    let tree = laid.layer_tree().expect("committed card scene");
+    for (_, node) in tree.iter() {
+        let Layer::Picture(picture) = node.layer() else {
+            continue;
+        };
+        for command in picture.picture() {
+            if let flui_painting::display_list::DrawOp::Rect { rect, .. } = &command.op {
+                let (x, y) = command.transform.transform_point(rect.left(), rect.top());
+                let mut point = flui_foundation::geometry::Point::new(x, y);
+                let mut parent = node.parent();
+                while let Some(id) = parent {
+                    let ancestor = tree.get(id).expect("scene parent exists");
+                    match ancestor.layer() {
+                        Layer::Transform(layer) => point = layer.transform_point(point),
+                        Layer::Offset(layer) => point += layer.offset(),
+                        Layer::Opacity(layer) => point += layer.offset(),
+                        _ => {}
+                    }
+                    parent = ancestor.parent();
+                }
+                return if vertical { point.y } else { point.x };
+            }
+        }
+    }
+    panic!("the card paints a rectangle");
+}
+
+pub(crate) fn a_returning_dismissible_migrates_between_registries() {
+    for vertical in [false, true] {
+        let old = Vsync::new();
+        let next = Vsync::new();
+        let card = Dismissible::new(
+            flui_widgets::SizedBox::new(200.0, 200.0)
+                .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+        )
+        .direction(if vertical {
+            DismissDirection::Vertical
+        } else {
+            DismissDirection::Horizontal
+        })
+        .resize_duration(None);
+        let mut laid = lay_out_animated(
+            VsyncScope::new(old.clone(), card.clone()),
+            tight(200.0, 200.0),
+            old.clone(),
+        );
+        let point = |primary| {
+            if vertical {
+                (50.0, primary)
+            } else {
+                (primary, 50.0)
+            }
+        };
+        let (x, y) = point(10.0);
+        laid.dispatch_pointer_down(x, y);
+        let (x, y) = point(80.0);
+        laid.dispatch_pointer_move(x, y);
+        laid.dispatch_pointer_cancel();
+        laid.pump_for(Duration::from_millis(16));
+        laid.pump_for(Duration::from_millis(16));
+        let before = painted_card_axis(&laid, vertical);
+        assert!(before > 0.0 && before < 70.0);
+        assert!(old.has_running());
+
+        laid.pump_widget(VsyncScope::new(next.clone(), card));
+        assert!(old.is_empty(), "the movement owner withdraws its old seat");
+        laid.adopt_vsync(next.clone());
+        laid.pump_for(Duration::ZERO);
+        assert!((painted_card_axis(&laid, vertical) - before).abs() < 1e-8);
+        laid.pump_for(Duration::from_millis(16));
+        assert!(
+            painted_card_axis(&laid, vertical) < before,
+            "new clock continues the painted return"
+        );
+        assert!(next.has_running());
+        laid.pump_widget(flui_widgets::SizedBox::shrink());
+        assert!(next.is_empty());
+    }
+}
+
 /// The card's speed, in px/s, just after a release at 1500 px/s on a card
 /// `width` px wide.
 fn release_speed(width: f64, reverse: bool, maximum: Option<f64>, vertical: bool) -> f64 {
-    let painted_x = |laid: &crate::common::LaidOut| {
-        use flui_rendering::layer::Layer;
-        let tree = laid.layer_tree().expect("committed card scene");
-        for (_, node) in tree.iter() {
-            let Layer::Picture(picture) = node.layer() else {
-                continue;
-            };
-            for command in picture.picture() {
-                if let flui_painting::display_list::DrawOp::Rect { rect, .. } = &command.op {
-                    let (x, y) = command.transform.transform_point(rect.left(), rect.top());
-                    let mut point = flui_foundation::geometry::Point::new(x, y);
-                    let mut parent = node.parent();
-                    while let Some(id) = parent {
-                        let ancestor = tree.get(id).expect("scene parent exists");
-                        match ancestor.layer() {
-                            Layer::Transform(layer) => point = layer.transform_point(point),
-                            Layer::Offset(layer) => point += layer.offset(),
-                            Layer::Opacity(layer) => point += layer.offset(),
-                            _ => {}
-                        }
-                        parent = ancestor.parent();
-                    }
-                    return if vertical { point.y } else { point.x };
-                }
-            }
-        }
-        panic!("the card paints a rectangle");
-    };
+    let painted_x = |laid: &crate::common::LaidOut| painted_card_axis(laid, vertical);
     let vsync = Vsync::new();
     let size = if vertical {
         flui_foundation::geometry::Size::new(100.0, width)
@@ -715,6 +771,14 @@ pub(crate) fn a_dismissible_release_keeps_finger_speed_on_any_width() {
 }
 
 pub(crate) fn a_dismissible_collapses_its_laid_out_size() {
+    exercise_collapse_registry(false);
+}
+
+pub(crate) fn a_collapsing_dismissible_migrates_between_registries() {
+    exercise_collapse_registry(true);
+}
+
+fn exercise_collapse_registry(migrate: bool) {
     let color = Color::rgb(131, 43, 71);
     let dismissed = Rc::new(Cell::new(0));
     let output = dismissed.clone();
@@ -725,11 +789,11 @@ pub(crate) fn a_dismissible_collapses_its_laid_out_size() {
     .background(ColoredBox::new(color))
     .on_dismissed(move |_, _| output.set(output.get() + 1));
     let mut laid = lay_out_animated(
-        VsyncScope::new(vsync.clone(), card),
+        VsyncScope::new(vsync.clone(), card.clone()),
         flui_rendering::constraints::BoxConstraints::loose(flui_foundation::geometry::Size::new(
             2400.0, 100.0,
         )),
-        vsync,
+        vsync.clone(),
     );
     laid.dispatch_pointer_down(10.0, 50.0);
     for step in 1..=12 {
@@ -756,6 +820,59 @@ pub(crate) fn a_dismissible_collapses_its_laid_out_size() {
         .expect("the collapsing background paints");
     assert_eq!((rect.width(), rect.height()), (150.0, 100.0));
     assert_eq!(dismissed.get(), 0);
+    if migrate {
+        let height = |laid: &crate::common::LaidOut| {
+            laid.draw_ops()
+                .into_iter()
+                .find_map(|command| {
+                    if let flui_painting::display_list::DrawOp::Rect { rect, paint } = command.op
+                        && paint.color == color
+                    {
+                        Some(rect.height())
+                    } else {
+                        None
+                    }
+                })
+                .expect("the collapsing background remains painted")
+        };
+        for _ in 0..32 {
+            laid.pump_for(Duration::from_millis(16));
+            if height(&laid) < 100.0 {
+                break;
+            }
+        }
+        let before = height(&laid);
+        assert!(
+            before > 0.0 && before < 100.0,
+            "the collapse is genuinely in flight: {before}"
+        );
+        assert!(vsync.has_running());
+        let next = Vsync::new();
+        laid.pump_widget(VsyncScope::new(next.clone(), card));
+        assert!(
+            vsync.is_empty(),
+            "both movement and collapse owners migrate"
+        );
+        laid.adopt_vsync(next.clone());
+        laid.pump_for(Duration::ZERO);
+        assert!((height(&laid) - before).abs() < 1e-8);
+        laid.pump_for(Duration::from_millis(16));
+        assert!(
+            height(&laid) < before,
+            "new clock continues the painted collapse"
+        );
+        assert_eq!(dismissed.get(), 0);
+        laid.pump_for(Duration::from_secs(1));
+        laid.pump_for(Duration::from_secs(1));
+        assert_eq!(
+            dismissed.get(),
+            1,
+            "migrated collapse delivers completion once"
+        );
+        laid.pump_widget(flui_widgets::SizedBox::shrink());
+        assert!(next.is_empty());
+        return;
+    }
     laid.pump_for(Duration::from_secs(1));
     laid.pump_for(Duration::from_secs(1));
     assert_eq!(dismissed.get(), 1);

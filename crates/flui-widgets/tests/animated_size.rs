@@ -75,6 +75,35 @@ fn width(laid: &crate::common::LaidOut) -> f64 {
     laid.size(laid.current_root()).width
 }
 
+pub(crate) fn an_active_size_run_migrates_between_registries() {
+    let old = Vsync::new();
+    let next = Vsync::new();
+    let tree = |registry, side| {
+        VsyncScope::new(
+            registry,
+            AnimatedSize::new(RUN).child(SizedBox::new(side, side)),
+        )
+    };
+    let mut laid = lay_out_animated(tree(old.clone(), 20.0), loose(200.0), old.clone());
+    laid.pump_widget(tree(old.clone(), 100.0));
+    laid.pump_for(FRAME);
+    laid.pump_for(FRAME);
+    let before = width(&laid);
+    assert!(before > 20.0 && before < 100.0);
+    assert!(old.has_running());
+
+    laid.pump_widget(tree(next.clone(), 100.0));
+    assert!(old.is_empty(), "size owner withdraws its preceding seat");
+    laid.adopt_vsync(next.clone());
+    laid.pump_for(Duration::ZERO);
+    assert!((width(&laid) - before).abs() < 1e-8);
+    laid.pump_for(FRAME);
+    assert!(width(&laid) > before && width(&laid) < 100.0);
+    assert!(next.has_running());
+    laid.pump_widget(SizedBox::shrink());
+    assert!(next.is_empty(), "unmount withdraws the active size run");
+}
+
 pub(crate) fn animated_size_interpolates_to_a_new_child_size_over_frames() {
     let vsync = Vsync::new();
     let side = Arc::new(Mutex::new(20.0));

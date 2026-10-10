@@ -18,7 +18,7 @@ use flui_foundation::geometry::{Angle, EdgeInsets, Matrix4};
 use flui_painting::Alignment;
 use flui_painting::styling::Color;
 use flui_view::prelude::{BuildContext, StatefulView};
-use flui_view::{IntoView, ViewState};
+use flui_view::{IntoView, ViewExt, ViewState};
 use flui_widgets::{
     AnimatedAlign, AnimatedContainer, AnimatedOpacity, AnimatedPadding, AnimatedRotation,
     RotationPath, SizedBox, VsyncScope,
@@ -870,6 +870,58 @@ pub(crate) fn swapping_the_scope_registry_preserves_an_implicit_run() {
 
     laid.pump_widget(SizedBox::shrink());
     assert!(new.is_empty(), "unmount releases the owning handle");
+}
+
+pub(crate) fn switching_entries_migrate_their_incoming_and_outgoing_runs() {
+    use flui_widgets::{AnimatedSwitcher, ColoredBox};
+
+    let old = Vsync::new();
+    let next = Vsync::new();
+    let tree = |registry, replacement| {
+        let child = if replacement {
+            ColoredBox::new(Color::rgb(10, 20, 30)).boxed()
+        } else {
+            SizedBox::new(100.0, 100.0).boxed()
+        };
+        VsyncScope::new(registry, AnimatedSwitcher::new(RUN).child(child))
+    };
+    let mut laid = lay_out_animated(tree(old.clone(), false), tight(100.0, 100.0), old.clone());
+    laid.pump_widget(tree(old.clone(), true));
+    laid.pump_for(FRAME);
+    laid.pump_for(FRAME);
+    let fades = laid.find_all_by_render_type("RenderAnimatedOpacity");
+    assert_eq!(fades.len(), 2, "both cross-fade participants are present");
+    let samples: Vec<_> = fades.iter().map(|id| laid.opacity(*id)).collect();
+    assert!(samples.iter().all(|value| *value > 0.0 && *value < 1.0));
+    assert!(old.has_running());
+
+    laid.pump_widget(tree(next.clone(), true));
+    assert!(old.is_empty(), "incoming and outgoing owners both migrate");
+    laid.adopt_vsync(next.clone());
+    laid.pump_for(Duration::ZERO);
+    for (id, before) in fades.iter().zip(&samples) {
+        assert!((laid.opacity(*id) - before).abs() < 1e-8);
+    }
+    laid.pump_for(FRAME);
+    for (id, before) in fades.iter().zip(&samples) {
+        let advanced = laid.opacity(*id);
+        assert!(advanced > 0.0 && advanced < 1.0);
+        assert!(
+            (advanced - before).abs() > 0.01,
+            "each cross-fade run advances"
+        );
+    }
+    laid.pump_for(RUN);
+    let remaining = laid.find_all_by_render_type("RenderAnimatedOpacity");
+    assert_eq!(
+        remaining.len(),
+        1,
+        "the outgoing child retires after completion"
+    );
+    assert_eq!(laid.opacity(remaining[0]), 1.0);
+    assert!(!next.has_running());
+    laid.pump_widget(SizedBox::shrink());
+    assert!(next.is_empty());
 }
 
 pub(crate) fn a_detached_ticker_mode_lands_an_implicit_run() {

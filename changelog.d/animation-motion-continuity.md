@@ -138,6 +138,8 @@
   when several animation samples arrive before a build or a resize callback panics.
 - Keep floating-header snap commands in owner-local state and refuse exhausted
   command epochs without wrapping or replacing the last admitted command.
+- Continue active Scrollable fling and wheel trajectories when their Vsync
+  registry changes, retaining sampled position and accumulated wheel goals.
 - Use component-specific spring rest distances through
   `TwoWayConverter::rest_thresholds`; derived values compose their fields'
   distances. Manual converters must implement the new method with positive finite

@@ -364,6 +364,14 @@ fn fling_scoped(widget: Scrollable, vsync: Vsync, constraints: BoxConstraints) -
 /// animation frames — confirming that the fling animation controller is wired
 /// to the scroll controller and the vsync is driving it.
 pub(crate) fn scrollable_fling_advances_offset_past_release() {
+    exercise_fling_registry(false);
+}
+
+pub(crate) fn an_active_fling_migrates_between_registries() {
+    exercise_fling_registry(true);
+}
+
+fn exercise_fling_registry(migrate: bool) {
     let controller = ScrollController::new();
     // Large extent prevents the fling from hitting the boundary on the first
     // frame — we want to observe forward motion, not clamping.
@@ -374,7 +382,7 @@ pub(crate) fn scrollable_fling_advances_offset_past_release() {
         .controller(controller.clone())
         .child(SizedBox::new(300.0, 5000.0));
 
-    let mut scoped = fling_scoped(widget, vsync, tight(300.0, 300.0));
+    let mut scoped = fling_scoped(widget.clone(), vsync.clone(), tight(300.0, 300.0));
 
     // Upward drag well past the 18 px slop to establish a recognizable fling
     // velocity. The first move crosses slop (on_pan_start). The second fires
@@ -405,6 +413,34 @@ pub(crate) fn scrollable_fling_advances_offset_past_release() {
          release={pixels_at_release:.1}, now={:.1}",
         controller.pixels()
     );
+    if migrate {
+        let before = controller.pixels();
+        assert!(vsync.has_running());
+        let next = Vsync::new();
+        scoped.pump_widget(VsyncScope::new(next.clone(), widget));
+        assert!(
+            vsync.is_empty(),
+            "fling owner withdraws its old registry seat"
+        );
+        scoped.adopt_vsync(next.clone());
+        scoped.pump_for(Duration::ZERO);
+        assert!((controller.pixels() - before).abs() < 1e-8);
+        scoped.pump_for(Duration::from_millis(16));
+        assert!(
+            controller.pixels() > before,
+            "the transferred fling continues scrolling"
+        );
+        assert!(next.has_running());
+        scoped.pump_widget(SizedBox::shrink());
+        assert!(next.is_empty());
+        let retired = controller.pixels();
+        scoped.pump_for(Duration::from_secs(1));
+        assert_eq!(
+            controller.pixels(),
+            retired,
+            "removed fling stops publishing scroll offsets"
+        );
+    }
 }
 
 /// Bouncing physics allows the drag to carry the scroll position past
@@ -1522,7 +1558,7 @@ fn advance_scroll_run(laid: &mut LaidOut) {
     }
 }
 
-pub(crate) fn replacing_vsync_retires_old_motion_and_drives_fresh_contacts() {
+pub(crate) fn replacing_vsync_releases_old_seats_and_drives_fresh_contacts() {
     use flui_foundation::geometry::EdgeInsets;
     use flui_widgets::{InteractiveViewer, TransformationController};
 
@@ -1599,6 +1635,11 @@ pub(crate) fn replacing_vsync_retires_old_motion_and_drives_fresh_contacts() {
         }));
         let replacement = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             laid.pump_widget(VsyncScope::new(second.clone(), child.clone()));
+            if family == "scrollable" && fail_stop {
+                // Clock transfer preserves scrolling. Explicit cancellation
+                // still exercises the one-shot activity failure and recovery.
+                scroll.jump_to(pixels());
+            }
         }));
         if let Err(payload) = replacement {
             assert!(fail_stop, "healthy clock replacement must not unwind");
@@ -1611,7 +1652,7 @@ pub(crate) fn replacing_vsync_retires_old_motion_and_drives_fresh_contacts() {
         assert_eq!(
             attempted.get(),
             usize::from(fail_stop),
-            "{family}: replacement reaches the one-shot activity failure"
+            "{family}: retirement reaches the one-shot activity failure"
         );
         let replaced = pixels();
         // Repeating the accepted new registry cannot hide a seat left on the
@@ -2178,6 +2219,40 @@ pub(crate) fn notched_wheel_accumulates_distance_and_eases_out_in_150ms() {
         100.0,
         "a healthy next wheel trajectory completes"
     );
+}
+
+pub(crate) fn a_notched_wheel_run_migrates_with_its_accepted_destination() {
+    use flui_platform_api::pointer::ScrollPrecision::Notched;
+    let scroll = ScrollController::new();
+    let old = Vsync::new();
+    let next = Vsync::new();
+    let mut laid = crate::common::lay_out_animated(
+        animated_scroll_content(&scroll, &old),
+        tight(300.0, 300.0),
+        old.clone(),
+    );
+    dispatch_typed_wheel(&laid, Notched, 100.0);
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(30));
+    let before = scroll.pixels();
+    assert!(before > 0.0 && before < 100.0);
+    assert!(old.has_running());
+    laid.pump_widget(animated_scroll_content(&scroll, &next));
+    assert!(old.is_empty());
+    laid.adopt_vsync(next.clone());
+    laid.pump_for(Duration::ZERO);
+    assert!((scroll.pixels() - before).abs() < 1e-8);
+    laid.pump_for(Duration::from_millis(16));
+    assert!(scroll.pixels() > before);
+    // A subsequent notch accumulates against the retained destination, not
+    // the intermediate painted position at registry replacement.
+    dispatch_typed_wheel(&laid, Notched, 50.0);
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(150));
+    assert_eq!(scroll.pixels(), 150.0);
+    assert!(!scroll.position().is_scrolling());
+    laid.pump_widget(SizedBox::shrink());
+    assert!(next.is_empty());
 }
 
 pub(crate) fn precise_and_unknown_wheels_interrupt_synthetic_motion_once() {

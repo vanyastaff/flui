@@ -634,10 +634,12 @@ impl ScrollableState {
             return;
         }
         self.fling_clock = incoming;
-        self.wheel_motion.borrow_mut().take();
-        // Cancel at the sampled pixels before a missing clock can settle the
-        // finite run. Gesture contacts remain owned by their admitted position.
-        let _ = self.fling_controller.controller().stop();
+        if self.fling_clock.is_none() {
+            self.wheel_motion.borrow_mut().take();
+            // A missing clock must not jump a physical scroll to its unbound
+            // settlement. A transfer between clocks preserves the accepted run.
+            let _ = self.fling_controller.controller().stop();
+        }
         if let Err(error) = self.fling_controller.rebind(self.fling_clock.as_ref()) {
             tracing::error!(%error, "Scrollable lost its frame registry");
         }

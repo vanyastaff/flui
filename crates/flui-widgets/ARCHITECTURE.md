@@ -2417,16 +2417,28 @@ unchanged pixels through later frames and fresh-contact recovery.
 
 The three gesture inertia drivers in `Scrollable`, `RefreshIndicator` and
 `InteractiveViewer` depend on the ambient `VsyncScope` during lifecycle hooks.
-Same registry identity preserves motion. A changed registry commits the new
-identity and stops the old trajectory at its sampled position before rebinding
-the `DrivenController`, which owns registration and retirement. Stopping first
-prevents clock removal from settling an old finite run into its endpoint.
+Same registry identity preserves motion. `Scrollable` transfers an accepted
+trajectory between live registries without cancelling it. Losing its clock stops
+at the sampled position before rebinding, preventing unbound settlement from
+jumping the scroll position. Refresh and viewer clock replacement retire their
+old trajectories before rebinding their `DrivenController` owners.
 Admitted contacts keep their gesture profile. The public row
-`replacing_vsync_retires_old_motion_and_drives_fresh_contacts` observes retired
+`replacing_vsync_releases_old_seats_and_drives_fresh_contacts` observes retired
 clock immobility and fresh motion on the new clock. Viewer stops at a boundary
 only when containment refuses proposed displacement; a repeated accepted frame
 sample preserves the trajectory. `a_repeated_frame_does_not_cancel_viewer_inertia`
 checks zero elapsed time followed by real progression and recovery.
+
+`an_active_fling_migrates_between_registries` checks continuity, new-clock
+progression and withdrawal during an active fling.
+`a_notched_wheel_run_migrates_with_its_accepted_destination` additionally verifies
+that the next wheel packet accumulates against the retained goal. The size row
+`an_active_size_run_migrates_between_registries` observes actual layout width;
+`switching_entries_migrate_their_incoming_and_outgoing_runs` observes both painted
+fade factors and outgoing-child retirement. The Dismissible rows
+`a_returning_dismissible_migrates_between_registries` and
+`a_collapsing_dismissible_migrates_between_registries` measure painted return
+coordinates on both axes and collapse height, including completion exactly once.
 
 Viewer focal inertia requires a live bound driver. Without one, release retains
 the current scene transform and still reports the measured interaction velocity;
