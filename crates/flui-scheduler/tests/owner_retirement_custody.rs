@@ -189,6 +189,145 @@ fn callbacks_and_task_polls_refuse_nested_owner_turns() {
     assert!(!task.is_cancelled());
 }
 
+struct RemovedCapture(Rc<Cell<usize>>);
+impl Drop for RemovedCapture {
+    fn drop(&mut self) {
+        self.0.set(self.0.get() + 1);
+    }
+}
+
+struct RemovedFuture {
+    capture: RemovedCapture,
+    ready: bool,
+}
+impl Future for RemovedFuture {
+    type Output = ();
+    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<()> {
+        let _ = &self.capture;
+        if self.ready {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    }
+}
+
+fn lifecycle_removal_preserves_caught_failure() {
+    let scheduler = UpdateScheduler::new();
+    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let drops = Rc::new(Cell::new(0));
+    let capture = RemovedCapture(Rc::clone(&drops));
+    let id = scheduler.add_lifecycle_state_listener(Rc::new(move |_| {
+        let _ = &capture;
+    }));
+    let now = Instant::now();
+    owner
+        .drive_frame(
+            now,
+            IdleDeadline::far_future(now),
+            || {
+                catch_nested_refusal_failure(&owner);
+                assert!(scheduler.remove_lifecycle_state_listener(id));
+            },
+            || {},
+        )
+        .expect("outer frame");
+    assert_eq!(
+        drops.get(),
+        0,
+        "removed lifecycle capture inherits active custody"
+    );
+}
+
+fn hook_replacement_preserves_caught_failure() {
+    struct Capture(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+    impl Drop for Capture {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    let scheduler = UpdateScheduler::new();
+    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let drops = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let capture = Capture(std::sync::Arc::clone(&drops));
+    scheduler.set_on_frame_scheduled(Some(std::sync::Arc::new(move || {
+        let _ = &capture;
+    })));
+    let now = Instant::now();
+    owner
+        .drive_frame(
+            now,
+            IdleDeadline::far_future(now),
+            || {
+                catch_nested_refusal_failure(&owner);
+                scheduler.set_on_frame_scheduled(None);
+            },
+            || {},
+        )
+        .expect("outer frame");
+    assert_eq!(
+        drops.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "displaced final hook inherits active custody"
+    );
+}
+
+fn explicit_task_cancellation_preserves_caught_failure() {
+    let scheduler = UpdateScheduler::new();
+    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let drops = Rc::new(Cell::new(0));
+    let token = owner.async_driver().spawn_local(Box::pin(RemovedFuture {
+        capture: RemovedCapture(Rc::clone(&drops)),
+        ready: false,
+    }));
+    let now = Instant::now();
+    owner
+        .drive_frame(
+            now,
+            IdleDeadline::far_future(now),
+            || {
+                catch_nested_refusal_failure(&owner);
+                token.cancel();
+            },
+            || {},
+        )
+        .expect("outer frame");
+    assert!(token.is_cancelled());
+    assert_eq!(owner.async_driver().pending_task_count(), 0);
+    assert_eq!(drops.get(), 0, "removed future inherits active custody");
+}
+
+fn eager_completion_preserves_caught_failure() {
+    let scheduler = UpdateScheduler::new();
+    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let drops = Rc::new(Cell::new(0));
+    let now = Instant::now();
+    owner
+        .drive_frame(
+            now,
+            IdleDeadline::far_future(now),
+            || {
+                catch_nested_refusal_failure(&owner);
+                assert!(
+                    owner
+                        .async_driver()
+                        .spawn_local_eager(Box::pin(RemovedFuture {
+                            capture: RemovedCapture(Rc::clone(&drops)),
+                            ready: true,
+                        }))
+                        .is_none()
+                );
+            },
+            || {},
+        )
+        .expect("outer frame");
+    assert_eq!(
+        drops.get(),
+        0,
+        "eagerly completed future inherits active custody"
+    );
+}
+
 #[test]
 fn owner_retirement_custody_contract() {
     crate::run_table(
@@ -205,6 +344,22 @@ fn owner_retirement_custody_contract() {
             (
                 "nested callback and task entry",
                 callbacks_and_task_polls_refuse_nested_owner_turns,
+            ),
+            (
+                "lifecycle removal custody",
+                lifecycle_removal_preserves_caught_failure,
+            ),
+            (
+                "wake hook replacement custody",
+                hook_replacement_preserves_caught_failure,
+            ),
+            (
+                "explicit task cancellation custody",
+                explicit_task_cancellation_preserves_caught_failure,
+            ),
+            (
+                "eager completion custody",
+                eager_completion_preserves_caught_failure,
             ),
         ],
     );
