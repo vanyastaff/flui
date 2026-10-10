@@ -556,6 +556,28 @@ impl MouseRegionCell {
     fn replace(&self, callbacks: MouseRegionCallbacks) -> MouseRegionCallbacks {
         std::mem::replace(&mut *self.current.borrow_mut(), callbacks)
     }
+
+    pub(super) fn retire(
+        cell: Rc<Self>,
+        failure: &mut crate::__runtime::ClosePanic,
+        preserving_owner: bool,
+    ) {
+        match Rc::try_unwrap(cell) {
+            Ok(cell) => {
+                let callbacks = cell.current.into_inner();
+                if preserving_owner {
+                    callbacks.retain();
+                } else {
+                    // These are separate callback owners, not one user aggregate.
+                    failure.retire(callbacks.on_enter);
+                    failure.retire(callbacks.on_exit);
+                    failure.retire(callbacks.on_hover);
+                }
+            }
+            Err(shared) if preserving_owner => shared.retain(),
+            Err(shared) => failure.retire(shared),
+        }
+    }
 }
 
 struct ScrollCell {
@@ -677,7 +699,7 @@ impl LocalEventTransform {
 
 struct ResolvedHitEntry {
     target: PointerTarget,
-    owner: Option<std::sync::Arc<DispatchOwner>>,
+    owner: OwnerLatch,
     handler_cell: Rc<HandlerCell>,
     local_transform: LocalEventTransform,
 }
@@ -698,11 +720,7 @@ impl Drop for ResolvedHitRoute {
     fn drop(&mut self) {
         let mut released = Vec::new();
         for entry in std::mem::take(&mut self.entries) {
-            if entry
-                .owner
-                .as_ref()
-                .is_some_and(|owner| owner.retains_withdrawn())
-            {
+            if entry.owner.retains_withdrawn() {
                 entry.handler_cell.retain();
             } else {
                 released.push(entry);
@@ -747,7 +765,7 @@ impl ResolvedHitRoute {
             if selected.is_some_and(|target| target != entry.target) {
                 continue;
             }
-            if entry.owner.as_ref().is_some_and(|owner| owner.is_closed()) {
+            if entry.owner.is_closed() {
                 continue;
             }
             let local_event = match &entry.local_transform {
@@ -780,7 +798,7 @@ impl ResolvedHitRoute {
             // the callback's final owner. Keep that destructor inside the same
             // dispatch transaction so later hit targets, the pointer router,
             // and lifecycle cleanup still run before the first unwind resumes.
-            let latch = OwnerLatch(entry.owner.clone());
+            let latch = entry.owner.clone();
             let snapshot_cleanup = RoutePanic::capture(|| latch.release(handler));
             RoutePanic::preserve_first(
                 &mut first_panic,
@@ -952,6 +970,7 @@ impl HitTestSnapshot {
 }
 
 struct LocalLaneInner {
+    owner: std::sync::Arc<DispatchOwner>,
     target_owners: RefCell<HashMap<TargetId, std::sync::Arc<DispatchOwner>>>,
     ticket: LaneTicket,
     target_ids: MonotonicIdSource,
@@ -968,7 +987,10 @@ struct LocalLaneInner {
 
 impl LocalLaneInner {
     fn owner_latch(&self, id: TargetId) -> OwnerLatch {
-        OwnerLatch(self.target_owners.borrow().get(&id).cloned())
+        OwnerLatch {
+            lane: std::sync::Arc::clone(&self.owner),
+            presentation: self.target_owners.borrow().get(&id).cloned(),
+        }
     }
 }
 
@@ -1005,6 +1027,7 @@ impl InteractionLane {
     pub fn try_new() -> Result<Self, InteractionDispatchError> {
         let lane_id = try_mint_lane_id(&NEXT_LANE_ID)?;
         let inner = Rc::new(LocalLaneInner {
+            owner: std::sync::Arc::new(DispatchOwner::default()),
             target_owners: RefCell::new(HashMap::new()),
             ticket: LaneTicket {
                 lane_id,
@@ -1032,7 +1055,10 @@ impl InteractionLane {
     pub fn dispatch_handle(&self) -> InteractionDispatchHandle {
         InteractionDispatchHandle {
             ticket: self.inner.ticket,
-            owner: None,
+            owner: OwnerLatch {
+                lane: std::sync::Arc::clone(&self.inner.owner),
+                presentation: None,
+            },
         }
     }
 
@@ -1121,6 +1147,14 @@ impl fmt::Debug for InteractionLane {
 
 impl Drop for InteractionLane {
     fn drop(&mut self) {
+        let mut failure = crate::__runtime::ClosePanic::for_close(
+            crate::__runtime::CloseMode::Ordinary,
+            self.inner.owner.mode.clone(),
+        );
+        self.inner
+            .owner
+            .closed
+            .store(true, std::sync::atomic::Ordering::Release);
         let removed_registry_entry = LOCAL_LANES
             .try_with(|registry| registry.borrow_mut().remove(&self.inner.ticket.lane_id))
             .ok()
@@ -1139,16 +1173,11 @@ impl Drop for InteractionLane {
         // Registry removal and every storage withdrawal precede user Drop.
         // One boundary carries the first failure across all storage families;
         // catch_unwind alone would lose it before retiring the next family.
-        let mut failure = crate::__runtime::ClosePanic::new();
         for route in ordered_lane_values(routes) {
             match Rc::try_unwrap(route) {
                 Ok(mut route) => {
                     for entry in std::mem::take(&mut route.entries) {
-                        if entry
-                            .owner
-                            .as_ref()
-                            .is_some_and(|owner| owner.retains_withdrawn())
-                        {
+                        if entry.owner.retains_withdrawn() {
                             entry.handler_cell.retain();
                         } else {
                             failure.retire(entry.handler_cell);
@@ -1162,17 +1191,7 @@ impl Drop for InteractionLane {
             failure.retire(target);
         }
         for cell in ordered_lane_values(mouse_targets) {
-            match Rc::try_unwrap(cell) {
-                Ok(cell) => {
-                    // The three callbacks are separate owners, not one user
-                    // aggregate: a failure in enter must not drop exit/hover.
-                    let callbacks = cell.current.into_inner();
-                    failure.retire(callbacks.on_enter);
-                    failure.retire(callbacks.on_exit);
-                    failure.retire(callbacks.on_hover);
-                }
-                Err(shared) => failure.retire(shared),
-            }
+            MouseRegionCell::retire(cell, &mut failure, false);
         }
         for target in ordered_lane_values(scroll_targets) {
             failure.retire(target);
@@ -1217,13 +1236,13 @@ impl Drop for LaneActivation<'_> {
 
 /// Send-safe ticket for owner-local interaction registration and route access.
 ///
-/// It carries identity and an optional terminal owner latch. Calls succeed while its lane is the
+/// It carries identity and terminal lane/presentation authority. Calls succeed while its lane is the
 /// active top scope on the owner thread.
 #[doc(hidden)]
 #[derive(Clone)]
 pub struct InteractionDispatchHandle {
     ticket: LaneTicket,
-    owner: Option<std::sync::Arc<DispatchOwner>>,
+    owner: OwnerLatch,
 }
 
 #[derive(Default)]
@@ -1250,23 +1269,48 @@ impl DispatchOwner {
 /// can close its presentation reentrantly. Every snapshot carries this latch,
 /// is skipped once the latch is closed, and is released under that close's
 /// retention policy.
-#[derive(Clone, Default)]
-pub(crate) struct OwnerLatch(Option<std::sync::Arc<DispatchOwner>>);
+#[derive(Clone)]
+pub(crate) struct OwnerLatch {
+    lane: std::sync::Arc<DispatchOwner>,
+    presentation: Option<std::sync::Arc<DispatchOwner>>,
+}
 
 impl OwnerLatch {
     /// Whether the registering owner has closed since the snapshot.
     pub(crate) fn is_closed(&self) -> bool {
-        self.0.as_ref().is_some_and(|owner| owner.is_closed())
+        self.lane.is_closed()
+            || self
+                .presentation
+                .as_ref()
+                .is_some_and(|owner| owner.is_closed())
+    }
+
+    pub(crate) fn retains_withdrawn(&self) -> bool {
+        self.lane.retains_withdrawn()
+            || self
+                .presentation
+                .as_ref()
+                .is_some_and(|owner| owner.retains_withdrawn())
+    }
+
+    fn rejection_mode(&self) -> crate::__runtime::CloseMode {
+        let preserving = crate::__runtime::CloseMode::PreservingFailure;
+        if self.lane.mode.mode() == preserving
+            || self
+                .presentation
+                .as_ref()
+                .is_some_and(|owner| owner.mode.mode() == preserving)
+        {
+            preserving
+        } else {
+            crate::__runtime::CloseMode::Ordinary
+        }
     }
 
     /// Drop a snapshot, or retain it when the owner's close was preserving
     /// and released its own clone first (ADR-0127).
     pub(crate) fn release<T: Retain>(&self, value: T) {
-        if self
-            .0
-            .as_ref()
-            .is_some_and(|owner| owner.retains_withdrawn())
-        {
+        if self.retains_withdrawn() {
             value.retain();
         } else {
             drop(value);
@@ -1398,7 +1442,10 @@ impl InteractionDispatchHandle {
     pub(crate) fn scoped_owner(&self) -> Self {
         Self {
             ticket: self.ticket,
-            owner: Some(std::sync::Arc::new(DispatchOwner::default())),
+            owner: OwnerLatch {
+                lane: std::sync::Arc::clone(&self.owner.lane),
+                presentation: Some(std::sync::Arc::new(DispatchOwner::default())),
+            },
         }
     }
 
@@ -1416,10 +1463,9 @@ impl InteractionDispatchHandle {
         &self,
         value: T,
     ) -> Result<T, InteractionDispatchError> {
-        if let Some(owner) = &self.owner
-            && owner.closed.load(std::sync::atomic::Ordering::Acquire)
-        {
-            let mut failure = crate::__runtime::ClosePanic::for_rejection(owner.mode.mode());
+        if self.owner.is_closed() {
+            let mut failure =
+                crate::__runtime::ClosePanic::for_rejection(self.owner.rejection_mode());
             failure.retire(value);
             failure.finish();
             return Err(InteractionDispatchError::OwnerGone);
@@ -1428,15 +1474,20 @@ impl InteractionDispatchHandle {
     }
 
     fn stamp(&self, lane: &LocalLaneInner, id: TargetId) {
-        if let Some(owner) = &self.owner {
+        if let Some(owner) = &self.owner.presentation {
             lane.target_owners
                 .borrow_mut()
                 .insert(id, std::sync::Arc::clone(owner));
         }
     }
 
-    pub(crate) fn close_tombstone(&self) -> Option<crate::__runtime::CloseTombstone> {
-        self.owner.as_ref().map(|owner| owner.mode.clone())
+    pub(crate) fn close_tombstone(&self) -> crate::__runtime::CloseTombstone {
+        self.owner
+            .presentation
+            .as_ref()
+            .unwrap_or(&self.owner.lane)
+            .mode
+            .clone()
     }
 
     pub(crate) fn close_owner(&self, mode: crate::__runtime::CloseMode) {
@@ -1487,7 +1538,7 @@ impl InteractionDispatchHandle {
         lane: Option<&LocalLaneInner>,
         mode: crate::__runtime::CloseMode,
     ) -> Option<DispatchCustody> {
-        let owner = self.owner.as_ref()?;
+        let owner = self.owner.presentation.as_ref()?;
         // The close's reentry window stays open until the custody retires.
         let failure = crate::__runtime::ClosePanic::for_close(mode, owner.mode.clone());
         owner
@@ -1532,11 +1583,7 @@ impl InteractionDispatchHandle {
     }
 
     fn active_lane(&self) -> Result<Rc<LocalLaneInner>, InteractionDispatchError> {
-        if self
-            .owner
-            .as_ref()
-            .is_some_and(|owner| owner.closed.load(std::sync::atomic::Ordering::Acquire))
-        {
+        if self.owner.is_closed() {
             return Err(InteractionDispatchError::OwnerGone);
         }
         if thread::current().id() != self.ticket.owner {
@@ -1593,7 +1640,7 @@ impl InteractionDispatchHandle {
         target_id: TargetId,
     ) -> Result<(), InteractionDispatchError> {
         self.validate_lane(lane_id)?;
-        if let Some(owner) = &self.owner {
+        if let Some(owner) = &self.owner.presentation {
             let owned = lane
                 .target_owners
                 .borrow()
@@ -2266,7 +2313,7 @@ impl InteractionDispatchHandle {
                 if let Some(cell) = registered.get(&target.target_id) {
                     entries.push(ResolvedHitEntry {
                         target,
-                        owner: lane.target_owners.borrow().get(&target.target_id).cloned(),
+                        owner: lane.owner_latch(target.target_id),
                         handler_cell: Rc::clone(cell),
                         local_transform: LocalEventTransform::capture(entry.transform.as_ref()),
                     });
@@ -2579,12 +2626,22 @@ impl fmt::Debug for InteractionDispatchHandle {
 pub(crate) fn active_dispatch_handle() -> Result<InteractionDispatchHandle, InteractionDispatchError>
 {
     let ticket = ACTIVE_LANES.with(|active| active.borrow().last().copied());
-    ticket
-        .map(|ticket| InteractionDispatchHandle {
-            ticket,
-            owner: None,
+    let ticket = ticket.ok_or(InteractionDispatchError::InactiveRuntime)?;
+    let lane = LOCAL_LANES
+        .with(|registry| {
+            registry
+                .borrow()
+                .get(&ticket.lane_id)
+                .and_then(Weak::upgrade)
         })
-        .ok_or(InteractionDispatchError::InactiveRuntime)
+        .ok_or(InteractionDispatchError::OwnerGone)?;
+    Ok(InteractionDispatchHandle {
+        ticket,
+        owner: OwnerLatch {
+            lane: std::sync::Arc::clone(&lane.owner),
+            presentation: None,
+        },
+    })
 }
 
 /// Resolve a path clipper target through the currently active owner lane.

@@ -7,7 +7,7 @@ use std::rc::Rc;
 use flui_foundation::geometry::Offset;
 use flui_interaction::events::{PointerKind, make_down_event};
 use flui_interaction::routing::{
-    EventPropagation, MouseRegionCallbacks, MouseTracker, MouseTrackerAnnotation,
+    EventPropagation, MouseRegionCallbacks, MouseTracker, MouseTrackerAnnotation, PointerMotionKind,
 };
 use flui_interaction::{
     HitTestEntry, InteractionDispatchError, InteractionDispatchHandle, InteractionLane, RenderId,
@@ -316,41 +316,50 @@ fn non_last_payload_owners_are_released() {
 
 fn non_last_mouse_callbacks_are_released() {
     for unwind in [false, true] {
-        let log = Rc::new(RefCell::new(Vec::new()));
-        let saved_capture = capture(&log, "saved", false);
-        let saved: flui_interaction::routing::MouseEnterCallback = Rc::new(move |_, _| {
-            let _ = &saved_capture;
-        });
-        let failure = catch_unwind(AssertUnwindSafe(|| {
-            let lane = InteractionLane::try_new().expect("lane");
-            lane.enter(|| {
-                lane.dispatch_handle()
-                    .register_mouse_region(MouseRegionCallbacks {
-                        on_enter: Some(Rc::clone(&saved)),
-                        on_exit: Some(Rc::clone(&saved)),
-                        on_hover: Some(Rc::clone(&saved)),
-                    })
-                    .expect("shared callbacks");
-                if !unwind {
-                    register(
-                        &lane.dispatch_handle(),
-                        Family::Pointer,
-                        capture(&log, "first", true),
-                    );
-                }
+        for cached in [false, true] {
+            let log = Rc::new(RefCell::new(Vec::new()));
+            let tracker = MouseTracker::new();
+            let region = RenderId::new(1);
+            let saved_capture = capture(&log, "saved", false);
+            let saved: flui_interaction::routing::MouseEnterCallback = Rc::new(move |_, _| {
+                let _ = &saved_capture;
             });
-            if unwind {
-                std::panic::panic_any("body failure");
-            }
-            drop(lane);
-        }))
-        .expect_err("failure");
-        assert_eq!(
-            failure.downcast_ref::<&str>(),
-            Some(&if unwind { "body failure" } else { "first" })
-        );
-        drop(saved);
-        assert_eq!(log.borrow().last(), Some(&"saved"));
+            let failure = catch_unwind(AssertUnwindSafe(|| {
+                let lane = InteractionLane::try_new().expect("lane");
+                lane.enter(|| {
+                    let target = lane
+                        .dispatch_handle()
+                        .register_mouse_region(MouseRegionCallbacks {
+                            on_enter: Some(Rc::clone(&saved)),
+                            on_exit: Some(Rc::clone(&saved)),
+                            on_hover: Some(Rc::clone(&saved)),
+                        })
+                        .expect("shared callbacks");
+                    if cached {
+                        tracker.register_annotation(MouseTrackerAnnotation::new(region, target));
+                    }
+                    if !unwind {
+                        register(
+                            &lane.dispatch_handle(),
+                            Family::Pointer,
+                            capture(&log, "first", true),
+                        );
+                    }
+                });
+                if unwind {
+                    std::panic::panic_any("body failure");
+                }
+                drop(lane);
+            }))
+            .expect_err("failure");
+            assert_eq!(
+                failure.downcast_ref::<&str>(),
+                Some(&if unwind { "body failure" } else { "first" })
+            );
+            tracker.unregister_annotation(region);
+            drop(saved);
+            assert_eq!(log.borrow().last(), Some(&"saved"));
+        }
     }
 }
 
@@ -448,12 +457,12 @@ pub(super) fn activation_restores_exact_owner() {
     assert_surviving_lane(&inner);
 }
 
-fn saved_mouse_cell_releases_with_its_surviving_owner() {
-    for unwind in [false, true] {
+fn saved_mouse_cell_follows_terminal_retirement_policy() {
+    for (preserving, unwind) in [(false, false), (true, false), (true, true)] {
         let log = Rc::new(RefCell::new(Vec::new()));
         let tracker = MouseTracker::new();
         let region = RenderId::new(1);
-        let failure = catch_unwind(AssertUnwindSafe(|| {
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
             let lane = InteractionLane::try_new().expect("lane");
             lane.enter(|| {
                 let saved = capture(&log, "saved mouse", false);
@@ -467,7 +476,7 @@ fn saved_mouse_cell_releases_with_its_surviving_owner() {
                     })
                     .expect("mouse target");
                 tracker.register_annotation(MouseTrackerAnnotation::new(region, target));
-                if !unwind {
+                if preserving && !unwind {
                     register(
                         &lane.dispatch_handle(),
                         Family::Pointer,
@@ -479,23 +488,103 @@ fn saved_mouse_cell_releases_with_its_surviving_owner() {
                 std::panic::panic_any("body failure");
             }
             drop(lane);
-        }))
-        .expect_err("failure");
-        assert_eq!(
-            failure.downcast_ref::<&str>(),
-            Some(&if unwind { "body failure" } else { "first" })
-        );
+        }));
+        if preserving {
+            let failure = outcome.expect_err("failure");
+            assert_eq!(
+                failure.downcast_ref::<&str>(),
+                Some(&if unwind { "body failure" } else { "first" })
+            );
+        } else {
+            outcome.expect("healthy close");
+        }
         assert!(
             !log.borrow().contains(&"saved mouse"),
             "tracker still owns callback"
         );
         tracker.unregister_annotation(region);
         assert_eq!(
-            log.borrow().last(),
-            Some(&"saved mouse"),
-            "non-last lane cell was released"
+            log.borrow().contains(&"saved mouse"),
+            !preserving,
+            "last framework snapshot follows its withdrawn capture policy"
         );
     }
+}
+
+fn late_mouse_retirement_preserves_original_lane_failure() {
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let tracker = MouseTracker::new();
+    let lane = InteractionLane::try_new().expect("lane");
+    let region = RenderId::new(1);
+    lane.enter(|| {
+        let value = capture(&log, "late mouse destructor", true);
+        let target = lane
+            .dispatch_handle()
+            .register_mouse_region(MouseRegionCallbacks {
+                on_enter: Some(Rc::new(move |_, _| {
+                    let _ = &value;
+                })),
+                ..MouseRegionCallbacks::default()
+            })
+            .expect("mouse target");
+        tracker.register_annotation(MouseTrackerAnnotation::new(region, target));
+        register(
+            &lane.dispatch_handle(),
+            Family::Pointer,
+            capture(&log, "original lane failure", true),
+        );
+    });
+    let original =
+        catch_unwind(AssertUnwindSafe(|| drop(lane))).expect_err("original lane failure");
+    assert_eq!(
+        original.downcast_ref::<&str>(),
+        Some(&"original lane failure")
+    );
+    let late = catch_unwind(AssertUnwindSafe(|| tracker.unregister_annotation(region)));
+    assert!(
+        late.is_ok(),
+        "a late final framework snapshot must retain captures from the failed close"
+    );
+    assert_eq!(log.borrow().as_slice(), ["original lane failure"]);
+    assert_surviving_lane(&InteractionLane::try_new().expect("survivor"));
+}
+
+fn raw_rejection_observes_only_the_active_close_window() {
+    use flui_interaction::__runtime::CloseWindow;
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = lane.dispatch_handle();
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let mut window = CloseWindow::new();
+    window.dispatch(&handle);
+    let original =
+        catch_unwind(|| std::panic::panic_any("outer close failure")).expect_err("outer failure");
+    window.preserve();
+    drop(lane);
+    let rejected = capture(&log, "unsafe rejected capture", true);
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        handle.register_pointer(move |_| {
+            let _ = &rejected;
+        })
+    }));
+    assert_eq!(
+        outcome.expect("active preserving close must not destroy rejected capture"),
+        Err(InteractionDispatchError::OwnerGone)
+    );
+    assert!(log.borrow().is_empty());
+    assert_eq!(
+        original.downcast_ref::<&str>(),
+        Some(&"outer close failure")
+    );
+    drop(window);
+    let healthy = capture(&log, "healthy post-close rejection", false);
+    assert_eq!(
+        handle.register_pointer(move |_| {
+            let _ = &healthy;
+        }),
+        Err(InteractionDispatchError::OwnerGone)
+    );
+    assert_eq!(log.borrow().as_slice(), ["healthy post-close rejection"]);
+    assert_surviving_lane(&InteractionLane::try_new().expect("survivor"));
 }
 
 fn saved_routes_are_stale_after_exceptional_retirement() {
@@ -536,6 +625,110 @@ fn saved_routes_are_stale_after_exceptional_retirement() {
         "saved identity cannot deliver to retired captures"
     );
     assert_surviving_lane(&survivor);
+}
+
+fn cached_mouse_exit_cannot_outlive_its_lane() {
+    use flui_interaction::HitTestResult;
+    use flui_interaction::events::make_move_event;
+    for under_surviving_lane in [false, true] {
+        let lane = InteractionLane::try_new().expect("lane");
+        let survivor = InteractionLane::try_new().expect("survivor");
+        let tracker = MouseTracker::new();
+        let exits = Rc::new(Cell::new(0));
+        let movement = make_move_event(Offset::ZERO, PointerKind::Mouse).expect("movement");
+        lane.enter(|| {
+            let count = Rc::clone(&exits);
+            let target = lane
+                .dispatch_handle()
+                .register_mouse_region(MouseRegionCallbacks {
+                    on_exit: Some(Rc::new(move |_, _| count.set(count.get() + 1))),
+                    ..MouseRegionCallbacks::default()
+                })
+                .expect("mouse region");
+            let mut path = HitTestResult::new();
+            path.add(
+                HitTestEntry::new(RenderId::new(1))
+                    .mouse_annotation(MouseTrackerAnnotation::new(RenderId::new(1), target)),
+            );
+            tracker.update_with_motion(&movement, PointerMotionKind::Hover, &path);
+        });
+        drop(lane);
+        let leave = || {
+            tracker.update_with_motion(&movement, PointerMotionKind::Hover, &HitTestResult::new());
+        };
+        if under_surviving_lane {
+            survivor.enter(leave);
+        } else {
+            leave();
+        }
+        assert_eq!(exits.get(), 0, "closed-lane cached exit must not execute");
+        assert_surviving_lane(&survivor);
+    }
+}
+
+fn snapshotted_mouse_exits_recheck_lane_after_reentry() {
+    use flui_interaction::HitTestResult;
+    use flui_interaction::events::make_move_event;
+    let owner = Rc::new(RefCell::new(Some(
+        InteractionLane::try_new().expect("lane"),
+    )));
+    let tracker = MouseTracker::new();
+    let log = Rc::new(RefCell::new(Vec::new()));
+    owner.borrow().as_ref().expect("owner").enter(|| {
+        let lane = owner.borrow();
+        let handle = lane.as_ref().expect("owner").dispatch_handle();
+        let mut path = HitTestResult::new();
+        for (index, name) in [(1, "first"), (2, "second")] {
+            let close = Rc::clone(&owner);
+            let calls = Rc::clone(&log);
+            let target = handle
+                .register_mouse_region(MouseRegionCallbacks {
+                    on_exit: Some(Rc::new(move |_, _| {
+                        calls.borrow_mut().push(name);
+                        if name == "first" {
+                            let lane = close.borrow_mut().take();
+                            drop(lane);
+                        }
+                    })),
+                    ..MouseRegionCallbacks::default()
+                })
+                .expect("mouse region");
+            path.add(
+                HitTestEntry::new(RenderId::new(index))
+                    .mouse_annotation(MouseTrackerAnnotation::new(RenderId::new(index), target)),
+            );
+        }
+        let movement = make_move_event(Offset::ZERO, PointerKind::Mouse).expect("movement");
+        tracker.update_with_motion(&movement, PointerMotionKind::Hover, &path);
+    });
+    tracker.dispatch_window_left();
+    assert_eq!(
+        log.borrow().as_slice(),
+        ["first"],
+        "later admitted snapshots observe terminal lane authority"
+    );
+    let survivor = InteractionLane::try_new().expect("survivor");
+    assert_surviving_lane(&survivor);
+}
+
+#[test]
+fn lane_snapshot_authority_contract() {
+    let cases: &[(&str, fn())] = &[
+        (
+            "cached_mouse_exit_cannot_outlive_its_lane",
+            cached_mouse_exit_cannot_outlive_its_lane,
+        ),
+        (
+            "snapshotted_mouse_exits_recheck_lane_after_reentry",
+            snapshotted_mouse_exits_recheck_lane_after_reentry,
+        ),
+    ];
+    for &(name, case) in cases {
+        if let Err(failure) = catch_unwind(case) {
+            eprintln!("lane snapshot authority case `{name}` failed");
+            std::panic::resume_unwind(failure);
+        }
+    }
 }
 
 fn competing_payloads() {
@@ -591,8 +784,16 @@ fn lane_terminal_retirement_contract() {
                 non_last_mouse_callbacks_are_released,
             ),
             (
-                "saved_mouse_cell_releases_with_its_surviving_owner",
-                saved_mouse_cell_releases_with_its_surviving_owner,
+                "saved_mouse_cell_follows_terminal_retirement_policy",
+                saved_mouse_cell_follows_terminal_retirement_policy,
+            ),
+            (
+                "late_mouse_retirement_preserves_original_lane_failure",
+                late_mouse_retirement_preserves_original_lane_failure,
+            ),
+            (
+                "raw_rejection_observes_only_the_active_close_window",
+                raw_rejection_observes_only_the_active_close_window,
             ),
             (
                 "saved_routes_are_stale_after_exceptional_retirement",
@@ -604,6 +805,9 @@ fn lane_terminal_retirement_contract() {
             ),
         ];
         for &(name, case) in cases {
+            if std::env::var("FLUI_LANE_RETIREMENT_CASE").is_ok_and(|selected| selected != name) {
+                continue;
+            }
             if let Err(failure) = catch_unwind(case) {
                 eprintln!("lane retirement case `{name}` failed");
                 std::panic::resume_unwind(failure);

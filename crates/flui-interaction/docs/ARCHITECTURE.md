@@ -75,6 +75,13 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   Saved dispatch handles become stale, while another live lane remains usable.
   `lane_terminal_retirement_contract` covers independent storage families,
   competing failures, reentry, unwind retention and surviving-lane recovery.
+  Every target snapshot also carries terminal lane authority, including raw
+  registrations without a presentation owner. `lane_snapshot_authority_contract`
+  pins cached mouse exits after lane closure and revocation between callbacks
+  already admitted to one round. Final framework snapshots retain withdrawn
+  captures after a preserving close; external non-last callback clones remain
+  releasable. Fresh stale-handle values retire ordinarily after the close window
+  returns, while rejected ownership during that window follows its failure mode.
   Containment cannot rescue one opaque aggregate that double-panics inside its
   own destruction before control returns to the framework.
 - **Dispatch identity does not imply activation authority.** A saved dispatch

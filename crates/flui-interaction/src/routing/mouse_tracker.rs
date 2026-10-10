@@ -114,7 +114,7 @@ impl MouseTrackerAnnotation {
 
 #[derive(Clone)]
 struct ResolvedMouseTrackerAnnotation {
-    cell: Rc<MouseRegionCell>,
+    cell: Option<Rc<MouseRegionCell>>,
     /// The region owner's terminal latch, carried into every callback snapshot.
     latch: OwnerLatch,
 }
@@ -122,6 +122,7 @@ struct ResolvedMouseTrackerAnnotation {
 impl ResolvedMouseTrackerAnnotation {
     fn on_enter(&self) -> Option<Latched<MouseEnterCallback>> {
         self.cell
+            .as_ref()?
             .snapshot()
             .on_enter
             .map(|callback| (callback, self.latch.clone()))
@@ -129,6 +130,7 @@ impl ResolvedMouseTrackerAnnotation {
 
     fn on_exit(&self) -> Option<Latched<MouseExitCallback>> {
         self.cell
+            .as_ref()?
             .snapshot()
             .on_exit
             .map(|callback| (callback, self.latch.clone()))
@@ -136,6 +138,7 @@ impl ResolvedMouseTrackerAnnotation {
 
     fn on_hover(&self) -> Option<Latched<MouseHoverCallback>> {
         self.cell
+            .as_ref()?
             .snapshot()
             .on_hover
             .map(|callback| (callback, self.latch.clone()))
@@ -143,8 +146,21 @@ impl ResolvedMouseTrackerAnnotation {
 }
 
 impl Retain for ResolvedMouseTrackerAnnotation {
-    fn retain(self) {
-        self.cell.retain();
+    fn retain(mut self) {
+        if let Some(cell) = self.cell.take() {
+            let mut failure = crate::__runtime::ClosePanic::new();
+            MouseRegionCell::retire(cell, &mut failure, true);
+        }
+    }
+}
+
+impl Drop for ResolvedMouseTrackerAnnotation {
+    fn drop(&mut self) {
+        if let Some(cell) = self.cell.take() {
+            let mut failure = crate::__runtime::ClosePanic::new();
+            MouseRegionCell::retire(cell, &mut failure, self.latch.retains_withdrawn());
+            failure.finish();
+        }
     }
 }
 
@@ -917,7 +933,10 @@ fn resolve_annotation_with_handle(
     annotation: MouseTrackerAnnotation,
 ) -> Option<ResolvedMouseTrackerAnnotation> {
     match handle.resolve_mouse_region(annotation.target) {
-        Ok((cell, latch)) => Some(ResolvedMouseTrackerAnnotation { cell, latch }),
+        Ok((cell, latch)) => Some(ResolvedMouseTrackerAnnotation {
+            cell: Some(cell),
+            latch,
+        }),
         Err(error) => {
             tracing::debug!(
                 ?error,
