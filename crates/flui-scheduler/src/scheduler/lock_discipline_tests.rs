@@ -70,7 +70,9 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
         binding,
         task_queue,
         owner_frame_claimed: _,
+        execution_release,
     } = &*scheduler.inner;
+    assert!(execution_release.try_borrow_mut().is_ok(), "terminal release custody is not borrowed through user code");
 
     let FrameState {
         current_frame,

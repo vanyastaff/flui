@@ -38,6 +38,10 @@
 
 ## Context
 
+**Superseded-by:** [ADR-0182](ADR-0182-complete-owner-execution.md) for scheduler
+execution authority and the raw background sequence. The runtime now submits
+preparation and pipeline through complete owner operations.
+
 **Superseded-by:** [ADR-0136 §2](ADR-0136-owner-local-ui-surfaces.md) for the frame
 entry API: `drive_frame(&OwnerFrame, ..)` replaces the former lane-specific driver
 named in this record's migration history. `UiRuntime::pump` retains the transaction;
