@@ -194,9 +194,7 @@ impl OwnerFrame {
             return action();
         };
         let scheduler = self.scheduler.upgrade();
-        let failure_scope = scheduler
-            .as_ref()
-            .map(|scheduler| self.bind_failure_scope(scheduler));
+        let failure_scope = self.bind_failure_scope(scheduler.as_ref());
         let mut recovery = Recovery::new(self);
         if let Some(Some(payload)) = recovery.attempt(action) {
             recovery.keep(payload);
@@ -209,17 +207,19 @@ impl OwnerFrame {
         recovery.first.take()
     }
 
-    fn bind_failure_scope<'a>(&'a self, scheduler: &UpdateScheduler) -> FailureScope<'a> {
+    fn bind_failure_scope<'a>(&'a self, scheduler: Option<&UpdateScheduler>) -> FailureScope<'a> {
         let signal = Arc::downgrade(&self.execution.failed.borrow());
-        *scheduler.inner.execution_failure.borrow_mut() = Some(signal.clone());
-        scheduler
-            .inner
-            .wake
-            .wake_delivery
-            .bind_failure_signal(Some(signal.clone()));
+        if let Some(scheduler) = scheduler {
+            *scheduler.inner.execution_failure.borrow_mut() = Some(signal.clone());
+            scheduler
+                .inner
+                .wake
+                .wake_delivery
+                .bind_failure_signal(Some(signal.clone()));
+        }
         self.bind_task_failure_signal(Some(signal));
         FailureScope {
-            scheduler: scheduler.downgrade(),
+            scheduler: self.scheduler.clone(),
             owner: self,
         }
     }
@@ -317,7 +317,7 @@ impl OwnerFrame {
             return Err(ExecutionError::SchedulerClosed);
         }
 
-        let failure_scope = self.bind_failure_scope(&scheduler);
+        let failure_scope = self.bind_failure_scope(Some(&scheduler));
         let mut recovery = Recovery::new(self);
         let mut output = None;
         recovery.attempt(&mut prepare);
@@ -412,7 +412,7 @@ impl OwnerFrame {
             recovery.finish();
             return Err(ExecutionError::SchedulerClosed);
         }
-        let failure_scope = self.bind_failure_scope(&scheduler);
+        let failure_scope = self.bind_failure_scope(Some(&scheduler));
         let mut recovery = Recovery::new(self);
         let mut polled = 0;
         recovery.attempt(|| {
