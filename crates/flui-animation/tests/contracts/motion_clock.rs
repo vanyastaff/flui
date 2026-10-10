@@ -1222,6 +1222,15 @@ fn stale_manual_sample_holds_the_run() {
 
 #[test]
 fn controller_rate_preserves_elapsed_and_paused_delivery() {
+    run_table(&[
+        ("tween", controller_rate_tween),
+        ("curve", controller_rate_curve),
+        ("repeat", controller_rate_repeat),
+        ("spring", controller_rate_spring),
+    ]);
+}
+
+fn controller_rate_tween() {
     let controller = AnimationController::builder(Duration::from_secs(1)).build();
     let _run = controller.forward().expect("live controller");
     controller.tick_at(ms(400));
@@ -1252,6 +1261,89 @@ fn controller_rate_preserves_elapsed_and_paused_delivery() {
         "rate survives restart"
     );
     assert_eq!(controller.velocity(), -2.0);
+}
+
+fn controller_rate_curve() {
+    rate_change_mid_run_keeps_value_continuous("curve");
+}
+
+fn controller_rate_repeat() {
+    rate_change_mid_run_keeps_value_continuous("repeat");
+}
+
+fn controller_rate_spring() {
+    rate_change_mid_run_keeps_value_continuous("spring");
+}
+
+fn rate_change_mid_run_keeps_value_continuous(kind: &str) {
+    use flui_animation::Curves;
+    use flui_animation::simulation::{SpringDescription, SpringSimulation, Tolerance};
+
+    let controller = AnimationController::builder(Duration::from_secs(1)).build();
+    let run = match kind {
+        "curve" => controller.animate_to_curved(1.0, None, Curves::Decelerate),
+        "repeat" => controller.repeat_with(None, None, false, None, None),
+        "spring" => controller.animate_with(
+            SpringSimulation::try_new(
+                SpringDescription::new(1.0, 1.0, 2.0).expect("critical spring"),
+                0.0,
+                1.0,
+                0.0,
+                Tolerance::DEFAULT,
+            )
+            .expect("finite spring"),
+        ),
+        _ => unreachable!("table names a run kind"),
+    }
+    .expect("live run");
+    let position = |time: f64| match kind {
+        "curve" => 2.0 * time - time * time,
+        "repeat" => time.fract(),
+        "spring" => 1.0 - (1.0 + time) * (-time).exp(),
+        _ => unreachable!("table names a run kind"),
+    };
+    let derivative = |time: f64| match kind {
+        "curve" => 2.0 - 2.0 * time,
+        "repeat" => 1.0,
+        "spring" => time * (-time).exp(),
+        _ => unreachable!("table names a run kind"),
+    };
+    controller.tick_at(ms(400));
+    controller.set_playback_rate(PlaybackRate::PAUSED);
+    controller.tick_at(ms(500));
+    assert!(
+        (controller.value() - position(0.5)).abs() < 1e-12,
+        "{kind}: old rate reaches the boundary"
+    );
+    assert_eq!(controller.velocity(), 0.0);
+    assert!(run.is_pending());
+    let held_status = controller.status();
+    controller.tick_at(Duration::from_secs(20));
+    assert!(
+        (controller.value() - position(0.5)).abs() < 1e-12,
+        "{kind}: paused gap"
+    );
+    assert_eq!(controller.status(), held_status);
+    assert!(run.is_pending());
+    controller.set_playback_rate(rate(2.0));
+    controller.tick_at(Duration::from_secs(21));
+    assert!(
+        (controller.value() - position(0.5)).abs() < 1e-12,
+        "{kind}: resume preserves the seam"
+    );
+    controller.tick_at(ms(21_100));
+    assert!(
+        (controller.value() - position(0.7)).abs() < 1e-12,
+        "{kind}: only the resumed interval scales"
+    );
+    // Decelerate uses the public Curve default's numerical slope.
+    assert!(
+        (controller.velocity() - 2.0 * derivative(0.7)).abs() < 1e-8,
+        "{kind}: velocity uses the applied rate, actual={}, expected={}",
+        controller.velocity(),
+        2.0 * derivative(0.7)
+    );
+    assert!(run.is_pending());
 }
 
 #[test]
@@ -1330,6 +1422,29 @@ fn op() -> impl Strategy<Value = Op> {
 }
 
 proptest! {
+    #[test]
+    fn controller_local_time_is_the_integral_of_its_rate(
+        changes in prop::collection::vec((0..10_000_u64, 0..RATES.len()), 1..64),
+    ) {
+        let controller = AnimationController::builder(Duration::from_secs(100)).build();
+        let run = controller.forward().expect("long running tween");
+        let mut raw_us = 0_u64;
+        let mut integrated_ns = 0_u128;
+        let mut applied = (1_u128, 1_u128);
+        for (delta_us, index) in changes {
+            let chosen = RATES[index];
+            controller.set_playback_rate(rate(chosen.0 as f64 / chosen.1 as f64));
+            raw_us += delta_us;
+            integrated_ns += u128::from(delta_us) * 1000 * applied.0 / applied.1;
+            controller.tick_at(Duration::from_micros(raw_us));
+            let expected = integrated_ns as f64 / 100_000_000_000.0;
+            prop_assert!((controller.value() - expected).abs() < 1e-12,
+                "raw_us={}, actual={}, reference={}", raw_us, controller.value(), expected);
+            prop_assert!(run.is_pending());
+            applied = chosen;
+        }
+    }
+
     #[test]
     fn preserve_runs_identically_under_any_policy(
         changes in prop::collection::vec((0..100_000u64, 0..7usize, 0..3usize, 0..RATES.len()), 1..64),

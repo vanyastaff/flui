@@ -103,6 +103,72 @@ fn manual_clock_ui_runtime(clock: &ManualClock) -> UiRuntime {
     .expect("runtime")
 }
 
+pub(crate) fn a_stopping_realm_ticks_no_presentation() {
+    use flui_animation::Curve;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    struct CountedCurve(Rc<Cell<usize>>);
+    impl Curve for CountedCurve {
+        fn transform(&self, time: f64) -> f64 {
+            self.0.set(self.0.get() + 1);
+            time
+        }
+        fn slope(&self, _: f64) -> f64 {
+            1.0
+        }
+    }
+
+    let mut clock = ManualClock::new();
+    let mut runtime = manual_clock_ui_runtime(&clock);
+    runtime
+        .attach_root_widget(&flui_widgets::SizedBox::square(10.0))
+        .expect("primary root");
+    let mut sink = ScriptedSink::always_presents();
+    let _ = runtime.pump(&mut clock, &mut sink);
+    let secondary = runtime.install_second_presentation_for_test();
+    runtime
+        .attach_root_widget_to_for_test(secondary, &flui_widgets::SizedBox::square(10.0))
+        .expect("secondary root");
+    let _ = runtime.pump(&mut clock, &mut sink);
+    let primary_owner =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&runtime.vsync()));
+    let secondary_owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(
+        &runtime
+            .presentations
+            .get(secondary)
+            .expect("secondary")
+            .vsync(),
+    ));
+    let samples = Rc::new(Cell::new(0));
+    for owner in [&primary_owner, &secondary_owner] {
+        owner
+            .controller()
+            .animate_to_curved(1.0, None, CountedCurve(Rc::clone(&samples)))
+            .expect("live curve");
+    }
+    let _ = runtime.pump(&mut clock, &mut sink);
+    clock.advance(Duration::from_millis(250));
+    let _ = runtime.pump(&mut clock, &mut sink);
+    assert!((primary_owner.controller().value() - 0.25).abs() < 1e-9);
+    assert!((secondary_owner.controller().value() - 0.25).abs() < 1e-9);
+    let sampled = samples.get();
+    assert!(sampled >= 2, "both sources were reached before stopping");
+    runtime.stop_presentations();
+    runtime.update_host_lifecycle(flui_scheduler::AppLifecycleState::Resumed);
+    for _ in 0..3 {
+        clock.advance(Duration::from_secs(1));
+        let _ = runtime.pump(&mut clock, &mut sink);
+        assert_eq!(
+            samples.get(),
+            sampled,
+            "stopping withdraws every presentation's tick authority"
+        );
+        assert!((primary_owner.controller().value() - 0.25).abs() < 1e-9);
+        assert!((secondary_owner.controller().value() - 0.25).abs() < 1e-9);
+    }
+}
+
 pub(crate) fn step_during_a_tick_applies_next_frame() {
     use flui_foundation::Listenable as _;
     use flui_protocol::MotionRequest;

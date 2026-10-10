@@ -508,6 +508,12 @@ and step remains unanswered during the current frame, advances only its target
 on the next frame and leaves sibling continuation independent. Moving inbox
 delivery to the end of the current frame fails the pending-answer assertion.
 
+Stopping is terminal for frame eligibility even if the host later reports
+`Resumed`. `a_stopping_realm_ticks_no_presentation` retains active registry
+owners in two presentations, stops through the public runtime entry and pumps
+past both deadlines. Source evaluation and displayed values stay held; removing
+the stop entry's lifecycle commit fails the same scenario.
+
 ### `Vsync` ticks in the persistent phase, not among the transient callbacks
 
 Tickers registered with a scheduler are transient frame callbacks, so they run

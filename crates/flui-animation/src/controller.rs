@@ -1696,6 +1696,11 @@ impl AnimationController {
     ///
     /// A paused run stays installed and keeps its completion future. A bound
     /// controller requests the sample that applies this change.
+    ///
+    /// `controller_rate_preserves_elapsed_and_paused_delivery` covers tween,
+    /// curve, repeat and spring seams. The property contract
+    /// `controller_local_time_is_the_integral_of_its_rate` compares samples
+    /// against an independent piecewise integral, including repeated time.
     pub fn set_playback_rate(&self, rate: PlaybackRate) {
         let mut inner = self.inner.borrow_mut();
         if inner.disposed || inner.pending_rate.unwrap_or(inner.playback_rate) == rate {
