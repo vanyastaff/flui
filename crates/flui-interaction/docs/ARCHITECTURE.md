@@ -63,10 +63,15 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   uses that same lazy delivery prefix before button edges and observing input.
   Explicit `clear` cancels source and unconsumed output; dropping an output
   iterator alone preserves debt. `has_pending_events` and `pending_event_count`
-  include prepared output. The public
+  include prepared output. Terminal contact withdrawal cancels that contact's
+  already-prepared prefix before terminal callbacks, while still-queued source
+  samples retain their terminal flush. A reused pointer ID owns a fresh queue;
+  reentrant withdrawal cannot flush the old frozen tail into its replacement.
+  The public
   `resampler_interpolates_on_event_time_and_never_drops_terminals` pins failed
   Down delivery with Up/Cancel tails, shared and independent recovery, clear,
-  and reentrant Move ordering before button or pending-input observation.
+  reentrant Move ordering before button or pending-input observation, and
+  Up/Cancel withdrawal with same-ID recovery during frame/input driving.
   The source pressure threshold does not cap prepared output debt; repeated
   observer failures require subsequent healthy driving or explicit cancellation.
   Shared queues commit each packet once; concurrent driver callbacks have no

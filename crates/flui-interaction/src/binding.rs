@@ -2492,6 +2492,12 @@ impl GestureBinding {
             pending_move,
             arena,
         } = detached;
+        if let Some(cached) = cached.as_ref() {
+            // The detached contact no longer owns a prepared delivery prefix.
+            // Keep queued source samples for the terminal flush, but cancel
+            // output already claimed by an outer, reentrant frame/input drive.
+            cached.resampler.cancel_prepared_events();
+        }
         let mut first_panic = None;
         if let (Some(cached), Some(PendingMove::Contact { event, sequence })) = (
             cached.as_ref(),

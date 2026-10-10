@@ -236,6 +236,12 @@ fn is_sequence_boundary(event: &PointerEvent) -> bool {
 }
 
 impl ResamplerInner {
+    fn cancel_output(&mut self) {
+        for batch in self.pending_output.drain(..) {
+            batch.lock().clear();
+        }
+    }
+
     fn reclaim_output(&mut self) {
         self.pending_output.retain(|batch| !batch.lock().is_empty());
         let idle = self
@@ -720,15 +726,19 @@ impl PointerEventResampler {
         self.inner.lock().pointer_id
     }
 
+    /// Withdraw already-prepared contact output after its owning sequence is
+    /// detached. Source events remain available for terminal flushing.
+    pub(crate) fn cancel_prepared_events(&self) {
+        self.inner.lock().cancel_output();
+    }
+
     /// Cancel all source events and not-yet-consumed output, including a frozen
     /// prefix currently being driven. A packet already passed to a callback
     /// remains consumed. Events admitted after clear belong to a later prefix.
     pub fn clear(&self) {
         let mut inner = self.inner.lock();
         inner.event_queue.clear();
-        for batch in inner.pending_output.drain(..) {
-            batch.lock().clear();
-        }
+        inner.cancel_output();
         inner.anchor = None;
     }
 }

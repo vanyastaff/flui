@@ -849,6 +849,10 @@ fn resampler_interpolates_on_event_time_and_never_drops_terminals() {
                 binding_reentry_orders_motion_before_observing_input,
             ),
             (
+                "binding terminal withdrawal cancels prepared contact output",
+                binding_terminal_withdrawal_cancels_prepared_contact_output,
+            ),
+            (
                 "boundary pressure, shared handles and independent recovery",
                 boundary_pressure_preserves_reused_contacts_and_shared_delivery,
             ),
@@ -1019,6 +1023,116 @@ fn reentrant_driving_preserves_the_admitted_round() {
             assert!(newer.iter().all(|event| event_x(event) == Some(2.0)));
         }
         assert!(!driver.has_pending_events());
+    }
+}
+
+fn binding_terminal_withdrawal_cancels_prepared_contact_output() {
+    use flui_foundation::MonotonicClock;
+    for before_input in [false, true] {
+        for cancel in [false, true] {
+            let lane = flui_interaction::InteractionLane::try_new().expect("lane");
+            let clock = std::sync::Arc::new(flui_foundation::ManualClock::new());
+            let binding = Rc::new(GestureBinding::with_clock(clock.clone()));
+            binding.set_resampling_enabled(true).expect("mode");
+            let observed = Rc::new(RefCell::new(Vec::new()));
+            let output = Rc::clone(&observed);
+            let reentrant = Rc::downgrade(&binding);
+            binding
+                .pointer_router()
+                .add_global_handler(Rc::new(move |event| {
+                    let PointerEvent::Move(movement) = event else {
+                        return;
+                    };
+                    let x = movement.current().position.get().x;
+                    output.borrow_mut().push(x);
+                    if x == 10.0 {
+                        let binding = reentrant.upgrade().expect("binding alive");
+                        let terminal = if cancel {
+                            make_cancel_event_for_id(contact(), PointerKind::Touch)
+                        } else {
+                            make_up_event_for_id(
+                                contact(),
+                                Offset::new(10.0, 0.0),
+                                PointerKind::Touch,
+                            )
+                            .expect("up")
+                        };
+                        binding.handle_pointer_event(&terminal, |_| HitTestResult::new());
+                        binding.handle_pointer_event(
+                            &make_down_event_for_id(
+                                contact(),
+                                Offset::new(90.0, 0.0),
+                                PointerKind::Touch,
+                            )
+                            .expect("replacement down"),
+                            |_| HitTestResult::new(),
+                        );
+                        binding.handle_pointer_event(
+                            &with_time(
+                                make_move_event_for_id(
+                                    contact(),
+                                    Offset::new(99.0, 0.0),
+                                    PointerKind::Touch,
+                                )
+                                .expect("replacement move"),
+                                40_000_000,
+                            ),
+                            |_| HitTestResult::new(),
+                        );
+                    }
+                }));
+            lane.enter(|| {
+                binding.handle_pointer_event(
+                    &make_down_event_for_id(contact(), Offset::ZERO, PointerKind::Touch)
+                        .expect("down"),
+                    |_| HitTestResult::new(),
+                );
+                for x in [10_u64, 20] {
+                    binding.handle_pointer_event(
+                        &with_time(
+                            make_move_event_for_id(
+                                contact(),
+                                Offset::new(x as f64, 0.0),
+                                PointerKind::Touch,
+                            )
+                            .expect("move"),
+                            x * 1_000_000,
+                        ),
+                        |_| HitTestResult::new(),
+                    );
+                }
+                let sample = clock.now() + ms(30.0);
+                let delivered = if before_input {
+                    binding.flush_pending_input()
+                } else {
+                    binding
+                        .flush_pending_moves_at(sample, sample + ms(16.0))
+                        .expect("frame")
+                };
+                assert_eq!(delivered, 1);
+                assert_eq!(
+                    observed.borrow().as_slice(),
+                    [10.0],
+                    "withdrawn contact output is cancelled"
+                );
+                assert_eq!(
+                    binding.pending_move_count(),
+                    1,
+                    "replacement retains its own next-frame work"
+                );
+                let sample = clock.now() + ms(60.0);
+                binding
+                    .flush_pending_moves_at(sample, sample + ms(16.0))
+                    .expect("replacement frame");
+                assert_eq!(observed.borrow().as_slice(), [10.0, 99.0]);
+                binding.handle_pointer_event(
+                    &make_up_event_for_id(contact(), Offset::new(99.0, 0.0), PointerKind::Touch)
+                        .expect("up"),
+                    |_| HitTestResult::new(),
+                );
+                assert_eq!(binding.active_pointer_count(), 0);
+            });
+        }
     }
 }
 
