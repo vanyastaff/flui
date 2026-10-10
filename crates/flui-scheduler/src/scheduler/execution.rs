@@ -2,12 +2,13 @@
 
 use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
-use std::rc::{Rc, Weak};
+use std::sync::{Arc, Weak};
 use std::sync::atomic::Ordering;
 
 use super::{IdleDeadline, UpdateScheduler, request_frame_impl_preserving_failure};
 use crate::async_driver::RetirePanic;
 use crate::{Instant, OwnerFrame, SchedulerPhase};
+use crate::wake_delivery::FailureSignal;
 
 /// Why an owner refused execution before changing frame or wake state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -28,7 +29,7 @@ pub enum ExecutionError {
 pub(crate) struct ExecutionState {
     active: Cell<bool>,
     retired: Cell<bool>,
-    failed: Rc<Cell<bool>>,
+    failed: RefCell<Arc<FailureSignal>>,
 }
 
 impl ExecutionState {
@@ -39,12 +40,26 @@ impl ExecutionState {
         if self.active.get() {
             return Err(ExecutionError::AlreadyExecuting);
         }
-        self.failed.set(false);
+        self.fresh_failure_signal();
         self.active.set(true);
         Ok(ExecutionPermit { state: self })
     }
 
+    fn fresh_failure_signal(&self) {
+        let mut failed = self.failed.borrow_mut();
+        // A stale worker may hold even a Weak receipt; exclusive reuse must
+        // prove neither strong nor weak observers can upgrade the old one.
+        if let Some(signal) = Arc::get_mut(&mut failed) {
+            signal.set(false);
+        } else {
+            *failed = Arc::new(FailureSignal::default());
+        }
+    }
+
     pub(crate) fn retire(&self) {
+        if !self.active.get() && !self.retired.get() && !std::thread::panicking() {
+            self.fresh_failure_signal();
+        }
         self.retired.set(true);
     }
 }
@@ -58,7 +73,7 @@ struct ExecutionPermit<'a> {
 /// Producer retirement borrows the accepted turn's failure custody weakly.
 struct FailureScope<'a> {
     scheduler: crate::WeakUpdateScheduler,
-    tasks: &'a RefCell<Option<Weak<Cell<bool>>>>,
+    owner: &'a OwnerFrame,
 }
 
 impl Drop for FailureScope<'_> {
@@ -67,13 +82,14 @@ impl Drop for FailureScope<'_> {
         // metadata cleanup calls no user code, so its temporary cannot be last.
         if let Some(scheduler) = self.scheduler.upgrade() {
             scheduler.inner.execution_failure.borrow_mut().take();
+            scheduler.inner.wake.wake_delivery.bind_failure_signal(None);
         }
-        self.tasks.borrow_mut().take();
+        self.owner.bind_task_failure_signal(None);
     }
 }
 
 pub(crate) fn retire_with_execution_custody<T>(
-    slot: &RefCell<Option<Weak<Cell<bool>>>>,
+    slot: &RefCell<Option<Weak<FailureSignal>>>,
     value: T,
 ) {
     let signal = slot.borrow().as_ref().and_then(Weak::upgrade);
@@ -90,7 +106,6 @@ pub(crate) fn retire_with_execution_custody<T>(
 impl Drop for ExecutionPermit<'_> {
     fn drop(&mut self) {
         self.state.active.set(false);
-        self.state.failed.set(false);
     }
 }
 
@@ -133,7 +148,7 @@ impl<'a> Recovery<'a> {
 
     fn release_scheduler(&mut self, scheduler: UpdateScheduler) {
         let preserve_failure = self.owner.preserving_execution_failure();
-        let failure_signal = Rc::clone(&self.owner.execution.failed);
+        let failure_signal = self.owner.execution_failure_signal();
         if let Some(Some(payload)) =
             self.attempt(|| scheduler.release_execution(preserve_failure, failure_signal))
         {
@@ -158,21 +173,22 @@ impl<'a> Recovery<'a> {
 
 impl OwnerFrame {
     fn bind_failure_scope<'a>(&'a self, scheduler: &UpdateScheduler) -> FailureScope<'a> {
-        *scheduler.inner.execution_failure.borrow_mut() = Some(Rc::downgrade(&self.execution.failed));
-        let tasks = self.task_execution_failure_slot();
-        *tasks.borrow_mut() = Some(Rc::downgrade(&self.execution.failed));
-        FailureScope { scheduler: scheduler.downgrade(), tasks }
+        let signal = Arc::downgrade(&self.execution.failed.borrow());
+        *scheduler.inner.execution_failure.borrow_mut() = Some(signal.clone());
+        scheduler.inner.wake.wake_delivery.bind_failure_signal(Some(signal.clone()));
+        self.bind_task_failure_signal(Some(signal));
+        FailureScope { scheduler: scheduler.downgrade(), owner: self }
     }
     pub(crate) fn record_execution_failure(&self) {
-        self.execution.failed.set(true);
+        self.execution.failed.borrow().set(true);
     }
 
     pub(crate) fn preserving_execution_failure(&self) -> bool {
-        self.execution.failed.get()
+        self.execution.failed.borrow().get()
     }
 
-    pub(crate) fn execution_failure_signal(&self) -> &Cell<bool> {
-        &self.execution.failed
+    pub(crate) fn execution_failure_signal(&self) -> Arc<FailureSignal> {
+        Arc::clone(&self.execution.failed.borrow())
     }
 
     pub(crate) fn release_scheduler_after_retirement(&self) -> Option<RetirePanic> {

@@ -1,15 +1,17 @@
 //! Terminal scheduler retirement after its last strong UI reference is gone.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
+use std::sync::Arc;
+use crate::wake_delivery::FailureSignal;
 
 use super::{SchedulerClosed, SchedulerInner, UpdateScheduler};
 use crate::async_driver::RetirePanic;
 
 pub(super) struct ExecutionRelease {
     pub(super) preserve_failure: bool,
-    pub(super) failure_signal: Rc<Cell<bool>>,
+    pub(super) failure_signal: Arc<FailureSignal>,
     pub(super) failure: Rc<RefCell<Option<RetirePanic>>>,
 }
 
@@ -19,7 +21,7 @@ impl UpdateScheduler {
     pub(crate) fn release_execution(
         self,
         preserve_failure: bool,
-        failure_signal: Rc<Cell<bool>>,
+        failure_signal: Arc<FailureSignal>,
     ) -> Option<RetirePanic> {
         if Rc::strong_count(&self.inner) != 1 {
             drop(self);
@@ -39,7 +41,7 @@ impl UpdateScheduler {
 
 struct Retirement<'a> {
     preserve_failure: bool,
-    signal: &'a Cell<bool>,
+    signal: &'a FailureSignal,
     first: Option<RetirePanic>,
 }
 
@@ -72,7 +74,7 @@ impl Drop for SchedulerInner {
             .closed
             .store(true, std::sync::atomic::Ordering::Release);
         let execution = self.execution_release.get_mut().take();
-        let local_signal = Cell::new(false);
+        let local_signal = FailureSignal::default();
         let signal = execution
             .as_ref()
             .map_or(&local_signal, |release| release.failure_signal.as_ref());

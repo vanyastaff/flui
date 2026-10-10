@@ -2,7 +2,8 @@
 
 use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::ThreadId;
 
 #[derive(Default)]
@@ -10,6 +11,21 @@ struct State {
     pending: bool,
     token: Option<Arc<()>>,
     active: HashMap<ThreadId, bool>,
+    failure_signal: Option<Weak<FailureSignal>>,
+}
+
+/// Failure metadata only: no payload, callback or owner execution authority.
+#[derive(Debug, Default)]
+pub(crate) struct FailureSignal(AtomicBool);
+
+impl FailureSignal {
+    pub(crate) fn get(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn set(&self, failed: bool) {
+        self.0.store(failed, Ordering::Release);
+    }
 }
 
 #[derive(Default)]
@@ -18,6 +34,9 @@ pub(crate) struct WakeDelivery {
 }
 
 impl WakeDelivery {
+    pub(crate) fn bind_failure_signal(&self, signal: Option<Weak<FailureSignal>>) {
+        self.state.lock().failure_signal = signal;
+    }
     /// Fresh demand supersedes in-flight acknowledgements. Identical demand
     /// retries unpaid delivery; a caller with no hook can never acknowledge it.
     /// Token allocations occur only on first delivery or overlapping fresh work.
@@ -40,7 +59,7 @@ impl WakeDelivery {
     ) {
         let preserve_failure = preserve_failure || std::thread::panicking();
         let thread = std::thread::current().id();
-        let (mut token, hook) = {
+        let (mut token, hook, failure_signal) = {
             let mut state = self.state.lock();
             if fresh() {
                 state.pending = true;
@@ -64,7 +83,8 @@ impl WakeDelivery {
             }
             let token = Arc::clone(state.token.get_or_insert_with(|| Arc::new(())));
             state.active.insert(thread, false);
-            (token, hook)
+            let failure_signal = state.failure_signal.as_ref().and_then(Weak::upgrade);
+            (token, hook, failure_signal)
         };
         let mut first_panic = None;
         // Keep both owning envelopes until delivery bookkeeping is closed.
@@ -75,6 +95,9 @@ impl WakeDelivery {
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| current_hook()));
             let succeeded = outcome.is_ok();
             if let Err(payload) = outcome {
+                if let Some(signal) = &failure_signal {
+                    signal.set(true);
+                }
                 if first_panic.is_none() {
                     first_panic = Some(payload);
                 } else {
@@ -142,16 +165,33 @@ impl WakeDelivery {
                     std::mem::forget(compensation_hook);
                     std::panic::resume_unwind(payload);
                 }
+                if failure_signal.as_ref().is_some_and(|signal| signal.get()) {
+                    std::mem::forget(hook);
+                    std::mem::forget(compensation_hook);
+                    return;
+                }
                 // Normal retirement can itself raise the first failure. Retire
                 // the initial envelope after removing the active entry; if it
                 // panics, retain the compensation envelope before resuming it.
                 if let Err(payload) =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(hook)))
                 {
+                    if let Some(signal) = &failure_signal {
+                        signal.set(true);
+                    }
                     std::mem::forget(compensation_hook);
                     std::panic::resume_unwind(payload);
                 }
-                drop(compensation_hook);
+                if failure_signal.as_ref().is_some_and(|signal| signal.get()) {
+                    std::mem::forget(compensation_hook);
+                } else if let Err(payload) = std::panic::catch_unwind(
+                    std::panic::AssertUnwindSafe(|| drop(compensation_hook)),
+                ) {
+                    if let Some(signal) = &failure_signal {
+                        signal.set(true);
+                    }
+                    std::panic::resume_unwind(payload);
+                }
                 return;
             }
         }

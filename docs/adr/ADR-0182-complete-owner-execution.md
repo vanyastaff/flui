@@ -37,7 +37,12 @@ authority; the enclosing boundary retains the first payload. During admitted
 execution, producer-side callback removal, hook replacement and task retirement
 consult that same live signal before releasing an opaque envelope. The binding
 is weak and scoped to the turn, so it neither extends owner lifetime nor changes
-healthy destruction after the turn ends.
+healthy destruction after the turn ends. Wake delivery upgrades a metadata-only
+atomic receipt before invoking a hook and reads it again before retirement.
+A worker can finish after the owner turn ends: its failed receipt remains
+authoritative for that delivery, while a later admission uses a fresh receipt
+if any strong or weak observer still holds the earlier one. Exclusively owned
+receipts are reused; receipt ownership grants no UI authority.
 
 Temporary scheduler release distinguishes an ordinary reference release from
 the actual last strong release. Actual destruction closes weak upgrades before

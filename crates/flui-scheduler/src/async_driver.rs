@@ -214,13 +214,17 @@ pub(crate) struct TaskStore {
     next_id: Cell<TaskId>,
     /// Set by retirement: no task is admitted afterwards.
     closed: Cell<bool>,
-    execution_failure: RefCell<Option<RcWeak<Cell<bool>>>>,
+    execution_failure: RefCell<Option<Weak<crate::wake_delivery::FailureSignal>>>,
     shared: Arc<WakeShared>,
 }
 
 impl TaskStore {
-    pub(crate) fn execution_failure_slot(&self) -> &RefCell<Option<RcWeak<Cell<bool>>>> {
-        &self.execution_failure
+    pub(crate) fn bind_execution_failure_signal(
+        &self,
+        signal: Option<Weak<crate::wake_delivery::FailureSignal>>,
+    ) {
+        *self.execution_failure.borrow_mut() = signal.clone();
+        self.shared.wake_delivery.bind_failure_signal(signal);
     }
     pub(crate) fn new() -> Self {
         Self::with_first_id(1)
@@ -549,7 +553,7 @@ impl RetiringTasks {
     pub(crate) fn retire_preserving_failure(
         self,
         preserve_failure: bool,
-        failure_signal: &Cell<bool>,
+        failure_signal: &crate::wake_delivery::FailureSignal,
     ) -> Option<RetirePanic> {
         self.retire_impl(preserve_failure, Some(failure_signal))
     }
@@ -557,13 +561,13 @@ impl RetiringTasks {
     fn retire_impl(
         self,
         preserve_failure: bool,
-        failure_signal: Option<&Cell<bool>>,
+        failure_signal: Option<&crate::wake_delivery::FailureSignal>,
     ) -> Option<RetirePanic> {
         let mut first: Option<RetirePanic> = None;
         let mut retire = |value| {
             if preserve_failure
                 || first.is_some()
-                || failure_signal.is_some_and(Cell::get)
+                || failure_signal.is_some_and(crate::wake_delivery::FailureSignal::get)
                 || std::thread::panicking()
             {
                 mem::forget(value);
@@ -588,7 +592,7 @@ impl RetiringTasks {
             // A hook has a different envelope type than a task future.
             if preserve_failure
                 || first.is_some()
-                || failure_signal.is_some_and(Cell::get)
+                || failure_signal.is_some_and(crate::wake_delivery::FailureSignal::get)
                 || std::thread::panicking()
             {
                 mem::forget(hook);
@@ -960,7 +964,7 @@ fn release_opaque<T>(value: T) -> Result<(), RetirePanic> {
 /// retained, never raised.
 fn refuse(
     future: BoxedTask,
-    failure_slot: Option<&RefCell<Option<RcWeak<Cell<bool>>>>>,
+    failure_slot: Option<&RefCell<Option<Weak<crate::wake_delivery::FailureSignal>>>>,
 ) -> TaskToken {
     let token = TaskToken::refused();
     let released = if let Some(slot) = failure_slot {

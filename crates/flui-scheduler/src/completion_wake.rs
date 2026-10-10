@@ -1,6 +1,6 @@
 //! Frame-completion wake ownership, failure priority and contained reporting.
 use std::any::Any;
-use std::cell::Cell;
+use crate::wake_delivery::FailureSignal;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::task::Waker;
 
@@ -28,7 +28,7 @@ pub(crate) struct WakeBatch<'a> {
     first: Option<Payload>,
     context: &'static str,
     preserve_failure: bool,
-    failure_signal: Option<&'a Cell<bool>>,
+    failure_signal: Option<&'a FailureSignal>,
 }
 
 impl<'a> WakeBatch<'a> {
@@ -44,7 +44,7 @@ impl<'a> WakeBatch<'a> {
     pub(crate) const fn with_failure_signal(
         context: &'static str,
         preserve_failure: bool,
-        failure_signal: &'a Cell<bool>,
+        failure_signal: &'a FailureSignal,
     ) -> Self {
         Self {
             first: None,
@@ -78,7 +78,7 @@ impl<'a> WakeBatch<'a> {
             self.failed(payload);
         } else if self.preserve_failure
             || self.first.is_some()
-            || self.failure_signal.is_some_and(Cell::get)
+            || self.failure_signal.is_some_and(FailureSignal::get)
             || std::thread::panicking()
         {
             std::mem::forget(waker);

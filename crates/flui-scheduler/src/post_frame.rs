@@ -107,8 +107,11 @@ pub struct OwnerFrame {
 }
 
 impl OwnerFrame {
-    pub(crate) fn task_execution_failure_slot(&self) -> &RefCell<Option<std::rc::Weak<Cell<bool>>>> {
-        self.tasks.execution_failure_slot()
+    pub(crate) fn bind_task_failure_signal(
+        &self,
+        signal: Option<std::sync::Weak<crate::wake_delivery::FailureSignal>>,
+    ) {
+        self.tasks.bind_execution_failure_signal(signal);
     }
     /// Owner-local frame state for `scheduler`'s frames. Task wakes request a
     /// frame through `scheduler`'s [`FrameWaker`](crate::FrameWaker).
@@ -232,7 +235,7 @@ impl OwnerFrame {
         }
         if let Some(payload) = tasks.retire_preserving_failure(
             self.preserving_execution_failure() || first.is_some(),
-            self.execution_failure_signal(),
+            &self.execution_failure_signal(),
         ) {
             self.record_execution_failure();
             keep_first(&mut first, payload);

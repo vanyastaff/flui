@@ -855,7 +855,7 @@ struct SchedulerInner {
     /// Terminal execution release reports contained cleanup failure to the
     /// caller that still owns its produced output. Ordinary turns use no sink.
     execution_release: RefCell<Option<teardown::ExecutionRelease>>,
-    execution_failure: RefCell<Option<std::rc::Weak<Cell<bool>>>>,
+    execution_failure: RefCell<Option<std::sync::Weak<crate::wake_delivery::FailureSignal>>>,
 }
 
 /// Main scheduler for frame and task management
@@ -1522,7 +1522,7 @@ impl UpdateScheduler {
                 self.notify_frame_completion(
                     FrameOutcome::Completed { timing },
                     callback_result.is_err(),
-                    Some(owner.execution_failure_signal()),
+                    Some(&owner.execution_failure_signal()),
                 );
             }));
 
@@ -1880,7 +1880,7 @@ impl UpdateScheduler {
         let previous = { std::mem::replace(&mut *self.inner.wake.on_frame_scheduled.lock(), hook) };
         execution::retire_with_execution_custody(&self.inner.execution_failure, previous);
         let preserve_failure = self.inner.execution_failure.borrow().as_ref()
-            .and_then(std::rc::Weak::upgrade).is_some_and(|signal| signal.get());
+            .and_then(std::sync::Weak::upgrade).is_some_and(|signal| signal.get());
         self.inner.wake.wake_delivery.request_preserving_failure(
             preserve_failure,
             || false,
@@ -2469,7 +2469,7 @@ impl UpdateScheduler {
         &self,
         outcome: FrameOutcome,
         preserve_failure: bool,
-        failure_signal: Option<&Cell<bool>>,
+        failure_signal: Option<&crate::wake_delivery::FailureSignal>,
     ) {
         let waiters = self.inner.frame.completion_waiters.borrow_mut().drain();
 
