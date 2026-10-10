@@ -116,6 +116,57 @@ fn running_vsync_registry(criterion: &mut Criterion) {
     group.finish();
 }
 
+/// Active controllers beneath a chain of real child admissions. Depth exposes
+/// the cost of reentrant ancestor validation that flat registries cannot price.
+fn nested_vsync_registry(criterion: &mut Criterion) {
+    let mut group = criterion.benchmark_group("nested_vsync_registry");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_millis(500));
+    group.measurement_time(Duration::from_secs(1));
+    for count in [100, 1_000] {
+        for depth in [1, 8, 32] {
+            let root = Vsync::new();
+            let mut leaf = root.clone();
+            for _ in 0..depth {
+                let child = Vsync::new();
+                leaf.attach_child(&child).unwrap();
+                leaf = child;
+            }
+            let mut owners = Vec::with_capacity(count);
+            for _ in 0..count {
+                let owner = AnimationController::builder(NEVER_ENDING).build_on(Some(&leaf));
+                owner.controller().forward().unwrap();
+                owners.push(owner);
+            }
+            black_box(&owners);
+            assert_eq!(leaf.len(), count);
+            let mut clock = MotionClock::new();
+            let mut raw = Duration::ZERO;
+            root.tick_all(&clock.frame(raw));
+            assert_live_progress(&root, &mut clock, &mut raw, owners[0].controller());
+            let before = owners[0].controller().value();
+            let before_raw = raw;
+            group.bench_with_input(
+                BenchmarkId::new(format!("{count}_owners"), depth),
+                &depth,
+                |bench, _| {
+                    bench.iter(|| {
+                        registry_frame(&root, &mut clock, &mut raw);
+                    });
+                },
+            );
+            assert!(owners.iter().all(|owner| owner.controller().is_animating()));
+            if raw > before_raw {
+                assert!(
+                    owners[0].controller().value() > before,
+                    "the measured nested walk must advance its active controllers"
+                );
+            }
+        }
+    }
+    group.finish();
+}
+
 /// 10% running, 90% stopped at N = 1,000 — the realistic implicit-animation
 /// mix (a scroll fling and a handful of open transitions among a much larger
 /// resident population of already-settled controllers).
@@ -210,6 +261,7 @@ criterion_group!(
     benches,
     stopped_vsync_registry,
     running_vsync_registry,
+    nested_vsync_registry,
     mixed_vsync_registry,
     unregister_all
 );
