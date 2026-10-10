@@ -104,6 +104,7 @@ pub struct RenderEntry<P: Protocol> {
     /// Kept outside `RenderState`: attachment is storage lifecycle, not
     /// protocol geometry or per-frame state.
     attachment: AttachmentState,
+    local_invalidation: Option<crate::pipeline::LocalRenderInvalidationHandle>,
 }
 
 /// Custody for the user-owned render object and parent data.
@@ -128,6 +129,9 @@ impl<P: Protocol> Drop for RetiringEntry<P> {
 
 impl<P: Protocol> Drop for RenderEntry<P> {
     fn drop(&mut self) {
+        if let Some(handle) = self.local_invalidation.take() {
+            handle.withdraw();
+        }
         let mut retiring = RetiringEntry {
             object: self.render_object.take(),
             parent_data: self.state.take_parent_data(),
@@ -172,6 +176,7 @@ impl<P: Protocol> RenderEntry<P> {
             state: RenderState::new(),
             links: NodeLinks::new(),
             attachment: AttachmentState::Detached(None),
+            local_invalidation: None,
         }
     }
 
@@ -186,6 +191,7 @@ impl<P: Protocol> RenderEntry<P> {
             state: RenderState::new(),
             links: NodeLinks::with_parent(parent, depth),
             attachment: AttachmentState::Detached(None),
+            local_invalidation: None,
         }
     }
 
@@ -193,11 +199,16 @@ impl<P: Protocol> RenderEntry<P> {
         self.attachment.next_epoch()
     }
 
-    pub(crate) fn begin_attachment(&mut self, epoch: AttachmentEpoch) -> bool {
+    pub(crate) fn begin_attachment(
+        &mut self,
+        epoch: AttachmentEpoch,
+        handle: crate::pipeline::LocalRenderInvalidationHandle,
+    ) -> bool {
         if self.attachment.next_epoch() != Some(epoch) {
             return false;
         }
         self.attachment = AttachmentState::Attached(epoch);
+        self.local_invalidation = Some(handle);
         true
     }
 
@@ -206,7 +217,16 @@ impl<P: Protocol> RenderEntry<P> {
             return false;
         };
         self.attachment = AttachmentState::Detached(Some(epoch));
+        if let Some(handle) = self.local_invalidation.take() {
+            handle.withdraw();
+        }
         true
+    }
+
+    pub(crate) fn local_invalidation(
+        &self,
+    ) -> Option<crate::pipeline::LocalRenderInvalidationHandle> {
+        self.local_invalidation.clone()
     }
 
     pub(crate) fn is_attached_for(&self, epoch: AttachmentEpoch) -> bool {

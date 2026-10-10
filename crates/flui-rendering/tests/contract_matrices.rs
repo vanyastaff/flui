@@ -46,6 +46,10 @@ fn frame_failure_matrix() {
 #[test]
 fn lifecycle_matrix() {
     let cases: &[(&str, fn())] = &[
+        ("local drain failure preserves its phase tail and next frame", crate::attach_detach_lifecycle::local_drain_failure_preserves_the_phase_tail_and_next_frame),
+        ("owner release withdraws peer handles before user Drop", crate::attach_detach_lifecycle::owner_release_withdraws_peer_handles_before_user_drop),
+        ("local marks survive a failed wake and coalesce", crate::attach_detach_lifecycle::local_marks_survive_a_failed_wake_and_coalesce),
+        ("local marks wait for a hook and end with the attachment", crate::attach_detach_lifecycle::local_marks_wait_for_a_hook_and_end_with_the_attachment),
         ("attach_detach_lifecycle::insert_fires_exactly_one_attach_with_a_handle_bound_to_the_new_id", crate::attach_detach_lifecycle::insert_fires_exactly_one_attach_with_a_handle_bound_to_the_new_id),
         ("dispose_eviction::removing_a_subtree_evicts_its_dirty_entries", crate::dispose_eviction::removing_a_subtree_evicts_its_dirty_entries),
         ("dispose_eviction::render_tree_retirement_preserves_independent_envelopes", crate::dispose_eviction::render_tree_retirement_preserves_independent_envelopes),

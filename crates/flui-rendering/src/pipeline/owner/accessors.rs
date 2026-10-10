@@ -112,7 +112,16 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         F: Fn() + Send + Sync + 'static,
     {
         let outgoing = { self.notifier.write().replace_need_visual_update(callback) };
-        drop(outgoing);
+        let wake = self
+            .local_dirty
+            .has_pending()
+            .then(|| self.notifier.read().deferred_visual_update());
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        if let Some(wake) = wake {
+            wake.notify_with(&mut recovery.scope());
+        }
+        recovery.scope().retire(outgoing);
+        recovery.finish();
     }
 
     /// Sets the callback for when semantics owner is created.
@@ -173,6 +182,17 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         ))
     }
 
+    /// Return an owner-local capability for this node's current attachment.
+    /// Pending marks coalesce independently of the bounded external channel.
+    /// Detached, removed and foreign nodes have no capability.
+    #[must_use]
+    pub fn local_render_invalidation_handle(
+        &self,
+        id: RenderId,
+    ) -> Option<crate::pipeline::LocalRenderInvalidationHandle> {
+        self.render_tree.get(id)?.local_invalidation()
+    }
+
     /// Drains the pending dirty-request channel into the scheduler's
     /// dirty sets.
     ///
@@ -218,7 +238,47 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 }
             }
         }
-        self.apply_font_change();
+        let mut local = self.local_dirty.take_pending();
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        for queued in local.drain(..) {
+            let Some(record) = queued.upgrade() else {
+                continue;
+            };
+            let marks = record.take_marks();
+            if !self
+                .render_tree
+                .get(record.id)
+                .is_some_and(|node| node.is_attached_for(record.epoch))
+            {
+                continue;
+            }
+            for kind in [
+                DirtyKind::Layout,
+                DirtyKind::Compositing,
+                DirtyKind::Paint,
+                DirtyKind::Semantics,
+                DirtyKind::CompositedLayerUpdate,
+            ] {
+                if marks & super::super::local_invalidation::bit(kind) == 0 {
+                    continue;
+                }
+                drained += 1;
+                recovery.scope().run(|| match kind {
+                    DirtyKind::Layout => self.mark_needs_layout(record.id),
+                    DirtyKind::Compositing => self.mark_needs_compositing_bits_update(record.id),
+                    DirtyKind::Paint => self.mark_needs_paint(record.id),
+                    DirtyKind::Semantics => self.mark_needs_semantics(record.id),
+                    DirtyKind::CompositedLayerUpdate => {
+                        self.mark_needs_composited_layer_update(record.id);
+                    }
+                });
+            }
+        }
+        self.local_dirty.recycle(local);
+        recovery.scope().run(|| {
+            self.apply_font_change();
+        });
+        recovery.finish();
         drained
     }
 
@@ -1470,8 +1530,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         else {
             return;
         };
-        let handle =
-            crate::pipeline::RenderInvalidationHandle::new(self.dirty_sender.clone(), id, epoch);
+        let handle = self.local_dirty.bind(id, epoch);
         if let Some(node) = self.render_tree.get_mut(id) {
             let _ = node.attach(epoch, handle);
         }
@@ -1820,7 +1879,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         self.scheduler.debug_doing_any_phase()
     }
 
-    /// Returns the total number of dirty nodes across all lists.
+    /// Returns the total number of nodes in the canonical phase lists.
+    /// Pending invalidations are counted after [`Self::drain_pending_dirty`].
     #[inline]
     pub fn dirty_node_count(&self) -> usize {
         self.scheduler.dirty_node_count()
@@ -1829,7 +1889,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// Returns whether there are any dirty nodes.
     #[inline]
     pub fn has_dirty_nodes(&self) -> bool {
-        self.scheduler.has_dirty_nodes()
+        self.scheduler.has_dirty_nodes() || self.local_dirty.has_pending()
     }
 
     /// Whether retained layout work needs a fresh layout invalidation before

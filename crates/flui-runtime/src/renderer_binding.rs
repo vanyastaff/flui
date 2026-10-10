@@ -100,7 +100,7 @@ pub(crate) fn redirty_pipeline_root(pipeline_owner: &PipelineCell) {
     let render_invalidation_handle = pipeline_owner.with(|root_owner| {
         root_owner
             .root_id()
-            .and_then(|root_id| root_owner.render_invalidation_handle(root_id))
+            .and_then(|root_id| root_owner.local_render_invalidation_handle(root_id))
     });
     if let Some(handle) = render_invalidation_handle
         && let Err(e) = handle.mark_needs_layout()
@@ -415,17 +415,10 @@ impl RenderingBinding {
     /// retained scene to re-present either — so the shared logic lives
     /// here, once.
     ///
-    /// Routed through [`PipelineOwner::render_invalidation_handle`]/
-    /// [`RenderInvalidationHandle::mark_needs_layout`](flui_rendering::pipeline::RenderInvalidationHandle::mark_needs_layout),
-    /// not a scheduler reach: a caller may not be the UI thread (an
-    /// async-init splash screen resolving on an executor thread, or the
-    /// re-enable listener firing from whatever thread drove the lifecycle
-    /// change) — resolving a scheduler by any thread-local at fire time from
-    /// the wrong thread would silently target the wrong instance and lose
-    /// the wake. `RenderInvalidationHandle` is `Send + Sync`, captured over a bounded
-    /// channel at `PipelineOwner` construction time, and its
-    /// `mark_needs_layout` fires the SAME visual-update notifier a local
-    /// dirty mark does — safe and non-blocking from any thread.
+    /// Routed through [`PipelineOwner::local_render_invalidation_handle`].
+    /// This binding belongs to the UI owner. The root's attachment retains
+    /// the layout mark before waking, so external channel pressure cannot
+    /// discard the request to present again.
     ///
     /// [`allow_first_frame`]: Self::allow_first_frame
     pub fn redirty_root_for_represent(&self) {

@@ -5,7 +5,7 @@ use std::{collections::hash_map::Entry, fmt, rc::Rc};
 use flui_foundation::RenderId;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::pipeline::{RenderInvalidationHandle, handle::AttachmentEpoch, phase::Idle};
+use crate::pipeline::{handle::AttachmentEpoch, phase::Idle};
 
 use super::PipelineOwner;
 
@@ -418,8 +418,7 @@ impl PipelineOwner<Idle> {
             .map(|record| record.attachment_epoch.next())
             .collect();
         for (record, epoch) in token.nodes.iter().zip(next_epochs) {
-            let handle =
-                RenderInvalidationHandle::new(self.dirty_sender.clone(), record.render_id, epoch);
+            let handle = self.local_dirty.bind(record.render_id, epoch);
             let attached = self
                 .render_tree
                 .get_mut(record.render_id)

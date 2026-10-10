@@ -112,7 +112,7 @@ use flui_rendering::{
     constraints::{SliverConstraints, SliverGeometry, child_paint_offset},
     context::{PaintCx, SliverHitTestContext, SliverLayoutContext},
     parent_data::SliverPhysicalParentData,
-    pipeline::RenderInvalidationHandle,
+    pipeline::LocalRenderInvalidationHandle,
     protocol::SliverProtocol,
     traits::{RenderObject, RenderSliver},
     view::ScrollDirection,
@@ -986,7 +986,7 @@ pub struct RenderSliverFloatingHeaderBase<M: FloatingHeaderMode> {
     child_position: Option<f64>,
     /// Value-change subscription on `controller`, torn down in `detach`.
     listener_id: Option<ListenerId>,
-    invalidation: Option<RenderInvalidationHandle>,
+    invalidation: Option<LocalRenderInvalidationHandle>,
     _mode: PhantomData<M>,
 }
 
@@ -1306,7 +1306,7 @@ impl<M: FloatingHeaderMode> RenderSliver for RenderSliverFloatingHeaderBase<M> {
         ctx.hit_test_child_at_layout_offset(0)
     }
 
-    fn attach(&mut self, handle: RenderInvalidationHandle) {
+    fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
         self.invalidation = Some(handle);
         self.set_snap_controller(self.controller.clone());
     }

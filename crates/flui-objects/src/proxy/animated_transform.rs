@@ -29,13 +29,12 @@
 //!
 //! # Failure keeps the cache
 //!
-//! Marks are fallible sends ([`RenderInvalidationHandle`]) that request the
-//! owner's next frame, so a tick publishes the new sample *before* marking.
-//! Render samples stay on the UI owner (ADR-0175). Delivery
-//! is tracked apart from the sample: the cache also keeps the last sample
-//! whose marks were all sent, and the next tick classifies against that one,
-//! so a failed send leaves the debt in place and is retried even when the
-//! next value equals the published one. A non-finite animation value is
+//! A tick publishes its sample before admitting visual and semantics phases
+//! together through [`LocalRenderInvalidationHandle::request_update`]. Accepted
+//! marks survive a failing wake and remain deliverable without another tick.
+//! Render samples stay on the UI owner (ADR-0175). The cache also tracks the
+//! last acknowledged admission, so reentrant publication cannot acknowledge an
+//! older sample as newer work. A non-finite animation value is
 //! ignored (the last finite sample stays); a finite sample whose matrix
 //! overflows is degenerate: nothing is painted or hit, and coordinate
 //! conversion falls back to the untransformed position rather than
@@ -61,7 +60,7 @@ use flui_rendering::{
     RenderUpdateImpact,
     context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
     parent_data::BoxParentData,
-    pipeline::RenderInvalidationHandle,
+    pipeline::LocalRenderInvalidationHandle,
     traits::{PaintEffects, RenderBox},
 };
 
@@ -272,14 +271,14 @@ impl Source {
         &self,
         cell: &Rc<SampleCell>,
         kind: Kind,
-        handle: &RenderInvalidationHandle,
+        handle: &LocalRenderInvalidationHandle,
     ) -> ListenerId {
         fn listen<T>(
             proxy: &Rc<ProxyAnimation<T>>,
             read: fn(&T) -> (f64, f64),
             cell: &Rc<SampleCell>,
             kind: Kind,
-            handle: &RenderInvalidationHandle,
+            handle: &LocalRenderInvalidationHandle,
         ) -> ListenerId
         where
             T: Clone + std::fmt::Debug + 'static,
@@ -323,7 +322,7 @@ fn commit(
     kind: Kind,
     generation: u64,
     value: (f64, f64),
-    handle: &RenderInvalidationHandle,
+    handle: &LocalRenderInvalidationHandle,
 ) -> bool {
     let Some(value) = finite(value) else {
         return false;
@@ -348,18 +347,19 @@ fn commit(
     let size = cell.size();
     let before = classify(kind, old, size);
     let after = classify(kind, value, size);
-    let layer_mark = if in_flight || before != after {
-        handle.mark_needs_paint()
+    let layer_impact = if in_flight || before != after {
+        flui_rendering::RenderUpdateImpact::PAINT
     } else if after == Class::Layered {
-        handle.mark_needs_composited_layer_update()
+        flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE
     } else {
-        Ok(())
+        flui_rendering::RenderUpdateImpact::NONE
     };
-    if let Err(error) = layer_mark.and_then(|()| handle.mark_needs_semantics()) {
+    if let Err(error) =
+        handle.request_update(layer_impact | flui_rendering::RenderUpdateImpact::SEMANTICS)
+    {
         tracing::warn!(
             %error,
-            "RenderAnimatedTransform: mark send failed; delivery stays owed so the next tick \
-             retries"
+            "RenderAnimatedTransform: the attachment ended before invalidation admission"
         );
         return false;
     }
@@ -612,7 +612,7 @@ impl RenderBox for RenderAnimatedTransform {
         (class == Class::Layered).then_some(matrix)
     }
 
-    fn attach(&mut self, handle: RenderInvalidationHandle) {
+    fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
         self.listener_id = Some(self.source.subscribe(&self.cell, self.kind, &handle));
         // Catch up with a change made while nothing listened (a reattach).
         // Its ticket is taken before the read like a listener's, so a
@@ -648,7 +648,7 @@ mod tests {
     /// visual-update wake set to `wake` (it fires inside every mark send).
     fn owner_with_handle(
         wake: impl Fn() + Send + Sync + 'static,
-    ) -> (PipelineOwner, RenderInvalidationHandle) {
+    ) -> (PipelineOwner, LocalRenderInvalidationHandle) {
         let controller = AnimationController::builder(Duration::from_millis(100)).build();
         controller.set_value(1.0);
         let proxy =
@@ -661,7 +661,7 @@ mod tests {
             })) as Box<dyn flui_rendering::traits::RenderObject<BoxProtocol>>,
         );
         let handle = owner
-            .render_invalidation_handle(anchor)
+            .local_render_invalidation_handle(anchor)
             .expect("just-inserted id must be live");
         (owner, handle)
     }

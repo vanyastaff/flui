@@ -2593,6 +2593,96 @@ fn harness_animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255
     }
 }
 
+fn harness_animated_opacity_completion_survives_dirty_backpressure() {
+    exercise_opacity_completion(false, false);
+}
+
+fn harness_animated_opacity_completion_survives_wake_failure() {
+    exercise_opacity_completion(true, false);
+}
+
+fn harness_sliver_animated_opacity_completion_survives_dirty_backpressure() {
+    exercise_opacity_completion(false, true);
+}
+
+fn harness_sliver_animated_opacity_completion_survives_wake_failure() {
+    exercise_opacity_completion(true, true);
+}
+
+fn exercise_opacity_completion(wake_failure: bool, sliver: bool) {
+    let controller = ticking_controller(100, 0.5);
+    let opacity = if sliver {
+        box_node(RenderConstrainedBox::new(BoxConstraints::tight(Size::new(
+            100.0, 100.0,
+        ))))
+        .child(viewport(
+            sliver_node(RenderSliverAnimatedOpacity::new(
+                animation_from(&controller),
+                false,
+            ))
+            .child(fixed_extent_list(
+                40.0,
+                vec![box_node(RenderColoredBox::red(100.0, 40.0))],
+            )),
+        ))
+    } else {
+        box_node(RenderAnimatedOpacity::new(
+            animation_from(&controller),
+            false,
+        ))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0)))
+    };
+    let mut run = RenderTester::mount(
+        box_node(RenderFlex::row())
+            .child(box_node(RenderColoredBox::green(10.0, 10.0)).label("other"))
+            .child(box_node(RenderRepaintBoundary::new()).child(opacity)),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    assert!(run.opacity_alpha().is_some());
+    controller.forward().expect("start the actual opacity run");
+    controller.tick_at(Duration::ZERO);
+    if wake_failure {
+        let fail = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        run.owner_mut().set_on_need_visual_update(move || {
+            assert!(
+                !fail.swap(false, std::sync::atomic::Ordering::Relaxed),
+                "first opacity wake"
+            );
+        });
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            controller.tick_at(Duration::from_millis(100));
+        }));
+        assert!(failed.is_err(), "the authored wake failure propagates");
+    } else {
+        let handle = run
+            .owner()
+            .render_invalidation_handle(run.id("other"))
+            .expect("independent mounted sibling's invalidation capability");
+        let mut queued = 0;
+        loop {
+            match handle.mark_needs_paint() {
+                Ok(()) => queued += 1,
+                Err(flui_rendering::pipeline::DirtySendError::ChannelFull { .. }) => break,
+                Err(error) => panic!("unexpected invalidation failure: {error}"),
+            }
+        }
+        assert!(queued > 0, "real accepted work fills the bounded channel");
+        controller.tick_at(Duration::from_millis(100));
+    }
+    assert_eq!(controller.value(), 1.0);
+    assert!(!controller.is_animating(), "no subsequent sample can retry");
+    run.pump();
+    assert!(
+        run.has_picture_layer(),
+        "the completed fade produces its final visible frame"
+    );
+    assert!(
+        run.opacity_alpha().is_none(),
+        "the completed fade must remove its partial-opacity layer after backpressure"
+    );
+}
+
 // ── RenderAnimatedTransform ──────────────────────────────────────────────
 
 /// A scale transition node over a 40×40 red child, centred in nothing: the
@@ -2741,6 +2831,80 @@ fn harness_animated_transform_singular_paints_and_hits_nothing() {
     assert!(
         !run.hit(2.0, 2.0).contains(&run.id("child")),
         "outside the painted square"
+    );
+}
+
+fn harness_animated_transform_completion_keeps_semantics_after_wake_failure() {
+    fn mount(controller: &AnimationController) -> FrameRun {
+        RenderTester::mount(
+            box_node(
+                RenderSemanticsAnnotations::new(SemanticsProperties::new().with_label("Root"))
+                    .with_container(true),
+            )
+            .child(
+                box_node(RenderRepaintBoundary::new()).child(
+                    box_node(RenderAnimatedTransform::new(TransformMotion::Scale {
+                        scale: animation_from(controller),
+                    }))
+                    .child(
+                        box_node(
+                            RenderSemanticsAnnotations::new(
+                                SemanticsProperties::new().with_label("Animated target"),
+                            )
+                            .with_container(true),
+                        )
+                        .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+                    ),
+                ),
+            ),
+        )
+        .with_constraints(loose(200.0))
+        .with_semantics_enabled()
+        .run_frame()
+    }
+    fn geometry(
+        run: &FrameRun,
+    ) -> (
+        flui_foundation::geometry::Rect<f64>,
+        Option<flui_foundation::geometry::Matrix4>,
+    ) {
+        let owner = run.owner().semantics_owner().expect("semantics enabled");
+        let (_, node) = owner
+            .tree()
+            .iter()
+            .find(|(_, node)| node.label() == Some("Animated target"))
+            .expect("accessible target");
+        (node.rect(), node.transform().copied())
+    }
+    let controller = ticking_controller(100, 0.5);
+    let mut run = mount(&controller);
+    let reference = mount(&ticking_controller(100, 1.0));
+    assert_ne!(
+        geometry(&run),
+        geometry(&reference),
+        "samples have distinguishable accessible geometry"
+    );
+    controller.forward().expect("actual transform run");
+    controller.tick_at(Duration::ZERO);
+    let fail = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    run.owner_mut().set_on_need_visual_update(move || {
+        assert!(
+            !fail.swap(false, std::sync::atomic::Ordering::Relaxed),
+            "first transform wake"
+        );
+    });
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            controller.tick_at(Duration::from_millis(100));
+        }))
+        .is_err()
+    );
+    assert!(!controller.is_animating());
+    run.pump();
+    assert_eq!(
+        geometry(&run),
+        geometry(&reference),
+        "completed transform publishes final accessible geometry without another tick"
     );
 }
 
@@ -6751,12 +6915,24 @@ fn family_clips_and_effects() {
                 harness_animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255,
             ),
             (
+                "animated_opacity_completion_survives_dirty_backpressure",
+                harness_animated_opacity_completion_survives_dirty_backpressure,
+            ),
+            (
+                "animated_opacity_completion_survives_wake_failure",
+                harness_animated_opacity_completion_survives_wake_failure,
+            ),
+            (
                 "animated_transform_tick_dirty_marking",
                 harness_animated_transform_tick_dirty_marking,
             ),
             (
                 "animated_transform_singular_paints_and_hits_nothing",
                 harness_animated_transform_singular_paints_and_hits_nothing,
+            ),
+            (
+                "animated transform completion keeps semantics after wake failure",
+                harness_animated_transform_completion_keeps_semantics_after_wake_failure,
             ),
             (
                 "animated_transform_non_finite_sample_keeps_the_last_matrix",
@@ -7021,6 +7197,8 @@ fn family_sliver_wrappers() {
         ("sliver_offstage_hidden_reports_zero_geometry", harness_sliver_offstage_hidden_reports_zero_geometry),
         ("sliver_opacity_alpha_zero_emits_no_opacity_layer", harness_sliver_opacity_alpha_zero_emits_no_opacity_layer),
         ("sliver_animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255", harness_sliver_animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255),
+        ("sliver opacity completion survives dirty backpressure", harness_sliver_animated_opacity_completion_survives_dirty_backpressure),
+        ("sliver opacity completion survives wake failure", harness_sliver_animated_opacity_completion_survives_wake_failure),
     ]);
 }
 

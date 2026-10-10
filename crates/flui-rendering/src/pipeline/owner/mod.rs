@@ -124,6 +124,10 @@ static PIPELINE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 /// -- it used `Arc<RwLock<PipelineOwner>>` for tree nodes, an
 /// anti-pattern this crate refuses.
 pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
+    /// First to retire: every attachment loses admission before user-owned
+    /// resources in the remaining fields run their destructors.
+    local_dirty: std::rc::Rc<super::local_invalidation::LocalDirtyInbox>,
+
     /// Unique identifier for this pipeline owner.
     id: u64,
 
@@ -377,6 +381,7 @@ where
         device_pixel_ratio: from.device_pixel_ratio,
         dirty_sender: from.dirty_sender,
         dirty_rx: from.dirty_rx,
+        local_dirty: from.local_dirty,
         #[cfg(any(test, feature = "testing"))]
         parent_data_seeds: from.parent_data_seeds,
         #[cfg(any(test, feature = "testing"))]

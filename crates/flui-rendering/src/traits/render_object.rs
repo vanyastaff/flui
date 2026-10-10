@@ -159,7 +159,7 @@ impl HitTestOutcome {
 /// **itself** dirty out-of-band — an owned animation controller driving its
 /// own layout, a delegate's repaint `Listenable` driving paint — subscribes
 /// through: `attach` hands over a generational, least-privilege
-/// [`RenderInvalidationHandle`](crate::pipeline::RenderInvalidationHandle) bound to this node;
+/// [`LocalRenderInvalidationHandle`](crate::pipeline::LocalRenderInvalidationHandle) bound to this node;
 /// `detach` is where the subscription is torn down. Neither is a hot path:
 /// both fire only on structural insert/remove
 /// ([`PipelineOwner::insert`](crate::pipeline::PipelineOwner::insert) and
@@ -772,14 +772,14 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     /// and its sibling insertion methods. A render object that must mark
     /// **itself** dirty out-of-band subscribes to its source here and
     /// self-marks on notify via
-    /// [`RenderInvalidationHandle::mark_needs_layout`](crate::pipeline::RenderInvalidationHandle::mark_needs_layout)
+    /// [`LocalRenderInvalidationHandle::mark_needs_layout`](crate::pipeline::LocalRenderInvalidationHandle::mark_needs_layout)
     /// or
-    /// [`RenderInvalidationHandle::mark_needs_paint`](crate::pipeline::RenderInvalidationHandle::mark_needs_paint).
+    /// [`LocalRenderInvalidationHandle::mark_needs_paint`](crate::pipeline::LocalRenderInvalidationHandle::mark_needs_paint).
     ///
     /// Default: no-op — override on `RenderBox` or `RenderSliver`,
     /// mirroring `reassemble`. See the *Tree-lifecycle note* in the trait
     /// doc.
-    fn attach(&mut self, handle: crate::pipeline::RenderInvalidationHandle) {
+    fn attach(&mut self, handle: crate::pipeline::LocalRenderInvalidationHandle) {
         let _ = handle;
     }
 

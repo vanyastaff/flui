@@ -436,12 +436,9 @@ impl<T> TransitionRoute<T> {
 
         // Jump when the two trains are at the same value or the next one is not moving.
         //
-        // **Not** `Animation::is_animating`, which for an `AnimationController` is
-        // *overridden* to mean "the ticker is running", and stays true after a
-        // controller has settled at `Completed`. Using the override here makes a
-        // settled route look like a moving train and forces a spurious hop,
-        // letting a stale train clobber a newer parent. The controller's
-        // override is a separate, recorded divergence.
+        // Train movement follows the published direction. A controller's
+        // `is_animating` reports run ownership, including a paused run, so it
+        // cannot decide whether these two trains are currently converging.
         let is_moving = matches!(
             next_animation.status(),
             AnimationStatus::Forward | AnimationStatus::Reverse

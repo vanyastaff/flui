@@ -23,7 +23,7 @@ use flui_rendering::{
     constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
     context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
     parent_data::BoxParentData,
-    pipeline::{DirtySendError, RenderInvalidationHandle},
+    pipeline::LocalRenderInvalidationHandle,
     traits::{RenderBox, SemanticsClip},
     view::{
         CacheExtentStyle, ScrollableViewportOffset, SliverPaintOrder, ViewportLayout as _,
@@ -60,35 +60,11 @@ impl std::fmt::Debug for OffsetListener {
 /// `scroll_position` module docs) — so this listener can only ever fire from
 /// OUTSIDE `perform_layout`; there is no synchronous mark-during-layout
 /// re-entrancy to guard against here.
-fn offset_relayout_listener(handle: RenderInvalidationHandle) -> std::rc::Rc<dyn Fn()> {
+fn offset_relayout_listener(handle: LocalRenderInvalidationHandle) -> std::rc::Rc<dyn Fn()> {
     std::rc::Rc::new(move || {
-        // `SendError::OwnerGone` (pipeline owner torn down — node/tree gone,
-        // this is teardown, not a fault) and any future variant (`SendError`
-        // is `#[non_exhaustive]`) get silent treatment: nothing left to
-        // mark, nothing to warn about. `ChannelFull` gets a `warn!` below —
-        // see its comment for why this is a real, unmitigated staleness
-        // risk, not routine backpressure noise.
-        if let Err(error @ DirtySendError::ChannelFull { .. }) = handle.mark_needs_layout() {
-            // A full channel does NOT mean this node's own mark is already
-            // queued in it — 256 unrelated marks from elsewhere in the tree
-            // fill it just as easily, so this send can be dropped for a
-            // node that has no other pending mark at all. There is no
-            // retry available: this closure has no way back into the
-            // render object to set a retry flag, and neither
-            // `perform_layout` nor `paint` runs for a node that isn't
-            // already on some dirty list, so nothing revisits it later on
-            // its own. Continuous scrolling self-heals (the very next
-            // offset mutation fires this listener again and retries the
-            // send), but a single one-shot `jump_to` under backpressure can
-            // leave this viewport showing a stale frame until some
-            // UNRELATED mutation elsewhere happens to mark it dirty.
-            tracing::warn!(
-                %error,
-                "viewport offset listener: mark_needs_layout dropped under backpressure; \
-                 this viewport may keep showing a stale frame until another offset mutation \
-                 or an unrelated dirty mark triggers a retry"
-            );
-        }
+        // Local admission is independent of external channel capacity.
+        // A withdrawn attachment has no remaining viewport work to deliver.
+        let _ = handle.mark_needs_layout();
     })
 }
 
@@ -107,7 +83,7 @@ fn unregister_offset_listener<O: ViewportOffset>(
 /// `handle`.
 fn register_offset_listener<O: ViewportOffset>(
     offset: &O,
-    handle: RenderInvalidationHandle,
+    handle: LocalRenderInvalidationHandle,
 ) -> OffsetListener {
     let listener = offset_relayout_listener(handle);
     offset.add_listener(listener.clone());
@@ -256,7 +232,7 @@ pub struct RenderViewport<O = ScrollableViewportOffset> {
     /// `None` before attach / after [`detach`](RenderBox::detach). `set_offset`
     /// clones it to re-register `offset_listener` on a swapped-in offset while
     /// the node is live in a pipeline.
-    render_invalidation_handle: Option<RenderInvalidationHandle>,
+    render_invalidation_handle: Option<LocalRenderInvalidationHandle>,
     /// The listener `attach` (or a live `set_offset`) registered on `offset` —
     /// retained so `detach`/`set_offset` can remove the SAME `Arc` via
     /// [`ViewportOffset::remove_listener`]'s ptr-eq contract.
@@ -381,7 +357,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
     /// extents (`min_scroll_extent`/`max_scroll_extent`/`viewport_dimension`)
     /// for no reason.
     ///
-    /// If this node is currently attached (a [`RenderInvalidationHandle`] was handed to
+    /// If this node is currently attached (a [`LocalRenderInvalidationHandle`] was handed to
     /// [`attach`](RenderBox::attach) and no matching
     /// [`detach`](RenderBox::detach) has run since), the offset-relayout
     /// listener moves with the swap: it is removed from the OLD offset first
@@ -1008,7 +984,7 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
     // The viewport subscribes to its `ViewportOffset` in `attach` and tears
     // the subscription down in `detach`. See `offset_relayout_listener`'s
     // docs for what fires the mark and why it can never re-enter `perform_layout`.
-    fn attach(&mut self, handle: RenderInvalidationHandle) {
+    fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
         self.offset_listener = Some(register_offset_listener(&self.offset, handle.clone()));
         self.render_invalidation_handle = Some(handle);
     }
@@ -1235,7 +1211,7 @@ pub struct RenderShrinkWrappingViewport<O = ScrollableViewportOffset> {
     layout: ShrinkWrappingLayout,
     spare_layout: ShrinkWrappingLayout,
     /// See [`RenderViewport::render_invalidation_handle`]'s matching field docs.
-    render_invalidation_handle: Option<RenderInvalidationHandle>,
+    render_invalidation_handle: Option<LocalRenderInvalidationHandle>,
     /// See [`RenderViewport::offset_listener`]'s matching field docs.
     offset_listener: Option<OffsetListener>,
     /// How content that overflows this viewport is clipped when it paints.
@@ -1747,7 +1723,7 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderShrinkWrappingViewport<O> 
 
     // See `RenderViewport::attach`/`detach`'s matching docs — identical
     // shape over `RenderShrinkWrappingViewport`'s own `offset`.
-    fn attach(&mut self, handle: RenderInvalidationHandle) {
+    fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
         self.offset_listener = Some(register_offset_listener(&self.offset, handle.clone()));
         self.render_invalidation_handle = Some(handle);
     }

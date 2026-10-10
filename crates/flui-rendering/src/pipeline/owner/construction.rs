@@ -59,6 +59,9 @@ impl PipelineOwner<Idle> {
         let (dirty_sender, dirty_rx) =
             DirtySender::new_pair(dirty_channel_capacity, std::sync::Arc::clone(&notifier));
         let scheduler = DirtyTracker::new(std::sync::Arc::clone(&notifier));
+        let local_dirty = super::super::local_invalidation::LocalDirtyInbox::new(
+            std::sync::Arc::clone(&notifier),
+        );
         Self {
             // A context lent while a pipeline is built is a measurement
             // building one: seed zero, and the first drain after the loan
@@ -86,6 +89,7 @@ impl PipelineOwner<Idle> {
             device_pixel_ratio: 1.0,
             dirty_sender,
             dirty_rx,
+            local_dirty,
             #[cfg(any(test, feature = "testing"))]
             parent_data_seeds: FxHashMap::default(),
             #[cfg(any(test, feature = "testing"))]

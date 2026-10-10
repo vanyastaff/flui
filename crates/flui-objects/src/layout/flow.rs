@@ -59,7 +59,7 @@ use flui_rendering::{
     context::{BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext, PaintCx},
     delegates::{FlowDelegate, FlowPaintingContext},
     parent_data::BoxParentData,
-    pipeline::RenderInvalidationHandle,
+    pipeline::LocalRenderInvalidationHandle,
     traits::{PaintClip, PaintEffects, RenderBox},
 };
 
@@ -68,7 +68,7 @@ use flui_rendering::{
 ///
 /// See the module docs for why this needs no custom parent data and how
 /// hit-testing works without mutable paint state.
-// NOT `Clone`: holds live per-node lifecycle state (a `RenderInvalidationHandle` bound to
+// NOT `Clone`: holds live per-node lifecycle state (a `LocalRenderInvalidationHandle` bound to
 // its `RenderId` + a repaint-`Listenable` subscription id). Cloning would
 // duplicate an id the clone does not own — move-only, like `RenderCustomPaint`
 // / `RenderAnimatedSize` (the ADR-0013 siblings).
@@ -84,7 +84,7 @@ pub struct RenderFlow {
     /// Self-dirty handle, held between [`RenderBox::attach`] and
     /// [`RenderBox::detach`] so the delegate's repaint `Listenable` can mark
     /// this node needing paint (ADR-0013). `None` while detached.
-    render_invalidation_handle: Option<RenderInvalidationHandle>,
+    render_invalidation_handle: Option<LocalRenderInvalidationHandle>,
     /// Active `add_listener` id on the delegate's repaint listenable, torn
     /// down in `detach` and migrated on a delegate swap.
     delegate_listener: Option<ListenerId>,
@@ -408,7 +408,7 @@ impl RenderBox for RenderFlow {
     /// Subscribes the delegate's repaint listenable (ADR-0013): a notify from
     /// the delegate's `repaint()` listenable now marks this node needing paint,
     /// so an animation-driven flow repaints without a widget rebuild.
-    fn attach(&mut self, handle: RenderInvalidationHandle) {
+    fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
         self.render_invalidation_handle = Some(handle);
         self.delegate_listener = self.subscribe();
     }

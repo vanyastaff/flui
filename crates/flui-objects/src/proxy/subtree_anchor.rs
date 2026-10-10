@@ -19,7 +19,7 @@
 //!   lookup, a keyed element and a repaint boundary that is not otherwise needed.
 //!
 //! The first — and only — lifecycle hook where a render object's own id is
-//! guaranteed is [`RenderBox::attach`], which receives a [`RenderInvalidationHandle`]
+//! guaranteed is [`RenderBox::attach`], which receives a [`LocalRenderInvalidationHandle`]
 //! carrying it. [`RenderBox::detach`] is its exact mirror. So this object
 //! publishes on `attach` and clears on `detach`: mount-driven, no key, no element
 //! walk, nothing acquired during build / layout / paint.
@@ -38,7 +38,7 @@ use std::sync::Arc;
 
 use flui_foundation::Single;
 use flui_foundation::geometry::{Offset, Size};
-use flui_rendering::pipeline::RenderInvalidationHandle;
+use flui_rendering::pipeline::LocalRenderInvalidationHandle;
 use parking_lot::Mutex;
 
 use flui_foundation::RenderId;
@@ -204,9 +204,9 @@ impl RenderBox for RenderSubtreeAnchor {
         self.has_child && ctx.hit_test_child_at_offset(0, Offset::ZERO)
     }
 
-    /// The publication. `RenderInvalidationHandle::id()` is the render object's own id, and
+    /// The publication. `LocalRenderInvalidationHandle::id()` is the render object's own id, and
     /// this is the first moment it exists.
-    fn attach(&mut self, handle: RenderInvalidationHandle) {
+    fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
         self.mounted_id = Some(handle.id());
         self.anchor.publish(handle.id());
     }

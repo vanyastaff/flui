@@ -53,7 +53,7 @@ use flui_rendering::{
         PaintCx,
     },
     parent_data::BoxParentData,
-    pipeline::RenderInvalidationHandle,
+    pipeline::LocalRenderInvalidationHandle,
     traits::{RenderBox, TextBaseline},
 };
 
@@ -458,7 +458,7 @@ impl RenderBox for RenderAnimatedSize {
         self.inner.hit_test(ctx)
     }
 
-    fn attach(&mut self, handle: RenderInvalidationHandle) {
+    fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
         let mark_handle = handle.clone();
         self.listener_id = Some(self.controller.add_listener(std::rc::Rc::new(move || {
             let _ = mark_handle.mark_needs_layout();

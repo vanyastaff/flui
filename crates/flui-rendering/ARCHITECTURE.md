@@ -30,6 +30,20 @@ deepest-first element unmount so view lifecycle hooks remain canonical.
 
 ## Mapping decisions
 
+### UI subscriptions retain invalidation independently of external pressure
+
+Render attachment hooks receive `LocalRenderInvalidationHandle`; worker
+producers retain the bounded `RenderInvalidationHandle`. Local marks coalesce
+by attachment and phase before waking and replay through canonical dirty walks.
+Detach withdraws pending metadata before user cleanup. See
+[ADR-0190](../../docs/adr/ADR-0190-owner-local-render-invalidation.md).
+The public `lifecycle_matrix` rows
+`local_marks_survive_a_failed_wake_and_coalesce` and
+`local_marks_wait_for_a_hook_and_end_with_the_attachment` pin wake recovery,
+coalescing, removal and owner release.
+`owner_release_withdraws_peer_handles_before_user_drop` checks that all peer
+admission ends before user destructors, including owner release from a wake.
+
 ### Semantics geometry follows committed paint transforms
 
 Full semantics assembly and partial graft reconstruction compose parent edges
