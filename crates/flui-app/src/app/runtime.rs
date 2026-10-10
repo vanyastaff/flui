@@ -808,10 +808,15 @@ impl AppRuntime {
         )
     )]
     pub(super) fn next_wake(&self) -> Option<web_time::Instant> {
-        self.installed_host
+        let runtime = self
+            .installed_host
             .logical()
             .next_wake()
-            .expect("BUG: wake deadline read before owner checkout returned")
+            .expect("BUG: wake deadline read before owner checkout returned");
+        [runtime, self.installed_host.native().text_sizing_deadline()]
+            .into_iter()
+            .flatten()
+            .min()
     }
 
     pub(super) fn close_requests(&self) -> Arc<super::close_request::CloseRequestRouter> {

@@ -42,8 +42,8 @@ struct TextScaleReader {
 impl StatelessView for TextScaleReader {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         self.builds.set(self.builds.get() + 1);
-        let scale = MediaQuery::text_scale_factor_of(ctx).expect("MediaQuery ancestor");
-        SizedBox::new(scale, 1.0)
+        let _ = MediaQuery::text_sizing_of(ctx).expect("MediaQuery ancestor");
+        SizedBox::square(1.0)
     }
 }
 
@@ -110,6 +110,28 @@ impl ProxyView for StaticChild {
     }
 }
 
+#[derive(Clone, StatelessView)]
+struct CopiedMediaText;
+
+impl StatelessView for CopiedMediaText {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        use flui_painting::typography::TextStyle;
+        use flui_view::ViewExt;
+        use flui_widgets::Text;
+
+        let mut copied = MediaQuery::of(ctx);
+        copied.size.width = 600.0;
+        MediaQuery::new(
+            copied,
+            StaticChild {
+                inner: Text::new("retained paragraph")
+                    .style(TextStyle::default().with_font_size(16.0))
+                    .boxed(),
+            },
+        )
+    }
+}
+
 struct Counters {
     size: Count,
     scale: Count,
@@ -145,7 +167,7 @@ fn subtree(c: &Counters) -> StaticChild {
 fn data(width: f64, scale: f64) -> MediaQueryData {
     MediaQueryData {
         size: flui_foundation::geometry::Size::new(width, 600.0),
-        text_scale_factor: scale,
+        text_sizing: flui_painting::TextSizing::linear(scale).expect("valid test policy"),
         ..MediaQueryData::default()
     }
 }
@@ -222,6 +244,92 @@ pub(crate) fn a_text_scale_change_relayouts_a_preserved_text_subtree() {
         override_size,
         "an outer preference update must preserve the subtree's explicit sizing"
     );
+
+    use flui_foundation::{TextScaleProfile, TextSize, TextSizeRequest};
+    use flui_painting::glyphs::FontRegistry;
+    use flui_painting::{DrawOp, TextSizing};
+
+    let exact = |answer| {
+        TextSizing::exact([(
+            TextSizeRequest {
+                size: TextSize::new(16.0).expect("authored size"),
+                profile: TextScaleProfile::Body,
+            },
+            TextSize::new(answer).expect("resolved size"),
+        )])
+        .expect("one exact answer")
+    };
+    // A full copied provider retains authority. An explicit Fixed provider
+    // resets it, including when the outer policy has exact native answers.
+    for nested in 0..3 {
+        let content = || match nested {
+            0 => child().boxed(),
+            1 => CopiedMediaText.boxed(),
+            _ => MediaQuery::new(MediaQueryData::default(), child()).boxed(),
+        };
+        let view = |text_sizing| {
+            MediaQuery::new(
+                MediaQueryData {
+                    text_sizing,
+                    ..MediaQueryData::default()
+                },
+                content(),
+            )
+        };
+        let mut laid = lay_out(view(exact(24.0)), loose(4000.0));
+        let id = laid
+            .find_text("retained paragraph")
+            .expect("actual paragraph");
+        for (policy, answer) in [
+            (exact(24.0), 24.0),
+            (exact(48.0), 48.0),
+            (TextSizing::linear(2.0).expect("linear policy"), 32.0),
+            (TextSizing::fixed(), 16.0),
+        ] {
+            laid.pump_widget(view(policy));
+            assert_eq!(laid.find_text("retained paragraph"), Some(id));
+            let expected = if nested == 2 { 16.0 } else { answer };
+            let mut painted = 0;
+            let mut registry = FontRegistry::new();
+            for command in laid.draw_ops() {
+                let DrawOp::Paragraph { paragraph, .. } = command.op else {
+                    continue;
+                };
+                assert_eq!(paragraph.text(), "retained paragraph");
+                for run in paragraph.runs() {
+                    let key = registry.prepare_run(&run).expect("real text face");
+                    for glyph in run.placed_glyphs(key, (0.0, 0.0), 1.0) {
+                        assert_eq!(
+                            f64::from(glyph.key.size()),
+                            expected,
+                            "provider mode {nested}"
+                        );
+                        painted += 1;
+                    }
+                }
+            }
+            assert!(painted > 0, "policy must reach painted glyphs");
+            if expected == 16.0 {
+                assert_eq!(laid.size(id), original, "fixed resolves authored geometry");
+            } else {
+                assert!(
+                    laid.size(id).height > original.height,
+                    "policy changes layout"
+                );
+            }
+        }
+        laid.pump_widget(
+            Text::new("retained paragraph").style(TextStyle::default().with_font_size(16.0)),
+        );
+        let unscoped = laid
+            .find_text("retained paragraph")
+            .expect("unscoped paragraph");
+        assert_eq!(
+            laid.size(unscoped),
+            original,
+            "removing the provider restores authored sizing"
+        );
+    }
 }
 
 pub(crate) fn a_build_that_panics_before_reading_keeps_its_dependency() {

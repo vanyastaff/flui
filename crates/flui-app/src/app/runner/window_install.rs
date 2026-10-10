@@ -141,6 +141,7 @@ impl WindowInstall {
             host,
             prepared,
             native: PreparedNativeWindow {
+                text_sizing: None,
                 registration,
                 frame: None,
                 close: None,
@@ -159,6 +160,18 @@ impl WindowInstall {
             owner_thread: std::thread::current().id(),
             address: self.prepared.address(),
         }
+    }
+
+    #[cfg(any(
+        target_os = "android",
+        target_os = "ios",
+        all(test, not(target_arch = "wasm32"))
+    ))]
+    pub(super) fn text_sizing(
+        &mut self,
+        sizing: std::rc::Rc<super::native_text_sizing::NativeTextSizing>,
+    ) {
+        self.native.text_sizing = Some(sizing);
     }
 
     #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]

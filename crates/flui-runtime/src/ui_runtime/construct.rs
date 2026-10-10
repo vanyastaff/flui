@@ -151,7 +151,7 @@ impl UiRuntime {
             RuntimeCapabilities {
                 global_key_scope: global_key_scope.clone(),
                 async_driver: owner_frame.async_driver(),
-                post_frame_handle: owner_frame.post_frame_handle(),
+                completion_scope: owner_frame.presentation_scope(),
                 interaction_dispatch_handle: interaction_lane.dispatch_handle(),
                 scheduler: &scheduler,
                 wake: Arc::clone(&wake),

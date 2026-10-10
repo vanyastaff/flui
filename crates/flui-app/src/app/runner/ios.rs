@@ -151,6 +151,7 @@ fn scene_event(event: IOSSceneEvent) -> Result<(), flui_platform::BootstrapError
 }
 
 fn drive_owner() {
+    super::host::drive_native_text_sizing();
     if let Some(mut lease) = lease_controller() {
         lease
             .controller
@@ -274,8 +275,8 @@ where
         with_owner_platform(f).expect("BUG: bootstrap_ios runs only after install_owner_platform")
     }
 
-    let presentation_window =
-        super::presentation_window(host).with_pointer_resampling(config.pointer_resampling);
+    let presentation_window = super::presentation_window(Arc::clone(&host))
+        .with_pointer_resampling(config.pointer_resampling);
     let window = Arc::clone(presentation_window.window());
 
     // 0b. This window's device-recovery backoff, constructed before the
@@ -302,7 +303,10 @@ where
         owner.shared().set_wake_deadline_hook(Box::new(move || {
             let device = device_recovery_backoff.next_attempt_at();
             let surface = surface_recreation_retry.next_attempt_at();
-            super::host::merge_wake_deadlines(device, surface)
+            super::host::merge_wake_deadlines(
+                APP_RUNTIME.with(|slot| slot.borrow().next_wake()),
+                super::host::merge_wake_deadlines(device, surface),
+            )
         }));
     });
 
@@ -336,6 +340,19 @@ where
     ui_runtime.set_frame_failure_detail(config.frame_failure_detail);
 
     let logical = window.logical_size();
+    let owner = APP_RUNTIME
+        .with(|slot| slot.borrow().owner_platform.clone())
+        .expect("BUG: UIKit owner installed before scene bootstrap");
+    let native_sizing = super::native_text_sizing::NativeTextSizing::prepare(
+        flui_foundation::PresentationAddress {
+            ui_runtime_id: ui_runtime.id(),
+            presentation_id: ui_runtime.presentation_id(),
+        },
+        host,
+        owner,
+    );
+    ui_runtime
+        .install_captured_text_sizing_for(ui_runtime.presentation_id(), native_sizing.source());
     let attach = ui_runtime.enter(|ui_runtime| {
         ui_runtime.attach_root_widget_with_size(&root, logical.width, logical.height)
     });
@@ -351,6 +368,7 @@ where
         .as_ref()
         .and_then(|agent| agent.vend(&ui_runtime, ui_runtime.presentation_id()));
     let mut installation = prepare_ui_runtime_alongside(ui_runtime, Arc::clone(&window));
+    installation.text_sizing(native_sizing);
     let owner_dispatch = installation.dispatcher();
 
     // 4. Adopt the raster mailbox (ADR-0045's inline lane).
@@ -571,10 +589,9 @@ impl IosFrameDriver {
 
         // The frame: `UiRuntime::pump` at `now`, with device-loss
         // recovery around it (`pump_with_device_recovery`).
-        let Some(mut lane) = lane_frame.try_lock() else {
-            tracing::error!("frame skipped: raster lane already held by an outer frame dispatch");
-            return;
-        };
-        let _ = pump_with_device_recovery(ui_runtime, &mut *lane, device_recovery_backoff, now);
+        if pump_with_device_recovery(ui_runtime, lane_frame, device_recovery_backoff, now).is_none()
+        {
+            tracing::error!("frame skipped: raster lane busy at frame admission");
+        }
     }
 }

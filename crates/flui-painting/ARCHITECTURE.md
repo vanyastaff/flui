@@ -71,15 +71,22 @@ stack is a silent no-op for the same reason.
 
 ## Text
 
-`TextPainter` is the facade `RenderParagraph` drives. Every measurement takes
-the `TextContext` it shapes through: `layout`, the four intrinsics, `dry_size`
-and `dry_baseline` each take `&mut TextContext`, and a render object lends its
-UI runtime's (decision 14). `layout` shapes the paragraph once on Parley
-(`TextContext::shape`: a `ParagraphSpec` with the painter's spans, scale,
+`TextPainter` is the facade `RenderParagraph` drives. Render-object measurements
+use a `TextMeasurement` combining borrowed shaping scratch with explicit numeric
+sizing authority. Standalone `layout`, intrinsics, `dry_size` and `dry_baseline`
+also accept `&mut TextContext`, using fixed sizing unless the painter has an
+override (decision 14). `layout` shapes the paragraph once on Parley
+(`TextContext::shape`: a `ParagraphSpec` with prepared numeric span sizes,
 width, `max_lines` and ellipsis), reads size and baselines from the
 `ParagraphLayout`'s `metrics()`, and turns the same layout into the
 `ShapedParagraph` it paints (`ParagraphLayout::to_shaped`). Intrinsic widths
 come from a second shape without truncation (`content_widths`, decision 9).
+Merged/scaled span styles and the root default are prepared once per uncached
+measurement. A committed layout reuses that owned typography for its intrinsic
+and ellipsis shapes; height and dry probes use the same preparation path.
+The prepared value stays private and measurement-local, and does not replace
+the authored span tree or freeze the font collection.
+
 The painter's cache keys on the context's collection and its
 `FontCollection::generation`, so a layout from another UI runtime's collection, or
 from before a registration, shapes again. Equal width constraints, including
@@ -164,8 +171,10 @@ pin actual producer output.
 
 ## Thread safety
 
-`#![forbid(unsafe_code)]`. Every type is plain `Send + Sync` value data;
-`Canvas` and `TextPainter` are mutated through `&mut self` by one owner.
+`#![forbid(unsafe_code)]`. Display-list values and shaped paragraphs cross the
+raster boundary as immutable `Send + Sync` data. Sizing policies, answer leases,
+preparation debt and their `TextPainter` remain owner-local. `Canvas` and
+`TextPainter` are mutated through `&mut self` by one owner.
 The crate takes no lock of its own: its `clippy.toml` disallows `Mutex` and
 `RwLock`, with no `#[expect]`ed site, and it declares no process-global font
 state (`cargo xtask globals`).
@@ -189,6 +198,25 @@ hold them.
 ---
 
 ## Mapping decisions
+
+### Numeric authority and finite measurement attempts are independent
+
+`TextSizing` selects Fixed, validated Linear or captured Exact numeric answers.
+An explicit override replaces that numeric authority while retaining the active
+measurement attempt. The attempt lazily pins requests from every selected
+capture, including cache hits and missing answers subsequently admitted. Its
+finite working set can exceed each capture's bounded historical cache; dropping
+the attempt releases its pins without withdrawing live geometry leases.
+`TextSizing::begin_cohort` creates this retention capability without granting
+numeric admission. The admission writer remains unique. Policies, numeric
+stores, answer leases and cohorts share owner-local `Rc` ownership; short
+`RefCell` borrows end before shaping, native evaluation or extensible iteration.
+Neither sizing authority nor its preparation debt crosses to the raster thread.
+`captured_attempts_retain_nested_sources_across_frontiers` and
+`fixed_and_linear_attempts_retain_multiple_nested_sources` exercise actual dry
+measurement across nested sources with zero warm retention. Their copied
+geometry retains no answer leases, and retirement checks distinguish attempt
+retention from an unbounded cache. ADR-0182 specifies the cross-crate contract.
 
 ### Text measurements reject invalid requests without geometry
 
@@ -531,11 +559,12 @@ shadows, decorations and gradient stops. Locked by
 
 ### 14. `TextPainter` measures through the context it is given
 
-**Rule:** every measuring method of `TextPainter` takes `&mut TextContext`;
-there is no ambient collection to fall back on. A render object lends its
-UI runtime's context (`ctx.text()` in flui-rendering), and the painter's cache is
-keyed on that context's collection and generation as well as the
-constraints.
+**Rule:** every measurement names the shaping scratch it uses; there is no
+ambient collection to fall back on. A render object acquires a fallible text
+loan from its complete mutable query context and passes its `TextMeasurement`
+to the painter. Standalone context-taking methods enter the same implementation.
+The painter's cache includes that context's collection and generation, the
+effective numeric sizing authority and constraints.
 
 **Why:** a UI runtime owns its text context (decision 11), and a UI runtime's layout
 must measure with it rather than with whichever context is ambient. Passing it
@@ -544,9 +573,10 @@ two UI runtimes' layouts apart (ADR-0092 §3). Keying the cache on the collectio
 closes the case a single ambient collection never had: one painter measured
 through two collections.
 
-**Accepted trade-off:** every signature that measures names the context, even
-where only one UI runtime exists. The context is shaped on in every build (ADR-0092
-§10 step 4a). Locked by `measurement_follows_the_context_it_is_given`,
+**Accepted trade-off:** every signature that measures names the context or its
+measurement loan, even where only one UI runtime exists. Text resources remain
+explicit in every build (ADR-0092 §10, superseded in part by ADR-0182).
+Locked by `measurement_follows_the_context_it_is_given`,
 `intrinsic_widths_follow_the_context_they_are_asked_through` and
 `a_registration_on_the_collection_invalidates_the_painter_cache`
 (`tests/text_painter_unit.rs`, rows of `text_context_contract`), and at the

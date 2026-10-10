@@ -36,6 +36,14 @@ impl MediaQuerySource {
     /// just updates the cell — the first build reads the fresh value, so
     /// the missing handle loses nothing.
     pub(crate) fn update(&self, mutate: impl FnOnce(&mut MediaQueryData)) {
+        if let Some(handle) = self.commit(mutate) {
+            handle.schedule(flui_view::RebuildReason::StateChange);
+        }
+    }
+
+    /// Commit inherited data without waking before companion state is published.
+    #[must_use = "schedule the returned root rebuild after publication guards release"]
+    pub(crate) fn commit(&self, mutate: impl FnOnce(&mut MediaQueryData)) -> Option<RebuildHandle> {
         let changed = {
             let mut data = self.data.borrow_mut();
             let before = data.clone();
@@ -43,14 +51,12 @@ impl MediaQuerySource {
             *data != before
         };
         if changed {
-            let handle = self
-                .rebuild
+            self.rebuild
                 .borrow()
                 .as_ref()
-                .map(|(_, handle)| handle.clone());
-            if let Some(handle) = handle {
-                handle.schedule(flui_view::RebuildReason::StateChange);
-            }
+                .map(|(_, handle)| handle.clone())
+        } else {
+            None
         }
     }
 

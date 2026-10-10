@@ -26,6 +26,7 @@ mod preferences;
 mod presentation_dispatch;
 mod runtime_dispatch;
 mod status;
+mod text_sizing;
 pub use callback::OwnerCallback;
 pub use delivery::{Delivery, DispatchError, FrameDispatcher, OwnerEffects};
 pub use preferences::SystemPreferencesSnapshot;
@@ -33,6 +34,7 @@ pub use presentation_dispatch::{InputOutcome, PresentationDispatcher, WindowObse
 use runtime_dispatch::RuntimeWork;
 pub use runtime_dispatch::{RuntimeDispatcher, RuntimeOperation};
 pub use status::RuntimeStatus;
+pub use text_sizing::TextSizingFrontier;
 
 /// The owner-affine logical registry. Handles and unpublished proposals belong
 /// to this exact host, independently of the native trampoline that reaches it.

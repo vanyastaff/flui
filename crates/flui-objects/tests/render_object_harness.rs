@@ -12,6 +12,7 @@
 //! | `RenderCustomPaint` | `harness_custom_paint_*` | yes | yes | yes | yes | order, paint size, poison |
 //! | `RenderImage` | `harness_image_*` | yes | — | yes | yes | — |
 //! | `RenderParagraph` | `harness_paragraph_*` | yes | — | yes | yes | — |
+//! | `RenderIcon` | `harness_icon_*` | yes | — | yes | yes | — |
 //! | `RenderEditable` | `harness_editable_*` | yes | yes | yes | yes | — |
 //! | `RenderPadding` | `harness_padding_*` | yes | yes | — | yes | queries |
 //! | `RenderCustomSingleChildLayoutBox` | `harness_custom_single_child_layout_*` | yes | yes | yes | yes | queries, baseline |
@@ -157,6 +158,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderCustomPaint",
     "RenderImage",
     "RenderParagraph",
+    "RenderIcon",
     "RenderEditable",
     "RenderPadding",
     "RenderCustomSingleChildLayoutBox",
@@ -952,6 +954,305 @@ fn harness_paragraph_paints_text_frame() {
     .run_frame();
 
     assert!(run.painted());
+}
+
+fn harness_icon_resolves_square_and_optional_glyph_together() {
+    use flui_foundation::{TextScaleProfile, TextSize, TextSizeRequest, TextSizingIntent};
+    use flui_painting::TextSizing;
+
+    let authored = TextSize::new(20.0).expect("valid side");
+    let exact = TextSizing::exact([
+        (
+            TextSizeRequest {
+                size: authored,
+                profile: TextScaleProfile::Body,
+            },
+            TextSize::new(32.0).expect("valid body size"),
+        ),
+        (
+            TextSizeRequest {
+                size: authored,
+                profile: TextScaleProfile::Headline,
+            },
+            TextSize::new(45.0).expect("valid headline size"),
+        ),
+    ])
+    .expect("consistent answers");
+    let cases = [
+        (None, TextSizing::linear(1.5).expect("valid scale"), 30.0),
+        (None, exact.clone(), 32.0),
+        (
+            Some(TextSizingIntent::Profile(TextScaleProfile::Body)),
+            exact.clone(),
+            32.0,
+        ),
+        (
+            Some(TextSizingIntent::Profile(TextScaleProfile::Headline)),
+            exact,
+            45.0,
+        ),
+        (
+            Some(TextSizingIntent::Fixed),
+            TextSizing::exact([]).expect("empty capture"),
+            20.0,
+        ),
+    ];
+    for (intent, sizing, expected) in cases {
+        for glyph in [None, Some('A')] {
+            let style = flui_painting::typography::TextStyle {
+                font_size: Some(77.0),
+                sizing: intent,
+                ..Default::default()
+            };
+            let run = RenderTester::mount(box_node(
+                RenderIcon::new(20.0, glyph, style).with_text_sizing(Some(sizing.clone())),
+            ))
+            .with_constraints(loose(80.0))
+            .run_frame();
+
+            assert_eq!(run.box_geometry(run.root()), Size::new(expected, expected));
+            let commands = run.display_commands();
+            assert_eq!(
+                commands
+                    .iter()
+                    .any(|command| command.line.contains("Paragraph")),
+                glyph.is_some(),
+                "only a valid glyph shapes and paints text: {commands:#?}",
+            );
+        }
+    }
+}
+
+fn harness_icon_without_a_glyph_retains_its_committed_size_answer() {
+    use flui_foundation::{TextScaleProfile, TextSize, TextSizeRequest};
+    use flui_painting::{TextSizing, TextSizingAdmissionError};
+
+    let request = TextSizeRequest {
+        size: TextSize::new(20.0).expect("valid authored icon side"),
+        profile: TextScaleProfile::Body,
+    };
+    let (sizing, mut admission) = TextSizing::captured();
+    admission.set_warm_capacity(1);
+    let cohort = sizing.begin_cohort();
+    admission
+        .admit([(request, TextSize::new(30.5).expect("valid resolved side"))])
+        .expect("initial captured answer");
+    let run = RenderTester::mount(box_node(
+        RenderIcon::new(20.0, None, flui_painting::typography::TextStyle::default())
+            .with_text_sizing(Some(cohort.policy())),
+    ))
+    .with_constraints(loose(80.0))
+    .run_frame();
+    let root = run.root();
+    assert_eq!(run.box_geometry(root), Size::new(30.5, 30.5));
+    assert!(
+        !run.display_commands()
+            .iter()
+            .any(|command| command.line.contains("Paragraph")),
+        "the live square must retain its answer without a shaped glyph"
+    );
+    drop(cohort);
+
+    admission
+        .admit([(
+            TextSizeRequest {
+                size: TextSize::new(40.0).expect("valid unrelated request"),
+                profile: TextScaleProfile::Body,
+            },
+            TextSize::new(50.0).expect("valid unrelated answer"),
+        )])
+        .expect("a newer answer replaces the one-entry warm history");
+    let error = admission
+        .admit([(
+            request,
+            TextSize::new(20.0).expect("valid conflicting size"),
+        )])
+        .expect_err("live icon geometry must retain the original captured answer");
+    assert!(matches!(
+        error,
+        TextSizingAdmissionError::Conflict(conflict) if conflict.request == request
+    ));
+    assert_eq!(run.box_geometry(root), Size::new(30.5, 30.5));
+}
+
+fn harness_icon_equal_inputs_install_the_new_measurement_attempt() {
+    use flui_foundation::{TextScaleProfile, TextSize, TextSizeRequest};
+    use flui_painting::{TextSizing, TextSizingAdmissionError};
+
+    let request = TextSizeRequest {
+        size: TextSize::new(20.0).expect("valid authored icon side"),
+        profile: TextScaleProfile::Body,
+    };
+    let (sizing, mut admission) = TextSizing::captured();
+    admission.set_warm_capacity(1);
+    admission
+        .admit([(request, TextSize::new(30.5).expect("valid resolved side"))])
+        .expect("initial captured answer");
+    let first_attempt = sizing.begin_cohort();
+    let mut run = RenderTester::mount(box_node(
+        RenderIcon::new(20.0, None, flui_painting::typography::TextStyle::default())
+            .with_text_sizing(Some(first_attempt.policy())),
+    ))
+    .with_constraints(loose(80.0))
+    .run_frame();
+    let root = run.root();
+    assert_eq!(run.box_geometry(root), Size::new(30.5, 30.5));
+    drop(first_attempt);
+
+    let second_attempt = sizing.begin_cohort();
+    flui_rendering::testing::update_render_object::<RenderIcon, _>(run.owner_mut(), root, |icon| {
+        icon.update(
+            20.0,
+            None,
+            flui_painting::typography::TextStyle::default(),
+            Some(second_attempt.policy()),
+            0,
+        )
+    });
+    assert_eq!(run.min_intrinsic_width(root, 80.0), 30.5);
+
+    flui_rendering::testing::update_render_object::<RenderIcon, _>(run.owner_mut(), root, |icon| {
+        icon.update(
+            0.0,
+            None,
+            flui_painting::typography::TextStyle::default(),
+            Some(second_attempt.policy()),
+            0,
+        )
+    });
+    run.pump();
+    assert_eq!(run.box_geometry(root), Size::ZERO);
+    admission
+        .admit([(
+            TextSizeRequest {
+                size: TextSize::new(40.0).expect("valid unrelated request"),
+                profile: TextScaleProfile::Body,
+            },
+            TextSize::new(50.0).expect("valid unrelated answer"),
+        )])
+        .expect("evict the original answer from warm history");
+    let error = admission
+        .admit([(
+            request,
+            TextSize::new(20.0).expect("valid conflicting size"),
+        )])
+        .expect_err("the new attempt must retain the answer observed by its intrinsic query");
+    assert!(matches!(
+        error,
+        TextSizingAdmissionError::Conflict(conflict) if conflict.request == request
+    ));
+    drop(second_attempt);
+}
+
+fn harness_icon_zero_side_without_a_glyph_remains_empty() {
+    use flui_painting::TextSizing;
+
+    for sizing in [
+        TextSizing::fixed(),
+        TextSizing::linear(2.0).expect("valid scale"),
+        TextSizing::exact([]).expect("empty capture"),
+    ] {
+        for constraints in [loose(80.0), BoxConstraints::tight(Size::new(12.0, 8.0))] {
+            let mut run = RenderTester::mount(box_node(
+                RenderIcon::new(0.0, None, flui_painting::typography::TextStyle::default())
+                    .with_text_sizing(Some(sizing.clone())),
+            ))
+            .with_constraints(constraints)
+            .run_frame();
+            let root = run.root();
+            let expected = constraints.constrain(Size::ZERO);
+            assert_eq!(run.box_geometry(root), expected);
+            assert_eq!(run.dry_layout(root, constraints), expected);
+            assert_eq!(run.min_intrinsic_width(root, 80.0), 0.0);
+            assert_eq!(run.max_intrinsic_width(root, 80.0), 0.0);
+            assert_eq!(run.min_intrinsic_height(root, 80.0), 0.0);
+            assert_eq!(run.max_intrinsic_height(root, 80.0), 0.0);
+            assert_eq!(
+                run.dry_baseline(root, constraints, TextBaseline::Alphabetic),
+                None
+            );
+            assert!(
+                !run.display_commands()
+                    .iter()
+                    .any(|command| command.line.contains("Paragraph")),
+                "an empty zero-side icon must not shape a glyph",
+            );
+        }
+    }
+}
+
+fn harness_icon_pending_layout_withdraws_old_glyph_geometry() {
+    let mut run = RenderTester::mount(box_node(RenderIcon::new(
+        20.0,
+        Some('A'),
+        flui_painting::typography::TextStyle::default(),
+    )))
+    .with_constraints(loose(80.0))
+    .run_frame();
+    let root = run.root();
+    let has_baseline = flui_rendering::testing::edit_render_object::<RenderIcon, _, _>(
+        run.owner_mut(),
+        root,
+        |icon| {
+            icon.compute_distance_to_actual_baseline(TextBaseline::Alphabetic)
+                .unwrap()
+                .is_some()
+        },
+    );
+    assert!(has_baseline, "the initial glyph commits a baseline");
+
+    flui_rendering::testing::update_render_object::<RenderIcon, _>(run.owner_mut(), root, |icon| {
+        icon.update(
+            20.0,
+            Some('A'),
+            flui_painting::typography::TextStyle::default(),
+            Some(flui_painting::TextSizing::exact([]).expect("consistent capture")),
+            0,
+        )
+    });
+    let (owner, result) = run.owner_mut().take_idle().run_frame();
+    *run.owner_mut() = owner;
+    assert!(matches!(
+        result,
+        Err(flui_rendering::RenderError::TextPreparationPending(_))
+    ));
+    flui_rendering::testing::edit_render_object::<RenderIcon, _, _>(
+        run.owner_mut(),
+        root,
+        |icon| {
+            assert!(
+                icon.compute_distance_to_actual_baseline(TextBaseline::Alphabetic)
+                    .unwrap()
+                    .is_none()
+            );
+            let mut recorder = flui_rendering::context::FragmentRecorder::new(Offset::ZERO, 1.0);
+            icon.paint(&mut flui_rendering::context::PaintCx::new(
+                &mut recorder,
+                0,
+                Size::new(20.0, 20.0),
+            ));
+            assert!(
+                recorder.finish().is_empty(),
+                "pending geometry must not paint the old glyph"
+            );
+        },
+    );
+
+    flui_rendering::testing::update_render_object::<RenderIcon, _>(run.owner_mut(), root, |icon| {
+        icon.update(
+            20.0,
+            Some('A'),
+            flui_painting::typography::TextStyle::default(),
+            Some(flui_painting::TextSizing::fixed()),
+            0,
+        )
+    });
+    run.pump();
+    assert!(
+        run.display_commands()
+            .iter()
+            .any(|command| command.line.contains("Paragraph"))
+    );
 }
 
 fn harness_editable_lays_out_and_paints_collapsed_caret() {
@@ -6393,6 +6694,26 @@ fn family_text_and_image() {
             (
                 "paragraph_paints_text_frame",
                 harness_paragraph_paints_text_frame,
+            ),
+            (
+                "icon_resolves_square_and_optional_glyph_together",
+                harness_icon_resolves_square_and_optional_glyph_together,
+            ),
+            (
+                "icon_without_a_glyph_retains_its_committed_size_answer",
+                harness_icon_without_a_glyph_retains_its_committed_size_answer,
+            ),
+            (
+                "icon_equal_inputs_install_the_new_measurement_attempt",
+                harness_icon_equal_inputs_install_the_new_measurement_attempt,
+            ),
+            (
+                "icon_zero_side_without_a_glyph_remains_empty",
+                harness_icon_zero_side_without_a_glyph_remains_empty,
+            ),
+            (
+                "icon_pending_layout_withdraws_old_glyph_geometry",
+                harness_icon_pending_layout_withdraws_old_glyph_geometry,
             ),
             (
                 "editable_lays_out_and_paints_collapsed_caret",

@@ -51,7 +51,6 @@ use flui_foundation::Diagnosticable;
 
 use crate::{
     hit_testing::{CursorRequest, MouseTrackerAnnotation},
-    parent_data::ParentData,
     protocol::{Protocol, ProtocolConstraints, ProtocolGeometry, ProtocolPosition},
     semantics::SemanticsConfiguration,
     traits::PaintEffects,
@@ -325,17 +324,16 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     /// Called by the pipeline's memoizing intrinsics walk
     /// (`PipelineOwner::box_intrinsic_dimension`); results are cached
     /// per node in `RenderState`'s layout cache, never here.
-    /// `child_query` answers the same question for a tree child — the
+    /// `ctx` answers the same question for a tree child — the
     /// driver memoizes each level, so a child probed twice with the
     /// same extent computes once.
     ///
     /// **Users don't implement this directly.** Protocol traits provide
-    /// blanket implementations that wrap `child_query` in a typed
-    /// context and call the protocol-level `compute_*` methods (e.g.
+    /// blanket implementations that forward the same complete context to
+    /// the protocol-level `compute_*` methods (e.g.
     /// [`RenderBox::compute_min_intrinsic_width`](crate::traits::RenderBox::compute_min_intrinsic_width)).
     ///
-    /// `text` is the UI runtime's text context the node measures with; `None`
-    /// leaves the typed context one of its own.
+    /// Text loans and recursive child queries borrow the same mutable context.
     ///
     /// Default: `0.0` for every
     /// intrinsic dimension; protocols without intrinsic sizing (sliver)
@@ -344,14 +342,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
         &self,
         _dimension: crate::storage::IntrinsicDimension,
         _extent: f64,
-        _child_count: usize,
-        _child_parent_data: &[Option<&dyn ParentData>],
-        _child_query: &mut dyn FnMut(
-            usize,
-            crate::storage::IntrinsicDimension,
-            f64,
-        ) -> crate::error::RenderResult<f64>,
-        _text: crate::pipeline::TextSource<'_>,
+        _ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
     ) -> crate::error::RenderResult<f64> {
         Ok(0.0)
     }
@@ -360,7 +351,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     /// geometry `perform_layout` WOULD produce, with no side effects.
     ///
     /// Same driver/memoization contract as
-    /// [`intrinsic_raw`](Self::intrinsic_raw); `child_dry` answers the
+    /// [`intrinsic_raw`](Self::intrinsic_raw); `ctx` answers the
     /// dry-layout question for a tree child.
     ///
     /// Default: the protocol's default geometry (a wrong dry size is loud
@@ -368,15 +359,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     fn dry_layout_raw(
         &self,
         _constraints: ProtocolConstraints<P>,
-        _child_count: usize,
-        _child_parent_data: &[Option<&dyn ParentData>],
-        _child_query: &mut dyn FnMut(
-            usize,
-            crate::context::DryLayoutChildRequest,
-        ) -> crate::error::RenderResult<
-            crate::context::DryLayoutChildResponse,
-        >,
-        _text: crate::pipeline::TextSource<'_>,
+        _ctx: &mut crate::context::BoxDryLayoutCtx<'_>,
     ) -> crate::error::RenderResult<ProtocolGeometry<P>> {
         Ok(P::default_geometry())
     }
@@ -392,15 +375,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
         &self,
         _constraints: ProtocolConstraints<P>,
         _baseline: crate::traits::TextBaseline,
-        _child_count: usize,
-        _child_parent_data: &[Option<&dyn ParentData>],
-        _child_query: &mut dyn FnMut(
-            usize,
-            crate::context::DryBaselineChildRequest,
-        ) -> crate::error::RenderResult<
-            crate::context::DryBaselineChildResponse,
-        >,
-        _text: crate::pipeline::TextSource<'_>,
+        _ctx: &mut crate::context::BoxDryBaselineCtx<'_>,
     ) -> crate::error::RenderResult<Option<f64>> {
         Ok(None)
     }
@@ -842,7 +817,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     // Diagnostics
     // ========================================================================
 
-    /// [`TypeId`] of the [`ParentData`] this render object expects on each
+    /// [`TypeId`] of the [`ParentData`](crate::ParentData) this render object expects on each
     /// child.
     ///
     /// Used by the element-tree parent-data attach seam to reject

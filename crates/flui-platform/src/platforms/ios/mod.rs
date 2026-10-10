@@ -56,6 +56,7 @@ mod native_owner;
 mod platform;
 mod preferences;
 mod scene;
+pub(crate) mod text_sizing;
 mod window;
 
 pub use clipboard::IOSClipboard;

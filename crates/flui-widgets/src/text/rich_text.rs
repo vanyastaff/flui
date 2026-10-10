@@ -37,13 +37,6 @@ pub struct RichText {
     align: TextAlign,
     direction: TextDirection,
     max_lines: Option<u32>,
-    scaling: TextScaling,
-}
-
-#[derive(Clone, Copy, Debug)]
-enum TextScaling {
-    Inherited,
-    Fixed,
 }
 
 impl RichText {
@@ -56,7 +49,6 @@ impl RichText {
             align: TextAlign::Start,
             direction: TextDirection::Ltr,
             max_lines: None,
-            scaling: TextScaling::Inherited,
         }
     }
 
@@ -80,13 +72,6 @@ impl RichText {
         self.max_lines = Some(max_lines);
         self
     }
-
-    /// The composing widget has already resolved its logical glyph size.
-    /// Weight preferences still apply; sizing must not be inherited a second time.
-    pub(crate) fn unscaled(mut self) -> Self {
-        self.scaling = TextScaling::Fixed;
-        self
-    }
 }
 
 impl View for RichText {
@@ -99,10 +84,7 @@ impl StatelessView for RichText {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         ResolvedParagraph {
             authored: self.clone(),
-            text_scale_factor: match self.scaling {
-                TextScaling::Inherited => MediaQuery::text_scale_factor_of(ctx).unwrap_or(1.0),
-                TextScaling::Fixed => 1.0,
-            },
+            text_sizing: MediaQuery::text_sizing_of(ctx),
             font_weight_adjustment: MediaQuery::font_weight_adjustment_of(ctx).unwrap_or(0),
         }
     }
@@ -113,7 +95,7 @@ impl StatelessView for RichText {
 #[derive(Clone, Debug)]
 struct ResolvedParagraph {
     authored: RichText,
-    text_scale_factor: f64,
+    text_sizing: Option<flui_painting::TextSizing>,
     font_weight_adjustment: i32,
 }
 
@@ -128,7 +110,7 @@ impl RenderView for ResolvedParagraph {
         RenderParagraph::new(self.authored.text.clone(), self.authored.direction)
             .with_text_align(self.authored.align)
             .with_max_lines(self.authored.max_lines)
-            .with_text_scale_factor(self.text_scale_factor)
+            .with_text_sizing(self.text_sizing.clone())
             .with_font_weight_adjustment(self.font_weight_adjustment)
     }
 
@@ -141,7 +123,7 @@ impl RenderView for ResolvedParagraph {
             | render_object.set_text_align(self.authored.align)
             | render_object.set_text_direction(self.authored.direction)
             | render_object.set_max_lines(self.authored.max_lines)
-            | render_object.set_text_scale_factor(self.text_scale_factor)
+            | render_object.set_text_sizing(self.text_sizing.clone())
             | render_object.set_font_weight_adjustment(self.font_weight_adjustment)
     }
 }

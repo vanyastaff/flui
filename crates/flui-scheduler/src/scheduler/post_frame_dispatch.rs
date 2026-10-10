@@ -1,9 +1,20 @@
-//! Completed-frame callbacks and panic-tail recovery in the owner's queue.
+//! Post-frame admission, eligible delivery and panic-tail recovery in the owner's queue.
 
 use super::UpdateScheduler;
-use crate::{FrameTiming, OwnerFrame};
+use crate::{FrameTiming, OwnerFrame, PostFrameCallback};
 
 impl UpdateScheduler {
+    /// Add a post-frame callback.
+    ///
+    /// Fires once after the current/next host frame completes, independently
+    /// of presentation-scoped geometry completion.
+    ///
+    /// Post-frame callbacks are called exactly once and cannot be
+    /// cancelled before they fire. Returns `()` — no cancellation handle.
+    pub fn add_post_frame_callback(&self, callback: PostFrameCallback) {
+        let _ = crate::PostFrameHandle::new(self).schedule(callback);
+    }
+
     pub(super) fn dispatch_post_frame_callbacks(
         &self,
         owner: &OwnerFrame,
@@ -20,20 +31,29 @@ impl UpdateScheduler {
                 "draining post-frame callback batch"
             );
             for id in callbacks.by_ref() {
-                let cancelled = self.inner.callbacks.cancelled.borrow().contains(&id);
-                if let Some(entry) = owner.take_active_post_frame(id)
-                    && !cancelled
-                {
-                    (entry.callback)(timing);
+                if let Some(entry) = owner.take_active_post_frame(id) {
+                    let cancelled = self.inner.callbacks.cancelled.borrow_mut().remove(&id);
+                    if !cancelled {
+                        (entry.callback)(timing);
+                    }
                 }
             }
         }));
-        if result.is_err() {
-            // The uninvoked tail retains its IDs ahead of reentrant admissions.
-            owner.restore_post_frame_queue();
-        } else {
-            self.inner.callbacks.cancelled.borrow_mut().clear();
-        }
+        // Keep both a panic tail and entries whose presentation became
+        // incomplete reentrantly after the eligible batch was selected.
+        // Their cancellation records survive until an entry is consumed.
+        owner.restore_post_frame_queue();
+        owner.finish_post_frame_batch();
+        self.retain_pending_post_frame_cancellations();
         result
+    }
+
+    pub(super) fn retain_pending_post_frame_cancellations(&self) {
+        let lane = self.inner.callbacks.post_frame.borrow().lane();
+        self.inner
+            .callbacks
+            .cancelled
+            .borrow_mut()
+            .retain(|id| lane.as_ref().is_some_and(|lane| lane.contains(*id)));
     }
 }

@@ -76,6 +76,24 @@ outside this boundary.
 `local_clone_competing_owner_reentry` and
 `key_collision_same_owner_and_stale_release`.
 
+### Suspended build distinguishes fresh admission from queue transport
+
+`BuildPremise` binds a checked admission stamp to the existing external inbox
+allocation. Local BuildOwner and ElementOwner scheduling and external batches
+advance that stamp before queue dedup and frame wake, including an already
+pending element whose state changes. The stamp and external queue admission
+commit under the inbox's pending mutex; no wake or external iterator runs under
+that guard. Absorbing, capping, returning or requeuing already admitted work
+does not advance it. Closed inboxes refuse compatibility.
+
+Counter exhaustion makes compatibility permanently false, including a token
+compared with the same current untrackable state. It does not refuse subsequent
+build work. `exhausted_build_premise_keeps_work_deliverable` seeds only the initial
+terminal counter privately, then exercises actual external admission, occupied
+queue dedup, transport, local admission and ordered delivery. Public scheduling
+cannot reach the terminal counter in a finite test. No per-element allocation,
+new owner identity or numeric getter is needed.
+
 ### Exhausted owner identities refuse admission permanently
 
 An owner tag is claim authority, so its allocator never wraps or reissues a

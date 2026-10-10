@@ -215,6 +215,54 @@ impl std::fmt::Debug for PresentationDispatcher {
 }
 
 impl PresentationDispatcher {
+    /// Install the native producer's read policy for this exact presentation.
+    ///
+    /// # Errors
+    /// Refuses an expired or closing target, closed host or active publication.
+    pub fn install_captured_text_sizing(
+        &self,
+        source: flui_painting::TextSizingSource,
+        effects: &dyn OwnerEffects,
+    ) -> Result<Delivery, DispatchError> {
+        let core = self.owner.upgrade().ok_or(DispatchError::OwnerGone)?;
+        core.deliver(
+            RuntimeWork::TextSizingInstall(self.address, source),
+            effects,
+        )
+    }
+
+    /// Offer retained requests after an actual native readiness opportunity.
+    ///
+    /// # Errors
+    /// Refuses an expired or closing target, closed host or active publication.
+    pub fn service_text_sizing_source(
+        &self,
+        source: &flui_painting::TextSizingSource,
+        effects: &dyn OwnerEffects,
+    ) -> Result<Delivery, DispatchError> {
+        let core = self.owner.upgrade().ok_or(DispatchError::OwnerGone)?;
+        core.deliver(
+            RuntimeWork::TextSizingService(self.address, source.clone()),
+            effects,
+        )
+    }
+
+    /// Withdraw only this producer's numeric source and pending work.
+    ///
+    /// # Errors
+    /// Refuses an expired or closing target, closed host or active publication.
+    pub fn withdraw_captured_text_sizing(
+        &self,
+        source: &flui_painting::TextSizingSource,
+        effects: &dyn OwnerEffects,
+    ) -> Result<Delivery, DispatchError> {
+        let core = self.owner.upgrade().ok_or(DispatchError::OwnerGone)?;
+        core.deliver(
+            RuntimeWork::TextSizingWithdraw(self.address, source.clone()),
+            effects,
+        )
+    }
+
     /// Inject a fault or reentrant operation through the real delivery machinery.
     /// Available only to test consumers; production work uses closed operations.
     ///

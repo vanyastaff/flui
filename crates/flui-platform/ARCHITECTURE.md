@@ -51,6 +51,27 @@ trait depends on `flui-platform-api` instead.
 
 ## Mapping decisions
 
+### Native text sizing captures conversion inputs on the owner lane
+
+`HostWindow` and `OwnerPlatform` acquire an owner-local `CapturedTextSizing`;
+native capsules remain in the backend and app composition root. Foundation
+requests identify validated authored size and growth profile, and replies carry
+only validated logical sizes. A retained capsule does not authorize publication
+after presentation or capture replacement (ADR-0182).
+
+Android copies `DisplayMetrics` before applying the native SP converter and
+dividing by the captured density. UIKit retains the complete trait collection
+and uses each profile's `UIFontMetrics` with a regular system reference font to
+obtain numeric point sizes; portable shaping still selects the authored face.
+Neither backend samples a sparse curve or substitutes a scalar for missing
+native answers.
+
+The private `android_capture_delivery_receipt` matrix exercises dropped and
+stale receipts, bounded retry, settled inboxes, deadline expiry and late healing
+through the acquisition protocol. It also runs on a non-Android test host, which
+does not execute JNI conversion. Native Android and UIKit conversion require
+their SDK and device verification; portable receipt tests do not establish it.
+
 ### Owner capability boundaries have external compiler witnesses
 
 `OwnerPlatform` stays owner-local, and callers obtain its thread-safe residual

@@ -52,8 +52,18 @@ use super::{
     handle::{DirtyRequest, DirtySender},
     notifier::VisualUpdateNotifier,
     phase::{Idle, PipelinePhase},
-    scheduler::DirtyTracker,
+    scheduler::{DirtyTracker, LayoutStamp},
 };
+
+/// Opaque layout-input premise retained by a suspended presentation segment.
+/// Queue transport does not change it. Exhausted stamps never match, even
+/// themselves, so this token intentionally provides no equality operation.
+#[derive(Clone, Debug)]
+#[must_use]
+pub struct LayoutPremise {
+    owner: Rc<relocation::RelocationOwnerSeal>,
+    stamp: LayoutStamp,
+}
 
 /// Default bounded capacity of the dirty-request channel between
 /// node-bound [`crate::pipeline::RenderInvalidationHandle`] producers and the owner receiver.
@@ -125,6 +135,7 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// The nodes that measured through `text` since the font collection
     /// last changed: the ones [`Self::apply_font_change`] lays out again.
     text_measurers: crate::pipeline::TextMeasurers,
+    text_sizing: flui_painting::TextSizing,
 
     /// The font collection's generation this pipeline last applied; a
     /// different one means a face was registered since.
@@ -346,6 +357,7 @@ where
         id: from.id,
         text: from.text,
         text_measurers: from.text_measurers,
+        text_sizing: from.text_sizing,
         fonts_seen: from.fonts_seen,
         relocation_owner_seal: from.relocation_owner_seal,
         render_tree: from.render_tree,

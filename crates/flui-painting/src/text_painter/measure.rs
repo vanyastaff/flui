@@ -6,23 +6,14 @@ use std::sync::Arc;
 use crate::typography::{InlineSpan, TextDirection, TextStyle};
 use flui_foundation::geometry::Size;
 
-use super::{DEFAULT_FONT_SIZE, LayoutMetrics, TextBaseline, TextLayoutCache, TextPainter};
+use super::{LayoutMetrics, TextBaseline, TextLayoutCache, TextPainter};
 use crate::text_layout::{FontsKey, TextContext, TextLayoutError, TextLayoutResult};
 
 impl TextPainter {
     /// What a cached layout was taken against: `text_cx`'s collection and
     /// its generation, which shaped it.
-    fn font_key(text_cx: &TextContext) -> FontsKey {
+    pub(super) fn font_key(text_cx: &TextContext) -> FontsKey {
         text_cx.fonts().key()
-    }
-
-    /// The cached layout, when it was shaped against the fonts `text_cx`
-    /// shapes with now.
-    fn cache_for(&self, text_cx: &TextContext) -> Option<&TextLayoutCache> {
-        let fonts = Self::font_key(text_cx);
-        self.layout_cache
-            .as_ref()
-            .filter(|cache| cache.fonts.matches(&fonts))
     }
 
     /// Computes the text layout within the given width constraints,
@@ -39,45 +30,48 @@ impl TextPainter {
         text_cx: &mut TextContext,
         min_width: f64,
         max_width: f64,
+    ) -> Result<(), super::TextMeasurementError> {
+        super::TextMeasurement::new(text_cx, &super::TextSizing::fixed())
+            .layout(self, min_width, max_width)
+    }
+
+    pub(super) fn commit_layout(
+        &mut self,
+        text_cx: &mut TextContext,
+        resolved: ResolvedText,
+        min_width: f64,
+        max_width: f64,
+        shape_widths: (f32, Option<f32>),
+        sizing: super::TextSizing,
     ) -> Result<(), TextLayoutError> {
-        text_cx.note_lent();
-
-        if let Err(error) = shaping_widths(min_width, max_width) {
-            self.layout_cache = None;
-            return Err(error);
-        }
         let fonts = Self::font_key(text_cx);
-        if let Some(cache) = self
-            .layout_cache
-            .as_ref()
-            .filter(|cache| cache.fonts.matches(&fonts))
-            && (cache.min_width == min_width || (cache.min_width - min_width).abs() < f64::EPSILON)
-            && (cache.max_width == max_width || (cache.max_width - max_width).abs() < f64::EPSILON)
-        {
-            return Ok(());
-        }
-
-        self.layout_cache = None;
-
-        let text = self.text.as_ref().ok_or(TextLayoutError::TextNotSet)?;
-        let _text_direction = self
-            .text_direction
-            .ok_or(TextLayoutError::TextDirectionNotSet)?;
 
         // One layout measures and paints: the paragraph the display list
         // carries is built from the layout the metrics are read from.
-        let layout =
-            self.parley_paragraph(text_cx, text, min_width, max_width, LineOverflow::Enforce)?;
+        let layout = self.parley_paragraph(
+            text_cx,
+            &resolved,
+            shape_widths.0,
+            shape_widths.1,
+            LineOverflow::Enforce,
+        )?;
         let result = layout.metrics();
         let metrics = Self::metrics_from(&result, min_width);
-        let root = text.style().and_then(crate::text_layout::paint_color);
+        let root = self
+            .text
+            .as_ref()
+            .and_then(InlineSpan::style)
+            .and_then(crate::text_layout::paint_color);
         let paragraph = Arc::new(layout.to_shaped(root));
 
         // Precompute intrinsic widths (shape once, query many).
-        let (min_intrinsic_width, max_intrinsic_width) = self.intrinsic_widths(text_cx, text)?;
+        let (min_intrinsic_width, max_intrinsic_width) =
+            self.intrinsic_widths(text_cx, &resolved)?;
 
         self.layout_cache = Some(TextLayoutCache {
             fonts,
+            sizing,
+            answers: resolved.answers,
             min_width,
             max_width,
             size: metrics.size,
@@ -95,9 +89,9 @@ impl TextPainter {
     /// The colour each shaped run carries, relative to the root. Baked into
     /// the layout at shape time, so `set_text` treats a change to one as a
     /// layout change.
-    pub(super) fn span_colors(&self, text: &InlineSpan) -> Vec<Option<crate::styling::Color>> {
+    pub(super) fn span_colors(text: &InlineSpan) -> Vec<Option<crate::styling::Color>> {
         let root = text.style().and_then(crate::text_layout::paint_color);
-        collect_styled_spans(text, self.text_scale_factor)
+        collect_authored_spans(text)
             .iter()
             .map(|(_, style)| {
                 style
@@ -108,23 +102,7 @@ impl TextPainter {
             .collect()
     }
 
-    /// The paragraph's font size with the text scale factor applied.
-    fn scaled_font_size(&self, text: &InlineSpan) -> Result<f32, TextLayoutError> {
-        if !self.text_scale_factor.is_finite() || self.text_scale_factor <= 0.0 {
-            return Err(TextLayoutError::InvalidScale {
-                factor: self.text_scale_factor,
-            });
-        }
-        let size = text
-            .style()
-            .and_then(|s| s.font_size)
-            .unwrap_or(DEFAULT_FONT_SIZE)
-            * self.text_scale_factor;
-        crate::text_layout::error::font_size(size)
-    }
-
-    /// Shapes `text` on Parley through `text_cx` at `max_width`, with the
-    /// span flattening and scale factor applied. Every span
+    /// Shapes resolved typography on Parley through `text_cx`. Every span
     /// carries its merged style; the root's style, scaled as a span's is, is
     /// the paragraph default, so a paragraph with no run (empty text)
     /// measures the line its style would, family and line height included.
@@ -135,29 +113,23 @@ impl TextPainter {
     /// shapes without line-count truncation so a zero-width wrap cannot erase
     /// visible content under `max_lines` (#1085). Callers that need the
     /// ellipsis as a width floor apply [`Self::ellipsis_width_floor`] on top.
-    fn parley_paragraph(
+    pub(super) fn parley_paragraph(
         &self,
         text_cx: &mut TextContext,
-        text: &InlineSpan,
-        min_width: f64,
-        max_width: f64,
+        text: &ResolvedText,
+        min_width: f32,
+        max_width: Option<f32>,
         line_overflow: LineOverflow,
     ) -> Result<crate::parley_text::ParagraphLayout, TextLayoutError> {
-        let font_size = self.scaled_font_size(text)?;
-        let (min_width, max_width) = shaping_widths(min_width, max_width)?;
-        let spans = collect_styled_spans(text, self.text_scale_factor);
-        let root = text
-            .style()
-            .map(|style| effective_style(style, self.text_scale_factor));
         let (max_lines, ellipsis) = match line_overflow {
             LineOverflow::Enforce => (self.max_lines.map(|n| n as usize), self.ellipsis.as_deref()),
             LineOverflow::IgnoreForWidthIntrinsic => (None, None),
         };
         text_cx.shape(&crate::parley_text::ParagraphSpec {
             font_weight_adjustment: self.font_weight_adjustment,
-            spans: &spans,
-            default_style: root.as_ref(),
-            font_size,
+            spans: &text.spans,
+            default_style: text.default_style.as_ref(),
+            font_size: text.font_size,
             max_width,
             min_width,
             text_align: self.text_align,
@@ -168,21 +140,8 @@ impl TextPainter {
         })
     }
 
-    /// Parley's metrics for `text` broken at `max_width`.
-    fn measure(
-        &self,
-        text_cx: &mut TextContext,
-        text: &InlineSpan,
-        max_width: f64,
-        line_overflow: LineOverflow,
-    ) -> Result<TextLayoutResult, TextLayoutError> {
-        Ok(self
-            .parley_paragraph(text_cx, text, 0.0, max_width, line_overflow)?
-            .metrics())
-    }
-
     /// The box metrics a shaped result gives under the width constraints.
-    fn metrics_from(result: &TextLayoutResult, min_width: f64) -> LayoutMetrics {
+    pub(super) fn metrics_from(result: &TextLayoutResult, min_width: f64) -> LayoutMetrics {
         let width = result.width.max(min_width);
         LayoutMetrics {
             size: Size::new(width, result.height),
@@ -197,10 +156,10 @@ impl TextPainter {
     /// single-line width, both without `max_lines` truncation (#1085) and
     /// both floored at the ellipsis width when truncation can leave only the
     /// ellipsis.
-    fn intrinsic_widths(
+    pub(super) fn intrinsic_widths(
         &self,
         text_cx: &mut TextContext,
-        text: &InlineSpan,
+        text: &ResolvedText,
     ) -> Result<(f64, f64), TextLayoutError> {
         let floor = self.ellipsis_width_floor(text_cx, text)?;
         let (min, max) = self
@@ -208,7 +167,7 @@ impl TextPainter {
                 text_cx,
                 text,
                 0.0,
-                f64::INFINITY,
+                None,
                 LineOverflow::IgnoreForWidthIntrinsic,
             )?
             .content_widths();
@@ -224,7 +183,7 @@ impl TextPainter {
     fn ellipsis_width_floor(
         &self,
         text_cx: &mut TextContext,
-        text: &InlineSpan,
+        text: &ResolvedText,
     ) -> Result<f64, TextLayoutError> {
         let Some(ellipsis) = self.ellipsis.as_deref().filter(|e| !e.is_empty()) else {
             return Ok(0.0);
@@ -233,26 +192,19 @@ impl TextPainter {
             return Ok(0.0);
         }
 
-        let font_size = self.scaled_font_size(text)?;
         // The one paragraph truncation keeps whatever the width is the
         // ellipsis alone, and `ellipsize` styles it as the first run: shaped
         // the same way, over the root as the paragraph default, the floor is
         // that paragraph's width, however the runs' styles differ from the
         // root's.
-        let first = collect_styled_spans(text, self.text_scale_factor)
-            .into_iter()
-            .next()
-            .and_then(|(_, style)| style);
-        let root = text
-            .style()
-            .map(|style| effective_style(style, self.text_scale_factor));
+        let first = text.spans.first().and_then(|(_, style)| style.clone());
         let spans = vec![(ellipsis.to_string(), first)];
         Ok(text_cx
             .shape(&crate::parley_text::ParagraphSpec {
                 font_weight_adjustment: self.font_weight_adjustment,
                 spans: &spans,
-                default_style: root.as_ref(),
-                font_size,
+                default_style: text.default_style.as_ref(),
+                font_size: text.font_size,
                 max_width: None,
                 min_width: 0.0,
                 text_align: crate::typography::TextAlign::Start,
@@ -346,15 +298,11 @@ impl TextPainter {
     /// Returns the precomputed value from the layout cache when it was
     /// measured against `text_cx`'s fonts (O(1) after `layout()`).
     /// Otherwise measures through `text_cx`.
-    pub fn max_intrinsic_width(&self, text_cx: &mut TextContext) -> Result<f64, TextLayoutError> {
-        text_cx.note_lent();
-        if let Some(cache) = self.cache_for(text_cx) {
-            return Ok(cache.max_intrinsic_width);
-        }
-        let Some(text) = self.text.as_ref() else {
-            return Ok(0.0);
-        };
-        Ok(self.intrinsic_widths(text_cx, text)?.1)
+    pub fn max_intrinsic_width(
+        &self,
+        text_cx: &mut TextContext,
+    ) -> Result<f64, super::TextMeasurementError> {
+        super::TextMeasurement::new(text_cx, &super::TextSizing::fixed()).max_intrinsic_width(self)
     }
 
     /// The narrowest width the text can take without overflowing — the
@@ -370,15 +318,11 @@ impl TextPainter {
     /// Returns the precomputed value from the layout cache when it was
     /// measured against `text_cx`'s fonts (O(1) after `layout()`).
     /// Otherwise measures through `text_cx`.
-    pub fn min_intrinsic_width(&self, text_cx: &mut TextContext) -> Result<f64, TextLayoutError> {
-        text_cx.note_lent();
-        if let Some(cache) = self.cache_for(text_cx) {
-            return Ok(cache.min_intrinsic_width);
-        }
-        let Some(text) = self.text.as_ref() else {
-            return Ok(0.0);
-        };
-        Ok(self.intrinsic_widths(text_cx, text)?.0)
+    pub fn min_intrinsic_width(
+        &self,
+        text_cx: &mut TextContext,
+    ) -> Result<f64, super::TextMeasurementError> {
+        super::TextMeasurement::new(text_cx, &super::TextSizing::fixed()).min_intrinsic_width(self)
     }
 
     /// The height the text takes when laid out at `width` — both the min
@@ -387,14 +331,9 @@ impl TextPainter {
         &self,
         text_cx: &mut TextContext,
         width: f64,
-    ) -> Result<f64, TextLayoutError> {
-        text_cx.note_lent();
-        let Some(text) = self.text.as_ref() else {
-            return Ok(0.0);
-        };
-        Ok(self
-            .measure(text_cx, text, width, LineOverflow::Enforce)?
-            .height)
+    ) -> Result<f64, super::TextMeasurementError> {
+        super::TextMeasurement::new(text_cx, &super::TextSizing::fixed())
+            .intrinsic_height(self, width)
     }
 
     /// The size the text would take under the given width constraints,
@@ -405,14 +344,9 @@ impl TextPainter {
         text_cx: &mut TextContext,
         min_width: f64,
         max_width: f64,
-    ) -> Result<Size<f64>, TextLayoutError> {
-        text_cx.note_lent();
-        let Some(text) = self.text.as_ref() else {
-            return Ok(Size::ZERO);
-        };
-        crate::text_layout::error::width(min_width)?;
-        let result = self.measure(text_cx, text, max_width, LineOverflow::Enforce)?;
-        Ok(Self::metrics_from(&result, min_width).size)
+    ) -> Result<Size<f64>, super::TextMeasurementError> {
+        super::TextMeasurement::new(text_cx, &super::TextSizing::fixed())
+            .dry_size(self, min_width, max_width)
     }
 
     /// Where the first baseline of the given kind would sit after a dry
@@ -424,22 +358,25 @@ impl TextPainter {
         min_width: f64,
         max_width: f64,
         baseline: TextBaseline,
-    ) -> Result<Option<f64>, TextLayoutError> {
-        text_cx.note_lent();
-        let Some(text) = self.text.as_ref() else {
-            return Ok(None);
-        };
-        crate::text_layout::error::width(min_width)?;
-        let result = self.measure(text_cx, text, max_width, LineOverflow::Enforce)?;
-        let metrics = Self::metrics_from(&result, min_width);
-        Ok(Some(match baseline {
-            TextBaseline::Alphabetic => metrics.alphabetic_baseline,
-            TextBaseline::Ideographic => metrics.ideographic_baseline,
-        }))
+    ) -> Result<Option<f64>, super::TextMeasurementError> {
+        super::TextMeasurement::new(text_cx, &super::TextSizing::fixed())
+            .dry_baseline(self, min_width, max_width, baseline)
     }
 }
 
-fn shaping_widths(min_width: f64, max_width: f64) -> Result<(f32, Option<f32>), TextLayoutError> {
+/// Owned typography shared by a measurement's committed and transient shapes.
+/// It never replaces the painter's authored span tree or crosses measurements.
+pub(super) struct ResolvedText {
+    pub(super) spans: Vec<(String, Option<TextStyle>)>,
+    pub(super) default_style: Option<TextStyle>,
+    pub(super) font_size: f32,
+    pub(super) answers: Vec<super::TextResolvedSize>,
+}
+
+pub(super) fn shaping_widths(
+    min_width: f64,
+    max_width: f64,
+) -> Result<(f32, Option<f32>), TextLayoutError> {
     let min_width = crate::text_layout::error::width(min_width)?;
     let max_width = if max_width == f64::INFINITY {
         None
@@ -454,7 +391,7 @@ fn shaping_widths(min_width: f64, max_width: f64) -> Result<(f32, Option<f32>), 
 /// Width intrinsics deliberately skip truncation (#1085); layout and dry
 /// probes keep it so paint and measurement agree.
 #[derive(Clone, Copy, Debug)]
-enum LineOverflow {
+pub(super) enum LineOverflow {
     Enforce,
     IgnoreForWidthIntrinsic,
 }
@@ -464,11 +401,6 @@ enum LineOverflow {
 /// style merges over its ancestors' (`TextStyle::merge`), so a bold
 /// child of a sized parent shapes bold at the parent's size.
 ///
-/// Every styled run carries an explicit font size, the default where no
-/// ancestor sets one, with the text scale factor baked in: the shaper sees
-/// final pixel sizes, and a run's letter spacing and line height apply at
-/// that size on both shapers ([`effective_style`]).
-///
 /// **Placeholder spans** are emitted as `\u{FFFC}` (Unicode Object
 /// Replacement Character) with the inherited style. The shaper gives
 /// it a glyph; the caller tracks placeholder positions separately for
@@ -476,14 +408,12 @@ enum LineOverflow {
 ///
 /// Average and worst case O(total spans + text bytes): one pre-order
 /// walk.
-pub(crate) fn collect_styled_spans(
-    span: &InlineSpan,
-    scale: f64,
-) -> Vec<(String, Option<TextStyle>)> {
+/// Merge inheritance before resolving size. The authored sizes remain available
+/// for an exact answer lookup; shaping never reconstructs them from scaled runs.
+pub(super) fn collect_authored_spans(span: &InlineSpan) -> Vec<(String, Option<TextStyle>)> {
     fn walk(
         span: &crate::typography::TextSpan,
         inherited: Option<&TextStyle>,
-        scale: f64,
         out: &mut Vec<(String, Option<TextStyle>)>,
     ) {
         let merged: Option<TextStyle> = match (inherited, span.style.as_ref()) {
@@ -495,17 +425,16 @@ pub(crate) fn collect_styled_spans(
         if let Some(text) = &span.text
             && !text.is_empty()
         {
-            let effective = merged.as_ref().map(|style| effective_style(style, scale));
-            out.push((text.clone(), effective));
+            out.push((text.clone(), merged.clone()));
         }
         for child in &span.children {
-            walk(child, merged.as_ref(), scale, out);
+            walk(child, merged.as_ref(), out);
         }
     }
 
     let mut out = Vec::new();
     match span {
-        InlineSpan::Text(root) => walk(root, None, scale, &mut out),
+        InlineSpan::Text(root) => walk(root, None, &mut out),
         InlineSpan::Placeholder(_placeholder) => {
             // Emit a Unicode Object Replacement Character (\u{FFFC})
             // as a placeholder. The shaper gives it a glyph; we track
@@ -514,19 +443,4 @@ pub(crate) fn collect_styled_spans(
         }
     }
     out
-}
-
-/// `style` as a run is shaped with: its font size, [`DEFAULT_FONT_SIZE`]
-/// where it sets none, and its letter spacing, both multiplied by `scale`.
-///
-/// Every run carries its size explicitly, so a span's letter spacing and
-/// line height apply at the size it shapes at. Letter spacing is in logical
-/// pixels and scales with the size: at a scale of 2 a 2 px spacing is 4 px.
-fn effective_style(style: &TextStyle, scale: f64) -> TextStyle {
-    let mut style = style.clone();
-    style.font_size = Some(style.font_size.unwrap_or(DEFAULT_FONT_SIZE) * scale);
-    if let Some(spacing) = style.letter_spacing {
-        style.letter_spacing = Some(spacing * scale);
-    }
-    style
 }

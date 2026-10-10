@@ -740,73 +740,34 @@ where
         &self,
         dimension: crate::storage::IntrinsicDimension,
         extent: f64,
-        child_count: usize,
-        child_parent_data: &[Option<&dyn crate::parent_data::ParentData>],
-        child_query: &mut dyn FnMut(
-            usize,
-            crate::storage::IntrinsicDimension,
-            f64,
-        ) -> crate::error::RenderResult<f64>,
-        text: crate::pipeline::TextSource<'_>,
+        ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
     ) -> crate::error::RenderResult<f64> {
-        // The intrinsics bridge: wrap the driver's memoizing child
-        // recursion in the typed ctx and dispatch the dimension to the
-        // matching typed compute_* — same shape as the paint/hit
-        // bridges, no GAT erasure needed.
+        // Preserve the driver's complete mutable query capability at the
+        // typed bridge: text and recursive child queries cannot be split.
         use crate::storage::IntrinsicDimension as Dim;
-        let mut ctx = crate::context::BoxIntrinsicsCtx::new(
-            child_count,
-            child_parent_data,
-            child_query,
-            text,
-        );
         match dimension {
-            Dim::MinWidth => T::compute_min_intrinsic_width(self, extent, &mut ctx),
-            Dim::MaxWidth => T::compute_max_intrinsic_width(self, extent, &mut ctx),
-            Dim::MinHeight => T::compute_min_intrinsic_height(self, extent, &mut ctx),
-            Dim::MaxHeight => T::compute_max_intrinsic_height(self, extent, &mut ctx),
+            Dim::MinWidth => T::compute_min_intrinsic_width(self, extent, ctx),
+            Dim::MaxWidth => T::compute_max_intrinsic_width(self, extent, ctx),
+            Dim::MinHeight => T::compute_min_intrinsic_height(self, extent, ctx),
+            Dim::MaxHeight => T::compute_max_intrinsic_height(self, extent, ctx),
         }
     }
 
     fn dry_layout_raw(
         &self,
         constraints: crate::protocol::ProtocolConstraints<BoxProtocol>,
-        child_count: usize,
-        child_parent_data: &[Option<&dyn crate::parent_data::ParentData>],
-        child_query: &mut dyn FnMut(
-            usize,
-            crate::context::DryLayoutChildRequest,
-        ) -> crate::error::RenderResult<
-            crate::context::DryLayoutChildResponse,
-        >,
-        text: crate::pipeline::TextSource<'_>,
+        ctx: &mut crate::context::BoxDryLayoutCtx<'_>,
     ) -> crate::error::RenderResult<crate::protocol::ProtocolGeometry<BoxProtocol>> {
-        let mut ctx =
-            crate::context::BoxDryLayoutCtx::new(child_count, child_parent_data, child_query, text);
-        T::compute_dry_layout(self, constraints, &mut ctx)
+        T::compute_dry_layout(self, constraints, ctx)
     }
 
     fn dry_baseline_raw(
         &self,
         constraints: crate::protocol::ProtocolConstraints<BoxProtocol>,
         baseline: crate::traits::TextBaseline,
-        child_count: usize,
-        child_parent_data: &[Option<&dyn crate::parent_data::ParentData>],
-        child_query: &mut dyn FnMut(
-            usize,
-            crate::context::DryBaselineChildRequest,
-        ) -> crate::error::RenderResult<
-            crate::context::DryBaselineChildResponse,
-        >,
-        text: crate::pipeline::TextSource<'_>,
+        ctx: &mut crate::context::BoxDryBaselineCtx<'_>,
     ) -> crate::error::RenderResult<Option<f64>> {
-        let mut ctx = crate::context::BoxDryBaselineCtx::new(
-            child_count,
-            child_parent_data,
-            child_query,
-            text,
-        );
-        T::compute_dry_baseline(self, constraints, baseline, &mut ctx)
+        T::compute_dry_baseline(self, constraints, baseline, ctx)
     }
 
     fn actual_baseline_raw(

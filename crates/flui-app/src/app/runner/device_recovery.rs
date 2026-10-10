@@ -61,9 +61,8 @@ enum RecoveryAttempt {
     /// The backoff's armed deadline had not yet elapsed — no attempt was
     /// made. Carries that SAME deadline (not a freshly computed one).
     Deferred(web_time::Instant),
-    /// A fresh attempt was made and failed. Carries the NEW deadline the
-    /// failure just armed.
-    Failed(web_time::Instant),
+    /// A fresh attempt failed; the caller records its backoff outside the lane.
+    Failed(flui_engine::EngineError),
     /// A fresh attempt was made and succeeded.
     Recovered,
 }
@@ -86,15 +85,8 @@ fn attempt_device_recovery<R: DeviceRecovery>(
         return RecoveryAttempt::Deferred(deadline);
     }
     match renderer.try_recover_device() {
-        Ok(()) => {
-            tracing::warn!("GPU device lost — recovered successfully");
-            backoff.record_success();
-            RecoveryAttempt::Recovered
-        }
-        Err(e) => {
-            let deadline = backoff.record_failure(&e, now);
-            RecoveryAttempt::Failed(deadline)
-        }
+        Ok(()) => RecoveryAttempt::Recovered,
+        Err(error) => RecoveryAttempt::Failed(error),
     }
 }
 
@@ -118,9 +110,8 @@ pub(super) struct FrameRecoveryOutcome {
     pub(super) presented: bool,
     /// Set exactly when a NEW recovery attempt failed this call — never on
     /// a merely-deferred attempt (the backoff deadline had not elapsed) and
-    /// never on success. Only this arms the retry wake; see this function's
-    /// own doc for why raising it here, not inside the attempt helper
-    /// itself, is what makes the wake survive.
+    /// never on success or lane contention. Recovery failures and an unchecked
+    /// post-frame device state arm their retry wake after the pump's tail.
     ///
     /// Read only by this module's own tests today: production callers
     /// (`bootstrap_desktop`/`bootstrap_android`) consult the persistent
@@ -207,13 +198,18 @@ pub(super) struct FrameRecoveryOutcome {
 /// the post-frame one after the post-frame callbacks. Neither touches the
 /// tree except `mark_primary_needs_full_repaint`, which still lands before
 /// the pipeline that repaints. `now` is also the pump's frame timestamp.
+///
+/// Only recovery and scene submission borrow the raster lane. Owner callbacks
+/// run without that guard. A busy initial lane returns `None`, retaining a wake
+/// without consuming frame work; contention during submission returns `Retry`.
+/// A busy post-frame check also retains a wake without claiming device loss.
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn pump_with_device_recovery<B>(
     ui_runtime: &mut crate::app::ui_runtime::UiRuntime,
-    lane: &mut crate::app::raster_lane::RasterLane<B>,
+    lane: &parking_lot::Mutex<crate::app::raster_lane::RasterLane<B>>,
     backoff: &DeviceRecoveryBackoff,
     now: web_time::Instant,
-) -> FrameRecoveryOutcome
+) -> Option<FrameRecoveryOutcome>
 where
     B: flui_engine::RasterBackend + DeviceRecovery,
 {
@@ -221,16 +217,33 @@ where
 
     let mut just_failed = false;
     let mut next_attempt_at = None;
+    let Some((mut sink, mut guard)) = crate::app::raster_lane::RasterFrame::try_new(lane) else {
+        ui_runtime.wake_frame();
+        return None;
+    };
 
-    if lane.is_device_lost() {
-        match lane.with_backend(|renderer| attempt_device_recovery(renderer, backoff, now)) {
+    let pre_attempt = if guard.is_device_lost() {
+        let attempt =
+            guard.with_backend(|renderer| attempt_device_recovery(renderer, backoff, now));
+        if matches!(attempt, RecoveryAttempt::Recovered) {
+            guard.note_surface_recreated();
+        }
+        Some(attempt)
+    } else {
+        None
+    };
+    drop(guard);
+
+    if let Some(attempt) = pre_attempt {
+        match attempt {
             RecoveryAttempt::Recovered => {
                 // Recovery rebuilt the surface, so the lane re-mints its
                 // `SurfaceGeneration` through the mailbox's one counter
                 // (ADR-0045 decision 4 names recovery's surface recreation
                 // as a mint site) — without this, the recovered lane's
                 // next frame would still stamp the pre-loss generation.
-                lane.note_surface_recreated();
+                backoff.record_success();
+                tracing::warn!("GPU device lost — recovered successfully");
                 // Pre-frame only: nothing has presented since the device
                 // died, so the recovered backing store needs a genuinely
                 // fresh submit — see `UiRuntime::mark_primary_needs_full_
@@ -238,18 +251,41 @@ where
                 // not get one.
                 ui_runtime.mark_primary_needs_full_repaint();
             }
-            RecoveryAttempt::Failed(deadline) => {
+            RecoveryAttempt::Failed(error) => {
                 just_failed = true;
-                next_attempt_at = Some(deadline);
+                next_attempt_at = Some(backoff.record_failure(&error, now));
             }
             RecoveryAttempt::Deferred(deadline) => next_attempt_at = Some(deadline),
         }
     }
 
-    let presented = ui_runtime.pump(&mut SampledClock(now), lane).presented();
+    let presented = ui_runtime
+        .pump(&mut SampledClock(now), &mut sink)
+        .presented();
 
-    if next_attempt_at.is_none() && lane.is_device_lost() {
-        match lane.with_backend(|renderer| attempt_device_recovery(renderer, backoff, now)) {
+    let mut recovery_check_pending = false;
+    let post_attempt = if next_attempt_at.is_none() {
+        if let Some(mut guard) = lane.try_lock() {
+            if guard.is_device_lost() {
+                let attempt =
+                    guard.with_backend(|renderer| attempt_device_recovery(renderer, backoff, now));
+                if matches!(attempt, RecoveryAttempt::Recovered) {
+                    guard.note_surface_recreated();
+                }
+                Some(attempt)
+            } else {
+                None
+            }
+        } else {
+            recovery_check_pending = true;
+            None
+        }
+    } else {
+        None
+    };
+
+    if let Some(attempt) = post_attempt {
+        match attempt {
             // Post-frame (mid-frame loss) success arms NO repaint, unlike
             // the pre-frame case above: the frame that just ran already had
             // its own chance to present before the loss was noticed, so
@@ -260,16 +296,19 @@ where
             // recovery rebuilt the surface either way, and the next frame
             // (whenever something else dirties the tree) must stamp the
             // post-recovery generation.
-            RecoveryAttempt::Recovered => lane.note_surface_recreated(),
-            RecoveryAttempt::Failed(deadline) => {
+            RecoveryAttempt::Recovered => {
+                backoff.record_success();
+                tracing::warn!("GPU device lost — recovered successfully");
+            }
+            RecoveryAttempt::Failed(error) => {
                 just_failed = true;
-                next_attempt_at = Some(deadline);
+                next_attempt_at = Some(backoff.record_failure(&error, now));
             }
             RecoveryAttempt::Deferred(deadline) => next_attempt_at = Some(deadline),
         }
     }
 
-    if just_failed {
+    if just_failed || recovery_check_pending {
         // Raised AFTER `render_frame`, never before: that method's
         // own tail (`if retry_needed { wake_frame() } else {
         // mark_rendered() }`) runs unconditionally on EVERY call, and
@@ -287,19 +326,20 @@ where
         ui_runtime.wake_frame();
     }
 
-    FrameRecoveryOutcome {
+    Some(FrameRecoveryOutcome {
         presented,
         just_failed,
         next_attempt_at,
-    }
+    })
 }
 
 /// The device-loss recovery contract of
 /// [`pump_with_device_recovery`] against scripted backends and the
 /// [`DeviceRecoveryBackoff`] pacing it: a pre-frame loss recovers BEFORE the
 /// frame build and ALWAYS runs it regardless of outcome, a mid-frame loss
-/// recovers after, only a NEW failure arms the retry wake (never a success,
-/// never a merely-deferred attempt), a successful recovery marks the
+/// recovers after, a NEW failure arms the recovery retry wake (never a success,
+/// never a merely-deferred attempt), lane contention retains unfinished work,
+/// a successful recovery marks the
 /// presentation dirty so it actually paints again, and a persistently
 /// failing device is retried on a bounded, non-blocking, growing deadline —
 /// never abandoned, never slept on.
@@ -362,8 +402,10 @@ mod device_recovery_tests {
     /// path drives (`pump_with_device_recovery` takes a lane, not
     /// a bare backend, since the desktop/Android runners adopted the
     /// mailbox) — the size matches the scripted backends' own `size()`.
-    fn lane_over<B: RasterBackend>(backend: B) -> crate::app::raster_lane::RasterLane<B> {
-        crate::app::raster_lane::RasterLane::new(
+    fn lane_over<B: RasterBackend>(
+        backend: B,
+    ) -> parking_lot::Mutex<crate::app::raster_lane::RasterLane<B>> {
+        parking_lot::Mutex::new(crate::app::raster_lane::RasterLane::new(
             backend,
             flui_foundation::PresentationAddress {
                 ui_runtime_id: flui_foundation::UiRuntimeId::new(1),
@@ -371,7 +413,7 @@ mod device_recovery_tests {
             },
             800,
             600,
-        )
+        ))
     }
 
     struct ScriptedDeviceBackend {
@@ -382,6 +424,7 @@ mod device_recovery_tests {
         scene_outcome: Option<Result<PresentDisposition, EngineError>>,
         /// `try_recover_device` outcome (`take`n, same reason).
         recover_outcome: Option<Result<(), EngineError>>,
+        next_recover_outcome: Option<Result<(), EngineError>>,
         /// Whether a successful recovery clears the lost flag (a failing
         /// driver reset leaves it set).
         recover_clears_lost: bool,
@@ -390,6 +433,7 @@ mod device_recovery_tests {
         lose_on_render: bool,
         render_calls: u32,
         recover_attempts: u32,
+        resizes: Vec<(u32, u32)>,
     }
 
     impl ScriptedDeviceBackend {
@@ -398,10 +442,12 @@ mod device_recovery_tests {
                 lost: false,
                 scene_outcome: Some(Ok(PresentDisposition::Presented)),
                 recover_outcome: Some(Ok(())),
+                next_recover_outcome: None,
                 recover_clears_lost: true,
                 lose_on_render: false,
                 render_calls: 0,
                 recover_attempts: 0,
+                resizes: Vec::new(),
             }
         }
     }
@@ -419,7 +465,9 @@ mod device_recovery_tests {
                 .take()
                 .expect("render_scene called more than once in a single-frame test")
         }
-        fn resize(&mut self, _width: u32, _height: u32) {}
+        fn resize(&mut self, width: u32, height: u32) {
+            self.resizes.push((width, height));
+        }
         fn is_device_lost(&self) -> bool {
             self.lost
         }
@@ -442,7 +490,8 @@ mod device_recovery_tests {
             let outcome = self
                 .recover_outcome
                 .take()
-                .expect("try_recover_device called more than once in a single-frame test");
+                .or_else(|| self.next_recover_outcome.take())
+                .expect("every recovery attempt has a scripted result");
             if outcome.is_ok() && self.recover_clears_lost {
                 self.lost = false;
             }
@@ -452,7 +501,7 @@ mod device_recovery_tests {
 
     fn a_pre_frame_loss_with_a_failing_recovery_still_renders_the_frame_and_backs_off() {
         let mut ui_runtime = mount_root();
-        let mut lane = lane_over(ScriptedDeviceBackend {
+        let lane = lane_over(ScriptedDeviceBackend {
             lost: true,
             // The real `Renderer::acquire_surface_texture` bails on the
             // `device_lost` flag before touching the GPU — scripted here
@@ -467,11 +516,12 @@ mod device_recovery_tests {
         let backoff = new_device_recovery_backoff();
         let now = Instant::now();
 
-        let outcome = pump_with_device_recovery(&mut ui_runtime, &mut lane, &backoff, now);
+        let outcome = pump_with_device_recovery(&mut ui_runtime, &lane, &backoff, now)
+            .expect("idle lane admits the frame");
 
         assert!(!outcome.presented, "a still-lost device presents nothing");
         assert_eq!(
-            lane.with_backend(|b| b.recover_attempts),
+            lane.lock().with_backend(|b| b.recover_attempts),
             1,
             "the recovery was attempted"
         );
@@ -483,7 +533,7 @@ mod device_recovery_tests {
         // deadlines, coalesced pointer moves, and every Vsync ticker all
         // depend on it).
         assert_eq!(
-            lane.with_backend(|b| b.render_calls),
+            lane.lock().with_backend(|b| b.render_calls),
             1,
             "render_frame must run even when the pre-frame recovery attempt \
              failed — a dead device must not stop the non-GPU half of the frame"
@@ -504,7 +554,7 @@ mod device_recovery_tests {
 
     fn a_mid_frame_loss_with_a_failing_recovery_backs_off() {
         let mut ui_runtime = mount_root();
-        let mut lane = lane_over(ScriptedDeviceBackend {
+        let lane = lane_over(ScriptedDeviceBackend {
             lose_on_render: true,
             recover_outcome: Some(Err(EngineError::DeviceLost)),
             recover_clears_lost: false,
@@ -514,10 +564,11 @@ mod device_recovery_tests {
         let backoff = new_device_recovery_backoff();
         let now = Instant::now();
 
-        let outcome = pump_with_device_recovery(&mut ui_runtime, &mut lane, &backoff, now);
+        let outcome = pump_with_device_recovery(&mut ui_runtime, &lane, &backoff, now)
+            .expect("idle lane admits the frame");
 
         assert_eq!(
-            lane.with_backend(|b| b.render_calls),
+            lane.lock().with_backend(|b| b.render_calls),
             1,
             "the frame rendered before the loss landed"
         );
@@ -526,7 +577,7 @@ mod device_recovery_tests {
             "the frame that rendered still reaches present()"
         );
         assert_eq!(
-            lane.with_backend(|b| b.recover_attempts),
+            lane.lock().with_backend(|b| b.recover_attempts),
             1,
             "the mid-frame loss is recovered after the render"
         );
@@ -567,14 +618,15 @@ mod device_recovery_tests {
         let mut now = Instant::now();
 
         for frame in 1..=3u32 {
-            let mut lane = lane_over(ScriptedDeviceBackend {
+            let lane = lane_over(ScriptedDeviceBackend {
                 lost: true,
                 scene_outcome: Some(Err(EngineError::DeviceLost)),
                 recover_outcome: Some(Err(EngineError::DeviceLost)),
                 recover_clears_lost: false,
                 ..ScriptedDeviceBackend::healthy()
             });
-            let _ = pump_with_device_recovery(&mut ui_runtime, &mut lane, &backoff, now);
+            let _ = pump_with_device_recovery(&mut ui_runtime, &lane, &backoff, now)
+                .expect("idle lane admits the frame");
             assert!(
                 ui_runtime.needs_redraw(),
                 "needs_redraw must still be armed after frame {frame} against a \
@@ -591,11 +643,243 @@ mod device_recovery_tests {
         }
     }
 
+    fn frame_callbacks_run_without_the_raster_lane_guard() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        use std::sync::Arc;
+
+        let mut ui_runtime = mount_root();
+        let lane = Arc::new(lane_over(ScriptedDeviceBackend::healthy()));
+        let observations = Rc::new(RefCell::new(Vec::new()));
+        let transient_lane = Arc::clone(&lane);
+        let transient_observations = Rc::clone(&observations);
+        ui_runtime
+            .scheduler()
+            .schedule_frame_callback(Box::new(move |_| {
+                let hook = transient_lane.try_lock().map(|lane| lane.resize_hook());
+                let available = hook.is_some();
+                if let Some(hook) = hook {
+                    hook.apply(900, 700);
+                }
+                transient_observations
+                    .borrow_mut()
+                    .push(("transient", available));
+            }));
+        let post_lane = Arc::clone(&lane);
+        let post_observations = Rc::clone(&observations);
+        ui_runtime
+            .scheduler()
+            .add_post_frame_callback(Box::new(move |_| {
+                let hook = post_lane.try_lock().map(|lane| lane.resize_hook());
+                let available = hook.is_some();
+                if let Some(hook) = hook {
+                    hook.apply(1200, 800);
+                }
+                post_observations
+                    .borrow_mut()
+                    .push(("post-frame", available));
+            }));
+
+        let backoff = new_device_recovery_backoff();
+        let outcome = pump_with_device_recovery(&mut ui_runtime, &lane, &backoff, Instant::now())
+            .expect("idle lane admits the frame");
+        assert_eq!(
+            *observations.borrow(),
+            [("transient", true), ("post-frame", true)],
+            "owner callbacks must run once and without the raster infrastructure guard"
+        );
+        assert!(outcome.presented, "the same pump still presents its scene");
+        lane.lock().with_backend(|backend| {
+            assert_eq!(backend.render_calls, 1);
+            assert_eq!(backend.resizes, [(900, 700)]);
+            backend.scene_outcome = Some(Ok(PresentDisposition::Presented));
+        });
+        ui_runtime.mark_primary_needs_full_repaint();
+        assert!(
+            pump_with_device_recovery(&mut ui_runtime, &lane, &backoff, Instant::now())
+                .expect("idle lane admits the next frame")
+                .presented
+        );
+        lane.lock().with_backend(|backend| {
+            assert_eq!(backend.render_calls, 2);
+            assert_eq!(backend.resizes, [(900, 700), (1200, 800)]);
+        });
+    }
+
+    fn a_busy_lane_keeps_the_unstarted_frame_deliverable() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let mut ui_runtime = mount_root();
+        let lane = lane_over(ScriptedDeviceBackend::healthy());
+        let calls = Rc::new(Cell::new(0));
+        let callback_calls = Rc::clone(&calls);
+        ui_runtime
+            .scheduler()
+            .schedule_frame_callback(Box::new(move |_| {
+                callback_calls.set(callback_calls.get() + 1);
+            }));
+        let backoff = new_device_recovery_backoff();
+        let guard = lane.lock();
+        assert!(
+            pump_with_device_recovery(&mut ui_runtime, &lane, &backoff, Instant::now()).is_none()
+        );
+        assert_eq!(calls.get(), 0, "no scheduler phase was consumed");
+        assert!(ui_runtime.needs_redraw());
+        assert_eq!(backoff.next_attempt_at(), None);
+        drop(guard);
+        assert!(
+            pump_with_device_recovery(&mut ui_runtime, &lane, &backoff, Instant::now())
+                .expect("released lane admits retained work")
+                .presented
+        );
+        assert_eq!(calls.get(), 1);
+    }
+
+    fn lane_contention_during_pump(post_frame: bool) {
+        use std::sync::{Arc, mpsc};
+
+        let mut ui_runtime = mount_root();
+        let lane = Arc::new(lane_over(ScriptedDeviceBackend::healthy()));
+        let worker_lane = Arc::clone(&lane);
+        let (start_tx, start_rx) = mpsc::channel::<()>();
+        let (held_tx, held_rx) = mpsc::channel::<()>();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let worker = std::thread::spawn(move || {
+            start_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("frame starts the competing operation");
+            let mut guard = worker_lane.lock();
+            if post_frame {
+                guard.with_backend(|backend| {
+                    backend.lost = true;
+                    backend.scene_outcome = Some(Ok(PresentDisposition::Presented));
+                });
+            }
+            held_tx.send(()).expect("frame observes lane contention");
+            let _ = release_rx.recv_timeout(Duration::from_secs(5));
+            drop(guard);
+        });
+        let hold_lane = move || {
+            start_tx.send(()).expect("competing operation starts");
+            held_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("competing operation holds the lane without waiting on the frame");
+        };
+        if post_frame {
+            ui_runtime
+                .scheduler()
+                .add_post_frame_callback(Box::new(move |_| hold_lane()));
+        } else {
+            ui_runtime
+                .scheduler()
+                .schedule_frame_callback(Box::new(move |_| hold_lane()));
+        }
+        let backoff = new_device_recovery_backoff();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            pump_with_device_recovery(&mut ui_runtime, &lane, &backoff, Instant::now())
+        }));
+        let _ = release_tx.send(());
+        let worker_result = worker.join();
+        let outcome = match outcome {
+            Ok(outcome) => outcome.expect("the lane was available at frame admission"),
+            Err(payload) => std::panic::resume_unwind(payload),
+        };
+        worker_result.expect("competing operation returns normally");
+        assert_eq!(outcome.presented, post_frame);
+        assert!(!outcome.just_failed, "contention is not device loss");
+        assert_eq!(outcome.next_attempt_at, None);
+        assert_eq!(backoff.next_attempt_at(), None);
+        assert!(
+            ui_runtime.needs_redraw(),
+            "unfinished frame work remains owed"
+        );
+        lane.lock().with_backend(|backend| {
+            assert_eq!(backend.render_calls, u32::from(post_frame));
+            assert_eq!(backend.recover_attempts, 0);
+        });
+        assert!(
+            pump_with_device_recovery(&mut ui_runtime, &lane, &backoff, Instant::now())
+                .expect("released lane admits the repaint")
+                .presented
+        );
+        lane.lock().with_backend(|backend| {
+            assert_eq!(backend.render_calls, 1 + u32::from(post_frame));
+            assert_eq!(backend.recover_attempts, u32::from(post_frame));
+        });
+    }
+
+    fn mid_frame_lane_contention_retries_the_scene_and_recovery_check() {
+        lane_contention_during_pump(false);
+    }
+
+    fn post_frame_lane_contention_keeps_device_recovery_deliverable() {
+        lane_contention_during_pump(true);
+    }
+
+    fn pre_frame_recovery_repaints_an_already_clean_tree() {
+        let mut ui_runtime = mount_root();
+        let lane = lane_over(ScriptedDeviceBackend::healthy());
+        let backoff = new_device_recovery_backoff();
+        assert!(
+            pump_with_device_recovery(&mut ui_runtime, &lane, &backoff, Instant::now())
+                .expect("initial frame is admitted")
+                .presented
+        );
+        lane.lock().with_backend(|backend| {
+            backend.lost = true;
+            backend.scene_outcome = Some(Ok(PresentDisposition::Presented));
+        });
+        let outcome = pump_with_device_recovery(&mut ui_runtime, &lane, &backoff, Instant::now())
+            .expect("recovery frame is admitted");
+        assert!(outcome.presented, "recovery dirties the clean producer");
+        assert!(!outcome.just_failed);
+        assert_eq!(backoff.next_attempt_at(), None);
+        lane.lock().with_backend(|backend| {
+            assert_eq!(backend.render_calls, 2);
+            assert_eq!(backend.recover_attempts, 1);
+        });
+    }
+
+    fn a_recovered_then_relost_device_is_retried_after_the_same_pump() {
+        let mut ui_runtime = mount_root();
+        let lane = lane_over(ScriptedDeviceBackend {
+            lost: true,
+            lose_on_render: true,
+            next_recover_outcome: Some(Err(EngineError::DeviceLost)),
+            ..ScriptedDeviceBackend::healthy()
+        });
+        let backoff = new_device_recovery_backoff();
+        let now = Instant::now();
+        let outcome = pump_with_device_recovery(&mut ui_runtime, &lane, &backoff, now)
+            .expect("recovery frame is admitted");
+        assert!(outcome.presented);
+        assert!(outcome.just_failed);
+        assert_eq!(
+            outcome.next_attempt_at,
+            Some(now + DeviceRecoveryBackoff::BASE)
+        );
+        assert!(ui_runtime.needs_redraw());
+        lane.lock().with_backend(|backend| {
+            assert_eq!(backend.render_calls, 1, "only one pump produced a scene");
+            assert_eq!(
+                backend.recover_attempts, 2,
+                "recovery brackets that same pump"
+            );
+        });
+    }
+
     #[test]
     fn device_recovery_matrix() {
         crate::table_test::run_table(
             "device_recovery_matrix",
             &[
+                ("a_busy_lane_keeps_the_unstarted_frame_deliverable", a_busy_lane_keeps_the_unstarted_frame_deliverable as fn()),
+                ("mid_frame_lane_contention_retries_the_scene_and_recovery_check", mid_frame_lane_contention_retries_the_scene_and_recovery_check as fn()),
+                ("post_frame_lane_contention_keeps_device_recovery_deliverable", post_frame_lane_contention_keeps_device_recovery_deliverable as fn()),
+                ("pre_frame_recovery_repaints_an_already_clean_tree", pre_frame_recovery_repaints_an_already_clean_tree as fn()),
+                ("a_recovered_then_relost_device_is_retried_after_the_same_pump", a_recovered_then_relost_device_is_retried_after_the_same_pump as fn()),
+                ("frame_callbacks_run_without_the_raster_lane_guard", frame_callbacks_run_without_the_raster_lane_guard as fn()),
                 ("a_pre_frame_loss_with_a_failing_recovery_still_renders_the_frame_and_backs_off", a_pre_frame_loss_with_a_failing_recovery_still_renders_the_frame_and_backs_off as fn()),
                 ("a_mid_frame_loss_with_a_failing_recovery_backs_off", a_mid_frame_loss_with_a_failing_recovery_backs_off as fn()),
                 ("needs_redraw_stays_armed_across_three_consecutive_frames_against_a_permanently_dead_device", needs_redraw_stays_armed_across_three_consecutive_frames_against_a_permanently_dead_device as fn()),

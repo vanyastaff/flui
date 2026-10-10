@@ -91,6 +91,31 @@ pub(super) fn refresh_preferences_with(
     Ok(())
 }
 
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub(super) fn drive_native_text_sizing() {
+    let host = APP_RUNTIME.with(|slot| slot.borrow().installed_host.clone());
+    super::owner_dispatch::with_owner_callback(|_| {
+        let current = APP_RUNTIME.with(|slot| slot.borrow().installed_host.same_host(&host));
+        if current {
+            let mut first = None;
+            super::installed_host::contain(&mut first, || {
+                if let Err(error) =
+                    refresh_preferences_with(flui_platform::OwnerPlatform::preferences)
+                {
+                    tracing::warn!(%error, "mobile system preference refresh failed");
+                }
+            });
+            if APP_RUNTIME.with(|slot| slot.borrow().installed_host.same_host(&host)) {
+                super::installed_host::contain(&mut first, || {
+                    host.native()
+                        .refresh_text_sizing(host.logical(), host.effects(), true)
+                });
+            }
+            super::installed_host::finish(first);
+        }
+    });
+}
+
 /// Builds a runner's UI runtime over the runtime's shared services: `wake`, the
 /// loop's `needs_redraw` flag, the platform clipboard, the app's font
 /// collection and the host's byte storage. Every runner site and secondary

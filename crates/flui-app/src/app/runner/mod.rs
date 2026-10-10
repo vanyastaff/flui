@@ -31,6 +31,7 @@ mod installed_host;
 pub(super) mod ios;
 mod native_bindings;
 mod native_retirement;
+mod native_text_sizing;
 mod window_install;
 
 mod owner_dispatch;

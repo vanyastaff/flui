@@ -40,10 +40,81 @@ bookkeeping closes. The panicking entry is consumed, not retried; the uninvoked
 tail returns to the owner queue with its original IDs.
 The private `scheduler::post_frame_dispatch` module owns this snapshot and tail
 recovery; the frame-close path retains phase and completion bookkeeping.
-The next completed frame sorts those IDs with newer registrations, so surviving
-work precedes work registered reentrantly by the failed callback. Cancellation
-records remain intact on the failed drain. No user callback or captured
+The next eligible batch sorts those IDs with newer registrations, so surviving
+eligible work precedes eligible work registered reentrantly by the failed callback.
+Cancellation records remain intact while their deferred entries exist, including
+across aborted host frames. No user callback or captured
 destructor runs under a queue borrow.
+
+`OwnerFrame::presentation_scope` mints the exact owner-local completion authority
+retained by a presentation. Its weak handle registers against a private retained
+epoch identity, never a wrapping counter or ambient active-presentation lookup.
+Running registrations join the current epoch; idle, suspended, detached-service
+and completing registrations join the next. Only coherent geometry completion
+makes the current epoch eligible. Host scheduler completion alone does not.
+Eligible entries run in registration order without an incomplete presentation
+blocking healthy siblings or unscoped runtime entries; callbacks receive the
+completing host's ordinary `FrameTiming`.
+
+Eligibility is rechecked immediately before removing an active entry: an earlier
+callback can enter and suspend a newer segment after the batch snapshot. Such an
+entry returns to the queue with its original ID and cancellation record, while
+healthy siblings continue. An older completed epoch is also blocked while its
+presentation's current geometry is incomplete.
+
+`PresentationScopeFactory` is the weak assembly capability. It can mint scopes
+only for the original live owner; a scoped widget handle cannot mint siblings.
+Successor registration commits completion demand before requesting a host wake,
+outside queue guards. A failed or cleared wake cannot erase that accepted debt.
+The runtime admits a completion-only segment only for an eligible presentation
+with previously coherent geometry and no pending tree work or retained segment;
+it does not manufacture a widget rebuild or dirty layout. The runtime re-arms
+remaining eligible demand after its host wake clear. Unscoped registration keeps
+its previous host-frame behavior and does not automatically request a frame.
+
+Cancellation withdraws geometry and retains the current epoch for a replacement
+to resume. It cannot silently begin a fresh epoch and discard accepted completion
+debt. Parked geometry uses the same retained scheduler debt; layout readiness and
+document-lock policy belong to the runtime, not this callback queue. Closing a
+scope first revokes weak handles and detaches its queued and active entries, then
+retires captures in ID order using the owner-frame retirement policy. The first
+destructor failure is returned to the enclosing owner's recovery; other scopes'
+entries remain deliverable. As with owner retirement, an aggregate whose captures
+double-panic before control returns cannot be rescued by an outer catch.
+
+Runtime teardown can separate these stages: `withdraw` permanently revokes the
+scope and completion demand without destroying captures, allowing graph, focus,
+text and gesture authority to close first. `close` subsequently detaches and
+retires the still-owned callbacks, even when withdrawal already happened. Neither
+repeated close nor `Drop` repeats retirement. The public case
+`withdrawal_defers_capture_retirement_until_other_authority_is_closed` covers
+saved-handle reentry between these stages, ordered competing retirement failures
+and healthy sibling delivery.
+
+If the runtime close sequence already owns a failure, `close_preserving` uses
+the same withdrawal and detachment but retains only that scope's opaque callback
+ownership without invoking destructors or diagnostics. Callback IDs and epoch
+metadata are ordinary framework values; unrelated queued or active scopes remain
+deliverable. Later scope `Drop` finds no callbacks to retire. This explicit mode
+is required after a catch, where `thread::panicking()` alone no longer records
+the first failure. `preserving_scope_close_retains_captures_and_keeps_siblings_deliverable`
+pins prior owner failure, potentially failing capture destruction and healthy
+sibling recovery through the public close and frame-drive APIs.
+
+`incomplete_presentations_do_not_block_eligible_siblings`,
+`cancelled_geometry_transfers_completion_debt_to_replacement`,
+`eligible_panic_preserves_exact_epochs_and_healthy_recovery` and
+`closing_a_scope_retires_its_active_tail_without_losing_siblings` pin these
+owner operations through scheduled callbacks and actual host frame drives.
+`reentrant_partial_geometry_blocks_an_already_selected_tail` pins the invocation
+boundary recheck; `successor_completion_demand_survives_wake_failure_and_host_clearing`
+pins retained wake debt, clean completion admission and weak factory lifetime.
+`DemandKind::Completion` carries this accepted work through the presentation's
+ordinary `FrameClock` coalescing, visibility and capacity gates independently of
+dirty tree demand. Clearing `Dirty` must not clear a clean completion obligation.
+`completion_demand_coalesces_and_survives_hidden_presentation_gating` exercises
+the actuator edge, retained hidden debt and once-only callback delivery after
+eligible clean admission.
 
 After the owner queue has been snapshotted, but before its entries are sorted
 or invoked, the dispatcher emits one debug event with `total_callbacks`.

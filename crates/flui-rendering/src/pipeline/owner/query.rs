@@ -58,11 +58,14 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             render_tree,
             layout_poison,
             text_measurers,
+            text_sizing,
             ..
         } = self;
         let mut slots = acquire_query_slots(render_tree, id)?;
-        let mut cx =
-            QueryPoisonCx::new(layout_poison, TextLender::new(text.cell(), text_measurers));
+        let mut cx = QueryPoisonCx::new(
+            layout_poison,
+            TextLender::new(text.cell(), text_measurers, text_sizing),
+        );
         let result = intrinsic_query(
             &mut slots,
             &mut cx,
@@ -109,11 +112,14 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             render_tree,
             layout_poison,
             text_measurers,
+            text_sizing,
             ..
         } = self;
         let mut slots = acquire_query_slots(render_tree, id)?;
-        let mut cx =
-            QueryPoisonCx::new(layout_poison, TextLender::new(text.cell(), text_measurers));
+        let mut cx = QueryPoisonCx::new(
+            layout_poison,
+            TextLender::new(text.cell(), text_measurers, text_sizing),
+        );
         let result = dry_layout_query(
             &mut slots,
             &mut cx,
@@ -155,11 +161,14 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             render_tree,
             layout_poison,
             text_measurers,
+            text_sizing,
             ..
         } = self;
         let mut slots = acquire_query_slots(render_tree, id)?;
-        let mut cx =
-            QueryPoisonCx::new(layout_poison, TextLender::new(text.cell(), text_measurers));
+        let mut cx = QueryPoisonCx::new(
+            layout_poison,
+            TextLender::new(text.cell(), text_measurers, text_sizing),
+        );
         let result = dry_baseline_query(
             &mut slots,
             &mut cx,
@@ -500,14 +509,15 @@ fn intrinsic_query_impl(
                         }
                     }
                 };
-            entry.render_object().intrinsic_raw(
-                dimension,
-                extent,
+            let mut query = crate::context::BoxIntrinsicsCtx::new(
                 children.len(),
                 &child_parent_data_refs,
                 &mut child_query,
                 text.source(id),
-            )
+            );
+            entry
+                .render_object()
+                .intrinsic_raw(dimension, extent, &mut query)
         }?;
         entry
             .state_mut()
@@ -608,13 +618,15 @@ fn dry_layout_query_impl(
                     }
                 }
             };
-            entry.render_object().dry_layout_raw(
-                constraints,
+            let mut query = crate::context::BoxDryLayoutCtx::new(
                 children.len(),
                 &child_parent_data_refs,
                 &mut child_query,
                 text.source(id),
-            )
+            );
+            entry
+                .render_object()
+                .dry_layout_raw(constraints, &mut query)
         }?;
         entry
             .state_mut()
@@ -719,14 +731,15 @@ fn dry_baseline_query_impl(
                     }
                 }
             };
-            entry.render_object().dry_baseline_raw(
-                constraints,
-                baseline,
+            let mut query = crate::context::BoxDryBaselineCtx::new(
                 children.len(),
                 &child_parent_data_refs,
                 &mut child_query,
                 text.source(id),
-            )
+            );
+            entry
+                .render_object()
+                .dry_baseline_raw(constraints, baseline, &mut query)
         }?;
         entry
             .state_mut()

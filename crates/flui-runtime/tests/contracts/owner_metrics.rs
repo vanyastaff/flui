@@ -5,6 +5,7 @@ use flui_foundation::{
     PresentationAddress,
     geometry::{EdgeInsets, Size},
 };
+use flui_painting::TextSizing;
 use flui_runtime::owner::{OwnerEffects, OwnerHost, WindowObservation};
 use flui_runtime::sink::{FrameSink, SubmitVerdict};
 use flui_runtime::ui_runtime::UiRuntime;
@@ -13,14 +14,14 @@ use flui_view::prelude::*;
 type ObservedMetrics = Rc<RefCell<Vec<(Size<f64>, f64)>>>;
 
 #[derive(Clone, StatelessView)]
-struct PreferenceReader(Rc<RefCell<Vec<f64>>>);
+struct PreferenceReader(Rc<RefCell<Vec<TextSizing>>>);
 
 impl StatelessView for PreferenceReader {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let scale =
-            flui_widgets::MediaQuery::text_scale_factor_of(ctx).expect("runtime root preference");
-        self.0.borrow_mut().push(scale);
-        flui_widgets::SizedBox::new(20.0 * scale, 20.0)
+        let sizing =
+            flui_widgets::MediaQuery::text_sizing_of(ctx).expect("runtime root preference");
+        self.0.borrow_mut().push(sizing);
+        flui_widgets::Text::new("Preference")
     }
 }
 
@@ -40,7 +41,7 @@ impl StatelessView for ContrastReader {
 struct MetricsReader {
     observed: ObservedMetrics,
     contrast: Rc<RefCell<Vec<bool>>>,
-    text_scale: Rc<RefCell<Vec<f64>>>,
+    text_scale: Rc<RefCell<Vec<TextSizing>>>,
     owner: OwnerHost,
     brightness: Rc<RefCell<Vec<flui_platform_api::Brightness>>>,
     padding: Rc<RefCell<Vec<EdgeInsets>>>,
@@ -71,7 +72,7 @@ impl StatelessView for MetricsReader {
         );
         let media = flui_widgets::MediaQuery::of(ctx);
         self.contrast.borrow_mut().push(media.high_contrast);
-        self.text_scale.borrow_mut().push(media.text_scale_factor);
+        self.text_scale.borrow_mut().push(media.text_sizing.clone());
         self.brightness.borrow_mut().push(media.platform_brightness);
         self.padding.borrow_mut().push(media.padding);
         self.observed
@@ -444,7 +445,10 @@ fn resize_and_surface_restore_reach_the_product_frame() {
         owner.next_wake().is_ok(),
         "deadline snapshot resumes after the frame"
     );
-    assert_eq!(text_scale.borrow().last(), Some(&1.0));
+    assert_eq!(
+        text_scale.borrow().last(),
+        Some(&TextSizing::linear(1.0).expect("valid scale"))
+    );
     assert_eq!(contrast.borrow().last(), Some(&false));
     for preference in [Some(true), Some(false), Some(true), None] {
         let values = flui_platform_api::SystemPreferences::default();
@@ -476,7 +480,7 @@ fn resize_and_surface_restore_reach_the_product_frame() {
         frames.deliver(&effects).expect("preference frame");
         assert_eq!(
             text_scale.borrow().last(),
-            Some(&scale),
+            Some(&TextSizing::linear(scale).expect("valid scale")),
             "preserved subtree observes the host preference"
         );
     }
@@ -533,7 +537,7 @@ fn resize_and_surface_restore_reach_the_product_frame() {
     );
     assert_eq!(
         *initial.borrow(),
-        [2.0],
+        [TextSizing::linear(2.0).expect("valid scale")],
         "first build observes accepted preferences"
     );
     assert_eq!(
@@ -2601,7 +2605,10 @@ fn preference_fanout_survives_a_failing_runtime() {
                 .expect("recipient frame")
                 .deliver(&effects)
                 .expect("initial consumer frame");
-            assert_eq!(*observed.borrow(), [1.0]);
+            assert_eq!(
+                *observed.borrow(),
+                [TextSizing::linear(1.0).expect("valid scale")]
+            );
             wakes.store(0, Ordering::SeqCst);
             recipients.push((effects, observed, wakes));
         }
@@ -2644,7 +2651,7 @@ fn preference_fanout_survives_a_failing_runtime() {
                 .expect("preference recovery frame");
             assert_eq!(
                 observed.borrow().last(),
-                Some(&2.0),
+                Some(&TextSizing::linear(2.0).expect("valid scale")),
                 "a failing sibling must not discard accepted preferences"
             );
         }
@@ -2662,7 +2669,10 @@ fn preference_fanout_survives_a_failing_runtime() {
                 .expect("live recipient")
                 .deliver(effects)
                 .expect("next frame after recovery");
-            assert_eq!(observed.borrow().last(), Some(&1.0));
+            assert_eq!(
+                observed.borrow().last(),
+                Some(&TextSizing::linear(1.0).expect("valid scale"))
+            );
         }
         owner.shutdown(&recipients[0].0);
     }
@@ -2740,7 +2750,10 @@ fn queued_state_bursts_coalesce_between_observing_frames() {
     );
     assert_eq!(
         &text_scale.borrow()[1..],
-        [2.0, 1.0],
+        [
+            TextSizing::linear(2.0).expect("valid scale"),
+            TextSizing::linear(1.0).expect("valid scale")
+        ],
         "each frame observes its admitted preference snapshot, even when the host has already accepted a newer one"
     );
     owner.shutdown(&effects);
@@ -2883,7 +2896,7 @@ fn resize_failure_preserves_other_batched_window_state() {
         frame.deliver(&effects).expect("recovery scene");
         assert_eq!(
             text_scale.borrow().last(),
-            Some(&2.0),
+            Some(&TextSizing::linear(2.0).expect("valid scale")),
             "accepted preferences remain deliverable after preceding window-state and completion failures"
         );
         assert_eq!(

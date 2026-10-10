@@ -74,7 +74,7 @@ use crate::{
     duration::{FrameDuration, Milliseconds},
     frame::{
         AppLifecycleState, FrameId, FramePhase, FrameTiming, OneShotFrameCallback,
-        PostFrameCallback, RecurringFrameCallback, SchedulerPhase,
+        RecurringFrameCallback, SchedulerPhase,
     },
     id::{CallbackId, IdGenerator},
     task::{Priority, TaskQueue},
@@ -1473,7 +1473,9 @@ impl UpdateScheduler {
     ///
     /// Each callback runs **exactly once** — the queue is drained, not iterated.
     ///
-    /// Drains `owner`'s queue in `CallbackId` registration order. Registrations
+    /// Drains eligible entries in `CallbackId` registration order. An incomplete
+    /// presentation does not block completed siblings or runtime callbacks.
+    /// Registrations
     /// through [`crate::PostFrameHandle::schedule`] share this same queue. An `owner`
     /// made for another scheduler is not drained (and the mismatch is logged).
     ///
@@ -1644,7 +1646,7 @@ impl UpdateScheduler {
             .scheduler_phase
             .store(SchedulerPhase::Idle as u8, Ordering::Release);
         *self.inner.frame.current_vsync_time.borrow_mut() = None;
-        self.inner.callbacks.cancelled.borrow_mut().clear();
+        self.retain_pending_post_frame_cancellations();
 
         if let Some(timing) = timing {
             self.notify_frame_completion(FrameOutcome::Aborted { timing }, preserve_failure);
@@ -2177,16 +2179,6 @@ impl UpdateScheduler {
             .persistent
             .borrow_mut()
             .push(CancellablePersistentCallback { id, callback });
-    }
-
-    /// Add a post-frame callback.
-    ///
-    /// Fires once after the current/next frame completes.
-    ///
-    /// Post-frame callbacks are called exactly once and cannot be
-    /// cancelled before they fire. Returns `()` — no cancellation handle.
-    pub fn add_post_frame_callback(&self, callback: PostFrameCallback) {
-        let _ = crate::PostFrameHandle::new(self).schedule(callback);
     }
 
     // =========================================================================

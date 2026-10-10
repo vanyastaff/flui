@@ -145,11 +145,11 @@ impl<'a> BoxDryBaselineCtx<'a> {
     /// The text context to measure with: the UI runtime's, lent through the
     /// pipeline, for as long as the returned [`TextCx`] lives.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// If the UI runtime's context is already lent, which only a measurement that
-    /// re-enters another could cause.
-    pub fn text(&mut self) -> TextCx<'_> {
+    /// Returns [`crate::error::RenderError::TextContextBusy`] when an
+    /// independently held loan already uses the runtime's shared resource.
+    pub fn text(&mut self) -> crate::error::RenderResult<TextCx<'_>> {
         lend_text(self.text)
     }
 
@@ -321,11 +321,11 @@ impl<'a> BoxIntrinsicsCtx<'a> {
     /// The text context to measure with: the UI runtime's, lent through the
     /// pipeline, for as long as the returned [`TextCx`] lives.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// If the UI runtime's context is already lent, which only a measurement that
-    /// re-enters another could cause.
-    pub fn text(&mut self) -> TextCx<'_> {
+    /// Returns [`crate::error::RenderError::TextContextBusy`] when an
+    /// independently held loan already uses the runtime's shared resource.
+    pub fn text(&mut self) -> crate::error::RenderResult<TextCx<'_>> {
         lend_text(self.text)
     }
 
@@ -475,11 +475,11 @@ impl<'a> BoxDryLayoutCtx<'a> {
     /// The text context to measure with: the UI runtime's, lent through the
     /// pipeline, for as long as the returned [`TextCx`] lives.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// If the UI runtime's context is already lent, which only a measurement that
-    /// re-enters another could cause.
-    pub fn text(&mut self) -> TextCx<'_> {
+    /// Returns [`crate::error::RenderError::TextContextBusy`] when an
+    /// independently held loan already uses the runtime's shared resource.
+    pub fn text(&mut self) -> crate::error::RenderResult<TextCx<'_>> {
         lend_text(self.text)
     }
 

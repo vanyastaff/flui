@@ -26,6 +26,7 @@
 //! whatever `common_fallback()` happens to name first. Falling through is
 //! what makes the rest of the chain do its job.
 
+use flui_sdk::foundation::{TextScaleProfile, TextSizingIntent};
 use flui_sdk::painting::Color;
 use flui_sdk::painting::{FontWeight, TextStyle};
 use flui_sdk::view::prelude::BuildContext;
@@ -35,6 +36,7 @@ use crate::colors::{CupertinoColors, CupertinoDynamicColor};
 /// The default general-content text style.
 fn default_text_style() -> TextStyle {
     TextStyle {
+        sizing: Some(TextSizingIntent::Profile(TextScaleProfile::Body)),
         font_family: Some("CupertinoSystemText".to_string()),
         font_family_fallback: system_text_fallback(),
         font_size: Some(17.0),
@@ -47,6 +49,7 @@ fn default_text_style() -> TextStyle {
 /// The default style of interactive text without a background.
 fn default_action_text_style() -> TextStyle {
     TextStyle {
+        sizing: Some(TextSizingIntent::Profile(TextScaleProfile::Body)),
         font_family: Some("CupertinoSystemText".to_string()),
         font_family_fallback: system_text_fallback(),
         font_size: Some(17.0),
@@ -59,6 +62,7 @@ fn default_action_text_style() -> TextStyle {
 /// The default style of interactive text in a small button.
 fn default_action_small_text_style() -> TextStyle {
     TextStyle {
+        sizing: Some(TextSizingIntent::Profile(TextScaleProfile::Callout)),
         font_family: Some("CupertinoSystemText".to_string()),
         font_family_fallback: system_text_fallback(),
         font_size: Some(15.0),
@@ -71,6 +75,7 @@ fn default_action_small_text_style() -> TextStyle {
 /// The default style of tab labels.
 fn default_tab_label_text_style() -> TextStyle {
     TextStyle {
+        sizing: Some(TextSizingIntent::Profile(TextScaleProfile::Caption2)),
         font_family: Some("CupertinoSystemText".to_string()),
         font_family_fallback: system_text_fallback(),
         font_size: Some(10.0),
@@ -84,6 +89,7 @@ fn default_tab_label_text_style() -> TextStyle {
 /// The source for [`CupertinoTextThemeData::nav_title_text_style`].
 fn default_middle_title_text_style() -> TextStyle {
     TextStyle {
+        sizing: Some(TextSizingIntent::Profile(TextScaleProfile::Headline)),
         font_family: Some("CupertinoSystemText".to_string()),
         font_family_fallback: system_text_fallback(),
         font_size: Some(17.0),
@@ -97,6 +103,7 @@ fn default_middle_title_text_style() -> TextStyle {
 /// The default style of large titles.
 fn default_large_title_text_style() -> TextStyle {
     TextStyle {
+        sizing: Some(TextSizingIntent::Profile(TextScaleProfile::LargeTitle)),
         font_family: Some("CupertinoSystemDisplay".to_string()),
         font_family_fallback: system_display_fallback(),
         font_size: Some(34.0),
@@ -110,6 +117,7 @@ fn default_large_title_text_style() -> TextStyle {
 /// The default style of pickers.
 fn default_picker_text_style() -> TextStyle {
     TextStyle {
+        sizing: Some(TextSizingIntent::Profile(TextScaleProfile::Title2)),
         font_family: Some("CupertinoSystemDisplay".to_string()),
         font_family_fallback: system_display_fallback(),
         font_size: Some(21.0),
@@ -123,6 +131,7 @@ fn default_picker_text_style() -> TextStyle {
 /// The default style of date/time pickers.
 fn default_date_time_picker_text_style() -> TextStyle {
     TextStyle {
+        sizing: Some(TextSizingIntent::Profile(TextScaleProfile::Title2)),
         font_family: Some("CupertinoSystemDisplay".to_string()),
         font_family_fallback: system_display_fallback(),
         font_size: Some(21.0),

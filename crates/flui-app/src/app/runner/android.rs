@@ -172,8 +172,8 @@ where
                 return Err(anyhow::Error::from(error).context("Failed to create Android window"));
             }
         };
-        let presentation_window =
-            super::presentation_window(host).with_pointer_resampling(config.pointer_resampling);
+        let presentation_window = super::presentation_window(Arc::clone(&host))
+            .with_pointer_resampling(config.pointer_resampling);
         let window = Arc::clone(presentation_window.window());
 
         // 2. Create GPU renderer (Vulkan backend on Android). `Renderer::new`
@@ -215,6 +215,19 @@ where
         ui_runtime.set_frame_failure_detail(config.frame_failure_detail);
 
         let logical = window.logical_size();
+        let owner = APP_RUNTIME
+            .with(|slot| slot.borrow().owner_platform.clone())
+            .expect("BUG: Android owner installed before bootstrap");
+        let native_sizing = super::native_text_sizing::NativeTextSizing::prepare(
+            flui_foundation::PresentationAddress {
+                ui_runtime_id: ui_runtime.id(),
+                presentation_id: ui_runtime.presentation_id(),
+            },
+            host,
+            owner,
+        );
+        ui_runtime
+            .install_captured_text_sizing_for(ui_runtime.presentation_id(), native_sizing.source());
         let attach = ui_runtime.enter(|ui_runtime| {
             ui_runtime.attach_root_widget_with_size(
                 &root,
@@ -227,6 +240,7 @@ where
             return Err(anyhow::anyhow!(e).context("Root widget attach failed"));
         }
         let mut installation = prepare_platform_ui_runtime(ui_runtime, Arc::clone(&window));
+        installation.text_sizing(native_sizing);
         let owner_dispatch = installation.dispatcher();
 
         // 3b. Start config-declared application services (issue #558) —
@@ -459,6 +473,8 @@ where
     let _owner_host_clear_guard = OwnerHostClearGuard::arm();
     let result = platform.run(Box::new(move |owner| {
         install_owner_platform(owner)?;
+        with_owner_platform(|owner| owner.on_wake(Box::new(super::host::drive_native_text_sizing)))
+            .expect("BUG: Android owner was just installed")?;
         APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_storage(&config));
         // `?` converts `bootstrap_android`'s `anyhow::Error` into the
         // callback's opaque `BootstrapError` (anyhow's own `From` impl),
@@ -644,10 +660,9 @@ impl AndroidFrameDriver {
         // consults the hook every iteration and forces a
         // dispatch once the deadline is due (`flui-platform`'s
         // `platforms/android/mod.rs`).
-        let Some(mut lane) = lane_frame.try_lock() else {
-            tracing::error!("frame skipped: raster lane already held by an outer frame dispatch");
-            return;
-        };
-        let _ = pump_with_device_recovery(ui_runtime, &mut *lane, device_recovery_backoff, now);
+        if pump_with_device_recovery(ui_runtime, lane_frame, device_recovery_backoff, now).is_none()
+        {
+            tracing::error!("frame skipped: raster lane busy at frame admission");
+        }
     }
 }

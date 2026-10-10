@@ -1,5 +1,8 @@
 # ADR-0092: Text shapes per UI runtime over Parley and crosses the display list as neutral shaped runs
 
+- **Superseded-by:** [ADR-0182](ADR-0182-explicit-numeric-text-sizing.md) for
+  raw query capability boundaries and fallible text-loan acquisition (§10, 3a).
+  Runtime ownership of reusable shaping resources remains in force.
 - **Status:** Accepted. Every gate (§8) is met: gate 1 by a prototype on 2026-09-26, gates 2, 6
   and 7 on 2026-09-30 (see Context). Every step of §10 landed. Two things this record leaves to
   others: the bidi base direction (Parley 0.11.1 takes it from the first strong character;
@@ -547,9 +550,20 @@ that wires what it adds.
      binding and harness that drives them, while `pump` and `render_frame` take `&self`. The
      UI runtime and the pipeline owners are already `!Send`; a typed render object sees only the
      scoped borrow, taken from `&mut` context, so it cannot hold two loans or lay out a child
-     while it holds one. The raw `RenderObject` methods and the erased layout context carry the
-     context as `TextSource`, an opaque token only flui-rendering can borrow, so a direct
-     `RenderObject` implementation cannot hold a loan across a child query either.
+     while that loan remains in use through the same typed context.
+   - **Raw capability and acquisition supersession:**
+     [ADR-0182](ADR-0182-explicit-numeric-text-sizing.md) replaces the independent
+     source/child-query channels with complete mutable intrinsic, dry-layout and
+     dry-baseline contexts. Erased layout lends through `text(&mut self)` without
+     source extraction. Both raw and typed hooks therefore borrow one capability
+     for text and recursive child queries. Independently captured handles or
+     driver sources can still alias the runtime resource: `ctx.text()?` refuses
+     an overlap with `RenderError::TextContextBusy`, without poisoning, native
+     preparation debt or automatic retries. The earlier claim that source
+     opacity alone prevented raw overlapping loans was incorrect. Runtime-shared
+     resource ownership is preserved. Public query refusal/recovery is pinned by
+     `shared_text_alias_refuses_raw_queries_and_recovers`; trybuild rejects live
+     loans across same-context query and erased-layout child operations.
    - (3a) Parley measures behind `parley-layout`, not `parley`: the workspace test scope turns
      `parley` on for CI's `test` job, and if `parley` switched measurement, CI
      would measure every text-size test with Parley while the build that ships measures with
