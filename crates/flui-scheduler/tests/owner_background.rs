@@ -290,6 +290,36 @@ fn recovery_keeps_first_failure_through_nested_refusal_and_hook_retirement() {
     }
 }
 
+fn healthy_wake_retirement_observes_newly_caught_failure() {
+    let scheduler = UpdateScheduler::new();
+    let owner = Rc::new(OwnerFrame::new(&scheduler).expect("fresh owner"));
+    RECOVERY_OWNER.with(|slot| {
+        *slot.borrow_mut() = Some((Rc::clone(&owner), scheduler.downgrade()));
+    });
+    let _scope = OwnerScope;
+    let hook_drops = Arc::new(AtomicUsize::new(0));
+    let hook_capture = HookCapture(Arc::clone(&hook_drops));
+    let rejected_drops = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&rejected_drops);
+    scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
+        let _ = &hook_capture;
+        let (owner, weak) =
+            RECOVERY_OWNER.with(|slot| slot.borrow().as_ref().expect("owner scope").clone());
+        let capture = HostileCapture(Arc::clone(&observed));
+        let failure = catch_unwind(AssertUnwindSafe(|| {
+            owner.pump_background(move || { let _ = &capture; })
+        })).expect_err("nested refused envelope fails");
+        assert_eq!(flui_foundation::panic::payload_text(failure.as_ref()),
+            Some("rejected recovery capture was destroyed"));
+        weak.upgrade().expect("scheduler live").set_on_frame_scheduled(None);
+    })));
+    assert_eq!(owner.pump_background(|| scheduler.request_frame()), Ok(0));
+    assert_eq!(rejected_drops.load(Ordering::SeqCst), 1);
+    assert_eq!(hook_drops.load(Ordering::SeqCst), 0,
+        "wake begun healthy retains its envelope after newly caught failure");
+    assert_eq!(owner.pump_background(|| {}), Ok(0));
+}
+
 #[test]
 fn owner_background_turn_contract() {
     crate::run_table(
@@ -310,6 +340,10 @@ fn owner_background_turn_contract() {
             (
                 "recovery_failure_custody",
                 recovery_keeps_first_failure_through_nested_refusal_and_hook_retirement,
+            ),
+            (
+                "new_failure_during_healthy_wake",
+                healthy_wake_retirement_observes_newly_caught_failure,
             ),
         ],
     );
