@@ -38,6 +38,9 @@ mod owner_execution;
 #[path = "owner_background.rs"]
 mod owner_background;
 
+#[path = "owner_retirement_custody.rs"]
+mod owner_retirement_custody;
+
 /// Runs every case even after one fails, then panics listing the failing case names.
 pub(crate) fn run_table(table: &str, cases: &[(&str, fn())]) {
     let failed: Vec<&str> = cases
