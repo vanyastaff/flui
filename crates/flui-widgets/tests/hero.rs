@@ -120,12 +120,31 @@ pub(crate) fn replacing_a_hero_scope_moves_the_existing_hero() {
 }
 
 pub(crate) fn reparenting_a_hero_moves_registration_without_recreating_it() {
+    reparent_hero(true, false, false);
+}
+
+pub(crate) fn reparenting_an_unscoped_hero_adopts_its_first_route() {
+    reparent_hero(false, false, false);
+}
+
+pub(crate) fn reparenting_refreshes_a_build_time_miss_but_prunes_an_unread_one() {
+    for stop_reading in [false, true] {
+        reparent_hero(false, true, stop_reading);
+    }
+}
+
+fn reparent_hero(initially_scoped: bool, read_scope: bool, stop_reading: bool) {
     #[derive(Clone)]
     struct KeyedHero {
         key: flui_view::GlobalKey<KeyedHeroState>,
         inits: std::rc::Rc<std::cell::Cell<usize>>,
+        changes: std::rc::Rc<std::cell::Cell<usize>>,
+        read_scope: bool,
     }
-    struct KeyedHeroState(std::rc::Rc<std::cell::Cell<usize>>);
+    struct KeyedHeroState {
+        inits: std::rc::Rc<std::cell::Cell<usize>>,
+        changes: std::rc::Rc<std::cell::Cell<usize>>,
+    }
     impl View for KeyedHero {
         fn create_element(&self) -> flui_view::element::ElementKind {
             flui_view::element::ElementKind::stateful(self)
@@ -137,25 +156,38 @@ pub(crate) fn reparenting_a_hero_moves_registration_without_recreating_it() {
     impl StatefulView for KeyedHero {
         type State = KeyedHeroState;
         fn create_state(&self) -> Self::State {
-            KeyedHeroState(std::rc::Rc::clone(&self.inits))
+            KeyedHeroState {
+                inits: std::rc::Rc::clone(&self.inits),
+                changes: std::rc::Rc::clone(&self.changes),
+            }
         }
     }
     impl ViewState<KeyedHero> for KeyedHeroState {
         fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
-            self.0.set(self.0.get() + 1);
+            self.inits.set(self.inits.get() + 1);
         }
-        fn build(&self, _view: &KeyedHero, _ctx: &dyn BuildContext) -> impl IntoView {
-            Hero::new(ValueKey::new("shared"), SizedBox::new(30.0, 20.0))
+        fn did_change_dependencies(&mut self, _ctx: &dyn LifecycleContext) {
+            self.changes.set(self.changes.get() + 1);
+        }
+        fn build(&self, view: &KeyedHero, ctx: &dyn BuildContext) -> impl IntoView {
+            let scoped = view.read_scope && ctx.depend_on::<HeroScope, _>(|_| ()).is_some();
+            Hero::new(
+                ValueKey::new("shared"),
+                SizedBox::new(if scoped { 45.0 } else { 30.0 }, 20.0),
+            )
         }
     }
     let left = HeroRegistry::new();
     let right = HeroRegistry::new();
     let key = flui_view::GlobalKey::new();
     let inits = std::rc::Rc::new(std::cell::Cell::new(0));
-    let tree = |moved| {
+    let changes = std::rc::Rc::new(std::cell::Cell::new(0));
+    let tree = |moved, read_scope| {
         let child = KeyedHero {
             key: key.clone(),
             inits: std::rc::Rc::clone(&inits),
+            changes: std::rc::Rc::clone(&changes),
+            read_scope,
         }
         .boxed();
         let empty = SizedBox::shrink().boxed();
@@ -164,16 +196,26 @@ pub(crate) fn reparenting_a_hero_moves_registration_without_recreating_it() {
         } else {
             (child, empty)
         };
-        flui_widgets::Row::new((
-            HeroScope::new(left.clone(), left_child),
-            HeroScope::new(right.clone(), right_child),
-        ))
+        let left_child = if initially_scoped {
+            HeroScope::new(left.clone(), left_child).boxed()
+        } else {
+            Center::new().child(left_child).boxed()
+        };
+        flui_widgets::Row::new((left_child, HeroScope::new(right.clone(), right_child)))
     };
-    let mut laid = crate::common::lay_out(tree(false), crate::common::tight(400.0, 100.0));
-    let original = left
-        .get(&tag("shared"))
-        .expect("the left scope registered the Hero");
-    laid.pump_widget(tree(true));
+    let mut laid =
+        crate::common::lay_out(tree(false, read_scope), crate::common::tight(400.0, 100.0));
+    let original = left.get(&tag("shared"));
+    assert_eq!(original.is_some(), initially_scoped);
+    if stop_reading {
+        laid.pump_widget(tree(false, false));
+    }
+    laid.pump_widget(tree(true, read_scope && !stop_reading));
+    assert_eq!(
+        changes.get(),
+        usize::from(read_scope && !stop_reading),
+        "a missing build dependency survives reparenting only while it is still read"
+    );
     assert!(
         left.get(&tag("shared")).is_none(),
         "the departed scope cannot invite the Hero"
@@ -181,13 +223,26 @@ pub(crate) fn reparenting_a_hero_moves_registration_without_recreating_it() {
     let moved = right
         .get(&tag("shared"))
         .expect("the right scope registered the reparented Hero");
-    assert!(
-        moved.is_same(&original),
-        "GlobalKey retakes the existing Hero subtree"
-    );
-    moved
+    if let Some(original) = original {
+        assert!(
+            moved.is_same(&original),
+            "GlobalKey retakes the existing Hero subtree"
+        );
+    }
+    let size = moved
         .start_flight(true)
         .expect("the moved Hero remains measurable");
+    assert_eq!(
+        size,
+        flui_foundation::geometry::Size::new(
+            if read_scope && !stop_reading {
+                45.0
+            } else {
+                30.0
+            },
+            20.0
+        )
+    );
     laid.pump();
     assert_eq!(
         inits.get(),

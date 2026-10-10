@@ -1314,6 +1314,10 @@ impl BuildOwner {
         self.inherited_dependencies.register(dependent, provider);
     }
 
+    pub(crate) fn register_inherited_miss(&mut self, dependent: ElementId) {
+        self.inherited_dependencies.register_miss(dependent, true);
+    }
+
     /// Build an [`ExternalBuildScheduler`] over this owner's shared inbox and
     /// frame-request hook.
     ///
@@ -1937,8 +1941,16 @@ impl BuildOwner {
                     accessor.reset_dependent_mask(crate::context::CrateToken::new(), id);
                 }
             }
+            if !build_recovered.get() {
+                self.inherited_dependencies.reset_build_misses(id);
+            }
             for record in dep_sink.into_inner() {
-                let Some(node) = tree.get_mut(record.provider) else {
+                let Some(provider) = record.provider else {
+                    self.inherited_dependencies
+                        .register_miss(record.dependent, record.lifecycle);
+                    continue;
+                };
+                let Some(node) = tree.get_mut(provider) else {
                     continue;
                 };
                 let Some(accessor) = node.element_mut().as_inherited_mut() else {
@@ -1960,7 +1972,7 @@ impl BuildOwner {
                     );
                 }
                 self.inherited_dependencies
-                    .register(record.dependent, record.provider);
+                    .register(record.dependent, provider);
             }
             for provider in previous_providers {
                 let pruned = tree

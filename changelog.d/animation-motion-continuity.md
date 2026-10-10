@@ -41,6 +41,9 @@
 
 ### Changed
 
+- Missing inherited dependencies refresh on subtree reactivation. Successful
+  builds prune unread misses; recovered build failures preserve previous reads.
+
 - Mounted Hero registration follows tag updates, HeroScope replacement and
   GlobalKey reparenting while preserving mounted state and first-wins matching.
 

@@ -70,6 +70,8 @@ checks first-wins matching and harmless rejected cleanup.
 `replacing_a_hero_scope_moves_the_existing_hero` and
 `reparenting_a_hero_moves_registration_without_recreating_it` verify scope adoption
 and preserved mounted state through the existing test-access registry seam.
+`reparenting_an_unscoped_hero_adopts_its_first_route` also starts with no scope:
+the inherited lookup miss remains an ancestry dependency until reactivation.
 
 ## Hero rect mappings execute outside flight guards
 

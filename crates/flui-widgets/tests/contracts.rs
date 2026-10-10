@@ -526,6 +526,8 @@ fn hero_flights() {
             ("hero::retagging_to_a_duplicate_preserves_the_existing_winner", crate::hero::retagging_to_a_duplicate_preserves_the_existing_winner as fn()),
             ("hero::replacing_a_hero_scope_moves_the_existing_hero", crate::hero::replacing_a_hero_scope_moves_the_existing_hero),
             ("hero::reparenting_a_hero_moves_registration_without_recreating_it", crate::hero::reparenting_a_hero_moves_registration_without_recreating_it),
+            ("hero::reparenting_an_unscoped_hero_adopts_its_first_route", crate::hero::reparenting_an_unscoped_hero_adopts_its_first_route),
+            ("hero::reparenting_refreshes_a_build_time_miss_but_prunes_an_unread_one", crate::hero::reparenting_refreshes_a_build_time_miss_but_prunes_an_unread_one),
             ("hero::a_retained_hero_handle_does_not_keep_its_presentation_alive", crate::hero::a_retained_hero_handle_does_not_keep_its_presentation_alive as fn()),
             ("hero::unmount_releases_hero_configuration_despite_a_retained_handle", crate::hero::unmount_releases_hero_configuration_despite_a_retained_handle),
             ("hero::a_hero_child_keeps_its_state_across_a_flight_without_a_global_key", crate::hero::a_hero_child_keeps_its_state_across_a_flight_without_a_global_key as fn()),
