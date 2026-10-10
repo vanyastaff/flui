@@ -13,8 +13,8 @@
 //! - `should_rebuild` gates delegate swaps;
 //! - all four pinned × floating variants mount and build through the seam.
 //!
-//! Stretch/snap configurations and `SliverAppBar` scaffolding are deferred by
-//! this widget and not covered here.
+//! Floating snap tests exercise gesture release, registry migration and
+//! withdrawal during an active run through the mounted widget.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -175,6 +175,16 @@ impl SliverPersistentHeaderDelegate for SnappingDelegate {
 /// (`shrink_offset == 0`) even though the scroll offset itself stays deep.
 /// Snapping is reveal animation, not scroll-to-top.
 pub(crate) fn a_floating_snap_header_snaps_fully_open_when_a_startward_scroll_ends() {
+    exercise_floating_snap(false, false);
+}
+
+pub(crate) fn an_active_floating_snap_migrates_and_unmounts() {
+    for pinned in [false, true] {
+        exercise_floating_snap(pinned, true);
+    }
+}
+
+fn exercise_floating_snap(pinned: bool, migrate_and_unmount: bool) {
     use std::time::Duration;
 
     use flui_animation::Vsync;
@@ -192,6 +202,7 @@ pub(crate) fn a_floating_snap_header_snaps_fully_open_when_a_startward_scroll_en
                 SliverPersistentHeader::new(SnappingDelegate {
                     builds: Rc::clone(&builds_for_delegate),
                 })
+                .pinned(pinned)
                 .floating(true),
                 trailing_content(),
             ))
@@ -200,10 +211,10 @@ pub(crate) fn a_floating_snap_header_snaps_fully_open_when_a_startward_scroll_en
         }));
 
     let mut laid = lay_out(
-        VsyncScope::new(vsync.clone(), scrollable),
+        VsyncScope::new(vsync.clone(), scrollable.clone()),
         tight(300.0, 300.0),
     );
-    laid.adopt_vsync(vsync);
+    laid.adopt_vsync(vsync.clone());
 
     // Scroll deep: the floating header scrolls away entirely.
     controller.jump_to(200.0);
@@ -251,6 +262,50 @@ pub(crate) fn a_floating_snap_header_snaps_fully_open_when_a_startward_scroll_en
         !controller.position().is_scrolling(),
         "premise: the stationary release ends scrolling"
     );
+
+    if migrate_and_unmount {
+        laid.pump_for(Duration::from_millis(16));
+        laid.pump_for(Duration::from_millis(16));
+        let before = builds.borrow().last().expect("header built").0;
+        assert!(
+            before > 0.0 && before < 120.0,
+            "snap is in flight: {before}"
+        );
+        assert!(vsync.has_running(), "a real snap owns frame delivery");
+
+        let next = Vsync::new();
+        laid.pump_widget(VsyncScope::new(next.clone(), scrollable));
+        assert!(vsync.is_empty(), "migration withdraws the preceding seats");
+        laid.adopt_vsync(next.clone());
+        laid.pump_for(Duration::ZERO);
+        let migrated = builds.borrow().last().expect("header built").0;
+        assert!(
+            (migrated - before).abs() < 1e-8,
+            "migration preserves the displayed header: {before} -> {migrated}"
+        );
+        laid.pump_for(Duration::from_millis(16));
+        let advanced = builds.borrow().last().expect("header built").0;
+        assert!(
+            advanced < migrated && advanced > 0.0,
+            "new registry advances the same unfinished snap: {migrated} -> {advanced}"
+        );
+        assert!(next.has_running());
+
+        laid.pump_widget(SizedBox::shrink());
+        assert!(
+            next.is_empty(),
+            "unmount withdraws the active header and scroll owner"
+        );
+        let retired_builds = builds.borrow().len();
+        laid.pump_for(Duration::from_secs(1));
+        assert_eq!(
+            builds.borrow().len(),
+            retired_builds,
+            "retired snap cannot rebuild its delegate"
+        );
+        assert!(!next.has_running());
+        return;
+    }
 
     // Drive the snap after the idle release until the header is fully
     // revealed. Bounded so a never-snapping regression fails loudly.

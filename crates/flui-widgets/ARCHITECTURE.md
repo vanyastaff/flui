@@ -1,5 +1,22 @@
 # flui-widgets architecture
 
+## Floating header snap ownership
+
+Floating headers share scroll-edge state between their activity listener and
+build through an owner-local cell. The listener commits the latest command
+before requesting a rebuild; neither a borrow nor a lock spans that request.
+Command epochs refuse permanently at exhaustion and retain the last admitted
+command, verified by `exhausted_snap_epochs_never_reissue_a_command` with a
+private counter seed.
+
+The host owns its snap controller and rebinds it through lifecycle dependency
+changes. `an_active_floating_snap_migrates_and_unmounts` exercises floating and
+pinned-floating headers through real pointer release, checks continuous reveal
+across a registry replacement, advances the unfinished snap from the new registry,
+and removes the subtree while it is active. Removal withdraws frame registration
+and prevents later delegate builds. The core controller ownership tests separately
+pin cancellation of the run future.
+
 ## Hero rect mappings execute outside flight guards
 
 Hero snapshots its owner-local rect factory before invoking user code. The

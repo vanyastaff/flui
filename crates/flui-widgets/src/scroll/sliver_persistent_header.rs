@@ -1,8 +1,8 @@
 //! [`SliverPersistentHeader`] — a sliver whose child is rebuilt as the header
 //! collapses, pinnable and floatable.
 
+use std::cell::Cell;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use flui_animation::{AnimationController, DrivenController};
 use flui_foundation::ListenerId;
@@ -35,15 +35,14 @@ use crate::scroll::scroll_position_scope::ScrollPositionScope;
 /// render objects, so flipping a flag replaces the element rather than
 /// mutating it.
 ///
-/// # Stretch is on the delegate; snap is deferred, deliberately
+/// # Stretch and snap are configured by the delegate
 ///
 /// Over-scroll stretch is configured per delegate —
 /// [`SliverPersistentHeaderDelegate::stretch_configuration`] — so this widget
 /// carries no stretch knob of its own.
-/// Snap (`FloatingHeaderSnapConfiguration`) remains unreachable: starting a
-/// snap needs a scroll-end trigger from the enclosing scrollable, which is
-/// the `SliverAppBar` integration seam. Until that lands, floating headers
-/// scroll freely and never snap.
+/// Floating headers use the enclosing [`Scrollable`](super::Scrollable)'s
+/// activity transitions to start and interrupt the delegate's snap animation.
+/// Outside that scope the header still floats, without gesture-driven snap.
 #[derive(Clone, StatelessView)]
 pub struct SliverPersistentHeader {
     delegate: Rc<dyn SliverPersistentHeaderDelegate>, // carries flui-view's SharedHeaderDelegate erasure (justified at its declaration) through the facade
@@ -154,10 +153,9 @@ impl std::fmt::Debug for FloatingHeaderHost {
     }
 }
 
-/// The listener↔build shared slot. Every touch is owner-thread today (see
-/// the host's own doc), but the activity-listener type is structurally
-/// `Send + Sync`, so the slot carries a real lock rather than a promise.
-#[derive(Default)]
+/// Owner-local scroll edges and their latest command. The listener commits
+/// this copy before scheduling a rebuild, so a reentrant wake sees the command.
+#[derive(Clone, Copy, Default)]
 struct SnapTriggerSlot {
     /// The last non-idle direction observed while scrolling — what the
     /// scroll that just ended was doing. Captured here because ending the
@@ -178,7 +176,7 @@ struct FloatingHeaderHostState {
     snap_controller: Option<DrivenController>,
     position: Option<ScrollPosition>,
     activity_listener: Option<ListenerId>,
-    slot: Arc<parking_lot::Mutex<SnapTriggerSlot>>,
+    slot: Rc<Cell<SnapTriggerSlot>>,
 }
 
 impl std::fmt::Debug for FloatingHeaderHostState {
@@ -198,7 +196,7 @@ impl StatefulView for FloatingHeaderHost {
             snap_controller: None,
             position: None,
             activity_listener: None,
-            slot: Arc::new(parking_lot::Mutex::new(SnapTriggerSlot::default())),
+            slot: Rc::new(Cell::new(SnapTriggerSlot::default())),
         }
     }
 }
@@ -216,13 +214,18 @@ impl FloatingHeaderHostState {
             return;
         };
         let rebuild: RebuildHandle = ctx.rebuild_handle();
-        let listener = OwnerThreadSnapListener {
-            slot: Arc::clone(&self.slot),
-            position: position.clone(),
-            rebuild,
-        };
-        let id = position.add_activity_listener(std::rc::Rc::new(move || {
-            listener.on_activity();
+        let slot = Rc::clone(&self.slot);
+        let observed_position = position.clone();
+        let id = position.add_activity_listener(Rc::new(move || {
+            let mut trigger = slot.get();
+            let changed = trigger.on_activity(
+                observed_position.is_scrolling(),
+                observed_position.user_scroll_direction(),
+            );
+            slot.set(trigger);
+            if changed {
+                rebuild.schedule(flui_view::RebuildReason::AnimationTick);
+            }
         }));
         self.position = Some(position);
         self.activity_listener = Some(id);
@@ -271,7 +274,7 @@ impl ViewState<FloatingHeaderHost> for FloatingHeaderHostState {
     }
 
     fn build(&self, view: &FloatingHeaderHost, _ctx: &dyn BuildContext) -> impl IntoView {
-        let command = self.slot.lock().pending;
+        let command = self.slot.get().pending;
         let controller = self
             .snap_controller
             .as_ref()
@@ -297,54 +300,60 @@ impl ViewState<FloatingHeaderHost> for FloatingHeaderHostState {
     }
 }
 
-/// The activity listener's owner-thread half, named so the safety argument
-/// above has an anchor.
-struct OwnerThreadSnapListener {
-    slot: Arc<parking_lot::Mutex<SnapTriggerSlot>>,
-    position: ScrollPosition,
-    rebuild: RebuildHandle,
-}
-
-impl OwnerThreadSnapListener {
-    fn on_activity(&self) {
-        let is_scrolling = self.position.is_scrolling();
-        let direction = self.position.user_scroll_direction();
-        let mut slot = self.slot.lock();
-        let was_scrolling = std::mem::replace(&mut slot.was_scrolling, is_scrolling);
-        if is_scrolling {
+impl SnapTriggerSlot {
+    fn on_activity(&mut self, is_scrolling: bool, direction: ScrollDirection) -> bool {
+        let was_scrolling = std::mem::replace(&mut self.was_scrolling, is_scrolling);
+        let action = if is_scrolling {
             if direction != ScrollDirection::Idle {
-                slot.last_direction = Some(direction);
+                self.last_direction = Some(direction);
             }
             if was_scrolling {
                 // Mid-scroll direction change: nothing edge-shaped to do.
-                return;
+                return false;
             }
             // A NEW scroll began: an in-flight snap must yield to the
             // finger immediately (on the rising edge of "is scrolling").
-            slot.epoch += 1;
-            slot.pending = Some(SnapCommand {
-                epoch: slot.epoch,
-                action: SnapAction::Stop,
-            });
-            drop(slot);
-            self.rebuild
-                .schedule(flui_view::RebuildReason::AnimationTick);
-            return;
-        }
-        // Scrolling just ended: the position's own direction is already
-        // reset, so the captured one is the scroll that ended. No captured
-        // direction (a programmatic jump) ⇒ no snap: snapping keys on user
-        // gestures only.
-        let Some(direction) = slot.last_direction.take() else {
-            return;
+            SnapAction::Stop
+        } else {
+            // Scrolling just ended: the position's own direction is already
+            // reset, so the captured one is the scroll that ended. No captured
+            // direction (a programmatic jump) ⇒ no snap: snapping keys on user
+            // gestures only.
+            let Some(direction) = self.last_direction.take() else {
+                return false;
+            };
+            SnapAction::Settle(direction)
         };
-        slot.epoch += 1;
-        slot.pending = Some(SnapCommand {
-            epoch: slot.epoch,
-            action: SnapAction::Settle(direction),
+        let Some(epoch) = self.epoch.checked_add(1) else {
+            return false;
+        };
+        self.epoch = epoch;
+        self.pending = Some(SnapCommand { epoch, action });
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ScrollDirection, SnapAction, SnapCommand, SnapTriggerSlot};
+
+    // The private seed reaches the otherwise unreachable identity boundary.
+    #[test]
+    fn exhausted_snap_epochs_never_reissue_a_command() {
+        let mut slot = SnapTriggerSlot {
+            epoch: u64::MAX - 1,
+            ..SnapTriggerSlot::default()
+        };
+        assert!(slot.on_activity(true, ScrollDirection::Forward));
+        let final_command = Some(SnapCommand {
+            epoch: u64::MAX,
+            action: SnapAction::Stop,
         });
-        drop(slot);
-        self.rebuild
-            .schedule(flui_view::RebuildReason::AnimationTick);
+        assert_eq!(slot.pending, final_command);
+        for direction in [ScrollDirection::Forward, ScrollDirection::Reverse] {
+            assert!(!slot.on_activity(false, ScrollDirection::Idle));
+            assert!(!slot.on_activity(true, direction));
+            assert_eq!(slot.pending, final_command);
+        }
     }
 }
