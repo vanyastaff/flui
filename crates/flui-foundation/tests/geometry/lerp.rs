@@ -79,6 +79,23 @@ fn extrapolation_and_nan_remain_visible() {
     assert!(0.0_f64.lerp_to(&f64::NAN, 0.5).is_nan());
 }
 
+fn extrapolation_preserves_a_representable_sum_after_product_overflow() {
+    for magnitude in [4.0, 1e308, f64::MAX] {
+        for sign in [-1.0, 1.0] {
+            let begin = sign * magnitude;
+            for t in [3.0, 4.0] {
+                let expected = begin * (1.0 - t * 0.5);
+                let actual = begin.lerp_to(&(begin * 0.5), t);
+                assert!(
+                    actual.is_finite(),
+                    "begin={begin}, t={t}: a representable extrapolation became {actual}"
+                );
+                assert!((actual / magnitude - expected / magnitude).abs() <= f64::EPSILON);
+            }
+        }
+    }
+}
+
 #[test]
 fn scalar_and_composite_lerp_preserve_representable_values() {
     crate::run_table(&[
@@ -94,6 +111,10 @@ fn scalar_and_composite_lerp_preserve_representable_values() {
         (
             "extrapolation and NaN",
             extrapolation_and_nan_remain_visible,
+        ),
+        (
+            "extrapolation product overflow",
+            extrapolation_preserves_a_representable_sum_after_product_overflow,
         ),
     ]);
 }

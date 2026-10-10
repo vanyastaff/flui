@@ -70,15 +70,23 @@ impl Lerp for f64 {
         if t == 1.0 {
             return *other;
         }
-        let value = self + (other - self) * t;
+        let span = other - self;
+        let value = self + span * t;
         if value.is_finite() {
-            value
-        } else {
-            // Opposite finite endpoints can overflow their difference while
-            // their weighted sum remains representable. Genuine overflow and
-            // invalid input still remain visible to the consuming property.
-            self * (1.0 - t) + other * t
+            return value;
         }
+        if span.is_finite() {
+            // An extrapolation can overflow the separate product even though
+            // adding the starting value brings it back into range.
+            let fused = span.mul_add(t, *self);
+            if fused.is_finite() {
+                return fused;
+            }
+        }
+        // Opposite finite endpoints can overflow their difference while
+        // their weighted sum remains representable. Genuine overflow and
+        // invalid input still remain visible to the consuming property.
+        self * (1.0 - t) + other * t
     }
 }
 
