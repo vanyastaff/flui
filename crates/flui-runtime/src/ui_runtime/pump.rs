@@ -19,6 +19,7 @@ struct FrameTimeGuard<'a> {
 #[cfg(test)]
 pub(super) fn rejected_nested_pump_preserves_outer_commits_and_animation_time() {
     use flui_animation::{Animation as _, AnimationController};
+    use flui_view::SignalWriteExt as _;
     use flui_platform_api::text_store::{
         InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextStore, TextStoreError,
     };
@@ -42,11 +43,9 @@ pub(super) fn rejected_nested_pump_preserves_outer_commits_and_animation_time() 
     controller.forward().expect("animation starts");
 
     let run = |time| {
-        let turn = runtime.begin_geometry_turn();
         runtime.pump_entered(
             &mut crate::pump::SampledClock(time),
             &mut crate::testing::ScriptedSink::always_presents(),
-            &turn,
         )
     };
     let first = runtime.start + Duration::from_secs(1);
@@ -55,11 +54,19 @@ pub(super) fn rejected_nested_pump_preserves_outer_commits_and_animation_time() 
     let grants = Rc::new(Cell::new(0));
     let observed_grants = Rc::clone(&grants);
     let observed_store = store.clone();
+    let signal = runtime.widgets().with_build_owner(|owner| owner.reactive().signal(0u32));
+    let commands = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed_commands = Arc::clone(&commands);
     let weak_runtime = Rc::downgrade(&runtime);
     runtime
         .scheduler
         .add_persistent_frame_callback(Rc::new(move |_| {
             let runtime = weak_runtime.upgrade().expect("outer pump owns runtime");
+            let commands = Arc::clone(&observed_commands);
+            runtime.command_sender().send_signal_write(signal.detach(), move |signal, graph| {
+                signal.set(graph, 1).expect("signal belongs to the runtime");
+                commands.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }).expect("command admitted");
             let count = Rc::clone(&observed_grants);
             assert_eq!(
                 observed_store.request_lock(
@@ -69,11 +76,9 @@ pub(super) fn rejected_nested_pump_preserves_outer_commits_and_animation_time() 
                 Ok(LockOutcome::Deferred),
             );
             let nested = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                let turn = runtime.begin_geometry_turn();
                 runtime.pump_entered(
                     &mut crate::pump::SampledClock(first + Duration::from_secs(5)),
                     &mut crate::testing::ScriptedSink::always_presents(),
-                    &turn,
                 )
             }));
             let failure = nested.expect_err("recursive runtime execution is refused");
@@ -84,6 +89,8 @@ pub(super) fn rejected_nested_pump_preserves_outer_commits_and_animation_time() 
                 "the runtime maps owner admission refusal to its invariant failure",
             );
             assert_eq!(observed_grants.get(), 0, "rejection runs no commit anchor");
+            assert_eq!(observed_commands.load(std::sync::atomic::Ordering::Relaxed), 0,
+                "rejection leaves the accepted command pending");
             assert_eq!(
                 observed_store.request_lock(LockGrant::read(|_| {}), LockTiming::Sync),
                 Err(TextStoreError::SyncLockUnavailable),
@@ -107,6 +114,9 @@ pub(super) fn rejected_nested_pump_preserves_outer_commits_and_animation_time() 
         (value - 0.5).abs() < 1e-9,
         "outer animation time survives: {value}"
     );
+    assert_eq!(runtime.drain_commands().invoked, 1, "the next boundary receives the command");
+    assert_eq!(commands.load(std::sync::atomic::Ordering::Relaxed), 1,
+        "rejected execution neither invokes nor loses the command");
 }
 
 impl<'a> FrameTimeGuard<'a> {
@@ -144,9 +154,10 @@ impl UiRuntime {
     ///    input method's lock asked for inside them is queued; the queued
     ///    grants run here, with the scheduler back in `Idle` (ADR-0027 §3).
     ///
-    /// `&mut self` is the point: the compiler rules out starting a frame
-    /// while another frame on this UI runtime is running. The pump enters the
-    /// UI runtime itself for the whole transaction.
+    /// The mutable interface prevents ordinary overlapping host calls. Owner
+    /// admission also refuses callback reentry before timestamp publication,
+    /// command application or geometry service. The pump enters the UI runtime
+    /// itself for the whole transaction.
     ///
     /// It is also the only way a host outside this crate draws a frame:
     ///
@@ -185,28 +196,30 @@ impl UiRuntime {
         clock: &mut dyn FrameClockSource,
         sink: &mut dyn FrameSink,
     ) -> FrameOutcome {
-        let turn = self.begin_geometry_turn();
-        self.pump_entered(clock, sink, &turn)
+        self.pump_entered(clock, sink)
     }
 
     fn pump_entered(
         &self,
         clock: &mut dyn FrameClockSource,
         sink: &mut dyn FrameSink,
-        turn: &super::preferences::GeometryTurn,
     ) -> FrameOutcome {
         let now = clock.frame_time();
         let deadline = clock.idle_deadline(now);
-        let _frame_time = FrameTimeGuard::publish(self, now);
+        let mut frame_time = None;
+        let mut geometry_turn = None;
         self.enter(|ui_runtime| {
-            let report = ui_runtime.drain_commands();
-            if report != DrainReport::default() {
-                tracing::trace!(?report, "owner inbox drained at pump start");
-            }
-            ui_runtime.service_gesture_geometry(turn);
             // Begin, draw and end frame run as the ui_runtime's text-store
             // transaction, with the commit anchor after it (ADR-0027 §3).
-            let presented = ui_runtime.drive_frame(now, deadline, || ui_runtime.render_frame(sink));
+            let presented = ui_runtime.drive_frame(now, deadline, || {
+                frame_time = Some(FrameTimeGuard::publish(self, now));
+                geometry_turn = Some(ui_runtime.begin_geometry_turn());
+                let report = ui_runtime.drain_commands();
+                if report != DrainReport::default() {
+                    tracing::trace!(?report, "owner inbox drained at pump start");
+                }
+                ui_runtime.service_gesture_geometry(geometry_turn.as_ref().expect("BUG: admitted preparation installed its turn"));
+            }, || ui_runtime.render_frame(sink));
             FrameOutcome::new(presented)
         })
     }
@@ -223,11 +236,14 @@ impl UiRuntime {
     /// unrelated input arrives. The owner performs the complete background
     /// operation, servicing geometry between demand consumption and polling.
     pub fn pump_background(&mut self) {
-        let turn = self.begin_geometry_turn();
+        let mut turn = None;
         self.enter(|ui_runtime| {
             ui_runtime
                 .owner_frame
-                .pump_background(|| ui_runtime.service_gesture_geometry(&turn))
+                .pump_background(|| {
+                    turn = Some(ui_runtime.begin_geometry_turn());
+                    ui_runtime.service_gesture_geometry(turn.as_ref().expect("BUG: admitted preparation installed its turn"));
+                })
                 .expect("BUG: the runtime's live frame owner must admit its background turn");
         });
     }

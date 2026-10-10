@@ -1131,7 +1131,7 @@ impl HeadlessBinding {
             // behavior before `drive_frame` took a deadline.
             let idle_deadline = flui_scheduler::IdleDeadline::far_future(vsync_time);
             owner_frame
-                .drive_frame(vsync_time, idle_deadline, || {
+                .drive_frame(vsync_time, idle_deadline, || {}, || {
                     let (painted_layer_tree, report) = Self::run_pipeline(tree);
                     *last_frame_report = report;
                     *last_frame_painted = painted_layer_tree.is_some();
