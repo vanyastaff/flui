@@ -1190,6 +1190,12 @@ impl GestureArena {
     }
 
     /// Create a gesture arena with pre-allocated deferred-resolution capacity.
+    ///
+    /// This reserves queue storage; it imposes no contact or member admission
+    /// limit. Standalone callers own admission and must close each Down after
+    /// routing, sweep each Up (abandon on Cancel), drain deferred resolutions,
+    /// and release held entry handles. Mounted consumers use `GestureBinding`,
+    /// which owns normal progression and its simultaneous-contact limit.
     #[inline]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
@@ -1839,7 +1845,8 @@ impl GestureArena {
     /// in registration order.
     ///
     /// Complexity: O(P + M) where P is the number of open arenas and M the
-    /// total active members — both bounded by the simultaneous-pointer cap.
+    /// total active members. The standalone arena imposes no admission cap;
+    /// the binding limits admitted simultaneous contacts, not members per contact.
     pub fn poll_deadlines(&self) {
         if self.owner_closed.get() {
             return;

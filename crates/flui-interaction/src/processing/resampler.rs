@@ -8,9 +8,12 @@
 //! - when the next buffered move lies after the sample time, one extra move
 //!   is synthesized at the position interpolated between the last emitted
 //!   point and that move, at the sample time;
-//! - `Down`, `Up`, `Cancel` and every other non-move event are never dropped
-//!   or reordered. When the queue is full, adjacent moves are coalesced (the
-//!   older one's samples move into the newer one's `coalesced` history).
+//! - sequence boundaries (`Down`, `Up`, `Cancel`, `Enter`, `Leave`) are never
+//!   dropped or reordered. At the 100-event pressure threshold, adjacent moves
+//!   are coalesced; otherwise the oldest non-boundary event is discarded.
+//!   Boundaries can grow the queue past that threshold. This is not a hard
+//!   memory bound: standalone callers must sample or stop regularly, including
+//!   when feeding repeated contacts without moves.
 //!
 //! This is particularly beneficial for:
 //! - Devices with low-frequency sensors

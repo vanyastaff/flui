@@ -666,6 +666,66 @@ fn overflow_keeps_terminals_and_the_newest_move() {
     );
 }
 
+/// Boundary preservation takes precedence over pressure coalescing, even
+/// when many complete contacts reuse one identity before the caller samples.
+fn boundary_pressure_preserves_reused_contacts_and_shared_delivery() {
+    let t0 = origin();
+    let resampler = PointerEventResampler::new(contact());
+    let producer = resampler.clone();
+    let independent = PointerEventResampler::new(contact());
+    let mut expected = Vec::new();
+    for sequence in 0..80_u32 {
+        let x = f64::from(sequence);
+        producer.add_event_at(
+            make_down_event_for_id(contact(), Offset::new(x, 0.0), PointerKind::Touch)
+                .expect("finite down"),
+            t0 + ms(x * 3.0),
+        );
+        producer.add_event_at(move_to(x + 0.5), t0 + ms(x * 3.0 + 1.0));
+        producer.add_event_at(
+            make_up_event_for_id(contact(), Offset::new(x + 1.0, 0.0), PointerKind::Touch)
+                .expect("finite up"),
+            t0 + ms(x * 3.0 + 2.0),
+        );
+        expected.extend([('D', x), ('U', x + 1.0)]);
+    }
+    independent.add_event_at(move_to(999.0), t0);
+    let emitted = sample_all(&resampler, t0 + ms(300.0));
+    let boundaries: Vec<_> = emitted
+        .iter()
+        .filter_map(|event| match event {
+            PointerEvent::Down(_) => Some(('D', event_x(event).expect("down position"))),
+            PointerEvent::Up(_) => Some(('U', event_x(event).expect("up position"))),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        boundaries, expected,
+        "every accepted contact boundary survives pressure"
+    );
+    assert!(
+        !producer.has_pending_events(),
+        "sampling drains the shared queue"
+    );
+    assert!(
+        independent.has_pending_events(),
+        "same identity does not share storage"
+    );
+    assert_eq!(
+        sample_all(&independent, t0 + ms(300.0))
+            .last()
+            .and_then(event_x),
+        Some(999.0)
+    );
+    producer.add_event_at(move_to(42.0), t0 + ms(320.0));
+    assert_eq!(
+        sample_all(&resampler, t0 + ms(340.0))
+            .last()
+            .and_then(event_x),
+        Some(42.0)
+    );
+}
+
 /// A Manual sampling clock installed on the binding still paces moves frame
 /// by frame instead of holding them until the pointer lifts.
 fn manual_clock_does_not_starve_moves() {
@@ -761,6 +821,10 @@ fn resampler_interpolates_on_event_time_and_never_drops_terminals() {
                 overflow_keeps_terminals_and_the_newest_move,
             ),
             ("manual clock", manual_clock_does_not_starve_moves),
+            (
+                "boundary pressure, shared handles and independent recovery",
+                boundary_pressure_preserves_reused_contacts_and_shared_delivery,
+            ),
             (
                 "interleaved non-moves stay bounded",
                 interleaved_non_moves_stay_bounded,

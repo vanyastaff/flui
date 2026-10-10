@@ -771,6 +771,36 @@ fn held_arena_swept_on_up_leaves_room_for_the_next_contact() {
     assert!(arena.is_empty());
 }
 
+fn standalone_arena_capacity_does_not_refuse_contacts() {
+    for capacity in [0, 1] {
+        let arena = GestureArena::with_capacity(capacity);
+        let members: Vec<_> = (0..64).map(|_| Rc::new(Verdicts::default())).collect();
+        for (index, member) in members.iter().enumerate() {
+            let pointer = id(u64::try_from(index).expect("small index") + 1);
+            arena.add(pointer, member);
+            arena.close(pointer);
+        }
+        arena.drain_deferred_resolutions();
+        for member in &members {
+            assert_eq!(
+                member.get(),
+                (1, 0),
+                "capacity {capacity} reserves storage, not admission"
+            );
+        }
+        assert!(arena.is_empty(), "all standalone contacts settle");
+        let next = Rc::new(Verdicts::default());
+        arena.add(id(1), &next);
+        arena.close(id(1));
+        arena.drain_deferred_resolutions();
+        assert_eq!(
+            next.get(),
+            (1, 0),
+            "a settled identity admits its next contact"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Device kind and buttons
 // ---------------------------------------------------------------------------
@@ -1188,6 +1218,10 @@ fn scale_captures_the_selected_estimator() {
 #[test]
 fn gesture_lifecycle_matrix() {
     let cases: &[(&str, fn())] = &[
+        (
+            "standalone arena capacity is not an admission limit",
+            standalone_arena_capacity_does_not_refuse_contacts,
+        ),
         (
             "fallback_acceptance_waits_for_preferred_failure",
             fallback_acceptance_waits_for_preferred_failure,

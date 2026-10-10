@@ -8,7 +8,7 @@ Crate-level design notes for `flui_interaction`: subsystems, ownership, mapping 
 |---|---|
 | `arena` | Owner-local conflict resolution between competing recognizers. Per-pointer members are `Weak<dyn GestureArenaMember>` in an inline-four `SmallVec`. Generational slots keep held competitions separate across pointer-ID reuse. Eager acceptors win when the arena closes; each notification upgrades its weak participant immediately before invoking it. |
 | `recognizers` | Ten recognizer types (tap, double tap, long press, drag, scale, force press, multi-tap, multi-drag, eager, tap-and-drag) and drag-axis builders. Each implements the open `GestureRecognizer` and `GestureArenaMember` traits. Builders configure immutable callbacks before returning `Rc` ownership. `ArenaMembership` names an exact weak allocation; `PrimaryContact` owns one admitted sequence, its settings snapshot, identity and deadline. `RecognizerSet` shares ordered weak attachments with listeners. |
-| `processing` | Per-pointer derived data: `VelocityTracker` (LSQ fit on 20-sample circular buffer, 100 ms horizon, 40 ms stationary gate), `PointerEventResampler` (frame-rate adaptation with 100-event cap and 1 ms minimum sample interval), standalone OneEuro filters, the crate-internal `lsq_solver` (used by `VelocityTracker` only) and `sampling_clock`. |
+| `processing` | Per-pointer derived data: `VelocityTracker` (LSQ fit on 20-sample circular buffer, 100 ms horizon, 40 ms stationary gate), `PointerEventResampler` (frame-rate adaptation with a 100-event pressure threshold, preserved sequence boundaries and 1 ms minimum sample interval), standalone OneEuro filters, the crate-internal `lsq_solver` (used by `VelocityTracker` only) and `sampling_clock`. |
 | `routing` | Event dispatch infrastructure: `PointerRouter`, the presentation-owned `FocusManager` (`FocusManager::new` returns an `Rc<Self>`; there is no thread-local focus state), `FocusScopeNode` / reading-order Tab traversal, `MouseTracker` (enter/exit/hover), hit testing, the `InteractionLane` that resolves and invokes pointer routes, and the `TransformGuard` stack-RAII for the transform stack. Route resolution on Down and cached-route invocation on every Move/Up are on the per-pointer hot path (`benches/pointer_route_bench.rs`). |
 | `binding` | `GestureBinding` — owner-local glue that hosts the arena, resolves and retains the Down hit route, coalesces/resamples Moves, and runs route → arena lifecycle ordering. Contact generations prevent frame-delayed samples from crossing a reused platform pointer ID. |
 | `observability` | `GestureEvent` gives typed event names; `SPAN_RECOGNIZER` and `SPAN_ARENA` name spans, and `pointer_event_kind` describes a pointer event for tracing. Rejection and terminal tracking commit local withdrawal before diagnostics, because subscribers can reenter or panic. The app installs the subscriber. |
@@ -30,7 +30,7 @@ them. Compile-time assertions in `src/lib.rs` cover only those data types.
 | Arena slots | `Rc<RefCell<BTreeMap<..>>>` and per-slot `RefCell` | exact owner-local slot transactions; callbacks and user destruction run after releasing borrows |
 | Recognizer state | `Cell` / `RefCell` behind `Rc` identity | synchronous owner-local mutation; callback configuration is immutable |
 | Pointer router / interaction lane | `Rc` + `RefCell` | explicitly owner-local executable callbacks |
-| Pointer resampler | `Arc<parking_lot::Mutex<ResamplerInner>>` | bounded data queue; sampling materializes a batch and unlocks before dispatch |
+| Pointer resampler | `Arc<parking_lot::Mutex<ResamplerInner>>` | shared data queue with pressure coalescing; sampling materializes a batch and unlocks before dispatch |
 | Focus manager | `Rc` + `RefCell` / `Cell`, one per presentation | owner-local focus tree and listeners |
 
 Negative compiler fixtures reject transfer of executable recognizers, builders
@@ -40,6 +40,43 @@ implementations cannot change arena ordering or bypass exact membership checks.
 ## Mapping decisions
 
 Local design choices and why. Each entry names the conflict, the choice, and the reference (a strategy clause, a design rule, or a precedent plan).
+
+- **Standalone admission differs from mounted admission.** A resampler's
+  100-event threshold is a pressure policy, not a hard memory limit. Admission
+  preserves `Down`, `Up`, `Cancel`, `Enter` and `Leave` in order; pressure
+  coalesces adjacent moves or removes the oldest non-boundary event. If only
+  boundaries remain, the next event is accepted beyond the threshold. Standalone
+  callers must pace `sample` or `stop`; silently losing an accepted terminal
+  would leave downstream recognition active. Clones share one queue, while
+  separately constructed resamplers remain independent even with equal pointer
+  IDs. `resampler_interpolates_on_event_time_and_never_drops_terminals` covers
+  repeated-contact boundary pressure, mixed moves, shared delivery and fresh
+  recovery. `GestureArena::with_capacity` reserves deferred-resolution storage,
+  not contact admission; `gesture_lifecycle_matrix` admits and settles contacts
+  beyond both that reservation and the binding's limit.
+- **The binding owns mounted gesture progression.** `GestureBinding` admits
+  at most 32 simultaneous contacts, retains each admitted Down route, closes
+  its arena after routing Down, and sweeps or abandons its exact generation on
+  terminal input. It flushes accepted motion before terminal delivery and owns
+  deferred verdict/deadline progression. `GestureArenaScope` supplies that
+  binding-driven arena to widgets; recognizers below it do not self-sweep.
+  Standalone drivers close after Down routing, sweep after Up (abandon on
+  Cancel), drain deferred resolutions and poll deadlines when due. Holds must
+  eventually release their exact entry handle, including after pointer reuse;
+  reserving capacity does not remove those obligations. The public
+  `gesture_lifecycle_matrix` covers held release and pointer reuse, while
+  `binding_input_contract_matrix` covers capped contacts, refused tails and
+  lifecycle reset. Neither cap limits arbitrary members per admitted contact.
+- **Terminal lane retirement commits before user destruction (ADR-0127).**
+  Closing withdraws executable callbacks and opaque route ownership before
+  retiring them outside borrows. Healthy retirement releases resources; after
+  the first failure or during unwind, remaining owners that could execute user
+  code are retained. Non-last owner-local `Rc` clones can still be released.
+  Saved dispatch handles become stale, while another live lane remains usable.
+  `lane_terminal_retirement_contract` covers independent storage families,
+  competing failures, reentry, unwind retention and surviving-lane recovery.
+  Containment cannot rescue one opaque aggregate that double-panics inside its
+  own destruction before control returns to the framework.
 
 - **Diagnostics participate in the subsystem's ownership boundary.** Router
   mutations and ignored sampling windows release their borrow or mutex before
