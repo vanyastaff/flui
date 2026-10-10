@@ -1,5 +1,19 @@
 # flui-widgets architecture
 
+## Grouped animation ownership
+
+Switcher transfers all current and outgoing controller seats in one Vsync update
+before exposing migration to callbacks. `switching_entries_finish_migration_before_a_wake_failure`
+observes the committed registrations inside a failing wake and verifies disposal
+of the faulted lifecycle actor followed by a fresh working cross-fade.
+
+Dismissible restores its shared collapse owner before publishing that same
+batched migration. `collapse_owner_storage_is_committed_before_migration_callouts`
+uses the private storage seam to check reentrant access, failure propagation and
+completion through the retained owner. The mounted row
+`a_collapsing_dismissible_survives_a_migration_wake_failure` separately verifies
+the lifecycle fault boundary retires both owners and a fresh collapse completes.
+
 ## Floating header snap ownership
 
 Floating headers share scroll-edge state between their activity listener and

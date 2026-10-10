@@ -63,6 +63,14 @@ After a delivery failure, opaque outgoing ownership follows ADR-0178's retention
 policy. `driven_controller_owns_its_seat_and_run` covers outgoing retirement,
 competing delivery failures, healthy settlement tails and subsequent runs.
 
+An owner with several controllers stages their migrations through `VsyncUpdate`.
+All registrations commit before the first clock callout. `prepare` separates this
+commit from `VsyncPublication` delivery without exposing controller borrows;
+widgets restore temporarily extracted owner storage before publication. Explicit
+publication and drop finish the accepted delivery tail. During unwind, drop
+preserves the incoming failure. Switcher and Dismissible consume this contract;
+their lifecycle fault boundary may retire the actor after propagation.
+
 `FrameWaker` and task `Waker` remain the cross-thread capabilities. A frame waker
 holds a weak reference to wake infrastructure containing the phase, enablement,
 request latch, delivery debt and platform hook. It contains no strong reference

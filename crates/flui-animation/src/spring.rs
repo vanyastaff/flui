@@ -6,7 +6,7 @@
 
 mod driver;
 
-pub use driver::{AnimatedValue, AnimatedValueView, MotionUpdate, VsyncUpdate};
+pub use driver::{AnimatedValue, AnimatedValueView, MotionUpdate, VsyncPublication, VsyncUpdate};
 
 use flui_foundation::geometry::{EdgeInsets, Offset, Size};
 use flui_painting::Alignment;

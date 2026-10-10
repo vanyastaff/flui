@@ -873,6 +873,14 @@ pub(crate) fn swapping_the_scope_registry_preserves_an_implicit_run() {
 }
 
 pub(crate) fn switching_entries_migrate_their_incoming_and_outgoing_runs() {
+    exercise_switching_registry(false);
+}
+
+pub(crate) fn switching_entries_finish_migration_before_a_wake_failure() {
+    exercise_switching_registry(true);
+}
+
+fn exercise_switching_registry(fail_wake: bool) {
     use flui_widgets::{AnimatedSwitcher, ColoredBox};
 
     let old = Vsync::new();
@@ -889,14 +897,61 @@ pub(crate) fn switching_entries_migrate_their_incoming_and_outgoing_runs() {
     laid.pump_widget(tree(old.clone(), true));
     laid.pump_for(FRAME);
     laid.pump_for(FRAME);
-    let fades = laid.find_all_by_render_type("RenderAnimatedOpacity");
+    let mut fades = laid.find_all_by_render_type("RenderAnimatedOpacity");
     assert_eq!(fades.len(), 2, "both cross-fade participants are present");
-    let samples: Vec<_> = fades.iter().map(|id| laid.opacity(*id)).collect();
+    let mut samples: Vec<_> = fades.iter().map(|id| laid.opacity(*id)).collect();
     assert!(samples.iter().all(|value| *value > 0.0 && *value < 1.0));
     assert!(old.has_running());
 
-    laid.pump_widget(tree(next.clone(), true));
+    let woke = std::rc::Rc::new(std::cell::Cell::new(false));
+    let committed = std::rc::Rc::new(std::cell::Cell::new(true));
+    if fail_wake {
+        next.set_frame_requester(Some(std::rc::Rc::new({
+            let (woke, committed, old) = (woke.clone(), committed.clone(), old.clone());
+            move || {
+                woke.set(true);
+                committed.set(committed.get() && old.is_empty());
+                panic!("switcher migration wake failed");
+            }
+        })));
+    }
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        laid.pump_widget(tree(next.clone(), true));
+    }));
+    if let Err(payload) = outcome {
+        assert!(fail_wake);
+        assert_eq!(
+            flui_foundation::panic::payload_text(payload.as_ref()),
+            Some("switcher migration wake failed")
+        );
+    }
+    next.set_frame_requester(None);
     assert!(old.is_empty(), "incoming and outgoing owners both migrate");
+    if fail_wake {
+        assert!(woke.get(), "migration reaches the failing hook");
+        assert!(
+            committed.get(),
+            "all seats transfer before the first callout"
+        );
+        assert!(
+            next.is_empty(),
+            "the failed lifecycle actor retires all its owners"
+        );
+        laid.pump_widget(SizedBox::shrink());
+        laid.pump_widget(tree(next.clone(), false));
+        laid.pump_widget(tree(next.clone(), true));
+        laid.adopt_vsync(next.clone());
+        laid.pump_for(FRAME);
+        laid.pump_for(FRAME);
+        fades = laid.find_all_by_render_type("RenderAnimatedOpacity");
+        assert_eq!(
+            fades.len(),
+            2,
+            "a fresh actor starts both cross-fade participants"
+        );
+        samples = fades.iter().map(|id| laid.opacity(*id)).collect();
+        assert!(samples.iter().all(|value| *value > 0.0 && *value < 1.0));
+    }
     laid.adopt_vsync(next.clone());
     laid.pump_for(Duration::ZERO);
     for (id, before) in fades.iter().zip(&samples) {

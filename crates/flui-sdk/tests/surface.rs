@@ -27,8 +27,8 @@ mod measured {
         FloatTween as _, JumpAt as _, Keyframes as _, MotionPolicy as _, MotionSpec as _,
         MotionUpdate as _, PlaybackRate as _, RunCanceled as _, Stagger as _, StaggerOrigin as _,
         StatusSubscription as _, Steps as _, Tween as _, TwoWayConverter as _, ValueRange as _,
-        Vsync as _, VsyncRegistration as _, VsyncRegistrationError as _, VsyncUpdate as _,
-        animate as _,
+        Vsync as _, VsyncPublication as _, VsyncRegistration as _, VsyncRegistrationError as _,
+        VsyncUpdate as _, animate as _,
     };
     use flui_sdk::foundation::notifier::Listenable as _;
     use flui_sdk::foundation::observe::{

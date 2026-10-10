@@ -35,7 +35,7 @@ use std::time::Duration;
 use flui_animation::curve::{ArcCurve, Curve};
 use flui_animation::{
     Animation, AnimationController, AnimationStatus, CurvedAnimation, Curves, DrivenController,
-    Vsync,
+    Vsync, VsyncUpdate,
 };
 use flui_foundation::ViewKey;
 use flui_painting::Alignment;
@@ -509,11 +509,15 @@ impl ViewState<AnimatedSwitcher> for AnimatedSwitcherState {
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         self.vsync = VsyncScope::maybe_of(ctx);
-        if let Some(entry) = self.current_entry.as_mut() {
-            entry.rebind(self.vsync.as_ref());
-        }
-        for entry in self.outgoing_entries.get_mut() {
-            entry.rebind(self.vsync.as_ref());
+        if let Err(error) = VsyncUpdate::run(|update| {
+            if let Some(entry) = self.current_entry.as_mut() {
+                update.rebind_controller(&mut entry.controller, self.vsync.as_ref());
+            }
+            for entry in self.outgoing_entries.get_mut() {
+                update.rebind_controller(&mut entry.controller, self.vsync.as_ref());
+            }
+        }) {
+            tracing::error!(%error, "AnimatedSwitcher lost its frame registry");
         }
     }
 

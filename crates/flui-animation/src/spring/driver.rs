@@ -2,7 +2,7 @@
 
 mod binding;
 mod update;
-pub use binding::VsyncUpdate;
+pub use binding::{VsyncPublication, VsyncUpdate};
 pub use update::MotionUpdate;
 
 use std::cell::{Cell, RefCell};

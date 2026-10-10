@@ -69,6 +69,7 @@ use flui_animation::curve::{Curve, Interval};
 use flui_animation::ext::AnimatableExt;
 use flui_animation::{
     Animation, AnimationController, AnimationStatus, Curves, DrivenController, Tween, Vsync,
+    VsyncUpdate,
 };
 use flui_foundation::geometry::Size;
 use flui_foundation::{Listenable, ListenerId, RenderId};
@@ -768,23 +769,12 @@ impl ViewState<Dismissible> for DismissibleState {
         let outgoing = self.drag.pipeline.replace(ctx.pipeline_owner());
         drop(outgoing);
         self.vsync = VsyncScope::maybe_of(ctx);
-        if let Err(error) = self.move_controller.rebind(self.vsync.as_ref()) {
+        if let Err(error) = rebind_motion_owners(
+            &mut self.move_controller,
+            &self.drag.resize_controller,
+            self.vsync.as_ref(),
+        ) {
             tracing::error!(%error, "Dismissible lost its frame registry");
-        }
-        let resize = self.drag.resize_controller.borrow_mut().take();
-        if let Some(mut owner) = resize {
-            if let Err(error) = owner.rebind(self.vsync.as_ref()) {
-                tracing::error!(%error, "Dismissible resize lost its frame registry");
-            }
-            let outgoing = {
-                let mut slot = self.drag.resize_controller.borrow_mut();
-                if slot.is_none() {
-                    slot.replace(owner)
-                } else {
-                    Some(owner)
-                }
-            };
-            drop(outgoing);
         }
     }
 
@@ -1385,14 +1375,28 @@ fn sliding_content_view(
     SlideTransition::new(Rc::new(position), child)
 }
 
-/// The post-dismiss collapse: a `background`-filled box shrinking along the
-/// axis perpendicular to the dismiss direction, on an
-/// `Interval(0.4, 1.0, Curves::Ease)` — a 40% pause, then an eased collapse
-/// to zero. See module docs limit #2 for why this
-/// clips at full size rather than progressively (`ClipRect::clip_behavior`
-/// has no arbitrary-rect clipper to crop the un-collapsed axis to the
-/// revealed sliver — irrelevant here anyway, since by this point the
-/// collapsing box IS the background at its full prior size).
+/// Move both owners, restoring shared storage before any migration callout.
+fn rebind_motion_owners(
+    movement: &mut DrivenController,
+    resize_slot: &RefCell<Option<DrivenController>>,
+    vsync: Option<&Vsync>,
+) -> Result<(), flui_animation::VsyncRegistrationError> {
+    let mut resize = resize_slot.borrow_mut().take();
+    let publication = VsyncUpdate::prepare(|update| {
+        update.rebind_controller(movement, vsync);
+        if let Some(owner) = resize.as_mut() {
+            update.rebind_controller(owner, vsync);
+        }
+    });
+    // Binding preparation invokes no animation hooks. Restore the active owner and release
+    // its slot before publication can wake, settle or reenter the widget.
+    let outgoing = resize_slot.replace(resize);
+    drop(outgoing);
+    publication.publish()
+}
+
+/// The post-dismiss collapse: a background-filled box shrinking perpendicular
+/// to the dismiss direction, with a 40% pause followed by an eased collapse.
 fn resize_collapse_view(
     resize_controller: &AnimationController,
     axis_is_x: bool,
@@ -1415,4 +1419,73 @@ fn resize_collapse_view(
         .clip_behavior(Clip::HardEdge)
         .child(collapsed)
         .boxed()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rebind_motion_owners;
+    use flui_animation::{Animation, AnimationController, MotionClock, Vsync};
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+        time::Duration,
+    };
+
+    // Only this seam can inspect shared owner storage from a migration hook
+    // without the mounted lifecycle boundary retiring the faulted actor.
+    #[test]
+    fn collapse_owner_storage_is_committed_before_migration_callouts() {
+        for fails in [false, true] {
+            let old = Vsync::new();
+            let next = Vsync::new();
+            let mut movement =
+                AnimationController::builder(Duration::from_secs(1)).build_on(Some(&old));
+            let resize = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&old));
+            let run = resize.controller().forward().expect("start collapse");
+            let slot = Rc::new(RefCell::new(Some(resize)));
+            let mut clock = MotionClock::new();
+            old.tick_all(&clock.frame(Duration::ZERO));
+            old.tick_all(&clock.frame(Duration::from_millis(100)));
+            let called = Rc::new(Cell::new(false));
+            next.set_frame_requester(Some(Rc::new({
+                let (slot, called, old) = (Rc::downgrade(&slot), called.clone(), old.clone());
+                move || {
+                    assert!(old.is_empty(), "every owner moved before wake");
+                    let slot = slot.upgrade().expect("collapse owner still mounted");
+                    let observer = slot
+                        .borrow()
+                        .as_ref()
+                        .expect("active owner restored before wake")
+                        .controller()
+                        .clone();
+                    assert!(observer.is_animating());
+                    called.set(true);
+                    assert!(!fails, "collapse migration delivery failure");
+                }
+            })));
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                rebind_motion_owners(&mut movement, &slot, Some(&next))
+            }));
+            if fails {
+                let payload = outcome.expect_err("failing wake propagates");
+                assert_eq!(
+                    flui_foundation::panic::payload_text(payload.as_ref()),
+                    Some("collapse migration delivery failure")
+                );
+            } else {
+                outcome
+                    .expect("healthy delivery")
+                    .expect("registry admitted");
+            }
+            assert!(called.get());
+            assert!(!run.is_canceled());
+            next.set_frame_requester(None);
+            next.tick_all(&clock.frame(Duration::from_secs(2)));
+            next.tick_all(&clock.frame(Duration::from_secs(3)));
+            assert!(run.is_complete(), "retained collapse reaches completion");
+            drop(movement);
+            drop(slot);
+            assert!(next.is_empty());
+        }
+    }
 }

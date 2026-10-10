@@ -140,6 +140,9 @@
   command epochs without wrapping or replacing the last admitted command.
 - Continue active Scrollable fling and wheel trajectories when their Vsync
   registry changes, retaining sampled position and accumulated wheel goals.
+- Commit all Switcher and Dismissible controller bindings before migration wakes;
+  restore shared collapse ownership before callback reentry. `VsyncUpdate::prepare`
+  returns a publication whose explicit delivery or drop completes the accepted tail.
 - Use component-specific spring rest distances through
   `TwoWayConverter::rest_thresholds`; derived values compose their fields'
   distances. Manual converters must implement the new method with positive finite

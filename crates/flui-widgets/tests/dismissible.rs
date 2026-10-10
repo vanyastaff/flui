@@ -771,14 +771,18 @@ pub(crate) fn a_dismissible_release_keeps_finger_speed_on_any_width() {
 }
 
 pub(crate) fn a_dismissible_collapses_its_laid_out_size() {
-    exercise_collapse_registry(false);
+    exercise_collapse_registry(false, false);
 }
 
 pub(crate) fn a_collapsing_dismissible_migrates_between_registries() {
-    exercise_collapse_registry(true);
+    exercise_collapse_registry(true, false);
 }
 
-fn exercise_collapse_registry(migrate: bool) {
+pub(crate) fn a_collapsing_dismissible_survives_a_migration_wake_failure() {
+    exercise_collapse_registry(true, true);
+}
+
+fn exercise_collapse_registry(migrate: bool, fail_wake: bool) {
     let color = Color::rgb(131, 43, 71);
     let dismissed = Rc::new(Cell::new(0));
     let output = dismissed.clone();
@@ -848,12 +852,46 @@ fn exercise_collapse_registry(migrate: bool) {
         );
         assert!(vsync.has_running());
         let next = Vsync::new();
-        laid.pump_widget(VsyncScope::new(next.clone(), card));
+        let woke = Rc::new(Cell::new(false));
+        if fail_wake {
+            next.set_frame_requester(Some(Rc::new({
+                let woke = woke.clone();
+                move || {
+                    woke.set(true);
+                    panic!("collapse migration wake failed");
+                }
+            })));
+        }
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            laid.pump_widget(VsyncScope::new(next.clone(), card));
+        }));
+        if let Err(payload) = outcome {
+            assert!(fail_wake);
+            assert_eq!(
+                flui_foundation::panic::payload_text(payload.as_ref()),
+                Some("collapse migration wake failed")
+            );
+        }
+        next.set_frame_requester(None);
+        if fail_wake {
+            assert!(woke.get(), "migration reaches the failing hook");
+            assert!(
+                next.is_empty(),
+                "the failed lifecycle actor retires both owners"
+            );
+            laid.pump_widget(flui_widgets::SizedBox::shrink());
+            exercise_collapse_registry(true, false);
+            return;
+        }
         assert!(
             vsync.is_empty(),
             "both movement and collapse owners migrate"
         );
         laid.adopt_vsync(next.clone());
+        assert!(
+            next.has_running(),
+            "failure retains the accepted collapse owner"
+        );
         laid.pump_for(Duration::ZERO);
         assert!((height(&laid) - before).abs() < 1e-8);
         laid.pump_for(Duration::from_millis(16));

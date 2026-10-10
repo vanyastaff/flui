@@ -148,6 +148,16 @@ respecting every component's distance bound. The color fade case in
 `tolerance_constructors_validate_and_scale_with_dpr` verifies its visible hue.
 
 `AnimatedValue<T>` owns one `DrivenController` for all its scalar components.
+`VsyncUpdate` stages property owners and plain controller owners together. It
+commits every new seat before delivering any clock transition. `prepare` returns
+an owned `VsyncPublication` without controller borrows, so a widget can restore
+temporarily extracted owner storage before a reentrant callback observes it.
+Explicit publication and ordinary drop complete the accepted tail. Drop during
+unwind preserves the incoming failure while still delivering settlement.
+`grouped_registry_migration_commits_before_delivery` in the public owning-value
+table verifies immediate delivery, ordinary drop and unwind, with live and absent
+clocks and competing callback failures.
+
 The controller's generated value-motion branch evaluates components outside
 its borrow, stages one vector sample and publishes that sample together with
 elapsed time only after its sample identity survives. The commit copies fixed

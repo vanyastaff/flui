@@ -553,77 +553,103 @@ fn owning_animated_value_contract() {
 }
 
 fn grouped_registry_migration_commits_before_delivery() {
-    for (unbound, fails) in [(false, false), (false, true), (true, false), (true, true)] {
-        let old = Vsync::new();
-        let next = Vsync::new();
-        let mut left = AnimatedValue::new(0.0, curve(Curves::Linear), Some(&old)).unwrap();
-        let mut right = AnimatedValue::new(0.0, curve(Curves::Linear), Some(&old)).unwrap();
-        let left_run = left.animate_to(1.0).unwrap();
-        let right_run = right.animate_to(2.0).unwrap();
-        let mut clock = MotionClock::new();
-        old.tick_all(&clock.frame(Duration::ZERO));
-        old.tick_all(&clock.frame(Duration::from_millis(250)));
-        let seam = (left.value(), right.value());
-        let delivered = Rc::new(Cell::new(0));
-        let check = {
-            let old = old.clone();
-            let delivered = Rc::clone(&delivered);
-            move || {
-                assert!(old.is_empty(), "every old seat leaves before any callout");
-                delivered.set(delivered.get() + 1);
-                assert!(!fails, "first migration delivery failure");
-            }
-        };
-        if unbound {
-            left_run.when_complete_or_cancel({
-                let check = check.clone();
-                move |result| {
+    #[derive(Clone, Copy)]
+    enum Delivery {
+        Immediate,
+        Drop,
+        Unwind,
+    }
+    for delivery in [Delivery::Immediate, Delivery::Drop, Delivery::Unwind] {
+        for (unbound, fails) in [(false, false), (false, true), (true, false), (true, true)] {
+            let old = Vsync::new();
+            let next = Vsync::new();
+            let mut left = AnimatedValue::new(0.0, curve(Curves::Linear), Some(&old)).unwrap();
+            let mut right = AnimatedValue::new(0.0, curve(Curves::Linear), Some(&old)).unwrap();
+            let left_run = left.animate_to(1.0).unwrap();
+            let right_run = right.animate_to(2.0).unwrap();
+            let mut clock = MotionClock::new();
+            old.tick_all(&clock.frame(Duration::ZERO));
+            old.tick_all(&clock.frame(Duration::from_millis(250)));
+            let seam = (left.value(), right.value());
+            let delivered = Rc::new(Cell::new(0));
+            let check = {
+                let old = old.clone();
+                let delivered = Rc::clone(&delivered);
+                move || {
+                    assert!(old.is_empty(), "every old seat leaves before any callout");
+                    delivered.set(delivered.get() + 1);
+                    assert!(!fails, "first migration delivery failure");
+                }
+            };
+            if unbound {
+                left_run.when_complete_or_cancel({
+                    let check = check.clone();
+                    move |result| {
+                        assert!(result.is_ok());
+                        check();
+                    }
+                });
+                right_run.when_complete_or_cancel(move |result| {
                     assert!(result.is_ok());
                     check();
+                });
+            } else {
+                next.set_frame_requester(Some(Rc::new(check)));
+            }
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if matches!(delivery, Delivery::Immediate) {
+                    VsyncUpdate::run(|update| {
+                        update.rebind(&mut left, (!unbound).then_some(&next));
+                        update.rebind(&mut right, (!unbound).then_some(&next));
+                    })
+                } else {
+                    let publication = VsyncUpdate::prepare(|update| {
+                        update.rebind(&mut left, (!unbound).then_some(&next));
+                        update.rebind(&mut right, (!unbound).then_some(&next));
+                    });
+                    if matches!(delivery, Delivery::Unwind) {
+                        panic!("owner restoration failure");
+                    }
+                    drop(publication);
+                    Ok(())
                 }
-            });
-            right_run.when_complete_or_cancel(move |result| {
-                assert!(result.is_ok());
-                check();
-            });
-        } else {
-            next.set_frame_requester(Some(Rc::new(check)));
+            }));
+            if matches!(delivery, Delivery::Unwind) {
+                let payload = result.unwrap_err();
+                assert_eq!(
+                    flui_foundation::panic::payload_text(payload.as_ref()),
+                    Some("owner restoration failure")
+                );
+            } else if fails {
+                let payload = result.unwrap_err();
+                assert_eq!(
+                    flui_foundation::panic::payload_text(payload.as_ref()),
+                    Some("first migration delivery failure")
+                );
+            } else {
+                result.unwrap().unwrap();
+            }
+            assert!(old.is_empty());
+            assert!(delivered.get() > 0);
+            next.set_frame_requester(None);
+            if unbound {
+                assert_eq!(
+                    delivered.get(),
+                    2,
+                    "settlement tail survives callback failure"
+                );
+                assert!(left_run.is_complete() && right_run.is_complete());
+            } else {
+                assert_eq!((left.value(), right.value()), seam);
+                assert!(!left_run.is_canceled() && !right_run.is_canceled());
+                next.tick_all(&clock.frame(Duration::from_secs(2)));
+                next.tick_all(&clock.frame(Duration::from_secs(3)));
+            }
+            assert_eq!((left.value(), right.value()), (1.0, 2.0));
+            assert!(!left.animation().is_animating() && !right.animation().is_animating());
+            drop((left, right));
+            assert!(next.is_empty());
         }
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            VsyncUpdate::run(|update| {
-                update.rebind(&mut left, (!unbound).then_some(&next));
-                update.rebind(&mut right, (!unbound).then_some(&next));
-            })
-        }));
-        if fails {
-            let payload = result.unwrap_err();
-            assert_eq!(
-                flui_foundation::panic::payload_text(payload.as_ref()),
-                Some("first migration delivery failure")
-            );
-        } else {
-            result.unwrap().unwrap();
-        }
-        assert!(old.is_empty());
-        assert!(delivered.get() > 0);
-        next.set_frame_requester(None);
-        if unbound {
-            assert_eq!(
-                delivered.get(),
-                2,
-                "settlement tail survives callback failure"
-            );
-            assert!(left_run.is_complete() && right_run.is_complete());
-        } else {
-            assert_eq!((left.value(), right.value()), seam);
-            assert!(!left_run.is_canceled() && !right_run.is_canceled());
-            next.tick_all(&clock.frame(Duration::from_secs(2)));
-            next.tick_all(&clock.frame(Duration::from_secs(3)));
-        }
-        assert_eq!((left.value(), right.value()), (1.0, 2.0));
-        assert!(!left.animation().is_animating() && !right.animation().is_animating());
-        drop((left, right));
-        assert!(next.is_empty());
     }
 }
 
