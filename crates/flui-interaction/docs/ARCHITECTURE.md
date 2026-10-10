@@ -77,6 +77,14 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   competing failures, reentry, unwind retention and surviving-lane recovery.
   Containment cannot rescue one opaque aggregate that double-panics inside its
   own destruction before control returns to the framework.
+- **Dispatch identity does not imply activation authority.** A saved dispatch
+  handle carries an exact lane ticket but runs only while that lane is entered
+  on its owner thread. `UiRuntime::enter` establishes this scope for mounted
+  consumers; standalone composition uses `InteractionLane::enter`. Nested
+  activation restores the previous ticket on return or unwind. An inactive,
+  foreign, wrong-thread or closed lane is rejected before invoking its targets,
+  rather than borrowing another runtime's active lane. `lane_capability_matrix`
+  pins those authority boundaries and stale capabilities after owner recreation.
 
 - **Diagnostics participate in the subsystem's ownership boundary.** Router
   mutations and ignored sampling windows release their borrow or mutex before
