@@ -385,6 +385,9 @@ fn owner_retirement_custody_contract() {
                 "completed retirement ends caller custody",
                 completed_retirement_ends_caller_failure_custody,
             ),
+            ("standalone frame refusal ends custody", standalone_frame_refusal_ends_custody),
+            ("standalone background refusal ends custody", standalone_background_refusal_ends_custody),
+            ("standalone failed retirement ends custody", standalone_failed_retirement_ends_custody),
         ],
     );
 }
@@ -454,6 +457,61 @@ fn recursive_retirement_shares_caught_failure() {
     assert_eq!(driver.pending_task_count(), 0);
     assert!(first.is_cancelled());
     assert!(second.is_cancelled());
+    assert_healthy_refusal_retires(&owner);
+}
+
+fn assert_healthy_refusal_retires(owner: &OwnerFrame) {
+    let drops = Rc::new(Cell::new(0));
+    let capture = RemovedCapture(Rc::clone(&drops));
+    assert_eq!(owner.pump_background(move || { let _ = &capture; }),
+        Err(ExecutionError::Retired));
+    assert_eq!(drops.get(), 1, "fresh standalone refusal has no earlier failure custody");
+}
+
+fn standalone_frame_refusal_ends_custody() {
+    standalone_refusal_ends_custody(true);
+}
+
+fn standalone_background_refusal_ends_custody() {
+    standalone_refusal_ends_custody(false);
+}
+
+fn standalone_refusal_ends_custody(frame: bool) {
+    let scheduler = UpdateScheduler::new();
+    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    assert!(owner.retire().is_none());
+    let failure = catch_unwind(AssertUnwindSafe(|| {
+        let capture = RejectedCapture;
+        if frame {
+            let now = Instant::now();
+            let _ = owner.drive_frame(now, IdleDeadline::far_future(now),
+                move || { let _ = &capture; }, || {});
+        } else {
+            let _ = owner.pump_background(move || { let _ = &capture; });
+        }
+    })).expect_err("standalone refused envelope reports its destructor failure");
+    assert_eq!(flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("nested refused capture failure"));
+    assert_healthy_refusal_retires(&owner);
+}
+
+fn standalone_failed_retirement_ends_custody() {
+    struct PanickingFuture;
+    impl Future for PanickingFuture {
+        type Output = ();
+        fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<()> { Poll::Pending }
+    }
+    impl Drop for PanickingFuture {
+        fn drop(&mut self) { panic!("standalone retired future failure"); }
+    }
+    let scheduler = UpdateScheduler::new();
+    let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
+    let token = owner.async_driver().spawn_local(Box::pin(PanickingFuture));
+    let failure = owner.retire().expect("retirement returns its first failure");
+    assert_eq!(flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("standalone retired future failure"));
+    assert!(token.is_cancelled());
+    assert_healthy_refusal_retires(&owner);
 }
 
 fn eager_pending_retirement_preserves_caught_failure() {
