@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-10-10
 - **Related:** [ADR-0176](ADR-0176-presentation-animation-playback.md),
-  [ADR-0183](ADR-0183-coordinated-property-motion-admission.md).
+  [ADR-0189](ADR-0189-coordinated-property-motion-admission.md).
 
 ## Context
 
