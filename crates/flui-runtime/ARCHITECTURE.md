@@ -489,10 +489,16 @@ paused frame production and one addressed step frame without sibling demand.
 and closed-window refusal through the public agent handle.
 
 Hidden presentations and disabled frames do not invoke controllers or create
-animation continuation demand. Their clocks still observe raw time, so the
-first visible frame catches up instead of replaying hidden frames.
+animation continuation demand. Each pump withdraws stale animation demand when
+the presentation cannot advance a running animation. Explicit agent steps use
+host demand, so an accepted inspection frame survives pausing or completion;
+independent widget-build demand remains deliverable.
+Their clocks still observe raw time, so the first visible frame catches up
+instead of replaying hidden frames.
 `gated_presentations_hold_samples_then_catch_up_when_visible` pins both gates
-through the runtime frame producer.
+through the runtime frame producer for tween, repeat and spring, including
+exactly-once terminal status and future delivery. The addressed step row above
+also checks a completed run's inspection frame and an independent root rebuild.
 
 ### `Vsync` ticks in the persistent phase, not among the transient callbacks
 

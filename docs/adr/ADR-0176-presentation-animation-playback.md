@@ -74,9 +74,14 @@ whole request before changing rate or time. An invalid rate applies neither
 field and answers the existing `invalid_argument` error. Accepted state is
 replied before calling the platform wake hook.
 
-An explicit step creates demand for its presentation. A paused registry alone
-does not create ongoing animation demand. Testing's extra presentations expose
-the same clock operations and keep their own rates and origins.
+An explicit step creates host demand for its presentation, independent of the
+animation continuation bit. Each runtime pump reconciles that continuation
+against the presentation's current gates and active runs before producing a
+frame. Pausing or disabling animation withdraws only its continuation; an
+accepted step or independent widget build remains deliverable.
+A paused registry alone does not create ongoing animation demand. Testing's
+extra presentations expose the same clock operations and keep their own rates
+and origins.
 
 Run admission, playback-rate changes and registration migration request their
 first sample through the live registry seat. The controller queues this demand

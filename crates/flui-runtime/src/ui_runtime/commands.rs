@@ -614,9 +614,11 @@ impl UiRuntime {
                                 .apply_motion(request)
                                 .map(|(state, demand)| {
                                     if demand {
+                                        // An accepted inspection sample outlives
+                                        // animation pause or run completion.
                                         presentation
                                             .clock()
-                                            .mark_demand(flui_scheduler::DemandKind::Animation);
+                                            .mark_demand(flui_scheduler::DemandKind::Host);
                                     }
                                     (state, demand)
                                 })

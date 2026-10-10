@@ -155,3 +155,6 @@
   events. Completion directly enters the existing owner lane without a counter
   or completion-driven rebuild; current callbacks, unmount cancellation and
   accepted delivery after callback failure follow the lane's contract.
+- Withdraw stale animation frame demand when motion is paused or frame delivery
+  is disabled. Explicit inspection steps retain their own host demand, including
+  after run completion, while independent widget builds remain deliverable.
