@@ -1668,6 +1668,42 @@ fn caught_callback_failures_leave_captures_with_their_owner() {
 /// Records its label into a shared log when the node's context is dropped.
 struct DropRecorder(&'static str, Rc<RefCell<Vec<&'static str>>>);
 
+#[test]
+fn manager_listener_withdrawal_preserves_a_caught_failure() {
+    struct HostileCapture(Rc<Cell<usize>>);
+    impl Drop for HostileCapture {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+            panic!("retired listener capture");
+        }
+    }
+
+    let manager = FocusManager::new();
+    let node = FocusNode::with_debug_label("withdrawal target");
+    let _attachment = manager.root_scope().attach_node(&node).expect("attach node");
+    let retired = Rc::new(Cell::new(0));
+    let later = Rc::new(Cell::new(None));
+    let first = manager.add_listener(Rc::new(|_, _| panic!("first observer")));
+    let owner = Rc::downgrade(&manager);
+    let later_id = Rc::clone(&later);
+    let second = manager.add_listener(Rc::new(move |_, _| {
+        owner.upgrade().expect("live owner").remove_listener(later_id.get().expect("installed listener"));
+    }));
+    let hostile = HostileCapture(Rc::clone(&retired));
+    later.set(Some(manager.add_listener(Rc::new(move |_, _| {
+        let _ = &hostile;
+        panic!("withdrawn listener ran");
+    }))));
+
+    let failure = catch_unwind(AssertUnwindSafe(|| node.request_focus())).expect_err("first failure propagates");
+    assert_eq!(failure.downcast_ref::<&str>(), Some(&"first observer"));
+    assert_eq!(retired.get(), 0, "caught failure prevents hostile last-owner retirement");
+    manager.remove_listener(first);
+    manager.remove_listener(second);
+    manager.unfocus();
+    assert!(manager.primary_focus().is_none(), "next healthy operation completes");
+}
+
 impl Drop for DropRecorder {
     fn drop(&mut self) {
         self.1.borrow_mut().push(self.0);
