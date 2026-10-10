@@ -337,6 +337,67 @@ impl SnapTriggerSlot {
 mod tests {
     use super::{ScrollDirection, SnapAction, SnapCommand, SnapTriggerSlot};
 
+    // The renderer discards the snap future. This private lifecycle seam
+    // complements the mounted gesture/unmount case without exposing it publicly.
+    #[test]
+    fn unmounting_a_floating_header_mid_snap_cancels_the_snap() {
+        use std::cell::Cell;
+        use std::future::Future;
+        use std::pin::Pin;
+        use std::rc::Rc;
+        use std::task::{Context, Poll, Waker};
+        use std::time::Duration;
+
+        use flui_animation::{Animation, AnimationController, MotionClock, Vsync};
+        use flui_view::prelude::ViewState;
+
+        let registry = Vsync::new();
+        let owner =
+            AnimationController::builder(Duration::from_millis(200)).build_on(Some(&registry));
+        let observer = owner.controller().clone();
+        let mut run = observer.forward_from(Some(0.0)).expect("snap starts");
+        let mut state = super::FloatingHeaderHostState {
+            snap_controller: Some(owner),
+            position: None,
+            activity_listener: None,
+            slot: Rc::new(Cell::new(SnapTriggerSlot::default())),
+        };
+        let mut clock = MotionClock::new();
+        registry.tick_all(&clock.frame(Duration::ZERO));
+        registry.tick_all(&clock.frame(Duration::from_millis(16)));
+        assert!(observer.value() > 0.0 && observer.value() < 1.0);
+        let mut context = Context::from_waker(Waker::noop());
+        assert_eq!(Pin::new(&mut run).poll(&mut context), Poll::Pending);
+
+        let calls = Rc::new(Cell::new(0));
+        let delivered = Rc::clone(&calls);
+        let callback_registry = registry.clone();
+        let callback_observer = observer.clone();
+        run.when_complete_or_cancel(move |outcome| {
+            assert!(outcome.is_err(), "the original snap is canceled");
+            assert!(callback_registry.is_empty());
+            assert!(!callback_observer.is_animating());
+            delivered.set(delivered.get() + 1);
+            // Cancellation runs outside the registry and controller borrows.
+            let replacement = AnimationController::builder(Duration::from_millis(200))
+                .build_on(Some(&callback_registry));
+            drop(replacement);
+        });
+
+        state.dispose();
+        assert!(
+            matches!(Pin::new(&mut run).poll(&mut context), Poll::Ready(Err(_))),
+            "the original future resolves before lifecycle disposal returns"
+        );
+        assert_eq!(calls.get(), 1);
+        assert!(registry.is_empty());
+        state.dispose();
+        drop(state);
+        registry.tick_all(&clock.frame(Duration::from_secs(1)));
+        assert_eq!(calls.get(), 1, "retirement delivers cancellation once");
+        assert!(!observer.is_animating());
+    }
+
     // The private seed reaches the otherwise unreachable identity boundary.
     #[test]
     fn exhausted_snap_epochs_never_reissue_a_command() {

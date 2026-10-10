@@ -44,8 +44,13 @@ changes. `an_active_floating_snap_migrates_and_unmounts` exercises floating and
 pinned-floating headers through real pointer release, checks continuous reveal
 across a registry replacement, advances the unfinished snap from the new registry,
 and removes the subtree while it is active. Removal withdraws frame registration
-and prevents later delegate builds. The core controller ownership tests separately
-pin cancellation of the run future.
+and prevents later delegate builds.
+`unmounting_a_floating_header_mid_snap_cancels_the_snap` retains the original
+future through the host's actual disposal method and checks immediate cancellation,
+withdrawal before the continuation, reentrant registration and repeated disposal.
+This private seam is necessary because the renderer discards the future returned
+when starting the snap; the public mounted case separately proves the gesture and
+unmount entry points.
 
 ## Hero handles observe the presentation without owning it
 
