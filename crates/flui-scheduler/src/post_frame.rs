@@ -50,6 +50,14 @@ impl PostFrameQueue {
             execution_failure: RefCell::new(None),
         })
     }
+
+    #[cfg(test)]
+    pub(crate) fn is_unlocked(&self) -> bool {
+        let Self { queue, active, closed: _, execution_failure } = self;
+        queue.try_borrow_mut().is_ok()
+            && active.try_borrow_mut().is_ok()
+            && execution_failure.try_borrow_mut().is_ok()
+    }
 }
 
 /// Construction may admit callbacks before the first owner frame exists.

@@ -152,6 +152,9 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
         post_frame.try_borrow_mut().is_ok(),
         "post_frame is locked during a callback"
     );
+    if let Some(lane) = post_frame.borrow().lane() {
+        assert!(lane.is_unlocked(), "post-frame lane state is borrowed during a callback");
+    }
     assert!(
         microtasks.try_borrow_mut().is_ok(),
         "microtasks is locked during a callback"
