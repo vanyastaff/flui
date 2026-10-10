@@ -166,14 +166,18 @@ impl OwnerFrame {
     /// Admission precedes mutation and diagnostics and remains held through
     /// completion, callable retirement and temporary scheduler release. The
     /// preparation runs once before opening a frame, then the pipeline runs
-    /// once. Both callables are borrowed from separate owned envelopes. Owner retirement
+    /// once. Both callables are borrowed from separate owned envelopes. Owner
+    /// retirement
     /// during its invocation closes future owner work without preempting the
     /// admitted frame's scheduler bookkeeping.
+    /// Preparation failure leaves accepted work and existing frame demand
+    /// intact without opening a frame or producing completion. The caller
+    /// decides when to retry that frame; this entry does not issue a new wake.
     ///
     /// # Errors
     /// Refuses recursive, retired or closed execution before invoking the
-    /// preparation or pipeline. Rejected envelopes retire separately, or are retained while
-    /// preserving an incoming failure.
+    /// preparation or pipeline. Rejected envelopes retire separately, or are
+    /// retained while preserving an incoming failure.
     ///
     /// # Panics
     /// Propagates the first invocation or cleanup failure after closing an
