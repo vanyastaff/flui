@@ -1,10 +1,10 @@
 //! Terminal scheduler retirement after its last strong UI reference is gone.
 
+use crate::wake_delivery::FailureSignal;
 use std::cell::RefCell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 use std::sync::Arc;
-use crate::wake_delivery::FailureSignal;
 
 use super::{SchedulerClosed, SchedulerInner, UpdateScheduler};
 use crate::async_driver::RetirePanic;

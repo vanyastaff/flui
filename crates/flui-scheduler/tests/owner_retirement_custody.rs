@@ -385,10 +385,22 @@ fn owner_retirement_custody_contract() {
                 "completed retirement ends caller custody",
                 completed_retirement_ends_caller_failure_custody,
             ),
-            ("standalone frame refusal ends custody", standalone_frame_refusal_ends_custody),
-            ("standalone background refusal ends custody", standalone_background_refusal_ends_custody),
-            ("standalone failed retirement ends custody", standalone_failed_retirement_ends_custody),
-            ("standalone retirement publishes producer custody", standalone_retirement_publishes_producer_custody),
+            (
+                "standalone frame refusal ends custody",
+                standalone_frame_refusal_ends_custody,
+            ),
+            (
+                "standalone background refusal ends custody",
+                standalone_background_refusal_ends_custody,
+            ),
+            (
+                "standalone failed retirement ends custody",
+                standalone_failed_retirement_ends_custody,
+            ),
+            (
+                "standalone retirement publishes producer custody",
+                standalone_retirement_publishes_producer_custody,
+            ),
         ],
     );
 }
@@ -397,12 +409,19 @@ fn healthy_teardown_after_completed_caught_failure() {
     let scheduler = UpdateScheduler::new();
     let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
     let drops = Rc::new(Cell::new(0));
-    assert_eq!(owner.pump_background(|| {
-        catch_nested_refusal_failure(&owner);
-        let capture = RemovedCapture(Rc::clone(&drops));
-        owner.post_frame_handle().schedule(move |_| { let _ = &capture; })
-            .expect("accepted callback");
-    }), Ok(0));
+    assert_eq!(
+        owner.pump_background(|| {
+            catch_nested_refusal_failure(&owner);
+            let capture = RemovedCapture(Rc::clone(&drops));
+            owner
+                .post_frame_handle()
+                .schedule(move |_| {
+                    let _ = &capture;
+                })
+                .expect("accepted callback");
+        }),
+        Ok(0)
+    );
     assert_eq!(drops.get(), 0, "callback remains accepted beyond its turn");
     assert!(owner.retire().is_none());
     assert_eq!(drops.get(), 1, "new healthy teardown retires the callback");
@@ -411,22 +430,47 @@ fn healthy_teardown_after_completed_caught_failure() {
 fn completed_retirement_ends_caller_failure_custody() {
     let scheduler = UpdateScheduler::new();
     let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
-    assert_eq!(owner.pump_background(|| {
-        catch_nested_refusal_failure(&owner);
-        assert!(owner.retire().is_none());
-    }), Ok(0));
+    assert_eq!(
+        owner.pump_background(|| {
+            catch_nested_refusal_failure(&owner);
+            assert!(owner.retire().is_none());
+        }),
+        Ok(0)
+    );
     let drops = Rc::new(Cell::new(0));
     let capture = RemovedCapture(Rc::clone(&drops));
-    assert_eq!(owner.pump_background(move || { let _ = &capture; }),
-        Err(ExecutionError::Retired));
-    assert_eq!(drops.get(), 1, "later healthy refused preparation retires normally");
+    assert_eq!(
+        owner.pump_background(move || {
+            let _ = &capture;
+        }),
+        Err(ExecutionError::Retired)
+    );
+    assert_eq!(
+        drops.get(),
+        1,
+        "later healthy refused preparation retires normally"
+    );
     let prepare = RemovedCapture(Rc::clone(&drops));
     let pipeline = RemovedCapture(Rc::clone(&drops));
     let now = Instant::now();
-    assert_eq!(owner.drive_frame(now, IdleDeadline::far_future(now),
-        move || { let _ = &prepare; }, move || { let _ = &pipeline; }),
-        Err(ExecutionError::Retired));
-    assert_eq!(drops.get(), 3, "later healthy refused frame retires both envelopes");
+    assert_eq!(
+        owner.drive_frame(
+            now,
+            IdleDeadline::far_future(now),
+            move || {
+                let _ = &prepare;
+            },
+            move || {
+                let _ = &pipeline;
+            }
+        ),
+        Err(ExecutionError::Retired)
+    );
+    assert_eq!(
+        drops.get(),
+        3,
+        "later healthy refused frame retires both envelopes"
+    );
 }
 
 fn recursive_retirement_shares_caught_failure() {
@@ -454,7 +498,11 @@ fn recursive_retirement_shares_caught_failure() {
         ready: false,
     }));
     assert!(owner.retire().is_none());
-    assert_eq!(drops.get(), 0, "recursive retirement cannot reset earlier custody");
+    assert_eq!(
+        drops.get(),
+        0,
+        "recursive retirement cannot reset earlier custody"
+    );
     assert_eq!(driver.pending_task_count(), 0);
     assert!(first.is_cancelled());
     assert!(second.is_cancelled());
@@ -464,9 +512,17 @@ fn recursive_retirement_shares_caught_failure() {
 fn assert_healthy_refusal_retires(owner: &OwnerFrame) {
     let drops = Rc::new(Cell::new(0));
     let capture = RemovedCapture(Rc::clone(&drops));
-    assert_eq!(owner.pump_background(move || { let _ = &capture; }),
-        Err(ExecutionError::Retired));
-    assert_eq!(drops.get(), 1, "fresh standalone refusal has no earlier failure custody");
+    assert_eq!(
+        owner.pump_background(move || {
+            let _ = &capture;
+        }),
+        Err(ExecutionError::Retired)
+    );
+    assert_eq!(
+        drops.get(),
+        1,
+        "fresh standalone refusal has no earlier failure custody"
+    );
 }
 
 fn standalone_frame_refusal_ends_custody() {
@@ -485,14 +541,25 @@ fn standalone_refusal_ends_custody(frame: bool) {
         let capture = RejectedCapture;
         if frame {
             let now = Instant::now();
-            let _ = owner.drive_frame(now, IdleDeadline::far_future(now),
-                move || { let _ = &capture; }, || {});
+            let _ = owner.drive_frame(
+                now,
+                IdleDeadline::far_future(now),
+                move || {
+                    let _ = &capture;
+                },
+                || {},
+            );
         } else {
-            let _ = owner.pump_background(move || { let _ = &capture; });
+            let _ = owner.pump_background(move || {
+                let _ = &capture;
+            });
         }
-    })).expect_err("standalone refused envelope reports its destructor failure");
-    assert_eq!(flui_foundation::panic::payload_text(failure.as_ref()),
-        Some("nested refused capture failure"));
+    }))
+    .expect_err("standalone refused envelope reports its destructor failure");
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("nested refused capture failure")
+    );
     assert_healthy_refusal_retires(&owner);
 }
 
@@ -500,17 +567,25 @@ fn standalone_failed_retirement_ends_custody() {
     struct PanickingFuture;
     impl Future for PanickingFuture {
         type Output = ();
-        fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<()> { Poll::Pending }
+        fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<()> {
+            Poll::Pending
+        }
     }
     impl Drop for PanickingFuture {
-        fn drop(&mut self) { panic!("standalone retired future failure"); }
+        fn drop(&mut self) {
+            panic!("standalone retired future failure");
+        }
     }
     let scheduler = UpdateScheduler::new();
     let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
     let token = owner.async_driver().spawn_local(Box::pin(PanickingFuture));
-    let failure = owner.retire().expect("retirement returns its first failure");
-    assert_eq!(flui_foundation::panic::payload_text(failure.as_ref()),
-        Some("standalone retired future failure"));
+    let failure = owner
+        .retire()
+        .expect("retirement returns its first failure");
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("standalone retired future failure")
+    );
     assert!(token.is_cancelled());
     assert_healthy_refusal_retires(&owner);
 }
@@ -525,24 +600,38 @@ fn standalone_retirement_publishes_producer_custody() {
         fn drop(&mut self) {
             let owner = self.owner.upgrade().expect("retiring owner lives");
             catch_nested_refusal_failure(&owner);
-            assert!(self.scheduler.upgrade().expect("scheduler lives")
-                .cancel_frame_callback(self.callback));
+            assert!(
+                self.scheduler
+                    .upgrade()
+                    .expect("scheduler lives")
+                    .cancel_frame_callback(self.callback)
+            );
         }
     }
     let scheduler = UpdateScheduler::new();
     let owner = Rc::new(OwnerFrame::new(&scheduler).expect("fresh owner"));
     let drops = Rc::new(Cell::new(0));
     let capture = RemovedCapture(Rc::clone(&drops));
-    let callback = scheduler.schedule_frame_callback(Box::new(move |_| { let _ = &capture; }));
+    let callback = scheduler.schedule_frame_callback(Box::new(move |_| {
+        let _ = &capture;
+    }));
     let capture = ProducerRemoval {
         owner: Rc::downgrade(&owner),
         scheduler: scheduler.downgrade(),
         callback,
     };
-    owner.post_frame_handle().schedule(move |_| { let _ = &capture; })
+    owner
+        .post_frame_handle()
+        .schedule(move |_| {
+            let _ = &capture;
+        })
         .expect("queued post-frame envelope");
     assert!(owner.retire().is_none());
-    assert_eq!(drops.get(), 0, "standalone cleanup shares custody with producer removals");
+    assert_eq!(
+        drops.get(),
+        0,
+        "standalone cleanup shares custody with producer removals"
+    );
     assert_healthy_refusal_retires(&owner);
 }
 
@@ -579,26 +668,40 @@ fn retired_task_admission_preserves_caught_failure(mode: u8) {
         let owner = Rc::new(OwnerFrame::new(&scheduler).expect("fresh owner"));
         let driver = owner.async_driver();
         let drops = Rc::new(Cell::new(0));
-        assert_eq!(owner.pump_background(|| {
-            if mode == 0 {
-                let token = driver.spawn_local_eager(Box::pin(EagerRetiringFuture {
-                    owner: Rc::downgrade(&owner),
-                    capture: RemovedCapture(Rc::clone(&drops)),
-                })).expect("pending poll refuses retired admission");
-                assert!(token.is_cancelled());
-            } else {
-                catch_nested_refusal_failure(&owner);
-                assert!(owner.retire().is_none());
-                let future = Box::pin(RemovedFuture {
-                    capture: RemovedCapture(Rc::clone(&drops)),
-                    ready: false,
-                });
-                let token = if mode == 1 { driver.spawn_local(future) }
-                    else { driver.spawn_local_eager(future).expect("refused eager token") };
-                assert!(token.is_cancelled());
-            }
-        }), Ok(0));
-        assert_eq!(drops.get(), 0, "retired admission retains opaque future, mode {mode}");
+        assert_eq!(
+            owner.pump_background(|| {
+                if mode == 0 {
+                    let token = driver
+                        .spawn_local_eager(Box::pin(EagerRetiringFuture {
+                            owner: Rc::downgrade(&owner),
+                            capture: RemovedCapture(Rc::clone(&drops)),
+                        }))
+                        .expect("pending poll refuses retired admission");
+                    assert!(token.is_cancelled());
+                } else {
+                    catch_nested_refusal_failure(&owner);
+                    assert!(owner.retire().is_none());
+                    let future = Box::pin(RemovedFuture {
+                        capture: RemovedCapture(Rc::clone(&drops)),
+                        ready: false,
+                    });
+                    let token = if mode == 1 {
+                        driver.spawn_local(future)
+                    } else {
+                        driver
+                            .spawn_local_eager(future)
+                            .expect("refused eager token")
+                    };
+                    assert!(token.is_cancelled());
+                }
+            }),
+            Ok(0)
+        );
+        assert_eq!(
+            drops.get(),
+            0,
+            "retired admission retains opaque future, mode {mode}"
+        );
         assert_eq!(driver.pending_task_count(), 0);
         assert_eq!(owner.pump_background(|| {}), Err(ExecutionError::Retired));
         drop(owner);

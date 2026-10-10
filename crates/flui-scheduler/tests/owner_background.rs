@@ -305,18 +305,28 @@ fn healthy_wake_retirement_observes_newly_caught_failure() {
         let _ = &hook_capture;
         let (owner, weak) =
             RECOVERY_OWNER.with(|slot| slot.borrow().as_ref().expect("owner scope").clone());
-        weak.upgrade().expect("scheduler live").set_on_frame_scheduled(None);
+        weak.upgrade()
+            .expect("scheduler live")
+            .set_on_frame_scheduled(None);
         let capture = HostileCapture(Arc::clone(&observed));
         let failure = catch_unwind(AssertUnwindSafe(|| {
-            owner.pump_background(move || { let _ = &capture; })
-        })).expect_err("nested refused envelope fails");
-        assert_eq!(flui_foundation::panic::payload_text(failure.as_ref()),
-            Some("rejected recovery capture was destroyed"));
+            owner.pump_background(move || {
+                let _ = &capture;
+            })
+        }))
+        .expect_err("nested refused envelope fails");
+        assert_eq!(
+            flui_foundation::panic::payload_text(failure.as_ref()),
+            Some("rejected recovery capture was destroyed")
+        );
     })));
     assert_eq!(owner.pump_background(|| scheduler.request_frame()), Ok(0));
     assert_eq!(rejected_drops.load(Ordering::SeqCst), 1);
-    assert_eq!(hook_drops.load(Ordering::SeqCst), 0,
-        "wake begun healthy retains its envelope after newly caught failure");
+    assert_eq!(
+        hook_drops.load(Ordering::SeqCst),
+        0,
+        "wake begun healthy retains its envelope after newly caught failure"
+    );
     assert_eq!(owner.pump_background(|| {}), Ok(0));
 }
 
@@ -331,43 +341,77 @@ fn worker_wake_keeps_failed_receipt_across_next_healthy_turn() {
     scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
         let _ = &hook_capture;
         entered.send(()).expect("owner awaits worker");
-        continue_hook.lock().expect("hook channel lock")
-            .recv().expect("owner releases worker");
+        continue_hook
+            .lock()
+            .expect("hook channel lock")
+            .recv()
+            .expect("owner releases worker");
     })));
     let worker = RefCell::new(None);
     let failure_drops = Arc::new(AtomicUsize::new(0));
-    assert_eq!(owner.pump_background(|| {
-        let waker = scheduler.frame_waker();
-        *worker.borrow_mut() = Some(std::thread::spawn(move || waker.request_frame()));
-        started.recv().expect("worker entered hook");
-        // Delivery owns the final hook before failure custody begins.
-        scheduler.set_on_frame_scheduled(None);
-        let capture = HostileCapture(Arc::clone(&failure_drops));
-        assert!(catch_unwind(AssertUnwindSafe(|| {
-            owner.pump_background(move || { let _ = &capture; })
-        })).is_err());
-    }), Ok(0));
+    assert_eq!(
+        owner.pump_background(|| {
+            let waker = scheduler.frame_waker();
+            *worker.borrow_mut() = Some(std::thread::spawn(move || waker.request_frame()));
+            started.recv().expect("worker entered hook");
+            // Delivery owns the final hook before failure custody begins.
+            scheduler.set_on_frame_scheduled(None);
+            let capture = HostileCapture(Arc::clone(&failure_drops));
+            assert!(
+                catch_unwind(AssertUnwindSafe(|| {
+                    owner.pump_background(move || {
+                        let _ = &capture;
+                    })
+                }))
+                .is_err()
+            );
+        }),
+        Ok(0)
+    );
     let healthy_drops = Arc::new(AtomicUsize::new(0));
     let teardown_drops = Arc::new(AtomicUsize::new(0));
-    assert_eq!(owner.pump_background(|| {
-        let capture = HookCapture(Arc::clone(&healthy_drops));
-        let id = scheduler.schedule_frame_callback(Box::new(move |_| { let _ = &capture; }));
-        assert!(scheduler.cancel_frame_callback(id));
-        let capture = HookCapture(Arc::clone(&teardown_drops));
-        owner.post_frame_handle().schedule(move |_| { let _ = &capture; })
-            .expect("live post-frame lane");
-    }), Ok(0));
+    assert_eq!(
+        owner.pump_background(|| {
+            let capture = HookCapture(Arc::clone(&healthy_drops));
+            let id = scheduler.schedule_frame_callback(Box::new(move |_| {
+                let _ = &capture;
+            }));
+            assert!(scheduler.cancel_frame_callback(id));
+            let capture = HookCapture(Arc::clone(&teardown_drops));
+            owner
+                .post_frame_handle()
+                .schedule(move |_| {
+                    let _ = &capture;
+                })
+                .expect("live post-frame lane");
+        }),
+        Ok(0)
+    );
     // Release before assertions so a failing assertion never strands a worker.
     release.send(()).expect("worker still waiting");
-    worker.borrow_mut().take().expect("worker started").join().expect("worker wake");
+    worker
+        .borrow_mut()
+        .take()
+        .expect("worker started")
+        .join()
+        .expect("worker wake");
     assert_eq!(failure_drops.load(Ordering::SeqCst), 1);
-    assert_eq!(hook_drops.load(Ordering::SeqCst), 0,
-        "old failed receipt survives a newer healthy admission");
-    assert_eq!(healthy_drops.load(Ordering::SeqCst), 1,
-        "new healthy receipt keeps ordinary capture destruction");
+    assert_eq!(
+        hook_drops.load(Ordering::SeqCst),
+        0,
+        "old failed receipt survives a newer healthy admission"
+    );
+    assert_eq!(
+        healthy_drops.load(Ordering::SeqCst),
+        1,
+        "new healthy receipt keeps ordinary capture destruction"
+    );
     assert!(owner.retire().is_none());
-    assert_eq!(teardown_drops.load(Ordering::SeqCst), 1,
-        "later healthy owner teardown retires accepted captures normally");
+    assert_eq!(
+        teardown_drops.load(Ordering::SeqCst),
+        1,
+        "later healthy owner teardown retires accepted captures normally"
+    );
 }
 
 fn late_worker_failure_does_not_contaminate_completed_owner_custody() {
@@ -378,26 +422,48 @@ fn late_worker_failure_does_not_contaminate_completed_owner_custody() {
     let continue_hook = std::sync::Mutex::new(continue_hook);
     scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
         entered.send(()).expect("owner awaits worker");
-        continue_hook.lock().expect("hook channel lock").recv().expect("owner releases worker");
+        continue_hook
+            .lock()
+            .expect("hook channel lock")
+            .recv()
+            .expect("owner releases worker");
         panic!("late worker hook failure");
     })));
     let worker = RefCell::new(None);
-    assert_eq!(owner.pump_background(|| {
-        let waker = scheduler.frame_waker();
-        *worker.borrow_mut() = Some(std::thread::spawn(move || waker.request_frame()));
-        started.recv().expect("worker entered hook");
-        scheduler.set_on_frame_scheduled(None);
-        assert!(owner.retire().is_none());
-    }), Ok(0));
+    assert_eq!(
+        owner.pump_background(|| {
+            let waker = scheduler.frame_waker();
+            *worker.borrow_mut() = Some(std::thread::spawn(move || waker.request_frame()));
+            started.recv().expect("worker entered hook");
+            scheduler.set_on_frame_scheduled(None);
+            assert!(owner.retire().is_none());
+        }),
+        Ok(0)
+    );
     release.send(()).expect("worker still waiting");
-    let failure = worker.borrow_mut().take().expect("worker started").join()
+    let failure = worker
+        .borrow_mut()
+        .take()
+        .expect("worker started")
+        .join()
         .expect_err("late worker failure propagates on its own thread");
-    assert_eq!(flui_foundation::panic::payload_text(failure.as_ref()), Some("late worker hook failure"));
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("late worker hook failure")
+    );
     let drops = Arc::new(AtomicUsize::new(0));
     let capture = HookCapture(Arc::clone(&drops));
-    assert_eq!(owner.pump_background(move || { let _ = &capture; }), Err(ExecutionError::Retired));
-    assert_eq!(drops.load(Ordering::SeqCst), 1,
-        "late worker failure has no custody over a new healthy refused preparation");
+    assert_eq!(
+        owner.pump_background(move || {
+            let _ = &capture;
+        }),
+        Err(ExecutionError::Retired)
+    );
+    assert_eq!(
+        drops.load(Ordering::SeqCst),
+        1,
+        "late worker failure has no custody over a new healthy refused preparation"
+    );
 }
 
 #[test]

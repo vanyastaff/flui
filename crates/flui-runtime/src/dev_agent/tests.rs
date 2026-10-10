@@ -142,10 +142,12 @@ fn ui_runtime() -> (UiRuntime, ScriptedSink) {
 
 fn frame(ui_runtime: &UiRuntime, sink: &mut ScriptedSink) {
     let now = flui_scheduler::Instant::now();
-    let _presented =
-        ui_runtime.drive_frame(now, flui_scheduler::IdleDeadline::far_future(now), || {}, || {
-            ui_runtime.render_frame(sink)
-        });
+    let _presented = ui_runtime.drive_frame(
+        now,
+        flui_scheduler::IdleDeadline::far_future(now),
+        || {},
+        || ui_runtime.render_frame(sink),
+    );
 }
 
 /// Frames once more and says whether the UI runtime collected semantics.

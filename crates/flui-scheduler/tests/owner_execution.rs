@@ -73,7 +73,10 @@ fn failed_preparation_does_not_fabricate_a_frame() {
     assert!(!pipeline_ran.get());
     assert!(!task_ran.get());
     assert!(!transient_ran.get());
-    assert!(scheduler.is_frame_scheduled(), "failed preparation keeps frame demand");
+    assert!(
+        scheduler.is_frame_scheduled(),
+        "failed preparation keeps frame demand"
+    );
     assert!(completed.as_mut().poll(&mut context).is_pending());
     owner
         .drive_frame(now, IdleDeadline::far_future(now), || {}, || {})
@@ -197,7 +200,10 @@ fn invocation_failure_retains_both_callable_envelopes() {
         assert_eq!(failure.downcast_ref::<&str>(), Some(&expected));
         assert_eq!(preparation_drops.get(), 0);
         assert_eq!(pipeline_drops.get(), 0);
-        assert!(!delivered.get(), "failure does not invoke the accepted tail");
+        assert!(
+            !delivered.get(),
+            "failure does not invoke the accepted tail"
+        );
         owner
             .drive_frame(now, IdleDeadline::far_future(now), || {}, || {})
             .expect("next healthy frame");
@@ -324,18 +330,19 @@ fn admitted_frame_preparation_contract() {
     }
     let mut failures = Vec::new();
     for (name, _) in cases {
-        let mut child = std::process::Command::new(std::env::current_exe().expect("test executable"))
-            .args([
-                "owner_execution::admitted_frame_preparation_contract",
-                "--exact",
-                "--nocapture",
-            ])
-            .env("FLUI_OWNER_EXECUTION_CASE", name)
-            .env("RUST_BACKTRACE", "0")
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .expect("child test process");
+        let mut child =
+            std::process::Command::new(std::env::current_exe().expect("test executable"))
+                .args([
+                    "owner_execution::admitted_frame_preparation_contract",
+                    "--exact",
+                    "--nocapture",
+                ])
+                .env("FLUI_OWNER_EXECUTION_CASE", name)
+                .env("RUST_BACKTRACE", "0")
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .expect("child test process");
         let mut stdout = child.stdout.take().expect("stdout pipe");
         let mut stderr = child.stderr.take().expect("stderr pipe");
         let stdout_reader = std::thread::spawn(move || {

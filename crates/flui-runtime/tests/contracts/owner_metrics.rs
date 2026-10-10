@@ -2130,9 +2130,15 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
     let retry_deadline = || {
         let deadline = Rc::new(Cell::new(None));
         let observed = Rc::clone(&deadline);
-        target.test_callback(Box::new(move |runtime| observed.set(runtime.next_wake())), &effects)
+        target
+            .test_callback(
+                Box::new(move |runtime| observed.set(runtime.next_wake())),
+                &effects,
+            )
             .expect("observe the affected runtime's public wake deadline");
-        deadline.get().expect("affected runtime retains geometry retry debt")
+        deadline
+            .get()
+            .expect("affected runtime retains geometry retry debt")
     };
     for hook_present in [false, true] {
         let wakes = Arc::new(AtomicUsize::new(0));
@@ -2158,8 +2164,11 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         let observed_polls = Rc::clone(&polls);
         let observed_window = Arc::clone(&window);
         let task = driver.spawn_local(Box::pin(std::future::poll_fn(move |cx| {
-            assert_eq!(observed_window.calls.load(Ordering::Relaxed), calls_before + 2,
-                "successful runtime geometry preparation precedes the first ready poll");
+            assert_eq!(
+                observed_window.calls.load(Ordering::Relaxed),
+                calls_before + 2,
+                "successful runtime geometry preparation precedes the first ready poll"
+            );
             observed_polls.set(observed_polls.get() + 1);
             if observed_polls.get() == 1 {
                 cx.waker().wake_by_ref();
@@ -2171,16 +2180,30 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         let wake_before = wakes.load(Ordering::SeqCst);
         window.panic_next.store(true, Ordering::Relaxed);
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            background.deliver(flui_runtime::owner::RuntimeOperation::Background, &effects)
+            background
+                .deliver(flui_runtime::owner::RuntimeOperation::Background, &effects)
                 .expect("actual host background pump");
-        })).expect_err("native preparation failure propagates");
-        assert_eq!(failure.downcast_ref::<&str>(), Some(&"scripted geometry query failure"));
-        assert_eq!(polls.get(), 0, "failed preparation leaves the ready future unpolled");
+        }))
+        .expect_err("native preparation failure propagates");
+        assert_eq!(
+            failure.downcast_ref::<&str>(),
+            Some(&"scripted geometry query failure")
+        );
+        assert_eq!(
+            polls.get(),
+            0,
+            "failed preparation leaves the ready future unpolled"
+        );
         assert_eq!(driver.pending_task_count(), 1);
-        assert!(scheduler.is_frame_scheduled(), "failure preserves accepted task delivery");
+        assert!(
+            scheduler.is_frame_scheduled(),
+            "failure preserves accepted task delivery"
+        );
         if hook_present {
-            assert!(wakes.load(Ordering::SeqCst) > wake_before,
-                "failed admitted preparation retries real hook delivery");
+            assert!(
+                wakes.load(Ordering::SeqCst) > wake_before,
+                "failed admitted preparation retries real hook delivery"
+            );
         }
         let replacement_wakes = Arc::new(AtomicUsize::new(0));
         let observed = Arc::clone(&replacement_wakes);
@@ -2188,42 +2211,68 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
             observed.fetch_add(1, Ordering::SeqCst);
         })));
         if !hook_present {
-            assert!(replacement_wakes.load(Ordering::SeqCst) > 0,
-                "installing a missing hook pays retained delivery debt");
+            assert!(
+                replacement_wakes.load(Ordering::SeqCst) > 0,
+                "installing a missing hook pays retained delivery debt"
+            );
         }
 
         let sibling_ran = Rc::new(Cell::new(false));
         let observed = Rc::clone(&sibling_ran);
-        let sibling_task = sibling_driver.spawn_local(Box::pin(async move { observed.set(true); }));
-        sibling_turn.deliver(flui_runtime::owner::RuntimeOperation::Background, &effects)
+        let sibling_task = sibling_driver.spawn_local(Box::pin(async move {
+            observed.set(true);
+        }));
+        sibling_turn
+            .deliver(flui_runtime::owner::RuntimeOperation::Background, &effects)
             .expect("sibling progresses after another runtime's preparation failure");
         assert!(sibling_ran.get());
         assert!(!sibling_task.is_cancelled());
-        assert_eq!(polls.get(), 0, "sibling execution cannot poll this runtime's task");
+        assert_eq!(
+            polls.get(),
+            0,
+            "sibling execution cannot poll this runtime's task"
+        );
 
         *window.answer.lock().expect("successful preparation script") = Ok(geometry(2.0, 2.0));
         let due = retry_deadline();
         clock.advance(due.duration_since(clock.now()));
         let wake_before = replacement_wakes.load(Ordering::SeqCst);
-        background.deliver(flui_runtime::owner::RuntimeOperation::Background, &effects)
+        background
+            .deliver(flui_runtime::owner::RuntimeOperation::Background, &effects)
             .expect("successful geometry preparation and one ready batch");
         assert_eq!(polls.get(), 1, "self-wake belongs to a later batch");
         assert_eq!(driver.pending_task_count(), 1);
-        assert!(replacement_wakes.load(Ordering::SeqCst) > wake_before,
-            "self-wake delivers a real next background opportunity");
-        assert!(scheduler.is_frame_scheduled(), "the self-wake survives the first batch");
+        assert!(
+            replacement_wakes.load(Ordering::SeqCst) > wake_before,
+            "self-wake delivers a real next background opportunity"
+        );
+        assert!(
+            scheduler.is_frame_scheduled(),
+            "the self-wake survives the first batch"
+        );
         let taps_before = taps.get();
         tap();
-        assert_eq!(taps.get(), taps_before,
-            "geometry prepared before polling reaches the actual gesture consumer");
-        background.deliver(flui_runtime::owner::RuntimeOperation::Background, &effects)
+        assert_eq!(
+            taps.get(),
+            taps_before,
+            "geometry prepared before polling reaches the actual gesture consumer"
+        );
+        background
+            .deliver(flui_runtime::owner::RuntimeOperation::Background, &effects)
             .expect("next background batch completes the self-waking task");
         assert_eq!(polls.get(), 2);
         assert_eq!(driver.pending_task_count(), 0);
         assert!(!task.is_cancelled());
-        assert_eq!(scheduler.frame_count(), frames_before, "background recovery fabricates no frame");
+        assert_eq!(
+            scheduler.frame_count(),
+            frames_before,
+            "background recovery fabricates no frame"
+        );
         assert_eq!(effects.sink.borrow().submitted, submissions_before);
-        assert!(!scheduler.frames_enabled(), "background progress does not enable visual frames");
+        assert!(
+            !scheduler.frames_enabled(),
+            "background progress does not enable visual frames"
+        );
     }
     *window.answer.lock().expect("pending before close") = Err(PreferenceQueryError::Unavailable);
     owner
@@ -2235,10 +2284,14 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
     let before = window.calls.load(Ordering::Relaxed);
     target.close(&effects).expect("close with pending retry");
     clock.advance(Duration::from_secs(2));
-    sibling_turn.deliver(flui_runtime::owner::RuntimeOperation::Background, &effects)
+    sibling_turn
+        .deliver(flui_runtime::owner::RuntimeOperation::Background, &effects)
         .expect("closing the failed presentation leaves its sibling live");
-    owner.presentation_dispatcher(sibling_address).expect("surviving sibling")
-        .close(&effects).expect("close surviving sibling");
+    owner
+        .presentation_dispatcher(sibling_address)
+        .expect("surviving sibling")
+        .close(&effects)
+        .expect("close surviving sibling");
     assert_eq!(owner.next_wake().expect("closed deadlines"), None);
     assert_eq!(
         window.calls.load(Ordering::Relaxed),

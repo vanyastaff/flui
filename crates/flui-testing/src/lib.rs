@@ -1131,48 +1131,53 @@ impl HeadlessBinding {
             // behavior before `drive_frame` took a deadline.
             let idle_deadline = flui_scheduler::IdleDeadline::far_future(vsync_time);
             owner_frame
-                .drive_frame(vsync_time, idle_deadline, || {}, || {
-                    let (painted_layer_tree, report) = Self::run_pipeline(tree);
-                    *last_frame_report = report;
-                    *last_frame_painted = painted_layer_tree.is_some();
-                    if let Some(layer_tree) = painted_layer_tree {
-                        *last_layer_tree = Some(layer_tree);
-                        *painted_frame_count = painted_frame_count.saturating_add(1);
-                    }
+                .drive_frame(
+                    vsync_time,
+                    idle_deadline,
+                    || {},
+                    || {
+                        let (painted_layer_tree, report) = Self::run_pipeline(tree);
+                        *last_frame_report = report;
+                        *last_frame_painted = painted_layer_tree.is_some();
+                        if let Some(layer_tree) = painted_layer_tree {
+                            *last_layer_tree = Some(layer_tree);
+                            *painted_frame_count = painted_frame_count.saturating_add(1);
+                        }
 
-                    // 7. Re-hit-test every stationary device against the
-                    //    tree layout/paint that just committed above,
-                    //    still inside this closure's `PersistentCallbacks`
-                    //    slot — i.e. BEFORE `end_frame` drains post-frame
-                    //    callbacks below, not after `drive_frame` returns.
-                    //    Placement matters: production
-                    //    (`UiRuntime::render_frame`,
-                    //    `crates/flui-runtime/src/ui_runtime/`, invoked from
-                    //    `crates/flui-app/src/app/runner.rs`) calls
-                    //    `update_all_devices` from inside the SAME
-                    //    `drive_frame` pipeline closure it runs its own
-                    //    layout/paint step in, so any post-frame work an
-                    //    enter/exit callback queues (e.g. a rebuild
-                    //    handle) lands in THIS frame's post-frame phase —
-                    //    matching the oracle, where
-                    //    `_scheduleMouseTrackerUpdate` posts
-                    //    `updateAllDevices` from
-                    //    `_handlePersistentFrameCallback`, still inside
-                    //    the persistent phase, ahead of the post-frame
-                    //    queue. Running this after `drive_frame` returns
-                    //    would defer that queued work to a LATER pump
-                    //    instead. Unconditional and every frame; a
-                    //    gesture-only binding has no tree to hit-test, so
-                    //    this is a no-op there.
-                    if let Some(tree_binding) = tree.as_ref() {
-                        let pipeline_owner = &tree_binding.pipeline_owner;
-                        gestures.mouse_tracker().update_all_devices(|position| {
-                            let mut result = HitTestResult::new();
-                            pipeline_owner.with(|owner| owner.hit_test(position, &mut result));
-                            result
-                        });
-                    }
-                })
+                        // 7. Re-hit-test every stationary device against the
+                        //    tree layout/paint that just committed above,
+                        //    still inside this closure's `PersistentCallbacks`
+                        //    slot — i.e. BEFORE `end_frame` drains post-frame
+                        //    callbacks below, not after `drive_frame` returns.
+                        //    Placement matters: production
+                        //    (`UiRuntime::render_frame`,
+                        //    `crates/flui-runtime/src/ui_runtime/`, invoked from
+                        //    `crates/flui-app/src/app/runner.rs`) calls
+                        //    `update_all_devices` from inside the SAME
+                        //    `drive_frame` pipeline closure it runs its own
+                        //    layout/paint step in, so any post-frame work an
+                        //    enter/exit callback queues (e.g. a rebuild
+                        //    handle) lands in THIS frame's post-frame phase —
+                        //    matching the oracle, where
+                        //    `_scheduleMouseTrackerUpdate` posts
+                        //    `updateAllDevices` from
+                        //    `_handlePersistentFrameCallback`, still inside
+                        //    the persistent phase, ahead of the post-frame
+                        //    queue. Running this after `drive_frame` returns
+                        //    would defer that queued work to a LATER pump
+                        //    instead. Unconditional and every frame; a
+                        //    gesture-only binding has no tree to hit-test, so
+                        //    this is a no-op there.
+                        if let Some(tree_binding) = tree.as_ref() {
+                            let pipeline_owner = &tree_binding.pipeline_owner;
+                            gestures.mouse_tracker().update_all_devices(|position| {
+                                let mut result = HitTestResult::new();
+                                pipeline_owner.with(|owner| owner.hit_test(position, &mut result));
+                                result
+                            });
+                        }
+                    },
+                )
                 .expect("BUG: the headless binding's live owner must admit its frame");
         });
     }

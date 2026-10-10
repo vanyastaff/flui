@@ -1,6 +1,6 @@
 //! Frame-completion wake ownership, failure priority and contained reporting.
-use std::any::Any;
 use crate::wake_delivery::FailureSignal;
+use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::task::Waker;
 

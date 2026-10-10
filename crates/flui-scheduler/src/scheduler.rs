@@ -1879,8 +1879,13 @@ impl UpdateScheduler {
     pub fn set_on_frame_scheduled(&self, hook: Option<Arc<dyn Fn() + Send + Sync>>) {
         let previous = { std::mem::replace(&mut *self.inner.wake.on_frame_scheduled.lock(), hook) };
         execution::retire_with_execution_custody(&self.inner.execution_failure, previous);
-        let preserve_failure = self.inner.execution_failure.borrow().as_ref()
-            .and_then(std::sync::Weak::upgrade).is_some_and(|signal| signal.get());
+        let preserve_failure = self
+            .inner
+            .execution_failure
+            .borrow()
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+            .is_some_and(|signal| signal.get());
         self.inner.wake.wake_delivery.request_preserving_failure(
             preserve_failure,
             || false,
@@ -2715,7 +2720,6 @@ impl UpdateScheduler {
     pub fn debug_assert_no_transient_callbacks(&self, _reason: &str) -> bool {
         self.inner.callbacks.transient.borrow_mut().is_empty()
     }
-
 }
 
 impl Default for UpdateScheduler {

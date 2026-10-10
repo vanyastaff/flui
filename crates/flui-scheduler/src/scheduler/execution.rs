@@ -2,13 +2,13 @@
 
 use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
-use std::sync::{Arc, Weak};
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Weak};
 
 use super::{IdleDeadline, UpdateScheduler, request_frame_impl_preserving_failure};
 use crate::async_driver::RetirePanic;
-use crate::{Instant, OwnerFrame, SchedulerPhase};
 use crate::wake_delivery::FailureSignal;
+use crate::{Instant, OwnerFrame, SchedulerPhase};
 
 /// Why an owner refused execution before changing frame or wake state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -194,7 +194,9 @@ impl OwnerFrame {
             return action();
         };
         let scheduler = self.scheduler.upgrade();
-        let failure_scope = scheduler.as_ref().map(|scheduler| self.bind_failure_scope(scheduler));
+        let failure_scope = scheduler
+            .as_ref()
+            .map(|scheduler| self.bind_failure_scope(scheduler));
         let mut recovery = Recovery::new(self);
         if let Some(Some(payload)) = recovery.attempt(action) {
             recovery.keep(payload);
@@ -210,9 +212,16 @@ impl OwnerFrame {
     fn bind_failure_scope<'a>(&'a self, scheduler: &UpdateScheduler) -> FailureScope<'a> {
         let signal = Arc::downgrade(&self.execution.failed.borrow());
         *scheduler.inner.execution_failure.borrow_mut() = Some(signal.clone());
-        scheduler.inner.wake.wake_delivery.bind_failure_signal(Some(signal.clone()));
+        scheduler
+            .inner
+            .wake
+            .wake_delivery
+            .bind_failure_signal(Some(signal.clone()));
         self.bind_task_failure_signal(Some(signal));
-        FailureScope { scheduler: scheduler.downgrade(), owner: self }
+        FailureScope {
+            scheduler: scheduler.downgrade(),
+            owner: self,
+        }
     }
     pub(crate) fn record_execution_failure(&self) {
         self.execution.failed.borrow().set(true);

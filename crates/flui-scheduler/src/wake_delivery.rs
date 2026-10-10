@@ -2,8 +2,8 @@
 
 use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::sync::{Arc, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Weak};
 use std::thread::ThreadId;
 
 #[derive(Default)]
@@ -184,9 +184,11 @@ impl WakeDelivery {
                 }
                 if failure_signal.as_ref().is_some_and(|signal| signal.get()) {
                     std::mem::forget(compensation_hook);
-                } else if let Err(payload) = std::panic::catch_unwind(
-                    std::panic::AssertUnwindSafe(|| drop(compensation_hook)),
-                ) {
+                } else if let Err(payload) =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        drop(compensation_hook)
+                    }))
+                {
                     if let Some(signal) = &failure_signal {
                         signal.set(true);
                     }
