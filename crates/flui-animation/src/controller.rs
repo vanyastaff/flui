@@ -696,7 +696,7 @@ impl AnimationController {
     /// });
     ///
     /// // Or await it directly. `tick_at` is normally driven by a real
-    /// // ticker/Vsync; this drives it to completion by hand for the example.
+    /// // Vsync; this drives it to completion by hand for the example.
     /// controller.tick_at(Duration::from_millis(100));
     /// let waker = Waker::noop();
     /// let mut cx = Context::from_waker(waker);
@@ -1166,7 +1166,7 @@ impl AnimationController {
             inner.scaled_run_duration(base)
         });
         // No-op fast path: already at the target, or the run duration is
-        // zero. Starting the ticker would run for the full duration,
+        // zero. Starting a timed run would wait for the full duration,
         // re-notifying value listeners every frame while the value never
         // changes, so settle immediately with a single notification instead
         // (see `forward_from`).
@@ -1196,7 +1196,7 @@ impl AnimationController {
     }
 
     /// Settle a run whose distance or duration is trivial: snap the value,
-    /// stop the ticker, cancel whatever run this displaced, and report the
+    /// cancel whatever run this displaced, and report the
     /// run's directed settled status — no transient running status, no
     /// full-duration no-op run. Returns an already-complete [`AnimationRunFuture`]
     /// for the (trivial) run this call represents. The single settle
@@ -1753,8 +1753,7 @@ impl AnimationController {
 
     /// A monotonically increasing run-generation counter, bumped once each time
     /// a fresh run begins — every `forward`/`reverse`/`animate_to`/`animate_back`/
-    /// `repeat`/`fling`/`animate_with` (i.e. every internal `restart_ticker`
-    /// that begins the run at elapsed zero).
+    /// `repeat`/`fling`/`animate_with` that begins the run at elapsed zero.
     ///
     /// An external, deterministic frame driver (e.g. `flui-testing`'s
     /// `HeadlessBinding`) reads this to detect that a new run's `t = 0` was just
@@ -1820,14 +1819,16 @@ impl AnimationController {
         }
     }
 
-    /// Advance the animation to `raw_elapsed_secs` seconds (ticker timeline,
-    /// pre-dilation) since the ticker started.
+    /// Sample the run at `elapsed`, measured from its own time origin.
+    /// Registry-driven calls use the presentation clock's projected timeline;
+    /// explicit callers supply their own run timeline. The controller applies
+    /// its local playback rate to this elapsed time.
     ///
     /// This is the single time-driven entry point: time-based runs interpolate
     /// `start_value -> target_value`, simulations sample `x(t)`, and a repeat
     /// samples its leg/phase/exhaustion as a pure function of `cycle` (see
     /// the private `tick_repeat`). Value and status listeners are fired
-    /// only after the inner lock is released.
+    /// only after the state borrow is released.
     pub fn tick_at(&self, elapsed: Duration) {
         let mut retirement = Retirement::new();
         retirement.run_with(|retirement| self.tick_at_with_retirement(elapsed, retirement));
@@ -2100,9 +2101,9 @@ impl AnimationController {
     /// was just written to the final sample) and a non-finite sample
     /// (`ValueChange::Unchanged`, since `value` is deliberately left at its
     /// last finite point — the caller already decided not to write the bad
-    /// sample through). Clears `simulation`, stops the ticker, settles
+    /// sample through). Clears `simulation`, settles
     /// `status` by direction, and publishes the completion BEFORE `finish`
-    /// unlocks (the completer resolves before listeners are notified), so a panicking value/status listener still
+    /// releases its state borrow (the completer resolves before listeners are notified), so a panicking value/status listener still
     /// leaves the run `Ok` — the admitted delivery preserves the
     /// already-published outcome. `complete`, not `cancel`: both paths
     /// are the run ending on its own terms, never a cancellation.
@@ -2598,7 +2599,7 @@ impl AnimationControllerInner {
         }
     }
 
-    /// Halt any active run at the current value: stop the ticker, clear
+    /// Halt any active run at the current value: clear
     /// simulation/repeat/curve state, and cancel the displaced run's
     /// completer — without touching `status` or emitting any notification.
     /// This is the raw halt that `set_value` performs first; it does not
@@ -2671,9 +2672,7 @@ impl AnimationControllerInner {
         }
     }
 
-    /// Dilated elapsed time since the current run started, from the last
-    /// observed tick (`restart_ticker` always begins a fresh run at elapsed
-    /// zero, so there is no per-run epoch left to subtract).
+    /// Local playback time of the current run, from its last published sample.
     fn cycle_elapsed_secs(&self) -> f64 {
         self.local_elapsed.as_secs_f64()
     }
