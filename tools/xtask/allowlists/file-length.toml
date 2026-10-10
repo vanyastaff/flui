@@ -3,8 +3,3 @@
 # fails when a file grows past its entry, shrinks below it, or comes under the
 # limit. `exit` names the ADR or migration-plan step whose change removes the entry.
 
-[[allow]]
-path = "crates/flui-scheduler/src/scheduler.rs"
-lines = 3206
-reason = "the production impl of UpdateScheduler is one block of about 2400 lines"
-exit = "W1-A5"
