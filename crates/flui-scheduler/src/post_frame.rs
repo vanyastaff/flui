@@ -4,9 +4,8 @@
 //! [`UpdateScheduler`] delegates to it: the post-frame queue and async task
 //! store. A UI runtime (or a headless binding) owns
 //! exactly one and is the only strong owner; every frame entry point takes it
-//! by reference — [`UpdateScheduler::drive_frame`],
-//! [`UpdateScheduler::handle_begin_frame`], [`UpdateScheduler::end_frame`],
-//! [`UpdateScheduler::execute_frame`] — so no frame can poll or drain
+//! through [`OwnerFrame::drive_frame`] and [`OwnerFrame::pump_background`],
+//! so no turn can poll or drain
 //! "nothing".
 //!
 //! All post-frame callbacks share one registration-ordered `Rc` queue.
@@ -170,8 +169,8 @@ impl OwnerFrame {
     /// number polled.
     ///
     /// The frame's mid-frame slot calls it from
-    /// [`UpdateScheduler::handle_begin_frame`]; a wake that runs no frame
-    /// calls it after [`UpdateScheduler::finish_async_pump`]. Never from
+    /// the internal begin-frame step; a background turn calls it after
+    /// consuming old demand and preparing runtime policy. Never from
     /// build, layout or paint. Tasks are polled in ascending id order; a task
     /// that completes or is cancelled is removed; a task woken during this
     /// call is polled next time — the driver never spins. Cost scales with
@@ -181,7 +180,7 @@ impl OwnerFrame {
     ///
     /// Propagates a task's poll panic after removing that task and keeping
     /// every unreached sibling indexed for the next poll.
-    pub fn poll_ready(&self) -> usize {
+    pub(crate) fn poll_ready(&self) -> usize {
         debug_assert!(
             self.scheduler.upgrade().is_none_or(
                 |scheduler| scheduler.phase() != crate::SchedulerPhase::PersistentCallbacks
@@ -478,7 +477,17 @@ mod tests {
             .post_frame_handle()
             .schedule(|_| panic!("post-frame probe"))
             .expect("lane alive");
-        assert!(catch_unwind(AssertUnwindSafe(|| scheduler.execute_frame(&owner))).is_err());
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| owner
+                .drive_frame(
+                    crate::Instant::now(),
+                    crate::IdleDeadline::far_future(crate::Instant::now()),
+                    || {},
+                    || {}
+                )
+                .expect("live owner frame")))
+            .is_err()
+        );
         assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
         let fired = Rc::new(Cell::new(false));
         let callback = Rc::clone(&fired);
@@ -486,7 +495,14 @@ mod tests {
             .post_frame_handle()
             .schedule(move |_| callback.set(true))
             .expect("gate remains usable");
-        scheduler.execute_frame(&owner);
+        owner
+            .drive_frame(
+                crate::Instant::now(),
+                crate::IdleDeadline::far_future(crate::Instant::now()),
+                || {},
+                || {},
+            )
+            .expect("live owner frame");
         assert!(fired.get());
     }
 
@@ -523,7 +539,16 @@ mod tests {
             .expect("lane alive");
 
         let (panicked, _) = flui_testing::log_capture::capture(|| {
-            catch_unwind(AssertUnwindSafe(|| scheduler.execute_frame(&owner)))
+            catch_unwind(AssertUnwindSafe(|| {
+                owner
+                    .drive_frame(
+                        crate::Instant::now(),
+                        crate::IdleDeadline::far_future(crate::Instant::now()),
+                        || {},
+                        || {},
+                    )
+                    .expect("live owner frame")
+            }))
         });
         assert!(panicked.is_err());
         assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
@@ -531,8 +556,16 @@ mod tests {
             log.lock().expect("log").is_empty(),
             "the poisoned frame stops delivery"
         );
-        let (_retry_frame, _) =
-            flui_testing::log_capture::capture(|| scheduler.execute_frame(&owner));
+        let (_retry_frame, _) = flui_testing::log_capture::capture(|| {
+            owner
+                .drive_frame(
+                    crate::Instant::now(),
+                    crate::IdleDeadline::far_future(crate::Instant::now()),
+                    || {},
+                    || {},
+                )
+                .expect("live owner frame")
+        });
         assert_eq!(
             *log.lock().expect("log"),
             [1, 2, 3],
@@ -547,7 +580,7 @@ mod tests {
 
     /// Retirement drops queued owner-local callbacks once, unrun, keeps the
     /// first destructor panic, and closes the queue to later registrations.
-    fn retirement_drops_queued_callbacks_and_closes_the_queue() {
+    fn retirement_retains_failed_callback_tail_and_closes_the_queue() {
         struct Probe {
             drops: Rc<Cell<usize>>,
             panics: bool,
@@ -582,11 +615,27 @@ mod tests {
             first.downcast_ref::<&str>().copied(),
             Some("callback capture probe")
         );
-        assert_eq!(drops.get(), 2, "both captures dropped once");
+        assert_eq!(
+            drops.get(),
+            1,
+            "the first failure retains the remaining opaque capture"
+        );
         assert!(!ran.get(), "a retired callback never runs");
         assert_eq!(handle.schedule(|_| {}), Err(PostFrameScheduleError::Closed));
-        scheduler.execute_frame(&owner);
-        assert!(!ran.get());
+        assert_eq!(
+            owner.drive_frame(
+                crate::Instant::now(),
+                crate::IdleDeadline::far_future(crate::Instant::now()),
+                || {},
+                || {}
+            ),
+            Err(crate::ExecutionError::Retired)
+        );
+        assert!(
+            !ran.get(),
+            "a refused frame must not revive retired callbacks"
+        );
+        assert_eq!(drops.get(), 1, "refusal must not retire the retained tail");
     }
 
     #[test]
@@ -603,8 +652,8 @@ mod tests {
                     post_frame_panic_preserves_uninvoked_mixed_tail_before_reentrant_work as fn(),
                 ),
                 (
-                    "retirement_drops_queued_callbacks_and_closes_the_queue",
-                    retirement_drops_queued_callbacks_and_closes_the_queue as fn(),
+                    "retirement_retains_failed_callback_tail_and_closes_the_queue",
+                    retirement_retains_failed_callback_tail_and_closes_the_queue as fn(),
                 ),
             ],
         );

@@ -34,6 +34,8 @@ mod owner_callbacks;
 
 #[path = "owner_execution.rs"]
 mod owner_execution;
+#[path = "owner_background.rs"]
+mod owner_background;
 
 /// Runs every case even after one fails, then panics listing the failing case names.
 pub(crate) fn run_table(table: &str, cases: &[(&str, fn())]) {

@@ -47,8 +47,8 @@
 //!
 //! // Execute a frame (typically called by event loop on vsync)
 //! let vsync_time = web_time::Instant::now();
-//! scheduler.handle_begin_frame(vsync_time, &owner);
-//! scheduler.handle_draw_frame();
+//! owner.drive_frame(vsync_time, flui_scheduler::IdleDeadline::far_future(vsync_time),
+//!     || {}, || {}).expect("the owner accepts the frame");
 //! ```
 
 use std::{
@@ -88,7 +88,7 @@ mod teardown;
 // CallbackId is imported from crate::id (re-exported from flui_foundation::FrameCallbackId)
 
 /// Total `Priority::Build` drain passes — including the frame's first,
-/// non-reentrant drain — [`UpdateScheduler::handle_draw_frame`] runs before
+/// non-reentrant drain — the internal frame-dispatch step runs before
 /// giving up on a chain and tracing a warning. The counter increments on
 /// that first ordinary drain too, so this permits 31 *extra* reentrant
 /// passes beyond it, not 32. Generous relative to any legitimate reentrant
@@ -156,7 +156,7 @@ struct LifecycleListener {
 /// via [`end_frame`](UpdateScheduler::end_frame) and resolves
 /// `Completed` (the pipeline already committed layout and paint; only the
 /// callback failed), while `Aborted` is the outcome of
-/// [`abort_frame`](UpdateScheduler::abort_frame) alone -- a frame whose
+/// the internal frame-abort path alone -- a frame whose
 /// post-frame callbacks never ran at all. Both variants are struct-shaped
 /// and carry variant-level `#[non_exhaustive]`, symmetrically: `Aborted`'s
 /// field set can grow (`abort_frame` records nothing else about how the
@@ -186,7 +186,7 @@ pub enum FrameOutcome {
         /// The timing for the frame that just completed.
         timing: FrameTiming,
     },
-    /// The frame closed through [`abort_frame`](UpdateScheduler::abort_frame):
+    /// The frame closed through the internal frame-abort path:
     /// a panic before the pipeline's post-frame slot, so its post-frame
     /// callbacks never ran.
     #[non_exhaustive]
@@ -690,7 +690,7 @@ impl FrameCompletionRegistry {
     }
 }
 
-/// The Idle-slice deadline [`UpdateScheduler::drive_frame`] bounds
+/// The Idle-slice deadline [`crate::OwnerFrame::drive_frame`] bounds
 /// `Priority::Idle` task execution by (see that method's own doc — it
 /// never gates `Priority::Animation`/`Build`, and it can never skip a
 /// frame).
@@ -721,22 +721,6 @@ impl From<Instant> for IdleDeadline {
     }
 }
 
-/// Clears the scheduler's Idle-slice deadline on drop — including during an
-/// unwind. See [`UpdateScheduler::drive_frame`]'s own doc ("A panicking task
-/// never leaks a stale deadline") for why this must be `Drop`-based rather
-/// than a plain "clear after the call" statement: a panicking task or
-/// persistent callback inside `handle_begin_frame`/`handle_draw_frame`
-/// unwinds straight past ordinary sequential cleanup code.
-struct IdleDeadlineGuard<'a> {
-    slot: &'a RefCell<Option<Instant>>,
-}
-
-impl Drop for IdleDeadlineGuard<'_> {
-    fn drop(&mut self) {
-        *self.slot.borrow_mut() = None;
-    }
-}
-
 /// Frame lifecycle and timing state (atomics + guarded fields)
 struct FrameState {
     /// Current frame timing
@@ -754,15 +738,11 @@ struct FrameState {
     frame_count: AtomicU64,
     /// Jank tracking - count of frames that exceeded budget
     janky_frame_count: AtomicU64,
-    /// Whether warm-up frame was executed
-    warm_up_done: AtomicBool,
     /// The current frame's Idle-slice deadline, set by
-    /// [`UpdateScheduler::drive_frame`] and consumed by
-    /// [`UpdateScheduler::handle_draw_frame`] to decide whether Idle-priority
+    /// [`crate::OwnerFrame::drive_frame`] and consumed by
+    /// the internal frame-dispatch step to decide whether Idle-priority
     /// tasks still fit. `None` (the default, and the state outside
-    /// `drive_frame`) means unbounded — a caller driving the phase machine
-    /// by hand (`handle_begin_frame`/`handle_draw_frame` directly, as
-    /// `HeadlessBinding` does) never has Idle work deferred. Only Idle is
+    /// `drive_frame`) means no active deadline. Only Idle is
     /// ever gated this way: Animation and Build tasks run unconditionally
     /// regardless of the deadline (see `drive_frame`'s doc).
     idle_deadline: RefCell<Option<Instant>>,
@@ -771,7 +751,7 @@ struct FrameState {
     /// everything that touches it.
     completion_waiters: RefCell<FrameCompletionRegistry>,
     /// The thread driving the currently-open (or most recently opened)
-    /// frame, recorded by [`UpdateScheduler::handle_begin_frame`] at the
+    /// frame, recorded by the internal frame-begin step at the
     /// same point it clears `frame_scheduled`, and load-bearing on the
     /// ORDER of that store relative to the phase transition: see
     /// `handle_begin_frame`'s own comment at the store site for why it
@@ -819,8 +799,6 @@ struct CallbackState {
     post_frame: RefCell<crate::post_frame::PostFrameStorage>,
     /// Microtask queue
     microtasks: RefCell<VecDeque<Box<dyn FnOnce()>>>,
-    /// Idle callbacks
-    idle: RefCell<Vec<Box<dyn FnOnce()>>>,
     /// Lifecycle state change listeners
     lifecycle_listeners: RefCell<Vec<LifecycleListener>>,
 }
@@ -993,7 +971,7 @@ impl FrameWaker {
     /// Sets the scheduler's frame latch; only its `false → true` edge fires
     /// the platform wake hook, so a burst of requests before the next frame
     /// is one wake. The latch is cleared at the next begin frame, or by
-    /// [`UpdateScheduler::finish_async_pump`] for a wake that runs no frame;
+    /// [`crate::OwnerFrame::pump_background`] for a wake that runs no frame;
     /// a failed hook keeps the demand for the next request or hook
     /// installation.
     ///
@@ -1076,7 +1054,7 @@ impl UpdateScheduler {
     /// accessor. The internal [`FrameBudget`] [`SchedulerBuilder`] seeds is a
     /// stats-window default only (`avg_fps`/jank tracking for a caller who
     /// never configured [`SchedulerBuilder::target_fps`]) — it does not gate
-    /// anything. [`Self::drive_frame`]'s `deadline` parameter is the only
+    /// anything. [`crate::OwnerFrame::drive_frame`]'s `deadline` parameter is the only
     /// thing that bounds work, and it bounds Idle priority tasks alone:
     /// Animation and Build tasks always run.
     pub fn new() -> Self {
@@ -1113,7 +1091,6 @@ impl UpdateScheduler {
                 budget: RefCell::new(FrameBudget::new(target_fps)),
                 frame_count: AtomicU64::new(0),
                 janky_frame_count: AtomicU64::new(0),
-                warm_up_done: AtomicBool::new(false),
                 idle_deadline: RefCell::new(None),
                 completion_waiters: RefCell::new(FrameCompletionRegistry::new()),
                 frame_thread,
@@ -1125,7 +1102,6 @@ impl UpdateScheduler {
                 persistent: RefCell::new(Vec::new()),
                 post_frame: RefCell::new(crate::post_frame::PostFrameStorage::new()),
                 microtasks: RefCell::new(VecDeque::new()),
-                idle: RefCell::new(Vec::new()),
                 lifecycle_listeners: RefCell::new(Vec::new()),
             },
             binding: BindingState {
@@ -1215,7 +1191,7 @@ impl UpdateScheduler {
     /// # Panics
     ///
     /// Panics before consuming frame demand if `owner` belongs to another scheduler.
-    pub fn handle_begin_frame(&self, vsync_time: Instant, owner: &crate::OwnerFrame) -> FrameId {
+    fn handle_begin_frame(&self, vsync_time: Instant, owner: &crate::OwnerFrame) -> FrameId {
         assert!(
             owner.belongs_to(self),
             "BUG: frame owner belongs to another scheduler"
@@ -1354,7 +1330,7 @@ impl UpdateScheduler {
     /// This method now leaves the scheduler in `PersistentCallbacks` after running
     /// persistent callbacks. Previously it also drained the post-frame queue and
     /// returned to `Idle`, which meant every post-frame callback ran *before* the
-    /// pipeline it was supposed to observe. Use [`drive_frame`](Self::drive_frame),
+    /// pipeline it was supposed to observe. Use [`drive_frame`](crate::OwnerFrame::drive_frame),
     /// or pair this with `end_frame`.
     ///
     /// # Panics
@@ -1366,13 +1342,13 @@ impl UpdateScheduler {
     ///
     /// Animation and Build priority tasks always run to completion here,
     /// unconditionally. Only `Priority::Idle` work is bounded, and only by
-    /// the deadline [`drive_frame`](Self::drive_frame) supplies (see the
+    /// the deadline [`drive_frame`](crate::OwnerFrame::drive_frame) supplies (see the
     /// private `is_idle_deadline_passed` helper below) — a caller driving
     /// this method directly, without going through `drive_frame`, has no
     /// deadline set and Idle work always runs too.
     /// A deadline can defer low-priority work; it can never skip a frame or
     /// starve logical (Animation/Build) work.
-    pub fn handle_draw_frame(&self) {
+    fn handle_draw_frame(&self) {
         // Phase 3: PersistentCallbacks (the pipeline's slot)
         self.set_scheduler_phase(SchedulerPhase::PersistentCallbacks);
 
@@ -1447,7 +1423,7 @@ impl UpdateScheduler {
         }
     }
 
-    /// Whether the Idle-slice deadline [`drive_frame`](Self::drive_frame) set
+    /// Whether the Idle-slice deadline [`drive_frame`](crate::OwnerFrame::drive_frame) set
     /// for the current frame has already passed.
     ///
     /// `false` (never passed, i.e. Idle work is never deferred) when no
@@ -1483,8 +1459,8 @@ impl UpdateScheduler {
     /// Debug-asserts an illegal phase transition unless the scheduler is in
     /// `PersistentCallbacks` (i.e. `handle_draw_frame` ran). To finish a frame
     /// *without* running its post-frame callbacks, use
-    /// [`abort_frame`](Self::abort_frame).
-    pub fn end_frame(&self, owner: &crate::OwnerFrame) {
+    /// the internal frame-abort path.
+    fn end_frame(&self, owner: &crate::OwnerFrame) {
         // Phase 4: PostFrameCallbacks
         self.set_scheduler_phase(SchedulerPhase::PostFrameCallbacks);
 
@@ -1590,13 +1566,12 @@ impl UpdateScheduler {
     ///
     /// # Who calls this, and why it is not a `Drop` guard
     ///
-    /// [`drive_frame`](Self::drive_frame) **does** catch a panic from any phase it
+    /// [`drive_frame`](crate::OwnerFrame::drive_frame) **does** catch a panic from any phase it
     /// owns — `handle_begin_frame`, `handle_draw_frame`, or the pipeline, all three
     /// under one `catch_unwind` — calls this, then `resume_unwind`s. So this runs
     /// *between* the catch and the resume — the panic payload is already captured
-    /// and nothing here executes during unwinding. A caller that drives a frame by
-    /// hand (`handle_begin_frame` + `handle_draw_frame`) and panics must call this
-    /// itself.
+    /// and nothing here executes during unwinding. Producer handles cannot
+    /// open a frame or invoke this recovery path.
     ///
     /// A `Drop` guard would be wrong twice. It would have to force
     /// `PersistentCallbacks -> Idle`, which
@@ -1629,10 +1604,6 @@ impl UpdateScheduler {
     /// frame that produced no visible work.
     ///
     /// Idempotent: a no-op when no frame is open.
-    pub fn abort_frame(&self) {
-        self.abort_frame_impl(false);
-    }
-
     fn abort_frame_impl(&self, preserve_failure: bool) {
         if self.phase() == SchedulerPhase::Idle {
             return;
@@ -1655,260 +1626,6 @@ impl UpdateScheduler {
         }
 
         tracing::warn!("frame aborted; its post-frame callbacks were not run");
-    }
-
-    /// The one shared frame ordering: **begin → persistent → pipeline → post-frame → idle.**
-    ///
-    /// Every frame driver goes through here — `HeadlessBinding::pump_frame` on its
-    /// binding-local scheduler, and the desktop / android / wasm runners on
-    /// the UI runtime's own owned `UpdateScheduler` (`UiRuntime.scheduler`, in flui-app —
-    /// there is no process-global scheduler singleton any more) — so
-    /// headless and production cannot drift.
-    ///
-    /// `pipeline` is the binding's build → layout → compositing → paint step. It
-    /// runs in the [`SchedulerPhase::PersistentCallbacks`] slot without being
-    /// registered as a callback: FLUI's bindings own their element tree by value,
-    /// so no `Fn` closure could drive it.
-    ///
-    /// # `deadline` bounds Idle work only
-    ///
-    /// `deadline` is a plain instant in time, supplied by the caller — this
-    /// scheduler has no refresh-rate or display of its own to derive one
-    /// from (that split lives in the presentation-owned `FrameClock`).
-    /// Once `deadline` has passed, [`handle_draw_frame`](Self::handle_draw_frame)
-    /// stops running `Priority::Idle` tasks for this frame. It can **never**
-    /// skip the frame itself, and it can never defer `Priority::Animation`
-    /// or `Priority::Build` work — those always run to completion,
-    /// regardless of `deadline`. A caller with no meaningful deadline yet
-    /// (no `FrameClock` wired in) can pass [`IdleDeadline::far_future`];
-    /// Idle work then always runs, matching this method's behavior before
-    /// `deadline` existed.
-    ///
-    /// # A panicking task never leaks a stale deadline
-    ///
-    /// `deadline` is visible to the private `is_idle_deadline_passed` helper
-    /// only for the duration of `handle_begin_frame` + `handle_draw_frame`,
-    /// immediately below, guarded by an RAII guard whose `Drop` clears it —
-    /// including when it runs *during an unwind*. Without that guard, a
-    /// panicking `Priority::Build`/`Animation` task inside
-    /// `handle_draw_frame` would unwind straight past a plain
-    /// "clear after the call" statement, leaving `Some(already-passed)`
-    /// behind forever: every *later* frame — including one driven by hand
-    /// via `handle_begin_frame`/`handle_draw_frame` directly, skipping
-    /// `drive_frame` entirely, as `HeadlessBinding` does — would then see a
-    /// deadline that has always already passed and defer `Priority::Idle`
-    /// permanently. The guard closes that leak structurally rather than by
-    /// discipline.
-    ///
-    /// # Errors and panics
-    ///
-    /// A pipeline that **returns** an error value is a completed frame: `end_frame`
-    /// runs, post-frame callbacks fire, exactly once.
-    ///
-    /// A panic from **any** phase this method drives — a transient callback or the
-    /// mid-frame async-driver poll inside `handle_begin_frame`; a persistent
-    /// callback or a `Priority::Animation`/`Build`/`Idle` task inside
-    /// `handle_draw_frame`; or the pipeline itself — is an abandoned frame. All
-    /// three phases run under ONE `catch_unwind`, so the panic is caught no matter
-    /// which one raised it, [`abort_frame`](Self::abort_frame) resets the phase
-    /// **without running any post-frame callback**, and the panic is then resumed
-    /// unchanged. This is issue #1057: earlier, only the pipeline sat inside the
-    /// `catch_unwind`, so a panic from `handle_begin_frame`/`handle_draw_frame`
-    /// escaped straight past `abort_frame` and left the phase machine, the
-    /// `frame_scheduled` latch, and every registered completion waiter stuck at
-    /// whatever state that frame happened to reach.
-    ///
-    /// Every queue this scheduler owns preserves the callbacks/tasks still behind
-    /// the panicking entry — see `handle_begin_frame`'s transient-callback loop and
-    /// [`TaskQueue::execute_until`](crate::TaskQueue::execute_until)'s own docs — so
-    /// only the entry that actually panicked is lost; everything queued after it
-    /// runs on the next completed frame, not retried and not silently dropped. A
-    /// panicking persistent callback skips the post-frame loop but still resets
-    /// the phase. FLUI does not isolate per callback — a panic here poisons
-    /// and propagates the whole frame, same as before this issue — this method's
-    /// contract is only that the scheduler's OWN bookkeeping is never left
-    /// half-closed by it.
-    ///
-    /// The recovery runs *between* `catch_unwind` and `resume_unwind` — the panic
-    /// payload is already captured, so nothing here executes during unwinding, and
-    /// no `Drop` guard is involved for THIS part (see `abort_frame` for why a guard
-    /// would `abort` the process here specifically — the earlier `IdleDeadlineGuard`
-    /// is a different, narrower guard over a plain field, not the phase machine, and
-    /// now sits INSIDE this same `catch_unwind`). Without this, a panicking pipeline
-    /// would leave the frame open at `PersistentCallbacks` and the *next*
-    /// `handle_begin_frame` would attempt the illegal `PersistentCallbacks ->
-    /// TransientCallbacks` transition; a panic from an earlier phase left it open at
-    /// whichever phase that was instead.
-    ///
-    /// See [`abort_frame`](Self::abort_frame)'s own doc for the `frame_scheduled`
-    /// contract a catcher inherits: closed, not re-armed, so a caller that wants
-    /// another frame after catching this one's resumed panic must request it.
-    ///
-    /// Under `panic = "abort"` nothing is caught and the process dies with the
-    /// frame open, which is moot.
-    ///
-    /// `owner` is the UI runtime's owner-local frame state: its ready tasks are
-    /// polled in the mid-frame slot and its post-frame queue drains with the
-    /// shared one (see [`end_frame`](Self::end_frame) for the ordering).
-    pub fn drive_frame<R>(
-        &self,
-        owner: &crate::OwnerFrame,
-        vsync_time: Instant,
-        deadline: IdleDeadline,
-        pipeline: impl FnOnce() -> R,
-    ) -> R {
-        self.drive_frame_impl(owner, vsync_time, deadline, pipeline)
-            .1
-    }
-
-    /// The shared implementation behind [`drive_frame`](Self::drive_frame) and
-    /// [`execute_frame`](Self::execute_frame) — the convenience method routes
-    /// through here too (with a no-op `pipeline`) rather than hand-rolling
-    /// `handle_begin_frame` + `handle_draw_frame` + `end_frame` directly, so
-    /// every caller gets the identical single-`catch_unwind` recovery boundary
-    /// this method's own doc describes; a bare sequential call site here would
-    /// silently reopen the exact gap issue #1057 closed.
-    ///
-    /// Returns the [`FrameId`] `handle_begin_frame` minted alongside
-    /// `pipeline`'s own result: `drive_frame` discards it to keep its `-> R`
-    /// signature, while `execute_frame` discards `R` (always `()` there) and
-    /// returns the id instead.
-    ///
-    /// # The `frame` span
-    ///
-    /// Opens a `DEBUG` span named `frame` for exactly the stretch the
-    /// scheduler counts as "in a frame" -- `handle_begin_frame` through
-    /// `end_frame` (or `abort_frame`) -- so the pipeline's `build`, `layout`,
-    /// `paint` and `compositing` spans nest inside it. This is the profiler
-    /// contract: `flui-devtools`' `FrameTimingLayer` delimits frames by this
-    /// name, and its end-to-end test drives this method through
-    /// `HeadlessBinding::pump_frame`. Rename it on either side and that test
-    /// fails, which is the point of the test.
-    fn drive_frame_impl<R>(
-        &self,
-        owner: &crate::OwnerFrame,
-        vsync_time: Instant,
-        deadline: IdleDeadline,
-        pipeline: impl FnOnce() -> R,
-    ) -> (FrameId, R) {
-        use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
-
-        assert!(
-            owner.belongs_to(self),
-            "BUG: frame owner belongs to another scheduler"
-        );
-        *self.inner.frame.idle_deadline.borrow_mut() = Some(deadline.0);
-
-        // Entered for the whole frame, the panic path included: on a panic
-        // the guard drops during unwinding, after `abort_frame`, so the span
-        // closes exactly when the frame does either way. The id is recorded
-        // once `handle_begin_frame` has minted it.
-        let frame_span = tracing::debug_span!("frame", id = tracing::field::Empty);
-        let _in_frame = frame_span.enter();
-
-        // ONE recovery boundary over the whole frame lifetime this method
-        // owns -- `handle_begin_frame`, `handle_draw_frame`, AND `pipeline`
-        // -- not merely `pipeline` alone (issue #1057). A transient
-        // callback, a mid-frame async poll, a persistent callback, or a
-        // priority task can panic just as the pipeline can, and every one
-        // of those phases runs before this frame would otherwise reach
-        // `end_frame`; leaving any of them outside this `catch_unwind` means
-        // its panic skips `abort_frame` entirely and leaves the phase
-        // machine, the `frame_scheduled` latch, and every completion waiter
-        // stuck wherever that phase left them.
-        let attempt = catch_unwind(AssertUnwindSafe(|| {
-            let idle_deadline_guard = IdleDeadlineGuard {
-                slot: &self.inner.frame.idle_deadline,
-            };
-
-            let frame_id = self.handle_begin_frame(vsync_time, owner);
-            frame_span.record("id", tracing::field::debug(&frame_id));
-            self.handle_draw_frame();
-            // The deadline only ever needs to be visible for this frame's
-            // own `handle_draw_frame` call, immediately above; drop the
-            // guard now (rather than leaving it to this closure's own end)
-            // so a caller that later drives `handle_begin_frame`/
-            // `handle_draw_frame` by hand never inherits a stale deadline,
-            // and so it is visibly gone before `pipeline` runs. The guard's
-            // `Drop` — not this explicit call alone — is what still clears
-            // the field if `handle_begin_frame` or `handle_draw_frame`
-            // above panics; see this method's own doc.
-            drop(idle_deadline_guard);
-
-            (frame_id, pipeline())
-        }));
-
-        match attempt {
-            Ok((frame_id, result)) => {
-                self.end_frame(owner);
-                (frame_id, result)
-            }
-            Err(payload) => {
-                // `abort_frame` calls `notify_frame_completion`, which can
-                // itself panic (a completion waiter's waker) -- a SECOND,
-                // unrelated panic on top of `payload`. Contained here so
-                // that panic can never displace the original: without this,
-                // `self.abort_frame()` would panic with the waker's payload
-                // before `resume_unwind(payload)` below ever ran, and the
-                // caller would observe the waker's failure instead of
-                // whichever phase actually caused this frame to abort.
-                if let Err(secondary_payload) =
-                    catch_unwind(AssertUnwindSafe(|| self.abort_frame_impl(true)))
-                {
-                    crate::completion_wake::retain_reported(
-                        secondary_payload,
-                        "abort_frame closing an already failed frame",
-                    );
-                }
-                resume_unwind(payload)
-            }
-        }
-    }
-
-    /// Execute a complete frame (convenience method)
-    ///
-    /// begin → persistent → end, with a no-op pipeline, through the SAME
-    /// shared implementation [`drive_frame`](Self::drive_frame) uses — not
-    /// a second, hand-rolled `handle_begin_frame` + `handle_draw_frame` +
-    /// `end_frame` sequence. Use this for simple cases (warm-up frames,
-    /// tests); for proper vsync integration, call `drive_frame` with a real
-    /// pipeline.
-    ///
-    /// Preserves this method's original behavior on the clean path: the
-    /// frame completes and its post-frame callbacks run. On the panic path
-    /// it now shares `drive_frame`'s recovery contract too (issue #1057):
-    /// a transient callback, mid-frame async poll, persistent callback, or
-    /// priority task that panics closes the phase/`frame_scheduled`/
-    /// completion bookkeeping via `abort_frame` before the panic resumes,
-    /// rather than escaping past a bare sequential call site the way it did
-    /// before this method routed through the shared implementation.
-    #[tracing::instrument(skip(self, owner))]
-    pub fn execute_frame(&self, owner: &crate::OwnerFrame) -> FrameId {
-        let vsync_time = Instant::now();
-        self.drive_frame_impl(
-            owner,
-            vsync_time,
-            IdleDeadline::far_future(vsync_time),
-            || {},
-        )
-        .0
-    }
-
-    /// Schedule a warm-up frame (synchronous, no vsync wait)
-    ///
-    /// This forces an immediate frame to be processed, useful for:
-    /// - App initialization
-    /// - Reducing first-frame jank
-    /// - Forcing immediate layout updates
-    #[tracing::instrument(skip(self, owner))]
-    pub fn schedule_warm_up_frame(&self, owner: &crate::OwnerFrame) {
-        if self.inner.frame.warm_up_done.load(Ordering::Acquire) {
-            return;
-        }
-
-        // Execute frame immediately without vsync
-        self.execute_frame(owner);
-        self.inner.frame.warm_up_done.store(true, Ordering::Release);
     }
 
     // =========================================================================
@@ -2106,7 +1823,7 @@ impl UpdateScheduler {
     ///
     /// Reentrant demand defers delivery to the outer hook invocation, with
     /// at most one compensating attempt; hooks must not drive a frame inline.
-    pub fn finish_async_pump(&self) {
+    fn finish_async_pump(&self) {
         self.inner.wake.wake_delivery.consume(|| {
             self.inner
                 .wake
@@ -2313,11 +2030,6 @@ impl UpdateScheduler {
         self.inner.task_queue.add(priority, callback);
     }
 
-    /// Get task queue reference
-    pub fn task_queue(&self) -> &TaskQueue {
-        &self.inner.task_queue
-    }
-
     // =========================================================================
     // Vsync Timestamp
     // =========================================================================
@@ -2347,21 +2059,6 @@ impl UpdateScheduler {
     /// Get current frame timing (if a frame is active)
     pub fn current_frame(&self) -> Option<FrameTiming> {
         *self.inner.frame.current_frame.borrow_mut()
-    }
-
-    /// Set the current frame phase (for rendering pipeline)
-    ///
-    /// The `current_frame` guard is held for this whole call — it is a
-    /// plain field write, never a callback invocation — and must stay that
-    /// way: this is exactly the shape `handle_begin_frame`'s retired legacy
-    /// callback loop got wrong (issue #1058), where the lock outlived a
-    /// `callback(timing)` call and a callback reading `current_frame()`
-    /// deadlocked on itself. No user code may run inside this method's
-    /// locked scope.
-    pub fn set_phase(&self, phase: FramePhase) {
-        if let Some(timing) = self.inner.frame.current_frame.borrow_mut().as_mut() {
-            timing.phase = phase;
-        }
     }
 
     // =========================================================================
@@ -2417,7 +2114,7 @@ impl UpdateScheduler {
     /// own scope. It is one small allocation, not free (`FrameBudget` carries
     /// a bounded rolling-window frame-time history), and the returned value
     /// is a stats snapshot only: it does not gate anything (see
-    /// [`drive_frame`](Self::drive_frame) and
+    /// [`drive_frame`](crate::OwnerFrame::drive_frame) and
     /// [`handle_draw_frame`](Self::handle_draw_frame) for the actual
     /// Idle-slice deadline gate).
     #[must_use]
@@ -2683,9 +2380,7 @@ impl UpdateScheduler {
     ///
     /// Two further consequences worth knowing before calling this:
     ///
-    /// * A pending waiter is real frame demand, so it suppresses
-    ///   [`execute_idle_callbacks`](Self::execute_idle_callbacks) until the
-    ///   frame runs.
+    /// * A pending waiter is real frame demand, not a background task.
     /// * A panicking or absent wake hook leaves durable delivery debt. A later
     ///   frame request or hook installation retries it without discarding waiters.
     ///
@@ -2918,13 +2613,8 @@ impl UpdateScheduler {
     /// pipeline in the frame's slot order, but not for
     /// `PersistentCallbacks`, where the pipeline itself runs — a call made
     /// after paint has already happened would have its demand dropped.
-    /// (A raw `handle_begin_frame`/`handle_draw_frame`
-    /// sequence outside `drive_frame_impl`'s panic boundary whose callback
-    /// panics leaves the phase stuck exactly where it panicked, and this
-    /// gate stays silent on that thread until something resets the phase
-    /// machine; production always drives frames through
-    /// `drive_frame`/`drive_frame_with_lane`, both of which wrap
-    /// `drive_frame_impl`.)
+    /// Complete owner execution closes an opened frame before a callback or
+    /// pipeline failure propagates, restoring this gate for the next turn.
     ///
     /// # Return value
     ///
@@ -3022,71 +2712,6 @@ impl UpdateScheduler {
         self.inner.callbacks.transient.borrow_mut().is_empty()
     }
 
-    // =========================================================================
-    // Idle Callbacks
-    // =========================================================================
-
-    /// Schedule a callback to run when the scheduler is idle.
-    ///
-    /// Idle callbacks execute when:
-    /// 1. No frame is scheduled
-    /// 2. The task queue is empty
-    /// 3. The app is in `Resumed` state
-    ///
-    /// The event loop calls `execute_idle_callbacks()` when it has no other
-    /// work.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use flui_scheduler::UpdateScheduler;
-    ///
-    /// let scheduler = UpdateScheduler::new();
-    ///
-    /// scheduler.schedule_idle_callback(|| {
-    ///     // Do background cleanup work
-    /// });
-    /// ```
-    pub fn schedule_idle_callback(&self, callback: impl FnOnce() + 'static) {
-        self.inner
-            .callbacks
-            .idle
-            .borrow_mut()
-            .push(Box::new(callback));
-    }
-
-    /// Execute all pending idle callbacks.
-    ///
-    /// Called by the event loop when the scheduler has no other work to do.
-    /// Only executes if the scheduler is idle, the task queue is empty,
-    /// and the app is in `Resumed` state.
-    ///
-    /// Returns the number of callbacks executed.
-    pub fn execute_idle_callbacks(&self) -> usize {
-        // Only run idle callbacks when truly idle
-        if self.is_frame_scheduled() || !self.inner.task_queue.is_empty() {
-            return 0;
-        }
-        if !self.lifecycle_state().should_render() {
-            return 0;
-        }
-
-        let callbacks: Vec<_> = {
-            let mut cbs = self.inner.callbacks.idle.borrow_mut();
-            cbs.drain(..).collect()
-        };
-
-        let count = callbacks.len();
-        for callback in callbacks {
-            callback();
-        }
-        count
-    }
-
-    /// Check if there are pending idle callbacks.
-    pub fn has_idle_callbacks(&self) -> bool {
-        !self.inner.callbacks.idle.borrow_mut().is_empty()
-    }
 }
 
 impl Default for UpdateScheduler {
@@ -3210,7 +2835,8 @@ mod tests {
              false->true edge does not occur on this re-enable"
         );
 
-        scheduler.finish_async_pump();
+        let owner = crate::OwnerFrame::new(&scheduler).expect("one frame owner");
+        owner.pump_background(|| {}).expect("live owner turn");
 
         assert_eq!(
             (
@@ -3250,12 +2876,18 @@ mod tests {
 
         // A frame runs; during it a ticker re-registers (transient
         // callback) — the cleared edge fires the hook again.
-        scheduler.handle_begin_frame(
-            Instant::now(),
-            &crate::OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame"),
-        );
-        scheduler.schedule_frame_callback(Box::new(|_| {}));
-        scheduler.handle_draw_frame();
+        let owner = crate::OwnerFrame::new(&scheduler).expect("one frame owner");
+        let now = Instant::now();
+        owner
+            .drive_frame(
+                now,
+                IdleDeadline::far_future(now),
+                || {},
+                || {
+                    scheduler.schedule_frame_callback(Box::new(|_| {}));
+                },
+            )
+            .expect("live owner frame");
         assert_eq!(
             fired.load(Ordering::SeqCst),
             2,
@@ -3294,9 +2926,15 @@ mod tests {
         requeue(scheduler.clone(), Arc::clone(&runs));
 
         let (_frame_id, log) = flui_testing::log_capture::capture(|| {
-            scheduler.execute_frame(
-                &crate::OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame"),
-            )
+            crate::OwnerFrame::new(&scheduler)
+                .expect("the scheduler has no live owner frame")
+                .drive_frame(
+                    crate::Instant::now(),
+                    crate::IdleDeadline::far_future(crate::Instant::now()),
+                    || {},
+                    || {},
+                )
+                .expect("live owner frame")
         });
 
         assert_eq!(
@@ -3396,9 +3034,15 @@ mod tests {
         assert!(Pin::new(&mut future_b).poll(&mut cx_b).is_pending());
 
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            scheduler.execute_frame(
-                &crate::OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame"),
-            );
+            crate::OwnerFrame::new(&scheduler)
+                .expect("the scheduler has no live owner frame")
+                .drive_frame(
+                    crate::Instant::now(),
+                    crate::IdleDeadline::far_future(crate::Instant::now()),
+                    || {},
+                    || {},
+                )
+                .expect("live owner frame");
         }));
         assert!(unwind.is_err(), "the waker's own panic must propagate");
         assert_eq!(
@@ -3488,9 +3132,15 @@ mod tests {
         scheduler.add_post_frame_callback(Box::new(|_timing| panic!("post-frame probe")));
 
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            scheduler.execute_frame(
-                &crate::OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame"),
-            );
+            crate::OwnerFrame::new(&scheduler)
+                .expect("the scheduler has no live owner frame")
+                .drive_frame(
+                    crate::Instant::now(),
+                    crate::IdleDeadline::far_future(crate::Instant::now()),
+                    || {},
+                    || {},
+                )
+                .expect("live owner frame");
         }));
 
         let payload = unwind.expect_err("the post-frame callback's panic must still propagate");

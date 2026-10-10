@@ -3,7 +3,7 @@
 //! # Persistent callbacks and the pipeline
 //!
 //! The pipeline is not itself a persistent callback: it is
-//! a closure passed to `UpdateScheduler::drive_frame`, so a *registered* persistent
+//! a closure passed to `OwnerFrame::drive_frame`, so a *registered* persistent
 //! callback runs **before** it. Post-frame ordering — the only thing a
 //! geometry-measuring post-frame callback needs — is unaffected.
 //! `persistent_callbacks_run_before_the_pipeline` pins the persistent-phase
@@ -48,15 +48,17 @@ fn drive_frame_runs_post_frame_callbacks_after_the_pipeline() {
     }));
 
     let log_pipe = log.clone();
-    scheduler.drive_frame(
-        &flui_scheduler::OwnerFrame::new(&scheduler)
-            .expect("the scheduler has no live owner frame"),
-        Instant::now(),
-        far_deadline(),
-        || {
-            log_pipe.push("pipeline");
-        },
-    );
+    flui_scheduler::OwnerFrame::new(&scheduler)
+        .expect("the scheduler has no live owner frame")
+        .drive_frame(
+            Instant::now(),
+            far_deadline(),
+            || {},
+            || {
+                log_pipe.push("pipeline");
+            },
+        )
+        .expect("live owner frame");
 
     assert_eq!(log.get(), vec!["pipeline", "post_frame"]);
 }
@@ -81,9 +83,14 @@ fn a_panicking_pipeline_aborts_the_frame_and_runs_no_post_frame_callbacks() {
     }));
 
     let panicked = catch_unwind(AssertUnwindSafe(|| {
-        scheduler.drive_frame(&owner, Instant::now(), far_deadline(), || {
-            panic!("pipeline exploded")
-        });
+        owner
+            .drive_frame(
+                Instant::now(),
+                far_deadline(),
+                || {},
+                || panic!("pipeline exploded"),
+            )
+            .expect("live owner frame");
     }))
     .is_err();
     assert!(panicked, "the panic must propagate, not be swallowed");
@@ -100,7 +107,9 @@ fn a_panicking_pipeline_aborts_the_frame_and_runs_no_post_frame_callbacks() {
     );
 
     // The recovered scheduler drives a clean frame, and the queued callback runs.
-    scheduler.drive_frame(&owner, Instant::now(), far_deadline(), || {});
+    owner
+        .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+        .expect("live owner frame");
     assert_eq!(fired.load(Ordering::SeqCst), 1);
 }
 
@@ -111,7 +120,9 @@ fn a_frame_after_a_panicking_frame_starts_cleanly() {
     let scheduler = UpdateScheduler::new();
     let owner = flui_scheduler::OwnerFrame::new(&scheduler).expect("one frame owner");
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        scheduler.drive_frame(&owner, Instant::now(), far_deadline(), || panic!("boom"));
+        owner
+            .drive_frame(Instant::now(), far_deadline(), || {}, || panic!("boom"))
+            .expect("live owner frame");
     }));
 
     let ran = Arc::new(AtomicUsize::new(0));
@@ -121,7 +132,9 @@ fn a_frame_after_a_panicking_frame_starts_cleanly() {
     }));
 
     // Would `debug_assert!` on the illegal transition if the frame were still open.
-    scheduler.drive_frame(&owner, Instant::now(), far_deadline(), || {});
+    owner
+        .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+        .expect("live owner frame");
     assert_eq!(ran.load(Ordering::SeqCst), 1);
     assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
 }
@@ -145,15 +158,17 @@ fn persistent_callbacks_run_before_the_pipeline() {
     scheduler.add_post_frame_callback(Box::new(move |_| {
         log_post.push("post_frame");
     }));
-    scheduler.drive_frame(
-        &flui_scheduler::OwnerFrame::new(&scheduler)
-            .expect("the scheduler has no live owner frame"),
-        Instant::now(),
-        far_deadline(),
-        || {
-            log_pipe.push("pipeline");
-        },
-    );
+    flui_scheduler::OwnerFrame::new(&scheduler)
+        .expect("the scheduler has no live owner frame")
+        .drive_frame(
+            Instant::now(),
+            far_deadline(),
+            || {},
+            || {
+                log_pipe.push("pipeline");
+            },
+        )
+        .expect("live owner frame");
 
     assert_eq!(
         log.get(),
@@ -177,7 +192,9 @@ fn retiring_owner_cancels_the_active_local_tail() {
         let tail = ran.clone();
         lane.schedule(move |_| tail.set(true)).expect("tail");
         let result = catch_unwind(AssertUnwindSafe(|| {
-            scheduler.drive_frame(&owner, Instant::now(), far_deadline(), || {});
+            owner
+                .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+                .expect("live owner frame");
         }));
         assert_eq!(result.is_err(), fail_after_retire);
         if let Err(failure) = result {
@@ -190,7 +207,9 @@ fn retiring_owner_cancels_the_active_local_tail() {
             !ran.get(),
             "retirement cancels callbacks already snapshotted for this frame"
         );
-        scheduler.drive_frame(&owner, Instant::now(), far_deadline(), || {});
+        owner
+            .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+            .expect("live owner frame");
         assert!(
             !ran.get(),
             "an abandoned frame cannot restore a retired local tail"
@@ -198,7 +217,7 @@ fn retiring_owner_cancels_the_active_local_tail() {
     }
 }
 
-fn retiring_owner_preserves_registration_order_across_the_active_tail() {
+fn retirement_orders_healthy_captures_and_retains_tail_after_failure() {
     struct Capture {
         name: &'static str,
         log: Log,
@@ -254,12 +273,30 @@ fn retiring_owner_preserves_registration_order_across_the_active_tail() {
             };
             lane.schedule(move |_| drop(capture)).expect("active tail");
         }
-        scheduler.drive_frame(&owner, Instant::now(), far_deadline(), || {});
-        assert_eq!(log.get(), ["older", "middle", "newer"]);
+        owner
+            .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+            .expect("live owner frame");
+        let expected = if failures[0] {
+            vec!["older"]
+        } else {
+            vec!["older", "middle", "newer"]
+        };
+        assert_eq!(
+            log.get(),
+            expected,
+            "healthy captures retire in registration order; a failure retains the unretired tail"
+        );
         assert!(owner.retire().is_none());
         assert!(lane.schedule(|_| {}).is_err());
-        scheduler.drive_frame(&owner, Instant::now(), far_deadline(), || {});
-        assert_eq!(log.get(), ["older", "middle", "newer"]);
+        assert_eq!(
+            owner.drive_frame(Instant::now(), far_deadline(), || {}, || {}),
+            Err(flui_scheduler::ExecutionError::Retired)
+        );
+        assert_eq!(
+            log.get(),
+            expected,
+            "idempotent retirement and refused execution must preserve the retained tail"
+        );
     }
 }
 
@@ -269,8 +306,8 @@ fn post_frame_ordering_matrix() {
         "post_frame_ordering_matrix",
         &[
             (
-                "retiring_owner_preserves_registration_order_across_the_active_tail",
-                retiring_owner_preserves_registration_order_across_the_active_tail as fn(),
+                "retirement_orders_healthy_captures_and_retains_tail_after_failure",
+                retirement_orders_healthy_captures_and_retains_tail_after_failure as fn(),
             ),
             (
                 "retiring_owner_cancels_the_active_local_tail",

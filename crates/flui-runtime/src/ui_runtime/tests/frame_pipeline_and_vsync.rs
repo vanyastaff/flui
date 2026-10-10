@@ -90,6 +90,7 @@ pub(crate) fn the_production_frame_polls_the_ui_runtimes_async_driver_once_befor
         .drive_frame(
             flui_scheduler::Instant::now(),
             flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
+            || {},
             || {
                 flag.store(polls_probe.load(Ordering::Acquire) == 1, Ordering::Release);
                 let _ = ui_runtime.draw_frame(test_constraints());
