@@ -154,17 +154,25 @@ impl OwnerFrame {
         }
     }
 
+    fn retire_refused_frame<P, F>(&self, prepare: P, pipeline: F) {
+        let mut recovery = Recovery::new(self);
+        recovery.retire(prepare);
+        recovery.retire(pipeline);
+        recovery.finish();
+    }
+
     /// Execute one complete frame on this owner's scheduler.
     ///
     /// Admission precedes mutation and diagnostics and remains held through
     /// completion, callable retirement and temporary scheduler release. The
-    /// pipeline runs once, borrowed from its owned envelope. Owner retirement
+    /// preparation runs once before opening a frame, then the pipeline runs
+    /// once. Both callables are borrowed from separate owned envelopes. Owner retirement
     /// during its invocation closes future owner work without preempting the
     /// admitted frame's scheduler bookkeeping.
     ///
     /// # Errors
     /// Refuses recursive, retired or closed execution before invoking the
-    /// pipeline. Rejected envelopes retire normally, or are retained while
+    /// preparation or pipeline. Rejected envelopes retire separately, or are retained while
     /// preserving an incoming failure.
     ///
     /// # Panics
@@ -177,21 +185,23 @@ impl OwnerFrame {
         &self,
         timestamp: Instant,
         deadline: IdleDeadline,
+        mut prepare: impl FnMut(),
         mut pipeline: impl FnMut() -> R,
     ) -> Result<R, ExecutionError> {
         let permit = match self.execution.enter() {
             Ok(permit) => permit,
             Err(error) => {
-                self.retire_refused(pipeline);
+                self.retire_refused_frame(prepare, pipeline);
                 return Err(error);
             }
         };
         let Some(scheduler) = self.scheduler.upgrade() else {
-            self.retire_refused(pipeline);
+            self.retire_refused_frame(prepare, pipeline);
             return Err(ExecutionError::SchedulerClosed);
         };
         if scheduler.inner.wake.closed.load(Ordering::Acquire) {
             let mut recovery = Recovery::new(self);
+            recovery.retire(prepare);
             recovery.retire(pipeline);
             recovery.release_scheduler(scheduler);
             recovery.finish();
@@ -200,7 +210,12 @@ impl OwnerFrame {
 
         let mut recovery = Recovery::new(self);
         let mut output = None;
-        let span = recovery.attempt(|| tracing::debug_span!("frame", id = tracing::field::Empty));
+        recovery.attempt(&mut prepare);
+        let span = if recovery.first.is_none() {
+            recovery.attempt(|| tracing::debug_span!("frame", id = tracing::field::Empty))
+        } else {
+            None
+        };
         if let Some(span) = span.as_ref() {
             let entered = recovery.attempt(|| span.enter());
             if recovery.first.is_none() {
@@ -227,6 +242,7 @@ impl OwnerFrame {
             // identity exhaustion). Such an attempt owes no completion but
             // must not leave its sampled timestamp published.
             *scheduler.inner.frame.current_vsync_time.borrow_mut() = None;
+            recovery.retire(prepare);
             recovery.retire(pipeline);
             // A subscriber can run arbitrary code from exit/close. Invoke
             // those cleanups explicitly while output ownership stays outside.
@@ -234,6 +250,7 @@ impl OwnerFrame {
                 recovery.attempt(|| drop(entered));
             }
         } else {
+            recovery.retire(prepare);
             recovery.retire(pipeline);
         }
         if let Some(span) = span {
