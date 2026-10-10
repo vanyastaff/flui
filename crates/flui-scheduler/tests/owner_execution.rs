@@ -56,6 +56,7 @@ fn failed_preparation_does_not_fabricate_a_frame() {
     let mut completed = pin!(scheduler.end_of_frame());
     let mut context = Context::from_waker(Waker::noop());
     assert!(completed.as_mut().poll(&mut context).is_pending());
+    assert!(scheduler.is_frame_scheduled());
     let pipeline_ran = Cell::new(false);
     let now = Instant::now();
     let failed = catch_unwind(AssertUnwindSafe(|| {
@@ -71,6 +72,7 @@ fn failed_preparation_does_not_fabricate_a_frame() {
     assert!(!pipeline_ran.get());
     assert!(!task_ran.get());
     assert!(!transient_ran.get());
+    assert!(scheduler.is_frame_scheduled(), "failed preparation keeps frame demand");
     assert!(completed.as_mut().poll(&mut context).is_pending());
     owner
         .drive_frame(now, IdleDeadline::far_future(now), || {}, || {})
