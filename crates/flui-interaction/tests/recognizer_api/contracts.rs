@@ -16,9 +16,7 @@ use flui_foundation::geometry::Offset;
 use flui_interaction::{
     ArenaMembership, BeginContactError, CancelOutcome, DoubleTapGestureRecognizer, GestureArena,
     GestureArenaMember, GestureRecognizer, GestureSettings, MultiTapGestureRecognizer, PointerId,
-    PrimaryContact, RecognizerSet, ScaleGestureRecognizer,
-    arena::run_pointer_lifecycle,
-    cancel_all,
+    PrimaryContact, RecognizerSet, ScaleGestureRecognizer, cancel_all,
     events::{
         PointerButton, PointerEvent, PointerKind, make_down_event_for_id,
         make_down_event_for_id_with_button, make_move_event_for_id, make_up_event_for_id,
@@ -638,16 +636,17 @@ fn held_recognizer_drop_releases_pending_sweep(
     owner.add_pointer(PointerDispatch::at_root(&event));
     let _first_entry = arena.add(pointer(83), &first);
     let _second_entry = arena.add(pointer(83), &second);
-    run_pointer_lifecycle(&arena, &event);
+    arena.close(pointer(83));
     if second_contact {
         let another = down(pointer(84));
         owner.add_pointer(PointerDispatch::at_root(&another));
-        run_pointer_lifecycle(&arena, &another);
+        arena.close(pointer(84));
     }
     let up = make_up_event_for_id(pointer(83), Offset::new(3.0, 4.0), PointerKind::Touch)
         .expect("valid fixture sample");
     owner.handle_event(PointerDispatch::at_root(&up));
-    run_pointer_lifecycle(&arena, &up);
+    // This controlled owner-drop fixture does not reenter input on Up.
+    arena.sweep(pointer(83));
     assert!(arena.is_held(pointer(83)), "actual recognizer owns a hold");
     assert!(
         arena.has_pending_sweep(pointer(83)),

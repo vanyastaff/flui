@@ -591,6 +591,90 @@ fn interpolation_uses_the_bracketing_samples() {
     );
 }
 
+fn interpolation_does_not_publish_future_sensor_readings() {
+    use flui_interaction::events::{PointerButtons, PointerMove, PointerSample};
+    use flui_platform_api::{EventTime, pointer::Pressure};
+
+    for (previous, next) in [(Some(0.2), Some(0.9)), (None, Some(0.9)), (Some(0.2), None)] {
+        let at = origin();
+        let resampler = PointerEventResampler::new(contact());
+        let pointer = match move_to(0.0) {
+            PointerEvent::Move(movement) => movement.pointer,
+            _ => unreachable!("Move fixture"),
+        };
+        let reading = |x, nanos, pressure: Option<f32>| {
+            let mut sample = PointerSample::new(
+                EventTime::from_nanos(nanos),
+                PointerPosition::try_new(flui_foundation::geometry::Point::new(x, 0.0))
+                    .expect("finite fixture"),
+            );
+            sample.pressure = pressure.map(|value| Pressure::try_new(value).expect("pressure"));
+            PointerEvent::Move(PointerMove::new(pointer, PointerButtons::default(), sample))
+        };
+        resampler.start_tracking();
+        resampler.add_event_at(reading(0.0, 0, previous), at);
+        resampler.add_event_at(reading(10.0, 10_000_000, next), at + ms(10.0));
+        let output = sample_all(&resampler, at + ms(5.0));
+        let PointerEvent::Move(interpolated) = output.last().expect("interpolated output") else {
+            panic!("expected Move");
+        };
+        assert_eq!(event_x(output.last().expect("output")), Some(5.0));
+        assert_eq!(
+            interpolated.current().pressure.map(Pressure::get),
+            previous,
+            "intermediate geometry must not publish a later hardware sensor reading"
+        );
+        let measured = sample_all(&resampler, at + ms(10.0));
+        let PointerEvent::Move(measured) = measured.last().expect("later measured output") else {
+            panic!("expected measured Move");
+        };
+        assert_eq!(measured.current().pressure.map(Pressure::get), next);
+    }
+}
+
+fn queued_leave_does_not_starve_accepted_boundaries() {
+    use flui_platform_api::{EventTime, pointer::PointerSignal};
+    for contact_sequence in [false, true] {
+        let at = origin();
+        let resampler = PointerEventResampler::new(contact());
+        let pointer = match move_to(0.0) {
+            PointerEvent::Move(movement) => movement.pointer,
+            _ => unreachable!("Move fixture"),
+        };
+        let signal = PointerSignal::new(pointer, EventTime::from_nanos(3));
+        let mut admitted = vec![PointerEvent::Enter(PointerSignal::new(
+            pointer,
+            EventTime::from_nanos(0),
+        ))];
+        if contact_sequence {
+            admitted.push(with_time(
+                make_down_event_for_id(contact(), Offset::ZERO, PointerKind::Touch).expect("Down"),
+                1,
+            ));
+            admitted.push(with_time(
+                make_up_event_for_id(contact(), Offset::ZERO, PointerKind::Touch).expect("Up"),
+                2,
+            ));
+        }
+        admitted.push(PointerEvent::Leave(signal));
+        for event in &admitted {
+            resampler.add_event_at(event.clone(), at);
+        }
+        let delivered = sample_all(&resampler, at + ms(1.0));
+        assert_eq!(
+            delivered, admitted,
+            "sampling must deliver accepted Enter/contact/Leave in order"
+        );
+        assert!(!resampler.has_pending_events());
+        resampler.add_event_at(move_to(9.0), at + ms(2.0));
+        assert_eq!(
+            sample_all(&resampler, at + ms(2.0)).len(),
+            1,
+            "standalone sampling also delivers an admitted hover Move without a Down"
+        );
+    }
+}
+
 /// Events delivered in one burst keep their own spacing: the later event
 /// lies in the future of a sample taken between them.
 fn burst_keeps_event_time_spacing() {
@@ -663,6 +747,81 @@ fn overflow_keeps_terminals_and_the_newest_move() {
         emitted.len() <= 102,
         "the queue stays bounded: {}",
         emitted.len()
+    );
+}
+
+/// Boundary preservation takes precedence over pressure coalescing, even
+/// when many complete contacts reuse one identity before the caller samples.
+fn boundary_pressure_preserves_reused_contacts_and_shared_delivery() {
+    let t0 = origin();
+    let resampler = PointerEventResampler::new(contact());
+    let producer = resampler.clone();
+    let independent = PointerEventResampler::new(contact());
+    let mut expected = Vec::new();
+    for sequence in 0..80_u32 {
+        let x = f64::from(sequence);
+        producer.add_event_at(
+            make_down_event_for_id(contact(), Offset::new(x, 0.0), PointerKind::Touch)
+                .expect("finite down"),
+            t0 + ms(x * 3.0),
+        );
+        producer.add_event_at(move_to(x + 0.5), t0 + ms(x * 3.0 + 1.0));
+        producer.add_event_at(
+            make_up_event_for_id(contact(), Offset::new(x + 1.0, 0.0), PointerKind::Touch)
+                .expect("finite up"),
+            t0 + ms(x * 3.0 + 2.0),
+        );
+        expected.extend([('D', x), ('U', x + 1.0)]);
+    }
+    for event in [
+        make_down_event_for_id(contact(), Offset::ZERO, PointerKind::Touch)
+            .expect("independent down"),
+        move_to(999.0),
+        make_up_event_for_id(contact(), Offset::new(999.0, 0.0), PointerKind::Touch)
+            .expect("independent up"),
+    ] {
+        independent.add_event_at(event, t0);
+    }
+    let emitted = sample_all(&resampler, t0 + ms(300.0));
+    let boundaries: Vec<_> = emitted
+        .iter()
+        .filter_map(|event| match event {
+            PointerEvent::Down(_) => Some(('D', event_x(event).expect("down position"))),
+            PointerEvent::Up(_) => Some(('U', event_x(event).expect("up position"))),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        boundaries, expected,
+        "every accepted contact boundary survives pressure"
+    );
+    assert!(
+        !producer.has_pending_events(),
+        "sampling drains the shared queue"
+    );
+    assert!(
+        independent.has_pending_events(),
+        "same identity does not share storage"
+    );
+    assert_eq!(
+        sample_all(&independent, t0 + ms(300.0))
+            .last()
+            .and_then(event_x),
+        Some(999.0)
+    );
+    for event in [
+        make_down_event_for_id(contact(), Offset::ZERO, PointerKind::Touch).expect("fresh down"),
+        move_to(42.0),
+        make_up_event_for_id(contact(), Offset::new(42.0, 0.0), PointerKind::Touch)
+            .expect("fresh up"),
+    ] {
+        producer.add_event_at(event, t0 + ms(320.0));
+    }
+    assert_eq!(
+        sample_all(&resampler, t0 + ms(340.0))
+            .last()
+            .and_then(event_x),
+        Some(42.0)
     );
 }
 
@@ -755,12 +914,40 @@ fn resampler_interpolates_on_event_time_and_never_drops_terminals() {
                 "interpolation factor",
                 interpolation_uses_the_bracketing_samples,
             ),
+            (
+                "sensor readings never come from the future",
+                interpolation_does_not_publish_future_sensor_readings,
+            ),
+            (
+                "Leave does not starve accepted boundaries",
+                queued_leave_does_not_starve_accepted_boundaries,
+            ),
             ("burst keeps event spacing", burst_keeps_event_time_spacing),
             (
                 "overflow keeps terminals",
                 overflow_keeps_terminals_and_the_newest_move,
             ),
             ("manual clock", manual_clock_does_not_starve_moves),
+            (
+                "failed delivery preserves accepted terminal debt",
+                failed_delivery_preserves_accepted_terminal_debt,
+            ),
+            (
+                "reentrant driving preserves the admitted round",
+                reentrant_driving_preserves_the_admitted_round,
+            ),
+            (
+                "binding reentry orders motion before observing input",
+                binding_reentry_orders_motion_before_observing_input,
+            ),
+            (
+                "binding terminal withdrawal cancels prepared contact output",
+                binding_terminal_withdrawal_cancels_prepared_contact_output,
+            ),
+            (
+                "boundary pressure, shared handles and independent recovery",
+                boundary_pressure_preserves_reused_contacts_and_shared_delivery,
+            ),
             (
                 "interleaved non-moves stay bounded",
                 interleaved_non_moves_stay_bounded,
@@ -771,6 +958,359 @@ fn resampler_interpolates_on_event_time_and_never_drops_terminals() {
             ),
         ],
     );
+}
+
+fn failed_delivery_preserves_accepted_terminal_debt() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    for (sample_first, stop_recovery) in
+        [(false, false), (false, true), (true, false), (true, true)]
+    {
+        for cancel in [false, true] {
+            for shared_recovery in [false, true] {
+                let at = origin();
+                let resampler = PointerEventResampler::new(contact());
+                let shared = resampler.clone();
+                let independent = PointerEventResampler::new(contact());
+                let terminal = if cancel {
+                    make_cancel_event_for_id(contact(), PointerKind::Touch)
+                } else {
+                    make_up_event_for_id(contact(), Offset::new(2.0, 0.0), PointerKind::Touch)
+                        .expect("terminal")
+                };
+                for (index, event) in [
+                    make_down_event_for_id(contact(), Offset::ZERO, PointerKind::Touch)
+                        .expect("down"),
+                    move_to(1.0),
+                    terminal,
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    resampler.add_event_at(event, at + Duration::from_millis(index as u64));
+                }
+                let mut observed = Vec::new();
+                let failed = catch_unwind(AssertUnwindSafe(|| {
+                    let callback = |event| {
+                        observed.push(event);
+                        std::panic::panic_any("first delivery failure");
+                    };
+                    if sample_first {
+                        resampler.sample(at + ms(4.0), at + ms(20.0), callback);
+                    } else {
+                        resampler.stop(callback);
+                    }
+                }))
+                .expect_err("delivery failure");
+                assert_eq!(
+                    failed.downcast_ref::<&str>(),
+                    Some(&"first delivery failure")
+                );
+                assert!(matches!(observed.as_slice(), [PointerEvent::Down(_)]));
+                let owed = (
+                    resampler.has_pending_events(),
+                    resampler.pending_event_count(),
+                );
+                assert!(!independent.has_pending_events());
+                let recover = if shared_recovery { &shared } else { &resampler };
+                if stop_recovery {
+                    recover.stop(|event| observed.push(event));
+                } else {
+                    recover.sample(at + ms(4.0), at + ms(20.0), |event| observed.push(event));
+                }
+                assert_eq!(observed.len(), 3, "accepted tail survives the failed hook");
+                assert_eq!(
+                    owed,
+                    (true, 2),
+                    "accepted output is visible as delivery debt"
+                );
+                assert!(matches!(observed[1], PointerEvent::Move(_)));
+                assert!(if cancel {
+                    matches!(observed[2], PointerEvent::Cancel(_))
+                } else {
+                    matches!(observed[2], PointerEvent::Up(_))
+                });
+                recover.stop(|event| observed.push(event));
+                assert_eq!(observed.len(), 3, "terminal is delivered exactly once");
+                for driver in [&resampler, &independent] {
+                    driver.add_event_at(
+                        make_down_event_for_id(contact(), Offset::ZERO, PointerKind::Touch)
+                            .expect("fresh down"),
+                        at + ms(30.0),
+                    );
+                    driver.add_event_at(
+                        make_up_event_for_id(contact(), Offset::ZERO, PointerKind::Touch)
+                            .expect("fresh up"),
+                        at + ms(31.0),
+                    );
+                    let mut fresh = Vec::new();
+                    driver.stop(|event| fresh.push(event));
+                    assert!(matches!(
+                        fresh.as_slice(),
+                        [PointerEvent::Down(_), PointerEvent::Up(_)]
+                    ));
+                }
+            }
+        }
+    }
+}
+
+fn reentrant_driving_preserves_the_admitted_round() {
+    for (clear, nested_drive) in [(false, false), (false, true), (true, false), (true, true)] {
+        let at = origin();
+        let driver = PointerEventResampler::new(contact());
+        let shared = driver.clone();
+        let enqueue = |resampler: &PointerEventResampler, position: f64| {
+            resampler.add_event_at(
+                make_down_event_for_id(contact(), Offset::new(position, 0.0), PointerKind::Touch)
+                    .expect("down"),
+                at,
+            );
+            resampler.add_event_at(
+                make_up_event_for_id(contact(), Offset::new(position, 0.0), PointerKind::Touch)
+                    .expect("up"),
+                at + ms(1.0),
+            );
+        };
+        enqueue(&driver, 1.0);
+        let observed = Rc::new(RefCell::new(Vec::new()));
+        driver.stop(|event| {
+            let starts = matches!(event, PointerEvent::Down(_));
+            observed.borrow_mut().push(event);
+            if starts {
+                if clear {
+                    shared.clear();
+                }
+                enqueue(&shared, 2.0);
+                if nested_drive {
+                    shared.stop(|event| observed.borrow_mut().push(event));
+                }
+            }
+        });
+        let older = if clear { 1 } else { 2 };
+        assert_eq!(
+            observed.borrow().len(),
+            older + if nested_drive { 2 } else { 0 }
+        );
+        let positions: Vec<_> = observed.borrow().iter().map(event_x).collect();
+        let mut expected = vec![Some(1.0); older];
+        if nested_drive {
+            expected.extend([Some(2.0), Some(2.0)]);
+        }
+        assert_eq!(
+            positions, expected,
+            "older debt precedes nested fresh contact"
+        );
+        let mut newer = Vec::new();
+        shared.stop(|event| newer.push(event));
+        if nested_drive {
+            assert!(
+                newer.is_empty(),
+                "nested driving consumed its prefix exactly once"
+            );
+        } else {
+            assert!(matches!(
+                newer.as_slice(),
+                [PointerEvent::Down(_), PointerEvent::Up(_)]
+            ));
+            assert!(newer.iter().all(|event| event_x(event) == Some(2.0)));
+        }
+        assert!(!driver.has_pending_events());
+    }
+}
+
+fn binding_terminal_withdrawal_cancels_prepared_contact_output() {
+    use flui_foundation::MonotonicClock;
+    for before_input in [false, true] {
+        for cancel in [false, true] {
+            let lane = flui_interaction::InteractionLane::try_new().expect("lane");
+            let clock = std::sync::Arc::new(flui_foundation::ManualClock::new());
+            let binding = Rc::new(GestureBinding::with_clock(clock.clone()));
+            binding.set_resampling_enabled(true).expect("mode");
+            let observed = Rc::new(RefCell::new(Vec::new()));
+            let output = Rc::clone(&observed);
+            let reentrant = Rc::downgrade(&binding);
+            binding
+                .pointer_router()
+                .add_global_handler(Rc::new(move |event| {
+                    let PointerEvent::Move(movement) = event else {
+                        return;
+                    };
+                    let x = movement.current().position.get().x;
+                    output.borrow_mut().push(x);
+                    if x == 10.0 {
+                        let binding = reentrant.upgrade().expect("binding alive");
+                        let terminal = if cancel {
+                            make_cancel_event_for_id(contact(), PointerKind::Touch)
+                        } else {
+                            make_up_event_for_id(
+                                contact(),
+                                Offset::new(10.0, 0.0),
+                                PointerKind::Touch,
+                            )
+                            .expect("up")
+                        };
+                        binding.handle_pointer_event(&terminal, |_| HitTestResult::new());
+                        binding.handle_pointer_event(
+                            &make_down_event_for_id(
+                                contact(),
+                                Offset::new(90.0, 0.0),
+                                PointerKind::Touch,
+                            )
+                            .expect("replacement down"),
+                            |_| HitTestResult::new(),
+                        );
+                        binding.handle_pointer_event(
+                            &with_time(
+                                make_move_event_for_id(
+                                    contact(),
+                                    Offset::new(99.0, 0.0),
+                                    PointerKind::Touch,
+                                )
+                                .expect("replacement move"),
+                                40_000_000,
+                            ),
+                            |_| HitTestResult::new(),
+                        );
+                    }
+                }));
+            lane.enter(|| {
+                binding.handle_pointer_event(
+                    &make_down_event_for_id(contact(), Offset::ZERO, PointerKind::Touch)
+                        .expect("down"),
+                    |_| HitTestResult::new(),
+                );
+                for x in [10_u64, 20] {
+                    binding.handle_pointer_event(
+                        &with_time(
+                            make_move_event_for_id(
+                                contact(),
+                                Offset::new(x as f64, 0.0),
+                                PointerKind::Touch,
+                            )
+                            .expect("move"),
+                            x * 1_000_000,
+                        ),
+                        |_| HitTestResult::new(),
+                    );
+                }
+                let sample = clock.now() + ms(30.0);
+                let delivered = if before_input {
+                    binding.flush_pending_input()
+                } else {
+                    binding
+                        .flush_pending_moves_at(sample, sample + ms(16.0))
+                        .expect("frame")
+                };
+                assert_eq!(delivered, 1);
+                assert_eq!(
+                    observed.borrow().as_slice(),
+                    [10.0],
+                    "withdrawn contact output is cancelled"
+                );
+                assert_eq!(
+                    binding.pending_move_count(),
+                    1,
+                    "replacement retains its own next-frame work"
+                );
+                let sample = clock.now() + ms(60.0);
+                binding
+                    .flush_pending_moves_at(sample, sample + ms(16.0))
+                    .expect("replacement frame");
+                assert_eq!(observed.borrow().as_slice(), [10.0, 99.0]);
+                binding.handle_pointer_event(
+                    &make_up_event_for_id(contact(), Offset::new(99.0, 0.0), PointerKind::Touch)
+                        .expect("up"),
+                    |_| HitTestResult::new(),
+                );
+                assert_eq!(binding.active_pointer_count(), 0);
+            });
+        }
+    }
+}
+
+fn binding_reentry_orders_motion_before_observing_input() {
+    use flui_foundation::MonotonicClock;
+    use flui_platform_api::pointer::{
+        ButtonChange, PointerButton, PointerButtons, PointerPress, PointerSample,
+    };
+    for button_edge in [false, true] {
+        let lane = flui_interaction::InteractionLane::try_new().expect("lane");
+        let clock = std::sync::Arc::new(flui_foundation::ManualClock::new());
+        let binding = Rc::new(GestureBinding::with_clock(clock.clone()));
+        binding.set_resampling_enabled(true).expect("mode");
+        let observed = Rc::new(RefCell::new(Vec::new()));
+        let output = Rc::clone(&observed);
+        let reentrant = Rc::downgrade(&binding);
+        binding
+            .pointer_router()
+            .add_global_handler(Rc::new(move |event| match event {
+                PointerEvent::Move(movement) => {
+                    let time = movement.current().time.as_nanos();
+                    output.borrow_mut().push(time);
+                    if time == 10_000_000 {
+                        let binding = reentrant.upgrade().expect("binding alive");
+                        if button_edge {
+                            let sample = PointerSample::new(
+                                flui_platform_api::EventTime::from_nanos(20_000_000),
+                                PointerPosition::try_new(flui_foundation::geometry::Point::new(
+                                    20.0, 0.0,
+                                ))
+                                .expect("position"),
+                            );
+                            binding.handle_pointer_event(
+                                &PointerEvent::ButtonChange(ButtonChange::Pressed(
+                                    PointerPress::new(
+                                        PointerInfo::new(contact(), PointerKind::Mouse),
+                                        PointerButton::SECONDARY,
+                                        PointerButtons::only(PointerButton::PRIMARY)
+                                            .with(PointerButton::SECONDARY),
+                                        sample,
+                                    ),
+                                )),
+                                |_| HitTestResult::new(),
+                            );
+                        } else {
+                            binding.flush_pending_input();
+                            output.borrow_mut().push(20_000_000);
+                        }
+                    }
+                }
+                PointerEvent::ButtonChange(_) => output.borrow_mut().push(20_000_000),
+                _ => {}
+            }));
+        lane.enter(|| {
+            binding.handle_pointer_event(
+                &make_down_event_for_id(contact(), Offset::ZERO, PointerKind::Mouse).expect("down"),
+                |_| HitTestResult::new(),
+            );
+            for time in [10_000_000, 15_000_000] {
+                binding.handle_pointer_event(
+                    &with_time(
+                        make_move_event_for_id(
+                            contact(),
+                            Offset::new(1.0, 0.0),
+                            PointerKind::Mouse,
+                        )
+                        .expect("move"),
+                        time,
+                    ),
+                    |_| HitTestResult::new(),
+                );
+            }
+            let sample = clock.now() + ms(30.0);
+            binding
+                .flush_pending_moves_at(sample, sample + ms(16.0))
+                .expect("frame");
+            assert_eq!(
+                observed.borrow().as_slice(),
+                [10_000_000, 15_000_000, 20_000_000]
+            );
+            binding.handle_pointer_event(
+                &make_cancel_event_for_id(contact(), PointerKind::Mouse),
+                |_| HitTestResult::new(),
+            );
+        });
+    }
 }
 
 fn binding_keeps_all_measured_packets_and_only_latest_predictions() {

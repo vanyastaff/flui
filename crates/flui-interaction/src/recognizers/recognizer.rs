@@ -135,28 +135,6 @@ pub enum GestureRecognizerState {
     Defunct,
 }
 
-/// Default gesture tolerances.
-pub mod constants {
-    /// Maximum tap movement in logical pixels.
-    pub const TAP_SLOP: f64 = 18.0;
-    /// Maximum distance between taps in logical pixels.
-    pub const DOUBLE_TAP_SLOP: f64 = 100.0;
-    /// Maximum interval between taps in milliseconds.
-    pub const DOUBLE_TAP_TIMEOUT_MS: u64 = 300;
-    /// Long-press duration in milliseconds.
-    pub const LONG_PRESS_DURATION_MS: u64 = 500;
-    /// Drag movement tolerance in logical pixels.
-    pub const DRAG_SLOP: f64 = 18.0;
-    /// Pan movement tolerance in logical pixels.
-    pub const PAN_SLOP: f64 = 18.0;
-    /// Scale movement tolerance in logical pixels.
-    pub const SCALE_SLOP: f64 = 18.0;
-    /// Minimum fling velocity in logical pixels per second.
-    pub const MIN_FLING_VELOCITY: f64 = 50.0;
-    /// Minimum fling distance in logical pixels.
-    pub const MIN_FLING_DISTANCE: f64 = 50.0;
-}
-
 #[cfg(test)]
 mod event_timeline_tests {
     use super::EventTimeline;

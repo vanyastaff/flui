@@ -75,19 +75,25 @@ pub use drag::{
 };
 pub use eager::{EagerGestureRecognizer, EagerGestureRecognizerBuilder};
 pub use force_press::{ForcePressGestureRecognizer, ForcePressGestureRecognizerBuilder};
-pub use long_press::{LongPressGestureRecognizer, LongPressGestureRecognizerBuilder};
+pub use long_press::{
+    LongPressCallback, LongPressDetails, LongPressDownCallback, LongPressDownDetails,
+    LongPressEndCallback, LongPressEndDetails, LongPressGestureRecognizer,
+    LongPressGestureRecognizerBuilder, LongPressMoveUpdateCallback, LongPressMoveUpdateDetails,
+    LongPressSimpleCallback, LongPressStartCallback, LongPressStartDetails,
+};
 pub use multi_tap::{MultiTapGestureRecognizer, MultiTapGestureRecognizerBuilder};
 pub use multidrag::{
     MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer,
     MultiDragGestureRecognizerBuilder, MultiDragHandle, MultiDragStartCallback,
     MultiDragUpdateDetails,
 };
-pub use recognizer::{
-    CancelOutcome, GestureRecognizer, GestureRecognizerState, cancel_all, constants,
-};
+pub use recognizer::{CancelOutcome, GestureRecognizer, GestureRecognizerState, cancel_all};
 pub use scale::{ScaleGestureRecognizer, ScaleGestureRecognizerBuilder};
 pub use set::RecognizerSet;
-pub use tap::{TapGestureRecognizer, TapGestureRecognizerBuilder};
+pub use tap::{
+    TapCallback, TapDetails, TapDownCallback, TapDownDetails, TapGestureRecognizer,
+    TapGestureRecognizerBuilder, TapUpCallback, TapUpDetails,
+};
 pub use tap_and_drag::{
     TapAndDragGestureRecognizer, TapAndDragGestureRecognizerBuilder, TapDragDownCallback,
     TapDragDownDetails, TapDragEndCallback, TapDragEndDetails, TapDragStartCallback,

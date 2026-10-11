@@ -4246,6 +4246,10 @@ assert_impl_all!(ResolvedRouteToken: Copy, Send, Sync);
 fn lane_capability_matrix() {
     let cases: &[(&str, fn())] = &[
         (
+            "activation_restores_exact_owner",
+            super::lane_retirement::activation_restores_exact_owner,
+        ),
+        (
             "lane_mints_a_send_safe_least_privilege_handle",
             lane_mints_a_send_safe_least_privilege_handle,
         ),

@@ -11,6 +11,8 @@ mod multi_tap;
 #[path = "interaction_lane.rs"]
 mod interaction_lane;
 
+mod lane_retirement;
+
 #[path = "text_input_retirement.rs"]
 mod text_input_retirement;
 
@@ -30,6 +32,7 @@ mod gesture_lifecycle;
 mod mouse_tracking;
 #[path = "multi_pointer_recognizers.rs"]
 mod multi_pointer_recognizers;
+mod one_euro;
 mod pointer_identity;
 #[path = "pointer_source.rs"]
 mod pointer_source;

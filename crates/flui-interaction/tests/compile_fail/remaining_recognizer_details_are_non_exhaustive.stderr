@@ -121,28 +121,30 @@ error[E0639]: cannot create non-exhaustive struct using struct expression
 72 | |         local_position: Offset::ZERO,
 73 | |         offset_from_origin: Offset::ZERO,
 74 | |         local_offset_from_origin: Offset::ZERO,
-75 | |     };
+75 | |         kind: PointerKind::Touch,
+76 | |     };
    | |_____^
 
 error[E0639]: cannot create non-exhaustive struct using struct expression
-  --> tests/compile_fail/remaining_recognizer_details_are_non_exhaustive.rs:76:13
+  --> tests/compile_fail/remaining_recognizer_details_are_non_exhaustive.rs:77:13
    |
-76 |       let _ = LongPressEndDetails {
+77 |       let _ = LongPressEndDetails {
    |  _____________^
-77 | |         global_position: Offset::ZERO,
-78 | |         local_position: Offset::ZERO,
-79 | |         velocity: Velocity::ZERO,
-80 | |     };
+78 | |         global_position: Offset::ZERO,
+79 | |         local_position: Offset::ZERO,
+80 | |         velocity: Velocity::ZERO,
+81 | |         kind: PointerKind::Touch,
+82 | |     };
    | |_____^
 
 error[E0639]: cannot create non-exhaustive struct using struct expression
-  --> tests/compile_fail/remaining_recognizer_details_are_non_exhaustive.rs:81:13
+  --> tests/compile_fail/remaining_recognizer_details_are_non_exhaustive.rs:83:13
    |
-81 |       let _ = ForcePressDetails {
+83 |       let _ = ForcePressDetails {
    |  _____________^
-82 | |         global_position: Offset::ZERO,
-83 | |         local_position: Offset::ZERO,
-84 | |         pressure: 0.5,
-85 | |         max_pressure: 1.0,
-86 | |     };
+84 | |         global_position: Offset::ZERO,
+85 | |         local_position: Offset::ZERO,
+86 | |         pressure: 0.5,
+87 | |         max_pressure: 1.0,
+88 | |     };
    | |_____^

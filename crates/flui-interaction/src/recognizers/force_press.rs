@@ -1,8 +1,12 @@
 //! Pressure-sensitive contact recognition with immutable owner-local configuration.
 //!
-//! A mouse never starts a force press. Other devices must report two different
-//! nonzero pressures before crossing the start threshold can claim the arena.
+//! Recognition requires declared pressure support and an actual measured reading.
+//! Device kind alone does not imply a pressure sensor; constant readings are valid.
 //! Cancellation ends an active press and permits reuse; dropping the owner is silent.
+//! Measured pressure history is processed in packet order before the current
+//! reading. Predictions never trigger recognition. Reentrant contact replacement
+//! revokes the remainder of the old packet; observer failures preserve the first
+//! panic while allowing the still-current measured tail to finish.
 
 use std::{cell::RefCell, rc::Rc};
 
@@ -11,7 +15,7 @@ use flui_foundation::geometry::Offset;
 use super::{
     callback_containment::{finish_containment, invoke_callback, retire_callback},
     contact::{ArenaMembership, PrimaryContact},
-    recognizer::{CancelOutcome, GestureRecognizer, is_primary_down, measured_positions},
+    recognizer::{CancelOutcome, GestureRecognizer, is_primary_down},
 };
 use crate::{
     ForcePressDetails,
@@ -265,7 +269,7 @@ impl ForcePressGestureRecognizer {
         invoke_callback(callback, || {}, |callback| callback(details));
     }
 
-    fn handle_sample(&self, position: Offset<f64>, global: Offset<f64>, pressure: f64) {
+    fn handle_sample(&self, position: Offset<f64>, global: Offset<f64>, pressure: Option<f64>) {
         let Some(contact) = self.contact.current() else {
             return;
         };
@@ -285,6 +289,11 @@ impl ForcePressGestureRecognizer {
             self.finish(ArenaStep::Withdraw, notices);
             return;
         }
+        // Missing sensor data can still end a contact through motion, but it
+        // cannot move the coordinates attached to the last measured pressure.
+        let Some(pressure) = pressure else {
+            return;
+        };
         if position.is_finite() {
             state.position = position;
         }
@@ -367,7 +376,11 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
         if let PointerEvent::Down(data) = down.local
             && let Some(pressure) = data.sample.pressure
         {
-            self.handle_sample(contact.local, contact.global, f64::from(pressure.get()));
+            self.handle_sample(
+                contact.local,
+                contact.global,
+                Some(f64::from(pressure.get())),
+            );
         }
     }
 
@@ -386,29 +399,38 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
                     dispatch.local.position(),
                     dispatch.global.position(),
                 ) {
-                    self.handle_sample(local, global, f64::from(pressure.get()));
+                    self.handle_sample(local, global, Some(f64::from(pressure.get())));
                 }
             }
             PointerEvent::Move(data) => {
-                if let Some(contact) = self.contact.current()
-                    && measured_positions(dispatch.local).any(|position| {
-                        contact
-                            .settings
-                            .exceeds_hit_slop(contact.kind, position - contact.local)
-                    })
-                {
-                    let mut notices = Vec::new();
-                    self.gesture_state.borrow_mut().retire(&mut notices);
-                    self.finish(ArenaStep::Withdraw, notices);
+                let Some(contact) = self.contact.current() else {
                     return;
+                };
+                let PointerEvent::Move(global) = dispatch.global else {
+                    return;
+                };
+                let samples = data
+                    .coalesced()
+                    .iter()
+                    .zip(global.coalesced())
+                    .chain(std::iter::once((data.current(), global.current())));
+                let mut first = None;
+                for (local, root) in samples {
+                    if !self.contact.is_current(contact.id) {
+                        break;
+                    }
+                    let local_position = local.position.get();
+                    let root_position = root.position.get();
+                    let candidate = RoutePanic::capture(|| {
+                        self.handle_sample(
+                            Offset::new(local_position.x, local_position.y),
+                            Offset::new(root_position.x, root_position.y),
+                            local.pressure.map(|pressure| f64::from(pressure.get())),
+                        );
+                    });
+                    RoutePanic::preserve_first(&mut first, candidate, "measured pressure history");
                 }
-                if let (Some(pressure), Some(local), Some(global)) = (
-                    data.current().pressure,
-                    dispatch.local.position(),
-                    dispatch.global.position(),
-                ) {
-                    self.handle_sample(local, global, f64::from(pressure.get()));
-                }
+                finish_containment(first, std::thread::panicking());
             }
             PointerEvent::Up(_) => self.end(Some(dispatch), ArenaStep::Finish),
             PointerEvent::Cancel(_) => {

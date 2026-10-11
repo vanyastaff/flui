@@ -54,6 +54,16 @@ path.
 
 ## Mapping decisions
 
+### Coordinate conversion preserves admitted reading identity
+
+`PointerMove::try_map_positions` changes only checked positions and preserves
+times, sensors, metadata and measured/predicted membership. It does not repeat
+source admission when distinct readings collapse to equal local values.
+Mapper refusal leaves the source unchanged (ADR-0184). The public
+`input_vocabulary_contract` row
+`position_mapping_preserves_readings_and_refuses_partial_output` pins refusal
+at each sample family and later successful conversion.
+
 ### Locale identity survives native observation and resource selection
 
 `Locale` validates a complete BCP 47 tag through one parser boundary (ADR-0173).

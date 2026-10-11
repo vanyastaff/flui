@@ -126,11 +126,9 @@ impl CloseWindow {
         Self::default()
     }
 
-    /// Hold the window of a presentation's dispatch owner.
+    /// Hold a presentation dispatch owner's window, or a raw handle's lane window.
     pub fn dispatch(&mut self, handle: &crate::InteractionDispatchHandle) {
-        if let Some(terminal) = handle.close_tombstone() {
-            self.hold(terminal);
-        }
+        self.hold(handle.close_tombstone());
     }
 
     /// Hold the window of a presentation's focus owner.

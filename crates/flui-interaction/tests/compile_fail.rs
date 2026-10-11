@@ -3,6 +3,7 @@
 #[test]
 fn trybuild_ui() {
     let cases = trybuild::TestCases::new();
+    cases.compile_fail("tests/compile_fail/after_route_lifecycle_kernel_is_unavailable.rs");
     cases.compile_fail("tests/compile_fail/recognizer_stays_on_its_thread.rs");
     cases.compile_fail("tests/compile_fail/builder_stays_on_its_thread.rs");
     cases.compile_fail("tests/compile_fail/recognizer_set_stays_on_its_thread.rs");

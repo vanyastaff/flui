@@ -56,6 +56,11 @@ runs, then the first panic is resumed by the dispatch owner.
 Localization rewrites the current position and every coalesced and predicted
 sample into the same local coordinate space. Times, pointer/device identity,
 kind, primary role, buttons, modifiers and sensor readings are preserved.
+Coordinate conversion also preserves admitted history order and cardinality:
+distinct source readings can round to the same local value without becoming
+the same observation. `PointerMove::try_map_positions` changes checked positions
+directly rather than passing converted histories through source admission again
+([ADR-0184](../../../docs/adr/ADR-0184-coordinate-mapping-preserves-pointer-readings.md)).
 The global event stays unchanged. A computed non-finite local position refuses
 that transformed event (`transform_pointer_event` in `routing/hit_test.rs`).
 The mounted `pointer_delivery_preserves_source_and_sample_families` row checks

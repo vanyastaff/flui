@@ -8,7 +8,7 @@ Crate-level design notes for `flui_interaction`: subsystems, ownership, mapping 
 |---|---|
 | `arena` | Owner-local conflict resolution between competing recognizers. Per-pointer members are `Weak<dyn GestureArenaMember>` in an inline-four `SmallVec`. Generational slots keep held competitions separate across pointer-ID reuse. Eager acceptors win when the arena closes; each notification upgrades its weak participant immediately before invoking it. |
 | `recognizers` | Ten recognizer types (tap, double tap, long press, drag, scale, force press, multi-tap, multi-drag, eager, tap-and-drag) and drag-axis builders. Each implements the open `GestureRecognizer` and `GestureArenaMember` traits. Builders configure immutable callbacks before returning `Rc` ownership. `ArenaMembership` names an exact weak allocation; `PrimaryContact` owns one admitted sequence, its settings snapshot, identity and deadline. `RecognizerSet` shares ordered weak attachments with listeners. |
-| `processing` | Per-pointer derived data: `VelocityTracker` (LSQ fit on 20-sample circular buffer, 100 ms horizon, 40 ms stationary gate), `PointerEventResampler` (frame-rate adaptation with 100-event cap and 1 ms minimum sample interval), standalone OneEuro filters, the crate-internal `lsq_solver` (used by `VelocityTracker` only) and `sampling_clock`. |
+| `processing` | Per-pointer derived data: `VelocityTracker` (LSQ fit on 20-sample circular buffer, 100 ms horizon, 40 ms stationary gate), `PointerEventResampler` (frame-rate adaptation with a 100-event pressure threshold, preserved sequence boundaries and 1 ms minimum sample interval), standalone OneEuro filters, the crate-internal `lsq_solver` (used by `VelocityTracker` only) and `sampling_clock`. |
 | `routing` | Event dispatch infrastructure: `PointerRouter`, the presentation-owned `FocusManager` (`FocusManager::new` returns an `Rc<Self>`; there is no thread-local focus state), `FocusScopeNode` / reading-order Tab traversal, `MouseTracker` (enter/exit/hover), hit testing, the `InteractionLane` that resolves and invokes pointer routes, and the `TransformGuard` stack-RAII for the transform stack. Route resolution on Down and cached-route invocation on every Move/Up are on the per-pointer hot path (`benches/pointer_route_bench.rs`). |
 | `binding` | `GestureBinding` — owner-local glue that hosts the arena, resolves and retains the Down hit route, coalesces/resamples Moves, and runs route → arena lifecycle ordering. Contact generations prevent frame-delayed samples from crossing a reused platform pointer ID. |
 | `observability` | `GestureEvent` gives typed event names; `SPAN_RECOGNIZER` and `SPAN_ARENA` name spans, and `pointer_event_kind` describes a pointer event for tracing. Rejection and terminal tracking commit local withdrawal before diagnostics, because subscribers can reenter or panic. The app installs the subscriber. |
@@ -30,7 +30,7 @@ them. Compile-time assertions in `src/lib.rs` cover only those data types.
 | Arena slots | `Rc<RefCell<BTreeMap<..>>>` and per-slot `RefCell` | exact owner-local slot transactions; callbacks and user destruction run after releasing borrows |
 | Recognizer state | `Cell` / `RefCell` behind `Rc` identity | synchronous owner-local mutation; callback configuration is immutable |
 | Pointer router / interaction lane | `Rc` + `RefCell` | explicitly owner-local executable callbacks |
-| Pointer resampler | `Arc<parking_lot::Mutex<ResamplerInner>>` | bounded data queue; sampling materializes a batch and unlocks before dispatch |
+| Pointer resampler | `Arc<parking_lot::Mutex<ResamplerInner>>` and shared output batches | source pressure coalescing and frozen delivery prefixes; no lock crosses a callback |
 | Focus manager | `Rc` + `RefCell` / `Cell`, one per presentation | owner-local focus tree and listeners |
 
 Negative compiler fixtures reject transfer of executable recognizers, builders
@@ -40,6 +40,109 @@ implementations cannot change arena ordering or bypass exact membership checks.
 ## Mapping decisions
 
 Local design choices and why. Each entry names the conflict, the choice, and the reference (a strategy clause, a design rule, or a precedent plan).
+
+- **Position interpolation does not measure a sensor.** A synthetic interpolated
+  position keeps the prior accepted reading's pressure, orientation, twist and
+  contact metadata, including absent sensors. It must not borrow a future
+  reading. Admission tracking and queued delivery are distinct: `Leave` ends
+  future tracking without erasing already accepted boundaries or hover packets.
+  `resampler_interpolates_on_event_time_and_never_drops_terminals` pins both
+  sensor provenance and terminal/hover delivery.
+- **Force recognition follows measured chronology.** Coalesced readings and the
+  current reading progress pressure and motion in order; predicted readings
+  never recognize a gesture. A missing pressure still checks motion, but cannot
+  rewrite coordinates attached to the prior measured pressure. Callback failures
+  preserve the first failure while the still-current tail progresses. Exact
+  contact replacement revokes the old tail, even when the pointer ID is reused.
+  `scale_and_force_press_owner_lifecycle` pins ordinary/coalesced equivalence,
+  threshold excursions, missing sensors, replacement and recovery.
+- **Scale continuity includes representable contraction.** Changing the contact
+  set carries the prior factor into a newly measured baseline. The ratio retries
+  product-first evaluation when quotient-first loses a nonzero result through
+  intermediate underflow, as well as on overflow. A real zero span still reports
+  zero; an unrepresentable final result follows the existing finite-publication
+  policy. `scale_and_force_press_owner_lifecycle` pins huge rebaselines, tiny
+  contractions, actual zero and fresh-contact recovery through public callbacks.
+
+- **Standalone admission differs from mounted admission.** A resampler's
+  100-event threshold is a pressure policy, not a hard memory limit. Admission
+  preserves `Down`, `Up`, `Cancel`, `Enter` and `Leave` in order; pressure
+  coalesces adjacent moves or removes the oldest non-boundary event. If only
+  boundaries remain, the next event is accepted beyond the threshold. Standalone
+  callers must pace `sample` or `stop`; silently losing an accepted terminal
+  would leave downstream recognition active. Clones share one queue, while
+  separately constructed resamplers remain independent even with equal pointer
+  IDs. `resampler_interpolates_on_event_time_and_never_drops_terminals` covers
+  repeated-contact boundary pressure, mixed moves, shared delivery and fresh
+  recovery. `GestureArena::with_capacity` reserves deferred-resolution storage,
+  not contact admission; `gesture_lifecycle_matrix` admits and settles contacts
+  beyond both that reservation and the binding's limit.
+- **Prepared output survives a failed observer.** Sampling commits source state
+  into shared output batches before calling user code. Each packet is consumed
+  before its callback; a callback panic leaves the unvisited tail deliverable by
+  a subsequent healthy sample or stop, including through a clone after stop
+  reset tracking. Nested driving consumes older output before newly prepared
+  packets, while an outer frozen prefix cannot acquire newer work. The binding
+  uses that same lazy delivery prefix before button edges and observing input.
+  Explicit `clear` cancels source and unconsumed output; dropping an output
+  iterator alone preserves debt. `has_pending_events` and `pending_event_count`
+  include prepared output. Terminal contact withdrawal cancels that contact's
+  already-prepared prefix before terminal callbacks, while still-queued source
+  samples retain their terminal flush. A reused pointer ID owns a fresh queue;
+  reentrant withdrawal cannot flush the old frozen tail into its replacement.
+  The public
+  `resampler_interpolates_on_event_time_and_never_drops_terminals` pins failed
+  Down delivery with Up/Cancel tails, shared and independent recovery, clear,
+  reentrant Move ordering before button or pending-input observation, and
+  Up/Cancel withdrawal with same-ID recovery during frame/input driving.
+  The source pressure threshold does not cap prepared output debt; repeated
+  observer failures require subsequent healthy driving or explicit cancellation.
+  Shared queues commit each packet once; concurrent driver callbacks have no
+  completion-order guarantee, so ordered UI delivery remains owner-synchronous.
+  Source admission reserves reusable shared batch storage. A live frozen prefix
+  prevents its batch identity from being reused even after cancellation; retiring
+  prefixes releases unused pool storage while keeping one idle buffer. The public
+  `resolved_route_move_invocation_allocates_no_heap_after_setup` pins unchanged-time
+  measured Sample/Stop delivery without allocation after admission and the
+  saturated source enqueue allocation bound.
+- **The binding owns mounted gesture progression.** `GestureBinding` admits
+  at most 32 simultaneous contacts, retains each admitted Down route, closes
+  its arena after routing Down, and sweeps or abandons its exact generation on
+  terminal input. It flushes accepted motion before terminal delivery and owns
+  deferred verdict/deadline progression. `GestureArenaScope` supplies that
+  binding-driven arena to widgets; recognizers below it do not self-sweep.
+  Standalone drivers close after Down routing, sweep after Up (abandon on
+  Cancel), drain deferred resolutions and poll deadlines when due. Holds must
+  eventually release their exact entry handle, including after pointer reuse;
+  reserving capacity does not remove those obligations. The public
+  `gesture_lifecycle_matrix` covers held release and pointer reuse, while
+  `binding_input_contract_matrix` covers capped contacts, refused tails and
+  lifecycle reset. The binding's contact cap does not limit members per contact.
+- **Terminal lane retirement commits before user destruction (ADR-0127).**
+  Closing withdraws executable callbacks and opaque route ownership before
+  retiring them outside borrows. Healthy retirement releases resources; after
+  the first failure or during unwind, remaining owners that could execute user
+  code are retained. Non-last owner-local `Rc` clones can still be released.
+  Saved dispatch handles become stale, while another live lane remains usable.
+  `lane_terminal_retirement_contract` covers independent storage families,
+  competing failures, reentry, unwind retention and surviving-lane recovery.
+  Every target snapshot also carries terminal lane authority, including raw
+  registrations without a presentation owner. `lane_snapshot_authority_contract`
+  pins cached mouse exits after lane closure and revocation between callbacks
+  already admitted to one round. Final framework snapshots retain withdrawn
+  captures after a preserving close; external non-last callback clones remain
+  releasable. Fresh stale-handle values retire ordinarily after the close window
+  returns, while rejected ownership during that window follows its failure mode.
+  Containment cannot rescue one opaque aggregate that double-panics inside its
+  own destruction before control returns to the framework.
+- **Dispatch identity does not imply activation authority.** A saved dispatch
+  handle carries an exact lane ticket but runs only while that lane is entered
+  on its owner thread. `UiRuntime::enter` establishes this scope for mounted
+  consumers; standalone composition uses `InteractionLane::enter`. Nested
+  activation restores the previous ticket on return or unwind. An inactive,
+  foreign, wrong-thread or closed lane is rejected before invoking its targets,
+  rather than borrowing another runtime's active lane. `lane_capability_matrix`
+  pins those authority boundaries and stale capabilities after owner recreation.
 
 - **Diagnostics participate in the subsystem's ownership boundary.** Router
   mutations and ignored sampling windows release their borrow or mutex before
@@ -329,6 +432,46 @@ revision. Inspect source inclusions with `rg 'include_str!' crates/flui-interact
 The classifier treats crate READMEs and nested crate documentation as source-impacting
 paths, so this guide needs no `DOCS_ONLY` exemption.
 
+### Native input evidence
+
+The public native window contract lives in
+[`flui-platform/tests/contract.rs`](../../flui-platform/tests/contract.rs).
+On Windows, select one existing child row through its environment variable;
+the top-level test exits after running that row. In PowerShell:
+
+```powershell
+$env:FLUI_NATIVE_WINDOW_CONTRACT_CHILD = 'fractional_native_wheel_packets_preserve_observed_precision_and_source'
+try {
+    cargo nextest run --locked -p flui-platform --test platform_it test_window_lifecycle_contract --no-capture --build-jobs 6 -j 1
+} finally {
+    Remove-Item Env:FLUI_NATIVE_WINDOW_CONTRACT_CHILD
+}
+```
+
+This row posts by-value mouse and wheel messages to an owned hidden HWND and
+pumps the native window procedure. It observes source identity, signed units
+and fractional precision without foreground activation or global injection.
+It proves message translation and delivery, not physical wheel classification.
+The separate `synthetic_touch_and_pen_reach_native_pointer_dispatch` row uses
+Windows synthetic pointer injection into a shown owned window. It requires an
+interactive, unobscured desktop and successful activation; `CANNOT_VERIFY`
+must remain an unavailable result, never be reported as a passed input check.
+Synthetic pen/touch execution does not certify a physical pen or touch sensor.
+
+`cargo xtask device windows-input` drives a real counter through OS mouse and
+keyboard input and UI Automation, with foreground and hit-target checks. It
+requires Windows with an interactive desktop and does not exercise pen/touch.
+`cargo xtask live-smoke` uses XTEST under Xvfb on Linux; its `--wayland` variant
+uses headless weston for teardown. Both variants are Linux-only; an explicit
+skip on another host is not execution evidence. Cross-typecheck and wasm-check
+are compilation evidence only.
+
+Retain the exact revision, command, exit status, verdict and output outside the
+repository. For physical claims, also retain device/backend identity and the
+actual exercise: contact/hover, sensor values, multi-contact, capture loss and
+terminal recovery as applicable. Input traces need the provenance described
+in [PERFORMANCE.md](PERFORMANCE.md#trace-provenance-and-replay).
+
 ## Observability
 
 The observability substrate lives at [`crate::observability`](../src/observability.rs) (re-exported at
@@ -355,7 +498,7 @@ the app boundary; the crate does not install one. Filter via
 - **Concurrency models must match ownership.** The executable arena is
   owner-local; a parallel `add` / `resolve` model would test an unsupported
   execution contract. Deferred data-plane synchronization needs its own model.
-- **Bench fidelity pass: realistic workloads.** Current benches use synthetic events; recorded traces would need a recording format, which this crate does not have (`testing` holds only the `input` event builders).
+- **Bench fidelity: measured input bursts.** Current benches use synthetic events. The existing owned-event resampler replay is sufficient for explicit fixtures; physical throughput and latency claims additionally require device provenance and recorded arrival/frame schedules. See [trace provenance and replay](PERFORMANCE.md#trace-provenance-and-replay) before extending the workload. No general-purpose recording format is required for a literal owned-event fixture.
 - **Re-export the `pub mod observability` at `crate::prelude`** once the devtools substrate is stable — currently only the `GestureEvent` / `SPAN_*` items are re-exported at the crate root.
 
 ## Index of in-crate companion documents
@@ -444,6 +587,35 @@ order without invoking user sorting code. The public Tab and Shift-Tab row
 policy replacement, last-owner retirement competition and subsequent traversal.
 
 ## Terminal focus ownership
+
+Global keyboard registrations have two lifetimes. `add_global_key_handler`
+installs a presentation-lived callback, withdrawn by clear-all or owner teardown.
+`register_global_key_handler` returns a non-cloneable `GlobalKeyRegistration`
+whose Drop withdraws exactly its registration. The weak owner prevents the token
+from retaining a presentation. This scoped capability is part of the supported
+consumer interface even when no framework widget needs a presentation-global
+handler; widget key handlers remain node-owned `FocusNodeRegistration`s.
+
+Withdrawal commits before callback retirement and runs no user code under a
+borrow. Dispatch snapshots contain registration identities and recheck live
+membership: withdrawing a later handler skips it immediately; re-registering
+the same callback creates a new identity that waits until the next dispatch.
+Closed owners return `GlobalKeyRegistrationError::OwnerClosed`; identity
+exhaustion permanently returns `IdentityExhausted`, preserving older handlers.
+Healthy rejection retires incoming captures; an earlier unwind or caught focus
+observer failure selects the owner's existing preservation policy.
+`scoped_global_key_registration_contracts` covers independent owners, snapshot
+revocation, weak ownership, rejection, hostile retirement, reentry, competing
+observer failures and recovery. The private terminal-counter row of
+`focus_traversal_matrix` proves identities cannot be reused.
+`manager_listener_withdrawal_preserves_a_caught_failure` pins the same cleanup
+policy for individual and bulk focus-manager callback withdrawal.
+Nested global key dispatch inherits a focus notification's saved failure before
+invoking a callback, and keeps that scoped policy until the protected callback
+snapshot retires. Withdrawing the current registration cannot make its last
+dispatch clone run hostile captures under an ordinary cleanup policy. The
+nested-dispatch rows in `scoped_global_key_registration_contracts` pin healthy
+and failing key callbacks, the first focus failure and subsequent delivery.
 
 Focus closure detaches the complete node tree and withdraws node properties
 before callbacks can inspect or reenter it. The first callback or retirement
