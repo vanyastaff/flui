@@ -28,7 +28,7 @@ mod velocity;
 // `lsq_solver` (LeastSquaresSolver / PolynomialFit / MAX_*) is crate-internal
 // numerical machinery shared by the velocity tracker; it is intentionally NOT
 // re-exported, so the public API is not pinned to the solver's internals.
-pub use one_euro::{OneEuroFilter, OneEuroFilter2D};
+pub use one_euro::{OneEuroFilter, OneEuroFilter2D, OneEuroFilterError};
 pub use resampler::{DEFAULT_RESAMPLE_LOOKBACK, PointerEventResampler};
 pub use sampling_clock::{DEFAULT_SAMPLE_PERIOD, SamplingClock};
 pub use velocity::{Velocity, VelocityEstimate, VelocityEstimator, VelocityTracker};

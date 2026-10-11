@@ -31,7 +31,7 @@ fn main() {
     for i in 0..24 {
         let jitter = if i % 2 == 0 { 1.0 } else { -1.0 };
         let raw = Offset::new(100.0 + jitter, 50.0);
-        let smoothed = filter.filter(t, raw);
+        let smoothed = filter.filter(t, raw).expect("finite slow-motion fixture");
         if i % 8 == 7 {
             println!("     raw x={:7.2}  filtered x={:7.2}", raw.dx, smoothed.dx);
         }
@@ -43,7 +43,7 @@ fn main() {
     for i in 0..24 {
         x += 2000.0 * dt.as_secs_f64();
         let raw = Offset::new(x, 50.0);
-        let smoothed = filter.filter(t, raw);
+        let smoothed = filter.filter(t, raw).expect("finite fast-motion fixture");
         if i % 8 == 7 {
             println!(
                 "     raw x={:7.2}  filtered x={:7.2}  (lag {:5.2} px)",

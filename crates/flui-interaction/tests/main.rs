@@ -32,8 +32,8 @@ mod gesture_lifecycle;
 mod mouse_tracking;
 #[path = "multi_pointer_recognizers.rs"]
 mod multi_pointer_recognizers;
-mod pointer_identity;
 mod one_euro;
+mod pointer_identity;
 #[path = "pointer_source.rs"]
 mod pointer_source;
 #[path = "recognizer_api.rs"]
