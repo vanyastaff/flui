@@ -20,7 +20,7 @@ autotests = false
 exclude = ["/ARCHITECTURE.md", "/benches/"]
 
 [dependencies]
-# Flui foundation (for the generic Id<T: Marker> system: FrameId, TaskId, TickerId;
+# Flui foundation (for the generic Id<T: Marker> system: FrameId, TaskId;
 # and MonotonicClock/ManualClock/SystemClock, which FrameClock's ClockSource reuses)
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 

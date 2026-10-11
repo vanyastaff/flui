@@ -712,10 +712,6 @@ ids! {
         /// Identifies tasks in the priority-based task queue.
         pub type TaskId Task;
 
-        /// Ticker ID - scheduler ticker identifier.
-        ///
-        /// Identifies tickers for animation timing callbacks.
-        pub type TickerId Ticker;
     }
     generational: {
         /// Render ID - **generational** key into the `RenderObject` tree.

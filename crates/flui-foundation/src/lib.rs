@@ -276,7 +276,6 @@ pub use id::{
     RenderId,
     SemanticsId,
     TaskId,
-    TickerId,
     // Minimal tree-generic bound (does not expose raw index; ElementId satisfies this)
     TreeId,
     // Runtime identity — one UiRuntime incarnation
