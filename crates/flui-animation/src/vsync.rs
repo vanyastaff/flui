@@ -27,7 +27,7 @@ use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 use std::rc::{Rc, Weak};
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use crate::AnimationController;
 use crate::animation::{Retirement, Terminal};
@@ -201,20 +201,38 @@ struct VsyncInner {
     /// Backend identity of the ultimate live parent at the last frame. Weak custody
     /// neither retains the old presentation nor permits address reuse to alias it.
     frame_authority: Option<Weak<RefCell<VsyncInner>>>,
+    /// Admission and gate mutations invalidate cached ancestry for active walks.
+    /// Saturation disables caching instead of reusing an earlier revision.
+    walk_revision: u64,
 }
 
 /// Borrowed admission chain for one recursive frame delivery. A callback can
 /// withdraw or mute any ancestor while a descendant is being sampled.
+/// Root revisions cache a successful chain only until its next mutation.
+/// `saturated_walk_revisions_revalidate_ancestor_admission` pins the uncached
+/// fallback when no fresh revision can be issued.
 struct FrameWalk<'a> {
     registry: &'a Vsync,
     parent: Option<(&'a Self, u64)>,
+    authority: &'a Weak<RefCell<VsyncInner>>,
+    validated_revision: Cell<Option<u64>>,
 }
 
 impl FrameWalk<'_> {
+    #[inline]
     fn has_live_parent(&self) -> bool {
         let Some((parent, slot)) = self.parent else {
             return true;
         };
+        let revision = self
+            .authority
+            .upgrade()
+            .map(|root| root.borrow().walk_revision);
+        if revision.is_some_and(|revision| {
+            revision != u64::MAX && self.validated_revision.get() == Some(revision)
+        }) {
+            return true;
+        }
         let attached = {
             let inner = self.registry.inner.borrow();
             inner.parent.as_ref().is_some_and(|seat| {
@@ -222,9 +240,14 @@ impl FrameWalk<'_> {
                     && std::ptr::eq(seat.owner.as_ptr(), Rc::as_ptr(&parent.registry.inner))
             })
         };
-        attached && parent.is_live()
+        let live = attached && parent.is_live();
+        if live {
+            self.validated_revision.set(revision);
+        }
+        live
     }
 
+    #[inline]
     fn is_live(&self) -> bool {
         let enabled = {
             let inner = self.registry.inner.borrow();
@@ -404,7 +427,9 @@ impl Vsync {
             slot,
         };
         drop(inner);
+        child.invalidate_walks();
         child.inner.borrow_mut().parent = Some(registration.clone());
+        self.invalidate_walks();
         let mut retirement = Retirement::new();
         let tick = self.inner.borrow().last_tick;
         if child.has_frame_demand(tick) {
@@ -433,6 +458,7 @@ impl Vsync {
         // Removing one child preserves the remaining registration order. Its
         // last controller captures must retire after releasing the parent guard.
         if let Some(removed) = removed {
+            self.invalidate_walks();
             let mut child = removed.child.inner.borrow_mut();
             if child.parent.as_ref() == Some(id) {
                 child.parent = None;
@@ -496,6 +522,9 @@ impl Vsync {
             inner.muted = muted;
             changed
         };
+        if changed {
+            self.invalidate_walks();
+        }
         if changed && !muted && self.has_frame_demand(None) {
             let mut retirement = Retirement::new();
             Self::request_frame_from(&self.inner, &mut retirement.scope());
@@ -643,6 +672,17 @@ impl Vsync {
         }
     }
 
+    /// No user code runs between a hierarchy mutation and its invalidation.
+    /// Walks revalidate their own ancestry, so unrelated healthy peers continue.
+    fn invalidate_walks(&self) {
+        let root = self
+            .frame_authority()
+            .upgrade()
+            .expect("BUG: synchronous authority lookup retains a live root");
+        let mut inner = root.borrow_mut();
+        inner.walk_revision = inner.walk_revision.saturating_add(1);
+    }
+
     fn tick_all_with_retirement<'a>(
         &'a self,
         tick: FrameTick,
@@ -653,6 +693,8 @@ impl Vsync {
         let walk = FrameWalk {
             registry: self,
             parent,
+            authority,
+            validated_revision: Cell::new(None),
         };
         if !walk.has_live_parent() {
             return;
@@ -860,6 +902,53 @@ mod tests {
 
     fn controller(ms: u64) -> AnimationController {
         AnimationController::builder(Duration::from_millis(ms)).build()
+    }
+
+    fn saturated_walk_revisions_revalidate_ancestor_admission() {
+        for revision in [u64::MAX - 1, u64::MAX] {
+            for mute in [false, true] {
+                let root = Vsync::new();
+                let middle = Vsync::new();
+                let leaf = Vsync::new();
+                let seat = root.attach_child(&middle).expect("middle admission");
+                middle.attach_child(&leaf).expect("leaf admission");
+                let trigger =
+                    AnimationController::builder(Duration::from_millis(50)).build_on(Some(&leaf));
+                let resident =
+                    AnimationController::builder(Duration::from_millis(200)).build_on(Some(&leaf));
+                trigger.controller().forward().expect("trigger starts");
+                let run = resident.controller().forward().expect("resident starts");
+                // Only a private seed can reach the saturation boundary.
+                root.inner.borrow_mut().walk_revision = revision;
+                let mut clock = crate::MotionClock::new();
+                root.tick_all(&clock.frame(Duration::ZERO));
+                let changing_root = root.clone();
+                let _subscription = trigger.controller().subscribe_status(Rc::new(move |_| {
+                    if mute {
+                        changing_root.set_muted(true);
+                    } else {
+                        changing_root.detach_child(&seat);
+                    }
+                }));
+                root.tick_all(&clock.frame(Duration::from_millis(100)));
+                assert_eq!(
+                    resident.controller().value(),
+                    0.0,
+                    "saturation cannot preserve stale admission: revision={revision}, mute={mute}"
+                );
+                assert!(run.is_pending());
+                if mute {
+                    root.set_muted(false);
+                } else {
+                    root.attach_child(&middle).expect("fresh admission");
+                }
+                root.tick_all(&clock.frame(Duration::from_millis(200)));
+                assert!(
+                    run.is_complete(),
+                    "a recovered admission remains deliverable"
+                );
+            }
+        }
     }
 
     /// Muting is **structural**, so nesting composes as a logical AND: an inner
@@ -1259,6 +1348,10 @@ mod tests {
     #[test]
     fn vsync_nesting_and_reentrancy() {
         crate::test_cases::run_cases(&[
+            (
+                "saturated walk revisions revalidate ancestor admission",
+                saturated_walk_revisions_revalidate_ancestor_admission,
+            ),
             (
                 "a terminal frame counter still delivers fresh runs",
                 a_terminal_frame_counter_still_delivers_fresh_runs,

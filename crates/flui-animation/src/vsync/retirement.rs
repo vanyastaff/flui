@@ -56,6 +56,7 @@ impl Vsync {
     }
 
     fn withdraw(&self, retirement: &mut VsyncRetirement) {
+        self.invalidate_walks();
         let (outgoing, parent) = {
             let mut inner = self.inner.borrow_mut();
             if inner.closed {
