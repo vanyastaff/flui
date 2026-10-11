@@ -14,17 +14,17 @@
 //! - at high speeds the cutoff rises with the filtered derivative, so fast
 //!   strokes track with minimal lag.
 //!
-//! This is the standard smoothing filter for stylus/ink, AR/VR pointing, and
-//! cursor stabilization. It is not commonly part of a UI framework's input
-//! pipeline.
+//! This standalone filter can smooth pointer coordinates before an application
+//! consumes them. The gesture pipeline does not enable it automatically.
 //!
 //! # Tuning (from the paper)
 //!
 //! 1. Set `beta = 0`, adjust `min_cutoff` until slow-motion jitter is gone.
 //! 2. Increase `beta` until fast motion lags acceptably little.
 //!
-//! Defaults here (`min_cutoff = 1.0 Hz`, `beta = 0.007`, `d_cutoff = 1.0 Hz`)
-//! are the paper's recommended starting point for 60–120 Hz pointer input.
+//! FLUI starts with `min_cutoff = 1.0 Hz`, `beta = 0.007` and
+//! `d_cutoff = 1.0 Hz`. Tune them for the source units and required response;
+//! these values are application defaults, not a device-independent guarantee.
 //!
 //! Tuning is validated at construction and cannot be mutated into an invalid
 //! state. Filtering rejects non-finite input and unrepresentable arithmetic

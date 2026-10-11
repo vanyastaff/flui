@@ -403,7 +403,9 @@ impl ResamplerInner {
                     sample,
                 });
             }
-            PointerEvent::Up(..) | PointerEvent::Cancel(..) | PointerEvent::Leave(..) => self.anchor = None,
+            PointerEvent::Up(..) | PointerEvent::Cancel(..) | PointerEvent::Leave(..) => {
+                self.anchor = None
+            }
             _ => {}
         }
         out.push(event);

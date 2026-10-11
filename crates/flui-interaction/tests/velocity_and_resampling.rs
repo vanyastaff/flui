@@ -620,7 +620,8 @@ fn interpolation_does_not_publish_future_sensor_readings() {
         };
         assert_eq!(event_x(output.last().expect("output")), Some(5.0));
         assert_eq!(
-            interpolated.current().pressure.map(Pressure::get), previous,
+            interpolated.current().pressure.map(Pressure::get),
+            previous,
             "intermediate geometry must not publish a later hardware sensor reading"
         );
         let measured = sample_all(&resampler, at + ms(10.0));
@@ -641,23 +642,36 @@ fn queued_leave_does_not_starve_accepted_boundaries() {
             _ => unreachable!("Move fixture"),
         };
         let signal = PointerSignal::new(pointer, EventTime::from_nanos(3));
-        let mut admitted = vec![PointerEvent::Enter(PointerSignal::new(pointer, EventTime::from_nanos(0)))];
+        let mut admitted = vec![PointerEvent::Enter(PointerSignal::new(
+            pointer,
+            EventTime::from_nanos(0),
+        ))];
         if contact_sequence {
-            admitted.push(with_time(make_down_event_for_id(contact(), Offset::ZERO, PointerKind::Touch)
-                .expect("Down"), 1));
-            admitted.push(with_time(make_up_event_for_id(contact(), Offset::ZERO, PointerKind::Touch)
-                .expect("Up"), 2));
+            admitted.push(with_time(
+                make_down_event_for_id(contact(), Offset::ZERO, PointerKind::Touch).expect("Down"),
+                1,
+            ));
+            admitted.push(with_time(
+                make_up_event_for_id(contact(), Offset::ZERO, PointerKind::Touch).expect("Up"),
+                2,
+            ));
         }
         admitted.push(PointerEvent::Leave(signal));
         for event in &admitted {
             resampler.add_event_at(event.clone(), at);
         }
         let delivered = sample_all(&resampler, at + ms(1.0));
-        assert_eq!(delivered, admitted, "sampling must deliver accepted Enter/contact/Leave in order");
+        assert_eq!(
+            delivered, admitted,
+            "sampling must deliver accepted Enter/contact/Leave in order"
+        );
         assert!(!resampler.has_pending_events());
         resampler.add_event_at(move_to(9.0), at + ms(2.0));
-        assert_eq!(sample_all(&resampler, at + ms(2.0)).len(), 1,
-            "standalone sampling also delivers an admitted hover Move without a Down");
+        assert_eq!(
+            sample_all(&resampler, at + ms(2.0)).len(),
+            1,
+            "standalone sampling also delivers an admitted hover Move without a Down"
+        );
     }
 }
 
@@ -900,8 +914,14 @@ fn resampler_interpolates_on_event_time_and_never_drops_terminals() {
                 "interpolation factor",
                 interpolation_uses_the_bracketing_samples,
             ),
-            ("sensor readings never come from the future", interpolation_does_not_publish_future_sensor_readings),
-            ("Leave does not starve accepted boundaries", queued_leave_does_not_starve_accepted_boundaries),
+            (
+                "sensor readings never come from the future",
+                interpolation_does_not_publish_future_sensor_readings,
+            ),
+            (
+                "Leave does not starve accepted boundaries",
+                queued_leave_does_not_starve_accepted_boundaries,
+            ),
             ("burst keeps event spacing", burst_keeps_event_time_spacing),
             (
                 "overflow keeps terminals",
