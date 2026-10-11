@@ -8,6 +8,27 @@ decisions` entries below; a full crate architecture writeup is deferred.
 
 ## Mapping decisions
 
+### Lifecycle and timing observers preserve accepted delivery
+
+Lifecycle state and frame eligibility commit before notification. Reentrant
+transitions enter an owner-local FIFO; surviving listeners finish the current
+transition before receiving a newer one. A listener removed before its turn is
+skipped. Callback failure does not erase the accepted tail: the first failure
+propagates after delivery, under the existing opaque-retirement policy.
+Notification shares the current failure receipt with callback, task and
+post-frame retirement. Outside a frame it establishes that custody for the
+notification; nested owner execution inherits it and restores the enclosing
+receipt on return. A caught observer panic therefore cannot make subsequent
+cleanup appear healthy. The next independent operation retires normally.
+
+Frame timing collection requires a subscriber. The completed frame's idle
+boundary flushes at the reporting interval or at 128 retained samples. Recovery
+retains only the newest 128 samples; removing the last subscriber clears the
+unreported batch. Explicit `report_timings` flushes a partial batch. Reporting
+drains storage before invoking callbacks and finishes healthy listeners before
+propagating their first failure. `observer_delivery_contract` checks lifecycle
+order, containment recovery, opt-in collection and automatic timing delivery.
+
 ### Scheduler storage belongs to one UI owner
 
 `UpdateScheduler` shares UI state through `Rc`, `Cell` and `RefCell`.

@@ -66,6 +66,11 @@ where
     V: View + StatelessView + Clone + 'static,
 {
     let _installation = crate::app::logging::init_managed_logging(&config);
+    #[cfg(feature = "persist")]
+    if let Err(error) = config.validate() {
+        tracing::error!(%error, "application configuration failed");
+        return;
+    }
     tracing::info!(title = %config.title, "Starting FLUI application on iOS");
     run_ios(root, config);
 }
@@ -232,7 +237,7 @@ where
             runtime.ensure_execution();
         });
         for service in &config.services {
-            APP_RUNTIME.with(|slot| slot.borrow_mut().start_service(service))?;
+            super::host::start_service(service)?;
         }
         let reload = WorkerReload::from_config(&config);
         let watcher = reload.spawn_watcher(runtime_wake_callback());
@@ -326,8 +331,7 @@ where
     // 3. Mount the root widget at the LOGICAL size; the paint root's DPR
     // transform maps to physical.
     let scale_factor = window.scale_factor();
-    let wake = runtime_wake_callback();
-    let ui_runtime = match super::host::build_ui_runtime(&wake, presentation_window, scale_factor) {
+    let ui_runtime = match super::host::build_ui_runtime(presentation_window, scale_factor) {
         Ok(ui_runtime) => ui_runtime,
         Err(error) => {
             tracing::error!(%error, "UiRuntime construction failed");

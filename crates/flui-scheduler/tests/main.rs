@@ -38,6 +38,9 @@ mod owner_execution;
 #[path = "owner_background.rs"]
 mod owner_background;
 
+#[path = "observer_delivery.rs"]
+mod observer_delivery;
+
 #[path = "owner_retirement_custody.rs"]
 mod owner_retirement_custody;
 

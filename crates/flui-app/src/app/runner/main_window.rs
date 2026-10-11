@@ -1,4 +1,7 @@
 //! The designated rendered window belongs to the loop, not its previous ui_runtime.
+#[cfg(test)]
+#[path = "host_delivery_tests.rs"]
+mod host_delivery_tests;
 use super::{
     desktop::{RenderedMain, install_desktop_window},
     host::{
@@ -588,11 +591,14 @@ where
     V: View + Clone + 'static,
     F: FnMut(&AppHandle) -> V + 'static,
 {
-    let platform = flui_platform::current_platform().map_err(|error| AppRunError::Platform {
-        source: Arc::new(error),
-    })?;
-    run_with_platform(application, platform)
+    run_with_platform_factory(application, || {
+        flui_platform::current_platform().map_err(|error| AppRunError::Platform {
+            source: Arc::new(error),
+        })
+    })
 }
+
+#[cfg(test)]
 fn run_with_platform<V, F>(
     application: Application<V, F>,
     platform: Box<dyn flui_platform::traits::Platform>,
@@ -601,6 +607,24 @@ where
     V: View + Clone + 'static,
     F: FnMut(&AppHandle) -> V + 'static,
 {
+    run_with_platform_factory(application, || Ok(platform))
+}
+
+fn run_with_platform_factory<V, F>(
+    application: Application<V, F>,
+    platform: impl FnOnce() -> Result<Box<dyn flui_platform::traits::Platform>, AppRunError>,
+) -> Result<(), AppRunError>
+where
+    V: View + Clone + 'static,
+    F: FnMut(&AppHandle) -> V + 'static,
+{
+    #[cfg(feature = "persist")]
+    application
+        .config
+        .validate()
+        .map_err(AppRunError::Configuration)?;
+    let _logging = super::super::logging::init_managed_logging(&application.config);
+    let platform = platform()?;
     let fatal = Rc::new(RefCell::new(None));
     let recorded = Rc::clone(&fatal);
     let _owner_guard = OwnerHostClearGuard::arm();
@@ -685,7 +709,7 @@ where
             });
         });
         for service in &config.services {
-            if let Err(error) = APP_RUNTIME.with(|slot| slot.borrow_mut().start_service(service)) {
+            if let Err(error) = super::host::start_service(service) {
                 let fatal = APP_RUNTIME.with(|slot| {
                     slot.borrow()
                         .main_controller

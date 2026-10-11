@@ -17,7 +17,7 @@ use crate::app::close_request::CloseRequestHandler;
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-use super::host::{APP_RUNTIME, runtime_wake_callback, with_owner_platform};
+use super::host::{APP_RUNTIME, with_owner_platform};
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -185,9 +185,11 @@ pub fn open_secondary_window(
 ///
 /// # Errors
 ///
-/// The same as [`open_secondary_window`], plus the renderer-initialization
-/// failures `install_desktop_window` can produce: GPU init
-/// ([`AppWindowError::Renderer`]), mount ([`AppWindowError::Mount`]).
+/// The returned `Result` describes admission and native creation. Await the
+/// [`crate::app::WindowRequest`] or poll its `try_result` to observe completed
+/// publication/initialization or a renderer/mount failure. Success identifies
+/// the installed presentation; it does not promise a presented compositor frame.
+/// Dropping the receiver does not cancel an admitted open.
 /// `WindowPolicy::Shared` is refused as [`AppWindowError::UnsupportedPolicy`].
 #[cfg(all(
     not(target_os = "android"),
@@ -198,11 +200,11 @@ pub fn open_window<V>(
     config: AppConfig,
     policy: WindowPolicy,
     root: V,
-) -> Result<(), AppWindowError>
+) -> Result<crate::app::WindowRequest, AppWindowError>
 where
     V: View + Clone + 'static,
 {
-    open_window_with_content_impl(config, policy, root).map(|_| ())
+    open_window_with_content_impl(config, policy, root)
 }
 
 // Same cfg as `open_secondary_window`/`open_secondary_window_impl`/
@@ -236,6 +238,7 @@ struct SecondaryWindowInstallConfig {
     not(target_arch = "wasm32")
 ))]
 struct PendingCompletion {
+    reply: Option<Arc<crate::app::application_control::Reply>>,
     config: SecondaryWindowInstallConfig,
     window: Arc<dyn flui_platform::traits::HostWindow>,
     stage: CompletionStage,
@@ -283,42 +286,44 @@ type SecondaryWindowInstall = Box<
     not(target_arch = "wasm32")
 ))]
 impl PendingCompletion {
-    fn advance(self) -> Result<(), AppWindowError> {
+    fn advance(self) -> Result<Option<flui_foundation::PresentationAddress>, AppWindowError> {
         let Self {
+            reply,
             config,
             window,
             stage,
         } = self;
         if !secondary_install_admitted(&config.loop_identity) {
-            return Err(AppWindowError::AdmissionClosed);
+            return Err(AppWindowError::Cancelled);
         }
         let receipt = match stage {
             CompletionStage::Bare => {
-                return finish_open_secondary_window(config, window).map(|_| ());
+                return finish_open_secondary_window(config, window).map(|_| None);
             }
             CompletionStage::Content(install) => {
                 if !config.reservation.0.begin_install() {
-                    return Err(AppWindowError::AdmissionClosed);
+                    return Err(AppWindowError::Cancelled);
                 }
                 install(Arc::clone(&window))?
             }
             CompletionStage::Publishing(receipt) => receipt,
         };
         if !secondary_install_admitted(&config.loop_identity) {
-            return Err(AppWindowError::AdmissionClosed);
+            return Err(AppWindowError::Cancelled);
         }
         match receipt.outcome() {
             None => {
                 PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
                     queue.borrow_mut().push(Self {
+                        reply,
                         config,
                         window,
                         stage: CompletionStage::Publishing(receipt),
                     });
                 });
-                Ok(())
+                Ok(None)
             }
-            Some(Ok(())) => Ok(()),
+            Some(Ok(())) => Ok(Some(receipt.address)),
             Some(Err(error)) => Err(mount_error(error)),
         }
     }
@@ -553,6 +558,39 @@ pub(super) fn cancel_pending_secondary_windows() {
             error,
             "uninstalled window close",
         );
+        let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if let Some(reply) = &completion.reply {
+                let _ = reply.deliver(Err(AppWindowError::Cancelled));
+            }
+        }))
+        .err();
+        crate::app::lifecycle_state::preserve_first_lifecycle_panic(
+            &mut panic,
+            error,
+            "cancelled window reply",
+        );
+        // Settle framework liveness before retaining an opaque envelope after
+        // failure. Its installer/configuration captures may have arbitrary Drop.
+        let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            completion.config.reservation.0.settle();
+        }))
+        .err();
+        crate::app::lifecycle_state::preserve_first_lifecycle_panic(
+            &mut panic,
+            error,
+            "cancelled window reservation",
+        );
+        if panic.is_some() || std::thread::panicking() {
+            std::mem::forget(completion);
+        } else {
+            let error =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(completion))).err();
+            crate::app::lifecycle_state::preserve_first_lifecycle_panic(
+                &mut panic,
+                error,
+                "cancelled window retirement",
+            );
+        }
     }
     if let Some(payload) = panic {
         std::panic::resume_unwind(payload);
@@ -576,9 +614,9 @@ fn secondary_install_admitted(identity: &Arc<()>) -> bool {
 /// checkout returns. Reentrant polling is suppressed until the current batch
 /// finishes; logical/native publication is admitted through the installed host.
 ///
-/// A completion's own failure is traced (`tracing::error!`), never
-/// propagated: by the time this runs there is no synchronous caller left for
-/// either policy to return an `Err` to.
+/// Typed installation failures are traced and settle the content window's
+/// request receipt. Callback and installer panics preserve the first failure
+/// while eligible completions and cleanup progress, then propagate it.
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -652,6 +690,7 @@ pub(super) fn drain_pending_secondary_window_completions(
             Ok(std::task::Poll::Ready(Ok(window))) => {
                 PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
                     queue.borrow_mut().push(PendingCompletion {
+                        reply: None,
                         config: request.config,
                         window,
                         stage: CompletionStage::Bare,
@@ -680,16 +719,27 @@ pub(super) fn drain_pending_secondary_window_completions(
             continue;
         }
         let window = Arc::clone(&completion.window);
+        let reply = completion.reply.clone();
+        let detail = completion.config.frame_failure_detail;
         let result =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| completion.advance()));
-        let failed = !matches!(&result, Ok(Ok(())));
-        let error = match result {
-            Ok(Ok(())) => None,
-            Ok(Err(error)) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                tracing::error!(%error, "installing resolved secondary window failed");
-            }))
-            .err(),
-            Err(payload) => Some(payload),
+        let failed = !matches!(&result, Ok(Ok(_)));
+        let (reply_result, error) = match result {
+            Ok(Ok(address)) => (address.map(Ok), None),
+            Ok(Err(error)) => {
+                let diagnostic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    tracing::error!(%error, "installing resolved secondary window failed");
+                }))
+                .err();
+                (Some(Err(error)), diagnostic)
+            }
+            Err(payload) => {
+                let message = flui_runtime::frame_failure::panic_text(detail, payload.as_ref());
+                (
+                    Some(Err(AppWindowError::InstallerPanicked { message })),
+                    Some(payload),
+                )
+            }
         };
         crate::app::lifecycle_state::preserve_first_lifecycle_panic(
             &mut first_panic,
@@ -703,6 +753,17 @@ pub(super) fn drain_pending_secondary_window_completions(
                 &mut first_panic,
                 error,
                 "failed window close",
+            );
+        }
+        if let (Some(reply), Some(result)) = (reply, reply_result) {
+            let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = reply.deliver(result);
+            }))
+            .err();
+            crate::app::lifecycle_state::preserve_first_lifecycle_panic(
+                &mut first_panic,
+                error,
+                "window request reply",
             );
         }
     }
@@ -738,6 +799,8 @@ pub(super) fn open_secondary_window_impl(
     config: AppConfig,
     policy: WindowPolicy,
 ) -> Result<Option<OpenedWindow>, AppWindowError> {
+    #[cfg(feature = "persist")]
+    config.validate()?;
     use flui_platform::{WindowOpen, WindowOptions};
     let loop_identity = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity));
     if !secondary_install_admitted(&loop_identity) {
@@ -809,10 +872,12 @@ pub(super) fn open_window_with_content_impl<V>(
     config: AppConfig,
     policy: WindowPolicy,
     root: V,
-) -> Result<Option<OpenedWindow>, AppWindowError>
+) -> Result<crate::app::WindowRequest, AppWindowError>
 where
     V: View + Clone + 'static,
 {
+    #[cfg(feature = "persist")]
+    config.validate()?;
     use flui_platform::{WindowOpen, WindowOptions};
 
     if policy == WindowPolicy::Shared {
@@ -838,6 +903,7 @@ where
 
     match open {
         WindowOpen::Ready(window) => {
+            let (reply, request) = crate::app::WindowRequest::new();
             // Preparation consumes the captured root once. The completion then
             // retains the native window and liveness reservation until the
             // owner's publication receipt settles, including when this request
@@ -856,6 +922,7 @@ where
             let config_for_install = config;
             PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
                 queue.borrow_mut().push(PendingCompletion {
+                    reply: Some(reply),
                     config: install_config,
                     window: Arc::clone(&window),
                     stage: CompletionStage::Content(Box::new(move |window| {
@@ -880,7 +947,7 @@ where
             // `UiRuntime::request_redraw` already does from
             // `request_redraw_for`.
             with_owner_platform(|owner| owner.proxy().wake());
-            Ok(None)
+            Ok(request)
         }
         WindowOpen::Pending(_) => Err(AppWindowError::UnsupportedPolicy {
             reason: "open_window with content does not yet support deferred window creation \
@@ -964,7 +1031,7 @@ fn finish_open_secondary_window(
     }
     let mut uninstalled = Uninstalled(Some(Arc::clone(&window)));
     if !secondary_install_admitted(&config.loop_identity) || !config.reservation.0.begin_install() {
-        return Err(AppWindowError::AdmissionClosed);
+        return Err(AppWindowError::Cancelled);
     }
 
     let policy = config.policy;
@@ -998,9 +1065,7 @@ fn finish_open_secondary_window(
             }
             WindowPolicy::Isolated => {
                 let scale_factor = window.scale_factor();
-                let wake = runtime_wake_callback();
                 let ui_runtime = super::host::build_ui_runtime(
-                    &wake,
                     super::presentation_window(Arc::clone(&host))
                         .with_pointer_resampling(config.pointer_resampling),
                     scale_factor,
@@ -1096,6 +1161,7 @@ fn finish_open_secondary_window(
         None => {
             PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
                 queue.borrow_mut().push(PendingCompletion {
+                    reply: None,
                     config,
                     window: host,
                     stage: CompletionStage::Publishing(receipt),
@@ -1164,6 +1230,13 @@ mod tests {
                 let retained = Arc::clone(&count);
                 let address = Rc::new(Cell::new(None));
                 let installed_address = Rc::clone(&address);
+                let failures = Arc::new(std::sync::Mutex::new(Vec::new()));
+                let reports = Arc::clone(&failures);
+                let (reply, mut request) = crate::app::WindowRequest::new();
+                assert!(
+                    request.try_result().is_none(),
+                    "admission is not completion"
+                );
                 let config = SecondaryWindowInstallConfig {
                     loop_identity: APP_RUNTIME
                         .with(|slot| Arc::clone(&slot.borrow().loop_identity)),
@@ -1176,10 +1249,18 @@ mod tests {
                 };
                 PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
                     queue.borrow_mut().push(PendingCompletion {
+                        reply: Some(reply),
                         config,
                         window,
                         stage: CompletionStage::Content(Box::new(move |window| {
                             let runtime = UiRuntime::for_test();
+                            runtime.set_frame_failure_handler(Some(
+                                flui_runtime::frame_failure::FrameFailureHandler::new(
+                                    move |report| {
+                                        reports.lock().expect("reports").push(report.address);
+                                    },
+                                ),
+                            ));
                             runtime
                                 .attach_root_widget(&flui_widgets::SizedBox::new(20.0, 30.0))
                                 .expect("root");
@@ -1261,6 +1342,26 @@ mod tests {
                     case == InstallCase::Ready,
                     "only a completed installation retains membership"
                 );
+                let completion = request
+                    .try_result()
+                    .expect("installation settles its caller's reply");
+                assert_eq!(
+                    *failures.lock().expect("reports"),
+                    if case == InstallCase::InitializationPanic {
+                        vec![address.get().expect("prepared address")]
+                    } else {
+                        Vec::new()
+                    },
+                    "initialization failure reaches its configured handler exactly once"
+                );
+                if case == InstallCase::Ready {
+                    assert_eq!(completion.expect("ready"), address.get().expect("address"));
+                } else {
+                    assert!(
+                        matches!(completion, Err(AppWindowError::Mount { .. })),
+                        "failure is typed after rollback: {completion:?}"
+                    );
+                }
                 Ok(())
             }))
             .expect("headless run");
@@ -1287,8 +1388,172 @@ mod tests {
                     "rendered_secondary_initialization_failure_retires_membership",
                     rendered_secondary_initialization_failure_retires_membership as fn(),
                 ),
+                (
+                    "shutdown_settles_all_requests_when_a_receiver_waker_panics",
+                    shutdown_settles_all_requests_when_a_receiver_waker_panics as fn(),
+                ),
+                (
+                    "secondary_receipt_observes_late_installation_failures",
+                    secondary_receipt_observes_late_installation_failures as fn(),
+                ),
             ],
         );
+    }
+
+    fn shutdown_settles_all_requests_when_a_receiver_waker_panics() {
+        use std::{
+            future::Future,
+            pin::Pin,
+            sync::atomic::AtomicUsize,
+            task::{Context, Poll, Wake, Waker},
+        };
+        struct PanickingWake;
+        impl Wake for PanickingWake {
+            fn wake(self: Arc<Self>) {
+                panic!("cancelled receiver wake");
+            }
+            fn wake_by_ref(self: &Arc<Self>) {
+                panic!("cancelled receiver wake");
+            }
+        }
+        let _clear = super::super::host::OwnerHostClearGuard::arm();
+        Box::new(HeadlessPlatform::new())
+            .run(Box::new(|owner| {
+                super::super::host::install_owner_platform(owner).expect("owner");
+                let closed = Arc::new(AtomicUsize::new(0));
+                let mut requests = Vec::new();
+                for _ in 0..2 {
+                    let window = with_owner_platform(|owner| {
+                        owner.open_window(flui_platform::WindowOptions::default())
+                    })
+                    .expect("owner")
+                    .expect("open")
+                    .try_ready()
+                    .expect("headless ready");
+                    let observed = Arc::clone(&closed);
+                    window.on_close(Box::new(move || {
+                        observed.fetch_add(1, Ordering::SeqCst);
+                    }));
+                    let (reply, request) = crate::app::WindowRequest::new();
+                    requests.push(request);
+                    let config = SecondaryWindowInstallConfig {
+                        loop_identity: APP_RUNTIME
+                            .with(|slot| Arc::clone(&slot.borrow().loop_identity)),
+                        policy: WindowPolicy::Isolated,
+                        shared_with: None,
+                        reservation: reserve_window().expect("reservation"),
+                        close_request_handler: None,
+                        frame_failure_detail: AppConfig::new().frame_failure_detail,
+                        pointer_resampling: AppConfig::new().pointer_resampling,
+                    };
+                    PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
+                        queue.borrow_mut().push(PendingCompletion {
+                            reply: Some(reply),
+                            config,
+                            window,
+                            stage: CompletionStage::Bare,
+                        });
+                    });
+                }
+                let waker = Waker::from(Arc::new(PanickingWake));
+                assert!(matches!(
+                    Pin::new(&mut requests[0]).poll(&mut Context::from_waker(&waker)),
+                    Poll::Pending
+                ));
+                let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                    cancel_pending_secondary_windows,
+                ))
+                .expect_err("receiver failure propagates after cancellation");
+                assert_eq!(
+                    failure.downcast_ref::<&str>(),
+                    Some(&"cancelled receiver wake")
+                );
+                assert_eq!(
+                    closed.load(Ordering::SeqCst),
+                    2,
+                    "both native windows close despite a failing receiver"
+                );
+                for request in &mut requests {
+                    assert!(matches!(
+                        request.try_result(),
+                        Some(Err(AppWindowError::Cancelled))
+                    ));
+                }
+                assert_eq!(
+                    APP_RUNTIME.with(|slot| slot
+                        .borrow()
+                        .pending_window_reservations
+                        .load(Ordering::Acquire)),
+                    0
+                );
+                Ok(())
+            }))
+            .expect("headless run");
+    }
+
+    fn secondary_receipt_observes_late_installation_failures() {
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        enum Failure {
+            Renderer,
+            InstallerPanic,
+            OwnerReplacement,
+        }
+        for failure in [
+            Failure::Renderer,
+            Failure::InstallerPanic,
+            Failure::OwnerReplacement,
+        ] {
+            let _clear = super::super::host::OwnerHostClearGuard::arm();
+            Box::new(HeadlessPlatform::new()).run(Box::new(move |owner| {
+                super::super::host::install_owner_platform(owner).expect("owner");
+                let window = with_owner_platform(|owner| owner.open_window(flui_platform::WindowOptions::default()))
+                    .expect("owner").expect("open").try_ready().expect("headless ready");
+                let identity = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity));
+                let (reply, mut request) = crate::app::WindowRequest::new();
+                let config = SecondaryWindowInstallConfig {
+                    loop_identity: Arc::clone(&identity),
+                    policy: WindowPolicy::Isolated,
+                    shared_with: None,
+                    reservation: reserve_window().expect("reservation"),
+                    close_request_handler: None,
+                    frame_failure_detail: AppConfig::new().frame_failure_detail,
+                    pointer_resampling: AppConfig::new().pointer_resampling,
+                };
+                PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| queue.borrow_mut().push(
+                    PendingCompletion {
+                        reply: Some(reply), config, window,
+                        stage: CompletionStage::Content(Box::new(move |window| match failure {
+                            Failure::Renderer => Err(AppWindowError::Renderer {
+                                source: Arc::new(std::io::Error::other("renderer unavailable")),
+                            }),
+                            Failure::InstallerPanic => panic!("secondary installer"),
+                            Failure::OwnerReplacement => {
+                                let runtime = UiRuntime::for_test();
+                                runtime.attach_root_widget(&flui_widgets::SizedBox::new(20.0, 30.0))
+                                    .expect("root");
+                                let receipt = super::super::owner_dispatch::prepare_ui_runtime_alongside(runtime, window).submit();
+                                APP_RUNTIME.with(|slot| slot.borrow_mut().loop_identity = Arc::new(()));
+                                Ok(receipt)
+                            }
+                        })),
+                    }
+                ));
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    drain_pending_secondary_window_completions(flui_runtime::owner::RecoveryState::Healthy);
+                }));
+                APP_RUNTIME.with(|slot| slot.borrow_mut().loop_identity = identity);
+                assert_eq!(result.is_err(), failure == Failure::InstallerPanic);
+                let result = request.try_result().expect("late failure settles its observer");
+                assert!(match (failure, result) {
+                    (Failure::Renderer, Err(AppWindowError::Renderer { source })) => source.to_string() == "renderer unavailable",
+                    (Failure::InstallerPanic, Err(AppWindowError::InstallerPanicked { .. })) |
+                    (Failure::OwnerReplacement, Err(AppWindowError::Cancelled)) => true,
+                    _ => false,
+                }, "receipt retains the installation failure or accepted-request cancellation");
+                assert_eq!(APP_RUNTIME.with(|slot| slot.borrow().pending_window_reservations.load(Ordering::Acquire)), 0);
+                Ok(())
+            })).expect("headless run");
+        }
     }
 
     fn bare_secondary_reports_pending_during_owner_delivery() {

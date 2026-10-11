@@ -86,6 +86,7 @@ impl NativeTextSizing {
         self.live.set(false);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn deadline(&self) -> Option<web_time::Instant> {
         self.live
             .get()

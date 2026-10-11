@@ -37,6 +37,11 @@ pub(super) enum InstallError {
 #[must_use = "observe installation completion before reporting a window ready"]
 pub(super) struct Installation {
     #[cfg(any(
+        all(
+            not(target_os = "android"),
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        ),
         all(test, not(target_os = "android"), not(target_arch = "wasm32")),
         target_os = "ios"
     ))]
@@ -129,6 +134,11 @@ impl InstalledHost {
         window: InstallationWindow,
     ) -> Installation {
         #[cfg(any(
+            all(
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ),
             all(test, not(target_os = "android"), not(target_arch = "wasm32")),
             target_os = "ios"
         ))]
@@ -152,6 +162,11 @@ impl InstalledHost {
         }
         Installation {
             #[cfg(any(
+                all(
+                    not(target_os = "android"),
+                    not(target_os = "ios"),
+                    not(target_arch = "wasm32")
+                ),
                 all(test, not(target_os = "android"), not(target_arch = "wasm32")),
                 target_os = "ios"
             ))]

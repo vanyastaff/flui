@@ -20,6 +20,9 @@ pub enum StartupWindow {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum AppRunError {
+    /// A configuration setting cannot be honored by the host.
+    #[error("application configuration failed: {0}")]
+    Configuration(#[source] AppWindowError),
     /// Native platform initialization or event-loop failure.
     #[error("platform startup or event loop failed: {source}")]
     Platform {

@@ -217,7 +217,7 @@ from a root tree: an owner-local `FnMut(&AppHandle) -> V` factory builds fresh
 view state per window. `StartupWindow::None` starts services without fonts or
 a GPU; `ExitPolicy::ExplicitQuit` keeps an empty loop alive (last-window exit
 stays the default). `AppHandle` sends only show and quit intents; a
-`MainWindowRequest` reply uses a claim slot for the result, not for native
+`WindowRequest` reply uses a claim slot for the result, not for native
 resource ownership, so dropping the receiver does not cancel an accepted show.
 Show requests admitted during disposal reserve the next generation; quit
 cancels active and queued generations. A successful reply proves installation

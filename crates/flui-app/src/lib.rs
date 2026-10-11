@@ -168,6 +168,6 @@ pub mod prelude {
     not(target_arch = "wasm32")
 ))]
 pub use app::{
-    AppControlError, AppHandle, AppRunError, AppWindowError, Application, MainWindowRequest,
-    StartupWindow,
+    AppControlError, AppHandle, AppRunError, AppWindowError, Application, StartupWindow,
+    WindowRequest,
 };

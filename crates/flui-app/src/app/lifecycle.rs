@@ -1206,6 +1206,22 @@ impl fmt::Debug for ServiceRegistry {
 }
 
 impl ServiceRegistry {
+    #[cfg(test)]
+    fn start(
+        &mut self,
+        definition: &ServiceDefinition,
+        services: &Arc<ExecutionServices>,
+    ) -> Result<(), ServiceStartError> {
+        let admission = self.prepare(definition, services)?;
+        let prepared = admission.construct(definition)?;
+        match self.commit(prepared) {
+            Ok(launch) => launch.spawn(),
+            Err(prepared) => {
+                prepared.refuse();
+                Err(ServiceStartError::Spawn(SpawnError::ShuttingDown))
+            }
+        }
+    }
     pub(crate) fn new() -> Self {
         Self {
             accepting: true,
@@ -1245,20 +1261,87 @@ impl ServiceRegistry {
     /// its lifetime. The service's completion travels on its own dedicated
     /// capacity-one channel — never a shared queue — so the staged
     /// shutdown's join cannot be starved by other traffic.
-    pub(crate) fn start(
-        &mut self,
+    pub(crate) fn prepare(
+        &self,
         definition: &ServiceDefinition,
         services: &Arc<ExecutionServices>,
-    ) -> Result<(), ServiceStartError> {
+    ) -> Result<ServiceAdmission, ServiceStartError> {
         if !self.accepting {
             return Err(ServiceStartError::Spawn(SpawnError::ShuttingDown));
         }
         let signal = CancellationSignal::child_of(services.cancellation_root());
-        let (report, completion) = mpsc::sync_channel(1);
         let context = ServiceContext {
-            signal: signal.clone(),
+            signal,
             spawner: TaskSpawner::new(services),
         };
+        Ok(ServiceAdmission {
+            name: definition.name,
+            lifetime: definition.lifetime,
+            context,
+            services: Arc::clone(services),
+            exit_notifier: matches!(definition.lifetime, ServiceLifetime::KeepsAppAlive)
+                .then(|| Arc::clone(&self.exit_notifier)),
+        })
+    }
+
+    pub(crate) fn commit(
+        &mut self,
+        prepared: PreparedService,
+    ) -> Result<ServiceLaunch, PreparedService> {
+        if !self.accepting || prepared.launch.services.cancellation_root().is_cancelled() {
+            // A factory may have stopped or replaced its owner. Never retire its
+            // opaque future while the composition root is borrowed.
+            return Err(prepared);
+        }
+        self.services.push(prepared.slot);
+        Ok(prepared.launch)
+    }
+}
+
+/// Owned factory capabilities; construction runs after the app borrow ends.
+pub(crate) struct ServiceAdmission {
+    name: &'static str,
+    lifetime: ServiceLifetime,
+    context: ServiceContext,
+    services: Arc<ExecutionServices>,
+    exit_notifier: Option<ExitNotifierSlot>,
+}
+
+pub(crate) struct PreparedService {
+    slot: ServiceSlot,
+    launch: ServiceLaunch,
+}
+
+impl PreparedService {
+    pub(crate) fn refuse(self) {
+        if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| drop(self))) {
+            flui_foundation::panic::retain_opaque_payload(payload);
+        }
+    }
+}
+
+/// Already registered work. Executor calls run outside the app borrow.
+pub(crate) struct ServiceLaunch {
+    name: &'static str,
+    future: ServiceFuture,
+    report: mpsc::SyncSender<ServiceExit>,
+    services: Arc<ExecutionServices>,
+    exit_notifier: Option<ExitNotifierSlot>,
+}
+
+impl ServiceAdmission {
+    pub(crate) fn construct(
+        self,
+        definition: &ServiceDefinition,
+    ) -> Result<PreparedService, ServiceStartError> {
+        let Self {
+            name,
+            lifetime,
+            context,
+            services,
+            exit_notifier,
+        } = self;
+        let signal = context.signal.clone();
         // The factory is application code and gets the same panic
         // containment as every body this module runs: a panic here must
         // become a typed start failure, never an unwind through the
@@ -1279,13 +1362,35 @@ impl ServiceRegistry {
                 return Err(ServiceStartError::FactoryPanicked);
             }
         };
-        let name = definition.name;
-        // Only a keep-alive service's exit can change the answer to "may
-        // the zero-window loop end now?", so only those completions fire
-        // the exit notifier — an editor-like service completing never
-        // needs a re-check.
-        let exit_notifier = matches!(definition.lifetime, ServiceLifetime::KeepsAppAlive)
-            .then(|| Arc::clone(&self.exit_notifier));
+        let (report, completion) = mpsc::sync_channel(1);
+        Ok(PreparedService {
+            slot: ServiceSlot {
+                name,
+                lifetime,
+                signal,
+                completion,
+                finished: None,
+            },
+            launch: ServiceLaunch {
+                name,
+                future,
+                report,
+                services,
+                exit_notifier,
+            },
+        })
+    }
+}
+
+impl ServiceLaunch {
+    pub(crate) fn spawn(self) -> Result<(), ServiceStartError> {
+        let Self {
+            name,
+            future,
+            report,
+            services,
+            exit_notifier,
+        } = self;
         // Deliberately NOT raced against the service's own token here: the
         // service observes cancellation itself and uses the window between
         // cancel and the registry's deadline to flush. The hard stop is the
@@ -1329,21 +1434,12 @@ impl ServiceRegistry {
                 }
             }
         }))?;
-        tracing::debug!(
-            service = definition.name,
-            lifetime = ?definition.lifetime,
-            "application service started"
-        );
-        self.services.push(ServiceSlot {
-            name: definition.name,
-            lifetime: definition.lifetime,
-            signal,
-            completion,
-            finished: None,
-        });
+        tracing::debug!(service = name, "application service started");
         Ok(())
     }
+}
 
+impl ServiceRegistry {
     /// Whether admission is open (no [`Self::shutdown`] since construction
     /// or the last [`Self::reopen`]). Checked before resolving execution
     /// services so a refused late start cannot resurrect a torn-down

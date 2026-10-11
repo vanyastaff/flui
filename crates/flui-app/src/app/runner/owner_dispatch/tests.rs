@@ -971,11 +971,7 @@ fn deferred_native_reads_preserve_accepted_preferences() {
                 Err(flui_platform::PlatformError::PreferencesDeferred)
             })
             .expect("deferred observation is not a new read failure");
-            let mut runtime = super::super::host::build_ui_runtime(
-                &super::super::host::runtime_wake_callback(),
-                test_window(),
-                1.0,
-            )?;
+            let mut runtime = super::super::host::build_ui_runtime(test_window(), 1.0)?;
             assert_eq!(
                 first_build_text_sizing(&mut runtime),
                 TextSizing::linear(2.0).expect("valid scale"),
@@ -986,11 +982,7 @@ fn deferred_native_reads_preserve_accepted_preferences() {
                     .with_text_scale(3.0)
                     .expect("valid scale"))
             })?;
-            let mut runtime = super::super::host::build_ui_runtime(
-                &super::super::host::runtime_wake_callback(),
-                test_window(),
-                1.0,
-            )?;
+            let mut runtime = super::super::host::build_ui_runtime(test_window(), 1.0)?;
             assert_eq!(
                 first_build_text_sizing(&mut runtime),
                 TextSizing::linear(3.0).expect("valid scale"),
@@ -1028,11 +1020,7 @@ fn preferences_wake_each_isolated_window() {
                 let redraws = window.redraw_calls_handle();
                 let window: Arc<dyn PlatformWindow> = Arc::new(window);
                 let observed = Rc::new(RefCell::new(Vec::new()));
-                let runtime = super::super::host::build_ui_runtime(
-                    &super::super::host::runtime_wake_callback(),
-                    Arc::clone(&window),
-                    1.0,
-                )?;
+                let runtime = super::super::host::build_ui_runtime(Arc::clone(&window), 1.0)?;
                 runtime.attach_root_widget_with_size(
                     &Reader(Rc::clone(&observed)),
                     800.0,
@@ -1122,11 +1110,7 @@ fn owner_wake_refreshes_installed_preference_consumers() {
                 flui_platform_api::SystemPreferences::default().with_text_scale(2.0)?,
                 host.effects(),
             )?;
-            let runtime = super::super::host::build_ui_runtime(
-                &super::super::host::runtime_wake_callback(),
-                test_window(),
-                1.0,
-            )?;
+            let runtime = super::super::host::build_ui_runtime(test_window(), 1.0)?;
             runtime.attach_root_widget_with_size(&Reader(reader), 800.0, 600.0)?;
             let mut installation = prepare_platform_ui_runtime(runtime, test_window());
             let dispatcher = installation.dispatcher();
@@ -1216,11 +1200,7 @@ fn obsolete_native_observation_cannot_update_a_replacement_host() {
                         result.is_ok(),
                         "an obsolete source must not report failure against its replacement"
                     );
-                    let mut runtime = super::super::host::build_ui_runtime(
-                        &super::super::host::runtime_wake_callback(),
-                        test_window(),
-                        1.0,
-                    )?;
+                    let mut runtime = super::super::host::build_ui_runtime(test_window(), 1.0)?;
                     assert_eq!(
                         first_build_text_sizing(&mut runtime),
                         TextSizing::linear(3.0).expect("valid scale"),
@@ -1252,11 +1232,7 @@ fn windows_bootstrap_accepts_preferences_before_the_first_window() {
                 host.logical().preferences()?.is_some(),
                 "bootstrap never accepted its native observation"
             );
-            let mut runtime = super::super::host::build_ui_runtime(
-                &super::super::host::runtime_wake_callback(),
-                test_window(),
-                1.0,
-            )?;
+            let mut runtime = super::super::host::build_ui_runtime(test_window(), 1.0)?;
             assert_eq!(
                 first_build_text_sizing(&mut runtime),
                 TextSizing::linear(expected).expect("native scale")
@@ -1283,11 +1259,7 @@ fn bootstrap_keeps_the_host_that_seeded_the_first_build() {
             })
             .expect("owner installed")?
             .try_ready()?;
-            let mut runtime = super::super::host::build_ui_runtime(
-                &super::super::host::runtime_wake_callback(),
-                Arc::clone(&window),
-                1.0,
-            )?;
+            let mut runtime = super::super::host::build_ui_runtime(Arc::clone(&window), 1.0)?;
             assert_eq!(
                 first_build_text_sizing(&mut runtime),
                 TextSizing::linear(2.0).expect("valid scale"),
@@ -1340,11 +1312,7 @@ fn a_replacement_platform_starts_a_new_preference_owner() {
                 ),
                 "replacing the native owner retires its logical source"
             );
-            let mut runtime = super::super::host::build_ui_runtime(
-                &super::super::host::runtime_wake_callback(),
-                test_window(),
-                1.0,
-            )?;
+            let mut runtime = super::super::host::build_ui_runtime(test_window(), 1.0)?;
             assert_eq!(
                 first_build_text_sizing(&mut runtime),
                 TextSizing::linear(1.0).expect("valid scale"),
@@ -1446,11 +1414,7 @@ fn platform_replacement_contains_reentrant_retirement() {
                     2,
                     "every outgoing producer retired"
                 );
-                let mut runtime = super::super::host::build_ui_runtime(
-                    &super::super::host::runtime_wake_callback(),
-                    test_window(),
-                    1.0,
-                )?;
+                let mut runtime = super::super::host::build_ui_runtime(test_window(), 1.0)?;
                 assert_eq!(
                     first_build_text_sizing(&mut runtime),
                     TextSizing::linear(2.5).expect("valid scale"),
@@ -2071,7 +2035,7 @@ fn a_landed_host_feed_wakes_every_ui_runtime_window() {
         crate::app::runtime::take_parked_host_feeds()
             .pop()
             .expect("the runtime launched its host feed when its services resolved");
-    let loop_redraw = super::super::host::runtime_needs_redraw_handle();
+    let loop_redraw = APP_RUNTIME.with(|slot| slot.borrow().loop_wake_pending());
     loop_redraw.store(false, std::sync::atomic::Ordering::Relaxed);
 
     std::thread::spawn(move || {

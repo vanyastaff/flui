@@ -2,9 +2,7 @@ use flui_scheduler::AppLifecycleState;
 use flui_view::{StatelessView, View};
 
 use super::frame_pacing::{FallbackGate, WakeAction, wake_action};
-use super::host::{
-    APP_RUNTIME, install_owner_platform, runtime_wake_callback, with_owner_platform,
-};
+use super::host::{APP_RUNTIME, install_owner_platform, with_owner_platform};
 use super::owner_dispatch::{
     RuntimeEvent, RuntimeTask, dispatch_platform_ui_runtime, install_input_wiring,
     prepare_platform_ui_runtime,
@@ -25,6 +23,12 @@ where
     use flui_engine::Renderer;
     use flui_platform::WindowOptions;
     use parking_lot::Mutex;
+
+    #[cfg(feature = "persist")]
+    if let Err(error) = config.validate() {
+        tracing::error!(%error, "application configuration failed");
+        return;
+    }
 
     tracing::info!("Starting web platform via flui-platform");
     crate::app::dev_agent::log_undriven(&config, "web");
@@ -87,15 +91,13 @@ where
         // transform maps to the physical canvas. `UiRuntime::new` applies the
         // DPR to the freshly built pipeline before returning.
         let scale_factor = window.scale_factor() as f64;
-        let wake = runtime_wake_callback();
-        let ui_runtime =
-            match super::host::build_ui_runtime(&wake, presentation_window, scale_factor) {
-                Ok(ui_runtime) => ui_runtime,
-                Err(error) => {
-                    tracing::error!(%error, "UiRuntime construction failed");
-                    return Err(anyhow::anyhow!(error).context("UiRuntime construction failed"));
-                }
-            };
+        let ui_runtime = match super::host::build_ui_runtime(presentation_window, scale_factor) {
+            Ok(ui_runtime) => ui_runtime,
+            Err(error) => {
+                tracing::error!(%error, "UiRuntime construction failed");
+                return Err(anyhow::anyhow!(error).context("UiRuntime construction failed"));
+            }
+        };
 
         // Debug overlay: `Some` stats IS the enable flag, so this is the
         // single point that turns the frame path's overlay work on.

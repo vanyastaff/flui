@@ -70,6 +70,14 @@ pub(super) enum FrameDriver {
     /// Private failure seam: uses the product pump and a scripted sink.
     #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
     Test(TestFrameDriver),
+    /// Deadline/retirement seam without constructing a GPU renderer.
+    #[cfg(all(
+        test,
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    TestDeadlines(std::sync::Arc<super::desktop::DesktopWakeDeadlines>),
 }
 
 #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
@@ -88,6 +96,13 @@ impl FrameDriver {
         #[cfg(not(target_arch = "wasm32"))]
         let _ = record;
         match self {
+            #[cfg(all(
+                test,
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ))]
+            Self::TestDeadlines(_) => {}
             #[cfg(all(
                 not(target_os = "android"),
                 not(target_os = "ios"),
@@ -110,6 +125,13 @@ impl FrameDriver {
     }
     fn resize(&mut self, size: flui_foundation::geometry::Size<f64>, scale_factor: f64) {
         match self {
+            #[cfg(all(
+                test,
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ))]
+            Self::TestDeadlines(_) => {}
             #[cfg(all(
                 not(target_os = "android"),
                 not(target_os = "ios"),
@@ -135,6 +157,13 @@ impl FrameDriver {
         #[cfg(not(target_arch = "wasm32"))]
         let _ = record;
         match self {
+            #[cfg(all(
+                test,
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ))]
+            Self::TestDeadlines(_) => {}
             #[cfg(all(
                 not(target_os = "android"),
                 not(target_os = "ios"),
@@ -174,6 +203,12 @@ enum FrameAdmission {
 }
 
 struct FrameRecord {
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    deadlines: Option<std::sync::Arc<super::desktop::DesktopWakeDeadlines>>,
     binding: FrameBinding,
     state: RefCell<DriverState>,
     /// Closing forbids new publication while earlier admitted frames finish.
@@ -189,8 +224,26 @@ impl PreparedFrame {
         address: PresentationAddress,
         driver: FrameDriver,
     ) -> (Self, FrameRegistration) {
+        #[cfg(all(
+            not(target_os = "android"),
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        ))]
+        let deadlines = match &driver {
+            FrameDriver::Desktop(driver) => Some(std::sync::Arc::clone(&driver.deadlines)),
+            #[cfg(test)]
+            FrameDriver::TestDeadlines(deadlines) => Some(std::sync::Arc::clone(deadlines)),
+            #[cfg(test)]
+            FrameDriver::Test(_) => None,
+        };
         let binding = FrameBinding(address);
         let record = Rc::new(FrameRecord {
+            #[cfg(all(
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ))]
+            deadlines,
             binding,
             state: RefCell::new(DriverState::Ready(driver)),
             admission: Cell::new(FrameAdmission::Prepared),
@@ -227,6 +280,26 @@ pub(super) enum FrameInstallError {
 }
 
 impl FrameDrivers {
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    pub(super) fn next_wake(
+        &self,
+        logical: &flui_runtime::owner::OwnerHost,
+    ) -> Option<web_time::Instant> {
+        self.records
+            .iter()
+            .filter(|record| record.admission.get() == FrameAdmission::Open)
+            .filter_map(|record| {
+                let enabled = logical
+                    .runtime_status(record.binding.0.ui_runtime_id)
+                    .is_ok_and(|status| status.frames_enabled);
+                record.deadlines.as_ref()?.next_wake(enabled)
+            })
+            .min()
+    }
     pub(in crate::app) fn new(retirement: NativeRetirement) -> Self {
         Self {
             records: Vec::new(),

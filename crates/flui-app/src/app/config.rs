@@ -95,16 +95,6 @@ pub struct AppConfig {
     /// Whether to show the window decorations.
     pub decorations: bool,
 
-    /// Whether to start in fullscreen mode.
-    ///
-    /// Not currently wired: `From<&AppConfig> for flui_platform::WindowOptions`
-    /// has no fullscreen field to carry this into, and nothing calls
-    /// `PlatformWindow::toggle_fullscreen` at startup to honor it. The intended
-    /// consumer is the desktop bootstrap in `runner.rs`, once `WindowOptions`
-    /// (or a post-creation `toggle_fullscreen` call keyed off this field)
-    /// grows the plumbing end to end.
-    pub fullscreen: bool,
-
     /// Whether to show the performance overlay — FPS, average frame time, and
     /// runtime tail-latency/counter telemetry drawn over the app's own content.
     ///
@@ -127,14 +117,6 @@ pub struct AppConfig {
     /// `From<&AppConfig> for flui_platform::WindowOptions` drops this field —
     /// it is a compositing concern, not a window-creation one.
     pub show_performance_overlay: bool,
-
-    /// Whether to enable debug paint.
-    ///
-    /// Not currently wired: `From<&AppConfig> for flui_platform::WindowOptions`
-    /// drops this field and no paint-phase debug visualization reads it yet.
-    /// Intended consumer: a future paint-phase hook that draws render-object
-    /// bounds.
-    pub debug_paint: bool,
 
     /// The development reload driver, if the application installed one with
     /// [`Self::with_dev_reload`] (ADR-0094 §1).
@@ -259,9 +241,7 @@ impl Default for AppConfig {
             max_size: None,
             resizable: true,
             decorations: true,
-            fullscreen: false,
             show_performance_overlay: false,
-            debug_paint: false,
             dev_reload: None,
             dev_agent: None,
             exit_policy: ExitPolicy::default(),
@@ -279,6 +259,16 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    #[cfg(feature = "persist")]
+    pub(crate) fn validate(&self) -> Result<(), super::AppWindowError> {
+        if self.storage_dir.is_some() {
+            return Err(super::AppWindowError::UnsupportedConfiguration {
+                setting: "storage_dir",
+            });
+        }
+        Ok(())
+    }
+
     /// Opt this window's presentation into frame-aligned pointer interpolation.
     #[must_use]
     pub fn with_pointer_resampling(mut self, policy: PointerResampling) -> Self {
@@ -347,24 +337,10 @@ impl AppConfig {
         self
     }
 
-    /// Set whether to start in fullscreen.
-    #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_fullscreen(mut self, fullscreen: bool) -> Self {
-        self.fullscreen = fullscreen;
-        self
-    }
-
     /// Enable performance overlay.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_performance_overlay(mut self, show: bool) -> Self {
         self.show_performance_overlay = show;
-        self
-    }
-
-    /// Enable debug paint.
-    #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_debug_paint(mut self, enabled: bool) -> Self {
-        self.debug_paint = enabled;
         self
     }
 
@@ -455,7 +431,9 @@ impl AppConfig {
     /// Widgets reach it through `LifecycleContext::storage`; without this,
     /// or on a platform without files, they get none.
     ///
-    /// Not yet wired: the UI runtime's widgets get no storage either way.
+    /// The file-backed host integration is not implemented yet. Startup and
+    /// window admission return [`super::AppWindowError::UnsupportedConfiguration`]
+    /// when this setting is present, rather than silently running without storage.
     #[cfg(feature = "persist")]
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_storage_dir(mut self, name: flui_platform_api::StorageName) -> Self {

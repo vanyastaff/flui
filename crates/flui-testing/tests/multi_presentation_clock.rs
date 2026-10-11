@@ -27,28 +27,28 @@ pub(crate) fn extra_registry_drivers_request_frames_and_retire_on_replacement() 
     let b_owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&b_registry));
     a_owner.controller().forward().expect("A run");
     assert!(
-        binding.scheduler().has_scheduled_frame(),
+        binding.scheduler().is_frame_scheduled(),
         "an extra presentation requests its first sample"
     );
     binding.pump_frame(Duration::ZERO);
-    assert!(!binding.scheduler().has_scheduled_frame());
+    assert!(!binding.scheduler().is_frame_scheduled());
     let replacement = binding.install_presentation_clock(a);
     a_owner
         .controller()
         .forward()
         .expect("standalone retired A run");
     assert!(
-        !binding.scheduler().has_scheduled_frame(),
+        !binding.scheduler().is_frame_scheduled(),
         "replacing A revokes its old driver capability"
     );
     let new_owner =
         AnimationController::builder(Duration::from_secs(1)).build_on(Some(&replacement));
     new_owner.controller().forward().expect("replacement A run");
-    assert!(binding.scheduler().has_scheduled_frame());
+    assert!(binding.scheduler().is_frame_scheduled());
     binding.pump_frame(Duration::ZERO);
     b_owner.controller().forward().expect("B run");
     assert!(
-        binding.scheduler().has_scheduled_frame(),
+        binding.scheduler().is_frame_scheduled(),
         "replacing A preserves B's driver"
     );
 }

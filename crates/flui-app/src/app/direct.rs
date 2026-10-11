@@ -93,6 +93,8 @@ pub fn run_direct(
     config: AppConfig,
     render_fn: impl FnMut(&mut SceneBuilder, f64, f64) + Send + 'static,
 ) -> anyhow::Result<()> {
+    #[cfg(feature = "persist")]
+    config.validate()?;
     // Managed startup, same contract as `run_app`: install FLUI's default
     // backend only into an empty slot. The historical code called
     // `Logger::init`, which panicked the moment a host — or a second
