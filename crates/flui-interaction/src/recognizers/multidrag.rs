@@ -140,7 +140,6 @@ impl MultiDragGestureRecognizerBuilder {
 struct MultiDragPointerState {
     id: ContactId,
     initial_position: Offset<f64>,
-    initial_global_position: Offset<f64>,
     last_position: Offset<f64>,
     last_global_position: Offset<f64>,
     kind: PointerKind,
@@ -384,8 +383,8 @@ impl MultiDragGestureRecognizer {
                 .map(|state| {
                     let update = MultiDragUpdateDetails {
                         pointer_id: pointer,
-                        global_position: state.initial_global_position,
-                        local_position: state.initial_position,
+                        global_position: state.last_global_position,
+                        local_position: state.last_position,
                         delta: state.pending_delta,
                         kind: state.kind,
                         timestamp: state.last_time,
@@ -469,7 +468,6 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
             MultiDragPointerState {
                 id,
                 initial_position: position,
-                initial_global_position: global,
                 last_position: position,
                 last_global_position: global,
                 kind,
