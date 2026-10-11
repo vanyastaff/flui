@@ -348,6 +348,17 @@ run, combinators forward their source's answer, and `ConstantAnimation` reports
 phase without an installed run. `controller_robustness_contract` verifies the
 constant case through proxy, reverse, curve, tween and switch combinators;
 `is_animating_false_after_set_value` covers manually positioned controllers.
+The live-source row `a_switch_tracks_activity_after_hopping_to_a_live_source`
+also checks a tween over a switch before and after adoption, completion,
+restarting the old source and switch disposal.
+
+`AnimationSwitch` retains its current source until the values actually cross.
+Only exactly equal initial values adopt the next source immediately; a fixed
+epsilon would cause premature switching and discard meaningful values close
+to zero. Construction selects the mode and source from one pair of samples.
+`nearby_values_wait_for_their_actual_crossing` covers both directions and the
+subsequent source custody; `equal_initial_values_adopt_the_next_source` preserves
+the immediate-adoption case.
 
 ### Curve Trait
 
@@ -586,8 +597,19 @@ settle chokepoint for BOTH zero-DISTANCE runs (`forward()` already at the
 upper bound) and zero-DURATION runs (`forward(..., Some(Duration::ZERO))`, or
 a zero base `duration`): `forward_from`/`reverse_from`/`drive_to` compute the
 run duration before their settle check and gate on
-`distance < BOUND_EPSILON || run_duration.is_zero()`, which covers both causes
+`value == target || run_duration.is_zero()`, which covers both causes
 identically.
+
+Representable differences are preserved regardless of value units. Timed runs
+retain their authored duration for distinct targets; bound phases require exact
+endpoint equality, and value notifications compare exact entry and exit values.
+Numerical solver accuracy and physical rest thresholds do not define equality.
+`small_distances_keep_their_authored_duration`,
+`small_remaining_distance_runs_until_its_scaled_deadline`,
+`small_from_jumps_notify_their_exact_value`,
+`small_zero_duration_settlement_notifies_the_endpoint` and
+`nearby_interior_positions_keep_their_directional_phase` pin these rules through
+public controller commands in both directions.
 
 It also notifies value listeners only when the value actually moved,
 measured against the value at METHOD ENTRY, before

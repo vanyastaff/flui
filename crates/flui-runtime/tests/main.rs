@@ -1,5 +1,8 @@
 //! Contracts exercised through the runtime's host interface.
 
+#[path = "contracts/frame_clock.rs"]
+mod frame_clock;
+
 #[path = "contracts/owner_close.rs"]
 mod owner_close;
 #[path = "contracts/owner_delivery.rs"]

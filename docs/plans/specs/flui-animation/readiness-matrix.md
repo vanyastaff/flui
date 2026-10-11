@@ -14,7 +14,8 @@
 
 | Требования | Текущее основание / что ещё доказать | Пакет |
 |---|---|---|
-| M-TIME-1, M-TIME-2 | MotionClock есть; единое типизированное время всех production-путей ещё не проведено | A3 |
+| M-TIME-1 | MotionClock есть; общий clock-контракт сверять вместе с production-путями и partition invariance | A3 |
+| M-TIME-2 | `one_pump_shares_its_selected_time_across_parent_and_child` проверяет реальный UiRuntime pump: один выбранный timestamp сохраняется для обоих Vsync, даже когда host clock продвигается при выборе времени и внутри callback. Normal/Preserve могут иметь разные локальные timeline согласно motion policy | A3 |
 | M-TIME-3 | Отрицательное/убывающее время должно проверяться на входе реестра, не только в чистых часах | A1, A3 |
 | M-TIME-4, M-TIME-5, M-TIME-6 | Quiescence/mute частично покрыты; скрытие, resume и owning lifetime требуют end-to-end проверки | A2, A3 |
 | M-TIME-7, M-TIME-8, M-TIME-9 | Остались TIME_DILATION и raw f64/testing пути; часы презентации ещё не единый источник | A3 |
@@ -62,7 +63,8 @@
 | M-CMP-3 | Repeat покрыт обычными тестами; completion/motion-policy проверить после core миграции | A1, A5 |
 | M-CMP-6 | Полная WAAPI timing model вынесена | Вне текущего scope |
 | M-CMP-7 | Решение удалить Compound ещё требует сверки финального surface: тип остаётся в baseline | A7 |
-| M-CMP-8, M-CMP-10 | Switch/proxy delivery и reentry остаются среди красных контрактов | A1, A2 |
+| M-CMP-8 | Публичные switch value/status reentry и delivery-контракты; `nearby_values_wait_for_their_actual_crossing` проверяет обе стороны crossing. Mounted Navigator `replacement_retains_near_zero_secondary_progress_until_crossing` проверяет реального consumer, включая progress меньше EPSILON. Старая epsilon-логика воспроизводимо нарушает оба сценария | A1, A2 |
+| M-CMP-10 | Proxy delivery и reentry сверять отдельно от switch; старый baseline содержал красные контракты | A1, A2 |
 | M-CMP-9 | Reverse duration/curve есть; проверить сквозную активность и inherited velocity | A4 |
 | M-CMP-11 | Вынос подтверждён для двух сценариев из composition/requirements: циклические фазы через hold+repeat (`indeterminate_bars_follow_the_published_timing`, записанные прямоугольники Material); переходы по состоянию через implicit+retarget (`container_retarget_preserves_the_laid_out_size_velocity`, `container_color_retarget_preserves_painted_alpha_progress`). Произвольный PhaseAnimator не заявлен | A7, согласованный вынос |
 
@@ -74,7 +76,8 @@
 | M-A11Y-6 | Отдельная cross-fade preference вынесена | Вне текущего scope |
 | M-OWN-1 | Run ownership/reentry частично покрыты обычными тестами; сохранить при смене owner model | A1, A2 |
 | M-OWN-2, M-OWN-6 | Owning lifetime и teardown не закрыты; есть красные контрактные тесты | A2 |
-| M-OWN-3, M-OWN-5, M-OWN-8, M-OWN-9 | Dispose/activity/panic/delivery order воспроизводимо нарушают intended contracts | A1 |
+| M-OWN-3, M-OWN-8, M-OWN-9 | Dispose/panic/delivery order воспроизводимо нарушали intended contracts на baseline; сверять конечные ownership и failure-path сценарии | A1 |
+| M-OWN-5 | `is_animating_everywhere` проверяет controller/proxy/reverse/curved/tween/switch; `a_switch_tracks_activity_after_hopping_to_a_live_source` проверяет inactive → live hop → completion → reverse → disposal, включая независимый старый source. ConstantAnimation всегда inactive, directional phase сама по себе не означает активный run | A1 |
 | M-OWN-4 | Отдельные consumers исправлялись, но полный перенос области/часов не доказан | A2 |
 | M-OWN-7 | Listener identity/exhaustion требует проверки конечного реестра, не переноса старых локальных счётчиков | A1 |
 | M-INTG-1 | Slide/scale/rotation используют render object; Drawer/Dismissible требуют завершения миграции | A6 |

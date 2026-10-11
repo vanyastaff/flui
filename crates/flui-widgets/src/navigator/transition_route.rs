@@ -443,9 +443,7 @@ impl<T> TransitionRoute<T> {
         );
         let jump = match &current_train {
             None => true,
-            Some(train) => {
-                (train.value() - next_animation.value()).abs() < f64::EPSILON || !is_moving
-            }
+            Some(train) => train.value() == next_animation.value() || !is_moving,
         };
 
         let previous = std::mem::replace(&mut *parent, SecondaryParent::Resting);

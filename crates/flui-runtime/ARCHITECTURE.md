@@ -11,6 +11,13 @@ host.
 
 ## Invariants
 
+- **A pump owns its selected timestamp.** The host clock is read once. Every
+  controller in a presentation's parent and child registries samples that
+  timestamp through the presentation motion clock, even if the host clock
+  advances during the pump or an earlier animation callback.
+  `one_pump_shares_its_selected_time_across_parent_and_child` uses the public
+  runtime pump and distinguishes its selected time from later host readings.
+
 - **Motion follows one host observation.** Presentation clocks resolve the
   runtime's application override against accepted `SystemPreferences` before
   publication callbacks. Both current and later presentations inherit it.

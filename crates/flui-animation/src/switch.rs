@@ -206,34 +206,22 @@ impl AnimationSwitch {
         let next = next.map(Terminal::new);
         let notifier = Rc::new(ChangeNotifier::new());
 
-        let mode = if let Some(ref next_anim) = next {
+        let (actual_current, actual_next, mode) = if let Some(ref next_anim) = next {
             let current_value = current.value();
             let next_value = next_anim.value();
 
-            if (current_value - next_value).abs() < 1e-6 {
-                // Same value - immediately switch to next, no callback
-                None // Will be handled specially
-            } else if current_value > next_value {
-                Some(SwitchMode::Maximize)
+            if current_value == next_value {
+                (Terminal::new(next_anim.get().clone()), None, None)
             } else {
-                Some(SwitchMode::Minimize)
+                let mode = if current_value > next_value {
+                    SwitchMode::Maximize
+                } else {
+                    SwitchMode::Minimize
+                };
+                (current, next, Some(mode))
             }
         } else {
-            None
-        };
-
-        // If values are equal, start with next animation
-        let (actual_current, actual_next) = if let Some(ref next_anim) = next {
-            let current_value = current.value();
-            let next_value = next_anim.value();
-
-            if (current_value - next_value).abs() < 1e-6 {
-                (Terminal::new(next_anim.get().clone()), None)
-            } else {
-                (current, next)
-            }
-        } else {
-            (current, next)
+            (current, None, None)
         };
 
         let inner = AnimationSwitchInner {

@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use flui_animation::{
-    Animation, AnimationController, AnimationStatus, CurvedAnimation, DrivenController,
-    ProxyAnimation, ReverseAnimation, Vsync,
+    Animation, AnimationController, AnimationStatus, AnimationSwitch, CurvedAnimation,
+    DrivenController, FloatTween, ProxyAnimation, ReverseAnimation, TweenAnimation, Vsync,
     curve::{Curve, Linear},
 };
 use flui_foundation::Listenable;
@@ -36,8 +36,14 @@ fn is_animating_everywhere(controller: &AnimationController) -> Vec<(&'static st
         ),
         (
             "curved",
-            CurvedAnimation::new(source, Linear).is_animating(),
+            CurvedAnimation::new(std::rc::Rc::clone(&source), Linear).is_animating(),
         ),
+        (
+            "tween",
+            TweenAnimation::new(FloatTween::new(10.0, 20.0), std::rc::Rc::clone(&source))
+                .is_animating(),
+        ),
+        ("switch", AnimationSwitch::new(source, None).is_animating()),
     ]
 }
 
@@ -117,6 +123,68 @@ fn a_constant_phase_does_not_install_a_run() {
             );
         }
     }
+}
+
+fn a_switch_tracks_activity_after_hopping_to_a_live_source() {
+    use std::rc::Rc;
+
+    let registry = Vsync::new();
+    let current = AnimationController::builder(Duration::from_secs(1))
+        .initial_value(0.8)
+        .build_on(Some(&registry));
+    let next = AnimationController::builder(Duration::from_secs(1))
+        .initial_value(0.3)
+        .build_on(Some(&registry));
+    let current_source: Rc<dyn Animation<f64>> = Rc::new(current.controller().clone());
+    let next_source: Rc<dyn Animation<f64>> = Rc::new(next.controller().clone());
+    let switch = AnimationSwitch::new(Rc::clone(&current_source), Some(Rc::clone(&next_source)));
+    let tween = TweenAnimation::new(FloatTween::new(10.0, 20.0), Rc::new(switch.clone()));
+    let run = next.controller().forward().unwrap();
+    assert!(
+        !switch.is_animating(),
+        "the next train does not own the output yet"
+    );
+    assert!(!tween.is_animating());
+    next.controller().tick_at(Duration::from_millis(600));
+    assert!(
+        Rc::ptr_eq(&switch.current(), &next_source),
+        "the trains crossed"
+    );
+    assert!(switch.is_animating(), "the adopted source still has a run");
+    assert!(tween.is_animating());
+    assert!(
+        (tween.value() - 19.0).abs() < 1e-9,
+        "the tween reads the adopted value"
+    );
+    assert!(run.is_pending());
+
+    current.controller().forward().unwrap();
+    next.controller().tick_at(Duration::from_millis(700));
+    assert!(run.is_complete());
+    assert!(
+        current.controller().is_animating(),
+        "the old source is independently live"
+    );
+    assert!(
+        !switch.is_animating(),
+        "the old train cannot keep the output active"
+    );
+    assert!(!tween.is_animating());
+    assert_eq!(tween.value(), 20.0);
+
+    next.controller().reverse().unwrap();
+    assert!(switch.is_animating());
+    assert!(tween.is_animating());
+    switch.dispose();
+    assert!(
+        !switch.is_animating(),
+        "a disposed switch has no output run"
+    );
+    assert!(!tween.is_animating());
+    assert!(
+        next.controller().is_animating(),
+        "disposal does not cancel the source"
+    );
 }
 
 #[cfg(feature = "serde")]
@@ -926,6 +994,10 @@ fn controller_robustness_contract() {
         (
             "a constant phase does not install a run",
             a_constant_phase_does_not_install_a_run,
+        ),
+        (
+            "switch activity follows the adopted live train",
+            a_switch_tracks_activity_after_hopping_to_a_live_source,
         ),
         (
             "is_animating after the run completes",

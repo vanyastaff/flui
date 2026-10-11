@@ -4,7 +4,9 @@ use flui_animation::{
     Animation, AnimationController, AnimationError, AnimationInput, AnimationStatus, Curve,
     DrivenController, MotionClock, RangeDefect, Simulation, ValueRange, Vsync, curves,
 };
+use flui_foundation::Listenable;
 use parking_lot::Mutex;
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -27,6 +29,125 @@ fn forward_from_mid_scales_run_duration() {
     );
     c.tick_at(Duration::from_millis(50));
     assert_eq!(c.status(), AnimationStatus::ForwardSettled);
+}
+
+fn small_distances_keep_their_authored_duration() {
+    for (from, target) in [(0.0, 0.5e-6), (0.5e-6, 0.0)] {
+        let (_owner, c) = controller(1000);
+        c.set_value(from);
+        let run = c.animate_to(target, Some(Duration::from_secs(1))).unwrap();
+        assert_eq!(
+            c.value(),
+            from,
+            "a distinct target does not settle at admission"
+        );
+        assert!(run.is_pending());
+        c.tick_at(Duration::from_millis(250));
+        assert!((c.value() - (from + (target - from) * 0.25)).abs() < 1e-15);
+        assert!(
+            run.is_pending(),
+            "the authored duration still owns completion"
+        );
+        c.tick_at(Duration::from_secs(1));
+        assert_eq!(c.value(), target);
+        assert!(run.is_complete());
+    }
+}
+
+fn small_remaining_distance_runs_until_its_scaled_deadline() {
+    for reverse in [false, true] {
+        let (_owner, c) = controller(1000);
+        let (from, target, run) = if reverse {
+            (0.5e-6, 0.0, c.reverse_from(Some(0.5e-6)).unwrap())
+        } else {
+            (
+                1.0 - 0.5e-6,
+                1.0,
+                c.forward_from(Some(1.0 - 0.5e-6)).unwrap(),
+            )
+        };
+        assert_eq!(c.value(), from, "remaining distance is nonzero");
+        assert!(run.is_pending());
+        c.tick_at(Duration::from_nanos(250));
+        assert!((c.value() - (from + (target - from) * 0.5)).abs() < 1e-15);
+        assert!(run.is_pending());
+        c.tick_at(Duration::from_micros(1));
+        assert_eq!(c.value(), target);
+        assert!(run.is_complete());
+    }
+}
+
+fn small_from_jumps_notify_their_exact_value() {
+    for reverse in [false, true] {
+        let (_owner, c) = controller(1000);
+        c.set_value(if reverse { 1.0 } else { 0.0 });
+        let values = Rc::new(RefCell::new(Vec::new()));
+        let observed = Rc::clone(&values);
+        let source = c.clone();
+        let listener = c.add_listener(Rc::new(move || observed.borrow_mut().push(source.value())));
+        let from = if reverse { 1.0 - 0.5e-6 } else { 0.5e-6 };
+        let run = if reverse {
+            c.reverse_from(Some(from))
+        } else {
+            c.forward_from(Some(from))
+        }
+        .unwrap();
+        assert_eq!(
+            *values.borrow(),
+            [from],
+            "every changed position is observable"
+        );
+        assert!(run.is_pending());
+        c.remove_listener(listener);
+    }
+}
+
+fn small_zero_duration_settlement_notifies_the_endpoint() {
+    let (_owner, c) = controller(1000);
+    let values = Rc::new(RefCell::new(Vec::new()));
+    let observed = Rc::clone(&values);
+    let source = c.clone();
+    let listener = c.add_listener(Rc::new(move || observed.borrow_mut().push(source.value())));
+    let run = c.animate_to(0.5e-6, Some(Duration::ZERO)).unwrap();
+    assert!(run.is_complete());
+    assert_eq!(
+        *values.borrow(),
+        [0.5e-6],
+        "the endpoint change is delivered once"
+    );
+    c.remove_listener(listener);
+}
+
+fn nearby_interior_positions_keep_their_directional_phase() {
+    for reverse in [false, true] {
+        for position in [0.5e-6, 1.0 - 0.5e-6] {
+            let (_owner, c) = controller(1000);
+            c.set_value(0.5);
+            let _run = if reverse { c.reverse() } else { c.forward() }.unwrap();
+            c.set_value(position);
+            assert_eq!(c.value(), position);
+            assert_eq!(
+                c.status(),
+                if reverse {
+                    AnimationStatus::Reverse
+                } else {
+                    AnimationStatus::Forward
+                },
+                "a representable interior position is not a bound"
+            );
+            assert!(!c.is_animating());
+            c.stop().unwrap();
+            assert_eq!(
+                c.status(),
+                if reverse {
+                    AnimationStatus::ReverseSettled
+                } else {
+                    AnimationStatus::ForwardSettled
+                },
+                "an interior stop settles by its run direction"
+            );
+        }
+    }
 }
 
 fn set_value_nan_is_canonicalized() {
@@ -369,6 +490,26 @@ fn a_panicking_status_listener_leaves_the_finished_run_ok() {
 #[test]
 fn controller_contract() {
     crate::run_table(&[
+        (
+            "small distances keep authored duration",
+            small_distances_keep_their_authored_duration,
+        ),
+        (
+            "small remaining distance keeps scaled deadline",
+            small_remaining_distance_runs_until_its_scaled_deadline,
+        ),
+        (
+            "small from jumps notify",
+            small_from_jumps_notify_their_exact_value,
+        ),
+        (
+            "small zero duration settlement notifies",
+            small_zero_duration_settlement_notifies_the_endpoint,
+        ),
+        (
+            "nearby interior positions keep phase",
+            nearby_interior_positions_keep_their_directional_phase,
+        ),
         (
             "forward from mid scales run duration",
             forward_from_mid_scales_run_duration,

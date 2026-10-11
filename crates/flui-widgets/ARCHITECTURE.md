@@ -1,5 +1,14 @@
 # flui-widgets architecture
 
+## Route animation crossing
+
+Route replacement preserves the displayed secondary animation until its current
+and replacement sources actually cross. Only exactly equal values or an idle
+replacement permit an immediate handoff; an absolute floating-point tolerance
+would discard representable progress. The mounted Navigator case
+`replacement_retains_near_zero_secondary_progress_until_crossing` observes the
+old value, crossing and new source through the secondary animation handle.
+
 ## Grouped animation ownership
 
 Switcher transfers all current and outgoing controller seats in one Vsync update

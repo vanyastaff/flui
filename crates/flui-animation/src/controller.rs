@@ -31,9 +31,6 @@ use std::fmt;
 use std::rc::Rc;
 use std::time::Duration;
 
-/// Absolute tolerance for "is the value at a bound" comparisons.
-const BOUND_EPSILON: f64 = 1e-6;
-
 /// Default spring for fling animations.
 fn default_fling_spring() -> SpringDescription {
     SpringDescription::with_damping_ratio(1.0, 500.0, 1.0)
@@ -787,9 +784,8 @@ impl AnimationController {
         inner.direction = AnimationDirection::Forward;
         inner.start_value = inner.value;
         inner.target_value = inner.upper_bound;
-        let distance = (inner.target_value - inner.value).abs();
         let run_duration = inner.scaled_run_duration(inner.duration);
-        if distance < BOUND_EPSILON || run_duration.is_zero() {
+        if inner.value == inner.target_value || run_duration.is_zero() {
             return Ok(self.settle_at_target(entry_value, retired, inner));
         }
 
@@ -800,7 +796,7 @@ impl AnimationController {
         // same entry-value rule `settle_at_target` uses), so
         // `forward_from(Some(x))` from `x` itself does not fire a spurious
         // notification for a value that never changed.
-        let value_change = if (inner.value - entry_value).abs() < BOUND_EPSILON {
+        let value_change = if inner.value == entry_value {
             ValueChange::Unchanged
         } else {
             ValueChange::Notify
@@ -892,10 +888,9 @@ impl AnimationController {
         inner.direction = AnimationDirection::Reverse;
         inner.start_value = inner.value;
         inner.target_value = inner.lower_bound;
-        let distance = (inner.target_value - inner.value).abs();
         let base = inner.reverse_duration.unwrap_or(inner.duration);
         let run_duration = inner.scaled_run_duration(base);
-        if distance < BOUND_EPSILON || run_duration.is_zero() {
+        if inner.value == inner.target_value || run_duration.is_zero() {
             return Ok(self.settle_at_target(entry_value, retired, inner));
         }
 
@@ -903,7 +898,7 @@ impl AnimationController {
         inner.run_duration = Some(run_duration);
         // See `forward_from`'s own comment: notify iff `from` actually moved
         // the value.
-        let value_change = if (inner.value - entry_value).abs() < BOUND_EPSILON {
+        let value_change = if inner.value == entry_value {
             ValueChange::Unchanged
         } else {
             ValueChange::Notify
@@ -1192,7 +1187,7 @@ impl AnimationController {
         // re-notifying value listeners every frame while the value never
         // changes, so settle immediately with a single notification instead
         // (see `forward_from`).
-        if (target - inner.value).abs() < BOUND_EPSILON || run_duration.is_zero() {
+        if target == inner.value || run_duration.is_zero() {
             return Ok(self.settle_at_target(entry_value, retired, inner));
         }
 
@@ -1250,7 +1245,7 @@ impl AnimationController {
                 .replace(completer)
                 .map(RunCompleter::cancel);
             let status = inner.status;
-            let change = if (inner.value - entry_value).abs() < BOUND_EPSILON {
+            let change = if inner.value == entry_value {
                 ValueChange::Unchanged
             } else {
                 ValueChange::Notify
@@ -1262,7 +1257,7 @@ impl AnimationController {
         let status = inner.direction.settled_status();
         inner.status = status;
         let delivery = inner.active_run.take().map(RunCompleter::cancel);
-        let value_change = if (inner.target_value - entry_value).abs() < BOUND_EPSILON {
+        let value_change = if inner.target_value == entry_value {
             ValueChange::Unchanged
         } else {
             ValueChange::Notify
@@ -2639,25 +2634,14 @@ impl AnimationControllerInner {
         !self.lower_bound.is_finite()
     }
 
-    /// Whether the current value is at (or indistinguishable from) the upper bound.
-    ///
-    /// Uses exact equality for infinite bounds to avoid the `INFINITY - INFINITY = NaN`
-    /// pitfall that breaks the epsilon comparison on an
-    /// [`unbounded`](crate::AnimationControllerBuilder::unbounded) controller,
-    /// whose bounds are fixed at `(NEG_INFINITY, INFINITY)`.
+    /// Whether the current value is exactly at the upper bound.
     fn is_at_upper_bound(&self) -> bool {
         self.value == self.upper_bound
-            || (!self.upper_bound.is_infinite()
-                && (self.value - self.upper_bound).abs() < BOUND_EPSILON)
     }
 
-    /// Whether the current value is at (or indistinguishable from) the lower bound.
-    ///
-    /// Uses exact equality for infinite bounds — see [`is_at_upper_bound`](Self::is_at_upper_bound).
+    /// Whether the current value is exactly at the lower bound.
     fn is_at_lower_bound(&self) -> bool {
         self.value == self.lower_bound
-            || (!self.lower_bound.is_infinite()
-                && (self.value - self.lower_bound).abs() < BOUND_EPSILON)
     }
 
     /// Status at a settled value, mapping non-bound stops by direction.

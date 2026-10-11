@@ -79,6 +79,14 @@
 
 ### Fixed
 
+- `AnimationSwitch` waits for an actual crossing when initial values differ
+  by less than one millionth. Nearby values no longer transfer the output
+  prematurely; exactly equal values still adopt the next source immediately.
+- Route replacement retains distinct secondary progress until the sources cross,
+  including differences smaller than `f64::EPSILON`.
+- Preserve small timed runs and their deadlines, deliver small value changes,
+  and report interior controller phases without treating nearby values as bounds.
+
 - Commit a Hero controller's replacement Navigator before retiring outgoing
   routes, so route-capture destructors can read or replace the attachment.
   Controller recordings use owner-local storage and retain their independent

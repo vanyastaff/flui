@@ -476,6 +476,7 @@ fn route_transitions() {
             ("transition_route::push_transition_parks_the_entry_in_pushing_until_the_controller_completes", crate::transition_route::push_transition_parks_the_entry_in_pushing_until_the_controller_completes),
             ("transition_route::scope_replacement_moves_an_existing_route_without_restarting_it", crate::transition_route::scope_replacement_moves_an_existing_route_without_restarting_it),
             ("transition_route::hopping_route_dropped_without_dispose_frees_proxy", crate::transition_route::hopping_route_dropped_without_dispose_frees_proxy),
+            ("transition_route::replacement_retains_near_zero_secondary_progress_until_crossing", crate::transition_route::replacement_retains_near_zero_secondary_progress_until_crossing),
         ],
     );
 }

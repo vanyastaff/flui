@@ -308,6 +308,52 @@ pub(crate) fn hopping_route_dropped_without_dispose_frees_proxy() {
     );
 }
 
+pub(crate) fn replacement_retains_near_zero_secondary_progress_until_crossing() {
+    for progress in [0.5e-6, f64::EPSILON / 4.0] {
+        let (bottom, bottom_handle) = transition("bottom");
+        let navigator = NavigatorHandle::new();
+        navigator.seed_initial(bottom);
+        let mut harness = mount(Navigator::new(navigator.clone()));
+        let (middle, middle_handle) = transition("middle");
+        navigator.push(middle);
+        harness.tick();
+        let middle_controller = middle_handle.controller().expect("installed middle");
+        middle_controller.set_value(progress);
+        let secondary = bottom_handle.secondary_animation();
+        assert_eq!(secondary.value(), progress);
+
+        let (replacement, replacement_handle) = transition("replacement");
+        navigator.push_replacement(replacement);
+        harness.tick();
+        assert_eq!(
+            secondary.value(),
+            progress,
+            "replacement preserves the previous displayed secondary progress"
+        );
+        let replacement_controller = replacement_handle
+            .controller()
+            .expect("installed replacement");
+        replacement_controller.set_value(progress / 2.0);
+        assert_eq!(
+            secondary.value(),
+            progress,
+            "the trains have not crossed yet"
+        );
+        replacement_controller.set_value(progress * 2.0);
+        assert_eq!(
+            secondary.value(),
+            progress * 2.0,
+            "the replacement now drives the secondary"
+        );
+        middle_controller.set_value(0.8);
+        assert_eq!(
+            secondary.value(),
+            progress * 2.0,
+            "the old route no longer owns the output"
+        );
+    }
+}
+
 std::thread_local! {
     static REENTRANT_HANDLE: RefCell<Option<TransitionHandle>> = const { RefCell::new(None) };
 }

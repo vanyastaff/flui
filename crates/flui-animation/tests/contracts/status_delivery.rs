@@ -1610,6 +1610,51 @@ fn dispose_before_a_hop_detaches_from_both_trains() {
     );
 }
 
+fn nearby_values_wait_for_their_actual_crossing() {
+    for (initial, before_crossing) in [(0.0, 0.25e-6), (1e-6, 0.75e-6)] {
+        let current = ObservedTrain::new(0.5e-6);
+        let next = ObservedTrain::new(initial);
+        let current_parent: Rc<dyn Animation<f64>> = current.clone();
+        let next_parent: Rc<dyn Animation<f64>> = next.clone();
+        let hops = Rc::new(Cell::new(0));
+        let observed_hops = Rc::clone(&hops);
+        let switch =
+            AnimationSwitch::new(Rc::clone(&current_parent), Some(Rc::clone(&next_parent)))
+                .on_switched(move || observed_hops.set(observed_hops.get() + 1));
+        assert!(
+            Rc::ptr_eq(&switch.current(), &current_parent),
+            "nearby values have not crossed: next={initial}"
+        );
+        assert_eq!(switch.value(), 0.5e-6, "retain the exact displayed value");
+        next.set_value(before_crossing);
+        assert!(Rc::ptr_eq(&switch.current(), &current_parent));
+        assert_eq!(hops.get(), 0, "no hop before the crossing");
+        next.set_value(0.5e-6);
+        assert!(Rc::ptr_eq(&switch.current(), &next_parent));
+        assert_eq!(hops.get(), 1, "equality crosses from either direction");
+        next.set_value(initial);
+        current.set_value(0.9);
+        assert_eq!(
+            switch.value(),
+            initial,
+            "only the adopted source drives output"
+        );
+        assert_eq!(hops.get(), 1, "a crossing transfers ownership once");
+    }
+}
+
+fn equal_initial_values_adopt_the_next_source() {
+    let current = ObservedTrain::new(0.5e-6);
+    let next = ObservedTrain::new(0.5e-6);
+    let next_parent: Rc<dyn Animation<f64>> = next.clone();
+    let switch = AnimationSwitch::new(current.clone(), Some(Rc::clone(&next_parent)));
+    assert!(Rc::ptr_eq(&switch.current(), &next_parent));
+    current.set_value(0.8);
+    assert_eq!(switch.value(), 0.5e-6);
+    next.set_value(0.7);
+    assert_eq!(switch.value(), 0.7);
+}
+
 #[derive(Clone, Copy)]
 enum Reentry {
     Value,
@@ -1860,6 +1905,14 @@ fn reentrant_set_parent_last_commit_wins() {
 #[test]
 fn status_delivery_contract() {
     crate::run_table(&[
+        (
+            "nearby values wait for their actual crossing",
+            nearby_values_wait_for_their_actual_crossing,
+        ),
+        (
+            "equal initial values adopt the next source",
+            equal_initial_values_adopt_the_next_source,
+        ),
         (
             "dispose before a hop releases both trains",
             dispose_before_a_hop_detaches_from_both_trains,
