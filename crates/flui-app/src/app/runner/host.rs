@@ -150,7 +150,7 @@ pub(super) fn build_ui_runtime(
     let pending = Arc::clone(&redraw);
     let target = Arc::downgrade(window.window());
     #[cfg(target_os = "ios")]
-    let proxy = with_owner_platform(|owner| owner.proxy());
+    let proxy = with_owner_platform(flui_platform::OwnerPlatform::proxy);
     let wake = Arc::new(move || {
         pending.store(true, std::sync::atomic::Ordering::Release);
         if let Some(window) = target.upgrade() {

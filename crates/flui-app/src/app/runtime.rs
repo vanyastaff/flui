@@ -979,7 +979,7 @@ impl AppRuntime {
         self.wake_handle().wake_frame();
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
     pub(super) fn loop_wake_pending(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.needs_redraw)
     }
