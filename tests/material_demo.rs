@@ -190,7 +190,22 @@ fn motion_lab_buttons_drive_independent_property_deadlines_and_reduce() {
             .and_then(|node| node.label()),
         Some("Resume activity")
     );
-    laid.pump_for(Duration::from_secs(6));
+    laid.pump_for(Duration::from_millis(137));
+    assert_eq!(
+        indicator_arc(&laid),
+        paused,
+        "pause survives moving focus at a non-cycle-aligned sample"
+    );
+    tap(&mut laid, "Change width");
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(1600));
+    assert_eq!(moving_box(&laid), (360.0, 40.0));
+    assert_eq!(
+        indicator_arc(&laid),
+        paused,
+        "other controls remain operable without resuming the indicator"
+    );
+    laid.pump_for(Duration::from_millis(6137));
     assert_eq!(
         indicator_arc(&laid),
         paused,

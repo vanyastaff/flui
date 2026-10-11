@@ -216,7 +216,85 @@ Reproduce the selected rows with:
 cargo bench -p flui-animation --bench vsync_registry --locked -- --noplot 'running_vsync_registry/10000|nested_vsync_registry/1000'
 ```
 
+### Complete registry workload, 2026-10-11
+
+The same historical baseline, `c297b6c89bc93941e28c738c9dfac3d623a2dae2`,
+was compared with the current ownership and continuous-color implementation.
+The benchmark files were identical, baseline production was unchanged, and
+release runs used separate target directories on the Windows host above.
+All populations used ten samples, a 500 ms warm-up and a one-second measurement.
+Other host activity and CPU frequency remained uncontrolled.
+
+Criterion time estimates in microseconds (95% intervals in parentheses):
+
+| Operation | Owners / depth | Baseline | Current |
+|---|---:|---:|---:|
+| Stopped frame | 100 | 1.508 (1.477–1.536) | 1.635 (1.630–1.641) |
+| Stopped frame | 1,000 | 37.524 (31.590–42.132) | 33.062 (29.322–36.304) |
+| Stopped frame | 5,000 | 289.300 (279.610–298.110) | 261.809 (241.135–279.267) |
+| Stopped frame | 10,000 | 570.540 (528.860–603.440) | 638.878 (596.917–681.474) |
+| Active frame | 100 | 8.362 (7.531–9.074) | 7.394 (6.706–8.496) |
+| Active frame | 1,000 | 102.330 (86.196–119.390) | 97.139 (86.175–105.480) |
+| Active frame | 5,000 | 613.400 (560.140–703.090) | 701.020 (675.283–725.097) |
+| Active frame | 10,000 | 1,205.300 (1,052.400–1,404.200) | 1,461.036 (1,283.028–1,654.705) |
+| Nested active frame | 100 / 1 | 7.342 (6.742–8.418) | 7.913 (7.121–8.838) |
+| Nested active frame | 100 / 8 | 8.783 (7.459–9.958) | 9.185 (7.577–11.015) |
+| Nested active frame | 100 / 32 | 9.155 (8.282–9.787) | 10.087 (8.473–11.643) |
+| Nested active frame | 1,000 / 1 | 99.525 (87.466–106.350) | 115.918 (101.012–123.840) |
+| Nested active frame | 1,000 / 8 | 110.570 (97.225–122.410) | 118.837 (105.819–134.217) |
+| Nested active frame | 1,000 / 32 | 111.020 (96.406–120.480) | 109.481 (92.513–125.867) |
+| Frame with 10% active | 1,000 | 34.185 (31.861–39.612) | 41.432 (35.805–46.697) |
+| Retire all owners | 1,000 | 127.970 (112.860–136.840) | 132.810 (129.621–137.715) |
+| Retire all owners | 10,000 | 1,352.600 (1,247.700–1,458.800) | 2,123.230 (1,871.866–2,317.069) |
+
+The retirement row remains a profiling concern. A longer serial repeat with
+50 samples, a one-second warm-up and a three-second measurement produced
+1,551.1 µs (1,479.7–1,627.0) on the baseline and 1,918.3 µs
+(1,810.1–2,048.6) on the current implementation. These intervals do not overlap;
+the observed cost increase must not be described as performance parity.
+Same-version runs also varied substantially. The measurements do not isolate
+the cause, establish whole-frame latency or replace admission and retarget tests.
+
+Registry defaults are configured before Criterion parses command-line options,
+so longer samples can be requested without changing the timed workload:
+
+```bash
+cargo bench --locked -p flui-animation --bench vsync_registry -- unregister_all/10000 --sample-size 50 --measurement-time 3 --warm-up-time 1 --noplot
+```
+
+Earlier per-group configuration overrode these command-line options. Its
+reported ten-sample results above remain ten-sample results; they must not be
+relabelled as longer measurements.
+
 ## Measured benchmarks
+
+### Continuous color, 2026-10-11
+
+The byte-color baseline was `1a1720bb126b27c3a1e80bbb0a7f0c38d1b57dd0`;
+the candidate uses ADR-0194's normalized color storage. Both runs used the
+same `animation_bench.rs` source on the Windows host above, separate target
+directories, the optimized bench profile and six build jobs. Criterion used
+50 samples, a one-second warm-up and a three-second measurement. Runs were
+sequential; other host activity and CPU frequency were not controlled.
+
+Criterion time estimates in nanoseconds (95% intervals in parentheses):
+
+| Operation | Byte color | Continuous color |
+|---|---:|---:|
+| Mixed-alpha `ColorTween::transform` | 39.441 (39.223–39.642) | 118.62 (118.10–119.11) |
+| First advancing `AnimatedValue<Color>` frame after retarget | 288.90 (281.03–298.26) | 288.70 (281.73–296.36) |
+
+Continuous conversion makes the isolated tween approximately three times
+more expensive. The active property-frame intervals overlap. The latter
+workload constructs and retargets a fresh owner, primes its zero frame outside
+measurement, then advances one 60 Hz frame and reads its color. Batched
+bookkeeping remains part of the measurement; these are property-operation
+costs, not whole UI frames or image-filter throughput. The frame result does
+not establish a general absence of performance regressions.
+
+```bash
+cargo bench --locked -p flui-animation --bench animation_bench -- 'tween_transform/color|spring/animated_value_color_frame' --sample-size 50 --measurement-time 3 --warm-up-time 1 --noplot
+```
 
 The benchmark tables below are historical measurements from before the
 owner-local controller migration. They are not measurements of the current

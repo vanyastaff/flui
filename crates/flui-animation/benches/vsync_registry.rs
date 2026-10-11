@@ -52,9 +52,6 @@ fn assert_live_progress(
 /// `docs/PERFORMANCE.md` compare against.
 fn stopped_vsync_registry(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("stopped_vsync_registry");
-    group.sample_size(10);
-    group.warm_up_time(Duration::from_millis(500));
-    group.measurement_time(Duration::from_secs(1));
     for count in [100, 1_000, 5_000, 10_000] {
         let vsync = Vsync::new();
         let mut owners = Vec::with_capacity(count);
@@ -81,9 +78,6 @@ fn stopped_vsync_registry(criterion: &mut Criterion) {
 /// Admission and progress checks happen outside the measured loop.
 fn running_vsync_registry(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("running_vsync_registry");
-    group.sample_size(10);
-    group.warm_up_time(Duration::from_millis(500));
-    group.measurement_time(Duration::from_secs(1));
     for count in [100, 1_000, 5_000, 10_000] {
         let vsync = Vsync::new();
         let mut owners = Vec::with_capacity(count);
@@ -120,9 +114,6 @@ fn running_vsync_registry(criterion: &mut Criterion) {
 /// the cost of reentrant ancestor validation that flat registries cannot price.
 fn nested_vsync_registry(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("nested_vsync_registry");
-    group.sample_size(10);
-    group.warm_up_time(Duration::from_millis(500));
-    group.measurement_time(Duration::from_secs(1));
     for count in [100, 1_000] {
         for depth in [1, 8, 32] {
             let root = Vsync::new();
@@ -175,9 +166,6 @@ fn mixed_vsync_registry(criterion: &mut Criterion) {
     const RUNNING: u32 = COUNT / 10;
 
     let mut group = criterion.benchmark_group("mixed_vsync_registry");
-    group.sample_size(10);
-    group.warm_up_time(Duration::from_millis(500));
-    group.measurement_time(Duration::from_secs(1));
 
     let vsync = Vsync::new();
     let mut owners = Vec::with_capacity(COUNT as usize);
@@ -224,9 +212,6 @@ fn mixed_vsync_registry(criterion: &mut Criterion) {
 /// LargeInput bounds the number of full registries constructed simultaneously.
 fn unregister_all(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("unregister_all");
-    group.sample_size(10);
-    group.warm_up_time(Duration::from_millis(500));
-    group.measurement_time(Duration::from_secs(1));
     for count in [1_000, 10_000] {
         group.bench_with_input(BenchmarkId::from_parameter(count), &count, |bench, _| {
             bench.iter_batched(
@@ -258,8 +243,12 @@ fn unregister_all(criterion: &mut Criterion) {
 }
 
 criterion_group!(
-    benches,
-    stopped_vsync_registry,
+    name = benches;
+    config = Criterion::default()
+        .sample_size(10)
+        .warm_up_time(Duration::from_millis(500))
+        .measurement_time(Duration::from_secs(1));
+    targets = stopped_vsync_registry,
     running_vsync_registry,
     nested_vsync_registry,
     mixed_vsync_registry,
