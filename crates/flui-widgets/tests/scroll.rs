@@ -609,6 +609,281 @@ pub(crate) fn scrollable_jump_to_during_animate_to_cancels_it_synchronously() {
 // Scrollbar — thumb drag
 // ============================================================================
 
+pub(crate) fn replacing_pending_scroll_motion_delivers_and_recovers_after_user_failure() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct RetiringCurve {
+        drops: Arc<AtomicUsize>,
+        fails: bool,
+    }
+
+    impl flui_animation::Curve for RetiringCurve {
+        fn transform(&self, progress: f64) -> f64 {
+            curves::LINEAR.transform(progress)
+        }
+    }
+
+    impl Drop for RetiringCurve {
+        fn drop(&mut self) {
+            self.drops.fetch_add(1, Ordering::SeqCst);
+            assert!(!self.fails, "pending scroll curve retirement failure");
+        }
+    }
+
+    struct RetiringObserver(Arc<AtomicUsize>);
+    impl RetiringObserver {
+        fn observe(&self) {
+            assert_eq!(self.0.load(Ordering::SeqCst), 0);
+        }
+    }
+    impl Drop for RetiringObserver {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    for jumps in [false, true] {
+        for (retirement_fails, notification_fails) in
+            [(false, false), (true, false), (false, true), (true, true)]
+        {
+            let controller = ScrollController::new();
+            controller.update_dimensions(300.0, 0.0, 4700.0);
+            let drops = Arc::new(AtomicUsize::new(0));
+            controller.animate_to(
+                100.0,
+                Duration::from_secs(1),
+                ArcCurve::new(RetiringCurve {
+                    drops: Arc::clone(&drops),
+                    fails: retirement_fails,
+                }),
+            );
+            let attempts = Rc::new(Cell::new(0));
+            let calls = Rc::clone(&attempts);
+            let listenable = controller.as_listenable();
+            let listener = listenable.add_listener(Rc::new(move || {
+                calls.set(calls.get() + 1);
+                assert!(!notification_fails, "pending scroll notification failure");
+            }));
+            let observer_drops = Arc::new(AtomicUsize::new(0));
+            let observer = RetiringObserver(Arc::clone(&observer_drops));
+            let identity = Rc::new(Cell::new(None));
+            let owned_identity = Rc::clone(&identity);
+            let removal = Rc::clone(&listenable);
+            let self_removing = listenable.add_listener(Rc::new(move || {
+                observer.observe();
+                removal.remove_listener(owned_identity.take().expect("registered observer"));
+            }));
+            identity.set(Some(self_removing));
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if jumps {
+                    controller.jump_to(200.0);
+                } else {
+                    controller.animate_to(
+                        200.0,
+                        Duration::from_secs(1),
+                        ArcCurve::new(curves::LINEAR),
+                    );
+                }
+            }));
+            assert_eq!(
+                drops.load(Ordering::SeqCst),
+                usize::from(!(jumps && notification_fails)),
+                "jump notification failure retains opaque outgoing ownership"
+            );
+            assert_eq!(attempts.get(), 1, "accepted replacement is delivered");
+            assert_eq!(
+                observer_drops.load(Ordering::SeqCst),
+                usize::from(!notification_fails && (jumps || !retirement_fails)),
+                "observer retirement inherits the enclosing failure custody"
+            );
+            if retirement_fails || notification_fails {
+                assert_scroll_failure(
+                    &outcome.expect_err("authored failure propagates after delivery"),
+                    if retirement_fails && !(jumps && notification_fails) {
+                        "pending scroll curve retirement failure"
+                    } else {
+                        "pending scroll notification failure"
+                    },
+                );
+            } else {
+                assert!(outcome.is_ok(), "healthy replacement completes");
+            }
+            listenable.remove_listener(listener);
+            let mut laid = fling_scoped(
+                Scrollable::new()
+                    .controller(controller.clone())
+                    .child(SizedBox::new(300.0, 5000.0)),
+                Vsync::new(),
+                tight(300.0, 300.0),
+            );
+            laid.pump_for(Duration::ZERO);
+            laid.pump_for(Duration::from_secs(2));
+            assert_eq!(
+                controller.pixels(),
+                200.0,
+                "mounted consumer keeps accepted command"
+            );
+            controller.jump_to(75.0);
+            controller.animate_to(280.0, Duration::from_secs(1), ArcCurve::new(curves::LINEAR));
+            laid.pump_for(Duration::ZERO);
+            laid.pump_for(Duration::from_millis(400));
+            assert!(
+                controller.pixels() > 75.0 && controller.pixels() < 280.0,
+                "a fresh mounted run advances after containment"
+            );
+            laid.pump_for(Duration::from_secs(2));
+            assert_eq!(controller.pixels(), 280.0, "fresh motion completes");
+        }
+    }
+}
+
+pub(crate) fn stopping_scroll_motion_preserves_commands_admitted_by_activity_observers() {
+    for newer_jumps in [false, true] {
+        let controller = ScrollController::new();
+        let mut laid = fling_scoped(
+            Scrollable::new()
+                .controller(controller.clone())
+                .child(SizedBox::new(300.0, 5000.0)),
+            Vsync::new(),
+            tight(300.0, 300.0),
+        );
+        controller.animate_to(
+            1000.0,
+            Duration::from_secs(1),
+            ArcCurve::new(curves::LINEAR),
+        );
+        laid.pump_for(Duration::ZERO);
+        laid.pump_for(Duration::from_millis(200));
+        assert!(
+            controller.pixels() > 0.0 && controller.position().is_scrolling(),
+            "mounted driver is active before cancellation"
+        );
+        let armed = Rc::new(Cell::new(true));
+        let once = Rc::clone(&armed);
+        let reentry = controller.clone();
+        let listener = controller
+            .position()
+            .add_activity_listener(Rc::new(move || {
+                if !reentry.position().is_scrolling() && once.replace(false) {
+                    if newer_jumps {
+                        reentry.jump_to(325.0);
+                    } else {
+                        reentry.animate_to(
+                            275.0,
+                            Duration::from_secs(1),
+                            ArcCurve::new(curves::LINEAR),
+                        );
+                    }
+                }
+            }));
+        controller.jump_to(200.0);
+        assert!(
+            !armed.get(),
+            "actual cancellation delivered the activity callback"
+        );
+        if newer_jumps {
+            assert_eq!(
+                controller.pixels(),
+                325.0,
+                "newer jump survives outer cancellation"
+            );
+        }
+        laid.pump_for(Duration::ZERO);
+        laid.pump_for(Duration::from_secs(2));
+        assert_eq!(
+            controller.pixels(),
+            if newer_jumps { 325.0 } else { 275.0 },
+            "newer mounted command survives the older cancellation tail"
+        );
+        controller.position().remove_activity_listener(listener);
+    }
+}
+
+pub(crate) fn retiring_scroll_curves_preserves_newer_reentrant_commands() {
+    use std::cell::RefCell;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    thread_local! {
+        static REENTRY: RefCell<Option<(ScrollController, bool)>> = const { RefCell::new(None) };
+    }
+    struct ReentrantCurve(Arc<AtomicUsize>);
+    impl flui_animation::Curve for ReentrantCurve {
+        fn transform(&self, progress: f64) -> f64 {
+            curves::LINEAR.transform(progress)
+        }
+    }
+    impl Drop for ReentrantCurve {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            let (controller, jumps) = REENTRY
+                .with(|slot| slot.borrow_mut().take())
+                .expect("armed owner-local curve retirement");
+            if jumps {
+                controller.jump_to(325.0);
+            } else {
+                controller.animate_to(275.0, Duration::from_secs(1), ArcCurve::new(curves::LINEAR));
+            }
+        }
+    }
+    for mounted in [false, true] {
+        for outer_jumps in [false, true] {
+            for newer_jumps in [false, true] {
+                let controller = ScrollController::new();
+                controller.update_dimensions(300.0, 0.0, 4700.0);
+                let drops = Arc::new(AtomicUsize::new(0));
+                let content = || {
+                    Scrollable::new()
+                        .controller(controller.clone())
+                        .child(SizedBox::new(300.0, 5000.0))
+                };
+                let mut mounted_scene =
+                    mounted.then(|| fling_scoped(content(), Vsync::new(), tight(300.0, 300.0)));
+                controller.animate_to(
+                    100.0,
+                    Duration::from_secs(1),
+                    ArcCurve::new(ReentrantCurve(Arc::clone(&drops))),
+                );
+                if let Some(laid) = &mut mounted_scene {
+                    laid.pump_for(Duration::ZERO);
+                    laid.pump_for(Duration::from_millis(200));
+                    assert!(
+                        controller.position().is_scrolling(),
+                        "custom curve drives mounted motion"
+                    );
+                }
+                REENTRY.with(|slot| *slot.borrow_mut() = Some((controller.clone(), newer_jumps)));
+                if outer_jumps {
+                    controller.jump_to(200.0);
+                } else {
+                    controller.animate_to(
+                        200.0,
+                        Duration::from_secs(1),
+                        ArcCurve::new(curves::LINEAR),
+                    );
+                }
+                assert_eq!(
+                    drops.load(Ordering::SeqCst),
+                    1,
+                    "outgoing destruction actually reenters"
+                );
+                assert!(REENTRY.with(|slot| slot.borrow().is_none()));
+                let mut laid = mounted_scene
+                    .unwrap_or_else(|| fling_scoped(content(), Vsync::new(), tight(300.0, 300.0)));
+                laid.pump_for(Duration::ZERO);
+                laid.pump_for(Duration::from_secs(2));
+                let expected = if newer_jumps { 325.0 } else { 275.0 };
+                assert_eq!(
+                    controller.pixels(),
+                    expected,
+                    "mounted consumer retains the newest command"
+                );
+                laid.pump_for(Duration::from_secs(2));
+                assert_eq!(controller.pixels(), expected, "older command cannot resume");
+            }
+        }
+    }
+}
+
 pub(crate) fn scrollbar_thumb_stays_inside_short_tracks_and_drag_remains_bounded() {
     fn short_track() {
         assert_scrollbar_track(10.0);

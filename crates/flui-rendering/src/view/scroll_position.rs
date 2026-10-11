@@ -427,14 +427,17 @@ impl Inner {
     /// there is exactly one place that decides who gets told.
     fn notify(&self) {
         let mut recovery = flui_foundation::panic::PanicRecovery::new();
-        self.notifier
-            .notify_listeners_with_recovery(&mut recovery.scope());
+        self.notify_with_recovery(&mut recovery.scope());
+        recovery.finish();
+    }
+
+    fn notify_with_recovery(&self, recovery: &mut flui_foundation::panic::RecoveryScope<'_>) {
+        self.notifier.notify_listeners_with_recovery(recovery);
         // Accepted pixel geometry must reach render invalidation even when a
         // widget listener failed. Both channels share the first failure and
         // the existing notifier's live-membership and retirement rules.
         self.offset_notifier
-            .notify_listeners_with_recovery(&mut recovery.scope());
-        recovery.finish();
+            .notify_listeners_with_recovery(recovery);
     }
 
     /// Mark the extents dirty and, if a flush handle is installed and no
@@ -688,6 +691,18 @@ impl ScrollPosition {
     /// `ScrollController::jump_to` clamps to the current extents before
     /// calling this.
     pub fn set_pixels(&self, value: f64) {
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        self.set_pixels_with_recovery(value, &mut recovery.scope());
+        recovery.finish();
+    }
+
+    /// Publish pixels within an enclosing framework operation's failure custody.
+    #[doc(hidden)]
+    pub fn set_pixels_with_recovery(
+        &self,
+        value: f64,
+        recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
+    ) {
         let changed = {
             let mut state = self.inner.state.borrow_mut();
             if (state.pixels - value).abs() > f64::EPSILON {
@@ -698,7 +713,7 @@ impl ScrollPosition {
             }
         };
         if changed {
-            self.notify();
+            self.notify_with_recovery(recovery);
         }
     }
 
@@ -723,6 +738,12 @@ impl ScrollPosition {
     /// `set_pixels` path, which never schedules one.
     pub fn notify(&self) {
         self.inner.notify();
+    }
+
+    /// Deliver both notification channels within shared framework failure custody.
+    #[doc(hidden)]
+    pub fn notify_with_recovery(&self, recovery: &mut flui_foundation::panic::RecoveryScope<'_>) {
+        self.inner.notify_with_recovery(recovery);
     }
 
     // ========== Scroll activity ==========

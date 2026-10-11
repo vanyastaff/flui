@@ -96,6 +96,12 @@ The public widget row
 checks render notification after a value failure, live ancestor reveal and a
 fresh request after recovery.
 
+Framework command operations can lend their RecoveryScope to pixel publication
+and both notification channels. They do not start an independent healthy
+receipt after an earlier command-retirement failure. The mounted widget row
+`replacing_pending_scroll_motion_delivers_and_recovers_after_user_failure`
+checks inherited custody with a self-removing observer's actual destructor.
+
 ### Ordinary text rejection remains a layout error
 
 Typed and erased child layout, intrinsic, dry-layout and baseline queries

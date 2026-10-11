@@ -2643,7 +2643,7 @@ listener and cancellation hook. A stopped trajectory cannot transfer its old
 metrics to the new position. Rebuilding with the same identity preserves the
 run. Cancellation hooks have an owning attachment: detaching or disposing an
 older attachment removes its hook and pending command only if that hook is
-still installed. Hook comparison/take is under the private lock; retired hooks,
+still installed. Hook comparison/take is under a short owner-local borrow; retired hooks,
 command values and animation callbacks retire or execute after it is released.
 This does not introduce multi-position commands or arbitration between several
 scrollables driving one position. The public rows
@@ -2651,6 +2651,22 @@ scrollables driving one position. The public rows
 `a_same_position_scrollable_rebuild_preserves_motion` and
 `retiring_one_scrollable_preserves_a_later_owners_jump_hook` exercise virtual
 frames, retired-controller commands and a shared-controller detach.
+
+Pending commands and cancellation hooks use owner-local cells. Replacement
+extracts the outgoing command before user destruction. A jump publishes pixels
+before that destruction, preserving a newer reentrant jump or animation. Queued
+animation replacement retires the displaced curve before notifying the latest
+command. Both notification channels and outgoing ownership share ADR-0178's
+first-failure custody. `replacing_pending_scroll_motion_delivers_and_recovers_after_user_failure`
+checks individual and competing failures, self-removing observer retirement and
+subsequent mounted motion. `retiring_scroll_curves_preserves_newer_reentrant_commands`
+checks pending and active curves with both command kinds through actual
+Scrollable frames. Each admission has a live pointer identity that remains
+after its command is serviced. A jump commits before invoking its stop hook
+and publishes pixels only while still current, so callback reentry can
+supersede it without stale writes. The public row
+`stopping_scroll_motion_preserves_commands_admitted_by_activity_observers`
+checks commands admitted by actual mounted cancellation callbacks.
 
 An actual position change in `Scrollable` or `RefreshIndicator` also replaces
 the private detector ownership identity. Incoming recognizers and mounted weak

@@ -83,6 +83,19 @@ dispatch borrows separate state storage, so a callback cannot accidentally
 extend the wrapper's owning lifetime. A last owner released by its own listener
 silences the rest of that round, including during an earlier parent failure.
 
+Pending scroll commands are owner-local. Replacement commits the incoming
+command and extracts outgoing ownership before invoking its curve's destructor.
+ScrollPosition's widget and viewport notifications borrow the enclosing
+command operation's RecoveryScope, so a retirement failure cannot erase
+accepted delivery or make observer retirement appear healthy. Each command
+admission owns a fresh pointer identity; the pending slot retains that identity
+after servicing, with no wrapping counter. A jump commits before calling its
+driver's cancellation hook and publishes pixels only if still current after
+that callback. It publishes before retiring the displaced pending command;
+a newer command admitted by that retirement remains authoritative. For a
+queued animation, retirement precedes the wake that services the latest command.
+Both paths complete accepted delivery before resuming their first failure.
+
 During a notification, outgoing callback ownership waits until the outermost
 round retires it. Snapshot and outgoing captures retire outside state borrows,
 in registration order, while the failure context is still authoritative. Healthy

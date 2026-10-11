@@ -300,6 +300,9 @@ fn scroll_physics_and_activity() {
     run_cases(
         "scroll_physics_and_activity",
         &[
+            ("scroll::replacing_pending_scroll_motion_delivers_and_recovers_after_user_failure", crate::scroll::replacing_pending_scroll_motion_delivers_and_recovers_after_user_failure),
+            ("scroll::retiring_scroll_curves_preserves_newer_reentrant_commands", crate::scroll::retiring_scroll_curves_preserves_newer_reentrant_commands),
+            ("scroll::stopping_scroll_motion_preserves_commands_admitted_by_activity_observers", crate::scroll::stopping_scroll_motion_preserves_commands_admitted_by_activity_observers),
             ("scroll::scrollable_accessibility_ranges_follow_the_actual_axis", crate::scroll::scrollable_accessibility_ranges_follow_the_actual_axis),
             ("scroll::terminal_scroll_motion_uses_the_admitted_fling_profile", crate::scroll::terminal_scroll_motion_uses_the_admitted_fling_profile as fn()),
             ("scroll::terminal_refresh_motion_uses_the_admitted_fling_profile", crate::scroll::terminal_refresh_motion_uses_the_admitted_fling_profile),
