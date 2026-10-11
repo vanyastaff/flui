@@ -564,6 +564,7 @@ fn animation_and_visibility() {
     run_cases(
         "animation_and_visibility",
         &[
+            ("frame_partitions::mounted_motion_reaches_equal_scenes_across_frame_partitions", crate::frame_partitions::mounted_motion_reaches_equal_scenes_across_frame_partitions as fn()),
             ("dismissible::dismissal_release_uses_its_captured_fling_profile", crate::dismissible::dismissal_release_uses_its_captured_fling_profile as fn()),
             ("dismissible::vertical_dismissal_release_uses_its_captured_fling_profile", crate::dismissible::vertical_dismissal_release_uses_its_captured_fling_profile),
             ("dismissible::cancelling_a_fully_slid_card_restores_it_without_dismissal", crate::dismissible::cancelling_a_fully_slid_card_restores_it_without_dismissal as fn()),
