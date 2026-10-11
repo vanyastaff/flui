@@ -1826,8 +1826,10 @@ impl GestureArena {
     /// by retained slots in generation order and explicit timer registrations
     /// in registration order.
     ///
-    /// Complexity: O(P + M) where P is the number of open arenas and M the
-    /// total active members. The standalone arena imposes no admission cap;
+    /// Snapshot complexity: O(P + M * U), where P counts active and retained
+    /// slots, M counts memberships and timer registrations, and U counts unique
+    /// member identities. Identity deduplication scans the collected members.
+    /// The standalone arena imposes no admission cap;
     /// the binding limits admitted simultaneous contacts, not members per contact.
     pub fn poll_deadlines(&self) {
         if self.owner_closed.get() {
