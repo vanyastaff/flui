@@ -6,6 +6,16 @@ use super::{AnimationController, AnimationControllerInner};
 use crate::{AnimationError, AnimationInput};
 
 impl AnimationController {
+    /// Direct assignment canonicalizes bounded non-finite values and ignores
+    /// them when unbounded. A validated range always has two finite endpoints;
+    /// an unbounded configuration has two infinite endpoints.
+    pub(super) fn canonicalize_direct_value(raw: f64, lower: f64, upper: f64) -> Option<f64> {
+        if !raw.is_finite() && !lower.is_finite() {
+            return None;
+        }
+        Some(if raw.is_nan() { lower } else { raw }.clamp(lower, upper))
+    }
+
     pub(super) fn check_disposed(inner: &AnimationControllerInner) -> Result<(), AnimationError> {
         if inner.disposed {
             Err(AnimationError::Disposed)

@@ -223,7 +223,7 @@ impl SimulationRun {
 /// mid-run ends the run; it is neither canonicalized nor ignored).
 #[derive(Debug, Clone, Copy)]
 enum NonFiniteOutcome {
-    /// Bounded `set_value`: canonicalized to the bound it points at
+    /// Bounded initialization or `set_value`: canonicalized to the bound it points at
     /// (`NaN` -> lower bound, `+-inf` -> whichever bound it points at).
     Canonicalized,
     /// Unbounded `set_value`: a full no-op — value untouched.
@@ -532,11 +532,28 @@ impl AnimationController {
             .map_or((f64::NEG_INFINITY, f64::INFINITY, 0.0), |range| {
                 (range.lower(), range.upper(), range.lower())
             });
-        let value = initial
-            .filter(|value| value.is_finite())
-            .unwrap_or(default)
-            .clamp(lower, upper);
-        Self::new_inner(duration, lower, upper, value, behavior)
+        let raw = initial.unwrap_or(default);
+        let canonical = Self::canonicalize_direct_value(raw, lower, upper);
+        let controller = Self::new_inner(
+            duration,
+            lower,
+            upper,
+            canonical.unwrap_or(default),
+            behavior,
+        );
+        if !raw.is_finite() {
+            controller.inner.borrow_mut().non_finite_warned = true;
+            Self::warn_non_finite_value(
+                true,
+                raw,
+                if canonical.is_some() {
+                    NonFiniteOutcome::Canonicalized
+                } else {
+                    NonFiniteOutcome::Ignored
+                },
+            );
+        }
+        controller
     }
 
     pub(crate) fn last_elapsed(&self) -> Duration {
@@ -2332,35 +2349,24 @@ impl AnimationController {
             return;
         }
 
+        let should_warn = !value.is_finite() && !inner.non_finite_warned;
         if !value.is_finite() {
-            let should_warn = !inner.non_finite_warned;
             inner.non_finite_warned = true;
-
-            if inner.is_unbounded() {
-                drop(inner);
-                Self::warn_non_finite_value(should_warn, value, NonFiniteOutcome::Ignored);
-                return;
-            }
-
-            let delivery = inner.stop_running(&mut retired);
-            let canonical = if value.is_nan() {
-                inner.lower_bound
-            } else {
-                value
-            };
-            inner.value = canonical.clamp(inner.lower_bound, inner.upper_bound);
-            let status = inner.settled_status_keep_direction();
-            inner.status = status;
-            self.deliver_transition(status, ValueChange::Notify, delivery, retired, inner);
-            Self::warn_non_finite_value(should_warn, value, NonFiniteOutcome::Canonicalized);
-            return;
         }
+        let Some(canonical) =
+            Self::canonicalize_direct_value(value, inner.lower_bound, inner.upper_bound)
+        else {
+            drop(inner);
+            Self::warn_non_finite_value(should_warn, value, NonFiniteOutcome::Ignored);
+            return;
+        };
 
         let delivery = inner.stop_running(&mut retired);
-        inner.value = value.clamp(inner.lower_bound, inner.upper_bound);
+        inner.value = canonical;
         let status = inner.settled_status_keep_direction();
         inner.status = status;
         self.deliver_transition(status, ValueChange::Notify, delivery, retired, inner);
+        Self::warn_non_finite_value(should_warn, value, NonFiniteOutcome::Canonicalized);
     }
 
     /// Close the kernel and cancel its run under the owning lifecycle's recovery.
@@ -2452,10 +2458,10 @@ impl AnimationController {
         retirement.finish();
     }
 
-    /// Emits the "received a non-finite value" warning shared by
+    /// Emits the "received a non-finite value" warning shared by initialization,
     /// [`set_value`](Self::set_value)'s canonicalization and
     /// [`tick_simulation`](Self::tick_simulation)'s mid-run non-finite
-    /// sample — call only after transition delivery releases its borrow,
+    /// sample — call only after releasing all controller borrows,
     /// so an arbitrary subscriber can reenter the controller.
     /// `should_warn` is the caller's snapshot of the latch
     /// (`!non_finite_warned`, taken before setting it) — this fires at most

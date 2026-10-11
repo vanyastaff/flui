@@ -100,7 +100,7 @@ pub enum SimulationError {
     OutOfRange {
         /// The refused input.
         parameter: SimulationParameter,
-        /// Its value (a duration in seconds).
+        /// The refused numeric value; duration inputs are expressed in seconds.
         #[cfg_attr(feature = "serde", serde(with = "crate::error::diagnostic_number"))]
         value: f64,
     },

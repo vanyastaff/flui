@@ -751,6 +751,18 @@ as a wide-open one: nothing in this workspace needs it, and allowing it
 would make the "bounded means finite" rule incidental complexity with no
 consumer.
 
+**Explicit initial values share direct-assignment canonicalization.** A finite
+input clamps to the configured range. For bounded controllers, NaN and negative
+infinity select the lower endpoint; positive infinity selects the upper endpoint.
+For unbounded controllers, non-finite inputs retain the default zero. A shared
+pure helper applies this rule at construction and in `set_value`; construction
+does not invoke the assignment command's notification or cancellation machinery.
+The finite state and warning latch are committed before calling diagnostics,
+with no controller borrow held. Non-finite initialization and subsequent direct
+assignments share the once-per-controller warning. `controller_builder_contract`
+pins all six bounded/unbounded non-finite cases, warning count and subsequent
+successful motion.
+
 **Initial value and status, and a recorded cost.** `value = 0.0`
 (never `lower_bound`, which is `-inf`). The initial `status` is computed by
 the SAME rule `set_value` applies,

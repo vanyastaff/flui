@@ -112,8 +112,10 @@ impl AnimationControllerBuilder {
         self
     }
 
-    /// Initial value, clamped to the range. Non-finite values use the lower
-    /// endpoint for bounded controllers or zero for unbounded controllers.
+    /// Initial value, using the same rule as [`AnimationController::set_value`].
+    /// Finite values clamp to the range; bounded NaN uses the lower endpoint
+    /// and infinities use the endpoint they point toward. Unbounded non-finite
+    /// inputs retain zero. Non-finite inputs warn once per controller.
     #[must_use]
     pub fn initial_value(mut self, value: f64) -> Self {
         self.initial_value = Some(value);
