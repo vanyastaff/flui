@@ -168,6 +168,23 @@ Reentrant focus requests are admitted to a synchronous FIFO. Committed observer
 rounds and accepted requests complete before the first observer failure resumes.
 Focus closure commits terminal ownership before retiring callbacks and contexts.
 
+For a shortcut whose lifetime follows a widget or plugin, retain its scoped
+registration. Dropping it withdraws only that registration; the token does not
+keep the manager alive. Presentation-wide handlers can instead use the explicit
+`add_global_key_handler` lifetime.
+
+```rust
+use std::rc::Rc;
+use flui_interaction::{FocusManager, KeyEventResult};
+
+let manager = FocusManager::new();
+let shortcut = manager.register_global_key_handler(Rc::new(|_event| {
+    // Match the desired key here before returning Handled.
+    KeyEventResult::Ignored
+})).expect("the presentation is open and identity is available");
+drop(shortcut); // No sibling registration is removed.
+```
+
 ## Hit testing and cursors
 
 `HitTestResult` records data-only target identities and global-to-local
@@ -202,6 +219,12 @@ let tap = TapGestureRecognizer::builder(GestureArena::new())
 
 Processing includes bounded velocity estimation, frame resampling and explicit
 pointer smoothing filters. Hardware predictions remain separate source samples.
+OneEuro construction and filtering return typed errors. Invalid input leaves
+accepted history unchanged; the 2D filter commits both axes together, and a
+duplicate or regressed timestamp holds its accepted result and clock anchor.
+See [the pointer filtering example](examples/pointer_filtering.rs) for tuning
+and sample admission. Interpolating a position keeps the preceding measured
+sensor reading, including missing pressure; it does not measure a new pressure.
 Recognizers use event timing anchored to their arena
 clock; replayed sample spacing determines the gesture's velocity.
 Gesture scripts and virtual-time replay live in `flui-testing`; the `testing`
