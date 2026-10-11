@@ -7,8 +7,9 @@
 //! Expected values are fixed by the documented contract, not by running this
 //! code.
 //!
-//! These drive the animation by hand, through the temporary test-access probe
-//! `RouteProbe::transition_handle()` (ADR-0083 §4).
+//! Most rows drive the animation by hand through the temporary test-access
+//! probe `RouteProbe::transition_handle()` (ADR-0083 §4). The separate entrance
+//! and exit duration row uses public route configuration and submitted paint.
 
 use flui_animation::{Animation, AnimationStatus};
 use flui_view::prelude::*;
@@ -84,6 +85,90 @@ pub(crate) fn page_route_occludes_the_route_below_once_its_transition_completes(
         !bottom_entry.is_mounted(),
         "the covered route has no maintain_state, so it left the tree"
     );
+}
+
+/// Public route configuration controls both directions of the submitted fade.
+pub(crate) fn page_route_paints_its_separate_entrance_and_exit_durations() {
+    use std::{rc::Rc, time::Duration};
+
+    use flui_animation::Vsync;
+    use flui_painting::{display_list::DrawOp, styling::Color};
+    use flui_rendering::layer::Layer;
+    use flui_widgets::{ColoredBox, FadeTransition, VsyncScope};
+
+    fn painted_alpha(app: &crate::common::LaidOut) -> Option<f64> {
+        let scene = app.layer_tree().expect("submitted page scene");
+        let mut alpha = 1.0;
+        let mut page_is_painted = false;
+        for (_, node) in scene.iter() {
+            match node.layer() {
+                Layer::Opacity(layer) => alpha *= layer.alpha(),
+                Layer::Picture(picture) => {
+                    for command in picture.picture() {
+                        if let DrawOp::Rect { rect, paint } = &command.op
+                            && paint.color == Color::RED
+                        {
+                            assert!(rect.width() > 0.0 && rect.height() > 0.0);
+                            page_is_painted = true;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        page_is_painted.then_some(alpha)
+    }
+
+    for (entrance, exit) in [(1000, 2000), (2000, 1000)] {
+        let registry = Vsync::new();
+        let navigator = NavigatorHandle::new();
+        navigator.seed_initial(plain_page());
+        let mut app = crate::common::lay_out_animated(
+            VsyncScope::new(registry.clone(), Navigator::new(navigator.clone())),
+            crate::common::tight(200.0, 100.0),
+            registry.clone(),
+        );
+        let _result = navigator.push(
+            PageRoute::<i32>::new(|_, _, _| {
+                ColoredBox::new(Color::RED)
+                    .child(SizedBox::new(80.0, 40.0))
+                    .into_view()
+                    .boxed()
+            })
+            .transitions(|_, animation, _, child| {
+                FadeTransition::new(Rc::clone(animation), child)
+                    .into_view()
+                    .boxed()
+            })
+            .transition_duration(Duration::from_millis(entrance))
+            .reverse_transition_duration(Duration::from_millis(exit)),
+        );
+        app.pump_for(Duration::ZERO);
+        app.pump_for(Duration::from_millis(entrance / 2));
+        let halfway = painted_alpha(&app).expect("entering page is painted");
+        assert!(
+            (halfway - 0.5).abs() < 1e-12,
+            "entrance {entrance}: {halfway}"
+        );
+        assert!(registry.has_running());
+        app.pump_for(Duration::from_millis(entrance / 2));
+        assert_eq!(painted_alpha(&app), Some(1.0));
+        assert!(!registry.has_running());
+
+        assert!(navigator.pop());
+        app.pump_for(Duration::ZERO);
+        app.pump_for(Duration::from_millis(exit / 2));
+        let halfway = painted_alpha(&app).expect("exiting page remains painted");
+        assert!((halfway - 0.5).abs() < 1e-12, "exit {exit}: {halfway}");
+        assert!(registry.has_running(), "the exit has not finished early");
+        app.pump_for(Duration::from_millis(exit / 2));
+        app.tick();
+        assert_eq!(painted_alpha(&app), None, "the exited page is retired");
+        assert!(registry.is_empty(), "retirement withdraws the route owner");
+        let _next = navigator.push(plain_page());
+        app.tick();
+        assert_eq!(navigator.route_ids().len(), 2, "navigation remains usable");
+    }
 }
 
 // ============================================================================

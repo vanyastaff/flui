@@ -471,6 +471,7 @@ fn route_transitions() {
             ("modal_route::modal_barrier_absorbs_pointers_and_a_dismissible_one_adds_a_gesture_detector", crate::modal_route::modal_barrier_absorbs_pointers_and_a_dismissible_one_adds_a_gesture_detector as fn()),
             ("modal_route::modal_opaque_route_occludes_the_route_below_once_its_transition_completes", crate::modal_route::modal_opaque_route_occludes_the_route_below_once_its_transition_completes),
             ("page_route::page_route_occludes_the_route_below_once_its_transition_completes", crate::page_route::page_route_occludes_the_route_below_once_its_transition_completes),
+            ("page_route::page_route_paints_its_separate_entrance_and_exit_durations", crate::page_route::page_route_paints_its_separate_entrance_and_exit_durations),
             ("page_route::secondary_animation_runs_on_the_previous_page_route_when_pushing_and_popping", crate::page_route::secondary_animation_runs_on_the_previous_page_route_when_pushing_and_popping),
             ("transition_route::push_transition_parks_the_entry_in_pushing_until_the_controller_completes", crate::transition_route::push_transition_parks_the_entry_in_pushing_until_the_controller_completes),
             ("transition_route::scope_replacement_moves_an_existing_route_without_restarting_it", crate::transition_route::scope_replacement_moves_an_existing_route_without_restarting_it),
