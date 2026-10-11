@@ -77,7 +77,7 @@ fn first_multidrag_update_reports_observed_transformed_coordinates() {
                     button.sample.time = EventTime::from_nanos(millis * 1_000_000);
                 }
                 PointerEvent::Up(button) => {
-                    button.sample.time = EventTime::from_nanos(millis * 1_000_000)
+                    button.sample.time = EventTime::from_nanos(millis * 1_000_000);
                 }
                 PointerEvent::Move(movement) => {
                     let mut sample = *movement.current();

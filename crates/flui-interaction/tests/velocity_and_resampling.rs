@@ -592,7 +592,7 @@ fn interpolation_uses_the_bracketing_samples() {
 }
 
 fn interpolation_does_not_publish_future_sensor_readings() {
-    use flui_interaction::events::{PointerMove, PointerSample};
+    use flui_interaction::events::{PointerButtons, PointerMove, PointerSample};
     use flui_platform_api::{EventTime, pointer::Pressure};
 
     for (previous, next) in [(Some(0.2), Some(0.9)), (None, Some(0.9)), (Some(0.2), None)] {
@@ -609,7 +609,7 @@ fn interpolation_does_not_publish_future_sensor_readings() {
                     .expect("finite fixture"),
             );
             sample.pressure = pressure.map(|value| Pressure::try_new(value).expect("pressure"));
-            PointerEvent::Move(PointerMove::new(pointer, Default::default(), sample))
+            PointerEvent::Move(PointerMove::new(pointer, PointerButtons::default(), sample))
         };
         resampler.start_tracking();
         resampler.add_event_at(reading(0.0, 0, previous), at);

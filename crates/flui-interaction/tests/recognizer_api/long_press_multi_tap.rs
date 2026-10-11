@@ -44,10 +44,10 @@ fn press_event(raw: u64, position: Offset<f64>, nanos: u64, up: bool) -> Pointer
     };
     match &mut event {
         PointerEvent::Down(press) => {
-            press.sample.time = flui_platform_api::EventTime::from_nanos(nanos)
+            press.sample.time = flui_platform_api::EventTime::from_nanos(nanos);
         }
         PointerEvent::Up(release) => {
-            release.sample.time = flui_platform_api::EventTime::from_nanos(nanos)
+            release.sample.time = flui_platform_api::EventTime::from_nanos(nanos);
         }
         _ => unreachable!("fixture creates button edges"),
     }
@@ -84,10 +84,10 @@ fn long_press_payloads_preserve_spaces_history_and_terminal_time() {
         let end_log = Rc::clone(&ends);
         let recognizer = LongPressGestureRecognizer::builder(arena)
             .on_long_press_move_update(move |details: LongPressMoveUpdateDetails| {
-                update_log.borrow_mut().push(details)
+                update_log.borrow_mut().push(details);
             })
             .on_long_press_end(move |details: LongPressEndDetails| {
-                end_log.borrow_mut().push(details)
+                end_log.borrow_mut().push(details);
             })
             .build();
         let local_down = press_event(71, Offset::new(10.0, 0.0), 0, false);
@@ -182,7 +182,7 @@ fn long_press_overflow_and_callback_failure_allow_fresh_terminal_delivery() {
         recognizer.poll_deadline(clock.now());
         let up = press_event(72, Offset::ZERO, 500_000_000, true);
         let result = catch_unwind(AssertUnwindSafe(|| {
-            recognizer.handle_event(PointerDispatch::at_root(&up))
+            recognizer.handle_event(PointerDispatch::at_root(&up));
         }));
         if attempt == 0 {
             let failure = result.expect_err("end callback fails once");
@@ -240,7 +240,7 @@ fn long_press_clock_failure_preserves_first_failure_and_replacement() {
         let end_count = Rc::clone(&ends);
         let recognizer = LongPressGestureRecognizer::builder(arena)
             .on_long_press_cancel(move |_| {
-                assert!(!callback_fail.get(), "competing press cancellation failure")
+                assert!(!callback_fail.get(), "competing press cancellation failure");
             })
             .on_long_press_end(move |_| end_count.set(end_count.get() + 1))
             .build();
@@ -251,7 +251,7 @@ fn long_press_clock_failure_preserves_first_failure_and_replacement() {
         clock.armed.store(true, Ordering::Relaxed);
         let moved = press_move(73, &[(510_000_000, 1.0)], &[]);
         let failure = catch_unwind(AssertUnwindSafe(|| {
-            recognizer.handle_event(PointerDispatch::at_root(&moved))
+            recognizer.handle_event(PointerDispatch::at_root(&moved));
         }))
         .expect_err("clock fails");
         assert_eq!(

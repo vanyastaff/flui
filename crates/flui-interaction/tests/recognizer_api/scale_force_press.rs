@@ -286,15 +286,14 @@ fn force_history_preserves_thresholds_and_first_failure() {
         let recognizer = ForcePressGestureRecognizer::builder(arena.clone())
             .on_start(move |_| {
                 s.borrow_mut().push("start");
-                if first_start.replace(false) {
-                    panic!("first historical pressure failure");
-                }
+                assert!(
+                    !first_start.replace(false),
+                    "first historical pressure failure"
+                );
             })
             .on_peak(move |_| {
                 p.borrow_mut().push("peak");
-                if first_peak.replace(false) {
-                    panic!("later peak failure");
-                }
+                assert!(!first_peak.replace(false), "later peak failure");
             })
             .on_update(move |_| u.borrow_mut().push("update"))
             .on_end(move |_| e.borrow_mut().push("end"))
@@ -329,7 +328,7 @@ fn force_history_preserves_thresholds_and_first_failure() {
                 .with_predicted(vec![sample(1.0, 4)]),
             );
             let outcome = catch_unwind(AssertUnwindSafe(|| {
-                recognizer.handle_event(PointerDispatch::at_root(&packet))
+                recognizer.handle_event(PointerDispatch::at_root(&packet));
             }));
             if failing && attempt == 0 {
                 let failure = outcome.expect_err("first historical observer failure must escape");

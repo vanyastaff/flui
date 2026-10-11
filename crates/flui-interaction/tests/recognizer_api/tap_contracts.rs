@@ -60,7 +60,7 @@ fn tap_phase_payloads_preserve_button_families_and_spaces() {
                 details.global_position,
                 details.local_position,
                 details.kind,
-            ))
+            ));
         }
     };
     let up_callback = |family, phase| {
@@ -72,7 +72,7 @@ fn tap_phase_payloads_preserve_button_families_and_spaces() {
                 details.global_position,
                 details.local_position,
                 details.kind,
-            ))
+            ));
         }
     };
     let recognizer = TapGestureRecognizer::builder(arena.clone())

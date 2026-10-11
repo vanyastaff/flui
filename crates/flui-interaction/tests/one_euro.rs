@@ -161,7 +161,7 @@ fn fixed_cutoff_matches_a_known_scalar_step() {
     filter.filter(0.0, 0.0).expect("first sample");
     let output = filter.filter(10.0, 1.0).expect("finite step");
     assert!(
-        (output - 8.62697438301587).abs() < 1e-9,
+        (output - 8.626_974_383_015_87).abs() < 1e-9,
         "unexpected scalar step: {output}"
     );
 }
