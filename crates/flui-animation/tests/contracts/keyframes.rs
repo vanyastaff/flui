@@ -14,6 +14,7 @@ use flui_animation::{
     Animatable, Curve, JumpAt, Keyframes, KeyframesError, Lerp, Linear, Stagger, StaggerOrigin,
     Steps, TwoWayConverter, curves,
 };
+use flui_foundation::geometry::Rect;
 use proptest::prelude::*;
 
 fn ms(value: u64) -> Duration {
@@ -541,6 +542,50 @@ fn cubic_hits_a_late_keyframe_at_its_time() {
     assert_eq!(track.value_at(Duration::from_secs(1)), 1.0);
 }
 
+fn rectangle_tracks_animate_bounds_without_normalizing() {
+    for (start, end) in [
+        (
+            Rect::from_ltrb(10.0, 20.0, 40.0, 60.0),
+            Rect::from_ltrb(50.0, 60.0, 100.0, 120.0),
+        ),
+        (
+            Rect::from_ltrb(40.0, 60.0, 10.0, 20.0),
+            Rect::from_ltrb(100.0, 120.0, 50.0, 60.0),
+        ),
+        (
+            Rect::from_ltrb(10.0, 20.0, 10.0, 20.0),
+            Rect::from_ltrb(50.0, 60.0, 50.0, 60.0),
+        ),
+        (
+            Rect::from_ltrb(-1e308, 0.0, 1e308, 20.0),
+            Rect::from_ltrb(-1e308, 40.0, 1e308, 60.0),
+        ),
+    ] {
+        let track = Keyframes::builder(start, ms(1000))
+            .cubic(end, ms(1000))
+            .build()
+            .expect("finite bounds do not require a finite derived width");
+        assert_eq!(track.value_at(Duration::ZERO), start);
+        assert_eq!(track.value_at(ms(1000)), end);
+        let quarter = track.value_at(ms(250));
+        // Both endpoint tangents are zero, so h01(1/4) = 5/32.
+        for (actual, begin, finish) in [
+            (quarter.min.x, start.min.x, end.min.x),
+            (quarter.min.y, start.min.y, end.min.y),
+            (quarter.max.x, start.max.x, end.max.x),
+            (quarter.max.y, start.max.y, end.max.y),
+        ] {
+            let expected = if begin == finish {
+                begin
+            } else {
+                begin + (finish - begin) * (5.0 / 32.0)
+            };
+            assert!(actual.is_finite(), "bounds remain finite: {quarter:?}");
+            assert_close(actual, expected, "cubic rectangle bound");
+        }
+    }
+}
+
 fn cubic_hermite_midpoint() {
     // Keys 0, 1, 0 at 0, 1, 2 s. The end velocities are zero and the middle
     // tangent (0 − 0) / 2 s is zero, so each half is the Hermite basis
@@ -598,6 +643,10 @@ fn custom_slope_seeds_the_next_cubic() {
 fn cubic_keyframes_pass_through_keys() {
     crate::run_table(&[
         ("late keyframe", cubic_hits_a_late_keyframe_at_its_time),
+        (
+            "rectangle bounds preserve their geometry",
+            rectangle_tracks_animate_bounds_without_normalizing,
+        ),
         ("Hermite midpoint", cubic_hermite_midpoint),
         (
             "steps hand over no velocity",

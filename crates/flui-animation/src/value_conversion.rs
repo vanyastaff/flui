@@ -3,7 +3,7 @@
 //! [`TwoWayConverter`] separates value representation from motion and ownership.
 //! [`crate::AnimatedValue`] applies curves or springs to these components.
 
-use flui_foundation::geometry::{EdgeInsets, Offset, Size};
+use flui_foundation::geometry::{EdgeInsets, Offset, Rect, Size};
 use flui_painting::Alignment;
 use flui_painting::styling::{Color, PremultipliedOklab};
 
@@ -107,6 +107,27 @@ impl TwoWayConverter for Size<f64> {
     #[inline]
     fn from_vector(v: Self::Vector) -> Self {
         Size::new(v[0], v[1])
+    }
+}
+
+/// Animates the four bounds in `[left, top, right, bottom]` order, matching
+/// `Rect` interpolation. Inverted and degenerate rectangles remain unchanged
+/// by conversion; consumers own any nonnegative-size requirement.
+impl TwoWayConverter for Rect<f64> {
+    type Vector = [f64; 4];
+
+    fn rest_thresholds() -> Self::Vector {
+        [0.01; 4]
+    }
+
+    #[inline]
+    fn to_vector(&self) -> Self::Vector {
+        [self.min.x, self.min.y, self.max.x, self.max.y]
+    }
+
+    #[inline]
+    fn from_vector([left, top, right, bottom]: Self::Vector) -> Self {
+        Self::from_ltrb(left, top, right, bottom)
     }
 }
 

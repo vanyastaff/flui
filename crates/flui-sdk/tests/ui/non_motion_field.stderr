@@ -9,6 +9,7 @@ error[E0277]: the trait bound `String: TwoWayConverter` is not satisfied
             Text
             f64
             flui_sdk::geometry::Offset
+            flui_sdk::geometry::Rect
             flui_sdk::geometry::Size
             flui_sdk::painting::Alignment
             flui_sdk::painting::Color

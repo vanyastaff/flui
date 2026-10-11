@@ -22,13 +22,14 @@ their distances. The derive concatenates each field's thresholds in declaration
 order, including nested fields, without passing distances through `to_vector`.
 Nonlinear converters do not generally preserve errors under value conversion.
 
-Offset, size and insets use 0.01 logical pixels. Scalar, alignment and
-premultiplied Oklab components use 0.001 in their representation's units. These
+Offset, size, rectangle bounds and insets use 0.01 logical pixels. Scalar,
+alignment and premultiplied Oklab components use 0.001 in their representation's units. These
 are conservative type defaults, not a device-pixel visibility guarantee. A
 converter for a different unit or precision selects its own distances. The
 existing Hermite rest transition bounds its remaining displacement by
 `31 / 27` times the selected distance, then reaches the exact authored target
-with zero velocity. Geometry's bound is consequently below 0.012 logical pixels.
+with zero velocity. Each geometry component's bound is consequently below 0.012
+logical pixels; a derived distance such as rectangle width combines two bounds.
 
 The spring derives each speed limit from its natural rate and the component's
 distance through the existing `Tolerance` contract. Rest timing remains
