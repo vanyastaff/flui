@@ -60,6 +60,10 @@ fn vsync_admission_contract() {
             "direct child frames retain their parent clock authority",
             direct_child_frames_retain_their_parent_clock_authority,
         ),
+        (
+            "child snapshot custody survives reentry and retires outside borrows",
+            child_snapshot_custody_survives_reentry_and_retires_outside_borrows,
+        ),
     ]);
 }
 
@@ -97,6 +101,113 @@ fn second_parent_cannot_apply_its_motion_policy_to_an_existing_owner() {
         (true, before, true),
         "the second presentation must neither gain ownership nor settle the first presentation's motion"
     );
+}
+
+fn child_snapshot_custody_survives_reentry_and_retires_outside_borrows() {
+    use flui_animation::MotionClock;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    struct Capture {
+        parent: Vsync,
+        events: Rc<RefCell<Vec<&'static str>>>,
+        name: &'static str,
+        fail: bool,
+    }
+
+    impl Drop for Capture {
+        fn drop(&mut self) {
+            let _ = self.parent.has_running();
+            self.events.borrow_mut().push(self.name);
+            assert!(!self.fail, "child capture retirement");
+        }
+    }
+
+    for (mute, callback_failure, drop_failure) in [
+        (false, false, false),
+        (true, false, false),
+        (false, false, true),
+        (true, false, true),
+        (false, true, true),
+        (true, true, true),
+    ] {
+        let parent = Vsync::new();
+        let first = Vsync::new();
+        parent.attach_child(&first).expect("first registry");
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mut seats = Vec::new();
+        for name in ["second", "third"] {
+            let child = Vsync::new();
+            let capture = Capture {
+                parent: parent.clone(),
+                events: events.clone(),
+                name,
+                fail: name == "second" && drop_failure,
+            };
+            child.set_frame_requester(Some(Rc::new(move || {
+                let _ = &capture;
+            })));
+            seats.push(parent.attach_child(&child).expect("later registry"));
+            // The parent's entry snapshot must be the final owner after detach.
+            drop(child);
+        }
+        let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&first));
+        owner.controller().forward().expect("first child run");
+        let mut clock = MotionClock::new();
+        parent.tick_all(&clock.frame(Duration::ZERO));
+        let tick = clock.frame(Duration::from_millis(250));
+        let callback_parent = parent.clone();
+        let callback_events = events.clone();
+        let entered = Cell::new(false);
+        owner.controller().add_listener(Rc::new(move || {
+            if entered.replace(true) {
+                return;
+            }
+            for seat in &seats {
+                callback_parent.detach_child(seat);
+            }
+            callback_parent.set_muted(mute);
+            callback_parent.tick_all(&tick);
+            assert!(
+                callback_events.borrow().is_empty(),
+                "entry custody survives reentry"
+            );
+            callback_events.borrow_mut().push("callback finished");
+            assert!(!callback_failure, "first child callback");
+        }));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            parent.tick_all(&tick);
+        }));
+        let expected = if callback_failure {
+            vec!["callback finished"]
+        } else if drop_failure {
+            vec!["callback finished", "second"]
+        } else {
+            vec!["callback finished", "second", "third"]
+        };
+        assert_eq!(*events.borrow(), expected);
+        if callback_failure || drop_failure {
+            let payload = result.expect_err("authored failure propagates after retirement");
+            assert_eq!(
+                payload.downcast_ref::<&str>().copied(),
+                Some(if callback_failure {
+                    "first child callback"
+                } else {
+                    "child capture retirement"
+                })
+            );
+        } else {
+            result.expect("healthy child retirement");
+        }
+        parent.set_muted(false);
+        parent.tick_all(&clock.frame(Duration::from_millis(500)));
+        assert!((owner.controller().value() - 0.5).abs() < 1e-9);
+        assert_eq!(
+            *events.borrow(),
+            expected,
+            "empty cache retains no detached captures"
+        );
+    }
 }
 
 fn duplicate_child_is_refused() {

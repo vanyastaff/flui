@@ -192,6 +192,9 @@ struct VsyncInner {
     /// children's. A nested unmuted registry cannot re-enable a muted
     /// ancestor, because the ancestor never forwards the tick.
     children: Vec<RegisteredChild>,
+    /// Reusable allocation for an entry snapshot. Stored empty: only the active
+    /// walk owns child handles, so a detached child is never retained by a cache.
+    child_snapshot: Vec<(u64, Terminal<Vsync>)>,
     parent: Option<VsyncRegistration>,
     request_frame: Option<Rc<dyn Fn()>>,
     next_id: u64,
@@ -536,26 +539,23 @@ impl Vsync {
     /// making parked or paused work request continuous frames. Ancestor policy
     /// also reaches children that have not observed it while muted.
     fn has_frame_demand(&self, inherited: Option<FrameTick>) -> bool {
-        let (mine, children, tick) = {
-            let inner = self.inner.borrow();
-            if inner.muted {
-                return false;
-            }
-            let tick = inherited.map_or(inner.last_tick, |tick| {
-                Some(tick.hold_after(inner.last_tick.unwrap_or(tick)))
-            });
-            let mine = inner
-                .controllers
-                .values()
-                .any(|registered| registered.controller.walk_probe().needs_sample(tick));
-            let children = inner
+        let inner = self.inner.borrow();
+        if inner.muted {
+            return false;
+        }
+        let tick = inherited.map_or(inner.last_tick, |tick| {
+            Some(tick.hold_after(inner.last_tick.unwrap_or(tick)))
+        });
+        // These probes read framework-owned scalar state only. No callback or
+        // outgoing ownership is invoked or retired while this borrow is held.
+        inner
+            .controllers
+            .values()
+            .any(|registered| registered.controller.walk_probe().needs_sample(tick))
+            || inner
                 .children
                 .iter()
-                .map(|registered| registered.child.clone())
-                .collect::<Vec<_>>();
-            (mine, children, tick)
-        };
-        mine || children.iter().any(|child| child.has_frame_demand(tick))
+                .any(|registered| registered.child.has_frame_demand(tick))
     }
 
     /// The number of controllers registered **with this registry**, not
@@ -594,30 +594,24 @@ impl Vsync {
     /// controller would hold the frame loop open forever.
     #[must_use]
     pub fn has_running(&self) -> bool {
-        let (mine, children) = {
-            let inner = self.inner.borrow_mut();
-            // A muted registry advances nothing — not its own controllers, not a
-            // nested registry's — so nothing under it can hold the frame loop
-            // open.
-            if inner.muted {
-                return false;
-            }
-            (
-                inner
-                    .controllers
-                    .values()
-                    .any(|c| c.controller.walk_probe().live_running),
-                inner
-                    .children
-                    .iter()
-                    .map(|registered| registered.child.clone())
-                    .collect::<Vec<_>>(),
-            )
-        };
+        let inner = self.inner.borrow();
+        // A muted registry advances nothing — not its own controllers, not a
+        // nested registry's — so nothing under it can hold the frame loop open.
+        if inner.muted {
+            return false;
+        }
         // Nested registries hold real controllers: a `TickerMode` (and so every
         // `Hero` child) puts its subtree's animations in one, and a frame-loop
         // gate that only looked at this level would stall them after one frame.
-        mine || children.iter().any(Vsync::has_running)
+        // Recursive probes invoke no user code and retire no owned values.
+        inner
+            .controllers
+            .values()
+            .any(|registered| registered.controller.walk_probe().live_running)
+            || inner
+                .children
+                .iter()
+                .any(|registered| registered.child.has_running())
     }
 
     /// Advance live controller registrations using a presentation's typed tick.
@@ -699,7 +693,7 @@ impl Vsync {
         if !walk.has_live_parent() {
             return;
         }
-        let (fence, children) = {
+        let (fence, mut children) = {
             let mut inner = self.inner.borrow_mut();
             if inner
                 .frame_authority
@@ -724,14 +718,14 @@ impl Vsync {
             }
             inner.last_tick = Some(tick.hold_after(inner.last_tick.unwrap_or(tick)));
             inner.frame = inner.frame.saturating_add(1);
-            (
-                inner.next_id,
+            let mut children = std::mem::take(&mut inner.child_snapshot);
+            children.extend(
                 inner
                     .children
                     .iter()
-                    .map(|registered| (registered.slot, registered.child.clone()))
-                    .collect::<Vec<_>>(),
-            )
+                    .map(|registered| (registered.slot, Terminal::new(registered.child.clone()))),
+            );
+            (inner.next_id, children)
         };
 
         // A muted registry delivers no tick — not to its own controllers, not
@@ -739,24 +733,33 @@ impl Vsync {
         // the clock keeps running underneath: an unmute lands the animation
         // where its presentation clock says. A new root first establishes its
         // own anchors instead of comparing unrelated absolute clock readings.
-        if !walk.is_live() {
-            return;
-        }
-
-        for (slot, child) in children {
-            if !walk.is_live() {
-                break;
+        for (slot, child) in children.drain(..) {
+            if walk.is_live() {
+                let tick = self
+                    .inner
+                    .borrow()
+                    .last_tick
+                    .expect("BUG: registry frame stores its tick before walking children");
+                retirement.run_with(|retirement| {
+                    child.tick_all_with_retirement(
+                        tick,
+                        authority,
+                        Some((&walk, slot)),
+                        retirement,
+                    );
+                });
             }
-            let child = Terminal::new(child);
-            let tick = self
-                .inner
-                .borrow()
-                .last_tick
-                .expect("BUG: registry frame stores its tick before walking children");
-            retirement.run_with(|retirement| {
-                child.tick_all_with_retirement(tick, authority, Some((&walk, slot)), retirement);
-            });
+            // Retire visited and withdrawn entries independently, before the
+            // next peer. A failed destructor joins this walk's first failure.
             retirement.retire(child);
+        }
+        {
+            let mut inner = self.inner.borrow_mut();
+            // A reentrant walk may have returned another empty allocation.
+            // Preserve the larger one; neither buffer owns user captures here.
+            if children.capacity() > inner.child_snapshot.capacity() {
+                std::mem::swap(&mut children, &mut inner.child_snapshot);
+            }
         }
 
         let mut cursor = 0u64;

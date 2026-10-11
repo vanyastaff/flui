@@ -215,10 +215,13 @@ converter and target-clone reentry, component failure, owner release inside a cu
 and exact-target delivery.
 The existing physical properties use replayed public Vsync traces for independent
 derivative probes; there is no production `advance(dt)` or owner clone.
-`a_steady_state_frame_allocates_nothing` measures a running scalar controller
-and a running four-component owner in one registry, including observer value
-reads and four listeners on each. Every measured component must advance; the
-run-start negative control verifies that the allocation counter is live.
+`a_steady_state_frame_allocates_nothing` measures running scalar, four-component
+and nested geometry/color owners, observer reads, keyframe sampling and listener
+relays. It also advances and queries a warmed root/child/grandchild registry with
+an actual running controller and listener delivery. Every measured component
+must advance; the run-start negative control verifies that the counter is live.
+This steady-state contract does not exclude allocations during topology growth
+or overlapping reentrant walks.
 
 ### Source-bound status removal
 
@@ -276,6 +279,17 @@ committing either edge. Refusals are typed; upward cycle checking allocates no
 descendant snapshot. Wake failure withdraws the new edge before recovery.
 The public `vsync_admission_contract` pins these rules and reattachment; existing
 closure rows retain nested first-failure and independent-owner coverage (ADR-0191).
+
+Frame delivery retains the entry child snapshot until each child's turn, even
+when an earlier callback detaches it. Each visited or skipped child retires
+independently outside borrows through the walk's first-failure custody. Only
+empty snapshot storage returns to the registry for reuse; cached storage never
+retains detached owners. Reentrant walks own separate populated snapshots.
+Activity and frame-demand queries traverse borrowed children directly because
+their private probes invoke no user code or owned-value destruction.
+`child_snapshot_custody_survives_reentry_and_retires_outside_borrows`, a row of
+`vsync_admission_contract`, pins last-owner timing, muting, reentry, competing
+callback/capture failures and the next healthy frame.
 
 A `VsyncRegistration` names the registry that issued it (a weak identity) and
 one slot from a monotonic namespace that controllers and children share

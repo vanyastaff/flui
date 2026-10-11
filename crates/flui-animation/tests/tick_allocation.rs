@@ -288,4 +288,47 @@ fn a_steady_state_frame_allocates_nothing() {
             "{depth} animation relays allocated {calls} times ({bytes} bytes)"
         );
     }
+
+    // Real subtree registries must have the same steady-state contract as a
+    // flat registry. Keep both seats alive: otherwise this prices detached work.
+    let root = Vsync::new();
+    let child = Vsync::new();
+    let grandchild = Vsync::new();
+    let _child_seat = root.attach_child(&child).expect("fresh child registry");
+    let _grandchild_seat = child
+        .attach_child(&grandchild)
+        .expect("fresh grandchild registry");
+    let owner = AnimationController::builder(NEVER_ENDING).build_on(Some(&grandchild));
+    let controller = owner.controller();
+    let delivered = std::rc::Rc::new(Cell::new(0usize));
+    let observed = delivered.clone();
+    controller.add_listener(std::rc::Rc::new(move || observed.set(observed.get() + 1)));
+    let _run = controller.forward().expect("live nested run");
+    let mut clock = MotionClock::new();
+    let mut now = 0.0;
+    for _ in 0..16 {
+        root.tick_all(&clock.frame(Duration::from_secs_f64(now)));
+        assert!(root.has_running());
+        now += FRAME;
+    }
+    let start_value = controller.value();
+    let deliveries_before = delivered.get();
+    let calls_before = read(&ALLOC_COUNT);
+    let bytes_before = read(&ALLOC_BYTES);
+    for _ in 0..FRAMES {
+        root.tick_all(&clock.frame(Duration::from_secs_f64(now)));
+        black_box(root.has_running());
+        now += FRAME;
+    }
+    let calls = read(&ALLOC_COUNT) - calls_before;
+    let bytes = read(&ALLOC_BYTES) - bytes_before;
+    assert!(root.has_running() && controller.value() > start_value);
+    assert_eq!(delivered.get() - deliveries_before, FRAMES);
+    eprintln!(
+        "nested registry allocation: {FRAMES} frames -- {calls} allocating calls, {bytes} bytes"
+    );
+    assert_eq!(
+        calls, 0,
+        "advancing and querying a live nested registry allocated {calls} times ({bytes} bytes)"
+    );
 }
