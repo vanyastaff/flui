@@ -48,6 +48,21 @@ struct Sample<V> {
     velocity: V,
     elapsed: Duration,
     done: bool,
+    representation: Representation,
+}
+
+#[derive(Clone, Copy)]
+enum Representation {
+    Origin,
+    Vector,
+    Target,
+}
+
+// Endpoint values need not survive a lossy component round trip. Retaining
+// them until replacement also keeps user destruction out of sample commits.
+struct ExactValues<T> {
+    origin: Terminal<Rc<T>>,
+    target: Terminal<Rc<T>>,
 }
 
 struct ComponentRun<V: AnimationVector> {
@@ -100,6 +115,13 @@ impl<V: AnimationVector> ValueMotion for ComponentRun<V> {
     fn commit_sample(&self, elapsed: Duration) {
         let mut sample = self.staged.get();
         sample.elapsed = elapsed;
+        sample.representation = if sample.done {
+            Representation::Target
+        } else if elapsed.is_zero() {
+            Representation::Origin
+        } else {
+            Representation::Vector
+        };
         self.published.set(sample);
     }
 
@@ -109,6 +131,7 @@ impl<V: AnimationVector> ValueMotion for ComponentRun<V> {
             velocity: self.goal.zero(),
             elapsed: Duration::ZERO,
             done: true,
+            representation: Representation::Target,
         });
     }
 }
@@ -125,17 +148,18 @@ enum Change {
     Snap,
 }
 
-struct Prepared<V: AnimationVector> {
+struct Prepared<T: TwoWayConverter> {
     seam: crate::controller::ValueSeam,
-    goal: V,
-    run: Option<PreparedRun<V>>,
+    goal: T::Vector,
+    run: Option<PreparedRun<T>>,
 }
 
-struct PreparedRun<V: AnimationVector> {
+struct PreparedRun<T: TwoWayConverter> {
     source: Terminal<Rc<dyn ValueMotion>>,
-    sample: Sample<V>,
+    origin: Terminal<Rc<T>>,
+    sample: Sample<T::Vector>,
     deadline: Option<Duration>,
-    reversal: Reversal<V>,
+    reversal: Reversal<T::Vector>,
 }
 
 struct Admission<T> {
@@ -143,7 +167,7 @@ struct Admission<T> {
     publication: crate::controller::ValuePublication,
     old_target: Terminal<Rc<T>>,
     old_motion: Terminal<MotionSpec>,
-    old_visible: Terminal<Rc<T>>,
+    old_visible: Terminal<ExactValues<T>>,
 }
 
 impl<T> Admission<T> {
@@ -160,7 +184,8 @@ impl<T> Admission<T> {
 ///
 /// Every component inherits its last published position and velocity. The
 /// owner controls the run and its registry seat; observer clones retain only
-/// the published value. Dropping the owner cancels and unregisters the run.
+/// the published sample and its exact endpoints. Dropping the owner cancels
+/// and unregisters the run.
 ///
 /// ```
 /// use flui_animation::{AnimatedValue, ArcCurve, curves, MotionClock, MotionSpec, Vsync};
@@ -187,7 +212,7 @@ pub struct AnimatedValue<T: TwoWayConverter + 'static> {
     motion: Terminal<MotionSpec>,
     target: Terminal<Rc<T>>,
     target_vector: T::Vector,
-    visible_target: Terminal<Rc<RefCell<Terminal<Rc<T>>>>>,
+    exact_values: Terminal<Rc<RefCell<Terminal<ExactValues<T>>>>>,
     published: Rc<Cell<Sample<T::Vector>>>,
     deadline: Option<Duration>,
     reversal: Reversal<T::Vector>,
@@ -196,10 +221,11 @@ pub struct AnimatedValue<T: TwoWayConverter + 'static> {
 /// A cloneable view of an owning animated value.
 ///
 /// Observers cannot move, register or dispose its controller. After owner
-/// teardown, they keep the last published value and report zero velocity.
+/// teardown, they keep the last published sample and its exact endpoints,
+/// and report zero velocity.
 pub struct AnimatedValueView<T: TwoWayConverter + 'static> {
     controller: AnimationController,
-    target: Rc<RefCell<Terminal<Rc<T>>>>,
+    exact_values: Rc<RefCell<Terminal<ExactValues<T>>>>,
     published: Rc<Cell<Sample<T::Vector>>>,
 }
 
@@ -207,7 +233,7 @@ impl<T: TwoWayConverter + 'static> Clone for AnimatedValueView<T> {
     fn clone(&self) -> Self {
         Self {
             controller: self.controller.clone(),
-            target: Rc::clone(&self.target),
+            exact_values: Rc::clone(&self.exact_values),
             published: Rc::clone(&self.published),
         }
     }
@@ -233,8 +259,12 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
             velocity: vector.zero(),
             elapsed: Duration::ZERO,
             done: true,
+            representation: Representation::Target,
         }));
-        let visible_target = Rc::new(RefCell::new(Terminal::new(Rc::clone(&initial))));
+        let exact_values = Rc::new(RefCell::new(Terminal::new(ExactValues {
+            origin: Terminal::new(Rc::clone(&initial)),
+            target: Terminal::new(Rc::clone(&initial)),
+        })));
         let driven = AnimationController::builder(Duration::from_secs(1))
             .unbounded()
             .build_on(vsync);
@@ -243,7 +273,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
             motion,
             target: initial,
             target_vector: vector,
-            visible_target: Terminal::new(visible_target),
+            exact_values: Terminal::new(exact_values),
             published,
             deadline: None,
             reversal: Reversal {
@@ -329,7 +359,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
     /// The current published value.
     #[must_use]
     pub fn value(&self) -> T {
-        read_value(self.published.get(), &self.visible_target)
+        read_value(self.published.get(), &self.exact_values)
     }
 
     /// Published component velocities per animation second, zero after stopping.
@@ -360,7 +390,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
     pub fn animation(&self) -> AnimatedValueView<T> {
         AnimatedValueView {
             controller: self.driven.controller().clone(),
-            target: Rc::clone(&self.visible_target),
+            exact_values: Rc::clone(&self.exact_values),
             published: Rc::clone(&self.published),
         }
     }
@@ -405,7 +435,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
         target: &Terminal<Rc<T>>,
         motion: &Terminal<MotionSpec>,
         change: Change,
-    ) -> Result<Prepared<T::Vector>, AnimationError> {
+    ) -> Result<Prepared<T>, AnimationError> {
         self.prepare_from(target, motion, change, None)
     }
 
@@ -414,13 +444,14 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
         target: &Terminal<Rc<T>>,
         motion: &Terminal<MotionSpec>,
         change: Change,
-        origin: Option<T::Vector>,
-    ) -> Result<Prepared<T::Vector>, AnimationError> {
+        origin: Option<&Rc<T>>,
+    ) -> Result<Prepared<T>, AnimationError> {
         let controller = self.driven.controller().clone();
         let seam = controller.value_seam()?;
         let goal = target.to_vector();
         validate(&goal)?;
-        if let Some(origin) = &origin {
+        let origin_vector = origin.map(|origin| origin.to_vector());
+        if let Some(origin) = &origin_vector {
             validate(origin)?;
         }
         let target_changed = origin.is_some() || goal.as_ref() != self.target_vector.as_ref();
@@ -434,13 +465,14 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
                 run: None,
             });
         }
-        let sample = origin.map_or_else(
+        let sample = origin_vector.map_or_else(
             || self.published.get(),
             |value| Sample {
                 value,
                 velocity: value.zero(),
                 elapsed: Duration::ZERO,
                 done: false,
+                representation: Representation::Origin,
             },
         );
         let velocity = if self.is_settled() || origin.is_some() {
@@ -552,11 +584,21 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
         drop(segment_motion);
         let deadline = components.iter().filter_map(Segment::curve_duration).max();
         let immediate = components.iter().all(|component| component.is_done(0.0));
+        let exact_origin = Terminal::new(if immediate {
+            Rc::clone(target)
+        } else {
+            origin.map_or_else(|| exact_value(sample, &self.exact_values), Rc::clone)
+        });
         let prepared = Sample {
             value: if immediate { goal } else { sample.value },
             velocity: if immediate { goal.zero() } else { velocity },
             elapsed: Duration::ZERO,
             done: immediate,
+            representation: if immediate {
+                Representation::Target
+            } else {
+                Representation::Origin
+            },
         };
         let run = Terminal::new(Rc::new(ComponentRun {
             segments: components,
@@ -571,6 +613,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
             goal,
             run: Some(PreparedRun {
                 source: Terminal::new(source),
+                origin: exact_origin,
                 sample: prepared,
                 deadline,
                 reversal,
@@ -580,7 +623,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
 
     fn install(
         &mut self,
-        prepared: Prepared<T::Vector>,
+        prepared: Prepared<T>,
         target: &mut Terminal<Rc<T>>,
         motion: &mut Terminal<MotionSpec>,
         recovery: &mut RecoveryScope<'_>,
@@ -592,9 +635,11 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
             let old_motion = self.motion.withdraw();
             self.target = target.withdraw();
             self.motion = motion.withdraw();
-            let old_visible = self
-                .visible_target
-                .replace(Terminal::new(Rc::clone(&self.target)));
+            let origin = Rc::clone(&self.exact_values.borrow().origin);
+            let old_visible = self.exact_values.replace(Terminal::new(ExactValues {
+                origin: Terminal::new(origin),
+                target: Terminal::new(Rc::clone(&self.target)),
+            }));
             // Equal vectors preserve the run while replacing the exact target.
             return Ok(Admission {
                 future: controller.value_run_future(),
@@ -616,9 +661,10 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
                 self.target = target.withdraw();
                 self.motion = motion.withdraw();
                 self.deadline = run.deadline;
-                let old_visible = self
-                    .visible_target
-                    .replace(Terminal::new(Rc::clone(&self.target)));
+                let old_visible = self.exact_values.replace(Terminal::new(ExactValues {
+                    origin: run.origin.withdraw(),
+                    target: Terminal::new(Rc::clone(&self.target)),
+                }));
                 self.published.set(run.sample);
                 (old_target, old_motion, old_visible)
             },
@@ -652,7 +698,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValueView<T> {
 
 impl<T: TwoWayConverter + 'static> Animation<T> for AnimatedValueView<T> {
     fn value(&self) -> T {
-        read_value(self.published.get(), &self.target)
+        read_value(self.published.get(), &self.exact_values)
     }
     fn status(&self) -> AnimationStatus {
         self.controller.status()
@@ -707,14 +753,14 @@ impl<T: TwoWayConverter + 'static> Drop for AnimatedValue<T> {
         let mut driven = self.driven.withdraw();
         let target = self.target.withdraw();
         let motion = self.motion.withdraw();
-        let visible_target = self.visible_target.withdraw();
+        let exact_values = self.exact_values.withdraw();
         let publication = driven.get_mut().prepare_dispose();
         let mut recovery = Retirement::new();
         controller.retire_with_delivery(
             move |scope| {
                 scope.retire(motion);
                 scope.retire(target);
-                scope.retire(visible_target);
+                scope.retire(exact_values);
                 scope.retire(driven);
             },
             &mut recovery.scope(),
@@ -740,12 +786,24 @@ fn validate(vector: &impl AsRef<[f64]>) -> Result<(), AnimationError> {
 
 fn read_value<T: TwoWayConverter>(
     sample: Sample<T::Vector>,
-    target: &RefCell<Terminal<Rc<T>>>,
+    values: &RefCell<Terminal<ExactValues<T>>>,
 ) -> T {
-    if sample.done {
-        let target = Rc::clone(target.borrow().get());
-        target.as_ref().clone()
-    } else {
-        T::from_vector(sample.value)
+    match sample.representation {
+        Representation::Vector => T::from_vector(sample.value),
+        Representation::Origin | Representation::Target => {
+            let exact = exact_value(sample, values);
+            exact.as_ref().clone()
+        }
+    }
+}
+
+fn exact_value<T: TwoWayConverter>(
+    sample: Sample<T::Vector>,
+    values: &RefCell<Terminal<ExactValues<T>>>,
+) -> Rc<T> {
+    match sample.representation {
+        Representation::Origin => Rc::clone(&values.borrow().origin),
+        Representation::Target => Rc::clone(&values.borrow().target),
+        Representation::Vector => Rc::new(T::from_vector(sample.value)),
     }
 }

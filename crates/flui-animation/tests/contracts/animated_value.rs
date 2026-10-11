@@ -252,6 +252,87 @@ fn color_motion_publishes_fractional_running_samples() {
     assert_eq!(view.value(), Color::WHITE);
 }
 
+fn admitting_motion_preserves_the_exact_displayed_origin() {
+    use flui_foundation::Listenable;
+    use flui_painting::styling::Color;
+
+    for (initial, target) in [
+        (Color::rgb(255, 0, 0), Color::rgb(0, 0, 255)),
+        (Color::rgba(255, 0, 0, 0), Color::WHITE),
+        (Color::rgba(0, 0, 255, 0), Color::rgb(0, 255, 0)),
+    ] {
+        let registry = Vsync::new();
+        let mut clock = MotionClock::new();
+        let mut owner =
+            AnimatedValue::new(initial, curve(curves::LINEAR), Some(&registry)).unwrap();
+        let view = owner.animation();
+        let heard = Rc::new(Cell::new(None));
+        let subscription = view.add_listener({
+            let view = view.clone();
+            let heard = Rc::clone(&heard);
+            Rc::new(move || heard.set(Some(view.value())))
+        });
+        let run = owner.animate_to(target).unwrap();
+        assert!(run.is_pending());
+        assert_eq!(
+            owner.value(),
+            initial,
+            "admission cannot move the displayed origin"
+        );
+        assert_eq!(
+            view.value(),
+            initial,
+            "the observer sees the exact same origin"
+        );
+        assert_eq!(
+            heard.get(),
+            Some(initial),
+            "admission delivery preserves the origin"
+        );
+        registry.tick_all(&clock.frame(Duration::ZERO));
+        assert_eq!(
+            view.value(),
+            initial,
+            "anchoring time is not a value change"
+        );
+        registry.tick_all(&clock.frame(Duration::from_millis(100)));
+        let seam = view.value();
+        assert_ne!(seam, initial, "a later frame must actually advance");
+        let next = owner.animate_to(Color::BLACK).unwrap();
+        assert!(run.is_canceled() && next.is_pending());
+        assert_eq!(
+            view.value(),
+            seam,
+            "interruption retains the displayed sample"
+        );
+        registry.tick_all(&clock.frame(Duration::from_secs(2)));
+        assert!(next.is_complete());
+        assert_eq!(
+            view.value(),
+            Color::BLACK,
+            "settlement retains the exact target"
+        );
+        MotionUpdate::run(|update| {
+            update.restart(&mut owner, initial, Color::WHITE, curve(curves::LINEAR))
+        })
+        .unwrap();
+        assert_eq!(
+            view.value(),
+            initial,
+            "grouped restart retains its exact origin"
+        );
+        registry.tick_all(&clock.frame(Duration::from_secs(2)));
+        assert_eq!(
+            view.value(),
+            initial,
+            "a zero-time restart retains its origin"
+        );
+        registry.tick_all(&clock.frame(Duration::from_secs(3)));
+        assert_eq!(view.value(), Color::WHITE);
+        view.remove_listener(subscription);
+    }
+}
+
 fn an_equivalent_motion_target_still_publishes_its_exact_value() {
     use flui_foundation::Listenable;
     use flui_painting::styling::Color;
@@ -275,6 +356,190 @@ fn an_equivalent_motion_target_still_publishes_its_exact_value() {
         Some(blue),
         "the observer must see the new exact target even when its motion vector is unchanged"
     );
+}
+
+fn immediate_motion_does_not_reconstruct_the_displaced_sample() {
+    thread_local! {
+        static REFUSE_RECONSTRUCTION: Cell<bool> = const { Cell::new(false) };
+    }
+    #[derive(Clone)]
+    struct Value(f64);
+    impl TwoWayConverter for Value {
+        type Vector = [f64; 1];
+        fn to_vector(&self) -> Self::Vector {
+            [self.0]
+        }
+        fn from_vector([position]: Self::Vector) -> Self {
+            REFUSE_RECONSTRUCTION.with(|refuse| {
+                assert!(!refuse.get(), "unused displaced sample was reconstructed");
+            });
+            Self(position)
+        }
+        fn rest_thresholds() -> Self::Vector {
+            [0.001]
+        }
+    }
+    for snap in [false, true] {
+        let registry = Vsync::new();
+        let mut clock = MotionClock::new();
+        let mut owner =
+            AnimatedValue::new(Value(0.0), curve(curves::LINEAR), Some(&registry)).unwrap();
+        let old = owner.animate_to(Value(1.0)).unwrap();
+        registry.tick_all(&clock.frame(Duration::ZERO));
+        registry.tick_all(&clock.frame(Duration::from_millis(250)));
+        REFUSE_RECONSTRUCTION.with(|refuse| refuse.set(true));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if snap {
+                owner.snap_to(Value(2.0)).unwrap();
+            } else {
+                let run = owner
+                    .retarget(
+                        Value(2.0),
+                        MotionSpec::Curve {
+                            duration: Duration::ZERO,
+                            curve: ArcCurve::new(curves::LINEAR),
+                        },
+                    )
+                    .unwrap();
+                assert!(run.is_complete());
+            }
+        }));
+        REFUSE_RECONSTRUCTION.with(|refuse| refuse.set(false));
+        result.unwrap();
+        assert!(old.is_canceled() && owner.is_settled());
+        assert_eq!(owner.value().0, 2.0);
+    }
+}
+
+fn displaced_exact_endpoints_share_failure_custody() {
+    use flui_foundation::Listenable;
+    struct Value {
+        position: f64,
+        retirement: Option<(Rc<Cell<usize>>, bool, &'static str)>,
+    }
+    impl Clone for Value {
+        fn clone(&self) -> Self {
+            Self {
+                position: self.position,
+                retirement: None,
+            }
+        }
+    }
+    impl TwoWayConverter for Value {
+        type Vector = [f64; 1];
+        fn to_vector(&self) -> Self::Vector {
+            [self.position]
+        }
+        fn from_vector([position]: Self::Vector) -> Self {
+            Self {
+                position,
+                retirement: None,
+            }
+        }
+        fn rest_thresholds() -> Self::Vector {
+            [0.001]
+        }
+    }
+    impl Drop for Value {
+        fn drop(&mut self) {
+            if let Some((drops, fails, message)) = &self.retirement {
+                drops.set(drops.get() + 1);
+                assert!(!fails, "{message}");
+            }
+        }
+    }
+    for (origin_fails, target_fails, delivery_fails) in [
+        (false, false, false),
+        (true, false, false),
+        (false, true, false),
+        (true, true, false),
+        (true, true, true),
+    ] {
+        let registry = Vsync::new();
+        let mut clock = MotionClock::new();
+        let origin_drops = Rc::new(Cell::new(0));
+        let target_drops = Rc::new(Cell::new(0));
+        let mut owner = AnimatedValue::new(
+            Value {
+                position: 0.0,
+                retirement: Some((Rc::clone(&origin_drops), origin_fails, "origin retirement")),
+            },
+            curve(curves::LINEAR),
+            Some(&registry),
+        )
+        .unwrap();
+        let old = owner
+            .animate_to(Value {
+                position: 1.0,
+                retirement: Some((Rc::clone(&target_drops), target_fails, "target retirement")),
+            })
+            .unwrap();
+        registry.tick_all(&clock.frame(Duration::ZERO));
+        registry.tick_all(&clock.frame(Duration::from_millis(250)));
+        assert_eq!(
+            (origin_drops.get(), target_drops.get()),
+            (0, 0),
+            "frames retain exact endpoints"
+        );
+        let view = owner.animation();
+        let listener = view.add_listener(Rc::new(move || {
+            assert!(!delivery_fails, "admission delivery")
+        }));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            owner
+                .animate_to(Value {
+                    position: 2.0,
+                    retirement: None,
+                })
+                .unwrap()
+        }));
+        view.remove_listener(listener);
+        let expected_failure = if delivery_fails {
+            Some("admission delivery")
+        } else if origin_fails {
+            Some("origin retirement")
+        } else if target_fails {
+            Some("target retirement")
+        } else {
+            None
+        };
+        match (result, expected_failure) {
+            (Ok(next), None) => assert!(next.is_pending()),
+            (Err(payload), Some(expected)) => {
+                assert_eq!(
+                    flui_foundation::panic::payload_text(&*payload),
+                    Some(expected)
+                );
+            }
+            _ => panic!("endpoint retirement did not preserve first failure"),
+        }
+        assert!(old.is_canceled());
+        assert_eq!(origin_drops.get(), usize::from(!delivery_fails));
+        assert_eq!(
+            target_drops.get(),
+            usize::from(!delivery_fails && !origin_fails)
+        );
+        registry.tick_all(&clock.frame(Duration::from_secs(2)));
+        assert_eq!(
+            view.value().position,
+            2.0,
+            "accepted replacement survives containment"
+        );
+        owner
+            .snap_to(Value {
+                position: 3.0,
+                retirement: None,
+            })
+            .unwrap();
+        assert_eq!(
+            view.value().position,
+            3.0,
+            "later healthy admission remains usable"
+        );
+        drop(owner);
+        assert!(registry.is_empty());
+        assert_eq!(view.value().position, 3.0);
+    }
 }
 
 struct ReentrantValue {
@@ -567,6 +832,18 @@ fn owning_animated_value_contract() {
         (
             "failed component keeps the whole sample",
             a_failed_component_keeps_the_whole_published_sample,
+        ),
+        (
+            "motion admission preserves exact displayed origin",
+            admitting_motion_preserves_the_exact_displayed_origin,
+        ),
+        (
+            "immediate motion avoids displaced reconstruction",
+            immediate_motion_does_not_reconstruct_the_displaced_sample,
+        ),
+        (
+            "exact endpoints share retirement custody",
+            displaced_exact_endpoints_share_failure_custody,
         ),
         (
             "equivalent motion publishes exact target",

@@ -32,6 +32,13 @@ interop uses `from_rgba_f32_array` and `to_rgba_f32_array`; channel accessors na
 their `f32` units. No public field permits bypassing admission. The `color` crate
 provides internal color-space conversion; its types do not enter FLUI signatures.
 Oklab interpolation and component animation retain ADR-0149's premultiplied contract.
+Component-motion admission preserves the exact displayed origin until time
+advances, including transparent colors' hidden RGB. Completion returns the exact
+authored target. A running interruption preserves its displayed seam; component
+conversion may be lossy and is not used to reconstruct exact endpoints.
+Observers retain both endpoints of the current segment until replacement or
+observer retirement. Endpoint destruction occurs outside sample commits, through
+the existing animation retirement boundary.
 Extreme extrapolation scales the affine Oklab mix before evaluating it, then
 restores linear-light magnitude using the cubic homogeneity of Oklab conversion.
 It saturates output channels rather than truncating the interpolation parameter.
@@ -106,6 +113,9 @@ Public painting rows `normalized_admission_and_hashing_are_canonical`,
 and wire units. Animation's `color_motion_publishes_fractional_running_samples`
 and widgets' `container_color_retarget_preserves_painted_alpha_progress` pin
 actual component motion and recorded paint.
+`admitting_motion_preserves_the_exact_displayed_origin` pins exact admission,
+zero-time sampling, interruption and explicit grouped restart through the public
+owning value and its observer.
 
 `contrast_selection_uses_linear_relative_luminance` compares every authored
 gray channel, primaries, fractional RGB and composited translucent surfaces

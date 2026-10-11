@@ -16,10 +16,8 @@ struct Retarget<'a, T: TwoWayConverter + 'static> {
     owner: &'a mut AnimatedValue<T>,
     target: Terminal<Rc<T>>,
     motion: Terminal<MotionSpec>,
-    prepared: Option<Terminal<Prepared<T::Vector>>>,
+    prepared: Option<Terminal<Prepared<T>>>,
     admission: Option<Terminal<Admission<T>>>,
-    // Keep converter-owned origin data until the whole update retires.
-    _origin: Terminal<Option<T>>,
 }
 
 impl<T: TwoWayConverter + 'static> Plan for Retarget<'_, T> {
@@ -257,26 +255,25 @@ impl<'owners> MotionUpdate<'owners> {
     ) -> Result<(), AnimationError> {
         let target = Terminal::new(Rc::new(target));
         let motion = Terminal::new(motion);
-        let origin = Terminal::new(origin);
+        let origin = Terminal::new(origin.map(Rc::new));
         if let Some(error) = &self.refusal {
             return Err(error.clone());
         }
         self.refusal = Some(AnimationError::AdmissionAborted);
-        let origin_vector = origin.get().as_ref().map(TwoWayConverter::to_vector);
-        let prepared = match owner.prepare_from(&target, &motion, Change::Animate, origin_vector) {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                self.refusal = Some(error.clone());
-                return Err(error);
-            }
-        };
+        let prepared =
+            match owner.prepare_from(&target, &motion, Change::Animate, origin.get().as_ref()) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    self.refusal = Some(error.clone());
+                    return Err(error);
+                }
+            };
         self.plans.push(Terminal::new(Box::new(Retarget {
             owner,
             target,
             motion,
             prepared: Some(Terminal::new(prepared)),
             admission: None,
-            _origin: origin,
         })));
         self.refusal = None;
         Ok(())
