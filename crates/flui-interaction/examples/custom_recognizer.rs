@@ -11,10 +11,11 @@ use flui_foundation::geometry::Point;
 use flui_platform_api::EventTime;
 
 use flui_interaction::{
-    ArenaMembership, CancelOutcome, GestureArenaMember, GestureRecognizer, GestureSettings,
-    LongPressGestureRecognizer, ManualClock, PointerButton, PointerButtons, PointerDispatch,
-    PointerEventExt, PointerId, PointerInfo, PointerPosition, PointerPress, PointerRelease,
-    PointerSample, PrimaryContact, RecognizerSet,
+    ArenaMembership, CancelOutcome, GestureArenaMember, GestureBinding, GestureRecognizer,
+    GestureSettings, HitTestEntry, HitTestResult, InteractionLane, LongPressGestureRecognizer,
+    ManualClock, PointerButton, PointerButtons, PointerDispatch, PointerEventExt, PointerId,
+    PointerInfo, PointerPosition, PointerPress, PointerRelease, PointerSample, PrimaryContact,
+    RecognizerSet, RenderId,
     arena::GestureArena,
     events::{PointerEvent, PointerKind},
 };
@@ -84,7 +85,10 @@ impl GestureRecognizer for LoggingRecognizer {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let arena = GestureArena::new();
+    let lane = InteractionLane::try_new()?;
+    let clock = Arc::new(ManualClock::new());
+    let binding = GestureBinding::with_clock(clock.clone());
+    let arena = binding.arena().clone();
     let winner = LoggingRecognizer::new(arena.clone(), "winner", true);
     let loser = LoggingRecognizer::new(arena.clone(), "loser", false);
     let mut recognizers = RecognizerSet::default();
@@ -106,40 +110,60 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         PointerButtons::only(PointerButton::PRIMARY),
         PointerSample::new(EventTime::from_nanos(20_000_000), position),
     ));
-    recognizers.dispatch(PointerDispatch::at_root(&down));
-    arena.close(pointer);
-    recognizers.dispatch(PointerDispatch::at_root(&up));
-    arena.sweep(pointer);
-    arena.drain_deferred_resolutions();
+    lane.enter(|| -> Result<(), Box<dyn std::error::Error>> {
+        let target = lane.dispatch_handle().register_pointer(move |dispatch| {
+            recognizers.dispatch(dispatch);
+        })?;
+        let route = |_| {
+            let mut path = HitTestResult::new();
+            path.add(HitTestEntry::new(RenderId::new(1)).pointer_target(target));
+            path
+        };
+        binding.handle_pointer_event(&down, route);
+        binding.handle_pointer_event(&up, route);
+        Ok(())
+    })?;
 
     assert!(winner.won.get(), "the release claimant wins");
     assert!(!loser.won.get(), "the other recognizer loses");
     assert!(arena.is_empty(), "the completed contact releases its arena");
 
-    // A second standalone arena shows idle progression without another packet.
+    // A second route shows idle progression without another pointer packet.
     // A mounted widget instead acquires GestureArenaScope::of(ctx); its binding
     // owns this progression and the widget must not create a private arena.
-    let clock = Arc::new(ManualClock::new());
-    let timed_arena = GestureArena::with_clock(clock.clone());
     let presses = Rc::new(Cell::new(0));
     let observed = presses.clone();
-    let long_press = LongPressGestureRecognizer::builder(timed_arena.clone())
+    let long_press = LongPressGestureRecognizer::builder(arena.clone())
         .settings(GestureSettings::default().with_long_press_timeout(Duration::from_millis(500)))
         .on_long_press(move || observed.set(observed.get() + 1))
         .build();
     let mut timed_recognizers = RecognizerSet::default();
     timed_recognizers.attach(&long_press);
-    timed_recognizers.dispatch(PointerDispatch::at_root(&down));
-    timed_arena.close(pointer);
-    assert!(timed_arena.next_deadline().is_some());
-    clock.advance(Duration::from_millis(500));
-    timed_arena.poll_deadlines();
-    timed_arena.drain_deferred_resolutions();
-    assert_eq!(presses.get(), 1, "stationary contact reaches its deadline");
-    timed_recognizers.dispatch(PointerDispatch::at_root(&up));
-    timed_arena.sweep(pointer);
-    timed_arena.drain_deferred_resolutions();
-    assert!(timed_arena.is_empty());
+    lane.enter(|| -> Result<(), Box<dyn std::error::Error>> {
+        let target = lane.dispatch_handle().register_pointer(move |dispatch| {
+            timed_recognizers.dispatch(dispatch);
+        })?;
+        let route = |_| {
+            let mut path = HitTestResult::new();
+            path.add(HitTestEntry::new(RenderId::new(2)).pointer_target(target));
+            path
+        };
+        binding.handle_pointer_event(&down, route);
+        assert!(binding.next_deadline().is_some());
+        clock.advance(Duration::from_millis(500));
+        binding.tick_deadlines();
+        binding.drain_deferred_arena_resolutions();
+        assert_eq!(presses.get(), 1, "stationary contact reaches its deadline");
+        let held_up = PointerEvent::Up(PointerRelease::new(
+            info,
+            PointerButton::PRIMARY,
+            PointerButtons::only(PointerButton::PRIMARY),
+            PointerSample::new(EventTime::from_nanos(500_000_000), position),
+        ));
+        binding.handle_pointer_event(&held_up, route);
+        Ok(())
+    })?;
+    assert!(arena.is_empty());
     println!("custom recognizer attachment demo OK");
     Ok(())
 }

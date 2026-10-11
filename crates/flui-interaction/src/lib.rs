@@ -197,7 +197,6 @@ pub use wheel_preferences::{WheelPreferencesProvider, WheelPreferencesSource};
 // ============================================================================
 pub use arena::{
     GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition, SweepModel,
-    run_pointer_lifecycle,
 };
 // ============================================================================
 // Re-exports: Other

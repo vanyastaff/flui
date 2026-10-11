@@ -50,15 +50,17 @@ use std::{cell::Cell, rc::Rc};
 use flui_foundation::geometry::Point;
 use flui_platform_api::EventTime;
 use flui_interaction::{
-    GestureArena, PointerButton, PointerButtons, PointerDispatch, PointerEvent,
+    GestureBinding, HitTestEntry, HitTestResult, InteractionLane, PointerButton,
+    PointerButtons, PointerEvent,
     PointerId, PointerInfo, PointerKind, PointerPosition, PointerPress,
-    PointerRelease, PointerSample, RecognizerSet, TapGestureRecognizer,
+    PointerRelease, PointerSample, RecognizerSet, RenderId, TapGestureRecognizer,
 };
 
-let arena = GestureArena::new();
+let lane = InteractionLane::try_new()?;
+let binding = GestureBinding::new();
 let taps = Rc::new(Cell::new(0));
 let observed = taps.clone();
-let tap = TapGestureRecognizer::builder(arena.clone())
+let tap = TapGestureRecognizer::builder(binding.arena().clone())
     .on_tap(move |_| observed.set(observed.get() + 1))
     .build();
 let mut recognizers = RecognizerSet::default();
@@ -74,30 +76,43 @@ let up = PointerEvent::Up(PointerRelease::new(
     info, PointerButton::PRIMARY, PointerButtons::only(PointerButton::PRIMARY),
     PointerSample::new(EventTime::from_nanos(20_000_000), position),
 ));
-recognizers.dispatch(PointerDispatch::at_root(&down));
-arena.close(pointer); // Close only after every Down recipient has joined.
-recognizers.dispatch(PointerDispatch::at_root(&up));
-arena.sweep(pointer);
-arena.drain_deferred_resolutions();
+lane.enter(|| -> Result<(), Box<dyn std::error::Error>> {
+    let target = lane.dispatch_handle().register_pointer(move |dispatch| {
+        recognizers.dispatch(dispatch);
+    })?;
+    let route = |_| {
+        let mut path = HitTestResult::new();
+        path.add(HitTestEntry::new(RenderId::new(1)).pointer_target(target));
+        path
+    };
+    binding.handle_pointer_event(&down, route);
+    binding.handle_pointer_event(&up, route);
+    Ok(())
+})?;
 assert_eq!(taps.get(), 1);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-This is a standalone driver. It owns the Down close, Up sweep and deferred
-resolution drain after routing; on Cancel it abandons the arena after routing
-cancellation. Deadline-driven recognizers also require idle progress: schedule
-`arena.next_deadline()`, then call `arena.poll_deadlines()` and
-`arena.drain_deferred_resolutions()` when that time arrives, even without another
-pointer packet. Retain and release any held arena entries according to the
-recognizer's protocol. The custom recognizer example runs both contact routing
-and a stationary long-press deadline using the public input constructors.
+This standalone composition uses the same `GestureBinding` as a presentation:
+the binding owns exact-contact Down closure, Up sweeping, Cancel retirement and
+deferred resolution draining after the full hit route. A host still drives idle
+progress: schedule `binding.next_deadline()`, call `binding.tick_deadlines()` and
+`binding.drain_deferred_arena_resolutions()` when due, and flush pending motion
+on frames. Keep these calls inside the active lane even without another pointer
+packet. The custom recognizer example demonstrates both routed contact delivery
+and a stationary long-press deadline using public input constructors.
 
 Mounted widgets acquire the presentation's shared, binding-driven arena through
 `flui_widgets::GestureArenaScope::of(ctx)` in their lifecycle setup, retain
 recognizers in state, and attach them with `Listener::recognizer`.
-`GestureBinding` owns routing, closure, sweeping, idle deadlines and draining
-there. `GestureArena::new()` creates a private self-driven arena for standalone
-use; it cannot back `GestureArenaScope`.
+`GestureBinding` owns routing, closure, sweeping and draining there; the
+presentation frame loop drives its idle deadlines and pending motion.
+`GestureArena::new()` creates a private self-driven arena for one recognizer
+owner; it cannot back `GestureArenaScope`. A private owner closes Down after
+admission, polls deadlines and drains deferred resolutions; built-in
+recognizers finish their exact admitted membership on Up or Cancel. Adding an
+ID-only sweep after a callback can instead sweep a newly admitted same-ID
+contact, so composed input uses the binding's complete route transaction.
 
 Tap Down callbacks receive `TapDownDetails`; Up and completed-tap callbacks
 receive `TapUpDetails`. Move and cancellation callbacks receive `TapDetails`.

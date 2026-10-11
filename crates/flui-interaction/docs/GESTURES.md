@@ -30,12 +30,14 @@ multi-tap its contact count, and multi-drag its axis. Configure callbacks and
 `.settings(GestureSettings)` before `.build()`, which returns `Rc<Self>`.
 Callbacks are immutable after construction and may capture `Rc` UI state.
 
-Construction alone does not deliver input. For standalone use, keep the strong
-recognizer owner, attach it to `RecognizerSet`, route Down before closing its
-arena, route Up before sweeping, and drain deferred resolutions after routing.
-Route Cancel before abandoning its arena. Idle time must also progress:
-schedule `arena.next_deadline()`, poll due deadlines and drain deferred
-resolutions without waiting for a Move. The runnable
+Construction alone does not deliver input. For composed standalone use, create
+`GestureBinding`, build recognizers with `binding.arena().clone()`, retain their
+strong owners and attach them to `RecognizerSet`. An `InteractionLane` pointer
+target dispatches to the set; supply that target in the binding's hit-test route.
+The binding owns exact-contact closure, sweeping and cancellation after the
+full route. Drive idle time by scheduling `binding.next_deadline()`, calling
+`binding.tick_deadlines()` and draining deferred arena resolutions in the active
+lane without waiting for a Move; flush pending motion on frames. The runnable
 [custom recognizer example](../examples/custom_recognizer.rs) uses public event
 constructors and a manual clock to demonstrate both terminal and idle delivery;
 it does not require the `testing` feature.
@@ -45,7 +47,10 @@ lifecycle setup, retain their owners in state and attach through
 `Listener::recognizer`. The presentation's `GestureBinding` supplies the shared
 binding-driven arena and owns its routing and time progression. A private
 `GestureArena::new()` is self-driven and cannot be installed as a presentation
-scope.
+scope. Reserve it for a private recognizer owner: close Down after admission,
+poll deadlines and drain resolutions. Built-in recognizers finish exact
+membership on terminal delivery; a later ID-only Up sweep can affect a new
+contact admitted reentrantly by its predecessor's callback.
 
 Callback detail payloads are `#[non_exhaustive]`: read their public fields or
 use a destructuring pattern with `..`. Existing detail constructors support
