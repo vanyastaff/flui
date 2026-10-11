@@ -127,6 +127,33 @@ controller.reset()?;                  // Jump to lower_bound, status = ReverseSe
 # }
 ```
 
+### Finishing a transition
+
+Use `finish()` when the application needs the current finite transition to
+reach its declared endpoint immediately. The original run future succeeds.
+
+```rust
+use flui_animation::{Animation, AnimationController};
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll, Waker};
+use std::time::Duration;
+
+let controller = AnimationController::builder(Duration::from_millis(300)).build();
+let mut run = controller.forward().expect("live controller");
+controller.tick_at(Duration::from_millis(150));
+assert_eq!(controller.value(), 0.5);
+controller.finish().expect("finite transition");
+assert_eq!(controller.value(), 1.0);
+assert!(!controller.is_animating());
+let mut context = Context::from_waker(Waker::noop());
+assert_eq!(Pin::new(&mut run).poll(&mut context), Poll::Ready(Ok(())));
+```
+
+A paused finite run can also finish. An idle controller stays idle. Infinite
+repeats and arbitrary custom simulations return `AnimationError::NoFiniteEndpoint`
+without changing the run; `stop()` instead cancels at the current value.
+
 ### Repeating
 
 ```rust
@@ -170,8 +197,9 @@ controller.animate_with(sim)?;
 
 ### Listening
 
-Value listeners come from `flui_foundation::Listenable`; status listeners
-from `Animation`. Both take an `Rc`'d callback and return a `ListenerId`.
+Value listeners come from `flui_foundation::Listenable` and return a `ListenerId`.
+Status subscriptions come from `Animation` and return a `StatusSubscription`
+that removes the callback when dropped. Both take an `Rc`'d callback.
 
 ```rust
 # use std::rc::Rc;
@@ -629,7 +657,7 @@ use flui_animation::simulation::{FrictionSimulation, Simulation, Tolerance};
 # fn main() -> Result<(), flui_animation::simulation::SimulationError> {
 // drag in (0, 1): the fraction of velocity kept per second.
 let sim = FrictionSimulation::new(0.135, 0.0, 1000.0, Tolerance::DEFAULT)?;
-let rest = sim.final_x();
+let rest = sim.x(f64::INFINITY);
 assert!(sim.time_at_x(rest / 2.0) > 0.0);
 assert_eq!(sim.time_at_x(-1.0), f64::INFINITY); // behind the start: never
 # Ok(())

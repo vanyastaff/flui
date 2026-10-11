@@ -582,7 +582,7 @@ fn spring_edges() {
 }
 fn friction_edges() {
     let sim = FrictionSimulation::new(0.135, 5.0, 300.0, Tolerance::DEFAULT).expect("friction");
-    assert_time_domain(&sim, 5.0, 300.0, sim.final_x());
+    assert_time_domain(&sim, 5.0, 300.0, 5.0 - 300.0 / 0.135_f64.ln());
 }
 fn bouncing_edges() {
     let bounds = SimulationBounds::new(0.0, 100.0).expect("bounds");

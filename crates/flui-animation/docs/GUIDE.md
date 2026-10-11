@@ -127,6 +127,33 @@ controller.set_value(0.5);
 # }
 ```
 
+### Finishing a transition
+
+An application can finish a finite transition immediately, keeping the original
+run future successful. This also works while the run is paused.
+
+```rust
+use flui_animation::{Animation, AnimationController};
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll, Waker};
+use std::time::Duration;
+
+let controller = AnimationController::builder(Duration::from_millis(300)).build();
+let mut run = controller.forward().expect("live controller");
+controller.tick_at(Duration::from_millis(150));
+assert_eq!(controller.value(), 0.5);
+controller.finish().expect("finite transition");
+assert_eq!(controller.value(), 1.0);
+assert!(!controller.is_animating());
+let mut context = Context::from_waker(Waker::noop());
+assert_eq!(Pin::new(&mut run).poll(&mut context), Poll::Ready(Ok(())));
+```
+
+`finish()` leaves an idle controller idle. Infinite repeats and arbitrary custom
+simulations refuse with `AnimationError::NoFiniteEndpoint` and keep their original
+run. Use `stop()` to cancel at the current value instead.
+
 ### Repeating
 
 ```rust
@@ -570,12 +597,12 @@ assert_eq!(sim.x(5.0), 1.0);
 ### FrictionSimulation
 
 ```rust
-use flui_animation::simulation::{FrictionSimulation, Tolerance};
+use flui_animation::simulation::{FrictionSimulation, Simulation, Tolerance};
 
 # fn main() -> Result<(), flui_animation::simulation::SimulationError> {
 // drag in (0, 1), position, velocity
 let sim = FrictionSimulation::new(0.05, 0.0, 100.0, Tolerance::DEFAULT)?;
-let resting = sim.final_x();
+let resting = sim.x(f64::INFINITY);
 assert!(sim.time_at_x(resting / 2.0) > 0.0);
 # Ok(())
 # }

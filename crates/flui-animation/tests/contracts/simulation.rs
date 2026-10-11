@@ -32,14 +32,32 @@ fn weak_drag_preserves_arrival_time() {
     );
 }
 
+fn weak_drag_with_a_subnormal_tolerance_reaches_finite_rest() {
+    let distance = f64::from_bits(1);
+    for velocity_limit in [distance, f64::INFINITY] {
+        let simulation = FrictionSimulation::new(
+            1.0_f64.next_down(),
+            0.0,
+            1.0,
+            Tolerance::new(distance, velocity_limit).expect("positive tolerance"),
+        )
+        .expect("finite glide endpoint");
+        // Independent bound: drag^t < exp(-1000) at 1e19 seconds, so both
+        // velocity and remaining glide are below the smallest positive f64.
+        assert!(
+            simulation.is_done(1e19),
+            "a representable finite rest must not become infinite through underflow"
+        );
+        assert_eq!(simulation.x(1e19), -1.0 / 1.0_f64.next_down().ln());
+        assert_eq!(simulation.dx(1e19), 0.0);
+    }
+}
+
 fn unreachable_and_stationary_queries() {
     let sim = friction(0.135, 0.0, 100.0);
-    assert_eq!(sim.time_at_x(sim.final_x()), f64::INFINITY);
-    assert_eq!(
-        sim.time_at_x(sim.final_x() * 2.0),
-        f64::INFINITY,
-        "past the rest"
-    );
+    let resting = -100.0 / 0.135_f64.ln();
+    assert_eq!(sim.time_at_x(resting), f64::INFINITY);
+    assert_eq!(sim.time_at_x(resting * 2.0), f64::INFINITY, "past the rest");
     assert_eq!(sim.time_at_x(-1.0), f64::INFINITY, "behind the start");
     assert!(sim.time_at_x(f64::NAN).is_nan());
     let stationary = friction(0.135, 0.0, 0.0);
@@ -63,7 +81,7 @@ fn roundtrip(drag: f64, start: f64, velocity: f64) {
         assert_eq!(sim.dx(time).is_sign_positive(), velocity.is_sign_positive());
     }
     assert_eq!(sim.x(f64::NAN), start);
-    assert_eq!(sim.x(f64::INFINITY), sim.final_x());
+    assert_eq!(sim.x(f64::INFINITY), start - velocity / drag.ln());
 }
 fn positive_normal_drag() {
     roundtrip(0.135, 10.0, 8000.0);
@@ -104,7 +122,7 @@ fn rests_when_the_remaining_glide_is_within_distance() {
     // Reference: 8000·dᵗ/|ln d| = 0.5 at t = 4.48741315404835 s.
     assert!(!sim.is_done(4.487_413_15));
     assert!(sim.is_done(4.487_413_16));
-    let remaining = (sim.final_x() - sim.x(4.4874)).abs();
+    let remaining = (-8000.0 / drag.ln() - sim.x(4.4874)).abs();
     assert!(
         remaining > 0.5 && remaining < 0.5001,
         "remaining {remaining}"
@@ -116,6 +134,10 @@ fn friction_preserves_small_decay_and_position_time_roundtrips() {
     crate::run_table(&[
         ("weak drag frame motion", weak_drag_preserves_frame_motion),
         ("weak drag arrival time", weak_drag_preserves_arrival_time),
+        (
+            "weak drag subnormal tolerance",
+            weak_drag_with_a_subnormal_tolerance_reaches_finite_rest,
+        ),
         ("positive normal drag", positive_normal_drag),
         ("negative normal drag", negative_normal_drag),
         ("nearly unit drag", nearly_unit_drag),
@@ -252,7 +274,7 @@ fn friction_that_rests_inside_never_springs() {
         assert_eq!(sim.x(t), glide.x(t));
     }
     assert!(sim.is_done(100.0));
-    assert_eq!(sim.x(100.0), glide.final_x());
+    assert_eq!(sim.x(100.0), 100.0 - 200.0 / 0.135_f64.ln());
 }
 fn outside_the_range_springs_back() {
     let bounds = SimulationBounds::new(0.0, 100.0).expect("bounds");

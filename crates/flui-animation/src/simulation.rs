@@ -1018,11 +1018,11 @@ fn settle_two_exponentials(slow: (f64, f64), fast: (f64, f64), limit: f64) -> f6
 // ---------------------------------------------------------------------------
 
 /// Motion decelerating by drag: velocity `v0*drag^t`, coasting toward
-/// [`final_x`](Self::final_x).
+/// its resting position, available through [`Simulation::x`] at infinite time.
 ///
 /// It rests once the remaining glide is within the tolerance's distance (and
 /// the speed under its velocity limit); from then on `x` is exactly
-/// `final_x` and `dx` is `0.0`.
+/// the resting position and `dx` is `0.0`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FrictionSimulation {
     drag: f64,
@@ -1049,9 +1049,10 @@ impl FrictionSimulation {
     /// use flui_animation::simulation::{FrictionSimulation, Simulation, Tolerance};
     ///
     /// let sim = FrictionSimulation::new(0.135, 0.0, 1000.0, Tolerance::new(0.5, f64::INFINITY)?)?;
-    /// assert!(sim.final_x() > 0.0);
+    /// let resting = sim.x(f64::INFINITY);
+    /// assert!(resting > 0.0);
     /// assert!(sim.is_done(10.0));
-    /// assert_eq!(sim.x(10.0), sim.final_x());
+    /// assert_eq!(sim.x(10.0), resting);
     /// assert!(FrictionSimulation::new(1.0, 0.0, 1.0, Tolerance::DEFAULT).is_err());
     /// # Ok::<(), flui_animation::simulation::SimulationError>(())
     /// ```
@@ -1069,13 +1070,17 @@ impl FrictionSimulation {
         let drag_log = drag.ln();
         let final_x = representable(position - velocity / drag_log)?;
         // Remaining glide |v(t)/ln d| <= distance, and |v(t)| <= the limit.
-        let speed_limit = tolerance
-            .velocity_limit(-drag_log)
-            .min(tolerance.distance * -drag_log);
-        let rest_secs = if velocity.abs() <= speed_limit {
+        // Compare in log space: distance * rate can underflow even when the
+        // corresponding time to rest is finite and representable.
+        let log_speed_limit = tolerance
+            .velocity
+            .ln()
+            .min(tolerance.distance.ln() + (-drag_log).ln());
+        let log_speed = velocity.abs().ln();
+        let rest_secs = if log_speed <= log_speed_limit {
             0.0
         } else {
-            (speed_limit.ln() - velocity.abs().ln()) / drag_log
+            (log_speed_limit - log_speed) / drag_log
         };
         Ok(Self {
             drag,
@@ -1087,15 +1092,9 @@ impl FrictionSimulation {
         })
     }
 
-    /// The position the motion coasts toward.
-    #[must_use]
-    pub fn final_x(&self) -> f64 {
-        self.final_x
-    }
-
     /// The time at which the unrested motion passes `x`: `0.0` at the start,
     /// `+inf` for a position it never reaches (behind the start, at or past
-    /// [`final_x`](Self::final_x), or any position other than the start when
+    /// the resting position, or any position other than the start when
     /// the velocity is zero), NaN for a NaN `x`.
     #[must_use]
     pub fn time_at_x(&self, x: f64) -> f64 {
