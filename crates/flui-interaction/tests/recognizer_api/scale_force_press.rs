@@ -223,6 +223,10 @@ fn scale_start_can_cancel_reentrantly_and_begin_a_healthy_later_scale() {
 fn scale_and_force_press_owner_lifecycle() {
     let cases: &[(&str, fn())] = &[
         (
+            "carried scale preserves representable contraction",
+            carried_scale_does_not_underflow_its_intermediate_ratio,
+        ),
+        (
             "force cancel is reusable",
             force_cancel_keeps_the_built_callbacks_for_the_next_contact,
         ),
@@ -519,6 +523,56 @@ fn force_missing_pressure_preserves_claim_coordinates() {
     assert_eq!(details[0].local_position, Offset::new(1.0, 0.0));
     assert!((details[0].pressure - 0.7).abs() < 1e-6);
     drop(details);
+    recognizer.cancel();
+    assert!(arena.is_empty());
+}
+
+fn carried_scale_does_not_underflow_its_intermediate_ratio() {
+    let arena = GestureArena::new();
+    let updates = Rc::new(RefCell::new(Vec::new()));
+    let observed = Rc::clone(&updates);
+    let recognizer = ScaleGestureRecognizer::builder(arena.clone())
+        .on_update(move |details| {
+            observed
+                .borrow_mut()
+                .push((details.scale, details.horizontal_scale));
+        })
+        .build();
+    let motion = |raw, x| {
+        recognizer.handle_event(PointerDispatch::at_root(
+            &make_move_event_for_id(pointer(raw), Offset::new(x, 0.0), PointerKind::Touch)
+                .expect("finite measured contact"),
+        ));
+    };
+    admit(&*recognizer, &arena, &down(1, 0.0), 1);
+    admit(&*recognizer, &arena, &down(2, 2.0), 2);
+    motion(2, 2e200);
+    let expanded = *updates.borrow().last().expect("expanded scale update");
+    for factor in [expanded.0, expanded.1] {
+        assert!(
+            (factor / 1e200 - 1.0).abs() < 1e-12,
+            "expanded factor: {factor}"
+        );
+    }
+    // A contact change carries the expanded factor into a huge new baseline.
+    // The next ratio is smaller than f64 can hold, but the carried result is
+    // representable: 1e200 * (tiny span / huge span) = 1e-200.
+    admit(&*recognizer, &arena, &down(3, 0.0), 3);
+    motion(2, 2e-200);
+    let contracted = *updates.borrow().last().expect("contracted scale update");
+    for factor in [contracted.0, contracted.1] {
+        assert!(
+            (factor / 1e-200 - 1.0).abs() < 1e-12,
+            "a representable carried factor must not collapse to zero: {factor}"
+        );
+    }
+    recognizer.cancel();
+    assert!(arena.is_empty());
+    admit(&*recognizer, &arena, &down(1, 0.0), 1);
+    admit(&*recognizer, &arena, &down(2, 2.0), 2);
+    motion(2, 4.0);
+    let recovered = *updates.borrow().last().expect("fresh scale update");
+    assert_eq!(recovered, (2.0, 2.0));
     recognizer.cancel();
     assert!(arena.is_empty());
 }
