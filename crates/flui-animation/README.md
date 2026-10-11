@@ -213,36 +213,36 @@ back curves overshoot). Used for easing.
 
 **Contract**: `transform(0.0) == 0.0` and `transform(1.0) == 1.0`.
 
-### Predefined Curves
+### Predefined curves
 
-`Curves` holds the catalog as associated constants:
+The `curves` module contains the easing preset constants:
 
 ```rust
-use flui_animation::{Curve, Curves};
+use flui_animation::{Curve, curves};
 
 let curves: [&dyn Curve; 12] = [
-    &Curves::Linear,        // Identity
-    &Curves::EaseIn,        // Slow start
-    &Curves::EaseOut,       // Slow end
-    &Curves::EaseInOut,     // Slow start and end
-    &Curves::FastOutSlowIn, // Material Design standard
-    &Curves::BounceIn,      // Bounce at start
-    &Curves::BounceOut,     // Bounce at end
-    &Curves::BounceInOut,   // Bounce both
-    &Curves::ElasticIn,     // Overshoot at start
-    &Curves::ElasticOut,    // Overshoot at end
-    &Curves::ElasticInOut,  // Overshoot both
-    &Curves::Decelerate,    // Fast start, gradual stop
+    &curves::LINEAR,           // Identity
+    &curves::EASE_IN,          // Slow start
+    &curves::EASE_OUT,         // Slow end
+    &curves::EASE_IN_OUT,      // Slow start and end
+    &curves::FAST_OUT_SLOW_IN, // Material Design standard
+    &curves::BOUNCE_IN,        // Bounce at start
+    &curves::BOUNCE_OUT,       // Bounce at end
+    &curves::BOUNCE_IN_OUT,    // Bounce both
+    &curves::ELASTIC_IN,       // Overshoot at start
+    &curves::ELASTIC_OUT,      // Overshoot at end
+    &curves::ELASTIC_IN_OUT,   // Overshoot both
+    &curves::DECELERATE,       // Fast start, gradual stop
 ];
 for curve in curves {
     assert!((curve.transform(1.0) - 1.0).abs() < 1e-9);
 }
 ```
 
-### Custom Curves
+### Custom curves
 
 ```rust
-use flui_animation::{Cubic, Curves, ElasticOutCurve, Interval};
+use flui_animation::{Cubic, curves, ElasticOutCurve, Interval};
 
 // Cubic bezier (CSS-style)
 let curve = Cubic::new(0.25, 0.1, 0.25, 1.0);
@@ -251,7 +251,7 @@ let curve = Cubic::new(0.25, 0.1, 0.25, 1.0);
 let elastic = ElasticOutCurve::new(0.3);
 
 // Interval: active only in [0.2, 0.8]
-let interval = Interval::new(0.2, 0.8, Curves::EaseIn);
+let interval = Interval::new(0.2, 0.8, curves::EASE_IN);
 
 ```
 
@@ -273,9 +273,9 @@ assert_eq!(ticks.transform(0.125), 0.125);
 ### Curve Modifiers
 
 ```rust
-use flui_animation::{Curve, Curves};
+use flui_animation::{Curve, curves};
 
-let flipped = Curves::EaseIn.flipped();   // 180° rotation: 1.0 - curve(1.0 - t)
+let flipped = curves::EASE_IN.flipped();   // 180° rotation: 1.0 - curve(1.0 - t)
 assert!((flipped.transform(0.0) - 0.0).abs() < 1e-9);
 ```
 
@@ -343,11 +343,11 @@ after a jump), and a non-finite sample is never published.
 
 ```rust
 use std::time::Duration;
-use flui_animation::{Animatable, Curves, Keyframes, Linear};
+use flui_animation::{Animatable, curves, Keyframes, Linear};
 
 let ms = Duration::from_millis;
 let pulse = Keyframes::builder(0.0, ms(1000))
-    .to(100.0, ms(250), Curves::EaseOut) // 0–250 ms
+    .to(100.0, ms(250), curves::EASE_OUT) // 0–250 ms
     .hold(ms(500))                       // 250–750 ms
     .to(0.0, ms(250), Linear)            // 750–1000 ms
     .build()
@@ -365,9 +365,9 @@ so one controller drives many elements.
 ### Tween Composition
 
 ```rust
-use flui_animation::{Animatable, Curve, Curves, FloatTween, ReverseTween};
+use flui_animation::{Animatable, Curve, curves, FloatTween, ReverseTween};
 let tween = FloatTween::new(0.0, 100.0);
-let eased = tween.transform(Curves::EaseIn.transform(0.5));
+let eased = tween.transform(curves::EASE_IN.transform(0.5));
 assert!(eased < 50.0);
 
 // Reverse direction
@@ -380,9 +380,9 @@ assert_eq!(reversed.transform(0.25), 75.0);
 Apply a curve as an Animatable:
 
 ```rust
-use flui_animation::{Animatable, CurveTween, Curves};
+use flui_animation::{Animatable, CurveTween, curves};
 
-let curve_tween = CurveTween::new(Curves::EaseIn);
+let curve_tween = CurveTween::new(curves::EASE_IN);
 let eased = curve_tween.transform(0.5); // EaseIn applied to 0.5
 assert!(eased < 0.5);
 ```
@@ -400,9 +400,9 @@ Apply a curve to an animation's output:
 ```rust
 # use std::rc::Rc;
 # use std::time::Duration;
-# use flui_animation::{Animation, AnimationController, CurvedAnimation, Curves};
+# use flui_animation::{Animation, AnimationController, CurvedAnimation, curves};
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
-let curved = CurvedAnimation::new(Rc::new(controller.clone()), Curves::EaseInOut);
+let curved = CurvedAnimation::new(Rc::new(controller.clone()), curves::EASE_IN_OUT);
 
 // Value is: curve.transform(controller.value())
 let value = curved.value();
@@ -506,10 +506,10 @@ let switch = AnimationSwitch::new(Rc::new(anim1.clone()), Some(Rc::new(anim2.clo
 ```rust
 # use std::rc::Rc;
 # use std::time::Duration;
-# use flui_animation::{AnimationController, CurvedAnimation, Curves, FloatTween};
+# use flui_animation::{AnimationController, CurvedAnimation, curves, FloatTween};
 use flui_animation::AnimatableExt;
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
-let curved = Rc::new(CurvedAnimation::new(Rc::new(controller.clone()), Curves::EaseOut));
+let curved = Rc::new(CurvedAnimation::new(Rc::new(controller.clone()), curves::EASE_OUT));
 let animated = FloatTween::new(0.0, 100.0).animate(curved);
 # drop(controller);
 ```
@@ -738,7 +738,7 @@ Each implemented from the canonical published source:
 | Capability | Source | API |
 |---|---|---|
 | Perceptually uniform color interpolation | Ottosson, Oklab (2020) | `ColorTween`, `Color::lerp` (premultiplied alpha, ADR-0149) |
-| M3 emphasized easing + full Penner catalog | Material 3 / Penner | `Curves::EaseInOutCubicEmphasized`, `ThreePointCubic`, `Split` |
+| Emphasized easing and polynomial-style presets | Bézier approximations; elastic and bounce formulas | `curves`, `ThreePointCubic`, `Split` |
 | Interruptible springs with velocity-preserving retarget | analytic closed forms | `AnimatedValue`, `#[derive(TwoWayConverter)]` |
 
 See `examples/oklab_gradient.rs`.

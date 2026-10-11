@@ -59,7 +59,7 @@
 //! The customization hooks: `Hero::create_rect_tween`,
 //! `Hero::flight_shuttle_builder` (which takes no foreign `BuildContext`),
 //! the state-preserving `Hero::placeholder`, and `Hero::curve` / `Hero::reverse_curve`
-//! with a `Curves::FastOutSlowIn` default. `FlightDirection` is public
+//! with a `curves::FAST_OUT_SLOW_IN` default. `FlightDirection` is public
 //! for the shuttle builder, and `HeroMode` grounds a subtree.
 //!
 //! The private surface stays out of the public API: `HeroTag`, `HeroRegistry`,

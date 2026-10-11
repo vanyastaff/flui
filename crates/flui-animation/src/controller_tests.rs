@@ -653,16 +653,16 @@ fn repeat_reverse_leg_velocity_is_negative() {
 // ---- animate_to_curved / animate_back_curved thread a curve through the run ----
 
 fn animate_to_curved_eases_through_the_given_curve() {
-    use crate::curve::Curves;
+    use crate::curves;
     let c = controller(100);
     c.animate_to_curved(
         1.0,
         Some(Duration::from_millis(100)),
-        Arc::new(Curves::EaseInQuint),
+        Arc::new(curves::EASE_IN_QUINT),
     )
     .unwrap();
     c.tick_at(std::time::Duration::from_secs_f64(0.05)); // t=0.5 raw
-    let expected = Curves::EaseInQuint.transform(0.5);
+    let expected = curves::EASE_IN_QUINT.transform(0.5);
     assert!(
         (c.value() - expected).abs() < 1e-3,
         "expected the curve applied at t=0.5: got {}, want {expected}",

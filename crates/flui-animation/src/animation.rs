@@ -41,7 +41,7 @@ impl AnimationDirection {
     }
 }
 
-/// An animation that progresses from 0.0 to 1.0, or from begin to end.
+/// An observable value with a directional phase and explicit run activity.
 ///
 /// This is the foundation of FLUI's animation system. All animations implement
 /// this trait and the `Listenable` trait, allowing widgets to rebuild when the

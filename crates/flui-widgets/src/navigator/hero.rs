@@ -69,7 +69,7 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use flui_animation::{Animatable, Animation, ArcCurve, Curve, Curves};
+use flui_animation::{Animatable, Animation, ArcCurve, Curve, curves};
 use flui_foundation::geometry::Rect;
 use flui_foundation::geometry::Size;
 use flui_foundation::{RenderId, ViewKey};
@@ -943,7 +943,7 @@ impl HeroHandle {
     /// This hero's forward flight curve.
     pub(crate) fn curve(&self) -> ArcCurve {
         self.inner.configuration.borrow().as_ref().map_or_else(
-            || ArcCurve::new(Curves::FastOutSlowIn),
+            || ArcCurve::new(curves::FAST_OUT_SLOW_IN),
             |view| view.curve.clone(),
         )
     }
@@ -1167,14 +1167,14 @@ impl Hero {
             rect_factory: None,
             shuttle_builder: None,
             placeholder: None,
-            curve: Terminal::new(ArcCurve::new(Curves::FastOutSlowIn)),
+            curve: Terminal::new(ArcCurve::new(curves::FAST_OUT_SLOW_IN)),
             reverse_curve: None,
             transition_on_user_gestures: false,
         }
     }
 
     /// The easing the flight animation runs with in the forward direction; the
-    /// default is `Curves::FastOutSlowIn`. A push eases on the **destination**
+    /// default is `curves::FAST_OUT_SLOW_IN`. A push eases on the **destination**
     /// hero's curve, a pop on the **source** hero's.
     #[must_use]
     pub fn curve(mut self, curve: impl Curve + Send + Sync + 'static) -> Self {

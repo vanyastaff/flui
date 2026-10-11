@@ -68,8 +68,8 @@ use std::time::Duration;
 use flui_animation::curve::{Curve, Interval};
 use flui_animation::ext::AnimatableExt;
 use flui_animation::{
-    Animation, AnimationController, AnimationStatus, Curves, DrivenController, Tween, Vsync,
-    VsyncUpdate,
+    Animation, AnimationController, AnimationStatus, DrivenController, Tween, Vsync, VsyncUpdate,
+    curves,
 };
 use flui_foundation::geometry::Size;
 use flui_foundation::{Listenable, ListenerId, RenderId};
@@ -1403,7 +1403,7 @@ fn resize_collapse_view(
     prior: Size,
     background: Option<BoxedView>,
 ) -> BoxedView {
-    let curved = Interval::new(0.4, 1.0, Curves::Ease).transform(resize_controller.value());
+    let curved = Interval::new(0.4, 1.0, curves::EASE).transform(resize_controller.value());
     let factor = 1.0 - curved;
     let (width, height) = if axis_is_x {
         (prior.width, prior.height * factor)

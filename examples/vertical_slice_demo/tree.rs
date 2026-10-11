@@ -7,7 +7,7 @@
 //!
 //! Self-contained over `flui-widgets` (plus the lower-layer `flui-view` and
 //! `flui-animation` crates it already depends on for `StateCell` and
-//! `Curves`) — no `flui-app` import here; each consumer decides how to mount.
+//! `curves`) — no `flui-app` import here; each consumer decides how to mount.
 //!
 //! Composition: a `StatefulView` root (`count`, `expanded`, `scroll_offset`)
 //! builds a `Column` of:
@@ -60,7 +60,7 @@
 
 use std::time::Duration;
 
-use flui_animation::Curves;
+use flui_animation::curves;
 use flui_view::StateCell;
 use flui_widgets::prelude::*;
 use flui_widgets::{AnimatedContainer, column, row};
@@ -401,7 +401,7 @@ impl ViewState<DemoHome> for DemoHomeState {
                     .height(target_height)
                     .color(target_color)
                     .duration(ANIMATION_DURATION)
-                    .curve(Curves::EaseOut),
+                    .curve(curves::EASE_OUT),
             );
 
         Container::new()

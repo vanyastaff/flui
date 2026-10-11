@@ -27,8 +27,8 @@ use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_ma
 
 use flui_animation::{
     Animatable, AnimatedValue, Animation, AnimationController, ColorTween, Curve, CurvedAnimation,
-    Curves, FloatTween, FrictionSimulation, MotionClock, MotionSpec, Simulation, SpringDescription,
-    SpringSimulation, Tolerance, Tween, Vsync,
+    FloatTween, FrictionSimulation, MotionClock, MotionSpec, Simulation, SpringDescription,
+    SpringSimulation, Tolerance, Tween, Vsync, curves,
 };
 use flui_foundation::Listenable;
 use flui_foundation::geometry::Offset;
@@ -69,17 +69,17 @@ fn curve_eval(c: &mut Criterion) {
     let mut group = c.benchmark_group("curve_eval");
 
     group.bench_function("linear", |b| {
-        b.iter(|| black_box(Curves::Linear.transform(black_box(0.37))));
+        b.iter(|| black_box(curves::LINEAR.transform(black_box(0.37))));
     });
     group.bench_function("ease_in_out", |b| {
-        b.iter(|| black_box(Curves::EaseInOut.transform(black_box(0.37))));
+        b.iter(|| black_box(curves::EASE_IN_OUT.transform(black_box(0.37))));
     });
     group.bench_function("elastic_out", |b| {
-        b.iter(|| black_box(Curves::ElasticOut.transform(black_box(0.37))));
+        b.iter(|| black_box(curves::ELASTIC_OUT.transform(black_box(0.37))));
     });
     // Two cubic segments + rescale arithmetic: the M3 emphasized default.
     group.bench_function("three_point_cubic_emphasized", |b| {
-        b.iter(|| black_box(Curves::EaseInOutCubicEmphasized.transform(black_box(0.37))));
+        b.iter(|| black_box(curves::EASE_IN_OUT_CUBIC_EMPHASIZED.transform(black_box(0.37))));
     });
 
     group.finish();
@@ -199,7 +199,7 @@ fn controller_tick(c: &mut Criterion) {
     // The same run eased through a cubic Bézier.
     let eased = AnimationController::builder(NEVER_ENDING).build();
     eased
-        .animate_to_curved(1.0, None, Arc::new(Curves::EaseInOut))
+        .animate_to_curved(1.0, None, Arc::new(curves::EASE_IN_OUT))
         .unwrap();
     bench_live_tick(&mut group, "ease_in_out", &eased);
     drop(eased);
@@ -254,7 +254,7 @@ fn controller_tick(c: &mut Criterion) {
     parent_controller.forward().unwrap();
     parent_controller.tick_at(std::time::Duration::from_secs_f64(0.37));
     let parent: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(parent_controller.clone());
-    let curved = CurvedAnimation::new(parent, Curves::EaseInOut);
+    let curved = CurvedAnimation::new(parent, curves::EASE_IN_OUT);
     group.bench_function("curved_value", |b| {
         b.iter(|| black_box(curved.value()));
     });

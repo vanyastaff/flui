@@ -43,12 +43,12 @@ use crate::simulation::{
 /// # Examples
 ///
 /// ```
-/// use flui_animation::{ArcCurve, Curves, MotionSpec, SpringDescription};
+/// use flui_animation::{ArcCurve, curves, MotionSpec, SpringDescription};
 /// use std::time::Duration;
 ///
 /// let eased = MotionSpec::Curve {
 ///     duration: Duration::from_millis(200),
-///     curve: ArcCurve::new(Curves::EaseInOut),
+///     curve: ArcCurve::new(curves::EASE_IN_OUT),
 /// };
 /// let sprung = MotionSpec::Spring(
 ///     SpringDescription::with_damping_ratio(1.0, 100.0, 1.0).unwrap(),

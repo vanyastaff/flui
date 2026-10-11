@@ -562,13 +562,13 @@ impl Vsync {
     /// counting nested ones (see [`attach_child`](Self::attach_child)).
     #[must_use]
     pub fn len(&self) -> usize {
-        self.inner.borrow_mut().controllers.len()
+        self.inner.borrow().controllers.len()
     }
 
     /// Whether no controllers are registered.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.inner.borrow_mut().controllers.is_empty()
+        self.inner.borrow().controllers.is_empty()
     }
 
     /// Whether at least one registered controller is currently running.
@@ -1218,7 +1218,7 @@ mod tests {
             exhausted.inner.borrow_mut().next_id = u64::MAX;
             let motion = crate::MotionSpec::Curve {
                 duration: Duration::from_secs(1),
-                curve: crate::ArcCurve::new(crate::Curves::Linear),
+                curve: crate::ArcCurve::new(crate::curves::LINEAR),
             };
             let mut refused = crate::AnimatedValue::new(0.0, motion.clone(), Some(&old)).unwrap();
             let mut accepted = crate::AnimatedValue::new(0.0, motion, Some(&old)).unwrap();
@@ -1311,7 +1311,7 @@ mod tests {
     }
 
     fn a_terminal_frame_counter_still_delivers_fresh_runs() {
-        use crate::{Animation, ArcCurve, Curves, MotionClock, MotionSpec};
+        use crate::{Animation, ArcCurve, MotionClock, MotionSpec, curves};
         let registry = Vsync::new();
         registry.inner.borrow_mut().frame = u64::MAX - 2;
         let mut clock = MotionClock::new();
@@ -1327,7 +1327,7 @@ mod tests {
                     0.8,
                     &MotionSpec::Curve {
                         duration: Duration::from_secs(1),
-                        curve: ArcCurve::new(Curves::Linear),
+                        curve: ArcCurve::new(curves::LINEAR),
                     },
                 )
                 .expect("terminal counter retains run admission");

@@ -3,8 +3,8 @@
 //! reference values, and parameter validation however a curve is made.
 
 use flui_animation::{
-    ArcCurve, BounceInCurve, Cubic, Curve, CurveError, Curves, ElasticInCurve, ElasticInOutCurve,
-    ElasticOutCurve, Interval, JumpAt, Linear, Split, Steps, ThreePointCubic,
+    ArcCurve, BounceInCurve, Cubic, Curve, CurveError, ElasticInCurve, ElasticInOutCurve,
+    ElasticOutCurve, Interval, JumpAt, Linear, Split, Steps, ThreePointCubic, curves,
 };
 use proptest::prelude::*;
 
@@ -20,137 +20,169 @@ enum Shape {
 fn catalog() -> Vec<(&'static str, ArcCurve, Shape)> {
     use Shape::{Monotone, Overshoots};
     vec![
-        ("Linear", ArcCurve::new(Curves::Linear), Monotone),
-        ("EaseIn", ArcCurve::new(Curves::EaseIn), Monotone),
-        ("EaseOut", ArcCurve::new(Curves::EaseOut), Monotone),
-        ("EaseInOut", ArcCurve::new(Curves::EaseInOut), Monotone),
+        ("Linear", ArcCurve::new(curves::LINEAR), Monotone),
+        ("EaseIn", ArcCurve::new(curves::EASE_IN), Monotone),
+        ("EaseOut", ArcCurve::new(curves::EASE_OUT), Monotone),
+        ("EaseInOut", ArcCurve::new(curves::EASE_IN_OUT), Monotone),
         (
             "FastOutSlowIn",
-            ArcCurve::new(Curves::FastOutSlowIn),
+            ArcCurve::new(curves::FAST_OUT_SLOW_IN),
             Monotone,
         ),
         (
-            "SlowOutFastIn",
-            ArcCurve::new(Curves::SlowOutFastIn),
+            "LinearOutSlowIn",
+            ArcCurve::new(curves::LINEAR_OUT_SLOW_IN),
             Monotone,
         ),
         (
             "EaseInOutCubic",
-            ArcCurve::new(Curves::EaseInOutCubic),
+            ArcCurve::new(curves::EASE_IN_OUT_CUBIC),
             Monotone,
         ),
-        ("EaseInSine", ArcCurve::new(Curves::EaseInSine), Monotone),
-        ("EaseOutSine", ArcCurve::new(Curves::EaseOutSine), Monotone),
+        ("EaseInSine", ArcCurve::new(curves::EASE_IN_SINE), Monotone),
+        (
+            "EaseOutSine",
+            ArcCurve::new(curves::EASE_OUT_SINE),
+            Monotone,
+        ),
         (
             "EaseInOutSine",
-            ArcCurve::new(Curves::EaseInOutSine),
+            ArcCurve::new(curves::EASE_IN_OUT_SINE),
             Monotone,
         ),
-        ("EaseInExpo", ArcCurve::new(Curves::EaseInExpo), Monotone),
-        ("EaseOutExpo", ArcCurve::new(Curves::EaseOutExpo), Monotone),
+        ("EaseInExpo", ArcCurve::new(curves::EASE_IN_EXPO), Monotone),
+        (
+            "EaseOutExpo",
+            ArcCurve::new(curves::EASE_OUT_EXPO),
+            Monotone,
+        ),
         (
             "EaseInOutExpo",
-            ArcCurve::new(Curves::EaseInOutExpo),
+            ArcCurve::new(curves::EASE_IN_OUT_EXPO),
             Monotone,
         ),
-        ("EaseInCirc", ArcCurve::new(Curves::EaseInCirc), Monotone),
-        ("EaseOutCirc", ArcCurve::new(Curves::EaseOutCirc), Monotone),
+        ("EaseInCirc", ArcCurve::new(curves::EASE_IN_CIRC), Monotone),
+        (
+            "EaseOutCirc",
+            ArcCurve::new(curves::EASE_OUT_CIRC),
+            Monotone,
+        ),
         (
             "EaseInOutCirc",
-            ArcCurve::new(Curves::EaseInOutCirc),
+            ArcCurve::new(curves::EASE_IN_OUT_CIRC),
             Monotone,
         ),
-        ("EaseInBack", ArcCurve::new(Curves::EaseInBack), Overshoots),
+        (
+            "EaseInBack",
+            ArcCurve::new(curves::EASE_IN_BACK),
+            Overshoots,
+        ),
         (
             "EaseOutBack",
-            ArcCurve::new(Curves::EaseOutBack),
+            ArcCurve::new(curves::EASE_OUT_BACK),
             Overshoots,
         ),
         (
             "EaseInOutBack",
-            ArcCurve::new(Curves::EaseInOutBack),
+            ArcCurve::new(curves::EASE_IN_OUT_BACK),
             Overshoots,
         ),
-        ("ElasticIn", ArcCurve::new(Curves::ElasticIn), Overshoots),
-        ("ElasticOut", ArcCurve::new(Curves::ElasticOut), Overshoots),
+        ("ElasticIn", ArcCurve::new(curves::ELASTIC_IN), Overshoots),
+        ("ElasticOut", ArcCurve::new(curves::ELASTIC_OUT), Overshoots),
         (
             "ElasticInOut",
-            ArcCurve::new(Curves::ElasticInOut),
+            ArcCurve::new(curves::ELASTIC_IN_OUT),
             Overshoots,
         ),
-        ("BounceIn", ArcCurve::new(Curves::BounceIn), Overshoots),
-        ("BounceOut", ArcCurve::new(Curves::BounceOut), Overshoots),
+        ("BounceIn", ArcCurve::new(curves::BOUNCE_IN), Overshoots),
+        ("BounceOut", ArcCurve::new(curves::BOUNCE_OUT), Overshoots),
         (
             "BounceInOut",
-            ArcCurve::new(Curves::BounceInOut),
+            ArcCurve::new(curves::BOUNCE_IN_OUT),
             Overshoots,
         ),
-        ("Decelerate", ArcCurve::new(Curves::Decelerate), Monotone),
-        ("Ease", ArcCurve::new(Curves::Ease), Monotone),
-        ("EaseInQuad", ArcCurve::new(Curves::EaseInQuad), Monotone),
-        ("EaseInCubic", ArcCurve::new(Curves::EaseInCubic), Monotone),
-        ("EaseInQuart", ArcCurve::new(Curves::EaseInQuart), Monotone),
-        ("EaseInQuint", ArcCurve::new(Curves::EaseInQuint), Monotone),
-        ("EaseOutQuad", ArcCurve::new(Curves::EaseOutQuad), Monotone),
+        ("Decelerate", ArcCurve::new(curves::DECELERATE), Monotone),
+        ("Ease", ArcCurve::new(curves::EASE), Monotone),
+        ("EaseInQuad", ArcCurve::new(curves::EASE_IN_QUAD), Monotone),
+        (
+            "EaseInCubic",
+            ArcCurve::new(curves::EASE_IN_CUBIC),
+            Monotone,
+        ),
+        (
+            "EaseInQuart",
+            ArcCurve::new(curves::EASE_IN_QUART),
+            Monotone,
+        ),
+        (
+            "EaseInQuint",
+            ArcCurve::new(curves::EASE_IN_QUINT),
+            Monotone,
+        ),
+        (
+            "EaseOutQuad",
+            ArcCurve::new(curves::EASE_OUT_QUAD),
+            Monotone,
+        ),
         (
             "EaseOutCubic",
-            ArcCurve::new(Curves::EaseOutCubic),
+            ArcCurve::new(curves::EASE_OUT_CUBIC),
             Monotone,
         ),
         (
             "EaseOutQuart",
-            ArcCurve::new(Curves::EaseOutQuart),
+            ArcCurve::new(curves::EASE_OUT_QUART),
             Monotone,
         ),
         (
             "EaseOutQuint",
-            ArcCurve::new(Curves::EaseOutQuint),
+            ArcCurve::new(curves::EASE_OUT_QUINT),
             Monotone,
         ),
         (
             "EaseInOutQuad",
-            ArcCurve::new(Curves::EaseInOutQuad),
+            ArcCurve::new(curves::EASE_IN_OUT_QUAD),
             Monotone,
         ),
         (
             "EaseInOutQuart",
-            ArcCurve::new(Curves::EaseInOutQuart),
+            ArcCurve::new(curves::EASE_IN_OUT_QUART),
             Monotone,
         ),
         (
             "EaseInOutQuint",
-            ArcCurve::new(Curves::EaseInOutQuint),
+            ArcCurve::new(curves::EASE_IN_OUT_QUINT),
             Monotone,
         ),
         (
             "FastLinearToSlowEaseIn",
-            ArcCurve::new(Curves::FastLinearToSlowEaseIn),
+            ArcCurve::new(curves::FAST_LINEAR_TO_SLOW_EASE_IN),
             Monotone,
         ),
         (
             "LinearToEaseOut",
-            ArcCurve::new(Curves::LinearToEaseOut),
+            ArcCurve::new(curves::LINEAR_TO_EASE_OUT),
             Monotone,
         ),
         (
             "EaseInToLinear",
-            ArcCurve::new(Curves::EaseInToLinear),
+            ArcCurve::new(curves::EASE_IN_TO_LINEAR),
             Monotone,
         ),
-        ("SlowMiddle", ArcCurve::new(Curves::SlowMiddle), Monotone),
+        ("SlowMiddle", ArcCurve::new(curves::SLOW_MIDDLE), Monotone),
         (
             "EaseInOutCubicEmphasized",
-            ArcCurve::new(Curves::EaseInOutCubicEmphasized),
+            ArcCurve::new(curves::EASE_IN_OUT_CUBIC_EMPHASIZED),
             Monotone,
         ),
         (
             "FastEaseInToSlowEaseOut",
-            ArcCurve::new(Curves::FastEaseInToSlowEaseOut),
+            ArcCurve::new(curves::FAST_EASE_IN_TO_SLOW_EASE_OUT),
             Monotone,
         ),
         (
             "Interval(0.2, 0.8, EaseIn)",
-            ArcCurve::new(Interval::new(0.2, 0.8, Curves::EaseIn)),
+            ArcCurve::new(Interval::new(0.2, 0.8, curves::EASE_IN)),
             Monotone,
         ),
         (
@@ -161,7 +193,7 @@ fn catalog() -> Vec<(&'static str, ArcCurve, Shape)> {
         ("Split(0.4)", ArcCurve::new(Split::new(0.4)), Monotone),
         (
             "EaseIn.flipped()",
-            ArcCurve::new(Curves::EaseIn.flipped()),
+            ArcCurve::new(curves::EASE_IN.flipped()),
             Monotone,
         ),
         (
@@ -302,7 +334,7 @@ fn assert_css(curve: &dyn Curve, expected: [f64; 5]) {
 
 fn css_ease() {
     assert_css(
-        &Curves::Ease,
+        &curves::EASE,
         [
             0.094_796_305_716_043_2,
             0.408_510_591_355_396,
@@ -315,7 +347,7 @@ fn css_ease() {
 
 fn css_ease_in() {
     assert_css(
-        &Curves::EaseIn,
+        &curves::EASE_IN,
         [
             0.017_026_609_651_562_9,
             0.093_464_650_718_824_8,
@@ -328,7 +360,7 @@ fn css_ease_in() {
 
 fn css_ease_out() {
     assert_css(
-        &Curves::EaseOut,
+        &curves::EASE_OUT,
         [
             0.160_572_154_237_533,
             0.378_138_130_825_110,
@@ -341,7 +373,7 @@ fn css_ease_out() {
 
 fn css_ease_in_out() {
     assert_css(
-        &Curves::EaseInOut,
+        &curves::EASE_IN_OUT,
         [
             0.019_722_453_548_311_2,
             0.129_161_931_047_320,
@@ -374,7 +406,7 @@ fn ease_in_out_expo_next_to_its_vertical_tangent() {
         let x = 0.5 + dx;
         let s = 0.5 + ((x - 0.5) / 4.0).cbrt();
         let want = 3.0 * s * s - 2.0 * s * s * s;
-        let got = Curves::EaseInOutExpo.transform(x);
+        let got = curves::EASE_IN_OUT_EXPO.transform(x);
         assert!(
             (got - want).abs() < 1e-6,
             "y({x}) = {got}, analytic {want}, |dy| = {}",
@@ -505,30 +537,33 @@ fn elastic_curves_are_continuous_at_endpoints() {
 // ---------------------------------------------------------------------------
 
 fn equal_builtin_curves_wrapped_separately_are_equal() {
-    assert_eq!(ArcCurve::new(Curves::EaseIn), ArcCurve::new(Curves::EaseIn));
+    assert_eq!(
+        ArcCurve::new(curves::EASE_IN),
+        ArcCurve::new(curves::EASE_IN)
+    );
     assert_eq!(
         ArcCurve::new(Cubic::new(0.42, 0.0, 1.0, 1.0)),
-        ArcCurve::new(Curves::EaseIn),
+        ArcCurve::new(curves::EASE_IN),
     );
-    assert_eq!(ArcCurve::new(Linear), ArcCurve::new(Curves::Linear));
+    assert_eq!(ArcCurve::new(Linear), ArcCurve::new(curves::LINEAR));
     assert_eq!(
         ArcCurve::new(ElasticOutCurve::new(0.3)),
         ArcCurve::new(ElasticOutCurve::new(0.3)),
     );
     assert_eq!(
-        ArcCurve::new(Curves::EaseInOutCubicEmphasized),
-        ArcCurve::new(Curves::EaseInOutCubicEmphasized),
+        ArcCurve::new(curves::EASE_IN_OUT_CUBIC_EMPHASIZED),
+        ArcCurve::new(curves::EASE_IN_OUT_CUBIC_EMPHASIZED),
     );
     assert_eq!(
         ArcCurve::new(BounceInCurve),
-        ArcCurve::new(Curves::BounceIn)
+        ArcCurve::new(curves::BOUNCE_IN)
     );
 }
 
 fn different_builtin_curves_are_unequal() {
     assert_ne!(
-        ArcCurve::new(Curves::EaseIn),
-        ArcCurve::new(Curves::EaseOut)
+        ArcCurve::new(curves::EASE_IN),
+        ArcCurve::new(curves::EASE_OUT)
     );
     assert_ne!(
         ArcCurve::new(ElasticOutCurve::new(0.3)),
@@ -539,32 +574,32 @@ fn different_builtin_curves_are_unequal() {
         ArcCurve::new(ElasticOutCurve::new(0.4)),
     );
     assert_ne!(
-        ArcCurve::new(Curves::Linear),
-        ArcCurve::new(Curves::Decelerate)
+        ArcCurve::new(curves::LINEAR),
+        ArcCurve::new(curves::DECELERATE)
     );
 }
 
 fn combinators_of_builtins_compare_by_value() {
     assert_eq!(
-        ArcCurve::new(Curves::EaseIn.flipped()),
-        ArcCurve::new(Curves::EaseIn.flipped()),
+        ArcCurve::new(curves::EASE_IN.flipped()),
+        ArcCurve::new(curves::EASE_IN.flipped()),
     );
     assert_ne!(
-        ArcCurve::new(Curves::EaseIn.flipped()),
-        ArcCurve::new(Curves::EaseIn),
+        ArcCurve::new(curves::EASE_IN.flipped()),
+        ArcCurve::new(curves::EASE_IN),
     );
     assert_eq!(
-        ArcCurve::new(Interval::new(0.2, 0.8, Curves::Ease)),
-        ArcCurve::new(Interval::new(0.2, 0.8, Curves::Ease)),
+        ArcCurve::new(Interval::new(0.2, 0.8, curves::EASE)),
+        ArcCurve::new(Interval::new(0.2, 0.8, curves::EASE)),
     );
     assert_ne!(
-        ArcCurve::new(Interval::new(0.2, 0.8, Curves::Ease)),
-        ArcCurve::new(Interval::new(0.2, 0.9, Curves::Ease)),
+        ArcCurve::new(Interval::new(0.2, 0.8, curves::EASE)),
+        ArcCurve::new(Interval::new(0.2, 0.9, curves::EASE)),
     );
     // Re-wrapping an erased built-in keeps its value identity.
     assert_eq!(
-        ArcCurve::new(ArcCurve::new(Curves::EaseIn)),
-        ArcCurve::new(Curves::EaseIn),
+        ArcCurve::new(ArcCurve::new(curves::EASE_IN)),
+        ArcCurve::new(curves::EASE_IN),
     );
 }
 
@@ -616,7 +651,7 @@ fn custom_curves_compare_by_identity() {
     let custom = ArcCurve::new(Quadratic);
     assert_eq!(custom, custom.clone());
     assert_ne!(ArcCurve::new(Quadratic), ArcCurve::new(Quadratic));
-    assert_ne!(ArcCurve::new(Quadratic), ArcCurve::new(Curves::EaseIn));
+    assert_ne!(ArcCurve::new(Quadratic), ArcCurve::new(curves::EASE_IN));
     // A combinator over a custom curve is opaque too.
     assert_ne!(
         ArcCurve::new(Quadratic.flipped()),
@@ -626,14 +661,14 @@ fn custom_curves_compare_by_identity() {
 
 fn erased_curves_evaluate_like_the_curve() {
     let pairs: [(ArcCurve, &dyn Curve); 4] = [
-        (ArcCurve::new(Curves::EaseIn), &Curves::EaseIn),
+        (ArcCurve::new(curves::EASE_IN), &curves::EASE_IN),
         (
-            ArcCurve::new(Interval::new(0.2, 0.8, Curves::Ease)),
-            &Interval::new(0.2, 0.8, Curves::Ease),
+            ArcCurve::new(Interval::new(0.2, 0.8, curves::EASE)),
+            &Interval::new(0.2, 0.8, curves::EASE),
         ),
         (
-            ArcCurve::new(Curves::ElasticOut.flipped()),
-            &Curves::ElasticOut.flipped(),
+            ArcCurve::new(curves::ELASTIC_OUT.flipped()),
+            &curves::ELASTIC_OUT.flipped(),
         ),
         (ArcCurve::new(Quadratic), &Quadratic),
     ];
@@ -751,7 +786,7 @@ fn cubic_slope_is_exact_where_a_difference_is_not() {
         let want = 6.0 * s * (1.0 - s) / (12.0 * (s - 0.5) * (s - 0.5));
         assert_close(
             &format!("next to the vertical tangent at {x}"),
-            Curves::EaseInOutExpo.slope(x),
+            curves::EASE_IN_OUT_EXPO.slope(x),
             want,
             1e-3 * want,
         );
@@ -799,7 +834,7 @@ fn default_difference_is_second_order() {
 
 fn linear_interval_and_flipped_use_the_chain_rule() {
     for t in [0.0, 0.5, 1.0] {
-        assert_close("linear", Curves::Linear.slope(t), 1.0, 0.0);
+        assert_close("linear", curves::LINEAR.slope(t), 1.0, 0.0);
     }
     let interval = Interval::new(0.2, 0.6, square());
     assert_close(
@@ -866,7 +901,7 @@ fn narrow_interval_of_a_steep_curve_has_a_finite_slope() {
 }
 
 fn vertical_tangent_slope_is_finite_and_steep() {
-    let slope = Curves::EaseInOutExpo.slope(0.5);
+    let slope = curves::EASE_IN_OUT_EXPO.slope(0.5);
     assert!(
         slope.is_finite() && slope > 10.0,
         "slope at the vertical tangent: {slope}"
@@ -1190,7 +1225,7 @@ fn cubic_wire() {
 #[cfg(feature = "serde")]
 fn three_point_wire() {
     round_trips(
-        &Curves::EaseInOutCubicEmphasized,
+        &curves::EASE_IN_OUT_CUBIC_EMPHASIZED,
         r#"{"a1":[0.05,0.0],"b1":[0.133333,0.06],"midpoint":[0.166666,0.4],"a2":[0.208333,0.82],"b2":[0.25,1.0]}"#,
     );
     rejects::<ThreePointCubic>(

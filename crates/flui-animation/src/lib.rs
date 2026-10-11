@@ -10,8 +10,9 @@
 //! - [`Animation<T>`] - Base trait for all animations (extends [`Listenable`])
 //! - [`AnimationController`] - Primary animation driver (generates 0.0..1.0)
 //! - [`CurvedAnimation`] - Applies easing curves to animations
-//! - [`Curve`] - Easing curve trait with predefined curves in [`Curves`]
-//!   (full Penner catalog, M3 [`ThreePointCubic`] emphasized set, [`Split`])
+//! - [`Curve`] - Easing curve trait with predefined curves in [`curves`]
+//!   (CSS easing presets, polynomial-style approximations, elastic and bounce
+//!   formulas, [`ThreePointCubic`] emphasized easing and [`Split`])
 //! - [`Tween`] - Maps animation values to any type T; [`ColorTween`]
 //!   interpolates colors in Oklab with premultiplied alpha
 //! - [`Keyframes`] - A value as a pure function of time: segments timed by
@@ -77,7 +78,7 @@
 //! [`CurvedAnimation`]: crate::CurvedAnimation
 //! [`AnimationError`]: crate::AnimationError
 //! [`Curve`]: crate::Curve
-//! [`Curves`]: crate::Curves
+//! [`curves`]: crate::curves
 //! [`Tween`]: crate::Tween
 //! [`Listenable`]: flui_foundation::Listenable
 //! [`Rc`]: std::rc::Rc
@@ -133,6 +134,8 @@ pub mod vsync;
 
 // Data types
 pub mod curve;
+#[doc(alias = "Curves")]
+pub mod curves;
 pub mod status;
 mod status_subscription;
 pub mod tween_types;
@@ -178,7 +181,7 @@ pub use vsync::{Vsync, VsyncRegistration, VsyncRegistrationError, VsyncRetiremen
 
 // Re-exports from data type modules
 pub use curve::{
-    ArcCurve, BounceInCurve, BounceInOutCurve, BounceOutCurve, Cubic, Curve, CurveError, Curves,
+    ArcCurve, BounceInCurve, BounceInOutCurve, BounceOutCurve, Cubic, Curve, CurveError,
     DecelerateCurve, ElasticInCurve, ElasticInOutCurve, ElasticOutCurve, FlippedCurve, Interval,
     JumpAt, Linear, Split, Steps, ThreePointCubic,
 };

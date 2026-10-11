@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use flui_animation::{Animation, AnimationController, Cubic, Curve, CurvedAnimation, Curves};
+use flui_animation::{Animation, AnimationController, Cubic, Curve, CurvedAnimation, curves};
 
 #[test]
 fn reverse_curve_locked_to_run_entry_direction() {
@@ -19,7 +19,7 @@ fn reverse_curve_locked_to_run_entry_direction() {
         controller.clone() as std::rc::Rc<dyn Animation<f64>>,
         Cubic::new(0.0, 0.0, 1.0, 1.0), // y(x) = x
     )
-    .with_reverse_curve(Curves::EaseInQuint);
+    .with_reverse_curve(curves::EASE_IN_QUINT);
 
     controller.set_value(0.5);
     let _ = controller.forward();
@@ -40,7 +40,7 @@ fn reverse_curve_locked_to_run_entry_direction() {
     let _ = controller.reverse();
     controller.set_value(0.5);
     let reverse_run = curved.value();
-    let expected = Curves::EaseInQuint.transform(0.5);
+    let expected = curves::EASE_IN_QUINT.transform(0.5);
     assert!(
         (reverse_run - expected).abs() < 1e-3,
         "a run entered in Reverse must use the reverse curve ({reverse_run} vs {expected})"

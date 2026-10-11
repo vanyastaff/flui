@@ -282,7 +282,7 @@ impl AnimationSwitch {
     /// Returns the currently active animation.
     #[must_use]
     pub fn current(&self) -> Rc<dyn Animation<f64>> {
-        self.owner.inner.borrow_mut().current.get().clone()
+        self.owner.inner.borrow().current.get().clone()
     }
 
     /// Builds the status forwarder that re-emits the current animation's
@@ -292,8 +292,8 @@ impl AnimationSwitch {
     ) -> crate::animation::StatusObserver {
         let inner_weak = inner_weak.clone();
         Rc::new(move |status, recovery| {
-            if let Some(inner_arc) = inner_weak.upgrade() {
-                let mut inner = inner_arc.borrow_mut();
+            if let Some(state) = inner_weak.upgrade() {
+                let mut inner = state.borrow_mut();
                 if inner.disposed {
                     return;
                 }
@@ -315,9 +315,9 @@ impl AnimationSwitch {
         let status_callback_for_handler = Rc::clone(&status_callback);
 
         let value_handler = move |recovery: &mut RecoveryScope<'_>| {
-            if let Some(inner_arc) = inner_weak.upgrade() {
+            if let Some(state) = inner_weak.upgrade() {
                 let (current, next, mode) = {
-                    let inner = inner_arc.borrow();
+                    let inner = state.borrow();
                     if inner.disposed {
                         return;
                     }
@@ -335,7 +335,7 @@ impl AnimationSwitch {
                 } else {
                     false
                 };
-                let mut inner = inner_arc.borrow_mut();
+                let mut inner = state.borrow_mut();
                 if inner.disposed || !Rc::ptr_eq(inner.current.get(), &current) {
                     return;
                 }
@@ -374,7 +374,7 @@ impl AnimationSwitch {
                             .subscribe_status_observer(Rc::clone(&status_callback_for_handler)),
                     ));
                     let admitted = {
-                        let mut inner = inner_arc.borrow_mut();
+                        let mut inner = state.borrow_mut();
                         if !inner.disposed && Rc::ptr_eq(inner.current.get(), &new_current) {
                             inner.current_status_subscription = subscription.take();
                             true

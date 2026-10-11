@@ -109,7 +109,7 @@ mod harness_snapshot;
 use std::{any::Any, cell::Cell, collections::HashMap, rc::Rc, sync::Arc, time::Duration};
 
 use flui_animation::curve::ArcCurve;
-use flui_animation::{Animation, AnimationController, Curves, ProxyAnimation};
+use flui_animation::{Animation, AnimationController, ProxyAnimation, curves};
 use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Point, Rect, Size};
 use flui_interaction::InteractionLane;
@@ -5493,7 +5493,7 @@ fn harness_render_animated_size_interpolates_over_several_frames_not_snap() {
     let (controller, driver) = animated_size_controller(100);
     let ro = RenderAnimatedSize::new(
         controller,
-        ArcCurve::new(Curves::Linear),
+        ArcCurve::new(curves::LINEAR),
         Alignment::CENTER,
         Clip::HardEdge,
     );
@@ -5561,23 +5561,23 @@ fn harness_render_animated_size_interpolates_over_several_frames_not_snap() {
 }
 
 /// A parent that rebuilds with the same built-in curve (a fresh
-/// `ArcCurve::new(Curves::EaseIn)` each build) must not relayout or rebuild
+/// `ArcCurve::new(curves::EASE_IN)` each build) must not relayout or rebuild
 /// the curved animation; a different curve must.
 fn harness_render_animated_size_equal_curve_is_not_a_change() {
     let (controller, _driver) = animated_size_controller(100);
     let mut ro = RenderAnimatedSize::new(
         controller,
-        ArcCurve::new(Curves::EaseIn),
+        ArcCurve::new(curves::EASE_IN),
         Alignment::CENTER,
         Clip::HardEdge,
     );
     assert_eq!(
-        ro.set_curve(ArcCurve::new(Curves::EaseIn)),
+        ro.set_curve(ArcCurve::new(curves::EASE_IN)),
         flui_rendering::RenderUpdateImpact::NONE,
         "an equal built-in curve rebuilt by the parent is not a change",
     );
     assert_eq!(
-        ro.set_curve(ArcCurve::new(Curves::EaseOut)),
+        ro.set_curve(ArcCurve::new(curves::EASE_OUT)),
         flui_rendering::RenderUpdateImpact::LAYOUT,
         "a different curve is a change",
     );
@@ -5587,7 +5587,7 @@ fn harness_render_animated_size_retarget_mid_flight_has_no_discontinuous_jump() 
     let (controller, driver) = animated_size_controller(100);
     let ro = RenderAnimatedSize::new(
         controller,
-        ArcCurve::new(Curves::Linear),
+        ArcCurve::new(curves::LINEAR),
         Alignment::CENTER,
         Clip::HardEdge,
     );

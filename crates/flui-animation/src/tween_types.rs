@@ -256,10 +256,10 @@ pub type Matrix4Tween = Tween<Matrix4>;
 /// # Examples
 ///
 /// ```
-/// use flui_animation::{CurveTween, Animatable, Curves};
+/// use flui_animation::{CurveTween, Animatable, curves};
 ///
 /// // Apply ease-in curve to progress
-/// let curve_tween = CurveTween::new(Curves::EaseIn);
+/// let curve_tween = CurveTween::new(curves::EASE_IN);
 /// assert!(curve_tween.transform(0.0).abs() < 0.001); // ~0
 /// assert!(curve_tween.transform(0.5) < 0.5); // ease-in is slower at start
 /// assert!((curve_tween.transform(1.0) - 1.0).abs() < 0.001); // ~1

@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use flui_animation::curve::{ArcCurve, Curve};
 use flui_animation::{
-    Animation, AnimationController, AnimationStatus, Curves, DrivenController, StatusSubscription,
+    Animation, AnimationController, AnimationStatus, DrivenController, StatusSubscription, curves,
 };
 use flui_objects::RenderAnimatedSize;
 use flui_painting::Alignment;
@@ -55,7 +55,7 @@ pub struct AnimatedSize {
 
 impl AnimatedSize {
     /// Animates size changes over `duration`, with `Alignment::CENTER`,
-    /// `Curves::Linear` (deliberately NOT the sibling widgets' `EaseInOut`
+    /// `curves::LINEAR` (deliberately NOT the sibling widgets' `EaseInOut`
     /// default), and
     /// `Clip::HardEdge`. The child is optional: a childless `AnimatedSize`
     /// exercises the tight/no-child fast path, a real configuration.
@@ -64,7 +64,7 @@ impl AnimatedSize {
             alignment: Alignment::CENTER,
             duration,
             reverse_duration: None,
-            curve: ArcCurve::new(Curves::Linear),
+            curve: ArcCurve::new(curves::LINEAR),
             clip_behavior: Clip::HardEdge,
             on_end: None,
             child: Child::empty(),

@@ -40,7 +40,7 @@ src/
 ├── constant.rs       # ConstantAnimation (fixed value)
 ├── switch.rs         # AnimationSwitch (crossover switching)
 │
-├── curve.rs          # Curve trait, Curves, implementations
+├── curve.rs          # Curve trait, curves, implementations
 ├── tween_types.rs    # Animatable, Tween, all tween types
 ├── status.rs         # AnimationStatus, AnimationBehavior
 ├── simulation.rs     # Simulation trait, Spring, Friction, bounded and bouncing scroll
@@ -958,7 +958,7 @@ TweenAnimation<ColorTween> (maps to Color)
 The wrappers share a private `ParentLinks` allocation containing the parent,
 separate value/status notifiers and one subscription to each parent channel.
 Cloning a wrapper shares these links; final retirement withdraws outgoing
-callbacks before detaching the subscriptions. Curves and animatables remain
+callbacks before detaching the subscriptions. curves and animatables remain
 owned by each value clone and follow terminal retirement when authored
 destruction fails.
 

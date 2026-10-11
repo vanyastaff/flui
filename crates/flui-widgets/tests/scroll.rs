@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::common::{LaidOut, lay_out, tight};
-use flui_animation::{ArcCurve, Curves, Vsync};
+use flui_animation::{ArcCurve, Vsync, curves};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::view::ScrollDirection;
 use flui_view::{IntoView, ViewExt};
@@ -514,7 +514,7 @@ fn assert_scroll_retarget_preserves_velocity(target: fn(f64) -> f64) {
     controller.animate_to(
         1000.0,
         Duration::from_secs(1),
-        ArcCurve::new(Curves::Linear),
+        ArcCurve::new(curves::LINEAR),
     );
     laid.pump_for(Duration::from_millis(1));
     laid.pump_for(Duration::from_millis(250));
@@ -528,7 +528,7 @@ fn assert_scroll_retarget_preserves_velocity(target: fn(f64) -> f64) {
     controller.animate_to(
         target,
         Duration::from_secs(1),
-        ArcCurve::new(Curves::EaseIn),
+        ArcCurve::new(curves::EASE_IN),
     );
     assert!((controller.pixels() - seam).abs() < 1e-12);
     assert!(controller.position().is_scrolling());
@@ -558,7 +558,7 @@ pub(crate) fn scrollable_jump_to_during_animate_to_cancels_it_synchronously() {
     controller.animate_to(
         1000.0,
         Duration::from_millis(300),
-        ArcCurve::new(Curves::Linear),
+        ArcCurve::new(curves::LINEAR),
     );
     // Three pumps of warm-up, one more than a direct `animate_with` fling:
     // `animate_to` queues a command, and pump 1's rebuild services it after
@@ -697,7 +697,7 @@ pub(crate) fn dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_ti
     scroll.animate_to(
         1000.0,
         Duration::from_millis(300),
-        ArcCurve::new(Curves::Linear),
+        ArcCurve::new(curves::LINEAR),
     );
     advance_scroll_run(&mut laid);
     assert!(scroll.pixels() > 0.0 && scroll.pixels() < 1000.0);
@@ -733,7 +733,7 @@ pub(crate) fn dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_ti
     scroll.animate_to(
         4000.0,
         Duration::from_millis(300),
-        ArcCurve::new(Curves::Linear),
+        ArcCurve::new(curves::LINEAR),
     );
     advance_scroll_run(&mut laid);
     assert!(
@@ -2418,7 +2418,7 @@ pub(crate) fn a_scrollable_swap_stops_old_motion_and_retires_its_jump_hook() {
     old.animate_to(
         1000.0,
         Duration::from_millis(300),
-        ArcCurve::new(Curves::Linear),
+        ArcCurve::new(curves::LINEAR),
     );
     advance_scroll_run(&mut laid);
     assert!(old.pixels() > 0.0);
@@ -2434,7 +2434,7 @@ pub(crate) fn a_scrollable_swap_stops_old_motion_and_retires_its_jump_hook() {
     new.animate_to(
         900.0,
         Duration::from_millis(300),
-        ArcCurve::new(Curves::Linear),
+        ArcCurve::new(curves::LINEAR),
     );
     advance_scroll_run(&mut laid);
     let before = new.pixels();
@@ -2459,7 +2459,7 @@ pub(crate) fn a_same_position_scrollable_rebuild_preserves_motion() {
     scroll.animate_to(
         1000.0,
         Duration::from_millis(300),
-        ArcCurve::new(Curves::Linear),
+        ArcCurve::new(curves::LINEAR),
     );
     advance_scroll_run(&mut laid);
     let before = scroll.pixels();
@@ -2511,7 +2511,7 @@ pub(crate) fn retiring_one_scrollable_preserves_a_later_owners_jump_hook() {
     scroll.animate_to(
         900.0,
         Duration::from_millis(300),
-        ArcCurve::new(Curves::Linear),
+        ArcCurve::new(curves::LINEAR),
     );
     advance_scroll_run(&mut second);
     assert!(scroll.pixels() > before, "next command still progresses");

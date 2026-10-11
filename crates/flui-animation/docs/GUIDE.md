@@ -234,36 +234,36 @@ assert!(matches!(controller.forward(), Err(AnimationError::Disposed)));
 
 ## Curves
 
-### Using Predefined Curves
+### Using predefined curves
 
 ```rust
-use flui_animation::{Curve, Curves};
+use flui_animation::{Curve, curves};
 # let t = 0.25;
 
-let value = Curves::EaseIn.transform(0.5);
-let value = Curves::BounceOut.transform(t);
-let value = Curves::ElasticOut.transform(t);
+let value = curves::EASE_IN.transform(0.5);
+let value = curves::BOUNCE_OUT.transform(t);
+let value = curves::ELASTIC_OUT.transform(t);
 ```
 
-### Available Curves
+### Available curves
 
 | Category | Curves |
 |----------|--------|
-| Linear | `Linear` |
-| Ease | `EaseIn`, `EaseOut`, `EaseInOut` |
-| Material | `FastOutSlowIn`, `SlowOutFastIn` |
-| Sine | `EaseInSine`, `EaseOutSine`, `EaseInOutSine` |
-| Expo | `EaseInExpo`, `EaseOutExpo`, `EaseInOutExpo` |
-| Circ | `EaseInCirc`, `EaseOutCirc`, `EaseInOutCirc` |
-| Back | `EaseInBack`, `EaseOutBack`, `EaseInOutBack` |
-| Elastic | `ElasticIn`, `ElasticOut`, `ElasticInOut` |
-| Bounce | `BounceIn`, `BounceOut`, `BounceInOut` |
-| Other | `Decelerate` |
+| Linear | `LINEAR` |
+| CSS easing | `EASE`, `EASE_IN`, `EASE_OUT`, `EASE_IN_OUT` |
+| Material | `FAST_OUT_SLOW_IN`, `LINEAR_OUT_SLOW_IN` |
+| Sine approximation | `EASE_IN_SINE`, `EASE_OUT_SINE`, `EASE_IN_OUT_SINE` |
+| Exponential approximation | `EASE_IN_EXPO`, `EASE_OUT_EXPO`, `EASE_IN_OUT_EXPO` |
+| Circular approximation | `EASE_IN_CIRC`, `EASE_OUT_CIRC`, `EASE_IN_OUT_CIRC` |
+| Back | `EASE_IN_BACK`, `EASE_OUT_BACK`, `EASE_IN_OUT_BACK` |
+| Elastic | `ELASTIC_IN`, `ELASTIC_OUT`, `ELASTIC_IN_OUT` |
+| Bounce | `BOUNCE_IN`, `BOUNCE_OUT`, `BOUNCE_IN_OUT` |
+| Other | `DECELERATE` |
 
-### Custom Curves
+### Custom curves
 
 ```rust
-use flui_animation::{Cubic, Curves, ElasticOutCurve, Interval};
+use flui_animation::{Cubic, curves, ElasticOutCurve, Interval};
 
 // Cubic bezier (CSS-style control points)
 let curve = Cubic::new(0.25, 0.1, 0.25, 1.0);
@@ -272,7 +272,7 @@ let curve = Cubic::new(0.25, 0.1, 0.25, 1.0);
 let elastic = ElasticOutCurve::new(0.3);
 
 // Active only in [0.2, 0.8]
-let interval = Interval::new(0.2, 0.8, Curves::EaseIn);
+let interval = Interval::new(0.2, 0.8, curves::EASE_IN);
 
 ```
 
@@ -370,7 +370,7 @@ keyframe as a `KeyframesError`.
 
 ```rust
 use std::time::Duration;
-use flui_animation::{Animatable, Curves, Keyframes};
+use flui_animation::{Animatable, curves, Keyframes};
 
 let ms = Duration::from_millis;
 // Keys 0, 1, 0 at 0, 1, 2 s on a spline: half way up at 0.5 s.
@@ -385,7 +385,7 @@ assert_eq!(arc.value_at(ms(1000)), 1.0);
 // One controller's progress reads every track of a group at one time.
 let fade = Keyframes::builder(1.0, ms(2000))
     .hold(ms(1000)) // a delay is a leading hold
-    .to(0.0, ms(1000), Curves::EaseIn)
+    .to(0.0, ms(1000), curves::EASE_IN)
     .build()
     .expect("fits");
 assert_eq!(fade.transform(0.5), 1.0);
@@ -399,10 +399,10 @@ element `i` of `n` the delay `step · |origin − i|` (`First`, `Last`,
 ### Chaining and Composition
 
 ```rust
-use flui_animation::{Animatable, Curve, Curves, FloatTween, ReverseTween};
+use flui_animation::{Animatable, Curve, curves, FloatTween, ReverseTween};
 let tween = FloatTween::new(0.0, 100.0);
 // A curve, then a value tween
-let eased = tween.transform(Curves::EaseIn.transform(0.5));
+let eased = tween.transform(curves::EASE_IN.transform(0.5));
 assert!(eased < 50.0);
 
 // Reverse
@@ -425,13 +425,13 @@ Apply curve to animation output:
 ```rust
 # use std::rc::Rc;
 # use std::time::Duration;
-# use flui_animation::{AnimationController, Curves};
+# use flui_animation::{AnimationController, curves};
 use flui_animation::CurvedAnimation;
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 
 let curved = CurvedAnimation::new(
     Rc::new(controller.clone()),
-    Curves::EaseInOut,
+    curves::EASE_IN_OUT,
 );
 
 # drop(controller);
@@ -640,10 +640,10 @@ controller, it does not copy it.
 ```rust
 # use std::rc::Rc;
 # use std::time::Duration;
-# use flui_animation::{AnimationController, CurvedAnimation, Curves};
+# use flui_animation::{AnimationController, CurvedAnimation, curves};
 let controller = AnimationController::builder(Duration::from_millis(300)).build();
-let curved1 = CurvedAnimation::new(Rc::new(controller.clone()), Curves::EaseIn);
-let curved2 = CurvedAnimation::new(Rc::new(controller.clone()), Curves::EaseOut);
+let curved1 = CurvedAnimation::new(Rc::new(controller.clone()), curves::EASE_IN);
+let curved2 = CurvedAnimation::new(Rc::new(controller.clone()), curves::EASE_OUT);
 # drop(controller);
 ```
 

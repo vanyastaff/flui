@@ -49,14 +49,14 @@ use crate::value_conversion::TwoWayConverter;
 ///
 /// ```
 /// use std::time::Duration;
-/// use flui_animation::{Curves, Keyframes};
+/// use flui_animation::{curves, Keyframes};
 ///
 /// let ms = Duration::from_millis;
 /// // 90° in 300 ms, a pause, then another 90°.
 /// let turn = Keyframes::builder(0.0, ms(1200))
-///     .to(90.0, ms(300), Curves::EaseOut)
+///     .to(90.0, ms(300), curves::EASE_OUT)
 ///     .hold(ms(300))
-///     .to(180.0, ms(300), Curves::EaseOut)
+///     .to(180.0, ms(300), curves::EASE_OUT)
 ///     .build()
 ///     .expect("the segments fit in 1200 ms");
 ///

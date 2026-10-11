@@ -20,8 +20,8 @@ use std::hint::black_box;
 use std::time::Duration;
 
 use flui_animation::{
-    AnimatedValue, Animation, AnimationController, ArcCurve, Curves, Keyframes, MotionClock,
-    MotionSpec, ReverseAnimation, TwoWayConverter, Vsync,
+    AnimatedValue, Animation, AnimationController, ArcCurve, Keyframes, MotionClock, MotionSpec,
+    ReverseAnimation, TwoWayConverter, Vsync, curves,
 };
 use flui_foundation::Listenable;
 use flui_foundation::geometry::{EdgeInsets, Offset};
@@ -110,7 +110,7 @@ fn a_steady_state_frame_allocates_nothing() {
         EdgeInsets::ZERO,
         MotionSpec::Curve {
             duration: Duration::from_secs(3600),
-            curve: ArcCurve::new(Curves::Linear),
+            curve: ArcCurve::new(curves::LINEAR),
         },
         Some(&vsync),
     )
@@ -137,7 +137,7 @@ fn a_steady_state_frame_allocates_nothing() {
         ),
         MotionSpec::Curve {
             duration: Duration::from_secs(3600),
-            curve: ArcCurve::new(Curves::Linear),
+            curve: ArcCurve::new(curves::LINEAR),
         },
         Some(&vsync),
     )

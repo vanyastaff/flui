@@ -11,8 +11,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::time::Duration;
 
 use flui_animation::{
-    Animatable, Curve, Curves, JumpAt, Keyframes, KeyframesError, Lerp, Linear, Stagger,
-    StaggerOrigin, Steps, TwoWayConverter,
+    Animatable, Curve, JumpAt, Keyframes, KeyframesError, Lerp, Linear, Stagger, StaggerOrigin,
+    Steps, TwoWayConverter, curves,
 };
 use proptest::prelude::*;
 
@@ -101,8 +101,8 @@ fn keyframes_segments_follow_each_other() {
 
 fn eased_boundaries_are_keyframes() {
     let track = Keyframes::builder(0.1, ms(300))
-        .to(0.7, ms(100), Curves::EaseInOut)
-        .to(0.3, ms(100), Curves::EaseIn)
+        .to(0.7, ms(100), curves::EASE_IN_OUT)
+        .to(0.3, ms(100), curves::EASE_IN)
         .build()
         .expect("fits");
     assert_eq!(track.value_at(ms(0)).to_bits(), 0.1_f64.to_bits());
@@ -632,7 +632,7 @@ proptest! {
         for &(millis, value, kind) in &segments {
             let over = ms(millis);
             builder = match kind {
-                0 => builder.to(value, over, Curves::EaseInOut),
+                0 => builder.to(value, over, curves::EASE_IN_OUT),
                 1 => builder.cubic(value, over),
                 2 => builder.hold(over),
                 _ => builder.jump(value),

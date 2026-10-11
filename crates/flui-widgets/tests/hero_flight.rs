@@ -10,7 +10,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_animation::{Curves, Interval};
+use flui_animation::{Interval, curves};
 use flui_foundation::ValueKey;
 use flui_foundation::geometry::Rect;
 use flui_view::ViewExt;
@@ -211,7 +211,7 @@ pub(crate) fn a_nonlinear_hero_pop_retraces_the_airborne_push() {
             &navigator,
             &mut harness,
             hero_page_with("shared", 30.0, 20.0, move |hero| {
-                let hero = hero.curve(Curves::Linear);
+                let hero = hero.curve(curves::LINEAR);
                 match source_bend {
                     Some(bend) => hero.create_rect_tween(move |begin, end| AsymmetricHeroPath {
                         endpoints: flui_animation::RectTween { begin, end },
@@ -221,7 +221,7 @@ pub(crate) fn a_nonlinear_hero_pop_retraces_the_airborne_push() {
                 }
             }),
             hero_page_with("shared", 60.0, 45.0, |hero| {
-                hero.curve(Curves::Linear)
+                hero.curve(curves::LINEAR)
                     .create_rect_tween(|begin, end| AsymmetricHeroPath {
                         endpoints: flui_animation::RectTween { begin, end },
                         bend: 160.0,
@@ -246,7 +246,7 @@ pub(crate) fn a_nonlinear_hero_pop_retraces_the_airborne_push() {
         }
         if source_bend.is_some() {
             let next_page = hero_page_with("shared", 90.0, 75.0, |hero| {
-                hero.curve(Curves::Linear)
+                hero.curve(curves::LINEAR)
                     .create_rect_tween(|begin, end| AsymmetricHeroPath {
                         endpoints: flui_animation::RectTween { begin, end },
                         bend: -240.0,
@@ -444,7 +444,7 @@ pub(crate) fn cancelling_a_hero_mapping_does_not_refreeze_the_previous_page() {
                                 .on_tap(move |_| taps.set(taps.get() + 1))
                                 .child(SizedBox::new(60.0, 45.0)),
                         )
-                        .curve(Curves::Linear)
+                        .curve(curves::LINEAR)
                         .create_rect_tween(move |begin, end| {
                             if phase == "factory" {
                                 hook();
@@ -513,7 +513,7 @@ fn rect_mapping_reentry(phase: &'static str) {
         hero_page("shared", 30.0, 20.0),
         hero_page_with("shared", 60.0, 45.0, move |hero| {
             let hook = Rc::clone(&hook);
-            hero.curve(Curves::Linear)
+            hero.curve(curves::LINEAR)
                 .create_rect_tween(move |begin, end| {
                     if phase == "factory" {
                         hook();
@@ -618,7 +618,7 @@ fn rect_mapping_failure(phase: &'static str) {
         hero_page_with("shared", 60.0, 45.0, move |hero| {
             let armed = Rc::clone(&factory_armed);
             let drops = Rc::clone(&factory_drops);
-            hero.curve(Curves::Linear)
+            hero.curve(curves::LINEAR)
                 .create_rect_tween(move |begin, end| {
                     assert!(!(armed.get() && phase == "factory"), "factory evaluation");
                     FailingRectMapping {
@@ -703,7 +703,7 @@ pub(crate) fn a_shrinking_flight_with_overshoot_keeps_a_non_negative_size() {
         &navigator,
         &mut harness,
         hero_page("shared", 100.0, 80.0),
-        hero_page_with("shared", 0.0, 0.0, |hero| hero.curve(Curves::EaseOutBack)),
+        hero_page_with("shared", 0.0, 0.0, |hero| hero.curve(curves::EASE_OUT_BACK)),
     );
     let flight = controller.flights().get(&tag("shared")).expect("airborne");
     for step in 0..=20 {
@@ -749,7 +749,7 @@ fn exercise_hero_geometry_sample(sample: Rect, accepted: Option<Rect>) {
             let replacement = Rc::clone(&replacement);
             move |hero| {
                 let replacement = Rc::clone(&replacement);
-                hero.curve(Curves::Linear)
+                hero.curve(curves::LINEAR)
                     .create_rect_tween(move |begin, end| SampledHeroPath {
                         endpoints: flui_animation::RectTween::new(begin, end),
                         sample: Rc::clone(&replacement),
@@ -929,7 +929,7 @@ fn exercise_hero_geometry_authority(phase: &'static str, cancel: bool) {
             move |hero| {
                 let replacement = Rc::clone(&replacement);
                 let hook = Rc::clone(&hook);
-                hero.curve(Curves::Linear)
+                hero.curve(curves::LINEAR)
                     .create_rect_tween(move |begin, end| {
                         let candidate = replacement.get();
                         if phase == "factory" {

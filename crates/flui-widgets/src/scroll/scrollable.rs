@@ -60,8 +60,8 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use flui_animation::{
-    Animation, AnimationController, AnimationStatus, Curves, DrivenController, StatusSubscription,
-    Vsync,
+    Animation, AnimationController, AnimationStatus, DrivenController, StatusSubscription, Vsync,
+    curves,
 };
 use flui_foundation::geometry::Axis;
 use flui_foundation::{Listenable, ListenerId};
@@ -1110,7 +1110,7 @@ impl ViewState<Scrollable> for ScrollableState {
                         let started = fling_wheel.animate_to_curved(
                             target,
                             Some(Duration::from_millis(150)),
-                            Rc::new(Curves::EaseOut),
+                            Rc::new(curves::EASE_OUT),
                         );
                         if is_current() {
                             if started.is_ok() && fling_wheel.status().is_directional() {

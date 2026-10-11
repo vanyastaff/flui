@@ -1276,12 +1276,12 @@ fn controller_rate_spring() {
 }
 
 fn rate_change_mid_run_keeps_value_continuous(kind: &str) {
-    use flui_animation::Curves;
+    use flui_animation::curves;
     use flui_animation::simulation::{SpringDescription, SpringSimulation, Tolerance};
 
     let controller = AnimationController::builder(Duration::from_secs(1)).build();
     let run = match kind {
-        "curve" => controller.animate_to_curved(1.0, None, Curves::Decelerate),
+        "curve" => controller.animate_to_curved(1.0, None, curves::DECELERATE),
         "repeat" => controller.repeat_with(None, None, false, None, None),
         "spring" => controller.animate_with(
             SpringSimulation::try_new(

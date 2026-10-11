@@ -38,13 +38,13 @@ fn update_curve_direction(direction: &Cell<Option<AnimationStatus>>, status: Ani
 ///
 /// ```
 /// use flui_animation::{AnimationController, CurvedAnimation};
-/// use flui_animation::Curves;
+/// use flui_animation::curves;
 /// use std::rc::Rc;
 /// use std::time::Duration;
 ///
 /// let controller = Rc::new(AnimationController::builder(Duration::from_millis(300)).build());
 ///
-/// let curved = CurvedAnimation::new(controller, Curves::EaseInOut);
+/// let curved = CurvedAnimation::new(controller, curves::EASE_IN_OUT);
 /// ```
 #[derive(Clone)]
 pub struct CurvedAnimation<C: Curve + Clone> {
@@ -61,7 +61,7 @@ impl<C: Curve + Clone> Drop for CurvedAnimation<C> {
         let links = self.links.withdraw();
         let curve = self.curve.withdraw();
         let reverse = self.reverse_curve.take();
-        // Curves belong to each value clone; parent subscriptions belong to the
+        // curves belong to each value clone; parent subscriptions belong to the
         // shared links allocation and remain installed until its final drop.
         retirement.run(|| drop(links.into_inner()));
         retirement.retire(curve);

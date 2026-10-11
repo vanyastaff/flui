@@ -24,7 +24,7 @@ impl StatelessView for OpacityTarget {
         )
         .duration(std::time::Duration::from_secs(1))
         .curve(flui_animation::ArcCurve::new(
-            flui_animation::Curves::Linear,
+            flui_animation::curves::LINEAR,
         ))
     }
 }

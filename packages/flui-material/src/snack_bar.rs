@@ -15,7 +15,7 @@
 //! `isFloatingSnackBar` is always `false` (fixed-only), so the
 //! `ValueListenableBuilder`-over-`_heightAnimation` branch is the only one
 //! this substrate ever takes — an `Align(alignment: topStart, heightFactor:
-//! value)` grown by [`Curves::FastOutSlowIn`] (`_snackBarHeightCurve`,
+//! value)` grown by [`curves::FAST_OUT_SLOW_IN`] (`_snackBarHeightCurve`,
 //! `:30`), applied symmetrically on entrance and exit (the oracle sets no
 //! `reverseCurve` on `_heightAnimation`, `:576`). Wrapped in
 //! [`AnimatedBuilder`] rather than a `ValueListenableBuilder`+`CurvedAnimation`
@@ -49,7 +49,7 @@ use std::rc::Rc;
 
 use std::time::Duration;
 
-use flui_sdk::animation::{Animation, AnimationController, Curve, Curves};
+use flui_sdk::animation::{Animation, AnimationController, Curve, curves};
 use flui_sdk::foundation::Listenable;
 use flui_sdk::painting::Clip;
 use flui_sdk::view::RebuildHandle;
@@ -325,7 +325,7 @@ fn build_content(snack_bar: &SnackBar, theme: &ThemeData) -> BoxedView {
 }
 
 /// The [`SnackBar`] presenter mounted at `crate::scaffold::SLOT_SNACK_BAR` —
-/// wraps [`build_content`] in the [`Curves::FastOutSlowIn`] `heightFactor`
+/// wraps [`build_content`] in the [`curves::FAST_OUT_SLOW_IN`] `heightFactor`
 /// entrance/exit animation, re-rendering on every `animation` tick via
 /// [`AnimatedBuilder`]. See the module docs' "Entrance animation" section.
 #[derive(Clone, StatefulView)]
@@ -479,7 +479,7 @@ impl ViewState<SnackBarPresenter> for SnackBarPresenterState {
             .child(
                 ClipRect::new().child(AnimatedBuilder::new(listenable, move || {
                     let height_factor =
-                        Curves::FastOutSlowIn.transform(animation.value().clamp(0.0, 1.0));
+                        curves::FAST_OUT_SLOW_IN.transform(animation.value().clamp(0.0, 1.0));
                     Align::new(Alignment::TOP_LEFT)
                         .height_factor(height_factor)
                         .child(content.clone())

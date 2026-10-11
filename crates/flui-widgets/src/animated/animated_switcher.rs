@@ -28,8 +28,8 @@ use std::time::Duration;
 
 use flui_animation::curve::{ArcCurve, Curve};
 use flui_animation::{
-    Animation, AnimationController, AnimationStatus, CurvedAnimation, Curves, DrivenController,
-    Vsync, VsyncUpdate,
+    Animation, AnimationController, AnimationStatus, CurvedAnimation, DrivenController, Vsync,
+    VsyncUpdate, curves,
 };
 use flui_foundation::ViewKey;
 use flui_painting::Alignment;
@@ -102,7 +102,7 @@ thread_local! {
 
 impl AnimatedSwitcher {
     /// A switcher with no child yet, transitioning over `duration` with
-    /// `Curves::Linear` in both directions (deliberately
+    /// `curves::LINEAR` in both directions (deliberately
     /// NOT the `EaseInOut` default of the sibling implicit-animation
     /// widgets), the default fade transition, and the default centered-stack
     /// layout.
@@ -111,8 +111,8 @@ impl AnimatedSwitcher {
             child: None,
             duration,
             reverse_duration: None,
-            switch_in_curve: ArcCurve::new(Curves::Linear),
-            switch_out_curve: ArcCurve::new(Curves::Linear),
+            switch_in_curve: ArcCurve::new(curves::LINEAR),
+            switch_out_curve: ArcCurve::new(curves::LINEAR),
             transition_builder: DEFAULT_TRANSITION_BUILDER.with(Clone::clone),
             layout_builder: DEFAULT_LAYOUT_BUILDER.with(Clone::clone),
         }
@@ -672,8 +672,8 @@ mod retirement_tests {
                 index as u64,
                 Duration::from_secs(1),
                 None,
-                ArcCurve::new(Curves::Linear),
-                ArcCurve::new(Curves::Linear),
+                ArcCurve::new(curves::LINEAR),
+                ArcCurve::new(curves::LINEAR),
                 &builder,
                 true,
                 Some(&vsync),

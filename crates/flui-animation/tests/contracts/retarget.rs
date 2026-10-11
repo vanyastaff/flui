@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use crate::motion_trace::AnimatedValue;
 use flui_animation::{
-    AnimationController, ArcCurve, Cubic, Curve, Curves, JumpAt, MotionSpec, PlaybackRate,
-    SpringDescription, Steps, Vsync,
+    AnimationController, ArcCurve, Cubic, Curve, JumpAt, MotionSpec, PlaybackRate,
+    SpringDescription, Steps, Vsync, curves,
 };
 use flui_foundation::geometry::Offset;
 use proptest::prelude::*;
@@ -552,7 +552,7 @@ fn retargeting_to_the_same_target_is_invisible() {
 fn reversal_shortens_by_the_eased_fraction() {
     let linear = MotionSpec::Curve {
         duration: Duration::from_millis(200),
-        curve: ArcCurve::new(Curves::Linear),
+        curve: ArcCurve::new(curves::LINEAR),
     };
     let mut value = AnimatedValue::with_motion(0.0_f64, linear).expect("finite motion");
     value.animate_to(100.0).expect("finite motion");
@@ -616,7 +616,7 @@ fn a_retarget_elsewhere_runs_the_full_duration() {
 fn linear_spec(millis: u64) -> MotionSpec {
     MotionSpec::Curve {
         duration: Duration::from_millis(millis),
-        curve: ArcCurve::new(Curves::Linear),
+        curve: ArcCurve::new(curves::LINEAR),
     }
 }
 
@@ -628,9 +628,9 @@ fn controller_velocity_boundaries() {
                 .build_on(Some(&Vsync::new()));
             let controller = owner.controller();
             let _run = if reverse {
-                controller.animate_back_curved(0.0, Some(duration), Curves::Linear)
+                controller.animate_back_curved(0.0, Some(duration), curves::LINEAR)
             } else {
-                controller.animate_to_curved(1.0, Some(duration), Curves::Linear)
+                controller.animate_to_curved(1.0, Some(duration), curves::LINEAR)
             }
             .expect("linear run");
             let expected = if duration.is_zero() {
@@ -1456,7 +1456,7 @@ fn retarget_retries_a_changed_sample_without_publishing_stale_velocity() {
             0.7,
             &MotionSpec::Curve {
                 duration: Duration::from_secs(1),
-                curve: ArcCurve::new(Curves::Linear),
+                curve: ArcCurve::new(curves::LINEAR),
             },
         );
         assert_eq!(calls.get(), 2, "one retry queries the new source");
@@ -1636,7 +1636,7 @@ fn a_retarget_from_a_listener_is_ordered_and_lock_free() {
                 0.0,
                 &MotionSpec::Curve {
                     duration: Duration::from_millis(100),
-                    curve: ArcCurve::new(Curves::EaseIn),
+                    curve: ArcCurve::new(curves::EASE_IN),
                 },
             )
             .expect("retarget from value callback");
@@ -1665,7 +1665,7 @@ fn a_retarget_without_a_clock_settles_at_its_target() {
             0.8,
             &MotionSpec::Curve {
                 duration: Duration::from_secs(1000),
-                curve: ArcCurve::new(Curves::EaseIn),
+                curve: ArcCurve::new(curves::EASE_IN),
             },
         )
         .expect("clockless retarget");
@@ -1690,7 +1690,7 @@ fn controller_curve_seam() {
             0.8,
             &MotionSpec::Curve {
                 duration: Duration::from_secs(1),
-                curve: ArcCurve::new(Curves::EaseIn),
+                curve: ArcCurve::new(curves::EASE_IN),
             },
         )
         .expect("curve retarget");

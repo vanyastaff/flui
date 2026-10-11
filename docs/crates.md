@@ -60,7 +60,7 @@ These crates compose the rendering and platform substrate largely without knowin
 |-------|--------|---------|
 | `flui-layer` | ✅ ACTIVE | Layer composition tree (compositor input) |
 | `flui-semantics` | ✅ ACTIVE | Accessibility tree (semantics nodes, focus, labels) |
-| `flui-animation` | ✅ ACTIVE | Curves, tweens, controllers, implicit animations (re-enabled for the Core.1 transition widgets) |
+| `flui-animation` | ✅ ACTIVE | curves, tweens, controllers, implicit animations (re-enabled for the Core.1 transition widgets) |
 | `flui-platform` | ✅ ACTIVE | Backends (native Win32 / AppKit / Headless + `winit` fallback) and the host-facing `Platform` / `HostWindow` surface; the contracts it implements, `PlatformWindow` among them, live in `flui-platform-api`. Sole home of OS-specific code. **Only `flui-app` may depend on it** (its manifest's `allowed-dependents`, checked by `cargo xtask workspace`; examples and tools are exempt). It sits at layer 3, above the substrate, because its accessibility bridge implements `PlatformAccessibility`, which lives in `flui-semantics` ([ADR-0082](adr/ADR-0082-platform-api-contract-crate.md) §2). Loses `BackgroundExecutor`/`PlatformExecutor` when host-injected runtime execution lands. |
 
 ## Layer 4 — Render machine + render catalog

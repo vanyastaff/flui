@@ -476,12 +476,12 @@ that hop plus a cubic solve.
 ```rust
 # use std::rc::Rc;
 # use std::time::Duration;
-# use flui_animation::{Animation, AnimationController, CurvedAnimation, Curves};
+# use flui_animation::{Animation, AnimationController, CurvedAnimation, curves};
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 let shared = controller.clone(); // shares the controller, no copy
 let animation: Rc<dyn Animation<f64>> = Rc::new(CurvedAnimation::new(
     Rc::new(shared),
-    Curves::EaseInOut,
+    curves::EASE_IN_OUT,
 ));
 let value = animation.value(); // dynamic dispatch into the curved layer
 # drop(controller);
@@ -571,13 +571,13 @@ Up to four value listeners notify without allocating; a fifth spills the
 notifier's snapshot to the heap on every frame. Fan out from one listener
 when a controller needs many observers.
 
-### 5. Built-in Curves Are Plain Values
+### 5. Built-in curves Are Plain Values
 
-`Curves::EaseInOut` is `Cubic::new(0.42, 0.0, 0.58, 1.0)`: a named constant
+`curves::EASE_IN_OUT` is `Cubic::new(0.42, 0.0, 0.58, 1.0)`: a named constant
 costs exactly what the equivalent hand-written `Cubic` costs.
 
 ```rust
-use flui_animation::{Cubic, Curves};
+use flui_animation::{Cubic, curves};
 
-assert_eq!(Curves::EaseInOut, Cubic::new(0.42, 0.0, 0.58, 1.0));
+assert_eq!(curves::EASE_IN_OUT, Cubic::new(0.42, 0.0, 0.58, 1.0));
 ```

@@ -30,7 +30,7 @@
 //!   builder that receives the child; [`Hero`](super::hero::Hero) exposes a
 //!   state-preserving `placeholder` hook instead. The animation handed to this
 //!   flight is already the manifest's `CurvedAnimation`, built by the controller's
-//!   `launch` — `Curves::FastOutSlowIn` by default.
+//!   `launch` — `curves::FAST_OUT_SLOW_IN` by default.
 //! * **User-gesture deferral is implemented.** A terminal status update is parked
 //!   while the navigator's user gesture is in progress and replayed once the
 //!   gesture ends, so dragging a pop back to zero mid-gesture does not tear the

@@ -15,8 +15,8 @@ use std::time::Duration;
 
 use crate::child_process;
 use flui_animation::{
-    Animation, AnimationController, AnimationStatus, AnimationSwitch, CurvedAnimation, Curves,
-    FloatTween, ProxyAnimation, ReverseAnimation, TweenAnimation, Vsync,
+    Animation, AnimationController, AnimationStatus, AnimationSwitch, CurvedAnimation, FloatTween,
+    ProxyAnimation, ReverseAnimation, TweenAnimation, Vsync, curves,
 };
 use flui_foundation::Listenable;
 
@@ -77,7 +77,7 @@ fn second_parent_cannot_apply_its_motion_policy_to_an_existing_owner() {
         0.0_f64,
         MotionSpec::Curve {
             duration: Duration::from_secs(1),
-            curve: ArcCurve::new(Curves::EaseInOut),
+            curve: ArcCurve::new(curves::EASE_IN_OUT),
         },
         Some(&child),
     )
@@ -1604,7 +1604,7 @@ fn reverse_over_disposed_source() {
 }
 fn curved_over_disposed_source() {
     wrapper_over_a_disposed_source(|parent| {
-        std::rc::Rc::new(CurvedAnimation::new(parent, Curves::Linear))
+        std::rc::Rc::new(CurvedAnimation::new(parent, curves::LINEAR))
     });
 }
 fn tween_over_disposed_source() {
@@ -1663,7 +1663,7 @@ fn reverse_status_listener_dies_with_the_wrapper() {
 #[test]
 fn curved_status_listener_dies_with_the_wrapper() {
     wrapper_status_listener_dies_with_the_wrapper(|parent| {
-        CurvedAnimation::new(parent, Curves::EaseIn)
+        CurvedAnimation::new(parent, curves::EASE_IN)
     });
 }
 

@@ -100,7 +100,7 @@ use std::{
 };
 
 use flui_animation::{
-    Animatable, Animation, AnimationController, ArcCurve, CurvedAnimation, Curves, FloatTween,
+    Animatable, Animation, AnimationController, ArcCurve, CurvedAnimation, FloatTween, curves,
 };
 use flui_foundation::Single;
 use flui_foundation::geometry::Axis;
@@ -250,7 +250,7 @@ impl FloatingHeaderSnapConfiguration {
 impl Default for FloatingHeaderSnapConfiguration {
     fn default() -> Self {
         Self {
-            curve: ArcCurve::new(Curves::Ease),
+            curve: ArcCurve::new(curves::EASE),
             duration: Duration::from_millis(300),
         }
     }

@@ -17,10 +17,10 @@
 //!   `PageRoute::back_gesture` doc, which names this exact route as the
 //!   Cupertino opt-in's first real caller).
 //! - The page transition's curve wiring: the **primary** position (this page
-//!   sliding in/out) is curved with `Curves::FastEaseInToSlowEaseOut`,
+//!   sliding in/out) is curved with `curves::FAST_EASE_IN_TO_SLOW_EASE_OUT`,
 //!   reverse-curved with its `.flipped()`. The **secondary** position (this
-//!   page being covered by the next) is curved with `Curves::LinearToEaseOut`
-//!   forward, `Curves::EaseInToLinear` reverse. Both tween a
+//!   page being covered by the next) is curved with `curves::LINEAR_TO_EASE_OUT`
+//!   forward, `curves::EASE_IN_TO_LINEAR` reverse. Both tween a
 //!   [`TranslationFraction`] through [`SlideTransition`].
 //! - A linear transition: mid-back-gesture, both curves are skipped and the
 //!   tweens are driven directly off the raw animations, to precisely track
@@ -60,7 +60,7 @@
 
 use std::time::Duration;
 
-use flui_sdk::animation::{Animation, ArcCurve, Curve, CurvedAnimation, Curves, Tween, animate};
+use flui_sdk::animation::{Animation, ArcCurve, Curve, CurvedAnimation, Tween, animate, curves};
 use flui_sdk::painting::Color;
 use flui_sdk::pipeline::TranslationFraction;
 use flui_sdk::view::prelude::BuildContext;
@@ -152,9 +152,11 @@ fn cupertino_page_transitions(
     } else {
         let curved = CurvedAnimation::new(
             std::rc::Rc::clone(primary),
-            ArcCurve::new(Curves::FastEaseInToSlowEaseOut),
+            ArcCurve::new(curves::FAST_EASE_IN_TO_SLOW_EASE_OUT),
         )
-        .with_reverse_curve(ArcCurve::new(Curves::FastEaseInToSlowEaseOut.flipped()));
+        .with_reverse_curve(ArcCurve::new(
+            curves::FAST_EASE_IN_TO_SLOW_EASE_OUT.flipped(),
+        ));
         let curved: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(curved);
         animate(right_middle_tween(), curved)
     };
@@ -162,8 +164,9 @@ fn cupertino_page_transitions(
     let secondary_position = if linear_transition {
         animate(middle_left_tween(), std::rc::Rc::clone(secondary))
     } else {
-        let curved = CurvedAnimation::new(std::rc::Rc::clone(secondary), Curves::LinearToEaseOut)
-            .with_reverse_curve(Curves::EaseInToLinear);
+        let curved =
+            CurvedAnimation::new(std::rc::Rc::clone(secondary), curves::LINEAR_TO_EASE_OUT)
+                .with_reverse_curve(curves::EASE_IN_TO_LINEAR);
         let curved: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(curved);
         animate(middle_left_tween(), curved)
     };

@@ -5,8 +5,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_animation::{
-    AnimatedValue, Animation, AnimationError, AnimationStatus, ArcCurve, Curves, MotionClock,
-    MotionSpec, MotionUpdate, SpringDescription, TwoWayConverter, Vsync, VsyncUpdate,
+    AnimatedValue, Animation, AnimationError, AnimationStatus, ArcCurve, MotionClock, MotionSpec,
+    MotionUpdate, SpringDescription, TwoWayConverter, Vsync, VsyncUpdate, curves,
 };
 use flui_foundation::geometry::Offset;
 
@@ -21,7 +21,7 @@ fn replacement_publishes_all_components_before_cancellation() {
     let registry = Vsync::new();
     let mut clock = MotionClock::new();
     let mut value =
-        AnimatedValue::new(Offset::ZERO, curve(Curves::Linear), Some(&registry)).unwrap();
+        AnimatedValue::new(Offset::ZERO, curve(curves::LINEAR), Some(&registry)).unwrap();
     let view = value.animation();
     let old = value.animate_to(Offset::new(2.0, -4.0)).unwrap();
     registry.tick_all(&clock.frame(Duration::ZERO));
@@ -41,7 +41,7 @@ fn replacement_publishes_all_components_before_cancellation() {
         }
     });
     let next = value
-        .retarget(Offset::new(-3.0, 7.0), curve(Curves::EaseIn))
+        .retarget(Offset::new(-3.0, 7.0), curve(curves::EASE_IN))
         .unwrap();
     assert!(old.is_canceled() && next.is_pending());
     assert_eq!(
@@ -64,18 +64,18 @@ fn replacement_publishes_all_components_before_cancellation() {
 fn repeated_configuration_keeps_the_remaining_deadline() {
     let registry = Vsync::new();
     let mut clock = MotionClock::new();
-    let mut value = AnimatedValue::new(0.0, curve(Curves::Linear), Some(&registry)).unwrap();
+    let mut value = AnimatedValue::new(0.0, curve(curves::LINEAR), Some(&registry)).unwrap();
     let first = value.animate_to(1.0).unwrap();
     registry.tick_all(&clock.frame(Duration::ZERO));
     registry.tick_all(&clock.frame(Duration::from_millis(250)));
     let repeated = value.animate_to(1.0).unwrap();
     assert!(first.is_pending() && repeated.is_pending());
     let seam = (value.value(), value.velocity());
-    let second = value.set_motion(curve(Curves::EaseIn)).unwrap();
+    let second = value.set_motion(curve(curves::EASE_IN)).unwrap();
     assert_eq!((value.value(), value.velocity()), seam);
     assert!(first.is_canceled() && repeated.is_canceled());
     registry.tick_all(&clock.frame(Duration::from_millis(500)));
-    let third = value.set_motion(curve(Curves::EaseOut)).unwrap();
+    let third = value.set_motion(curve(curves::EASE_OUT)).unwrap();
     assert!(second.is_canceled());
     registry.tick_all(&clock.frame(Duration::from_secs(1)));
     assert!(third.is_complete());
@@ -85,7 +85,7 @@ fn repeated_configuration_keeps_the_remaining_deadline() {
 
 fn clockless_motion_and_snap_publish_the_exact_target() {
     let spring = SpringDescription::with_damping_ratio(1.0, 100.0, 0.5).expect("admitted spring");
-    for motion in [curve(Curves::EaseIn), MotionSpec::Spring(spring)] {
+    for motion in [curve(curves::EASE_IN), MotionSpec::Spring(spring)] {
         let mut value = AnimatedValue::new(Offset::ZERO, motion, None).unwrap();
         let run = value.animate_to(Offset::new(3.0, -7.0)).unwrap();
         assert!(run.is_complete());
@@ -146,12 +146,12 @@ fn refused_threshold<const CASE: usize>() {
     let mut clock = MotionClock::new();
     let mut owner = AnimatedValue::new(
         InvalidThreshold::<CASE>(0.0),
-        curve(Curves::Linear),
+        curve(curves::LINEAR),
         Some(&registry),
     )
     .unwrap();
     let old = owner.animate_to(InvalidThreshold(1.0)).unwrap();
-    let mut healthy = AnimatedValue::new(0.0, curve(Curves::Linear), Some(&registry)).unwrap();
+    let mut healthy = AnimatedValue::new(0.0, curve(curves::LINEAR), Some(&registry)).unwrap();
     let healthy_old = healthy.animate_to(1.0).unwrap();
     registry.tick_all(&clock.frame(Duration::ZERO));
     registry.tick_all(&clock.frame(Duration::from_millis(250)));
@@ -167,7 +167,7 @@ fn refused_threshold<const CASE: usize>() {
     assert!(old.is_pending(), "refusal cannot cancel accepted motion");
     assert_eq!((owner.value().0, owner.velocity()), seam);
     let refused = MotionUpdate::run(|update| {
-        update.retarget(&mut healthy, 3.0, curve(Curves::Linear))?;
+        update.retarget(&mut healthy, 3.0, curve(curves::LINEAR))?;
         update.retarget(
             &mut owner,
             InvalidThreshold(2.0),
@@ -200,7 +200,7 @@ fn invalid_rest_thresholds_preserve_the_accepted_run() {
 fn observers_do_not_prolong_the_run_or_its_seat() {
     let registry = Vsync::new();
     let mut clock = MotionClock::new();
-    let mut value = AnimatedValue::new(0.0, curve(Curves::Linear), Some(&registry)).unwrap();
+    let mut value = AnimatedValue::new(0.0, curve(curves::LINEAR), Some(&registry)).unwrap();
     let view = value.animation();
     let run = value.animate_to(1.0).unwrap();
     registry.tick_all(&clock.frame(Duration::ZERO));
@@ -222,7 +222,7 @@ fn an_equivalent_motion_target_still_publishes_its_exact_value() {
     let blue = Color::rgba(0, 0, 255, 0);
     assert_eq!(red.to_vector(), blue.to_vector());
     let registry = Vsync::new();
-    let mut value = AnimatedValue::new(red, curve(Curves::Linear), Some(&registry)).unwrap();
+    let mut value = AnimatedValue::new(red, curve(curves::LINEAR), Some(&registry)).unwrap();
     let view = value.animation();
     let notified = Rc::new(Cell::new(None));
     let _listener = view.add_listener({
@@ -282,7 +282,7 @@ fn plain(position: f64) -> ReentrantValue {
 fn converters_can_reenter_the_registry_and_replace_a_visible_target() {
     let registry = Vsync::new();
     let clock = Rc::new(RefCell::new(MotionClock::new()));
-    let mut value = AnimatedValue::new(plain(0.0), curve(Curves::Linear), Some(&registry)).unwrap();
+    let mut value = AnimatedValue::new(plain(0.0), curve(curves::LINEAR), Some(&registry)).unwrap();
     let old = value.animate_to(plain(1.0)).unwrap();
     registry.tick_all(&clock.borrow_mut().frame(Duration::ZERO));
     registry.tick_all(&clock.borrow_mut().frame(Duration::from_millis(250)));
@@ -310,7 +310,7 @@ fn converters_can_reenter_the_registry_and_replace_a_visible_target() {
     drop(value);
 
     let owner = Rc::new(RefCell::new(
-        AnimatedValue::new(plain(0.0), curve(Curves::Linear), None).unwrap(),
+        AnimatedValue::new(plain(0.0), curve(curves::LINEAR), None).unwrap(),
     ));
     let view = owner.borrow().animation();
     let once = Rc::new(Cell::new(false));
@@ -475,7 +475,7 @@ fn a_failed_component_keeps_the_whole_published_sample() {
     assert!(old.is_pending());
     fail.store(false, Ordering::Relaxed);
     let next = value
-        .retarget(Offset::new(-3.0, 7.0), curve(Curves::Linear))
+        .retarget(Offset::new(-3.0, 7.0), curve(curves::LINEAR))
         .unwrap();
     assert!(old.is_canceled() && next.is_pending());
     assert_eq!((value.value(), value.velocity()), published);
@@ -641,7 +641,7 @@ fn owner_retirement_joins_every_delivery_channel() {
                     position: 0.0,
                     drops: None,
                 },
-                curve(Curves::Linear),
+                curve(curves::LINEAR),
                 Some(&registry),
             )
             .unwrap();
@@ -726,7 +726,7 @@ fn owner_retirement_joins_every_delivery_channel() {
                     position: 0.0,
                     drops: None,
                 },
-                curve(Curves::Linear),
+                curve(curves::LINEAR),
                 Some(&registry),
             )
             .unwrap();
@@ -816,7 +816,7 @@ fn owner_retirement_keeps_its_first_destructor_failure() {
         "remaining opaque resources are retained"
     );
     assert!(registry.is_empty());
-    let mut fresh = AnimatedValue::new(0.0_f64, curve(Curves::Linear), Some(&registry)).unwrap();
+    let mut fresh = AnimatedValue::new(0.0_f64, curve(curves::LINEAR), Some(&registry)).unwrap();
     let run = fresh.animate_to(1.0).unwrap();
     let mut clock = MotionClock::new();
     registry.tick_all(&clock.frame(Duration::ZERO));
@@ -836,7 +836,7 @@ fn retired_owner_cleanup_passes_a_stale_settlement_fence() {
         }
     }
     let registry = Vsync::new();
-    let mut value = AnimatedValue::new(0.0_f64, curve(Curves::Linear), Some(&registry)).unwrap();
+    let mut value = AnimatedValue::new(0.0_f64, curve(curves::LINEAR), Some(&registry)).unwrap();
     let first_run = value.animate_to(1.0).unwrap();
     let view = value.animation();
     let mut clock = MotionClock::new();
@@ -901,8 +901,8 @@ fn grouped_registry_migration_commits_before_delivery() {
         for (unbound, fails) in [(false, false), (false, true), (true, false), (true, true)] {
             let old = Vsync::new();
             let next = Vsync::new();
-            let mut left = AnimatedValue::new(0.0, curve(Curves::Linear), Some(&old)).unwrap();
-            let mut right = AnimatedValue::new(0.0, curve(Curves::Linear), Some(&old)).unwrap();
+            let mut left = AnimatedValue::new(0.0, curve(curves::LINEAR), Some(&old)).unwrap();
+            let mut right = AnimatedValue::new(0.0, curve(curves::LINEAR), Some(&old)).unwrap();
             let left_run = left.animate_to(1.0).unwrap();
             let right_run = right.animate_to(2.0).unwrap();
             let mut clock = MotionClock::new();
@@ -995,9 +995,9 @@ fn grouped_motion_publishes_all_owners_before_delivery() {
     use flui_foundation::Listenable;
     let registry = Vsync::new();
     let mut clock = MotionClock::new();
-    let mut left = AnimatedValue::new(0.0, curve(Curves::Linear), Some(&registry)).unwrap();
+    let mut left = AnimatedValue::new(0.0, curve(curves::LINEAR), Some(&registry)).unwrap();
     let mut right =
-        AnimatedValue::new(Offset::ZERO, curve(Curves::Linear), Some(&registry)).unwrap();
+        AnimatedValue::new(Offset::ZERO, curve(curves::LINEAR), Some(&registry)).unwrap();
     let left_old = left.animate_to(1.0).unwrap();
     let right_old = right.animate_to(Offset::new(2.0, -4.0)).unwrap();
     registry.tick_all(&clock.frame(Duration::ZERO));
@@ -1046,8 +1046,8 @@ fn grouped_motion_publishes_all_owners_before_delivery() {
         check();
     });
     MotionUpdate::run(|update| {
-        update.retarget(&mut left, -1.0, curve(Curves::EaseIn))?;
-        update.retarget(&mut right, Offset::new(-3.0, 7.0), curve(Curves::EaseOut))
+        update.retarget(&mut left, -1.0, curve(curves::EASE_IN))?;
+        update.retarget(&mut right, Offset::new(-3.0, 7.0), curve(curves::EASE_OUT))
     })
     .unwrap();
     assert_eq!(delivered.get(), 4);
@@ -1063,16 +1063,16 @@ fn grouped_motion_publishes_all_owners_before_delivery() {
 fn an_ignored_refusal_keeps_every_old_run() {
     let registry = Vsync::new();
     let mut clock = MotionClock::new();
-    let mut left = AnimatedValue::new(0.0, curve(Curves::Linear), Some(&registry)).unwrap();
-    let mut right = AnimatedValue::new(0.0, curve(Curves::Linear), Some(&registry)).unwrap();
+    let mut left = AnimatedValue::new(0.0, curve(curves::LINEAR), Some(&registry)).unwrap();
+    let mut right = AnimatedValue::new(0.0, curve(curves::LINEAR), Some(&registry)).unwrap();
     let left_old = left.animate_to(1.0).unwrap();
     let right_old = right.animate_to(2.0).unwrap();
     registry.tick_all(&clock.frame(Duration::ZERO));
     let result = MotionUpdate::run(|update| {
-        update.retarget(&mut left, 3.0, curve(Curves::Linear))?;
+        update.retarget(&mut left, 3.0, curve(curves::LINEAR))?;
         assert!(
             update
-                .retarget(&mut right, f64::NAN, curve(Curves::Linear))
+                .retarget(&mut right, f64::NAN, curve(curves::LINEAR))
                 .is_err()
         );
         Ok(())
@@ -1082,8 +1082,8 @@ fn an_ignored_refusal_keeps_every_old_run() {
     registry.tick_all(&clock.frame(Duration::from_secs(1)));
     assert_eq!((left.value(), right.value()), (1.0, 2.0));
     MotionUpdate::run(|update| {
-        update.retarget(&mut left, 3.0, curve(Curves::Linear))?;
-        update.retarget(&mut right, 4.0, curve(Curves::Linear))
+        update.retarget(&mut left, 3.0, curve(curves::LINEAR))?;
+        update.retarget(&mut right, 4.0, curve(curves::LINEAR))
     })
     .unwrap();
     registry.tick_all(&clock.frame(Duration::from_millis(1001)));
@@ -1094,13 +1094,13 @@ fn an_ignored_refusal_keeps_every_old_run() {
 fn a_caught_preparation_panic_keeps_every_old_run() {
     let registry = Vsync::new();
     let mut clock = MotionClock::new();
-    let mut left = AnimatedValue::new(0.0, curve(Curves::Linear), Some(&registry)).unwrap();
-    let mut right = AnimatedValue::new(plain(0.0), curve(Curves::Linear), Some(&registry)).unwrap();
+    let mut left = AnimatedValue::new(0.0, curve(curves::LINEAR), Some(&registry)).unwrap();
+    let mut right = AnimatedValue::new(plain(0.0), curve(curves::LINEAR), Some(&registry)).unwrap();
     let left_old = left.animate_to(1.0).unwrap();
     let right_old = right.animate_to(plain(2.0)).unwrap();
     registry.tick_all(&clock.frame(Duration::ZERO));
     let result = MotionUpdate::run(|update| {
-        update.retarget(&mut left, 3.0, curve(Curves::Linear))?;
+        update.retarget(&mut left, 3.0, curve(curves::LINEAR))?;
         let target = ReentrantValue {
             position: 4.0,
             clone_hook: Rc::new(|| {}),
@@ -1110,7 +1110,7 @@ fn a_caught_preparation_panic_keeps_every_old_run() {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| update.retarget(
                 &mut right,
                 target,
-                curve(Curves::Linear)
+                curve(curves::LINEAR)
             )))
             .is_err()
         );
@@ -1125,8 +1125,8 @@ fn a_caught_preparation_panic_keeps_every_old_run() {
 fn a_later_converter_invalidates_the_whole_group() {
     let registry = Vsync::new();
     let mut clock = MotionClock::new();
-    let mut left = AnimatedValue::new(0.0, curve(Curves::Linear), Some(&registry)).unwrap();
-    let mut right = AnimatedValue::new(plain(0.0), curve(Curves::Linear), Some(&registry)).unwrap();
+    let mut left = AnimatedValue::new(0.0, curve(curves::LINEAR), Some(&registry)).unwrap();
+    let mut right = AnimatedValue::new(plain(0.0), curve(curves::LINEAR), Some(&registry)).unwrap();
     let left_old = left.animate_to(1.0).unwrap();
     let right_old = right.animate_to(plain(2.0)).unwrap();
     registry.tick_all(&clock.frame(Duration::ZERO));
@@ -1140,8 +1140,8 @@ fn a_later_converter_invalidates_the_whole_group() {
         }),
     };
     let result = MotionUpdate::run(|update| {
-        update.retarget(&mut left, 3.0, curve(Curves::Linear))?;
-        update.retarget(&mut right, target, curve(Curves::Linear))
+        update.retarget(&mut left, 3.0, curve(curves::LINEAR))?;
+        update.retarget(&mut right, target, curve(curves::LINEAR))
     });
     assert_eq!(result, Err(AnimationError::ReentrantMotion));
     assert!(left_old.is_pending() && right_old.is_pending());
@@ -1153,7 +1153,7 @@ fn a_refused_optional_owner_releases_its_registry_seat() {
     for panics in [false, true] {
         let registry = Vsync::new();
         let mut owner =
-            AnimatedValue::new(plain(0.0), curve(Curves::Linear), Some(&registry)).unwrap();
+            AnimatedValue::new(plain(0.0), curve(curves::LINEAR), Some(&registry)).unwrap();
         let old = owner.animate_to(plain(1.0)).unwrap();
         let mut appearing = None;
         let target = ReentrantValue {
@@ -1168,11 +1168,11 @@ fn a_refused_optional_owner_releases_its_registry_seat() {
                 update.replace(
                     &mut appearing,
                     Some(
-                        AnimatedValue::new(0.0_f64, curve(Curves::Linear), Some(&registry))
+                        AnimatedValue::new(0.0_f64, curve(curves::LINEAR), Some(&registry))
                             .unwrap(),
                     ),
                 );
-                update.retarget(&mut owner, target, curve(Curves::Linear))
+                update.retarget(&mut owner, target, curve(curves::LINEAR))
             })
         }));
         if panics {
@@ -1195,9 +1195,9 @@ fn grouped_removal_commits_every_seat_before_cancellation() {
     for (keep_owners, fails) in [(false, false), (false, true), (true, false), (true, true)] {
         let registry = Vsync::new();
         let mut left =
-            Some(AnimatedValue::new(0.0, curve(Curves::Linear), Some(&registry)).unwrap());
+            Some(AnimatedValue::new(0.0, curve(curves::LINEAR), Some(&registry)).unwrap());
         let mut right =
-            Some(AnimatedValue::new(0.0, curve(Curves::Linear), Some(&registry)).unwrap());
+            Some(AnimatedValue::new(0.0, curve(curves::LINEAR), Some(&registry)).unwrap());
         let left_old = left.as_mut().unwrap().animate_to(1.0).unwrap();
         let right_old = right.as_mut().unwrap().animate_to(2.0).unwrap();
         let left_view = left.as_ref().unwrap().animation();

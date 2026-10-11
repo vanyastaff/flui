@@ -8,7 +8,7 @@
 //! A release at least as fast as `MIN_FLING_VELOCITY` settles with a fling
 //! that starts at the finger's speed, so the page keeps moving as fast as it
 //! was dragged. A slower release, or a cancel, takes a fixed 350ms /
-//! `Curves::FastEaseInToSlowEaseOut` settle.
+//! `curves::FAST_EASE_IN_TO_SLOW_EASE_OUT` settle.
 //!
 //! # Deferred by design
 //!
@@ -32,7 +32,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
-use flui_animation::{Animation, AnimationController, Curves};
+use flui_animation::{Animation, AnimationController, curves};
 use flui_foundation::Listenable;
 use flui_interaction::recognizers::drag_variants::horizontal_drag;
 use flui_interaction::{
@@ -164,7 +164,7 @@ impl BackGestureController {
         } else {
             PopPacing::Curved {
                 duration: DROPPED_SWIPE_DURATION,
-                curve: Rc::new(Curves::FastEaseInToSlowEaseOut), // see `PopPacing`'s doc (binding.rs) — same erased easing-curve boundary
+                curve: Rc::new(curves::FAST_EASE_IN_TO_SLOW_EASE_OUT), // see `PopPacing`'s doc (binding.rs) — same erased easing-curve boundary
             }
         };
 

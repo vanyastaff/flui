@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use common::{lay_out_animated, tight};
 use flui_cupertino::cupertino_page_route;
-use flui_sdk::animation::{Curve, Curves, Vsync};
+use flui_sdk::animation::{Curve, Vsync, curves};
 use flui_sdk::painting::Color;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{ColoredBox, Navigator, NavigatorHandle, SimpleRoute, VsyncScope};
@@ -122,7 +122,7 @@ fn primary_slide_dx(laid: &common::LaidOut) -> f64 {
 /// The pushed page slides in from fully off the right edge of the viewport
 /// to flush with it, over the oracle's 500ms `kTransitionDuration` — not a
 /// jump cut, and not settled before the duration elapses. The midpoint value
-/// is pinned against `Curves::FastEaseInToSlowEaseOut`'s own math (the exact
+/// is pinned against `curves::FAST_EASE_IN_TO_SLOW_EASE_OUT`'s own math (the exact
 /// curve `route.dart`'s `_setupAnimation` applies to the primary position),
 /// not a loose "still mid-flight" range a plain linear interpolation would
 /// also satisfy.
@@ -130,7 +130,7 @@ fn primary_slide_dx(laid: &common::LaidOut) -> f64 {
 /// Red-check: replace `cupertino_page_transitions` with the framework
 /// default (jump-cut) `transitions` builder — the exact-midpoint assertion
 /// below fails, since a jump cut is already at rest the instant it mounts.
-/// Red-check 2: swap the primary curve for `Curves::Linear` in
+/// Red-check 2: swap the primary curve for `curves::LINEAR` in
 /// `route.rs` — `midpoint_dx` reads `0.5` (linear at `t=0.5`), which is
 /// `> 0.05` away from `FastEaseInToSlowEaseOut`'s real value asserted below,
 /// so the tight-tolerance assertion fails.
@@ -154,7 +154,7 @@ pub fn cupertino_page_route_slides_in_from_off_the_right_edge_over_500ms() {
     // and at the exact value `FastEaseInToSlowEaseOut` (not linear) predicts.
     laid.pump_for(TRANSITION / 2);
     let midpoint_dx = primary_slide_dx(&laid);
-    let curved_progress = Curves::FastEaseInToSlowEaseOut.transform(0.5);
+    let curved_progress = curves::FAST_EASE_IN_TO_SLOW_EASE_OUT.transform(0.5);
     let expected_midpoint_dx = 1.0 - curved_progress;
     assert!(
         (midpoint_dx - expected_midpoint_dx).abs() < 0.01,
