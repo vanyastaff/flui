@@ -499,11 +499,60 @@ fn coalescing_keeps_distinct_current_time_readings_and_excludes_future_history()
     assert_eq!(*newer.current(), current);
 }
 
+fn position_mapping_preserves_readings_and_refuses_partial_output() {
+    let sample = |x| {
+        PointerSample::new(T0, position(x, 2.0))
+            .with_pressure(Pressure::try_new(0.4).expect("pressure"))
+            .with_orientation(PenOrientation::try_altitude(0.3).expect("orientation"))
+            .with_twist(Twist::try_new(0.2).expect("twist"))
+    };
+    let movement = PointerMove::new(
+        mouse(),
+        PointerButtons::only(PointerButton::SECONDARY),
+        sample(1.0),
+    )
+    .with_modifiers(flui_platform_api::keyboard::Modifiers::SHIFT)
+    .with_coalesced(vec![sample(0.0)])
+    .with_predicted(vec![sample(2.0)]);
+    let original = movement.clone();
+    for failed_x in [0.0, 1.0, 2.0] {
+        let refused = movement.try_map_positions(|reading| {
+            if reading.get().x == failed_x {
+                Err("position cannot be represented")
+            } else {
+                Ok(position(1e20, 2.0))
+            }
+        });
+        assert_eq!(refused, Err("position cannot be represented"));
+        assert_eq!(movement, original, "refusal leaves the source deliverable");
+
+        let mapped = movement
+            .try_map_positions(|_| Ok::<_, InputValueError>(position(1e20, 2.0)))
+            .expect("later complete mapping succeeds");
+        let mut expected_sample = sample(1.0);
+        expected_sample.position = position(1e20, 2.0);
+        assert_eq!(mapped.current(), &expected_sample);
+        assert_eq!(mapped.coalesced(), &[expected_sample]);
+        assert_eq!(mapped.predicted(), &[expected_sample]);
+        assert_eq!(mapped.pointer, original.pointer);
+        assert_eq!(mapped.buttons, original.buttons);
+        assert_eq!(mapped.modifiers, original.modifiers);
+        assert_eq!(
+            movement, original,
+            "successful mapping also preserves source"
+        );
+    }
+}
+
 #[test]
 fn input_vocabulary_contract() {
     run_table(
         "input_vocabulary_contract",
         &[
+            (
+                "position_mapping_preserves_readings_and_refuses_partial_output",
+                position_mapping_preserves_readings_and_refuses_partial_output,
+            ),
             (
                 "a_non_finite_position_is_refused",
                 a_non_finite_position_is_refused,
