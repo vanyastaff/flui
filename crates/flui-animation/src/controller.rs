@@ -2028,10 +2028,14 @@ impl AnimationController {
                     }
                     return;
                 }
-                if matches!(simulation, SimulationRun::Motion { .. }) {
+                let endpoint = match simulation {
+                    SimulationRun::Motion { .. } => Some(self.inner.borrow().target_value),
+                    SimulationRun::Fling { bound, .. } => Some(*bound),
+                    SimulationRun::Custom(_) | SimulationRun::Value(_) => None,
+                };
+                if let Some(target) = endpoint {
                     let inner = self.inner.borrow_mut();
                     if inner.matches_sample(&identity) {
-                        let target = inner.target_value;
                         self.tick_simulation(inner, target, true, recovery);
                     }
                     return;

@@ -37,6 +37,9 @@ forwards the same tick through nested registries. Under Reduce it settles Normal
 work outside the registry borrow: finite runs complete at their terminal value;
 finite repeats land at the last leg's endpoint; infinite repeats park at their
 first leg's start and retain their future. Parked work requests no continuation.
+Native property motion uses its exact target, and a native fling uses its declared
+bound. The bounded settlement probe applies only to arbitrary custom simulations
+without a declared endpoint; it must not substitute an intermediate native sample.
 Full resumes parked work from a fresh zero-time anchor. A reentrant replacement
 waits until the next frame. Existing retirement and first-failure custody apply
 to listeners, futures and simulation sources.

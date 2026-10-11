@@ -926,6 +926,12 @@ round trips, unreachable queries and the remaining-glide rest.
   `fling_with_overflowing_spring_preserves_the_admitted_run` checks the refused
   replacement, continued original trajectory, successful original completion
   and a healthy subsequent command in `springs_at_the_edge_of_f64_stay_finite_and_rest`.
+- Policy and missing-clock settlement finish native flings at their declared
+  bound. The bounded probe of arbitrary simulations cannot identify a slow
+  fling's endpoint. `fling_settlement_reaches_its_declared_bound` in
+  `simulation_settle_grid` covers both directions under Reduce, missing clock
+  and exhausted clock, endpoint publication before completion delivery, one
+  transition and healthy subsequent motion.
 - The motion is one closed form for every `ζ`:
   `x = e^{−at}[x0·C + (a·x0 + v0)·S]`, `v = e^{−at}[v0·C − (ω²x0 + a·v0)·S]`,
   `a = ζω`, with `C`, `S` summed as series where `|ω²(1 − ζ²)t²| < 10⁻²`

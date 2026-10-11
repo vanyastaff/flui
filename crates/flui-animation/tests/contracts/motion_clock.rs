@@ -335,6 +335,68 @@ fn reduced_non_finite_simulation_keeps_the_published_value() {
     );
 }
 
+fn fling_settlement_reaches_its_declared_bound() {
+    use flui_animation::simulation::SpringDescription;
+    use flui_animation::{AnimationStatus, MotionPreference, Vsync};
+    use std::{cell::Cell, rc::Rc};
+
+    for mode in ["missing clock", "reduced motion", "exhausted clock"] {
+        for (velocity, endpoint, status) in [
+            (1e-6, 1.0, AnimationStatus::ForwardSettled),
+            (-1e-6, 0.0, AnimationStatus::ReverseSettled),
+        ] {
+            let registry = Vsync::new();
+            let owner = AnimationController::builder(ms(1000))
+                .initial_value(0.4)
+                .build_on((mode != "missing clock").then_some(&registry));
+            let controller = owner.controller();
+            let completions = Rc::new(Cell::new(0));
+            let delivered = Rc::clone(&completions);
+            let observed = controller.clone();
+            let subscription = controller.subscribe_status(Rc::new(move |phase| {
+                if phase == status {
+                    assert_eq!(observed.value(), endpoint, "endpoint precedes delivery");
+                    assert!(!observed.is_animating());
+                    delivered.set(delivered.get() + 1);
+                }
+            }));
+            let spring = SpringDescription::with_damping_ratio(1.0, 1e-12, 1.0)
+                .expect("a finite slow spring");
+            let run = controller
+                .fling_with(velocity, Some(spring))
+                .expect("a finite bound-directed fling");
+            let mut clock = MotionClock::new();
+            if mode == "reduced motion" {
+                clock.set_preference(MotionPreference::Reduce);
+                registry.tick_all(&clock.frame(Duration::ZERO));
+            } else if mode == "exhausted clock" {
+                registry.tick_all(&clock.frame(Duration::MAX));
+            }
+            assert!(run.is_complete(), "{mode}: the original future completes");
+            assert_eq!(
+                controller.value(),
+                endpoint,
+                "{mode}: successful completion must reach the declared fling bound"
+            );
+            assert_eq!(controller.status(), status);
+            assert!(!controller.is_animating());
+            assert!(!registry.has_running());
+            assert_eq!(completions.get(), 1, "one completion transition");
+            registry.tick_all(&clock.frame(Duration::MAX));
+            assert_eq!(controller.value(), endpoint, "no post-completion sample");
+            assert_eq!(completions.get(), 1);
+            drop(subscription);
+            let next = controller
+                .animate_to(0.25, Some(ms(1000)))
+                .expect("a healthy subsequent run");
+            registry.tick_all(&clock.frame(Duration::MAX));
+            assert!(next.is_complete());
+            assert_eq!(controller.value(), 0.25);
+            assert!(!registry.has_running());
+        }
+    }
+}
+
 #[test]
 fn simulation_settle_grid() {
     run_table(&[
@@ -357,6 +419,10 @@ fn simulation_settle_grid() {
         (
             "no finite sample",
             reduced_non_finite_simulation_keeps_the_published_value,
+        ),
+        (
+            "fling declared endpoint",
+            fling_settlement_reaches_its_declared_bound,
         ),
     ]);
 }
