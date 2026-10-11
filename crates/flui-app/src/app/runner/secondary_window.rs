@@ -1201,11 +1201,16 @@ mod tests {
         installation_case(InstallCase::InitializationPanic);
     }
 
+    fn rendered_secondary_installs_after_receipt_observer_is_dropped() {
+        installation_case(InstallCase::ObserverDropped);
+    }
+
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum InstallCase {
         Ready,
         Closed,
         InitializationPanic,
+        ObserverDropped,
     }
 
     fn installation_case(case: InstallCase) {
@@ -1237,6 +1242,7 @@ mod tests {
                     request.try_result().is_none(),
                     "admission is not completion"
                 );
+                let mut request = Some(request);
                 let config = SecondaryWindowInstallConfig {
                     loop_identity: APP_RUNTIME
                         .with(|slot| Arc::clone(&slot.borrow().loop_identity)),
@@ -1305,6 +1311,9 @@ mod tests {
                         })),
                     });
                 });
+                if case == InstallCase::ObserverDropped {
+                    drop(request.take());
+                }
                 let delivery = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     dispatch_platform_ui_runtime(
                         outer,
@@ -1339,12 +1348,9 @@ mod tests {
                 });
                 assert_eq!(
                     registered,
-                    case == InstallCase::Ready,
+                    matches!(case, InstallCase::Ready | InstallCase::ObserverDropped),
                     "only a completed installation retains membership"
                 );
-                let completion = request
-                    .try_result()
-                    .expect("installation settles its caller's reply");
                 assert_eq!(
                     *failures.lock().expect("reports"),
                     if case == InstallCase::InitializationPanic {
@@ -1354,13 +1360,18 @@ mod tests {
                     },
                     "initialization failure reaches its configured handler exactly once"
                 );
-                if case == InstallCase::Ready {
-                    assert_eq!(completion.expect("ready"), address.get().expect("address"));
-                } else {
-                    assert!(
-                        matches!(completion, Err(AppWindowError::Mount { .. })),
-                        "failure is typed after rollback: {completion:?}"
-                    );
+                if let Some(mut request) = request {
+                    let completion = request
+                        .try_result()
+                        .expect("installation settles its caller's reply");
+                    if case == InstallCase::Ready {
+                        assert_eq!(completion.expect("ready"), address.get().expect("address"));
+                    } else {
+                        assert!(
+                            matches!(completion, Err(AppWindowError::Mount { .. })),
+                            "failure is typed after rollback: {completion:?}"
+                        );
+                    }
                 }
                 Ok(())
             }))
@@ -1379,6 +1390,10 @@ mod tests {
                 (
                     "rendered_secondary_retains_reservation_through_initialization",
                     rendered_secondary_retains_reservation_through_initialization as fn(),
+                ),
+                (
+                    "rendered_secondary_installs_after_receipt_observer_is_dropped",
+                    rendered_secondary_installs_after_receipt_observer_is_dropped as fn(),
                 ),
                 (
                     "rendered_secondary_closed_before_publication_releases_reservation",

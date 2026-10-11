@@ -47,6 +47,43 @@ fn lifecycle_reentry_preserves_order() {
     );
 }
 
+fn lifecycle_removal_before_delivery_skips_retired_listener() {
+    let scheduler = UpdateScheduler::new();
+    let removed = Rc::new(std::cell::Cell::new(None));
+    let target = Rc::clone(&removed);
+    let weak = scheduler.downgrade();
+    scheduler.add_lifecycle_state_listener(Rc::new(move |_| {
+        if let Some(id) = target.take() {
+            assert!(
+                weak.upgrade()
+                    .expect("live scheduler")
+                    .remove_lifecycle_state_listener(id)
+            );
+        }
+    }));
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let retired_output = Rc::clone(&seen);
+    removed.set(Some(scheduler.add_lifecycle_state_listener(Rc::new(
+        move |state| {
+            retired_output.borrow_mut().push(("retired", state));
+        },
+    ))));
+    let healthy_output = Rc::clone(&seen);
+    scheduler.add_lifecycle_state_listener(Rc::new(move |state| {
+        healthy_output.borrow_mut().push(("healthy", state));
+    }));
+    scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Hidden);
+    scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Resumed);
+    assert_eq!(
+        &*seen.borrow(),
+        &[
+            ("healthy", AppLifecycleState::Hidden),
+            ("healthy", AppLifecycleState::Resumed)
+        ],
+        "removal suppresses the pending invocation without skipping the healthy tail"
+    );
+}
+
 fn timings_without_subscribers_retain_nothing() {
     let scheduler = UpdateScheduler::new();
     let owner = OwnerFrame::new(&scheduler).expect("fresh owner");
@@ -316,6 +353,10 @@ fn observer_delivery_contract() {
             (
                 "lifecycle_reentry_preserves_order",
                 lifecycle_reentry_preserves_order,
+            ),
+            (
+                "lifecycle_removal_before_delivery_skips_retired_listener",
+                lifecycle_removal_before_delivery_skips_retired_listener,
             ),
             (
                 "timings_without_subscribers_retain_nothing",
