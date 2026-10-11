@@ -1,14 +1,19 @@
 //! Gesture detail types
 //!
-//! Recognizer-independent gesture detail payloads: tap, long-press
-//! move-update/end, and force press. The drag, scale, and long-press
-//! down/start payloads are defined next to their recognizers in
-//! `flui-interaction` instead. Device kind is the owned platform vocabulary
-//! (`PointerKind`); timestamps use the recognizer's clock.
+//! Callback payloads for tap, held-press and pressure recognition.
+//!
+//! Each phase names the payload its callback actually delivers. Root and local
+//! positions use logical units; device kinds are frozen on contact admission.
+//! Drag and scale payloads remain next to their recognizers.
 
 use flui_foundation::geometry::Offset;
 
 use crate::{PointerKind, Velocity};
+
+pub use crate::recognizers::long_press::{
+    LongPressDetails, LongPressDownDetails, LongPressStartDetails,
+};
+pub use crate::recognizers::tap::TapDetails;
 
 // ============================================================================
 // Tap Gesture Details
@@ -100,11 +105,14 @@ pub struct LongPressMoveUpdateDetails {
     /// The local position of the pointer
     pub local_position: Offset<f64>,
 
-    /// The distance moved since the last update
+    /// Root-space displacement from the admitted Down position.
     pub offset_from_origin: Offset<f64>,
 
-    /// The total distance moved since the long press started
+    /// Recognizer-local displacement from the admitted Down position.
     pub local_offset_from_origin: Offset<f64>,
+
+    /// Device kind frozen at admission.
+    pub kind: PointerKind,
 }
 
 impl LongPressMoveUpdateDetails {
@@ -121,7 +129,15 @@ impl LongPressMoveUpdateDetails {
             local_position,
             offset_from_origin,
             local_offset_from_origin,
+            kind: PointerKind::Touch,
         }
+    }
+
+    /// Set the admitted device kind for an authored payload.
+    #[inline]
+    pub const fn with_kind(mut self, kind: PointerKind) -> Self {
+        self.kind = kind;
+        self
     }
 }
 
@@ -137,8 +153,11 @@ pub struct LongPressEndDetails {
     /// The local position where the long press ended
     pub local_position: Offset<f64>,
 
-    /// The velocity when the long press ended
+    /// Recognizer-local measured velocity at release, in logical units/second.
     pub velocity: Velocity,
+
+    /// Device kind frozen at admission.
+    pub kind: PointerKind,
 }
 
 impl LongPressEndDetails {
@@ -153,7 +172,15 @@ impl LongPressEndDetails {
             global_position,
             local_position,
             velocity,
+            kind: PointerKind::Touch,
         }
+    }
+
+    /// Set the admitted device kind for an authored payload.
+    #[inline]
+    pub const fn with_kind(mut self, kind: PointerKind) -> Self {
+        self.kind = kind;
+        self
     }
 }
 

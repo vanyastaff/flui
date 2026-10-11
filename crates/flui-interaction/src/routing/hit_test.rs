@@ -977,25 +977,9 @@ pub(crate) fn transform_pointer_event(
 
 /// Localize each source reading directly into the required owned histories.
 fn transform_move_event(event: &PointerMove, transform: &Matrix4) -> Option<PointerMove> {
-    let current = transform_sample(*event.current(), transform)?;
-    let coalesced = event
-        .coalesced()
-        .iter()
-        .copied()
-        .map(|sample| transform_sample(sample, transform))
-        .collect::<Option<Vec<_>>>()?;
-    let predicted = event
-        .predicted()
-        .iter()
-        .copied()
-        .map(|sample| transform_sample(sample, transform))
-        .collect::<Option<Vec<_>>>()?;
-    Some(
-        PointerMove::new(event.pointer, event.buttons, current)
-            .with_modifiers(event.modifiers)
-            .with_coalesced(coalesced)
-            .with_predicted(predicted),
-    )
+    event
+        .try_map_positions(|position| transform_position(position, transform).ok_or(()))
+        .ok()
 }
 
 /// Refuse a local coordinate that cannot be represented by the checked vocabulary.

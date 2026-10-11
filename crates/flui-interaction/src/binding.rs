@@ -911,7 +911,7 @@ impl GestureBinding {
             let measured: SmallVec<[_; 4]> = snapshots
                 .into_iter()
                 .map(|snapshot| {
-                    let events = snapshot.resampler.take_pending_events();
+                    let events = snapshot.resampler.prepare_pending_events();
                     (snapshot, events)
                 })
                 .collect();
@@ -922,10 +922,10 @@ impl GestureBinding {
             let losses = self.drain_capture_losses(None);
             RoutePanic::preserve_first(&mut first_panic, losses, "input prefix capture loss");
             for (snapshot, events) in &measured {
-                for event in events {
+                for event in events.deliveries() {
                     if self.is_current_sequence(snapshot.pointer_id, snapshot.sequence) {
                         let delivered = self.dispatch_event_with_capture(
-                            event,
+                            &event,
                             snapshot.token,
                             Some(&snapshot.capture),
                         );
@@ -2492,6 +2492,12 @@ impl GestureBinding {
             pending_move,
             arena,
         } = detached;
+        if let Some(cached) = cached.as_ref() {
+            // The detached contact no longer owns a prepared delivery prefix.
+            // Keep queued source samples for the terminal flush, but cancel
+            // output already claimed by an outer, reentrant frame/input drive.
+            cached.resampler.cancel_prepared_events();
+        }
         let mut first_panic = None;
         if let (Some(cached), Some(PendingMove::Contact { event, sequence })) = (
             cached.as_ref(),

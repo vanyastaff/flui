@@ -8,9 +8,15 @@
 //! - when the next buffered move lies after the sample time, one extra move
 //!   is synthesized at the position interpolated between the last emitted
 //!   point and that move, at the sample time;
-//! - `Down`, `Up`, `Cancel` and every other non-move event are never dropped
-//!   or reordered. When the queue is full, adjacent moves are coalesced (the
-//!   older one's samples move into the newer one's `coalesced` history).
+//! - sequence boundaries (`Down`, `Up`, `Cancel`, `Enter`, `Leave`) are never
+//!   dropped or reordered. At the 100-event pressure threshold, adjacent moves
+//!   are coalesced; otherwise the oldest non-boundary event is discarded.
+//!   Boundaries can grow the queue past that threshold. This is not a hard
+//!   memory bound: standalone callers must sample or stop regularly, including
+//!   when feeding repeated contacts without moves.
+//!   Prepared output is separate delivery debt: repeated observer failures can
+//!   grow it beyond the source threshold, including through measured moves.
+//!   A healthy driver must consume that debt, or explicit `clear` cancel it.
 //!
 //! This is particularly beneficial for:
 //! - Devices with low-frequency sensors
@@ -108,6 +114,8 @@ struct Anchor {
     position: Offset<f64>,
     timestamp: Instant,
     nanos: u64,
+    /// Sensor values from the most recently delivered reading, never the future bracket.
+    sample: PointerSample,
 }
 
 /// Pointer event resampler for smooth motion
@@ -120,6 +128,9 @@ struct Anchor {
 /// A cheap shared handle (`Arc<Mutex<_>>`): clones address the same
 /// queue, so the owner can sample while user callbacks re-enter it. No
 /// lock is held while a callback runs.
+/// Prepared events are consumed once across handles. Concurrent drivers run
+/// their callbacks on their own threads without a callback-completion ordering
+/// guarantee; ordered UI observation requires synchronous owner driving.
 #[derive(Debug, Clone)]
 pub struct PointerEventResampler {
     inner: Arc<Mutex<ResamplerInner>>,
@@ -131,6 +142,10 @@ struct ResamplerInner {
     pointer_id: PointerId,
     /// Queue of buffered events, in arrival order.
     event_queue: VecDeque<BufferedEvent>,
+    /// Prepared output remains deliverable until consumed or explicitly cleared.
+    pending_output: VecDeque<OutputBatch>,
+    /// Admission reserves reusable storage; live frozen prefixes prevent reuse.
+    output_pool: Vec<OutputBatch>,
     /// Whether the pointer is currently down
     is_down: bool,
     /// Whether the pointer is being tracked
@@ -147,6 +162,33 @@ struct ResamplerInner {
     /// The [`Instant`] at which the event clock read zero, estimated from
     /// the smallest delivery latency seen (`arrival - event time`).
     event_clock_base: Option<Instant>,
+}
+
+type OutputBatch = Arc<Mutex<VecDeque<PointerEvent>>>;
+
+/// One frozen output prefix. Nested drivers can consume its shared debt, but
+/// newly prepared batches never join this prefix after its admission.
+pub(crate) struct PreparedEvents {
+    batches: SmallVec<[OutputBatch; 4]>,
+    owner: Arc<Mutex<ResamplerInner>>,
+}
+
+impl Drop for PreparedEvents {
+    fn drop(&mut self) {
+        self.batches.clear();
+        self.owner.lock().reclaim_output();
+    }
+}
+
+impl PreparedEvents {
+    /// Commit each event before handing it to an observer. A panicking observer
+    /// consumes that event only; the unvisited tail stays in the shared queue.
+    /// Dropping this lazy iterator early preserves all events it did not yield.
+    pub(crate) fn deliveries(&self) -> impl Iterator<Item = PointerEvent> + '_ {
+        self.batches
+            .iter()
+            .flat_map(|batch| std::iter::from_fn(move || batch.lock().pop_front()))
+    }
 }
 
 /// The event's own time in nanoseconds, if it carries a usable one.
@@ -196,6 +238,64 @@ fn is_sequence_boundary(event: &PointerEvent) -> bool {
 }
 
 impl ResamplerInner {
+    fn cancel_output(&mut self) {
+        for batch in self.pending_output.drain(..) {
+            batch.lock().clear();
+        }
+    }
+
+    fn reclaim_output(&mut self) {
+        self.pending_output.retain(|batch| !batch.lock().is_empty());
+        let idle = self
+            .output_pool
+            .iter()
+            .enumerate()
+            .filter(|(_, batch)| Arc::strong_count(batch) == 1)
+            .max_by_key(|(_, batch)| batch.lock().capacity())
+            .map(|(index, _)| index);
+        let mut index = 0;
+        self.output_pool.retain(|batch| {
+            let keep = Some(index) == idle || Arc::strong_count(batch) != 1;
+            index += 1;
+            keep
+        });
+    }
+
+    fn reserve_output(&mut self, capacity: usize) -> usize {
+        self.reclaim_output();
+        // The pool's sole Arc cannot acquire another owner without this inner
+        // lock. In particular, an empty but still frozen prefix is not reusable.
+        let index = self
+            .output_pool
+            .iter()
+            .position(|batch| Arc::strong_count(batch) == 1)
+            .unwrap_or_else(|| {
+                self.output_pool.push(Arc::new(Mutex::new(VecDeque::new())));
+                self.output_pool.len() - 1
+            });
+        self.output_pool[index].lock().reserve(capacity);
+        self.pending_output.reserve(1);
+        index
+    }
+
+    fn prepared_events(
+        &mut self,
+        emitted: SmallVec<[PointerEvent; 4]>,
+        owner: &Arc<Mutex<Self>>,
+    ) -> PreparedEvents {
+        self.reclaim_output();
+        if !emitted.is_empty() {
+            let index = self.reserve_output(emitted.len());
+            let batch = &self.output_pool[index];
+            batch.lock().extend(emitted);
+            self.pending_output.push_back(Arc::clone(batch));
+        }
+        PreparedEvents {
+            batches: self.pending_output.iter().cloned().collect(),
+            owner: Arc::clone(owner),
+        }
+    }
+
     /// Queue the event and return the diagnostic owed after unlocking.
     fn enqueue(&mut self, event: PointerEvent, stamp: Stamp) -> Option<PointerId> {
         match &event {
@@ -217,6 +317,7 @@ impl ResamplerInner {
             && !self.coalesce_one_move()
             && !self.drop_oldest_droppable();
         self.event_queue.push_back(BufferedEvent { event, stamp });
+        self.reserve_output(self.event_queue.len().saturating_add(1));
         overflow.then_some(self.pointer_id)
     }
 
@@ -288,15 +389,23 @@ impl ResamplerInner {
         self.last_emitted_nanos = nanos;
         match &event {
             PointerEvent::Down(..) | PointerEvent::Move(..) => {
+                let sample = match &event {
+                    PointerEvent::Down(button) => button.sample,
+                    PointerEvent::Move(movement) => *movement.current(),
+                    _ => unreachable!("BUG: contact sample matched above"),
+                };
                 self.anchor = Some(Anchor {
                     position: event
                         .position()
                         .expect("BUG: measured contact carries position"),
                     timestamp: at,
                     nanos,
+                    sample,
                 });
             }
-            PointerEvent::Up(..) | PointerEvent::Cancel(..) => self.anchor = None,
+            PointerEvent::Up(..) | PointerEvent::Cancel(..) | PointerEvent::Leave(..) => {
+                self.anchor = None;
+            }
             _ => {}
         }
         out.push(event);
@@ -320,6 +429,8 @@ impl PointerEventResampler {
             inner: Arc::new(Mutex::new(ResamplerInner {
                 pointer_id,
                 event_queue: VecDeque::new(),
+                pending_output: VecDeque::new(),
+                output_pool: vec![Arc::new(Mutex::new(VecDeque::new()))],
                 is_down: false,
                 is_tracked: false,
                 anchor: None,
@@ -336,8 +447,9 @@ impl PointerEventResampler {
     /// The binding dispatches the `Down` event directly (synchronously, to
     /// close the arena and cache the hit test), so the resampler must not also
     /// re-emit it on the next `sample()`. This establishes the tracking state
-    /// that `sample()` requires (`is_tracked`) so subsequent moves are paced
-    /// instead of silently dropped.
+    /// reported by [`Self::is_tracked`]. Sampling always advances accepted
+    /// source events, including hover and a queued Leave; no separate tracking
+    /// call is required when feeding the standalone queue.
     pub fn start_tracking(&self) {
         let mut inner = self.inner.lock();
         inner.is_down = true;
@@ -348,8 +460,9 @@ impl PointerEventResampler {
     /// clock by the event's own time (see the module's "Time" section).
     ///
     /// Events are buffered and will be processed during the next `sample()`
-    /// call. `Down`, `Up`, `Cancel` and other non-move events are never
-    /// dropped; a full queue coalesces moves instead.
+    /// call. Sequence boundaries (`Down`, `Up`, `Cancel`, `Enter`, `Leave`)
+    /// are never dropped; a full queue coalesces adjacent moves or discards
+    /// its oldest non-boundary event.
     pub fn add_event(&self, event: PointerEvent) {
         self.add_event_with_arrival(event, Instant::now());
     }
@@ -407,11 +520,18 @@ impl PointerEventResampler {
     ///   point and that move, at the fraction
     ///   `(sample_time - last) / (next - last)`; it is skipped when the
     ///   position did not change.
+    ///   Sensors retain the last emitted reading (including `None`); pressure,
+    ///   orientation and contact size are not copied from the future bracket
+    ///   or interpolated. Synthetic moves contain no measured/predicted history.
     /// - A sample time earlier than the previous one, or less than 1 ms after
-    ///   it, emits nothing.
+    ///   it, prepares no new output. Previously prepared delivery debt remains
+    ///   consumable even when sampling does not advance or tracking was reset.
     ///
     /// The callback runs after the resampler's state is committed, with no
-    /// lock held, so it may re-enter this resampler.
+    /// lock held. A panic consumes the current packet and leaves the unvisited
+    /// tail for the next healthy driver. Nested driving consumes older output
+    /// before its newly prepared prefix; adding alone waits for another drive.
+    /// Explicit [`Self::clear`] cancels remaining source and output debt.
     pub fn sample<F>(&self, sample_time: Instant, next_sample_time: Instant, mut callback: F)
     where
         F: FnMut(PointerEvent),
@@ -421,24 +541,32 @@ impl PointerEventResampler {
             return;
         }
 
-        let emitted = {
+        let emitted = self.prepare_sample(sample_time);
+        for event in emitted.deliveries() {
+            callback(event);
+        }
+    }
+
+    fn prepare_sample(&self, sample_time: Instant) -> PreparedEvents {
+        {
             let mut inner = self.inner.lock();
 
-            // Skip if not tracking or no events
-            if !inner.is_tracked || inner.event_queue.is_empty() {
-                return;
+            // Admission state does not revoke accepted source delivery.
+            if inner.event_queue.is_empty() {
+                return inner.prepared_events(SmallVec::new(), &self.inner);
             }
 
             // Enforce minimum sample interval
             if let Some(last_time) = inner.last_sample_time {
                 let Some(elapsed) = sample_time.checked_duration_since(last_time) else {
                     let pointer_id = inner.pointer_id;
+                    let emitted = inner.prepared_events(SmallVec::new(), &self.inner);
                     drop(inner);
                     tracing::warn!(?pointer_id, "ignoring a regressed pointer sample time");
-                    return;
+                    return emitted;
                 };
                 if elapsed < MIN_SAMPLE_INTERVAL {
-                    return;
+                    return inner.prepared_events(SmallVec::new(), &self.inner);
                 }
             }
 
@@ -487,7 +615,7 @@ impl PointerEventResampler {
                     } else {
                         anchor.nanos
                     };
-                    let mut sample = *next_move.current();
+                    let mut sample = anchor.sample;
                     sample.position =
                         PointerPosition::try_new(Point::new(position.dx, position.dy))
                             .expect("BUG: finite interpolated position checked above");
@@ -500,14 +628,7 @@ impl PointerEventResampler {
                 }
             }
 
-            emitted
-        };
-
-        // User dispatch happens only after the state transaction is complete.
-        // Re-entrant callbacks may therefore add/clear/stop without deadlocking
-        // or mutating the batch currently being emitted.
-        for event in emitted {
-            callback(event);
+            inner.prepared_events(emitted, &self.inner)
         }
     }
 
@@ -521,7 +642,7 @@ impl PointerEventResampler {
         boundary: EventTime,
         mut callback: impl FnMut(PointerEvent),
     ) {
-        let emitted: SmallVec<[PointerEvent; 4]> = {
+        let emitted = {
             let mut inner = self.inner.lock();
             let mut emitted = SmallVec::new();
             while inner.event_queue.front().is_some_and(|buffered| {
@@ -534,34 +655,35 @@ impl PointerEventResampler {
                 let at = inner.timestamp(buffered.stamp);
                 inner.emit(buffered.event, at, &mut emitted);
             }
-            emitted
+            inner.prepared_events(emitted, &self.inner)
         };
-        for event in emitted {
+        for event in emitted.deliveries() {
             callback(event);
         }
     }
 
     /// Commit the accepted measured prefix without advancing frame sampling or
     /// ending the contact. The binding freezes all prefixes before dispatch.
-    pub(crate) fn take_pending_events(&self) -> SmallVec<[PointerEvent; 4]> {
+    pub(crate) fn prepare_pending_events(&self) -> PreparedEvents {
         let mut inner = self.inner.lock();
         let mut emitted = SmallVec::new();
         while let Some(buffered) = inner.event_queue.pop_front() {
             let at = inner.timestamp(buffered.stamp);
             inner.emit(buffered.event, at, &mut emitted);
         }
-        emitted
+        inner.prepared_events(emitted, &self.inner)
     }
 
     /// Stops resampling and flushes all remaining events
     ///
     /// Invokes the callback with every buffered event, in order, and resets
-    /// the resampler for the next sequence.
+    /// the resampler for the next sequence. Prepared output remains pending if
+    /// the callback panics; a subsequent sample or stop can deliver its tail.
     pub fn stop<F>(&self, mut callback: F)
     where
         F: FnMut(PointerEvent),
     {
-        let emitted: SmallVec<[PointerEvent; 4]> = {
+        let emitted = {
             let mut inner = self.inner.lock();
             let mut emitted = SmallVec::new();
             while let Some(buffered) = inner.event_queue.pop_front() {
@@ -577,34 +699,45 @@ impl PointerEventResampler {
             inner.last_stamp = None;
             inner.last_emitted_nanos = 0;
             inner.event_clock_base = None;
-            emitted
+            inner.prepared_events(emitted, &self.inner)
         };
 
-        for event in emitted {
+        for event in emitted.deliveries() {
             callback(event);
         }
     }
 
-    /// Checks if the pointer is currently down
+    /// Whether the latest admitted boundary leaves the pointer down.
+    ///
+    /// This describes admission, not which events callbacks have observed.
     pub fn is_down(&self) -> bool {
         self.inner.lock().is_down
     }
 
-    /// Checks if the pointer is being tracked
+    /// Whether the latest admitted Down/start-tracking has not been followed by Leave/stop.
+    ///
+    /// This admission query does not gate delivery of accepted events. A queued
+    /// Leave can make it false while its earlier events still await sampling.
     pub fn is_tracked(&self) -> bool {
         self.inner.lock().is_tracked
     }
 
-    /// Checks if there are pending events in the queue
+    /// Whether source events or previously prepared output remain deliverable.
     pub fn has_pending_events(&self) -> bool {
-        !self.inner.lock().event_queue.is_empty()
+        self.pending_event_count() != 0
     }
 
-    /// Number of input events waiting for a sampling window.
+    /// Number of source events and prepared output packets waiting for delivery.
     #[inline]
     #[must_use]
     pub fn pending_event_count(&self) -> usize {
-        self.inner.lock().event_queue.len()
+        let inner = self.inner.lock();
+        inner.event_queue.len()
+            + inner
+                .pending_output
+                .iter()
+                .map(|batch| batch.lock().len())
+                .sum::<usize>()
     }
 
     /// Returns the pointer ID this resampler tracks
@@ -612,10 +745,19 @@ impl PointerEventResampler {
         self.inner.lock().pointer_id
     }
 
-    /// Clears all buffered events
+    /// Withdraw already-prepared contact output after its owning sequence is
+    /// detached. Source events remain available for terminal flushing.
+    pub(crate) fn cancel_prepared_events(&self) {
+        self.inner.lock().cancel_output();
+    }
+
+    /// Cancel all source events and not-yet-consumed output, including a frozen
+    /// prefix currently being driven. A packet already passed to a callback
+    /// remains consumed. Events admitted after clear belong to a later prefix.
     pub fn clear(&self) {
         let mut inner = self.inner.lock();
         inner.event_queue.clear();
+        inner.cancel_output();
         inner.anchor = None;
     }
 }

@@ -454,6 +454,8 @@ pub enum ButtonChange {
 /// without `current` itself; `predicted` holds readings expected after `current`, oldest
 /// first. A consumer that only needs the latest position reads `current`; velocity tracking
 /// and ink read every coalesced reading.
+/// Position mapping preserves these admitted observations even when distinct
+/// source positions round to equal local values; it does not filter them again.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct PointerMove {
@@ -474,6 +476,47 @@ pub struct PointerMove {
 pub struct MismatchedPointerInfo;
 
 impl PointerMove {
+    /// Convert positions without changing the admitted readings.
+    ///
+    /// The returned movement preserves pointer metadata, buttons, modifiers,
+    /// timestamps, sensors, and the order and number of measured and predicted
+    /// readings. Distinct source readings remain distinct even when their mapped
+    /// positions coincide. Coordinate conversion does not repeat history admission.
+    /// The source movement is unchanged.
+    ///
+    /// # Errors
+    /// Returns the mapper's first error without publishing a partial movement.
+    pub fn try_map_positions<E>(
+        &self,
+        mut map: impl FnMut(PointerPosition) -> Result<PointerPosition, E>,
+    ) -> Result<Self, E> {
+        let mut sample = |mut sample: PointerSample| {
+            sample.position = map(sample.position)?;
+            Ok(sample)
+        };
+        let current = sample(self.current)?;
+        let coalesced = self
+            .coalesced
+            .iter()
+            .copied()
+            .map(&mut sample)
+            .collect::<Result<Vec<_>, E>>()?;
+        let predicted = self
+            .predicted
+            .iter()
+            .copied()
+            .map(sample)
+            .collect::<Result<Vec<_>, E>>()?;
+        Ok(Self {
+            pointer: self.pointer,
+            buttons: self.buttons,
+            modifiers: self.modifiers,
+            current,
+            coalesced,
+            predicted,
+        })
+    }
+
     /// Fold an earlier movement's measured readings into this dispatch.
     ///
     /// The complete [`PointerInfo`] must match; refusal leaves both movements

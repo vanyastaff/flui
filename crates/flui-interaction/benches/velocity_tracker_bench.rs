@@ -223,7 +223,11 @@ fn bench_one_euro_step(c: &mut Criterion) {
             i = i.wrapping_add(1);
             let t = start + Duration::from_millis(8) * i;
             let p = Offset::new(i as f64 * 0.5, 50.0);
-            black_box(filter.filter(black_box(t), black_box(p)))
+            black_box(
+                filter
+                    .filter(black_box(t), black_box(p))
+                    .expect("finite filter workload"),
+            )
         });
     });
 }

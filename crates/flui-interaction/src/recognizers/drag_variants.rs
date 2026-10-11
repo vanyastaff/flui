@@ -1,11 +1,14 @@
-//! Axis-specific entry points for the same drag recognizer.
+//! Axis-configuring constructors for one drag recognizer type.
+//!
+//! The descriptive aliases below are the same Rust type and impose no axis
+//! restriction. Use the corresponding constructor to select the gesture axis.
 use super::drag::{DragGestureRecognizer, DragGestureRecognizerBuilder};
 use crate::{arena::GestureArena, traits::DragAxis};
-/// Vertical-axis drag, configured through [`vertical_drag`].
+/// Alias for [`DragGestureRecognizer`]; [`vertical_drag`] selects its axis.
 pub type VerticalDragGestureRecognizer = DragGestureRecognizer;
-/// Horizontal-axis drag, configured through [`horizontal_drag`].
+/// Alias for [`DragGestureRecognizer`]; [`horizontal_drag`] selects its axis.
 pub type HorizontalDragGestureRecognizer = DragGestureRecognizer;
-/// Free-axis drag, configured through [`pan`].
+/// Alias for [`DragGestureRecognizer`]; [`pan`] selects unrestricted motion.
 pub type PanGestureRecognizer = DragGestureRecognizer;
 /// Configure a vertical-axis drag before allocating shared ownership.
 #[must_use]

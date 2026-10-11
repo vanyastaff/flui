@@ -14,7 +14,6 @@ use flui_interaction::{
     GestureSettings, GestureSettingsSource, LongPressGestureRecognizer, ManualClock,
     MonotonicClock, MultiTapGestureRecognizer, PointerId, ScaleGestureRecognizer,
     TapAndDragGestureRecognizer, TapGestureRecognizer,
-    arena::run_pointer_lifecycle,
     events::{PointerEvent, PointerEventExt, PointerKind},
     routing::PointerDispatch,
 };
@@ -61,7 +60,11 @@ fn send(recognizer: &dyn GestureRecognizer, arena: &GestureArena, event: &Pointe
     } else {
         recognizer.handle_event(PointerDispatch::at_root(event));
     }
-    run_pointer_lifecycle(arena, event);
+    // This private-arena policy fixture has no reentrant input route; its
+    // recognizer finishes its exact entry on terminal events.
+    if let PointerEvent::Down(press) = event {
+        arena.close(press.pointer.id);
+    }
     arena.drain_deferred_resolutions();
 }
 

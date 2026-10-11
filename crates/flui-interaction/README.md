@@ -47,16 +47,79 @@ UI state.
 
 ```rust
 use std::{cell::Cell, rc::Rc};
-use flui_interaction::{GestureArena, TapGestureRecognizer};
+use flui_foundation::geometry::Point;
+use flui_platform_api::EventTime;
+use flui_interaction::{
+    GestureBinding, HitTestEntry, HitTestResult, InteractionLane, PointerButton,
+    PointerButtons, PointerEvent,
+    PointerId, PointerInfo, PointerKind, PointerPosition, PointerPress,
+    PointerRelease, PointerSample, RecognizerSet, RenderId, TapGestureRecognizer,
+};
 
+let lane = InteractionLane::try_new()?;
+let binding = GestureBinding::new();
 let taps = Rc::new(Cell::new(0));
 let observed = taps.clone();
-let tap = TapGestureRecognizer::builder(GestureArena::new())
+let tap = TapGestureRecognizer::builder(binding.arena().clone())
     .on_tap(move |_| observed.set(observed.get() + 1))
     .build();
-
-// Keep `tap` in widget state for as long as it should receive input.
+let mut recognizers = RecognizerSet::default();
+recognizers.attach(&tap); // `tap` remains the strong owner.
+let pointer = PointerId::new(std::num::NonZeroU64::MIN);
+let info = PointerInfo::new(pointer, PointerKind::Touch);
+let position = PointerPosition::try_new(Point::new(12.0, 20.0))?;
+let down = PointerEvent::Down(PointerPress::new(
+    info, PointerButton::PRIMARY, PointerButtons::NONE,
+    PointerSample::new(EventTime::from_nanos(0), position),
+));
+let up = PointerEvent::Up(PointerRelease::new(
+    info, PointerButton::PRIMARY, PointerButtons::only(PointerButton::PRIMARY),
+    PointerSample::new(EventTime::from_nanos(20_000_000), position),
+));
+lane.enter(|| -> Result<(), Box<dyn std::error::Error>> {
+    let target = lane.dispatch_handle().register_pointer(move |dispatch| {
+        recognizers.dispatch(dispatch);
+    })?;
+    let route = |_| {
+        let mut path = HitTestResult::new();
+        path.add(HitTestEntry::new(RenderId::new(1)).pointer_target(target));
+        path
+    };
+    binding.handle_pointer_event(&down, route);
+    binding.handle_pointer_event(&up, route);
+    Ok(())
+})?;
+assert_eq!(taps.get(), 1);
+# Ok::<(), Box<dyn std::error::Error>>(())
 ```
+
+This standalone composition uses the same `GestureBinding` as a presentation:
+the binding owns exact-contact Down closure, Up sweeping, Cancel retirement and
+deferred resolution draining after the full hit route. A host still drives idle
+progress: schedule `binding.next_deadline()`, call `binding.tick_deadlines()` and
+`binding.drain_deferred_arena_resolutions()` when due, and flush pending motion
+on frames. Keep these calls inside the active lane even without another pointer
+packet. The custom recognizer example demonstrates both routed contact delivery
+and a stationary long-press deadline using public input constructors.
+
+Mounted widgets acquire the presentation's shared, binding-driven arena through
+`flui_widgets::GestureArenaScope::of(ctx)` in their lifecycle setup, retain
+recognizers in state, and attach them with `Listener::recognizer`.
+`GestureBinding` owns routing, closure, sweeping and draining there; the
+presentation frame loop drives its idle deadlines and pending motion.
+`GestureArena::new()` creates a private self-driven arena for one recognizer
+owner; it cannot back `GestureArenaScope`. A private owner closes Down after
+admission, polls deadlines and drains deferred resolutions; built-in
+recognizers finish their exact admitted membership on Up or Cancel. Adding an
+ID-only sweep after a callback can instead sweep a newly admitted same-ID
+contact, so composed input uses the binding's complete route transaction.
+
+Tap Down callbacks receive `TapDownDetails`; Up and completed-tap callbacks
+receive `TapUpDetails`. Move and cancellation callbacks receive `TapDetails`.
+Long-press movement receives `LongPressMoveUpdateDetails` with local/root
+displacements from Down; its terminal callback receives `LongPressEndDetails`
+with measured local velocity. These names are exported at the crate root and
+through `flui::interaction`.
 
 `GestureRecognizer` is an open, dyn-compatible extension point with
 `add_pointer(&self, PointerDispatch<'_>)`, `handle_event(&self,
@@ -105,6 +168,23 @@ Reentrant focus requests are admitted to a synchronous FIFO. Committed observer
 rounds and accepted requests complete before the first observer failure resumes.
 Focus closure commits terminal ownership before retiring callbacks and contexts.
 
+For a shortcut whose lifetime follows a widget or plugin, retain its scoped
+registration. Dropping it withdraws only that registration; the token does not
+keep the manager alive. Presentation-wide handlers can instead use the explicit
+`add_global_key_handler` lifetime.
+
+```rust
+use std::rc::Rc;
+use flui_interaction::{FocusManager, KeyEventResult};
+
+let manager = FocusManager::new();
+let shortcut = manager.register_global_key_handler(Rc::new(|_event| {
+    // Match the desired key here before returning Handled.
+    KeyEventResult::Ignored
+})).expect("the presentation is open and identity is available");
+drop(shortcut); // No sibling registration is removed.
+```
+
 ## Hit testing and cursors
 
 `HitTestResult` records data-only target identities and global-to-local
@@ -139,6 +219,12 @@ let tap = TapGestureRecognizer::builder(GestureArena::new())
 
 Processing includes bounded velocity estimation, frame resampling and explicit
 pointer smoothing filters. Hardware predictions remain separate source samples.
+OneEuro construction and filtering return typed errors. Invalid input leaves
+accepted history unchanged; the 2D filter commits both axes together, and a
+duplicate or regressed timestamp holds its accepted result and clock anchor.
+See [the pointer filtering example](examples/pointer_filtering.rs) for tuning
+and sample admission. Interpolating a position keeps the preceding measured
+sensor reading, including missing pressure; it does not measure a new pressure.
 Recognizers use event timing anchored to their arena
 clock; replayed sample spacing determines the gesture's velocity.
 Gesture scripts and virtual-time replay live in `flui-testing`; the `testing`

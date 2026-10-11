@@ -47,7 +47,9 @@ pub enum MultiDragAxis {
     /// Admit vertical movement.
     Vertical,
 }
-/// Factory called after acceptance. Returning `None` rejects that contact.
+/// Factory called after acceptance with the admitted Down position in the
+/// receiving node's local coordinates. Updates carry the latest observed local
+/// and root positions. Returning `None` rejects that contact.
 pub type MultiDragStartCallback =
     Rc<dyn Fn(PointerId, Offset<f64>) -> Option<Rc<dyn MultiDragHandle>>>;
 /// Movement delivered to one drag client.
@@ -75,7 +77,8 @@ pub struct MultiDragEndDetails {
     pub pointer_id: PointerId,
     /// Final observed root-space position.
     pub global_position: Offset<f64>,
-    /// Velocity on the contact's event clock.
+    /// Measured velocity in receiving-node local logical coordinates, using the
+    /// contact's event clock. The terminal position above is in root space.
     pub velocity: crate::processing::Velocity,
     /// Device kind captured on Down.
     pub kind: PointerKind,
@@ -140,7 +143,6 @@ impl MultiDragGestureRecognizerBuilder {
 struct MultiDragPointerState {
     id: ContactId,
     initial_position: Offset<f64>,
-    initial_global_position: Offset<f64>,
     last_position: Offset<f64>,
     last_global_position: Offset<f64>,
     kind: PointerKind,
@@ -384,8 +386,8 @@ impl MultiDragGestureRecognizer {
                 .map(|state| {
                     let update = MultiDragUpdateDetails {
                         pointer_id: pointer,
-                        global_position: state.initial_global_position,
-                        local_position: state.initial_position,
+                        global_position: state.last_global_position,
+                        local_position: state.last_position,
                         delta: state.pending_delta,
                         kind: state.kind,
                         timestamp: state.last_time,
@@ -469,7 +471,6 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
             MultiDragPointerState {
                 id,
                 initial_position: position,
-                initial_global_position: global,
                 last_position: position,
                 last_global_position: global,
                 kind,

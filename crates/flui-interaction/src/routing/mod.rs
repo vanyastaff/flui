@@ -24,7 +24,9 @@ mod traversal;
 pub use pointer_capture::{PointerCapture, PointerCaptureError};
 pub use traversal::{FocusDirection, FocusTraversalOverrides};
 
-pub use focus::{FocusChangeCallback, FocusManager};
+pub use focus::{
+    FocusChangeCallback, FocusManager, GlobalKeyRegistration, GlobalKeyRegistrationError,
+};
 pub use focus_scope::{
     FocusAttachment, FocusDetachOutcome, FocusNode, FocusNodeChangeCallback, FocusNodeId,
     FocusNodeRegistration, FocusRequestOutcome, FocusScopeNode, FocusSubscription,

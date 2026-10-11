@@ -197,7 +197,6 @@ pub use wheel_preferences::{WheelPreferencesProvider, WheelPreferencesSource};
 // ============================================================================
 pub use arena::{
     GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition, SweepModel,
-    run_pointer_lifecycle,
 };
 // ============================================================================
 // Re-exports: Other
@@ -205,8 +204,8 @@ pub use arena::{
 pub use binding::{GestureBinding, InvalidSamplingWindow, ResamplingModeChangeError};
 pub use clipboard::ClipboardHandle;
 pub use details::{
-    ForcePressDetails, LongPressEndDetails, LongPressMoveUpdateDetails, TapDownDetails,
-    TapUpDetails,
+    ForcePressDetails, LongPressDetails, LongPressDownDetails, LongPressEndDetails,
+    LongPressMoveUpdateDetails, LongPressStartDetails, TapDetails, TapDownDetails, TapUpDetails,
 };
 // The monotonic clock primitive now lives in `flui-foundation`; re-exported here
 // because the gesture arena's public API takes a `MonotonicClock` (and tests /
@@ -242,12 +241,14 @@ pub use recognizers::{
     DragDownDetails, DragEndCallback, DragEndDetails, DragGestureRecognizer, DragPointerStrategy,
     DragStartCallback, DragStartDetails, DragUpdateCallback, DragUpdateDetails,
     EagerGestureRecognizer, ForcePressGestureRecognizer, GestureEndReason, GestureRecognizer,
-    LongPressGestureRecognizer, MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer,
-    MultiDragHandle, MultiDragStartCallback, MultiDragUpdateDetails, MultiTapGestureRecognizer,
-    PrimaryContact, RecognizerSet, ScaleGestureRecognizer, TapAndDragGestureRecognizer,
+    LongPressCallback, LongPressDownCallback, LongPressEndCallback, LongPressGestureRecognizer,
+    LongPressMoveUpdateCallback, LongPressSimpleCallback, LongPressStartCallback, MultiDragAxis,
+    MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle, MultiDragStartCallback,
+    MultiDragUpdateDetails, MultiTapGestureRecognizer, PrimaryContact, RecognizerSet,
+    ScaleGestureRecognizer, TapAndDragGestureRecognizer, TapCallback, TapDownCallback,
     TapDragDownCallback, TapDragDownDetails, TapDragEndCallback, TapDragEndDetails,
     TapDragStartCallback, TapDragStartDetails, TapDragUpCallback, TapDragUpDetails,
-    TapDragUpdateCallback, TapDragUpdateDetails, TapGestureRecognizer, cancel_all,
+    TapDragUpdateCallback, TapDragUpdateDetails, TapGestureRecognizer, TapUpCallback, cancel_all,
 };
 pub use recognizers::{
     DoubleTapGestureRecognizerBuilder, DragGestureRecognizerBuilder, EagerGestureRecognizerBuilder,
@@ -268,14 +269,14 @@ pub use routing::{
     EventPropagation, FocusAttachment, FocusChangeCallback, FocusDetachOutcome, FocusDirection,
     FocusManager, FocusNode, FocusNodeChangeCallback, FocusNodeRegistration, FocusRequestOutcome,
     FocusScopeNode, FocusSubscription, FocusTraversalOverrides, FocusTraversalPolicy,
-    FocusTreeError, GlobalPointerHandler, HitTestBehavior, HitTestEntry, HitTestHandle,
-    HitTestProbe, HitTestResult, HitTestSnapshot, InteractionDispatchError,
-    InteractionDispatchHandle, InteractionLane, KeyEventHandler, KeyEventResult,
-    LocalPayloadTarget, NodeContext, PathClipTarget, PointerCapture, PointerCaptureError,
-    PointerDispatch, PointerRouteHandler, PointerRouter, PointerTarget, ReadingOrderPolicy,
-    RectProvider, RenderId, ResolvedRouteToken, ResolvedStep, RoutePanic, RouteResolution,
-    RouteResolutionMiss, ScrollTarget, ShaderMaskTarget, TransformGuard, TraversalDirection,
-    TraversalEdgeBehavior, resolve_local_payload, resolve_path_clip_target,
+    FocusTreeError, GlobalKeyRegistration, GlobalKeyRegistrationError, GlobalPointerHandler,
+    HitTestBehavior, HitTestEntry, HitTestHandle, HitTestProbe, HitTestResult, HitTestSnapshot,
+    InteractionDispatchError, InteractionDispatchHandle, InteractionLane, KeyEventHandler,
+    KeyEventResult, LocalPayloadTarget, NodeContext, PathClipTarget, PointerCapture,
+    PointerCaptureError, PointerDispatch, PointerRouteHandler, PointerRouter, PointerTarget,
+    ReadingOrderPolicy, RectProvider, RenderId, ResolvedRouteToken, ResolvedStep, RoutePanic,
+    RouteResolution, RouteResolutionMiss, ScrollTarget, ShaderMaskTarget, TransformGuard,
+    TraversalDirection, TraversalEdgeBehavior, resolve_local_payload, resolve_path_clip_target,
     resolve_shader_mask_target,
 };
 pub use settings::{

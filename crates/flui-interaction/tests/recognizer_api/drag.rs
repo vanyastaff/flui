@@ -1,6 +1,6 @@
 //! Drag notifications belong to the contact that produced them.
 use flui_foundation::geometry::Offset;
-use flui_interaction::arena::{GestureArena, GestureArenaMember, run_pointer_lifecycle};
+use flui_interaction::arena::{GestureArena, GestureArenaMember};
 use flui_interaction::events::{
     PointerEvent, PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
 };
@@ -46,7 +46,7 @@ fn up_before_acceptance_rejects_drag_and_preserves_the_competitor() {
     let up = make_up_event_for_id(pointer, Offset::ZERO, PointerKind::Touch)
         .expect("valid fixture sample");
     drag.handle_event(PointerDispatch::at_root(&up));
-    run_pointer_lifecycle(&arena, &up);
+    arena.sweep(pointer);
     arena.drain_deferred_resolutions();
     assert_eq!((started.get(), cancelled.get(), won.get()), (0, 1, 1));
     assert!(arena.is_empty());
@@ -94,7 +94,12 @@ fn cancelling_drag_from_start_drops_the_stale_update_and_recovers() {
         } else {
             drag.handle_event(dispatch);
         }
-        run_pointer_lifecycle(&arena, &event);
+        // This controlled recognizer fixture never readmits input from Up.
+        match &event {
+            PointerEvent::Down(press) => arena.close(press.pointer.id),
+            PointerEvent::Up(release) => arena.sweep(release.pointer.id),
+            _ => {}
+        }
         arena.drain_deferred_resolutions();
     };
     let rival = Rc::new(Rival);
@@ -195,7 +200,7 @@ fn continuation_cancel_commits_before_reentry_and_retains_the_first_failure() {
                     )
                     .expect("finite replacement");
                     recognizer.add_pointer(PointerDispatch::at_root(&event));
-                    run_pointer_lifecycle(&callback_arena, &event);
+                    callback_arena.close(PointerId::try_from(2).expect("nonzero contact"));
                     callback_arena.drain_deferred_resolutions();
                     assert!(!callback_panics, "continuation terminal callback");
                 }
@@ -210,7 +215,7 @@ fn continuation_cancel_commits_before_reentry_and_retains_the_first_failure() {
             )
             .expect("finite touch");
             drag.add_pointer(PointerDispatch::at_root(&down));
-            run_pointer_lifecycle(&arena, &down);
+            arena.close(PointerId::try_from(id).expect("nonzero contact"));
             arena.drain_deferred_resolutions();
         }
         assert_eq!(starts.get(), 1);
@@ -236,7 +241,7 @@ fn continuation_cancel_commits_before_reentry_and_retains_the_first_failure() {
         )
         .expect("finite replacement release");
         drag.handle_event(PointerDispatch::at_root(&up));
-        run_pointer_lifecycle(&arena, &up);
+        arena.sweep(PointerId::try_from(2).expect("nonzero contact"));
         arena.drain_deferred_resolutions();
         assert_eq!(
             ends.get(),
@@ -274,7 +279,7 @@ fn continuation_does_not_take_a_rejected_or_other_device_contact() {
                     .with_device(DeviceId::try_from(device).expect("nonzero device"));
             }
             drag.add_pointer(PointerDispatch::at_root(&down));
-            run_pointer_lifecycle(&arena, &down);
+            arena.close(PointerId::try_from(id).expect("nonzero contact"));
             arena.drain_deferred_resolutions();
         }
         let up = make_up_event_for_id(
@@ -284,7 +289,7 @@ fn continuation_does_not_take_a_rejected_or_other_device_contact() {
         )
         .expect("finite release");
         drag.handle_event(PointerDispatch::at_root(&up));
-        run_pointer_lifecycle(&arena, &up);
+        arena.sweep(PointerId::try_from(2).expect("nonzero contact"));
         assert_eq!(
             ends.get(),
             usize::from(secondary_device != Some(1)),
@@ -310,7 +315,7 @@ fn continuation_does_not_take_a_rejected_or_other_device_contact() {
         )
         .expect("finite touch");
         drag.add_pointer(PointerDispatch::at_root(&down));
-        run_pointer_lifecycle(&arena, &down);
+        arena.close(PointerId::try_from(id).expect("nonzero contact"));
         arena.drain_deferred_resolutions();
     };
     send_down(2);
@@ -332,7 +337,7 @@ fn continuation_does_not_take_a_rejected_or_other_device_contact() {
     )
     .expect("finite release");
     drag.handle_event(PointerDispatch::at_root(&up));
-    run_pointer_lifecycle(&arena, &up);
+    arena.sweep(PointerId::try_from(2).expect("nonzero contact"));
     assert_eq!(
         ends.get(),
         1,
@@ -407,7 +412,12 @@ fn remaining_touches_continue_in_admission_order_without_a_jump() {
             } else {
                 drag.handle_event(PointerDispatch::at_root(&event));
             }
-            run_pointer_lifecycle(&arena, &event);
+            // Callbacks record details; this script owns each contact admission.
+            match phase {
+                0 => arena.close(info.id),
+                2 => arena.sweep(info.id),
+                _ => {}
+            }
             arena.drain_deferred_resolutions();
         };
         send(2, 0, 0.0, 0);

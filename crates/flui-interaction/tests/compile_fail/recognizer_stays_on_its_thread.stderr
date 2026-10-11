@@ -210,6 +210,34 @@ note: required by a bound in `assert_send`
 3 | fn assert_send<T: Send>() {}
   |                   ^^^^ required by this bound in `assert_send`
 
+error[E0277]: `Rc<(dyn std::ops::Fn(TapDownDetails) + 'static)>` cannot be sent between threads safely
+ --> tests/compile_fail/recognizer_stays_on_its_thread.rs:6:19
+  |
+6 |     assert_send::<TapGestureRecognizer>();
+  |                   ^^^^^^^^^^^^^^^^^^^^ `Rc<(dyn std::ops::Fn(TapDownDetails) + 'static)>` cannot be sent between threads safely
+  |
+  = help: within `TapGestureRecognizer`, the trait `Send` is not implemented for `Rc<(dyn std::ops::Fn(TapDownDetails) + 'static)>`
+note: required because it appears within the type `Option<Rc<(dyn std::ops::Fn(TapDownDetails) + 'static)>>`
+ --> $RUST/core/src/option.rs
+  |
+  | pub enum Option<T> {
+  |          ^^^^^^
+note: required because it appears within the type `tap::TapCallbacks`
+ --> src/recognizers/tap.rs
+  |
+  | struct TapCallbacks {
+  |        ^^^^^^^^^^^^
+note: required because it appears within the type `TapGestureRecognizer`
+ --> src/recognizers/tap.rs
+  |
+  | pub struct TapGestureRecognizer {
+  |            ^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `assert_send`
+ --> tests/compile_fail/recognizer_stays_on_its_thread.rs:3:19
+  |
+3 | fn assert_send<T: Send>() {}
+  |                   ^^^^ required by this bound in `assert_send`
+
 error[E0277]: `Rc<(dyn std::ops::Fn(TapDetails) + 'static)>` cannot be sent between threads safely
  --> tests/compile_fail/recognizer_stays_on_its_thread.rs:6:19
   |
@@ -218,6 +246,34 @@ error[E0277]: `Rc<(dyn std::ops::Fn(TapDetails) + 'static)>` cannot be sent betw
   |
   = help: within `TapGestureRecognizer`, the trait `Send` is not implemented for `Rc<(dyn std::ops::Fn(TapDetails) + 'static)>`
 note: required because it appears within the type `Option<Rc<(dyn std::ops::Fn(TapDetails) + 'static)>>`
+ --> $RUST/core/src/option.rs
+  |
+  | pub enum Option<T> {
+  |          ^^^^^^
+note: required because it appears within the type `tap::TapCallbacks`
+ --> src/recognizers/tap.rs
+  |
+  | struct TapCallbacks {
+  |        ^^^^^^^^^^^^
+note: required because it appears within the type `TapGestureRecognizer`
+ --> src/recognizers/tap.rs
+  |
+  | pub struct TapGestureRecognizer {
+  |            ^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `assert_send`
+ --> tests/compile_fail/recognizer_stays_on_its_thread.rs:3:19
+  |
+3 | fn assert_send<T: Send>() {}
+  |                   ^^^^ required by this bound in `assert_send`
+
+error[E0277]: `Rc<(dyn std::ops::Fn(TapUpDetails) + 'static)>` cannot be sent between threads safely
+ --> tests/compile_fail/recognizer_stays_on_its_thread.rs:6:19
+  |
+6 |     assert_send::<TapGestureRecognizer>();
+  |                   ^^^^^^^^^^^^^^^^^^^^ `Rc<(dyn std::ops::Fn(TapUpDetails) + 'static)>` cannot be sent between threads safely
+  |
+  = help: within `TapGestureRecognizer`, the trait `Send` is not implemented for `Rc<(dyn std::ops::Fn(TapUpDetails) + 'static)>`
+note: required because it appears within the type `Option<Rc<(dyn std::ops::Fn(TapUpDetails) + 'static)>>`
  --> $RUST/core/src/option.rs
   |
   | pub enum Option<T> {

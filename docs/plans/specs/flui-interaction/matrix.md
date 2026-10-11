@@ -10,6 +10,39 @@
 [scope-closure.md](scope-closure.md). Для X1 утверждённый контракт теперь задаёт
 ADR-0172, а не Proposed ADR-0151 целиком.
 
+## Сверка native producers с текущим кодом
+
+Колонка `FLUI status` в исходных таблицах ниже — статус **на 2026-10-06**.
+Её нельзя переносить в новый backlog без сверки с текущим producer и consumer.
+Следующая таблица фиксирует наличие реализации, а не результат запуска:
+
+| Исторические строки | Текущий producer | Что остаётся доказать исполнением |
+|---|---|---|
+| M1-1, M1-8, M1-18, M1-40: Win32 touch/pen и hover отсутствовали | `platforms/windows/platform.rs` принимает `WM_POINTER*`; `platforms/windows/events.rs::native_pointer_input` читает native history, pressure, contact и orientation. `native_pointer_decoding_contracts` проверяет decoder | Physical pen/touch, hover, capture loss, history и повторное admission на настоящем устройстве. Decoder и synthetic OS injection не сертифицируют сенсор |
+| M1-2, M1-3, M1-5, M1-6: pen tool/sensors отсутствовали или были неполными | `decode_native_reading` учитывает Win32 masks: отсутствующий sensor остаётся `None`; pen tool, pressure, tilt и twist переводятся в owned vocabulary | Реальные sensor readings, включая отсутствие сенсора и смену pen tool; наличие полей не доказывает аппаратную доставку |
+| M1-3: winit `TouchpadPressure` терялся | `platforms/winit/events.rs` переводит `WindowEvent::TouchpadPressure` в Move с проверенным pressure при известной позиции; `platforms/winit/platform.rs` направляет этот variant в converter | Доставка с поддерживающего pressure тачпада на соответствующем backend; Windows mouse smoke этого не проверяет |
+| M1-9: все native histories были пустыми | Win32 `native_history` и web `pointer_samples` читают measured samples; Win32 Move переносит их через `with_coalesced` | Реальные bursts и history ordering до recognizer. Synthetic resampler traces доказывают свой workload, а не частоту или latency устройства |
+| M1-14, M1-20, M1-23: Win32 capture, Xbuttons и native time отсутствовали | Native public contract содержит `press_captures_the_mouse_until_the_last_release`, `extended_mouse_buttons_share_contact_and_capture` и `queued_mouse_samples_keep_native_message_time` | Выполнить нужные строки на проверяемой ревизии; исторический успешный запуск не является свежим прогоном |
+
+Пути producer выше относительно `crates/flui-platform/src/`; public native contract —
+`crates/flui-platform/tests/contract.rs`. Воспроизводимая source inventory из корня:
+
+```text
+rg -n 'WM_POINTER|native_pointer_input|EnableMouseInPointer' crates/flui-platform/src/platforms/windows
+rg -n 'decode_native_reading|native_history|with_coalesced|penMask|touchMask' crates/flui-platform/src/platforms/windows/events.rs
+rg -n 'TouchpadPressure' crates/flui-platform/src/platforms/winit
+rg -n 'pointer_samples|coalesced_events|predicted_events' crates/flui-platform/src/platforms/web/events.rs
+rg -n 'native_pointer_decoding_contracts|synthetic_touch_and_pen_reach_native_pointer_dispatch|fractional_native_wheel_packets_preserve_observed_precision_and_source' crates/flui-platform
+```
+
+Команды и границы native исполнения описаны в
+[архитектуре interaction](../../../../crates/flui-interaction/docs/ARCHITECTURE.md#native-input-evidence),
+а provenance и границы replay — в
+[performance guide](../../../../crates/flui-interaction/docs/PERFORMANCE.md#trace-provenance-and-replay).
+Сохраняйте SHA, вывод свежих запусков и сведения об устройстве вне public repository.
+Исторические результаты остаются в [tasks.md](tasks.md) и не повышают статус
+неисполненного аппаратного пути.
+
 ## M1. Указатель, колесо, тачпад
 
 

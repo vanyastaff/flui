@@ -3,12 +3,17 @@
 use super::{
     ArenaMembership, CancelOutcome, ContactId, PrimaryContact,
     callback_containment::{CallbackSequence, finish_containment, retire_callbacks},
-    recognizer::{GestureRecognizer, is_primary_down, measured_positions},
+    recognizer::{
+        EventTimeline, GestureRecognizer, event_time, is_primary_down, measured_positions,
+        motion_history,
+    },
 };
+pub use crate::details::{LongPressEndDetails, LongPressMoveUpdateDetails};
 use crate::{
     arena::{GestureArena, GestureArenaMember},
     events::{PointerEvent, PointerEventExt, PointerKind},
     ids::PointerId,
+    processing::VelocityTracker,
     routing::{PointerDispatch, RoutePanic},
     settings::GestureSettingsProvider,
 };
@@ -25,8 +30,12 @@ pub type LongPressDownCallback = Rc<dyn Fn(LongPressDownDetails)>;
 pub type LongPressSimpleCallback = Rc<dyn Fn()>;
 /// Callback for recognition with contact details.
 pub type LongPressStartCallback = Rc<dyn Fn(LongPressStartDetails)>;
-/// Callback for movement, release, or cancellation.
+/// Callback for release-position notification or cancellation.
 pub type LongPressCallback = Rc<dyn Fn(LongPressDetails)>;
+/// Callback for measured movement after recognition.
+pub type LongPressMoveUpdateCallback = Rc<dyn Fn(LongPressMoveUpdateDetails)>;
+/// Callback for completed release and its measured terminal velocity.
+pub type LongPressEndCallback = Rc<dyn Fn(LongPressEndDetails)>;
 
 /// Initial press contact in root and recognizer coordinates.
 #[derive(Debug, Clone, PartialEq)]
@@ -50,7 +59,7 @@ pub struct LongPressStartDetails {
     /// Admitted device kind.
     pub kind: PointerKind,
 }
-/// Contact at movement, release, or cancellation.
+/// Latest contact position at release or cancellation.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct LongPressDetails {
@@ -68,9 +77,9 @@ struct LongPressCallbacks {
     on_long_press_down: Option<LongPressDownCallback>,
     on_long_press: Option<LongPressSimpleCallback>,
     on_long_press_start: Option<LongPressStartCallback>,
-    on_long_press_move_update: Option<LongPressCallback>,
+    on_long_press_move_update: Option<LongPressMoveUpdateCallback>,
     on_long_press_up: Option<LongPressCallback>,
-    on_long_press_end: Option<LongPressCallback>,
+    on_long_press_end: Option<LongPressEndCallback>,
     on_long_press_cancel: Option<LongPressCallback>,
 }
 impl Drop for LongPressCallbacks {
@@ -92,6 +101,8 @@ struct LongPressState {
     phase: LongPressPhase,
     local: Offset<f64>,
     global: Offset<f64>,
+    timeline: EventTimeline,
+    velocity_tracker: VelocityTracker,
 }
 
 /// Recognizes a primary contact held within its frozen admission tolerance.
@@ -136,10 +147,11 @@ impl LongPressGestureRecognizerBuilder {
         self.callbacks.on_long_press_start = Some(Rc::new(callback));
         self
     }
-    /// Called for movement after recognition.
+    /// Called for movement after recognition, with displacement from Down in
+    /// each coordinate space. Unrepresentable displacement cancels the contact.
     pub fn on_long_press_move_update(
         mut self,
-        callback: impl Fn(LongPressDetails) + 'static,
+        callback: impl Fn(LongPressMoveUpdateDetails) + 'static,
     ) -> Self {
         self.callbacks.on_long_press_move_update = Some(Rc::new(callback));
         self
@@ -149,8 +161,10 @@ impl LongPressGestureRecognizerBuilder {
         self.callbacks.on_long_press_up = Some(Rc::new(callback));
         self
     }
-    /// Called after release while its contact is still current.
-    pub fn on_long_press_end(mut self, callback: impl Fn(LongPressDetails) + 'static) -> Self {
+    /// Called after release while its contact is still current. Velocity uses
+    /// measured local samples, the admitted estimator and release event time;
+    /// predictions do not contribute and a stationary terminal tail yields zero.
+    pub fn on_long_press_end(mut self, callback: impl Fn(LongPressEndDetails) + 'static) -> Self {
         self.callbacks.on_long_press_end = Some(Rc::new(callback));
         self
     }
@@ -189,6 +203,28 @@ impl LongPressGestureRecognizer {
             local_position: state.local,
             kind,
         }
+    }
+    fn clock_for(&self, id: ContactId) -> Option<Instant> {
+        match RoutePanic::try_run(|| self.contact.now()) {
+            Ok(now) => self.contact.is_current(id).then_some(now),
+            Err(failure) => {
+                self.cancel_failed_contact(id, failure);
+                None
+            }
+        }
+    }
+    fn cancel_failed_contact(&self, id: ContactId, failure: RoutePanic) {
+        let mut first = Some(failure);
+        if self.contact.is_current(id) {
+            RoutePanic::preserve_first(
+                &mut first,
+                RoutePanic::capture(|| {
+                    self.cancel();
+                }),
+                "long press clock failure cancellation",
+            );
+        }
+        finish_containment(first, std::thread::panicking());
     }
     fn finish_contact(&self, id: ContactId, first: &mut Option<RoutePanic>) {
         if self.contact.is_current(id) {
@@ -264,10 +300,26 @@ impl GestureRecognizer for LongPressGestureRecognizer {
             phase: LongPressPhase::Possible,
             local: contact.local,
             global: contact.global,
+            timeline: EventTimeline::default(),
+            velocity_tracker: VelocityTracker::for_gesture(
+                contact.kind,
+                contact.settings.velocity_estimator(),
+            ),
         };
-        let _ = self
-            .contact
-            .arm_deadline(contact.settings.long_press_timeout());
+        let Some(clock) = self.clock_for(id) else {
+            return;
+        };
+        {
+            let mut state = self.state.borrow_mut();
+            let now = state.timeline.instant(event_time(down.local), clock);
+            state.velocity_tracker.add_position(now, contact.local);
+        }
+        if let Err(failure) = RoutePanic::try_run(|| {
+            self.contact
+                .arm_deadline(contact.settings.long_press_timeout())
+        }) {
+            self.cancel_failed_contact(id, failure);
+        }
         if !self.contact.is_current(id) {
             return;
         }
@@ -305,11 +357,33 @@ impl GestureRecognizer for LongPressGestureRecognizer {
                 return;
             }
         }
+        let clock = if matches!(dispatch.local, PointerEvent::Move(_) | PointerEvent::Up(_)) {
+            let Some(clock) = self.clock_for(contact.id) else {
+                return;
+            };
+            Some(clock)
+        } else {
+            None
+        };
         match dispatch.local {
             PointerEvent::Move(_) => {
                 let local = dispatch.local.position().unwrap_or(contact.local);
                 let global = dispatch.global.position().unwrap_or(contact.global);
                 let phase = self.state.borrow().phase;
+                let offset = global - contact.global;
+                let local_offset = local - contact.local;
+                if !offset.dx.is_finite()
+                    || !offset.dy.is_finite()
+                    || !local_offset.dx.is_finite()
+                    || !local_offset.dy.is_finite()
+                    || measured_positions(dispatch.local).any(|position| {
+                        let delta = position - contact.local;
+                        !delta.dx.is_finite() || !delta.dy.is_finite()
+                    })
+                {
+                    self.cancel();
+                    return;
+                }
                 if phase == LongPressPhase::Possible
                     && measured_positions(dispatch.local).any(|position| {
                         let delta = position - contact.local;
@@ -323,14 +397,26 @@ impl GestureRecognizer for LongPressGestureRecognizer {
                     let mut state = self.state.borrow_mut();
                     state.local = local;
                     state.global = global;
+                    let clock = clock.expect("BUG: Move reads the owner clock");
+                    for (stamp, position) in motion_history(dispatch.local) {
+                        let time = state.timeline.instant(stamp, clock);
+                        state.velocity_tracker.add_position(time, position);
+                    }
+                    let time = state.timeline.instant(event_time(dispatch.local), clock);
+                    state.velocity_tracker.add_position(time, local);
                 }
                 if phase == LongPressPhase::Possible {
-                    let now = self.contact.now();
                     if self.contact.is_current(contact.id) {
-                        self.fire_deadline(now);
+                        self.fire_deadline(clock.expect("BUG: Move reads the owner clock"));
                     }
                 } else if phase == LongPressPhase::Started {
-                    let details = self.details(contact.kind);
+                    let details = LongPressMoveUpdateDetails {
+                        global_position: global,
+                        local_position: local,
+                        offset_from_origin: offset,
+                        local_offset_from_origin: local_offset,
+                        kind: contact.kind,
+                    };
                     let mut notices = CallbackSequence::new();
                     notices.call(
                         self.callbacks.on_long_press_move_update.clone(),
@@ -341,15 +427,25 @@ impl GestureRecognizer for LongPressGestureRecognizer {
             }
             PointerEvent::Up(_) => {
                 self.contact.disarm_deadline();
-                let started = {
+                let (started, velocity) = {
                     let mut state = self.state.borrow_mut();
                     let started = state.phase == LongPressPhase::Started;
                     state.phase = LongPressPhase::Ready;
                     state.local = dispatch.local.position().unwrap_or(contact.local);
                     state.global = dispatch.global.position().unwrap_or(contact.global);
-                    started
+                    let time = state.timeline.instant(
+                        event_time(dispatch.local),
+                        clock.expect("BUG: Up reads the owner clock"),
+                    );
+                    (started, state.velocity_tracker.velocity_at(time))
                 };
                 let details = self.details(contact.kind);
+                let end = LongPressEndDetails {
+                    global_position: details.global_position,
+                    local_position: details.local_position,
+                    velocity,
+                    kind: contact.kind,
+                };
                 let mut notices = CallbackSequence::new();
                 if started {
                     notices.call(self.callbacks.on_long_press_up.clone(), |callback| {
@@ -357,7 +453,7 @@ impl GestureRecognizer for LongPressGestureRecognizer {
                     });
                     if self.contact.is_current(contact.id) {
                         notices.call(self.callbacks.on_long_press_end.clone(), |callback| {
-                            callback(details);
+                            callback(end);
                         });
                     }
                 }
