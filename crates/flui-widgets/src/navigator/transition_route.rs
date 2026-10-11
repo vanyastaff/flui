@@ -557,8 +557,8 @@ impl TransitionHandle {
     /// Apply animation statuses captured by the data-plane listener.
     ///
     /// This is owner-local by construction: callers are route/modal build paths
-    /// or tests explicitly entering the owner scope. The status listener itself
-    /// stores only data so `AnimationController` can stay `Send + Sync`.
+    /// or tests explicitly entering the owner scope. The status listener records
+    /// transitions; these callers apply their route and overlay consequences.
     pub fn drain_pending_statuses(&self) {
         self.inner.drain_pending_statuses();
     }

@@ -1,5 +1,6 @@
 //! `AnimationController` - The primary animation driver.
 
+mod completion;
 mod delivery;
 mod motion;
 mod policy;
@@ -44,7 +45,7 @@ const FLING_TOLERANCE: Tolerance = Tolerance {
     velocity: f64::INFINITY,
 };
 
-/// Whether `AnimationController::finish` must notify value listeners,
+/// Whether transition delivery must notify value listeners,
 /// alongside status listeners and any pending [`RunDelivery`]. Most
 /// run-starting calls change `status` but not `value` at the call itself
 /// (the value only moves once ticks arrive) — but `repeat_with` snaps
@@ -477,7 +478,7 @@ struct AnimationControllerInner {
     /// here before, inline, under whatever borrow is held at that statement;
     /// always go through `.replace()`/`.take()` and bind the returned
     /// `Option<RunCompleter>` so its displaced value reaches
-    /// [`AnimationController::finish`] instead. `Option<T>` does not
+    /// transition delivery instead. `Option<T>` does not
     /// inherit `T`'s `#[must_use]`, so nothing in the compiler catches a
     /// dropped binding here.
     active_run: Option<RunCompleter>,
@@ -586,7 +587,7 @@ impl AnimationController {
     /// `docs/ARCHITECTURE.md`'s mapping entry for the recorded cost). Both
     /// fields must agree at construction: if `last_committed_status` stayed
     /// hard-coded `ReverseSettled` while `status` starts `Forward`, the first
-    /// [`AnimationController::finish`] call — even one that changes
+    /// transition delivery call — even one that changes
     /// nothing — would read them as different and fire a spurious status
     /// notification for a change that never happened.
     fn new_inner(
@@ -794,7 +795,7 @@ impl AnimationController {
             .replace(completer)
             .map(RunCompleter::cancel);
 
-        self.finish(
+        self.deliver_transition(
             AnimationStatus::Forward,
             value_change,
             displaced_delivery,
@@ -897,7 +898,7 @@ impl AnimationController {
             .replace(completer)
             .map(RunCompleter::cancel);
 
-        self.finish(
+        self.deliver_transition(
             AnimationStatus::Reverse,
             value_change,
             displaced_delivery,
@@ -934,7 +935,7 @@ impl AnimationController {
 
         let status = inner.settled_status_directed();
         inner.status = status;
-        self.finish(status, ValueChange::Unchanged, delivery, retired, inner);
+        self.deliver_transition(status, ValueChange::Unchanged, delivery, retired, inner);
         Ok(())
     }
 
@@ -964,7 +965,7 @@ impl AnimationController {
             inner.lower_bound
         };
         inner.status = AnimationStatus::ReverseSettled;
-        self.finish(
+        self.deliver_transition(
             AnimationStatus::ReverseSettled,
             ValueChange::Notify,
             delivery,
@@ -1183,7 +1184,7 @@ impl AnimationController {
             .map(RunCompleter::cancel);
 
         let status = inner.status;
-        self.finish(
+        self.deliver_transition(
             status,
             ValueChange::Unchanged,
             displaced_delivery,
@@ -1231,7 +1232,7 @@ impl AnimationController {
             } else {
                 ValueChange::Notify
             };
-            self.finish(status, change, displaced, retired, inner);
+            self.deliver_transition(status, change, displaced, retired, inner);
             return future;
         }
         inner.value = inner.target_value;
@@ -1243,7 +1244,7 @@ impl AnimationController {
         } else {
             ValueChange::Notify
         };
-        self.finish(status, value_change, delivery, retired, inner);
+        self.deliver_transition(status, value_change, delivery, retired, inner);
         AnimationRunFuture::complete()
     }
 
@@ -1464,7 +1465,7 @@ impl AnimationController {
         // value-at-the-call jump is real but reported on the run's first
         // tick, not synchronously here.
         let status = inner.status;
-        self.finish(
+        self.deliver_transition(
             status,
             ValueChange::Unchanged,
             displaced_delivery,
@@ -1609,7 +1610,7 @@ impl AnimationController {
             .map(RunCompleter::cancel);
 
         let status = inner.status;
-        self.finish(
+        self.deliver_transition(
             status,
             ValueChange::Unchanged,
             displaced_delivery,
@@ -1707,7 +1708,7 @@ impl AnimationController {
             .map(RunCompleter::cancel);
 
         let status = inner.status;
-        self.finish(
+        self.deliver_transition(
             status,
             ValueChange::Unchanged,
             displaced_delivery,
@@ -1736,7 +1737,7 @@ impl AnimationController {
             .pending_delivery
             .push_back(ControllerDelivery::RequestFrame);
         let status = inner.status;
-        self.finish(
+        self.deliver_transition(
             status,
             ValueChange::Unchanged,
             None,
@@ -1854,7 +1855,7 @@ impl AnimationController {
                 let delivery = inner.stop_running(&mut retired);
                 let status = inner.settled_status_directed();
                 inner.status = status;
-                self.finish_with_retirement(
+                self.deliver_transition_with_recovery(
                     status,
                     ValueChange::Unchanged,
                     delivery,
@@ -1979,7 +1980,8 @@ impl AnimationController {
             TickSource::Time { target, .. } => {
                 let inner = self.inner.borrow_mut();
                 if inner.matches_sample(&identity) {
-                    self.tick_time_based(inner, 1.0, *target, recovery);
+                    let direction = inner.direction;
+                    self.complete_finite_run(inner, (*target, direction), recovery);
                 }
             }
             TickSource::Repeat(run) => {
@@ -2009,7 +2011,7 @@ impl AnimationController {
                         inner.motion_state = MotionRunState::Parked;
                         inner.run_start = RunStart::Fresh;
                     }
-                    self.finish_with_retirement(
+                    self.deliver_transition_with_recovery(
                         AnimationStatus::Forward,
                         ValueChange::Notify,
                         None,
@@ -2020,26 +2022,15 @@ impl AnimationController {
                 }
             }
             TickSource::Simulation(simulation) => {
-                if let SimulationRun::Value(source) = simulation {
-                    let inner = self.inner.borrow_mut();
-                    if inner.matches_sample(&identity) {
-                        source.settle();
-                        self.tick_simulation(inner, 0.0, true, recovery);
-                    }
+                let inner = self.inner.borrow_mut();
+                if !inner.matches_sample(&identity) {
                     return;
                 }
-                let endpoint = match simulation {
-                    SimulationRun::Motion { .. } => Some(self.inner.borrow().target_value),
-                    SimulationRun::Fling { bound, .. } => Some(*bound),
-                    SimulationRun::Custom(_) | SimulationRun::Value(_) => None,
-                };
-                if let Some(target) = endpoint {
-                    let inner = self.inner.borrow_mut();
-                    if inner.matches_sample(&identity) {
-                        self.tick_simulation(inner, target, true, recovery);
-                    }
+                if let Ok(endpoint) = inner.completion_endpoint() {
+                    self.complete_finite_run(inner, endpoint, recovery);
                     return;
                 }
+                drop(inner);
                 let mut last_finite = self.inner.borrow().value;
                 for exponent in 0..=8 {
                     let time = 0.25 * f64::from(1u32 << exponent);
@@ -2088,7 +2079,7 @@ impl AnimationController {
             self.end_simulation_run(inner, ValueChange::Notify, retirement);
         } else {
             let status = inner.status;
-            self.finish_with_retirement(
+            self.deliver_transition_with_recovery(
                 status,
                 ValueChange::Notify,
                 None,
@@ -2106,8 +2097,8 @@ impl AnimationController {
     /// (`ValueChange::Unchanged`, since `value` is deliberately left at its
     /// last finite point — the caller already decided not to write the bad
     /// sample through). Clears `simulation`, settles
-    /// `status` by direction, and publishes the completion BEFORE `finish`
-    /// releases its state borrow (the completer resolves before listeners are notified), so a panicking value/status listener still
+    /// `status` by direction, and publishes the completion before transition
+    /// delivery releases its state borrow (the completer resolves before listeners are notified), so a panicking value/status listener still
     /// leaves the run `Ok` — the admitted delivery preserves the
     /// already-published outcome. `complete`, not `cancel`: both paths
     /// are the run ending on its own terms, never a cancellation.
@@ -2126,7 +2117,14 @@ impl AnimationController {
         let status = inner.direction.settled_status();
         inner.status = status;
         let delivery = inner.active_run.take().map(RunCompleter::complete);
-        self.finish_with_retirement(status, value_change, delivery, retired, inner, retirement);
+        self.deliver_transition_with_recovery(
+            status,
+            value_change,
+            delivery,
+            retired,
+            inner,
+            retirement,
+        );
     }
 
     /// Time-based (tween) branch of [`tick_at`](Self::tick_at). Never called
@@ -2145,7 +2143,7 @@ impl AnimationController {
         inner.value = value.clamp(inner.lower_bound, inner.upper_bound);
         if t < 1.0 {
             let status = inner.status;
-            self.finish_with_retirement(
+            self.deliver_transition_with_recovery(
                 status,
                 ValueChange::Notify,
                 None,
@@ -2158,7 +2156,7 @@ impl AnimationController {
         let status = inner.direction.settled_status();
         inner.status = status;
         let delivery = inner.active_run.take().map(RunCompleter::complete);
-        self.finish_with_retirement(
+        self.deliver_transition_with_recovery(
             status,
             ValueChange::Notify,
             delivery,
@@ -2189,7 +2187,7 @@ impl AnimationController {
     /// lives; this function calls them instead of hand-copying it.
     fn finish_repeat(
         &self,
-        mut inner: std::cell::RefMut<'_, AnimationControllerInner>,
+        inner: std::cell::RefMut<'_, AnimationControllerInner>,
         run: &RepeatRun,
         count: u32,
         recovery: &mut RecoveryScope<'_>,
@@ -2200,22 +2198,7 @@ impl AnimationController {
             run.max,
             u128::from(count.saturating_sub(1)),
         );
-        inner.value = value;
-        inner.start_value = value;
-        inner.target_value = value;
-        inner.direction = direction;
-        inner.repeat = None;
-        let status = direction.settled_status();
-        inner.status = status;
-        let delivery = inner.active_run.take().map(RunCompleter::complete);
-        self.finish_with_retirement(
-            status,
-            ValueChange::Notify,
-            delivery,
-            RetiredSources::new(),
-            inner,
-            recovery,
-        );
+        self.complete_finite_run(inner, (value, direction), recovery);
     }
 
     fn tick_repeat(
@@ -2266,7 +2249,7 @@ impl AnimationController {
         inner.value = sample.value;
         let status = sample.direction.running_status();
         inner.status = status;
-        self.finish_with_retirement(
+        self.deliver_transition_with_recovery(
             status,
             ValueChange::Notify,
             None,
@@ -2320,7 +2303,7 @@ impl AnimationController {
             inner.value = canonical.clamp(inner.lower_bound, inner.upper_bound);
             let status = inner.settled_status_keep_direction();
             inner.status = status;
-            self.finish(status, ValueChange::Notify, delivery, retired, inner);
+            self.deliver_transition(status, ValueChange::Notify, delivery, retired, inner);
             Self::warn_non_finite_value(should_warn, value, NonFiniteOutcome::Canonicalized);
             return;
         }
@@ -2329,7 +2312,7 @@ impl AnimationController {
         inner.value = value.clamp(inner.lower_bound, inner.upper_bound);
         let status = inner.settled_status_keep_direction();
         inner.status = status;
-        self.finish(status, ValueChange::Notify, delivery, retired, inner);
+        self.deliver_transition(status, ValueChange::Notify, delivery, retired, inner);
     }
 
     /// Close the kernel and cancel its run under the owning lifecycle's recovery.
@@ -2496,7 +2479,7 @@ impl AnimationController {
     /// Emits the "received a non-finite value" warning shared by
     /// [`set_value`](Self::set_value)'s canonicalization and
     /// [`tick_simulation`](Self::tick_simulation)'s mid-run non-finite
-    /// sample — call only after `finish` has released its borrow and delivered,
+    /// sample — call only after transition delivery releases its borrow,
     /// so an arbitrary subscriber can reenter the controller.
     /// `should_warn` is the caller's snapshot of the latch
     /// (`!non_finite_warned`, taken before setting it) — this fires at most
@@ -2513,13 +2496,13 @@ impl AnimationController {
     }
 
     /// Commit status, run delivery and outgoing custody before releasing the borrow.
-    /// The outermost finish owns the FIFO drain, including work admitted by
+    /// The outermost delivery owns the FIFO drain, including work admitted by
     /// value listeners, status listeners, continuations and destructors.
     /// Status precedes the corresponding run delivery (ADR-0064); accepted
     /// transitions do not coalesce. A caught failure does not discard the tail
     /// or change a published run outcome. Retirement resumes the first failure
     /// only after the queue is empty and the delivery latch is released.
-    fn finish(
+    fn deliver_transition(
         &self,
         status: AnimationStatus,
         value_change: ValueChange,
@@ -2528,7 +2511,7 @@ impl AnimationController {
         inner: std::cell::RefMut<'_, AnimationControllerInner>,
     ) {
         let mut retirement = Retirement::new();
-        self.finish_with_retirement(
+        self.deliver_transition_with_recovery(
             status,
             value_change,
             delivery,
@@ -2539,7 +2522,7 @@ impl AnimationController {
         retirement.finish();
     }
 
-    fn finish_with_retirement(
+    fn deliver_transition_with_recovery(
         &self,
         status: AnimationStatus,
         value_change: ValueChange,
@@ -2610,9 +2593,9 @@ impl AnimationControllerInner {
     /// recompute status (the caller does that separately).
     ///
     /// The returned [`RunDelivery`] must be handed to
-    /// [`AnimationController::finish`]; nothing else in this file may call
+    /// transition delivery; nothing else in this file may call
     /// `deliver()` on it.
-    #[must_use = "a displaced run's RunDelivery must reach AnimationController::finish"]
+    #[must_use = "a displaced run's RunDelivery must reach transition delivery"]
     fn stop_running(&mut self, retired: &mut RetiredSources) -> Option<RunDelivery> {
         self.clear_run_modes(retired);
         self.active_run.take().map(RunCompleter::cancel)

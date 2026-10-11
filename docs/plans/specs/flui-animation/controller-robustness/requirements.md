@@ -147,3 +147,15 @@ property-тест на `proptest` (добавляет Q0).
 - **R9.5** Realm остановлен посреди анимации (дроп `Vsync`): контроллер, которого держит виджет,
   сохраняет прогон (`is_animating() == true`), future pending до `dispose()`, затем `Err(RunCanceled)`.
   Тест: `dropped_vsync_leaves_run_until_dispose` — пинует честное поведение (см. риски design).
+
+## Явное успешное завершение
+
+Владелец согласовал `AnimationController::finish()` как API для авторов приложений.
+Команда доводит исходный конечный прогон до объявленной конечной точки и сохраняет
+успешный результат уже выданного future. Новый прогон не создаётся. Пауза не запрещает
+явную команду; idle вызов молчит, disposed отказывает. Бесконечный repeat и произвольная
+custom simulation получают `NoFiniteEndpoint` до мутации или sampling. Конечный repeat
+учитывает чётность последней ноги. Контракт и альтернативы: [ADR-0197](../../../../adr/ADR-0197-explicit-animation-completion.md).
+
+Проверки: `controller_robustness_contract`, `status_delivery_failure_custody` и публичный
+авторский маршрут `explicit_finish_commits_an_authored_page_and_retires_the_old_route`.

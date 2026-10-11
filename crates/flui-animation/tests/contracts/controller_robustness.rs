@@ -403,9 +403,445 @@ fn repeated_frame_time_announces_completion_once() {
     );
 }
 
+fn explicit_finish_completes_the_original_finite_run() {
+    use flui_animation::{MotionClock, PlaybackRate};
+    use std::{cell::RefCell, rc::Rc};
+
+    for (target, reverse) in [(1.0, false), (0.0, true), (0.25, false), (0.75, true)] {
+        for paused in [false, true] {
+            let registry = Vsync::new();
+            let owner = AnimationController::builder(Duration::from_secs(1))
+                .initial_value(0.4)
+                .build_on(Some(&registry));
+            let controller = owner.controller();
+            let run = if reverse {
+                controller.animate_back(target, Some(Duration::from_secs(1)))
+            } else {
+                controller.animate_to(target, Some(Duration::from_secs(1)))
+            }
+            .expect("finite admitted run");
+            let mut clock = MotionClock::new();
+            registry.tick_all(&clock.frame(Duration::ZERO));
+            registry.tick_all(&clock.frame(Duration::from_millis(400)));
+            assert_ne!(
+                controller.value(),
+                target,
+                "finish starts at an interior sample"
+            );
+            assert!(run.is_pending());
+            if paused {
+                controller.set_playback_rate(PlaybackRate::new(0.0).unwrap());
+            }
+            let events = Rc::new(RefCell::new(Vec::new()));
+            let value_events = Rc::clone(&events);
+            let observed = controller.clone();
+            let original = run.clone();
+            let listener = controller.add_listener(Rc::new(move || {
+                assert_eq!(observed.value(), target);
+                assert!(!observed.is_animating());
+                assert!(
+                    original.is_complete(),
+                    "outcome is committed before listeners"
+                );
+                value_events.borrow_mut().push("value");
+            }));
+            let status_events = Rc::clone(&events);
+            let observed = controller.clone();
+            let phase = if reverse {
+                AnimationStatus::ReverseSettled
+            } else {
+                AnimationStatus::ForwardSettled
+            };
+            let subscription = controller.subscribe_status(Rc::new(move |status| {
+                assert_eq!(
+                    observed.value(),
+                    target,
+                    "endpoint precedes status delivery"
+                );
+                assert_eq!(status, phase);
+                status_events.borrow_mut().push("status");
+            }));
+            let completion_events = Rc::clone(&events);
+            run.when_complete_or_cancel(move |outcome| {
+                assert!(
+                    outcome.is_ok(),
+                    "finish preserves successful original completion"
+                );
+                completion_events.borrow_mut().push("outcome");
+            });
+            controller.finish().expect("declared finite endpoint");
+            assert!(run.is_complete());
+            assert_eq!(controller.value(), target);
+            assert_eq!(controller.status(), phase);
+            assert_eq!(*events.borrow(), ["value", "status", "outcome"]);
+            assert!(!registry.has_running());
+            controller.finish().expect("idle finish is silent");
+            registry.tick_all(&clock.frame(Duration::from_secs(2)));
+            assert_eq!(*events.borrow(), ["value", "status", "outcome"]);
+            controller.remove_listener(listener);
+            drop(subscription);
+        }
+    }
+}
+
+fn explicit_finish_uses_the_last_repeat_leg() {
+    for reverse in [false, true] {
+        for count in [1, 2, 3, 4] {
+            let controller = controller();
+            let run = controller
+                .repeat_with(Some(0.2), Some(0.8), reverse, None, Some(count))
+                .expect("finite repeat");
+            controller.tick_at(Duration::from_millis(250));
+            let (endpoint, phase) = if reverse && count % 2 == 0 {
+                (0.2, AnimationStatus::ReverseSettled)
+            } else {
+                (0.8, AnimationStatus::ForwardSettled)
+            };
+            controller.finish().expect("finite repeat has a final leg");
+            assert_eq!(controller.value(), endpoint);
+            assert_eq!(controller.status(), phase);
+            assert!(run.is_complete());
+            assert!(!controller.is_animating());
+        }
+    }
+}
+
+fn explicit_finish_refuses_an_undeclared_endpoint_without_sampling() {
+    use flui_animation::simulation::Simulation;
+    use std::{cell::Cell, rc::Rc};
+
+    struct UnknownEnd(Rc<Cell<usize>>);
+    impl Simulation for UnknownEnd {
+        fn x(&self, time: f64) -> f64 {
+            self.0.set(self.0.get() + 1);
+            0.25 + time * 0.1
+        }
+        fn dx(&self, _time: f64) -> f64 {
+            0.1
+        }
+        fn is_done(&self, _time: f64) -> bool {
+            false
+        }
+    }
+    for custom in [false, true] {
+        let controller = controller();
+        let samples = Rc::new(Cell::new(0));
+        let run = if custom {
+            controller.animate_with(UnknownEnd(Rc::clone(&samples)))
+        } else {
+            controller.repeat(true)
+        }
+        .expect("admitted motion without a declared end");
+        controller.tick_at(Duration::from_millis(400));
+        let before = (controller.value(), controller.status(), samples.get());
+        assert!(
+            matches!(
+                controller.finish(),
+                Err(flui_animation::AnimationError::NoFiniteEndpoint)
+            ),
+            "no guessed endpoint"
+        );
+        assert_eq!(
+            (controller.value(), controller.status(), samples.get()),
+            before
+        );
+        assert!(run.is_pending());
+        assert!(controller.is_animating());
+        controller.tick_at(Duration::from_millis(700));
+        assert_ne!(
+            controller.value(),
+            before.0,
+            "refusal leaves the original run deliverable"
+        );
+        controller.stop().expect("caller may still cancel");
+        assert!(run.is_canceled());
+        let next = controller
+            .animate_to(0.9, Some(Duration::from_secs(1)))
+            .unwrap();
+        controller
+            .finish()
+            .expect("subsequent finite run remains healthy");
+        assert!(next.is_complete());
+        assert_eq!(controller.value(), 0.9);
+    }
+}
+
+fn explicit_finish_reaches_native_physical_endpoints() {
+    use flui_animation::{MotionSpec, SpringDescription};
+    let slow = SpringDescription::with_damping_ratio(1.0, 1e-12, 1.0).unwrap();
+    for (fling, input, endpoint) in [(true, 1e-6, 1.0), (true, -1e-6, 0.0), (false, 0.75, 0.75)] {
+        let controller = AnimationController::builder(Duration::from_secs(1))
+            .initial_value(0.4)
+            .build();
+        let run = if fling {
+            controller.fling_with(input, Some(slow))
+        } else {
+            controller.retarget(input, &MotionSpec::Spring(slow))
+        }
+        .unwrap();
+        controller.tick_at(Duration::from_millis(400));
+        assert_ne!(controller.value(), endpoint);
+        controller.finish().unwrap();
+        assert_eq!(controller.value(), endpoint);
+        assert!(run.is_complete());
+        assert!(!controller.is_animating());
+        controller.tick_at(Duration::MAX);
+        assert_eq!(controller.value(), endpoint);
+    }
+}
+
+fn explicit_finish_distinguishes_parked_owned_work_and_disposal() {
+    use flui_animation::{AnimationError, MotionClock, MotionPreference};
+    let registry = Vsync::new();
+    let mut owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
+    let controller = owner.controller().clone();
+    let run = controller.repeat(true).unwrap();
+    let mut clock = MotionClock::new();
+    clock.set_preference(MotionPreference::Reduce);
+    registry.tick_all(&clock.frame(Duration::ZERO));
+    assert!(run.is_pending());
+    assert!(!registry.has_running(), "parked work requests no frames");
+    assert_eq!(controller.finish(), Err(AnimationError::NoFiniteEndpoint));
+    assert!(run.is_pending());
+    clock.set_preference(MotionPreference::Full);
+    registry.tick_all(&clock.frame(Duration::from_millis(500)));
+    registry.tick_all(&clock.frame(Duration::from_secs(1)));
+    assert!(controller.value() > 0.0, "refused parked work can resume");
+    owner.dispose();
+    assert!(run.is_canceled());
+    assert_eq!(controller.finish(), Err(AnimationError::Disposed));
+}
+
+fn explicit_finish_preserves_a_reentrant_replacement() {
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+    };
+    for channel in ["value", "status", "outcome"] {
+        let controller = controller();
+        let original = controller.forward().unwrap();
+        controller.tick_at(Duration::from_millis(400));
+        let replacement = Rc::new(RefCell::new(None));
+        let action: Rc<dyn Fn()> = {
+            let controller = controller.clone();
+            let original = original.clone();
+            let replacement = Rc::clone(&replacement);
+            let armed = Cell::new(true);
+            Rc::new(move || {
+                if !armed.replace(false) {
+                    return;
+                }
+                assert_eq!(controller.value(), 1.0);
+                assert!(original.is_complete());
+                assert!(!controller.is_animating());
+                controller.finish().unwrap();
+                *replacement.borrow_mut() = Some(
+                    controller
+                        .animate_back(0.25, Some(Duration::from_secs(1)))
+                        .unwrap(),
+                );
+            })
+        };
+        let value_listener =
+            (channel == "value").then(|| controller.add_listener(Rc::clone(&action)));
+        let status_subscription = (channel == "status").then(|| {
+            let action = Rc::clone(&action);
+            controller.subscribe_status(Rc::new(move |status| {
+                if status == AnimationStatus::ForwardSettled {
+                    action();
+                }
+            }))
+        });
+        if channel == "outcome" {
+            let action = Rc::clone(&action);
+            original.when_complete_or_cancel(move |outcome| {
+                assert!(outcome.is_ok());
+                action();
+            });
+        }
+        controller.finish().unwrap();
+        assert!(original.is_complete());
+        assert!(
+            controller.is_animating(),
+            "{channel}: replacement survives outer finish"
+        );
+        let next = replacement
+            .borrow()
+            .as_ref()
+            .expect("callback admitted a replacement")
+            .clone();
+        assert!(next.is_pending());
+        controller.tick_at(Duration::from_millis(500));
+        assert!((controller.value() - 0.625).abs() < 1e-12);
+        controller.tick_at(Duration::from_secs(1));
+        assert_eq!(controller.value(), 0.25);
+        assert!(next.is_complete());
+        if let Some(listener) = value_listener {
+            controller.remove_listener(listener);
+        }
+        drop(status_subscription);
+    }
+}
+
+fn explicit_finish_retires_sources_with_failure_custody() {
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+    };
+
+    struct RetiringCurve {
+        controller: AnimationController,
+        drops: Rc<Cell<usize>>,
+        replacement: Rc<RefCell<Option<flui_animation::AnimationRunFuture>>>,
+        fails: bool,
+    }
+    impl Curve for RetiringCurve {
+        fn transform(&self, time: f64) -> f64 {
+            time
+        }
+    }
+    impl Drop for RetiringCurve {
+        fn drop(&mut self) {
+            self.drops.set(self.drops.get() + 1);
+            assert_eq!(self.controller.value(), 1.0);
+            assert!(!self.controller.is_animating());
+            let next = self
+                .controller
+                .animate_back(0.25, Some(Duration::from_secs(1)))
+                .unwrap();
+            *self.replacement.borrow_mut() = Some(next);
+            assert!(!self.fails, "source retirement failure");
+        }
+    }
+    for mode in [
+        "healthy",
+        "source",
+        "value",
+        "status",
+        "value+source",
+        "status+source",
+    ] {
+        let controller = controller();
+        let drops = Rc::new(Cell::new(0));
+        let replacement = Rc::new(RefCell::new(None));
+        let original = controller
+            .animate_to_curved(
+                1.0,
+                Some(Duration::from_secs(1)),
+                RetiringCurve {
+                    controller: controller.clone(),
+                    drops: Rc::clone(&drops),
+                    replacement: Rc::clone(&replacement),
+                    fails: mode.contains("source"),
+                },
+            )
+            .unwrap();
+        controller.tick_at(Duration::from_millis(400));
+        let value_listener = mode.contains("value").then(|| {
+            let armed = Cell::new(true);
+            controller.add_listener(Rc::new(move || {
+                assert!(!armed.replace(false), "value delivery failure");
+            }))
+        });
+        let status_subscription = mode.contains("status").then(|| {
+            let armed = Cell::new(true);
+            controller.subscribe_status(Rc::new(move |status| {
+                if status == AnimationStatus::ForwardSettled {
+                    assert!(!armed.replace(false), "status delivery failure");
+                }
+            }))
+        });
+        let outcomes = Rc::new(Cell::new(0));
+        let delivered = Rc::clone(&outcomes);
+        original.when_complete_or_cancel(move |outcome| {
+            assert!(outcome.is_ok());
+            delivered.set(delivered.get() + 1);
+        });
+        let result = catch_unwind(AssertUnwindSafe(|| controller.finish()));
+        if mode == "healthy" {
+            assert_eq!(result.unwrap(), Ok(()));
+        } else {
+            let failure = result.expect_err("the first failure is propagated after cleanup");
+            let expected = if mode.contains("value") {
+                "value delivery failure"
+            } else if mode.contains("status") {
+                "status delivery failure"
+            } else {
+                "source retirement failure"
+            };
+            assert_eq!(
+                flui_foundation::panic::payload_text(failure.as_ref()),
+                Some(expected)
+            );
+        }
+        assert!(
+            original.is_complete(),
+            "failure cannot turn accepted success into cancellation"
+        );
+        assert_eq!(outcomes.get(), 1);
+        let failed_before_retirement = mode.contains("value") || mode.contains("status");
+        assert_eq!(drops.get(), usize::from(!failed_before_retirement));
+        if let Some(listener) = value_listener {
+            controller.remove_listener(listener);
+        }
+        drop(status_subscription);
+        let next = if let Some(next) = replacement.borrow_mut().take() {
+            next
+        } else {
+            controller
+                .animate_back(0.25, Some(Duration::from_secs(1)))
+                .unwrap()
+        };
+        controller.tick_at(Duration::from_secs(1));
+        assert_eq!(
+            controller.value(),
+            0.25,
+            "{mode}: the next admitted run makes progress"
+        );
+        assert!(next.is_complete());
+        assert_eq!(outcomes.get(), 1);
+    }
+}
+
 #[test]
 fn controller_robustness_contract() {
     crate::run_table(&[
+        (
+            "explicit finish releases its owner during delivery",
+            explicit_finish_allows_owner_release_during_delivery,
+        ),
+        (
+            "explicit finish delivers a failing future waker",
+            explicit_finish_preserves_success_after_waker_failure,
+        ),
+        (
+            "explicit finish retains failure custody",
+            explicit_finish_retires_sources_with_failure_custody,
+        ),
+        (
+            "explicit finish preserves reentrant replacements",
+            explicit_finish_preserves_a_reentrant_replacement,
+        ),
+        (
+            "explicit finish reaches physical endpoints",
+            explicit_finish_reaches_native_physical_endpoints,
+        ),
+        (
+            "explicit finish distinguishes parked work and disposal",
+            explicit_finish_distinguishes_parked_owned_work_and_disposal,
+        ),
+        (
+            "explicit finish preserves the original future",
+            explicit_finish_completes_the_original_finite_run,
+        ),
+        (
+            "explicit finish lands on the final repeat leg",
+            explicit_finish_uses_the_last_repeat_leg,
+        ),
+        (
+            "explicit finish refuses unknown endpoints atomically",
+            explicit_finish_refuses_an_undeclared_endpoint_without_sampling,
+        ),
         #[cfg(feature = "serde")]
         ("directional phase wire names", directional_phase_wire_names),
         (
@@ -428,6 +864,103 @@ fn controller_robustness_contract() {
             repeated_frame_time_announces_completion_once,
         ),
     ]);
+}
+
+fn explicit_finish_allows_owner_release_during_delivery() {
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    for channel in ["value", "status", "outcome"] {
+        let registry = Vsync::new();
+        let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
+        let controller = owner.controller().clone();
+        let run = controller.forward().unwrap();
+        controller.tick_at(Duration::from_millis(400));
+        let owner = Rc::new(RefCell::new(Some(owner)));
+        let releases = Rc::new(Cell::new(0));
+        let release: Rc<dyn Fn()> = {
+            let owner = Rc::clone(&owner);
+            let releases = Rc::clone(&releases);
+            let controller = controller.clone();
+            let run = run.clone();
+            Rc::new(move || {
+                assert_eq!(controller.value(), 1.0);
+                assert!(run.is_complete());
+                let outgoing = owner.borrow_mut().take();
+                drop(outgoing);
+                releases.set(releases.get() + 1);
+            })
+        };
+        if channel == "value" {
+            controller.add_listener(Rc::clone(&release));
+        } else if channel == "status" {
+            let release = Rc::clone(&release);
+            controller
+                .subscribe_status(Rc::new(move |_| release()))
+                .detach();
+        } else {
+            let release = Rc::clone(&release);
+            run.when_complete_or_cancel(move |outcome| {
+                assert!(outcome.is_ok());
+                release();
+            });
+        }
+        controller.finish().unwrap();
+        assert!(
+            run.is_complete(),
+            "{channel}: committed success survives owner release"
+        );
+        assert_eq!(releases.get(), 1);
+        assert!(owner.borrow().is_none());
+        assert!(registry.is_empty());
+        assert_eq!(
+            controller.finish(),
+            Err(flui_animation::AnimationError::Disposed)
+        );
+    }
+}
+
+fn explicit_finish_preserves_success_after_waker_failure() {
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::task::{Context, Poll, Wake, Waker};
+
+    struct FailingWake(Arc<AtomicUsize>);
+    impl Wake for FailingWake {
+        fn wake(self: Arc<Self>) {
+            self.wake_by_ref();
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            panic!("completion wake failure");
+        }
+    }
+    let controller = controller();
+    let mut run = controller.forward().unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let waker = Waker::from(Arc::new(FailingWake(Arc::clone(&calls))));
+    assert!(matches!(
+        Pin::new(&mut run).poll(&mut Context::from_waker(&waker)),
+        Poll::Pending
+    ));
+    let failure = catch_unwind(AssertUnwindSafe(|| controller.finish())).expect_err("wake fails");
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("completion wake failure")
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(controller.value(), 1.0);
+    assert!(matches!(
+        Pin::new(&mut run).poll(&mut Context::from_waker(Waker::noop())),
+        Poll::Ready(Ok(()))
+    ));
+    controller.finish().unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let next = controller.reverse().unwrap();
+    controller.finish().unwrap();
+    assert_eq!(controller.value(), 0.0);
+    assert!(next.is_complete());
 }
 
 #[test]

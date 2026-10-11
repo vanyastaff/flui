@@ -32,6 +32,12 @@ pub enum AnimationError {
     #[error("AnimationController has been disposed")]
     Disposed,
 
+    /// The active run has no declared finite endpoint to finish at.
+    /// Infinite repeats and arbitrary custom simulations refuse explicit
+    /// completion without changing the run, its sample or its future.
+    #[error("the active animation has no declared finite endpoint")]
+    NoFiniteEndpoint,
+
     /// This controller permanently consumed its run or sample identities.
     /// New runs refuse before mutation; a final admitted run may still finish.
     #[error("AnimationController identities exhausted")]

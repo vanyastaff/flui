@@ -484,7 +484,7 @@ value cannot replace the decoding or range error.
 `Ok(())` on a normal finish and `Err(RunCanceled)` when it is superseded
 or torn down. `AnimationControllerInner.active_run: Option<RunCompleter>`
 is the one completer this controller ever holds; every run-ending or
-run-starting site funnels through `AnimationController::finish`, the single
+run-starting site funnels through `AnimationController::deliver_transition`, the single
 chokepoint that owns `drop(inner)` then delivers — see
 `docs/adr/ADR-0064-animation-completion-is-one-controller-resolved-future.md`
 for why resolution moved here rather than staying on `Ticker` (a lock-order
@@ -499,6 +499,7 @@ fact).
 | `tick_time_based` (non-repeating end) | the finishing run, complete | — |
 | `tick_repeat` (exhausted end) | the finishing run, complete | — |
 | `tick_simulation` (`is_done`) | the finishing run, complete | — |
+| public `finish` (a finite run with a declared endpoint) | original run, complete at its endpoint | completed simulation and curve, retired after delivery |
 | `stop`/`set_value` (`stop_running`) | — | `active_run`, canceled |
 | `reset` (`stop_running`) | — | `active_run`, canceled |
 | `dispose` | — | `active_run`, canceled |
@@ -513,9 +514,23 @@ leave the run `Ok`: the controller drains the admitted `RunDelivery` with
 the already-published outcome, even after containing a listener failure.
 
 **Status-before-cancel.** A run-starting site displaces `active_run` under
-the lock, but `finish` fires the run's own (new) status listeners **before**
+the lock, but transition delivery fires the run's own (new) status listeners **before**
 delivering the displaced run's cancellation — the observable order a caller
 sees is "the new run started" then "the old one was canceled".
+
+**Explicit successful completion.** `AnimationController::finish()` is an
+application-authoring command, independent of frame demand and playback rate.
+It commits the original finite run's endpoint and successful outcome before
+calling listeners. Idle calls are silent; disposed calls fail. Infinite repeats
+and arbitrary custom simulations have no declared endpoint and are refused
+without sampling or canceling their run. Finite repeat parity determines the
+endpoint; native flings use their bound and property motion uses its target.
+Completed sources leave the kernel before delivery and retire afterward through
+the existing recovery custody. A listener's replacement run remains authoritative.
+The public cases `explicit_finish_completes_the_original_finite_run` and
+`explicit_finish_retires_sources_with_failure_custody` pin these guarantees;
+`explicit_finish_commits_an_authored_page_and_retires_the_old_route` exercises
+the command through an application-authored navigator page and committed opacity.
 
 ### Direction is chosen by the method; a run ends in its direction's settled status
 

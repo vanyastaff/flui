@@ -683,6 +683,15 @@ fn status_delivery_failure_custody() {
         ),
         ("run", status_failure_retains_completed_run_captures),
         ("waiter", status_failure_retains_completed_run_waiter),
+        ("explicit_finish_run", || {
+            completed_run_capture_custody(true);
+        }),
+        ("explicit_finish_waiter", || {
+            completed_run_waiter_custody(true);
+        }),
+        ("explicit_finish_competition", || {
+            completed_run_failure_custody(true);
+        }),
         (
             "run_competition",
             status_failure_remains_authoritative_over_run_failure,
@@ -1272,6 +1281,10 @@ fn fail_on_completion(controller: &AnimationController) {
 }
 
 fn status_failure_retains_completed_run_captures() {
+    completed_run_capture_custody(false);
+}
+
+fn completed_run_capture_custody(explicit: bool) {
     let mut lifecycle =
         AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
     let controller = lifecycle.controller().clone();
@@ -1281,7 +1294,11 @@ fn status_failure_retains_completed_run_captures() {
     let (tail, listener) = recorder();
     controller.subscribe_status(listener).detach();
     let failure = catch_unwind(AssertUnwindSafe(|| {
-        controller.tick_at(std::time::Duration::from_secs_f64(1.0));
+        if explicit {
+            controller.finish().expect("finite run finishes");
+        } else {
+            controller.tick_at(std::time::Duration::from_secs_f64(1.0));
+        }
     }))
     .expect_err("status failure");
     assert_eq!(payload_text(failure.as_ref()), Some("first status failure"));
@@ -1311,6 +1328,10 @@ impl Wake for HostileWaiter {
 }
 
 fn status_failure_retains_completed_run_waiter() {
+    completed_run_waiter_custody(false);
+}
+
+fn completed_run_waiter_custody(explicit: bool) {
     let mut lifecycle =
         AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
     let controller = lifecycle.controller().clone();
@@ -1332,7 +1353,11 @@ fn status_failure_retains_completed_run_waiter() {
         ));
     }
     let failure = catch_unwind(AssertUnwindSafe(|| {
-        controller.tick_at(std::time::Duration::from_secs_f64(1.0));
+        if explicit {
+            controller.finish().expect("finite run finishes");
+        } else {
+            controller.tick_at(std::time::Duration::from_secs_f64(1.0));
+        }
     }))
     .expect_err("status failure");
     assert_eq!(payload_text(failure.as_ref()), Some("first status failure"));
@@ -1348,6 +1373,10 @@ fn status_failure_retains_completed_run_waiter() {
 }
 
 fn status_failure_remains_authoritative_over_run_failure() {
+    completed_run_failure_custody(false);
+}
+
+fn completed_run_failure_custody(explicit: bool) {
     let mut lifecycle =
         AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
     let controller = lifecycle.controller().clone();
@@ -1368,7 +1397,11 @@ fn status_failure_remains_authoritative_over_run_failure() {
         called.fetch_add(1, Ordering::SeqCst);
     });
     let failure = catch_unwind(AssertUnwindSafe(|| {
-        controller.tick_at(std::time::Duration::from_secs_f64(1.0));
+        if explicit {
+            controller.finish().expect("finite run finishes");
+        } else {
+            controller.tick_at(std::time::Duration::from_secs_f64(1.0));
+        }
     }))
     .expect_err("first status failure");
     assert_eq!(payload_text(failure.as_ref()), Some("first status failure"));

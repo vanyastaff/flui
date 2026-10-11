@@ -129,7 +129,7 @@ pub(crate) fn push_transition_parks_the_entry_in_pushing_until_the_controller_co
 /// push's `AnimationRunFuture` **inside the flush that runs `did_pop`**: `did_pop`
 /// calls `reverse()`, which — as a run-starting method — displaces and
 /// cancels the still-pending `forward()` run before starting the new one, and
-/// `AnimationController::finish` delivers synchronously, so the continuation
+/// the controller delivers synchronously, so the continuation
 /// `NavigatorShared::apply` registered on that run fires right there, mid-flush.
 /// No deadlock (the continuation only touches the command queue and
 /// `settle_wake`, never the history), and the entry ends `Popping`, not

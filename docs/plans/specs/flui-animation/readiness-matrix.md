@@ -25,7 +25,7 @@
 | M-INT-4 | Продолжительность и атомарность отказа входят в красные robustness-контракты | A1 |
 | M-INT-6 | Dismissible использует max constraints, а не фактический размер; Drawer/back gesture проверить вместе | A6 |
 | M-INT-7, M-INT-8, M-INT-9, M-INT-10 | Базовые reverse/seek/cancel/completion тесты проходят; reentrant delivery и lifecycle ещё красные | A1, A4 |
-| M-INT-11 | Finish — явный контракт, не эквивалент stop/reset; подтвердить выбранный interface и consumer | A1 |
+| M-INT-11 | Согласован application-authoring `AnimationController::finish()`, сохраняющий исходный future; ADR-0197, controller contracts и публичный authored-page paint/disposal сценарий | A1 |
 | M-INT-12 | Конечность/bounds должны сохраняться при hostile curve/simulation и reentry | A1 |
 | M-INT-13 | Аддитивная композиция вынесена при условии непрерывного retarget; условие ещё не закрыто в виджетах | A4, условный вынос |
 

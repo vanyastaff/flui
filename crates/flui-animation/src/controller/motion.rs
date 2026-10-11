@@ -416,7 +416,7 @@ impl AnimationController {
                 .replace(completer)
                 .map(RunCompleter::cancel);
             let status = inner.status;
-            self.finish_with_retirement(
+            self.deliver_transition_with_recovery(
                 status,
                 ValueChange::Unchanged,
                 displaced,

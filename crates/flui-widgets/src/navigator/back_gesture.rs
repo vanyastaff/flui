@@ -212,10 +212,9 @@ impl BackGestureController {
 ///
 /// A plain struct behind `Rc`, not `Arc`: every field here is owner-affine
 /// (`NavigatorHandle` itself is `!Send + !Sync`), and every callback that
-/// touches it runs on the owner thread — a drag recognizer's callbacks are
-/// `Fn(..) + 'static`, not `Send + Sync` (unlike an `AnimationController`
-/// status listener, which is why the settle wait below is a poll, not a
-/// second status listener; see `poll_settle`'s doc).
+/// touches it runs on the owner thread. Recognizer and animation callbacks may
+/// capture owner-local state. The detector observes completion in `build` before
+/// reporting the end of the released gesture; see `poll_settle`.
 ///
 /// `pub` only so `crate::__test_access` can re-export it (ADR-0083 §4); the
 /// module is private, so nothing else names it.
