@@ -47,16 +47,64 @@ UI state.
 
 ```rust
 use std::{cell::Cell, rc::Rc};
-use flui_interaction::{GestureArena, TapGestureRecognizer};
+use flui_foundation::geometry::Point;
+use flui_platform_api::EventTime;
+use flui_interaction::{
+    GestureArena, PointerButton, PointerButtons, PointerDispatch, PointerEvent,
+    PointerId, PointerInfo, PointerKind, PointerPosition, PointerPress,
+    PointerRelease, PointerSample, RecognizerSet, TapGestureRecognizer,
+};
 
+let arena = GestureArena::new();
 let taps = Rc::new(Cell::new(0));
 let observed = taps.clone();
-let tap = TapGestureRecognizer::builder(GestureArena::new())
+let tap = TapGestureRecognizer::builder(arena.clone())
     .on_tap(move |_| observed.set(observed.get() + 1))
     .build();
-
-// Keep `tap` in widget state for as long as it should receive input.
+let mut recognizers = RecognizerSet::default();
+recognizers.attach(&tap); // `tap` remains the strong owner.
+let pointer = PointerId::new(std::num::NonZeroU64::MIN);
+let info = PointerInfo::new(pointer, PointerKind::Touch);
+let position = PointerPosition::try_new(Point::new(12.0, 20.0))?;
+let down = PointerEvent::Down(PointerPress::new(
+    info, PointerButton::PRIMARY, PointerButtons::NONE,
+    PointerSample::new(EventTime::from_nanos(0), position),
+));
+let up = PointerEvent::Up(PointerRelease::new(
+    info, PointerButton::PRIMARY, PointerButtons::only(PointerButton::PRIMARY),
+    PointerSample::new(EventTime::from_nanos(20_000_000), position),
+));
+recognizers.dispatch(PointerDispatch::at_root(&down));
+arena.close(pointer); // Close only after every Down recipient has joined.
+recognizers.dispatch(PointerDispatch::at_root(&up));
+arena.sweep(pointer);
+arena.drain_deferred_resolutions();
+assert_eq!(taps.get(), 1);
+# Ok::<(), Box<dyn std::error::Error>>(())
 ```
+
+This is a standalone driver. It owns the Down close, Up sweep and deferred
+resolution drain after routing; on Cancel it abandons the arena after routing
+cancellation. Deadline-driven recognizers also require idle progress: schedule
+`arena.next_deadline()`, then call `arena.poll_deadlines()` and
+`arena.drain_deferred_resolutions()` when that time arrives, even without another
+pointer packet. Retain and release any held arena entries according to the
+recognizer's protocol. The custom recognizer example runs both contact routing
+and a stationary long-press deadline using the public input constructors.
+
+Mounted widgets acquire the presentation's shared, binding-driven arena through
+`flui_widgets::GestureArenaScope::of(ctx)` in their lifecycle setup, retain
+recognizers in state, and attach them with `Listener::recognizer`.
+`GestureBinding` owns routing, closure, sweeping, idle deadlines and draining
+there. `GestureArena::new()` creates a private self-driven arena for standalone
+use; it cannot back `GestureArenaScope`.
+
+Tap Down callbacks receive `TapDownDetails`; Up and completed-tap callbacks
+receive `TapUpDetails`. Move and cancellation callbacks receive `TapDetails`.
+Long-press movement receives `LongPressMoveUpdateDetails` with local/root
+displacements from Down; its terminal callback receives `LongPressEndDetails`
+with measured local velocity. These names are exported at the crate root and
+through `flui::interaction`.
 
 `GestureRecognizer` is an open, dyn-compatible extension point with
 `add_pointer(&self, PointerDispatch<'_>)`, `handle_event(&self,

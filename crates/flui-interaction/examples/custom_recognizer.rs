@@ -5,13 +5,18 @@
 //!
 //! Run with `cargo run -p flui-interaction --example custom_recognizer`.
 
-use std::{cell::Cell, rc::Rc};
+use std::{cell::Cell, rc::Rc, sync::Arc, time::Duration};
+
+use flui_foundation::geometry::Point;
+use flui_platform_api::EventTime;
 
 use flui_interaction::{
-    ArenaMembership, CancelOutcome, GestureArenaMember, GestureRecognizer, GestureSettings, Offset,
-    PointerDispatch, PointerEventExt, PointerId, PrimaryContact, RecognizerSet,
+    ArenaMembership, CancelOutcome, GestureArenaMember, GestureRecognizer, GestureSettings,
+    LongPressGestureRecognizer, ManualClock, PointerButton, PointerButtons, PointerDispatch,
+    PointerEventExt, PointerId, PointerInfo, PointerPosition, PointerPress, PointerRelease,
+    PointerSample, PrimaryContact, RecognizerSet,
     arena::GestureArena,
-    events::{PointerEvent, PointerKind, make_down_event_for_id, make_up_event_for_id},
+    events::{PointerEvent, PointerKind},
 };
 
 struct LoggingRecognizer {
@@ -78,7 +83,7 @@ impl GestureRecognizer for LoggingRecognizer {
     }
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arena = GestureArena::new();
     let winner = LoggingRecognizer::new(arena.clone(), "winner", true);
     let loser = LoggingRecognizer::new(arena.clone(), "loser", false);
@@ -87,16 +92,54 @@ fn main() {
     recognizers.attach(&loser);
 
     let pointer = PointerId::new(std::num::NonZeroU64::MIN);
-    let down = make_down_event_for_id(pointer, Offset::ZERO, PointerKind::Touch)
-        .expect("valid fixture sample");
-    let up = make_up_event_for_id(pointer, Offset::ZERO, PointerKind::Touch)
-        .expect("valid fixture sample");
+    let info = PointerInfo::new(pointer, PointerKind::Touch);
+    let position = PointerPosition::try_new(Point::new(12.0, 20.0))?;
+    let down = PointerEvent::Down(PointerPress::new(
+        info,
+        PointerButton::PRIMARY,
+        PointerButtons::NONE,
+        PointerSample::new(EventTime::from_nanos(0), position),
+    ));
+    let up = PointerEvent::Up(PointerRelease::new(
+        info,
+        PointerButton::PRIMARY,
+        PointerButtons::only(PointerButton::PRIMARY),
+        PointerSample::new(EventTime::from_nanos(20_000_000), position),
+    ));
     recognizers.dispatch(PointerDispatch::at_root(&down));
     arena.close(pointer);
     recognizers.dispatch(PointerDispatch::at_root(&up));
+    arena.sweep(pointer);
+    arena.drain_deferred_resolutions();
 
     assert!(winner.won.get(), "the release claimant wins");
     assert!(!loser.won.get(), "the other recognizer loses");
     assert!(arena.is_empty(), "the completed contact releases its arena");
+
+    // A second standalone arena shows idle progression without another packet.
+    // A mounted widget instead acquires GestureArenaScope::of(ctx); its binding
+    // owns this progression and the widget must not create a private arena.
+    let clock = Arc::new(ManualClock::new());
+    let timed_arena = GestureArena::with_clock(clock.clone());
+    let presses = Rc::new(Cell::new(0));
+    let observed = presses.clone();
+    let long_press = LongPressGestureRecognizer::builder(timed_arena.clone())
+        .settings(GestureSettings::default().with_long_press_timeout(Duration::from_millis(500)))
+        .on_long_press(move || observed.set(observed.get() + 1))
+        .build();
+    let mut timed_recognizers = RecognizerSet::default();
+    timed_recognizers.attach(&long_press);
+    timed_recognizers.dispatch(PointerDispatch::at_root(&down));
+    timed_arena.close(pointer);
+    assert!(timed_arena.next_deadline().is_some());
+    clock.advance(Duration::from_millis(500));
+    timed_arena.poll_deadlines();
+    timed_arena.drain_deferred_resolutions();
+    assert_eq!(presses.get(), 1, "stationary contact reaches its deadline");
+    timed_recognizers.dispatch(PointerDispatch::at_root(&up));
+    timed_arena.sweep(pointer);
+    timed_arena.drain_deferred_resolutions();
+    assert!(timed_arena.is_empty());
     println!("custom recognizer attachment demo OK");
+    Ok(())
 }

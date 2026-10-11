@@ -77,7 +77,8 @@ pub struct MultiDragEndDetails {
     pub pointer_id: PointerId,
     /// Final observed root-space position.
     pub global_position: Offset<f64>,
-    /// Velocity on the contact's event clock.
+    /// Measured velocity in receiving-node local logical coordinates, using the
+    /// contact's event clock. The terminal position above is in root space.
     pub velocity: crate::processing::Velocity,
     /// Device kind captured on Down.
     pub kind: PointerKind,

@@ -30,6 +30,23 @@ multi-tap its contact count, and multi-drag its axis. Configure callbacks and
 `.settings(GestureSettings)` before `.build()`, which returns `Rc<Self>`.
 Callbacks are immutable after construction and may capture `Rc` UI state.
 
+Construction alone does not deliver input. For standalone use, keep the strong
+recognizer owner, attach it to `RecognizerSet`, route Down before closing its
+arena, route Up before sweeping, and drain deferred resolutions after routing.
+Route Cancel before abandoning its arena. Idle time must also progress:
+schedule `arena.next_deadline()`, poll due deadlines and drain deferred
+resolutions without waiting for a Move. The runnable
+[custom recognizer example](../examples/custom_recognizer.rs) uses public event
+constructors and a manual clock to demonstrate both terminal and idle delivery;
+it does not require the `testing` feature.
+
+Mounted recognizers acquire `flui_widgets::GestureArenaScope::of(ctx)` during
+lifecycle setup, retain their owners in state and attach through
+`Listener::recognizer`. The presentation's `GestureBinding` supplies the shared
+binding-driven arena and owns its routing and time progression. A private
+`GestureArena::new()` is self-driven and cannot be installed as a presentation
+scope.
+
 Callback detail payloads are `#[non_exhaustive]`: read their public fields or
 use a destructuring pattern with `..`. Existing detail constructors support
 authored payloads where consumers need them; recognizer-produced outputs do
