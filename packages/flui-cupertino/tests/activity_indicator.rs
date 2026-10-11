@@ -26,7 +26,7 @@ fn tick_alphas(laid: &LaidOut) -> Vec<u8> {
     laid.draw_ops()
         .into_iter()
         .filter_map(|command| match command.op {
-            DrawOp::RRect { paint, .. } => Some(paint.color.a),
+            DrawOp::RRect { paint, .. } => Some(paint.color.to_rgba8()[3]),
             _ => None,
         })
         .collect()

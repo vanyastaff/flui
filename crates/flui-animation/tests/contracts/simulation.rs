@@ -349,15 +349,17 @@ fn color_spring_fades_to_transparent_without_darkening() {
     for frame in 0..120 {
         v.advance(std::time::Duration::from_secs_f64(1.0 / 60.0));
         let color = v.value();
-        if color.a > 0 {
+        if !color.is_transparent() {
             assert!(
-                color.r >= 250 && color.g <= 5 && color.b <= 5,
+                color.red_f32() >= 250.0 / 255.0
+                    && color.green_f32() <= 5.0 / 255.0
+                    && color.blue_f32() <= 5.0 / 255.0,
                 "frame {frame}: {color:?} darkened on the way out"
             );
         }
     }
     assert!(v.is_settled());
-    assert_eq!(v.value().a, 0);
+    assert!(v.value().is_transparent());
 }
 
 fn transparent_color_keeps_its_identity_at_rest() {

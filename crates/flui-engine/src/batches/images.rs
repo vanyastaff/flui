@@ -2,7 +2,7 @@
 //! images, repeats, slices and sprites. Quota admission precedes publication.
 use super::{
     super::{
-        command_ir::{AdvancedShapeOp, DrawItem, DrawRun, DrawSegment},
+        command_ir::{AdvancedShapeOp, CachedImageDraw, DrawItem, DrawRun, DrawSegment},
         state_stack::GpuStateStack,
         texture_cache::{TextureCache, TextureKey},
     },
@@ -213,17 +213,19 @@ fn append_image(
     instance: crate::instancing::TextureInstance,
     state: &GpuStateStack,
     mode: BlendMode,
+    filter: Option<crate::image_source_filter::ImageSourceFilter>,
 ) -> bool {
-    segment.cached_images.push((
+    segment.cached_images.push(CachedImageDraw {
         key,
         instance,
-        state.current_scissor(),
-        if mode.is_advanced() {
+        scissor: state.current_scissor(),
+        mode: if mode.is_advanced() {
             BlendMode::SrcOver
         } else {
             mode
         },
-    ));
+        filter,
+    });
     segment.record_run(
         DrawRun::CachedImage(
             segment.cached_images.len().saturating_sub(1)..segment.cached_images.len(),
@@ -283,13 +285,18 @@ impl DrawBatcher {
         {
             return;
         }
-        let filtered = filter.map(|filter| filtered_image(image, filter));
-        let image = filtered.as_ref().unwrap_or(image);
-        let key = if filtered.is_some() {
-            TextureKey::from_data(image.width(), image.height(), image.data())
-        } else {
-            TextureKey::from_image(image)
+        let filter = match filter {
+            Some(filter) => {
+                let Some(filter) =
+                    crate::image_source_filter::ImageSourceFilter::from_filter(filter)
+                else {
+                    return;
+                };
+                Some(filter)
+            }
+            None => None,
         };
+        let key = TextureKey::from_image(image);
         let mode = paint.map_or(BlendMode::SrcOver, |paint| paint.blend_mode);
         let tint = paint.map_or(Color::WHITE, |paint| paint.color);
         let atlas =
@@ -315,6 +322,7 @@ impl DrawBatcher {
                 quad.instance(uv, atlas, tint, state),
                 state,
                 mode,
+                filter,
             );
             return;
         }
@@ -333,6 +341,7 @@ impl DrawBatcher {
                 quad.instance(uv, atlas, tint, state),
                 state,
                 mode,
+                filter,
             ) {
                 return;
             }
@@ -406,6 +415,7 @@ impl DrawBatcher {
                         quad.instance(uv, atlas, tint, state),
                         state,
                         mode,
+                        filter,
                     ) {
                         return;
                     }
@@ -595,6 +605,7 @@ impl DrawBatcher {
                     quad.instance(uv, atlas, tint, state),
                     state,
                     mode,
+                    None,
                 ) {
                     return;
                 }
@@ -669,20 +680,14 @@ impl DrawBatcher {
                 .and_then(|c| c.get(index))
                 .copied()
                 .unwrap_or(Color::WHITE);
-            let tint = paint.map_or(tint, |p| {
-                Color::rgba(
-                    ((u16::from(tint.r) * u16::from(p.color.r) + 127) / 255) as u8,
-                    ((u16::from(tint.g) * u16::from(p.color.g) + 127) / 255) as u8,
-                    ((u16::from(tint.b) * u16::from(p.color.b) + 127) / 255) as u8,
-                    ((u16::from(tint.a) * u16::from(p.color.a) + 127) / 255) as u8,
-                )
-            });
+            let tint = paint.map_or(tint, |p| tint.multiply(p.color));
             if !append_image(
                 &mut content,
                 key.clone(),
                 quad.instance(uv, atlas, tint, state),
                 state,
                 mode,
+                None,
             ) {
                 return;
             }
@@ -748,47 +753,4 @@ impl DrawBatcher {
             state.clip_chain(),
         );
     }
-}
-
-/// Filters decoded straight channels before tinting and premultiplication.
-fn filtered_image(image: &Image, filter: ColorFilter) -> Image {
-    let mut data = Vec::with_capacity(image.data().len());
-    for pixel in image.data().as_chunks::<4>().0 {
-        match filter {
-            ColorFilter::Mode { color, blend_mode } => {
-                let value = color.blend(
-                    Color::rgba(pixel[0], pixel[1], pixel[2], pixel[3]),
-                    blend_mode,
-                );
-                data.extend_from_slice(&[value.r, value.g, value.b, value.a]);
-            }
-            ColorFilter::Matrix(matrix) => {
-                let channels = pixel.map(|v| f32::from(v) / 255.0);
-                for row in matrix.values.as_chunks::<5>().0 {
-                    let value = (row[0] * channels[0]
-                        + row[1] * channels[1]
-                        + row[2] * channels[2]
-                        + row[3] * channels[3]
-                        + row[4])
-                        .clamp(0.0, 1.0);
-                    data.push((value * 255.0) as u8);
-                }
-            }
-            ColorFilter::LinearToSrgbGamma | ColorFilter::SrgbToLinearGamma => {
-                for channel in &pixel[..3] {
-                    let value = f32::from(*channel) / 255.0;
-                    let value = match filter {
-                        ColorFilter::LinearToSrgbGamma if value <= 0.003_130_8 => value * 12.92,
-                        ColorFilter::LinearToSrgbGamma => 1.055 * value.powf(1.0 / 2.4) - 0.055,
-                        _ if value <= 0.04045 => value / 12.92,
-                        _ => ((value + 0.055) / 1.055).powf(2.4),
-                    };
-                    data.push((value.clamp(0.0, 1.0) * 255.0) as u8);
-                }
-                data.push(pixel[3]);
-            }
-            _ => return image.clone(),
-        }
-    }
-    Image::from_rgba8(image.width(), image.height(), data)
 }

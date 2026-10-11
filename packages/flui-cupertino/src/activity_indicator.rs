@@ -194,7 +194,7 @@ impl CustomPainter for TickPainter {
         canvas.translate(size.width / 2.0, size.height / 2.0);
         for index in 0..TICKS {
             let alpha = self.phases.alpha(index, elapsed);
-            let color = Color::rgba(self.color.r, self.color.g, self.color.b, alpha);
+            let color = self.color.with_alpha(alpha);
             canvas.draw_rrect(tick, &Paint::fill(color));
             canvas.rotate(TAU / f64::from(TICKS));
         }

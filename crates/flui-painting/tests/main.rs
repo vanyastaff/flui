@@ -235,6 +235,19 @@ fn color_contract() {
         "color",
         &[
             (
+                "fractional_channels_survive_color_operations",
+                color_property::fractional_channels_survive_color_operations,
+            ),
+            (
+                "normalized_admission_and_hashing_are_canonical",
+                color_property::normalized_admission_and_hashing_are_canonical,
+            ),
+            #[cfg(feature = "serde")]
+            (
+                "color_wire_validates_normalized_units_before_narrowing",
+                color_property::color_wire_validates_normalized_units_before_narrowing,
+            ),
+            (
                 "hex_roundtrips_and_porter_duff_modes_mirror",
                 color_property::hex_roundtrips_and_porter_duff_modes_mirror,
             ),
@@ -249,6 +262,10 @@ fn color_contract() {
             (
                 "channels_round_to_the_nearest_step",
                 color_property::channels_round_to_the_nearest_step,
+            ),
+            (
+                "contrast_selection_uses_linear_relative_luminance",
+                color_property::contrast_selection_uses_linear_relative_luminance,
             ),
         ],
     );
@@ -288,6 +305,10 @@ fn value_contract() {
     run_cases(
         "value",
         &[
+            (
+                "color_matrix_checks_intermediate_overflow",
+                values::color_matrix_checks_intermediate_overflow,
+            ),
             (
                 "radial_overshoot_refuses_coincident_nonzero_circles",
                 values::radial_overshoot_refuses_coincident_nonzero_circles,

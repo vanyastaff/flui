@@ -359,11 +359,11 @@ fn resolve_background_color(
         }
         ButtonFillStyle::Plain | ButtonFillStyle::Filled => {
             let alpha = match view.color {
-                Some(CupertinoColor::Static(color)) => color.a,
-                Some(CupertinoColor::Dynamic(dynamic)) => dynamic.color.a,
-                None => 255,
+                Some(CupertinoColor::Static(color)) => color.opacity(),
+                Some(CupertinoColor::Dynamic(dynamic)) => dynamic.color.opacity(),
+                None => 1.0,
             };
-            base_color.with_alpha(alpha)
+            base_color.with_opacity(f64::from(alpha))
         }
     })
 }

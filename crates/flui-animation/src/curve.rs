@@ -37,6 +37,7 @@ use std::sync::Arc;
 ///
 /// impl Curve for MyCurve {
 ///     fn transform(&self, t: f64) -> f64 {
+///         let t = t.clamp(0.0, 1.0);
 ///         t * t // quadratic ease-in
 ///     }
 /// }
@@ -45,6 +46,9 @@ use std::sync::Arc;
 /// assert_eq!(curve.transform(0.0), 0.0);
 /// assert_eq!(curve.transform(0.5), 0.25);
 /// assert_eq!(curve.transform(1.0), 1.0);
+/// assert_eq!(curve.transform(-0.5), 0.0);
+/// assert_eq!(curve.transform(f64::INFINITY), 1.0);
+/// assert!(curve.transform(f64::NAN).is_nan());
 /// ```
 pub trait Curve {
     /// Returns the eased progress at progress `t`, following the input

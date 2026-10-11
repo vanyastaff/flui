@@ -65,12 +65,7 @@ const INDICATOR_HEIGHT_PX: f64 = 56.0;
 
 /// Indicator background colour: Material Blue 500 at 80 % opacity.
 /// DEFERRED (v1): theming / custom indicator builders.
-const INDICATOR_COLOR: Color = Color {
-    r: 33,
-    g: 150,
-    b: 243,
-    a: 204,
-};
+const INDICATOR_COLOR: Color = Color::rgba(33, 150, 243, 204);
 
 // ---------------------------------------------------------------------------
 // RefreshControllerInner — Arc-shared state

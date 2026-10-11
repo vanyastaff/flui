@@ -117,7 +117,7 @@ impl DrawBatcher {
             return;
         }
 
-        let alpha_per_layer = f32::from(color.a) / num_layers as f32;
+        let alpha_per_layer = color.opacity() / num_layers as f32;
 
         // Prime the tessellator's flatten tolerance to the current CTM scale so
         // shadow curves don't facet on HiDPI / scaled frames. The per-layer
@@ -131,8 +131,8 @@ impl DrawBatcher {
             let offset_scale = (i as f32 + 1.0) / num_layers as f32;
             let current_blur = blur_radius * offset_scale;
 
-            let shadow_alpha = (alpha_per_layer * (1.0 - offset_scale * 0.5)) as u8;
-            let shadow_color = Color::rgba(color.r, color.g, color.b, shadow_alpha);
+            let shadow_alpha = alpha_per_layer * (1.0 - offset_scale * 0.5);
+            let shadow_color = color.with_opacity(f64::from(shadow_alpha));
             let shadow_paint = Paint::fill(shadow_color);
 
             // Push a per-layer translate so the tessellated geometry is baked
@@ -209,8 +209,7 @@ impl DrawBatcher {
 
         // Material's `shadowColor` is opaque black, but a real elevation shadow
         // is a translucent penumbra — soften the core to a Material-like alpha.
-        let alpha = ((f32::from(color.a) / 255.0) * 0.32 * 255.0).round() as u8;
-        let shadow_color = Color::rgba(color.r, color.g, color.b, alpha);
+        let shadow_color = color.with_opacity(f64::from(color.opacity()) * 0.32);
 
         let params = crate::effects::ShadowParams::new(offset, blur_sigma, shadow_color);
         Self::draw_shadow_rect(
@@ -512,7 +511,7 @@ impl DrawBatcher {
 
                 Vertex {
                     position: [(pos.x as f32), (pos.y as f32)],
-                    color: color.to_f32_array(),
+                    color: color.to_rgba_f32_array(),
                     tex_coord: (uv).map(|v| v as f32),
                 }
             })

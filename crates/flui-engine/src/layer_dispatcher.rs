@@ -770,10 +770,9 @@ impl LayerStateStack for LayerDispatcher<'_> {
 
     fn push_opacity(&mut self, alpha: f32) {
         self.flush_active_transform();
-        // Create a layer with opacity (clamped to [0, 255]).
+        // Keep normalized opacity continuous until composition.
         // Blend mode defaults to SrcOver via Paint::fill.
-        let alpha_u8 = (alpha.clamp(0.0, 1.0) * 255.0) as u8;
-        let paint = Paint::fill(Color::WHITE).with_alpha(alpha_u8);
+        let paint = Paint::fill(Color::WHITE.with_opacity(f64::from(alpha)));
         self.painter.save_layer(None, &paint);
     }
 
@@ -783,10 +782,7 @@ impl LayerStateStack for LayerDispatcher<'_> {
         // compositor reads it from `paint.blend_mode`: an advanced mode takes
         // the dst-read path, and any other mode composites the layer's whole
         // region (the clip, as the layer is unbounded) with its own factors.
-        let alpha_u8 = (alpha.clamp(0.0, 1.0) * 255.0) as u8;
-        let paint = Paint::fill(Color::WHITE)
-            .with_alpha(alpha_u8)
-            .with_blend_mode(blend);
+        let paint = Paint::fill(Color::WHITE.with_opacity(f64::from(alpha))).with_blend_mode(blend);
         self.painter.save_layer(None, &paint);
     }
 
@@ -828,7 +824,7 @@ impl LayerStateStack for LayerDispatcher<'_> {
                 self.painter.save_layer_with_filter(
                     None,
                     LayerFilter::Mode {
-                        color: color.to_f32_array(),
+                        color: color.to_rgba_f32_array(),
                         blend_mode: *blend_mode,
                     },
                 );

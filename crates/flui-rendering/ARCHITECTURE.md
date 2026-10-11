@@ -466,8 +466,15 @@ reverted. The one place the protocols genuinely diverge is the
 never sets `transform`, so the transform arm of `own_effect_layers` stays
 unexercised for slivers.
 
-**Known gap:** neither opacity render object has an `always_include_semantics`
-field. Both report semantics unconditionally on a visibility flip.
+The static opacity objects retain child semantics; neither exposes an
+`always_include_semantics` flag. The animated box and sliver variants visit
+child semantics when their accepted opacity is positive or that flag is set.
+A zero crossing publishes the sample and admits all required paint, compositing and
+semantics work together before waking the owner. The public harness row
+`harness_animated_opacity_semantics_follow_accepted_visibility` covers both
+protocols, both flag values and repeated visibility changes. The opacity
+completion rows also cover final semantics delivery after channel backpressure
+or a failing wake, when no later animation sample can retry.
 
 **`RenderTransform`.** A transform change is also served as a layer update.
 The transitions (`SlideTransition`, `ScaleTransition`, `RotationTransition`)

@@ -81,7 +81,7 @@ pub(crate) enum LayerFilter {
     /// applied in straight sRGB space.
     ///
     /// `color` is the **filter** color in straight sRGB `[f32; 4]` (pre-converted
-    /// from [`flui_painting::styling::Color`] via [`flui_painting::styling::Color::to_f32_array`] at the
+    /// from [`flui_painting::styling::Color`] via [`flui_painting::styling::Color::to_rgba_f32_array`] at the
     /// call site).  The GPU shader unpremultiplies the layer pixel, computes
     /// `blend(src=color, dst=straight_pixel, mode)`, clamps to `[0, 1]`, and
     /// repremultiplies.
@@ -573,6 +573,16 @@ pub(crate) struct SavedLayer {
     pub(crate) composite_clip: Option<GroupClip>,
 }
 
+/// A decoded image draw retains source identity and floating filter parameters.
+#[derive(Debug, Clone)]
+pub(crate) struct CachedImageDraw {
+    pub(crate) key: TextureKey,
+    pub(crate) instance: TextureInstance,
+    pub(crate) scissor: ScissorRect,
+    pub(crate) mode: flui_painting::BlendMode,
+    pub(crate) filter: Option<crate::image_source_filter::ImageSourceFilter>,
+}
+
 // ─── Draw segment ─────────────────────────────────────────────────────────────
 
 /// A segment of draw commands that share the same rendering phase ordering.
@@ -636,16 +646,10 @@ pub(crate) struct DrawSegment {
     pub(crate) sweep_gradient_runs: crate::recording_budget::BudgetVec<GradientRun>,
     /// Cached image draws queued for this segment.
     ///
-    /// The third element is the scissor rect active at draw time, forwarded to
-    /// image replay so clipped images do not spill outside their clip region.
-    /// The fourth is the fixed-function mode; advanced groups record SrcOver
-    /// internally and apply their operator once at the group boundary.
-    pub(crate) cached_images: crate::recording_budget::BudgetVec<(
-        TextureKey,
-        TextureInstance,
-        ScissorRect,
-        flui_painting::BlendMode,
-    )>,
+    /// Advanced groups record SrcOver internally and apply their operator once
+    /// at the group boundary. Each decoded tap is filtered before interpolation
+    /// and tint.
+    pub(crate) cached_images: crate::recording_budget::BudgetVec<CachedImageDraw>,
     /// Allocation, alpha and sampling are frozen at recording. Texel contents
     /// remain live: writes into the same allocation are visible at submission.
     pub(crate) external_images: crate::recording_budget::BudgetVec<(

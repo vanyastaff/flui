@@ -215,6 +215,43 @@ fn observers_do_not_prolong_the_run_or_its_seat() {
     assert!(!view.is_animating());
 }
 
+fn color_motion_publishes_fractional_running_samples() {
+    use flui_painting::styling::Color;
+    let registry = Vsync::new();
+    let mut clock = MotionClock::new();
+    let mut value = AnimatedValue::new(
+        Color::WHITE.with_opacity(0.0),
+        curve(curves::LINEAR),
+        Some(&registry),
+    )
+    .unwrap();
+    let view = value.animation();
+    let run = value.animate_to(Color::WHITE).unwrap();
+    registry.tick_all(&clock.frame(Duration::ZERO));
+    // A fresh value has zero velocity: its curve segment joins both resting
+    // endpoints with the cubic Hermite correction, even for a linear curve.
+    for micros in [30_000, 40_000] {
+        registry.tick_all(&clock.frame(Duration::from_micros(micros)));
+        let sample = view.value();
+        assert!(run.is_pending() && view.is_animating());
+        assert_eq!(sample, value.value());
+        let t = f64::from(micros as u32) / 1_000_000.0;
+        let expected = t * t * (3.0 - 2.0 * t);
+        assert!(
+            (f64::from(sample.opacity()) - expected).abs() < 1e-8,
+            "{micros}us: {sample:?}"
+        );
+        assert!(
+            sample.to_rgba_f32_array()[..3]
+                .iter()
+                .all(|channel| *channel > 0.999)
+        );
+    }
+    registry.tick_all(&clock.frame(Duration::from_secs(1)));
+    assert!(run.is_complete());
+    assert_eq!(view.value(), Color::WHITE);
+}
+
 fn an_equivalent_motion_target_still_publishes_its_exact_value() {
     use flui_foundation::Listenable;
     use flui_painting::styling::Color;
@@ -534,6 +571,10 @@ fn owning_animated_value_contract() {
         (
             "equivalent motion publishes exact target",
             an_equivalent_motion_target_still_publishes_its_exact_value,
+        ),
+        (
+            "color motion publishes fractional running samples",
+            color_motion_publishes_fractional_running_samples,
         ),
         (
             "owner release stops remaining callouts",

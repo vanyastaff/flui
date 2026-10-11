@@ -91,12 +91,7 @@ const ELEVATION: f64 = 1.0;
 /// M3 default corner radius on the drawer's end-facing edge.
 const CORNER_RADIUS: f64 = 16.0;
 /// `Colors.black54` (`material/colors.dart`) — the default drawer scrim.
-const BLACK54: Color = Color {
-    r: 0,
-    g: 0,
-    b: 0,
-    a: 0x8A,
-};
+const BLACK54: Color = Color::rgba(0, 0, 0, 0x8A);
 
 /// Which edge of the [`crate::Scaffold`] a drawer slides in from.
 ///

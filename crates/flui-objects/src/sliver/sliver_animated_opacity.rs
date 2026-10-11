@@ -77,21 +77,12 @@ impl RenderSliverAnimatedOpacity {
         }
     }
 
-    /// Returns the current cached alpha (`0..=255`).
+    /// Returns the accepted opacity in `0.0..=1.0`, refreshed on animation
+    /// notifications and construction or attachment.
     #[inline]
     #[must_use]
-    pub fn alpha(&self) -> u8 {
+    pub fn opacity(&self) -> f64 {
         self.alpha.get()
-    }
-
-    /// The composed animation's raw `f64` value, bypassing the `u8` alpha
-    /// cache's `1/255` quantization. See
-    /// [`RenderAnimatedOpacity::opacity_value`](crate::RenderAnimatedOpacity::opacity_value)
-    /// for why this exists.
-    #[inline]
-    #[must_use]
-    pub fn opacity_value(&self) -> f64 {
-        self.animation.value()
     }
 
     /// Whether child semantics are included regardless of alpha.
@@ -99,14 +90,6 @@ impl RenderSliverAnimatedOpacity {
     #[must_use]
     pub fn always_include_semantics(&self) -> bool {
         self.always_include_semantics
-    }
-
-    /// Whether `alpha` sits in the "layered" range `(0, 255)`. See
-    /// [`RenderAnimatedOpacity`](crate::RenderAnimatedOpacity)'s
-    /// `is_layered` doc for the rationale — identical rule here.
-    #[inline]
-    fn is_layered(alpha: u8) -> bool {
-        alpha > 0 && alpha < 255
     }
 
     /// Recomputes `alpha` and marks the node dirty through `handle`. See
@@ -125,7 +108,7 @@ impl RenderSliverAnimatedOpacity {
 impl std::fmt::Debug for RenderSliverAnimatedOpacity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RenderSliverAnimatedOpacity")
-            .field("alpha", &self.alpha())
+            .field("opacity", &self.opacity())
             .field("always_include_semantics", &self.always_include_semantics)
             .finish_non_exhaustive()
     }
@@ -133,7 +116,7 @@ impl std::fmt::Debug for RenderSliverAnimatedOpacity {
 
 impl flui_foundation::Diagnosticable for RenderSliverAnimatedOpacity {
     fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_default_double("opacity", f64::from(self.alpha()) / 255.0, 1.0, None);
+        builder.add_default_double("opacity", self.opacity(), 1.0, None);
         builder.add_flag(
             "always_include_semantics",
             self.always_include_semantics,
@@ -173,19 +156,19 @@ impl RenderSliver for RenderSliverAnimatedOpacity {
     // comment on that override for the walk's mechanics). The box variant,
     // `RenderAnimatedOpacity`, carries the analogous override for the same
     // reason — see its own comment for the predicate used
-    // (`is_layered`, `0 < alpha < 255`) and why.
+    // (`is_layered`, `0 < alpha < 1`) and why.
     fn always_needs_compositing(&self) -> bool {
-        Self::is_layered(self.alpha())
+        OpacitySample::is_layered(self.opacity())
     }
 
     // The whole point of this object: the pipeline reads paint_effects
     // through `&dyn RenderObject<SliverProtocol>`; the blanket impl forwards
     // here.
     fn paint_effects(&self, _size: Size) -> PaintEffects {
-        let alpha = self.alpha();
-        // None when fully opaque (255) or fully transparent (0): neither
+        let alpha = self.opacity();
+        // None when fully opaque (1) or fully transparent (0): neither
         // requires an OpacityLayer.
-        if alpha == 255 || alpha == 0 {
+        if alpha == 1.0 || alpha == 0.0 {
             PaintEffects::NONE
         } else {
             PaintEffects::NONE.with_opacity(PaintOpacity::new(alpha))
@@ -193,7 +176,11 @@ impl RenderSliver for RenderSliverAnimatedOpacity {
     }
 
     fn skip_paint(&self) -> bool {
-        self.alpha() == 0
+        self.opacity() == 0.0
+    }
+
+    fn visits_child_for_semantics(&self, _child_slot: usize) -> bool {
+        self.always_include_semantics || self.opacity() > 0.0
     }
 
     fn attach(&mut self, handle: LocalRenderInvalidationHandle) {

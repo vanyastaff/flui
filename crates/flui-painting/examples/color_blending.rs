@@ -90,9 +90,9 @@ fn color_mixing_example() {
             "   t={:.1}: {} (R:{}, G:{}, B:{})",
             t,
             mixed.to_hex(),
-            mixed.r,
-            mixed.g,
-            mixed.b
+            mixed.to_rgba8()[0],
+            mixed.to_rgba8()[1],
+            mixed.to_rgba8()[2]
         );
     }
 
@@ -107,15 +107,19 @@ fn alpha_blending_example() {
 
     println!("   Blending semi-transparent red over white background:");
     println!("   Background: {}", background.to_hex());
-    println!("   Foreground: {:?} (alpha={})", foreground, foreground.a);
+    println!(
+        "   Foreground: {:?} (alpha={})",
+        foreground,
+        foreground.opacity()
+    );
 
     let blended = foreground.blend_over(background);
     println!(
         "   Result: {} (R:{}, G:{}, B:{})",
         blended.to_hex(),
-        blended.r,
-        blended.g,
-        blended.b
+        blended.to_rgba8()[0],
+        blended.to_rgba8()[1],
+        blended.to_rgba8()[2]
     );
 
     println!("\n   Multiple layers:");

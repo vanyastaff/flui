@@ -32,7 +32,7 @@ impl GradientStop {
     /// Create a new gradient stop. `position` is clamped to `0.0..=1.0`.
     #[must_use]
     pub(crate) fn new(color: Color, position: f32) -> Self {
-        Self::from_rgba(color.to_rgba_f32().into(), position)
+        Self::from_rgba(color.to_rgba_f32_array(), position)
     }
 
     /// Create a stop from straight RGBA channels, each in `0.0..=1.0`.

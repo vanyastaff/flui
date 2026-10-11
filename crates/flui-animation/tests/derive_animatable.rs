@@ -49,11 +49,13 @@ fn nested_fields_keep_their_interpolation_contracts() {
     assert_eq!(middle.0.position, Offset::new(10.0, 20.0));
     assert_eq!(middle.1, 4.0);
     assert!(
-        middle.0.color.r >= 254 && middle.0.color.g <= 1 && middle.0.color.b <= 1,
+        middle.0.color.red_f32() >= 254.0 / 255.0
+            && middle.0.color.green_f32() <= 1.0 / 255.0
+            && middle.0.color.blue_f32() <= 1.0 / 255.0,
         "transparent blue cannot muddy the red fade: {:?}",
         middle.0.color
     );
-    assert!((i16::from(middle.0.color.a) - 128).abs() <= 1);
+    assert!((middle.0.color.opacity() - 0.5).abs() < 1e-6);
     let rebuilt = NestedAppearance::from_vector([2.0, -4.0, 0.0, 0.0, 0.0, 0.0, 0.75]);
     assert_eq!(rebuilt.0.position, Offset::new(2.0, -4.0));
     assert_eq!(rebuilt.0.color, Color::TRANSPARENT);
@@ -94,8 +96,8 @@ fn nested_values_retarget_on_one_registered_motion() {
     vsync.tick_all(&clock.frame(Duration::from_millis(500)));
     let seam = (owner.value(), owner.velocity());
     assert!(seam.0.0.position.dx > 0.0 && seam.0.0.position.dy > 0.0);
-    assert!(seam.0.0.color.r >= 253 && seam.0.0.color.b <= 2);
-    assert!(seam.0.0.color.a > 0 && seam.0.0.color.a < 255);
+    assert!(seam.0.0.color.red_f32() >= 253.0 / 255.0 && seam.0.0.color.blue_f32() <= 2.0 / 255.0);
+    assert!(seam.0.0.color.opacity() > 0.0 && seam.0.0.color.opacity() < 1.0);
     let second = owner
         .animate_to(NestedAppearance(
             Appearance {

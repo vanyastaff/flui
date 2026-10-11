@@ -68,7 +68,7 @@ mod gpu_tests {
     /// CPU oracle: `Color::blend(src, dst, mode)` → premultiplied RGBA u8.
     fn oracle_premultiplied(src_straight: Color, dst_straight: Color, mode: BlendMode) -> [u8; 4] {
         let result = src_straight.blend(dst_straight, mode);
-        let [r, g, b, a] = result.to_f32_array();
+        let [r, g, b, a] = result.to_rgba_f32_array();
         let to_u8 = |channel: f32| (channel.clamp(0.0, 1.0) * 255.0).round() as u8;
         [to_u8(r * a), to_u8(g * a), to_u8(b * a), to_u8(a)]
     }

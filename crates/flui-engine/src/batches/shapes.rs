@@ -112,13 +112,9 @@ impl DrawBatcher {
 
         if paint.style == PaintStyle::Fill {
             let color = if opacity < 1.0 {
-                let alpha = (f32::from(paint.color.a) * opacity) as u8;
-                flui_painting::styling::Color::rgba(
-                    paint.color.r,
-                    paint.color.g,
-                    paint.color.b,
-                    alpha,
-                )
+                paint
+                    .color
+                    .with_opacity(f64::from(paint.color.opacity() * opacity))
             } else {
                 paint.color
             };
@@ -299,13 +295,9 @@ impl DrawBatcher {
 
         if paint.style == PaintStyle::Fill {
             let color = if opacity < 1.0 {
-                let alpha = (f32::from(paint.color.a) * opacity) as u8;
-                flui_painting::styling::Color::rgba(
-                    paint.color.r,
-                    paint.color.g,
-                    paint.color.b,
-                    alpha,
-                )
+                paint
+                    .color
+                    .with_opacity(f64::from(paint.color.opacity() * opacity))
             } else {
                 paint.color
             };
@@ -467,13 +459,9 @@ impl DrawBatcher {
 
         if paint.style == PaintStyle::Fill {
             let color = if opacity < 1.0 {
-                let alpha = (f32::from(paint.color.a) * opacity) as u8;
-                flui_painting::styling::Color::rgba(
-                    paint.color.r,
-                    paint.color.g,
-                    paint.color.b,
-                    alpha,
-                )
+                paint
+                    .color
+                    .with_opacity(f64::from(paint.color.opacity() * opacity))
             } else {
                 paint.color
             };
@@ -643,8 +631,9 @@ impl DrawBatcher {
         // Fold the compositor layer opacity into the color (the instanced pipeline
         // has no opacity uniform), mirroring `rect`/`rrect`/`circle`.
         let color = if opacity < 1.0 {
-            let alpha = (f32::from(paint.color.a) * opacity) as u8;
-            flui_painting::styling::Color::rgba(paint.color.r, paint.color.g, paint.color.b, alpha)
+            paint
+                .color
+                .with_opacity(f64::from(paint.color.opacity() * opacity))
         } else {
             paint.color
         };
@@ -833,13 +822,9 @@ impl DrawBatcher {
             // Fold compositor layer opacity into the color alpha (the instanced
             // pipeline has no opacity uniform), mirroring `rect`/`circle`/`oval`.
             let color = if opacity < 1.0 {
-                let alpha = (f32::from(paint.color.a) * opacity) as u8;
-                flui_painting::styling::Color::rgba(
-                    paint.color.r,
-                    paint.color.g,
-                    paint.color.b,
-                    alpha,
-                )
+                paint
+                    .color
+                    .with_opacity(f64::from(paint.color.opacity() * opacity))
             } else {
                 paint.color
             };

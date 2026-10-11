@@ -993,6 +993,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "color"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ec7c5eb7a16992b1904d76c517d170ab353b0e0b3d5a0c81a8a0cd1037893cf"
+
+[[package]]
 name = "color_quant"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2151,6 +2157,7 @@ dependencies = [
 name = "flui-painting"
 version = "0.2.0-dev"
 dependencies = [
+ "color",
  "criterion",
  "flui-foundation",
  "flui-painting",

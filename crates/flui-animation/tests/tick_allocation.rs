@@ -222,7 +222,7 @@ fn a_steady_state_frame_allocates_nothing() {
         !nested.is_settled()
             && final_nested.0.position.dx > start_nested.0.position.dx
             && final_nested.0.position.dy > start_nested.0.position.dy
-            && final_nested.0.color.a < start_nested.0.color.a
+            && final_nested.0.color.opacity() < start_nested.0.color.opacity()
             && final_nested.1 > start_nested.1,
         "the nested geometry, color and scalar must advance during measurement"
     );

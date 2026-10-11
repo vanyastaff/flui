@@ -144,7 +144,8 @@ fn nested_custom_motion_repaints_and_retargets_through_the_facade() {
     assert_paint_only(&mut laid);
     let seam = sample(&laid);
     assert_eq!(seam.0, Rect::from_origin_size(Point::new(10.0, 20.0), Size::new(15.0, 10.0)));
-    assert!(seam.1.r >= 254 && seam.1.b <= 1 && (i16::from(seam.1.a) - 128).abs() <= 1);
+    let [red, _, blue, alpha] = seam.1.to_rgba_f32_array();
+    assert!(red >= 0.999 && blue <= 0.001 && (alpha - 0.5).abs() <= 1e-6);
     let velocity = owner.velocity();
     let second = owner.animate_to(CardMotion(
         Appearance { position: Offset::new(-20.0, -40.0), color: Color::rgb(0, 255, 0) },

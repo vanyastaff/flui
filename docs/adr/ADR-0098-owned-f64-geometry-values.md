@@ -6,6 +6,8 @@
 - **Date:** 2026-09-28
 - **Superseded-by:** [ADR-0149](ADR-0149-interpolation-contracts.md), in part: §7's `Color::lerp`
   bullet (colour now interpolates in Oklab, premultiplied)
+  and [ADR-0194](ADR-0194-continuous-color-and-opacity.md), the implementation-status
+  deferral of normalized `Color` storage only.
 - **Related:** [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) (kept as is: this
   record needs no exception to it), [ADR-0077](ADR-0077-migrate-to-parley.md),
   [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md),
@@ -287,7 +289,10 @@ What is deferred, each with its reason:
 - **`Color` in `f32` storage behind the `color` crate, and gradient interpolation spaces**
   (Oklab, premultiplied). `Color` stays four `u8` channels, which are already lawfully
   `Eq + Hash`; wide-gamut and gradient-space work change the engine's shaders and belong
-  together. peniko is not added: the display list stores no peniko type.
+  together. This storage deferral is superseded by ADR-0194: normalized sRGB storage
+  is implemented independently of wide-gamut support. Wide-gamut and alternative
+  gradient-space work remain deferred. peniko is not added: the display list stores
+  no peniko type.
 - **Pruning `Vec2`, `Bounds`, `Circle`** and the scalar traits to their consumers.
 
 ## Alternatives considered

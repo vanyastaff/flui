@@ -25,7 +25,7 @@ fn main() {
     assert_eq!(<Motion<7> as TwoWayConverter>::Vector::COMPONENTS, 7);
     let midpoint = start.lerp_to(&finish, 0.5);
     assert_eq!(midpoint.0.position, Offset::new(2.0, 4.0));
-    assert_eq!(midpoint.0.color.r, 255);
+    assert!(midpoint.0.color.red_f32() > 0.999);
     let restored = Motion::<7>::from_vector(midpoint.to_vector());
     assert_eq!(restored.0.position, midpoint.0.position);
     assert_eq!(restored.1, 0.5);

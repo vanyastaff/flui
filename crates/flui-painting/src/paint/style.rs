@@ -298,7 +298,7 @@ impl Paint {
     #[must_use]
     #[inline]
     pub const fn is_opaque(&self) -> bool {
-        self.color.a == 255
+        self.color.is_opaque()
             && matches!(self.blend_mode, BlendMode::SrcOver | BlendMode::Src)
             && self.shader.is_none()
     }
@@ -307,7 +307,7 @@ impl Paint {
     #[must_use]
     #[inline]
     pub const fn is_transparent(&self) -> bool {
-        self.color.a == 0
+        self.color.is_transparent()
     }
 
     /// Sets the alpha channel.

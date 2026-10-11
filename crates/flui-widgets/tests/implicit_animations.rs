@@ -291,7 +291,16 @@ pub(crate) fn container_color_retarget_preserves_painted_alpha_progress() {
     );
     laid.pump_widget(tree(Color::WHITE, ArcCurve::new(curves::LINEAR)));
     laid.pump_for(Duration::from_millis(1));
-    laid.pump_for(Duration::from_millis(250));
+    for (delta, t) in [(30, 0.03_f64), (10, 0.04)] {
+        laid.pump_for(Duration::from_millis(delta));
+        let expected = t * t * (3.0 - 2.0 * t);
+        assert!(
+            (alpha(&laid) - expected).abs() < 1e-8,
+            "implicit container must record fractional alpha: {} vs {expected}",
+            alpha(&laid)
+        );
+    }
+    laid.pump_for(Duration::from_millis(210));
     let h = Duration::from_millis(20);
     let previous = alpha(&laid);
     laid.pump_for(h);

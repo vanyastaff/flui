@@ -43,13 +43,15 @@ fn exercise_button_fade_migration(releasing: bool) {
 
     let paint_alpha = |laid: &common::LaidOut, render| {
         laid.pipeline_owner().with(|owner| {
-            owner
-                .render_tree()
-                .get(render)
-                .expect("the fade remains mounted")
-                .paint_effects()
-                .opacity
-                .map(|opacity| opacity.alpha)
+            Some(
+                owner
+                    .render_tree()
+                    .get(render)
+                    .expect("the fade remains mounted")
+                    .paint_effects()
+                    .opacity?
+                    .alpha(),
+            )
         })
     };
 
@@ -83,7 +85,7 @@ fn exercise_button_fade_migration(releasing: bool) {
         "active {phase} fade: {before}"
     );
     let painted_before = paint_alpha(&laid, fade).expect("the active fade composites opacity");
-    assert!((f64::from(painted_before) / 255.0 - before).abs() <= 1.0 / 255.0);
+    assert_eq!(painted_before, before, "the layer retains accepted opacity");
     assert!(old.has_running());
     assert_eq!(taps.get(), 1);
 

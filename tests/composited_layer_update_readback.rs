@@ -573,6 +573,356 @@ fn a_slide_tick_moves_pixels_without_rebuilding() {
     }
 }
 
+/// Fractional edge coverage must apply before the final framebuffer quantization.
+fn a_color_tween_preserves_sub_byte_alpha_until_rasterization() {
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    use flui::painting::{Canvas, CustomPainter, Paint, SemanticsBuilder};
+    use flui_animation::ext::AnimatableExt;
+    use flui_animation::{Animation, AnimationController, ColorTween};
+    use flui_foundation::{Listenable, geometry::Rect};
+    use flui_painting::styling::Color;
+    use flui_testing::{HeadlessBinding, MountOptions, MountOwners};
+    use flui_widgets::{CustomPaint, FocusRoot, GestureArenaScope};
+
+    #[derive(Debug)]
+    struct FadePainter(Rc<dyn Animation<Color>>, Rc<std::cell::Cell<Option<Color>>>);
+
+    impl CustomPainter for FadePainter {
+        fn paint(&self, canvas: &mut Canvas, size: Size) {
+            self.1.set(Some(self.0.value()));
+            canvas.draw_rect(
+                Rect::from_xywh(0.0, 0.0, size.width, size.height),
+                &Paint::fill(Color::BLACK),
+            );
+            canvas.draw_rect(
+                Rect::from_xywh(1.5, 1.0, 13.5, 14.0),
+                &Paint::fill(self.0.value()),
+            );
+        }
+
+        fn should_repaint(&self, _old: &dyn CustomPainter) -> bool {
+            false
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn repaint(&self) -> Option<Rc<dyn Listenable>> {
+            Some(self.0.clone())
+        }
+
+        fn semantics_builder(&self) -> Option<SemanticsBuilder> {
+            None
+        }
+    }
+
+    let mut binding = HeadlessBinding::new();
+    let owner =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(binding.vsync()));
+    let scalar: Rc<dyn Animation<f64>> = Rc::new(owner.controller().clone());
+    let color =
+        Rc::new(ColorTween::new(Color::rgba(255, 255, 255, 0), Color::WHITE).animate(scalar));
+    let painted = Rc::new(std::cell::Cell::new(None));
+    let root = GestureArenaScope::new(
+        binding.arena().clone(),
+        FocusRoot::new(
+            CustomPaint::new()
+                .size(Size::new(16.0, 16.0))
+                .painter(Rc::new(FadePainter(color.clone(), painted.clone()))),
+        ),
+    );
+    let _mounted = binding.mount_root(&root, MountOwners::fresh(), MountOptions::tight(16.0, 16.0));
+    binding.pump_frame(Duration::ZERO);
+    let renderer = pollster::block_on(HeadlessRenderer::new()).expect("GPU adapter for readback");
+    owner.controller().forward().expect("fresh color run");
+    binding.pump_frame(Duration::ZERO);
+
+    let mut edges = Vec::new();
+    let mut interiors = Vec::new();
+    let mut samples = Vec::new();
+    for (delta, elapsed) in [
+        (Duration::from_micros(2500), 0.0025),
+        (Duration::from_micros(2500), 0.005),
+    ] {
+        binding.pump_frame(delta);
+        assert!((owner.controller().value() - elapsed).abs() < 1e-9);
+        let [r, g, b, alpha] = color.value().to_rgba_f32_array();
+        assert!(
+            r > 0.999 && g > 0.999 && b > 0.999,
+            "white sample: {:?}",
+            color.value()
+        );
+        samples.push((alpha, elapsed));
+        assert_eq!(
+            painted.get(),
+            Some(color.value()),
+            "paint accepted latest color"
+        );
+        let pixels = renderer
+            .render_layer_tree(binding.layer_tree().expect("mounted color scene"), (16, 16))
+            .expect("rasterizing the color tween");
+        let pixel = |x: usize| {
+            let index = (8 * 16 + x) * 4;
+            <[u8; 4]>::try_from(&pixels[index..index + 4]).expect("RGBA pixel")
+        };
+        assert_eq!(pixel(0), [0, 0, 0, 255], "black backdrop at {elapsed}");
+        interiors.push(pixel(8));
+        assert_eq!(binding.last_frame_report().build.elements_built, 0);
+        edges.push(pixel(1));
+    }
+    // The pixel center lies exactly on the straight edge: coverage is 1/2.
+    // Continuous alpha produces 0.31875 and 0.6375 encoded byte values.
+    // Byte quantization before coverage maps both alphas to the same 1/255,
+    // so the two edge pixels cannot differ. Samples avoid the near-half-byte
+    // values whose result also depends on the device's blending precision.
+    assert_eq!(
+        (interiors, edges),
+        (
+            vec![[1, 1, 1, 255], [1, 1, 1, 255]],
+            vec![[0, 0, 0, 255], [1, 1, 1, 255]]
+        )
+    );
+    for (alpha, elapsed) in samples {
+        assert!((f64::from(alpha) - elapsed).abs() < 1e-9, "alpha {alpha}");
+    }
+}
+
+fn group_opacity_retains_fractional_alpha_until_composition() {
+    let renderer = pollster::block_on(HeadlessRenderer::new()).expect("GPU adapter for readback");
+    for alpha in [0.0025, 0.005] {
+        let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+        let (root, _) = tree::mount(
+            &mut owner,
+            box_node(RenderFlex::row()).child(box_node(RenderOpacity::new(alpha)).child(box_node(
+                RenderColoredBox::new([0.0, 0.0, 0.0, 1.0], Size::new(16.0, 16.0)),
+            ))),
+        );
+        owner.set_root_id(Some(root));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(16.0, 16.0))));
+        let (_owner, result) = owner.run_frame();
+        let layers = result.expect("opacity frame").expect("painted layer tree");
+        assert_eq!(
+            flui_rendering::testing::inspect::first_opacity_alpha(&layers),
+            Some(alpha),
+            "group opacity must reach the layer without byte quantization"
+        );
+        let pixels = renderer
+            .render_layer_tree(&layers, (16, 16))
+            .expect("opacity readback");
+        let center = (8 * 16 + 8) * 4;
+        assert_eq!(
+            &pixels[center..center + 4],
+            &[254, 254, 254, 255],
+            "group alpha {alpha} must survive until composition"
+        );
+    }
+}
+
+fn a_decoration_image_filter_preserves_fractional_alpha_before_modulation() {
+    run_cases(
+        "decoration image source filters",
+        &[
+            ("mode", decoration_mode_filter_precision),
+            ("matrix", decoration_matrix_filter_precision),
+            (
+                "tap order and batch identity",
+                decoration_filters_preserve_tap_order_and_batch_identity,
+            ),
+        ],
+    );
+}
+
+fn decoration_mode_filter_precision() {
+    decoration_filter_precision(|alpha| flui_painting::paint::ColorFilter::Mode {
+        color: flui_painting::styling::Color::WHITE.with_opacity(f64::from(alpha)),
+        blend_mode: flui_painting::paint::BlendMode::SrcIn,
+    });
+}
+
+fn decoration_filters_preserve_tap_order_and_batch_identity() {
+    use flui::painting::CustomPainter;
+    use flui_foundation::geometry::Rect;
+    use flui_objects::RenderCustomPaint;
+    use flui_painting::paint::{BlendMode, BoxFit, ColorFilter, Image};
+    use flui_painting::styling::{BoxDecoration, Color, DecorationImage};
+    use flui_painting::{Canvas, DecorationPaintOptions, Paint, paint_box_decoration};
+    use std::rc::Rc;
+
+    #[derive(Debug)]
+    struct FilterPainter(Image);
+    impl CustomPainter for FilterPainter {
+        fn paint(&self, canvas: &mut Canvas, _size: Size) {
+            canvas.draw_rect(
+                Rect::from_xywh(0.0, 0.0, 16.0, 16.0),
+                &Paint::fill(Color::BLACK),
+            );
+            // Each middle pixel mixes opaque black and white equally. Applying
+            // gamma or ColorDodge after interpolation gives a different result.
+            for (x, filter) in [
+                (1.0, ColorFilter::SrgbToLinearGamma),
+                (5.0, ColorFilter::LinearToSrgbGamma),
+                (
+                    9.0,
+                    ColorFilter::Mode {
+                        color: Color::rgb(128, 128, 128),
+                        blend_mode: BlendMode::ColorDodge,
+                    },
+                ),
+                (
+                    13.0,
+                    ColorFilter::Mode {
+                        color: Color::RED,
+                        blend_mode: BlendMode::Src,
+                    },
+                ),
+            ] {
+                let image = DecorationImage::new(self.0.clone_handle())
+                    .with_fit(BoxFit::Fill)
+                    .with_color_filter(filter);
+                paint_box_decoration(
+                    canvas,
+                    Rect::from_xywh(x, 1.0, 3.0, 14.0),
+                    &BoxDecoration::with_image(image),
+                    DecorationPaintOptions::default(),
+                );
+            }
+        }
+        fn should_repaint(&self, _old: &dyn CustomPainter) -> bool {
+            false
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+    let image = Image::from_rgba8(2, 1, vec![0, 0, 0, 255, 255, 255, 255, 255]);
+    let (root, _) = tree::mount(
+        &mut owner,
+        box_node(RenderCustomPaint::new(
+            Some(Rc::new(FilterPainter(image))),
+            None,
+            Size::new(16.0, 16.0),
+        )),
+    );
+    owner.set_root_id(Some(root));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(16.0, 16.0))));
+    let (_, frame) = owner.run_frame();
+    let layers = frame
+        .expect("filtered image frame")
+        .expect("painted layers");
+    let renderer = pollster::block_on(HeadlessRenderer::new()).expect("GPU adapter for readback");
+    let pixels = renderer
+        .render_layer_tree(&layers, (16, 16))
+        .expect("filtered source readback");
+    for x in [2_usize, 6, 10] {
+        let index = (8 * 16 + x) * 4;
+        let pixel = &pixels[index..index + 4];
+        assert!(
+            pixel[..3].iter().all(|channel| channel.abs_diff(128) <= 1),
+            "per-tap filtering at {x}: {pixel:?}"
+        );
+        assert_eq!(pixel[3], 255);
+    }
+    assert_eq!(
+        &pixels[(8 * 16 + 14) * 4..(8 * 16 + 15) * 4],
+        &[255, 0, 0, 255],
+        "the same source with a different filter must start another batch"
+    );
+}
+
+fn decoration_matrix_filter_precision() {
+    decoration_filter_precision(|alpha| {
+        let mut matrix = flui_painting::paint::ColorMatrix::identity();
+        matrix.values[18] = 0.0;
+        matrix.values[19] = alpha;
+        flui_painting::paint::ColorFilter::Matrix(matrix)
+    });
+}
+
+fn decoration_filter_precision(filter: fn(f32) -> flui_painting::paint::ColorFilter) {
+    use std::rc::Rc;
+
+    use flui::painting::CustomPainter;
+    use flui_foundation::geometry::Rect;
+    use flui_objects::RenderCustomPaint;
+    use flui_painting::paint::Image;
+    use flui_painting::styling::{BoxDecoration, Color, DecorationImage};
+    use flui_painting::{Canvas, DecorationPaintOptions, Paint, paint_box_decoration};
+
+    #[derive(Debug)]
+    struct ImagePainter(BoxDecoration<f64>);
+
+    impl CustomPainter for ImagePainter {
+        fn paint(&self, canvas: &mut Canvas, size: Size) {
+            let bounds = Rect::from_xywh(0.0, 0.0, size.width, size.height);
+            canvas.draw_rect(bounds, &Paint::fill(Color::BLACK));
+            paint_box_decoration(
+                canvas,
+                Rect::from_xywh(1.0, 1.0, 14.0, 14.0),
+                &self.0,
+                DecorationPaintOptions::default(),
+            );
+        }
+
+        fn should_repaint(&self, _old: &dyn CustomPainter) -> bool {
+            false
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    let renderer = pollster::block_on(HeadlessRenderer::new()).expect("GPU adapter for readback");
+    for filtered in [false, true] {
+        let mut interiors = Vec::new();
+        for alpha in [0.0025_f32, 0.005_f32] {
+            let image = DecorationImage::new(Image::solid_color(1, 1, Color::WHITE))
+                .with_fit(flui_painting::paint::BoxFit::Fill);
+            let image = if filtered {
+                image.with_opacity(0.5).with_color_filter(filter(alpha))
+            } else {
+                image.with_opacity(f64::from(alpha) * 0.5)
+            };
+            let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+            let (root, _) = tree::mount(
+                &mut owner,
+                box_node(RenderCustomPaint::new(
+                    Some(Rc::new(ImagePainter(BoxDecoration::with_image(image)))),
+                    None,
+                    Size::new(16.0, 16.0),
+                )),
+            );
+            owner.set_root_id(Some(root));
+            owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(16.0, 16.0))));
+            let (_owner, result) = owner.run_frame();
+            let layers = result
+                .expect("decoration frame")
+                .expect("painted layer tree");
+            let pixels = renderer
+                .render_layer_tree(&layers, (16, 16))
+                .expect("image readback");
+            let pixel = |x: usize| {
+                <[u8; 4]>::try_from(&pixels[(8 * 16 + x) * 4..(8 * 16 + x) * 4 + 4])
+                    .expect("RGBA pixel")
+            };
+            assert_eq!(
+                pixel(0),
+                [0, 0, 0, 255],
+                "black backdrop, filtered={filtered}"
+            );
+            interiors.push(pixel(8));
+        }
+        assert_eq!(
+            interiors,
+            [[0, 0, 0, 255], [1, 1, 1, 255]],
+            "interior, filtered={filtered}"
+        );
+    }
+}
+
 /// Runs every row, then panics once naming each row that failed.
 fn run_cases(family: &str, cases: &[(&str, fn())]) {
     let mut failures = Vec::new();
@@ -627,6 +977,18 @@ fn composited_layer_update_readbacks() {
             (
                 "a_slide_tick_moves_pixels_without_rebuilding",
                 a_slide_tick_moves_pixels_without_rebuilding,
+            ),
+            (
+                "a_color_tween_preserves_sub_byte_alpha_until_rasterization",
+                a_color_tween_preserves_sub_byte_alpha_until_rasterization,
+            ),
+            (
+                "group_opacity_retains_fractional_alpha_until_composition",
+                group_opacity_retains_fractional_alpha_until_composition,
+            ),
+            (
+                "a_decoration_image_filter_preserves_fractional_alpha_before_modulation",
+                a_decoration_image_filter_preserves_fractional_alpha_before_modulation,
             ),
         ],
     );

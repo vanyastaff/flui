@@ -1119,9 +1119,8 @@ struct RetainedNode {
 fn own_effect_layers(effects: PaintEffects, origin: Offset) -> SmallVec<[Layer; 3]> {
     let mut layers = SmallVec::new();
     if let Some(opacity) = effects.opacity {
-        let alpha_f32 = f64::from(opacity.alpha) / 255.0;
         layers.push(Layer::Opacity(OpacityLayer::with_offset(
-            alpha_f32,
+            opacity.alpha(),
             Offset::ZERO,
         )));
     }

@@ -25,13 +25,8 @@ pub(crate) const BACKGROUND: flui_painting::styling::Color = flui_painting::styl
 /// through, as the painter maps a fill's colour; `partial_equals_full_inside_damage`
 /// compares the two backgrounds pixel for pixel.
 pub(crate) fn background_clear_value() -> wgpu::Color {
-    let channel = |value: u8| f64::from(value) / 255.0;
-    wgpu::Color {
-        r: channel(BACKGROUND.r),
-        g: channel(BACKGROUND.g),
-        b: channel(BACKGROUND.b),
-        a: channel(BACKGROUND.a),
-    }
+    let [r, g, b, a] = BACKGROUND.to_rgba_f32_array().map(f64::from);
+    wgpu::Color { r, g, b, a }
 }
 
 /// The parts of a frame that depend on where it is presented.

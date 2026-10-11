@@ -283,9 +283,8 @@ fn controller_status(c: &mut Criterion) {
         drop(controller);
     }
 
-    // Starting a run from rest on a fresh controller with a detached ticker
-    // (the `is_animating`-reporting widget shape). Construction and the
-    // returned future's drop sit outside the timed region.
+    // Starting a run from rest on a fresh, unbound controller. Construction
+    // and the returned future's drop sit outside the timed region.
     group.bench_function("forward", |b| {
         b.iter_batched(
             || AnimationController::builder(NEVER_ENDING).build(),

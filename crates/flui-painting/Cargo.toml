@@ -25,6 +25,7 @@ flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 
 # `Path` geometry: arcs and ovals as curves, exact winding, tight bounds (ADR-0098 §7).
 kurbo = { workspace = true }
+color = { workspace = true }
 thiserror = { workspace = true }
 # Serialization of the style values (optional). `rc` covers `InlineSpan::Text(Arc<TextSpan>)`;
 # deserialization does not preserve `Arc` sharing, which no snapshot relies on.

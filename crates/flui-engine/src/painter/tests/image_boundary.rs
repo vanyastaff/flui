@@ -6,6 +6,286 @@ use flui_painting::{
     styling::Color,
 };
 
+pub(super) fn filtered_image_device_limits_refuse_and_recover() {
+    use flui_painting::paint::ColorFilter;
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::LowPower,
+        force_fallback_adapter: false,
+        compatible_surface: None,
+        apply_limit_buckets: false,
+    }))
+    .expect("GPU test adapter");
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("Three bind groups image device"),
+        required_limits: wgpu::Limits {
+            max_bind_groups: 3,
+            ..wgpu::Limits::default()
+        },
+        ..wgpu::DeviceDescriptor::default()
+    }))
+    .expect("custom image device");
+    let device = Arc::new(device);
+    let queue = Arc::new(queue);
+    let (target, view) = crate::test_support::create_target(
+        &device,
+        "Filtered image limit recovery",
+        32,
+        32,
+        READBACK_FORMAT,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+    );
+    crate::test_support::clear_target(&device, &queue, &view, wgpu::Color::BLACK);
+    let mut painter = WgpuPainter::with_shared_device(
+        Arc::clone(&device),
+        Arc::clone(&queue),
+        READBACK_FORMAT,
+        (32, 32),
+    );
+    painter
+        .begin_frame()
+        .expect("limited filtered frame begins");
+    painter.draw_image_region(
+        &image(),
+        Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+        Rect::from_xywh(0.0, 0.0, 8.0, 8.0),
+        None,
+        ImageRepeat::NoRepeat,
+        Some(ColorFilter::Mode {
+            color: Color::RED,
+            blend_mode: BlendMode::Src,
+        }),
+        None,
+    );
+    let mut rejected = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    assert!(
+        matches!(
+            painter.render_to_texture(&target, &mut rejected),
+            Err(crate::EngineError::PreparedResourceLimit {
+                resource: "image filter bind groups",
+                requested: 4,
+                limit: 3
+            })
+        ),
+        "filter layout must be refused before GPU pipeline creation"
+    );
+    drop(rejected);
+    painter.finish_frame();
+    painter.begin_frame().expect("unfiltered frame begins");
+    painter.save();
+    painter.clip_rrect(
+        flui_foundation::geometry::RRect::from_rect_circular(
+            Rect::from_xywh(14.25, 14.25, 12.0, 12.0),
+            3.0,
+        ),
+        flui_painting::paint::Clip::AntiAlias,
+    );
+    painter.draw_image(
+        &Image::solid_color(4, 4, Color::GREEN),
+        Rect::from_xywh(16.0, 16.0, 8.0, 8.0),
+        BlendMode::Src,
+    );
+    painter.restore();
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    painter
+        .render_to_texture(&target, &mut encoder)
+        .expect("unfiltered images fit the same device");
+    painter
+        .submit_encoder(encoder)
+        .expect("valid frame submits");
+    painter.finish_frame();
+    let pixels = crate::test_support::readback_bytes(&device, &queue, &target, 32, 32);
+    assert_eq!(pixel_at(&pixels, 32, 4, 4), [0, 0, 0, 255]);
+    assert_eq!(pixel_at(&pixels, 32, 20, 20), [0, 255, 0, 255]);
+}
+
+pub(super) fn filtered_image_matrix_range() {
+    use flui_painting::paint::{ColorFilter, ColorMatrix};
+    for coefficient in [f32::NAN, f32::INFINITY, f32::MAX] {
+        for offset in [0.0, 0.25, 1.0] {
+            let mut matrix = ColorMatrix::identity();
+            matrix.values[..5].copy_from_slice(&[
+                coefficient,
+                coefficient,
+                -coefficient,
+                -coefficient,
+                offset,
+            ]);
+            let pixels = draw_clear(32, wgpu::Color::BLUE, |p| {
+                p.draw_image_region(
+                    &image(),
+                    Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+                    Rect::from_xywh(0.0, 0.0, 8.0, 8.0),
+                    None,
+                    ImageRepeat::NoRepeat,
+                    Some(ColorFilter::Matrix(matrix)),
+                    None,
+                );
+                p.draw_rect(
+                    Rect::from_xywh(16.0, 16.0, 8.0, 8.0),
+                    &Paint::fill(Color::RED),
+                );
+            });
+            let expected = if coefficient.is_finite() {
+                [(offset * 255.0).round() as u8, 255, 255, 255]
+            } else {
+                [0, 0, 255, 255]
+            };
+            assert_eq!(
+                pixel_at(&pixels, 32, 4, 4),
+                expected,
+                "matrix coefficient {coefficient}"
+            );
+            assert_eq!(
+                pixel_at(&pixels, 32, 20, 20),
+                [255, 0, 0, 255],
+                "a valid following draw remains deliverable"
+            );
+        }
+    }
+}
+
+pub(super) fn filtered_image_preparation_failure_recovers() {
+    use crate::device_domain::{DeviceDomain, PreparedCost, PreparedIrLimits};
+    use flui_painting::paint::ColorFilter;
+    let (device, queue) = test_device_and_queue();
+    // Target bindings fit; the additional filter uniform cannot. This private
+    // seam exercises resource admission through the ordinary painter API.
+    let domain = DeviceDomain::with_limits(
+        Arc::clone(&device),
+        Arc::clone(&queue),
+        PreparedIrLimits {
+            cost: PreparedCost {
+                gpu_bytes: 128,
+                ..PreparedIrLimits::default().cost
+            },
+            ..Default::default()
+        },
+    );
+    let mut painter = WgpuPainter::with_domain(domain, READBACK_FORMAT, (32, 32));
+    let (target, view) = crate::test_support::create_target(
+        &device,
+        "Filter preparation recovery",
+        32,
+        32,
+        READBACK_FORMAT,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+    );
+    painter.begin_frame().expect("failing frame begins");
+    let mut rejected = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    painter.draw_image_region(
+        &image(),
+        Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+        Rect::from_xywh(0.0, 0.0, 8.0, 8.0),
+        None,
+        ImageRepeat::NoRepeat,
+        Some(ColorFilter::Mode {
+            color: Color::RED,
+            blend_mode: BlendMode::Src,
+        }),
+        None,
+    );
+    assert!(
+        matches!(
+            painter.render_to_texture(&target, &mut rejected),
+            Err(crate::EngineError::PreparedResourceLimit {
+                resource: "GPU payload bytes",
+                ..
+            })
+        ),
+        "filter preparation must fail through the resource contract"
+    );
+    drop(rejected);
+    painter.finish_frame();
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .expect("rejected frame resource retirement");
+
+    painter.begin_frame().expect("recovery frame begins");
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    {
+        let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Recovery backdrop"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+    }
+    painter.draw_image(
+        &Image::solid_color(4, 4, Color::GREEN),
+        Rect::from_xywh(16.0, 16.0, 8.0, 8.0),
+        BlendMode::SrcOver,
+    );
+    painter
+        .render_to_texture(&target, &mut encoder)
+        .expect("unfiltered frame fits the same allowance");
+    painter
+        .submit_encoder(encoder)
+        .expect("recovery frame submits");
+    painter.finish_frame();
+    let pixels = crate::test_support::readback_bytes(&device, &queue, &target, 32, 32);
+    assert_eq!(
+        pixel_at(&pixels, 32, 4, 4),
+        [0, 0, 0, 255],
+        "rejected draw must not leak into the next frame"
+    );
+    assert_eq!(pixel_at(&pixels, 32, 20, 20), [0, 255, 0, 255]);
+}
+
+pub(super) fn filtered_image_independent_clip_coverage() {
+    use flui_foundation::geometry::RRect;
+    use flui_painting::paint::{Clip, ColorFilter};
+    let source = Image::from_rgba8(4, 4, [255, 0, 0, 0].repeat(16));
+    let filtered = |p: &mut WgpuPainter, mode, color| {
+        p.save();
+        p.clip_rrect(
+            RRect::from_rect_circular(Rect::from_xywh(6.25, 6.25, 12.0, 12.0), 3.0),
+            Clip::AntiAlias,
+        );
+        p.draw_image_region(
+            &source,
+            Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+            Rect::from_xywh(4.0, 4.0, 20.0, 20.0),
+            None,
+            ImageRepeat::NoRepeat,
+            Some(ColorFilter::Mode {
+                color,
+                blend_mode: BlendMode::Src,
+            }),
+            Some(&Paint::fill(Color::WHITE).with_blend_mode(mode)),
+        );
+        p.restore();
+    };
+    let reference = draw_clear(32, wgpu::Color::TRANSPARENT, |p| {
+        filtered(p, BlendMode::SrcOver, Color::WHITE);
+    });
+    let actual = draw(32, |p| {
+        filtered(p, BlendMode::Src, Color::GREEN.with_opacity(0.5));
+    });
+    let mut partial = 0;
+    for y in 4..24 {
+        for x in 4..24 {
+            let coverage = pixel_at(&reference, 32, x, y)[3];
+            let pixel = pixel_at(&actual, 32, x, y);
+            let green = (f32::from(coverage) * 0.5).round() as u8;
+            let blue = 255 - coverage;
+            near(pixel, [0, green, blue, green.saturating_add(blue)]);
+            partial += usize::from((1..255).contains(&coverage));
+        }
+    }
+    assert!(partial > 0, "the oracle must exercise fractional coverage");
+}
+
 fn draw(size: u32, draw: impl FnOnce(&mut WgpuPainter)) -> Vec<u8> {
     draw_clear(size, wgpu::Color::BLUE, draw)
 }

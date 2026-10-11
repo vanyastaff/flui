@@ -139,12 +139,12 @@ fn vs_main(
 
 // Straight-alpha coverage must be premultiplied BEFORE filtering; multiplying
 // the hardware-filtered RGB by its filtered alpha compounds edge attenuation.
-fn load_premultiplied_straight(coord: vec2<i32>, size: vec2<i32>, bounds: vec4<f32>) -> vec4<f32> {
+fn load_filtered_premultiplied_texel(coord: vec2<i32>, size: vec2<i32>, bounds: vec4<f32>) -> vec4<f32> {
     let first = vec2<i32>(round(bounds.xy * vec2<f32>(size)));
     let last = vec2<i32>(round(bounds.zw * vec2<f32>(size))) - vec2<i32>(1);
     let clamped = clamp(coord, first, last);
     let texel = textureLoad(texture_view, clamped, 0);
-    return vec4<f32>(texel.rgb * texel.a, texel.a);
+    return filterSourceTexel(texel);
 }
 
 fn filter_straight_coverage(uv: vec2<f32>, bounds: vec4<f32>) -> vec4<f32> {
@@ -152,10 +152,10 @@ fn filter_straight_coverage(uv: vec2<f32>, bounds: vec4<f32>) -> vec4<f32> {
     let position = uv * vec2<f32>(size) - vec2<f32>(0.5);
     let base = vec2<i32>(floor(position));
     let weight = fract(position);
-    let tl = load_premultiplied_straight(base, size, bounds);
-    let tr = load_premultiplied_straight(base + vec2<i32>(1, 0), size, bounds);
-    let bl = load_premultiplied_straight(base + vec2<i32>(0, 1), size, bounds);
-    let br = load_premultiplied_straight(base + vec2<i32>(1, 1), size, bounds);
+    let tl = load_filtered_premultiplied_texel(base, size, bounds);
+    let tr = load_filtered_premultiplied_texel(base + vec2<i32>(1, 0), size, bounds);
+    let bl = load_filtered_premultiplied_texel(base + vec2<i32>(0, 1), size, bounds);
+    let br = load_filtered_premultiplied_texel(base + vec2<i32>(1, 1), size, bounds);
     return mix(mix(tl, tr, weight.x), mix(bl, br, weight.x), weight.y);
 }
 

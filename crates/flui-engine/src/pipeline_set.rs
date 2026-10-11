@@ -241,6 +241,9 @@ pub(crate) struct PipelineSet {
     ssaa_tile_surface_format: wgpu::TextureFormat,
     portable_coverage: Option<crate::portable_coverage::PortableCoveragePipeline>,
     image_isolation: Option<(wgpu::BindGroupLayout, wgpu::RenderPipeline)>,
+    filtered_image_isolation: Option<(wgpu::BindGroupLayout, wgpu::RenderPipeline)>,
+    pub(crate) image_filter_layout: wgpu::BindGroupLayout,
+    filtered_texture_composite_cache: HashMap<BlendMode, wgpu::RenderPipeline>,
 
     /// Cache of premultiplied SSAA tile composite pipelines keyed by blend mode.
     ///
@@ -252,16 +255,25 @@ impl PipelineSet {
     pub(crate) fn image_isolation(
         &mut self,
         device: &wgpu::Device,
+        filtered: bool,
     ) -> &(wgpu::BindGroupLayout, wgpu::RenderPipeline) {
-        if self.image_isolation.is_none() {
+        if (if filtered {
+            &self.filtered_image_isolation
+        } else {
+            &self.image_isolation
+        })
+        .is_none()
+        {
             let mapping = crate::pipeline_cache::create_isolation_bind_group_layout(device);
+            let bind_group_layouts = [
+                Some(self.viewport_bind_group_layout()),
+                Some(&self.texture_bind_group_layout),
+                Some(&mapping),
+                Some(&self.image_filter_layout),
+            ];
             let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Image source and coverage isolation"),
-                bind_group_layouts: &[
-                    Some(self.viewport_bind_group_layout()),
-                    Some(&self.texture_bind_group_layout),
-                    Some(&mapping),
-                ],
+                bind_group_layouts: &bind_group_layouts[..if filtered { 4 } else { 3 }],
                 immediate_size: 0,
             });
             let targets = [
@@ -282,7 +294,11 @@ impl PipelineSet {
                 &QuadPipelineSpec {
                     shader_label: "Image isolation shader",
                     pipeline_label: "Image isolation pipeline",
-                    shader_source: crate::shaders::TEXTURE_ISOLATION,
+                    shader_source: if filtered {
+                        crate::shaders::TEXTURE_FILTERED_ISOLATION
+                    } else {
+                        crate::shaders::TEXTURE_ISOLATION
+                    },
                     instance_layout: crate::instancing::TextureInstance::desc(),
                     blend: wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
                     constants: &[("premultiplied_source", 1.0)],
@@ -290,11 +306,19 @@ impl PipelineSet {
                 &targets,
                 "vs_isolation",
             );
-            self.image_isolation = Some((mapping, pipeline));
+            if filtered {
+                self.filtered_image_isolation = Some((mapping, pipeline));
+            } else {
+                self.image_isolation = Some((mapping, pipeline));
+            }
         }
-        self.image_isolation
-            .as_ref()
-            .expect("BUG: image isolation initialized above")
+        (if filtered {
+            &self.filtered_image_isolation
+        } else {
+            &self.image_isolation
+        })
+        .as_ref()
+        .expect("BUG: image isolation initialized above")
     }
 
     pub(crate) fn portable_coverage(
@@ -459,6 +483,9 @@ impl PipelineSet {
             ssaa_tile_surface_format: surface_format,
             portable_coverage: None,
             image_isolation: None,
+            filtered_image_isolation: None,
+            image_filter_layout: crate::image_source_filter::layout(device),
+            filtered_texture_composite_cache: HashMap::new(),
             texture_composite_cache: HashMap::new(),
         }
     }
@@ -571,6 +598,50 @@ impl PipelineSet {
                  call ensure_texture_composite first"
             )
         })
+    }
+
+    pub(crate) fn filtered_texture_composite(
+        &mut self,
+        device: &wgpu::Device,
+        mode: BlendMode,
+    ) -> &wgpu::RenderPipeline {
+        self.filtered_texture_composite_cache
+            .entry(mode)
+            .or_insert_with(|| {
+                let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("Filtered decoded image"),
+                    bind_group_layouts: &[
+                        Some(self.shape_cache.viewport_bind_group_layout()),
+                        Some(&self.texture_bind_group_layout),
+                        None,
+                        Some(&self.image_filter_layout),
+                    ],
+                    immediate_size: 0,
+                });
+                create_unit_quad_pipeline(
+                    device,
+                    self.ssaa_tile_surface_format,
+                    &layout,
+                    &QuadPipelineSpec {
+                        shader_label: "Filtered decoded image",
+                        pipeline_label: "Filtered decoded image",
+                        shader_source: crate::shaders::TEXTURE_FILTERED,
+                        instance_layout: crate::instancing::TextureInstance::desc(),
+                        blend: blend_state_for(mode),
+                        constants: &[
+                            ("premultiplied_source", 1.0),
+                            (
+                                "replaces_destination",
+                                if mode.keeps_destination_under_transparent_source() {
+                                    0.0
+                                } else {
+                                    1.0
+                                },
+                            ),
+                        ],
+                    },
+                )
+            })
     }
 }
 
@@ -772,9 +843,14 @@ pub(super) fn create_unit_quad_pipeline_with_targets(
     } else {
         std::borrow::Cow::Borrowed(spec.shader_source)
     };
+    let shader_source = if source.contains("#import color_filter") {
+        crate::shader_composer::compose_filter_shader(&source, spec.shader_label)
+    } else {
+        wgpu::ShaderSource::Wgsl(source)
+    };
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(spec.shader_label),
-        source: wgpu::ShaderSource::Wgsl(source),
+        source: shader_source,
     });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(spec.pipeline_label),

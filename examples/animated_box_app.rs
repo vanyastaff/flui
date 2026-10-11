@@ -238,7 +238,7 @@ impl ViewState<AnimatedBoxDemo> for AnimatedBoxDemoState {
             view.histogram.lock().record(Instant::now());
         }
         let value = self.controller.controller().value();
-        let color = Color::lerp(view.red, view.blue, value).to_f32_array();
+        let color = Color::lerp(view.red, view.blue, value).to_rgba_f32_array();
         AnimatedBox { color }.boxed()
     }
 }

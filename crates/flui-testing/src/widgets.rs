@@ -897,11 +897,8 @@ impl LaidOut {
 
     /// The committed opacity of a [`RenderOpacity`] node (e.g. the one a
     /// `FadeTransition` builds) or a [`RenderAnimatedOpacity`] node (the one
-    /// `AnimatedOpacity` builds). The latter reads the composed animation's
-    /// raw `f64` value (`RenderAnimatedOpacity::opacity_value`), not the
-    /// quantized `u8` alpha cache — the `1/255` rounding would blow the
-    /// implicit-animation tests' `< 1e-4` tolerance. Panics if `id` is
-    /// neither.
+    /// `AnimatedOpacity` builds). Both read the accepted normalized value
+    /// used by painting. Panics if `id` is neither.
     pub fn opacity(&self, id: RenderId) -> f64 {
         self.pipeline_owner.with_mut(|owner| {
             let node = owner
@@ -912,7 +909,7 @@ impl LaidOut {
                 return render.opacity();
             }
             if let Some(render) = node.downcast_render_object_mut::<RenderAnimatedOpacity>() {
-                return render.opacity_value();
+                return render.opacity();
             }
             panic!("render node should be a RenderOpacity or RenderAnimatedOpacity");
         })
@@ -926,7 +923,7 @@ impl LaidOut {
     /// quantity the pipeline reads through `&dyn RenderObject<BoxProtocol>`
     /// to decide whether to allocate a compositing layer. Panics if `id` is
     /// not a `RenderOpacity`.
-    pub fn opacity_paint_alpha(&self, id: RenderId) -> Option<u8> {
+    pub fn opacity_paint_alpha(&self, id: RenderId) -> Option<f64> {
         self.pipeline_owner.with_mut(|owner| {
             let node = owner
                 .render_tree_mut()
@@ -934,7 +931,9 @@ impl LaidOut {
                 .expect("render node should exist");
             node.downcast_render_object_mut::<RenderOpacity>()
                 .expect("render node should be a RenderOpacity");
-            node.paint_effects().opacity.map(|o| o.alpha)
+            node.paint_effects()
+                .opacity
+                .map(flui_rendering::traits::PaintOpacity::alpha)
         })
     }
 
@@ -961,7 +960,7 @@ impl LaidOut {
     /// rule: `None` at full opacity or full transparency without
     /// `always_needs_compositing`, `Some(alpha)` for a genuine partial
     /// blend). Panics if `id` is not a `RenderSliverOpacity`.
-    pub fn sliver_opacity_paint_alpha(&self, id: RenderId) -> Option<u8> {
+    pub fn sliver_opacity_paint_alpha(&self, id: RenderId) -> Option<f64> {
         self.pipeline_owner.with_mut(|owner| {
             let node = owner
                 .render_tree_mut()
@@ -969,7 +968,9 @@ impl LaidOut {
                 .expect("render node should exist");
             node.downcast_render_object_mut::<RenderSliverOpacity>()
                 .expect("render node should be a RenderSliverOpacity");
-            node.paint_effects().opacity.map(|o| o.alpha)
+            node.paint_effects()
+                .opacity
+                .map(flui_rendering::traits::PaintOpacity::alpha)
         })
     }
 

@@ -1,8 +1,7 @@
 //! Color benchmarks for blending, mixing, and conversions
 //!
-//! Performance targets:
-//! - Color::lerp (mix): <20ns
-//! - Color::blend_over: <20ns
+//! Measurements cover individual operations; frame budgets must also account
+//! for the number of colors sampled and the work of their actual consumers.
 
 // Bench harness, not public API; `criterion_group!` generates the
 // undocumentable entry fn.

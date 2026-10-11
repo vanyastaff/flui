@@ -29,6 +29,25 @@ use naga_oil::compose::{
     ShaderType,
 };
 
+/// Compose filter arithmetic shared by layer passes and decoded image taps.
+pub(crate) fn compose_filter_shader(source: &str, label: &str) -> wgpu::ShaderSource<'static> {
+    compose_wgsl_shader(
+        &[
+            ComposableSource {
+                source: include_str!("shaders/blend_helpers.wgsl"),
+                file_path: "shaders/blend_helpers.wgsl",
+            },
+            ComposableSource {
+                source: include_str!("shaders/color_filter.wgsl"),
+                file_path: "shaders/color_filter.wgsl",
+            },
+        ],
+        source,
+        label,
+    )
+    .expect("BUG: filter shader imports must resolve")
+}
+
 /// A composable module source to register before composing the entry shader.
 ///
 /// Pass one entry per `#define_import_path` module that the entry shader imports.
@@ -64,8 +83,8 @@ pub(crate) struct ComposableSource {
 /// `clippy::result_large_err` and cause stack-bloat at every call site.
 pub(crate) fn compose_wgsl_shader(
     composables: &[ComposableSource],
-    entry_source: &'static str,
-    entry_file_path: &'static str,
+    entry_source: &str,
+    entry_file_path: &str,
 ) -> Result<wgpu::ShaderSource<'static>, Box<ComposerError>> {
     let mut composer = Composer::default();
 

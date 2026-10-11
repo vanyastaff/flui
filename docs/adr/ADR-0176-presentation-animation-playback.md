@@ -147,7 +147,7 @@ displayed matrix with C⁰ continuity and runs separate curve or spring progress
 
 The mounted widget velocity rows exercise opacity, padding, alignment, container size and rotation through
 their render, layout and transform producers. Painted container alpha continuity
-is measured within its 8-bit quantization. The two mounted scroll replacement
+is measured as the normalized sample recorded in its paint operation. The two mounted scroll replacement
 rows assert pixel velocity continuity, exact settlement and activity completion.
 
 The wire schema golden and additivity gate cover published protocol shapes.

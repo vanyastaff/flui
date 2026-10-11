@@ -81,9 +81,9 @@ use crate::hit_testing::PathClipTarget;
 /// use flui_painting::paint::Clip;
 ///
 /// let effects = PaintEffects::NONE
-///     .with_opacity(PaintOpacity::new(128))
+///     .with_opacity(PaintOpacity::new(0.5))
 ///     .with_clip(PaintClip::Rect { rect: Rect::ZERO, behavior: Clip::HardEdge });
-/// assert_eq!(effects.opacity.map(|o| o.alpha), Some(128));
+/// assert_eq!(effects.opacity.map(|o| o.alpha()), Some(0.5));
 /// assert!(matches!(effects.clip, Some(PaintClip::Rect { .. })));
 /// assert!(effects.transform.is_none());
 /// ```
@@ -149,30 +149,40 @@ impl PaintEffects {
 
 /// A node's own group opacity, expressed as a paint effect.
 ///
-/// `Copy + PartialEq + Eq`, unlike [`PaintClip`]: nothing here can carry a
-/// memoised or shared payload, so an oracle may compare the whole value
-/// (`assert_eq!(fx.opacity, Some(PaintOpacity::new(128)))`), and a blend
-/// mode added later keeps all three.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Alpha remains continuous until the compositor's output conversion.
+/// Construction guarantees a finite value in `0.0..=1.0`, so equality is
+/// reflexive and callers cannot publish an invalid effect.
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct PaintOpacity {
-    /// Alpha in `0..=255`, applied to everything the node paints.
-    ///
-    /// `255` (fully opaque) is representable and expected: a node forced
-    /// into `always_needs_compositing` (for example, to keep a stable
-    /// layer for repeated composited updates) still describes a full-alpha
-    /// group layer here rather than omitting [`PaintEffects::opacity`].
-    pub alpha: u8,
+    alpha: f64,
 }
 
+// The private field is always finite; NaN is never representable.
+impl Eq for PaintOpacity {}
+
 impl PaintOpacity {
-    /// Creates a paint-effect opacity from a raw alpha value.
+    /// Creates a group opacity, clamping to `0.0..=1.0`.
     ///
-    /// A `blend` field is added here once a producer needs one — it is
-    /// deliberately not present as a phantom placeholder today.
+    /// NaN and negative values become zero; positive infinity becomes one.
+    /// Both zero signs are canonicalized to positive zero.
     #[must_use]
-    pub const fn new(alpha: u8) -> Self {
+    pub const fn new(alpha: f64) -> Self {
+        let alpha = if alpha > 0.0 {
+            if alpha < 1.0 { alpha } else { 1.0 }
+        } else {
+            0.0
+        };
         Self { alpha }
+    }
+
+    /// The normalized alpha applied to everything the node paints.
+    ///
+    /// One is valid when a producer keeps a stable group layer even at full
+    /// opacity instead of omitting its opacity effect.
+    #[must_use]
+    pub const fn alpha(self) -> f64 {
+        self.alpha
     }
 }
 

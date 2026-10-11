@@ -88,67 +88,12 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
     return out;
 }
 
-// ─── Transfer functions ───────────────────────────────────────────────────────
-//
-// Mirrors `flui_types::styling::color::srgb_to_linear` and `linear_to_srgb`
-// exactly (IEC 61966-2-1 piecewise).  One WGSL impl per direction, no branch
-// table: the `u.direction` select is done once in `fs_main` via `select(...)`.
-
-/// IEC 61966-2-1 sRGB → linear electro-optical transfer (gamma-decode).
-fn srgb_to_linear(c: f32) -> f32 {
-    return select(
-        pow((c + 0.055) / 1.055, 2.4),
-        c / 12.92,
-        c <= 0.04045
-    );
-}
-
-/// IEC 61966-2-1 linear → sRGB opto-electronic transfer (gamma-encode).
-fn linear_to_srgb(c: f32) -> f32 {
-    return select(
-        1.055 * pow(c, 1.0 / 2.4) - 0.055,
-        12.92 * c,
-        c <= 0.003130800000
-    );
-}
-
-// ─── Fragment stage ───────────────────────────────────────────────────────────
+#import color_filter::filter_gamma
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // Step 1 — sample the premultiplied source texel.
-    let t: vec4<f32> = textureSample(src_texture, src_sampler, in.uv);
-
-    // Step 2 — un-premultiply (divide-by-zero guard: if α=0 → straight RGB = 0).
-    let straight_rgb: vec3<f32> = select(vec3<f32>(0.0), t.rgb / t.a, t.a > 0.0);
-
-    // Step 3 — apply the transfer function per channel; alpha passes through.
-    // `var` (not `let`): WGSL `let` requires an initializer; the value is assigned
-    // in both branches below (definitely-assigned before the read at step 4).
-    var transferred_rgb: vec3<f32>;
-    if u.direction == 0u {
-        // SrgbToLinear
-        transferred_rgb = vec3<f32>(
-            srgb_to_linear(straight_rgb.x),
-            srgb_to_linear(straight_rgb.y),
-            srgb_to_linear(straight_rgb.z),
-        );
-    } else {
-        // LinearToSrgb
-        transferred_rgb = vec3<f32>(
-            linear_to_srgb(straight_rgb.x),
-            linear_to_srgb(straight_rgb.y),
-            linear_to_srgb(straight_rgb.z),
-        );
-    }
-
-    // Step 4 — clamp RGB to [0, 1].  Alpha carries through from `t.a`.
-    let clamped_rgb: vec3<f32> = clamp(transferred_rgb, vec3<f32>(0.0), vec3<f32>(1.0));
-    let out_a: f32 = t.a;
-
-    // Step 5 — re-premultiply: rgb *= a.
-    let out_rgb: vec3<f32> = clamped_rgb * out_a;
-
-    // Step 6 — emit premultiplied RGBA (BlendState::REPLACE, no HW blending).
-    return vec4<f32>(out_rgb, out_a);
+    let t = textureSample(src_texture, src_sampler, in.uv);
+    var rgb = vec3<f32>(0.0);
+    if t.a > 0.0 { rgb = t.rgb / t.a; }
+    return filter_gamma(vec4<f32>(rgb, t.a), u.direction);
 }

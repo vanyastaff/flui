@@ -31,7 +31,7 @@
 use flui_painting::paint::BlendMode;
 
 use super::generated::mode;
-use crate::shader_composer::{ComposableSource, compose_wgsl_shader};
+use crate::shader_composer::compose_filter_shader;
 
 // ── Byte-identity gate ────────────────────────────────────────────────────────
 //
@@ -158,22 +158,10 @@ impl ModePipeline {
             immediate_size: 0,
         });
 
-        // Compose mode.wgsl by resolving its `#import blend_helpers` via naga_oil.
-        // The Composer registers blend_helpers.wgsl as a composable module, then
-        // produces a fully resolved naga::Module that wgpu accepts via ShaderSource::Naga.
-        // Panics are intentional here: a composition failure at pipeline-init is a
-        // programming error (bad WGSL or missing import), not a recoverable runtime
-        // condition — it matches the behaviour of the previous concat!/create_shader_module
-        // path which also panicked (wgpu panics on shader validation failure).
-        let composed_source = compose_wgsl_shader(
-            &[ComposableSource {
-                source: include_str!("../shaders/blend_helpers.wgsl"),
-                file_path: "shaders/blend_helpers.wgsl",
-            }],
+        let composed_source = compose_filter_shader(
             include_str!("../shaders/effects/mode.wgsl"),
             "shaders/effects/mode.wgsl",
-        )
-        .expect("blend_helpers.wgsl #import in mode.wgsl must resolve: check for WGSL syntax errors or a missing #define_import_path");
+        );
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Mode Shader"),

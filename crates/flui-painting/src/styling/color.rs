@@ -3,29 +3,97 @@
 //! This module provides a comprehensive Color type with conversions between
 //! different color spaces (RGB, HSL, HSV).
 
-use super::srgb_tables::{
-    LINEAR_BUCKET_CODES, LINEAR_BUCKETS, LINEAR_ROUNDING_THRESHOLDS, SRGB_TO_LINEAR,
-};
+use std::hash::{Hash, Hasher};
 
-/// The largest extrapolation weight [`Color::lerp_unclamped`] feeds its f32 mix; larger
-/// weights give the same saturated colour.
-const MAX_EXTRAPOLATION: f64 = 1e6;
+/// Weights within this range keep the direct f32 Oklab mix and its cubes finite.
+/// Larger weights use scaled arithmetic, rather than truncating extrapolation.
+const MAX_DIRECT_LERP_WEIGHT: f64 = 1e6;
 
-/// An RGBA color with four 8-bit channels and straight (unmultiplied) alpha.
+/// A finite, normalized sRGB color with straight (unmultiplied) alpha.
 ///
 /// Channels are in sRGB gamma space. The
-/// renderer premultiplies when it converts a color for the GPU.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// renderer premultiplies when it converts a color for the GPU. Components retain
+/// floating-point precision through interpolation and paint; explicit byte exports
+/// round to RGBA8. Private storage excludes NaN, infinity and negative zero, making
+/// exact equality and hashing lawful. Transparent colors retain authored hidden RGB.
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Color {
-    /// Red channel (0-255)
-    pub r: u8,
-    /// Green channel (0-255)
-    pub g: u8,
-    /// Blue channel (0-255)
-    pub b: u8,
-    /// Alpha channel (0-255, 0 = transparent, 255 = opaque)
-    pub a: u8,
+    r: f32,
+    g: f32,
+    b: f32,
+    a: f32,
+}
+
+impl Eq for Color {}
+
+/// Explicit normalized wire units; deserialization cannot bypass admission.
+#[cfg(feature = "serde")]
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ColorWire {
+    srgb: [f64; 3],
+    alpha: f64,
+}
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for Color {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        ColorWire {
+            srgb: [self.r, self.g, self.b].map(f64::from),
+            alpha: f64::from(self.a),
+        }
+        .serialize(serializer)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for Color {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = ColorWire::deserialize(deserializer)?;
+        let [r, g, b] = wire.srgb;
+        let rgba = [r, g, b, wire.alpha];
+        if rgba
+            .iter()
+            .any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
+        {
+            return Err(serde::de::Error::custom(
+                "Color requires finite normalized sRGB and alpha",
+            ));
+        }
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "wire range validated before narrowing to Color precision"
+        )]
+        let rgba = rgba.map(|v| v as f32);
+        Ok(Self::from_rgba_f32_array(rgba))
+    }
+}
+
+impl Hash for Color {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.to_rgba_f32_array().map(f32::to_bits).hash(state);
+    }
+}
+
+/// Admit normalized channels, including saturating conversion results.
+#[inline]
+fn normalized(channel: f32) -> f32 {
+    if channel.is_nan() || channel <= 0.0 {
+        0.0
+    } else {
+        channel.min(1.0)
+    }
+}
+
+/// Round a private finite f32 channel in 0..=1 at the explicit byte boundary.
+/// Widening first preserves the side of each half-byte rounding threshold.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "private normalized channels round into 0..=255"
+)]
+const fn byte_channel(channel: f32) -> u8 {
+    (channel as f64 * 255.0 + 0.5) as u8
 }
 
 /// A color in the Oklab perceptually uniform color space.
@@ -68,19 +136,8 @@ pub struct PremultipliedOklab {
 }
 
 impl Oklab {
-    /// Oklab from the cube roots of the LMS response.
-    #[inline]
-    fn from_cube_roots(l: f32, m: f32, s: f32) -> Self {
-        Oklab {
-            l: 0.210_454_26 * l + 0.793_617_8 * m - 0.004_072_047 * s,
-            a: 1.977_998_5 * l - 2.428_592_2 * m + 0.450_593_7 * s,
-            b: 0.025_904_037 * l + 0.782_771_77 * m - 0.808_675_77 * s,
-        }
-    }
-
-    /// `self` with its components multiplied by the 8-bit `alpha` as a fraction.
-    fn premultiplied(self, alpha: u8) -> PremultipliedOklab {
-        let alpha = f32::from(alpha) / 255.0;
+    /// Multiply signed Oklab components by normalized alpha.
+    fn premultiplied(self, alpha: f32) -> PremultipliedOklab {
         PremultipliedOklab {
             l: self.l * alpha,
             a: self.a * alpha,
@@ -105,7 +162,12 @@ impl Color {
     /// ```
     #[inline]
     pub const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
-        Self { r, g, b, a }
+        Self {
+            r: r as f32 / 255.0,
+            g: g as f32 / 255.0,
+            b: b as f32 / 255.0,
+            a: a as f32 / 255.0,
+        }
     }
 
     /// Creates a fully opaque color from RGB values (0-255).
@@ -192,7 +254,7 @@ impl Color {
     #[inline]
     #[must_use]
     pub const fn opacity(&self) -> f32 {
-        self.a as f32 / 255.0
+        self.a
     }
 
     // ===== Modifiers =====
@@ -207,17 +269,20 @@ impl Color {
     /// let opaque_red = Color::rgb(255, 0, 0);
     /// let transparent_red = opaque_red.with_alpha(128);
     ///
-    /// assert_eq!(transparent_red.a, 128);
+    /// assert_eq!(transparent_red.to_rgba8()[3], 128);
     /// ```
     #[inline]
     pub const fn with_alpha(&self, alpha: u8) -> Self {
-        Self::rgba(self.r, self.g, self.b, alpha)
+        Self {
+            a: alpha as f32 / 255.0,
+            ..*self
+        }
     }
 
     /// Returns a new color with the specified opacity (0.0-1.0).
     ///
-    /// Values are clamped to the valid range, and the alpha rounds to the
-    /// nearest of its 256 steps (`(255 * opacity).round()`).
+    /// Values saturate to the valid range; NaN becomes zero. No byte quantization
+    /// occurs until an explicit export such as [`Self::to_rgba8`].
     ///
     /// # Examples
     ///
@@ -227,32 +292,40 @@ impl Color {
     /// let opaque = Color::rgb(255, 0, 0);
     /// let half = opaque.with_opacity(0.5);
     ///
-    /// assert_eq!(half.a, 128); // 127.5 rounds up
+    /// assert_eq!(half.opacity(), 0.5);
     /// ```
     #[inline]
     pub fn with_opacity(&self, opacity: f64) -> Self {
-        #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        // 0..=255 after the clamp
-        let alpha = (opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
-        self.with_alpha(alpha)
+        #[expect(clippy::cast_possible_truncation, reason = "normalized alpha uses f32")]
+        let alpha = normalized(opacity.clamp(0.0, 1.0) as f32);
+        Self { a: alpha, ..*self }
     }
 
     /// Returns a new color with the specified red component.
     #[inline]
     pub const fn with_red(&self, red: u8) -> Self {
-        Self::rgba(red, self.g, self.b, self.a)
+        Self {
+            r: red as f32 / 255.0,
+            ..*self
+        }
     }
 
     /// Returns a new color with the specified green component.
     #[inline]
     pub const fn with_green(&self, green: u8) -> Self {
-        Self::rgba(self.r, green, self.b, self.a)
+        Self {
+            g: green as f32 / 255.0,
+            ..*self
+        }
     }
 
     /// Returns a new color with the specified blue component.
     #[inline]
     pub const fn with_blue(&self, blue: u8) -> Self {
-        Self::rgba(self.r, self.g, blue, self.a)
+        Self {
+            b: blue as f32 / 255.0,
+            ..*self
+        }
     }
 
     // ===== Checks =====
@@ -260,13 +333,13 @@ impl Color {
     /// Returns true if this color is fully transparent (alpha = 0).
     #[inline]
     pub const fn is_transparent(&self) -> bool {
-        self.a == 0
+        self.a == 0.0
     }
 
-    /// Returns true if this color is fully opaque (alpha = 255).
+    /// Returns true if this color is fully opaque (normalized alpha = 1).
     #[inline]
     pub const fn is_opaque(&self) -> bool {
-        self.a == 255
+        self.a == 1.0
     }
 
     // ===== Operations =====
@@ -291,10 +364,11 @@ impl Color {
     /// ```
     /// use flui_painting::styling::Color;
     ///
-    /// assert_eq!(Color::lerp(Color::BLACK, Color::WHITE, 0.5), Color::rgb(99, 99, 99));
+    /// assert_eq!(Color::lerp(Color::BLACK, Color::WHITE, 0.5).to_rgba8(), [99, 99, 99, 255]);
     /// // A fade to transparent keeps the red.
     /// let half = Color::lerp(Color::rgb(255, 0, 0), Color::TRANSPARENT, 0.5);
-    /// assert_eq!(half, Color::rgba(255, 0, 0, 128));
+    /// assert_eq!(half.opacity(), 0.5);
+    /// assert_eq!(half.to_rgba8(), [255, 0, 0, 128]);
     /// ```
     #[must_use]
     pub fn lerp(a: Color, b: Color, t: f64) -> Color {
@@ -307,22 +381,22 @@ impl Color {
     /// [`Self::lerp`] without the clamp: `t` outside `[0, 1]` extrapolates and the result
     /// saturates. `t == 0` and `t == 1` return the endpoints exactly; a NaN `t` returns `a`.
     pub(crate) fn lerp_unclamped(a: Color, b: Color, t: f64) -> Color {
-        if t == 0.0 || t.is_nan() {
+        if t == 0.0 || t.is_nan() || a == b {
             return a;
         }
         if t == 1.0 {
             return b;
         }
-        // The animation parameter narrows to the f32 colour math (ADR-0098 §2). Every
-        // channel has saturated long before |t| = 1e6, and bounding it there keeps the
-        // mixed components, and the cubes Oklab decodes them through, finite in f32.
+        let (la, lb) = (a.to_oklab(), b.to_oklab());
+        if t.abs() > MAX_DIRECT_LERP_WEIGHT {
+            return Self::lerp_scaled(a, b, la, lb, t);
+        }
         #[expect(
             clippy::cast_possible_truncation,
-            reason = "t is bounded to ±1e6 first; f32 is the colour math's precision"
+            reason = "direct mix weight is finite and bounded; f32 is color math precision"
         )]
-        let t = t.clamp(-MAX_EXTRAPOLATION, MAX_EXTRAPOLATION) as f32;
+        let t = t as f32;
         let mix = |from: f32, to: f32| from + (to - from) * t;
-        let (la, lb) = a.to_oklab_pair(b);
         if a.a == b.a {
             // Equal alphas cancel out of the premultiplied mix exactly: mix straight
             // and keep the alpha (the common opaque-to-opaque case, no divisions).
@@ -331,7 +405,7 @@ impl Color {
                 a: mix(la.a, lb.a),
                 b: mix(la.b, lb.b),
             };
-            return Color::from_oklab(straight, a.a);
+            return Color::from_oklab_normalized(straight, a.a);
         }
         let (pa, pb) = (la.premultiplied(a.a), lb.premultiplied(b.a));
         let mixed = PremultipliedOklab {
@@ -349,25 +423,114 @@ impl Color {
             a: mix(la.a, lb.a),
             b: mix(la.b, lb.b),
         };
-        Color::from_oklab(straight, 0)
+        Color::from_oklab_normalized(straight, 0.0)
+    }
+
+    /// Evaluate an affine mix divided by |t|, so even infinite directional
+    /// limits retain endpoint differences without overflowing intermediate sums.
+    fn lerp_scaled(a: Color, b: Color, la: Oklab, lb: Oklab, t: f64) -> Self {
+        let inverse_scale = t.abs().recip();
+        let weight = t.signum();
+        let from = [la.l, la.a, la.b].map(f64::from);
+        let to = [lb.l, lb.a, lb.b].map(f64::from);
+        let mix = |from: f64, to: f64| from * inverse_scale + (to - from) * weight;
+        let straight = std::array::from_fn(|i| mix(from[i], to[i]));
+        if a.a == b.a {
+            return Self::from_scaled_oklab(straight, inverse_scale, a.a);
+        }
+        let (from_alpha, to_alpha) = (f64::from(a.a), f64::from(b.a));
+        let alpha_scaled = mix(from_alpha, to_alpha);
+        if alpha_scaled <= 0.0 {
+            return Self::from_scaled_oklab(straight, inverse_scale, 0.0);
+        }
+        let premultiplied = std::array::from_fn(|i| mix(from[i] * from_alpha, to[i] * to_alpha));
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "positive extrapolated alpha saturates before narrowing"
+        )]
+        let alpha = (alpha_scaled / inverse_scale).min(1.0) as f32;
+        Self::from_scaled_oklab(premultiplied, alpha_scaled, alpha)
+    }
+
+    /// Oklab to linear sRGB is homogeneous of degree three. Convert a bounded
+    /// direction through the color crate, then restore magnitude with saturated
+    /// division. This keeps the output clamp without overflowing Oklab cubes.
+    fn from_scaled_oklab(components: [f64; 3], divisor: f64, alpha: f32) -> Self {
+        let magnitude = components.into_iter().map(f64::abs).fold(0.0, f64::max);
+        if magnitude == 0.0 {
+            return Self::from_rgba_f32_array([0.0, 0.0, 0.0, alpha]);
+        }
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "normalized Oklab direction components are within [-1, 1]"
+        )]
+        let [l, a, b] = components.map(|component| (component / magnitude) as f32);
+        let linear =
+            color::AlphaColor::<color::Oklab>::new([l, a, b, alpha]).convert::<color::LinearSrgb>();
+        let inverse_magnitude = divisor / magnitude;
+        let threshold = inverse_magnitude * inverse_magnitude * inverse_magnitude;
+        let restore = |channel: f32| {
+            let channel = f64::from(channel);
+            if channel <= 0.0 {
+                0.0
+            } else if channel >= threshold {
+                1.0
+            } else {
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "channel below positive threshold restores within [0, 1]"
+                )]
+                {
+                    (channel / threshold) as f32
+                }
+            }
+        };
+        let [r, g, b, _] = linear.components;
+        let restored = [restore(r), restore(g), restore(b), alpha];
+        let mut converted =
+            color::AlphaColor::<color::LinearSrgb>::new(restored).convert::<color::Srgb>();
+        // The transfer function fixes zero and one exactly. Preserve output
+        // saturation even if the upstream floating evaluation rounds inward.
+        for (channel, linear) in converted.components[..3].iter_mut().zip(restored) {
+            if linear == 0.0 || linear == 1.0 {
+                *channel = linear;
+            }
+        }
+        Self::from_rgba_f32_array(converted.components)
     }
 
     /// Converts to a 32-bit ARGB value in `0xAARRGGBB` format.
     ///
-    /// Inverse of [`Color::from_argb`].
+    /// Rounds normalized channels to bytes. Byte-authored colors round-trip
+    /// through [`Color::from_argb`]; fractional channels lose precision here.
     #[inline]
     #[must_use]
     pub const fn to_argb(&self) -> u32 {
-        ((self.a as u32) << 24) | ((self.r as u32) << 16) | ((self.g as u32) << 8) | (self.b as u32)
+        let [r, g, b, a] = self.to_rgba8();
+        u32::from_be_bytes([a, r, g, b])
+    }
+
+    /// Exports gamma-encoded RGBA8, rounding each normalized channel to nearest.
+    /// Fractional colors deliberately lose precision at this byte boundary.
+    #[must_use]
+    pub const fn to_rgba8(&self) -> [u8; 4] {
+        [
+            byte_channel(self.r),
+            byte_channel(self.g),
+            byte_channel(self.b),
+            byte_channel(self.a),
+        ]
     }
 
     /// Formats as an uppercase hex string: `#RRGGBB` when fully opaque,
     /// `#AARRGGBB` otherwise.
     ///
-    /// Both forms round-trip through [`Color::from_hex`].
+    /// Byte-authored colors round-trip through [`Color::from_hex`]. Fractional
+    /// colors quantize at this export; use normalized components or serde to retain them.
     #[must_use]
     #[inline]
     pub fn to_hex(&self) -> String {
+        let [r, g, b, a] = self.to_rgba8();
         // Lookup table avoids format! machinery (no padding, no Display trait
         // dispatch).
         const HEX: &[u8; 16] = b"0123456789ABCDEF";
@@ -375,7 +538,7 @@ impl Color {
         if self.is_opaque() {
             let mut s = String::with_capacity(7);
             s.push('#');
-            for &b in &[self.r, self.g, self.b] {
+            for &b in &[r, g, b] {
                 s.push(HEX[(b >> 4) as usize] as char);
                 s.push(HEX[(b & 0x0F) as usize] as char);
             }
@@ -383,7 +546,7 @@ impl Color {
         } else {
             let mut s = String::with_capacity(9);
             s.push('#');
-            for &b in &[self.a, self.r, self.g, self.b] {
+            for &b in &[a, r, g, b] {
                 s.push(HEX[(b >> 4) as usize] as char);
                 s.push(HEX[(b & 0x0F) as usize] as char);
             }
@@ -391,84 +554,53 @@ impl Color {
         }
     }
 
-    /// Returns the RGBA channels as an `(r, g, b, a)` tuple of `f32` values
-    /// in `0.0..=1.0`.
-    #[inline]
-    #[must_use]
-    pub const fn to_rgba_f32(&self) -> (f32, f32, f32, f32) {
-        (
-            self.r as f32 / 255.0,
-            self.g as f32 / 255.0,
-            self.b as f32 / 255.0,
-            self.a as f32 / 255.0,
-        )
-    }
-
     /// Returns the RGBA channels as an `[r, g, b, a]` array of `f32` values
     /// in `0.0..=1.0`.
     #[inline]
     #[must_use]
     pub const fn to_rgba_f32_array(&self) -> [f32; 4] {
-        [
-            self.r as f32 / 255.0,
-            self.g as f32 / 255.0,
-            self.b as f32 / 255.0,
-            self.a as f32 / 255.0,
-        ]
+        [self.r, self.g, self.b, self.a]
     }
 
     /// Creates a color from an `[r, g, b, a]` array of `f32` values in
     /// `0.0..=1.0`.
     ///
-    /// Values are clamped to `0.0..=1.0` before conversion.
+    /// Values saturate to `0.0..=1.0`; NaN and negative infinity become zero,
+    /// positive infinity becomes one, and negative zero becomes positive zero.
+    /// Authored hidden RGB is retained when alpha is zero.
     #[inline]
     #[must_use]
     pub fn from_rgba_f32_array(rgba: [f32; 4]) -> Self {
-        Self::rgba(
-            (rgba[0].clamp(0.0, 1.0) * 255.0) as u8,
-            (rgba[1].clamp(0.0, 1.0) * 255.0) as u8,
-            (rgba[2].clamp(0.0, 1.0) * 255.0) as u8,
-            (rgba[3].clamp(0.0, 1.0) * 255.0) as u8,
-        )
-    }
-
-    /// Returns the RGBA channels as an `[r, g, b, a]` array of `f32` values
-    /// in `0.0..=1.0`.
-    ///
-    /// The shorter-named alias of [`Color::to_rgba_f32_array`], delegating to
-    /// it so the channel arithmetic exists once.
-    #[inline]
-    #[must_use]
-    pub const fn to_f32_array(&self) -> [f32; 4] {
-        self.to_rgba_f32_array()
+        let [r, g, b, a] = rgba.map(normalized);
+        Self { r, g, b, a }
     }
 
     /// Returns the red channel as an `f32` in `0.0..=1.0`.
     #[inline]
     #[must_use]
     pub const fn red_f32(&self) -> f32 {
-        self.r as f32 / 255.0
+        self.r
     }
 
     /// Returns the green channel as an `f32` in `0.0..=1.0`.
     #[inline]
     #[must_use]
     pub const fn green_f32(&self) -> f32 {
-        self.g as f32 / 255.0
+        self.g
     }
 
     /// Returns the blue channel as an `f32` in `0.0..=1.0`.
     #[inline]
     #[must_use]
     pub const fn blue_f32(&self) -> f32 {
-        self.b as f32 / 255.0
+        self.b
     }
 
     /// Returns the alpha channel as an `f32` in `0.0..=1.0`.
     #[inline]
     #[must_use]
     pub const fn alpha_f32(&self) -> f32 {
-        self.a as f32 / 255.0
+        self.a
     }
 
     // ===== Helper methods for rendering =====
@@ -479,18 +611,21 @@ impl Color {
     /// Uses a float formulation: the background keeps
     /// `back = a_bg · (1 − a_fg)` of its alpha, the result's alpha is
     /// `a_fg + back` (exactly 1 over an opaque background), each channel is
-    /// `(fg · a_fg + bg · back) / alpha`, and channels round to nearest when
-    /// stored as 8 bits. Fully opaque returns `self` and fully transparent
-    /// returns `background`.
+    /// `(fg · a_fg + bg · back) / alpha`. Channels retain normalized float
+    /// precision. An opaque source or transparent backdrop returns `self`;
+    /// a transparent source returns `background`.
     #[must_use]
     #[inline]
     pub fn blend_over(&self, background: Color) -> Color {
         // Fast paths
-        if self.a == 255 {
+        if self.a == 1.0 {
             return *self;
         }
-        if self.a == 0 {
+        if self.a == 0.0 {
             return background;
+        }
+        if background.a == 0.0 {
+            return *self;
         }
 
         self.blend_over_scalar(background)
@@ -500,12 +635,12 @@ impl Color {
     /// result is fully transparent.
     #[inline]
     fn blend_over_factors(&self, background: Color) -> Option<(f32, f32, f32)> {
-        let alpha = f32::from(self.a) / 255.0;
+        let alpha = self.a;
         let inv_alpha = 1.0 - alpha;
-        if background.a == 255 {
+        if background.a == 1.0 {
             return Some((alpha, inv_alpha, 1.0));
         }
-        let back = f32::from(background.a) / 255.0 * inv_alpha;
+        let back = background.a * inv_alpha;
         let out = alpha + back;
         (out > 0.0).then_some((alpha, back, out))
     }
@@ -515,26 +650,26 @@ impl Color {
         let Some((alpha, back, out)) = self.blend_over_factors(background) else {
             return Color::TRANSPARENT;
         };
-        let channel =
-            |fg: u8, bg: u8| ((f32::from(fg) * alpha + f32::from(bg) * back) / out).round() as u8;
-        Color::rgba(
+        let channel = |fg: f32, bg: f32| (fg * alpha + bg * back) / out;
+        Color::from_rgba_f32_array([
             channel(self.r, background.r),
             channel(self.g, background.g),
             channel(self.b, background.b),
-            (out * 255.0).round() as u8,
-        )
+            out,
+        ])
     }
 
     /// Multiplies each channel (including alpha) componentwise with `other`.
     #[inline]
     #[must_use]
     pub const fn multiply(&self, other: Color) -> Color {
-        Color::rgba(
-            ((self.r as u16 * other.r as u16) / 255) as u8,
-            ((self.g as u16 * other.g as u16) / 255) as u8,
-            ((self.b as u16 * other.b as u16) / 255) as u8,
-            ((self.a as u16 * other.a as u16) / 255) as u8,
-        )
+        // Products of canonical finite normalized channels remain canonical.
+        Color {
+            r: self.r * other.r,
+            g: self.g * other.g,
+            b: self.b * other.b,
+            a: self.a * other.a,
+        }
     }
 
     /// Darkens the color by scaling the RGB channels by `factor` (clamped to
@@ -546,12 +681,7 @@ impl Color {
     #[must_use]
     pub fn darken(&self, factor: f32) -> Color {
         let factor = factor.clamp(0.0, 1.0);
-        Color::rgba(
-            (self.r as f32 * factor) as u8,
-            (self.g as f32 * factor) as u8,
-            (self.b as f32 * factor) as u8,
-            self.a,
-        )
+        Color::from_rgba_f32_array([self.r * factor, self.g * factor, self.b * factor, self.a])
     }
 
     /// Lightens the color by moving the RGB channels toward white by
@@ -563,41 +693,51 @@ impl Color {
     #[must_use]
     pub fn lighten(&self, factor: f32) -> Color {
         let factor = factor.clamp(0.0, 1.0);
-        Color::rgba(
-            (self.r as f32 + (255.0 - self.r as f32) * factor) as u8,
-            (self.g as f32 + (255.0 - self.g as f32) * factor) as u8,
-            (self.b as f32 + (255.0 - self.b as f32) * factor) as u8,
+        Color::from_rgba_f32_array([
+            self.r + (1.0 - self.r) * factor,
+            self.g + (1.0 - self.g) * factor,
+            self.b + (1.0 - self.b) * factor,
             self.a,
-        )
+        ])
     }
 
-    /// Returns the perceived brightness in `0.0..=1.0`, using Rec. 709 luma
-    /// coefficients on the gamma-encoded channels.
+    /// Returns relative luminance in `0.0..=1.0`, using linear sRGB channels.
+    ///
+    /// Alpha is excluded. For a translucent painted surface, first composite
+    /// over its actual opaque backdrop with [`Self::blend_over`].
     #[inline]
     #[must_use]
-    pub const fn luminance(&self) -> f32 {
-        (0.2126 * self.r as f32 + 0.7152 * self.g as f32 + 0.0722 * self.b as f32) / 255.0
+    pub fn luminance(&self) -> f32 {
+        0.2126 * srgb_to_linear(self.r)
+            + 0.7152 * srgb_to_linear(self.g)
+            + 0.0722 * srgb_to_linear(self.b)
     }
 
-    /// Returns `true` if the luminance is below 0.5.
+    /// Returns `true` when white contrasts more strongly with this RGB than black.
+    /// Uses [`Self::luminance`]; an exact contrast tie is classified as light.
     #[inline]
     #[must_use]
-    pub const fn is_dark(&self) -> bool {
-        self.luminance() < 0.5
+    pub fn is_dark(&self) -> bool {
+        let luminance = f64::from(self.luminance()) + 0.05;
+        1.05 / luminance > luminance / 0.05
     }
 
-    /// Returns `true` if the luminance is 0.5 or above.
+    /// Returns `true` when black contrasts at least as strongly as white.
+    /// Uses the same RGB and alpha policy as [`Self::is_dark`].
     #[inline]
     #[must_use]
-    pub const fn is_light(&self) -> bool {
-        self.luminance() >= 0.5
+    pub fn is_light(&self) -> bool {
+        !self.is_dark()
     }
 
-    /// Returns a legible text color for use over this background: white for
-    /// dark colors, black for light ones.
+    /// Chooses black or white with the greatest contrast over an opaque background.
+    ///
+    /// Uses the [WCAG relative-luminance contrast ratio](https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html).
+    /// Alpha is excluded: composite a translucent surface over its actual opaque
+    /// backdrop first. This color choice alone does not establish application accessibility.
     #[inline]
     #[must_use]
-    pub const fn contrasting_text_color(&self) -> Color {
+    pub fn contrasting_text_color(&self) -> Color {
         if self.is_dark() {
             Color::WHITE
         } else {
@@ -609,59 +749,31 @@ impl Color {
 
     /// Convert to Oklab (perceptually uniform, Björn Ottosson 2020).
     ///
-    /// Pipeline: sRGB → linear → LMS (M1) → cube root → Lab (M2). Exact
-    /// matrices from <https://bottosson.github.io/posts/oklab/>. Alpha is not
-    /// part of Oklab and is carried separately by the caller.
+    /// Uses the `color` crate's sRGB-to-Oklab conversion. See the
+    /// [Oklab definition](https://bottosson.github.io/posts/oklab/).
+    /// Alpha is not part of Oklab and is carried separately by the caller.
     #[must_use]
     pub fn to_oklab(self) -> Oklab {
-        let [l, m, s] = self.lms();
-        let [l_, m_, s_, _] = cbrt_lanes([l, m, s, 1.0]);
-        Oklab::from_cube_roots(l_, m_, s_)
+        let converted = color::AlphaColor::<color::Srgb>::new(self.to_rgba_f32_array())
+            .convert::<color::Oklab>();
+        let [l, a, b, _] = converted.components;
+        Oklab { l, a, b }
     }
 
-    /// Both colours in Oklab, their six cube roots taken in one set of lanes.
-    fn to_oklab_pair(self, other: Color) -> (Oklab, Oklab) {
-        let ([l0, m0, s0], [l1, m1, s1]) = (self.lms(), other.lms());
-        let [l0, m0, s0, _, l1, m1, s1, _] = cbrt_lanes([l0, m0, s0, 1.0, l1, m1, s1, 1.0]);
-        (
-            Oklab::from_cube_roots(l0, m0, s0),
-            Oklab::from_cube_roots(l1, m1, s1),
-        )
-    }
-
-    /// The colour's cone response (Oklab's LMS), before the cube root.
-    #[inline]
-    fn lms(self) -> [f32; 3] {
-        let r = SRGB_TO_LINEAR[usize::from(self.r)];
-        let g = SRGB_TO_LINEAR[usize::from(self.g)];
-        let b = SRGB_TO_LINEAR[usize::from(self.b)];
-        [
-            0.412_221_47 * r + 0.536_332_54 * g + 0.051_445_995 * b,
-            0.211_903_5 * r + 0.680_699_5 * g + 0.107_396_96 * b,
-            0.088_302_46 * r + 0.281_718_85 * g + 0.629_978_7 * b,
-        ]
-    }
-
-    /// Convert from Oklab back to sRGB, with the given alpha channel.
+    /// Convert from Oklab back to sRGB, with byte alpha in `0..=255`.
     ///
-    /// Out-of-gamut results are clamped per channel (sufficient for
-    /// interpolation between two in-gamut endpoints; the Oklab segment
-    /// between two sRGB colors leaves the gamut only marginally).
+    /// Uses the `color` crate's Oklab-to-sRGB conversion. Out-of-gamut results
+    /// are clamped per channel.
     #[must_use]
     pub fn from_oklab(lab: Oklab, alpha: u8) -> Color {
-        let l_ = lab.l + 0.396_337_78 * lab.a + 0.215_803_76 * lab.b;
-        let m_ = lab.l - 0.105_561_346 * lab.a - 0.063_854_17 * lab.b;
-        let s_ = lab.l - 0.089_484_18 * lab.a - 1.291_485_5 * lab.b;
+        Self::from_oklab_normalized(lab, f32::from(alpha) / 255.0)
+    }
 
-        let l = l_ * l_ * l_;
-        let m = m_ * m_ * m_;
-        let s = s_ * s_ * s_;
-
-        let r = 4.076_741_7 * l - 3.307_711_6 * m + 0.230_969_94 * s;
-        let g = -1.268_438 * l + 2.609_757_4 * m - 0.341_319_38 * s;
-        let b = -0.004_196_086_3 * l - 0.703_418_6 * m + 1.707_614_7 * s;
-
-        Color::rgba(encode_linear(r), encode_linear(g), encode_linear(b), alpha)
+    /// Convert before clamping: signed Oklab axes are not normalized channels.
+    fn from_oklab_normalized(lab: Oklab, alpha: f32) -> Self {
+        let converted = color::AlphaColor::<color::Oklab>::new([lab.l, lab.a, lab.b, alpha])
+            .convert::<color::Srgb>();
+        Self::from_rgba_f32_array(converted.components)
     }
 
     /// Converts to Oklab with alpha in `[0, 1]`, the colour components multiplied by it —
@@ -682,19 +794,20 @@ impl Color {
     }
 
     /// Converts a premultiplied Oklab vector back to a colour: the components are divided
-    /// by `alpha`, which saturates into `0..=255`, and out-of-gamut channels clamp.
+    /// by `alpha`, which saturates into `[0, 1]`, and out-of-gamut channels clamp.
     ///
     /// A vector with no positive alpha (zero, negative or NaN) carries no colour and
-    /// returns [`Color::TRANSPARENT`]. Inverts [`Color::to_premultiplied_oklab`] up to the
-    /// 8-bit quantisation of the channels.
+    /// returns [`Color::TRANSPARENT`]. Inverts [`Color::to_premultiplied_oklab`] up to
+    /// floating-point conversion error; subnormal alpha reduces RGB precision.
     ///
     /// # Examples
     ///
     /// ```
     /// use flui_painting::styling::Color;
+    /// use flui_foundation::geometry::ApproxEq;
     ///
     /// let red = Color::rgb(255, 0, 0);
-    /// assert_eq!(Color::from_premultiplied_oklab(red.to_premultiplied_oklab()), red);
+    /// assert!(Color::from_premultiplied_oklab(red.to_premultiplied_oklab()).approx_eq(&red));
     /// ```
     #[must_use]
     pub fn from_premultiplied_oklab(premultiplied: PremultipliedOklab) -> Color {
@@ -707,13 +820,8 @@ impl Color {
             a: premultiplied.a / alpha,
             b: premultiplied.b / alpha,
         };
-        #[expect(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "rounded and clamped into 0..=255 first"
-        )]
-        let alpha = (alpha * 255.0).round().clamp(0.0, 255.0) as u8;
-        Color::from_oklab(lab, alpha)
+        // Direct division above avoids overflowing 1/alpha for subnormal alpha.
+        Color::from_oklab_normalized(lab, alpha)
     }
 
     /// Samples a multi-stop color ramp at position `t` (clamped to
@@ -788,8 +896,17 @@ impl Color {
     pub fn blend(&self, dst: Color, mode: crate::paint::BlendMode) -> Color {
         use crate::paint::BlendMode;
 
-        let [src_r, src_g, src_b, src_a] = self.to_f32_array();
-        let [dst_r, dst_g, dst_b, dst_a] = dst.to_f32_array();
+        // Preserve exact identities before premultiplication can underflow.
+        match mode {
+            BlendMode::Src => return *self,
+            BlendMode::Dst => return dst,
+            BlendMode::SrcOver => return self.blend_over(dst),
+            BlendMode::DstOver => return dst.blend_over(*self),
+            _ => {}
+        }
+
+        let [src_r, src_g, src_b, src_a] = self.to_rgba_f32_array();
+        let [dst_r, dst_g, dst_b, dst_a] = dst.to_rgba_f32_array();
 
         // The output color is accumulated premultiplied, then un-premultiplied
         // once at the end. (`src_pm`/`dst_pm` are used by the Modulate and
@@ -850,15 +967,8 @@ impl Color {
         if out_a <= 0.0 {
             return Color::TRANSPARENT;
         }
-        // Round to nearest, as the GPU's float -> unorm8 conversion does;
-        // truncating made `Src`/`Dst` drift by one on ~13% of translucent inputs.
-        let to_u8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-        Color::rgba(
-            to_u8(out_r_pm / out_a),
-            to_u8(out_g_pm / out_a),
-            to_u8(out_b_pm / out_a),
-            to_u8(out_a),
-        )
+        // Retain normalized precision; only explicit byte exports quantize.
+        Color::from_rgba_f32_array([out_r_pm / out_a, out_g_pm / out_a, out_b_pm / out_a, out_a])
     }
 
     // ===== Common color constants =====
@@ -909,8 +1019,7 @@ impl Color {
 /// Applies the IEC 61966-2-1 piecewise formula to a single channel `c` in
 /// `[0, 1]` (straight sRGB). Returns the linearized value in `[0, 1]`.
 ///
-/// Used by [`Color::to_oklab`] and the GPU gamma `ColorFilter`'s CPU oracle.
-/// One home for both callers — do not inline copies elsewhere.
+/// Used by [`Color::luminance`] and the GPU gamma `ColorFilter`'s CPU oracle.
 ///
 /// # Examples
 /// ```
@@ -934,8 +1043,7 @@ pub fn srgb_to_linear(c: f32) -> f32 {
 /// Applies the IEC 61966-2-1 piecewise formula to a single linearized channel
 /// `c` in `[0, 1]`. Returns the gamma-encoded sRGB value in `[0, 1]`.
 ///
-/// Used by [`Color::from_oklab`] and the GPU gamma `ColorFilter` CPU oracle.
-/// One home for both callers — do not inline copies elsewhere.
+/// Also available to CPU oracles for the GPU gamma `ColorFilter`.
 ///
 /// # Examples
 /// ```
@@ -951,60 +1059,6 @@ pub fn linear_to_srgb(c: f32) -> f32 {
     } else {
         1.055 * c.powf(1.0 / 2.4) - 0.055
     }
-}
-
-/// Encodes a linear-light channel as the nearest 8-bit sRGB code, clamping out-of-gamut
-/// values (and NaN) into `0..=255`.
-///
-/// Equal to `round(linear_to_srgb(c) * 255)`, without a `powf`: the transfer function is
-/// monotonic, so the code is the number of rounding boundaries (linear light of
-/// `(k + 0.5) / 255`) at or below `c`. The bucket table gives that count at the bucket's
-/// lower edge, and at most one more boundary lies inside a bucket.
-#[inline]
-fn encode_linear(c: f32) -> u8 {
-    #[expect(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        clippy::cast_precision_loss,
-        reason = "the float-to-usize cast saturates (negative and NaN to 0) and is clamped"
-    )]
-    let bucket = ((c * LINEAR_BUCKETS as f32) as usize).min(LINEAR_BUCKETS);
-    let code = LINEAR_BUCKET_CODES[bucket];
-    match LINEAR_ROUNDING_THRESHOLDS.get(usize::from(code)) {
-        Some(&threshold) if c >= threshold => code + 1,
-        _ => code,
-    }
-}
-
-/// Cube roots of LMS responses, lane by lane, for [`Color::to_oklab`].
-///
-/// An estimate from the bits (the biased exponent divided by three, `0x2a51_37a0`
-/// restoring the bias; within about 4 %) refined by two Halley steps
-/// `y ← y·(y³ + 2x)/(2y³ + x)`. Measured worst relative error over `[1e-30, 1e10]`:
-/// 2.3e-7, the `f32` rounding level. Six roots run per colour interpolation; in
-/// isolation on the reference host the six cost about 9 ns against about 44 ns for
-/// `f32::cbrt` (libm), and beat division-free inverse-root Newton iterations (four
-/// steps for the same precision, a longer dependent chain). Zero, negative, subnormal
-/// and NaN inputs (which `to_oklab`'s non-negative weights and table produce only as
-/// zero) take `f32::cbrt`.
-#[inline]
-fn cbrt_lanes<const N: usize>(x: [f32; N]) -> [f32; N] {
-    // Lanes with no branch inside the loop, so the steps vectorise (one packed
-    // division per step for four roots instead of one each).
-    let mut y = x.map(|x| f32::from_bits(x.to_bits() / 3 + 0x2a51_37a0));
-    for _ in 0..2 {
-        for (y, x) in y.iter_mut().zip(x) {
-            let y3 = *y * *y * *y;
-            *y *= (y3 + 2.0 * x) / (2.0 * y3 + x);
-        }
-    }
-    std::array::from_fn(|i| {
-        if x[i].is_nan() || x[i] < f32::MIN_POSITIVE {
-            x[i].cbrt()
-        } else {
-            y[i]
-        }
-    })
 }
 
 // ===== Blend-mode evaluation helpers (used by `Color::blend`) =====
@@ -1200,10 +1254,12 @@ impl From<[u8; 4]> for Color {
 // ===== Approximate equality =====
 
 impl flui_foundation::geometry::ApproxEq for Color {
-    /// Default epsilon for color comparison (1/255 ≈ 0.004).
+    /// Default epsilon for color comparison (approximately 1/255).
     ///
-    /// This allows for 1 unit difference in u8 color channels.
-    const DEFAULT_EPSILON: f64 = 1.0 / 255.0;
+    /// Includes one normalized f32 rounding unit so adjacent byte-authored
+    /// channels remain within the promised one-byte tolerance. An explicitly
+    /// supplied epsilon is used exactly, without this allowance.
+    const DEFAULT_EPSILON: f64 = 1.0 / 255.0 + f32::EPSILON as f64;
 
     /// Compares colors in normalized f32 space with epsilon tolerance.
     ///
@@ -1225,11 +1281,8 @@ impl flui_foundation::geometry::ApproxEq for Color {
     /// ```
     #[inline]
     fn approx_eq_eps(&self, other: &Self, epsilon: f64) -> bool {
-        // Distances are taken in 8-bit units before normalizing: subtracting
-        // two normalized channels can land just above `n / 255` (4/255 - 3/255
-        // does in f32), which would reject a one-unit difference at the
-        // default epsilon.
-        let within = |x: u8, y: u8| f64::from(x.abs_diff(y)) / 255.0 <= epsilon;
+        // Compare the stored normalized values, independently of byte exports.
+        let within = |x: f32, y: f32| (f64::from(x) - f64::from(y)).abs() <= epsilon;
         within(self.r, other.r)
             && within(self.g, other.g)
             && within(self.b, other.b)

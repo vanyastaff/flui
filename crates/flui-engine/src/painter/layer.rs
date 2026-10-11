@@ -527,7 +527,7 @@ impl WgpuPainter {
     /// All drawing between `save_layer` and the matching [`Self::restore_layer`]
     /// is captured into an offscreen texture.  On restore the offscreen is
     /// composited onto the parent surface with the layer's effective group
-    /// opacity (derived from `paint.color.a`) and `paint.blend_mode`.
+    /// opacity (derived from `paint.color.opacity()`) and `paint.blend_mode`.
     ///
     /// The `paint.color` RGB is intentionally ignored: a tint is a
     /// `ColorFilter` on the layer (the color-filter layer path), never
@@ -542,7 +542,7 @@ impl WgpuPainter {
     /// region, even for an empty layer (mapping decision 19 in
     /// `ARCHITECTURE.md`).
     pub fn save_layer(&mut self, bounds: Option<Rect<f64>>, paint: &Paint) {
-        let paint_alpha = f32::from(paint.color.a) / 255.0;
+        let paint_alpha = paint.color.opacity();
         let layer_opacity = self.compositor.effective_layer_opacity(paint_alpha);
         let region = self.composite_region(bounds);
         let composite_clip = self.composite_clip(bounds, paint.blend_mode, true);

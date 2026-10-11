@@ -2,31 +2,29 @@
 
 use std::cell::Cell;
 
-use flui_rendering::{RenderUpdateImpact, pipeline::LocalRenderInvalidationHandle};
+use flui_rendering::{
+    RenderUpdateImpact, pipeline::LocalRenderInvalidationHandle, traits::PaintOpacity,
+};
 
 pub(crate) struct OpacitySample {
     generation: Cell<u64>,
-    alpha: Cell<u8>,
+    alpha: Cell<PaintOpacity>,
 }
 
 impl OpacitySample {
     pub(crate) fn new(value: f64) -> Self {
         Self {
             generation: Cell::new(0),
-            alpha: Cell::new(Self::convert(value)),
+            alpha: Cell::new(PaintOpacity::new(value)),
         }
     }
 
-    pub(crate) fn get(&self) -> u8 {
-        self.alpha.get()
+    pub(crate) fn get(&self) -> f64 {
+        self.alpha.get().alpha()
     }
 
-    fn convert(value: f64) -> u8 {
-        (value.clamp(0.0, 1.0) * 255.0).round() as u8
-    }
-
-    pub(crate) fn is_layered(alpha: u8) -> bool {
-        alpha > 0 && alpha < 255
+    pub(crate) fn is_layered(alpha: f64) -> bool {
+        alpha > 0.0 && alpha < 1.0
     }
 
     pub(crate) fn sample(
@@ -38,7 +36,7 @@ impl OpacitySample {
             return false;
         };
         self.generation.set(generation);
-        let alpha = Self::convert(read());
+        let alpha = PaintOpacity::new(read());
         if self.generation.get() != generation {
             return false;
         }
@@ -48,12 +46,12 @@ impl OpacitySample {
         }
         // Paint sees the accepted sample even if the wake fails or reenters.
         // The owner retains all owed phases in one admission before that wake.
-        let mut impact = if (old == 0) == (alpha == 0) {
+        let mut impact = if (old.alpha() == 0.0) == (alpha.alpha() == 0.0) {
             RenderUpdateImpact::COMPOSITED_LAYER_UPDATE
         } else {
-            RenderUpdateImpact::PAINT
+            RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS
         };
-        if Self::is_layered(old) != Self::is_layered(alpha) {
+        if Self::is_layered(old.alpha()) != Self::is_layered(alpha.alpha()) {
             impact |= RenderUpdateImpact::COMPOSITING_BITS;
         }
         handle.request_update(impact).is_ok()

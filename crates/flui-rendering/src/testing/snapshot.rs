@@ -85,8 +85,9 @@ fn f(v: f64) -> String {
 }
 
 /// Format a `Color` as `#RRGGBBAA`.
-fn hex_color(c: Color) -> String {
-    format!("#{:02X}{:02X}{:02X}{:02X}", c.r, c.g, c.b, c.a)
+fn hex_color(color: Color) -> String {
+    let [r, g, b, a] = color.to_rgba8();
+    format!("#{r:02X}{g:02X}{b:02X}{a:02X}")
 }
 
 /// Summarize a `Paint` as `"<style> <#RRGGBBAA>[ stroke=<w>]"`.

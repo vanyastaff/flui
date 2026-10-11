@@ -549,7 +549,9 @@ let end = CardMotion(Appearance {
 }, 1.0);
 let midpoint = start.lerp_to(&end, 0.5);
 assert_eq!(midpoint.0.position, Offset::new(10.0, 20.0));
-assert!(midpoint.0.color.r >= 254 && midpoint.0.color.b <= 1);
+let [red, _, blue, alpha] = midpoint.0.color.to_rgba_f32_array();
+assert!(red >= 254.0 / 255.0 && blue <= 1.0 / 255.0);
+assert_eq!(alpha, 0.5);
 assert_eq!(midpoint.1, 0.5);
 ```
 

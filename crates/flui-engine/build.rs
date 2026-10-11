@@ -1,27 +1,28 @@
 //! Build script for `flui-engine`.
 //!
-//! ## P1–P3: wgsl_bindgen on filter-pass and composed shaders
+//! ## Generated filter bindings
 //!
 //! Generates Rust bindings for the transfer-filter shaders (gamma, blur,
 //! morphology, color_matrix) and the naga_oil-composed shaders (mode,
-//! advanced_blend) into `OUT_DIR`.  Each generated file is `include!`d from
-//! `src/<name>/generated.rs`.
+//! advanced_blend), plus decoded-image source filters, into `OUT_DIR`. The
+//! consumer includes each generated file and owns its runtime pipeline.
 //!
 //! ## Covered shaders (this file)
 //!
 //! | Shader              | OUT_DIR file                  | Uniform size | Imports        |
 //! |---------------------|-------------------------------|--------------|----------------|
-//! | gamma.wgsl          | gamma_generated.rs            | 16 bytes     | —              |
+//! | gamma.wgsl          | gamma_generated.rs            | 16 bytes     | color_filter   |
 //! | blur.wgsl           | blur_generated.rs             | 32 bytes     | —              |
 //! | morphology.wgsl     | morphology_generated.rs       | 48 bytes     | —              |
-//! | color_matrix.wgsl   | color_matrix_generated.rs     | 80 bytes     | —              |
-//! | effects/mode.wgsl   | mode_generated.rs             | 32 bytes     | blend_helpers  |
+//! | color_matrix.wgsl   | color_matrix_generated.rs     | 80 bytes     | color_filter   |
+//! | effects/mode.wgsl   | mode_generated.rs             | 32 bytes     | color_filter   |
+//! | image_source_filter_layout.wgsl | image_source_filter_generated.rs | 112 bytes | color_filter |
 //! | advanced_blend.wgsl | advanced_blend_generated.rs   | 128 bytes    | blend_helpers  |
 //!
 //! ## `#import` resolution for the composed shaders
 //!
-//! `mode.wgsl` and `advanced_blend.wgsl` carry a
-//! `#import blend_helpers::{…}` directive.  `wgsl_bindgen` resolves imports by
+//! Composed shaders import `color_filter` or `blend_helpers`.
+//! `wgsl_bindgen` resolves imports by
 //! file-path convention (it maps the module name `blend_helpers` to a
 //! `blend_helpers.wgsl` file found under the workspace root, the importing
 //! file's directory, or an additional scan directory — see
@@ -112,11 +113,6 @@ struct ShaderConfig {
 /// All import-free filter-pass shaders (P1 + P2a).
 const SHADER_CONFIGS: &[ShaderConfig] = &[
     ShaderConfig {
-        shader_name: "gamma.wgsl",
-        out_file: "gamma_generated.rs",
-        overrides: NEAREST_SRC,
-    },
-    ShaderConfig {
         shader_name: "blur.wgsl",
         out_file: "blur_generated.rs",
         // blur is the only filterable shader: the Gaussian kernel composes
@@ -131,11 +127,6 @@ const SHADER_CONFIGS: &[ShaderConfig] = &[
     ShaderConfig {
         shader_name: "morphology.wgsl",
         out_file: "morphology_generated.rs",
-        overrides: NEAREST_SRC,
-    },
-    ShaderConfig {
-        shader_name: "color_matrix.wgsl",
-        out_file: "color_matrix_generated.rs",
         overrides: NEAREST_SRC,
     },
 ];
@@ -174,6 +165,30 @@ struct ComposedShaderConfig {
 /// All naga_oil-composed shaders (P3).  Both sample texel-aligned premultiplied
 /// data with a nearest sampler.
 const COMPOSED_SHADER_CONFIGS: &[ComposedShaderConfig] = &[
+    ComposedShaderConfig {
+        entry_rel: "image_source_filter_layout.wgsl",
+        out_file: "image_source_filter_generated.rs",
+        workspace_rel: "",
+        scan_rel: &[],
+        overrides: NEAREST_SRC,
+        field_type_overrides: &[],
+    },
+    ComposedShaderConfig {
+        entry_rel: "effects/gamma.wgsl",
+        out_file: "gamma_generated.rs",
+        workspace_rel: "effects",
+        scan_rel: &[""],
+        overrides: NEAREST_SRC,
+        field_type_overrides: &[],
+    },
+    ComposedShaderConfig {
+        entry_rel: "effects/color_matrix.wgsl",
+        out_file: "color_matrix_generated.rs",
+        workspace_rel: "effects",
+        scan_rel: &[""],
+        overrides: NEAREST_SRC,
+        field_type_overrides: &[],
+    },
     ComposedShaderConfig {
         entry_rel: "effects/mode.wgsl",
         out_file: "mode_generated.rs",

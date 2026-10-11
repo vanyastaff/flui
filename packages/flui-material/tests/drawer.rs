@@ -330,12 +330,12 @@ fn drawer_scene_sample(
             let DrawOp::Rect { rect, paint } = &command.op else {
                 continue;
             };
-            if (paint.color.r, paint.color.g, paint.color.b) != (color.r, color.g, color.b) {
+            if paint.color.to_rgba_f32_array()[..3] != color.to_rgba_f32_array()[..3] {
                 continue;
             }
             let (x, y) = command.transform.transform_point(rect.left(), rect.top());
             let mut point = Point::new(x, y);
-            let mut alpha = f64::from(paint.color.a) / 255.0;
+            let mut alpha = f64::from(paint.color.opacity());
             let mut parent = node.parent();
             while let Some(id) = parent {
                 let ancestor = tree.get(id).expect("scene parent exists");
@@ -446,7 +446,7 @@ pub fn drawer_slides_without_rebuilding_per_frame() {
                 };
                 let alpha = drawer_scene_sample(scene, scrim).1;
                 assert!(
-                    (alpha - value * f64::from(scrim.a) / 255.0).abs() <= 1.0 / 255.0,
+                    (alpha - value * f64::from(scrim.opacity())).abs() <= 1.0 / 255.0,
                     "dragged panel and scrim consume the same value"
                 );
             }
@@ -481,7 +481,7 @@ pub fn drawer_slides_without_rebuilding_per_frame() {
             };
             let alpha = drawer_scene_sample(scene, scrim).1;
             assert!(
-                (alpha - value * f64::from(scrim.a) / 255.0).abs() <= 1.0 / 255.0,
+                (alpha - value * f64::from(scrim.opacity())).abs() <= 1.0 / 255.0,
                 "scrim alpha follows the same motion"
             );
             previous = x;

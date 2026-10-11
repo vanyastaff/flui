@@ -745,17 +745,17 @@ impl PipelineCache {
 ///   the shape into `DrawItem::AdvancedShape` before the key is used for a
 ///   pipeline-cache lookup. The advanced key must never reach the cache:
 ///   [`PipelineCache::get_or_create`] debug-asserts against it.
-/// - `SrcOver` keeps the legacy fast heuristic: opaque source (`a == 255`) skips
+/// - `SrcOver` keeps the legacy fast heuristic: opaque source (`alpha == 1`) skips
 ///   the blend stage entirely; translucent source uses the SrcOver blend.
 pub(crate) fn pipeline_key_from_paint(paint: &Paint) -> PipelineKey {
     let mode = paint.blend_mode;
 
     if mode == BlendMode::SrcOver {
         // Legacy fast path: opaque SrcOver skips blending.
-        return if paint.color.a < 255 {
-            PipelineKey::alpha_blend()
-        } else {
+        return if paint.color.is_opaque() {
             PipelineKey::opaque()
+        } else {
+            PipelineKey::alpha_blend()
         };
     }
 

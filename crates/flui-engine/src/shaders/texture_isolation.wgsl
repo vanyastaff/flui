@@ -25,5 +25,6 @@ fn fs_main(in: VertexOutput) -> ImageIsolationOutput {
     output.coverage = clipAlpha(in.position.xy + image_isolation.origin, in.world_pos,
         in.clip_bounds, in.clip_radii, in.clip_kind,
         in.clip_device_to_local, in.clip_local_origin);
+    output.source *= output.coverage;
     return output;
 }

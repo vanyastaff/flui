@@ -931,7 +931,7 @@ impl RenderEditable {
         let Some(range) = self.selection.as_ref() else {
             return;
         };
-        if range.is_empty() || self.selection_color.a == 0 {
+        if range.is_empty() || self.selection_color.is_transparent() {
             return;
         }
 

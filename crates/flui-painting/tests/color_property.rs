@@ -8,11 +8,128 @@ use flui_painting::paint::{BlendMode, BlendMode::*};
 use flui_painting::styling::Color;
 use proptest::prelude::*;
 
+pub(crate) fn normalized_admission_and_hashing_are_canonical() {
+    use flui_foundation::geometry::ApproxEq;
+    for channel in 0..255 {
+        assert!(
+            Color::rgb(channel, 0, 0).approx_eq(&Color::rgb(channel + 1, 0, 0)),
+            "adjacent byte channels {channel} and {}",
+            channel + 1
+        );
+    }
+    for (input, expected) in [
+        (f32::NAN, 0.0),
+        (f32::NEG_INFINITY, 0.0),
+        (f32::INFINITY, 1.0),
+        (-1.0, 0.0),
+        (2.0, 1.0),
+        (-0.0, 0.0),
+    ] {
+        let color = Color::from_rgba_f32_array([input; 4]);
+        assert_eq!(color.to_rgba_f32_array(), [expected; 4]);
+        assert!(
+            color
+                .to_rgba_f32_array()
+                .into_iter()
+                .all(|v| v.is_finite() && !v.is_sign_negative())
+        );
+    }
+    let mut colors = std::collections::HashSet::new();
+    colors.insert(Color::from_rgba_f32_array([-0.0; 4]));
+    assert!(colors.contains(&Color::TRANSPARENT));
+    assert!(!colors.insert(Color::TRANSPARENT));
+    let first = Color::WHITE.with_opacity(0.0025);
+    let second = Color::WHITE.with_opacity(0.005);
+    assert_eq!(first.to_rgba8(), second.to_rgba8());
+    assert!(colors.insert(first));
+    assert!(colors.insert(second));
+    for (input, expected) in [
+        (0.0, 0),
+        (0.001_960_784_2, 0),
+        (0.001_960_784_4, 1),
+        (0.5, 128),
+        (1.0, 255),
+    ] {
+        assert_eq!(
+            Color::from_rgba_f32_array([input; 4]).to_rgba8(),
+            [expected; 4]
+        );
+    }
+}
+
+#[cfg(feature = "serde")]
+pub(crate) fn color_wire_validates_normalized_units_before_narrowing() {
+    let color = Color::from_rgba_f32_array([0.125, 0.25, 0.5, 0.0025]);
+    let encoded = serde_json::to_value(color).expect("finite Color serializes");
+    assert_eq!(
+        serde_json::from_value::<Color>(encoded.clone()).expect("Color roundtrip"),
+        color
+    );
+    assert!(encoded.get("srgb").is_some() && encoded.get("alpha").is_some());
+    for malformed in [
+        r#"{"r":255,"g":0,"b":0,"a":255}"#,
+        r#"{"srgb":[1.000000000001,0,0],"alpha":1}"#,
+        r#"{"srgb":[0,0,0],"alpha":-1e-100}"#,
+        r#"{"srgb":[0,0,0],"alpha":1e100}"#,
+        r#"{"srgb":[0,0,0],"alpha":0.5,"extra":true}"#,
+    ] {
+        assert!(
+            serde_json::from_str::<Color>(malformed).is_err(),
+            "{malformed}"
+        );
+    }
+    assert_eq!(
+        serde_json::from_str::<Color>(r#"{"srgb":[-0.0,0,0],"alpha":-0.0}"#)
+            .expect("canonical zero"),
+        Color::TRANSPARENT
+    );
+}
+
+/// Authoring, modulation, blending and Oklab publication retain fractional alpha.
+pub(crate) fn fractional_channels_survive_color_operations() {
+    let subnormal = Color::from_rgba_f32_array([0.5, 0.25, 0.75, f32::from_bits(1)]);
+    assert_eq!(subnormal.blend(Color::BLACK, BlendMode::Src), subnormal);
+    assert_eq!(Color::BLACK.blend(subnormal, BlendMode::Dst), subnormal);
+    assert_eq!(subnormal.blend_over(Color::TRANSPARENT), subnormal);
+    for alpha in [0.002_f32, 0.0025, 0.123_456, 1e-40] {
+        let color = Color::from_rgba_f32_array([1.0, 0.0, 0.0, alpha]);
+        assert_eq!(color.to_rgba_f32_array(), [1.0, 0.0, 0.0, alpha]);
+        assert_eq!(Color::RED.with_opacity(f64::from(alpha)).opacity(), alpha);
+        assert_eq!(color.multiply(Color::WHITE), color);
+        let restored = Color::from_premultiplied_oklab(color.to_premultiplied_oklab());
+        assert_eq!(restored.opacity(), alpha);
+        // Subnormal component multiplication has reduced precision, but hue
+        // must survive without reciprocal overflow or byte quantization.
+        let [r, g, b, _] = restored.to_rgba_f32_array();
+        assert!(r > 0.999 && g < 0.001 && b < 0.001, "{alpha}: {restored:?}");
+        let [r, _, _, a] = color.blend_over(Color::BLACK).to_rgba_f32_array();
+        assert_eq!(a, 1.0);
+        assert_eq!(r, alpha);
+    }
+    for t in [0.002, 0.0025] {
+        let sample = Color::lerp(Color::WHITE.with_opacity(0.0), Color::WHITE, t);
+        assert!((f64::from(sample.opacity()) - t).abs() < 1e-9);
+    }
+}
+
 /// Half the generated colors are opaque: `to_hex` has a separate 6-digit
 /// branch for `a == 255`, which a uniform alpha would reach 1 time in 256.
 pub(crate) fn arb_color() -> impl Strategy<Value = Color> {
     let alpha = prop_oneof![Just(255u8), any::<u8>()];
     (any::<u8>(), any::<u8>(), any::<u8>(), alpha).prop_map(|(r, g, b, a)| Color::rgba(r, g, b, a))
+}
+
+fn arb_motion_color() -> impl Strategy<Value = Color> {
+    prop_oneof![
+        arb_color(),
+        (
+            0.0_f32..=1.0,
+            0.0_f32..=1.0,
+            0.0_f32..=1.0,
+            0.0001_f32..=1.0
+        )
+            .prop_map(|(r, g, b, a)| Color::from_rgba_f32_array([r, g, b, a])),
+    ]
 }
 
 /// Stops at 0.25 / 0.75 / 1.0 (exact in binary, so the local t is too):
@@ -72,10 +189,12 @@ pub(crate) fn hex_roundtrips_and_porter_duff_modes_mirror() {
 /// A float channel rounds to the nearest of the 256 steps, as the GPU's
 /// float-to-unorm8 conversion does; truncating would land up to one step low.
 pub(crate) fn channels_round_to_the_nearest_step() {
+    const PACKED: u32 = Color::rgba(255, 0, 0, 128).to_argb();
+    assert_eq!(PACKED, 0x80FF_0000);
     let red = Color::rgb(255, 0, 0);
     // 127.5 and 30.6.
-    assert_eq!(red.with_opacity(0.5).a, 128);
-    assert_eq!(red.with_opacity(0.12).a, 31);
+    assert_eq!(red.with_opacity(0.5).to_rgba8()[3], 128);
+    assert_eq!(red.with_opacity(0.12).to_rgba8()[3], 31);
 }
 
 /// Oklab's lightness of an achromatic colour is the cube root of its relative
@@ -84,8 +203,16 @@ pub(crate) fn channels_round_to_the_nearest_step() {
 /// gives 128).
 pub(crate) fn black_to_white_midpoint_is_oklab_mid_grey() {
     let grey = Color::rgb(99, 99, 99);
-    assert_eq!(Color::lerp(Color::BLACK, Color::WHITE, 0.5), grey);
-    assert_eq!(Color::BLACK.lerp_to(&Color::WHITE, 0.5), grey);
+    let expected = 1.055 * 0.125_f64.powf(1.0 / 2.4) - 0.055;
+    for sample in [
+        Color::lerp(Color::BLACK, Color::WHITE, 0.5),
+        Color::BLACK.lerp_to(&Color::WHITE, 0.5),
+    ] {
+        assert_eq!(sample.to_rgba8(), grey.to_rgba8());
+        for channel in sample.to_rgba_f32_array().into_iter().take(3) {
+            assert!((f64::from(channel) - expected).abs() < 2e-6);
+        }
+    }
 }
 
 /// The lerp is premultiplied: fading to transparent black keeps the hue
@@ -93,14 +220,16 @@ pub(crate) fn black_to_white_midpoint_is_oklab_mid_grey() {
 /// lightness and lands on a dark red).
 pub(crate) fn lerp_to_transparent_keeps_the_hue() {
     let half = Color::lerp(Color::rgb(255, 0, 0), Color::TRANSPARENT, 0.5);
-    assert_eq!(half, Color::rgba(255, 0, 0, 128));
+    assert_eq!(half.to_rgba8(), [255, 0, 0, 128]);
+    assert_eq!(half.opacity(), 0.5);
     let tweened = Color::rgb(255, 0, 0).lerp_to(&Color::TRANSPARENT, 0.5);
-    assert_eq!(tweened, Color::rgba(255, 0, 0, 128));
+    assert_eq!(tweened.to_rgba8(), [255, 0, 0, 128]);
+    assert_eq!(tweened.opacity(), 0.5);
 }
 
-/// The sRGB decoding of one 8-bit channel, in `f64` (IEC 61966-2-1).
-fn decode(channel: u8) -> f64 {
-    let c = f64::from(channel) / 255.0;
+/// The sRGB decoding of one normalized channel, in `f64` (IEC 61966-2-1).
+fn decode(channel: f32) -> f64 {
+    let c = f64::from(channel);
     if c <= 0.04045 {
         c / 12.92
     } else {
@@ -108,16 +237,52 @@ fn decode(channel: u8) -> f64 {
     }
 }
 
-/// The sRGB encoding of linear light, clamped to the gamut, on the `0..=255` scale
-/// before rounding.
+pub(crate) fn contrast_selection_uses_linear_relative_luminance() {
+    assert_eq!(
+        Color::rgb(127, 127, 127).contrasting_text_color(),
+        Color::BLACK
+    );
+    let backgrounds = (0..=255)
+        .map(|channel| Color::rgb(channel, channel, channel))
+        .chain([
+            Color::RED,
+            Color::GREEN,
+            Color::BLUE,
+            Color::rgb(255, 0, 255),
+            Color::from_rgba_f32_array([0.37, 0.52, 0.81, 1.0]),
+            Color::WHITE.with_opacity(0.25).blend_over(Color::BLACK),
+            Color::BLACK.with_opacity(0.25).blend_over(Color::WHITE),
+        ]);
+    for background in backgrounds {
+        let [red, green, blue, _] = background.to_rgba_f32_array().map(decode);
+        let luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+        let white_contrast = 1.05 / (luminance + 0.05);
+        let black_contrast = (luminance + 0.05) / 0.05;
+        let expected = if white_contrast > black_contrast {
+            Color::WHITE
+        } else {
+            Color::BLACK
+        };
+        assert_eq!(
+            background.contrasting_text_color(),
+            expected,
+            "{background:?}"
+        );
+        assert_eq!(background.is_dark(), expected == Color::WHITE);
+        assert_eq!(background.is_light(), expected == Color::BLACK);
+        assert!((f64::from(background.luminance()) - luminance).abs() < 1e-6);
+        assert!(white_contrast.max(black_contrast) >= 4.5);
+    }
+}
+
+/// The normalized sRGB encoding of linear light, clamped to the gamut.
 fn encode(linear: f64) -> f64 {
     let c = linear.clamp(0.0, 1.0);
-    let encoded = if c <= 0.003_130_8 {
+    if c <= 0.003_130_8 {
         12.92 * c
     } else {
         1.055 * c.powf(1.0 / 2.4) - 0.055
-    };
-    encoded * 255.0
+    }
 }
 
 /// Ottosson's Oklab, in `f64`, from <https://bottosson.github.io/posts/oklab/>.
@@ -126,7 +291,7 @@ fn encode(linear: f64) -> f64 {
     reason = "r, g, b and l, m, s are the colour-science names"
 )]
 fn oklab(color: Color) -> [f64; 3] {
-    let (r, g, b) = (decode(color.r), decode(color.g), decode(color.b));
+    let [r, g, b, _] = color.to_rgba_f32_array().map(decode);
     let l = (0.412_221_470_8 * r + 0.536_332_536_3 * g + 0.051_445_992_9 * b).cbrt();
     let m = (0.211_903_498_2 * r + 0.680_699_545_1 * g + 0.107_396_956_6 * b).cbrt();
     let s = (0.088_302_461_9 * r + 0.281_718_837_6 * g + 0.629_978_700_5 * b).cbrt();
@@ -137,7 +302,7 @@ fn oklab(color: Color) -> [f64; 3] {
     ]
 }
 
-/// Oklab back to unrounded sRGB channels on the `0..=255` scale.
+/// Oklab back to normalized sRGB channels.
 fn srgb(lab: [f64; 3]) -> [f64; 3] {
     let l = (lab[0] + 0.396_337_777_4 * lab[1] + 0.215_803_757_3 * lab[2]).powi(3);
     let m = (lab[0] - 0.105_561_345_8 * lab[1] - 0.063_854_172_8 * lab[2]).powi(3);
@@ -150,17 +315,16 @@ fn srgb(lab: [f64; 3]) -> [f64; 3] {
 }
 
 /// `Color::lerp` against an `f64` evaluation of premultiplied Oklab with the
-/// transfer function's own `powf` and `cbrt`: every channel of the 8-bit result lies
-/// within one step of the exact, unrounded value, that is, half a step of rounding
-/// plus at most half a step (0.5/255) of approximation. Colour channels are compared
-/// only where the result is visible (alpha above zero).
+/// transfer function's own `powf` and `cbrt`, for both byte-authored and fractional
+/// channels. The normalized error tolerance is far below one byte step. Colour
+/// channels are compared only where the result is visible (alpha above zero).
 pub(crate) fn lerp_matches_the_exact_oklab_evaluation() {
-    proptest!(|(a in arb_color(), b in arb_color(), t in 0.0f64..=1.0)| {
+    proptest!(|(a in arb_motion_color(), b in arb_motion_color(), t in 0.0f64..=1.0)| {
         let got = Color::lerp(a, b, t);
-        let (alpha_a, alpha_b) = (f64::from(a.a) / 255.0, f64::from(b.a) / 255.0);
+        let (alpha_a, alpha_b) = (f64::from(a.opacity()), f64::from(b.opacity()));
         let alpha = alpha_a + (alpha_b - alpha_a) * t;
-        prop_assert!((f64::from(got.a) - alpha * 255.0).abs() <= 1.0, "alpha {:?}", got);
-        if got.a == 0 || alpha <= 0.0 {
+        prop_assert!((f64::from(got.opacity()) - alpha).abs() <= 2e-7, "alpha {:?}", got);
+        if got.is_transparent() || alpha <= 0.0 {
             return Ok(());
         }
         let (la, lb) = (oklab(a), oklab(b));
@@ -168,9 +332,9 @@ pub(crate) fn lerp_matches_the_exact_oklab_evaluation() {
             (la[i] * alpha_a + (lb[i] * alpha_b - la[i] * alpha_a) * t) / alpha
         });
         let want = srgb(mixed);
-        for (channel, (got, want)) in [got.r, got.g, got.b].into_iter().zip(want).enumerate() {
+        for (channel, (got, want)) in got.to_rgba_f32_array().into_iter().zip(want).enumerate() {
             prop_assert!(
-                (f64::from(got) - want).abs() <= 1.0,
+                (f64::from(got) - want).abs() <= 2e-5,
                 "channel {} is {}, exact {}: {:?} -> {:?} at t = {}", channel, got, want, a, b, t
             );
         }
@@ -180,7 +344,7 @@ pub(crate) fn lerp_matches_the_exact_oklab_evaluation() {
 /// `t = 0` and `t = 1` return the endpoints exactly, through both the clamping
 /// `Color::lerp` and the extrapolating `Lerp` impl.
 pub(crate) fn lerp_endpoints_are_exact() {
-    proptest!(|(a in arb_color(), b in arb_color())| {
+    proptest!(|(a in arb_motion_color(), b in arb_motion_color())| {
         prop_assert_eq!(Color::lerp(a, b, 0.0), a);
         prop_assert_eq!(Color::lerp(a, b, 1.0), b);
         prop_assert_eq!(a.lerp_to(&b, 0.0), a);
@@ -191,11 +355,63 @@ pub(crate) fn lerp_endpoints_are_exact() {
 /// Overshoot extrapolates and saturates the channels; a NaN `t` keeps `begin`.
 pub(crate) fn lerp_outside_the_segment_saturates_and_nan_keeps_begin() {
     let (opaque, clear) = (Color::rgba(255, 0, 0, 255), Color::rgba(0, 0, 255, 0));
-    assert_eq!(opaque.lerp_to(&clear, 1.5).a, 0);
-    assert_eq!(opaque.lerp_to(&clear, -0.5).a, 255);
+    for color in [
+        opaque,
+        clear,
+        Color::from_rgba_f32_array([0.25, 0.5, 0.75, 0.125]),
+    ] {
+        for t in [f64::MAX, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(color.lerp_to(&color, t), color, "unchanged endpoint at {t}");
+        }
+    }
+    assert_eq!(opaque.lerp_to(&clear, 1.5).opacity(), 0.0);
+    assert_eq!(opaque.lerp_to(&clear, -0.5).opacity(), 1.0);
     assert_eq!(Color::lerp(opaque, clear, 1.5), clear);
     assert_eq!(Color::lerp(opaque, clear, -0.5), opaque);
     let (black, white) = (Color::BLACK, Color::WHITE);
+    // Fractional endpoints can be much closer than adjacent authored bytes.
+    // Bounding the parameter itself loses their extrapolated motion.
+    for channel in [1e-20_f32, 1e-30] {
+        let near_black = Color::from_rgba_f32_array([channel, channel, channel, 1.0]);
+        for t in [1e20, 1e30, f64::MAX] {
+            assert_eq!(
+                black.lerp_to(&near_black, t),
+                white,
+                "fractional endpoint {channel} at t={t}"
+            );
+        }
+    }
+    for (begin, end, t) in [
+        (
+            black,
+            Color::from_rgba_f32_array([1e-24, 1e-24, 1e-24, 1.0]),
+            1e7,
+        ),
+        (
+            black.with_opacity(0.25),
+            Color::from_rgba_f32_array([1e-24, 1e-24, 1e-24, 0.250_000_03]),
+            2e6,
+        ),
+        (white, black, f64::INFINITY),
+        (black, white, f64::NEG_INFINITY),
+    ] {
+        let actual = begin.lerp_to(&end, t);
+        if t.is_finite() {
+            let (alpha_a, alpha_b) = (f64::from(begin.opacity()), f64::from(end.opacity()));
+            let alpha = alpha_a + (alpha_b - alpha_a) * t;
+            let (la, lb) = (oklab(begin), oklab(end));
+            let mixed = std::array::from_fn(|i| {
+                (la[i] * alpha_a + (lb[i] * alpha_b - la[i] * alpha_a) * t) / alpha
+            });
+            let expected = srgb(mixed);
+            for (actual, expected) in actual.to_rgba_f32_array().into_iter().zip(expected) {
+                assert!((f64::from(actual) - expected).abs() < 2e-5);
+            }
+            assert!((f64::from(actual.opacity()) - alpha.clamp(0.0, 1.0)).abs() < 2e-7);
+        } else {
+            assert_eq!(actual, black);
+        }
+    }
     assert_eq!(black.lerp_to(&white, 1.5), white);
     assert_eq!(white.lerp_to(&black, 1.5), black);
     // Weights past f32's range still saturate toward the far end.
@@ -207,7 +423,11 @@ pub(crate) fn lerp_outside_the_segment_saturates_and_nan_keeps_begin() {
             black,
             "black to white at t = -{t}"
         );
-        assert_eq!(opaque.lerp_to(&clear, t).a, 0, "opaque to clear at t = {t}");
+        assert_eq!(
+            opaque.lerp_to(&clear, t).opacity(),
+            0.0,
+            "opaque to clear at t = {t}"
+        );
     }
     assert_eq!(Color::lerp(opaque, clear, f64::NAN), opaque);
     assert_eq!(opaque.lerp_to(&clear, f64::NAN), opaque);

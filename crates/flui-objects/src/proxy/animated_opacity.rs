@@ -7,14 +7,15 @@
 //! The object caches an alpha, recomputes it on every `opacity` animation tick
 //! via a listener registered in `attach` (and once more, unconditionally,
 //! right after registering — in case it changed while nothing was
-//! listening), and on each recompute: marks needs-paint whenever the alpha
-//! value changed, and additionally marks needs-compositing-bits whenever the
-//! recompute crosses the layered threshold.
+//! listening). A partial-alpha change updates the retained layer; crossing
+//! the layered threshold also updates compositing bits, and crossing zero
+//! requests paint and semantics.
 //!
 //! # Composited-layer updates
 //!
-//! A tick never repaints the child subtree — only the compositor re-blends
-//! the cached layer. This is reached without promoting the node to a repaint
+//! A partial-alpha tick reuses the child subtree and updates the cached layer.
+//! Crossing zero adds or removes the child from painting and, unless explicitly
+//! retained, from semantics. Layer updates do not promote the node to a repaint
 //! boundary: the frame rebuilds just this node's own effect layers inside the
 //! ENCLOSING repaint boundary's retained capture, so the node stays an ordinary
 //! non-boundary. The design and its accepted trade-offs are recorded in
@@ -26,7 +27,7 @@
 //! listener, and `recompute_alpha` pokes a [`LocalRenderInvalidationHandle`]
 //! directly. A plain alpha move updates the composited layer; crossing the
 //! layered threshold also updates compositing bits; crossing alpha zero
-//! requests paint. The sample is published before all required phases are
+//! requests paint and semantics. The sample is published before all required phases are
 //! admitted together through `request_update`. The owner retains those marks
 //! even if its wake callback fails, without requiring another animation tick.
 //!
@@ -89,10 +90,7 @@ pub struct RenderAnimatedOpacity {
     /// Sampling generations prevent an older reentrant read from replacing
     /// a newer sample; no borrow survives the animation's value callback.
     alpha: Rc<OpacitySample>,
-    /// Whether child semantics are included regardless of alpha. Stored for
-    /// diagnostics/API; this object does not yet gate child-semantics
-    /// visiting on it (no semantics-tree visitor override exists on this
-    /// proxy today).
+    /// Whether child semantics remain included at zero opacity.
     always_include_semantics: bool,
     /// Tick-listener subscription on `animation`, torn down in `detach`.
     listener_id: Option<ListenerId>,
@@ -116,24 +114,12 @@ impl RenderAnimatedOpacity {
         }
     }
 
-    /// Returns the current cached alpha (`0..=255`), refreshed by the last
-    /// tick that changed it (and once at construction / attach time).
+    /// Returns the accepted opacity in `0.0..=1.0`, refreshed on animation
+    /// notifications and construction or attachment.
     #[inline]
     #[must_use]
-    pub fn alpha(&self) -> u8 {
+    pub fn opacity(&self) -> f64 {
         self.alpha.get()
-    }
-
-    /// The composed animation's raw `f64` value, bypassing the `u8` alpha
-    /// cache's `1/255` quantization. Test/harness accessor — production
-    /// paint/compositing decisions read [`alpha`](Self::alpha)/
-    /// [`paint_effects`](RenderBox::paint_effects), which are correctly
-    /// quantized; this exists only because harness assertions pinned to
-    /// sub-`1/255` tolerances need the un-rounded value.
-    #[inline]
-    #[must_use]
-    pub fn opacity_value(&self) -> f64 {
-        self.animation.value()
     }
 
     /// Whether child semantics are included regardless of alpha.
@@ -141,16 +127,6 @@ impl RenderAnimatedOpacity {
     #[must_use]
     pub fn always_include_semantics(&self) -> bool {
         self.always_include_semantics
-    }
-
-    /// Whether `alpha` sits in the "layered" range `(0, 255)` — the exact
-    /// threshold `paint_effects`/`skip_paint` use to decide whether an
-    /// `OpacityLayer` is needed. `RenderOpacity` uses the same
-    /// `alpha != 255` narrowing for its no-layer fast path at full/zero
-    /// opacity (see `proxy/opacity.rs`).
-    #[inline]
-    fn is_layered(alpha: u8) -> bool {
-        alpha > 0 && alpha < 255
     }
 
     /// Publishes a changed alpha and admits its required phases together.
@@ -172,7 +148,7 @@ impl RenderAnimatedOpacity {
 impl std::fmt::Debug for RenderAnimatedOpacity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RenderAnimatedOpacity")
-            .field("alpha", &self.alpha())
+            .field("opacity", &self.opacity())
             .field("always_include_semantics", &self.always_include_semantics)
             .finish_non_exhaustive()
     }
@@ -180,7 +156,7 @@ impl std::fmt::Debug for RenderAnimatedOpacity {
 
 impl flui_foundation::Diagnosticable for RenderAnimatedOpacity {
     fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
-        properties.add_default_double("opacity", f64::from(self.alpha()) / 255.0, 1.0, None);
+        properties.add_default_double("opacity", self.opacity(), 1.0, None);
         properties.add_flag(
             "always_include_semantics",
             self.always_include_semantics,
@@ -220,10 +196,10 @@ impl RenderBox for RenderAnimatedOpacity {
     // through `&dyn RenderObject<BoxProtocol>`; the blanket impl forwards
     // here.
     fn paint_effects(&self, _size: Size) -> PaintEffects {
-        let alpha = self.alpha();
-        // None when fully opaque (255) or fully transparent (0): neither
+        let alpha = self.opacity();
+        // None when fully opaque (1) or fully transparent (0): neither
         // requires an OpacityLayer.
-        if alpha == 255 || alpha == 0 {
+        if alpha == 1.0 || alpha == 0.0 {
             PaintEffects::NONE
         } else {
             PaintEffects::NONE.with_opacity(PaintOpacity::new(alpha))
@@ -232,7 +208,11 @@ impl RenderBox for RenderAnimatedOpacity {
 
     fn skip_paint(&self) -> bool {
         // Fully transparent: nothing to paint.
-        self.alpha() == 0
+        self.opacity() == 0.0
+    }
+
+    fn visits_child_for_semantics(&self, _child_slot: usize) -> bool {
+        self.always_include_semantics || self.opacity() > 0.0
     }
 
     // Compositing-layer requirement: the pipeline's compositing-bits walk
@@ -246,10 +226,10 @@ impl RenderBox for RenderAnimatedOpacity {
     // `RenderBox` trait's default `false` (`render_box.rs`'s
     // `always_needs_compositing` default) and never allocate the layer.
     //
-    // The threshold is [`is_layered`](Self::is_layered) (`0 < alpha < 255`),
+    // The threshold is `OpacitySample::is_layered` (`0 < alpha < 1`),
     // the SAME predicate `paint_effects`/`skip_paint` above already use, and
     // the one `RenderOpacity`/`RenderSliverOpacity` establish for this crate:
-    // at `alpha == 255` no layer is ever allocated (`paint_effects` returns no
+    // at `alpha == 1` no layer is ever allocated (`paint_effects` returns no
     // opacity effect), so requiring compositing there would be pure
     // overhead with no visual effect: fully opaque does not count as
     // needing its own layer.
@@ -258,7 +238,7 @@ impl RenderBox for RenderAnimatedOpacity {
     // override at all — a separate, pre-existing gap in this crate that
     // predates this change and stays out of scope here.
     fn always_needs_compositing(&self) -> bool {
-        Self::is_layered(self.alpha())
+        OpacitySample::is_layered(self.opacity())
     }
 
     fn attach(&mut self, handle: LocalRenderInvalidationHandle) {

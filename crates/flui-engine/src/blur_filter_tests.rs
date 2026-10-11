@@ -411,13 +411,9 @@ mod gpu_tests {
         let top = margin_u;
         let right = SURFACE_WIDTH as usize - margin_u;
         let bottom = SURFACE_HEIGHT as usize - margin_u;
-        // Color stores public r/g/b/a u8 fields; there is no to_rgba_u8 method.
-        let source_premul: [u8; 4] = [
-            source_color.r,
-            source_color.g,
-            source_color.b,
-            source_color.a,
-        ];
+        // The independently authored opaque source above lands exactly on these
+        // framebuffer bytes; the blur oracle does not reuse Color conversion.
+        let source_premul: [u8; 4] = [180, 120, 60, 255];
 
         let source_grid: Vec<[u8; 4]> = (0..SURFACE_HEIGHT as usize)
             .flat_map(|row| {

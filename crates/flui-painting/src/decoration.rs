@@ -569,14 +569,8 @@ fn paint_decoration_image(
         clipped.height() * sy,
     );
     let src = clipped;
-    let paint = (image.opacity < 1.0).then(|| {
-        Paint::fill(Color::rgba(
-            255,
-            255,
-            255,
-            (image.opacity.clamp(0.0, 1.0) * 255.0).round() as u8,
-        ))
-    });
+    let paint =
+        (image.opacity < 1.0).then(|| Paint::fill(Color::WHITE.with_opacity(image.opacity)));
     canvas.draw_image_region_effects(
         image.image.clone(),
         src,

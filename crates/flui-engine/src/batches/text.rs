@@ -110,7 +110,7 @@ impl DrawBatcher {
 
                 let mut fill = glyph.color.unwrap_or(color);
                 if opacity < 1.0 {
-                    fill = Color::rgba(fill.r, fill.g, fill.b, (f32::from(fill.a) * opacity) as u8);
+                    fill = fill.with_opacity(f64::from(fill.opacity() * opacity));
                 }
                 let mut instance = GlyphInstance::new(
                     [x as f32, y as f32, w as f32, h as f32],
