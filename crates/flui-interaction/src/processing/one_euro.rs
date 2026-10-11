@@ -165,7 +165,15 @@ impl OneEuroFilter {
         // Filtered derivative: raw slope against the PREVIOUS FILTERED value
         // (per the paper — using the raw previous sample would re-amplify
         // the very noise being removed).
-        let dx = (x - x_prev) / te;
+        let difference = x - x_prev;
+        // An opposite-sign difference may overflow while the slope remains
+        // representable after division by a long interval. Scale each operand
+        // first on that path; an actually unrepresentable slope is still refused.
+        let dx = if difference.is_finite() {
+            difference / te
+        } else {
+            x / te - x_prev / te
+        };
         if !dx.is_finite() {
             return Err(OneEuroFilterError::ArithmeticOverflow);
         }

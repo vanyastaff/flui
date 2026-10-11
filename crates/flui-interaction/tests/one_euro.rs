@@ -135,6 +135,10 @@ fn overflow_refusal_allows_a_healthy_next_sample() {
 }
 
 fn extreme_cutoff_and_interval_keep_meaningful_smoothing() {
+    let mut crossing = OneEuroFilter::default();
+    crossing.filter(f64::MAX, 0.0).expect("finite first sample");
+    assert_eq!(crossing.filter(-f64::MAX, f64::MAX), Ok(-f64::MAX));
+
     let mut high = OneEuroFilter::new(f64::MAX, 0.0, f64::MAX).expect("finite cutoff");
     high.filter(0.0, 0.0).expect("first sample");
     assert_eq!(high.filter(1.0, 1.0), Ok(1.0));
