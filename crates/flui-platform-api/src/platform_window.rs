@@ -58,7 +58,7 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 /// and `request_quit` while refusing deferred `open_window` with
 /// `flui_platform::ProxySendError::Unsupported`. The winit lane also transports
 /// deferred window creation. Direct backends create windows through their
-/// owner capability; browser signals follow ADR-0185.
+/// owner capability; browser signals follow ADR-0196.
 ///
 /// [`close`](Self::close) is the one method that documents itself out of this
 /// default: it is callable from any thread the native API permits, and states

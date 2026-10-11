@@ -9,7 +9,7 @@ the dispatch layer moves there too.
 
 ## Invariants
 
-- **Browser owner wakes refresh the installed host.** ADR-0185 uses the same
+- **Browser owner wakes refresh the installed host.** ADR-0196 uses the same
   loop-identity and logical-host checks as desktop delivery. DOM invalidation
   posts the shared owner signal rather than entering the runtime directly;
   source values reach the ADR-0195 projection through the existing host path.

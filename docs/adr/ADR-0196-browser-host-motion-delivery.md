@@ -1,4 +1,4 @@
-# ADR-0185: Browser host motion uses the existing owner signal
+# ADR-0196: Browser host motion uses the existing owner signal
 
 - **Status:** Accepted
 - **Date:** 2026-10-09

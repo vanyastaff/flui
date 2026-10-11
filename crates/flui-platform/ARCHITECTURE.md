@@ -195,7 +195,7 @@ not an actual OS preference change or a rendered native application's update.
 
 ### Native gesture sampling follows public API refresh limits
 
-Browser motion observation and owner delivery follow ADR-0185. One host-owned
+Browser motion observation and owner delivery follow ADR-0196. One host-owned
 media query invalidates the existing signal; its callback runs on a later
 microtask and remains independent of canvas creation. The public WASM case
 `browser_motion_observations_wake_replace_and_retire_their_owner` covers the
