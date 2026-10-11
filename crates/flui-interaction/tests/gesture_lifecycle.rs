@@ -1,15 +1,15 @@
 //! Recognizer lifecycles driven the way a binding drives them, and a
 //! property test of the arena itself.
 //!
-//! [`Lane`] stands in for the binding: every recognizer is admitted from the
-//! `Down`, other events reach every recognizer, the arena lifecycle
-//! (`run_pointer_lifecycle`) runs after routing even when a callback panicked,
-//! and deferred resolutions drain at input end. Time is a [`ManualClock`];
+//! [`Lane`] uses the public binding: every recognizer is admitted from the
+//! `Down`, other events reach every recognizer, and the binding owns exact
+//! contact retirement even when a callback panicked. Deferred resolutions
+//! drain at input end. Time is a [`ManualClock`];
 //! `frames` pumps deadline frames.
 
 use std::{
     cell::{Cell, RefCell},
-    panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
+    panic::{AssertUnwindSafe, catch_unwind},
     rc::Rc,
     sync::{
         Arc,
@@ -21,7 +21,6 @@ use std::{
 use flui_foundation::geometry::Offset;
 use flui_interaction::arena::{
     GestureArena, GestureArenaEntry, GestureArenaMember, GestureCompetition, GestureDisposition,
-    run_pointer_lifecycle,
 };
 use flui_interaction::events::{
     PointerButton, PointerEvent, PointerKind, make_down_event_for_id_with_button,
@@ -29,80 +28,73 @@ use flui_interaction::events::{
 };
 use flui_interaction::routing::PointerDispatch;
 use flui_interaction::{
-    DoubleTapGestureRecognizer, DragAxis, DragGestureRecognizer, GestureEndReason,
-    GestureRecognizer, LongPressGestureRecognizer, ManualClock, MultiDragAxis, MultiDragEndDetails,
-    MultiDragGestureRecognizer, MultiDragHandle, MultiDragUpdateDetails, MultiTapGestureRecognizer,
-    PointerId, ScaleGestureRecognizer, TapAndDragGestureRecognizer, TapGestureRecognizer,
+    DoubleTapGestureRecognizer, DragAxis, DragGestureRecognizer, GestureBinding, GestureEndReason,
+    GestureRecognizer, HitTestResult, InteractionLane, LongPressGestureRecognizer, ManualClock,
+    MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle,
+    MultiDragUpdateDetails, MultiTapGestureRecognizer, PointerId, ScaleGestureRecognizer,
+    TapAndDragGestureRecognizer, TapGestureRecognizer,
 };
 use proptest::prelude::*;
 
 // ---------------------------------------------------------------------------
-// Binding stand-in
+// Public binding driver
 // ---------------------------------------------------------------------------
 
-type Route = Box<dyn Fn(PointerDispatch<'_>)>;
-
 struct Lane {
+    binding: GestureBinding,
+    dispatch: InteractionLane,
     arena: GestureArena,
     clock: ManualClock,
-    admit: Vec<Route>,
-    forward: Vec<Route>,
 }
 
 impl Lane {
     fn new() -> Self {
         let clock = ManualClock::new();
+        let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
+        let arena = binding.arena().clone();
         Self {
-            arena: GestureArena::binding_driven(Arc::new(clock.clone())),
+            binding,
+            dispatch: InteractionLane::try_new().expect("owner lane"),
+            arena,
             clock,
-            admit: Vec::new(),
-            forward: Vec::new(),
         }
     }
 
     /// Route this recognizer the way `GestureDetector` does: admitted from
     /// the `Down`, every other event forwarded.
     fn join<R: GestureRecognizer + 'static>(&mut self, recognizer: &Rc<R>) {
-        let admit = Rc::clone(recognizer);
-        self.admit
-            .push(Box::new(move |dispatch| admit.add_pointer(dispatch)));
-        let forward = Rc::clone(recognizer);
-        self.forward
-            .push(Box::new(move |dispatch| forward.handle_event(dispatch)));
+        let recognizer = Rc::clone(recognizer);
+        self.binding
+            .pointer_router()
+            .add_global_handler(Rc::new(move |event| {
+                let dispatch = PointerDispatch::at_root(event);
+                if matches!(event, PointerEvent::Down(_)) {
+                    recognizer.add_pointer(dispatch);
+                } else {
+                    recognizer.handle_event(dispatch);
+                }
+            }));
     }
 
-    /// Dispatch one event, then run the arena lifecycle and drain, even when
-    /// a callback panicked; the first panic resumes afterwards.
+    /// Dispatch through the binding, which owns terminal cleanup and preserves
+    /// the first route failure. Healthy input drains deferred resolutions.
     fn send(&self, event: &PointerEvent) {
-        let dispatch = PointerDispatch::at_root(event);
-        let routes = if matches!(event, PointerEvent::Down(_)) {
-            &self.admit
-        } else {
-            &self.forward
-        };
-        let mut failure = None;
-        for route in routes {
-            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| route(dispatch))) {
-                failure.get_or_insert(payload);
+        self.dispatch.enter(|| {
+            self.binding
+                .handle_pointer_event(event, |_| HitTestResult::new());
+            if matches!(event, PointerEvent::Move(_)) {
+                self.binding.flush_pending_moves();
             }
-        }
-        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
-            run_pointer_lifecycle(&self.arena, event);
-            self.arena.drain_deferred_resolutions();
-        })) {
-            failure.get_or_insert(payload);
-        }
-        if let Some(payload) = failure {
-            resume_unwind(payload);
-        }
+            self.binding.drain_deferred_arena_resolutions();
+        });
     }
 
     /// Pump ~16 ms frames covering `ms` of virtual time.
     fn frames(&self, ms: u64) {
         for _ in 0..=ms / 16 {
             self.clock.advance(Duration::from_millis(16));
-            self.arena.poll_deadlines();
-            self.arena.drain_deferred_resolutions();
+            self.binding.tick_deadlines();
+            self.binding.drain_deferred_arena_resolutions();
         }
     }
 }
@@ -755,7 +747,7 @@ fn held_arena_swept_on_up_leaves_room_for_the_next_contact() {
     arena.add(pointer, &second);
     arena.close(pointer);
     first_entry.hold();
-    run_pointer_lifecycle(&arena, &up(pointer, at(0.0, 0.0), PointerKind::Mouse));
+    first_entry.sweep();
     let next = Rc::new(Verdicts::default());
     arena.add(pointer, &next);
     arena.close(pointer);
@@ -1216,7 +1208,9 @@ fn scale_captures_the_selected_estimator() {
 }
 
 fn after_route_up_must_not_sweep_a_reentrant_replacement() {
-    let arena = GestureArena::binding_driven(Arc::new(ManualClock::new()));
+    let binding = Rc::new(GestureBinding::with_clock(Arc::new(ManualClock::new())));
+    let arena = binding.arena().clone();
+    let lane = InteractionLane::try_new().expect("owner lane");
     let pointer = id(91);
     let replacement_starts = counter();
     let observed = replacement_starts.clone();
@@ -1224,50 +1218,78 @@ fn after_route_up_must_not_sweep_a_reentrant_replacement() {
         .on_start(move |_| observed.set(observed.get() + 1))
         .build();
     let second = DragGestureRecognizer::builder(arena.clone(), DragAxis::Horizontal).build();
-    let reentrant_arena = arena.clone();
-    let (replacement_first, replacement_second) = (first.clone(), second.clone());
+    let reentrant_binding = Rc::downgrade(&binding);
     let tapped = counter();
     let observed_taps = tapped.clone();
     let tap = TapGestureRecognizer::builder(arena.clone())
         .on_tap(move |_| {
             observed_taps.set(observed_taps.get() + 1);
             let next_down = down(pointer, at(90.0, 0.0), PointerKind::Touch);
-            replacement_first.add_pointer(PointerDispatch::at_root(&next_down));
-            replacement_second.add_pointer(PointerDispatch::at_root(&next_down));
-            run_pointer_lifecycle(&reentrant_arena, &next_down);
+            reentrant_binding
+                .upgrade()
+                .expect("live binding")
+                .handle_pointer_event(&next_down, |_| HitTestResult::new());
         })
         .build();
-    let old_down = down(pointer, Offset::ZERO, PointerKind::Touch);
-    tap.add_pointer(PointerDispatch::at_root(&old_down));
-    run_pointer_lifecycle(&arena, &old_down);
-    arena.drain_deferred_resolutions();
-    let old_up = up(pointer, Offset::ZERO, PointerKind::Touch);
-    tap.handle_event(PointerDispatch::at_root(&old_up));
-    assert_eq!(
-        tapped.get(),
-        1,
-        "old route readmits the pointer before lifecycle finish"
-    );
-    run_pointer_lifecycle(&arena, &old_up);
-    assert_eq!(
-        replacement_starts.get(),
-        0,
-        "old Up must not grant the replacement contact before its own movement"
-    );
-    first.handle_event(PointerDispatch::at_root(&motion(
-        pointer,
-        at(120.0, 0.0),
-        PointerKind::Touch,
-    )));
-    assert_eq!(
-        replacement_starts.get(),
-        1,
-        "replacement makes progress on its own input"
-    );
-    first.cancel();
-    second.cancel();
-    arena.drain_deferred_resolutions();
-    assert!(arena.is_empty());
+    let routed_taps = tapped.clone();
+    binding
+        .pointer_router()
+        .add_global_handler(Rc::new(move |event| {
+            let dispatch = PointerDispatch::at_root(event);
+            if routed_taps.get() == 0 {
+                if matches!(event, PointerEvent::Down(_)) {
+                    tap.add_pointer(dispatch);
+                } else {
+                    tap.handle_event(dispatch);
+                }
+            } else if matches!(event, PointerEvent::Down(_)) {
+                first.add_pointer(dispatch);
+                second.add_pointer(dispatch);
+            } else {
+                first.handle_event(dispatch);
+                second.handle_event(dispatch);
+            }
+        }));
+    lane.enter(|| {
+        let send = |event: PointerEvent| {
+            binding.handle_pointer_event(&event, |_| HitTestResult::new());
+            if matches!(event, PointerEvent::Move(_)) {
+                binding.flush_pending_moves();
+            }
+            binding.drain_deferred_arena_resolutions();
+        };
+        send(down(pointer, Offset::ZERO, PointerKind::Touch));
+        send(up(pointer, Offset::ZERO, PointerKind::Touch));
+        assert_eq!(
+            tapped.get(),
+            1,
+            "old route attempts same-pointer admission before lifecycle finish"
+        );
+        assert_eq!(
+            replacement_starts.get(),
+            0,
+            "old Up must not grant the replacement contact before its own movement"
+        );
+        assert_eq!(
+            binding.active_pointer_count(),
+            0,
+            "Down during terminal teardown is refused"
+        );
+        send(down(pointer, at(90.0, 0.0), PointerKind::Touch));
+        assert_eq!(
+            replacement_starts.get(),
+            0,
+            "future contact waits for its own input"
+        );
+        send(motion(pointer, at(120.0, 0.0), PointerKind::Touch));
+        assert_eq!(
+            replacement_starts.get(),
+            1,
+            "replacement makes progress on its own input"
+        );
+        send(up(pointer, at(120.0, 0.0), PointerKind::Touch));
+        assert!(arena.is_empty());
+    });
 }
 
 #[test]
@@ -2088,8 +2110,7 @@ impl Model {
             }
             Op::Sweep(pointer) => {
                 if self.current[Self::slot(pointer)].take().is_some() {
-                    let event = up(id(pointer), at(0.0, 0.0), PointerKind::Touch);
-                    quietly(|| run_pointer_lifecycle(&self.arena, &event));
+                    quietly(|| self.arena.sweep(id(pointer)));
                 }
             }
             Op::Abandon(pointer) => {

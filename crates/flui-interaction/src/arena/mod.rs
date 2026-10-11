@@ -904,16 +904,17 @@ impl ArenaEntryData {
 
 /// Who owns the close/sweep lifecycle of an arena.
 ///
-/// The contract is that the *binding* — not a recognizer — drives
-/// `close(pointer)` on pointer-down and `sweep(pointer)` on pointer-up.
+/// For a shared arena, the binding closes admissions on pointer-down and
+/// detaches exact contact generations before terminal routing. Pointer-up
+/// sweeps that detached batch; cancellation abandons it without a winner.
 ///
 /// - [`SelfDriven`](Self::SelfDriven) — a low-level recognizer owns its private
-///   arena lifecycle, so finishing pointer-up tracking sweeps the arena. This
+///   arena lifecycle, so finishing pointer-up tracking sweeps its exact entry. This
 ///   model is for standalone recognizer use and focused recognizer tests, never
 ///   a presentation widget subtree.
 /// - [`BindingDriven`](Self::BindingDriven) — a binding owns the arena and runs
-///   the close/sweep lifecycle after routing each pointer event to the hit-test
-///   path. Recognizers below it must *not* self-sweep: a tap's own
+///   lifecycle for exact contact generations around pointer routing.
+///   Recognizers below it must *not* self-sweep: a tap's own
 ///   sweep on the first up would force-resolve a shared entry
 ///   to the front member before a double-tap (or a peer detector) could
 ///   complete.
@@ -925,29 +926,6 @@ pub enum SweepModel {
     SelfDriven,
     /// A binding owns the lifecycle (shared arena).
     BindingDriven,
-}
-
-/// Run the binding-owned close/sweep lifecycle for a single pointer event.
-///
-/// On `PointerDown` the arena is closed; on `PointerUp` it is swept. Every
-/// other event — including `PointerCancel` — is a no-op for the arena
-/// lifecycle (recognizers self-reject on cancel; sweeping on cancel would
-/// force the first member to win an interrupted gesture). Callers run
-/// their own route (hit-test dispatch) step *first*, then call this kernel
-/// — the route-before-sweep order is load-bearing (it lets a double-tap's
-/// first-up `hold` run before the sweep, so the sweep observes the hold
-/// and defers). A held arena leaves the pointer's active slot on that sweep,
-/// so the pointer's next Down opens a fresh arena.
-///
-/// No workspace code calls it: `GestureBinding` runs the same sequence inline
-/// (`binding.rs`). Kept public for standalone arena users and tests.
-pub fn run_pointer_lifecycle(arena: &GestureArena, event: &crate::events::PointerEvent) {
-    use crate::events::PointerEvent;
-    match event {
-        PointerEvent::Down(data) => arena.close(data.pointer.id),
-        PointerEvent::Up(data) => arena.sweep(data.pointer.id),
-        _ => {}
-    }
 }
 
 // ============================================================================
@@ -1170,8 +1148,12 @@ impl GestureArena {
     ///
     /// The returned arena answers [`SweepModel::BindingDriven`], so recognizers
     /// added to it never self-sweep when finishing tracking — the binding runs the
-    /// close/sweep lifecycle via [`run_pointer_lifecycle`] after routing each
-    /// pointer event. This is the arena a [`HeadlessBinding`](https://docs.rs/flui-testing)
+    /// exact contact lifecycle around routing each pointer event. On Up it
+    /// detaches the contact before callbacks and sweeps that detached generation;
+    /// on Cancel it abandons that generation without granting a winner. Composed
+    /// standalone drivers use [`crate::GestureBinding`] too, rather than finishing
+    /// an event by its reusable pointer ID after callbacks. This is the arena a
+    /// [`HeadlessBinding`](https://docs.rs/flui-testing)
     /// or production `GestureBinding` hands down to a subtree.
     #[inline]
     pub fn binding_driven(clock: Arc<dyn MonotonicClock>) -> Self {
