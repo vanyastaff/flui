@@ -385,7 +385,7 @@ end from zero:
 | Segment | Moves | Velocity at a join with `cubic` |
 |---|---|---|
 | `to(value, over, curve)` | eases into `value`; the curve belongs to this segment | the curve's slope at that end |
-| `cubic(value, over)` | Catmull-Rom spline through the keyframe *times* | the chord of the neighbouring keys |
+| `cubic(value, over)` | cubic spline through the keyframe *times* | the neighbouring chord between consecutive cubic segments; an eased neighbour's velocity; zero beside hold/jump or a track endpoint |
 | `hold(over)` | keeps the value | zero |
 | `jump(value)` | changes the value instantly | zero |
 
@@ -420,8 +420,12 @@ assert_eq!(fade.transform(0.5), 1.0);
 
 Repeat with a repeating controller (or `value_at_looped`). `Stagger` gives
 element `i` of `n` the delay `step · |origin − i|` (`First`, `Last`,
-`Center`, `Index`), so one controller drives every element:
-`track.value_at_looped(elapsed + track.total() - stagger.delay(i, n))`.
+`Center`, `Index`), so one controller drives every element. For a repeating
+track, sample the phase `(elapsed − delay) mod total`. Compute this in `u128`
+nanoseconds, reducing elapsed and delay modulo the period before subtraction;
+`(phase + period − delay) mod period` then stays nonnegative and fits `u128`.
+Direct `Duration` addition or subtraction can overflow when elapsed is near
+`Duration::MAX` or a delay exceeds the period.
 
 ### Chaining and Composition
 

@@ -606,8 +606,10 @@ let value = animation.value(); // dynamic dispatch into the curved layer
 
 Value and status listeners are `Rc<dyn Fn ...>` callbacks. Reusing one
 callback across several animations shares its `Rc` and captures, but
-`add_listener` still wraps each registration in a fresh `Rc` (plus any map
-growth), so every registration costs at least one allocation:
+notifier-backed `add_listener` still wraps each registration in a fresh `Rc`
+(plus any map growth), so each such registration costs at least one allocation.
+Fixed animations such as `ConstantAnimation` do not store callbacks or allocate
+registration wrappers:
 
 ```rust
 # use std::rc::Rc;

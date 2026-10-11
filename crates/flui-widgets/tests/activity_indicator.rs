@@ -497,16 +497,28 @@ fn indicator_callback_requests_removal(source: usize) {
         owner
             .render_tree()
             .iter()
-            .filter_map(|(_, node)| {
+            .filter_map(|(id, node)| {
                 node.downcast_render_object::<flui_objects::RenderCustomPaint>()
                     .and_then(|paint| paint.painter())
                     .and_then(|painter| painter.repaint())
+                    .map(|animation| (id, animation))
             })
             .collect::<Vec<_>>()
     });
     assert_eq!(animations.len(), 2);
+    let deliveries = Rc::new([Cell::new(0usize), Cell::new(0usize)]);
+    let monitors = animations
+        .iter()
+        .enumerate()
+        .map(|(index, (_, animation))| {
+            animation.add_listener(Rc::new({
+                let deliveries = deliveries.clone();
+                move || deliveries[index].set(deliveries[index].get() + 1)
+            }))
+        })
+        .collect::<Vec<_>>();
     let requested = Rc::new(Cell::new(false));
-    let callback = animations[source].add_listener(Rc::new({
+    let callback = animations[source].1.add_listener(Rc::new({
         let requested = requested.clone();
         move || {
             if !requested.replace(true) {
@@ -526,14 +538,41 @@ fn indicator_callback_requests_removal(source: usize) {
         1,
         "same-frame reconciliation retires the owner"
     );
+    let retained = laid.pipeline_owner().with(|owner| {
+        owner
+            .render_tree()
+            .iter()
+            .filter_map(|(id, node)| {
+                node.downcast_render_object::<flui_objects::RenderCustomPaint>()
+                    .map(|_| id)
+            })
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(retained.len(), 1);
+    let survivor = animations
+        .iter()
+        .position(|(id, _)| *id == retained[0])
+        .expect("reconciliation retains one original indicator");
+    let departed = 1 - survivor;
+    assert_eq!(deliveries[survivor].get(), 1, "survivor receives this tick");
+    assert_eq!(deliveries[departed].get(), 1, "departure follows this tick");
     let (start, _) = only_arc(&laid);
     assert_angle(
         start,
         expected_rotation(ms(300)),
         "survivor paints this tick",
     );
-    animations[source].remove_listener(callback);
     laid.pump_for(ms(300));
+    assert_eq!(
+        deliveries[survivor].get(),
+        2,
+        "survivor receives the next tick"
+    );
+    assert_eq!(
+        deliveries[departed].get(),
+        1,
+        "disposed source delivers nothing more"
+    );
     let (start, _) = only_arc(&laid);
     assert_angle(
         start,
@@ -545,6 +584,17 @@ fn indicator_callback_requests_removal(source: usize) {
         vsync.is_empty(),
         "retained repaint handles do not retain registrations"
     );
+    let after_teardown = deliveries.each_ref().map(Cell::get);
+    laid.pump_for(ms(300));
+    assert_eq!(deliveries.each_ref().map(Cell::get), after_teardown);
+    assert!(
+        arcs(&laid).is_empty(),
+        "disposed indicators paint no further arcs"
+    );
+    animations[source].1.remove_listener(callback);
+    for ((_, animation), monitor) in animations.iter().zip(monitors) {
+        animation.remove_listener(monitor);
+    }
 }
 
 fn indicator_rebind_after_unmount() {

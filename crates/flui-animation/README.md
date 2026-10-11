@@ -365,8 +365,10 @@ let position = tween.transform(controller.value());
 
 A `Keyframes<T>` track is a value as a pure function of time. Segments are
 timed by `Duration` and laid end to end; each `to` segment carries the curve
-that eases *into* its value, `cubic` segments form a Catmull-Rom spline
-through the keyframe times, `hold` pauses and `jump` changes the value
+that eases *into* its value. Consecutive `cubic` segments form a Catmull-Rom
+spline through the keyframe times. At a join with an eased segment, a cubic
+segment takes that segment's velocity; next to `hold`, `jump` or a track
+endpoint, its velocity is zero. `hold` pauses and `jump` changes the value
 instantly. At a boundary the track returns the keyframe exactly (the value
 after a jump), and a non-finite sample is never published.
 
