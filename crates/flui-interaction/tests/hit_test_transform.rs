@@ -178,6 +178,15 @@ fn perspective_delivery(
     positions: [(f64, f64); 3],
     expected: Option<[(f64, f64); 3]>,
 ) {
+    sample_delivery(transform, positions, expected, false);
+}
+
+fn sample_delivery(
+    transform: Matrix4,
+    positions: [(f64, f64); 3],
+    expected: Option<[(f64, f64); 3]>,
+    coarse_timestamp: bool,
+) {
     use flui_foundation::geometry::Point;
     use flui_interaction::InteractionLane;
     use flui_platform_api::{
@@ -191,7 +200,11 @@ fn perspective_delivery(
 
     let sample = |index: usize| {
         PointerSample::new(
-            EventTime::from_nanos(index as u64 + 1),
+            EventTime::from_nanos(if coarse_timestamp {
+                2
+            } else {
+                index as u64 + 1
+            }),
             PointerPosition::try_new(Point::new(positions[index].0, positions[index].1))
                 .expect("finite screen sample"),
         )
@@ -228,6 +241,16 @@ fn perspective_delivery(
                 assert_eq!(local.pointer, global.pointer);
                 assert_eq!(local.buttons, global.buttons);
                 assert_eq!(local.modifiers, global.modifiers);
+                assert_eq!(
+                    local.coalesced().len(),
+                    global.coalesced().len(),
+                    "localization retains every admitted measured reading"
+                );
+                assert_eq!(
+                    local.predicted().len(),
+                    global.predicted().len(),
+                    "localization retains every admitted prediction"
+                );
                 for ((local, global), point) in [
                     (&local.coalesced()[0], &global.coalesced()[0]),
                     (local.current(), global.current()),
@@ -262,6 +285,19 @@ fn perspective_delivery(
         assert_eq!(deliveries.get(), usize::from(expected.is_some()));
         handle.release_route(route).expect("release route");
     });
+}
+
+fn localization_preserves_distinct_readings_that_round_to_the_same_position() {
+    // These root readings have one coarse timestamp and equal sensors, but are
+    // distinct samples. A large affine offset rounds their local positions to
+    // the same finite value; coordinate conversion must not re-admit histories
+    // and erase their established sample identities.
+    sample_delivery(
+        Matrix4::translation(-1e20, 0.0, 0.0),
+        [(0.0, 0.0), (1.0, 0.0), (2.0, 0.0)],
+        Some([(1e20, 0.0); 3]),
+        true,
+    );
 }
 
 fn perspective_delivery_preserves_the_source_and_unprojects_samples() {
@@ -332,6 +368,10 @@ fn plane_unprojection_preserves_admitted_anisotropic_delivery() {
 fn hit_test_transform_admission() {
     let mut failures = Vec::new();
     for (name, case) in [
+        (
+            "distinct source samples with equal localized positions",
+            localization_preserves_distinct_readings_that_round_to_the_same_position as fn(),
+        ),
         (
             "admitted anisotropic sample families",
             plane_unprojection_preserves_admitted_anisotropic_delivery as fn(),
