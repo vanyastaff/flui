@@ -1786,6 +1786,14 @@ fn scoped_global_key_registration_contracts() {
             "self withdrawal failure",
             scoped_keys_can_withdraw_the_current_failing_callback,
         ),
+        (
+            "key dispatch under caught focus failure",
+            nested_keys_preserve_caught_focus_failure,
+        ),
+        (
+            "nested key failure competition",
+            nested_key_failure_preserves_caught_focus_failure,
+        ),
     ];
     let mut failed = Vec::new();
     for &(name, case) in cases {
@@ -2091,6 +2099,74 @@ fn scoped_keys_can_withdraw_the_current_failing_callback() {
         0,
         "protected callback retires after its failure is saved"
     );
+    assert_eq!(
+        manager.dispatch_key_event(&key_event()),
+        KeyEventResult::Ignored
+    );
+    let healthy = manager
+        .register_global_key_handler(Rc::new(|_| KeyEventResult::Handled))
+        .expect("recovered owner");
+    assert_eq!(
+        manager.dispatch_key_event(&key_event()),
+        KeyEventResult::Handled
+    );
+    drop(healthy);
+}
+
+fn nested_keys_preserve_caught_focus_failure() {
+    nested_key_dispatch_after_focus_failure(false);
+}
+
+fn nested_key_failure_preserves_caught_focus_failure() {
+    nested_key_dispatch_after_focus_failure(true);
+}
+
+fn nested_key_dispatch_after_focus_failure(key_panics: bool) {
+    let manager = FocusManager::new();
+    let node = FocusNode::new();
+    let _attachment = manager
+        .root_scope()
+        .attach_node(&node)
+        .expect("attach node");
+    let drops = Rc::new(Cell::new(0));
+    let token = Rc::new(RefCell::new(None));
+    let withdrawn = Rc::clone(&token);
+    let capture = KeyCaptureRetirement {
+        drops: Rc::clone(&drops),
+        owner: Rc::downgrade(&manager),
+    };
+    let registration = manager
+        .register_global_key_handler(Rc::new(move |_| {
+            let _ = &capture;
+            let retired = withdrawn.borrow_mut().take();
+            drop(retired);
+            assert!(!key_panics, "competing key callback");
+            KeyEventResult::Ignored
+        }))
+        .expect("live global handler");
+    *token.borrow_mut() = Some(registration);
+    let first = manager.add_listener(Rc::new(|_, _| panic!("first focus observer")));
+    let owner = Rc::downgrade(&manager);
+    let second = manager.add_listener(Rc::new(move |_, _| {
+        let _ = owner
+            .upgrade()
+            .expect("live owner")
+            .dispatch_key_event(&key_event());
+    }));
+    let failure = catch_unwind(AssertUnwindSafe(|| node.request_focus()))
+        .expect_err("first focus failure propagates");
+    assert_eq!(
+        failure.downcast_ref::<&str>(),
+        Some(&"first focus observer")
+    );
+    assert_eq!(
+        drops.get(),
+        0,
+        "nested key snapshot inherits the already-caught focus failure"
+    );
+    manager.remove_listener(first);
+    manager.remove_listener(second);
+    manager.unfocus();
     assert_eq!(
         manager.dispatch_key_event(&key_event()),
         KeyEventResult::Ignored
