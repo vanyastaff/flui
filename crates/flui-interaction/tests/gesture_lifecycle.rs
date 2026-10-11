@@ -341,7 +341,9 @@ fn drag_cancelled_end_callback_admits_the_next_contact_once() {
 }
 
 fn assert_drag_terminal_callback_admits_the_next_contact_once(started: bool) {
-    let mut lane = Lane::new();
+    // This row pins the recognizer's own admission transaction. Its callback
+    // intentionally calls add_pointer directly, without admitting binding input.
+    let arena = GestureArena::binding_driven(Arc::new(ManualClock::new()));
     let pointer = id(2);
     let touch = PointerKind::Touch;
     let downs = Rc::new(RefCell::new(Vec::new()));
@@ -365,7 +367,7 @@ fn assert_drag_terminal_callback_admits_the_next_contact_once(started: bool) {
         Rc::clone(&cancels),
     );
     let readmit_cancel = Rc::clone(&readmit);
-    let drag = DragGestureRecognizer::builder(lane.arena.clone(), DragAxis::Free)
+    let drag = DragGestureRecognizer::builder(arena.clone(), DragAxis::Free)
         .on_down(move |details| {
             d.borrow_mut()
                 .push((details.local_position, details.global_position));
@@ -387,19 +389,34 @@ fn assert_drag_terminal_callback_admits_the_next_contact_once(started: bool) {
         })
         .build();
     *slot.borrow_mut() = Rc::downgrade(&drag);
-    lane.join(&drag);
+    let send = |event: &PointerEvent| {
+        let dispatch = PointerDispatch::at_root(event);
+        if matches!(event, PointerEvent::Down(_)) {
+            drag.add_pointer(dispatch);
+        } else {
+            drag.handle_event(dispatch);
+        }
+        // Reentry occurs only while cancelling a superseded Down; completed Up
+        // callbacks only record results, so this controlled script owns its ID.
+        match event {
+            PointerEvent::Down(press) => arena.close(press.pointer.id),
+            PointerEvent::Up(release) => arena.sweep(release.pointer.id),
+            _ => {}
+        }
+        arena.drain_deferred_resolutions();
+    };
     let first_down = down(pointer, at(0.0, 0.0), touch);
     if started {
-        lane.send(&first_down);
-        lane.send(&motion(pointer, at(40.0, 0.0), touch));
+        send(&first_down);
+        send(&motion(pointer, at(40.0, 0.0), touch));
     } else {
         // A closed arena defers its lone winner until the input-end drain.
         // Restart while the first contact still awaits that verdict.
         drag.add_pointer(PointerDispatch::at_root(&first_down));
-        lane.arena.close(pointer);
+        arena.close(pointer);
     }
 
-    lane.send(&down(pointer, at(200.0, 20.0), touch));
+    send(&down(pointer, at(200.0, 20.0), touch));
     assert_eq!(
         &*downs.borrow(),
         &[
@@ -408,8 +425,8 @@ fn assert_drag_terminal_callback_admits_the_next_contact_once(started: bool) {
         ],
         "the retiring callback's admission supersedes the outer Down"
     );
-    lane.send(&motion(pointer, at(140.0, 10.0), touch));
-    lane.send(&up(pointer, at(140.0, 10.0), touch));
+    send(&motion(pointer, at(140.0, 10.0), touch));
+    send(&up(pointer, at(140.0, 10.0), touch));
     let expected_starts = if started {
         vec![
             (at(0.0, 0.0), at(0.0, 0.0)),
@@ -437,14 +454,11 @@ fn assert_drag_terminal_callback_admits_the_next_contact_once(started: bool) {
         "the inner contact completes once"
     );
     assert_eq!(cancels.get(), u32::from(!started));
-    assert!(
-        lane.arena.is_empty(),
-        "the reused pointer's contest has settled"
-    );
+    assert!(arena.is_empty(), "the reused pointer's contest has settled");
 
-    lane.send(&down(pointer, at(300.0, 30.0), touch));
-    lane.send(&motion(pointer, at(340.0, 30.0), touch));
-    lane.send(&up(pointer, at(340.0, 30.0), touch));
+    send(&down(pointer, at(300.0, 30.0), touch));
+    send(&motion(pointer, at(340.0, 30.0), touch));
+    send(&up(pointer, at(340.0, 30.0), touch));
     assert_eq!(
         downs.borrow().len(),
         3,
@@ -456,7 +470,7 @@ fn assert_drag_terminal_callback_admits_the_next_contact_once(started: bool) {
         ends.borrow().last(),
         Some(&(GestureEndReason::Completed, at(340.0, 30.0)))
     );
-    assert!(lane.arena.is_empty());
+    assert!(arena.is_empty());
 }
 
 fn other_finger_does_not_complete_a_double_tap_contact() {
