@@ -258,11 +258,19 @@ impl Default for AppConfig {
     }
 }
 
+/// A setting the current host integration cannot honor on any platform.
+#[cfg(feature = "persist")]
+#[derive(Debug, thiserror::Error)]
+#[error("unsupported application setting: {setting}")]
+pub(crate) struct UnsupportedSetting {
+    pub(crate) setting: &'static str,
+}
+
 impl AppConfig {
     #[cfg(feature = "persist")]
-    pub(crate) fn validate(&self) -> Result<(), super::AppWindowError> {
+    pub(crate) fn validate(&self) -> Result<(), UnsupportedSetting> {
         if self.storage_dir.is_some() {
-            return Err(super::AppWindowError::UnsupportedConfiguration {
+            return Err(UnsupportedSetting {
                 setting: "storage_dir",
             });
         }
@@ -424,16 +432,13 @@ impl AppConfig {
         self
     }
 
-    /// Give the application's widgets storage under the directory `name`:
-    /// documents in `<data_dir>/<name>/`, which follows the user between
-    /// machines, and machine-local state such as a session in
-    /// `<data_local_dir>/<name>/` (the per-user roots of the `dirs` crate).
-    /// Widgets reach it through `LifecycleContext::storage`; without this,
-    /// or on a platform without files, they get none.
+    /// Select a directory name for the planned file-backed storage integration.
     ///
-    /// The file-backed host integration is not implemented yet. Startup and
-    /// window admission return [`super::AppWindowError::UnsupportedConfiguration`]
-    /// when this setting is present, rather than silently running without storage.
+    /// The integration is not implemented yet, so a configured value is refused
+    /// before platform startup or window admission. Desktop entry points return
+    /// `AppWindowError::UnsupportedConfiguration` (inside `anyhow::Error` for
+    /// direct rendering). Managed Android, iOS and web entry points log the
+    /// refusal and return without starting the application.
     #[cfg(feature = "persist")]
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_storage_dir(mut self, name: flui_platform_api::StorageName) -> Self {

@@ -103,6 +103,15 @@ pub enum AppWindowError {
     },
 }
 
+#[cfg(feature = "persist")]
+impl From<super::config::UnsupportedSetting> for AppWindowError {
+    fn from(error: super::config::UnsupportedSetting) -> Self {
+        Self::UnsupportedConfiguration {
+            setting: error.setting,
+        }
+    }
+}
+
 pub(crate) type Reply = ClaimSlot<Result<PresentationAddress, AppWindowError>>;
 const WAITER_CAPACITY: usize = 64;
 #[derive(Clone, Copy, PartialEq, Eq)]

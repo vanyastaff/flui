@@ -324,7 +324,7 @@ impl PendingCompletion {
                 Ok(None)
             }
             Some(Ok(())) => Ok(Some(receipt.address)),
-            Some(Err(error)) => Err(mount_error(error)),
+            Some(Err(error)) => Err(error.into()),
         }
     }
 }
@@ -416,6 +416,10 @@ impl PendingRequestState {
     fn take_ready(&self) -> bool {
         let mut state = self.state.lock();
         state.0 == PendingPhase::Waiting && std::mem::take(&mut state.1)
+    }
+    fn is_ready(&self) -> bool {
+        let state = self.state.lock();
+        state.0 == PendingPhase::Waiting && state.1
     }
     fn failed(&self) -> bool {
         self.state.lock().0 == PendingPhase::Failed
@@ -653,6 +657,7 @@ pub(super) fn drain_pending_secondary_window_completions(
     let pending =
         PENDING_SECONDARY_WINDOW_OPENS.with(|queue| std::mem::take(&mut *queue.borrow_mut()));
     let mut first_panic = None;
+    let mut retry_needed = false;
     for mut request in pending {
         if !secondary_install_admitted(&request.config.loop_identity)
             || request.config.reservation.0.failed()
@@ -668,10 +673,12 @@ pub(super) fn drain_pending_secondary_window_completions(
             );
             continue;
         }
-        if recovery != flui_runtime::owner::RecoveryState::Healthy
-            || first_panic.is_some()
-            || !request.config.reservation.0.take_ready()
-        {
+        if recovery != flui_runtime::owner::RecoveryState::Healthy || first_panic.is_some() {
+            retry_needed |= request.config.reservation.0.is_ready();
+            PENDING_SECONDARY_WINDOW_OPENS.with(|queue| queue.borrow_mut().push(request));
+            continue;
+        }
+        if !request.config.reservation.0.take_ready() {
             PENDING_SECONDARY_WINDOW_OPENS.with(|queue| queue.borrow_mut().push(request));
             continue;
         }
@@ -715,6 +722,7 @@ pub(super) fn drain_pending_secondary_window_completions(
         if (recovery != flui_runtime::owner::RecoveryState::Healthy || first_panic.is_some())
             && !matches!(completion.stage, CompletionStage::Publishing(_))
         {
+            retry_needed = true;
             PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| queue.borrow_mut().push(completion));
             continue;
         }
@@ -764,6 +772,19 @@ pub(super) fn drain_pending_secondary_window_completions(
                 &mut first_panic,
                 error,
                 "window request reply",
+            );
+        }
+    }
+    if retry_needed {
+        // These queues are outside the logical owner's FIFO. Retain delivery
+        // independently of the failure that deferred their next healthy turn.
+        let wake = APP_RUNTIME.with(|slot| slot.borrow().owner_turn_wake.clone());
+        if let Some(wake) = wake {
+            let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| wake())).err();
+            crate::app::lifecycle_state::preserve_first_lifecycle_panic(
+                &mut first_panic,
+                error,
+                "pending window continuation",
             );
         }
     }
@@ -1156,7 +1177,7 @@ fn finish_open_secondary_window(
     });
     let receipt = installation.submit();
     match receipt.outcome() {
-        Some(Err(error)) => return Err(mount_error(error)),
+        Some(Err(error)) => return Err(error.into()),
         Some(Ok(())) => {}
         None => {
             PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
@@ -1197,6 +1218,14 @@ mod tests {
         installation_case(InstallCase::Closed);
     }
 
+    fn rendered_secondary_closed_during_initialization_is_cancelled() {
+        installation_case(InstallCase::ClosedDuringInitialization);
+    }
+
+    fn initialization_panic_after_native_close_remains_a_failure() {
+        installation_case(InstallCase::ClosedDuringInitializationThenPanic);
+    }
+
     fn rendered_secondary_initialization_failure_retires_membership() {
         installation_case(InstallCase::InitializationPanic);
     }
@@ -1209,6 +1238,8 @@ mod tests {
     enum InstallCase {
         Ready,
         Closed,
+        ClosedDuringInitialization,
+        ClosedDuringInitializationThenPanic,
         InitializationPanic,
         ObserverDropped,
     }
@@ -1271,6 +1302,7 @@ mod tests {
                                 .attach_root_widget(&flui_widgets::SizedBox::new(20.0, 30.0))
                                 .expect("root");
                             let window: Arc<dyn flui_platform::traits::PlatformWindow> = window;
+                            let closing_window = Arc::clone(&window);
                             let mut prepared =
                                 super::super::owner_dispatch::prepare_ui_runtime_alongside(
                                     runtime,
@@ -1287,8 +1319,11 @@ mod tests {
                                         prelude: None,
                                         resize: Some(Box::new(move |_, _| {
                                             observed.set(Some(retained.load(Ordering::Acquire)));
+                                            if matches!(case, InstallCase::ClosedDuringInitialization | InstallCase::ClosedDuringInitializationThenPanic) {
+                                                closing_window.close();
+                                            }
                                             assert!(
-                                                case != InstallCase::InitializationPanic,
+                                                !matches!(case, InstallCase::InitializationPanic | InstallCase::ClosedDuringInitializationThenPanic),
                                                 "initial metrics failure"
                                             );
                                         })),
@@ -1323,9 +1358,12 @@ mod tests {
                 }));
                 assert_eq!(
                     delivery.is_err(),
-                    case == InstallCase::InitializationPanic,
+                    matches!(case, InstallCase::InitializationPanic | InstallCase::ClosedDuringInitializationThenPanic),
                     "initialization preserves its failure"
                 );
+                if let Err(failure) = delivery {
+                    assert_eq!(failure.downcast_ref::<&str>(), Some(&"initial metrics failure"));
+                }
                 assert_eq!(
                     during.get(),
                     if case == InstallCase::Closed {
@@ -1353,7 +1391,7 @@ mod tests {
                 );
                 assert_eq!(
                     *failures.lock().expect("reports"),
-                    if case == InstallCase::InitializationPanic {
+                    if matches!(case, InstallCase::InitializationPanic | InstallCase::ClosedDuringInitializationThenPanic) {
                         vec![address.get().expect("prepared address")]
                     } else {
                         Vec::new()
@@ -1368,7 +1406,12 @@ mod tests {
                         assert_eq!(completion.expect("ready"), address.get().expect("address"));
                     } else {
                         assert!(
-                            matches!(completion, Err(AppWindowError::Mount { .. })),
+                            match case {
+                                InstallCase::Closed | InstallCase::ClosedDuringInitialization => {
+                                    matches!(completion, Err(AppWindowError::Cancelled))
+                                }
+                                _ => matches!(completion, Err(AppWindowError::Mount { .. })),
+                            },
                             "failure is typed after rollback: {completion:?}"
                         );
                     }
@@ -1400,12 +1443,24 @@ mod tests {
                     rendered_secondary_closed_before_publication_releases_reservation as fn(),
                 ),
                 (
+                    "rendered_secondary_closed_during_initialization_is_cancelled",
+                    rendered_secondary_closed_during_initialization_is_cancelled as fn(),
+                ),
+                (
+                    "initialization_panic_after_native_close_remains_a_failure",
+                    initialization_panic_after_native_close_remains_a_failure as fn(),
+                ),
+                (
                     "rendered_secondary_initialization_failure_retires_membership",
                     rendered_secondary_initialization_failure_retires_membership as fn(),
                 ),
                 (
                     "shutdown_settles_all_requests_when_a_receiver_waker_panics",
                     shutdown_settles_all_requests_when_a_receiver_waker_panics as fn(),
+                ),
+                (
+                    "receipt_wake_failure_retries_the_accepted_installation_tail",
+                    receipt_wake_failure_retries_the_accepted_installation_tail as fn(),
                 ),
                 (
                     "secondary_receipt_observes_late_installation_failures",
@@ -1504,6 +1559,106 @@ mod tests {
                 Ok(())
             }))
             .expect("headless run");
+    }
+
+    fn receipt_wake_failure_retries_the_accepted_installation_tail() {
+        use std::{
+            future::Future,
+            pin::Pin,
+            task::{Context, Poll, Wake, Waker},
+        };
+        struct PanickingWake;
+        impl Wake for PanickingWake {
+            fn wake(self: Arc<Self>) {
+                panic!("installed receiver wake");
+            }
+        }
+        let _clear = super::super::host::OwnerHostClearGuard::arm();
+        let platform = HeadlessPlatform::new();
+        let turns = platform.owner_turns();
+        let requests = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let saved = Rc::clone(&requests);
+        let calls = Rc::new(Cell::new(0));
+        let called = Rc::clone(&calls);
+        Box::new(platform)
+            .run(Box::new(move |owner| {
+                super::super::host::install_owner_platform(owner).expect("owner");
+                for first in [true, false] {
+                    let window = with_owner_platform(|owner| {
+                        owner.open_window(flui_platform::WindowOptions::default())
+                    })
+                    .expect("owner")
+                    .expect("open")
+                    .try_ready()
+                    .expect("headless ready");
+                    let config = SecondaryWindowInstallConfig {
+                        loop_identity: APP_RUNTIME
+                            .with(|slot| Arc::clone(&slot.borrow().loop_identity)),
+                        policy: WindowPolicy::Isolated,
+                        shared_with: None,
+                        reservation: reserve_window().expect("reservation"),
+                        close_request_handler: None,
+                        frame_failure_detail: AppConfig::new().frame_failure_detail,
+                        pointer_resampling: AppConfig::new().pointer_resampling,
+                    };
+                    let stage = if first {
+                        let receipt = super::super::owner_dispatch::prepare_ui_runtime_alongside(
+                            UiRuntime::for_test(),
+                            Arc::clone(&window) as Arc<dyn flui_platform::traits::PlatformWindow>,
+                        )
+                        .submit();
+                        assert!(matches!(receipt.outcome(), Some(Ok(()))));
+                        CompletionStage::Publishing(receipt)
+                    } else {
+                        let called = Rc::clone(&called);
+                        CompletionStage::Content(Box::new(move |window| {
+                            called.set(called.get() + 1);
+                            Ok(super::super::owner_dispatch::prepare_ui_runtime_alongside(
+                                UiRuntime::for_test(),
+                                window,
+                            )
+                            .submit())
+                        }))
+                    };
+                    let (reply, mut request) = crate::app::WindowRequest::new();
+                    if first {
+                        let waker = Waker::from(Arc::new(PanickingWake));
+                        assert!(matches!(
+                            Pin::new(&mut request).poll(&mut Context::from_waker(&waker)),
+                            Poll::Pending
+                        ));
+                    }
+                    saved.borrow_mut().push(request);
+                    PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
+                        queue.borrow_mut().push(PendingCompletion {
+                            reply: Some(reply),
+                            config,
+                            window,
+                            stage,
+                        });
+                    });
+                }
+                with_owner_platform(|owner| owner.proxy().wake())
+                    .expect("owner")
+                    .expect("initial completion wake");
+                Ok(())
+            }))
+            .expect("headless run");
+        turns.drive();
+        assert!(matches!(requests.borrow_mut()[0].try_result(), Some(Ok(_))));
+        assert_eq!(calls.get(), 0, "failure defers new construction");
+        assert!(requests.borrow_mut()[1].try_result().is_none());
+        turns.drive();
+        assert_eq!(calls.get(), 1, "the accepted tail posts its own retry");
+        assert!(matches!(requests.borrow_mut()[1].try_result(), Some(Ok(_))));
+        assert_eq!(
+            APP_RUNTIME.with(|slot| slot
+                .borrow()
+                .pending_window_reservations
+                .load(Ordering::Acquire)),
+            0,
+            "both receipts release loop liveness reservations"
+        );
     }
 
     fn secondary_receipt_observes_late_installation_failures() {

@@ -32,6 +32,22 @@ pub(super) enum InstallError {
     WindowClosed,
 }
 
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+impl From<InstallError> for crate::app::AppWindowError {
+    fn from(error: InstallError) -> Self {
+        match error {
+            InstallError::WindowClosed => Self::Cancelled,
+            source => Self::Mount {
+                source: Arc::new(source),
+            },
+        }
+    }
+}
+
 /// Admission is distinct from publication. A pending receipt never represents
 /// a ready window; the completion tail observes its eventual result.
 #[must_use = "observe installation completion before reporting a window ready"]
@@ -302,7 +318,7 @@ impl OwnerEffects for HostState {
         &self,
         address: PresentationAddress,
         outcome: InitializationOutcome,
-        _: RecoveryState,
+        recovery: RecoveryState,
     ) {
         let mut entry = {
             let mut initializing = self.initializing.borrow_mut();
@@ -331,9 +347,13 @@ impl OwnerEffects for HostState {
                 return;
             }
         }
-        entry
-            .result
-            .set(Some(Err(InstallError::InitializationFailed)));
+        let error =
+            if recovery == RecoveryState::Healthy && first.is_none() && entry.window.is_closed() {
+                InstallError::WindowClosed
+            } else {
+                InstallError::InitializationFailed
+            };
+        entry.result.set(Some(Err(error)));
         contain(&mut first, || {
             if let Ok(target) = self.logical.presentation_dispatcher(address) {
                 self.native.fence_presentation(address);

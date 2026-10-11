@@ -320,6 +320,16 @@ fn unsupported_storage_is_refused_before_startup() {
     let config = AppConfig::new().with_storage_dir(flui_platform_api::StorageName::from_static(
         "storage-admission",
     ));
+    let direct_error = crate::app::run_direct(config.clone(), |_, _, _| {
+        panic!("unsupported configuration must fail before direct rendering");
+    })
+    .expect_err("unsupported storage is refused before direct startup");
+    assert!(matches!(
+        direct_error.downcast_ref::<AppWindowError>(),
+        Some(AppWindowError::UnsupportedConfiguration {
+            setting: "storage_dir"
+        })
+    ));
     let app = Application::new(|_| flui_widgets::Text::new("unused"))
         .with_config(config.clone())
         .with_startup_window(StartupWindow::None)
