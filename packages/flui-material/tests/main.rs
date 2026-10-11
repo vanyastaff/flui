@@ -246,6 +246,7 @@ fn overlay_contracts() {
         ("drawer::drawer_settling_uses_the_captured_fling_profile", drawer::drawer_settling_uses_the_captured_fling_profile),
         ("drawer::open_drawer_settling_uses_the_captured_fling_profile", drawer::open_drawer_settling_uses_the_captured_fling_profile),
         ("drawer::a_drawer_release_keeps_finger_speed", drawer::a_drawer_release_keeps_finger_speed),
+        ("drawer::grabbing_a_closing_drawer_preserves_its_panel", drawer::grabbing_a_closing_drawer_preserves_its_panel),
         ("drawer::drawer_slides_without_rebuilding_per_frame", drawer::drawer_slides_without_rebuilding_per_frame),
         ("drawer::incoming_end_drawer_scrim_covers_the_outgoing_start_panel", drawer::incoming_end_drawer_scrim_covers_the_outgoing_start_panel),
         (

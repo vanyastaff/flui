@@ -12,6 +12,21 @@ recorded so far.
 
 ## Mapping decisions
 
+### Drawer admission follows position and run ownership
+
+A drawer is closed when its normalized progress is zero and it owns no active
+run. Directional settlement alone does not prove an endpoint: grabbing a closing
+panel stops its reverse run at the current interior position. The panel and scrim
+remain mounted, cancellation settles from position, and starting an opening run
+at zero mounts before the first value sample. Render transitions still publish
+ordinary value ticks without rebuilding the widget each frame.
+
+`grabbing_a_closing_drawer_preserves_its_panel` checks both alignments through
+public pointer input and committed scene geometry, with cancellation and release
+on both sides of halfway, dragging to zero, mounting an opening run at zero,
+a fresh closing gesture and unmount withdrawal. The existing
+`drawer_slides_without_rebuilding_per_frame` pins retained frame publication.
+
 ### Replacing a display timer retires its outgoing owner
 
 The messenger installs and starts the new display owner before retiring the

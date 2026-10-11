@@ -58,9 +58,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_sdk::animation::ext::AnimatableExt;
-use flui_sdk::animation::{
-    Animation, AnimationController, AnimationStatus, DrivenController, Tween,
-};
+use flui_sdk::animation::{Animation, AnimationController, DrivenController, Tween};
 use flui_sdk::geometry::Radius;
 use flui_sdk::interaction::GestureEndReason;
 use flui_sdk::painting::{Alignment, Clip};
@@ -568,8 +566,11 @@ impl DrawerControllerCore {
         drop(previous);
     }
 
-    fn is_dismissed(&self) -> bool {
-        self.controller.status() == AnimationStatus::Dismissed
+    fn is_closed(&self) -> bool {
+        // Drawer progress is normalized to 0..=1. A stopped reverse run can
+        // settle at an interior value; its phase does not mean the panel closed.
+        // An opening run at zero must mount the panel before its first sample.
+        self.controller.value() == 0.0 && !self.controller.is_animating()
     }
 
     fn notify_open_changed(&self, opened: bool) {
@@ -609,7 +610,7 @@ impl DrawerControllerCore {
     /// crossed (the third firing path — independent of the value later
     /// crossing `0.5` as the fling animates).
     fn settle(&self, primary_velocity: f64) {
-        if self.is_dismissed() {
+        if self.is_closed() {
             return;
         }
         let width = self.panel_width.get();
@@ -627,7 +628,7 @@ impl DrawerControllerCore {
     /// Only reachable from the open panel's gesture detector; the
     /// closed-state edge strip wires no `on_horizontal_drag_cancel`.
     fn handle_drag_cancel(&self) {
-        if self.is_dismissed() || self.controller.is_animating() {
+        if self.is_closed() || self.controller.is_animating() {
             return;
         }
         if self.controller.value() < 0.5 {
@@ -662,7 +663,7 @@ pub struct DrawerControllerState {
 impl std::fmt::Debug for DrawerControllerState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DrawerControllerState")
-            .field("is_dismissed", &self.core.is_dismissed())
+            .field("is_closed", &self.core.is_closed())
             .field("value", &self.core.controller.value())
             .finish_non_exhaustive()
     }
@@ -713,8 +714,9 @@ impl ViewState<DrawerController> for DrawerControllerState {
 
         self.did_change_dependencies(ctx);
 
-        // Status mounts the panel as a run starts, even at value zero, and
-        // removes it after dismissal. Render transitions consume value ticks.
+        // Status changes rebuild the panel's admission as a run starts or
+        // settles. Closed admission depends on position and run ownership;
+        // render transitions consume value ticks without rebuilding the widget.
         let rebuild_for_status = rebuild;
         self.core
             .controller
@@ -797,7 +799,7 @@ fn drawer_surface(
     view: &DrawerController,
     drag_area_width: f64,
 ) -> impl IntoView + use<> {
-    let closed = core.is_dismissed();
+    let closed = core.is_closed();
     let content = if closed {
         let width = if view.enable_open_drag_gesture {
             drag_area_width

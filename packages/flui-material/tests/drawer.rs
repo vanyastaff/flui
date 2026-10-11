@@ -1,38 +1,10 @@
-//! `Drawer`/`DrawerController`/`Scaffold` drawer-slot end-to-end coverage —
-//! a real [`Vsync`] clock drives the settle animation, matching
-//! `tests/show_dialog.rs`'s harness. Sections, in file order: (1) closed-state
-//! edge-strip translucent hit-testing, (2) mid-drag panel geometry, (3) the
-//! scrim's mount, tap-to-close, and settle-to-unmount, (4) the
-//! [`ScaffoldScope`] handle's data surface (`has_drawer`/`is_drawer_open`)
-//! and the no-flash mount timing, (5) `on_drawer_changed`'s forward to the
-//! app author, (6) the dynamic child order when both drawers are configured.
+//! Mounted drawer behavior through public handles, pointer input and painting.
 //!
-//! Pure value/status math (fling threshold, direction factor, the three
-//! `on_drawer_changed` firing paths) is ALSO covered at the
-//! `DrawerControllerCore` unit level in
-//! `packages/flui-material/src/drawer.rs`'s own test module — deterministic
-//! there (no real-clock-dependent velocity simulation needed); this file
-//! additionally covers what only a real mounted tree can prove: geometry,
-//! hit-testing, the `GlobalKey` bridge, and `Scaffold`'s own relay of the
-//! per-drawer callback.
-//!
-//! # `themed` vs `themed_animated` — the `VsyncScope` requirement
-//!
-//! [`DrawerControllerState::init_state`] resolves its `Vsync` via
-//! `ctx.get::<VsyncScope, _>` — an ordinary ANCESTOR-WIDGET lookup, entirely
-//! separate from [`common::lay_out_animated`]'s `vsync` parameter (which
-//! only adopts a `Vsync` onto the *binding*, i.e. what `pump_for`/`tick_all`
-//! iterate). A tree with no `VsyncScope` ancestor leaves
-//! `DrawerControllerCore::vsync` `None`, so nothing ever registers with the
-//! adopted `Vsync`, and `pump_for` ticks precisely zero controllers no
-//! matter how large the budget — a `close()`/`open()` fling then never
-//! progresses past its very first simulated value, and a mount/unmount that
-//! depends on the fling actually *settling* (not just starting) never
-//! happens. [`themed_animated`] wraps `vsync` in [`flui_sdk::widgets::VsyncScope`]
-//! so the tree-side registration and the binding-side pump are the SAME
-//! clock; plain [`themed`] (no `VsyncScope`) is for tests that only need
-//! synchronous effects (a bare `set_value`, or a same-tick status flip) and
-//! never call `pump_for`/`tick_all` expecting real animation progress.
+//! [`themed_animated`] provides the same [`Vsync`] to the widget's ambient
+//! registry scope and the binding driven by [`common::lay_out_animated`].
+//! This exercises actual settling, retained panel and scrim geometry,
+//! interruption, gesture recovery and registration release. [`themed`] is
+//! used for cases that need synchronous behavior without a bound clock.
 //!
 //! Pointer moves and cancellation use the binding's captured Down route.
 //! Cancellation coverage below uses the ordinary edge width.
@@ -131,6 +103,214 @@ pub fn a_drawer_release_keeps_finger_speed() {
         );
         laid.pump_widget(SizedBox::shrink());
     }
+}
+
+pub fn grabbing_a_closing_drawer_preserves_its_panel() {
+    fn cancel_start() {
+        grabbing_closing_drawer(false, InterruptedContact::Cancel, 32, true);
+    }
+    fn release_start() {
+        grabbing_closing_drawer(false, InterruptedContact::Release, 32, true);
+    }
+    fn cancel_end() {
+        grabbing_closing_drawer(true, InterruptedContact::Cancel, 32, true);
+    }
+    fn release_end() {
+        grabbing_closing_drawer(true, InterruptedContact::Release, 32, true);
+    }
+    fn close_start() {
+        grabbing_closing_drawer(false, InterruptedContact::DragClosed, 32, true);
+    }
+    fn close_end() {
+        grabbing_closing_drawer(true, InterruptedContact::DragClosed, 32, true);
+    }
+    fn cancel_start_below_half() {
+        grabbing_closing_drawer(false, InterruptedContact::Cancel, 128, false);
+    }
+    fn release_start_below_half() {
+        grabbing_closing_drawer(false, InterruptedContact::Release, 128, false);
+    }
+    fn cancel_end_below_half() {
+        grabbing_closing_drawer(true, InterruptedContact::Cancel, 128, false);
+    }
+    fn release_end_below_half() {
+        grabbing_closing_drawer(true, InterruptedContact::Release, 128, false);
+    }
+    common::run_cases(&[
+        ("cancel_start", cancel_start),
+        ("release_start", release_start),
+        ("cancel_end", cancel_end),
+        ("release_end", release_end),
+        ("close_start", close_start),
+        ("close_end", close_end),
+        ("cancel_start_below_half", cancel_start_below_half),
+        ("release_start_below_half", release_start_below_half),
+        ("cancel_end_below_half", cancel_end_below_half),
+        ("release_end_below_half", release_end_below_half),
+    ]);
+}
+
+enum InterruptedContact {
+    Cancel,
+    Release,
+    DragClosed,
+}
+
+fn grabbing_closing_drawer(
+    end: bool,
+    finish: InterruptedContact,
+    closing_millis: u64,
+    above_half: bool,
+) {
+    use flui_sdk::painting::Color;
+    use flui_sdk::widgets::ColoredBox;
+
+    let vsync = Vsync::new();
+    let slot = Rc::new(RefCell::new(None));
+    let marker = Color::rgb(17, 83, 149);
+    let drawer = Drawer::new()
+        .width(150.0)
+        .child(SizedBox::height(400.0).child(ColoredBox::new(marker)));
+    let scaffold = if end {
+        Scaffold::new().end_drawer(drawer)
+    } else {
+        Scaffold::new().drawer(drawer)
+    }
+    .body(HandleProbe {
+        slot: Rc::clone(&slot),
+        on_tap: Rc::new(|_| {}),
+    });
+    let mut laid = lay_out_animated(
+        themed_animated(scaffold, &vsync),
+        tight(400.0, 400.0),
+        vsync.clone(),
+    );
+    let handle = slot.borrow().clone().expect("drawer handle captured");
+    laid.enter_owner_scope(|| {
+        if end {
+            handle.open_end_drawer();
+        } else {
+            handle.open_drawer();
+        }
+    });
+    laid.pump_for(Duration::ZERO);
+    assert_eq!(
+        drawer_panels(&laid).len(),
+        1,
+        "opening mounts at zero before the first advancing frame"
+    );
+    assert_eq!(
+        drawer_scene_sample(laid.layer_tree().expect("scene"), marker).0,
+        if end { 400.0 } else { -150.0 },
+        "the newly mounted panel starts outside the viewport"
+    );
+    for _ in 0..FLING_SETTLE_PUMPS {
+        laid.pump_for(FRAME);
+    }
+    let open_x = if end { 250.0 } else { 0.0 };
+    assert_eq!(
+        drawer_scene_sample(laid.layer_tree().expect("scene"), marker).0,
+        open_x
+    );
+
+    laid.enter_owner_scope(|| {
+        if end {
+            handle.close_end_drawer();
+        } else {
+            handle.close_drawer();
+        }
+    });
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(closing_millis));
+    let before = drawer_scene_sample(laid.layer_tree().expect("scene"), marker).0;
+    let fraction = if end {
+        (400.0 - before) / 150.0
+    } else {
+        (before + 150.0) / 150.0
+    };
+    assert!(
+        fraction > 0.0 && fraction < 1.0,
+        "closing panel is interior: {fraction}"
+    );
+    assert_eq!(
+        fraction > 0.5,
+        above_half,
+        "independent painted position at {closing_millis}ms: {fraction}"
+    );
+
+    let contact_x = if end { 395.0 } else { 5.0 };
+    laid.dispatch_pointer_down(contact_x, 200.0);
+    laid.pump();
+    assert_eq!(
+        drawer_scene_sample(laid.layer_tree().expect("scene"), marker).0,
+        before,
+        "a contact stops the closing run without removing or moving the panel"
+    );
+    let direction = if end { 1.0 } else { -1.0 };
+    let reopened = match finish {
+        InterruptedContact::Cancel => {
+            laid.dispatch_pointer_cancel();
+            above_half
+        }
+        InterruptedContact::Release => {
+            laid.dispatch_pointer_up(contact_x, 200.0);
+            above_half
+        }
+        InterruptedContact::DragClosed => {
+            laid.dispatch_pointer_move_after(contact_x + direction * 300.0, 200.0, FRAME);
+            laid.pump();
+            laid.dispatch_pointer_cancel();
+            false
+        }
+    };
+    for _ in 0..FLING_SETTLE_PUMPS {
+        laid.pump_for(FRAME);
+    }
+    if !reopened {
+        assert!(
+            drawer_panels(&laid).is_empty(),
+            "a closed settle removes the panel"
+        );
+        laid.enter_owner_scope(|| {
+            if end {
+                handle.open_end_drawer();
+            } else {
+                handle.open_drawer();
+            }
+        });
+        for _ in 0..FLING_SETTLE_PUMPS {
+            laid.pump_for(FRAME);
+        }
+    }
+    assert_eq!(
+        drawer_scene_sample(laid.layer_tree().expect("scene"), marker).0,
+        open_x
+    );
+    assert!(if end {
+        handle.is_end_drawer_open()
+    } else {
+        handle.is_drawer_open()
+    });
+
+    // A fresh contact can close the retained panel after interruption recovery.
+    laid.dispatch_pointer_down(contact_x, 200.0);
+    laid.dispatch_pointer_move_after(contact_x + direction * 30.0, 200.0, FRAME);
+    laid.pump();
+    laid.dispatch_pointer_move_after(contact_x + direction * 130.0, 200.0, FRAME);
+    laid.pump();
+    laid.dispatch_pointer_up(contact_x + direction * 130.0, 200.0);
+    for _ in 0..FLING_SETTLE_PUMPS {
+        laid.pump_for(FRAME);
+    }
+    assert!(
+        drawer_panels(&laid).is_empty(),
+        "the next drag closes and unmounts the panel"
+    );
+    laid.pump_widget(SizedBox::shrink());
+    assert!(
+        vsync.is_empty(),
+        "unmount releases the drawer's registration"
+    );
 }
 
 /// Observe the authored rectangle in the committed scene, including the
