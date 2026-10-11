@@ -445,6 +445,12 @@ impl OwnerCore {
                         let Ok(mut lease) = RuntimeLease::checkout(self, &work) else {
                             continue;
                         };
+                        let address = work.report_address(
+                            lease
+                                .runtime
+                                .as_deref()
+                                .expect("BUG: stop owns runtime lease"),
+                        );
                         let failure = catch_unwind(AssertUnwindSafe(|| {
                             work.run(
                                 self,
@@ -456,6 +462,13 @@ impl OwnerCore {
                             );
                         }))
                         .err();
+                        if let Some(payload) = failure.as_ref() {
+                            lease
+                                .runtime
+                                .as_deref_mut()
+                                .expect("BUG: stop owns runtime lease")
+                                .report_contained_panic(address, payload.as_ref());
+                        }
                         drop(lease);
                         preserve_first_lifecycle_panic(
                             &mut first,
@@ -498,6 +511,13 @@ impl OwnerCore {
                                             effects,
                                         );
                                     }));
+                                    if let Err(payload) = &result {
+                                        lease
+                                            .runtime
+                                            .as_deref()
+                                            .expect("BUG: initialization retains its runtime lease")
+                                            .report_contained_panic(address, payload.as_ref());
+                                    }
                                     drop(lease);
                                     if let Err(failure) = result {
                                         first = Some(failure);
@@ -534,6 +554,12 @@ impl OwnerCore {
                     let Ok(mut lease) = RuntimeLease::checkout(self, &work) else {
                         continue;
                     };
+                    let address = work.report_address(
+                        lease
+                            .runtime
+                            .as_deref()
+                            .expect("BUG: active lease owns runtime"),
+                    );
                     let mut failure = catch_unwind(AssertUnwindSafe(|| {
                         work.run(
                             self,
@@ -550,6 +576,9 @@ impl OwnerCore {
                         .as_deref()
                         .expect("BUG: active lease retains its runtime until return");
                     let id = runtime.id();
+                    if let Some(payload) = failure.as_ref() {
+                        runtime.report_contained_panic(address, payload.as_ref());
+                    }
                     let frontiers = if failure.is_none() && first_failure.is_none() {
                         runtime.take_text_sizing_frontiers()
                     } else {

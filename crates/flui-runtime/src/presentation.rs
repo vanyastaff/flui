@@ -713,13 +713,9 @@ impl PresentationState {
         // (`UiRuntime::construct` wires it to this same `wake`), so the closure
         // no longer calls `wake` directly.
         //
-        // Still pokes THIS presentation's own window directly (`Weak`,
-        // exactly like `Self::window` below — never a strong ref kept past
-        // the platform's own teardown), because `capabilities.wake` only
-        // pokes whichever ONE window `AppRuntime`'s own `redraw_window` slot
-        // happens to hold (issue #555's still-single-window wake contract).
-        // Once a ui_runtime hosts more than one presentation, each needs its OWN
-        // window poked when IT dirties — never a sibling's. The poke is gated
+        // Pokes this presentation's own window through a weak reference.
+        // The runtime wake targets its primary window; a runtime with several
+        // presentations still needs this addressed secondary wake. It is gated
         // on `ensure_visual_update`'s return so it fires only when the
         // scheduler actually accepted the demand.
         let scheduler = capabilities.scheduler.frame_waker();

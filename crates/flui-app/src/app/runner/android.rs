@@ -5,10 +5,7 @@ use super::device_recovery::{new_device_recovery_backoff, pump_with_device_recov
 use super::frame_pacing::{
     BACKGROUNDED_PUMP_PACE, FallbackGate, WakeAction, frame_is_dirty, wake_action,
 };
-use super::host::{
-    APP_RUNTIME, OwnerHostClearGuard, install_owner_platform, runtime_wake_callback,
-    with_owner_platform,
-};
+use super::host::{APP_RUNTIME, OwnerHostClearGuard, install_owner_platform, with_owner_platform};
 use super::owner_dispatch::{
     RuntimeEvent, RuntimeTask, dispatch_platform_ui_runtime, install_input_wiring,
     prepare_platform_ui_runtime, teardown_platform_ui_runtime,
@@ -61,6 +58,11 @@ where
     V: View + StatelessView + Clone + 'static,
 {
     let _installation = crate::app::logging::init_managed_logging(&config);
+    #[cfg(feature = "persist")]
+    if let Err(error) = config.validate() {
+        tracing::error!(%error, "application configuration failed");
+        return;
+    }
 
     tracing::info!(
         title = %config.title,
@@ -195,15 +197,13 @@ where
         // `UiRuntime::new` applies the DPR to the freshly built pipeline
         // before returning.
         let scale_factor = window.scale_factor() as f64;
-        let wake = runtime_wake_callback();
-        let ui_runtime =
-            match super::host::build_ui_runtime(&wake, presentation_window, scale_factor) {
-                Ok(ui_runtime) => ui_runtime,
-                Err(error) => {
-                    tracing::error!(%error, "UiRuntime construction failed");
-                    return Err(anyhow::anyhow!(error).context("UiRuntime construction failed"));
-                }
-            };
+        let ui_runtime = match super::host::build_ui_runtime(presentation_window, scale_factor) {
+            Ok(ui_runtime) => ui_runtime,
+            Err(error) => {
+                tracing::error!(%error, "UiRuntime construction failed");
+                return Err(anyhow::anyhow!(error).context("UiRuntime construction failed"));
+            }
+        };
 
         // Debug overlay: `Some` stats IS the enable flag, so this is the
         // single point that turns the frame path's overlay work on.
@@ -254,7 +254,7 @@ where
         // process lifetime; the services themselves still run, spawn, and
         // get the staged cancel-then-join teardown.
         for service in &config.services {
-            if let Err(error) = APP_RUNTIME.with(|slot| slot.borrow_mut().start_service(service)) {
+            if let Err(error) = super::host::start_service(service) {
                 tracing::error!(service = service.name(), %error, "service start failed");
                 return Err(anyhow::Error::from(error).context(format!(
                     "failed to start application service `{}`",

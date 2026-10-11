@@ -1,4 +1,7 @@
 //! The designated rendered window belongs to the loop, not its previous ui_runtime.
+#[cfg(test)]
+#[path = "host_delivery_tests.rs"]
+mod host_delivery_tests;
 use super::{
     desktop::{RenderedMain, install_desktop_window},
     host::{
@@ -370,9 +373,7 @@ impl MainController {
                 contain(|| drop(open));
                 if self.is_current() {
                     self.fail(match outcome {
-                        Err(source) => AppWindowError::Mount {
-                            source: Arc::new(source),
-                        },
+                        Err(source) => source.into(),
                         Ok(()) => AppWindowError::Cancelled,
                     });
                 } else {
@@ -588,11 +589,14 @@ where
     V: View + Clone + 'static,
     F: FnMut(&AppHandle) -> V + 'static,
 {
-    let platform = flui_platform::current_platform().map_err(|error| AppRunError::Platform {
-        source: Arc::new(error),
-    })?;
-    run_with_platform(application, platform)
+    run_with_platform_factory(application, || {
+        flui_platform::current_platform().map_err(|error| AppRunError::Platform {
+            source: Arc::new(error),
+        })
+    })
 }
+
+#[cfg(test)]
 fn run_with_platform<V, F>(
     application: Application<V, F>,
     platform: Box<dyn flui_platform::traits::Platform>,
@@ -601,6 +605,24 @@ where
     V: View + Clone + 'static,
     F: FnMut(&AppHandle) -> V + 'static,
 {
+    run_with_platform_factory(application, || Ok(platform))
+}
+
+fn run_with_platform_factory<V, F>(
+    application: Application<V, F>,
+    platform: impl FnOnce() -> Result<Box<dyn flui_platform::traits::Platform>, AppRunError>,
+) -> Result<(), AppRunError>
+where
+    V: View + Clone + 'static,
+    F: FnMut(&AppHandle) -> V + 'static,
+{
+    #[cfg(feature = "persist")]
+    application
+        .config
+        .validate()
+        .map_err(|error| AppRunError::Configuration(error.into()))?;
+    let _logging = super::super::logging::init_managed_logging(&application.config);
+    let platform = platform()?;
     let fatal = Rc::new(RefCell::new(None));
     let recorded = Rc::clone(&fatal);
     let _owner_guard = OwnerHostClearGuard::arm();
@@ -685,7 +707,7 @@ where
             });
         });
         for service in &config.services {
-            if let Err(error) = APP_RUNTIME.with(|slot| slot.borrow_mut().start_service(service)) {
+            if let Err(error) = super::host::start_service(service) {
                 let fatal = APP_RUNTIME.with(|slot| {
                     slot.borrow()
                         .main_controller
@@ -834,77 +856,86 @@ mod tests {
         };
         use flui_runtime::ui_runtime::UiRuntime;
 
-        let _owner = OwnerHostClearGuard::arm();
-        let _cleanup = LoopTeardown;
-        Box::new(HeadlessPlatform::new())
-            .run(Box::new(move |owner| {
-                let handle = install_test_controller(
-                    owner,
-                    Box::new(|_, window, host| {
-                        let runtime = UiRuntime::for_test();
-                        runtime
-                            .attach_root_widget(&flui_widgets::SizedBox::new(20.0, 30.0))
-                            .expect("mount root");
-                        let window: Arc<dyn flui_platform::traits::PlatformWindow> = window;
-                        let mut prepared =
-                            prepare_ui_runtime_alongside(runtime, Arc::clone(&window));
-                        let address = prepared.dispatcher().address;
-                        prepared
-                            .frame_driver(FrameDriver::Test(TestFrameDriver {
-                                installed: None,
-                                sink: flui_runtime::testing::ScriptedSink::new(|_, _| {
-                                    flui_runtime::sink::SubmitVerdict::Presented
-                                }),
-                                prelude: None,
-                                resize: None,
-                            }))
-                            .expect("prepare frame driver");
-                        prepared.lifecycle(host);
-                        let installation = prepared.submit();
-                        assert!(
-                            installation.outcome().is_none(),
-                            "completion tail cannot publish during the current owner turn"
-                        );
-                        Ok(RenderedMain {
-                            window,
-                            address,
-                            installation,
-                        })
-                    }),
-                    None,
-                );
-                let outer = install_platform_ui_runtime(
-                    UiRuntime::for_test(),
-                    &crate::app::window_test_support::headless_test_window(),
-                );
-                let reply = Rc::new(RefCell::new(None));
-                let requested = Rc::clone(&reply);
-                dispatch_platform_ui_runtime(
-                    outer,
-                    RuntimeTask::TestCallback(Box::new(move |_| {
-                        let mut request = handle
-                            .request_show_main_window()
-                            .expect("admit show request");
-                        assert!(
-                            request.try_result().is_none(),
-                            "request is not ready during the caller's operation"
-                        );
-                        *requested.borrow_mut() = Some(request);
-                    })),
-                )
-                .expect("complete caller and installation");
-                let result = reply
-                    .borrow_mut()
-                    .as_mut()
-                    .expect("request submitted")
-                    .try_result();
-                assert!(
-                    matches!(result, Some(Ok(_))),
-                    "ready follows publication: {result:?}"
-                );
-                Ok(())
-            }))
-            .expect("headless bootstrap");
+        for close_before_publication in [false, true] {
+            let _owner = OwnerHostClearGuard::arm();
+            let _cleanup = LoopTeardown;
+            Box::new(HeadlessPlatform::new())
+                .run(Box::new(move |owner| {
+                    let handle = install_test_controller(
+                        owner,
+                        Box::new(move |_, window, host| {
+                            let runtime = UiRuntime::for_test();
+                            runtime
+                                .attach_root_widget(&flui_widgets::SizedBox::new(20.0, 30.0))
+                                .expect("mount root");
+                            let window: Arc<dyn flui_platform::traits::PlatformWindow> = window;
+                            let mut prepared =
+                                prepare_ui_runtime_alongside(runtime, Arc::clone(&window));
+                            let address = prepared.dispatcher().address;
+                            prepared
+                                .frame_driver(FrameDriver::Test(TestFrameDriver {
+                                    installed: None,
+                                    sink: flui_runtime::testing::ScriptedSink::new(|_, _| {
+                                        flui_runtime::sink::SubmitVerdict::Presented
+                                    }),
+                                    prelude: None,
+                                    resize: None,
+                                }))
+                                .expect("prepare frame driver");
+                            prepared.lifecycle(host);
+                            let installation = prepared.submit();
+                            assert!(
+                                installation.outcome().is_none(),
+                                "completion tail cannot publish during the current owner turn"
+                            );
+                            if close_before_publication {
+                                window.close();
+                            }
+                            Ok(RenderedMain {
+                                window,
+                                address,
+                                installation,
+                            })
+                        }),
+                        None,
+                    );
+                    let outer = install_platform_ui_runtime(
+                        UiRuntime::for_test(),
+                        &crate::app::window_test_support::headless_test_window(),
+                    );
+                    let reply = Rc::new(RefCell::new(None));
+                    let requested = Rc::clone(&reply);
+                    dispatch_platform_ui_runtime(
+                        outer,
+                        RuntimeTask::TestCallback(Box::new(move |_| {
+                            let mut request = handle
+                                .request_show_main_window()
+                                .expect("admit show request");
+                            assert!(
+                                request.try_result().is_none(),
+                                "request is not ready during the caller's operation"
+                            );
+                            *requested.borrow_mut() = Some(request);
+                        })),
+                    )
+                    .expect("complete caller and installation");
+                    let result = reply
+                        .borrow_mut()
+                        .as_mut()
+                        .expect("request submitted")
+                        .try_result();
+                    assert!(
+                        if close_before_publication {
+                            matches!(result, Some(Err(AppWindowError::Cancelled)))
+                        } else {
+                            matches!(result, Some(Ok(_)))
+                        },
+                        "ready follows publication: {result:?}"
+                    );
+                    Ok(())
+                }))
+                .expect("headless bootstrap");
+        }
     }
 
     fn owner_failure_defers_new_window_work_until_recovery() {

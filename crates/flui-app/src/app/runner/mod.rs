@@ -438,12 +438,8 @@ mod tests {
                 .expect("BUG: install_owner_platform just ran above")
                 .and_then(flui_platform::WindowOpen::try_ready)
                 .expect("headless open_window is always Ready");
-                let ui_runtime = host::build_ui_runtime(
-                    &host::runtime_wake_callback(),
-                    presentation_window(window),
-                    1.0,
-                )
-                .expect("ui_runtime");
+                let ui_runtime =
+                    host::build_ui_runtime(presentation_window(window), 1.0).expect("ui_runtime");
                 let store = flui_platform_api::text_store::InMemoryTextStore::new("");
                 let _token = ui_runtime
                     .text_input_handle()

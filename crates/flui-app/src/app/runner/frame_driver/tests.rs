@@ -722,6 +722,11 @@ fn installed_frame_driver_contract() {
     crate::table_test::run_table(
         "installed_frame_driver_contract",
         &[
+            #[cfg(not(target_os = "ios"))]
+            (
+                "deadlines_survive_a_sibling_install_and_close",
+                deadlines_survive_a_sibling_install_and_close as fn(),
+            ),
             #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
             (
                 "agent_notification_follows_live_native_initialization",
@@ -782,6 +787,102 @@ fn installed_frame_driver_contract() {
             ),
         ],
     );
+}
+
+#[cfg(not(target_os = "ios"))]
+fn deadlines_survive_a_sibling_install_and_close() {
+    use super::super::{
+        desktop::DesktopWakeDeadlines, first_reveal::FirstReveal, frame_pacing::FallbackWake,
+    };
+    let _clear = OwnerHostClearGuard::arm();
+    // Both reveal deadlines are already due, so unrelated future geometry
+    // retries cannot hide their loss in the owner's earliest-deadline fold.
+    let now = web_time::Instant::now()
+        .checked_sub(web_time::Duration::from_secs(10))
+        .expect("clock supports a recent past deadline");
+    let mut installed = Vec::new();
+    for offset in [0, 2] {
+        let reveal = Arc::new(FirstReveal::new());
+        assert!(!reveal.after_frame(false, now + web_time::Duration::from_secs(offset)));
+        let deadline = reveal.next_deadline().expect("armed reveal");
+        let sources = Arc::new(DesktopWakeDeadlines {
+            device_recovery_backoff: Arc::new(
+                super::super::device_recovery::new_device_recovery_backoff(),
+            ),
+            fallback: Arc::new(FallbackWake::new(web_time::Duration::from_millis(16))),
+            first_reveal: reveal,
+        });
+        let mut installation = super::super::owner_dispatch::prepare_ui_runtime_alongside(
+            UiRuntime::for_test(),
+            crate::app::window_test_support::headless_test_window(),
+        );
+        let dispatcher = installation.dispatcher();
+        let frame = installation
+            .frame_driver(FrameDriver::TestDeadlines(sources))
+            .expect("deadline driver");
+        installation
+            .submit()
+            .outcome()
+            .expect("settled")
+            .expect("installed");
+        installed.push((dispatcher, deadline, frame));
+    }
+    let earliest = || super::super::host::APP_RUNTIME.with(|slot| slot.borrow().next_wake());
+    assert_eq!(
+        earliest(),
+        Some(installed[0].1),
+        "installing B retains A's earlier deadline"
+    );
+    let host = super::super::host::APP_RUNTIME.with(|slot| slot.borrow().installed_host.clone());
+    // Use the actual published record; this private view exposes the existing
+    // checkout operation without adding a test API to native storage.
+    let drivers = super::FrameDrivers {
+        records: vec![installed[0].2.liveness.0.upgrade().expect("live record")],
+        retirement: host.native().retirement(),
+    };
+    let lease = drivers
+        .checkout_presentation(installed[0].0.address)
+        .expect("lease the installed native driver");
+    assert_eq!(
+        earliest(),
+        Some(installed[0].1),
+        "leasing A's driver does not hide its pacing metadata"
+    );
+    installed[0]
+        .0
+        .runtime()
+        .lifecycle(flui_scheduler::AppLifecycleState::Hidden)
+        .expect("hide A");
+    assert_eq!(
+        earliest(),
+        Some(installed[1].1),
+        "hidden A contributes no visual deadline"
+    );
+    installed[0]
+        .0
+        .runtime()
+        .lifecycle(flui_scheduler::AppLifecycleState::Resumed)
+        .expect("resume A");
+    assert_eq!(
+        earliest(),
+        Some(installed[0].1),
+        "resume restores the retained retry deadline"
+    );
+    close_this_window(installed[1].0);
+    assert_eq!(
+        earliest(),
+        Some(installed[0].1),
+        "closing B retains A's deadline"
+    );
+    drop(lease);
+    assert_eq!(earliest(), Some(installed[0].1));
+    close_this_window(installed[0].0);
+    assert_eq!(
+        earliest(),
+        None,
+        "closed presentations contribute no deadline"
+    );
+    teardown_platform_ui_runtime();
 }
 
 fn unpublished_window_retires_native_resources_independently() {

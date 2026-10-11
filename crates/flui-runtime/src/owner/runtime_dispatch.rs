@@ -104,6 +104,27 @@ pub(super) enum RuntimeWork {
 }
 
 impl RuntimeWork {
+    pub(super) fn report_address(&self, runtime: &UiRuntime) -> PresentationAddress {
+        match self {
+            Self::Initialize(initial) => initial.address,
+            Self::SurfaceRestored(address)
+            | Self::Close(address)
+            | Self::Observation(address, _)
+            | Self::WindowState(address, _)
+            | Self::Frame(address)
+            | Self::TextSizingInstall(address, _)
+            | Self::TextSizingService(address, _)
+            | Self::TextSizingWithdraw(address, _)
+            | Self::TextSizingSettled(address, _, _)
+            | Self::Input { address, .. } => *address,
+            Self::Runtime(_, _) | Self::Preferences(_, _) => PresentationAddress {
+                ui_runtime_id: runtime.id(),
+                presentation_id: runtime.presentation_id(),
+            },
+            #[cfg(feature = "test-support")]
+            Self::TestCallback(address, _) => *address,
+        }
+    }
     pub(super) fn merge_pending_state(&mut self, newer: &Self) -> bool {
         if let (Self::WindowState(address, state), Self::WindowState(next_address, next)) =
             (self, newer)
