@@ -1229,7 +1229,7 @@ fn after_route_up_must_not_sweep_a_reentrant_replacement() {
     let tapped = counter();
     let observed_taps = tapped.clone();
     let tap = TapGestureRecognizer::builder(arena.clone())
-        .on_tap(move || {
+        .on_tap(move |_| {
             observed_taps.set(observed_taps.get() + 1);
             let next_down = down(pointer, at(90.0, 0.0), PointerKind::Touch);
             replacement_first.add_pointer(PointerDispatch::at_root(&next_down));
