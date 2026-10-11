@@ -20,7 +20,7 @@ render pipeline or event loop.
 ```text
 Application
     ↓
-UpdateScheduler (orchestrates frames — logical time only)
+UpdateScheduler (frame phases and owner turns)
     ├─ TaskQueue (priority-based execution)
     └─ FrameBudget (phase-duration stats)
 
@@ -232,9 +232,9 @@ Tasks execute in strict priority order:
 | Priority | Use Case | Examples |
 |----------|----------|----------|
 | **UserInput** | Immediate response | Mouse clicks, keyboard, touch |
-| **Animation** | Smooth 60fps | Tickers, transitions |
+| **Animation** | Time-sensitive UI work | Animation samples, transitions |
 | **Build** | Widget rebuilds | State changes, layout |
-| **Idle** | Background work | GC, telemetry, preloading |
+| **Idle** | Background work | Deferred cleanup, telemetry, preloading |
 
 ## Integration with FLUI
 
