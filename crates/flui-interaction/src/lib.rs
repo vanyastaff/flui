@@ -205,8 +205,8 @@ pub use arena::{
 pub use binding::{GestureBinding, InvalidSamplingWindow, ResamplingModeChangeError};
 pub use clipboard::ClipboardHandle;
 pub use details::{
-    ForcePressDetails, LongPressEndDetails, LongPressMoveUpdateDetails, TapDownDetails,
-    TapUpDetails,
+    ForcePressDetails, LongPressDetails, LongPressDownDetails, LongPressEndDetails,
+    LongPressMoveUpdateDetails, LongPressStartDetails, TapDetails, TapDownDetails, TapUpDetails,
 };
 // The monotonic clock primitive now lives in `flui-foundation`; re-exported here
 // because the gesture arena's public API takes a `MonotonicClock` (and tests /
@@ -242,12 +242,14 @@ pub use recognizers::{
     DragDownDetails, DragEndCallback, DragEndDetails, DragGestureRecognizer, DragPointerStrategy,
     DragStartCallback, DragStartDetails, DragUpdateCallback, DragUpdateDetails,
     EagerGestureRecognizer, ForcePressGestureRecognizer, GestureEndReason, GestureRecognizer,
-    LongPressGestureRecognizer, MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer,
-    MultiDragHandle, MultiDragStartCallback, MultiDragUpdateDetails, MultiTapGestureRecognizer,
-    PrimaryContact, RecognizerSet, ScaleGestureRecognizer, TapAndDragGestureRecognizer,
+    LongPressCallback, LongPressDownCallback, LongPressEndCallback, LongPressGestureRecognizer,
+    LongPressMoveUpdateCallback, LongPressSimpleCallback, LongPressStartCallback, MultiDragAxis,
+    MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle, MultiDragStartCallback,
+    MultiDragUpdateDetails, MultiTapGestureRecognizer, PrimaryContact, RecognizerSet,
+    ScaleGestureRecognizer, TapAndDragGestureRecognizer, TapCallback, TapDownCallback,
     TapDragDownCallback, TapDragDownDetails, TapDragEndCallback, TapDragEndDetails,
     TapDragStartCallback, TapDragStartDetails, TapDragUpCallback, TapDragUpDetails,
-    TapDragUpdateCallback, TapDragUpdateDetails, TapGestureRecognizer, cancel_all,
+    TapDragUpdateCallback, TapDragUpdateDetails, TapGestureRecognizer, TapUpCallback, cancel_all,
 };
 pub use recognizers::{
     DoubleTapGestureRecognizerBuilder, DragGestureRecognizerBuilder, EagerGestureRecognizerBuilder,

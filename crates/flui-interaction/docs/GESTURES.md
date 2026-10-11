@@ -60,7 +60,11 @@ only a shorthand for the corresponding state machine.
 `Ready → Down` on pointer down. Up within slop fires `on_tap_up` and `on_tap`
 once the recognizer wins the arena (the release is held in `pending_up` until
 `accept_gesture`). Moving beyond the kind-specific slop goes to `Cancelled`.
-`TapDetails { global_position, local_position, kind }`.
+Down callbacks receive `TapDownDetails`; Up and completed-tap callbacks receive
+`TapUpDetails`. Move and cancellation callbacks receive `TapDetails`. Each
+snapshot carries `global_position`, `local_position` and the admitted `kind`.
+The same phase payloads apply to primary, secondary and auxiliary button
+callbacks; choosing a callback family chooses the button.
 
 ### Double tap (`double_tap.rs`, `DoubleTapPhase`)
 
@@ -91,6 +95,49 @@ tap on the same region is already rejected when the callbacks run.
 Builder methods: `on_long_press_down`, `on_long_press`,
 `on_long_press_start`, `on_long_press_move_update`,
 `on_long_press_up`, `on_long_press_end`, `on_long_press_cancel`.
+
+| Callback | Payload |
+|---|---|
+| `on_long_press_down` | `LongPressDownDetails`: admitted root/local position and device kind |
+| `on_long_press` | No argument; recognition notification |
+| `on_long_press_start` | `LongPressStartDetails`: position at recognition and admitted kind |
+| `on_long_press_move_update` | `LongPressMoveUpdateDetails`: current positions and displacement from Down in each space |
+| `on_long_press_up` / `on_long_press_cancel` | `LongPressDetails`: latest positions and admitted kind |
+| `on_long_press_end` | `LongPressEndDetails`: release positions, measured local velocity and admitted kind |
+
+Move displacement uses logical units from the admitted Down, including movement
+before recognition. It is not an incremental delta. Arithmetic overflow cancels
+the contact without publishing non-finite displacement. End velocity uses the
+admitted velocity estimator, measured history and the release event timestamp;
+predicted samples do not contribute, and a stationary release tail yields zero.
+Callbacks run outside state borrows and revalidate the exact contact after user
+clock calls. A failed clock or end callback cannot strand the next contact.
+
+Import these payloads from `flui_interaction` or `flui::interaction`. Callback
+argument annotations using the old generic snapshot for Down, Up or end must
+name the corresponding phase payload instead. Destructure with `..`, since
+these payloads are non-exhaustive.
+
+```rust
+use flui_interaction::{
+    GestureArena, LongPressGestureRecognizer, LongPressMoveUpdateDetails,
+    LongPressEndDetails, TapGestureRecognizer, TapDownDetails, TapUpDetails,
+};
+
+let arena = GestureArena::new();
+let tap = TapGestureRecognizer::builder(arena.clone())
+    .on_tap_down(|details: TapDownDetails| println!("Down at {:?}", details.local_position))
+    .on_tap(|details: TapUpDetails| println!("Released at {:?}", details.local_position))
+    .build();
+let press = LongPressGestureRecognizer::builder(arena)
+    .on_long_press_move_update(|details: LongPressMoveUpdateDetails| {
+        println!("Moved {:?} from Down", details.local_offset_from_origin);
+    })
+    .on_long_press_end(|details: LongPressEndDetails| {
+        println!("Release velocity {:?}", details.velocity);
+    })
+    .build();
+```
 
 ### Drag (`drag.rs`, `DragPhase`)
 
@@ -267,7 +314,7 @@ A quadratic least-squares fit over at most 20 samples within a 100 ms horizon;
 fewer than 3 samples gives no fit, and a pointer still for 40 ms reports zero.
 Use `processing::VelocityTracker::with_estimator(kind, estimator)` for a
 different `processing::VelocityEstimator`, or configure a recognizer through
-`GestureSettings::with_velocity_estimator`. Drag, multi-drag, tap-and-drag and
+`GestureSettings::with_velocity_estimator`. Drag, multi-drag, tap-and-drag, long-press and
 scale capture this policy when their contact sequence begins. Defaults remain
 least squares on every platform; selecting weighted recent intervals or impulse
 integration is an authored policy rather than an OS preference. All algorithms

@@ -47,7 +47,9 @@ pub enum MultiDragAxis {
     /// Admit vertical movement.
     Vertical,
 }
-/// Factory called after acceptance. Returning `None` rejects that contact.
+/// Factory called after acceptance with the admitted Down position in the
+/// receiving node's local coordinates. Updates carry the latest observed local
+/// and root positions. Returning `None` rejects that contact.
 pub type MultiDragStartCallback =
     Rc<dyn Fn(PointerId, Offset<f64>) -> Option<Rc<dyn MultiDragHandle>>>;
 /// Movement delivered to one drag client.

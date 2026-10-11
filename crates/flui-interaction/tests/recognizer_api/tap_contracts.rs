@@ -6,8 +6,12 @@ use std::{
 use flui_foundation::geometry::Offset;
 use flui_interaction::{
     CancelOutcome, DoubleTapGestureRecognizer, GestureArena, GestureRecognizer, GestureSettings,
-    GestureSettingsSource, TapGestureRecognizer,
-    events::{PointerEventExt, PointerKind, make_down_event, make_move_event, make_up_event},
+    GestureSettingsSource, PointerId, TapDownDetails, TapGestureRecognizer, TapUpDetails,
+    events::{
+        PointerButton, PointerEventExt, PointerKind, make_down_event,
+        make_down_event_for_id_with_button, make_move_event, make_up_event,
+        make_up_event_for_id_with_button,
+    },
     routing::PointerDispatch,
 };
 
@@ -15,6 +19,10 @@ use flui_interaction::{
 fn tap_builder_lifecycle_contract() {
     for (name, row) in [
         ("cancel_reuses_tap", cancel_reuses_tap as fn()),
+        (
+            "phase payloads preserve each button and coordinate space",
+            tap_phase_payloads_preserve_button_families_and_spaces,
+        ),
         (
             "live_settings_apply_to_next_contact",
             live_settings_apply_to_next_contact,
@@ -37,6 +45,112 @@ fn tap_builder_lifecycle_contract() {
             eprintln!("tap contract `{name}` failed");
             std::panic::resume_unwind(payload);
         }
+    }
+}
+
+fn tap_phase_payloads_preserve_button_families_and_spaces() {
+    let arena = GestureArena::new();
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let down_callback = |family| {
+        let log = Rc::clone(&log);
+        move |details: TapDownDetails| {
+            log.borrow_mut().push((
+                family,
+                "down",
+                details.global_position,
+                details.local_position,
+                details.kind,
+            ))
+        }
+    };
+    let up_callback = |family, phase| {
+        let log = Rc::clone(&log);
+        move |details: TapUpDetails| {
+            log.borrow_mut().push((
+                family,
+                phase,
+                details.global_position,
+                details.local_position,
+                details.kind,
+            ))
+        }
+    };
+    let recognizer = TapGestureRecognizer::builder(arena.clone())
+        .on_tap_down(down_callback("primary"))
+        .on_tap_up(up_callback("primary", "up"))
+        .on_tap(up_callback("primary", "tap"))
+        .on_secondary_tap_down(down_callback("secondary"))
+        .on_secondary_tap_up(up_callback("secondary", "up"))
+        .on_secondary_tap(up_callback("secondary", "tap"))
+        .on_tertiary_tap_down(down_callback("auxiliary"))
+        .on_tertiary_tap_up(up_callback("auxiliary", "up"))
+        .on_tertiary_tap(up_callback("auxiliary", "tap"))
+        .build();
+    let pointer = PointerId::try_from(81_u64).expect("fixture pointer");
+    for (family, button) in [
+        ("primary", PointerButton::PRIMARY),
+        ("secondary", PointerButton::SECONDARY),
+        ("auxiliary", PointerButton::AUXILIARY),
+    ] {
+        let local_down = make_down_event_for_id_with_button(
+            pointer,
+            Offset::new(1.0, 2.0),
+            PointerKind::Mouse,
+            button,
+        )
+        .expect("local down");
+        let root_down = make_down_event_for_id_with_button(
+            pointer,
+            Offset::new(10.0, 20.0),
+            PointerKind::Mouse,
+            button,
+        )
+        .expect("root down");
+        let local_up = make_up_event_for_id_with_button(
+            pointer,
+            Offset::new(3.0, 4.0),
+            PointerKind::Mouse,
+            button,
+        )
+        .expect("local up");
+        let root_up = make_up_event_for_id_with_button(
+            pointer,
+            Offset::new(30.0, 40.0),
+            PointerKind::Mouse,
+            button,
+        )
+        .expect("root up");
+        recognizer.add_pointer(PointerDispatch::new(&local_down, &root_down));
+        arena.close(pointer);
+        recognizer.handle_event(PointerDispatch::new(&local_up, &root_up));
+        arena.drain_deferred_resolutions();
+        assert_eq!(
+            log.borrow().as_slice(),
+            &[
+                (
+                    family,
+                    "down",
+                    Offset::new(10.0, 20.0),
+                    Offset::new(1.0, 2.0),
+                    PointerKind::Mouse
+                ),
+                (
+                    family,
+                    "up",
+                    Offset::new(30.0, 40.0),
+                    Offset::new(3.0, 4.0),
+                    PointerKind::Mouse
+                ),
+                (
+                    family,
+                    "tap",
+                    Offset::new(30.0, 40.0),
+                    Offset::new(3.0, 4.0),
+                    PointerKind::Mouse
+                ),
+            ]
+        );
+        log.borrow_mut().clear();
     }
 }
 

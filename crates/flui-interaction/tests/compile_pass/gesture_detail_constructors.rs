@@ -1,14 +1,13 @@
 use flui_foundation::geometry::Offset;
 use flui_interaction::{
     DragUpdateDetails, ForcePressDetails, GestureArena, LongPressEndDetails,
+    LongPressDetails, LongPressDownDetails, LongPressStartDetails, TapDetails,
     LongPressMoveUpdateDetails, PointerKind, TapDownDetails, TapGestureRecognizer, TapUpDetails,
     Velocity,
     recognizers::{
         DoubleTapDetails, DoubleTapGestureRecognizer, LongPressGestureRecognizer,
         MultiTapGestureRecognizer,
-        long_press::{LongPressDetails, LongPressDownDetails, LongPressStartDetails},
         multi_tap::MultiTapDetails,
-        tap::TapDetails,
     },
 };
 
@@ -24,7 +23,17 @@ fn main() {
 
     let arena = GestureArena::new();
     let _tap = TapGestureRecognizer::builder(arena.clone())
-        .on_tap(|TapDetails { global_position, .. }| { let _ = global_position; })
+        .on_tap_down(|TapDownDetails { global_position, .. }| { let _ = global_position; })
+        .on_tap_move(|TapDetails { local_position, .. }| { let _ = local_position; })
+        .on_tap_up(|TapUpDetails { global_position, .. }| { let _ = global_position; })
+        .on_tap(|TapUpDetails { global_position, .. }| { let _ = global_position; })
+        .on_tap_cancel(|TapDetails { kind, .. }| { let _ = kind; })
+        .on_secondary_tap_down(|_: TapDownDetails| {})
+        .on_secondary_tap_up(|_: TapUpDetails| {})
+        .on_secondary_tap(|_: TapUpDetails| {})
+        .on_tertiary_tap_down(|_: TapDownDetails| {})
+        .on_tertiary_tap_up(|_: TapUpDetails| {})
+        .on_tertiary_tap(|_: TapUpDetails| {})
         .build();
     let _double = DoubleTapGestureRecognizer::builder(arena.clone())
         .on_double_tap(|DoubleTapDetails { local_position, .. }| { let _ = local_position; })
@@ -32,7 +41,10 @@ fn main() {
     let _long = LongPressGestureRecognizer::builder(arena.clone())
         .on_long_press_down(|LongPressDownDetails { global_position, .. }| { let _ = global_position; })
         .on_long_press_start(|LongPressStartDetails { local_position, .. }| { let _ = local_position; })
-        .on_long_press_end(|LongPressDetails { kind, .. }| { let _ = kind; })
+        .on_long_press_move_update(|LongPressMoveUpdateDetails { offset_from_origin, .. }| { let _ = offset_from_origin; })
+        .on_long_press_up(|LongPressDetails { kind, .. }| { let _ = kind; })
+        .on_long_press_end(|LongPressEndDetails { velocity, .. }| { let _ = velocity; })
+        .on_long_press_cancel(|LongPressDetails { kind, .. }| { let _ = kind; })
         .build();
     let _multi = MultiTapGestureRecognizer::builder(arena, 2)
         .on_multi_tap(|MultiTapDetails { positions, .. }| { let _ = positions; })

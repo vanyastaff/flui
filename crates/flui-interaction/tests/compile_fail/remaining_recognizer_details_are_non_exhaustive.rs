@@ -72,11 +72,13 @@ fn main() {
         local_position: Offset::ZERO,
         offset_from_origin: Offset::ZERO,
         local_offset_from_origin: Offset::ZERO,
+        kind: PointerKind::Touch,
     };
     let _ = LongPressEndDetails {
         global_position: Offset::ZERO,
         local_position: Offset::ZERO,
         velocity: Velocity::ZERO,
+        kind: PointerKind::Touch,
     };
     let _ = ForcePressDetails {
         global_position: Offset::ZERO,

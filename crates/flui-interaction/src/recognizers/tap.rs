@@ -5,6 +5,7 @@ use super::{
     contact::{ArenaMembership, ContactId, PrimaryContact},
     recognizer::{CancelOutcome, GestureRecognizer, measured_positions},
 };
+pub use crate::details::{TapDownDetails, TapUpDetails};
 use crate::events::PointerButton;
 use crate::{
     arena::{GestureArena, GestureArenaEntry, GestureArenaMember},
@@ -48,9 +49,13 @@ impl TapButton {
         Self::try_from(button).ok()
     }
 }
-/// Callback carrying the contact in local and root coordinates.
+/// Callback for movement or cancellation in local and root coordinates.
 pub type TapCallback = Rc<dyn Fn(TapDetails)>;
-/// Position and device kind of a tap contact.
+/// Callback for the admitted Down snapshot.
+pub type TapDownCallback = Rc<dyn Fn(TapDownDetails)>;
+/// Callback for a successful release or completed tap.
+pub type TapUpCallback = Rc<dyn Fn(TapUpDetails)>;
+/// Position and admitted device kind at movement or cancellation.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct TapDetails {
@@ -65,36 +70,36 @@ pub struct TapDetails {
 #[derive(Default)]
 #[expect(clippy::struct_field_names)]
 struct TapCallbacks {
-    on_tap_down: Option<TapCallback>,
+    on_tap_down: Option<TapDownCallback>,
     on_tap_move: Option<TapCallback>,
-    on_tap_up: Option<TapCallback>,
-    on_tap: Option<TapCallback>,
+    on_tap_up: Option<TapUpCallback>,
+    on_tap: Option<TapUpCallback>,
     on_tap_cancel: Option<TapCallback>,
-    on_secondary_tap_down: Option<TapCallback>,
-    on_secondary_tap_up: Option<TapCallback>,
-    on_secondary_tap: Option<TapCallback>,
+    on_secondary_tap_down: Option<TapDownCallback>,
+    on_secondary_tap_up: Option<TapUpCallback>,
+    on_secondary_tap: Option<TapUpCallback>,
     on_secondary_tap_cancel: Option<TapCallback>,
-    on_tertiary_tap_down: Option<TapCallback>,
-    on_tertiary_tap_up: Option<TapCallback>,
-    on_tertiary_tap: Option<TapCallback>,
+    on_tertiary_tap_down: Option<TapDownCallback>,
+    on_tertiary_tap_up: Option<TapUpCallback>,
+    on_tertiary_tap: Option<TapUpCallback>,
     on_tertiary_tap_cancel: Option<TapCallback>,
 }
 impl TapCallbacks {
-    fn down(&self, button: TapButton) -> Option<TapCallback> {
+    fn down(&self, button: TapButton) -> Option<TapDownCallback> {
         match button {
             TapButton::Primary => self.on_tap_down.clone(),
             TapButton::Secondary => self.on_secondary_tap_down.clone(),
             TapButton::Tertiary => self.on_tertiary_tap_down.clone(),
         }
     }
-    fn up(&self, button: TapButton) -> Option<TapCallback> {
+    fn up(&self, button: TapButton) -> Option<TapUpCallback> {
         match button {
             TapButton::Primary => self.on_tap_up.clone(),
             TapButton::Secondary => self.on_secondary_tap_up.clone(),
             TapButton::Tertiary => self.on_tertiary_tap_up.clone(),
         }
     }
-    fn tap(&self, button: TapButton) -> Option<TapCallback> {
+    fn tap(&self, button: TapButton) -> Option<TapUpCallback> {
         match button {
             TapButton::Primary => self.on_tap.clone(),
             TapButton::Secondary => self.on_secondary_tap.clone(),
@@ -142,7 +147,7 @@ impl TapGestureRecognizerBuilder {
         self
     }
     /// Register a callback before building the recognizer.
-    pub fn on_tap_down(mut self, callback: impl Fn(TapDetails) + 'static) -> Self {
+    pub fn on_tap_down(mut self, callback: impl Fn(TapDownDetails) + 'static) -> Self {
         self.callbacks.on_tap_down = Some(Rc::new(callback));
         self
     }
@@ -152,12 +157,12 @@ impl TapGestureRecognizerBuilder {
         self
     }
     /// Register a callback before building the recognizer.
-    pub fn on_tap_up(mut self, callback: impl Fn(TapDetails) + 'static) -> Self {
+    pub fn on_tap_up(mut self, callback: impl Fn(TapUpDetails) + 'static) -> Self {
         self.callbacks.on_tap_up = Some(Rc::new(callback));
         self
     }
     /// Register a callback before building the recognizer.
-    pub fn on_tap(mut self, callback: impl Fn(TapDetails) + 'static) -> Self {
+    pub fn on_tap(mut self, callback: impl Fn(TapUpDetails) + 'static) -> Self {
         self.callbacks.on_tap = Some(Rc::new(callback));
         self
     }
@@ -167,17 +172,17 @@ impl TapGestureRecognizerBuilder {
         self
     }
     /// Register a callback before building the recognizer.
-    pub fn on_secondary_tap_down(mut self, callback: impl Fn(TapDetails) + 'static) -> Self {
+    pub fn on_secondary_tap_down(mut self, callback: impl Fn(TapDownDetails) + 'static) -> Self {
         self.callbacks.on_secondary_tap_down = Some(Rc::new(callback));
         self
     }
     /// Register a callback before building the recognizer.
-    pub fn on_secondary_tap_up(mut self, callback: impl Fn(TapDetails) + 'static) -> Self {
+    pub fn on_secondary_tap_up(mut self, callback: impl Fn(TapUpDetails) + 'static) -> Self {
         self.callbacks.on_secondary_tap_up = Some(Rc::new(callback));
         self
     }
     /// Register a callback before building the recognizer.
-    pub fn on_secondary_tap(mut self, callback: impl Fn(TapDetails) + 'static) -> Self {
+    pub fn on_secondary_tap(mut self, callback: impl Fn(TapUpDetails) + 'static) -> Self {
         self.callbacks.on_secondary_tap = Some(Rc::new(callback));
         self
     }
@@ -187,17 +192,17 @@ impl TapGestureRecognizerBuilder {
         self
     }
     /// Register a callback before building the recognizer.
-    pub fn on_tertiary_tap_down(mut self, callback: impl Fn(TapDetails) + 'static) -> Self {
+    pub fn on_tertiary_tap_down(mut self, callback: impl Fn(TapDownDetails) + 'static) -> Self {
         self.callbacks.on_tertiary_tap_down = Some(Rc::new(callback));
         self
     }
     /// Register a callback before building the recognizer.
-    pub fn on_tertiary_tap_up(mut self, callback: impl Fn(TapDetails) + 'static) -> Self {
+    pub fn on_tertiary_tap_up(mut self, callback: impl Fn(TapUpDetails) + 'static) -> Self {
         self.callbacks.on_tertiary_tap_up = Some(Rc::new(callback));
         self
     }
     /// Register a callback before building the recognizer.
-    pub fn on_tertiary_tap(mut self, callback: impl Fn(TapDetails) + 'static) -> Self {
+    pub fn on_tertiary_tap(mut self, callback: impl Fn(TapUpDetails) + 'static) -> Self {
         self.callbacks.on_tertiary_tap = Some(Rc::new(callback));
         self
     }
@@ -240,9 +245,9 @@ impl std::fmt::Debug for TapGestureRecognizer {
 struct TapSequence {
     member: Rc<TapArenaMember>,
     id: ContactId,
-    down: TapDetails,
+    down: TapDownDetails,
     button: TapButton,
-    up: Option<TapDetails>,
+    up: Option<TapUpDetails>,
     accepted: bool,
     delivering: bool,
 }
@@ -334,17 +339,17 @@ impl TapGestureRecognizer {
             if !sequence.accepted || sequence.delivering {
                 return;
             }
-            let Some(up) = sequence.up.clone() else {
+            let Some(up) = sequence.up else {
                 return;
             };
             sequence.delivering = true;
-            (sequence.down.clone(), up, sequence.button)
+            (sequence.down, up, sequence.button)
         };
         let (down, up, button) = delivery;
         let mut run = CallbackSequence::new();
         run.call(self.callbacks.down(button), |callback| callback(down));
         if self.is_live(id) {
-            run.call(self.callbacks.up(button), |callback| callback(up.clone()));
+            run.call(self.callbacks.up(button), |callback| callback(up));
         }
         if self.is_live(id) {
             run.call(self.callbacks.tap(button), |callback| callback(up));
@@ -414,7 +419,7 @@ impl GestureRecognizer for TapGestureRecognizer {
         let Some(snapshot) = member.contact.current() else {
             return;
         };
-        let down = TapDetails {
+        let down = TapDownDetails {
             global_position: snapshot.global,
             local_position: snapshot.local,
             kind: snapshot.kind,
@@ -481,7 +486,11 @@ impl GestureRecognizer for TapGestureRecognizer {
                     };
                     let sequence = &mut sequences.live[index];
                     if sequence.button == button {
-                        sequence.up = Some(details.clone());
+                        sequence.up = Some(TapUpDetails {
+                            global_position: details.global_position,
+                            local_position: details.local_position,
+                            kind: details.kind,
+                        });
                         sequences.current = None;
                         false
                     } else {
@@ -524,7 +533,13 @@ impl GestureRecognizer for TapGestureRecognizer {
                     || {
                         sequence.member.contact.cancel();
                     },
-                    |callback| callback(sequence.down),
+                    |callback| {
+                        callback(TapDetails {
+                            global_position: sequence.down.global_position,
+                            local_position: sequence.down.local_position,
+                            kind: sequence.down.kind,
+                        })
+                    },
                 );
             });
             RoutePanic::preserve_first(&mut first, candidate, "tap cancellation");

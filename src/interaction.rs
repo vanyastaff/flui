@@ -7,6 +7,27 @@
 //! [`crate::view::LifecycleContext`], using the callback and result types below.
 //! Owners and backend adapter construction remain internal to the runtime.
 //!
+//! Phase payloads name the callback that delivers them:
+//!
+//! ```rust
+//! use flui::interaction::{
+//!     GestureArena, TapGestureRecognizer, TapDownDetails, TapUpDetails,
+//!     LongPressGestureRecognizer, LongPressMoveUpdateDetails, LongPressEndDetails,
+//! };
+//!
+//! let arena = GestureArena::new();
+//! let tap = TapGestureRecognizer::builder(arena.clone())
+//!     .on_tap_down(|details: TapDownDetails| { let _ = details.local_position; })
+//!     .on_tap(|details: TapUpDetails| { let _ = details.global_position; })
+//!     .build();
+//! let press = LongPressGestureRecognizer::builder(arena)
+//!     .on_long_press_move_update(|details: LongPressMoveUpdateDetails| {
+//!         let _ = details.local_offset_from_origin;
+//!     })
+//!     .on_long_press_end(|details: LongPressEndDetails| { let _ = details.velocity; })
+//!     .build();
+//! ```
+//!
 //! The owning layer's internal runtime bridge is not part of this facade:
 //!
 //! ```compile_fail,E0432
@@ -20,9 +41,6 @@ pub use flui_interaction::events::{
     CursorIcon, PointerButtons, PointerEvent, PointerEventExt, PointerKind,
 };
 pub use flui_interaction::recognizers::double_tap::DoubleTapDetails;
-pub use flui_interaction::recognizers::long_press::{
-    LongPressDetails, LongPressDownDetails, LongPressStartDetails,
-};
 pub use flui_interaction::recognizers::multi_tap::MultiTapDetails;
 pub use flui_interaction::recognizers::scale::{
     ScaleEndDetails, ScaleStartDetails, ScaleUpdateDetails,
@@ -42,7 +60,10 @@ pub use flui_interaction::{
     TapDragUpDetails, TapDragUpdateDetails, TapGestureRecognizer, VerticalDragGestureRecognizer,
 };
 pub use flui_interaction::{
-    ForcePressDetails, LongPressEndDetails, LongPressMoveUpdateDetails, TapDownDetails,
+    ForcePressDetails, LongPressCallback, LongPressDetails, LongPressDownCallback,
+    LongPressDownDetails, LongPressEndCallback, LongPressEndDetails, LongPressMoveUpdateCallback,
+    LongPressMoveUpdateDetails, LongPressSimpleCallback, LongPressStartCallback,
+    LongPressStartDetails, TapCallback, TapDetails, TapDownCallback, TapDownDetails, TapUpCallback,
     TapUpDetails, Velocity, VelocityEstimate,
 };
 pub use flui_platform_api::pointer::{
