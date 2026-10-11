@@ -268,7 +268,7 @@ struct ChildEntry {
     curved: Terminal<CurvedAnimation<ArcCurve>>,
     status_subscription: Option<flui_animation::StatusSubscription>,
     /// Flipped by the status-listener callback when `controller` reaches
-    /// [`AnimationStatus::Dismissed`] (a completed reverse run). Read — and
+    /// [`AnimationStatus::ReverseSettled`] (a completed reverse run). Read — and
     /// acted on — by [`AnimatedSwitcherState::build`]'s sweep; see the
     /// module docs for why the listener cannot dispose the entry itself.
     dismissed: Rc<Cell<bool>>,
@@ -340,7 +340,7 @@ impl ChildEntry {
     /// Register with `vsync` (if any) and attach the dismissal
     /// status-listener, which flips [`ChildEntry::dismissed`] and schedules
     /// `rebuild` when `controller` reaches
-    /// [`AnimationStatus::Dismissed`].
+    /// [`AnimationStatus::ReverseSettled`].
     fn register(&mut self, vsync: Option<Vsync>, rebuild: RebuildHandle) {
         self.rebind(vsync.as_ref());
 
@@ -348,7 +348,7 @@ impl ChildEntry {
         drop(self.status_subscription.take());
         self.status_subscription = Some(self.controller.controller().subscribe_status(
             std::rc::Rc::new(move |status| {
-                if status == AnimationStatus::Dismissed {
+                if status == AnimationStatus::ReverseSettled {
                     dismissed.set(true);
                     rebuild.schedule(flui_view::RebuildReason::AnimationTick);
                 }

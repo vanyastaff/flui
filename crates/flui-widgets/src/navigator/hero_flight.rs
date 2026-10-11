@@ -474,7 +474,7 @@ impl HeroFlight {
     }
 
     /// Whether this is a gesture-driven pop whose proxy never left
-    /// `Dismissed`, as `HeroController::did_stop_user_gesture` checks: the drag
+    /// `ReverseSettled`, as `HeroController::did_stop_user_gesture` checks: the drag
     /// never moved, so no status transition ever fired to report it, and
     /// nothing else will end this flight on its own.
     fn is_stalled_gesture_pop(&self) -> bool {
@@ -482,7 +482,7 @@ impl HeroFlight {
             let state = self.inner.state.borrow();
             state.is_user_gesture_transition && state.direction == FlightDirection::Pop
         };
-        gesture_pop && self.inner.proxy.is_dismissed()
+        gesture_pop && self.inner.proxy.is_reverse_settled()
     }
 
     /// Tear this flight down and hand the two heroes back for the caller to
@@ -543,11 +543,11 @@ impl HeroFlight {
             return;
         };
 
-        // If completed, the destination hero is the one on top and the source hero
-        // stays hidden. If dismissed, the animation was triggered but canceled
-        // before it finished; the destination hero stays hidden instead.
-        recovery.run(|| from_hero.end_flight_for(&self.inner.identity, status.is_completed()));
-        recovery.run(|| to_hero.end_flight_for(&self.inner.identity, status.is_dismissed()));
+        // Forward settlement leaves the destination hero on top and the source
+        // hidden. Reverse settlement leaves the destination hero hidden instead.
+        recovery
+            .run(|| from_hero.end_flight_for(&self.inner.identity, status.is_forward_settled()));
+        recovery.run(|| to_hero.end_flight_for(&self.inner.identity, status.is_reverse_settled()));
         recovery.retire(from_hero);
         recovery.retire(to_hero);
     }
@@ -1231,11 +1231,11 @@ impl FlightManager {
                             return;
                         }
                         match status {
-                            AnimationStatus::Dismissed => {
-                                settled_status.set(Some(AnimationStatus::Dismissed));
+                            AnimationStatus::ReverseSettled => {
+                                settled_status.set(Some(AnimationStatus::ReverseSettled));
                             }
-                            AnimationStatus::Completed => {
-                                settled_status.set(Some(AnimationStatus::Completed));
+                            AnimationStatus::ForwardSettled => {
+                                settled_status.set(Some(AnimationStatus::ForwardSettled));
                             }
                             _ => {}
                         }
@@ -1257,11 +1257,11 @@ impl FlightManager {
                             // Read the status fresh, not whatever status was skipped when it
                             // was parked.
                             match proxy_for_replay.status() {
-                                AnimationStatus::Dismissed => {
-                                    settled_status.set(Some(AnimationStatus::Dismissed));
+                                AnimationStatus::ReverseSettled => {
+                                    settled_status.set(Some(AnimationStatus::ReverseSettled));
                                 }
-                                AnimationStatus::Completed => {
-                                    settled_status.set(Some(AnimationStatus::Completed));
+                                AnimationStatus::ForwardSettled => {
+                                    settled_status.set(Some(AnimationStatus::ForwardSettled));
                                 }
                                 _ => {} // Still animating; nothing to replay.
                             }
@@ -1346,7 +1346,7 @@ impl FlightManager {
 
     /// The manual sweep for `HeroController::did_stop_user_gesture`:
     /// every still-airborne, gesture-driven pop flight whose proxy never left
-    /// `Dismissed` (the drag never moved) is fed a synthetic `Dismissed` update
+    /// `ReverseSettled` (the drag never moved) is fed a synthetic `ReverseSettled` update
     /// through the same [`finish`](Self::finish) path a real terminal status
     /// would use.
     ///
@@ -1358,7 +1358,7 @@ impl FlightManager {
         for (_, flight) in all.iter() {
             recovery.run_with(|recovery| {
                 if flight.is_stalled_gesture_pop() {
-                    self.finish_with_recovery(flight, AnimationStatus::Dismissed, recovery);
+                    self.finish_with_recovery(flight, AnimationStatus::ReverseSettled, recovery);
                 }
             });
         }
@@ -1776,9 +1776,9 @@ mod terminal_tests {
             }
             let outcome = catch_unwind(AssertUnwindSafe(|| {
                 if case == "placeholder_reentry_finish" {
-                    old_manager.finish(&old, AnimationStatus::Completed);
+                    old_manager.finish(&old, AnimationStatus::ForwardSettled);
                 } else if case == "placeholder_reentry_dismissed" {
-                    old_manager.finish(&old, AnimationStatus::Dismissed);
+                    old_manager.finish(&old, AnimationStatus::ReverseSettled);
                 } else {
                     old_manager.finish_all();
                 }
@@ -1972,7 +1972,7 @@ mod terminal_tests {
                 .expect("fixture tag is unique")
                 .commit();
             *current.inner.seat.borrow_mut() = Some(seat);
-            manager.finish(&old, AnimationStatus::Completed);
+            manager.finish(&old, AnimationStatus::ForwardSettled);
             assert!(manager.is_airborne(current.tag()));
             let mut recovery = flui_foundation::panic::PanicRecovery::new();
             manager.abort(&current, &mut recovery.scope());

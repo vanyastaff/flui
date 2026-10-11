@@ -16,7 +16,7 @@
 //! substitutes a second, per-snackbar [`AnimationController`] whose
 //! `duration` is the snackbar's own configured display duration
 //! ([`crate::SnackBar::duration`]): it is `forward()`-ed when the entrance
-//! animation completes, and its own `Completed` status stands in for the
+//! animation completes, and its own `ForwardSettled` status stands in for the
 //! timer callback. **Honest cost**: unlike a real timer, this
 //! keeps the frame loop scheduled for the full display duration (a `Vsync`
 //! registration ticks every frame, not just once at expiry) — accepted
@@ -31,15 +31,15 @@
 //!
 //! There is no separate `enum` tracking Idle/Entering/Displayed/Exiting: the
 //! entrance controller's own [`AnimationStatus`] already carries every bit of
-//! that state (`Dismissed` = idle, `Forward` = entering, `Completed` =
+//! that state (`ReverseSettled` = idle, `Forward` = entering, `ForwardSettled` =
 //! displayed, `Reverse` = exiting) with the queue as the one piece it does
 //! not — an earlier version of this module shadowed that status in a
 //! `DrainState` cell, which nothing ever read except its own tests, exactly
 //! the "two sources of truth, one inert" shape this module now avoids.
 //! `MessengerCore::handle_entry_status` translates a *change* in that status
-//! into the one queue-affecting consequence it has (`Dismissed` → pop and
-//! advance to the next entry; `Completed` → start the display timer) — `pop
-//! and advance` on `Dismissed`, then immediately re-entering if the queue is
+//! into the one queue-affecting consequence it has (`ReverseSettled` → pop and
+//! advance to the next entry; `ForwardSettled` → start the display timer) — `pop
+//! and advance` on `ReverseSettled`, then immediately re-entering if the queue is
 //! still non-empty, IS the state machine.
 //!
 //! ## Why status edges are polled, not pushed, from the controller
@@ -61,7 +61,7 @@
 //! for the natural case where a controller settles purely from ticking, with
 //! no explicit API call in between. `reconcile` loops until a full pass
 //! detects no further change, so it correctly drains a multi-step cascade
-//! (e.g. `Dismissed` → pop → `forward()` → `Forward`) within one call.
+//! (e.g. `ReverseSettled` → pop → `forward()` → `Forward`) within one call.
 //! `reconcile` never holds the `queue` `RefCell` borrowed across a call back
 //! into the controller or into caller-supplied code
 //! (`SnackBarController::on_closed`) — this crate has shipped five separate
@@ -71,20 +71,20 @@
 //! reaches this same machine again, from the same call stack.
 //!
 //! **Queue-wedge invariant**: *the queue is non-empty ⇒ the entrance
-//! controller is not `Dismissed`, except transiently inside
+//! controller is not `ReverseSettled`, except transiently inside
 //! `MessengerCore::pop_and_advance` itself.* Maintaining this is what lets
 //! `MessengerCore::hide_current` simply early-return when the controller is
-//! already `Dismissed` (oracle parity — nothing to hide). But
+//! already `ReverseSettled` (oracle parity — nothing to hide). But
 //! `MessengerCore::remove_current`/`MessengerCore::clear` have no such
 //! early return in the oracle (`removeCurrentSnackBar` only checks
-//! `_snackBars.isEmpty`) — calling `set_value(0.0)` on an ALREADY-`Dismissed`
+//! `_snackBars.isEmpty`) — calling `set_value(0.0)` on an ALREADY-`ReverseSettled`
 //! controller is a **no-op status change**: `set_value` only fires a status
 //! *transition* on an actual change, so an edge-only drain would silently
 //! wedge the queue forever the moment `remove`/`clear` is called while the
-//! controller is already settled at `Dismissed` (reachable via the exact
+//! controller is already settled at `ReverseSettled` (reachable via the exact
 //! re-entrancy this module warns about: an `on_closed` callback that itself
 //! calls `remove_current_snack_bar`). Both methods therefore check
-//! `status() == Dismissed` themselves and, when true, directly call
+//! `status() == ReverseSettled` themselves and, when true, directly call
 //! `pop_and_advance` instead of routing through `set_value`.
 //! `MessengerCore::advancing` guards `pop_and_advance` itself against
 //! double-entry from that same re-entrant path.
@@ -163,7 +163,7 @@
 //! - `QueuedEntry::set_reason` (remove) — **unconditional overwrite**.
 //!   A remove completes the still-pending completion with ITS OWN reason
 //!   immediately — a race it always wins against a hide/timeout that recorded a reason
-//!   but has not yet actually completed (settled to `Dismissed`). So a
+//!   but has not yet actually completed (settled to `ReverseSettled`). So a
 //!   `remove_current_snack_bar()` call arriving mid-reverse (after an
 //!   earlier `hide_current_snack_bar()`) must report `Remove`, not the
 //!   hide's own `Hide`.
@@ -481,12 +481,14 @@ impl MessengerCore {
             match duration_status {
                 Some(status) if status != self.last_duration_status.get() => {
                     self.last_duration_status.set(status);
-                    if status == AnimationStatus::Completed {
+                    if status == AnimationStatus::ForwardSettled {
                         self.hide_current(SnackBarClosedReason::Timeout);
                     }
                     changed = true;
                 }
-                None => self.last_duration_status.set(AnimationStatus::Dismissed),
+                None => self
+                    .last_duration_status
+                    .set(AnimationStatus::ReverseSettled),
                 Some(_) => {}
             }
 
@@ -500,8 +502,8 @@ impl MessengerCore {
     /// transition/pop.
     fn handle_entry_status(&self, status: AnimationStatus, origin: ReconcileOrigin) {
         match status {
-            AnimationStatus::Dismissed => self.pop_and_advance(origin),
-            AnimationStatus::Completed => self.start_display_timer(),
+            AnimationStatus::ReverseSettled => self.pop_and_advance(origin),
+            AnimationStatus::ForwardSettled => self.start_display_timer(),
             // Forward/Reverse carry no further consequence here — the
             // controller's own `status()` already IS the observable state
             // (see the module docs' "The drain state machine" section).
@@ -615,7 +617,8 @@ impl MessengerCore {
                 }))
                 .detach();
         }
-        self.last_duration_status.set(AnimationStatus::Dismissed);
+        self.last_duration_status
+            .set(AnimationStatus::ReverseSettled);
         let outgoing = self.duration_controller.borrow_mut().replace(owner);
         let mut recovery = flui_sdk::foundation::panic::PanicRecovery::new();
         recovery.run(|| {
@@ -628,7 +631,8 @@ impl MessengerCore {
     fn cancel_display_timer(&self) {
         let outgoing = self.duration_controller.borrow_mut().take();
         drop(outgoing);
-        self.last_duration_status.set(AnimationStatus::Dismissed);
+        self.last_duration_status
+            .set(AnimationStatus::ReverseSettled);
     }
 
     /// Always takes the animated-reverse path: there is no
@@ -636,9 +640,9 @@ impl MessengerCore {
     /// `MediaQuery.accessibleNavigation` consumer exists yet in this
     /// substrate).
     fn hide_current(&self, reason: SnackBarClosedReason) {
-        if self.entry_controller.status() == AnimationStatus::Dismissed {
+        if self.entry_controller.status() == AnimationStatus::ReverseSettled {
             // Nothing showing to hide, including the empty-queue
-            // case (an empty queue always leaves the controller Dismissed
+            // case (an empty queue always leaves the controller ReverseSettled
             // under this module's invariant).
             return;
         }
@@ -664,7 +668,7 @@ impl MessengerCore {
         };
         front.set_reason(reason);
         self.cancel_display_timer();
-        if self.entry_controller.status() == AnimationStatus::Dismissed {
+        if self.entry_controller.status() == AnimationStatus::ReverseSettled {
             self.pop_and_advance(ReconcileOrigin::Direct);
         } else {
             self.entry_controller.set_value(0.0);
@@ -675,7 +679,7 @@ impl MessengerCore {
     /// the surviving current entry with.
     fn clear(&self) {
         if self.queue.borrow().is_empty()
-            || self.entry_controller.status() == AnimationStatus::Dismissed
+            || self.entry_controller.status() == AnimationStatus::ReverseSettled
         {
             return;
         }
@@ -730,8 +734,8 @@ impl ScaffoldMessengerHandle {
             post_frame: RefCell::new(None),
             writer: RefCell::new(None),
             queue: RefCell::new(VecDeque::new()),
-            last_entry_status: Cell::new(AnimationStatus::Dismissed),
-            last_duration_status: Cell::new(AnimationStatus::Dismissed),
+            last_entry_status: Cell::new(AnimationStatus::ReverseSettled),
+            last_duration_status: Cell::new(AnimationStatus::ReverseSettled),
             advancing: Cell::new(false),
             scaffolds: RefCell::new(HashMap::new()),
         });

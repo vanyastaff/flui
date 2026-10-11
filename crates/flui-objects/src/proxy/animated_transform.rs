@@ -868,7 +868,7 @@ mod tests {
         }
         fn status(&self) -> flui_animation::AnimationStatus {
             self.0.store(true, Ordering::SeqCst);
-            flui_animation::AnimationStatus::Dismissed
+            flui_animation::AnimationStatus::ReverseSettled
         }
 
         fn subscribe_status(

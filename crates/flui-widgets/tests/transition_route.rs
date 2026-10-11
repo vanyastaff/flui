@@ -13,7 +13,7 @@
 //! individually testable — rather than by awaiting the `AnimationRunFuture`
 //! `did_push` returns (ADR-0064). A handful that need the run to have real,
 //! not-yet-covered distance left (so a `reverse()` cannot collapse
-//! synchronously to `Dismissed`) pump a real `Vsync` instead; those say so.
+//! synchronously to `ReverseSettled`) pump a real `Vsync` instead; those say so.
 
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -70,7 +70,7 @@ fn navigator() -> (NavigatorHandle, Harness) {
     (handle, harness)
 }
 
-/// Drive a controller to `Completed` (entrance finished).
+/// Drive a controller to `ForwardSettled` (entrance finished).
 ///
 /// `set_value` **cancels** the active run rather than completing its
 /// `AnimationRunFuture` — this helper drives `status`, not the future. A test that
@@ -79,15 +79,15 @@ fn navigator() -> (NavigatorHandle, Harness) {
 fn complete(handle: &TransitionHandle) {
     let controller = handle.controller().expect("install created the controller");
     controller.set_value(1.0);
-    assert_eq!(controller.status(), AnimationStatus::Completed);
+    assert_eq!(controller.status(), AnimationStatus::ForwardSettled);
     handle.drain_pending_statuses();
 }
 
-/// Drive a controller to `Dismissed` (exit finished).
+/// Drive a controller to `ReverseSettled` (exit finished).
 fn dismiss(handle: &TransitionHandle) {
     let controller = handle.controller().expect("install created the controller");
     controller.set_value(0.0);
-    assert_eq!(controller.status(), AnimationStatus::Dismissed);
+    assert_eq!(controller.status(), AnimationStatus::ReverseSettled);
     handle.drain_pending_statuses();
 }
 
@@ -96,7 +96,7 @@ fn dismiss(handle: &TransitionHandle) {
 // ============================================================================
 
 /// `didPush` drives the controller forward and the entry parks in `Pushing` until
-/// the controller reports `Completed`.
+/// the controller reports `ForwardSettled`.
 ///
 /// Red-check: return `PushCompletion::Immediate` from `TransitionRoute::did_push`.
 pub(crate) fn push_transition_parks_the_entry_in_pushing_until_the_controller_completes() {
@@ -138,7 +138,7 @@ pub(crate) fn push_transition_parks_the_entry_in_pushing_until_the_controller_co
 ///
 /// Needs a real, ticking `Vsync`: popping at `value == 0` (this file's usual
 /// hand-driven setup, which never advances the controller) would let
-/// `reverse()` collapse straight to `Dismissed` — an already-dismissed
+/// `reverse()` collapse straight to `ReverseSettled` — an already-dismissed
 /// controller finalizing synchronously, a different shape from this one — so
 /// this pumps the entrance to its midpoint first, leaving `reverse()` real
 /// distance to cover.
@@ -166,7 +166,7 @@ pub(crate) fn pop_mid_push_cancels_the_push_future_inside_the_flush_and_ends_pop
     // registry's per-run clock (`Vsync`'s own doc); a second pump is what
     // actually advances it.
     laid.pump_for(Duration::ZERO);
-    // Halfway through the 300ms entrance: `Forward`, not yet `Completed` —
+    // Halfway through the 300ms entrance: `Forward`, not yet `ForwardSettled` —
     // `reverse()` below has real distance to cover.
     laid.pump_for(Duration::from_millis(150));
     assert_eq!(

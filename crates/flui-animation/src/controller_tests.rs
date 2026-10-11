@@ -244,7 +244,7 @@ fn forward_from_mid_scales_run_duration() {
         c.value()
     );
     c.tick_at(std::time::Duration::from_secs_f64(0.05));
-    assert_eq!(c.status(), AnimationStatus::Completed);
+    assert_eq!(c.status(), AnimationStatus::ForwardSettled);
     crate::test_cases::dispose_controller(&c);
 }
 
@@ -257,7 +257,7 @@ fn set_value_nan_is_canonicalized() {
         0.0,
         "NaN must canonicalize to the lower bound, not poison the value"
     );
-    assert_eq!(c.status(), AnimationStatus::Dismissed);
+    assert_eq!(c.status(), AnimationStatus::ReverseSettled);
     crate::test_cases::dispose_controller(&c);
 }
 
@@ -417,7 +417,7 @@ fn a_simulation_that_turns_non_finite_mid_run_ends_the_run_at_the_last_finite_va
         0.5,
         "the run must end AT THE LAST FINITE VALUE, not read the NaN sample through"
     );
-    assert_eq!(c.status(), AnimationStatus::Completed);
+    assert_eq!(c.status(), AnimationStatus::ForwardSettled);
     assert!(
         !vsync.has_running(),
         "the run must not hold the frame loop open forever"
@@ -442,7 +442,7 @@ fn status_callback_can_reenter_controller_without_deadlock() {
     let c2 = c.clone();
     let r2 = Arc::clone(&reentered);
     c.subscribe_status(std::rc::Rc::new(move |status| {
-        if status == AnimationStatus::Completed {
+        if status == AnimationStatus::ForwardSettled {
             // Re-enter: read + mutate the controller from within the status
             // callback. Under the old notify-under-lock code this deadlocked.
             let _ = c2.value();
@@ -452,7 +452,7 @@ fn status_callback_can_reenter_controller_without_deadlock() {
     }))
     .detach();
     c.forward().unwrap();
-    c.tick_at(std::time::Duration::from_secs_f64(0.10)); // complete -> fires Completed -> callback re-enters
+    c.tick_at(std::time::Duration::from_secs_f64(0.10)); // complete -> fires ForwardSettled -> callback re-enters
     assert_eq!(reentered.load(Ordering::SeqCst), 1);
     crate::test_cases::dispose_controller(&c);
 }
@@ -471,7 +471,7 @@ fn repeat_consumes_all_cycles_in_one_long_frame() {
     c.tick_at(std::time::Duration::from_secs_f64(0.045)); // 4.5 cycles elapsed in one frame
     assert_eq!(
         c.status(),
-        AnimationStatus::Completed,
+        AnimationStatus::ForwardSettled,
         "all four cycles retired in one long frame -> exhausted"
     );
     crate::test_cases::dispose_controller(&c);
@@ -573,7 +573,7 @@ fn repeat_bounce_finite_count_and_absolute_time_rewind() {
     c3.repeat_with(None, None, true, None, Some(4)).unwrap();
     c3.tick_at(std::time::Duration::from_secs_f64(0.4));
     assert!((c3.value() - 0.0).abs() < 1e-6, "value={}", c3.value());
-    assert_eq!(c3.status(), AnimationStatus::Dismissed);
+    assert_eq!(c3.status(), AnimationStatus::ReverseSettled);
     crate::test_cases::dispose_controller(&c3);
 }
 
@@ -588,7 +588,7 @@ fn repeat_tick_at_infinity_exhausts_a_finite_count_instead_of_rewinding() {
     c.repeat_with(None, None, false, Some(Duration::from_millis(100)), Some(2))
         .unwrap();
     c.tick_at(Duration::MAX);
-    assert_eq!(c.status(), AnimationStatus::Completed);
+    assert_eq!(c.status(), AnimationStatus::ForwardSettled);
     assert!((c.value() - 1.0).abs() < 1e-6, "value={}", c.value());
     crate::test_cases::dispose_controller(&c);
 }
@@ -608,7 +608,7 @@ fn repeat_with_zero_period_settles_synchronously_at_the_call() {
         .unwrap();
     assert!(future.is_complete());
     assert!((c.value() - 1.0).abs() < 1e-6, "value={}", c.value());
-    assert_eq!(c.status(), AnimationStatus::Completed);
+    assert_eq!(c.status(), AnimationStatus::ForwardSettled);
     assert_eq!(c.run_generation(), generation_before);
     c.tick_at(std::time::Duration::from_secs_f64(1.0));
     assert!(
@@ -626,7 +626,7 @@ fn repeat_with_zero_period_settles_synchronously_at_the_call() {
         .unwrap();
     assert!(future2.is_complete());
     assert!((c2.value() - 1.0).abs() < 1e-6, "value={}", c2.value());
-    assert_eq!(c2.status(), AnimationStatus::Completed);
+    assert_eq!(c2.status(), AnimationStatus::ForwardSettled);
     crate::test_cases::dispose_controller(&c2);
 }
 
@@ -674,7 +674,7 @@ fn animate_to_curved_eases_through_the_given_curve() {
         1.0,
         "the curve must land exactly on the target at t=1.0"
     );
-    assert_eq!(c.status(), AnimationStatus::Completed);
+    assert_eq!(c.status(), AnimationStatus::ForwardSettled);
     crate::test_cases::dispose_controller(&c);
 }
 
@@ -793,7 +793,7 @@ fn a_panicking_status_listener_leaves_the_finished_run_ok() {
 
     c.subscribe_status(std::rc::Rc::new(|status| {
         assert!(
-            status != AnimationStatus::Completed,
+            status != AnimationStatus::ForwardSettled,
             "a status listener panics on completion"
         );
     }))

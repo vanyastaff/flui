@@ -269,8 +269,8 @@ fn controller_status(c: &mut Criterion) {
     let mut group = c.benchmark_group("controller");
 
     // One iteration is two status transitions, each fanned out to every
-    // listener: `forward_from(0)` (Completed -> Forward) and a tick past the
-    // end (Forward -> Completed).
+    // listener: `forward_from(0)` (ForwardSettled -> Forward) and a tick past the
+    // end (Forward -> ForwardSettled).
     for status_listeners in [1, 4, 8] {
         let controller = AnimationController::builder(Duration::from_secs(1)).build();
         add_listeners(&controller, 0, status_listeners);

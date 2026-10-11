@@ -59,22 +59,22 @@ The separation allows:
 
 | Variant | Meaning |
 |---------|---------|
-| `Dismissed` | Reverse-settled phase or a value at the lower bound; an interior stop also uses this phase |
+| `ReverseSettled` | Reverse-settled phase or a value at the lower bound; an interior stop also uses this phase |
 | `Forward` | Forward directional status; a run may be active or stopped between the bounds |
 | `Reverse` | Reverse directional status; a run may be active or stopped between the bounds |
-| `Completed` | Forward-settled phase or a value at the upper bound; an interior stop also uses this phase |
+| `ForwardSettled` | Forward-settled phase or a value at the upper bound; an interior stop also uses this phase |
 
 ```rust
 use flui_animation::AnimationStatus;
 
 assert!(AnimationStatus::Forward.is_directional());
-assert!(AnimationStatus::Completed.is_settled());
+assert!(AnimationStatus::ForwardSettled.is_settled());
 assert_eq!(AnimationStatus::Forward.flip(), AnimationStatus::Reverse);
 ```
 
 Status indicates direction, not position or whether a run is active. Use
 `Animation::is_animating` to check activity: `AnimationStatus::is_directional`
-only identifies the `Forward` and `Reverse` status variants. A `Completed`
+only identifies the `Forward` and `Reverse` status variants. A `ForwardSettled`
 animation at value 1.0 that starts reversing becomes `Reverse` immediately,
 even before the value changes; `set_value` and disposal can leave a directional
 status without an active run.
@@ -121,7 +121,7 @@ controller.forward_from(Some(0.5))?;  // Jump to 0.5, then animate forward
 controller.reverse_from(Some(0.8))?;  // Jump to 0.8, then animate backward
 controller.animate_to(0.6, None)?;    // Animate to a value over the forward duration
 controller.stop()?;                   // Stop at current value
-controller.reset()?;                  // Jump to lower_bound, status = Dismissed
+controller.reset()?;                  // Jump to lower_bound, status = ReverseSettled
 # drop(controller);
 # Ok(())
 # }
@@ -186,8 +186,8 @@ controller.remove_listener(id);
 
 // Status changes
 let subscription = controller.subscribe_status(Rc::new(|status| {
-    if status == AnimationStatus::Completed {
-        println!("done");
+    if status == AnimationStatus::ForwardSettled {
+        println!("forward phase settled");
     }
 }));
 drop(subscription);
@@ -439,7 +439,7 @@ Invert an animation:
 let reversed = ReverseAnimation::new(Rc::new(controller.clone()));
 
 // value = 1.0 - parent.value()
-// Forward becomes Reverse, Completed becomes Dismissed
+// Forward becomes Reverse, ForwardSettled becomes ReverseSettled
 assert_eq!(reversed.value(), 1.0);
 # drop(controller);
 ```
@@ -467,15 +467,15 @@ proxy.set_parent(Rc::new(controller2.clone()));
 Animation with a fixed value (never changes):
 
 ```rust
-use flui_animation::{ALWAYS_COMPLETE, ALWAYS_DISMISSED, Animation, AnimationStatus, ConstantAnimation};
+use flui_animation::{UNIT_END_ANIMATION, UNIT_START_ANIMATION, Animation, AnimationStatus, ConstantAnimation};
 
-let stopped = ConstantAnimation::with_status(0.5, AnimationStatus::Completed);
-let complete = ConstantAnimation::completed(1.0);
-let dismissed = ConstantAnimation::dismissed(0.0);
+let stopped = ConstantAnimation::with_status(0.5, AnimationStatus::ForwardSettled);
+let end = ConstantAnimation::forward_settled(1.0);
+let start = ConstantAnimation::reverse_settled(0.0);
 
-// Predefined statics
-assert_eq!(ALWAYS_COMPLETE.value(), 1.0);
-assert_eq!(ALWAYS_DISMISSED.value(), 0.0);
+// Fixed normalized endpoints
+assert_eq!(UNIT_END_ANIMATION.value(), 1.0);
+assert_eq!(UNIT_START_ANIMATION.value(), 0.0);
 ```
 
 ### AnimationSwitch

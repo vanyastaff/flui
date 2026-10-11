@@ -311,7 +311,7 @@ where
     /// Current value
     fn value(&self) -> T;
     
-    /// Current status (Forward, Reverse, Completed, Dismissed)
+    /// Current status (Forward, Reverse, ForwardSettled, ReverseSettled)
     fn status(&self) -> AnimationStatus;
 
     /// Installed run, independent of directional status; includes paused runs.
@@ -400,29 +400,20 @@ Observer clones retain the kernel without retaining that registration.
 
 ### State Machine
 
-```
-                forward()
-    ┌─────────────────────────────────────┐
-    │                                     ▼
-┌───────────┐                       ┌───────────┐
-│ Dismissed │◄──────────────────────│  Forward  │
-│  (0.0)    │      reaches 0.0      │ (running) │
-└───────────┘                       └─────┬─────┘
-    ▲                                     │
-    │               reaches 1.0           │
-    │         ┌───────────────────────────┘
-    │         ▼
-    │   ┌───────────┐
-    │   │ Completed │
-    │   │   (1.0)   │
-    │   └─────┬─────┘
-    │         │ reverse()
-    │         ▼
-    │   ┌───────────┐
-    └───│  Reverse  │
-        │ (running) │
-        └───────────┘
-```
+The directional phase is separate from position and run ownership:
+
+| Operation | Phase |
+| --- | --- |
+| Admit a forward run | `Forward` |
+| Settle that run, or stop it at an interior value | `ForwardSettled` |
+| Admit a reverse run | `Reverse` |
+| Settle that run, or stop it at an interior value | `ReverseSettled` |
+
+A stopped run retains its current position, including an interior position.
+A manually assigned value also selects a phase without installing a run.
+Stopping at a bound selects that bound's settled phase.
+Use the controller's value for endpoint decisions, `is_animating()` for run
+ownership and the run future for success or cancellation (ADR-0193).
 
 ### Tick Cycle
 
@@ -519,13 +510,13 @@ sees is "the new run started" then "the old one was canceled".
 whether `target` is above or below the current value: the caller's choice of
 method is the one bit of direction information it carries. Every run ends in its direction's
 settled status with no bound check
-(`AnimationDirection::settled_status`: `Forward` → `Completed`, `Reverse` →
-`Dismissed`), at every run end: `tick_time_based`'s non-repeat end,
+(`AnimationDirection::settled_status`: `Forward` → `ForwardSettled`, `Reverse` →
+`ReverseSettled`), at every run end: `tick_time_based`'s non-repeat end,
 `tick_repeat`'s exhaustion end, `tick_simulation`'s `is_done`, and
 `settle_at_target`. The rule is unconditional, so `animate_to(lower_bound)` from mid-range ends
-`Completed`, not `Dismissed` — and the same holds through
+`ForwardSettled`, not `ReverseSettled` — and the same holds through
 `tick_simulation`: `animate_with(sim)` landing on a BOUNDED controller's
-lower bound also ends `Completed`. A fling's own end is unaffected:
+lower bound also ends `ForwardSettled`. A fling's own end is unaffected:
 `fling`/`fling_with` pick `direction` from the sign of `velocity`, not from
 where the simulation happens to land.
 
@@ -538,13 +529,13 @@ current one: `scroll_controller.rs`'s ballistic fling (`animate_to_curved`
 toward an arbitrary pixel offset) and `flui-cupertino`'s `CupertinoButton`
 (`animate_to_curved` for both the press-in fade toward `1.0` and the
 release fade toward `0.0`). The scroll controller's
-status listener matches `Completed | Dismissed` identically (it only ends
+status listener matches `ForwardSettled | ReverseSettled` identically (it only ends
 the scroll activity), so its `animate_to` toward a SMALLER pixel value
-reporting `Forward`/`Completed` instead of `Reverse`/`Dismissed` changes
+reporting `Forward`/`ForwardSettled` instead of `Reverse`/`ReverseSettled` changes
 nothing observable. The button's release fade is the consumer the rule
-reached: its start was chained off a status listener watching `Completed`,
+reached: its start was chained off a status listener watching `ForwardSettled`,
 which stops distinguishing "the press just landed" from "the release just
-landed" once both report `Completed`, so the listener re-triggered a
+landed" once both report `ForwardSettled`, so the listener re-triggered a
 redundant zero-distance settle when the release it started reached its own
 end (no observable trace — same-status writes are deduplicated — but the
 wrong shape). It now chains the release on the press fade's own
@@ -654,7 +645,7 @@ with that leg's own settled status.** Wrapping with `% 1.0` would make a
 bounce exhaustion would report the direction of the NEXT leg it never runs
 (`count: 1` bounce ends `dismissed` at value `1.0`). FLUI lands on the
 endpoint its own final retired leg actually reached, with that leg's own
-direction settled (`Completed` at `max`, `Dismissed` at `min`) — matching
+direction settled (`ForwardSettled` at `max`, `ReverseSettled` at `min`) — matching
 the Web Animations spec's fill behavior ("holding the endpoint of the final iteration rather
 than the start of the next"), Android's `ValueAnimator`, and Compose's
 `VectorizedRepeatableSpec`, all of which land on the actual endpoint.
@@ -689,7 +680,7 @@ endpoint for the finite count (or cycle 0's end for an infinite one) — a
 documented exception to "an infinite repeat's future resolves only by
 cancellation". `count: Some(0)` (any period), separately: zero CYCLES run
 at all, so there is no cycle to land on — the settle value is the plain
-CLAMPED CURRENT value, not a landing jump, status `Completed` (Web
+CLAMPED CURRENT value, not a landing jump, status `ForwardSettled` (Web
 Animations semantics for an empty active interval; Compose throws for
 `iterations < 1`).
 
@@ -735,8 +726,8 @@ consumer.
 (never `lower_bound`, which is `-inf`). The initial `status` is computed by
 the SAME rule `set_value` applies,
 `AnimationControllerInner::settled_status_keep_direction`, applied once at
-construction for every constructor, not hard-coded `Dismissed`: a bounded
-controller at `lower_bound` still reports `Dismissed` (unchanged), but an
+construction for every constructor, not hard-coded `ReverseSettled`: a bounded
+controller at `lower_bound` still reports `ReverseSettled` (unchanged), but an
 unbounded one at `0.0`, with `AnimationDirection` defaulted `Forward` and
 neither infinite bound ever "at", reports **`Forward`**.
 
@@ -753,9 +744,9 @@ this change (`set_value`'s interior-value status already had the identical
 property).
 
 One direct, load-bearing consequence: **the first `stop()` on a fresh
-unbounded controller emits `Forward → Completed`.**
+unbounded controller emits `Forward → ForwardSettled`.**
 `settled_status_directed`'s bound checks are both false on an infinite
-range, so it falls to `match direction { Forward => Completed }`. Every
+range, so it falls to `match direction { Forward => ForwardSettled }`. Every
 `jump_to` on a fresh `Scrollable`/`RefreshIndicator` (both migrated to
 `unbounded_without_ticker` below) triggers exactly this event through the
 fling controller's `stop_hook`.
@@ -881,13 +872,13 @@ no-op that leaves `value` wherever it already was, never snapping it to
 reset always has a value to land on.
 
 **Cost (2): status at `0.0` is path-dependent.** `reset()` on an unbounded
-controller lands at `0.0` with status `Dismissed` (its documented
+controller lands at `0.0` with status `ReverseSettled` (its documented
 contract); construction, or a later `set_value(0.0)`, lands at the SAME
 `0.0` with status `Forward` (the keep-direction rule above). Two different
 routes to the identical value report two different statuses: a caller
 that only inspects `value() == 0.0` cannot infer `status()` from it on an
 unbounded controller the way it could reason "at the lower bound implies
-Dismissed" on a bounded one.
+ReverseSettled" on a bounded one.
 
 **Tests inverted, not fixed.** `without_ticker_bounds_rejects_wide_open_ones`
 and its `with_detached_ticker_bounds` twin used to assert that a wide-open

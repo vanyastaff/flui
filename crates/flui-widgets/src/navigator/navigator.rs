@@ -2676,7 +2676,7 @@ impl NavigatorHandle {
             return false;
         }
         self.route_modal(route)
-            .is_some_and(|modal| modal.primary_animation().status().is_completed())
+            .is_some_and(|modal| modal.primary_animation().status().is_forward_settled())
     }
 
     /// The binding's post-frame capability, as an owned handle.

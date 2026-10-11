@@ -805,8 +805,8 @@ impl ScrollableState {
     }
 
     /// Installs the status listener that ends the position's scroll
-    /// activity when the ballistic run settles (`Completed`) or is stopped
-    /// by a grab or teardown (`Dismissed`). The activity signal is what a
+    /// activity when the ballistic run settles or is stopped by a grab or
+    /// teardown (`ForwardSettled` or `ReverseSettled`). The activity signal is what a
     /// floating header's snap trigger listens to — without this half, a
     /// fling would leave `is_scrolling` stuck true forever.
     fn install_fling_status_listener(&mut self) {
@@ -818,7 +818,7 @@ impl ScrollableState {
             .subscribe_status(std::rc::Rc::new(move |status| {
                 if matches!(
                     status,
-                    AnimationStatus::Completed | AnimationStatus::Dismissed
+                    AnimationStatus::ForwardSettled | AnimationStatus::ReverseSettled
                 ) {
                     position.set_is_scrolling(false);
                 }

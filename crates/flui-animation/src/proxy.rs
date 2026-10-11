@@ -360,7 +360,7 @@ mod tests {
     fn swap_with_status_change_fires_listeners() {
         let controller1 = Rc::new(AnimationController::builder(Duration::from_millis(100)).build());
         let controller2 = Rc::new(AnimationController::builder(Duration::from_millis(100)).build());
-        controller2.set_value(1.0); // Completed
+        controller2.set_value(1.0); // ForwardSettled
 
         let proxy = ProxyAnimation::new(controller1.clone() as Rc<dyn Animation<f64>>);
 
@@ -372,10 +372,10 @@ mod tests {
             }))
             .detach();
 
-        // Dismissed -> Completed across the swap must fire once with the new
+        // ReverseSettled -> ForwardSettled across the swap must fire once with the new
         // status.
         proxy.set_parent(controller2.clone() as Rc<dyn Animation<f64>>);
-        assert_eq!(seen.borrow().as_slice(), &[AnimationStatus::Completed]);
+        assert_eq!(seen.borrow().as_slice(), &[AnimationStatus::ForwardSettled]);
 
         crate::test_cases::dispose_controller(&controller1);
         crate::test_cases::dispose_controller(&controller2);

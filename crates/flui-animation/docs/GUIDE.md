@@ -117,7 +117,7 @@ controller.reverse_from(Some(0.8))?;
 // Stop at current position
 controller.stop()?;
 
-// Jump to lower_bound, status = Dismissed
+// Jump to lower_bound, status = ReverseSettled
 controller.reset()?;
 
 // Set value directly (no animation)
@@ -183,9 +183,9 @@ use flui_animation::Animation;
 let value = controller.value();   // Current value
 let status = controller.status(); // AnimationStatus
 
-controller.is_animating(); // Forward or Reverse
-controller.is_completed(); // At upper_bound
-controller.is_dismissed(); // At lower_bound
+controller.is_animating(); // Owns a run, including a paused run
+controller.is_forward_settled(); // Forward phase settled; value may be interior
+controller.is_reverse_settled(); // Reverse phase settled; value may be interior
 # drop(controller);
 ```
 
@@ -209,8 +209,8 @@ controller.remove_listener(id);
 // Status changes
 let subscription = controller.subscribe_status(Rc::new(|status| {
     match status {
-        AnimationStatus::Completed => println!("done"),
-        AnimationStatus::Dismissed => println!("reset"),
+        AnimationStatus::ForwardSettled => println!("forward phase settled"),
+        AnimationStatus::ReverseSettled => println!("reverse phase settled"),
         _ => {}
     }
 }));
@@ -468,7 +468,7 @@ use flui_animation::ReverseAnimation;
 
 let reversed = ReverseAnimation::new(Rc::new(controller.clone()));
 // value = 1.0 - parent.value()
-// Forward ↔ Reverse, Completed ↔ Dismissed
+// Forward ↔ Reverse, ForwardSettled ↔ ReverseSettled
 
 # drop(controller);
 ```
@@ -497,14 +497,14 @@ proxy.set_parent(Rc::new(controller2.clone()));
 Fixed value:
 
 ```rust
-use flui_animation::{ALWAYS_COMPLETE, ALWAYS_DISMISSED, Animation, AnimationStatus, ConstantAnimation};
+use flui_animation::{UNIT_END_ANIMATION, UNIT_START_ANIMATION, Animation, AnimationStatus, ConstantAnimation};
 
-let stopped = ConstantAnimation::with_status(0.5, AnimationStatus::Completed);
-let complete = ConstantAnimation::completed(1.0);
+let stopped = ConstantAnimation::with_status(0.5, AnimationStatus::ForwardSettled);
+let end = ConstantAnimation::forward_settled(1.0);
 
-// Global statics
-assert_eq!(ALWAYS_COMPLETE.value(), 1.0);
-assert_eq!(ALWAYS_DISMISSED.value(), 0.0);
+// Fixed normalized endpoints
+assert_eq!(UNIT_END_ANIMATION.value(), 1.0);
+assert_eq!(UNIT_START_ANIMATION.value(), 0.0);
 ```
 
 ### AnimationSwitch
@@ -670,11 +670,11 @@ controller.forward()?;
 # use flui_animation::{Animation, AnimationController, AnimationStatus};
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 // Bad: check every frame
-if controller.status() == AnimationStatus::Completed { /* ... */ }
+if controller.status() == AnimationStatus::ForwardSettled { /* ... */ }
 
 // Good: react to changes
 let _subscription = controller.subscribe_status(Rc::new(|status| {
-    if status == AnimationStatus::Completed { /* ... */ }
+    if status == AnimationStatus::ForwardSettled { /* ... */ }
 }));
 # drop(controller);
 ```

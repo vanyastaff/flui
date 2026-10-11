@@ -16,7 +16,7 @@ use std::rc::Rc;
 fn update_curve_direction(direction: &Cell<Option<AnimationStatus>>, status: AnimationStatus) {
     match status {
         // At rest the selection is cleared; the next transition re-captures.
-        AnimationStatus::Dismissed | AnimationStatus::Completed => direction.set(None),
+        AnimationStatus::ReverseSettled | AnimationStatus::ForwardSettled => direction.set(None),
         // First transition into a running status wins; a same-run direction
         // flip (or a directional report from `set_value` that isn't a fresh
         // run) keeps the entry curve.

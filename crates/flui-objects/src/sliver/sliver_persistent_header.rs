@@ -969,7 +969,7 @@ pub struct RenderSliverFloatingHeaderBase<M: FloatingHeaderMode> {
     /// directly against the (now-stale, frozen) animation value would wrongly
     /// re-clobber that real tracking on every later, unrelated layout. Gating
     /// on `AnimationController::is_animating()` instead does not work: status
-    /// flips to `Completed` on the exact same tick the value reaches the
+    /// flips to `ForwardSettled` on the exact same tick the value reaches the
     /// target, which would then skip applying that final tick's value.
     last_synced_animation_value: Option<f64>,
     snap_configuration: Option<FloatingHeaderSnapConfiguration>,
@@ -1219,7 +1219,7 @@ impl<M: FloatingHeaderMode> RenderSliver for RenderSliverFloatingHeaderBase<M> {
         // read+guard happens here instead, at the top of the very layout that
         // listener's `mark_needs_layout` triggered. `last_synced_animation_value`
         // (not `is_animating()`) is the guard: it changes on every tick
-        // (including the final tick that also flips status to `Completed`,
+        // (including the final tick that also flips status to `ForwardSettled`,
         // which `is_animating()` would already report `false` for — a subtly
         // different, wrong gate), and stops changing the instant the drive
         // settles, so later unrelated real-scroll-driven layouts never see a

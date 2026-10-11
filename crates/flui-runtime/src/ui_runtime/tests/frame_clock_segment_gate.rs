@@ -277,7 +277,7 @@ pub(crate) fn gated_presentations_hold_samples_then_catch_up_when_visible() {
         let _subscription = controller.subscribe_status(Rc::new({
             let completions = Rc::clone(&completions);
             move |status| {
-                if status == AnimationStatus::Completed {
+                if status == AnimationStatus::ForwardSettled {
                     completions.set(completions.get() + 1);
                 }
             }

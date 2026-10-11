@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 /// Callback for animation status changes.
 ///
-/// Called when an animation's status changes (e.g., from Forward to Completed).
+/// Called when an animation's status changes (e.g., from Forward to ForwardSettled).
 pub type StatusCallback = Rc<dyn Fn(AnimationStatus)>;
 
 /// Internal status relay borrowing the enclosing delivery's recovery context.
@@ -103,17 +103,17 @@ where
     /// and fixed values return `false`.
     fn is_animating(&self) -> bool;
 
-    /// Whether the phase is [`AnimationStatus::Completed`].
+    /// Whether the phase is [`AnimationStatus::ForwardSettled`].
     /// This does not imply endpoint arrival or successful run completion.
     #[inline]
-    fn is_completed(&self) -> bool {
-        self.status().is_completed()
+    fn is_forward_settled(&self) -> bool {
+        self.status().is_forward_settled()
     }
 
-    /// Whether the phase is [`AnimationStatus::Dismissed`].
+    /// Whether the phase is [`AnimationStatus::ReverseSettled`].
     #[inline]
-    fn is_dismissed(&self) -> bool {
-        self.status().is_dismissed()
+    fn is_reverse_settled(&self) -> bool {
+        self.status().is_reverse_settled()
     }
 
     /// Whether the phase is [`AnimationStatus::Forward`].

@@ -97,7 +97,7 @@ fn navigator_with_seed() -> (NavigatorHandle, Harness, RouteId) {
 /// status bridge and the overlay rebuild it schedules.
 ///
 /// This drives the transition by hand rather than awaiting the `AnimationRunFuture`
-/// `did_push` returns — `set_value(1.0)` fires the `Completed` status, which is
+/// `did_push` returns — `set_value(1.0)` fires the `ForwardSettled` status, which is
 /// queued by the animation listener and drained from owner-local `ModalScope`
 /// build. The resulting `OverlayEntry.opaque` write schedules the overlay
 /// rebuild that applies occlusion on the following tick.
@@ -106,7 +106,7 @@ fn complete_entrance(transition: &TransitionHandle, harness: &mut Harness) {
         .controller()
         .expect("install must have created the controller");
     controller.set_value(1.0);
-    assert_eq!(controller.status(), AnimationStatus::Completed);
+    assert_eq!(controller.status(), AnimationStatus::ForwardSettled);
     harness.tick();
     harness.tick();
 }

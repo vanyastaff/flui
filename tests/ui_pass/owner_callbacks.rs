@@ -26,7 +26,7 @@ fn main() {
     let observed = calls.clone();
     controller
         .subscribe_status(Rc::new(move |status| {
-            if status == AnimationStatus::Completed {
+            if status == AnimationStatus::ForwardSettled {
                 observed.set(observed.get() + 1);
             }
         }))

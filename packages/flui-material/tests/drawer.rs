@@ -714,7 +714,7 @@ const PUMPS: usize = (SETTLE.as_millis() / FRAME.as_millis()) as usize + 2;
 /// A fling's settling time depends on the spring simulation, not `SETTLE` —
 /// a full-distance fling (e.g. `close()` from a fully open, fully rested
 /// drawer) measured empirically at 36 `FRAME`-sized ticks (~576ms) to reach
-/// `AnimationStatus::Dismissed`. This budget carries generous margin over
+/// `AnimationStatus::ReverseSettled`. This budget carries generous margin over
 /// that measurement. Tests that fling across the drawer's *entire* range
 /// (not a drag-shortened one) and need to observe the *settled* result
 /// (mount/unmount, not just the synchronous `on_open_changed` report) use

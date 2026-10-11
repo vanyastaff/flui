@@ -22,7 +22,7 @@
 pub enum AnimationStatus {
     /// The reverse-settled phase, also used for the lower bound.
     #[default]
-    Dismissed,
+    ReverseSettled,
 
     /// The forward directional phase; it does not imply an installed run.
     Forward,
@@ -31,7 +31,7 @@ pub enum AnimationStatus {
     Reverse,
 
     /// The forward-settled phase, also used for the upper bound.
-    Completed,
+    ForwardSettled,
 }
 
 impl AnimationStatus {
@@ -43,29 +43,29 @@ impl AnimationStatus {
         matches!(self, AnimationStatus::Forward | AnimationStatus::Reverse)
     }
 
-    /// Whether the phase is [`Dismissed`](Self::Dismissed) or [`Completed`](Self::Completed).
+    /// Whether the phase is [`ReverseSettled`](Self::ReverseSettled) or [`ForwardSettled`](Self::ForwardSettled).
     /// This does not imply arrival at a value's endpoint or successful completion.
     #[inline]
     #[must_use]
     pub const fn is_settled(&self) -> bool {
         matches!(
             self,
-            AnimationStatus::Dismissed | AnimationStatus::Completed
+            AnimationStatus::ReverseSettled | AnimationStatus::ForwardSettled
         )
     }
 
-    /// Whether the phase is [`Dismissed`](Self::Dismissed).
+    /// Whether the phase is [`ReverseSettled`](Self::ReverseSettled).
     #[inline]
     #[must_use]
-    pub const fn is_dismissed(&self) -> bool {
-        matches!(self, AnimationStatus::Dismissed)
+    pub const fn is_reverse_settled(&self) -> bool {
+        matches!(self, AnimationStatus::ReverseSettled)
     }
 
-    /// Whether the phase is [`Completed`](Self::Completed).
+    /// Whether the phase is [`ForwardSettled`](Self::ForwardSettled).
     #[inline]
     #[must_use]
-    pub const fn is_completed(&self) -> bool {
-        matches!(self, AnimationStatus::Completed)
+    pub const fn is_forward_settled(&self) -> bool {
+        matches!(self, AnimationStatus::ForwardSettled)
     }
 
     /// Whether the phase is [`Forward`](Self::Forward).
@@ -86,15 +86,15 @@ impl AnimationStatus {
     ///
     /// - Forward → Reverse
     /// - Reverse → Forward
-    /// - Dismissed/Completed → unchanged
+    /// - ReverseSettled/ForwardSettled → unchanged
     #[inline]
     #[must_use]
     pub const fn flip(&self) -> Self {
         match self {
             AnimationStatus::Forward => AnimationStatus::Reverse,
             AnimationStatus::Reverse => AnimationStatus::Forward,
-            AnimationStatus::Dismissed => AnimationStatus::Dismissed,
-            AnimationStatus::Completed => AnimationStatus::Completed,
+            AnimationStatus::ReverseSettled => AnimationStatus::ReverseSettled,
+            AnimationStatus::ForwardSettled => AnimationStatus::ForwardSettled,
         }
     }
 }

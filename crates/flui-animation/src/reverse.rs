@@ -16,8 +16,8 @@ use std::rc::Rc;
 /// The status is also reversed:
 /// - Forward becomes Reverse
 /// - Reverse becomes Forward
-/// - Dismissed becomes Completed
-/// - Completed becomes Dismissed
+/// - ReverseSettled becomes ForwardSettled
+/// - ForwardSettled becomes ReverseSettled
 ///
 /// # Examples
 ///
@@ -90,8 +90,8 @@ fn reverse_status(status: AnimationStatus) -> AnimationStatus {
     match status {
         AnimationStatus::Forward => AnimationStatus::Reverse,
         AnimationStatus::Reverse => AnimationStatus::Forward,
-        AnimationStatus::Dismissed => AnimationStatus::Completed,
-        AnimationStatus::Completed => AnimationStatus::Dismissed,
+        AnimationStatus::ReverseSettled => AnimationStatus::ForwardSettled,
+        AnimationStatus::ForwardSettled => AnimationStatus::ReverseSettled,
     }
 }
 

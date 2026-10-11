@@ -6,7 +6,7 @@
 //! [`flui_animation::Vsync`] / `pump_frame`. With a naive fixed
 //! anchor (recorded once at registration), the first reverse pump would feed
 //! `tick_at(huge_elapsed)` and snap the value straight to the target (0.0,
-//! Dismissed) on a single frame. Re-anchoring on the observed run-generation
+//! ReverseSettled) on a single frame. Re-anchoring on the observed run-generation
 //! bump makes the reverse leg advance from 1.0 over its own timeline. No tree is
 //! bound here, so the registry is exercised in isolation — and no `thread::sleep`.
 
@@ -185,7 +185,7 @@ pub(crate) fn starting_an_idle_bound_controller_requests_its_first_frame() {
     for _ in 0..6 {
         binding.pump_frame(FRAME);
     }
-    assert_eq!(owner.controller().status(), AnimationStatus::Completed);
+    assert_eq!(owner.controller().status(), AnimationStatus::ForwardSettled);
     assert_eq!(owner.controller().value(), 1.0);
 }
 
@@ -203,7 +203,7 @@ pub(crate) fn second_run_ticks_from_its_own_start_not_a_stale_anchor() {
     }
     assert_eq!(
         controller.status(),
-        AnimationStatus::Completed,
+        AnimationStatus::ForwardSettled,
         "the forward run completes after being fully pumped",
     );
     assert!(
@@ -220,7 +220,7 @@ pub(crate) fn second_run_ticks_from_its_own_start_not_a_stale_anchor() {
 
     // The detection frame of the reverse run holds ~1.0 (first tick is elapsed
     // 0). The NAIVE fixed-anchor model fails here: it would feed a large elapsed
-    // and snap straight to 0.0 / Dismissed on this very frame.
+    // and snap straight to 0.0 / ReverseSettled on this very frame.
     binding.pump_frame(FRAME);
     assert!(
         controller.value() > 0.5,
@@ -253,7 +253,7 @@ pub(crate) fn second_run_ticks_from_its_own_start_not_a_stale_anchor() {
     );
     assert_eq!(
         controller.status(),
-        AnimationStatus::Dismissed,
+        AnimationStatus::ReverseSettled,
         "a fully pumped reverse run dismisses",
     );
 

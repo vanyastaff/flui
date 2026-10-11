@@ -867,7 +867,7 @@ impl NavigatorObserver for HeroController {
     /// stop, matching [`NavigatorHandle::did_stop_user_gesture`]'s own
     /// 1→0-only observer notification. Once genuinely stopped, sweeps every
     /// still-airborne, gesture-driven pop flight whose proxy never left
-    /// `Dismissed` — the drag never moved, so no status transition ever fired
+    /// `ReverseSettled` — the drag never moved, so no status transition ever fired
     /// to end it on its own — and manually dismisses each one.
     fn did_stop_user_gesture(&self) {
         let Some(navigator) = self.navigator() else {

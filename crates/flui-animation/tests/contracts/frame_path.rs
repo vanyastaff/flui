@@ -41,7 +41,7 @@ fn reads_inside_a_status_listener_see_the_commit() {
     let reader = controller.clone();
     controller
         .subscribe_status(std::rc::Rc::new(move |status| {
-            if status == AnimationStatus::Completed {
+            if status == AnimationStatus::ForwardSettled {
                 *sink.lock().expect("observed read") =
                     Some((reader.value(), reader.status(), format!("{reader:?}")));
             }
@@ -54,9 +54,9 @@ fn reads_inside_a_status_listener_see_the_commit() {
         .lock()
         .expect("observed read")
         .take()
-        .expect("the listener saw Completed");
-    assert_eq!((value, status), (1.0, AnimationStatus::Completed));
-    assert!(debug.contains("Completed"), "{debug}");
+        .expect("the listener saw ForwardSettled");
+    assert_eq!((value, status), (1.0, AnimationStatus::ForwardSettled));
+    assert!(debug.contains("ForwardSettled"), "{debug}");
 }
 
 fn nested_commit_is_not_overwritten() {
@@ -66,7 +66,7 @@ fn nested_commit_is_not_overwritten() {
     let slot = std::rc::Rc::new(Mutex::new(Some(controller.clone())));
     controller
         .subscribe_status(std::rc::Rc::new(move |status| {
-            if status != AnimationStatus::Completed {
+            if status != AnimationStatus::ForwardSettled {
                 return;
             }
             let owner = slot.lock().expect("retarget slot").take();
@@ -159,7 +159,7 @@ fn last_owner_released_from_its_own_listener_mid_walk() {
     let owners = std::rc::Rc::new(Mutex::new(Some(vec![first_owner, second_owner])));
     first
         .subscribe_status(std::rc::Rc::new(move |status| {
-            if status != AnimationStatus::Completed {
+            if status != AnimationStatus::ForwardSettled {
                 return;
             }
             let released = owners.lock().expect("owners").take();

@@ -420,11 +420,11 @@ fn reentrant_settles_leave_the_next_run_for_a_later_entry() {
     let observed = completions.clone();
     controller
         .subscribe_status(std::rc::Rc::new(move |status| match status {
-            AnimationStatus::Completed => {
+            AnimationStatus::ForwardSettled => {
                 observed.set(observed.get() + 1);
                 let _next = callback_controller.reverse().expect("reentrant reverse");
             }
-            AnimationStatus::Dismissed => {
+            AnimationStatus::ReverseSettled => {
                 observed.set(observed.get() + 1);
                 let _next = callback_controller.forward().expect("reentrant forward");
             }
@@ -528,7 +528,7 @@ fn unbound_time_run_completes_once() {
         .expect("unbound run is admitted");
     assert_eq!(owner.controller().value(), 1.0);
     assert!(run.is_complete());
-    assert_eq!(owner.controller().status(), AnimationStatus::Completed);
+    assert_eq!(owner.controller().status(), AnimationStatus::ForwardSettled);
 }
 
 fn rebinding_retires_the_old_registry_after_committing_the_new_clock() {
@@ -688,7 +688,7 @@ fn dropping_the_last_owner_from_its_own_listener_mid_frame() {
             let retire = retire.clone();
             first_controller
                 .subscribe_status(Rc::new(move |status| {
-                    if status == AnimationStatus::Completed {
+                    if status == AnimationStatus::ForwardSettled {
                         retire();
                     }
                 }))
@@ -862,7 +862,7 @@ fn unbound_finite_repeat_lands_on_its_last_leg() {
         .repeat_with(None, None, true, None, Some(4))
         .expect("finite repeat");
     assert_eq!(owner.controller().value(), 0.0);
-    assert_eq!(owner.controller().status(), AnimationStatus::Dismissed);
+    assert_eq!(owner.controller().status(), AnimationStatus::ReverseSettled);
     assert!(run.is_complete());
 }
 

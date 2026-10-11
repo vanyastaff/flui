@@ -764,7 +764,7 @@ fn fling_completes_on_the_frame_that_reaches_the_bound() {
         }
     }
     assert_eq!(finished, Some(18), "first frame at or after 0.29537 s");
-    assert_eq!(controller.status(), AnimationStatus::Completed);
+    assert_eq!(controller.status(), AnimationStatus::ForwardSettled);
     assert_eq!(controller.value(), 1.0);
 }
 

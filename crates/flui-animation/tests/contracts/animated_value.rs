@@ -853,7 +853,7 @@ fn retired_owner_cleanup_passes_a_stale_settlement_fence() {
         let storage = Rc::downgrade(&storage);
         let next_run = Rc::clone(&next_run);
         Rc::new(move |status| {
-            if status != AnimationStatus::Completed {
+            if status != AnimationStatus::ForwardSettled {
                 return;
             }
             let storage = storage.upgrade().unwrap();
@@ -866,7 +866,7 @@ fn retired_owner_cleanup_passes_a_stale_settlement_fence() {
     let second = view.subscribe_status({
         let storage = Rc::downgrade(&storage);
         Rc::new(move |status| {
-            if status != AnimationStatus::Completed {
+            if status != AnimationStatus::ForwardSettled {
                 return;
             }
             let storage = storage.upgrade().unwrap();

@@ -146,7 +146,7 @@ pub use animated_value::{
 };
 pub use animation::{Animation, AnimationDirection, StatusCallback};
 pub use builder::{AnimationControllerBuilder, ValueRange};
-pub use constant::{ALWAYS_COMPLETE, ALWAYS_DISMISSED, ConstantAnimation};
+pub use constant::{ConstantAnimation, UNIT_END_ANIMATION, UNIT_START_ANIMATION};
 pub use controller::AnimationController;
 pub use curved::CurvedAnimation;
 pub use driven::DrivenController;

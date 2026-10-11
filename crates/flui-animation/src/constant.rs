@@ -31,13 +31,13 @@ static LISTENER_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
 /// assert_eq!(animation.value(), 0.5);
 /// assert_eq!(animation.status(), AnimationStatus::Forward);
 ///
-/// // Create a completed animation
-/// let completed = ConstantAnimation::completed(1.0);
-/// assert_eq!(completed.status(), AnimationStatus::Completed);
+/// // A settled phase does not imply a particular value or a completed run.
+/// let stopped = ConstantAnimation::forward_settled(0.5);
+/// assert_eq!(stopped.status(), AnimationStatus::ForwardSettled);
+/// assert_eq!(stopped.value(), 0.5);
 ///
-/// // Create a dismissed animation
-/// let dismissed = ConstantAnimation::dismissed(0.0);
-/// assert_eq!(dismissed.status(), AnimationStatus::Dismissed);
+/// let reverse = ConstantAnimation::reverse_settled(0.5);
+/// assert_eq!(reverse.status(), AnimationStatus::ReverseSettled);
 /// ```
 ///
 /// [`AnimationController`]: crate::AnimationController
@@ -71,25 +71,25 @@ where
         Self { value, status }
     }
 
-    /// Creates a constant animation that is always completed.
+    /// Creates a constant value with a forward-settled phase.
     ///
-    /// The status is [`AnimationStatus::Completed`].
+    /// The status is [`AnimationStatus::ForwardSettled`].
     #[must_use]
-    pub fn completed(value: T) -> Self {
+    pub fn forward_settled(value: T) -> Self {
         Self {
             value,
-            status: AnimationStatus::Completed,
+            status: AnimationStatus::ForwardSettled,
         }
     }
 
-    /// Creates a constant animation that is always dismissed.
+    /// Creates a constant value with a reverse-settled phase.
     ///
-    /// The status is [`AnimationStatus::Dismissed`].
+    /// The status is [`AnimationStatus::ReverseSettled`].
     #[must_use]
-    pub fn dismissed(value: T) -> Self {
+    pub fn reverse_settled(value: T) -> Self {
         Self {
             value,
-            status: AnimationStatus::Dismissed,
+            status: AnimationStatus::ReverseSettled,
         }
     }
 }
@@ -153,7 +153,7 @@ where
 // Pre-defined Constants
 // ============================================================================
 
-/// An animation that is always complete (value = 1.0).
+/// A fixed value at the end of the normalized unit interval (`1.0`).
 ///
 /// This is useful when an API expects an animation but you want to show
 /// the final state immediately.
@@ -161,18 +161,18 @@ where
 /// # Examples
 ///
 /// ```
-/// use flui_animation::{ALWAYS_COMPLETE, Animation};
+/// use flui_animation::{UNIT_END_ANIMATION, Animation};
 /// use flui_animation::AnimationStatus;
 ///
-/// assert_eq!(ALWAYS_COMPLETE.value(), 1.0);
-/// assert_eq!(ALWAYS_COMPLETE.status(), AnimationStatus::Completed);
+/// assert_eq!(UNIT_END_ANIMATION.value(), 1.0);
+/// assert_eq!(UNIT_END_ANIMATION.status(), AnimationStatus::ForwardSettled);
 /// ```
-pub static ALWAYS_COMPLETE: ConstantAnimation<f64> = ConstantAnimation {
+pub const UNIT_END_ANIMATION: ConstantAnimation<f64> = ConstantAnimation {
     value: 1.0,
-    status: AnimationStatus::Completed,
+    status: AnimationStatus::ForwardSettled,
 };
 
-/// An animation that is always dismissed (value = 0.0).
+/// A fixed value at the start of the normalized unit interval (`0.0`).
 ///
 /// This is useful when an API expects an animation but you want to show
 /// the initial state.
@@ -180,13 +180,13 @@ pub static ALWAYS_COMPLETE: ConstantAnimation<f64> = ConstantAnimation {
 /// # Examples
 ///
 /// ```
-/// use flui_animation::{ALWAYS_DISMISSED, Animation};
+/// use flui_animation::{UNIT_START_ANIMATION, Animation};
 /// use flui_animation::AnimationStatus;
 ///
-/// assert_eq!(ALWAYS_DISMISSED.value(), 0.0);
-/// assert_eq!(ALWAYS_DISMISSED.status(), AnimationStatus::Dismissed);
+/// assert_eq!(UNIT_START_ANIMATION.value(), 0.0);
+/// assert_eq!(UNIT_START_ANIMATION.status(), AnimationStatus::ReverseSettled);
 /// ```
-pub static ALWAYS_DISMISSED: ConstantAnimation<f64> = ConstantAnimation {
+pub const UNIT_START_ANIMATION: ConstantAnimation<f64> = ConstantAnimation {
     value: 0.0,
-    status: AnimationStatus::Dismissed,
+    status: AnimationStatus::ReverseSettled,
 };

@@ -540,7 +540,7 @@ fn begin_press_deactivation(
     // This callback lives until its owned timer is canceled or retired.
     controller
         .subscribe_status(std::rc::Rc::new(move |status| {
-            if status == AnimationStatus::Completed {
+            if status == AnimationStatus::ForwardSettled {
                 states_for_listener.update(WidgetState::Pressed, false);
                 rebuild_for_listener.schedule(flui_sdk::view::RebuildReason::AnimationTick);
             }

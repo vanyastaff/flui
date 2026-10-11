@@ -134,7 +134,7 @@ fn custom_sources_can_construct_removal_authority() {
     assert_eq!(calls.get(), 1);
     drop(subscription);
     assert_eq!(drops.get(), 1);
-    source.notify(&AnimationStatus::Completed);
+    source.notify(&AnimationStatus::ForwardSettled);
     assert_eq!(calls.get(), 1);
 }
 
@@ -430,7 +430,7 @@ fn proxy_subscription_survives_parent_replacement() {
         *statuses.borrow(),
         [
             AnimationStatus::Forward,
-            AnimationStatus::Dismissed,
+            AnimationStatus::ReverseSettled,
             AnimationStatus::Forward
         ]
     );
@@ -456,11 +456,11 @@ fn switch_subscription_survives_the_active_parent_hop() {
         &switch.current(),
         &(next.clone() as Rc<dyn Animation<f64>>)
     ));
-    assert_eq!(*statuses.borrow(), [AnimationStatus::Completed]);
+    assert_eq!(*statuses.borrow(), [AnimationStatus::ForwardSettled]);
     let _run = next.reverse().unwrap();
     assert_eq!(
         *statuses.borrow(),
-        [AnimationStatus::Completed, AnimationStatus::Reverse]
+        [AnimationStatus::ForwardSettled, AnimationStatus::Reverse]
     );
     drop(subscription);
     let _run = next.forward().unwrap();

@@ -1035,7 +1035,7 @@ mod tests {
         let slot_for_listener = Rc::clone(&slot);
         controller
             .subscribe_status(Rc::new(move |status| {
-                if status == AnimationStatus::Completed
+                if status == AnimationStatus::ForwardSettled
                     && let Some(registration) = slot_for_listener.borrow_mut().take()
                 {
                     vsync_for_listener.unregister(&registration);
@@ -1045,7 +1045,7 @@ mod tests {
 
         controller.forward().expect("fresh controller forwards");
         vsync.tick_all(&crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)));
-        vsync.tick_all(&crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.2))); // past the 100 ms duration → Completed → unregisters
+        vsync.tick_all(&crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.2))); // past the 100 ms duration → ForwardSettled → unregisters
 
         assert!(slot.borrow().is_none(), "the listener ran and unregistered");
         assert_eq!(vsync.len(), 0, "and the registry dropped the controller");

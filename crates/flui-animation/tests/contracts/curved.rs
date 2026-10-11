@@ -36,7 +36,7 @@ fn reverse_curve_locked_to_run_entry_direction() {
 
     // Settle the run, then start a fresh run in Reverse: now the reverse
     // curve applies from the start.
-    controller.set_value(1.0); // Completed -> direction lock cleared
+    controller.set_value(1.0); // ForwardSettled -> direction lock cleared
     let _ = controller.reverse();
     controller.set_value(0.5);
     let reverse_run = curved.value();

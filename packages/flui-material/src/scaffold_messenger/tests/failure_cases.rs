@@ -396,10 +396,10 @@ fn a_second_display_timer_retires_the_first() {
         }
     });
     // The public queue cancels before starting another entry. This private
-    // mounted seam delivers a second Completed without that cancellation.
+    // mounted seam delivers a second ForwardSettled without that cancellation.
     handle
         .shared
-        .handle_entry_status(AnimationStatus::Completed, ReconcileOrigin::Direct);
+        .handle_entry_status(AnimationStatus::ForwardSettled, ReconcileOrigin::Direct);
     assert!(
         first_run.is_canceled(),
         "replacement cancels the old accepted run"

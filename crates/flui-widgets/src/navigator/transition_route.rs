@@ -7,9 +7,9 @@
 //!
 //! The whole type turns on one observation: **the route drives its own lifecycle
 //! from an animation status listener**, calling back into the navigator. It is not
-//! the navigator that waits on the animation. On `Completed` the route writes its
+//! the navigator that waits on the animation. On `ForwardSettled` the route writes its
 //! `opaque` flag to the overlay entry; on `Forward`/`Reverse` it clears it; on
-//! `Dismissed`, if the route is no longer active, it finalizes itself once.
+//! `ReverseSettled`, if the route is no longer active, it finalizes itself once.
 //!
 //! Both callbacks reach the navigator through a `RouteBinding`, which enqueues a
 //! `RouteCommand` rather than re-entering the flush (see `binding.rs`
@@ -56,8 +56,8 @@ use std::time::Duration;
 use std::{fmt, marker::PhantomData};
 
 use flui_animation::{
-    ALWAYS_COMPLETE, ALWAYS_DISMISSED, Animation, AnimationController, AnimationStatus,
-    AnimationSwitch, ConstantAnimation, DrivenController, ProxyAnimation,
+    Animation, AnimationController, AnimationStatus, AnimationSwitch, DrivenController,
+    ProxyAnimation, UNIT_END_ANIMATION, UNIT_START_ANIMATION,
 };
 use flui_foundation::ChangeNotifier;
 use std::cell::{Cell, RefCell};
@@ -66,22 +66,20 @@ use super::binding::{CompletedSignal, RouteBindingSlot, TransitionGroup, Transit
 use super::overlay_route::{NavigatorRoute, RouteContentBuilder};
 use super::route::{PushCompletion, Route, RouteId, RouteSettings};
 
-/// The always-dismissed animation a `secondary_animation` rests at
-/// (`value == 0.0`, `status == dismissed`).
-pub(crate) fn always_dismissed() -> std::rc::Rc<dyn Animation<f64>> {
-    Rc::new(ConstantAnimation::dismissed(ALWAYS_DISMISSED.value()))
+/// The normalized start value a `secondary_animation` rests at.
+pub(crate) fn unit_start_animation() -> std::rc::Rc<dyn Animation<f64>> {
+    Rc::new(UNIT_START_ANIMATION)
 }
 
-/// The always-complete animation (`value == 1.0`, `status == completed`). What an
-/// **offstage** `ModalRoute`'s primary animation points at.
-pub(crate) fn always_complete() -> std::rc::Rc<dyn Animation<f64>> {
-    Rc::new(ConstantAnimation::completed(ALWAYS_COMPLETE.value()))
+/// The normalized end value an offstage `ModalRoute` presents as its primary animation.
+pub(crate) fn unit_end_animation() -> std::rc::Rc<dyn Animation<f64>> {
+    Rc::new(UNIT_END_ANIMATION)
 }
 
 /// What the `secondary_animation` proxy currently points at.
 enum SecondaryParent {
-    /// The always-dismissed animation: no route above, or it cannot be coordinated.
-    Dismissed,
+    /// No route above, or it cannot be coordinated; the proxy rests at zero.
+    Resting,
     /// Pointed straight at the next route's primary animation.
     Direct(RouteId),
     /// Mid-hop: an [`AnimationSwitch`] is proxying from the old train to `target`.
@@ -98,7 +96,7 @@ impl SecondaryParent {
         proxy: &ProxyAnimation<f64>,
     ) -> Option<std::rc::Rc<dyn Animation<f64>>> {
         match self {
-            Self::Dismissed => None,
+            Self::Resting => None,
             Self::Direct(_) => Some(proxy.parent()),
             Self::Hopping { switch, .. } => Some(switch.current()),
         }
@@ -129,7 +127,7 @@ struct TransitionInner {
     secondary_parent: RefCell<SecondaryParent>,
 
     /// Set once the route is popped: a popped route is no longer active, which is
-    /// the half that matters to the status handler's `Dismissed` guard.
+    /// the half that matters to the status handler's `ReverseSettled` guard.
     popped: AtomicBool,
     /// Whether the pop has already been finalized.
     pop_finalized: AtomicBool,
@@ -159,7 +157,7 @@ impl Drop for TransitionInner {
         let secondary = self.secondary.withdraw();
         let parent = super::lifecycle::Terminal::new(std::mem::replace(
             self.secondary_parent.get_mut(),
-            SecondaryParent::Dismissed,
+            SecondaryParent::Resting,
         ));
         let completed = self.completed.withdraw();
         let mut recovery = flui_foundation::panic::PanicRecovery::new();
@@ -214,7 +212,7 @@ impl TransitionInner {
         };
 
         match status {
-            AnimationStatus::Completed => {
+            AnimationStatus::ForwardSettled => {
                 // Publish `opaque` to the route's overlay entry.
                 // The entrance settling `pushing` → `idle` is driven by
                 // `NavigatorShared::apply` awaiting the `AnimationRunFuture`
@@ -229,7 +227,7 @@ impl TransitionInner {
             }
             // A route may still be active if something else is controlling the
             // transition and hits the dismissed status.
-            AnimationStatus::Dismissed
+            AnimationStatus::ReverseSettled
                 if !self.is_active() && !self.pop_finalized.swap(true, Ordering::AcqRel) =>
             {
                 self.finalize_calls.fetch_add(1, Ordering::Relaxed);
@@ -307,9 +305,9 @@ impl<T> TransitionRoute<T> {
                 pending_statuses: Rc::new(RefCell::new(Vec::new())),
                 status_wake: RefCell::new(None),
                 secondary: super::lifecycle::Terminal::new(Rc::new(ProxyAnimation::new(
-                    always_dismissed(),
+                    unit_start_animation(),
                 ))),
-                secondary_parent: RefCell::new(SecondaryParent::Dismissed),
+                secondary_parent: RefCell::new(SecondaryParent::Resting),
                 popped: AtomicBool::new(false),
                 pop_finalized: AtomicBool::new(false),
                 opaque: AtomicBool::new(false),
@@ -415,7 +413,7 @@ impl<T> TransitionRoute<T> {
         let Some((next_id, peer)) = target.filter(|(_, peer)| {
             self.can_transition_to && peer.can_transition_from && peer.group == self.group
         }) else {
-            self.set_secondary(SecondaryParent::Dismissed, always_dismissed());
+            self.set_secondary(SecondaryParent::Resting, unit_start_animation());
             return;
         };
 
@@ -450,7 +448,7 @@ impl<T> TransitionRoute<T> {
             }
         };
 
-        let previous = std::mem::replace(&mut *parent, SecondaryParent::Dismissed);
+        let previous = std::mem::replace(&mut *parent, SecondaryParent::Resting);
 
         if jump {
             self.inner.secondary.set_parent(Rc::clone(&next_animation));
@@ -504,8 +502,8 @@ impl<T> TransitionRoute<T> {
             if !still_ours {
                 return;
             }
-            let previous = std::mem::replace(&mut *parent, SecondaryParent::Dismissed);
-            inner.secondary.set_parent(always_dismissed());
+            let previous = std::mem::replace(&mut *parent, SecondaryParent::Resting);
+            inner.secondary.set_parent(unit_start_animation());
             drop(parent);
             if let SecondaryParent::Hopping { switch, .. } = previous {
                 switch.dispose();
@@ -542,12 +540,12 @@ impl TransitionHandle {
         self.inner.controller()
     }
 
-    /// The controller, erased. The always-dismissed animation before `install()` —
+    /// The controller, erased. The fixed normalized start value before `install()` —
     /// a route that is not yet pushed has no controller.
     pub(crate) fn primary_animation(&self) -> std::rc::Rc<dyn Animation<f64>> {
         match self.controller() {
             Some(controller) => Rc::new(controller) as std::rc::Rc<dyn Animation<f64>>,
-            None => always_dismissed(),
+            None => unit_start_animation(),
         }
     }
 
@@ -566,7 +564,7 @@ impl TransitionHandle {
     }
 
     /// The secondary animation: a `ProxyAnimation` resting at the
-    /// always-dismissed animation.
+    /// fixed normalized start value.
     #[must_use]
     pub fn secondary_animation(&self) -> Rc<ProxyAnimation<f64>> {
         Rc::clone(&self.inner.secondary)
@@ -584,12 +582,12 @@ impl TransitionHandle {
         self.inner.finalize_calls.load(Ordering::Relaxed)
     }
 
-    /// Whether the secondary proxy currently rests at always-dismissed.
+    /// Whether the secondary proxy rests at zero without a coordinated route above.
     #[must_use]
-    pub fn secondary_is_dismissed(&self) -> bool {
+    pub fn secondary_is_resting(&self) -> bool {
         matches!(
             &*self.inner.secondary_parent.borrow_mut(),
-            SecondaryParent::Dismissed
+            SecondaryParent::Resting
         )
     }
 
@@ -635,7 +633,7 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
             .inner
             .controller()
             .as_ref()
-            .is_some_and(AnimationController::is_dismissed);
+            .is_some_and(AnimationController::is_reverse_settled);
         dismissed && !self.inner.pop_finalized.load(Ordering::Acquire)
     }
 
@@ -693,7 +691,7 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
 
             // A controller that installs already completed never fires a status
             // change, so the status listener would never write `opaque`.
-            if controller.is_completed() {
+            if controller.is_forward_settled() {
                 binding.set_entry_opaque(self.inner.opaque.load(Ordering::Relaxed));
             }
         }
@@ -780,7 +778,7 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
         // Release every route below that is still proxying our animation, before
         // the controller is disposed under them.
         self.inner.completed.complete();
-        self.set_secondary(SecondaryParent::Dismissed, always_dismissed());
+        self.set_secondary(SecondaryParent::Resting, unit_start_animation());
 
         let outgoing = self.inner.controller.borrow_mut().take();
         let mut subscription = self.inner.status_subscription.borrow_mut().take();

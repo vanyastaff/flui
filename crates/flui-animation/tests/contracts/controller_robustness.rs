@@ -79,8 +79,8 @@ fn a_constant_phase_does_not_install_a_run() {
     for status in [
         AnimationStatus::Forward,
         AnimationStatus::Reverse,
-        AnimationStatus::Completed,
-        AnimationStatus::Dismissed,
+        AnimationStatus::ForwardSettled,
+        AnimationStatus::ReverseSettled,
     ] {
         let constant = ConstantAnimation::with_status(0.5_f64, status);
         assert!(!constant.is_animating(), "constant {status:?} has no run");
@@ -116,6 +116,28 @@ fn a_constant_phase_does_not_install_a_run() {
                 "{name} over constant {status:?} has no run"
             );
         }
+    }
+}
+
+#[cfg(feature = "serde")]
+fn directional_phase_wire_names() {
+    for (phase, wire) in [
+        (AnimationStatus::Forward, "\"Forward\""),
+        (AnimationStatus::Reverse, "\"Reverse\""),
+        (AnimationStatus::ForwardSettled, "\"ForwardSettled\""),
+        (AnimationStatus::ReverseSettled, "\"ReverseSettled\""),
+    ] {
+        assert_eq!(
+            serde_json::to_string(&phase).expect("serialize phase"),
+            wire
+        );
+        assert_eq!(
+            serde_json::from_str::<AnimationStatus>(wire).expect("deserialize phase"),
+            phase
+        );
+    }
+    for former in ["\"Completed\"", "\"Dismissed\""] {
+        assert!(serde_json::from_str::<AnimationStatus>(former).is_err());
     }
 }
 
@@ -163,7 +185,7 @@ fn curved_run_never_publishes_a_non_finite_value() {
     );
     controller.tick_at(std::time::Duration::from_secs_f64(1.0));
     assert_eq!(controller.value(), 1.0, "the run still lands on its target");
-    assert_eq!(controller.status(), AnimationStatus::Completed);
+    assert_eq!(controller.status(), AnimationStatus::ForwardSettled);
     let published = published.lock().expect("published values").clone();
     assert!(
         published.iter().all(|value| value.is_finite()),
@@ -324,7 +346,7 @@ fn finite_clock_time_anchors_a_run() {
     );
     assert_eq!(
         controller.status(),
-        AnimationStatus::Completed,
+        AnimationStatus::ForwardSettled,
         "the run completes once time resumes"
     );
 }
@@ -350,7 +372,7 @@ fn backwards_frame_time_resumes_the_run() {
     vsync.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(11.0)),
     );
-    assert_eq!(controller.status(), AnimationStatus::Completed);
+    assert_eq!(controller.status(), AnimationStatus::ForwardSettled);
 }
 
 fn repeated_frame_time_announces_completion_once() {
@@ -377,13 +399,15 @@ fn repeated_frame_time_announces_completion_once() {
     );
     assert_eq!(
         *statuses.lock().expect("status log"),
-        [AnimationStatus::Completed]
+        [AnimationStatus::ForwardSettled]
     );
 }
 
 #[test]
 fn controller_robustness_contract() {
     crate::run_table(&[
+        #[cfg(feature = "serde")]
+        ("directional phase wire names", directional_phase_wire_names),
         (
             "a constant phase does not install a run",
             a_constant_phase_does_not_install_a_run,

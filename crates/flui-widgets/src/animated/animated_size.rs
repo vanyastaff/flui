@@ -180,7 +180,7 @@ impl ViewState<AnimatedSize> for AnimatedSizeState {
         let callback = Rc::clone(&self.on_end);
         self.status_subscription = Some(self.controller.controller().subscribe_status(
             std::rc::Rc::new(move |status| {
-                if status != AnimationStatus::Completed || !mounted.get() {
+                if status != AnimationStatus::ForwardSettled || !mounted.get() {
                     return;
                 }
                 if let Some(post_frame) = &post_frame {

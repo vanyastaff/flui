@@ -34,7 +34,7 @@ impl Subscription {
     }
 }
 
-use AnimationStatus::{Completed, Dismissed, Forward, Reverse};
+use AnimationStatus::{Forward, ForwardSettled, Reverse, ReverseSettled};
 
 type Log = Arc<Mutex<Vec<AnimationStatus>>>;
 
@@ -267,10 +267,10 @@ fn panicking_status_listener_leaves_the_next_frame_ticking() {
         "the run advances on the next frame"
     );
     controller.tick_at(std::time::Duration::from_secs_f64(1.0));
-    assert_eq!(controller.status(), Completed);
+    assert_eq!(controller.status(), ForwardSettled);
     assert_eq!(
         seen(&log),
-        [Completed],
+        [ForwardSettled],
         "the listener that panicked stays subscribed"
     );
 }
@@ -427,7 +427,7 @@ fn reversing_on_completed_keeps_commit_order() {
     let pending = std::rc::Rc::clone(&slot);
     controller
         .subscribe_status(std::rc::Rc::new(move |status| {
-            if status == Completed {
+            if status == ForwardSettled {
                 let owner = pending.lock().expect("reverse slot").take();
                 if let Some(controller) = owner {
                     let _run = controller.reverse().expect("reverse from a listener");
@@ -445,7 +445,7 @@ fn reversing_on_completed_keeps_commit_order() {
     assert_eq!(controller.status(), Reverse);
     assert_eq!(
         seen(&observer),
-        [Forward, Completed, Reverse],
+        [Forward, ForwardSettled, Reverse],
         "a later listener observes statuses in commit order, ending at status()"
     );
 }
@@ -501,7 +501,7 @@ fn reentrant_completion_delivers_its_outcome_before_the_next_status() {
     let slot = std::rc::Rc::new(Mutex::new(Some(controller.clone())));
     controller
         .subscribe_status(std::rc::Rc::new(move |status| {
-            if status == Completed {
+            if status == ForwardSettled {
                 let owner = slot.lock().expect("reverse owner").take();
                 if let Some(owner) = owner {
                     let _next = owner.reverse().expect("replacement run");
@@ -514,9 +514,9 @@ fn reentrant_completion_delivers_its_outcome_before_the_next_status() {
     controller
         .subscribe_status(std::rc::Rc::new(move |status| {
             sink.lock().expect("delivery order").push(match status {
-                Completed => "completed status",
+                ForwardSettled => "completed status",
                 Reverse => "reverse status",
-                Dismissed => "dismissed status",
+                ReverseSettled => "dismissed status",
                 _ => "unexpected status",
             });
         }))
@@ -628,7 +628,7 @@ fn status_failure_retains_removed_captures_and_competing_payloads() {
     controller.tick_at(std::time::Duration::from_secs_f64(1.0));
     assert_eq!(
         seen(&tail),
-        [Forward, Completed],
+        [Forward, ForwardSettled],
         "the next frame still delivers"
     );
     lifecycle.dispose();
@@ -1183,7 +1183,7 @@ fn removed_value_capture_custody(mode: &str) {
     failure_id.remove(&controller);
     peer.remove_listener(peer_failure);
     controller.tick_at(std::time::Duration::from_secs_f64(1.0));
-    assert_eq!(controller.status(), Completed);
+    assert_eq!(controller.status(), ForwardSettled);
     assert_eq!(
         calls.get(),
         match mode {
@@ -1236,7 +1236,7 @@ fn status_failure_retains_a_reentrantly_removed_new_subscription() {
     assert_eq!(seen(&tail), [Forward]);
     assert_eq!(drops.load(Ordering::SeqCst), 0);
     controller.tick_at(std::time::Duration::from_secs_f64(1.0));
-    assert_eq!(seen(&tail), [Forward, Completed]);
+    assert_eq!(seen(&tail), [Forward, ForwardSettled]);
     lifecycle.dispose();
 }
 
@@ -1264,7 +1264,7 @@ fn install_hostile_continuation(
 fn fail_on_completion(controller: &AnimationController) {
     controller
         .subscribe_status(std::rc::Rc::new(|status| {
-            if status == Completed {
+            if status == ForwardSettled {
                 panic_any("first status failure");
             }
         }))
@@ -1285,12 +1285,12 @@ fn status_failure_retains_completed_run_captures() {
     }))
     .expect_err("status failure");
     assert_eq!(payload_text(failure.as_ref()), Some("first status failure"));
-    assert_eq!(seen(&tail), [Completed]);
+    assert_eq!(seen(&tail), [ForwardSettled]);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(drops.load(Ordering::SeqCst), 0);
     let _run = controller.reverse().expect("reverse starts");
     controller.tick_at(std::time::Duration::from_secs_f64(1.0));
-    assert_eq!(seen(&tail), [Completed, Reverse, Dismissed]);
+    assert_eq!(seen(&tail), [ForwardSettled, Reverse, ReverseSettled]);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     lifecycle.dispose();
 }
@@ -1542,7 +1542,7 @@ fn switch_hop_announces_the_new_train_status() {
     train.set_value(0.2);
     let switch = AnimationSwitch::new(
         std::rc::Rc::new(train.clone()),
-        Some(std::rc::Rc::new(ConstantAnimation::completed(0.5))),
+        Some(std::rc::Rc::new(ConstantAnimation::forward_settled(0.5))),
     );
     let (log, listener) = recorder();
     switch.subscribe_status(listener).detach();
@@ -1550,10 +1550,10 @@ fn switch_hop_announces_the_new_train_status() {
     train.set_value(0.6);
 
     assert_eq!(switch.value(), 0.5, "the switch hopped to the next train");
-    assert_eq!(switch.status(), Completed);
+    assert_eq!(switch.status(), ForwardSettled);
     assert_eq!(
         seen(&log),
-        [Completed],
+        [ForwardSettled],
         "the hop announces the new train's status once"
     );
 }
@@ -1569,7 +1569,7 @@ struct Parents {
     c: AnimationController,
 }
 
-/// Three parents with distinct statuses: `a` Forward, `b` Completed, `c` Dismissed.
+/// Three parents with distinct statuses: `a` Forward, `b` ForwardSettled, `c` ReverseSettled.
 fn parents() -> Parents {
     let a = controller();
     a.set_value(0.5);
@@ -1578,7 +1578,7 @@ fn parents() -> Parents {
     let c = controller();
     assert_eq!(
         (a.status(), b.status(), c.status()),
-        (Forward, Completed, Dismissed)
+        (Forward, ForwardSettled, ReverseSettled)
     );
     Parents { a, b, c }
 }
@@ -1605,7 +1605,11 @@ fn set_parent_moves_every_notification_to_the_new_parent_once() {
 
     proxy.set_parent(std::rc::Rc::new(b.clone()));
     assert_eq!(count(&values), 1, "one value notification per set_parent");
-    assert_eq!(seen(&log), [Completed], "the new status is announced once");
+    assert_eq!(
+        seen(&log),
+        [ForwardSettled],
+        "the new status is announced once"
+    );
 
     a.set_value(0.0);
     assert_eq!(
@@ -1615,7 +1619,7 @@ fn set_parent_moves_every_notification_to_the_new_parent_once() {
     );
     assert_eq!(
         seen(&log),
-        [Completed],
+        [ForwardSettled],
         "the replaced parent's status is ignored"
     );
 
@@ -1624,7 +1628,7 @@ fn set_parent_moves_every_notification_to_the_new_parent_once() {
     assert_eq!(count(&values), 2, "the new parent's values arrive");
     assert_eq!(
         seen(&log),
-        [Completed, Forward],
+        [ForwardSettled, Forward],
         "the new parent's status arrives"
     );
 }
@@ -1649,7 +1653,7 @@ fn reentrant_set_parent_last_commit_wins() {
 
     assert_eq!(
         proxy.status(),
-        Dismissed,
+        ReverseSettled,
         "the reentrant parent is the one in charge"
     );
     assert_eq!(

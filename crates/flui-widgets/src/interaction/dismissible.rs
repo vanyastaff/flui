@@ -751,7 +751,7 @@ impl ViewState<Dismissible> for DismissibleState {
         drop(self.move_status_subscription.take());
         self.move_status_subscription = Some(self.move_controller.controller().subscribe_status(
             std::rc::Rc::new(move |status| {
-                if status == AnimationStatus::Completed
+                if status == AnimationStatus::ForwardSettled
                     && let Some(drag) = drag.upgrade()
                 {
                     drag.move_completion_pending.set(true);
@@ -1069,7 +1069,7 @@ fn handle_drag_update(
         // clobbered by a tick — no re-registration needed here.
         move_controller.set_value(new_extent.abs() / overall_extent);
         // A drag that reaches (or overshoots) 100% of `overall_extent` clamps
-        // `set_value` to the upper bound, which reports `Completed` — mid-drag,
+        // `set_value` to the upper bound, which reports `ForwardSettled` — mid-drag,
         // as any `AnimationController.value` write can.
         // That case must be discarded; see
         // `discard_transient_move_completion`'s doc for why it is discarded
@@ -1108,7 +1108,7 @@ fn handle_drag_end(
         let _ = move_controller.reverse();
         return;
     };
-    if move_controller.is_completed() {
+    if move_controller.is_forward_settled() {
         // Direct drag samples have already discarded their completion debt.
         // Release at the bound therefore starts collapse directly.
         run_move_completion(drag, move_controller, resolved, vsync, rebuild, size);
@@ -1148,7 +1148,7 @@ fn handle_drag_end(
             let _ = move_controller.fling_across(-primary_velocity.abs(), extent);
         }
         FlingGestureKind::None => {
-            if !move_controller.is_dismissed() {
+            if !move_controller.is_reverse_settled() {
                 if move_controller.value() > threshold {
                     let _ = move_controller.forward();
                 } else {
@@ -1161,17 +1161,17 @@ fn handle_drag_end(
 
 /// Starts the completion behavior. Two call sites reach this:
 ///
-/// - `handle_drag_end`'s direct bypass, when `move_controller.is_completed()`
+/// - `handle_drag_end`'s direct bypass, when `move_controller.is_forward_settled()`
 ///   holds at the exact moment of release.
 /// - [`deliver_move_completion`], the deferred path for a
-///   `.forward()`/`.fling()` run that settles to `Completed` sometime AFTER
+///   `.forward()`/`.fling()` run that settles to `ForwardSettled` sometime AFTER
 ///   release, driven by the status listener.
 ///
 /// Calling this twice for the "same" logical completion cannot happen: the
 /// direct-bypass site is reached only once per release, and the deferred
 /// site only ever observes a completion the direct-bypass site did not
 /// already consume (see `discard_transient_move_completion`'s doc for why a
-/// mid-drag `Completed` never leaves deferred completion debt).
+/// mid-drag `ForwardSettled` never leaves deferred completion debt).
 // the six pieces of state the completion needs are not otherwise grouped
 fn run_move_completion(
     drag: &Rc<DragState>,
@@ -1188,7 +1188,7 @@ fn run_move_completion(
     );
     let threshold = dismiss_threshold_for(&resolved.dismiss_thresholds, dismiss_direction);
     if threshold >= 1.0 {
-        // A real run starts here too (reached via the `is_completed()` bypass
+        // A real run starts here too (reached via the `is_forward_settled()` bypass
         // in `handle_drag_end`, where the drag itself — never vsync-registered,
         // see `unregister_move_controller_vsync` — pushed the value to 1.0).
         let _ = move_controller.reverse();
@@ -1267,7 +1267,7 @@ fn start_resize_animation(
             let Some(drag) = weak_drag.upgrade() else {
                 return;
             };
-            if resize_ref.is_completed() {
+            if resize_ref.is_forward_settled() {
                 if drag.resize_completion.get() == ResizeCompletion::Waiting {
                     drag.resize_completion.set(ResizeCompletion::Pending);
                 }

@@ -98,7 +98,7 @@ fn vsync_retirement_reentry(removal: VsyncRemoval) {
             let order = child_order.clone();
             animation
                 .subscribe_status(std::rc::Rc::new(move |status| {
-                    if status == AnimationStatus::Completed {
+                    if status == AnimationStatus::ForwardSettled {
                         order.lock().expect("child tick order").push(label);
                     }
                 }))

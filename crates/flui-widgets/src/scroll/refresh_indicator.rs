@@ -559,7 +559,7 @@ impl RefreshIndicatorState {
             Rc::new(move |status| {
                 if matches!(
                     status,
-                    AnimationStatus::Completed | AnimationStatus::Dismissed
+                    AnimationStatus::ForwardSettled | AnimationStatus::ReverseSettled
                 ) {
                     position.set_is_scrolling(false);
                 }

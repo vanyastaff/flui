@@ -421,8 +421,8 @@ fn start_press_fade(
 /// Chained on `press_fade`'s own [`AnimationRunFuture`] (ADR-0064), not a status
 /// listener: a status listener has no way to tell "the press fade just
 /// landed" from "the release fade just landed" now that direction is chosen
-/// by the method (`animate_to_curved` reports `Completed` at BOTH ends,
-/// issue #1171) — a listener watching `Completed` unconditionally
+/// by the method (`animate_to_curved` reports `ForwardSettled` at BOTH ends,
+/// issue #1171) — a listener watching `ForwardSettled` unconditionally
 /// re-triggers itself once the release it started lands. Chaining off the
 /// return of the leg just started is one-shot, unlike a persistent listener.
 fn chain_release_fade(controller: &AnimationController, press_fade: AnimationRunFuture) {

@@ -41,14 +41,14 @@ fn navigator_with_seed() -> (NavigatorHandle, Harness, RouteId) {
 }
 
 /// Run an entrance transition to completion, then settle the owner status bridge
-/// and the overlay rebuild it schedules. `set_value(1.0)` fires `Completed`,
+/// and the overlay rebuild it schedules. `set_value(1.0)` fires `ForwardSettled`,
 /// which is queued by the animation listener and drained from owner-local
 /// `ModalScope` build; the resulting `OverlayEntry.opaque` write rebuilds the
 /// overlay on the following tick.
 fn complete_entrance(transition: &TransitionHandle, harness: &mut Harness) {
     let controller = transition.controller().expect("install created it");
     controller.set_value(1.0);
-    assert_eq!(controller.status(), AnimationStatus::Completed);
+    assert_eq!(controller.status(), AnimationStatus::ForwardSettled);
     harness.tick();
     harness.tick();
 }
@@ -108,7 +108,7 @@ pub(crate) fn secondary_animation_runs_on_the_previous_page_route_when_pushing_a
     complete_entrance(&lower_transition, &mut harness);
 
     assert!(
-        lower_transition.secondary_is_dismissed(),
+        lower_transition.secondary_is_resting(),
         "no route above: the proxy rests at kAlwaysDismissedAnimation"
     );
 

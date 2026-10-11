@@ -581,11 +581,11 @@ impl AnimationController {
     /// [`AnimationControllerInner::settled_status_keep_direction`] at that
     /// value — the status rule applies at construction too, not only to a
     /// later `set_value` (a bounded
-    /// controller at `lower_bound` stays `Dismissed`; an unbounded one at
+    /// controller at `lower_bound` stays `ReverseSettled`; an unbounded one at
     /// `0.0`, direction defaulted `Forward`, reports `Forward` — see
     /// `docs/ARCHITECTURE.md`'s mapping entry for the recorded cost). Both
     /// fields must agree at construction: if `last_committed_status` stayed
-    /// hard-coded `Dismissed` while `status` starts `Forward`, the first
+    /// hard-coded `ReverseSettled` while `status` starts `Forward`, the first
     /// [`AnimationController::finish`] call — even one that changes
     /// nothing — would read them as different and fire a spurious status
     /// notification for a change that never happened.
@@ -600,7 +600,7 @@ impl AnimationController {
 
         let mut inner = AnimationControllerInner {
             value: initial_value,
-            status: AnimationStatus::Dismissed,
+            status: AnimationStatus::ReverseSettled,
             duration,
             behavior,
             motion_state: MotionRunState::Active,
@@ -632,7 +632,7 @@ impl AnimationController {
             repeat: None,
             simulation: None,
             run_curve: None,
-            last_committed_status: AnimationStatus::Dismissed,
+            last_committed_status: AnimationStatus::ReverseSettled,
             active_run: None,
             non_finite_warned: false,
         };
@@ -717,7 +717,7 @@ impl AnimationController {
     /// `(upper_bound - value) / (upper_bound - lower_bound)`. A zero DISTANCE
     /// (starting at the upper bound) or a zero DURATION (the scaled run
     /// duration is `Duration::ZERO`) settles SYNCHRONOUSLY, before this
-    /// call returns, with [`AnimationStatus::Completed`] and an
+    /// call returns, with [`AnimationStatus::ForwardSettled`] and an
     /// already-complete [`AnimationRunFuture`]. See
     /// [`forward`](Self::forward) for the returned future's contract.
     ///
@@ -824,7 +824,7 @@ impl AnimationController {
     /// duration) scaled by `(value - lower_bound) / (upper_bound -
     /// lower_bound)`. A zero DISTANCE (starting at the lower bound) or a zero DURATION
     /// settles SYNCHRONOUSLY, before this call returns, with
-    /// [`AnimationStatus::Dismissed`] — see [`forward_from`](Self::forward_from).
+    /// [`AnimationStatus::ReverseSettled`] — see [`forward_from`](Self::forward_from).
     /// See [`forward`](Self::forward) for the returned future's contract.
     ///
     /// # Errors
@@ -910,9 +910,9 @@ impl AnimationController {
     /// Stop the animation at its current value.
     ///
     /// The status transitions to a **non-running** settled status:
-    /// - [`AnimationStatus::Completed`] at (or above) the upper bound, or when
+    /// - [`AnimationStatus::ForwardSettled`] at (or above) the upper bound, or when
     ///   the active run direction was [`Forward`](AnimationDirection::Forward)
-    /// - [`AnimationStatus::Dismissed`] at (or below) the lower bound, or when
+    /// - [`AnimationStatus::ReverseSettled`] at (or below) the lower bound, or when
     ///   the active run direction was [`Reverse`](AnimationDirection::Reverse)
     ///
     /// This phase does not prove endpoint arrival or successful completion.
@@ -943,7 +943,7 @@ impl AnimationController {
     /// Sets the value to the beginning — `lower_bound` on a bounded
     /// controller, `0.0` on an [`unbounded`](crate::AnimationControllerBuilder::unbounded) one (there is
     /// no `lower_bound` to return to) — and the status to
-    /// [`AnimationStatus::Dismissed`]. Never fails for non-finiteness: a
+    /// [`AnimationStatus::ReverseSettled`]. Never fails for non-finiteness: a
     /// reset always has a value to land on. Cancels the active run's
     /// [`AnimationRunFuture`] with
     /// [`RunCanceled`](crate::RunCanceled), delivered
@@ -963,9 +963,9 @@ impl AnimationController {
         } else {
             inner.lower_bound
         };
-        inner.status = AnimationStatus::Dismissed;
+        inner.status = AnimationStatus::ReverseSettled;
         self.finish(
-            AnimationStatus::Dismissed,
+            AnimationStatus::ReverseSettled,
             ValueChange::Notify,
             delivery,
             retired,
@@ -986,7 +986,7 @@ impl AnimationController {
     ///
     /// [`status`](Animation::status) is reported as
     /// [`AnimationStatus::Forward`] **regardless of whether `target` is above
-    /// or below the current value**, ending [`AnimationStatus::Completed`].
+    /// or below the current value**, ending [`AnimationStatus::ForwardSettled`].
     /// If `target` is
     /// already the current value (or `duration` resolves to
     /// `Duration::ZERO`), this settles synchronously; see
@@ -1033,7 +1033,7 @@ impl AnimationController {
     ///
     /// [`status`](Animation::status) is reported as
     /// [`AnimationStatus::Reverse`] regardless of whether `target` is above
-    /// or below the current value, ending [`AnimationStatus::Dismissed`] —
+    /// or below the current value, ending [`AnimationStatus::ReverseSettled`] —
     /// the mirror of [`animate_to`](Self::animate_to)'s own contract.
     ///
     /// # Errors
@@ -1100,7 +1100,7 @@ impl AnimationController {
     /// `direction` is the METHOD's, not derived from `target`'s relation to
     /// the current value: it is fixed by which method was called, before
     /// `target` is even looked at. It drives both the run's status (Forward/Reverse while
-    /// running, Completed/Dismissed at the end —
+    /// running, ForwardSettled/ReverseSettled at the end —
     /// [`AnimationDirection::settled_status`]) and, when `duration` is
     /// `None`, which base duration (`self.duration`/`self.reverse_duration`)
     /// the remaining-fraction scaling starts from — again the method's
@@ -2712,13 +2712,13 @@ impl AnimationControllerInner {
     /// see that method's own doc.
     fn settled_status_directed(&self) -> AnimationStatus {
         if self.is_at_upper_bound() {
-            AnimationStatus::Completed
+            AnimationStatus::ForwardSettled
         } else if self.is_at_lower_bound() {
-            AnimationStatus::Dismissed
+            AnimationStatus::ReverseSettled
         } else {
             match self.direction {
-                AnimationDirection::Forward => AnimationStatus::Completed,
-                AnimationDirection::Reverse => AnimationStatus::Dismissed,
+                AnimationDirection::Forward => AnimationStatus::ForwardSettled,
+                AnimationDirection::Reverse => AnimationStatus::ReverseSettled,
             }
         }
     }
@@ -2735,9 +2735,9 @@ impl AnimationControllerInner {
     /// [`walk_probe`](AnimationController::walk_probe)'s doc.
     fn settled_status_keep_direction(&self) -> AnimationStatus {
         if self.is_at_upper_bound() {
-            AnimationStatus::Completed
+            AnimationStatus::ForwardSettled
         } else if self.is_at_lower_bound() {
-            AnimationStatus::Dismissed
+            AnimationStatus::ReverseSettled
         } else {
             self.direction.running_status()
         }
@@ -2811,8 +2811,8 @@ impl AnimationDirection {
     /// The status a run in this direction ends at, with **no bound check**.
     ///
     /// The end status follows purely from the run's direction, so
-    /// `animate_to(lower_bound)` from mid-range ends `Completed`, not
-    /// `Dismissed`. Used at every RUN END: `tick_time_based`'s non-repeat
+    /// `animate_to(lower_bound)` from mid-range ends `ForwardSettled`, not
+    /// `ReverseSettled`. Used at every RUN END: `tick_time_based`'s non-repeat
     /// and repeat-exhaustion ends, `tick_simulation`'s `is_done`, and
     /// `settle_at_target`. `stop()`/`set_value` do **not** use this — they
     /// keep the bounds-first
@@ -2821,8 +2821,8 @@ impl AnimationDirection {
     /// FLUI's own frame-driver contract (see those methods' docs).
     const fn settled_status(self) -> AnimationStatus {
         match self {
-            AnimationDirection::Forward => AnimationStatus::Completed,
-            AnimationDirection::Reverse => AnimationStatus::Dismissed,
+            AnimationDirection::Forward => AnimationStatus::ForwardSettled,
+            AnimationDirection::Reverse => AnimationStatus::ReverseSettled,
         }
     }
 }

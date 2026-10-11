@@ -30,9 +30,9 @@ impl ReentrantParent {
         let proxy = self.proxy.lock().expect("parent hook lock").take();
         if let Some(proxy) = proxy.and_then(|proxy| proxy.upgrade()) {
             let replacement = if matches!(self.reentry, Reentry::Removal) {
-                ConstantAnimation::dismissed(0.75)
+                ConstantAnimation::reverse_settled(0.75)
             } else {
-                ConstantAnimation::completed(0.75)
+                ConstantAnimation::forward_settled(0.75)
             };
             proxy.set_parent(std::rc::Rc::new(replacement));
         }
@@ -102,9 +102,9 @@ fn fixture(reentry: Reentry) -> (Rc<ProxyAnimation<f64>>, Rc<AtomicUsize>) {
 
 fn next_swap_still_notifies(proxy: &ProxyAnimation<f64>, changes: &AtomicUsize) {
     let before = changes.load(Ordering::Relaxed);
-    proxy.set_parent(std::rc::Rc::new(ConstantAnimation::dismissed(0.5)));
+    proxy.set_parent(std::rc::Rc::new(ConstantAnimation::reverse_settled(0.5)));
     assert_eq!(proxy.value(), 0.5);
-    assert_eq!(proxy.status(), AnimationStatus::Dismissed);
+    assert_eq!(proxy.status(), AnimationStatus::ReverseSettled);
     assert_eq!(changes.load(Ordering::Relaxed), before + 1);
 }
 
@@ -119,7 +119,7 @@ fn parent_value_may_replace_the_proxy_parent() {
 fn parent_status_may_replace_the_proxy_parent() {
     let (proxy, changes) = fixture(Reentry::Status);
     assert_eq!(proxy.status(), AnimationStatus::Forward);
-    assert_eq!(proxy.status(), AnimationStatus::Completed);
+    assert_eq!(proxy.status(), AnimationStatus::ForwardSettled);
     assert_eq!(proxy.value(), 0.75);
     assert_eq!(changes.load(Ordering::Relaxed), 1);
     next_swap_still_notifies(&proxy, &changes);
@@ -127,13 +127,13 @@ fn parent_status_may_replace_the_proxy_parent() {
 
 fn old_parent_status_may_reenter_during_a_swap() {
     let (proxy, changes) = fixture(Reentry::Status);
-    proxy.set_parent(std::rc::Rc::new(ConstantAnimation::completed(1.0)));
+    proxy.set_parent(std::rc::Rc::new(ConstantAnimation::forward_settled(1.0)));
     assert_eq!(
         proxy.value(),
         1.0,
         "outer swap finishes after reentrant swap"
     );
-    assert_eq!(proxy.status(), AnimationStatus::Completed);
+    assert_eq!(proxy.status(), AnimationStatus::ForwardSettled);
     assert_eq!(changes.load(Ordering::Relaxed), 2);
     next_swap_still_notifies(&proxy, &changes);
 }
@@ -176,13 +176,13 @@ fn old_parent_removal_keeps_committed_notification_order() {
             observed.borrow_mut().push(status);
         }))
         .detach();
-    proxy.set_parent(std::rc::Rc::new(ConstantAnimation::completed(1.0)));
+    proxy.set_parent(std::rc::Rc::new(ConstantAnimation::forward_settled(1.0)));
     assert_eq!(
         proxy.value(),
         0.75,
         "removal reentry is the last committed parent"
     );
-    assert_eq!(proxy.status(), AnimationStatus::Dismissed);
+    assert_eq!(proxy.status(), AnimationStatus::ReverseSettled);
     assert_eq!(
         changes.load(Ordering::Relaxed),
         2,
@@ -190,7 +190,10 @@ fn old_parent_removal_keeps_committed_notification_order() {
     );
     assert_eq!(
         statuses.borrow().as_slice(),
-        &[AnimationStatus::Completed, AnimationStatus::Dismissed]
+        &[
+            AnimationStatus::ForwardSettled,
+            AnimationStatus::ReverseSettled
+        ]
     );
     next_swap_still_notifies(&proxy, &changes);
 }

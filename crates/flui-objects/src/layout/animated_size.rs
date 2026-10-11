@@ -209,7 +209,7 @@ impl RenderAnimatedSize {
             self.size_tween = SizeTween::new(self.current_size, child_size);
             self.restart_animation();
             self.state = AnimatedSizeState::Changed;
-        } else if self.controller.status() == AnimationStatus::Completed {
+        } else if self.controller.status() == AnimationStatus::ForwardSettled {
             // Both ends already equal `child_size`; a no-op snap that just
             // clears any float drift (detected via `status()` rather than by
             // comparing the controller value with its upper bound).
@@ -272,7 +272,7 @@ impl RenderAnimatedSize {
             AnimatedSizeState::Stable => {
                 if self.size_tween.end != child_size {
                     constraints.constrain(self.current_size)
-                } else if self.controller.status() == AnimationStatus::Completed {
+                } else if self.controller.status() == AnimationStatus::ForwardSettled {
                     constraints.constrain(child_size)
                 } else {
                     constraints.constrain(self.size_tween.transform(self.animation.value()))

@@ -97,7 +97,7 @@ fn reduced_motion_settles_normal_runs_on_the_next_tick() {
         assert_eq!(normal.controller().value(), 1.0);
         assert_eq!(
             *statuses.borrow(),
-            [AnimationStatus::Forward, AnimationStatus::Completed]
+            [AnimationStatus::Forward, AnimationStatus::ForwardSettled]
         );
         assert_eq!(
             Pin::new(&mut completed).poll(&mut Context::from_waker(Waker::noop())),
@@ -256,7 +256,7 @@ fn settle_simulation(source: impl flui_animation::Simulation + 'static, expected
     let delivered = Rc::new(Cell::new(0));
     let count = Rc::clone(&delivered);
     let _listener = controller.subscribe_status(Rc::new(move |status| {
-        assert_eq!(status, AnimationStatus::Completed);
+        assert_eq!(status, AnimationStatus::ForwardSettled);
         count.set(count.get() + 1);
     }));
     let mut clock = MotionClock::new();
@@ -392,7 +392,7 @@ fn reduced_settle_retires_simulation_sources_after_delivery() {
     impl Drop for RestartOnDrop {
         fn drop(&mut self) {
             self.drops.set(self.drops.get() + 1);
-            assert_eq!(self.controller.status(), AnimationStatus::Completed);
+            assert_eq!(self.controller.status(), AnimationStatus::ForwardSettled);
             assert_eq!(self.controller.value(), 0.25);
             *self.restarted.borrow_mut() = Some(
                 self.controller
@@ -425,7 +425,7 @@ fn reduced_settle_retires_simulation_sources_after_delivery() {
         let completions = Rc::new(Cell::new(0));
         let observed = Rc::clone(&completions);
         let _listener = owner.controller().subscribe_status(Rc::new(move |status| {
-            if status == AnimationStatus::Completed {
+            if status == AnimationStatus::ForwardSettled {
                 observed.set(observed.get() + 1);
                 assert!(
                     !(panic_listener && observed.get() == 1),
@@ -629,7 +629,7 @@ fn reduced_settle_preserves_peer_delivery_and_reentrant_runs() {
         let first = AnimationController::builder(ms(1000)).build_on(Some(&child));
         let peer = AnimationController::builder(ms(1000)).build_on(Some(&registry));
         let _peer_subscription = peer.controller().subscribe_status(Rc::new(move |status| {
-            if status == AnimationStatus::Completed {
+            if status == AnimationStatus::ForwardSettled {
                 assert!(!panic_peer, "peer settle callback panic");
             }
         }));
@@ -639,7 +639,7 @@ fn reduced_settle_preserves_peer_delivery_and_reentrant_runs() {
         let restart = Rc::clone(&restarted);
         let count = Rc::clone(&calls);
         let _subscription = first.controller().subscribe_status(Rc::new(move |status| {
-            if status == AnimationStatus::Completed {
+            if status == AnimationStatus::ForwardSettled {
                 count.set(count.get() + 1);
                 if count.get() == 1 {
                     *restart.borrow_mut() =
@@ -717,12 +717,12 @@ fn reduced_motion_settles_finite_and_paused_runs_once() {
         task::{Context, Poll, Waker},
     };
     for (reverse, repeat_count, expected, status) in [
-        (false, None, 1.0, AnimationStatus::Completed),
-        (true, None, 0.0, AnimationStatus::Dismissed),
-        (false, Some(1), 1.0, AnimationStatus::Completed),
-        (true, Some(1), 1.0, AnimationStatus::Completed),
-        (true, Some(2), 0.0, AnimationStatus::Dismissed),
-        (true, Some(3), 1.0, AnimationStatus::Completed),
+        (false, None, 1.0, AnimationStatus::ForwardSettled),
+        (true, None, 0.0, AnimationStatus::ReverseSettled),
+        (false, Some(1), 1.0, AnimationStatus::ForwardSettled),
+        (true, Some(1), 1.0, AnimationStatus::ForwardSettled),
+        (true, Some(2), 0.0, AnimationStatus::ReverseSettled),
+        (true, Some(3), 1.0, AnimationStatus::ForwardSettled),
     ] {
         for paused in [false, true] {
             let registry = flui_animation::Vsync::new();
@@ -993,7 +993,7 @@ fn tiny_scale_saturates_and_completes_once() {
         let delivered = Rc::new(Cell::new(0));
         let count = Rc::clone(&delivered);
         let _subscription = owner.controller().subscribe_status(Rc::new(move |status| {
-            if status == flui_animation::AnimationStatus::Completed {
+            if status == flui_animation::AnimationStatus::ForwardSettled {
                 count.set(count.get() + 1);
             }
         }));
