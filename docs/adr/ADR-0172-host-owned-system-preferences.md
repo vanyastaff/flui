@@ -70,7 +70,7 @@ Native observer handles and callback stacks never enter runtime values.
 ## Projection and consumer policy
 
 Motion consumer integration follows
-[ADR-0184](ADR-0184-presentation-motion-policy.md): the runtime projects accepted
+[ADR-0195](ADR-0195-presentation-motion-policy.md): the runtime projects accepted
 host observations into presentation clocks and inherited widget policy, with
 authored application overrides and an explicit unknown-value fallback. Mounted
 runtime, implicit-widget and package cases exercise this projection. Native

@@ -16,7 +16,7 @@ host.
   publication callbacks. Both current and later presentations inherit it.
   Normal runs use the duration-scale timeline and settle under Reduce; Preserve
   keeps authored timing. Changed motion wakes parked work, while duplicate host
-  observations do not republish inherited data (ADR-0184).
+  observations do not republish inherited data (ADR-0195).
   `system_motion_change_reaches_media_query_and_the_clock` exercises actual
   frame sampling, inherited publication and late presentation seeds.
 

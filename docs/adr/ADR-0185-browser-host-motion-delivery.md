@@ -4,7 +4,7 @@
 - **Date:** 2026-10-09
 - **Supersedes:** [ADR-0039](ADR-0039-event-loop-affinity-capability.md) §7's browser registration posture only.
 - **Related:** [ADR-0172](ADR-0172-host-owned-system-preferences.md),
-  [ADR-0184](ADR-0184-presentation-motion-policy.md)
+  [ADR-0195](ADR-0195-presentation-motion-policy.md)
 
 ## Decision
 
@@ -29,7 +29,7 @@ The application runner installs the same host-refresh callback used on desktop.
 It checks the installed loop identity and logical host before accepting native
 observations. A retained callback from an obsolete host cannot sample or update
 its successor. Initial publication still precedes root mount; subsequent updates
-reach presentation clocks and inherited policy through ADR-0184.
+reach presentation clocks and inherited policy through ADR-0195.
 
 Quit closes signal admission before removing the media-query listener and
 retiring callbacks. The listener captures an admission flag and a weak signal,

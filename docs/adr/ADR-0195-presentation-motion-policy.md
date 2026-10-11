@@ -1,4 +1,4 @@
-# ADR-0184: Presentation clocks resolve host motion and application policy
+# ADR-0195: Presentation clocks resolve host motion and application policy
 
 - **Status:** Accepted
 - **Date:** 2026-10-09

@@ -345,7 +345,7 @@ pinned by `a_size_only_change_rebuilds_size_and_whole_readers_only`.
 `MediaQuery::motion_of` observes the presentation's resolved policy, while
 controllers obey the clock rather than an inherited subtree override. Physical
 scroll and viewer inertia explicitly use Preserve; ordinary transitions remain
-Normal (ADR-0184). Loading indicators use Normal and visible static feedback under
+Normal (ADR-0195). Loading indicators use Normal and visible static feedback under
 Reduce (ADR-0192). `TickerMode::is_enabled` exposes effective configured permission
 for representation; registry topology still owns delivery. The private inherited
 wrapper remains present across permission and binding changes, retaining descendants.

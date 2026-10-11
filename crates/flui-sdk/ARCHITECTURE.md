@@ -45,7 +45,7 @@ topology is not part of any package manifest.
 
 `animation::AnimationBehavior` is used by essential timer and loading-indicator
 controllers. `animation::MotionPolicy` is read by Cupertino route composition
-through `widgets::MediaQuery::motion_of` (ADR-0184). These consumer imports are
+through `widgets::MediaQuery::motion_of` (ADR-0195). These consumer imports are
 pinned in `tests/surface.rs`.
 
 `painting::TextSizing` is the existing Painting policy carried by

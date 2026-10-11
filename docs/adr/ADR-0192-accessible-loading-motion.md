@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-10
-- **Supersedes:** [ADR-0184](ADR-0184-presentation-motion-policy.md), loading indicator behavior only.
+- **Supersedes:** [ADR-0195](ADR-0195-presentation-motion-policy.md), loading indicator behavior only.
 - **Related:** [ADR-0179](ADR-0179-controller-registration-ownership.md), [ADR-0191](ADR-0191-single-parent-animation-registries.md).
 
 ## Context

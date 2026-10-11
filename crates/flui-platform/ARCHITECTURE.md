@@ -220,7 +220,7 @@ owner; notifications only wake that owner, which samples the getters and checks
 admission before publishing. Successful registrations acquire ownership
 immediately so partial registration unwinds retire earlier tokens. Closure makes
 all callbacks inert before taking tokens out of the borrow and removing them.
-These sources feed the existing ADR-0172 delivery path and ADR-0184 projection.
+These sources feed the existing ADR-0172 delivery path and ADR-0195 projection.
 Local cross-target clippy compiles these native paths; it does not execute their
 OS getters or external-setting notifications.
 

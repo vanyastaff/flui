@@ -12,7 +12,7 @@ the dispatch layer moves there too.
 - **Browser owner wakes refresh the installed host.** ADR-0185 uses the same
   loop-identity and logical-host checks as desktop delivery. DOM invalidation
   posts the shared owner signal rather than entering the runtime directly;
-  source values reach the ADR-0184 projection through the existing host path.
+  source values reach the ADR-0195 projection through the existing host path.
   WASM platform adapter acceptance uses the controlled JS boundary described
   in `flui-platform/ARCHITECTURE.md`; rendered browser live-update acceptance
   remains separate.
