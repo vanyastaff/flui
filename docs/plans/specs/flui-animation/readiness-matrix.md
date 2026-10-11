@@ -44,7 +44,7 @@
 | M-CRV-6 | Steps есть; before-flag исключён уточнённой спецификацией | A7 |
 | M-CRV-7 | Piecewise linear не найден как завершённый production-сценарий; нужна явная disposition строки | A7 |
 | M-CRV-8 | Экстраполяция кривой вынесена; не смешивать с экстраполяцией интерполируемого значения | Вне текущего scope |
-| M-CRV-9 | Cubic keyframes заменяют CatmullRom; подтвердить потребителя, а не только math tests | A7 |
+| M-CRV-9 | Владелец согласовал `KeyframesBuilder::cubic()` для авторских траекторий. `authored_cubic_hero_geometry_is_painted_and_retraced` передаёт Keyframes через production-контракт `Hero::create_rect_tween`, сравнивает нарисованную геометрию с независимым эталоном и проверяет обратный переход. Основание сохранения API записано в composition/design | A7, согласованный authoring API |
 | M-CRV-10 | Sampled spring curve не подтверждена; не помечать закрытой по наличию SpringSimulation | A7 |
 | M-CRV-11, M-CRV-12 | Input policy проверяется отдельно от параметров. `curve_parameters_reject_invalid_input` сопоставляет независимый ожидаемый CurveError с try_new, panic new и численным serde decode для Cubic, ThreePointCubic, Interval и всех Elastic; включает NaN/±∞ и границы допустимых параметров. Steps проверяет отказ try_new/new и JSON decode в существующих таблицах. Обход проверки x2 или NaN только при decode воспроизводимо нарушает новые случаи. Это не закрывает неподтверждённые authoring-возможности M-CRV-7/M-CRV-10 | A7, A8 |
 
@@ -59,7 +59,7 @@
 | M-INTP-7, M-INTP-8 | TwoWayConverter/derive есть; миграция реальных implicit consumers ещё нужна | A4, A7 |
 | M-INTP-9 | ADR-0186: пороги компонентов через TwoWayConverter, derive сохраняет единицы полей; публичные проверки различают geometry/scalar rest, отказ сохраняет run и весь coordinated update. Вектор завершает компоненты совместно, сохраняя premultiplied hue. Нужны итоговый consumer gate и CI | A7, A9 |
 | M-INTP-10 | Opt-in discrete values вынесены | Вне текущего scope |
-| M-CMP-1, M-CMP-2, M-CMP-4, M-CMP-5 | Keyframes/hold/группы на общем времени/stagger есть; indicators дают consumers, нужны lifecycle/render проверки | A7 |
+| M-CMP-1, M-CMP-2, M-CMP-4, M-CMP-5 | `cubic_keyframes_pass_through_keys` проверяет смешанные hold/jump/cubic/eased joins по независимым значениям и односторонним производным. `indicator_unmount_mid_frame_releases_controller` меняет signal из реального repaint-источника каждого смонтированного индикатора: reconciliation того же кадра снимает регистрацию, рисует один оставшийся arc и сохраняет его движение в следующем кадре. Это проверка callback-requested reconciliation, не синхронного unmount внутри обхода реестра | A7 |
 | M-CMP-3 | Repeat покрыт обычными тестами; completion/motion-policy проверить после core миграции | A1, A5 |
 | M-CMP-6 | Полная WAAPI timing model вынесена | Вне текущего scope |
 | M-CMP-7 | Решение удалить Compound ещё требует сверки финального surface: тип остаётся в baseline | A7 |

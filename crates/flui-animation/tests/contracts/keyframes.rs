@@ -639,6 +639,77 @@ fn custom_slope_seeds_the_next_cubic() {
     assert_close(cubic_midpoint_after(DeclaredFlat), 1.5, "declared flat end");
 }
 
+fn hold_and_jump_seed_zero_cubic_velocity() {
+    let held = Keyframes::builder(1.0, ms(2000))
+        .hold(ms(1000))
+        .cubic(2.0, ms(1000))
+        .build()
+        .expect("held track");
+    let jumped = Keyframes::builder(-4.0, ms(2000))
+        .to(-2.0, ms(1000), Linear)
+        .jump(1.0)
+        .cubic(2.0, ms(1000))
+        .build()
+        .expect("jumped track");
+    for (label, track) in [("hold", held), ("jump", jumped)] {
+        // Zero velocities at both ends give h01(1/4) = 5/32.
+        assert_close(track.value_at(ms(1250)), 1.0 + 5.0 / 32.0, label);
+        let (_, outgoing) = one_sided_slopes(&track, ms(1000), Duration::from_micros(10));
+        assert!(outgoing.abs() < 1e-6, "{label}: start velocity {outgoing}");
+    }
+}
+
+fn cubic_borrows_the_following_eased_velocity() {
+    // Square's incoming slope is zero. Its mirrored curve has incoming
+    // slope two, so a two-unit rise in one second starts at four units/s.
+    for (curve, velocity) in [
+        (flui_animation::ArcCurve::new(Square), 0.0),
+        (
+            flui_animation::ArcCurve::new(flui_animation::FlippedCurve::new(Square)),
+            4.0,
+        ),
+    ] {
+        let track = Keyframes::builder(0.0, ms(2000))
+            .cubic(1.0, ms(1000))
+            .to(3.0, ms(1000), curve)
+            .build()
+            .expect("mixed track");
+        // h01(1/2) = 1/2, h11(1/2) = -1/8, initial velocity zero.
+        assert_close(
+            track.value_at(ms(500)),
+            0.5 - velocity / 8.0,
+            "outgoing tangent",
+        );
+        let (left, right) = one_sided_slopes(&track, ms(1000), Duration::from_micros(10));
+        assert!(
+            (left - velocity).abs() < 1e-6,
+            "cubic velocity {left}, expected {velocity}"
+        );
+        assert!(
+            (right - velocity).abs() < 1e-6,
+            "eased velocity {right}, expected {velocity}"
+        );
+    }
+}
+
+fn cubic_before_hold_and_jump_has_zero_final_velocity() {
+    let held = Keyframes::builder(0.0, ms(2000))
+        .cubic(1.0, ms(1000))
+        .hold(ms(1000))
+        .build()
+        .expect("cubic then hold");
+    let jumped = Keyframes::builder(0.0, ms(2000))
+        .cubic(1.0, ms(1000))
+        .jump(3.0)
+        .build()
+        .expect("cubic then jump");
+    for (label, track) in [("before hold", held), ("before jump", jumped)] {
+        // Read before the join: the jump replaces the value at the join itself.
+        assert_close(track.value_at(ms(250)), 5.0 / 32.0, label);
+        assert_close(track.value_at(ms(500)), 0.5, label);
+    }
+}
+
 #[test]
 fn cubic_keyframes_pass_through_keys() {
     crate::run_table(&[
@@ -655,6 +726,18 @@ fn cubic_keyframes_pass_through_keys() {
         (
             "custom slope seeds the next cubic",
             custom_slope_seeds_the_next_cubic,
+        ),
+        (
+            "hold and jump seed zero cubic velocity",
+            hold_and_jump_seed_zero_cubic_velocity,
+        ),
+        (
+            "cubic borrows following eased velocity",
+            cubic_borrows_the_following_eased_velocity,
+        ),
+        (
+            "cubic before hold and jump",
+            cubic_before_hold_and_jump_has_zero_final_velocity,
         ),
     ]);
 }

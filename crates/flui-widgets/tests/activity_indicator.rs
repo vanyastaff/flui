@@ -11,7 +11,7 @@ use flui_animation::Vsync;
 use flui_painting::display_list::DrawOp;
 use flui_rendering::layer::Layer;
 use flui_testing::a11y::Role;
-use flui_view::ViewExt;
+use flui_view::{SignalWriteExt, ViewExt};
 use flui_widgets::{
     ActivityIndicator, Center, RefreshController, RefreshIndicator, Row, ScrollController,
     SizedBox, TickerMode, VsyncScope,
@@ -447,6 +447,107 @@ fn two_indicators_share_one_vsync() {
 
 #[test]
 fn indicator_unmount_mid_frame_releases_controller() {
+    fn first_source_requests_removal() {
+        indicator_callback_requests_removal(0);
+    }
+    fn second_source_requests_removal() {
+        indicator_callback_requests_removal(1);
+    }
+    crate::common::cases::run_cases(
+        "indicator retirement",
+        &[
+            ("first repaint source", first_source_requests_removal),
+            ("second repaint source", second_source_requests_removal),
+            (
+                "inherited registry replacement",
+                indicator_rebind_after_unmount,
+            ),
+        ],
+    );
+}
+
+#[derive(Clone)]
+struct VisibleIndicators(flui_view::Signal<usize>);
+
+impl flui_view::View for VisibleIndicators {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
+    }
+}
+
+impl flui_view::StatelessView for VisibleIndicators {
+    fn build(&self, ctx: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
+        two_indicators(self.0.get(ctx))
+    }
+}
+
+fn indicator_callback_requests_removal(source: usize) {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let vsync = Vsync::new();
+    let mut laid = lay_out_animated(SizedBox::shrink(), loose(200.0), vsync.clone());
+    let reactive = laid.with_build_owner_mut(|owner| owner.reactive().clone());
+    let count = reactive.signal(2usize);
+    laid.pump_widget(VsyncScope::new(vsync.clone(), VisibleIndicators(count)));
+    laid.pump_for(Duration::ZERO);
+    // The mounted painter's public repaint source is the indicator's real
+    // animation. Copy the handles before invoking any callbacks or pumping.
+    let animations = laid.pipeline_owner().with(|owner| {
+        owner
+            .render_tree()
+            .iter()
+            .filter_map(|(_, node)| {
+                node.downcast_render_object::<flui_objects::RenderCustomPaint>()
+                    .and_then(|paint| paint.painter())
+                    .and_then(|painter| painter.repaint())
+            })
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(animations.len(), 2);
+    let requested = Rc::new(Cell::new(false));
+    let callback = animations[source].add_listener(Rc::new({
+        let requested = requested.clone();
+        move || {
+            if !requested.replace(true) {
+                count
+                    .set(&reactive, 1)
+                    .expect("callback may update visibility");
+            }
+        }
+    }));
+    laid.pump_for(ms(300));
+    assert!(
+        requested.get(),
+        "removal originates in the indicator callback"
+    );
+    assert_eq!(
+        vsync.len(),
+        1,
+        "same-frame reconciliation retires the owner"
+    );
+    let (start, _) = only_arc(&laid);
+    assert_angle(
+        start,
+        expected_rotation(ms(300)),
+        "survivor paints this tick",
+    );
+    animations[source].remove_listener(callback);
+    laid.pump_for(ms(300));
+    let (start, _) = only_arc(&laid);
+    assert_angle(
+        start,
+        expected_rotation(ms(600)),
+        "survivor advances next frame",
+    );
+    laid.pump_widget(VsyncScope::new(vsync.clone(), SizedBox::shrink()));
+    assert!(
+        vsync.is_empty(),
+        "retained repaint handles do not retain registrations"
+    );
+}
+
+fn indicator_rebind_after_unmount() {
     let vsync = Vsync::new();
     let mut laid = lay_out_animated(
         VsyncScope::new(vsync.clone(), two_indicators(2)),

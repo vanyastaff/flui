@@ -50,8 +50,8 @@ NaN/±inf в любом аргументе; `mass ≤ 0`, `stiffness ≤ 0`, `da
 `tests/contracts/spring.rs`). Нулевое затухание отклоняется: незатухающая пружина никогда не покоится.
 
 **R2 (D-12).** Поля `SpringDescription` СИСТЕМА ДОЛЖНА держать приватными: значение вне допустимой
-области непредставимо. Тест: trybuild-фикстура `spring_description_literal` (compile-fail, в существующем
-trybuild-прогоне крейта или новом `[[test]]`, если его нет).
+области непредставимо. Проверка: compile-fail doctest `SpringDescription`, использующий
+актуальные поля `omega` и `zeta`; компиляция запрещает внешний struct literal.
 
 **R3.** КОГДА пружина задана через `(duration, bounce)` или `(response, damping_fraction)`, СИСТЕМА
 ДОЛЖНА давать `ω = 2π/d`, `ζ = 1 − b` при `b ≥ 0`, `ζ = 1/(1 + b)` при `b < 0`, `ζ = damping_fraction`;

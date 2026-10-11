@@ -207,6 +207,26 @@ fn damping_ratio_refusal_does_not_unwind() {
     assert!(simulation.x(0.1) > 0.0 && simulation.x(0.1) < 1.0);
     assert!(simulation.is_done(10.0));
 }
+
+fn all_spring_constructors_refuse_nonfinite_parameters() {
+    for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        for (mass, stiffness, damping, parameter) in [
+            (value, 100.0, 20.0, SimulationParameter::Mass),
+            (1.0, value, 20.0, SimulationParameter::Stiffness),
+            (1.0, 100.0, value, SimulationParameter::Damping),
+        ] {
+            assert_refused(SpringDescription::new(mass, stiffness, damping), parameter);
+        }
+        assert_refused(
+            SpringDescription::with_duration_and_bounce(Duration::from_millis(500), value),
+            SimulationParameter::Bounce,
+        );
+        assert_refused(
+            SpringDescription::with_response_and_damping(Duration::from_millis(300), value),
+            SimulationParameter::DampingFraction,
+        );
+    }
+}
 fn simulation_start_nan() {
     assert_refused(
         SpringSimulation::new(spring(10.0, 1.0), f64::NAN, 0.0, 0.0, Tolerance::DEFAULT),
@@ -264,6 +284,10 @@ fn spring_constructors_refuse_outside_the_admitted_domain() {
         (
             "damping ratio refusal does not unwind",
             damping_ratio_refusal_does_not_unwind,
+        ),
+        (
+            "all spring constructors refuse nonfinite parameters",
+            all_spring_constructors_refuse_nonfinite_parameters,
         ),
         ("simulation start nan", simulation_start_nan),
         ("simulation end infinite", simulation_end_infinite),

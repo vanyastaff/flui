@@ -1426,6 +1426,10 @@ fn backwards_raw_time_holds_the_timeline() {
             "repeated_raw_time_is_the_same_tick",
             repeated_raw_time_is_the_same_tick,
         ),
+        (
+            "panic_in_listener_keeps_the_clock_monotone",
+            panic_in_listener_keeps_the_clock_monotone,
+        ),
     ]);
 }
 
@@ -1433,12 +1437,14 @@ fn a_million_second_gap() {
     let mut clock = MotionClock::new();
     let gap = Duration::from_secs(1_000_000);
     assert_eq!(now_after(&mut clock, gap), gap);
+    finite_run_completes_once_after_gap(gap, PlaybackRate::NORMAL);
 }
 
 fn the_largest_raw_time() {
     let mut clock = MotionClock::new();
     clock.set_rate(rate(2.0));
     assert_eq!(now_after(&mut clock, Duration::MAX), Duration::MAX);
+    finite_run_completes_once_after_gap(Duration::MAX, rate(2.0));
 }
 
 fn an_enormous_rate() {
@@ -1453,6 +1459,116 @@ fn an_enormous_rate() {
         now_after(&mut clock, Duration::from_secs(2_000_000)),
         Duration::MAX
     );
+    finite_run_completes_once_after_gap(Duration::from_secs(1_000_000), rate(1e300));
+}
+
+fn finite_run_completes_once_after_gap(gap: Duration, playback: PlaybackRate) {
+    use flui_animation::{AnimationStatus, Vsync};
+    use std::{
+        cell::RefCell,
+        future::Future,
+        pin::Pin,
+        rc::Rc,
+        task::{Context, Poll, Waker},
+    };
+
+    let registry = Vsync::new();
+    let owner = AnimationController::builder(ms(1000)).build_on(Some(&registry));
+    let statuses = Rc::new(RefCell::new(Vec::new()));
+    let recorded = Rc::clone(&statuses);
+    let _subscription = owner.controller().subscribe_status(Rc::new(move |status| {
+        recorded.borrow_mut().push(status);
+    }));
+    let completions = Rc::new(RefCell::new(Vec::new()));
+    let observed = Rc::clone(&completions);
+    let mut run = owner.controller().forward().expect("finite run");
+    run.when_complete_or_cancel(move |outcome| {
+        observed.borrow_mut().push(outcome);
+    });
+    let mut clock = MotionClock::new();
+    clock.set_rate(playback);
+    registry.tick_all(&clock.frame(Duration::ZERO));
+    registry.tick_all(&clock.frame(gap));
+    assert_eq!(owner.controller().value(), 1.0);
+    assert!(!owner.controller().is_animating());
+    assert!(!registry.has_running(), "the settled run requests no frame");
+    assert_eq!(
+        Pin::new(&mut run).poll(&mut Context::from_waker(Waker::noop())),
+        Poll::Ready(Ok(()))
+    );
+    registry.tick_all(&clock.frame(gap));
+    registry.tick_all(&clock.frame(Duration::MAX));
+    assert_eq!(
+        *completions.borrow(),
+        [Ok(())],
+        "settlement is delivered once"
+    );
+    assert_eq!(
+        *statuses.borrow(),
+        [AnimationStatus::Forward, AnimationStatus::ForwardSettled]
+    );
+    assert!(!registry.has_running());
+}
+
+fn panic_in_listener_keeps_the_clock_monotone() {
+    use flui_animation::Vsync;
+    use flui_foundation::Listenable;
+    use std::{
+        cell::Cell,
+        panic::{AssertUnwindSafe, catch_unwind},
+        rc::Rc,
+    };
+
+    let registry = Vsync::new();
+    let first = AnimationController::builder(ms(1000)).build_on(Some(&registry));
+    let competing = AnimationController::builder(ms(1000)).build_on(Some(&registry));
+    let healthy = AnimationController::builder(ms(1000)).build_on(Some(&registry));
+    first.controller().forward().expect("first run");
+    competing.controller().forward().expect("competing run");
+    let healthy_run = healthy.controller().forward().expect("healthy run");
+    let mut clock = MotionClock::new();
+    registry.tick_all(&clock.frame(Duration::ZERO));
+    let first_listener = first
+        .controller()
+        .add_listener(Rc::new(|| panic!("first clock listener")));
+    let competing_listener = competing
+        .controller()
+        .add_listener(Rc::new(|| panic!("second clock listener")));
+    let deliveries = Rc::new(Cell::new(0));
+    let recorded = Rc::clone(&deliveries);
+    let _healthy_listener = healthy.controller().add_listener(Rc::new(move || {
+        recorded.set(recorded.get() + 1);
+    }));
+    let failure = catch_unwind(AssertUnwindSafe(|| {
+        registry.tick_all(&clock.frame(ms(250)));
+    }))
+    .expect_err("listener failure crosses the frame boundary");
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("first clock listener")
+    );
+    flui_foundation::panic::retain_opaque_payload(failure);
+    assert_eq!(
+        now_after(&mut clock, ms(100)),
+        ms(250),
+        "failure cannot rewind accepted time"
+    );
+    assert_eq!(
+        healthy.controller().value(),
+        0.25,
+        "healthy tail is delivered"
+    );
+    assert_eq!(deliveries.get(), 1);
+    // Remove the failing observers before verifying the next operation.
+    first.controller().remove_listener(first_listener);
+    competing.controller().remove_listener(competing_listener);
+    registry.tick_all(&clock.frame(ms(100)));
+    assert_eq!(healthy.controller().value(), 0.25);
+    let held_deliveries = deliveries.get();
+    registry.tick_all(&clock.frame(ms(500)));
+    assert_eq!(healthy.controller().value(), 0.5);
+    assert_eq!(deliveries.get(), held_deliveries + 1);
+    assert!(healthy_run.is_pending());
 }
 
 #[test]
