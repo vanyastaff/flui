@@ -51,7 +51,7 @@ stack-local link. Nesting does not grow a heap collection; the borrow checker
 prevents a scope or signal reference from escaping its synchronous delivery.
 
 Framework relays borrow this same context through `Listenable::add_observer`
-and `Animation::add_status_observer`. User listeners retain their ordinary
+and `Animation::subscribe_status_observer`. User listeners retain their ordinary
 callback signature. Both kinds share the channel's membership, ordering and
 retirement storage. Foundation channels, controllers and combinators override
 the relay seams so a chain of wrappers does not start a fresh recovery after
@@ -66,6 +66,15 @@ swaps admit queued value and status notifications with committed status
 membership; reentrant swaps append so the last committed parent's status is
 the last announced status.
 
+Driven-controller and typed-value teardown withdraws the seat and closes the
+kernel before retiring outgoing ownership. Registry captures, motion and exact
+target storage join the controller's committed delivery FIFO. If teardown runs
+inside a value listener, status listener, continuation or waiter, physical
+retirement waits until that enclosing round has captured its first failure.
+Opaque custody is then retained after a failure; healthy resources retire
+individually through the same borrowed recovery. This requires no ambient
+failure flag, and cleanup metadata does not allocate on a steady-state frame.
+
 Wrapper lifetime belongs to a shared owner allocation, independently of the
 temporary storage references a notification needs. Final owner destruction
 withdraws channel membership before parent detachments and capture retirement.
@@ -73,6 +82,19 @@ Reverse, curved and tween wrappers share the same parent-link owner. Switch
 dispatch borrows separate state storage, so a callback cannot accidentally
 extend the wrapper's owning lifetime. A last owner released by its own listener
 silences the rest of that round, including during an earlier parent failure.
+
+Pending scroll commands are owner-local. Replacement commits the incoming
+command and extracts outgoing ownership before invoking its curve's destructor.
+ScrollPosition's widget and viewport notifications borrow the enclosing
+command operation's RecoveryScope, so a retirement failure cannot erase
+accepted delivery or make observer retirement appear healthy. Each command
+admission owns a fresh pointer identity; the pending slot retains that identity
+after servicing, with no wrapping counter. A jump commits before calling its
+driver's cancellation hook and publishes pixels only if still current after
+that callback. It publishes before retiring the displaced pending command;
+a newer command admitted by that retirement remains authoritative. For a
+queued animation, retirement precedes the wake that services the latest command.
+Both paths complete accepted delivery before resuming their first failure.
 
 During a notification, outgoing callback ownership waits until the outermost
 round retires it. Snapshot and outgoing captures retire outside state borrows,
@@ -86,6 +108,16 @@ must own the returned callbacks until its enclosing recovery retires them.
 Animation uses these methods to commit value-listener removal and disposal
 immediately while placing outgoing custody into its existing delivery FIFO.
 Disposed controllers refuse later mutations and listener admission.
+
+Framework cleanup rounds also lend this custody to subscription cancellation.
+`StatusSubscription::cancel_with_recovery` withdraws its removal authority before
+calling the source. `ProxyAnimation::remove_listener_with_recovery` withdraws a
+value listener and retires its outgoing capture within the same borrowed scope;
+ordinary `Listenable::remove_listener` uses this path with its own outer recovery.
+Hero teardown uses these seams alongside `ChangeNotifier::take_listener` so one
+failed cancellation cannot skip overlay withdrawal, placeholder restoration or
+the remaining flights. Outgoing owners retire through that same context;
+cancellation and restoration complete before it resumes its first failure.
 
 Ticker start and stop also join that FIFO. The run and its completer are committed
 before a platform wake hook runs, and no controller borrow is held across the
@@ -111,6 +143,14 @@ The same family verifies last-owner release from both notification channels,
 healthy and failed tails, and the next parent notification.
 The tests fail when the production behavior is reverted.
 
+`proxy_listener_removal_joins_its_enclosing_cleanup` checks healthy capture
+reentry, removal after an earlier failure, competing capture destruction and
+fresh healthy cleanup. Hero's private `hero_flight_terminal_retirement` matrix
+injects subscription-removal failures into the production teardown path, checks
+both heroes and a peer flight are restored, and then admits and cancels a fresh
+flight. The private seam supplies a cancellation failure which the route-owned
+proxy's built-in status relay does not expose to an application.
+
 `a_steady_state_frame_allocates_nothing` also measures a running controller
 forwarding through five reverse wrappers to a live leaf listener. Every measured
 frame reaches the leaf and advances its value, with no allocations. The original
@@ -119,6 +159,20 @@ delivery code passes this case; a heap-spilling recovery stack fails it.
 The public hook read, registry query, stop/replace/dispose and last-controller
 drop tests pin ticker admission and lifetime. Callback failures do not change
 already-published completion or cancellation outcomes.
+
+`owner_retirement_joins_every_delivery_channel` checks last-owner release through
+all four delivery channels, healthy destruction, exceptional target retention
+and a fresh healthy owner after recovery. `owner_retirement_keeps_its_first_destructor_failure`
+checks competing motion and target destruction. `reentrant_owner_retirement_joins_registry_custody`
+checks the outgoing registry captures when a bound owner is released by its
+controller's value listener. Reverting the corresponding production cleanup
+hunks fails the public regression rows.
+
+The once-per-round settlement fence applies only to a still-eligible run. A
+stale settlement record is consumed without deferring cancellation or owned
+retirement behind it. `retired_owner_cleanup_passes_a_stale_settlement_fence`
+checks reentrant replacement followed by owner release; restoring the
+unconditional fence leaves healthy resources retained and fails the row.
 
 Containment starts once control returns from user code. A callback or aggregate
 whose destructors double-panic before reaching containment can still abort under

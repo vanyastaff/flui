@@ -80,8 +80,9 @@ impl flui_rendering::traits::RenderBox for PoisonedDescriptor {
             !self.armed.load(Ordering::Relaxed),
             "PoisonedDescriptor: armed, poisoning descriptor build on purpose",
         );
-        flui_rendering::traits::PaintEffects::NONE
-            .with_opacity(flui_rendering::traits::PaintOpacity::new(self.alpha))
+        flui_rendering::traits::PaintEffects::NONE.with_opacity(
+            flui_rendering::traits::PaintOpacity::new(f64::from(self.alpha) / 255.0),
+        )
     }
 }
 

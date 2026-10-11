@@ -12,11 +12,23 @@
 #[path = "support/child_process.rs"]
 mod child_process;
 
+#[path = "support/motion_trace.rs"]
+mod motion_trace;
+
+#[path = "contracts/animated_value.rs"]
+mod animated_value;
+
 #[path = "contracts/builder.rs"]
 mod builder;
 
 #[path = "contracts/controller_sources.rs"]
 mod controller_sources;
+
+#[path = "contracts/controller_commands.rs"]
+mod controller_commands;
+
+#[path = "contracts/vsync.rs"]
+mod vsync;
 
 #[path = "contracts/controller_robustness.rs"]
 mod controller_robustness;
@@ -29,6 +41,9 @@ mod ownership;
 
 #[path = "contracts/status_delivery.rs"]
 mod status_delivery;
+
+#[path = "contracts/status_subscription.rs"]
+mod status_subscription;
 
 #[path = "contracts/curve.rs"]
 mod curve;

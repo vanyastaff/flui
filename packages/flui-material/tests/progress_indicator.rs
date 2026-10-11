@@ -117,7 +117,7 @@ pub fn indeterminate_bars_follow_the_published_timing() {
     let mut now = 0;
     // A delay's plateau, a run's end, both bars at once, the second bar
     // alone, and the next cycle's start.
-    for t in [200, 250, 1000, 1100, 1250, 1600, 1750, 1950] {
+    for t in [1, 200, 250, 1000, 1100, 1250, 1600, 1749, 1750, 1751, 1950] {
         mounted.laid.pump_for(ms(t - now));
         now = t;
         assert_bars(&mounted, t % 1750);
@@ -241,4 +241,267 @@ pub fn announced_as_progress() {
     let tree = mounted.laid.a11y_tree().expect("semantics enabled");
     let node = tree.find_by_label("Loading").expect("the default label");
     assert_eq!(node.role(), Role::ProgressIndicator);
+}
+
+pub fn reduced_motion_keeps_visible_loading_without_continuation() {
+    use flui_sdk::animation::MotionPreference;
+    use flui_sdk::widgets::SizedBox;
+    fn live_ltr() {
+        policy_case(TextDirection::Ltr, false);
+    }
+    fn live_rtl() {
+        policy_case(TextDirection::Rtl, false);
+    }
+    fn initial_ltr() {
+        policy_case(TextDirection::Ltr, true);
+    }
+    fn initial_rtl() {
+        policy_case(TextDirection::Rtl, true);
+    }
+    fn policy_case(direction: TextDirection, initially_reduced: bool) {
+        let theme = ThemeData::light();
+        let vsync = Vsync::new();
+        let mut laid = lay_out_animated(
+            VsyncScope::new(vsync.clone(), SizedBox::shrink()),
+            tight(WIDTH, HEIGHT),
+            vsync.clone(),
+        );
+        laid.set_motion_preference(if initially_reduced {
+            MotionPreference::Reduce
+        } else {
+            MotionPreference::Full
+        });
+        laid.pump_widget(VsyncScope::new(
+            vsync.clone(),
+            Directionality::new(
+                direction,
+                Theme::new(theme.clone(), LinearProgressIndicator::new()),
+            ),
+        ));
+        laid.pump_for(Duration::ZERO);
+        if !initially_reduced {
+            laid.pump_for(ms(200));
+            laid.set_motion_preference(MotionPreference::Reduce);
+            laid.pump_for(Duration::ZERO);
+        }
+        let stopped = painted_bars(&laid, theme.color_scheme.primary);
+        assert!(
+            !stopped.is_empty(),
+            "static unknown-total loading stays visible"
+        );
+        assert_eq!(
+            stopped,
+            [(90.0, 150.0)],
+            "unknown work is centered, not a fraction filled"
+        );
+        laid.pump_for(ms(350));
+        assert_eq!(
+            painted_bars(&laid, theme.color_scheme.primary),
+            stopped,
+            "Reduce stops visible motion"
+        );
+        assert!(
+            !vsync.has_running(),
+            "a parked indicator needs no continuation"
+        );
+        laid.enable_semantics();
+        laid.tick();
+        let tree = laid.a11y_tree().expect("semantics enabled");
+        let node = tree
+            .find_by_label("Loading")
+            .expect("loading label retained");
+        assert_eq!(node.role(), Role::ProgressIndicator);
+        assert_eq!(node.value(), None, "unknown work has no percentage");
+        laid.set_motion_preference(MotionPreference::Full);
+        laid.pump_for(Duration::ZERO);
+        let resumed = painted_bars(&laid, theme.color_scheme.primary);
+        laid.pump_for(ms(200));
+        assert_ne!(
+            painted_bars(&laid, theme.color_scheme.primary),
+            resumed,
+            "Full resumes visible motion"
+        );
+        laid.pump_widget(VsyncScope::new(vsync.clone(), SizedBox::shrink()));
+        assert!(vsync.is_empty());
+    }
+    crate::common::run_cases(&[
+        ("live LTR", live_ltr),
+        ("live RTL", live_rtl),
+        ("initial LTR", initial_ltr),
+        ("initial RTL", initial_rtl),
+    ]);
+}
+
+pub fn initially_inactive_loading_stays_visible_without_a_percentage() {
+    use flui_sdk::animation::MotionPreference;
+    use flui_sdk::widgets::TickerMode;
+    fn disabled_mode() {
+        inactive_case(false);
+    }
+    fn detached_scope() {
+        inactive_case(true);
+    }
+    fn inactive_case(detached: bool) {
+        let vsync = Vsync::new();
+        let theme = ThemeData::light();
+        let indicator = Theme::new(theme.clone(), LinearProgressIndicator::new());
+        let root = if detached {
+            VsyncScope::detached(TickerMode::new(indicator))
+        } else {
+            VsyncScope::new(vsync.clone(), TickerMode::new(indicator).enabled(false))
+        };
+        let mut laid = lay_out_animated(root, tight(WIDTH, HEIGHT), vsync.clone());
+        laid.set_motion_preference(MotionPreference::Full);
+        laid.pump_for(Duration::ZERO);
+        let stopped = painted_bars(&laid, theme.color_scheme.primary);
+        assert!(
+            !stopped.is_empty(),
+            "initially inactive loading needs visible busy feedback"
+        );
+        assert_eq!(stopped, [(90.0, 150.0)]);
+        laid.pump_for(ms(500));
+        assert_eq!(painted_bars(&laid, theme.color_scheme.primary), stopped);
+        laid.enable_semantics();
+        laid.tick();
+        let tree = laid.a11y_tree().expect("semantics enabled");
+        let node = tree
+            .find_by_label("Loading")
+            .expect("loading label retained");
+        assert_eq!(node.role(), Role::ProgressIndicator);
+        assert_eq!(node.value(), None);
+        laid.pump_widget(VsyncScope::new(
+            vsync.clone(),
+            TickerMode::new(Theme::new(theme.clone(), LinearProgressIndicator::new())),
+        ));
+        laid.pump_for(Duration::ZERO);
+        let resumed = painted_bars(&laid, theme.color_scheme.primary);
+        laid.pump_for(ms(200));
+        assert_ne!(
+            painted_bars(&laid, theme.color_scheme.primary),
+            resumed,
+            "binding or enabling the retained indicator restores motion"
+        );
+        laid.pump_widget(VsyncScope::new(
+            vsync.clone(),
+            flui_sdk::widgets::SizedBox::shrink(),
+        ));
+        assert!(vsync.is_empty());
+    }
+    crate::common::run_cases(&[
+        ("disabled mode", disabled_mode),
+        ("detached scope", detached_scope),
+    ]);
+}
+
+pub fn nested_pause_and_policy_changes_retain_visible_loading() {
+    use flui_sdk::animation::MotionPreference;
+    use flui_sdk::widgets::{SizedBox, TickerMode};
+    let vsync = Vsync::new();
+    let theme = ThemeData::light();
+    let tree = |registry: &Vsync, enabled| {
+        VsyncScope::new(
+            registry.clone(),
+            TickerMode::new(TickerMode::new(Theme::new(
+                theme.clone(),
+                LinearProgressIndicator::new(),
+            )))
+            .enabled(enabled),
+        )
+    };
+    let mut laid = lay_out_animated(tree(&vsync, false), tight(WIDTH, HEIGHT), vsync.clone());
+    laid.set_motion_preference(MotionPreference::Full);
+    laid.pump_for(Duration::ZERO);
+    let stopped = painted_bars(&laid, theme.color_scheme.primary);
+    assert!(
+        !stopped.is_empty(),
+        "enabled child cannot override a disabled ancestor"
+    );
+    assert_eq!(stopped, [(90.0, 150.0)]);
+    laid.pump_for(ms(500));
+    assert_eq!(painted_bars(&laid, theme.color_scheme.primary), stopped);
+    laid.set_motion_preference(MotionPreference::Reduce);
+    laid.pump_for(Duration::ZERO);
+    laid.set_motion_preference(MotionPreference::Reduce);
+    laid.pump_for(ms(350));
+    assert_eq!(painted_bars(&laid, theme.color_scheme.primary), stopped);
+    let next = Vsync::new();
+    laid.pump_widget(tree(&next, false));
+    laid.adopt_vsync(next.clone())
+        .expect("replacement registry remains admissible");
+    laid.pump_widget(tree(&next, true));
+    laid.pump_for(ms(350));
+    assert_eq!(
+        painted_bars(&laid, theme.color_scheme.primary),
+        stopped,
+        "resuming the configured mode does not override Reduce"
+    );
+    assert!(!next.has_running());
+    laid.set_motion_preference(MotionPreference::Full);
+    laid.pump_for(Duration::ZERO);
+    let resumed = painted_bars(&laid, theme.color_scheme.primary);
+    laid.pump_for(ms(200));
+    assert_ne!(painted_bars(&laid, theme.color_scheme.primary), resumed);
+    laid.pump_widget(tree(&next, false));
+    assert_eq!(
+        painted_bars(&laid, theme.color_scheme.primary),
+        stopped,
+        "live pause replaces the animated painter immediately"
+    );
+    laid.pump_widget(VsyncScope::new(next.clone(), SizedBox::shrink()));
+    assert!(!next.has_running());
+    assert!(!vsync.has_running());
+}
+
+pub fn reduced_motion_determinate_switches_keep_their_meaning() {
+    use flui_sdk::animation::MotionPreference;
+    fn ltr() {
+        switch_case(TextDirection::Ltr);
+    }
+    fn rtl() {
+        switch_case(TextDirection::Rtl);
+    }
+    fn switch_case(direction: TextDirection) {
+        let mut mounted = mount_in(direction, LinearProgressIndicator::new());
+        mounted.laid.set_motion_preference(MotionPreference::Reduce);
+        mounted.laid.pump_for(Duration::ZERO);
+        let unknown = painted_bars(&mounted.laid, mounted.primary);
+        assert_eq!(unknown, [(90.0, 150.0)]);
+        mounted.laid.pump_widget(VsyncScope::new(
+            mounted.vsync.clone(),
+            Directionality::new(
+                direction,
+                Theme::new(
+                    ThemeData::light(),
+                    LinearProgressIndicator::new().value(Some(0.25)),
+                ),
+            ),
+        ));
+        let expected = if direction == TextDirection::Ltr {
+            (0.0, 60.0)
+        } else {
+            (180.0, 240.0)
+        };
+        assert_eq!(painted_bars(&mounted.laid, mounted.primary), [expected]);
+        assert!(mounted.vsync.is_empty());
+        mounted.laid.enable_semantics();
+        mounted.laid.tick();
+        let tree = mounted.laid.a11y_tree().expect("semantics enabled");
+        assert_eq!(
+            tree.find_by_label("Loading").expect("label").value(),
+            Some("25%")
+        );
+        mounted.laid.pump_widget(VsyncScope::new(
+            mounted.vsync.clone(),
+            Directionality::new(
+                direction,
+                Theme::new(ThemeData::light(), LinearProgressIndicator::new()),
+            ),
+        ));
+        mounted.laid.pump_for(ms(500));
+        assert_eq!(painted_bars(&mounted.laid, mounted.primary), unknown);
+        assert!(!mounted.vsync.has_running());
+        let tree = mounted.laid.a11y_tree().expect("semantics enabled");
+        assert_eq!(tree.find_by_label("Loading").expect("label").value(), None);
+    }
+    crate::common::run_cases(&[("LTR", ltr), ("RTL", rtl)]);
 }

@@ -53,6 +53,32 @@ const ENTRY: Duration = Duration::from_millis(250);
 /// The per-pump virtual-time step.
 const FRAME: Duration = Duration::from_millis(16);
 
+pub fn snack_bar_keeps_its_display_duration_under_reduced_motion() {
+    let vsync = Vsync::new();
+    let (mut laid, handle) =
+        mount_with_scaffolds(&vsync, vec![Scaffold::new().body(body_marker())]);
+    laid.set_motion_preference(flui_sdk::animation::MotionPreference::Reduce);
+    laid.pump_for(FRAME);
+    let closed = Rc::new(RefCell::new(Vec::new()));
+    let observed = Rc::clone(&closed);
+    handle
+        .show_snack_bar(SnackBar::new(Text::new("Saved")).duration(Duration::from_millis(800)))
+        .on_closed(move |_cx, reason| observed.borrow_mut().push(reason));
+    pump_ms(&mut laid, 400);
+    assert_eq!(
+        snack_bar_material_count(&laid),
+        1,
+        "the real mounted bar remains visible during its display interval"
+    );
+    assert!(closed.borrow().is_empty());
+    pump_ms(&mut laid, 500);
+    assert_eq!(snack_bar_material_count(&laid), 0);
+    assert_eq!(
+        &*closed.borrow(),
+        &[flui_material::SnackBarClosedReason::Timeout]
+    );
+}
+
 pub fn snack_bar_display_timer_pauses_while_hovered() {
     let vsync = Vsync::new();
     let (mut laid, handle) =

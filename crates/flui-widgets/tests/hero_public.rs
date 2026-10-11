@@ -19,6 +19,7 @@
 //! of throwing.
 
 use std::time::Duration;
+use std::{cell::Cell, rc::Rc, sync::Arc};
 
 use crate::common::{LaidOut, lay_out_animated, tight};
 use flui_animation::Vsync;
@@ -108,6 +109,252 @@ pub(crate) fn a_hero_push_flight_runs_and_settles() {
     assert_eq!(max, 1, "exactly one shuttle flew");
     assert_eq!(end, 0, "and it landed — no shuttle remains");
     assert_eq!(navigator.route_ids().len(), 2, "the push completed");
+}
+
+pub(crate) fn replacing_the_hero_observer_inside_its_builder_cancels_the_flight() {
+    for divert in [false, true] {
+        let vsync = Vsync::new();
+        let navigator = seeded();
+        let mut laid = lay_out_animated(app(&vsync, &navigator), tight(400.0, 400.0), vsync);
+        let owner = laid.pipeline_owner();
+        if divert {
+            let _push = laid.enter_owner_scope(|| navigator.push(hero_page()));
+            laid.pump_for(FRAME);
+            laid.pump_for(FRAME);
+            assert_eq!(shuttles(&owner), 1, "the old flight is already airborne");
+        }
+        let replacement = HeroController::new();
+        let replaced = Rc::new(Cell::new(false));
+        let taps = Rc::new(Cell::new(0));
+        let route = PageRoute::<i32>::new({
+            let navigator = navigator.clone();
+            let replacement = Arc::clone(&replacement);
+            let replaced = Rc::clone(&replaced);
+            let taps = Rc::clone(&taps);
+            move |_ctx, _primary, _secondary| {
+                let navigator = navigator.clone();
+                let replacement = Arc::clone(&replacement);
+                let replaced = Rc::clone(&replaced);
+                let taps = Rc::clone(&taps);
+                Center::new()
+                    .child(
+                        Hero::new(
+                            ValueKey::new("shared"),
+                            GestureDetector::new()
+                                .behavior(flui_widgets::HitTestBehavior::Opaque)
+                                .on_tap(move |_| taps.set(taps.get() + 1))
+                                .child(SizedBox::new(60.0, 45.0)),
+                        )
+                        .flight_shuttle_builder(
+                            move |_animation, _direction, _from, to| {
+                                if !replaced.replace(true) {
+                                    navigator.add_observer(replacement.clone());
+                                }
+                                to.clone()
+                            },
+                        ),
+                    )
+                    .into_view()
+                    .boxed()
+            }
+        })
+        .transition_duration(TRANSITION);
+
+        let _push = laid.enter_owner_scope(|| navigator.push(route));
+        laid.pump_for(FRAME);
+        assert!(
+            replaced.get(),
+            "the real shuttle builder replaced its observer"
+        );
+        laid.pump_for(FRAME);
+        assert_eq!(
+            shuttles(&owner),
+            0,
+            "a detached observer cannot publish the flight its builder cancelled"
+        );
+        laid.dispatch_pointer_down(200.0, 200.0);
+        laid.dispatch_pointer_up(200.0, 200.0);
+        laid.pump_for(FRAME);
+        assert_eq!(
+            taps.get(),
+            1,
+            "cancellation restores the new destination child"
+        );
+
+        let _next = laid.enter_owner_scope(|| navigator.push(hero_page()));
+        let (max, end) = run(&mut laid, &owner, SETTLE);
+        assert_eq!(max, 1, "the replacement controller flies one fresh shuttle");
+        assert_eq!(end, 0, "the replacement flight lands");
+    }
+}
+
+pub(crate) fn replacing_the_hero_observer_cancels_queued_measurement() {
+    let vsync = Vsync::new();
+    let navigator = seeded();
+    let mut laid = lay_out_animated(app(&vsync, &navigator), tight(400.0, 400.0), vsync);
+    let owner = laid.pipeline_owner();
+    let _push = laid.enter_owner_scope(|| navigator.push(hero_page()));
+    laid.enter_owner_scope(|| navigator.add_observer(HeroController::new()));
+    laid.pump_for(FRAME);
+    laid.pump_for(FRAME);
+    assert_eq!(
+        shuttles(&owner),
+        0,
+        "cancelled measurement cannot launch a flight"
+    );
+    let _next = laid.enter_owner_scope(|| navigator.push(hero_page()));
+    let (max, end) = run(&mut laid, &owner, SETTLE);
+    assert_eq!(max, 1, "the new observer admits a fresh flight");
+    assert_eq!(end, 0);
+}
+
+pub(crate) fn a_failed_hero_builder_restores_its_child_and_allows_a_fresh_flight() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    for divert in [false, true] {
+        let vsync = Vsync::new();
+        let navigator = seeded();
+        let mut laid = lay_out_animated(app(&vsync, &navigator), tight(400.0, 400.0), vsync);
+        let owner = laid.pipeline_owner();
+        if divert {
+            let _push = laid.enter_owner_scope(|| navigator.push(hero_page()));
+            laid.pump_for(FRAME);
+            laid.pump_for(FRAME);
+            assert_eq!(shuttles(&owner), 1);
+        }
+        let fail_once = Rc::new(Cell::new(true));
+        let taps = Rc::new(Cell::new(0));
+        let page = PageRoute::<i32>::new({
+            let fail_once = Rc::clone(&fail_once);
+            let taps = Rc::clone(&taps);
+            move |_ctx, _primary, _secondary| {
+                let taps = Rc::clone(&taps);
+                let fail_once = Rc::clone(&fail_once);
+                Center::new()
+                    .child(
+                        Hero::new(
+                            ValueKey::new("shared"),
+                            GestureDetector::new()
+                                .behavior(flui_widgets::HitTestBehavior::Opaque)
+                                .on_tap(move |_| taps.set(taps.get() + 1))
+                                .child(SizedBox::new(60.0, 45.0)),
+                        )
+                        .flight_shuttle_builder(
+                            move |_animation, _direction, _from, to| {
+                                assert!(!fail_once.replace(false), "authored Hero builder failure");
+                                to.clone()
+                            },
+                        ),
+                    )
+                    .into_view()
+                    .boxed()
+            }
+        })
+        .transition_duration(TRANSITION);
+        let _push = laid.enter_owner_scope(|| navigator.push(page));
+        let failure = catch_unwind(AssertUnwindSafe(|| laid.pump_for(FRAME)))
+            .expect_err("the authored builder failure propagates");
+        assert_eq!(
+            failure.downcast_ref::<&str>().copied(),
+            Some("authored Hero builder failure"),
+        );
+        laid.pump_for(FRAME);
+        assert_eq!(shuttles(&owner), 0, "failed construction leaves no shuttle");
+        laid.dispatch_pointer_down(200.0, 200.0);
+        laid.dispatch_pointer_up(200.0, 200.0);
+        laid.pump_for(FRAME);
+        assert_eq!(
+            taps.get(),
+            1,
+            "the destination child is restored for hit testing"
+        );
+        let _next = laid.enter_owner_scope(|| navigator.push(hero_page()));
+        let (max, end) = run(&mut laid, &owner, SETTLE);
+        assert_eq!(
+            max, 1,
+            "the same controller admits another flight after failure"
+        );
+        assert_eq!(end, 0);
+    }
+}
+
+pub(crate) fn hero_builder_cancellation_and_failure_account_for_the_matched_tail() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    for behavior in ["cancel", "one_failure", "competing"] {
+        let replace = behavior == "cancel";
+        let source = || {
+            PageRoute::<i32>::new(|_ctx, _primary, _secondary| {
+                Column::new((
+                    Hero::new(ValueKey::new("one"), SizedBox::new(30.0, 20.0)),
+                    Hero::new(ValueKey::new("two"), SizedBox::new(30.0, 20.0)),
+                ))
+                .into_view()
+                .boxed()
+            })
+            .transition_duration(TRANSITION)
+        };
+        let vsync = Vsync::new();
+        let navigator = NavigatorHandle::new();
+        navigator.seed_initial(source());
+        let mut laid = lay_out_animated(app(&vsync, &navigator), tight(400.0, 400.0), vsync);
+        let owner = laid.pipeline_owner();
+        let calls = Rc::new(Cell::new(0));
+        let page = PageRoute::<i32>::new({
+            let navigator = navigator.clone();
+            let calls = Rc::clone(&calls);
+            move |_ctx, _primary, _secondary| {
+                let hero = |name: &'static str| {
+                    let navigator = navigator.clone();
+                    let calls = Rc::clone(&calls);
+                    Hero::new(ValueKey::new(name), SizedBox::new(60.0, 45.0))
+                        .flight_shuttle_builder(move |_animation, _direction, _from, to| {
+                            let previous = calls.get();
+                            calls.set(previous + 1);
+                            if previous == 0 {
+                                if replace {
+                                    navigator.add_observer(HeroController::new());
+                                } else {
+                                    panic!("first matched Hero builder failure");
+                                }
+                            } else if previous == 1 && behavior == "competing" {
+                                panic!("second matched Hero builder failure");
+                            }
+                            to.clone()
+                        })
+                };
+                Column::new((hero("one"), hero("two"))).into_view().boxed()
+            }
+        })
+        .transition_duration(TRANSITION);
+        let _push = laid.enter_owner_scope(|| navigator.push(page));
+        let result = catch_unwind(AssertUnwindSafe(|| laid.pump_for(FRAME)));
+        if replace {
+            result.expect("observer replacement is a healthy cancellation");
+        } else {
+            let failure = result.expect_err("the first builder failure propagates after the tail");
+            assert_eq!(
+                failure.downcast_ref::<&str>().copied(),
+                Some("first matched Hero builder failure")
+            );
+        }
+        laid.pump_for(FRAME);
+        assert_eq!(
+            calls.get(),
+            if replace { 1 } else { 2 },
+            "cancellation refuses the tail; failure delivers its healthy peer"
+        );
+        assert_eq!(
+            shuttles(&owner),
+            usize::from(behavior == "one_failure"),
+            "only admitted healthy work flies"
+        );
+        run(&mut laid, &owner, SETTLE);
+        let _next = laid.enter_owner_scope(|| navigator.push(source()));
+        let (max, end) = run(&mut laid, &owner, SETTLE);
+        assert_eq!(max, 2, "both tags remain usable after recovery");
+        assert_eq!(end, 0);
+    }
 }
 
 // ============================================================================

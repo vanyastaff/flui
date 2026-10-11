@@ -20,7 +20,7 @@ mod host_window;
 // The owner-thread capability (ADR-0039): `OwnerPlatform`, `PlatformProxy`,
 // `PendingWindow`, and their typed errors. `pub(crate)` (not private): the
 // `pub(crate)` seams inside it — `OwnerHooks`, `ProxyTransport`,
-// `DirectOwnerHooks`, `ClosedTransport` — are wired up by every backend
+// `DirectOwnerHooks` — are wired up by the direct backends
 // module, not just this crate's own `traits` tree.
 pub(crate) mod owner;
 mod platform;

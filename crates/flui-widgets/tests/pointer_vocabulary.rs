@@ -435,7 +435,7 @@ fn viewer_focal_inertia_uses_profile(native: bool) {
         ),
         tight(200.0, 200.0),
     );
-    laid.adopt_vsync(vsync);
+    laid.adopt_vsync(vsync).expect("clock admission");
     for attempt in 0..3 {
         let info = PointerInfo::new(
             PointerId::try_from(100_u64 + attempt).expect("contact identity"),
@@ -569,7 +569,7 @@ pub(crate) fn viewer_focal_fling_advances_then_stops_on_new_input() {
         ),
         tight(200.0, 200.0),
     );
-    laid.adopt_vsync(vsync);
+    laid.adopt_vsync(vsync).expect("clock admission");
     let source = PointerInfo::new(
         PointerId::try_from(81_u64).expect("contact"),
         PointerKind::Touch,
@@ -658,7 +658,7 @@ fn viewer_focal_fling_without_clock_preserves_the_scene() {
             }
         };
         let mut laid = lay_out(tree(initially_bound), tight(200.0, 200.0));
-        laid.adopt_vsync(vsync.clone());
+        laid.adopt_vsync(vsync.clone()).expect("clock admission");
         let post_frame = laid.post_frame_handle();
         let packet = |millis: u64, phase| {
             PointerEvent::PanZoom(PanZoomEvent::new(
@@ -766,7 +766,7 @@ pub(crate) fn viewer_focal_fling_rebuild_preserves_or_retires_geometry() {
             )
         };
         let mut laid = lay_out(tree(200.0, 1000.0), crate::common::loose(300.0));
-        laid.adopt_vsync(vsync.clone());
+        laid.adopt_vsync(vsync.clone()).expect("clock admission");
         let packet = |millis: u64, phase| {
             PointerEvent::PanZoom(PanZoomEvent::new(
                 mouse(),

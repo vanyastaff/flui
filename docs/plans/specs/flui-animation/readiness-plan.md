@@ -64,7 +64,7 @@
 | A4 | C⁰/C¹ retarget в implicit-виджетах | A1–A3, T4 | common implicit machinery + controller run/velocity | Отображаемая позиция и производная при target/curve/duration update; same target без restart; ранний reverse; .spring() consumer; старый путь удалён |
 | A5 | Системная и app motion policy | A1–A3; merged SystemPreferences producer | platform owner → realm projection → animation/widgets | Первый кадр и live update; User/Always/Never; Preserve; конечный scale; completion ровно раз; два realm независимы |
 | A6 | Согласованная геометрия paint/hit/semantics и жест→settle | A1/A2; motion часть A4 | objects/rendering + Drawer/Dismissible | Loose/tight/RTL/vertical, resize/cancel; экранная скорость; semantics bounds; hit coordinate snapshot; GPU readback и build count |
-| A7 | Замкнуть composition и public surface | A2/A4/A5 | animation/macros/sdk/packages | Каждый сохраняемый pub имеет caller или явное принятое решение; cubic-track consumer; derive nested; indicators Preserve; delete/migrate старые экспорты |
+| A7 | Замкнуть composition и public surface | A2/A4/A5 | animation/macros/sdk/packages | Каждый сохраняемый pub имеет caller или явное принятое решение; cubic-track consumer; derive nested; indicators Normal и видимая статичная загрузка при Reduce/запрете TickerMode/отсутствии привязки (ADR-0192); delete/migrate старые экспорты |
 | A8 | Измерение готового пути и актуальные docs | A1–A7 | benches, perf scenarios, README/GUIDE/PATTERNS/PERFORMANCE | Same-host baseline vs final, active/idle N, allocation bound, актуальные примеры и усиленные lints |
 | A9 | Выпускная проверка | A8 | whole consumer graph + CI/native owners | Ниже приведённый release checklist, SHA и evidence на каждую строку |
 
@@ -191,6 +191,11 @@ CompoundAnimation предписано удалить, а не оставить 
 
 Эти пункты оформлены как открытые решения, а не скрытое сокращение scope. Остальные задачи
 не обязаны ждать решения о precision цвета или sampled easing.
+
+Владелец согласовал 2026-10-11 завершение и слияние проверенных изменений без ожидания
+оставшихся решений и полного прохода по acceptance-матрице. Неподтверждённые строки
+остаются открытыми для следующей работы; это не отменяет их требований и не означает
+полную готовность всей спецификации.
 
 ## Release checklist
 

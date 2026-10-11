@@ -17,7 +17,7 @@
 //!    republishes `maintain_state`. It does **not** rebuild the navigator.
 //!
 //! ADR-0021 added the fourth: **`offstage` swaps the animation proxies** to
-//! always-complete / always-dismissed, so an offstage route's builders lay it out
+//! fixed normalized end / fixed normalized start, so an offstage route's builders lay it out
 //! at its *final* position. That is what lets `HeroController` read a flight's
 //! destination one frame early.
 //!
@@ -80,7 +80,7 @@ use super::pop_scope::{PopEntryRegistry, PopEntryScope};
 use super::route::{PushCompletion, Route, RouteId, RouteSettings};
 use super::subtree::{RouteSubtreeAnchor, RouteSubtreeCell};
 use super::transition_route::{
-    TransitionHandle, TransitionRoute, always_complete, always_dismissed,
+    TransitionHandle, TransitionRoute, unit_end_animation, unit_start_animation,
 };
 use flui_interaction::routing::FocusScopeNode;
 
@@ -148,14 +148,14 @@ struct ModalInner {
     ///
     /// **This — not the controller — is what the page and transitions builders
     /// see.** Its parent is the `TransitionRoute` controller normally, and an
-    /// always-complete animation while the route is [`offstage`](Self::offstage).
+    /// fixed normalized end animation while the route is [`offstage`](Self::offstage).
     /// That swap is the entire reason an offstage route lays out at its
     /// *final* geometry rather than wherever its entrance transition happens to be:
     /// `HeroController` measures the destination one frame before the flight.
     primary: super::lifecycle::Terminal<Rc<ProxyAnimation<f64>>>,
     /// The secondary animation proxy.
     ///
-    /// Parent is the `TransitionRoute` secondary train, or an always-dismissed
+    /// Parent is the `TransitionRoute` secondary train, or an fixed normalized start
     /// animation while offstage — an offstage route must not be pushed aside by
     /// whatever sits above it either.
     secondary: super::lifecycle::Terminal<Rc<ProxyAnimation<f64>>>,
@@ -322,15 +322,15 @@ impl ModalInner {
         let transition = self.transition.get();
 
         self.primary.set_parent(if offstage {
-            always_complete()
+            unit_end_animation()
         } else {
-            transition.map_or_else(always_dismissed, TransitionHandle::primary_animation)
+            transition.map_or_else(unit_start_animation, TransitionHandle::primary_animation)
         });
 
         self.secondary.set_parent(if offstage {
-            always_dismissed()
+            unit_start_animation()
         } else {
-            transition.map_or_else(always_dismissed, |transition| {
+            transition.map_or_else(unit_start_animation, |transition| {
                 transition.secondary_animation() as std::rc::Rc<dyn Animation<f64>>
             })
         });
@@ -385,7 +385,7 @@ struct ModalScope {
     transitions: super::lifecycle::Terminal<RouteTransitionsBuilder>,
     transition: super::lifecycle::Terminal<TransitionHandle>,
     /// The route's animation — the **proxy**, so an offstage route's builders see
-    /// an always-complete animation.
+    /// an fixed normalized end animation.
     primary: super::lifecycle::Terminal<Rc<ProxyAnimation<f64>>>,
     /// The route's secondary animation proxy.
     secondary: super::lifecycle::Terminal<Rc<ProxyAnimation<f64>>>,
@@ -559,13 +559,13 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
             transition: OnceLock::new(),
             relay: super::lifecycle::Terminal::new(Rc::new(ChangeNotifier::new())),
             relay_subscriptions: Mutex::new(Vec::new()),
-            // Both rest at an always-dismissed animation until `install()` points
+            // Both rest at an fixed normalized start animation until `install()` points
             // them at the controller — an unpushed route has no animation to proxy.
             primary: super::lifecycle::Terminal::new(Rc::new(ProxyAnimation::new(
-                always_dismissed(),
+                unit_start_animation(),
             ))),
             secondary: super::lifecycle::Terminal::new(Rc::new(ProxyAnimation::new(
-                always_dismissed(),
+                unit_start_animation(),
             ))),
             subtree: RouteSubtreeCell::new(),
             heroes: super::lifecycle::Terminal::new(HeroRegistry::new()),
@@ -775,8 +775,8 @@ impl ModalHandle {
         if self.inner.offstage.swap(offstage, Ordering::Relaxed) == offstage {
             return; // Unchanged.
         }
-        // Offstage points the primary proxy at an always-complete animation and the
-        // secondary at an always-dismissed one; back onstage restores the real
+        // Offstage points the primary proxy at an fixed normalized end animation and the
+        // secondary at an fixed normalized start one; back onstage restores the real
         // ones. This runs before `changed_internal_state`, so the rebuild it
         // schedules already sees the swapped animations.
         self.inner.sync_animation_proxies();

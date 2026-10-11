@@ -268,6 +268,170 @@ fn leaf(_ctx: &dyn BuildContext) -> BoxedView {
     SizedBox::new(10.0, 10.0).into_view().boxed()
 }
 
+/// An application finishes its authored page entrance without canceling the
+/// navigator's original completion future or leaving the old page alive.
+pub(crate) fn explicit_finish_commits_an_authored_page_and_retires_the_old_route() {
+    use std::cell::Cell;
+    use std::time::Duration;
+
+    use flui_animation::{Animation, AnimationController, AnimationError, DrivenController, Vsync};
+    use flui_painting::{display_list::DrawOp, styling::Color};
+    use flui_rendering::layer::Layer;
+    use flui_widgets::{AnimationRunFuture, FadeTransition, PushCompletion};
+
+    struct AuthoredPage {
+        settings: RouteSettings,
+        builder: RouteContentBuilder,
+        owner: Option<DrivenController>,
+        run: Rc<RefCell<Option<AnimationRunFuture>>>,
+        disposals: Rc<Cell<usize>>,
+    }
+
+    impl Route for AuthoredPage {
+        type Output = ();
+
+        fn settings(&self) -> &RouteSettings {
+            &self.settings
+        }
+
+        fn did_push(&mut self) -> PushCompletion {
+            let Some(owner) = &self.owner else {
+                return PushCompletion::Immediate;
+            };
+            let run = owner.controller().forward().expect("page entrance starts");
+            *self.run.borrow_mut() = Some(run.clone());
+            PushCompletion::Animating(run)
+        }
+
+        fn dispose(&mut self) {
+            drop(self.owner.take());
+            self.disposals.set(self.disposals.get() + 1);
+        }
+    }
+
+    impl NavigatorRoute for AuthoredPage {
+        fn content_builder(&self) -> RouteContentBuilder {
+            Rc::clone(&self.builder)
+        }
+    }
+
+    fn scene_alpha(app: &crate::common::LaidOut) -> f64 {
+        let scene = app.layer_tree().expect("page scene submitted");
+        let mut alpha = 1.0;
+        let mut rectangles = 0;
+        for (_, node) in scene.iter() {
+            match node.layer() {
+                Layer::Opacity(layer) => alpha *= layer.alpha(),
+                Layer::Picture(picture) => {
+                    for command in picture.picture() {
+                        if let DrawOp::Rect { rect, paint } = &command.op
+                            && paint.color == Color::RED
+                        {
+                            assert!(rect.width() > 0.0 && rect.height() > 0.0);
+                            rectangles += 1;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(rectangles, 1, "authored page actually paints");
+        alpha
+    }
+
+    let vsync = Vsync::new();
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
+    let controller = owner.controller().clone();
+    let original = Rc::new(RefCell::new(None));
+    let old_disposals = Rc::new(Cell::new(0));
+    let new_disposals = Rc::new(Cell::new(0));
+    let handle = NavigatorHandle::new();
+    handle.seed_initial(AuthoredPage {
+        settings: RouteSettings::named("/old"),
+        builder: Rc::new(leaf),
+        owner: None,
+        run: Rc::clone(&original),
+        disposals: Rc::clone(&old_disposals),
+    });
+    let mut app = crate::common::lay_out_animated(
+        Navigator::new(handle.clone()),
+        loose(400.0),
+        vsync.clone(),
+    );
+    let opacity: Rc<dyn Animation<f64>> = Rc::new(controller.clone());
+    let _popped = handle.push_and_remove_until(
+        AuthoredPage {
+            settings: RouteSettings::named("/new"),
+            builder: Rc::new(move |_| {
+                FadeTransition::new(
+                    Rc::clone(&opacity),
+                    ColoredBox::new(Color::RED).child(SizedBox::new(80.0, 40.0)),
+                )
+                .into_view()
+                .boxed()
+            }),
+            owner: Some(owner),
+            run: Rc::clone(&original),
+            disposals: Rc::clone(&new_disposals),
+        },
+        |_| false,
+    );
+    app.tick();
+    app.pump_for(Duration::from_millis(400));
+    let fade = app.find_by_render_type("RenderAnimatedOpacity");
+    let interior = app.opacity(fade);
+    assert!(
+        interior > 0.0 && interior < 1.0,
+        "entrance is painted midway"
+    );
+    assert_eq!(scene_alpha(&app), interior);
+    assert_eq!(old_disposals.get(), 0, "old page waits for the entrance");
+    let run = original
+        .borrow()
+        .as_ref()
+        .expect("original push run")
+        .clone();
+    assert!(run.is_pending());
+    let outcomes = Rc::new(Cell::new(0));
+    run.when_complete_or_cancel({
+        let outcomes = Rc::clone(&outcomes);
+        move |outcome| {
+            assert!(
+                outcome.is_ok(),
+                "explicit finish succeeds rather than cancels"
+            );
+            outcomes.set(outcomes.get() + 1);
+        }
+    });
+
+    controller
+        .finish()
+        .expect("application finishes the entrance");
+    app.tick();
+    assert!(run.is_complete());
+    assert_eq!(outcomes.get(), 1);
+    assert_eq!(app.opacity(fade), 1.0);
+    assert_eq!(scene_alpha(&app), 1.0);
+    assert_eq!(old_disposals.get(), 1);
+    app.pump_for(Duration::from_secs(2));
+    assert_eq!(outcomes.get(), 1);
+    assert_eq!(old_disposals.get(), 1);
+
+    let id = handle.route_ids()[0];
+    handle.remove_route(id);
+    app.tick();
+    assert_eq!(new_disposals.get(), 1, "route releases its animation owner");
+    assert_eq!(controller.finish(), Err(AnimationError::Disposed));
+    assert!(!vsync.has_running());
+    assert!(
+        vsync.is_empty(),
+        "disposed route withdraws its registration"
+    );
+    let _next = handle.push(SimpleRoute::<()>::new(leaf).named("/next"));
+    app.tick();
+    assert_eq!(handle.route_ids().len(), 1, "navigation remains usable");
+}
+
 /// Asking `push_named_typed` for the wrong result type is refused at **push**
 /// time, with the stack untouched — ADR-0024's "with nothing pushed" — and
 /// the route that was generated for the attempt is **disposed**.

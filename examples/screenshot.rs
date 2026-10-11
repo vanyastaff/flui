@@ -8,7 +8,7 @@
 //!
 //! Run: `cargo run -p flui --example screenshot --features material,cupertino -- <demo> [width] [height] [out.png]`
 //! where `<demo>` is `material` | `cupertino` | `vertical-slice` | `gallery` |
-//! `animated-box` | `colored-box` | `text` | `telemetry-overlay`.
+//! `motion-lab` | `animated-box` | `colored-box` | `text` | `telemetry-overlay`.
 //! Defaults: `material`, 900 x 760, `<demo>.png`.
 //!
 //! Captures one frame at mount time (t=0): animated examples show their initial
@@ -26,6 +26,12 @@
 mod cupertino_demo;
 #[path = "material_demo/tree.rs"]
 mod material_demo;
+#[expect(
+    dead_code,
+    reason = "the interactive example's main is not used for capture"
+)]
+#[path = "motion_lab.rs"]
+mod motion_lab;
 #[path = "vertical_slice_demo/tree.rs"]
 mod vertical_slice_demo;
 
@@ -86,6 +92,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // not die on renderer construction.
     const DEMOS: &[&str] = &[
         "material",
+        "motion-lab",
         "cupertino",
         "vertical-slice",
         "vslice",
@@ -100,7 +107,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ];
     if !DEMOS.contains(&demo.as_str()) {
         eprintln!(
-            "unknown demo {demo:?}; expected: material | cupertino | vertical-slice | \
+            "unknown demo {demo:?}; expected: material | motion-lab | cupertino | vertical-slice | \
              gallery | animated-box | colored-box | text | telemetry-overlay | \
              sliver | sliver-mid | sliver-collapsed"
         );
@@ -121,6 +128,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let rgba = match demo.as_str() {
         "material" => capture(material_demo::MaterialDemoApp, width, height, &raster),
+        "motion-lab" => capture(
+            flui_widgets::MediaQuery::new(
+                flui_widgets::MediaQueryData::default(),
+                motion_lab::MotionLab,
+            ),
+            width,
+            height,
+            &raster,
+        ),
         "cupertino" => capture(cupertino_demo::CupertinoDemoApp, width, height, &raster),
         "vertical-slice" | "vslice" => {
             capture(vertical_slice_demo::DemoApp, width, height, &raster)

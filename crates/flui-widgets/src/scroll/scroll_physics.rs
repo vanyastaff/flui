@@ -369,7 +369,8 @@ impl BouncingScrollPhysics {
     pub fn new() -> Self {
         Self {
             overscroll_spring_coefficient: 0.52,
-            spring: SpringDescription::with_damping_ratio(1.0, 500.0, 0.75),
+            spring: SpringDescription::with_damping_ratio(1.0, 500.0, 0.75)
+                .expect("BUG: default scroll spring is in the admitted domain"),
             min_fling_velocity_px_per_sec: 50.0,
             fling_drag_coefficient: 0.135,
         }
@@ -418,7 +419,7 @@ impl ScrollPhysics for BouncingScrollPhysics {
             None
         };
         if let Some(edge) = edge {
-            let spring = SpringSimulation::try_new(
+            let spring = SpringSimulation::new(
                 self.spring,
                 metrics.pixels,
                 edge,

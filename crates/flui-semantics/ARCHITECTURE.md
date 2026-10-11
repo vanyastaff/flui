@@ -233,9 +233,11 @@ notifier hooks). Assembly runs in the existing post-paint semantics phase (`run_
   `SemanticsConfiguration::absorb`; `is_merging_semantics_of_descendants` collapses a subtree
   into one node; `excludes_semantics_subtree` and a per-child `visits_child_for_semantics`
   drop children from the walk.
-- Geometry reuses the paint walk's inputs — the committed `RenderNode::offset()` and
-  `paint_transform()` — plus the parent's semantics clip (`describe_semantics_clip`), so there
-  is no second source of node geometry.
+- Geometry composes each parent edge through `RenderNode::apply_paint_transform`,
+  using its committed child offset and current paint transform. Full assembly
+  and graft ancestor reconstruction use the same operation. Node bounds,
+  unclipped reveal bounds and parent clips are projected into root coordinates
+  before clipping; there is no second source of node geometry.
 - A pass re-assembles only the subtrees that can observe the frame's semantics marks, grafting
   each into the persistent semantics arena under its **anchor** — the nearest unmarked ancestor
   that formed a node last pass. A formed node absorbs every pending fragment below it and its

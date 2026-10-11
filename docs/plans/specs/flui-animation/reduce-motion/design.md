@@ -18,7 +18,7 @@
 4. **Виджеты читают политику как inherited-значение** `MediaQueryData::motion`
    (`MediaQuery::motion_of(ctx)` — в `build` и в `did_change_dependencies`). Метода
    `LifecycleContext` нет (Варианты (d)). Потребитель — `cupertino_page_route`.
-5. `behavior` задаётся явно у каждого контроллера (решение X2, «unbounded ⇒ Preserve» не выводится): таймеры (snackbar, InkWell), скролл и индикаторы загрузки (X9) — `Preserve`, implicit-анимации — `Normal`. Мёртвые `AccessibilityFeatures`-поля
+5. `behavior` задаётся явно у каждого контроллера (решение X2, «unbounded ⇒ Preserve» не выводится): таймеры (snackbar, InkWell) и скролл — `Preserve`; индикаторы загрузки и implicit-анимации — `Normal`. ADR-0192 пересматривает X9: статичная загрузка остаётся видимой. Мёртвые `AccessibilityFeatures`-поля
    движения удаляются. ADR нужен.
 
 ## Граница с motion-clock
@@ -78,7 +78,9 @@ Normal (не ломающее изменение).
 Решение (принято здесь; в прежней редакции motion-clock было его «(d)», ныне там «(d)» — скрытая
 презентация): конец в следующем кадре (Compose scale 0, market.md [axui-mds];
 GPUI oneshot → конец, repeat → начало, market.md [gpui-animation]); ×0.05 Flutter отвергнут.
-Уточнение здесь — сетка симуляции: одна для Reduce и для ownership «нет часов»
+Нативные запуски с объявленной конечной точкой завершаются точно в ней:
+property motion — в цели, fling — на границе. Пробная сетка не определяет их endpoint.
+Для произвольных пользовательских симуляций сетка одна для Reduce и ownership «нет часов»
 (`0.25·2ᵏ ≤ 64 s`, как в ownership design); правило «не завершилась — идти как Full» прежней
 редакции motion-clock отвергнуто (в motion-clock его больше нет): под Reduce движение не должно продолжаться; существенное движение помечается
 `Preserve`. Точный конец пружин даёт physics (`is_done ⇔ t ≥ rest_time`, `x = end`).
@@ -237,7 +239,8 @@ Linux-портал — за фичей `a11y` (она уже тянет `zbus` �
 Reduce` = `MotionPreference` (`FollowSystem` по умолчанию, `Reduce`, `Full`) поверх сигнала;
 хранится в часах презентации, приходит в реестр с тиком. (3) Под `Reduce` Normal-запуски
 завершаются на следующем тике с доставкой статусов и futures, бесконечный repeat паркуется в
-начале; `Preserve` (скролл, таймеры, индикаторы загрузки — задаётся явно у контроллера) не меняется. (4) Масштаб
+начале; `Preserve` (скролл, таймеры — задаётся явно у контроллера) не меняется. Индикаторы
+используют `Normal` и видимое статичное представление (ADR-0192). (4) Масштаб
 длительностей ОС (0 → `Reduce`, < 0 и нефинитный — отказ) растягивает только Normal-время.
 (5) Виджеты читают политику как inherited-значение `MediaQueryData::motion`; capability на
 `LifecycleContext` не вводится — ADR-0078 относится к handles, которые действуют. Альтернативы:
@@ -255,7 +258,8 @@ R5 (PB), R7 (PB), R10, R14, R15.
 - **`flui-app`**: `AppConfig::with_motion_preference`; **`flui-widgets`**: `MediaQueryData::motion`.
 ### Changed
 - **`flui-animation`**: under reduced motion, `AnimationBehavior::Normal` runs finish on the next
-  frame and still report status and completion; scroll, timers and progress indicators are `Preserve` explicitly;
+  frame and still report status and completion; scroll and timers are `Preserve` explicitly;
+  loading indicators use `Normal` with visible static feedback under Reduce (ADR-0192);
   the OS animation scale stretches `Normal` runs only.
 - **`flui-cupertino`**: page routes do not slide under reduced motion.
 ### Removed
@@ -337,7 +341,7 @@ controller-robustness). Panic слушателя в settle — политика 
 | Пункт конвенции | Статус | Где (до правки) | Правка |
 |---|---|---|---|
 | enum вместо неявного правила / bool | нарушала | design.md:63-64, 215-216, 240, 258; R6 | `behavior` явно, `Normal` по умолчанию (X2) |
-| Решение владельца применено | нарушала | индикаторы не названы (X9) | индикаторы — `Preserve` |
+| Решение владельца применено | нарушала | индикаторы не названы (X9) | ADR-0192 пересматривает прежний `Preserve`: индикаторы — `Normal` и видимая статичная загрузка |
 | `#[non_exhaustive]` на растущих enum | соответствует | design.md:120-143 | — |
 | Newtype с проверкой, `thiserror` | соответствует | `DurationScale`, `InvalidDurationScale` | — |
 | Нет `static`/lock | соответствует | I1 | — |

@@ -8,7 +8,7 @@
 //! A release at least as fast as `MIN_FLING_VELOCITY` settles with a fling
 //! that starts at the finger's speed, so the page keeps moving as fast as it
 //! was dragged. A slower release, or a cancel, takes a fixed 350ms /
-//! `Curves::FastEaseInToSlowEaseOut` settle.
+//! `curves::FAST_EASE_IN_TO_SLOW_EASE_OUT` settle.
 //!
 //! # Deferred by design
 //!
@@ -32,7 +32,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
-use flui_animation::{Animation, AnimationController, Curves};
+use flui_animation::{Animation, AnimationController, curves};
 use flui_foundation::Listenable;
 use flui_interaction::recognizers::drag_variants::horizontal_drag;
 use flui_interaction::{
@@ -164,7 +164,7 @@ impl BackGestureController {
         } else {
             PopPacing::Curved {
                 duration: DROPPED_SWIPE_DURATION,
-                curve: Rc::new(Curves::FastEaseInToSlowEaseOut), // see `PopPacing`'s doc (binding.rs) — same erased easing-curve boundary
+                curve: Rc::new(curves::FAST_EASE_IN_TO_SLOW_EASE_OUT), // see `PopPacing`'s doc (binding.rs) — same erased easing-curve boundary
             }
         };
 
@@ -212,10 +212,9 @@ impl BackGestureController {
 ///
 /// A plain struct behind `Rc`, not `Arc`: every field here is owner-affine
 /// (`NavigatorHandle` itself is `!Send + !Sync`), and every callback that
-/// touches it runs on the owner thread — a drag recognizer's callbacks are
-/// `Fn(..) + 'static`, not `Send + Sync` (unlike an `AnimationController`
-/// status listener, which is why the settle wait below is a poll, not a
-/// second status listener; see `poll_settle`'s doc).
+/// touches it runs on the owner thread. Recognizer and animation callbacks may
+/// capture owner-local state. The detector observes completion in `build` before
+/// reporting the end of the released gesture; see `poll_settle`.
 ///
 /// `pub` only so `crate::__test_access` can re-export it (ADR-0083 §4); the
 /// module is private, so nothing else names it.
@@ -366,10 +365,8 @@ impl BackGestureRuntime {
     /// mid-flight. Expressed as a poll, called from
     /// `BackGestureDetectorState::build` on every rebuild — which happens on
     /// every tick of the release animation, because that `ViewState` is an
-    /// `AnimatedView` subscribed to this same controller. A genuine second
-    /// status listener would need to be `Send + Sync`
-    /// (`AnimationController::add_status_listener`'s bound) and could
-    /// therefore never touch this owner-affine `NavigatorHandle` directly.
+    /// `AnimatedView` subscribed to this same controller. Polling reads the
+    /// settled run before releasing the navigator's user-gesture state.
     pub fn poll_settle(&self) {
         if self.awaiting_settle.get() && !self.controller.is_animating() {
             self.awaiting_settle.set(false);

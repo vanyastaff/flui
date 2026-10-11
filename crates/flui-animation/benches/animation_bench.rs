@@ -27,8 +27,8 @@ use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_ma
 
 use flui_animation::{
     Animatable, AnimatedValue, Animation, AnimationController, ColorTween, Curve, CurvedAnimation,
-    Curves, FloatTween, FrictionSimulation, Simulation, SpringDescription, SpringSimulation,
-    Tolerance, Tween,
+    FloatTween, FrictionSimulation, MotionClock, MotionSpec, Simulation, SpringDescription,
+    SpringSimulation, Tolerance, Tween, Vsync, curves,
 };
 use flui_foundation::Listenable;
 use flui_foundation::geometry::Offset;
@@ -69,17 +69,17 @@ fn curve_eval(c: &mut Criterion) {
     let mut group = c.benchmark_group("curve_eval");
 
     group.bench_function("linear", |b| {
-        b.iter(|| black_box(Curves::Linear.transform(black_box(0.37))));
+        b.iter(|| black_box(curves::LINEAR.transform(black_box(0.37))));
     });
     group.bench_function("ease_in_out", |b| {
-        b.iter(|| black_box(Curves::EaseInOut.transform(black_box(0.37))));
+        b.iter(|| black_box(curves::EASE_IN_OUT.transform(black_box(0.37))));
     });
     group.bench_function("elastic_out", |b| {
-        b.iter(|| black_box(Curves::ElasticOut.transform(black_box(0.37))));
+        b.iter(|| black_box(curves::ELASTIC_OUT.transform(black_box(0.37))));
     });
     // Two cubic segments + rescale arithmetic: the M3 emphasized default.
     group.bench_function("three_point_cubic_emphasized", |b| {
-        b.iter(|| black_box(Curves::EaseInOutCubicEmphasized.transform(black_box(0.37))));
+        b.iter(|| black_box(curves::EASE_IN_OUT_CUBIC_EMPHASIZED.transform(black_box(0.37))));
     });
 
     group.finish();
@@ -90,7 +90,7 @@ fn spring_step(c: &mut Criterion) {
 
     let spring =
         SpringDescription::with_response_and_damping(Duration::from_millis(300), 0.8).unwrap();
-    let sim = SpringSimulation::try_new(spring, 0.0, 100.0, 0.0, Tolerance::DEFAULT).unwrap();
+    let sim = SpringSimulation::new(spring, 0.0, 100.0, 0.0, Tolerance::DEFAULT).unwrap();
     group.bench_function("simulation_x_dx", |b| {
         b.iter(|| {
             let t = black_box(0.1_f64);
@@ -102,7 +102,7 @@ fn spring_step(c: &mut Criterion) {
     group.bench_function("simulation_new", |b| {
         b.iter(|| {
             black_box(
-                SpringSimulation::try_new(
+                SpringSimulation::new(
                     black_box(spring),
                     black_box(0.0),
                     black_box(100.0),
@@ -123,12 +123,20 @@ fn spring_step(c: &mut Criterion) {
     group.bench_function("animated_value_color_frame", |b| {
         b.iter_batched(
             || {
-                let mut value = AnimatedValue::new(Color::rgba(0, 0, 0, 255), smooth).unwrap();
+                let registry = Vsync::new();
+                let mut clock = MotionClock::new();
+                let mut value = AnimatedValue::new(
+                    Color::rgba(0, 0, 0, 255),
+                    MotionSpec::Spring(smooth),
+                    Some(&registry),
+                )
+                .unwrap();
                 value.animate_to(Color::rgba(255, 128, 0, 255)).unwrap();
-                value
+                registry.tick_all(&clock.frame(Duration::ZERO));
+                (value, registry, clock)
             },
-            |mut value| {
-                value.advance(black_box(Duration::from_secs_f64(FRAME)));
+            |(value, registry, mut clock)| {
+                registry.tick_all(&clock.frame(black_box(Duration::from_secs_f64(FRAME))));
                 black_box(value.value());
                 value
             },
@@ -152,9 +160,11 @@ fn add_listeners(
         }));
     }
     for _ in 0..status_listeners {
-        controller.add_status_listener(std::rc::Rc::new(|status| {
-            black_box(status);
-        }));
+        controller
+            .subscribe_status(std::rc::Rc::new(|status| {
+                black_box(status);
+            }))
+            .detach();
     }
 }
 
@@ -172,7 +182,7 @@ fn bench_live_tick(
         });
     });
     assert!(
-        controller.status().is_running(),
+        controller.status().is_directional(),
         "the {variant} run must still be live after the benchmark, or it priced a finished run"
     );
 }
@@ -189,7 +199,7 @@ fn controller_tick(c: &mut Criterion) {
     // The same run eased through a cubic Bézier.
     let eased = AnimationController::builder(NEVER_ENDING).build();
     eased
-        .animate_to_curved(1.0, None, Arc::new(Curves::EaseInOut))
+        .animate_to_curved(1.0, None, Arc::new(curves::EASE_IN_OUT))
         .unwrap();
     bench_live_tick(&mut group, "ease_in_out", &eased);
     drop(eased);
@@ -225,7 +235,7 @@ fn controller_tick(c: &mut Criterion) {
         .build();
     spring
         .animate_with(
-            SpringSimulation::try_new(
+            SpringSimulation::new(
                 SpringDescription::new(1.0, 100.0, 1e-6).unwrap(),
                 0.0,
                 1000.0,
@@ -244,11 +254,11 @@ fn controller_tick(c: &mut Criterion) {
     parent_controller.forward().unwrap();
     parent_controller.tick_at(std::time::Duration::from_secs_f64(0.37));
     let parent: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(parent_controller.clone());
-    let curved = CurvedAnimation::new(parent, Curves::EaseInOut);
+    let curved = CurvedAnimation::new(parent, curves::EASE_IN_OUT);
     group.bench_function("curved_value", |b| {
         b.iter(|| black_box(curved.value()));
     });
-    assert!(parent_controller.status().is_running());
+    assert!(parent_controller.status().is_directional());
     drop(curved);
     drop(parent_controller);
 
@@ -259,8 +269,8 @@ fn controller_status(c: &mut Criterion) {
     let mut group = c.benchmark_group("controller");
 
     // One iteration is two status transitions, each fanned out to every
-    // listener: `forward_from(0)` (Completed -> Forward) and a tick past the
-    // end (Forward -> Completed).
+    // listener: `forward_from(0)` (ForwardSettled -> Forward) and a tick past the
+    // end (Forward -> ForwardSettled).
     for status_listeners in [1, 4, 8] {
         let controller = AnimationController::builder(Duration::from_secs(1)).build();
         add_listeners(&controller, 0, status_listeners);
@@ -273,9 +283,8 @@ fn controller_status(c: &mut Criterion) {
         drop(controller);
     }
 
-    // Starting a run from rest on a fresh controller with a detached ticker
-    // (the `is_animating`-reporting widget shape). Construction and the
-    // returned future's drop sit outside the timed region.
+    // Starting a run from rest on a fresh, unbound controller. Construction
+    // and the returned future's drop sit outside the timed region.
     group.bench_function("forward", |b| {
         b.iter_batched(
             || AnimationController::builder(NEVER_ENDING).build(),

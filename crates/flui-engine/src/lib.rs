@@ -284,6 +284,7 @@ pub(crate) mod gamma;
 /// Windowless GPU capture: rasterize a `LayerTree` to an offscreen texture and
 /// read the pixels back (golden-image / screenshot tooling).
 pub mod headless;
+mod image_source_filter;
 /// GPU instance-buffer types: `RectInstance`, `CircleInstance`,
 /// `ArcInstance`, `TextureInstance`, and the gradient/shadow instances.
 /// Consumed by `painter`, which owns the per-primitive batch layout.

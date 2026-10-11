@@ -10,6 +10,19 @@ use flui_painting::styling::{
 };
 use flui_painting::typography::FontWeight;
 
+pub(crate) fn color_matrix_checks_intermediate_overflow() {
+    use flui_painting::paint::ColorMatrix;
+    for offset in [0.0, 0.25, 1.0] {
+        let mut matrix = ColorMatrix::identity();
+        matrix.values[..5].copy_from_slice(&[f32::MAX, f32::MAX, -f32::MAX, -f32::MAX, offset]);
+        assert_eq!(
+            matrix.apply([1.0; 4]),
+            [offset, 1.0, 1.0, 1.0],
+            "finite cancelling terms retain the offset"
+        );
+    }
+}
+
 fn gradient_geometry_extrapolates(through_decoration: bool) {
     let colors = vec![Color::RED, Color::BLUE];
     let pairs = [
@@ -1077,17 +1090,22 @@ fn keeps_hard_gradient_transition(gradient: Gradient) {
         Gradient::lerp(&gradient, &other, 0.5).expect("valid hard-edge gradients interpolate");
     assert_eq!(mixed.stops(), Some([0.0, 0.5, 0.5, 1.0].as_slice()));
     // Half way to black in Oklab halves L, a and b, which scales linear light by
-    // 1/8: a full channel becomes 0.125 linear, sRGB-encoded as 99.
-    assert_eq!(
-        mixed.colors(),
-        &[
-            Color::rgb(99, 0, 0),
-            Color::rgb(99, 0, 0),
-            Color::rgb(0, 0, 99),
-            Color::rgb(0, 0, 99),
-        ],
-        "both sides of the red-to-blue discontinuity survive interpolation"
-    );
+    // 1/8: a full channel becomes 0.125 linear. Check continuous sRGB,
+    // independently of the conversion implementation or byte exports.
+    let encoded = 1.055 * 0.125_f64.powf(1.0 / 2.4) - 0.055;
+    for (actual, expected) in mixed.colors().iter().zip([
+        [encoded, 0.0, 0.0, 1.0],
+        [encoded, 0.0, 0.0, 1.0],
+        [0.0, 0.0, encoded, 1.0],
+        [0.0, 0.0, encoded, 1.0],
+    ]) {
+        for (actual, expected) in actual.to_rgba_f32_array().into_iter().zip(expected) {
+            assert!(
+                (f64::from(actual) - expected).abs() < 2e-6,
+                "both sides of the discontinuity retain continuous color: {actual} vs {expected}"
+            );
+        }
+    }
 }
 
 pub(crate) fn linear_interpolation_keeps_hard_transitions() {

@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use crate::{AnimationController, AnimationError, DrivenController, Vsync};
+use crate::{AnimationController, DrivenController, RangeDefect, Vsync};
 
 /// Finite controller bounds with a finite, positive span.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -21,17 +21,19 @@ impl ValueRange {
     /// Validate endpoints and their difference before constructing a range.
     ///
     /// # Errors
-    /// Returns `AnimationError::InvalidBounds` for non-finite endpoints or span,
-    /// or when `lower >= upper`.
-    pub fn new(lower: f64, upper: f64) -> Result<Self, AnimationError> {
-        if !lower.is_finite()
-            || !upper.is_finite()
-            || lower >= upper
-            || !(upper - lower).is_finite()
-        {
-            return Err(AnimationError::InvalidBounds(format!(
-                "bounds ({lower}, {upper}) must have finite endpoints and a finite positive span"
-            )));
+    /// Returns [`RangeDefect::NonFinite`] for a NaN or infinite endpoint,
+    /// [`RangeDefect::Inverted`] when `lower >= upper`, or
+    /// [`RangeDefect::SpanOverflow`] when the ordered endpoints' difference
+    /// overflows `f64`. These checks run in that order.
+    pub fn new(lower: f64, upper: f64) -> Result<Self, RangeDefect> {
+        if !lower.is_finite() || !upper.is_finite() {
+            return Err(RangeDefect::NonFinite);
+        }
+        if lower >= upper {
+            return Err(RangeDefect::Inverted);
+        }
+        if !(upper - lower).is_finite() {
+            return Err(RangeDefect::SpanOverflow);
         }
         Ok(Self { lower, upper })
     }
@@ -73,6 +75,7 @@ pub struct AnimationControllerBuilder {
     bounds: Option<ValueRange>,
     reverse_duration: Option<Duration>,
     initial_value: Option<f64>,
+    behavior: crate::AnimationBehavior,
 }
 
 impl AnimationControllerBuilder {
@@ -84,6 +87,7 @@ impl AnimationControllerBuilder {
             bounds: Some(ValueRange::UNIT),
             reverse_duration: None,
             initial_value: None,
+            behavior: crate::AnimationBehavior::Normal,
         }
     }
 
@@ -108,19 +112,32 @@ impl AnimationControllerBuilder {
         self
     }
 
-    /// Initial value, clamped to the range. Non-finite values use the lower
-    /// endpoint for bounded controllers or zero for unbounded controllers.
+    /// Initial value, using the same rule as [`AnimationController::set_value`].
+    /// Finite values clamp to the range; bounded NaN uses the lower endpoint
+    /// and infinities use the endpoint they point toward. Unbounded non-finite
+    /// inputs retain zero. Non-finite inputs warn once per controller.
     #[must_use]
     pub fn initial_value(mut self, value: f64) -> Self {
         self.initial_value = Some(value);
         self
     }
 
+    /// Choose whether system motion policy applies to this controller.
+    #[must_use]
+    pub fn behavior(mut self, behavior: crate::AnimationBehavior) -> Self {
+        self.behavior = behavior;
+        self
+    }
+
     /// Build a controller sampled explicitly through `tick_at(Duration)`.
     #[must_use]
     pub fn build(self) -> AnimationController {
-        let controller =
-            AnimationController::from_config(self.duration, self.bounds, self.initial_value);
+        let controller = AnimationController::from_config(
+            self.duration,
+            self.bounds,
+            self.initial_value,
+            self.behavior,
+        );
         if let Some(duration) = self.reverse_duration {
             controller.set_reverse_duration(duration);
         }

@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 /// Callback for animation status changes.
 ///
-/// Called when an animation's status changes (e.g., from Forward to Completed).
+/// Called when an animation's status changes (e.g., from Forward to ForwardSettled).
 pub type StatusCallback = Rc<dyn Fn(AnimationStatus)>;
 
 /// Internal status relay borrowing the enclosing delivery's recovery context.
@@ -41,7 +41,7 @@ impl AnimationDirection {
     }
 }
 
-/// An animation that progresses from 0.0 to 1.0, or from begin to end.
+/// An observable value with a directional phase and explicit run activity.
 ///
 /// This is the foundation of FLUI's animation system. All animations implement
 /// this trait and the `Listenable` trait, allowing widgets to rebuild when the
@@ -62,12 +62,12 @@ impl AnimationDirection {
 /// use flui_animation::Animation;
 /// use flui_animation::AnimationStatus;
 ///
-/// fn use_animation<T: Clone + Send + Sync + 'static>(animation: &dyn Animation<T>) {
+/// fn use_animation<T: Clone + 'static>(animation: &dyn Animation<T>) {
 ///     let value = animation.value();
 ///     let status = animation.status();
 ///
-///     if status.is_running() {
-///         // Animation is in progress
+///     if animation.is_animating() {
+///         // The source owns a run, including a paused run.
 ///     }
 /// }
 /// ```
@@ -78,52 +78,51 @@ where
     /// Returns the current value of the animation.
     fn value(&self) -> T;
 
-    /// Returns the current status of the animation.
+    /// Returns the directional phase, independent of run ownership and value.
     fn status(&self) -> AnimationStatus;
 
-    /// Add a status listener (called when animation starts, completes, etc.).
-    ///
-    /// Returns a listener ID that can be used to remove the listener later.
-    fn add_status_listener(&self, callback: StatusCallback) -> ListenerId;
+    /// Observe status changes until the returned source-bound guard is dropped.
+    /// The guard must not extend the animation owner's lifetime.
+    fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription;
 
-    /// Register a framework relay in this animation's status channel.
+    /// Register a relay borrowing the enclosing delivery's recovery context.
     #[doc(hidden)]
-    fn add_status_observer(&self, observer: StatusObserver) -> ListenerId {
-        self.add_status_listener(Rc::new(move |status| {
+    fn subscribe_status_observer(&self, observer: StatusObserver) -> crate::StatusSubscription {
+        self.subscribe_status(Rc::new(move |status| {
             let mut recovery = Retirement::new();
             recovery.run_with(|recovery| observer(status, recovery));
             recovery.finish();
         }))
     }
 
-    /// Remove a status listener.
-    fn remove_status_listener(&self, id: ListenerId);
+    /// Whether the source owns an active run, including a paused run.
+    ///
+    /// Directional status is independent: a constant or a manually positioned
+    /// animation may report [`AnimationStatus::Forward`] without owning a run.
+    /// Owners report run ownership, combinators forward their source's answer,
+    /// and fixed values return `false`.
+    fn is_animating(&self) -> bool;
 
-    /// Whether the animation is currently running.
+    /// Whether the phase is [`AnimationStatus::ForwardSettled`].
+    /// This does not imply endpoint arrival or successful run completion.
     #[inline]
-    fn is_animating(&self) -> bool {
-        self.status().is_running()
+    fn is_forward_settled(&self) -> bool {
+        self.status().is_forward_settled()
     }
 
-    /// Whether the animation is completed.
+    /// Whether the phase is [`AnimationStatus::ReverseSettled`].
     #[inline]
-    fn is_completed(&self) -> bool {
-        self.status().is_completed()
+    fn is_reverse_settled(&self) -> bool {
+        self.status().is_reverse_settled()
     }
 
-    /// Whether the animation is dismissed (at beginning).
-    #[inline]
-    fn is_dismissed(&self) -> bool {
-        self.status().is_dismissed()
-    }
-
-    /// Whether the animation is running forward.
+    /// Whether the phase is [`AnimationStatus::Forward`].
     #[inline]
     fn is_forward(&self) -> bool {
         self.status().is_forward()
     }
 
-    /// Whether the animation is running in reverse.
+    /// Whether the phase is [`AnimationStatus::Reverse`].
     #[inline]
     fn is_reverse(&self) -> bool {
         self.status().is_reverse()
@@ -191,7 +190,7 @@ impl<T> Terminal<T> {
             .expect("BUG: a live animation owns its field")
     }
 
-    fn get_mut(&mut self) -> &mut T {
+    pub(crate) fn get_mut(&mut self) -> &mut T {
         self.0
             .as_mut()
             .expect("BUG: a live animation owns its field")
@@ -247,7 +246,7 @@ pub(crate) struct ParentLinks {
     pub(crate) notifier: Terminal<Rc<ChangeNotifier>>,
     pub(crate) status_notifier: Terminal<Rc<flui_foundation::Notifier<AnimationStatus>>>,
     value_sub: Terminal<Rc<ParentSubscription>>,
-    status_sub: Terminal<Rc<ParentSubscription>>,
+    status_sub: Terminal<crate::StatusSubscription>,
 }
 
 impl ParentLinks {
@@ -273,6 +272,35 @@ impl ParentLinks {
         self.notifier.inherit_failure(recovery);
         self.status_notifier.inherit_failure(recovery);
     }
+
+    pub(crate) fn subscribe_status(
+        self: &Rc<Self>,
+        callback: StatusCallback,
+    ) -> crate::StatusSubscription {
+        let id = self
+            .status_notifier
+            .add(Rc::new(move |status| callback(*status)));
+        crate::StatusSubscription::new(self, id, Self::withdraw_status)
+    }
+
+    pub(crate) fn subscribe_status_observer(
+        self: &Rc<Self>,
+        observer: StatusObserver,
+    ) -> crate::StatusSubscription {
+        let id = self
+            .status_notifier
+            .add_with_recovery(Rc::new(move |status, recovery| observer(*status, recovery)));
+        crate::StatusSubscription::new(self, id, Self::withdraw_status)
+    }
+
+    fn withdraw_status(
+        &self,
+        id: ListenerId,
+        recovery: &mut RecoveryScope<'_>,
+    ) -> Option<Rc<flui_foundation::notifier_generic::NotificationCallback<AnimationStatus>>> {
+        self.inherit_failure(recovery);
+        self.status_notifier.take_callback(id)
+    }
 }
 
 impl Drop for ParentLinks {
@@ -283,11 +311,13 @@ impl Drop for ParentLinks {
         let notifier = self.notifier.withdraw();
         let statuses = self.status_notifier.withdraw();
         let value_sub = self.value_sub.withdraw();
-        let status_sub = self.status_sub.withdraw();
+        let mut status_sub = self.status_sub.withdraw();
         let values = notifier.dispose_and_take_listeners();
         let callbacks = statuses.dispose_and_take_callbacks();
         value_sub.detach(&mut recovery.scope());
-        status_sub.detach(&mut recovery.scope());
+        status_sub
+            .get_mut()
+            .cancel_with_recovery(&mut recovery.scope());
         for callback in values {
             recovery.retire(Terminal::new(callback));
         }
@@ -331,13 +361,11 @@ pub(crate) fn link_parent_status<T: Clone + 'static>(
     parent: &Rc<dyn Animation<T>>,
     notifier: &Rc<flui_foundation::Notifier<AnimationStatus>>,
     map: impl Fn(AnimationStatus) -> AnimationStatus + 'static,
-) -> Rc<ParentSubscription> {
+) -> crate::StatusSubscription {
     let weak = Rc::downgrade(notifier);
-    let id = parent.add_status_observer(Rc::new(move |status, recovery| {
+    parent.subscribe_status_observer(Rc::new(move |status, recovery| {
         if let Some(notifier) = weak.upgrade() {
             notifier.notify_with_recovery(&map(status), recovery);
         }
-    }));
-    let parent = Rc::clone(parent);
-    ParentSubscription::new(move || parent.remove_status_listener(id))
+    }))
 }

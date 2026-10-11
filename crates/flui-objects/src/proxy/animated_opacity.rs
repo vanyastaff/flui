@@ -7,14 +7,15 @@
 //! The object caches an alpha, recomputes it on every `opacity` animation tick
 //! via a listener registered in `attach` (and once more, unconditionally,
 //! right after registering — in case it changed while nothing was
-//! listening), and on each recompute: marks needs-paint whenever the alpha
-//! value changed, and additionally marks needs-compositing-bits whenever the
-//! recompute crosses the layered threshold.
+//! listening). A partial-alpha change updates the retained layer; crossing
+//! the layered threshold also updates compositing bits, and crossing zero
+//! requests paint and semantics.
 //!
 //! # Composited-layer updates
 //!
-//! A tick never repaints the child subtree — only the compositor re-blends
-//! the cached layer. This is reached without promoting the node to a repaint
+//! A partial-alpha tick reuses the child subtree and updates the cached layer.
+//! Crossing zero adds or removes the child from painting and, unless explicitly
+//! retained, from semantics. Layer updates do not promote the node to a repaint
 //! boundary: the frame rebuilds just this node's own effect layers inside the
 //! ENCLOSING repaint boundary's retained capture, so the node stays an ordinary
 //! non-boundary. The design and its accepted trade-offs are recorded in
@@ -23,14 +24,12 @@
 //!
 //! **Which seam a tick takes matters, and it is not the setter one.** This type
 //! has no impact-returning setter at all: an animation tick runs through the
-//! listener, and `recompute_alpha` pokes a [`RenderInvalidationHandle`]
-//! directly — `mark_needs_composited_layer_update()` for a plain alpha move,
-//! `mark_needs_compositing_bits_update()` across the layered threshold,
-//! `mark_needs_paint()` across alpha 0. Those are fallible cross-thread sends,
-//! which is why each one has a failure arm that leaves the alpha cache
-//! unadvanced so the next tick retries. `RenderUpdateImpact` is the OTHER,
-//! synchronous seam, used by the plain `RenderOpacity`/`RenderSliverOpacity`
-//! setters; conflating the two hides the retry contract.
+//! listener, and `recompute_alpha` pokes a [`LocalRenderInvalidationHandle`]
+//! directly. A plain alpha move updates the composited layer; crossing the
+//! layered threshold also updates compositing bits; crossing alpha zero
+//! requests paint and semantics. The sample is published before all required phases are
+//! admitted together through `request_update`. The owner retains those marks
+//! even if its wake callback fails, without requiring another animation tick.
 //!
 //! # Retargeting — the proxy absorbs the swap
 //!
@@ -47,8 +46,9 @@
 //! because the proxy absorbs it entirely on the widget side; this render
 //! object never bakes a curve of its own.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::rc::Rc;
+
+use crate::opacity_sample::OpacitySample;
 
 use flui_foundation::Single;
 use flui_foundation::geometry::{Offset, Size};
@@ -59,7 +59,7 @@ use flui_foundation::{Listenable, ListenerId};
 use flui_rendering::{
     context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
-    pipeline::RenderInvalidationHandle,
+    pipeline::LocalRenderInvalidationHandle,
     traits::{PaintEffects, PaintOpacity, RenderBox},
 };
 
@@ -77,9 +77,8 @@ use flui_rendering::{
 ///
 /// # Performance
 ///
-/// See the module docs' *documented divergence* section: every alpha change
-/// costs a full repaint of the subtree (FLUI has no retained-layer
-/// alpha-blend update yet), not just a compositor re-blend.
+/// Alpha changes update the retained effect layer. Crossing alpha zero
+/// requests paint because the child enters or leaves the painted subtree.
 pub struct RenderAnimatedOpacity {
     /// The composed animation driving alpha, injected at construction and
     /// listened to for this object's entire lifetime. A
@@ -87,24 +86,11 @@ pub struct RenderAnimatedOpacity {
     /// *parent* it wraps (retarget) without this render object ever seeing a
     /// new listenable — see the module docs' *Retargeting* section.
     animation: ProxyAnimation<f64>,
-    /// Alpha cache (`0..=255`), shared with the tick listener closure via
-    /// `Arc` so both the listener (running off the owning thread, per
-    /// [`RenderInvalidationHandle`]'s cross-thread contract) and
-    /// `paint_effects`/`skip_paint` (called with `&self` from the pipeline's
-    /// paint walk)
-    /// observe the same up-to-date value. `AtomicU8` over `Mutex<u8>`: a
-    /// single-byte cache with no compound invariant needs no lock.
-    /// `Ordering::Relaxed` suffices because the dirty-channel send in
-    /// [`recompute_alpha`](Self::recompute_alpha) — not the atomic op — is
-    /// the synchronization edge: `alpha` is only stored *after* the mark
-    /// send succeeds, so the paint walk that observes the mark is
-    /// guaranteed to run after the store that produced it, via the
-    /// channel's own happens-before, independent of atomic memory order.
-    alpha: Arc<AtomicU8>,
-    /// Whether child semantics are included regardless of alpha. Stored for
-    /// diagnostics/API; this object does not yet gate child-semantics
-    /// visiting on it (no semantics-tree visitor override exists on this
-    /// proxy today).
+    /// Owner-local alpha shared with the tick listener and paint walk.
+    /// Sampling generations prevent an older reentrant read from replacing
+    /// a newer sample; no borrow survives the animation's value callback.
+    alpha: Rc<OpacitySample>,
+    /// Whether child semantics remain included at zero opacity.
     always_include_semantics: bool,
     /// Tick-listener subscription on `animation`, torn down in `detach`.
     listener_id: Option<ListenerId>,
@@ -119,7 +105,7 @@ impl RenderAnimatedOpacity {
     /// see the controller, only the composed value stream).
     #[must_use]
     pub fn new(animation: ProxyAnimation<f64>, always_include_semantics: bool) -> Self {
-        let alpha = Arc::new(AtomicU8::new(Self::opacity_to_alpha(animation.value())));
+        let alpha = Rc::new(OpacitySample::new(animation.value()));
         Self {
             animation,
             alpha,
@@ -128,24 +114,12 @@ impl RenderAnimatedOpacity {
         }
     }
 
-    /// Returns the current cached alpha (`0..=255`), refreshed by the last
-    /// tick that changed it (and once at construction / attach time).
+    /// Returns the accepted opacity in `0.0..=1.0`, refreshed on animation
+    /// notifications and construction or attachment.
     #[inline]
     #[must_use]
-    pub fn alpha(&self) -> u8 {
-        self.alpha.load(Ordering::Relaxed)
-    }
-
-    /// The composed animation's raw `f64` value, bypassing the `u8` alpha
-    /// cache's `1/255` quantization. Test/harness accessor — production
-    /// paint/compositing decisions read [`alpha`](Self::alpha)/
-    /// [`paint_effects`](RenderBox::paint_effects), which are correctly
-    /// quantized; this exists only because harness assertions pinned to
-    /// sub-`1/255` tolerances need the un-rounded value.
-    #[inline]
-    #[must_use]
-    pub fn opacity_value(&self) -> f64 {
-        self.animation.value()
+    pub fn opacity(&self) -> f64 {
+        self.alpha.get()
     }
 
     /// Whether child semantics are included regardless of alpha.
@@ -155,38 +129,8 @@ impl RenderAnimatedOpacity {
         self.always_include_semantics
     }
 
-    /// Converts opacity (`0.0..=1.0`) to alpha (`0..=255`).
-    #[inline]
-    fn opacity_to_alpha(opacity: f64) -> u8 {
-        (opacity.clamp(0.0, 1.0) * 255.0).round() as u8
-    }
-
-    /// Whether `alpha` sits in the "layered" range `(0, 255)` — the exact
-    /// threshold `paint_effects`/`skip_paint` use to decide whether an
-    /// `OpacityLayer` is needed. `RenderOpacity` uses the same
-    /// `alpha != 255` narrowing for its no-layer fast path at full/zero
-    /// opacity (see `proxy/opacity.rs`).
-    #[inline]
-    fn is_layered(alpha: u8) -> bool {
-        alpha > 0 && alpha < 255
-    }
-
-    /// Recomputes `alpha` from `animation`'s current value and marks the
-    /// node dirty through `handle` per the module docs' rule:
-    /// needs-paint whenever alpha changed, plus needs-compositing-bits
-    /// whenever the recompute crosses the [`is_layered`](Self::is_layered)
-    /// threshold. Returns `true` iff alpha changed AND every required mark
-    /// was sent successfully.
-    ///
-    /// The cache commits (`alpha.store`) only after every mark this
-    /// recompute owes has been sent successfully — never before. `handle`'s
-    /// send can fail under backpressure or once the pipeline owner is gone
-    /// (`SendError`); committing first would make that failure invisible,
-    /// since the next tick would then compare its new value against an
-    /// already-updated cache and see no change, permanently losing the mark
-    /// for whatever the animation settles on. Leaving the cache at
-    /// `old_alpha` on failure means the next tick re-derives the same delta
-    /// (or a larger one) against the true old value and retries the send.
+    /// Publishes a changed alpha and admits its required phases together.
+    /// Returns whether this sample changed alpha and reached a live owner.
     ///
     /// Free function (not `&self`) so both [`attach`](RenderBox::attach)
     /// (called with the live `self.animation`/`self.alpha`) and the tick
@@ -194,85 +138,17 @@ impl RenderAnimatedOpacity {
     /// be `'static` and cannot borrow `self`) share one implementation.
     fn recompute_alpha(
         animation: &ProxyAnimation<f64>,
-        alpha: &AtomicU8,
-        handle: &RenderInvalidationHandle,
+        alpha: &OpacitySample,
+        handle: &LocalRenderInvalidationHandle,
     ) -> bool {
-        let new_alpha = Self::opacity_to_alpha(animation.value());
-        let old_alpha = alpha.load(Ordering::Relaxed);
-        if old_alpha == new_alpha {
-            return false;
-        }
-
-        if Self::is_layered(old_alpha) != Self::is_layered(new_alpha)
-            && let Err(error) = handle.mark_needs_compositing_bits_update()
-        {
-            tracing::warn!(
-                %error,
-                old_alpha,
-                new_alpha,
-                "RenderAnimatedOpacity: compositing-bits mark send failed; \
-                 alpha cache left at the old value so the next tick retries"
-            );
-            return false;
-        }
-
-        // A tick that only moved the alpha lands ONLY on the `OpacityLayer`
-        // this node pushes, so the frame rebuilds that layer and replays the
-        // enclosing repaint boundary's retained output instead of repainting
-        // the subtree — the whole point of an animated opacity. Degrades to a
-        // paint mark on its own when there is no retained output to patch, so
-        // this is never weaker than the `mark_needs_paint` it replaces.
-        //
-        // A tick that CROSSED the layered threshold already sent a
-        // compositing-bits mark above; that walk marks paint, which wins over
-        // this by the `!needs_paint()` filter in `run_paint`.
-        // Crossing alpha 0 starts or stops suppressing the subtree's paint
-        // entirely, and that is invisible to the layer-update path: at both
-        // alpha 0 and alpha 255 no `OpacityLayer` is emitted, so there is no
-        // effect-layer slot to patch. Only a repaint can add or remove that
-        // content.
-        //
-        // Belt and braces, and knowingly so: the paint phase refuses to graft
-        // when a node that requested an update owns no slot, which covers this
-        // case as well — a mutation run removes this branch and the end-to-end
-        // test still passes. It stays because reporting the truth here saves a
-        // queue-then-refuse round trip, and because this class has already
-        // produced visible corruption once.
-        if (old_alpha == 0) != (new_alpha == 0) {
-            if let Err(error) = handle.mark_needs_paint() {
-                tracing::warn!(
-                    %error,
-                    old_alpha,
-                    new_alpha,
-                    "RenderAnimatedOpacity: paint mark send failed on a visibility change; \
-                     alpha cache left at the old value so the next tick retries"
-                );
-                return false;
-            }
-            alpha.store(new_alpha, Ordering::Relaxed);
-            return true;
-        }
-
-        if let Err(error) = handle.mark_needs_composited_layer_update() {
-            tracing::warn!(
-                %error,
-                old_alpha,
-                new_alpha,
-                "RenderAnimatedOpacity: composited-layer-update mark send failed; alpha cache \
-                 left at the old value so the next tick retries"
-            );
-            return false;
-        }
-
-        alpha.store(new_alpha, Ordering::Relaxed);
-        true
+        alpha.sample(|| animation.value(), handle)
     }
 }
 
 impl std::fmt::Debug for RenderAnimatedOpacity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RenderAnimatedOpacity")
-            .field("alpha", &self.alpha())
+            .field("opacity", &self.opacity())
             .field("always_include_semantics", &self.always_include_semantics)
             .finish_non_exhaustive()
     }
@@ -280,7 +156,7 @@ impl std::fmt::Debug for RenderAnimatedOpacity {
 
 impl flui_foundation::Diagnosticable for RenderAnimatedOpacity {
     fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
-        properties.add_default_double("opacity", f64::from(self.alpha()) / 255.0, 1.0, None);
+        properties.add_default_double("opacity", self.opacity(), 1.0, None);
         properties.add_flag(
             "always_include_semantics",
             self.always_include_semantics,
@@ -320,10 +196,10 @@ impl RenderBox for RenderAnimatedOpacity {
     // through `&dyn RenderObject<BoxProtocol>`; the blanket impl forwards
     // here.
     fn paint_effects(&self, _size: Size) -> PaintEffects {
-        let alpha = self.alpha();
-        // None when fully opaque (255) or fully transparent (0): neither
+        let alpha = self.opacity();
+        // None when fully opaque (1) or fully transparent (0): neither
         // requires an OpacityLayer.
-        if alpha == 255 || alpha == 0 {
+        if alpha == 1.0 || alpha == 0.0 {
             PaintEffects::NONE
         } else {
             PaintEffects::NONE.with_opacity(PaintOpacity::new(alpha))
@@ -332,7 +208,11 @@ impl RenderBox for RenderAnimatedOpacity {
 
     fn skip_paint(&self) -> bool {
         // Fully transparent: nothing to paint.
-        self.alpha() == 0
+        self.opacity() == 0.0
+    }
+
+    fn visits_child_for_semantics(&self, _child_slot: usize) -> bool {
+        self.always_include_semantics || self.opacity() > 0.0
     }
 
     // Compositing-layer requirement: the pipeline's compositing-bits walk
@@ -346,10 +226,10 @@ impl RenderBox for RenderAnimatedOpacity {
     // `RenderBox` trait's default `false` (`render_box.rs`'s
     // `always_needs_compositing` default) and never allocate the layer.
     //
-    // The threshold is [`is_layered`](Self::is_layered) (`0 < alpha < 255`),
+    // The threshold is `OpacitySample::is_layered` (`0 < alpha < 1`),
     // the SAME predicate `paint_effects`/`skip_paint` above already use, and
     // the one `RenderOpacity`/`RenderSliverOpacity` establish for this crate:
-    // at `alpha == 255` no layer is ever allocated (`paint_effects` returns no
+    // at `alpha == 1` no layer is ever allocated (`paint_effects` returns no
     // opacity effect), so requiring compositing there would be pure
     // overhead with no visual effect: fully opaque does not count as
     // needing its own layer.
@@ -358,10 +238,10 @@ impl RenderBox for RenderAnimatedOpacity {
     // override at all — a separate, pre-existing gap in this crate that
     // predates this change and stays out of scope here.
     fn always_needs_compositing(&self) -> bool {
-        Self::is_layered(self.alpha())
+        OpacitySample::is_layered(self.opacity())
     }
 
-    fn attach(&mut self, handle: RenderInvalidationHandle) {
+    fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
         let animation = self.animation.clone();
         let alpha = self.alpha.clone();
         let mark_handle = handle.clone();
@@ -382,78 +262,5 @@ impl RenderBox for RenderAnimatedOpacity {
         if let Some(id) = self.listener_id.take() {
             self.animation.remove_listener(id);
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use flui_animation::AnimationController;
-    use flui_rendering::pipeline::PipelineOwner;
-    use flui_rendering::protocol::BoxProtocol;
-    use std::time::Duration;
-
-    fn controller(ms: u64) -> AnimationController {
-        AnimationController::builder(Duration::from_millis(ms)).build()
-    }
-
-    fn render_at(opacity: f64) -> RenderAnimatedOpacity {
-        RenderAnimatedOpacity::new(proxy_at(opacity), false)
-    }
-
-    fn proxy_at(opacity: f64) -> ProxyAnimation<f64> {
-        let c = controller(100);
-        c.set_value(opacity);
-        let parent: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(c);
-        ProxyAnimation::new(parent)
-    }
-
-    /// Mints a real [`RenderInvalidationHandle`] by inserting a throwaway anchor node —
-    /// `RenderInvalidationHandle::new` is `pub(super)` to `flui_rendering::pipeline`, so
-    /// a real one can only come from a live `PipelineOwner` (matches
-    /// `RenderAnimatedSize`'s own tests, which go through `PipelineOwner::insert`
-    /// rather than constructing a handle by hand).
-    fn anchor_handle() -> (PipelineOwner, RenderInvalidationHandle) {
-        let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
-        let anchor = owner
-            .insert(Box::new(render_at(1.0))
-                as Box<dyn flui_rendering::traits::RenderObject<BoxProtocol>>);
-        let handle = owner
-            .render_invalidation_handle(anchor)
-            .expect("just-inserted id must be live");
-        (owner, handle)
-    }
-
-    // Proves the commit-ordering fix: when the mark send fails, the cache
-    // must NOT advance, so a later successful tick still sees the true
-    // delta and retries the mark instead of silently losing it. Dropping
-    // `owner` closes the dirty-request channel's receiver, so any further
-    // send on `handle` returns `SendError::OwnerGone` — a real, cheaply
-    // reproducible failure path (not a channel-full simulation, but exactly
-    // the same code path: `RenderInvalidationHandle::mark_needs_paint`/
-    // `mark_needs_compositing_bits_update` returning `Err`).
-    #[test]
-    fn recompute_alpha_does_not_advance_the_cache_when_the_mark_send_fails() {
-        let (owner, handle) = anchor_handle();
-        drop(owner);
-
-        // 0.0 -> 0.5 crosses the layered boundary, so the compositing-bits
-        // send is attempted first; it fails immediately (owner gone) and
-        // the function must return before ever touching the cache or
-        // attempting the paint-mark send.
-        let cache = AtomicU8::new(0);
-        let changed = RenderAnimatedOpacity::recompute_alpha(&proxy_at(0.5), &cache, &handle);
-
-        assert!(
-            !changed,
-            "a failed mark send must report no committed change"
-        );
-        assert_eq!(
-            cache.load(Ordering::Relaxed),
-            0,
-            "the cache must stay at the old value when the send fails, so \
-             the next tick re-derives the same delta against the true old \
-             value and retries the mark instead of losing it"
-        );
     }
 }

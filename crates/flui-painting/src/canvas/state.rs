@@ -167,7 +167,7 @@ impl Canvas {
     /// Saves the canvas state with a layer that applies a blend mode at full opacity.
     ///
     /// A blend-mode layer with no explicit opacity is opaque
-    /// (alpha = 1.0).  The engine derives layer opacity from `paint.color.a`, so
+    /// (alpha = 1.0). The engine derives layer opacity from `paint.color.opacity()`, so
     /// this method sets alpha = 255 — not the zero produced by `Color::TRANSPARENT`.
     /// RGB channels are ignored for saveLayer compositing; only alpha matters.
     ///

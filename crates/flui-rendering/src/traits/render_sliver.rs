@@ -461,7 +461,7 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     /// Override to subscribe to a `dyn Listenable` this object owns or
     /// holds and self-mark on notify via the handle. Default: no-op. See
     /// [`RenderObject::attach`].
-    fn attach(&mut self, handle: crate::pipeline::RenderInvalidationHandle) {
+    fn attach(&mut self, handle: crate::pipeline::LocalRenderInvalidationHandle) {
         let _ = handle;
     }
 
@@ -625,7 +625,7 @@ where
         <T as RenderSliver>::reassemble(self);
     }
 
-    fn attach(&mut self, handle: crate::pipeline::RenderInvalidationHandle) {
+    fn attach(&mut self, handle: crate::pipeline::LocalRenderInvalidationHandle) {
         <T as RenderSliver>::attach(self, handle);
     }
 

@@ -301,7 +301,8 @@ impl super::WgpuPainter {
     /// Draw an in-bounds texel region under the current affine transform.
     ///
     /// Filtering applies to decoded straight channels before Paint tint/alpha.
-    /// Invalid geometry omits the complete operation; quota failures remain sticky.
+    /// Invalid geometry or nonfinite filter coefficients omit the complete
+    /// operation; quota failures remain sticky.
     #[expect(
         clippy::too_many_arguments,
         reason = "The source rectangle and optional fitted tile preserve the recorded image operation"

@@ -1,10 +1,5 @@
-error[E0624]: method `dispose` is private
+error[E0599]: no method named `dispose` found for struct `AnimationController` in the current scope
  --> crates/flui-animation/tests/compile_fail/driven_controller_has_no_bare_dispose.rs:9:14
   |
 9 |     observer.dispose();
-  |              ^^^^^^^ private method
-  |
- ::: crates/flui-animation/src/controller.rs
-  |
-  |     pub(crate) fn dispose(&self, retirement: &mut RecoveryScope<'_>) {
-  |     ---------------------------------------------------------------- private method defined here
+  |              ^^^^^^^ method not found in `AnimationController`

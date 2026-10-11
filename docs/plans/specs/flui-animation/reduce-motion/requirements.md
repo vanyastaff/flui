@@ -58,19 +58,24 @@
   якоря этого тика. Тест: строки `finite_repeat_settles_at_its_last_leg`,
   `infinite_repeat_parks_at_its_first_leg_start`, `parked_repeat_resumes_from_zero_under_full`.
 - **R4.** КОГДА Normal-контроллер с симуляцией завершается (Reduce или «нет часов» ownership),
-  СИСТЕМА ДОЛЖНА взять первое `t ∈ {0.25·2ᵏ s, k = 0..8}` с `is_done(t)` и конечным `x(t)`;
+  СИСТЕМА ДОЛЖНА использовать объявленную конечную точку нативного запуска: цель
+  property motion или границу fling. Для произвольной пользовательской `Simulation`,
+  которая не объявляет endpoint, СИСТЕМА ДОЛЖНА взять первое
+  `t ∈ {0.25·2ᵏ s, k = 0..8}` с `is_done(t)` и конечным `x(t)`;
   иначе — последний конечный `x(t)` сетки (64 s); если конечного нет — значение не меняется;
   во всех случаях статус терминален, future `Ok`. Тест: `simulation_settle_grid` (строки:
   трение → `final_x` замкнутой формы, пружина → `end` точно, тестовая `x(t) = t` без конца → 64,
-  тестовая NaN-симуляция → значение прежнее).
+  тестовая NaN-симуляция → значение прежнее; медленный нативный fling → объявленная
+  граница, `fling_settlement_reaches_its_declared_bound`).
 - **R5.** `AnimationBehavior::Preserve` ДОЛЖЕН давать при любой политике и масштабе те же значения,
   что при `Full`. Тест (PB): `preserve_runs_identically_under_any_policy` — случайные
   последовательности смен политики/масштаба и разбиения кадров; эталон — тот же запуск на втором
   `Vsync` с `Full`.
 - **R6.** Builder ДОЛЖЕН давать `Normal` по умолчанию для любой формы (`unbounded()` поведение не
-  меняет); `behavior` задаётся явно. Скролл (3 сайта), таймеры (snackbar, InkWell) и индикаторы
-  загрузки (`ActivityIndicator`, `LinearProgressIndicator`, `CupertinoActivityIndicator`) —
-  `.behavior(Preserve)`; implicit-анимации и `AnimatedValue` — `Normal` (решения X2, X9,
+  меняет); `behavior` задаётся явно. Скролл (3 сайта) и таймеры (snackbar, InkWell) —
+  `.behavior(Preserve)`; индикаторы загрузки (`ActivityIndicator`, `LinearProgressIndicator`,
+  `CupertinoActivityIndicator`) — `Normal` с видимой статичной обратной связью под Reduce
+  (ADR-0192 пересматривает прежнее решение X9); implicit-анимации и `AnimatedValue` — `Normal` (решение X2,
   orchestration «По итогам adversarial review»). Тест: `default_behavior_is_normal` (таблица
   builder'ов) и строка `implicit_opacity_settles_under_reduce`.
 

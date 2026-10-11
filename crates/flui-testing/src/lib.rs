@@ -1472,7 +1472,7 @@ impl HeadlessBinding {
     /// reports `false` by the time that same tick returns. A ticker's tick
     /// invokes its callback unconditionally (deciding whether to *reschedule*
     /// only afterward), and a controller's tick clamps the value to the
-    /// endpoint, flips the status to `Completed`, stops, and ONLY THEN
+    /// endpoint, flips the status to `ForwardSettled`, stops, and ONLY THEN
     /// notifies listeners — the completing tick still delivers the
     /// final value and fires the status listener. Sampling `has_running()`
     /// after `tick_all` would silently drop the one pump that carries that

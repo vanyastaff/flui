@@ -392,12 +392,12 @@ impl FlushState {
 /// The heap-allocated state shared by every clone of a [`ScrollPosition`].
 struct Inner {
     state: RefCell<State>,
-    /// `Listenable` sink — what `ScrollController::as_listenable()` and
+    /// `Listenable` sink — what `ScrollController::listenable()` and
     /// `AnimatedBuilder` subscribe to.
     notifier: ChangeNotifier,
     /// The `ViewportOffset` trait's own ptr-eq listener list, kept separate
     /// from `notifier` because it has a different identity contract
-    /// (`Arc::ptr_eq` removal, not a `ListenerId`).
+    /// (`Rc::ptr_eq` removal, not a `ListenerId`).
     offset_listeners: RefCell<Vec<(flui_foundation::ListenerId, std::rc::Weak<dyn Fn()>)>>,
     offset_notifier: ChangeNotifier,
     flush: RefCell<FlushState>,
@@ -427,14 +427,17 @@ impl Inner {
     /// there is exactly one place that decides who gets told.
     fn notify(&self) {
         let mut recovery = flui_foundation::panic::PanicRecovery::new();
-        self.notifier
-            .notify_listeners_with_recovery(&mut recovery.scope());
+        self.notify_with_recovery(&mut recovery.scope());
+        recovery.finish();
+    }
+
+    fn notify_with_recovery(&self, recovery: &mut flui_foundation::panic::RecoveryScope<'_>) {
+        self.notifier.notify_listeners_with_recovery(recovery);
         // Accepted pixel geometry must reach render invalidation even when a
         // widget listener failed. Both channels share the first failure and
         // the existing notifier's live-membership and retirement rules.
         self.offset_notifier
-            .notify_listeners_with_recovery(&mut recovery.scope());
-        recovery.finish();
+            .notify_listeners_with_recovery(recovery);
     }
 
     /// Mark the extents dirty and, if a flush handle is installed and no
@@ -492,7 +495,7 @@ impl Listenable for Inner {
 /// implementation (consumed by `RenderViewport`) that is also
 /// [`Listenable`] (consumed by `ScrollController`/`AnimatedBuilder`).
 ///
-/// All clones point at the same underlying state via an `Arc`, so a gesture
+/// All clones point at the same underlying state via an `Rc`, so a gesture
 /// handler holding one clone and a `RenderViewport` holding another observe
 /// each other's writes immediately — no separate push step is needed once
 /// both sides share the same `ScrollPosition`.
@@ -688,6 +691,18 @@ impl ScrollPosition {
     /// `ScrollController::jump_to` clamps to the current extents before
     /// calling this.
     pub fn set_pixels(&self, value: f64) {
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        self.set_pixels_with_recovery(value, &mut recovery.scope());
+        recovery.finish();
+    }
+
+    /// Publish pixels within an enclosing framework operation's failure custody.
+    #[doc(hidden)]
+    pub fn set_pixels_with_recovery(
+        &self,
+        value: f64,
+        recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
+    ) {
         let changed = {
             let mut state = self.inner.state.borrow_mut();
             if (state.pixels - value).abs() > f64::EPSILON {
@@ -698,7 +713,7 @@ impl ScrollPosition {
             }
         };
         if changed {
-            self.notify();
+            self.notify_with_recovery(recovery);
         }
     }
 
@@ -723,6 +738,12 @@ impl ScrollPosition {
     /// `set_pixels` path, which never schedules one.
     pub fn notify(&self) {
         self.inner.notify();
+    }
+
+    /// Deliver both notification channels within shared framework failure custody.
+    #[doc(hidden)]
+    pub fn notify_with_recovery(&self, recovery: &mut flui_foundation::panic::RecoveryScope<'_>) {
+        self.inner.notify_with_recovery(recovery);
     }
 
     // ========== Scroll activity ==========
@@ -834,10 +855,10 @@ impl ScrollPosition {
         self.notify();
     }
 
-    /// Returns an `Arc<dyn Listenable>` pointing at the same shared state —
-    /// the upcast `ScrollController::as_listenable()` hands to `AnimatedBuilder`.
+    /// Returns an `Rc<dyn Listenable>` sharing this position's notification channel.
+    /// Each call retains the same channel identity without allocating a new notifier.
     #[must_use]
-    pub fn as_listenable(&self) -> Rc<dyn Listenable> {
+    pub fn listenable(&self) -> Rc<dyn Listenable> {
         Rc::clone(&self.inner) as Rc<dyn Listenable>
     }
 
@@ -871,7 +892,7 @@ impl ScrollPosition {
     }
 
     /// Whether `self` and `other` are clones of the same underlying position
-    /// (share one `Arc`-backed inner state), not merely equal by value. A
+    /// (share one `Rc`-backed inner state), not merely equal by value. A
     /// widget reconciling an injected `ScrollPosition` against the one
     /// already installed on its render object uses this to decide whether a
     /// swap is actually a change — replacing a same-identity offset would

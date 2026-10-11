@@ -8,6 +8,35 @@ rendered page leaves out.
 
 ## Core Concepts
 
+### Presentation motion policy
+
+Application `MotionPreference` is `FollowSystem` (the default), `Reduce` or
+`Full`. Each presentation resolves it against the host's `SystemPreferences`.
+The runtime updates its clock and publishes `MediaQuery::motion_of` before
+the next frame. Application Full uses authored durations even when the host
+requests reduced motion or a duration scale.
+
+Controllers default to `AnimationBehavior::Normal`. Under Reduce, a finite
+run settles at its terminal value on the next registry tick; an infinite
+repeat parks without completing its future or requesting continuous frames.
+Full resumes a parked repeat with a fresh time anchor. Under FollowSystem,
+a positive host duration scale multiplies Normal durations.
+
+Select `AnimationBehavior::Preserve` for physical inertia and essential timers.
+Loading indicators use Normal and visible static feedback under Reduce (ADR-0192).
+Preserve keeps authored timing under motion preferences;
+debug playback and registry muting still apply. Changing policy commits clock
+state without sampling controllers or invoking their listeners.
+
+The [guide](docs/GUIDE.md#motion-preferences) gives an executable clock example.
+The interactive `motion_lab` example at the workspace root compares property
+interruption, independent deadlines, gestures and preserved timers:
+
+```bash
+cargo run --example motion_lab --features material -- --full
+cargo run --example motion_lab --features material -- --reduce
+```
+
 ### The Animation Model
 
 In FLUI an `Animation<T>` produces values of type `T` over time. The animation itself doesn't know about time—it's sampled by a presentation registry or manually.
@@ -30,22 +59,22 @@ The separation allows:
 
 | Variant | Meaning |
 |---------|---------|
-| `Dismissed` | Settled after a reverse run or a reset; the value is the lower bound only if the run finished (a `stop` mid-reverse leaves it between the bounds) |
+| `ReverseSettled` | Reverse-settled phase or a value at the lower bound; an interior stop also uses this phase |
 | `Forward` | Forward directional status; a run may be active or stopped between the bounds |
 | `Reverse` | Reverse directional status; a run may be active or stopped between the bounds |
-| `Completed` | Settled after a forward run; the value is the upper bound only if the run finished (a `stop` mid-forward leaves it between the bounds) |
+| `ForwardSettled` | Forward-settled phase or a value at the upper bound; an interior stop also uses this phase |
 
 ```rust
 use flui_animation::AnimationStatus;
 
-assert!(AnimationStatus::Forward.is_running());
-assert!(AnimationStatus::Completed.is_stopped());
+assert!(AnimationStatus::Forward.is_directional());
+assert!(AnimationStatus::ForwardSettled.is_settled());
 assert_eq!(AnimationStatus::Forward.flip(), AnimationStatus::Reverse);
 ```
 
 Status indicates direction, not position or whether a run is active. Use
-`Animation::is_animating` to check activity: `AnimationStatus::is_running`
-only identifies the `Forward` and `Reverse` status variants. A `Completed`
+`Animation::is_animating` to check activity: `AnimationStatus::is_directional`
+only identifies the `Forward` and `Reverse` status variants. A `ForwardSettled`
 animation at value 1.0 that starts reversing becomes `Reverse` immediately,
 even before the value changes; `set_value` and disposal can leave a directional
 status without an active run.
@@ -59,7 +88,7 @@ The primary driver. Holds a value in `[lower_bound, upper_bound]` (default 0.0�
 ```rust
 # use std::time::Duration;
 # use flui_animation::{AnimationController, AnimationError};
-# fn main() -> Result<(), AnimationError> {
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
 # let duration = Duration::from_millis(300);
 let controller = AnimationController::builder(Duration::from_millis(300)).build();
 
@@ -92,11 +121,38 @@ controller.forward_from(Some(0.5))?;  // Jump to 0.5, then animate forward
 controller.reverse_from(Some(0.8))?;  // Jump to 0.8, then animate backward
 controller.animate_to(0.6, None)?;    // Animate to a value over the forward duration
 controller.stop()?;                   // Stop at current value
-controller.reset()?;                  // Jump to lower_bound, status = Dismissed
+controller.reset()?;                  // Jump to lower_bound, status = ReverseSettled
 # drop(controller);
 # Ok(())
 # }
 ```
+
+### Finishing a transition
+
+Use `finish()` when the application needs the current finite transition to
+reach its declared endpoint immediately. The original run future succeeds.
+
+```rust
+use flui_animation::{Animation, AnimationController};
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll, Waker};
+use std::time::Duration;
+
+let controller = AnimationController::builder(Duration::from_millis(300)).build();
+let mut run = controller.forward().expect("live controller");
+controller.tick_at(Duration::from_millis(150));
+assert_eq!(controller.value(), 0.5);
+controller.finish().expect("finite transition");
+assert_eq!(controller.value(), 1.0);
+assert!(!controller.is_animating());
+let mut context = Context::from_waker(Waker::noop());
+assert_eq!(Pin::new(&mut run).poll(&mut context), Poll::Ready(Ok(())));
+```
+
+A paused finite run can also finish. An idle controller stays idle. Infinite
+repeats and arbitrary custom simulations return `AnimationError::NoFiniteEndpoint`
+without changing the run; `stop()` instead cancels at the current value.
 
 ### Repeating
 
@@ -119,7 +175,7 @@ controller.repeat_with(Some(0.2), Some(0.8), true, None, Some(3))?;
 
 ```rust
 # use std::time::Duration;
-# use flui_animation::{AnimationController, AnimationError, SpringDescription, SpringSimulation};
+# use flui_animation::{AnimationController, AnimationError, SpringDescription, SpringSimulation, Tolerance};
 # fn main() -> Result<(), AnimationError> {
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 // Fling with velocity (uses spring physics)
@@ -127,12 +183,12 @@ controller.fling(1.0)?;   // velocity toward upper_bound
 controller.fling(-1.0)?;  // velocity toward lower_bound
 
 // Custom spring: fling needs a non-oscillating (ratio >= 1) spring
-let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0);
+let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0).expect("valid spring");
 controller.fling_with(1.0, Some(spring))?;
 
 // Arbitrary simulation, oscillating springs included
-let bouncy = SpringDescription::with_damping_ratio(1.0, 500.0, 0.7);
-let sim = SpringSimulation::new(bouncy, 0.0, 1.0, 2.0);
+let bouncy = SpringDescription::with_damping_ratio(1.0, 500.0, 0.7).expect("valid spring");
+let sim = SpringSimulation::new(bouncy, 0.0, 1.0, 2.0, Tolerance::DEFAULT)?;
 controller.animate_with(sim)?;
 # drop(controller);
 # Ok(())
@@ -141,8 +197,9 @@ controller.animate_with(sim)?;
 
 ### Listening
 
-Value listeners come from `flui_foundation::Listenable`; status listeners
-from `Animation`. Both take an `Rc`'d callback and return a `ListenerId`.
+Value listeners come from `flui_foundation::Listenable` and return a `ListenerId`.
+Status subscriptions come from `Animation` and return a `StatusSubscription`
+that removes the callback when dropped. Both take an `Rc`'d callback.
 
 ```rust
 # use std::rc::Rc;
@@ -156,12 +213,12 @@ let id = controller.add_listener(Rc::new(|| println!("value changed")));
 controller.remove_listener(id);
 
 // Status changes
-let id = controller.add_status_listener(Rc::new(|status| {
-    if status == AnimationStatus::Completed {
-        println!("done");
+let subscription = controller.subscribe_status(Rc::new(|status| {
+    if status == AnimationStatus::ForwardSettled {
+        println!("forward phase settled");
     }
 }));
-controller.remove_status_listener(id);
+drop(subscription);
 # drop(controller);
 ```
 
@@ -185,36 +242,36 @@ back curves overshoot). Used for easing.
 
 **Contract**: `transform(0.0) == 0.0` and `transform(1.0) == 1.0`.
 
-### Predefined Curves
+### Predefined curves
 
-`Curves` holds the catalog as associated constants:
+The `curves` module contains the easing preset constants:
 
 ```rust
-use flui_animation::{Curve, Curves};
+use flui_animation::{Curve, curves};
 
 let curves: [&dyn Curve; 12] = [
-    &Curves::Linear,        // Identity
-    &Curves::EaseIn,        // Slow start
-    &Curves::EaseOut,       // Slow end
-    &Curves::EaseInOut,     // Slow start and end
-    &Curves::FastOutSlowIn, // Material Design standard
-    &Curves::BounceIn,      // Bounce at start
-    &Curves::BounceOut,     // Bounce at end
-    &Curves::BounceInOut,   // Bounce both
-    &Curves::ElasticIn,     // Overshoot at start
-    &Curves::ElasticOut,    // Overshoot at end
-    &Curves::ElasticInOut,  // Overshoot both
-    &Curves::Decelerate,    // Fast start, gradual stop
+    &curves::LINEAR,           // Identity
+    &curves::EASE_IN,          // Slow start
+    &curves::EASE_OUT,         // Slow end
+    &curves::EASE_IN_OUT,      // Slow start and end
+    &curves::FAST_OUT_SLOW_IN, // Material Design standard
+    &curves::BOUNCE_IN,        // Bounce at start
+    &curves::BOUNCE_OUT,       // Bounce at end
+    &curves::BOUNCE_IN_OUT,    // Bounce both
+    &curves::ELASTIC_IN,       // Overshoot at start
+    &curves::ELASTIC_OUT,      // Overshoot at end
+    &curves::ELASTIC_IN_OUT,   // Overshoot both
+    &curves::DECELERATE,       // Fast start, gradual stop
 ];
 for curve in curves {
     assert!((curve.transform(1.0) - 1.0).abs() < 1e-9);
 }
 ```
 
-### Custom Curves
+### Custom curves
 
 ```rust
-use flui_animation::{Cubic, Curves, ElasticOutCurve, Interval};
+use flui_animation::{Cubic, curves, ElasticOutCurve, Interval};
 
 // Cubic bezier (CSS-style)
 let curve = Cubic::new(0.25, 0.1, 0.25, 1.0);
@@ -223,7 +280,7 @@ let curve = Cubic::new(0.25, 0.1, 0.25, 1.0);
 let elastic = ElasticOutCurve::new(0.3);
 
 // Interval: active only in [0.2, 0.8]
-let interval = Interval::new(0.2, 0.8, Curves::EaseIn);
+let interval = Interval::new(0.2, 0.8, curves::EASE_IN);
 
 ```
 
@@ -245,9 +302,9 @@ assert_eq!(ticks.transform(0.125), 0.125);
 ### Curve Modifiers
 
 ```rust
-use flui_animation::{Curve, Curves};
+use flui_animation::{Curve, curves};
 
-let flipped = Curves::EaseIn.flipped();   // 180° rotation: 1.0 - curve(1.0 - t)
+let flipped = curves::EASE_IN.flipped();   // 180° rotation: 1.0 - curve(1.0 - t)
 assert!((flipped.transform(0.0) - 0.0).abs() < 1e-9);
 ```
 
@@ -255,7 +312,7 @@ assert!((flipped.transform(0.0) - 0.0).abs() < 1e-9);
 
 ## Tweens
 
-An `Animatable<T>` transforms `t ∈ [0, 1]` into a value of type `T`.
+An `Animatable` transforms `t ∈ [0, 1]` into its associated `Value` type.
 
 A `Tween<T>` is an `Animatable` with explicit `begin` and `end` values.
 
@@ -308,18 +365,20 @@ let position = tween.transform(controller.value());
 
 A `Keyframes<T>` track is a value as a pure function of time. Segments are
 timed by `Duration` and laid end to end; each `to` segment carries the curve
-that eases *into* its value, `cubic` segments form a Catmull-Rom spline
-through the keyframe times, `hold` pauses and `jump` changes the value
+that eases *into* its value. Consecutive `cubic` segments form a Catmull-Rom
+spline through the keyframe times. At a join with an eased segment, a cubic
+segment takes that segment's velocity; next to `hold`, `jump` or a track
+endpoint, its velocity is zero. `hold` pauses and `jump` changes the value
 instantly. At a boundary the track returns the keyframe exactly (the value
 after a jump), and a non-finite sample is never published.
 
 ```rust
 use std::time::Duration;
-use flui_animation::{Animatable, Curves, Keyframes, Linear};
+use flui_animation::{Animatable, curves, Keyframes, Linear};
 
 let ms = Duration::from_millis;
 let pulse = Keyframes::builder(0.0, ms(1000))
-    .to(100.0, ms(250), Curves::EaseOut) // 0–250 ms
+    .to(100.0, ms(250), curves::EASE_OUT) // 0–250 ms
     .hold(ms(500))                       // 250–750 ms
     .to(0.0, ms(250), Linear)            // 750–1000 ms
     .build()
@@ -337,13 +396,14 @@ so one controller drives many elements.
 ### Tween Composition
 
 ```rust
-use flui_animation::{ChainedTween, CurveTween, Curves, FloatTween, ReverseTween};
+use flui_animation::{Animatable, Curve, curves, FloatTween, ReverseTween};
 let tween = FloatTween::new(0.0, 100.0);
-// Chain: a curve, then a value tween
-let curved = ChainedTween::new(CurveTween::new(Curves::EaseIn), tween);
+let eased = tween.transform(curves::EASE_IN.transform(0.5));
+assert!(eased < 50.0);
 
 // Reverse direction
 let reversed = ReverseTween::new(tween);
+assert_eq!(reversed.transform(0.25), 75.0);
 ```
 
 ### CurveTween
@@ -351,9 +411,9 @@ let reversed = ReverseTween::new(tween);
 Apply a curve as an Animatable:
 
 ```rust
-use flui_animation::{Animatable, CurveTween, Curves};
+use flui_animation::{Animatable, CurveTween, curves};
 
-let curve_tween = CurveTween::new(Curves::EaseIn);
+let curve_tween = CurveTween::new(curves::EASE_IN);
 let eased = curve_tween.transform(0.5); // EaseIn applied to 0.5
 assert!(eased < 0.5);
 ```
@@ -371,9 +431,9 @@ Apply a curve to an animation's output:
 ```rust
 # use std::rc::Rc;
 # use std::time::Duration;
-# use flui_animation::{Animation, AnimationController, CurvedAnimation, Curves};
+# use flui_animation::{Animation, AnimationController, CurvedAnimation, curves};
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
-let curved = CurvedAnimation::new(Rc::new(controller.clone()), Curves::EaseInOut);
+let curved = CurvedAnimation::new(Rc::new(controller.clone()), curves::EASE_IN_OUT);
 
 // Value is: curve.transform(controller.value())
 let value = curved.value();
@@ -409,7 +469,7 @@ Invert an animation:
 let reversed = ReverseAnimation::new(Rc::new(controller.clone()));
 
 // value = 1.0 - parent.value()
-// Forward becomes Reverse, Completed becomes Dismissed
+// Forward becomes Reverse, ForwardSettled becomes ReverseSettled
 assert_eq!(reversed.value(), 1.0);
 # drop(controller);
 ```
@@ -437,15 +497,15 @@ proxy.set_parent(Rc::new(controller2.clone()));
 Animation with a fixed value (never changes):
 
 ```rust
-use flui_animation::{ALWAYS_COMPLETE, ALWAYS_DISMISSED, Animation, AnimationStatus, ConstantAnimation};
+use flui_animation::{UNIT_END_ANIMATION, UNIT_START_ANIMATION, Animation, AnimationStatus, ConstantAnimation};
 
-let stopped = ConstantAnimation::with_status(0.5, AnimationStatus::Completed);
-let complete = ConstantAnimation::completed(1.0);
-let dismissed = ConstantAnimation::dismissed(0.0);
+let stopped = ConstantAnimation::with_status(0.5, AnimationStatus::ForwardSettled);
+let end = ConstantAnimation::forward_settled(1.0);
+let start = ConstantAnimation::reverse_settled(0.0);
 
-// Predefined statics
-assert_eq!(ALWAYS_COMPLETE.value(), 1.0);
-assert_eq!(ALWAYS_DISMISSED.value(), 0.0);
+// Fixed normalized endpoints
+assert_eq!(UNIT_END_ANIMATION.value(), 1.0);
+assert_eq!(UNIT_START_ANIMATION.value(), 0.0);
 ```
 
 ### AnimationSwitch
@@ -477,15 +537,59 @@ let switch = AnimationSwitch::new(Rc::new(anim1.clone()), Some(Rc::new(anim2.clo
 ```rust
 # use std::rc::Rc;
 # use std::time::Duration;
-# use flui_animation::{AnimationController, CurvedAnimation, Curves, FloatTween};
+# use flui_animation::{AnimationController, CurvedAnimation, curves, FloatTween};
 use flui_animation::AnimatableExt;
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
-let curved = Rc::new(CurvedAnimation::new(Rc::new(controller.clone()), Curves::EaseOut));
+let curved = Rc::new(CurvedAnimation::new(Rc::new(controller.clone()), curves::EASE_OUT));
 let animated = FloatTween::new(0.0, 100.0).animate(curved);
 # drop(controller);
 ```
 
 ---
+
+## Custom value motion
+
+A custom value can combine geometry, color and nested values into one owned
+motion. Derive `TwoWayConverter` for a nonempty `Clone` struct whose fields
+implement `TwoWayConverter` and `Lerp`. Field vectors are concatenated in
+declaration order. Interpolation delegates to each field, so a color keeps its
+premultiplied Oklab behavior rather than becoming four independent channel tweens.
+
+```rust
+use flui_animation::{Lerp, TwoWayConverter};
+use flui_foundation::geometry::Offset;
+use flui_painting::styling::Color;
+
+#[derive(Clone, TwoWayConverter)]
+struct Appearance {
+    position: Offset<f64>,
+    color: Color,
+}
+
+#[derive(Clone, TwoWayConverter)]
+struct CardMotion(Appearance, f64);
+
+let start = CardMotion(Appearance {
+    position: Offset::ZERO,
+    color: Color::rgb(255, 0, 0),
+}, 0.0);
+let end = CardMotion(Appearance {
+    position: Offset::new(20.0, 40.0),
+    color: Color::rgba(0, 0, 255, 0),
+}, 1.0);
+let midpoint = start.lerp_to(&end, 0.5);
+assert_eq!(midpoint.0.position, Offset::new(10.0, 20.0));
+let [red, _, blue, alpha] = midpoint.0.color.to_rgba_f32_array();
+assert!(red >= 254.0 / 255.0 && blue <= 1.0 / 255.0);
+assert_eq!(alpha, 0.5);
+assert_eq!(midpoint.1, 0.5);
+```
+
+Pass this value to `AnimatedValue` to share registration, admission, time and
+retargeting across its components. Fields need concrete vector widths; stable
+Rust cannot sum generic-dependent widths into an array length. A manual
+`TwoWayConverter` implementation can choose a concrete representation for a
+generic value.
 
 ## Physics Simulations
 
@@ -513,8 +617,8 @@ let physical = SpringDescription::new(1.0, 500.0, 10.0)?;
 let perceptual = SpringDescription::with_duration_and_bounce(Duration::from_millis(500), 0.3)?;
 assert_eq!(perceptual.spring_type(), SpringType::Underdamped);
 
-// A constant spring from a damping ratio; panics on invalid input.
-let critical = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0);
+// A damping ratio uses the same fallible contract as the physical coefficients.
+let critical = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0)?;
 assert_eq!(critical.spring_type(), SpringType::CriticallyDamped);
 
 assert!(SpringDescription::new(1.0, 500.0, 0.0).is_err()); // never rests
@@ -529,8 +633,8 @@ assert!(SpringDescription::new(1.0, 500.0, 0.0).is_err()); // never rests
 use flui_animation::simulation::{Simulation, SpringDescription, SpringSimulation, Tolerance};
 
 # fn main() -> Result<(), flui_animation::simulation::SimulationError> {
-let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 0.7);
-let sim = SpringSimulation::try_new(spring, 0.0, 1.0, 0.0, Tolerance::DEFAULT)?;
+let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 0.7)?;
+let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0, Tolerance::DEFAULT)?;
 
 assert_eq!(sim.x(0.0), 0.0);
 assert!(sim.dx(0.05) > 0.0);
@@ -555,7 +659,7 @@ use flui_animation::simulation::{FrictionSimulation, Simulation, Tolerance};
 # fn main() -> Result<(), flui_animation::simulation::SimulationError> {
 // drag in (0, 1): the fraction of velocity kept per second.
 let sim = FrictionSimulation::new(0.135, 0.0, 1000.0, Tolerance::DEFAULT)?;
-let rest = sim.final_x();
+let rest = sim.x(f64::INFINITY);
 assert!(sim.time_at_x(rest / 2.0) > 0.0);
 assert_eq!(sim.time_at_x(-1.0), f64::INFINITY); // behind the start: never
 # Ok(())
@@ -576,7 +680,7 @@ use flui_animation::simulation::{
 
 # fn main() -> Result<(), flui_animation::simulation::SimulationError> {
 let bounds = SimulationBounds::new(0.0, 100.0)?;
-let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 0.75);
+let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 0.75)?;
 let sim = BouncingScrollSimulation::new(spring, 0.135, 90.0, 2000.0, bounds, Tolerance::DEFAULT)?;
 assert!(sim.is_done(10.0));
 assert_eq!(sim.x(10.0), 100.0);
@@ -606,22 +710,47 @@ assert_eq!(screen, Tolerance::new(0.25, f64::INFINITY)?);
 
 ## Error Handling
 
-Fallible operations return `Result<_, AnimationError>`:
+Controller operations return `Result<_, AnimationError>`:
 
 | Variant | When |
 |---------|------|
 | `Disposed` | Fallible driving operations refuse; queries remain readable and closed channels do not resume delivery |
-| `InvalidBounds(String)` | `lower >= upper`, a non-finite bound or span, or a bad `repeat_with` range |
+| `NoFiniteEndpoint` | `finish()` refuses an infinite repeat or a custom simulation without a declared endpoint |
 | `IdentityExhausted` | A run or sample namespace has exhausted its non-reusable identities |
-| `InvalidSpring(String)` | An underdamped (oscillating) spring passed to `fling_with`; use `animate_with` for those |
-| `NonFiniteTarget(String)` | A `NaN` target or `from` (always), an infinite one when the bound it would clamp to is itself infinite (on a bounded controller infinities clamp to the bound), or a non-finite fling velocity or simulation start |
+| `ReentrantMotion` | User motion code repeatedly replaces the run while retargeting is prepared |
+| `AdmissionAborted` | Grouped preparation was interrupted before admission |
+| `InvalidExtent` | The gesture extent is not finite and strictly positive |
+| `InvalidRepeatRange { .. }` | Repeat endpoints or their span are invalid; `defect` identifies the range failure |
+| `UnderdampedFlingSpring { .. }` | The supplied damping ratio oscillates; use `animate_with` for that motion |
+| `NonFiniteInput { .. }` | A scalar input or inherited velocity is not finite; `input` and `value` identify it |
+| `UnboundedTarget { .. }` | The input requests an endpoint the unbounded controller does not have |
+| `SpanOverflow { .. }` | The finite `from` and `to` have an unrepresentable difference |
+| `VelocityOverflow { .. }` | Finite gesture velocity, extent and span yield an unrepresentable converted velocity |
+| `NonFiniteComponent { .. }` | A converter produces a non-finite component before admission |
+| `ComponentSimulation { .. }` | A vector component's motion construction fails; the original `SimulationError` is preserved |
+| `Simulation(_)` | Scalar physical motion construction fails with a typed `SimulationError` |
 
 ```rust
-# use std::time::Duration;
-# use flui_animation::{AnimationController, AnimationError};
-let err = flui_animation::ValueRange::new(1.0, 0.0);
-assert!(matches!(err, Err(AnimationError::InvalidBounds(_))));
+use flui_animation::{RangeDefect, ValueRange};
+
+assert_eq!(ValueRange::new(1.0, 0.0), Err(RangeDefect::Inverted));
+assert_eq!(ValueRange::new(f64::NAN, 1.0), Err(RangeDefect::NonFinite));
+assert_eq!(ValueRange::new(-f64::MAX, f64::MAX), Err(RangeDefect::SpanOverflow));
 ```
+
+`ValueRange::new()` returns the narrow `RangeDefect`, so configuration code
+can distinguish invalid endpoint data, ordering and span overflow without
+parsing a message. Controller lifetime and admission errors remain separate.
+
+Bounded `target` and `from` infinities still clamp to the indicated finite
+bound. A refused operation preserves the installed run, its displayed value
+and its original future. [ADR-0198](../../docs/adr/ADR-0198-typed-animation-admission-errors.md)
+records the input, range and physical-construction error boundaries.
+
+With optional serde, human-readable error diagnostics encode finite values as
+numbers and non-finite values as the exact strings `NaN`, `Infinity` and
+`-Infinity`, including nested simulation causes. Decoding rejects null and other
+strings. NaN payload bits are canonicalized; binary formats retain native floats.
 
 ---
 
@@ -641,8 +770,8 @@ dropping the owner unregisters and cancels the run. A manual controller from
 ## Validation
 
 Simulation constructors return `Err(SimulationError)` on invalid input
-(`SpringDescription::new`, `with_duration_and_bounce`,
-`with_response_and_damping`, `SpringSimulation::try_new`,
+(`SpringDescription::new`, `with_damping_ratio`, `with_duration_and_bounce`,
+`with_response_and_damping`, `SpringSimulation::new`,
 `FrictionSimulation::new`, `BoundedFrictionSimulation::new`,
 `BouncingScrollSimulation::new`, `SimulationBounds::new`, `Tolerance::new`,
 `Tolerance::for_device_pixel_ratio`). These constructors, meant for constants,
@@ -650,8 +779,6 @@ panic instead:
 
 | Constructor | Panics if |
 |-------------|-----------|
-| `SpringDescription::with_damping_ratio` | mass, stiffness or ratio is NaN, infinite or ≤ 0 |
-| `SpringSimulation::new` | start, end or velocity is not finite |
 | `Steps::new` | count = 0, or count = 1 with `JumpAt::None` |
 | `Interval::new` | begin/end not finite or outside [0,1], end < begin |
 | `Cubic::new` | any argument not finite, x1 or x2 outside [0,1], y1 or y2 outside [-1e6, 1e6] |
@@ -668,7 +795,7 @@ Each implemented from the canonical published source:
 | Capability | Source | API |
 |---|---|---|
 | Perceptually uniform color interpolation | Ottosson, Oklab (2020) | `ColorTween`, `Color::lerp` (premultiplied alpha, ADR-0149) |
-| M3 emphasized easing + full Penner catalog | Material 3 / Penner | `Curves::EaseInOutCubicEmphasized`, `ThreePointCubic`, `Split` |
+| Emphasized easing and polynomial-style presets | Bézier approximations; elastic and bounce formulas | `curves`, `ThreePointCubic`, `Split` |
 | Interruptible springs with velocity-preserving retarget | analytic closed forms | `AnimatedValue`, `#[derive(TwoWayConverter)]` |
 
 See `examples/oklab_gradient.rs`.

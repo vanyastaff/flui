@@ -51,7 +51,7 @@
 //! [`DrawerController`]s need — see `crate::drawer`'s module docs for the
 //! `GlobalKey` bridge and why [`DrawerHandle`] is `!Send`. The state tracks
 //! each drawer's opened bool (`crate::drawer::DrawerController::on_open_changed`
-//! updates it and reschedules this build), which drives BOTH the dynamic
+//! updates it and reschedules this build only when two slots reorder), which drives the dynamic
 //! child order (`if end_drawer_opened { drawer, end_drawer } else {
 //! end_drawer, drawer }`) — added last, an open end-drawer's scrim/panel
 //! must paint on top of, and hit-test before, a closed start-drawer's edge
@@ -673,9 +673,8 @@ impl ViewState<Scaffold> for ScaffoldState {
 impl ScaffoldState {
     /// Builds the [`DrawerController`] for one drawer slot, wiring its
     /// `on_open_changed` to update [`DrawerHandle`]'s tracked opened-bool,
-    /// reschedule this `Scaffold`'s own rebuild (so the dynamic slot order
-    /// and `on_drawer_changed` relay both react), and forward to the app
-    /// author's callback.
+    /// rebuild when the two drawer slots change order, and forward to the
+    /// app author's callback.
     fn build_drawer_controller(
         &self,
         alignment: DrawerAlignment,
@@ -696,14 +695,18 @@ impl ScaffoldState {
             DrawerAlignment::Start => DrawerHandle::set_drawer_opened,
             DrawerAlignment::End => DrawerHandle::set_end_drawer_opened,
         };
+        let can_reorder = alignment == DrawerAlignment::End && view.drawer.is_some();
 
         let mut controller = DrawerController::new(key, alignment, drawer.clone())
             .panel_width(drawer.configured_width())
             .is_open(is_open)
             .enable_open_drag_gesture(view.enable_open_drag_gesture)
             .on_open_changed(move |cx, opened| {
+                let reorder = can_reorder && handle.is_end_drawer_open() != opened;
                 set_opened(&handle, opened);
-                rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
+                if reorder {
+                    rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
+                }
                 if let Some(callback) = &on_changed {
                     callback(cx, opened);
                 }

@@ -13,7 +13,7 @@
 //! individually testable — rather than by awaiting the `AnimationRunFuture`
 //! `did_push` returns (ADR-0064). A handful that need the run to have real,
 //! not-yet-covered distance left (so a `reverse()` cannot collapse
-//! synchronously to `Dismissed`) pump a real `Vsync` instead; those say so.
+//! synchronously to `ReverseSettled`) pump a real `Vsync` instead; those say so.
 
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -70,7 +70,7 @@ fn navigator() -> (NavigatorHandle, Harness) {
     (handle, harness)
 }
 
-/// Drive a controller to `Completed` (entrance finished).
+/// Drive a controller to `ForwardSettled` (entrance finished).
 ///
 /// `set_value` **cancels** the active run rather than completing its
 /// `AnimationRunFuture` — this helper drives `status`, not the future. A test that
@@ -79,15 +79,15 @@ fn navigator() -> (NavigatorHandle, Harness) {
 fn complete(handle: &TransitionHandle) {
     let controller = handle.controller().expect("install created the controller");
     controller.set_value(1.0);
-    assert_eq!(controller.status(), AnimationStatus::Completed);
+    assert_eq!(controller.status(), AnimationStatus::ForwardSettled);
     handle.drain_pending_statuses();
 }
 
-/// Drive a controller to `Dismissed` (exit finished).
+/// Drive a controller to `ReverseSettled` (exit finished).
 fn dismiss(handle: &TransitionHandle) {
     let controller = handle.controller().expect("install created the controller");
     controller.set_value(0.0);
-    assert_eq!(controller.status(), AnimationStatus::Dismissed);
+    assert_eq!(controller.status(), AnimationStatus::ReverseSettled);
     handle.drain_pending_statuses();
 }
 
@@ -96,7 +96,7 @@ fn dismiss(handle: &TransitionHandle) {
 // ============================================================================
 
 /// `didPush` drives the controller forward and the entry parks in `Pushing` until
-/// the controller reports `Completed`.
+/// the controller reports `ForwardSettled`.
 ///
 /// Red-check: return `PushCompletion::Immediate` from `TransitionRoute::did_push`.
 pub(crate) fn push_transition_parks_the_entry_in_pushing_until_the_controller_completes() {
@@ -129,7 +129,7 @@ pub(crate) fn push_transition_parks_the_entry_in_pushing_until_the_controller_co
 /// push's `AnimationRunFuture` **inside the flush that runs `did_pop`**: `did_pop`
 /// calls `reverse()`, which — as a run-starting method — displaces and
 /// cancels the still-pending `forward()` run before starting the new one, and
-/// `AnimationController::finish` delivers synchronously, so the continuation
+/// the controller delivers synchronously, so the continuation
 /// `NavigatorShared::apply` registered on that run fires right there, mid-flush.
 /// No deadlock (the continuation only touches the command queue and
 /// `settle_wake`, never the history), and the entry ends `Popping`, not
@@ -138,7 +138,7 @@ pub(crate) fn push_transition_parks_the_entry_in_pushing_until_the_controller_co
 ///
 /// Needs a real, ticking `Vsync`: popping at `value == 0` (this file's usual
 /// hand-driven setup, which never advances the controller) would let
-/// `reverse()` collapse straight to `Dismissed` — an already-dismissed
+/// `reverse()` collapse straight to `ReverseSettled` — an already-dismissed
 /// controller finalizing synchronously, a different shape from this one — so
 /// this pumps the entrance to its midpoint first, leaving `reverse()` real
 /// distance to cover.
@@ -166,7 +166,7 @@ pub(crate) fn pop_mid_push_cancels_the_push_future_inside_the_flush_and_ends_pop
     // registry's per-run clock (`Vsync`'s own doc); a second pump is what
     // actually advances it.
     laid.pump_for(Duration::ZERO);
-    // Halfway through the 300ms entrance: `Forward`, not yet `Completed` —
+    // Halfway through the 300ms entrance: `Forward`, not yet `ForwardSettled` —
     // `reverse()` below has real distance to cover.
     laid.pump_for(Duration::from_millis(150));
     assert_eq!(
@@ -211,7 +211,8 @@ pub(crate) fn scope_replacement_moves_an_existing_route_without_restarting_it() 
     laid.pump_widget(tree(new.clone()));
     assert!(old.is_empty(), "the existing route releases its old clock");
     assert_eq!(new.len(), 1, "the existing route acquires the new clock");
-    laid.adopt_vsync(new.clone());
+    laid.adopt_vsync(new.clone())
+        .expect("replacement clock admission");
     laid.pump_for(Duration::ZERO);
     assert_eq!(
         controller.value(),
@@ -307,6 +308,52 @@ pub(crate) fn hopping_route_dropped_without_dispose_frees_proxy() {
     );
 }
 
+pub(crate) fn replacement_retains_near_zero_secondary_progress_until_crossing() {
+    for progress in [0.5e-6, f64::EPSILON / 4.0] {
+        let (bottom, bottom_handle) = transition("bottom");
+        let navigator = NavigatorHandle::new();
+        navigator.seed_initial(bottom);
+        let mut harness = mount(Navigator::new(navigator.clone()));
+        let (middle, middle_handle) = transition("middle");
+        navigator.push(middle);
+        harness.tick();
+        let middle_controller = middle_handle.controller().expect("installed middle");
+        middle_controller.set_value(progress);
+        let secondary = bottom_handle.secondary_animation();
+        assert_eq!(secondary.value(), progress);
+
+        let (replacement, replacement_handle) = transition("replacement");
+        navigator.push_replacement(replacement);
+        harness.tick();
+        assert_eq!(
+            secondary.value(),
+            progress,
+            "replacement preserves the previous displayed secondary progress"
+        );
+        let replacement_controller = replacement_handle
+            .controller()
+            .expect("installed replacement");
+        replacement_controller.set_value(progress / 2.0);
+        assert_eq!(
+            secondary.value(),
+            progress,
+            "the trains have not crossed yet"
+        );
+        replacement_controller.set_value(progress * 2.0);
+        assert_eq!(
+            secondary.value(),
+            progress * 2.0,
+            "the replacement now drives the secondary"
+        );
+        middle_controller.set_value(0.8);
+        assert_eq!(
+            secondary.value(),
+            progress * 2.0,
+            "the old route no longer owns the output"
+        );
+    }
+}
+
 std::thread_local! {
     static REENTRANT_HANDLE: RefCell<Option<TransitionHandle>> = const { RefCell::new(None) };
 }
@@ -348,9 +395,10 @@ pub(crate) fn dispose_releases_the_controller_slot_before_disposing_it() {
         animation
             .controller()
             .expect("install created the controller")
-            .add_status_listener(std::rc::Rc::new(move |_| {
+            .subscribe_status(std::rc::Rc::new(move |_| {
                 let _ = &probe;
-            }));
+            }))
+            .detach();
         REENTRANT_HANDLE.with(|slot| *slot.borrow_mut() = Some(animation.clone()));
 
         navigator_handle.pop();

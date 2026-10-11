@@ -107,7 +107,7 @@ impl ShadowInstance {
             shadow_offset: [params.offset().x, params.offset().y],
             blur_sigma: params.blur_sigma(),
             padding2: 0.0,
-            shadow_color: params.color().to_rgba_f32().into(),
+            shadow_color: params.color().to_rgba_f32_array(),
         }
     }
 }

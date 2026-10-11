@@ -706,10 +706,8 @@ pub struct IdleDeadline(pub Instant);
 
 impl IdleDeadline {
     /// An Idle-slice deadline far enough past `now` that it never passes in
-    /// practice — for a caller with no real deadline source yet (no
-    /// `FrameClock` wired into any backend; see `drive_frame`'s doc). Idle
-    /// work is never deferred under this deadline, matching `drive_frame`'s
-    /// behavior before it took a deadline parameter at all.
+    /// practice, for a caller without a real deadline source. Idle work
+    /// is not deferred unless the frame lasts longer than an hour.
     #[must_use]
     pub fn far_future(now: Instant) -> Self {
         Self(now + std::time::Duration::from_hours(1))
@@ -768,29 +766,20 @@ struct FrameState {
     /// if it were the current one, even though the field itself is never
     /// reset between frames.
     ///
-    /// `FrameWaker` can be reached from any thread; this field lets its
-    /// `ensure_visual_update`
-    /// distinguish "I am the thread already driving this frame" (safe to
-    /// trust the phase classification) from "some other thread is
-    /// mid-frame and I am not it" (must request regardless of phase, since
-    /// nothing on this thread will otherwise observe what prompted the
-    /// call).
+    /// Shared with the thread-safe [`FrameWaker`]. Its visual-update gate
+    /// suppresses mid-frame demand only on the thread driving that frame;
+    /// another thread must request a frame regardless of the current phase.
+    /// The owning [`UpdateScheduler`] itself remains on the UI thread.
     frame_thread: Arc<Mutex<Option<std::thread::ThreadId>>>,
 }
 
 /// Callback registration and cancellation state
 struct CallbackState {
-    /// Transient callbacks - animation tickers.
-    ///
-    /// A `VecDeque`, not a `Vec`: `handle_begin_frame` pops one entry at a
-    /// time from the front and invokes it outside this lock (see that
-    /// method's own comment) so a panicking callback loses only itself --
-    /// every callback still behind it in the queue is untouched, not
-    /// silently dropped with the batch a single-lock drain would already
-    /// have removed it into (issue #1057).
+    /// One-shot frame callbacks. Entries are removed individually before
+    /// invocation, outside the storage borrow, so a failed callback leaves
+    /// the accepted tail available for delivery.
     transient: RefCell<VecDeque<CancellableTransientCallback>>,
-    /// Cancelled callback IDs. `DashMap`: a sharded `RwLock`, not
-    /// lock-free; `contains_key` releases its shard before returning.
+    /// Cancelled callback IDs, queried before callback delivery.
     cancelled: RefCell<HashSet<CallbackId>>,
     /// Callback ID generator
     id_gen: IdGenerator<flui_foundation::markers::FrameCallback>,
@@ -828,7 +817,11 @@ struct WakeShared {
     closed: AtomicBool,
 }
 
-/// Owner-local state shares one allocation. Only wake metadata crosses threads.
+/// Owner-local frame, callback and task state shared by scheduler handles.
+///
+/// [`UpdateScheduler`] owns this allocation through `Rc`; weak handles do
+/// not extend its lifetime. Only the separate wake infrastructure is shared
+/// across threads, without retaining UI callbacks or tasks.
 struct SchedulerInner {
     wake: Arc<WakeShared>,
     /// Frame lifecycle and timing
@@ -837,7 +830,7 @@ struct SchedulerInner {
     callbacks: CallbackState,
     /// Binding integration
     binding: BindingState,
-    /// Task queue (priority-based, already internally synchronized)
+    /// Owner-local priority task queue.
     task_queue: TaskQueue,
     /// Set while an [OwnerFrame](crate::OwnerFrame) for this scheduler
     /// lives: a scheduler has at most one, so the owner a frame drive polls is
@@ -853,7 +846,7 @@ struct SchedulerInner {
 /// Main scheduler for frame and task management
 ///
 /// Implements phased scheduling:
-/// - TransientCallbacks: Animation tickers
+/// - TransientCallbacks: One-shot frame callbacks
 /// - PersistentCallbacks: Rendering pipeline
 /// - PostFrameCallbacks: Cleanup
 ///
@@ -888,16 +881,13 @@ pub struct UpdateScheduler {
 
 /// A non-owning reference to a [`UpdateScheduler`], obtained via [`UpdateScheduler::downgrade`].
 ///
-/// Exists so a handle that must outlive its scheduler's *owner* (a `Ticker`
-/// stored on an `AnimationController`, a `PostFrameHandle` vended to a
-/// widget capability) can fail closed instead of keeping the whole scheduler
-/// — and everything it owns — alive. [`upgrade`](Self::upgrade) returns
-/// `None` once the UI runtime that owns the backing `UpdateScheduler` has dropped its
-/// last strong reference; every caller here treats that as "silently done",
-/// matching a disposed ticker's own short-circuit.
+/// UI capabilities and retirement bookkeeping can retain this handle without
+/// extending the scheduler's lifetime. [`upgrade`](Self::upgrade) returns
+/// `None` after the last strong scheduler reference is released.
 ///
-/// Like [`UpdateScheduler`], this handle remains on the owner thread.
-/// Cross-thread wake producers use [`FrameWaker`] instead.
+/// This handle is owner-local and is neither `Send` nor `Sync`.
+/// Cross-thread frame requests use [`FrameWaker`], which shares only wake
+/// infrastructure and keeps no UI callback storage alive.
 #[derive(Clone)]
 pub struct WeakUpdateScheduler {
     inner: std::rc::Weak<SchedulerInner>,
@@ -1284,9 +1274,7 @@ impl UpdateScheduler {
                     break;
                 };
 
-                // Skip if cancelled. DashMap: sharded `RwLock`; `contains_key`
-                // releases its shard before returning, so nothing is held
-                // across the callback invocation below.
+                // End the cancellation-set borrow before invoking user code.
                 if self
                     .inner
                     .callbacks
@@ -1699,15 +1687,10 @@ impl UpdateScheduler {
     /// scheduler.cancel_frame_callback(id);
     /// ```
     pub fn cancel_frame_callback(&self, id: CallbackId) -> bool {
-        // Locate-then-remove instead of `Vec::retain`'s drop-in-place: `retain`
-        // would run the cancelled callback's `Drop` while `transient` is
-        // still held, and a capture that re-enters the scheduler (e.g.
-        // registering another callback) would deadlock on this same mutex.
-        // `position` + `remove` finds the single matching entry (ids are
-        // unique, so at most one) with no allocation and no full-Vec
-        // move — unlike a partition copy, the common no-match path (every
-        // `Ticker::stop`/`dispose` that outlives its callback) costs nothing
-        // extra. The removed value is dropped only after the guard falls.
+        // Remove without retiring captures under the storage borrow. A
+        // callback's Drop may register or cancel another callback. Unique
+        // IDs permit a single removal; a no-match cancellation allocates
+        // nothing. Outgoing ownership retires after the borrow ends.
         let removed = {
             let mut callbacks = self.inner.callbacks.transient.borrow_mut();
             callbacks
@@ -2297,12 +2280,9 @@ impl UpdateScheduler {
     ///
     /// Returns `true` if the listener was found and removed.
     pub fn remove_lifecycle_state_listener(&self, id: CallbackId) -> bool {
-        // Same hazard `cancel_frame_callback` guards against: `retain` would
-        // drop the removed listener's `Arc<dyn Fn(..)>` (possibly the last
-        // reference, running the captured state's `Drop`) while
-        // `lifecycle_listeners` is still locked. A listener whose capture
-        // re-enters this scheduler (adding or removing another listener) on
-        // drop would deadlock. `position` + `remove` finds the single
+        // Retire the removed listener only after the storage borrow ends:
+        // its captures may reenter this scheduler during Drop.
+        // `position` + `remove` finds the single
         // matching entry (ids are unique) with no allocation and no full-Vec
         // move on the common no-match path, and the removed value is
         // dropped only after the guard falls.
@@ -2396,7 +2376,7 @@ impl UpdateScheduler {
             // The predicate is LIVE entries, not `is_empty()`. A tombstone
             // left by a cancelled waiter says nothing about whether a frame
             // is still coming: `frame_scheduled` has a second clearer
-            // besides `handle_begin_frame` — the public `finish_async_pump`
+            // besides `handle_begin_frame` — the owner-local `finish_async_pump`
             // — so a demand can be revoked with no drain, and `is_empty()`
             // would then be sound only through an untested coupling across
             // the registry, that latch, and `frames_enabled`.
@@ -2586,10 +2566,9 @@ impl UpdateScheduler {
     /// [`SchedulerPhase::PersistentCallbacks`]) are a no-op **only for the
     /// thread already driving this frame** (see `frame_thread`'s own doc).
     /// A caller on any OTHER thread always requests, regardless of phase:
-    /// [`FrameWaker::ensure_visual_update`] is reachable from any thread,
-    /// so a lost cross-thread wake would be the worst failure
-    /// class this crate names, and only the driving thread's own later
-    /// phases are guaranteed to observe what prompted a same-thread call.
+    /// the shared [`FrameWaker::ensure_visual_update`] gate handles those
+    /// cross-thread calls. `UpdateScheduler` remains owner-local; only the
+    /// driving thread's later phases observe a same-thread update.
     ///
     /// This is not a blanket "the in-flight frame will pick up your
     /// change" promise even for the driving thread: it holds for
@@ -2639,11 +2618,11 @@ impl UpdateScheduler {
         // Same hazard as `cancel_frame_callback`/`remove_lifecycle_state_listener`.
         // `extract_if` (stable since Rust 1.87) removes every matching entry
         // in one pass with no full-Vec reallocation or copy of the kept
-        // entries, and the removed callback owners are dropped only
+        // entries, and the removed callbacks are dropped only
         // once `timings_callbacks`'s guard has already fallen, not while a
-        // re-entrant drop could deadlock on it. Remove-all, not
+        // reentrant Drop could conflict with that borrow. Remove-all, not
         // remove-first: unlike the two `CallbackId`-addressed sites above,
-        // nothing here guarantees a caller registers a given `Rc` only once.
+        // nothing here guarantees a caller registers a given callback only once.
         let removed: Vec<_> = {
             let mut callbacks = self.inner.binding.timings_callbacks.borrow_mut();
             callbacks

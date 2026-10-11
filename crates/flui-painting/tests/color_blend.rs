@@ -8,27 +8,31 @@ use flui_painting::styling::Color;
 /// `56/255 · 245/255` of its alpha: `10/255 + 0.2110 = 0.2502 → 63.8 → 64`.
 pub(crate) fn blend_over_is_source_over_alpha_blend() {
     assert_eq!(
-        Color::rgba(255, 0, 0, 128).blend_over(Color::rgb(0, 0, 255)),
-        Color::rgba(128, 0, 127, 255)
+        Color::rgba(255, 0, 0, 128)
+            .blend_over(Color::rgb(0, 0, 255))
+            .to_rgba8(),
+        [128, 0, 127, 255]
     );
     assert_eq!(
-        Color::rgba(3, 3, 3, 10).blend_over(Color::rgba(3, 3, 3, 56)),
-        Color::rgba(3, 3, 3, 64)
+        Color::rgba(3, 3, 3, 10)
+            .blend_over(Color::rgba(3, 3, 3, 56))
+            .to_rgba8(),
+        [3, 3, 3, 64]
     );
     // One step from each fast path: a nearly opaque source still lets the
     // background through, and only a fully opaque background makes the
     // result opaque.
     let white = |a| Color::rgba(255, 255, 255, a);
     let black = |a| Color::rgba(0, 0, 0, a);
-    assert_eq!(black(254).blend_over(white(255)), Color::rgba(1, 1, 1, 255));
+    assert_eq!(black(254).blend_over(white(255)).to_rgba8(), [1, 1, 1, 255]);
     assert_eq!(
-        black(1).blend_over(white(255)),
-        Color::rgba(254, 254, 254, 255)
+        black(1).blend_over(white(255)).to_rgba8(),
+        [254, 254, 254, 255]
     );
     assert_eq!(
-        black(64).blend_over(white(254)),
-        Color::rgba(191, 191, 191, 254)
+        black(64).blend_over(white(254)).to_rgba8(),
+        [191, 191, 191, 254]
     );
-    assert_eq!(black(64).blend_over(white(1)), Color::rgba(3, 3, 3, 65));
+    assert_eq!(black(64).blend_over(white(1)).to_rgba8(), [3, 3, 3, 65]);
     assert_eq!(black(64).blend_over(white(0)), black(64));
 }

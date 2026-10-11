@@ -75,6 +75,7 @@ fn headless_frame_driver_matrix() {
     run_table(
         "headless_frame_driver_matrix",
         &[
+            ("controller_restart::widget_registry_adoption_preserves_its_driver_on_refusal", controller_restart::widget_registry_adoption_preserves_its_driver_on_refusal as fn()),
             ("runtime_driver::a_signal_probe_reads_and_writes_its_current_mount_after_remount", runtime_driver::a_signal_probe_reads_and_writes_its_current_mount_after_remount as fn()),
             ("first_frame_deferral::unmatched_first_frame_release_preserves_the_next_deferral", first_frame_deferral::unmatched_first_frame_release_preserves_the_next_deferral as fn()),
             ("runtime_driver::a_zero_capacity_performance_window_retains_no_frame_samples", runtime_driver::a_zero_capacity_performance_window_retains_no_frame_samples as fn()),

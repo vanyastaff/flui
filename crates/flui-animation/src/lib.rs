@@ -10,8 +10,9 @@
 //! - [`Animation<T>`] - Base trait for all animations (extends [`Listenable`])
 //! - [`AnimationController`] - Primary animation driver (generates 0.0..1.0)
 //! - [`CurvedAnimation`] - Applies easing curves to animations
-//! - [`Curve`] - Easing curve trait with predefined curves in [`Curves`]
-//!   (full Penner catalog, M3 [`ThreePointCubic`] emphasized set, [`Split`])
+//! - [`Curve`] - Easing curve trait with predefined curves in [`curves`]
+//!   (CSS easing presets, polynomial-style approximations, elastic and bounce
+//!   formulas, [`ThreePointCubic`] emphasized easing and [`Split`])
 //! - [`Tween`] - Maps animation values to any type T; [`ColorTween`]
 //!   interpolates colors in Oklab with premultiplied alpha
 //! - [`Keyframes`] - A value as a pure function of time: segments timed by
@@ -19,8 +20,12 @@
 //!   track per index
 //! - [`simulation`] - Validated physics: springs, friction and a bouncing
 //!   scroll fling that rest at a precomputed time
-//! - [`AnimatedValue`] - Interruptible spring value with velocity-preserving
-//!   retargeting (`#[derive(TwoWayConverter)]` for custom types)
+//! - [`AnimatedValue`] - An owned value driven by [`MotionSpec`], with
+//!   velocity-preserving retargeting (`#[derive(TwoWayConverter)]` for custom types)
+//! - [`VsyncRetirement`] - Terminal registry withdrawal separates committed
+//!   kernel closure from cancellation delivery and outgoing capture retirement.
+//!   Runtime shutdown prepares every closing presentation before callbacks;
+//!   retained widget owners cannot keep their runs active (ADR-0175).
 //! - [`AnimationError`] - Error type for animation operations
 //!
 //! ## Persistent Object Pattern
@@ -73,7 +78,7 @@
 //! [`CurvedAnimation`]: crate::CurvedAnimation
 //! [`AnimationError`]: crate::AnimationError
 //! [`Curve`]: crate::Curve
-//! [`Curves`]: crate::Curves
+//! [`curves`]: crate::curves
 //! [`Tween`]: crate::Tween
 //! [`Listenable`]: flui_foundation::Listenable
 //! [`Rc`]: std::rc::Rc
@@ -105,6 +110,7 @@ extern crate self as flui_animation;
 #[cfg(test)]
 mod test_cases;
 
+pub mod animated_value;
 pub mod animation;
 pub mod builder;
 pub mod constant;
@@ -120,28 +126,37 @@ pub mod retarget;
 pub mod reverse;
 mod run_future;
 pub mod simulation;
-pub mod spring;
 pub mod stagger;
 pub mod switch;
 pub mod tween;
+pub mod value_conversion;
 pub mod vsync;
 
 // Data types
 pub mod curve;
+#[doc(alias = "Curves")]
+pub mod curves;
 pub mod status;
+mod status_subscription;
 pub mod tween_types;
 
 // Re-exports from animation modules
+pub use animated_value::{
+    AnimatedValue, AnimatedValueView, MotionUpdate, VsyncPublication, VsyncUpdate,
+};
 pub use animation::{Animation, AnimationDirection, StatusCallback};
 pub use builder::{AnimationControllerBuilder, ValueRange};
-pub use constant::{ALWAYS_COMPLETE, ALWAYS_DISMISSED, ConstantAnimation};
+pub use constant::{ConstantAnimation, UNIT_END_ANIMATION, UNIT_START_ANIMATION};
 pub use controller::AnimationController;
 pub use curved::CurvedAnimation;
 pub use driven::DrivenController;
-pub use error::AnimationError;
+pub use error::{AnimationError, AnimationInput, RangeDefect};
 pub use ext::AnimatableExt;
 pub use keyframes::{Keyframes, KeyframesBuilder, KeyframesError};
-pub use motion::{AnimationTime, FrameTick, InvalidPlaybackRate, MotionClock, PlaybackRate};
+pub use motion::{
+    AnimationTime, FrameTick, InvalidPlaybackRate, MotionClock, MotionPolicy, MotionPreference,
+    PlaybackRate,
+};
 pub use proxy::ProxyAnimation;
 pub use retarget::MotionSpec;
 pub use reverse::ReverseAnimation;
@@ -151,8 +166,9 @@ pub use simulation::{
     SimulationBounds, SimulationError, SimulationParameter, SpringDescription, SpringSimulation,
     SpringType, Tolerance,
 };
-pub use spring::{AnimatedValue, TwoWayConverter};
 pub use stagger::{Stagger, StaggerOrigin};
+pub use status_subscription::StatusSubscription;
+pub use value_conversion::{AnimationVector, TwoWayConverter};
 // `#[derive(TwoWayConverter)]` generates `TwoWayConverter` and `Lerp` impls. It
 // shares the trait's name but lives in the macro namespace (the serde
 // `Serialize` trait+derive pattern), so one `use flui_animation::TwoWayConverter`
@@ -161,19 +177,19 @@ pub use flui_foundation::geometry::Lerp;
 pub use flui_macros::TwoWayConverter;
 pub use switch::AnimationSwitch;
 pub use tween::{TweenAnimation, animate};
-pub use vsync::{Vsync, VsyncRegistration, VsyncRegistrationError};
+pub use vsync::{Vsync, VsyncRegistration, VsyncRegistrationError, VsyncRetirement};
 
 // Re-exports from data type modules
 pub use curve::{
-    ArcCurve, BounceInCurve, BounceInOutCurve, BounceOutCurve, Cubic, Curve, CurveError, Curves,
+    ArcCurve, BounceInCurve, BounceInOutCurve, BounceOutCurve, Cubic, Curve, CurveError,
     DecelerateCurve, ElasticInCurve, ElasticInOutCurve, ElasticOutCurve, FlippedCurve, Interval,
     JumpAt, Linear, Split, Steps, ThreePointCubic,
 };
 pub use status::{AnimationBehavior, AnimationStatus};
 pub use tween_types::{
-    AlignmentTween, Animatable, BorderRadiusTween, ChainedTween, ColorTween, ConstantTween,
-    CurveTween, EdgeInsetsTween, FloatTween, IntTween, Matrix4Tween, OffsetTween, RectTween,
-    ReverseTween, SizeTween, StepTween, Tween,
+    AlignmentTween, Animatable, BorderRadiusTween, ColorTween, ConstantTween, CurveTween,
+    EdgeInsetsTween, FloatTween, IntTween, Matrix4Tween, OffsetTween, RectTween, ReverseTween,
+    SizeTween, StepTween, Tween,
 };
 
 // Every `rust` block in the crate's prose docs compiles as a doctest.

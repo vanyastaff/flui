@@ -9,6 +9,14 @@ the dispatch layer moves there too.
 
 ## Invariants
 
+- **Browser owner wakes refresh the installed host.** ADR-0196 uses the same
+  loop-identity and logical-host checks as desktop delivery. DOM invalidation
+  posts the shared owner signal rather than entering the runtime directly;
+  source values reach the ADR-0195 projection through the existing host path.
+  WASM platform adapter acceptance uses the controlled JS boundary described
+  in `flui-platform/ARCHITECTURE.md`; rendered browser live-update acceptance
+  remains separate.
+
 - **Window delivery retains its address.** Runtime wakes and redraw debt are
   independent; a sibling frame cannot clear another runtime's pending redraw.
   The desktop owner installs one deadline hook, folding every open presentation's

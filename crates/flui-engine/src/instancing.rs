@@ -143,7 +143,7 @@ impl RectInstance {
                 (rect.width() as f32),
                 (rect.height() as f32),
             ],
-            color: color.to_f32_array(),
+            color: color.to_rgba_f32_array(),
             corner_radii: [0.0; 4],
             // Identity 2×2: x-col=(1,0), y-col=(0,1).
             transform: [1.0, 0.0, 0.0, 1.0],
@@ -190,7 +190,7 @@ impl RectInstance {
                 (rect.width() as f32),
                 (rect.height() as f32),
             ],
-            color: color.to_f32_array(),
+            color: color.to_rgba_f32_array(),
             corner_radii: [top_left, top_right, bottom_right, bottom_left],
             // Identity 2×2: x-col=(1,0), y-col=(0,1).
             transform: [1.0, 0.0, 0.0, 1.0],
@@ -226,7 +226,7 @@ impl RectInstance {
     ) -> Self {
         Self {
             bounds: local_bounds,
-            color: color.to_f32_array(),
+            color: color.to_rgba_f32_array(),
             corner_radii,
             transform: linear_cols,
             clip_rrect: [0.0; 8],
@@ -390,7 +390,7 @@ impl CircleInstance {
             // origin-centered unit circle scaled by `radius`. center_radius.xy is
             // unused; only .z (radius) is read.
             center_radius: [0.0, 0.0, radius, 0.0],
-            color: color.to_f32_array(),
+            color: color.to_rgba_f32_array(),
             // Baked scale: identity rotation, per-axis scale as diag(sx, sy).
             // x-col = (sx, 0), y-col = (0, sy).
             transform: [scale_xy[0], 0.0, 0.0, scale_xy[1]],
@@ -428,7 +428,7 @@ impl CircleInstance {
         Self {
             // Unit circle at local origin; the affine encodes radius + world transform.
             center_radius: [0.0, 0.0, 1.0, 0.0],
-            color: color.to_f32_array(),
+            color: color.to_rgba_f32_array(),
             transform: linear_cols,
             transform_translate: [translation[0], translation[1], 0.0, 0.0],
             // No clip until `ClippableInstance::with_clip_*` attaches one.
@@ -573,7 +573,7 @@ impl ArcInstance {
             // Unit circle at local origin; the affine encodes radius + world transform.
             center_radius: [0.0, 0.0, 1.0, 0.0],
             angles: [start_angle, sweep_angle, 0.0, 0.0],
-            color: color.to_f32_array(),
+            color: color.to_rgba_f32_array(),
             transform: linear_cols,
             transform_translate: [translation[0], translation[1], 0.0, 0.0],
         }
@@ -707,7 +707,7 @@ impl TextureInstance {
                 0.0,
             ],
             src_uv: [0.0, 0.0, 1.0, 1.0], // Full texture
-            tint: tint.to_f32_array(),
+            tint: tint.to_rgba_f32_array(),
             axis_y: [0.0, dst_rect.height() as f32, 0.0, 0.0], // No rotation
             clip_rrect: [0.0; 8],
             clip_kind: [0; 4],
@@ -737,7 +737,7 @@ impl TextureInstance {
                 0.0,
             ],
             src_uv,
-            tint: tint.to_f32_array(),
+            tint: tint.to_rgba_f32_array(),
             axis_y: [0.0, dst_rect.height() as f32, 0.0, 0.0],
             clip_rrect: [0.0; 8],
             clip_kind: [0; 4],
@@ -750,8 +750,7 @@ impl TextureInstance {
     /// Create a textured quad with custom UV and a raw `[f32; 4]` tint.
     ///
     /// Used by the offscreen-layer composite path, which needs a fractional
-    /// premultiplied tint `(C.r*O, C.g*O, C.b*O, O)` that an 8-bit [`Color`]
-    /// would quantize prematurely. The shader multiplies the sampled texel by
+    /// premultiplied tint `(C.r*O, C.g*O, C.b*O, O)`. The shader multiplies the sampled texel by
     /// this tint (`tex_color * in.tint`).
     #[must_use]
     pub(crate) fn with_uv_tint_f32(
@@ -892,7 +891,7 @@ impl GlyphInstance {
                 if color_page { 1.0 } else { 0.0 },
                 0.0,
             ],
-            color: color.to_f32_array(),
+            color: color.to_rgba_f32_array(),
             transform: [1.0, 0.0, 0.0, 1.0],
             origin: [0.0; 4],
             clip_rrect: [0.0; 8],

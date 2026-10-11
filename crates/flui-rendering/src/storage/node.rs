@@ -174,23 +174,34 @@ impl RenderNode {
     pub(crate) fn attach(
         &mut self,
         epoch: crate::pipeline::handle::AttachmentEpoch,
-        handle: crate::pipeline::RenderInvalidationHandle,
+        handle: crate::pipeline::LocalRenderInvalidationHandle,
     ) -> bool {
         match self {
             Self::Box(entry) => {
-                if !entry.begin_attachment(epoch) {
+                if !entry.begin_attachment(epoch, handle.clone()) {
                     return false;
                 }
                 entry.render_object_mut().attach(handle);
             }
             Self::Sliver(entry) => {
-                if !entry.begin_attachment(epoch) {
+                if !entry.begin_attachment(epoch, handle.clone()) {
                     return false;
                 }
                 entry.render_object_mut().attach(handle);
             }
         }
         true
+    }
+
+    pub(crate) fn local_invalidation(
+        &self,
+    ) -> Option<crate::pipeline::LocalRenderInvalidationHandle> {
+        with_entry!(self, entry => entry.local_invalidation())
+    }
+
+    /// Close admission before any member of the selected batch calls user code.
+    pub(crate) fn begin_detachment(&mut self) -> bool {
+        with_entry!(self, entry => entry.begin_detachment())
     }
 
     /// Tree-lifecycle hook (ADR-0013): tears down whatever `attach`

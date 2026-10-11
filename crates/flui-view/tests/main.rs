@@ -293,6 +293,7 @@ fn element_lifecycle_and_dependency_matrix() {
             ("notifications::dispatch_notification_calls_handler_and_stops_on_true", notifications::dispatch_notification_calls_handler_and_stops_on_true as fn()),
             ("ancestor_finders::find_ancestor_view_returns_nearest_match", ancestor_finders::find_ancestor_view_returns_nearest_match as fn()),
             ("inherited_dependency::inherited_update_notifies_dependents", inherited_dependency::inherited_update_notifies_dependents as fn()),
+            ("inherited_dependency::missing_inherited_reads_refresh_lifecycle_and_survive_build_recovery", inherited_dependency::missing_inherited_reads_refresh_lifecycle_and_survive_build_recovery),
             ("inherited_dependency::unmounted_dependent_is_removed_from_provider_before_next_notification", inherited_dependency::unmounted_dependent_is_removed_from_provider_before_next_notification as fn()),
             ("build_owner_tests::build_owners_have_isolated_focus_managers", build_owner_tests::build_owners_have_isolated_focus_managers as fn()),
             ("build_owner_tests::test_build_scope_processes_in_depth_order", build_owner_tests::test_build_scope_processes_in_depth_order as fn()),

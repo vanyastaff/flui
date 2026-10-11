@@ -299,7 +299,7 @@ impl CupertinoTabBar {
             .background_color
             .unwrap_or_else(|| theme.bar_background_color())
             .resolve(ctx);
-        background.a == 0xFF
+        background.is_opaque()
     }
 }
 

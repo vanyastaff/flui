@@ -10,7 +10,8 @@ mod browser {
     use flui_platform::{DispatchEventResult, Platform, WindowOptions};
     use flui_platform_api::PlatformInput;
     use flui_platform_api::pointer::{
-        ButtonChange, PointerButton, PointerButtons, PointerEvent, PointerSample,
+        ButtonChange, PenOrientation, PointerButton, PointerButtons, PointerEvent, PointerSample,
+        Twist,
     };
     use wasm_bindgen::prelude::*;
 
@@ -47,9 +48,9 @@ mod browser {
                     .tangential_pressure
                     .map(|value| f64::from(value.get()))
             ),
-            number(sample.orientation.and_then(|value| value.altitude())),
-            number(sample.orientation.and_then(|value| value.azimuth())),
-            number(sample.twist.map(|value| value.radians())),
+            number(sample.orientation.and_then(PenOrientation::altitude)),
+            number(sample.orientation.and_then(PenOrientation::azimuth)),
+            number(sample.twist.map(Twist::radians)),
             number(sample.contact_size.map(|value| value.get().width)),
             number(sample.contact_size.map(|value| value.get().height)),
         )

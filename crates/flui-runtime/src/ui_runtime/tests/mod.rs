@@ -459,6 +459,8 @@ fn frame_pacing_and_pump_matrix() {
             ("frame_pipeline_and_vsync::an_invalid_or_backwards_frame_time_holds_the_animation", frame_pipeline_and_vsync::an_invalid_or_backwards_frame_time_holds_the_animation as fn()),
             ("frame_pipeline_and_vsync::surface_lost_keeps_needs_redraw_armed_for_a_retry", frame_pipeline_and_vsync::surface_lost_keeps_needs_redraw_armed_for_a_retry as fn()),
             ("pump_transaction::pump_post_frame_callback_observes_this_frames_committed_layout", pump_transaction::pump_post_frame_callback_observes_this_frames_committed_layout as fn()),
+            ("pump_transaction::step_during_a_tick_applies_next_frame", pump_transaction::step_during_a_tick_applies_next_frame as fn()),
+            ("pump_transaction::a_stopping_realm_ticks_no_presentation", pump_transaction::a_stopping_realm_ticks_no_presentation as fn()),
             ("presentation_text_input::a_text_store_lock_requested_during_a_frame_is_granted_after_the_drive_returns", presentation_text_input::a_text_store_lock_requested_during_a_frame_is_granted_after_the_drive_returns as fn()),
             ("super::pump::rejected_nested_pump_preserves_outer_commits_and_animation_time", super::pump::rejected_nested_pump_preserves_outer_commits_and_animation_time as fn()),
             ("presentation_text_input::a_window_with_a_text_store_host_takes_input_through_it", presentation_text_input::a_window_with_a_text_store_host_takes_input_through_it as fn()),

@@ -362,7 +362,7 @@ mod synthetic_op_tests {
     // ── Colour helpers ────────────────────────────────────────────────────────
 
     fn color_to_premul_f32(c: Color) -> [f32; 4] {
-        let [red, green, blue, alpha] = c.to_f32_array();
+        let [red, green, blue, alpha] = c.to_rgba_f32_array();
         [red * alpha, green * alpha, blue * alpha, alpha]
     }
 
@@ -480,7 +480,7 @@ mod synthetic_op_tests {
         let result = src_straight.blend(dst_straight, mode);
         // Color::blend returns a straight Color (un-premultiplied); convert to premultiplied
         // RGBA bytes for comparison with the GPU readback (which outputs premultiplied).
-        let [r, g, b, a] = result.to_f32_array();
+        let [r, g, b, a] = result.to_rgba_f32_array();
         // Clamping [0,1]*255 before truncation makes the cast provably safe.
         let f32_to_u8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
         let r_pm = f32_to_u8(r * a);

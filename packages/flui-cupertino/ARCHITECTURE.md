@@ -5,6 +5,18 @@ and callbacks are owner-local; the package does not own a reactive graph.
 
 ## Mapping decisions
 
+### Button fade ownership follows its presentation clock
+
+The button owns one controller across both legs of its tap fade. A scope
+replacement transfers that owner without restarting its displayed sample.
+The press leg's completion starts the release once; disposal withdraws the
+active owner before retained callbacks can attempt another run.
+
+`an_active_button_press_fade_migrates_and_retires` and
+`an_active_button_release_fade_migrates_and_retires` exercise pointer taps,
+mid-leg registry replacement, continuous compositing alpha, progress from the
+new clock, resting frame demand and unmount during another active fade.
+
 ### Typography defaults select numeric growth independently of authored fonts
 
 Body and action styles use Body growth; small action uses Callout, tab labels

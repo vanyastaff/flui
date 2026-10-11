@@ -11,8 +11,9 @@ use std::{
     time::Duration,
 };
 
+use flui_platform_api::MotionPreference;
 use objc2::MainThreadMarker;
-use objc2_app_kit::NSEvent;
+use objc2_app_kit::{NSEvent, NSWorkspace};
 
 use crate::{
     GesturePreferences, PlatformError, SystemPreferences,
@@ -21,13 +22,13 @@ use crate::{
 
 const SAMPLE_INTERVAL: Duration = Duration::from_millis(500);
 
-pub(super) struct PreferenceSource {
+pub(in crate::platforms) struct PreferenceSource {
     signal: Weak<OwnerSignal>,
     admission: crate::shared::preference_read::ReadAdmission,
 }
 
 impl PreferenceSource {
-    pub(super) fn new(signal: &Arc<OwnerSignal>) -> Arc<Self> {
+    pub(in crate::platforms) fn new(signal: &Arc<OwnerSignal>) -> Arc<Self> {
         let source = Arc::new(Self {
             signal: Arc::downgrade(signal),
             admission: crate::shared::preference_read::ReadAdmission::default(),
@@ -43,7 +44,7 @@ impl PreferenceSource {
         source
     }
 
-    pub(super) fn read(&self) -> Result<SystemPreferences, PlatformError> {
+    pub(in crate::platforms) fn read(&self) -> Result<SystemPreferences, PlatformError> {
         if MainThreadMarker::new().is_none() {
             return Err(PlatformError::Preferences {
                 message: "AppKit preferences require the application owner thread".into(),
@@ -103,5 +104,12 @@ fn sample() -> Result<SystemPreferences, PlatformError> {
             message: error.to_string(),
         })?;
     let gestures = GesturePreferences::default().with_double_click_interval(interval);
-    Ok(SystemPreferences::default().with_gestures(gestures))
+    let motion = if NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion() {
+        MotionPreference::Reduce
+    } else {
+        MotionPreference::NoPreference
+    };
+    Ok(SystemPreferences::default()
+        .with_gestures(gestures)
+        .with_motion(motion))
 }

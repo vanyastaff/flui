@@ -7,7 +7,8 @@
 //!   the caller in the InheritedElement's dependent map.
 //! - Rebuilding the InheritedView with a value where
 //!   `update_should_notify` returns `true` marks dependents dirty.
-//! - Edge: no ancestor of `T` -> returns `None`, no dependent-set write.
+//! - Edge: no ancestor of `T` -> returns `None`, retaining an ancestry dependency
+//!   for reactivation without creating a provider notification edge.
 //! - Edge: deduplication when the same element calls `depend_on` twice.
 //! - Unmount/deactivate remove provider edges synchronously, so long-lived
 //!   providers do not accumulate historical dependents.
@@ -214,6 +215,105 @@ pub(crate) fn inherited_update_notifies_dependents() {
 // ============================================================================
 // Edge: unmounted dependent is removed from the provider immediately
 // ============================================================================
+
+pub(crate) fn missing_inherited_reads_refresh_lifecycle_and_survive_build_recovery() {
+    #[derive(Clone)]
+    struct Probe {
+        changes: std::rc::Rc<std::cell::Cell<usize>>,
+        read_in_build: bool,
+        fail_build: std::rc::Rc<std::cell::Cell<bool>>,
+    }
+    struct ProbeState(std::rc::Rc<std::cell::Cell<usize>>);
+    impl View for Probe {
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::stateful(self)
+        }
+    }
+    impl flui_view::StatefulView for Probe {
+        type State = ProbeState;
+        fn create_state(&self) -> Self::State {
+            ProbeState(std::rc::Rc::clone(&self.changes))
+        }
+    }
+    impl flui_view::ViewState<Probe> for ProbeState {
+        fn did_change_dependencies(&mut self, ctx: &dyn flui_view::LifecycleContext) {
+            self.0.set(self.0.get() + 1);
+            assert!(ctx.depend_on::<ThemeProvider, _>(|_| ()).is_none());
+        }
+        fn build(&self, view: &Probe, ctx: &dyn BuildContext) -> impl IntoView {
+            assert!(
+                !view.fail_build.replace(false),
+                "authored build failure before reading dependencies"
+            );
+            if view.read_in_build {
+                assert!(ctx.depend_on::<ThemeProvider, _>(|_| ()).is_none());
+            }
+            LeafView
+        }
+    }
+
+    for (subscribe, read_in_build, failed_rebuild) in [
+        (false, false, false),
+        (true, false, false),
+        (false, true, false),
+        (false, true, true),
+    ] {
+        let (tree, owner) = create_tree_and_owner();
+        let changes = std::rc::Rc::new(std::cell::Cell::new(0));
+        let fail_build = std::rc::Rc::new(std::cell::Cell::new(false));
+        let root = tree.write().mount_root(
+            &Probe {
+                changes: std::rc::Rc::clone(&changes),
+                read_in_build,
+                fail_build: std::rc::Rc::clone(&fail_build),
+            },
+            &mut owner.write().element_owner_mut(),
+        );
+        owner
+            .write()
+            .schedule_build_for(root, 0, flui_view::RebuildReason::InitialMount);
+        owner.write().build_scope(&mut tree.write());
+        if failed_rebuild {
+            fail_build.set(true);
+            tree.write().update(
+                root,
+                &Probe {
+                    changes: std::rc::Rc::clone(&changes),
+                    read_in_build,
+                    fail_build: std::rc::Rc::clone(&fail_build),
+                },
+                &mut owner.write().element_owner_mut(),
+            );
+            owner
+                .write()
+                .schedule_build_for(root, 0, flui_view::RebuildReason::ParentUpdate);
+            owner.write().build_scope(&mut tree.write());
+            assert_eq!(owner.write().take_recovered_panics().len(), 1);
+        }
+        let ctx = ElementBuildContext::for_element(root, tree.clone(), owner.clone())
+            .expect("the probe is mounted");
+        let found = if subscribe {
+            ctx.depend_on::<ThemeProvider, _>(|_| ())
+        } else {
+            ctx.get::<ThemeProvider, _>(|_| ())
+        };
+        assert!(found.is_none());
+        for cycle in 1..=2 {
+            tree.write()
+                .deactivate(root, &mut owner.write().element_owner_mut());
+            tree.write()
+                .activate(root, &mut owner.write().element_owner_mut());
+            owner.write().build_scope(&mut tree.write());
+            assert_eq!(
+                changes.get(),
+                if subscribe || read_in_build { cycle } else { 0 },
+                "only dependency reads refresh lifecycle after activation"
+            );
+        }
+        tree.write()
+            .remove(root, &mut owner.write().element_owner_mut());
+    }
+}
 
 pub(crate) fn unmounted_dependent_is_removed_from_provider_before_next_notification() {
     let (tree, owner) = create_tree_and_owner();

@@ -41,7 +41,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::Duration;
 
-use flui_animation::Curve;
+use flui_animation::ArcCurve;
 use flui_animation::simulation::{Simulation, SpringDescription, SpringSimulation};
 use flui_foundation::geometry::Axis;
 use flui_foundation::{Listenable, ListenerId};
@@ -114,7 +114,8 @@ impl PageScrollPhysics {
         Self {
             viewport_fraction,
             boundary: Arc::new(ClampingScrollPhysics::new()),
-            spring: SpringDescription::with_damping_ratio(0.5, 100.0, 1.1),
+            spring: SpringDescription::with_damping_ratio(0.5, 100.0, 1.1)
+                .expect("BUG: default page spring is in the admitted domain"),
             velocity_tolerance_px_per_sec: 20.0,
         }
     }
@@ -150,7 +151,7 @@ impl ScrollPhysics for PageScrollPhysics {
         let target = metrics.pixels_from_page(self.viewport_fraction, page.round());
 
         if (target - metrics.pixels).abs() > f64::EPSILON {
-            let spring = SpringSimulation::try_new(
+            let spring = SpringSimulation::new(
                 self.spring,
                 metrics.pixels,
                 target,
@@ -302,12 +303,7 @@ impl PageController {
     /// last/first real page instead of overshooting past it — see
     /// [`next_page`](Self::next_page)/[`previous_page`](Self::previous_page)'s
     /// docs for the resulting end-of-range behavior.
-    pub fn animate_to_page(
-        &self,
-        page: usize,
-        duration: Duration,
-        curve: std::rc::Rc<dyn Curve + Send + Sync>, // see PopPacing's doc (navigator/binding.rs) — same erased easing-curve boundary
-    ) {
+    pub fn animate_to_page(&self, page: usize, duration: Duration, curve: ArcCurve) {
         let page_f = page as f64;
         let position = self.scroll.position();
         if position.set_cached_page_while_collapsed(page_f) {
@@ -335,11 +331,7 @@ impl PageController {
     /// [`ScrollController::animate_to`] clamps the resulting pixel target to
     /// `max_scroll_extent`, so the run visibly stops AT the last page instead
     /// of scrolling past it.
-    pub fn next_page(
-        &self,
-        duration: Duration,
-        curve: std::rc::Rc<dyn Curve + Send + Sync>, // see PopPacing's doc (navigator/binding.rs) — same erased easing-curve boundary
-    ) {
+    pub fn next_page(&self, duration: Duration, curve: ArcCurve) {
         let Some(page) = self.page() else { return };
         self.animate_to_page((page.round() + 1.0).max(0.0) as usize, duration, curve);
     }
@@ -351,11 +343,7 @@ impl PageController {
     /// [`animate_to_page`](Self::animate_to_page)'s delegated `animate_to`
     /// clamps to `min_scroll_extent` regardless. A no-op before the first
     /// layout.
-    pub fn previous_page(
-        &self,
-        duration: Duration,
-        curve: std::rc::Rc<dyn Curve + Send + Sync>, // see PopPacing's doc (navigator/binding.rs) — same erased easing-curve boundary
-    ) {
+    pub fn previous_page(&self, duration: Duration, curve: ArcCurve) {
         let Some(page) = self.page() else { return };
         self.animate_to_page((page.round() - 1.0).max(0.0) as usize, duration, curve);
     }
@@ -372,10 +360,10 @@ impl PageController {
         self.scroll.clone()
     }
 
-    /// An `Arc<dyn Listenable>` pointing at the same shared position.
+    /// An `Rc<dyn Listenable>` sharing this controller's position channel.
     #[must_use]
-    pub fn as_listenable(&self) -> std::rc::Rc<dyn Listenable> {
-        self.scroll.as_listenable()
+    pub fn listenable(&self) -> std::rc::Rc<dyn Listenable> {
+        self.scroll.listenable()
     }
 }
 
@@ -538,7 +526,7 @@ pub struct PageViewState {
     /// The listenable the listener is registered on, alongside its id.
     /// Stored together (not looked up fresh from `self.controller` at
     /// removal time) because a controller SWAP changes which listenable
-    /// `self.controller.as_listenable()` resolves to — each notifier keeps
+    /// `self.controller.listenable()` resolves to — each notifier keeps
     /// its own `ListenerId` counter, so removing by id from a DIFFERENT
     /// notifier than the one that issued it can collide with an unrelated
     /// listener there (silently removing the wrong one and leaking the
@@ -650,7 +638,7 @@ impl PageViewState {
             .clone()
             .expect("BUG: init_state mints the rebuild handle before registering the listener");
 
-        let listenable = self.controller.as_listenable();
+        let listenable = self.controller.listenable();
         let listener_id = listenable.add_listener(std::rc::Rc::new(move || {
             if !position.has_applied_viewport_dimension() {
                 return;
@@ -774,13 +762,13 @@ impl ViewState<PageView> for PageViewState {
         };
 
         // Detect an actual controller SWAP by listenable identity — mirrors
-        // `AnimatedBehavior::on_view_updated`'s `Arc::ptr_eq` guard
+        // `AnimatedBehavior::on_view_updated`'s `Rc::ptr_eq` guard
         // (`crates/flui-view/src/element/behavior.rs`): a rebuild that hands
         // back the SAME controller (by far the common case when one IS
         // explicitly supplied) must not tear down and rebuild the
         // subscription.
-        let old_listenable = self.controller.as_listenable();
-        let new_listenable = new_controller.as_listenable();
+        let old_listenable = self.controller.listenable();
+        let new_listenable = new_controller.listenable();
         let controller_swapped = !std::rc::Rc::ptr_eq(&old_listenable, &new_listenable);
 
         self.controller = new_controller.clone();

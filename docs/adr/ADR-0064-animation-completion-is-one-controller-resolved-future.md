@@ -52,7 +52,7 @@ entrance transition (#1161).
    before the controller lock drops (Flutter's order: complete, then notify) and deliver after.
    Starting a new run cancels the displaced one, firing the new run's status before delivering
    the old run's cancellation. A zero-distance run returns an already-complete future. Every
-   site funnels through one chokepoint, `AnimationController::finish`, which drops the lock and
+   site funnels through one chokepoint, `AnimationController::deliver_transition`, which releases the guard and
    then delivers; a source-guard test keeps `deliver()` out of the rest of `controller.rs`.
    The per-site table is in `flui-animation`'s `## Mapping decisions`.
 
@@ -68,7 +68,7 @@ entrance transition (#1161).
    drops `active_run`, which cancels and delivers with no controller lock held. Foreign code
    still runs under the controller guard (`restart_ticker` → `request_frame` → the embedder's
    `on_frame_scheduled`), so `restart_ticker` runs before any completer for the run exists, and
-   `controller.rs` emits no `tracing` under the guard (warnings are raised after `finish`
+   `controller.rs` emits no `tracing` under the guard (warnings are raised after transition delivery
    unlocks), because a subscriber is arbitrary code. Scheduler-driven and detached-ticker
    controllers hold a `ticker → callback → controller` cycle until an explicit `dispose()`.
    `Event::notify`'s waker precondition (a waker that re-polls from `wake()` deadlocks inside
@@ -94,7 +94,7 @@ not synchronously in `forward()` as Flutter's `_animateToInternal` special-cases
 ## Consequences
 
 - A waker or continuation re-entering a controller cannot deadlock: nothing in
-  `flui-scheduler` resolves under a caller's lock, and only `AnimationController::finish`
+  `flui-scheduler` resolves under a caller's lock, and only controller transition delivery
   delivers in `flui-animation`.
 - The navigator awaits route transitions directly.
 - Breaking, on purpose, pre-1.0: `Ticker::start*`'s return type, the removed

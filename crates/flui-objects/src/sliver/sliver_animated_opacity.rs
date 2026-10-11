@@ -21,8 +21,9 @@
 //! before this change — only the box variant's constructor signature and its
 //! widget were rewired in this unit.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::rc::Rc;
+
+use crate::opacity_sample::OpacitySample;
 
 use flui_foundation::Single;
 use flui_foundation::geometry::Size;
@@ -34,7 +35,7 @@ use flui_rendering::{
     constraints::SliverGeometry,
     context::{SliverHitTestContext, SliverLayoutContext},
     parent_data::SliverPhysicalParentData,
-    pipeline::RenderInvalidationHandle,
+    pipeline::LocalRenderInvalidationHandle,
     traits::{PaintEffects, PaintOpacity, RenderSliver},
 };
 
@@ -51,13 +52,10 @@ pub struct RenderSliverAnimatedOpacity {
     /// [`ProxyAnimation<f64>`] absorbs retargeting on the widget side
     /// instead).
     animation: ProxyAnimation<f64>,
-    /// Alpha cache (`0..=255`), shared with the tick listener closure.
-    /// See [`RenderAnimatedOpacity`](crate::RenderAnimatedOpacity)'s
-    /// field doc for why this is an `AtomicU8`, not a `Cell`/`Mutex`, and
-    /// why `Ordering::Relaxed` suffices (the dirty-channel send in
-    /// [`recompute_alpha`](Self::recompute_alpha), not the atomic op, is
-    /// the synchronization edge).
-    alpha: Arc<AtomicU8>,
+    /// Owner-local alpha shared with the tick listener and paint walk.
+    /// Both opacity protocols use the same generation-checked sample and
+    /// admit every required invalidation phase before waking the owner.
+    alpha: Rc<OpacitySample>,
     /// Whether child semantics are included regardless of alpha.
     always_include_semantics: bool,
     /// Tick-listener subscription on `animation`, torn down in `detach`.
@@ -70,7 +68,7 @@ impl RenderSliverAnimatedOpacity {
     /// [`RenderAnimatedOpacity::new`](crate::RenderAnimatedOpacity::new)).
     #[must_use]
     pub fn new(animation: ProxyAnimation<f64>, always_include_semantics: bool) -> Self {
-        let alpha = Arc::new(AtomicU8::new(Self::opacity_to_alpha(animation.value())));
+        let alpha = Rc::new(OpacitySample::new(animation.value()));
         Self {
             animation,
             alpha,
@@ -79,21 +77,12 @@ impl RenderSliverAnimatedOpacity {
         }
     }
 
-    /// Returns the current cached alpha (`0..=255`).
+    /// Returns the accepted opacity in `0.0..=1.0`, refreshed on animation
+    /// notifications and construction or attachment.
     #[inline]
     #[must_use]
-    pub fn alpha(&self) -> u8 {
-        self.alpha.load(Ordering::Relaxed)
-    }
-
-    /// The composed animation's raw `f64` value, bypassing the `u8` alpha
-    /// cache's `1/255` quantization. See
-    /// [`RenderAnimatedOpacity::opacity_value`](crate::RenderAnimatedOpacity::opacity_value)
-    /// for why this exists.
-    #[inline]
-    #[must_use]
-    pub fn opacity_value(&self) -> f64 {
-        self.animation.value()
+    pub fn opacity(&self) -> f64 {
+        self.alpha.get()
     }
 
     /// Whether child semantics are included regardless of alpha.
@@ -103,103 +92,23 @@ impl RenderSliverAnimatedOpacity {
         self.always_include_semantics
     }
 
-    /// Converts opacity (`0.0..=1.0`) to alpha (`0..=255`).
-    #[inline]
-    fn opacity_to_alpha(opacity: f64) -> u8 {
-        (opacity.clamp(0.0, 1.0) * 255.0).round() as u8
-    }
-
-    /// Whether `alpha` sits in the "layered" range `(0, 255)`. See
-    /// [`RenderAnimatedOpacity`](crate::RenderAnimatedOpacity)'s
-    /// `is_layered` doc for the rationale — identical rule here.
-    #[inline]
-    fn is_layered(alpha: u8) -> bool {
-        alpha > 0 && alpha < 255
-    }
-
     /// Recomputes `alpha` and marks the node dirty through `handle`. See
     /// [`RenderAnimatedOpacity`](crate::RenderAnimatedOpacity)'s
-    /// `recompute_alpha` for the full rule this mirrors, including why the
-    /// cache commit is ordered strictly after every required mark send
-    /// succeeds. Returns `true` iff alpha changed AND every required mark
-    /// was sent successfully.
+    /// `recompute_alpha` for the shared sample publication and phase admission
+    /// rule. Returns whether alpha changed and reached a live owner.
     fn recompute_alpha(
         animation: &ProxyAnimation<f64>,
-        alpha: &AtomicU8,
-        handle: &RenderInvalidationHandle,
+        alpha: &OpacitySample,
+        handle: &LocalRenderInvalidationHandle,
     ) -> bool {
-        let new_alpha = Self::opacity_to_alpha(animation.value());
-        let old_alpha = alpha.load(Ordering::Relaxed);
-        if old_alpha == new_alpha {
-            return false;
-        }
-
-        if Self::is_layered(old_alpha) != Self::is_layered(new_alpha)
-            && let Err(error) = handle.mark_needs_compositing_bits_update()
-        {
-            tracing::warn!(
-                %error,
-                old_alpha,
-                new_alpha,
-                "RenderSliverAnimatedOpacity: compositing-bits mark send \
-                 failed; alpha cache left at the old value so the next tick \
-                 retries"
-            );
-            return false;
-        }
-
-        // See `RenderAnimatedOpacity::recompute_alpha` for why this is the
-        // composited-layer-update mark rather than a paint mark: an alpha-only
-        // tick rebuilds just this node's `OpacityLayer` and replays the
-        // enclosing boundary's retained output, and degrades to a paint mark
-        // on its own when there is nothing retained to patch.
-        // Crossing alpha 0 starts or stops suppressing the subtree's paint
-        // entirely, and that is invisible to the layer-update path: at both
-        // alpha 0 and alpha 255 no `OpacityLayer` is emitted, so there is no
-        // effect-layer slot to patch. Only a repaint can add or remove that
-        // content.
-        //
-        // Belt and braces, and knowingly so: the paint phase refuses to graft
-        // when a node that requested an update owns no slot, which covers this
-        // case as well — a mutation run removes this branch and the end-to-end
-        // test still passes. It stays because reporting the truth here saves a
-        // queue-then-refuse round trip, and because this class has already
-        // produced visible corruption once.
-        if (old_alpha == 0) != (new_alpha == 0) {
-            if let Err(error) = handle.mark_needs_paint() {
-                tracing::warn!(
-                    %error,
-                    old_alpha,
-                    new_alpha,
-                    "RenderSliverAnimatedOpacity: paint mark send failed on a visibility change; \
-                     alpha cache left at the old value so the next tick retries"
-                );
-                return false;
-            }
-            alpha.store(new_alpha, Ordering::Relaxed);
-            return true;
-        }
-
-        if let Err(error) = handle.mark_needs_composited_layer_update() {
-            tracing::warn!(
-                %error,
-                old_alpha,
-                new_alpha,
-                "RenderSliverAnimatedOpacity: composited-layer-update mark send \
-                 failed; alpha cache left at the old value so the next tick retries"
-            );
-            return false;
-        }
-
-        alpha.store(new_alpha, Ordering::Relaxed);
-        true
+        alpha.sample(|| animation.value(), handle)
     }
 }
 
 impl std::fmt::Debug for RenderSliverAnimatedOpacity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RenderSliverAnimatedOpacity")
-            .field("alpha", &self.alpha())
+            .field("opacity", &self.opacity())
             .field("always_include_semantics", &self.always_include_semantics)
             .finish_non_exhaustive()
     }
@@ -207,7 +116,7 @@ impl std::fmt::Debug for RenderSliverAnimatedOpacity {
 
 impl flui_foundation::Diagnosticable for RenderSliverAnimatedOpacity {
     fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_default_double("opacity", f64::from(self.alpha()) / 255.0, 1.0, None);
+        builder.add_default_double("opacity", self.opacity(), 1.0, None);
         builder.add_flag(
             "always_include_semantics",
             self.always_include_semantics,
@@ -247,19 +156,19 @@ impl RenderSliver for RenderSliverAnimatedOpacity {
     // comment on that override for the walk's mechanics). The box variant,
     // `RenderAnimatedOpacity`, carries the analogous override for the same
     // reason — see its own comment for the predicate used
-    // (`is_layered`, `0 < alpha < 255`) and why.
+    // (`is_layered`, `0 < alpha < 1`) and why.
     fn always_needs_compositing(&self) -> bool {
-        Self::is_layered(self.alpha())
+        OpacitySample::is_layered(self.opacity())
     }
 
     // The whole point of this object: the pipeline reads paint_effects
     // through `&dyn RenderObject<SliverProtocol>`; the blanket impl forwards
     // here.
     fn paint_effects(&self, _size: Size) -> PaintEffects {
-        let alpha = self.alpha();
-        // None when fully opaque (255) or fully transparent (0): neither
+        let alpha = self.opacity();
+        // None when fully opaque (1) or fully transparent (0): neither
         // requires an OpacityLayer.
-        if alpha == 255 || alpha == 0 {
+        if alpha == 1.0 || alpha == 0.0 {
             PaintEffects::NONE
         } else {
             PaintEffects::NONE.with_opacity(PaintOpacity::new(alpha))
@@ -267,10 +176,14 @@ impl RenderSliver for RenderSliverAnimatedOpacity {
     }
 
     fn skip_paint(&self) -> bool {
-        self.alpha() == 0
+        self.opacity() == 0.0
     }
 
-    fn attach(&mut self, handle: RenderInvalidationHandle) {
+    fn visits_child_for_semantics(&self, _child_slot: usize) -> bool {
+        self.always_include_semantics || self.opacity() > 0.0
+    }
+
+    fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
         let animation = self.animation.clone();
         let alpha = self.alpha.clone();
         let mark_handle = handle.clone();

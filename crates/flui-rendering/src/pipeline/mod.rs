@@ -9,6 +9,7 @@
 mod dirty;
 pub(crate) mod handle;
 pub mod hit_test_probe;
+mod local_invalidation;
 mod notifier;
 mod owner;
 pub mod phase;
@@ -25,6 +26,7 @@ pub use flui_painting::paint::{BlendMode, ClipOp, FilterQuality, ImageFilter, Po
 pub use dirty::{DirtyNode, DirtySets, PaintEntry, PaintKind, PaintQueue};
 pub use flui_painting::paint::{BlurStyle, StrokeCap, StrokeJoin, TileMode};
 pub use handle::{RenderInvalidationHandle, SendError as DirtySendError};
+pub use local_invalidation::LocalRenderInvalidationHandle;
 pub use notifier::{DeferredVisualUpdate, VisualUpdateNotifier};
 pub use owner::{
     AttachRenderSubtreesError, AttachRenderSubtreesFailure, DetachRenderSubtreesError,

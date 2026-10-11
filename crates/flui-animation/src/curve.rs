@@ -1,6 +1,7 @@
 //! Animation curves for interpolation.
 
 use crate::animation::{Retirement, Terminal};
+use crate::curves;
 
 use std::fmt;
 use std::sync::Arc;
@@ -15,7 +16,7 @@ use std::sync::Arc;
 /// - `transform` is defined on all of `f64`. For `t` in `[0, 1]` the result
 ///   is finite, `transform(0.0) == 0.0` and `transform(1.0) == 1.0` exactly.
 ///   Inside the interval the result may leave `[0, 1]` (an overshooting
-///   curve such as [`Curves::EaseOutBack`] or [`ElasticOutCurve`]).
+///   curve such as [`curves::EASE_OUT_BACK`] or [`ElasticOutCurve`]).
 /// - A finite `t` outside `[0, 1]`, and `±∞`, is clamped: the result is the
 ///   value at the nearest end. Curves do not extrapolate.
 /// - `transform(f64::NAN)` returns NaN. A curve never disguises a broken
@@ -36,6 +37,7 @@ use std::sync::Arc;
 ///
 /// impl Curve for MyCurve {
 ///     fn transform(&self, t: f64) -> f64 {
+///         let t = t.clamp(0.0, 1.0);
 ///         t * t // quadratic ease-in
 ///     }
 /// }
@@ -44,6 +46,9 @@ use std::sync::Arc;
 /// assert_eq!(curve.transform(0.0), 0.0);
 /// assert_eq!(curve.transform(0.5), 0.25);
 /// assert_eq!(curve.transform(1.0), 1.0);
+/// assert_eq!(curve.transform(-0.5), 0.0);
+/// assert_eq!(curve.transform(f64::INFINITY), 1.0);
+/// assert!(curve.transform(f64::NAN).is_nan());
 /// ```
 pub trait Curve {
     /// Returns the eased progress at progress `t`, following the input
@@ -85,10 +90,10 @@ pub trait Curve {
     /// # Examples
     ///
     /// ```
-    /// use flui_animation::{Curve, Curves};
+    /// use flui_animation::{Curve, curves};
     ///
-    /// assert_eq!(Curves::Linear.slope(0.3), 1.0);
-    /// assert_eq!(Curves::EaseIn.slope(2.0), 0.0);
+    /// assert_eq!(curves::LINEAR.slope(0.3), 1.0);
+    /// assert_eq!(curves::EASE_IN.slope(2.0), 0.0);
     /// ```
     fn slope(&self, t: f64) -> f64 {
         difference_slope(|t| self.transform(t), t)
@@ -358,7 +363,7 @@ fn settled(t: f64) -> Option<f64> {
 }
 
 // ============================================================================
-// Standard Curves
+// Standard curves
 // ============================================================================
 /// A linear curve.
 ///
@@ -390,9 +395,9 @@ impl Curve for Linear {
 /// # Examples
 ///
 /// ```
-/// use flui_animation::{Curve, Curves, Interval};
+/// use flui_animation::{Curve, curves, Interval};
 ///
-/// let late = Interval::new(0.5, 1.0, Curves::Linear);
+/// let late = Interval::new(0.5, 1.0, curves::LINEAR);
 /// assert_eq!(late.transform(0.25), 0.0);
 /// assert_eq!(late.transform(0.75), 0.5);
 /// ```
@@ -579,7 +584,7 @@ impl<C: Curve + Copy> TryFrom<IntervalWire<C>> for Interval<C> {
 }
 
 // ============================================================================
-// Cubic Curves
+// Cubic curves
 // ============================================================================
 
 /// One coordinate of a unit cubic bezier, `p(s) = ((a·s + b)·s + c)·s`, with
@@ -661,7 +666,7 @@ const MIN_NEWTON_SLOPE: f64 = 1e-7;
 /// stops on the **output**: it brackets the bezier parameter until the
 /// bracket's width times the largest `|dy/ds|` is below `1e-7`, so the
 /// result is within `1e-7` of the exact y(x) — including next to a vertical
-/// tangent such as [`Curves::EaseInOutExpo`]'s, where a solver that stops on
+/// tangent such as [`curves::EASE_IN_OUT_EXPO`]'s, where a solver that stops on
 /// the x residual is off by up to `9e-3`. Floating-point rounding in x
 /// limits this only within about `1e-16 / x'(s)` of a point where `x'(s) = 0`.
 ///
@@ -1357,10 +1362,10 @@ impl<B: Curve, E: Curve> Drop for Split<B, E> {
 
 impl Split<Linear, Cubic> {
     /// Creates a split curve with the default halves: linear before `split`,
-    /// `Curves::EaseOutCubic` after.
+    /// `curves::EASE_OUT_CUBIC` after.
     #[must_use]
     pub fn new(split: f64) -> Self {
-        Self::with_curves(split, Linear, Curves::EaseOutCubic)
+        Self::with_curves(split, Linear, curves::EASE_OUT_CUBIC)
     }
 }
 
@@ -1429,7 +1434,7 @@ impl<B: Curve, E: Curve> Curve for Split<B, E> {
 }
 
 // ============================================================================
-// Elastic Curves
+// Elastic curves
 // ============================================================================
 
 /// `2^-10`: the Penner elastic envelope's value at the far end.
@@ -1612,7 +1617,7 @@ impl Curve for ElasticInOutCurve {
 }
 
 // ============================================================================
-// Bounce Curves
+// Bounce curves
 // ============================================================================
 
 /// A bounce curve that bounces at the end.
@@ -1701,7 +1706,7 @@ impl Curve for DecelerateCurve {
 }
 
 // ============================================================================
-// Step Curves
+// Step curves
 // ============================================================================
 
 /// Where a [`Steps`] curve places its jumps (CSS Easing 1 §2.3.1
@@ -1913,175 +1918,6 @@ impl<C: Curve> Curve for FlippedCurve<C> {
     }
 }
 
-// ============================================================================
-// Predefined Curves
-// ============================================================================
-
-/// A collection of commonly used curves.
-///
-/// Every constant is monotone except the `Back`, `Elastic` and `Bounce`
-/// families, which overshoot `[0, 1]` (`Bounce` stays inside it but turns
-/// back).
-#[derive(Debug)]
-pub struct Curves;
-
-#[expect(
-    non_upper_case_globals,
-    reason = "curve constants are spelled like the curve types they name"
-)]
-impl Curves {
-    /// A linear curve (the identity function).
-    pub const Linear: Linear = Linear;
-
-    /// A cubic ease-in curve.
-    pub const EaseIn: Cubic = Cubic::new(0.42, 0.0, 1.0, 1.0);
-
-    /// A cubic ease-out curve.
-    pub const EaseOut: Cubic = Cubic::new(0.0, 0.0, 0.58, 1.0);
-
-    /// A cubic ease-in-out curve.
-    pub const EaseInOut: Cubic = Cubic::new(0.42, 0.0, 0.58, 1.0);
-
-    /// A curve that is fast at the beginning and slow at the end.
-    pub const FastOutSlowIn: Cubic = Cubic::new(0.4, 0.0, 0.2, 1.0);
-
-    /// Starts at full speed and decelerates to rest: `cubic-bezier(0, 0, 0.2, 1)`,
-    /// the Material "linear out, slow in" curve (the name reads the other way).
-    pub const SlowOutFastIn: Cubic = Cubic::new(0.0, 0.0, 0.2, 1.0);
-
-    /// Starts slowly, speeds up through the middle and ends slowly (Penner
-    /// `easeInOutCubic`).
-    pub const EaseInOutCubic: Cubic = Cubic::new(0.645, 0.045, 0.355, 1.0);
-
-    /// A curve that starts slowly and ends at full speed.
-    pub const EaseInSine: Cubic = Cubic::new(0.47, 0.0, 0.745, 0.715);
-
-    /// A curve that starts at full speed and ends slowly.
-    pub const EaseOutSine: Cubic = Cubic::new(0.39, 0.575, 0.565, 1.0);
-
-    /// A curve that starts slowly, speeds up, and then ends slowly.
-    pub const EaseInOutSine: Cubic = Cubic::new(0.445, 0.05, 0.55, 0.95);
-
-    /// A curve that starts slowly and accelerates exponentially.
-    pub const EaseInExpo: Cubic = Cubic::new(0.95, 0.05, 0.795, 0.035);
-
-    /// A curve that starts quickly and decelerates exponentially.
-    pub const EaseOutExpo: Cubic = Cubic::new(0.19, 1.0, 0.22, 1.0);
-
-    /// A curve that accelerates and decelerates exponentially.
-    pub const EaseInOutExpo: Cubic = Cubic::new(1.0, 0.0, 0.0, 1.0);
-
-    /// A curve that starts slowly and accelerates sharply.
-    pub const EaseInCirc: Cubic = Cubic::new(0.6, 0.04, 0.98, 0.335);
-
-    /// A curve that starts quickly and decelerates sharply.
-    pub const EaseOutCirc: Cubic = Cubic::new(0.075, 0.82, 0.165, 1.0);
-
-    /// A curve that accelerates and decelerates sharply.
-    pub const EaseInOutCirc: Cubic = Cubic::new(0.785, 0.135, 0.15, 0.86);
-
-    /// Dips below 0 first (anticipation), then accelerates into 1 (Penner
-    /// `easeInBack`). Not monotone.
-    pub const EaseInBack: Cubic = Cubic::new(0.6, -0.28, 0.735, 0.045);
-
-    /// Starts fast, overshoots past 1 near the end and settles back (Penner
-    /// `easeOutBack`). Not monotone.
-    pub const EaseOutBack: Cubic = Cubic::new(0.175, 0.885, 0.32, 1.275);
-
-    /// Dips below 0 at the start and overshoots past 1 at the end. Not
-    /// monotone.
-    pub const EaseInOutBack: Cubic = Cubic::new(0.68, -0.55, 0.265, 1.55);
-
-    /// An elastic ease-in curve.
-    pub const ElasticIn: ElasticInCurve = ElasticInCurve::new(0.4);
-
-    /// An elastic ease-out curve.
-    pub const ElasticOut: ElasticOutCurve = ElasticOutCurve::new(0.4);
-
-    /// An elastic ease-in-out curve.
-    pub const ElasticInOut: ElasticInOutCurve = ElasticInOutCurve::new(0.4);
-
-    /// A bounce curve that bounces at the beginning.
-    pub const BounceIn: BounceInCurve = BounceInCurve;
-
-    /// A bounce curve that bounces at the end.
-    pub const BounceOut: BounceOutCurve = BounceOutCurve;
-
-    /// A bounce curve that bounces at both ends.
-    pub const BounceInOut: BounceInOutCurve = BounceInOutCurve;
-
-    /// A curve where the rate of change starts fast and then decelerates.
-    pub const Decelerate: DecelerateCurve = DecelerateCurve;
-
-    /// The CSS `ease` function: speeds up quickly, ends slowly.
-    pub const Ease: Cubic = Cubic::new(0.25, 0.1, 0.25, 1.0);
-
-    /// A quadratic ease-in (Penner `easeInQuad`).
-    pub const EaseInQuad: Cubic = Cubic::new(0.55, 0.085, 0.68, 0.53);
-
-    /// A cubic ease-in (Penner `easeInCubic`).
-    pub const EaseInCubic: Cubic = Cubic::new(0.55, 0.055, 0.675, 0.19);
-
-    /// A quartic ease-in (Penner `easeInQuart`).
-    pub const EaseInQuart: Cubic = Cubic::new(0.895, 0.03, 0.685, 0.22);
-
-    /// A quintic ease-in (Penner `easeInQuint`).
-    pub const EaseInQuint: Cubic = Cubic::new(0.755, 0.05, 0.855, 0.06);
-
-    /// A quadratic ease-out (Penner `easeOutQuad`).
-    pub const EaseOutQuad: Cubic = Cubic::new(0.25, 0.46, 0.45, 0.94);
-
-    /// A cubic ease-out (Penner `easeOutCubic`).
-    pub const EaseOutCubic: Cubic = Cubic::new(0.215, 0.61, 0.355, 1.0);
-
-    /// A quartic ease-out (Penner `easeOutQuart`).
-    pub const EaseOutQuart: Cubic = Cubic::new(0.165, 0.84, 0.44, 1.0);
-
-    /// A quintic ease-out (Penner `easeOutQuint`).
-    pub const EaseOutQuint: Cubic = Cubic::new(0.23, 1.0, 0.32, 1.0);
-
-    /// A quadratic ease-in-out (Penner `easeInOutQuad`).
-    pub const EaseInOutQuad: Cubic = Cubic::new(0.455, 0.03, 0.515, 0.955);
-
-    /// A quartic ease-in-out (Penner `easeInOutQuart`).
-    pub const EaseInOutQuart: Cubic = Cubic::new(0.77, 0.0, 0.175, 1.0);
-
-    /// A quintic ease-in-out (Penner `easeInOutQuint`).
-    pub const EaseInOutQuint: Cubic = Cubic::new(0.86, 0.0, 0.07, 1.0);
-
-    /// Starts nearly linear and ends with a strong ease-in; pairs with
-    /// `LinearToEaseOut` for enter/exit transitions.
-    pub const FastLinearToSlowEaseIn: Cubic = Cubic::new(0.18, 1.0, 0.04, 1.0);
-
-    /// Starts nearly linear and ends with an ease-out; the exit counterpart
-    /// of `FastLinearToSlowEaseIn`.
-    pub const LinearToEaseOut: Cubic = Cubic::new(0.35, 0.91, 0.33, 0.97);
-
-    /// Starts with an ease-in and ends nearly linear.
-    pub const EaseInToLinear: Cubic = Cubic::new(0.67, 0.03, 0.65, 0.09);
-
-    /// Fast at the edges, slow through the middle.
-    pub const SlowMiddle: Cubic = Cubic::new(0.15, 0.85, 0.85, 0.15);
-
-    /// Material 3 emphasized easing: the default M3 motion curve.
-    pub const EaseInOutCubicEmphasized: ThreePointCubic = ThreePointCubic::new(
-        (0.05, 0.0),
-        (0.133_333, 0.06),
-        (0.166_666, 0.4),
-        (0.208_333, 0.82),
-        (0.25, 1.0),
-    );
-
-    /// A strong ease-in followed by a long, gentle ease-out.
-    pub const FastEaseInToSlowEaseOut: ThreePointCubic = ThreePointCubic::new(
-        (0.056, 0.024),
-        (0.108, 0.308_5),
-        (0.198, 0.541),
-        (0.365_5, 1.0),
-        (0.546_5, 0.989),
-    );
-}
-
 /// A reference-counted, type-erased curve handle.
 ///
 /// Wraps any `impl Curve + Send + Sync + 'static` so that a single, stable
@@ -2097,7 +1933,7 @@ impl Curves {
 /// equal [`Cubic`]s, [`ThreePointCubic`]s, elastic, bounce or linear curves,
 /// or an [`Interval`] or [`FlippedCurve`] of those, are equal however they
 /// were built. A parent that rebuilds every frame with
-/// `.curve(Curves::EaseInOut)` therefore hands an implicit animation an
+/// `.curve(curves::EASE_IN_OUT)` therefore hands an implicit animation an
 /// *unchanged* curve, and the animation keeps its run. Any other curve —
 /// yours, a [`Split`], or a combinator over one — compares by identity
 /// (`Arc::ptr_eq`), because [`Curve`] has no equality of its own: reuse the
@@ -2106,15 +1942,15 @@ impl Curves {
 /// # Examples
 ///
 /// ```
-/// use flui_animation::curve::{ArcCurve, Curve, Curves, ElasticOutCurve};
+/// use flui_animation::{ArcCurve, Curve, curves, ElasticOutCurve};
 ///
 /// let curve = ArcCurve::new(ElasticOutCurve::default());
 /// assert_eq!(curve.transform(0.0), 0.0);
 /// assert_eq!(curve.transform(1.0), 1.0);
 ///
 /// // Built-in curves compare by value.
-/// assert_eq!(ArcCurve::new(Curves::EaseIn), ArcCurve::new(Curves::EaseIn));
-/// assert_ne!(ArcCurve::new(Curves::EaseIn), ArcCurve::new(Curves::EaseOut));
+/// assert_eq!(ArcCurve::new(curves::EASE_IN), ArcCurve::new(curves::EASE_IN));
+/// assert_ne!(ArcCurve::new(curves::EASE_IN), ArcCurve::new(curves::EASE_OUT));
 /// ```
 ///
 /// [`CurvedAnimation`]: crate::CurvedAnimation

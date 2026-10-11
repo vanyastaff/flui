@@ -10,25 +10,25 @@ use flui_view::{BoxedView, InheritedView, impl_inherited_view};
 ///
 /// A binding (or a test harness) wraps the application subtree in
 /// `VsyncScope::new(binding.vsync(), child)`. Every implicitly-animated widget
-/// below (`AnimatedOpacity`, …) reads this registry ambiently in `init_state`
-/// (via `ctx.get::<VsyncScope, _>(..)`) and registers its controller in it, so
+/// below (`AnimatedOpacity`, …) acquires this registry in `init_state`
+/// through [`VsyncScope::maybe_of`] and creates an owning controller in it, so
 /// the binding's `pump_frame` advances all of them on the same virtual clock —
 /// deterministically, with no `thread::sleep`.
 ///
 /// FLUI is non-singleton, so there is no ambient ticker owner: the registry is
 /// handed down explicitly as inherited data, scoped to a subtree.
 ///
-/// An implicitly-animated widget with no `VsyncScope` above it still functions:
-/// its controller is created with its own scheduler-ticker (which drives it off
-/// wall-clock time on a real display), it is simply not binding-driven. Gesture
+/// Without a registry, finite animations settle through the common unbound
+/// policy; infinite repeats park until a registry is provided. Gesture
 /// ownership is stricter and unrelated: gesture widgets require their
 /// presentation's `GestureArenaScope`.
 ///
-/// Replacing the registry notifies retained states, which migrate their ticker registrations.
+/// Replacing the registry notifies retained states, which rebind their owning
+/// controllers in `did_change_dependencies` without restarting accepted motion.
 #[derive(Clone)]
 pub struct VsyncScope {
     /// The shared registry handed to descendants. Cloning the scope clones this
-    /// `Arc`-backed handle, so all clones observe the same registry.
+    /// `Rc`-backed handle, so all clones observe the same registry.
     vsync: Option<Vsync>,
     /// The wrapped subtree the registry is provided to.
     child: BoxedView,

@@ -69,7 +69,8 @@ impl super::GpuReplay {
                 };
                 match &run.kind {
                     DrawRun::CachedImage(range) if run.clip.has_antialias() => {
-                        for (_, _, _, mode) in &segment.cached_images[range.clone()] {
+                        for draw in &segment.cached_images[range.clone()] {
+                            let mode = &draw.mode;
                             if super::coverage::image_needs_portable(*mode) {
                                 let texture = target.texture.ok_or(
                                     crate::error::EngineError::UnsupportedCoverageBlend {
@@ -283,7 +284,7 @@ impl super::GpuReplay {
                     resources,
                     encoder,
                     view,
-                ),
+                )?,
                 DrawRun::ExternalImage(range) => self.flush_segment_external_images(
                     segment,
                     range.clone(),

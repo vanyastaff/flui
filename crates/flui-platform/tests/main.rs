@@ -21,6 +21,9 @@
 mod android_exit_path;
 #[path = "contract.rs"]
 mod contract;
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "executor.rs"]
+mod executor;
 #[path = "file_store.rs"]
 mod file_store;
 #[path = "preferences.rs"]
@@ -28,6 +31,7 @@ mod preferences;
 #[path = "text_input_mapping.rs"]
 mod text_input_mapping;
 #[path = "window_callback_unwind.rs"]
+#[cfg(not(target_arch = "wasm32"))]
 mod window_callback_unwind;
 #[path = "window_installation.rs"]
 mod window_installation;

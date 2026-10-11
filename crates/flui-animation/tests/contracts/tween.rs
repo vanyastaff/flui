@@ -33,6 +33,13 @@ fn ordinary_integer_rounding_and_clamping() {
     assert_eq!(stepped.transform(2.0), 3);
 }
 
+fn nan_progress_preserves_the_begin_endpoint() {
+    for (begin, end) in [(7, -3), (-9, 4)] {
+        assert_eq!(IntTween::new(begin, end).transform(f64::NAN), begin);
+        assert_eq!(StepTween::new(begin, end).transform(f64::NAN), begin);
+    }
+}
+
 #[test]
 fn integer_tweens_interpolate_across_the_full_range() {
     crate::run_table(&[
@@ -47,6 +54,10 @@ fn integer_tweens_interpolate_across_the_full_range() {
         (
             "ordinary integer rounding and clamping",
             ordinary_integer_rounding_and_clamping,
+        ),
+        (
+            "NaN progress preserves the begin endpoint",
+            nan_progress_preserves_the_begin_endpoint,
         ),
     ]);
 }

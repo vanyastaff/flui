@@ -64,10 +64,7 @@ impl From<Color> for HSLColor {
     #[inline]
     #[expect(clippy::manual_midpoint)]
     fn from(color: Color) -> Self {
-        let r = color.r as f32 / 255.0;
-        let g = color.g as f32 / 255.0;
-        let b = color.b as f32 / 255.0;
-        let a = color.a as f32 / 255.0;
+        let [r, g, b, a] = color.to_rgba_f32_array();
 
         let max = r.max(g).max(b);
         let min = r.min(g).min(b);
@@ -117,14 +114,8 @@ impl From<HSLColor> for Color {
             (c, 0.0, x)
         };
 
-        // Round to nearest; truncating loses a unit
-        // whenever the float lands just under an integer.
-        Color::rgba(
-            ((r + m) * 255.0).round() as u8,
-            ((g + m) * 255.0).round() as u8,
-            ((b + m) * 255.0).round() as u8,
-            (hsl.alpha * 255.0).round() as u8,
-        )
+        // Preserve normalized channels until an explicit byte export.
+        Color::from_rgba_f32_array([r + m, g + m, b + m, hsl.alpha])
     }
 }
 
@@ -186,10 +177,7 @@ impl HSVColor {
 impl From<Color> for HSVColor {
     #[inline]
     fn from(color: Color) -> Self {
-        let r = color.r as f32 / 255.0;
-        let g = color.g as f32 / 255.0;
-        let b = color.b as f32 / 255.0;
-        let a = color.a as f32 / 255.0;
+        let [r, g, b, a] = color.to_rgba_f32_array();
 
         let max = r.max(g).max(b);
         let min = r.min(g).min(b);
@@ -234,13 +222,7 @@ impl From<HSVColor> for Color {
             (c, 0.0, x)
         };
 
-        // Round to nearest; truncating loses a unit
-        // whenever the float lands just under an integer.
-        Color::rgba(
-            ((r + m) * 255.0).round() as u8,
-            ((g + m) * 255.0).round() as u8,
-            ((b + m) * 255.0).round() as u8,
-            (hsv.alpha * 255.0).round() as u8,
-        )
+        // Preserve normalized channels until an explicit byte export.
+        Color::from_rgba_f32_array([r + m, g + m, b + m, hsv.alpha])
     }
 }

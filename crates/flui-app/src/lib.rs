@@ -52,8 +52,8 @@ mod table_test;
 
 // Primary exports
 pub use app::{
-    AppConfig, DiagnosticsProfile, PointerResampling, RootRenderElement, RootRenderView, run_app,
-    run_app_with_config,
+    AppConfig, DiagnosticsProfile, MotionPreference, PointerResampling, RootRenderElement,
+    RootRenderView, run_app, run_app_with_config,
 };
 // The app's font registration door (ADR-0092 §2).
 pub use app::{FontRegistrationError, register_font};

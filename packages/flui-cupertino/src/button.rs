@@ -1,8 +1,7 @@
-//! [`CupertinoButton`] — the iOS (17) Human Interface Guidelines button.
+//! [`CupertinoButton`] — a themed button with a tap-fade sequence.
 //!
-//! Every geometry constant (padding, border radius, minimum size, tinted
-//! opacity, fade timing) follows the iOS HIG per-[`CupertinoButtonSize`]
-//! tables — pinned by a const-table test in `tests/button.rs`.
+//! [`CupertinoButtonSize`] selects padding, border radius and minimum
+//! geometry; theme and brightness determine its foreground and fill.
 //!
 //! ## Honest reduction: one recognized tap, not a real down/move/up sequence
 //!
@@ -17,10 +16,10 @@
 //!
 //! So the fade *sequence* is applied uniformly to that single
 //! `on_tap` event: on tap, animate toward `CupertinoButton::pressed_opacity` over
-//! [`K_FADE_OUT_DURATION`] (`Curves::EaseInOutCubicEmphasized`, the press-down
+//! [`K_FADE_OUT_DURATION`] (`curves::EASE_IN_OUT_CUBIC_EMPHASIZED`, the press-down
 //! curve), call the handler, then — once that fade
 //! completes — animate back to full opacity over [`K_FADE_IN_DURATION`]
-//! (`Curves::EaseOutCubic`, the release curve). The visible result
+//! (`curves::EASE_OUT_CUBIC`, the release curve). The visible result
 //! is a brief "flash" per tap instead of a fade that tracks how long the
 //! finger is actually held down. Tap-move-slop-driven cancel-while-dragging
 //! has no equivalent here (named, not silently dropped): there is no drag
@@ -47,8 +46,8 @@ use std::time::Duration;
 use flui_sdk::animation::ext::AnimatableExt;
 
 use flui_sdk::animation::{
-    Animation, AnimationController, AnimationRunFuture, CurvedAnimation, Curves, DrivenController,
-    FloatTween,
+    Animation, AnimationController, AnimationRunFuture, CurvedAnimation, DrivenController,
+    FloatTween, curves,
 };
 use flui_sdk::geometry::EdgeInsets;
 use flui_sdk::painting::Alignment;
@@ -360,11 +359,11 @@ fn resolve_background_color(
         }
         ButtonFillStyle::Plain | ButtonFillStyle::Filled => {
             let alpha = match view.color {
-                Some(CupertinoColor::Static(color)) => color.a,
-                Some(CupertinoColor::Dynamic(dynamic)) => dynamic.color.a,
-                None => 255,
+                Some(CupertinoColor::Static(color)) => color.opacity(),
+                Some(CupertinoColor::Dynamic(dynamic)) => dynamic.color.opacity(),
+                None => 1.0,
             };
-            base_color.with_alpha(alpha)
+            base_color.with_opacity(f64::from(alpha))
         }
     })
 }
@@ -389,9 +388,7 @@ fn resolve_foreground_color(
 
 /// Starts the press-in fade on tap, returning the run's [`AnimationRunFuture`] so
 /// the caller can chain the release fade onto it — `None` if it did not
-/// start a run at all. Extracted from the `on_tap` closure so "does a tap
-/// with `pressed_opacity: None` actually start the controller" is
-/// unit-testable without mounting a render tree (see the tests below).
+/// start a run at all.
 ///
 /// `pressed_opacity: None` means [`CupertinoButton::pressed_opacity`]'s
 /// contract — "disables the fade animation entirely". Driving the controller
@@ -406,7 +403,7 @@ fn start_press_fade(
 ) -> Option<AnimationRunFuture> {
     pressed_opacity?;
     let curve: Rc<dyn flui_sdk::animation::Curve + Send + Sync> =
-        std::rc::Rc::new(Curves::EaseInOutCubicEmphasized);
+        std::rc::Rc::new(curves::EASE_IN_OUT_CUBIC_EMPHASIZED);
     let outcome = controller.animate_to_curved(1.0, Some(K_FADE_OUT_DURATION), curve);
     if let Err(error) = &outcome {
         tracing::debug!(?error, "CupertinoButton press fade failed to start");
@@ -419,16 +416,13 @@ fn start_press_fade(
 
 /// Starts the release fade once `press_fade` genuinely completes — never on
 /// cancellation (a second tap superseding this one must not start a
-/// release for the one it displaced). Extracted from the `on_tap` closure
-/// for the same reason as [`start_press_fade`]: a direct, controller-only
-/// unit test proves "the release starts exactly once per tap" without
-/// mounting a render tree.
+/// release for the one it displaced).
 ///
 /// Chained on `press_fade`'s own [`AnimationRunFuture`] (ADR-0064), not a status
 /// listener: a status listener has no way to tell "the press fade just
 /// landed" from "the release fade just landed" now that direction is chosen
-/// by the method (`animate_to_curved` reports `Completed` at BOTH ends,
-/// issue #1171) — a listener watching `Completed` unconditionally
+/// by the method (`animate_to_curved` reports `ForwardSettled` at BOTH ends,
+/// issue #1171) — a listener watching `ForwardSettled` unconditionally
 /// re-triggers itself once the release it started lands. Chaining off the
 /// return of the leg just started is one-shot, unlike a persistent listener.
 fn chain_release_fade(controller: &AnimationController, press_fade: AnimationRunFuture) {
@@ -436,7 +430,7 @@ fn chain_release_fade(controller: &AnimationController, press_fade: AnimationRun
     press_fade.when_complete_or_cancel(move |outcome| {
         if outcome.is_ok() {
             let curve: Rc<dyn flui_sdk::animation::Curve + Send + Sync> =
-                std::rc::Rc::new(Curves::EaseOutCubic);
+                std::rc::Rc::new(curves::EASE_OUT_CUBIC);
             if let Err(error) =
                 release_controller.animate_to_curved(0.0, Some(K_FADE_IN_DURATION), curve)
             {
@@ -449,9 +443,8 @@ fn chain_release_fade(controller: &AnimationController, press_fade: AnimationRun
 /// Persistent state behind [`CupertinoButton`] — see [`StatefulView`]/
 /// [`ViewState`].
 pub struct CupertinoButtonState {
-    /// `None` when there is no ambient [`VsyncScope`] — see the module doc's
-    /// press-fade section; the button still responds to taps, it just has no
-    /// clock to animate the fade against.
+    /// Acquired during initialization and withdrawn during disposal. The
+    /// owner follows the ambient registry through dependency changes.
     controller: Option<DrivenController>,
     rebuild: Option<RebuildHandle>,
 }
@@ -553,7 +546,7 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
                 let pressed_opacity = view.pressed_opacity.unwrap_or(1.0);
                 let curved = std::rc::Rc::new(CurvedAnimation::new(
                     Rc::new(controller.controller().clone()) as std::rc::Rc<dyn Animation<f64>>,
-                    Curves::Decelerate,
+                    curves::DECELERATE,
                 ));
                 std::rc::Rc::new(
                     FloatTween::new(1.0, pressed_opacity)

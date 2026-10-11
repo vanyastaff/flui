@@ -313,6 +313,95 @@ fn taps_at(
     (tap(moved), tap(original))
 }
 
+/// A selected path owns its coordinate mapping through delivery, while a
+/// later selection observes the newly committed animation sample.
+pub(crate) fn a_moving_slide_preserves_selected_pointer_coordinates() {
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    use flui_foundation::geometry::{Offset, Point};
+    use flui_platform_api::pointer::PointerEvent;
+    use flui_testing::PointerScript;
+    use flui_widgets::Listener;
+
+    for (direction, sign) in [(TextDirection::Ltr, 1.0), (TextDirection::Rtl, -1.0)] {
+        let mut binding = HeadlessBinding::new();
+        let owner =
+            AnimationController::builder(Duration::from_secs(1)).build_on(Some(binding.vsync()));
+        let controller = owner.controller();
+        let received = Rc::new(RefCell::new(Vec::new()));
+        let delivered = Rc::clone(&received);
+        let listener = Listener::new()
+            .on_pointer_down(move |_, dispatch| {
+                let (PointerEvent::Down(local), PointerEvent::Down(global)) =
+                    (dispatch.local, dispatch.global)
+                else {
+                    panic!("pointer-down callback receives a Down in both spaces");
+                };
+                delivered
+                    .borrow_mut()
+                    .push((local.sample.position.get(), global.sample.position.get()));
+            })
+            .child(child_box());
+        let slide = SlideTransition::new(
+            fraction(controller, TranslationFraction::new(2.0, 0.0)),
+            listener,
+        )
+        .text_direction(direction);
+        let root = GestureArenaScope::new(
+            binding.arena().clone(),
+            FocusRoot::new(Align::new(Alignment::CENTER).child(slide)),
+        );
+        let _mounted = binding.mount_root(
+            &root,
+            MountOwners::fresh(),
+            MountOptions::tight(200.0, 200.0),
+        );
+        binding.pump_frame(Duration::ZERO);
+        controller.forward().expect("fresh slide run");
+        binding.pump_frame(Duration::ZERO);
+        binding.pump_frame(Duration::from_millis(250));
+        assert!((controller.value() - 0.25).abs() < 1e-9);
+        assert_no_rebuild(
+            binding.last_frame_report(),
+            "running slide before selection",
+        );
+
+        let first = Offset::new(90.0 + sign * 20.0, 90.0);
+        let selected = Cell::new(false);
+        binding.replay_with(&PointerScript::tap(first), |binding, position| {
+            let path = binding.hit_test(position);
+            if !selected.replace(true) {
+                // Change the public animation after choosing the path, before
+                // the owner lane receives it. Its mapping must remain admitted.
+                controller.set_value(0.5);
+            }
+            path
+        });
+        assert_eq!(
+            &*received.borrow(),
+            &[(Point::new(10.0, 10.0), Point::new(first.dx, first.dy))],
+            "{direction:?}: selected coordinates survive a newer animation sample"
+        );
+        assert_no_rebuild(
+            binding.last_frame_report(),
+            "committing the replacement sample",
+        );
+
+        let second = Offset::new(90.0 + sign * 40.0, 90.0);
+        binding.replay(&PointerScript::tap(second));
+        assert_eq!(
+            &*received.borrow(),
+            &[
+                (Point::new(10.0, 10.0), Point::new(first.dx, first.dy)),
+                (Point::new(10.0, 10.0), Point::new(second.dx, second.dy)),
+            ],
+            "{direction:?}: the next selection uses the current sample"
+        );
+        assert_no_rebuild(binding.last_frame_report(), "the next pointer selection");
+    }
+}
+
 pub(crate) fn hit_test_follows_the_painted_transform() {
     let slide = |transform_hit_tests: bool| {
         move |c: &AnimationController, child: GestureDetector| -> BoxedView {

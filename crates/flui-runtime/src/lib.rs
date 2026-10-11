@@ -72,3 +72,4 @@ pub mod ui_runtime;
 
 #[cfg(test)]
 mod table_test;
+pub use flui_animation::MotionPreference;

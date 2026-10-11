@@ -1,7 +1,7 @@
 ### Added
 
 - **`Eq` on float-free curve and tween types** (`flui-animation`): `FlippedCurve`, `Tween`,
-  `ConstantTween`, `ReverseTween`, `CurveTween` and `ChainedTween` derive `Eq` when their parameters do.
+  `ConstantTween`, `ReverseTween` and `CurveTween` derive `Eq` when their parameters do.
 
 ### Fixed
 

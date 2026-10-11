@@ -124,6 +124,10 @@ fn action_component_contracts() {
             ink_well::disabled_ink_well_does_not_fire_a_tap_callback,
         ),
         (
+            "ink_well::press highlight lasts its delay under reduced motion",
+            ink_well::press_highlight_lasts_its_delay_under_reduced_motion,
+        ),
+        (
             "ink_well::pointer and keyboard activation write the owning signal",
             ink_well::pointer_and_keyboard_activation_write_the_owning_signal,
         ),
@@ -236,10 +240,15 @@ fn text_input_contracts() {
 #[test]
 fn overlay_contracts() {
     common::run_cases(&[
+        ("snack_bar_keeps_its_display_duration_under_reduced_motion", snack_bar::snack_bar_keeps_its_display_duration_under_reduced_motion),
         ("unmounting_a_hovered_snack_bar_releases_its_timer_pause", snack_bar::unmounting_a_hovered_snack_bar_releases_its_timer_pause),
         ("snack_bar_display_timer_pauses_while_hovered", snack_bar::snack_bar_display_timer_pauses_while_hovered),
         ("drawer::drawer_settling_uses_the_captured_fling_profile", drawer::drawer_settling_uses_the_captured_fling_profile),
         ("drawer::open_drawer_settling_uses_the_captured_fling_profile", drawer::open_drawer_settling_uses_the_captured_fling_profile),
+        ("drawer::a_drawer_release_keeps_finger_speed", drawer::a_drawer_release_keeps_finger_speed),
+        ("drawer::grabbing_a_closing_drawer_preserves_its_panel", drawer::grabbing_a_closing_drawer_preserves_its_panel),
+        ("drawer::drawer_slides_without_rebuilding_per_frame", drawer::drawer_slides_without_rebuilding_per_frame),
+        ("drawer::incoming_end_drawer_scrim_covers_the_outgoing_start_panel", drawer::incoming_end_drawer_scrim_covers_the_outgoing_start_panel),
         (
         "snack_bar::a completion panic still advances the accepted snack bar queue",
         snack_bar::a_completion_panic_still_advances_the_accepted_snack_bar_queue,
@@ -426,6 +435,18 @@ fn linear_progress_indeterminate_keyframes() {
             "progress_indicator::announced as progress",
             progress_indicator::announced_as_progress,
         ),
+        (
+            "progress_indicator::reduced motion keeps visible loading without continuation",
+            progress_indicator::reduced_motion_keeps_visible_loading_without_continuation,
+        ),
+        (
+            "progress_indicator::initially inactive loading stays visible without a percentage",
+            progress_indicator::initially_inactive_loading_stays_visible_without_a_percentage,
+        ),
+        (
+            "progress_indicator::nested pause and policy changes retain visible loading",
+            progress_indicator::nested_pause_and_policy_changes_retain_visible_loading,
+        ),
     ]);
 }
 
@@ -433,6 +454,10 @@ fn linear_progress_indeterminate_keyframes() {
 #[test]
 fn linear_progress_switches_to_determinate() {
     common::run_cases(&[
+        (
+            "progress_indicator::reduced motion determinate switches keep their meaning",
+            progress_indicator::reduced_motion_determinate_switches_keep_their_meaning,
+        ),
         (
             "progress_indicator::switching to a value stops the bars",
             progress_indicator::switching_to_a_value_stops_the_bars,

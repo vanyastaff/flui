@@ -9,6 +9,21 @@ substrate driver over raw owners, which the raw-owner suites still use.
 
 ## Invariants
 
+- **Adopted widget clocks have one runtime parent.** Re-adopting the same registry
+  is a no-op. A foreign, closed or otherwise refused replacement returns its typed
+  admission error and keeps the current driver; outgoing registry custody drops
+  after releasing the adoption borrow. The public
+  `widget_registry_adoption_preserves_its_driver_on_refusal` observes old and new
+  run completion across refusal and corrected adoption (ADR-0191).
+
+- **Application motion preference uses the runtime's publication path.**
+  `HeadlessHost::set_motion_preference` and the widget harness's matching method
+  call `UiRuntime::set_motion_preference` inside the owner entry. The runtime
+  updates presentation clocks and inherited data; the harness owns no second
+  policy resolver. Material's `press_highlight_lasts_its_delay_under_reduced_motion`
+  and `snack_bar_keeps_its_display_duration_under_reduced_motion` drive real
+  mounted timers through this entry and observe both retained duration and expiry.
+
 - **Extra presentation motion clocks remain independent.** An owning controller
   registers through `build_on` and remains alive for the scripted run. The
   harness has no manual controller-registration shortcut. Editing an extra

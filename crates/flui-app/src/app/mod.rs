@@ -33,7 +33,7 @@ pub(crate) mod window_test_support;
 pub use close_request::{
     CloseReason, CloseRequest, CloseRequestError, CloseRequestHandler, CloseResponse,
 };
-pub use config::{AppConfig, DiagnosticsProfile, PointerResampling};
+pub use config::{AppConfig, DiagnosticsProfile, MotionPreference, PointerResampling};
 pub use dev_agent::DevAgent;
 pub use direct::run_direct;
 pub use flui_runtime::frame_failure::{

@@ -8,9 +8,8 @@
 //!
 //! # Design notes
 //!
-//! * `opacity` is clamped to `[0, 1]` on construction and `set_opacity`;
-//!   the cached `alpha: u8` is recomputed at the boundary so paint-time
-//!   code reads it as `Some(u8)` without re-clamping per frame.
+//! * `opacity` is normalized to a finite value in `[0, 1]` on construction
+//!   and `set_opacity`, retaining fractional alpha for the compositor.
 //! * The opacity setter reports the exact paint, compositing, and semantics
 //!   impact of the alpha transition.
 //! * The `always_needs_compositing` opt-in is honoured by
@@ -51,10 +50,8 @@ use flui_rendering::{
 pub struct RenderSliverOpacity {
     /// Opacity in `[0.0, 1.0]`.
     opacity: f64,
-    /// Cached alpha as `u8` (0..=255) for efficient layer operations.
-    alpha: u8,
     /// When `true`, always report an opacity effect from `paint_effects`,
-    /// even when `alpha == 255`. Useful for stable compositing under
+    /// even when `alpha == 1`. Useful for stable compositing under
     /// animation.
     always_needs_compositing: bool,
 }
@@ -63,10 +60,9 @@ impl RenderSliverOpacity {
     /// Creates a sliver-opacity render object with the given opacity
     /// (clamped to `[0, 1]`).
     pub fn new(opacity: f64) -> Self {
-        let clamped = opacity.clamp(0.0, 1.0);
+        let clamped = PaintOpacity::new(opacity).alpha();
         Self {
             opacity: clamped,
-            alpha: Self::opacity_to_alpha(clamped),
             always_needs_compositing: false,
         }
     }
@@ -91,37 +87,25 @@ impl RenderSliverOpacity {
         self.opacity
     }
 
-    /// Returns the cached alpha (`0..=255`).
-    #[inline]
-    pub fn alpha(&self) -> u8 {
-        self.alpha
-    }
-
     /// Returns whether compositing is needed.
     ///
     /// Returns `true` only when `always_needs_compositing` is set OR the alpha
-    /// is non-trivially blended (`0 < alpha < 255`). Fully-transparent
+    /// is non-trivially blended (`0 < alpha < 1`). Fully-transparent
     /// (`alpha == 0`) does not need compositing because the subtree is skipped
     /// entirely.
     ///
-    /// This is false at alpha 255. The `alpha != 255` term is
-    /// deliberate and is the same `is_layered`
-    /// threshold `paint_effects` and `skip_paint` already use: at alpha 255 no
-    /// layer is ever allocated (`paint_effects` returns no opacity effect),
-    /// so demanding compositing there is pure overhead with no visual
-    /// effect. The full rationale is recorded once, on the sibling that
-    /// first made the call — see `always_needs_compositing` in
-    /// `proxy::animated_opacity`. No test asserts the alpha-255 value.
+    /// At full opacity the child paints directly unless the explicit
+    /// stable-layer flag is set.
     #[inline]
     pub fn needs_compositing(&self) -> bool {
-        self.always_needs_compositing || (self.alpha > 0 && self.alpha != 255)
+        self.always_needs_compositing || (self.opacity > 0.0 && self.opacity < 1.0)
     }
 
     /// Returns the raw `always_needs_compositing` field (the explicit opt-in flag).
     ///
     /// This is the stored boolean flag only. Use
     /// [`needs_compositing`](Self::needs_compositing) to test whether
-    /// compositing is needed for any reason (field OR alpha in `(0, 255)`).
+    /// compositing is needed for any reason (field OR alpha in `(0, 1)`).
     #[inline]
     pub fn always_needs_compositing_flag(&self) -> bool {
         self.always_needs_compositing
@@ -130,18 +114,17 @@ impl RenderSliverOpacity {
     /// Updates the opacity (clamped to `[0, 1]`) and reports its exact pipeline
     /// impact.
     pub fn set_opacity(&mut self, opacity: f64) -> flui_rendering::RenderUpdateImpact {
-        let clamped = opacity.clamp(0.0, 1.0);
-        if (self.opacity - clamped).abs() <= f64::EPSILON {
+        let clamped = PaintOpacity::new(opacity).alpha();
+        if self.opacity == clamped {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
         let old_needs_compositing = self.needs_compositing();
-        let old_is_visible = self.alpha > 0;
+        let old_is_visible = self.opacity > 0.0;
         // Whether this node suppresses its subtree's paint entirely. Read
         // through the trait method rather than re-deriving `alpha == 0`, so
         // this stays correct if that predicate changes.
         let old_skips_paint = <Self as RenderSliver>::skip_paint(self);
         self.opacity = clamped;
-        self.alpha = Self::opacity_to_alpha(clamped);
         // A pure alpha change lands ONLY on the `OpacityLayer` this node
         // pushes, so the frame can rebuild that layer and replay the enclosing
         // repaint boundary's retained output rather than repainting the
@@ -153,8 +136,7 @@ impl RenderSliverOpacity {
         //
         // The path exists here because a retained capture is a flat list and
         // a node's own effect layers are addressable INSIDE the enclosing
-        // boundary's capture, so nothing is promoted. No test drives this
-        // setter through the layer-update path.
+        // boundary's capture, so nothing is promoted.
         let mut impact = flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE;
         if old_needs_compositing != self.needs_compositing() {
             // Crossing the layered threshold changes which layers exist, not
@@ -164,13 +146,13 @@ impl RenderSliverOpacity {
             // — which is the only way to serve a structural change.
             impact |= flui_rendering::RenderUpdateImpact::COMPOSITING_BITS;
         }
-        if old_is_visible != (self.alpha > 0) {
+        if old_is_visible != (self.opacity > 0.0) {
             impact |= flui_rendering::RenderUpdateImpact::SEMANTICS;
         }
         // Starting or stopping suppressing the subtree's paint is a change to
         // what the frame CONTAINS, not to a layer property, and it is invisible
         // to the layer-update path: WITHOUT the always-compositing flag this
-        // node emits no `OpacityLayer` at either alpha 255 or alpha 0, so it
+        // node emits no `OpacityLayer` at either alpha 1 or alpha 0, so it
         // has no effect-layer slot for an update to patch, and only a repaint
         // can add or remove that content.
         //
@@ -179,7 +161,7 @@ impl RenderSliverOpacity {
         // so with the flag set it is false on both sides of the crossing and
         // nothing is added here — while `paint_effects` keeps returning an
         // opacity effect at alpha 0, so the layer survives and the patch has
-        // a slot after all. No test pins that acceleration.
+        // a slot after all.
         //
         // This is the honest impact rather than the last line of defence. The
         // paint phase refuses to graft when a node that requested an update
@@ -202,12 +184,6 @@ impl RenderSliverOpacity {
         }
         self.always_needs_compositing = value;
         flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
-    }
-
-    /// Converts opacity (`0.0..=1.0`) to alpha (`0..=255`).
-    #[inline]
-    fn opacity_to_alpha(opacity: f64) -> u8 {
-        (opacity * 255.0).round() as u8
     }
 }
 
@@ -265,7 +241,7 @@ impl RenderSliver for RenderSliverOpacity {
     // dedicated compositing layer that the opacity effect requires.
     //
     // The child-presence gate is absorbed into the paint phase, and the
-    // alpha threshold excludes 255 — see [`needs_compositing`]'s doc. The
+    // alpha threshold excludes 1 — see [`needs_compositing`]'s doc. The
     // `always_needs_compositing` opt-in field (stable-layer animation
     // support) is OR-ed in, so it only ever widens when a layer is demanded.
     fn always_needs_compositing(&self) -> bool {
@@ -276,19 +252,19 @@ impl RenderSliver for RenderSliverOpacity {
     // paint_effects through `&dyn RenderObject<SliverProtocol>`; the
     // blanket impl forwards here.
     fn paint_effects(&self, _size: Size) -> PaintEffects {
-        // None when fully opaque (255) OR fully transparent (0) without the
+        // None when fully opaque (1) OR fully transparent (0) without the
         // always-needs-compositing flag: neither requires an OpacityLayer.
-        if (self.alpha == 255 || self.alpha == 0) && !self.always_needs_compositing {
+        if (self.opacity == 1.0 || self.opacity == 0.0) && !self.always_needs_compositing {
             PaintEffects::NONE
         } else {
-            PaintEffects::NONE.with_opacity(PaintOpacity::new(self.alpha))
+            PaintEffects::NONE.with_opacity(PaintOpacity::new(self.opacity))
         }
     }
 
     fn skip_paint(&self) -> bool {
         // Fully transparent without the always-compositing flag: suppress child
         // paint entirely (no invisible GPU draws).
-        self.alpha == 0 && !self.always_needs_compositing
+        self.opacity == 0.0 && !self.always_needs_compositing
     }
 }
 

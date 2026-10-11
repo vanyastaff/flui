@@ -432,6 +432,7 @@ impl StatefulView for InteractiveViewer {
 
     fn create_state(&self) -> Self::State {
         let controller = AnimationController::builder(Duration::from_millis(1))
+            .behavior(flui_animation::AnimationBehavior::Preserve)
             .unbounded()
             .build_on(None);
         let fling = Rc::new(FocalFling::new(controller.controller().clone()));
@@ -723,7 +724,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
             .clone()
             .expect("BUG: InteractiveViewer initialized before build");
 
-        let listenable = controller.as_listenable();
+        let listenable = controller.listenable();
 
         AnimatedBuilder::new(listenable, move || {
             let matrix = controller.value();

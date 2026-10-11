@@ -26,7 +26,7 @@ fn tick_alphas(laid: &LaidOut) -> Vec<u8> {
     laid.draw_ops()
         .into_iter()
         .filter_map(|command| match command.op {
-            DrawOp::RRect { paint, .. } => Some(paint.color.a),
+            DrawOp::RRect { paint, .. } => Some(paint.color.to_rgba8()[3]),
             _ => None,
         })
         .collect()
@@ -110,4 +110,106 @@ pub fn unmount_releases_the_controller() {
         flui_sdk::widgets::SizedBox::new(1.0, 1.0),
     ));
     assert_eq!(vsync.len(), 0);
+}
+
+pub fn reduced_motion_keeps_visible_loading_without_continuation() {
+    use flui_sdk::animation::MotionPreference;
+    use flui_sdk::widgets::SizedBox;
+    fn live() {
+        policy_case(false);
+    }
+    fn initial() {
+        policy_case(true);
+    }
+    fn policy_case(initially_reduced: bool) {
+        let vsync = Vsync::new();
+        let mut laid = lay_out_animated(
+            VsyncScope::new(vsync.clone(), SizedBox::shrink()),
+            loose(100.0),
+            vsync.clone(),
+        );
+        laid.set_motion_preference(if initially_reduced {
+            MotionPreference::Reduce
+        } else {
+            MotionPreference::Full
+        });
+        laid.pump_widget(VsyncScope::new(
+            vsync.clone(),
+            CupertinoActivityIndicator::new(),
+        ));
+        laid.pump_for(Duration::ZERO);
+        if !initially_reduced {
+            laid.pump_for(Duration::from_millis(250));
+            laid.set_motion_preference(MotionPreference::Reduce);
+            laid.pump_for(Duration::ZERO);
+        }
+        let stopped = tick_alphas(&laid);
+        assert_eq!(stopped.len(), 8, "static loading retains all eight ticks");
+        assert!(stopped.iter().any(|alpha| *alpha > 0));
+        laid.pump_for(Duration::from_millis(375));
+        assert_eq!(tick_alphas(&laid), stopped, "Reduce stops visible motion");
+        assert!(
+            !vsync.has_running(),
+            "a parked indicator needs no continuation"
+        );
+        laid.enable_semantics();
+        laid.tick();
+        let tree = laid.a11y_tree().expect("semantics enabled");
+        let node = tree
+            .find_by_label("Loading")
+            .expect("loading label retained");
+        assert_eq!(node.role(), Role::ProgressIndicator);
+        assert_eq!(node.value(), None);
+        laid.set_motion_preference(MotionPreference::Full);
+        laid.pump_for(Duration::ZERO);
+        let resumed = tick_alphas(&laid);
+        laid.pump_for(Duration::from_millis(125));
+        assert_ne!(tick_alphas(&laid), resumed, "Full resumes visible motion");
+        laid.pump_widget(VsyncScope::new(vsync.clone(), SizedBox::shrink()));
+        assert!(vsync.is_empty());
+    }
+    crate::common::run_cases(&[("live preference", live), ("initial preference", initial)]);
+}
+
+pub fn inactive_loading_stays_visible_and_resumes() {
+    use flui_sdk::widgets::{SizedBox, TickerMode};
+    fn disabled() {
+        inactive_case(false);
+    }
+    fn detached() {
+        inactive_case(true);
+    }
+    fn inactive_case(detached: bool) {
+        let vsync = Vsync::new();
+        let root = if detached {
+            VsyncScope::detached(TickerMode::new(CupertinoActivityIndicator::new()))
+        } else {
+            VsyncScope::new(
+                vsync.clone(),
+                TickerMode::new(CupertinoActivityIndicator::new()).enabled(false),
+            )
+        };
+        let mut laid = lay_out_animated(root, loose(100.0), vsync.clone());
+        laid.pump_for(Duration::from_millis(500));
+        assert_eq!(tick_alphas(&laid), ALPHAS);
+        laid.enable_semantics();
+        laid.tick();
+        let tree = laid.a11y_tree().expect("semantics enabled");
+        let node = tree
+            .find_by_label("Loading")
+            .expect("loading remains visible");
+        assert_eq!(node.role(), Role::ProgressIndicator);
+        assert_eq!(node.value(), None);
+        laid.pump_widget(VsyncScope::new(
+            vsync.clone(),
+            TickerMode::new(CupertinoActivityIndicator::new()),
+        ));
+        laid.pump_for(Duration::ZERO);
+        let resumed = tick_alphas(&laid);
+        laid.pump_for(Duration::from_millis(125));
+        assert_ne!(tick_alphas(&laid), resumed);
+        laid.pump_widget(VsyncScope::new(vsync.clone(), SizedBox::shrink()));
+        assert!(vsync.is_empty());
+    }
+    crate::common::run_cases(&[("disabled", disabled), ("detached", detached)]);
 }

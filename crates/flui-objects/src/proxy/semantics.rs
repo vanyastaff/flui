@@ -8,7 +8,7 @@ use flui_foundation::Single;
 use flui_foundation::geometry::Axis;
 use flui_rendering::semantics::{NumericRange, SemanticsAction};
 use flui_rendering::{
-    pipeline::RenderInvalidationHandle,
+    pipeline::LocalRenderInvalidationHandle,
     view::{ScrollPosition, ViewportOffset},
 };
 use std::rc::Rc;
@@ -91,7 +91,7 @@ pub struct RenderSemanticsAnnotations {
     action_route: Option<SemanticsActionRoute>,
     scroll: Option<(ScrollPosition, Axis, bool)>,
     scroll_subscription: Option<Rc<ScrollSubscription>>,
-    invalidation: Option<RenderInvalidationHandle>,
+    invalidation: Option<LocalRenderInvalidationHandle>,
 }
 
 impl RenderSemanticsAnnotations {
@@ -389,7 +389,7 @@ impl RenderBox for RenderSemanticsAnnotations {
         }
     }
 
-    fn attach(&mut self, handle: RenderInvalidationHandle) {
+    fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
         self.scroll_subscription = None;
         self.invalidation = Some(handle);
         self.subscribe_scroll();

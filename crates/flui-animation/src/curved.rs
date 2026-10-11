@@ -4,7 +4,7 @@ use crate::animation::{Animation, ParentLinks, Retirement, StatusCallback, Termi
 use crate::curve::Curve;
 use crate::status::AnimationStatus;
 use flui_foundation::{Listenable, ListenerCallback, ListenerId};
-use std::cell::RefCell;
+use std::cell::Cell;
 use std::fmt;
 use std::rc::Rc;
 
@@ -13,16 +13,17 @@ use std::rc::Rc;
 /// `AnimationStatus` — no separate "is a ticker literally running" check.
 /// Shared by the constructor's seed call and the status-listener callback so
 /// both apply the identical rule.
-fn update_curve_direction(direction: &RefCell<Option<AnimationStatus>>, status: AnimationStatus) {
-    let mut direction = direction.borrow_mut();
+fn update_curve_direction(direction: &Cell<Option<AnimationStatus>>, status: AnimationStatus) {
     match status {
-        // At rest the lock is released; the next transition re-captures.
-        AnimationStatus::Dismissed | AnimationStatus::Completed => *direction = None,
+        // At rest the selection is cleared; the next transition re-captures.
+        AnimationStatus::ReverseSettled | AnimationStatus::ForwardSettled => direction.set(None),
         // First transition into a running status wins; a same-run direction
         // flip (or a directional report from `set_value` that isn't a fresh
         // run) keeps the entry curve.
         AnimationStatus::Forward | AnimationStatus::Reverse => {
-            direction.get_or_insert(status);
+            if direction.get().is_none() {
+                direction.set(Some(status));
+            }
         }
     }
 }
@@ -37,20 +38,20 @@ fn update_curve_direction(direction: &RefCell<Option<AnimationStatus>>, status: 
 ///
 /// ```
 /// use flui_animation::{AnimationController, CurvedAnimation};
-/// use flui_animation::Curves;
+/// use flui_animation::curves;
 /// use std::rc::Rc;
 /// use std::time::Duration;
 ///
 /// let controller = Rc::new(AnimationController::builder(Duration::from_millis(300)).build());
 ///
-/// let curved = CurvedAnimation::new(controller, Curves::EaseInOut);
+/// let curved = CurvedAnimation::new(controller, curves::EASE_IN_OUT);
 /// ```
 #[derive(Clone)]
 pub struct CurvedAnimation<C: Curve + Clone> {
     curve: Terminal<C>,
     reverse_curve: Option<Terminal<C>>,
     links: Terminal<Rc<ParentLinks>>,
-    curve_direction: Rc<RefCell<Option<AnimationStatus>>>,
+    curve_direction: Rc<Cell<Option<AnimationStatus>>>,
 }
 
 impl<C: Curve + Clone> Drop for CurvedAnimation<C> {
@@ -60,7 +61,7 @@ impl<C: Curve + Clone> Drop for CurvedAnimation<C> {
         let links = self.links.withdraw();
         let curve = self.curve.withdraw();
         let reverse = self.reverse_curve.take();
-        // Curves belong to each value clone; parent subscriptions belong to the
+        // curves belong to each value clone; parent subscriptions belong to the
         // shared links allocation and remain installed until its final drop.
         retirement.run(|| drop(links.into_inner()));
         retirement.retire(curve);
@@ -80,7 +81,7 @@ impl<C: Curve + Clone> CurvedAnimation<C> {
     pub fn new(parent: Rc<dyn Animation<f64>>, curve: C) -> Self {
         let parent = Terminal::new(parent);
         let curve = Terminal::new(curve);
-        let curve_direction = Rc::new(RefCell::new(None));
+        let curve_direction = Rc::new(Cell::new(None));
         update_curve_direction(&curve_direction, parent.status());
         let weak_direction = Rc::downgrade(&curve_direction);
         let links = ParentLinks::new(parent.into_inner(), move |status| {
@@ -112,7 +113,7 @@ impl<C: Curve + Clone> CurvedAnimation<C> {
     /// instantaneous status at rest.
     #[inline]
     fn current_curve(&self) -> &C {
-        let captured: Option<AnimationStatus> = *self.curve_direction.borrow_mut();
+        let captured = self.curve_direction.get();
         let effective = captured.unwrap_or_else(|| self.links.parent.status());
         match effective {
             AnimationStatus::Reverse => self
@@ -141,20 +142,15 @@ impl<C: Curve + Clone + fmt::Debug + 'static> Animation<f64> for CurvedAnimation
         self.links.parent.is_animating()
     }
 
-    fn add_status_listener(&self, callback: StatusCallback) -> ListenerId {
-        self.links
-            .status_notifier
-            .add(Rc::new(move |status| callback(*status)))
+    fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription {
+        self.links.subscribe_status(callback)
     }
 
-    fn add_status_observer(&self, observer: crate::animation::StatusObserver) -> ListenerId {
-        self.links
-            .status_notifier
-            .add_with_recovery(Rc::new(move |status, recovery| observer(*status, recovery)))
-    }
-
-    fn remove_status_listener(&self, id: ListenerId) {
-        self.links.status_notifier.remove_even_if_disposed(id);
+    fn subscribe_status_observer(
+        &self,
+        observer: crate::animation::StatusObserver,
+    ) -> crate::StatusSubscription {
+        self.links.subscribe_status_observer(observer)
     }
 }
 

@@ -1,6 +1,11 @@
 //! Animation status and behavior types.
 
-/// The status of an animation.
+/// An animation's directional phase, independent of run ownership and value.
+///
+/// Manual position changes and constant values may have a directional phase
+/// without a run. A stopped run can have a settled phase at an interior value.
+/// Use [`crate::Animation::is_animating`] for an installed run, the value for
+/// position and [`crate::AnimationRunFuture`] for its completion or cancellation.
 ///
 /// # Examples
 ///
@@ -8,67 +13,69 @@
 /// use flui_animation::AnimationStatus;
 ///
 /// let status = AnimationStatus::Forward;
-/// assert!(status.is_running());
+/// assert!(status.is_directional());
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Default)]
 #[non_exhaustive]
 pub enum AnimationStatus {
-    /// The animation is stopped at the beginning.
+    /// The reverse-settled phase, also used for the lower bound.
     #[default]
-    Dismissed,
+    ReverseSettled,
 
-    /// The animation is running from beginning to end.
+    /// The forward directional phase; it does not imply an installed run.
     Forward,
 
-    /// The animation is running backwards, from end to beginning.
+    /// The reverse directional phase; it does not imply an installed run.
     Reverse,
 
-    /// The animation is stopped at the end.
-    Completed,
+    /// The forward-settled phase, also used for the upper bound.
+    ForwardSettled,
 }
 
 impl AnimationStatus {
-    /// Returns true if the animation is running (forward or reverse).
+    /// Whether the phase is [`Forward`](Self::Forward) or [`Reverse`](Self::Reverse).
+    /// This does not imply an installed run.
     #[inline]
     #[must_use]
-    pub const fn is_running(&self) -> bool {
+    pub const fn is_directional(&self) -> bool {
         matches!(self, AnimationStatus::Forward | AnimationStatus::Reverse)
     }
 
-    /// Returns true if the animation is stopped (dismissed or completed).
+    /// Whether the phase is [`ReverseSettled`](Self::ReverseSettled) or [`ForwardSettled`](Self::ForwardSettled).
+    /// This does not imply arrival at a value's endpoint or successful completion.
     #[inline]
     #[must_use]
-    pub const fn is_stopped(&self) -> bool {
+    pub const fn is_settled(&self) -> bool {
         matches!(
             self,
-            AnimationStatus::Dismissed | AnimationStatus::Completed
+            AnimationStatus::ReverseSettled | AnimationStatus::ForwardSettled
         )
     }
 
-    /// Returns true if the animation is at the beginning (dismissed).
+    /// Whether the phase is [`ReverseSettled`](Self::ReverseSettled).
     #[inline]
     #[must_use]
-    pub const fn is_dismissed(&self) -> bool {
-        matches!(self, AnimationStatus::Dismissed)
+    pub const fn is_reverse_settled(&self) -> bool {
+        matches!(self, AnimationStatus::ReverseSettled)
     }
 
-    /// Returns true if the animation is at the end (completed).
+    /// Whether the phase is [`ForwardSettled`](Self::ForwardSettled).
     #[inline]
     #[must_use]
-    pub const fn is_completed(&self) -> bool {
-        matches!(self, AnimationStatus::Completed)
+    pub const fn is_forward_settled(&self) -> bool {
+        matches!(self, AnimationStatus::ForwardSettled)
     }
 
-    /// Returns true if the animation is running forward.
+    /// Whether the phase is [`Forward`](Self::Forward).
     #[inline]
     #[must_use]
     pub const fn is_forward(&self) -> bool {
         matches!(self, AnimationStatus::Forward)
     }
 
-    /// Returns true if the animation is running in reverse.
+    /// Whether the phase is [`Reverse`](Self::Reverse).
     #[inline]
     #[must_use]
     pub const fn is_reverse(&self) -> bool {
@@ -79,62 +86,45 @@ impl AnimationStatus {
     ///
     /// - Forward → Reverse
     /// - Reverse → Forward
-    /// - Dismissed/Completed → unchanged
+    /// - ReverseSettled/ForwardSettled → unchanged
     #[inline]
     #[must_use]
     pub const fn flip(&self) -> Self {
         match self {
             AnimationStatus::Forward => AnimationStatus::Reverse,
             AnimationStatus::Reverse => AnimationStatus::Forward,
-            AnimationStatus::Dismissed => AnimationStatus::Dismissed,
-            AnimationStatus::Completed => AnimationStatus::Completed,
+            AnimationStatus::ReverseSettled => AnimationStatus::ReverseSettled,
+            AnimationStatus::ForwardSettled => AnimationStatus::ForwardSettled,
         }
     }
 }
 
-/// Configures how an animation should behave when animations are globally
-/// disabled (e.g. the platform's reduce-motion accessibility setting).
+/// Selects a controller's timeline and response to presentation motion policy.
 ///
-/// This is a policy carrier: `AnimationController` does not read it itself —
-/// the accessibility/bindings layer consults it when deciding whether to
-/// fast-forward (`Normal`) or run unchanged (`Preserve`) under a
-/// disable-animations setting.
+/// The controller builder stores this immutable configuration. Its presentation's
+/// registry selects the corresponding timeline and applies reduced-motion
+/// settlement when delivering a frame.
 ///
 /// # Examples
 ///
 /// ```
-/// use flui_animation::AnimationBehavior;
+/// use std::time::Duration;
+/// use flui_animation::{AnimationBehavior, AnimationController};
 ///
-/// let behavior = AnimationBehavior::Normal;
-/// assert!(!behavior.should_preserve());
+/// // A display timer keeps its authored duration under reduced motion.
+/// let timer = AnimationController::builder(Duration::from_secs(3))
+///     .behavior(AnimationBehavior::Preserve)
+///     .build();
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum AnimationBehavior {
-    /// The animation will run normally.
+    /// Honor reduced motion and the host duration scale.
     #[default]
     Normal,
 
-    /// The animation will preserve its state when not in view.
-    ///
-    /// This is useful for animations that should not tick when the widget
-    /// is not visible, but should resume when it becomes visible again.
+    /// Keep authored timing under any host motion setting or application policy.
+    /// Debug playback controls and registry muting still apply.
     Preserve,
-}
-
-impl AnimationBehavior {
-    /// Returns true if the animation should preserve its state.
-    #[inline]
-    #[must_use]
-    pub const fn should_preserve(&self) -> bool {
-        matches!(self, AnimationBehavior::Preserve)
-    }
-
-    /// Returns true if the animation should run normally.
-    #[inline]
-    #[must_use]
-    pub const fn is_normal(&self) -> bool {
-        matches!(self, AnimationBehavior::Normal)
-    }
 }

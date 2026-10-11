@@ -14,8 +14,9 @@
 //!
 //! The AND falls out structurally: a muted registry ticks neither its own
 //! controllers nor its children's, so a `TickerMode(true)` nested inside a
-//! `TickerMode(false)` never receives the frame it would forward. No flag to
-//! compose, and no way to get it wrong.
+//! `TickerMode(false)` never receives the frame it would forward. An inherited
+//! effective permission separately lets descendants choose their representation;
+//! it does not participate in frame delivery.
 //!
 //! **The clock keeps running while muted.** A disabled subtree delivers no
 //! ticks, and when it
@@ -23,17 +24,18 @@
 //! Muting does not freeze that timeline; pausing the presentation motion clock
 //! does.
 //!
-//! # Deferred, and named
+//! Indicators observe the configured mode during build to retain visible static
+//! loading feedback while disabled. This observation does not acquire a registry
+//! or control its clock.
 //!
-//! * A query for the current mode — no consumer; descendants need the
-//!   registry, not the flag.
-//! * A manually sampled controller outside the ambient registry is driven by
-//!   its caller. Without an ambient clock, descendants receive a detached scope:
-//!   finite runs settle immediately and repeats park until bound.
+//! A manually sampled controller outside the ambient registry is driven by
+//! its caller. Without an ambient clock, descendants receive a detached scope:
+//! finite runs settle immediately and repeats park until bound.
 
 use flui_animation::{Vsync, VsyncRegistration};
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
+use flui_view::{InheritedView, impl_inherited_view};
 
 use super::VsyncScope;
 
@@ -59,6 +61,18 @@ pub struct TickerMode {
 }
 
 impl TickerMode {
+    /// Depend on the configured animation permission of enclosing ticker modes.
+    ///
+    /// Nested permissions compose as an AND; without a mode this returns true.
+    /// This is composition data for choosing a static representation. Binding,
+    /// motion policy, clock playback and direct registry muting independently
+    /// determine whether time actually advances.
+    #[must_use]
+    pub fn is_enabled(ctx: &dyn BuildContext) -> bool {
+        ctx.depend_on::<TickerModeScope, _>(|scope| scope.enabled)
+            .unwrap_or(true)
+    }
+
     /// A ticker scope around `child`. `enabled` defaults to `true`,
     /// so a bare `TickerMode` changes nothing.
     pub fn new(child: impl IntoView) -> Self {
@@ -68,7 +82,7 @@ impl TickerMode {
         }
     }
 
-    /// Whether this subtree's animations advance (`:41`).
+    /// Whether this mode permits delivery to its subtree.
     #[must_use]
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
@@ -109,8 +123,8 @@ impl StatefulView for TickerMode {
 pub struct TickerModeState {
     registry: Vsync,
     /// The ambient registry this one is nested under, and the id it holds
-    /// there. `None` when no `VsyncScope` is above — then this registry has no
-    /// driver, and `build` deliberately does **not** hand it to the subtree.
+    /// there. `None` when no `VsyncScope` is above or admission was refused —
+    /// then `build` supplies a detached scope with missing-clock settlement.
     parent: Option<(Vsync, VsyncRegistration)>,
 }
 
@@ -139,8 +153,9 @@ impl TickerModeState {
         let Some(parent) = ambient else {
             return;
         };
-        if let Some(id) = parent.attach_child(&self.registry) {
-            self.parent = Some((parent, id));
+        match parent.attach_child(&self.registry) {
+            Ok(id) => self.parent = Some((parent, id)),
+            Err(error) => tracing::warn!(%error, "ticker mode has no parent clock"),
         }
     }
 
@@ -182,12 +197,51 @@ impl ViewState<TickerMode> for TickerModeState {
     /// Without an ambient clock, provide an explicitly detached scope rather
     /// than an undriven child registry. Finite runs then settle immediately and
     /// repeats park under the missing-clock contract.
-    fn build(&self, view: &TickerMode, _ctx: &dyn BuildContext) -> impl IntoView {
-        if self.parent.is_none() {
-            return VsyncScope::detached(view.child.clone()).into_view().boxed();
+    fn build(&self, view: &TickerMode, ctx: &dyn BuildContext) -> impl IntoView {
+        let enabled = TickerMode::is_enabled(ctx) && view.enabled;
+        let child = if self.parent.is_none() {
+            VsyncScope::detached(view.child.clone())
+        } else {
+            VsyncScope::new(self.registry.clone(), view.child.clone())
+        };
+        // Keep the wrapper's identity through toggles and missing-clock changes:
+        // a permission change updates retained descendants instead of remounting.
+        TickerModeScope {
+            enabled,
+            child: child.into_view().boxed(),
         }
-        VsyncScope::new(self.registry.clone(), view.child.clone())
-            .into_view()
-            .boxed()
     }
 }
+
+/// A derived observation of widget configuration, separate from clock authority.
+#[derive(Clone)]
+struct TickerModeScope {
+    enabled: bool,
+    child: BoxedView,
+}
+
+impl std::fmt::Debug for TickerModeScope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TickerModeScope")
+            .field("enabled", &self.enabled)
+            .finish_non_exhaustive()
+    }
+}
+
+impl InheritedView for TickerModeScope {
+    type Data = bool;
+
+    fn data(&self) -> &Self::Data {
+        &self.enabled
+    }
+
+    fn child(&self) -> &dyn View {
+        &self.child
+    }
+
+    fn update_should_notify(&self, old: &Self) -> bool {
+        self.enabled != old.enabled
+    }
+}
+
+impl_inherited_view!(TickerModeScope);

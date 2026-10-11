@@ -109,7 +109,7 @@ mod harness_snapshot;
 use std::{any::Any, cell::Cell, collections::HashMap, rc::Rc, sync::Arc, time::Duration};
 
 use flui_animation::curve::ArcCurve;
-use flui_animation::{Animation, AnimationController, Curves, ProxyAnimation};
+use flui_animation::{Animation, AnimationController, ProxyAnimation, curves};
 use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Point, Rect, Size};
 use flui_interaction::InteractionLane;
@@ -2540,15 +2540,69 @@ fn harness_offstage_hidden_drops_its_semantics_subtree() {
 }
 
 fn harness_opacity_paints_with_alpha_layer() {
-    let run = RenderTester::mount(
-        box_node(RenderOpacity::new(0.5))
-            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
-    )
-    .with_constraints(loose(200.0))
-    .run_frame();
+    for alpha in [1e-17, 0.0025, 0.005, 0.5, 1.0 - f64::EPSILON] {
+        let run = RenderTester::mount(
+            box_node(RenderOpacity::new(alpha))
+                .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+        )
+        .with_constraints(loose(200.0))
+        .run_frame();
 
-    assert!(run.painted());
-    assert!(run.structure().contains(&"Opacity"));
+        assert!(run.painted());
+        assert!(run.structure().contains(&"Opacity"));
+        assert_eq!(run.opacity_alpha(), Some(alpha));
+    }
+    exercise_static_opacity_updates(false);
+}
+
+fn exercise_static_opacity_updates(sliver: bool) {
+    for always_layered in [false, true] {
+        let opacity = if sliver {
+            let mut render = RenderSliverOpacity::transparent();
+            let _ = render.set_always_needs_compositing(always_layered); // Not mounted yet.
+            viewport(
+                sliver_node(render)
+                    .label("opacity")
+                    .child(fixed_extent_list(
+                        30.0,
+                        vec![box_node(RenderColoredBox::red(300.0, 1000.0))],
+                    )),
+            )
+        } else {
+            let mut render = RenderOpacity::transparent();
+            let _ = render.set_always_needs_compositing(always_layered); // Not mounted yet.
+            box_node(RenderFlex::row()).child(
+                box_node(render)
+                    .label("opacity")
+                    .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+            )
+        };
+        let mut run = RenderTester::mount(opacity)
+            .with_size(Size::new(300.0, 100.0))
+            .run_frame();
+        let id = run.id("opacity");
+        for value in [1e-17, 0.0025, 0.005, 1.0, 0.0, 0.005, 0.0025] {
+            if sliver {
+                flui_rendering::testing::update_render_object::<RenderSliverOpacity, _>(
+                    run.owner_mut(),
+                    id,
+                    |render| render.set_opacity(value),
+                );
+            } else {
+                flui_rendering::testing::update_render_object::<RenderOpacity, _>(
+                    run.owner_mut(),
+                    id,
+                    |render| render.set_opacity(value),
+                );
+            }
+            run.pump();
+            assert_eq!(
+                run.opacity_alpha(),
+                (always_layered || (value > 0.0 && value < 1.0)).then_some(value),
+                "accepted opacity update: sliver={sliver}, stable_layer={always_layered}, value={value}"
+            );
+        }
+    }
 }
 
 // ── RenderAnimatedOpacity ────────────────────────────────────────────────
@@ -2570,9 +2624,10 @@ fn animation_from(controller: &AnimationController) -> ProxyAnimation<f64> {
 }
 
 fn harness_animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255() {
-    for (value, expect_layer) in [(0.0, false), (0.5, true), (1.0, false)] {
+    for value in [0.0, 1e-17, 0.0025, 0.005, 0.5, 1.0 - f64::EPSILON, 1.0] {
+        let expect_layer = value > 0.0 && value < 1.0;
         let controller = ticking_controller(100, value);
-        let run = RenderTester::mount(
+        let mut run = RenderTester::mount(
             box_node(RenderAnimatedOpacity::new(
                 animation_from(&controller),
                 false,
@@ -2582,6 +2637,7 @@ fn harness_animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255
         .with_constraints(loose(200.0))
         .run_frame();
 
+        assert_eq!(run.opacity_alpha(), expect_layer.then_some(value));
         assert_eq!(
             run.structure().contains(&"Opacity"),
             expect_layer,
@@ -2589,6 +2645,185 @@ fn harness_animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255
              no layer): {:?}",
             if expect_layer { "" } else { "NOT " },
             run.structure(),
+        );
+        for next in [0.0, 0.0025, 0.005, 1.0, 1e-17, 0.0] {
+            controller.set_value(next);
+            run.pump();
+            assert_eq!(
+                run.opacity_alpha(),
+                (next > 0.0 && next < 1.0).then_some(next)
+            );
+        }
+    }
+}
+
+fn harness_animated_opacity_semantics_follow_accepted_visibility() {
+    for sliver in [false, true] {
+        for always_include in [false, true] {
+            let controller = ticking_controller(100, 0.0);
+            let child = box_node(
+                RenderSemanticsAnnotations::new(
+                    SemanticsProperties::new().with_label("Fade content"),
+                )
+                .with_container(true),
+            )
+            .child(box_node(RenderSizedBox::new(Some(40.0), Some(20.0))));
+            let opacity = if sliver {
+                viewport(
+                    sliver_node(RenderSliverAnimatedOpacity::new(
+                        animation_from(&controller),
+                        always_include,
+                    ))
+                    .child(sliver_node(RenderSliverToBoxAdapter::new()).child(child)),
+                )
+            } else {
+                box_node(RenderAnimatedOpacity::new(
+                    animation_from(&controller),
+                    always_include,
+                ))
+                .child(child)
+            };
+            let mut run = RenderTester::mount(opacity)
+                .with_size(Size::new(100.0, 100.0))
+                .with_semantics_enabled()
+                .run_frame();
+            for alpha in [0.0, 0.0025, 0.005, 0.0, 1.0, 0.0] {
+                controller.set_value(alpha);
+                run.pump();
+                let included = run
+                    .owner()
+                    .semantics_owner()
+                    .expect("semantics enabled")
+                    .tree()
+                    .iter()
+                    .any(|(_, node)| node.label() == Some("Fade content"));
+                assert_eq!(
+                    included,
+                    always_include || alpha > 0.0,
+                    "sliver={sliver}, always_include={always_include}, alpha={alpha}"
+                );
+            }
+        }
+    }
+}
+
+fn harness_animated_opacity_completion_survives_dirty_backpressure() {
+    exercise_opacity_completion(false, false);
+}
+
+fn harness_animated_opacity_completion_survives_wake_failure() {
+    exercise_opacity_completion(true, false);
+}
+
+fn harness_sliver_animated_opacity_completion_survives_dirty_backpressure() {
+    exercise_opacity_completion(false, true);
+}
+
+fn harness_sliver_animated_opacity_completion_survives_wake_failure() {
+    exercise_opacity_completion(true, true);
+}
+
+fn exercise_opacity_completion(wake_failure: bool, sliver: bool) {
+    for reverse in [false, true] {
+        let controller = ticking_controller(100, 0.5);
+        let content = box_node(
+            RenderSemanticsAnnotations::new(
+                SemanticsProperties::new().with_label("Completing fade"),
+            )
+            .with_container(true),
+        )
+        .child(box_node(RenderColoredBox::red(100.0, 40.0)));
+        let opacity = if sliver {
+            box_node(RenderConstrainedBox::new(BoxConstraints::tight(Size::new(
+                100.0, 100.0,
+            ))))
+            .child(viewport(
+                sliver_node(RenderSliverAnimatedOpacity::new(
+                    animation_from(&controller),
+                    false,
+                ))
+                .child(fixed_extent_list(40.0, vec![content])),
+            ))
+        } else {
+            box_node(RenderAnimatedOpacity::new(
+                animation_from(&controller),
+                false,
+            ))
+            .child(content)
+        };
+        let mut run = RenderTester::mount(
+            box_node(RenderFlex::row())
+                .child(box_node(RenderColoredBox::green(10.0, 10.0)).label("other"))
+                .child(box_node(RenderRepaintBoundary::new()).child(opacity)),
+        )
+        .with_constraints(loose(200.0))
+        .with_semantics_enabled()
+        .run_frame();
+        assert!(run.opacity_alpha().is_some());
+        assert!(
+            run.owner()
+                .semantics_owner()
+                .expect("semantics enabled")
+                .tree()
+                .iter()
+                .any(|(_, node)| node.label() == Some("Completing fade"))
+        );
+        if reverse {
+            controller.reverse()
+        } else {
+            controller.forward()
+        }
+        .expect("start the actual opacity run");
+        controller.tick_at(Duration::ZERO);
+        if wake_failure {
+            let fail = Arc::new(std::sync::atomic::AtomicBool::new(true));
+            run.owner_mut().set_on_need_visual_update(move || {
+                assert!(
+                    !fail.swap(false, std::sync::atomic::Ordering::Relaxed),
+                    "first opacity wake"
+                );
+            });
+            let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                controller.tick_at(Duration::from_millis(100));
+            }));
+            assert!(failed.is_err(), "the authored wake failure propagates");
+        } else {
+            let handle = run
+                .owner()
+                .render_invalidation_handle(run.id("other"))
+                .expect("independent mounted sibling's invalidation capability");
+            let mut queued = 0;
+            loop {
+                match handle.mark_needs_paint() {
+                    Ok(()) => queued += 1,
+                    Err(flui_rendering::pipeline::DirtySendError::ChannelFull { .. }) => break,
+                    Err(error) => panic!("unexpected invalidation failure: {error}"),
+                }
+            }
+            assert!(queued > 0, "real accepted work fills the bounded channel");
+            controller.tick_at(Duration::from_millis(100));
+        }
+        assert_eq!(controller.value(), if reverse { 0.0 } else { 1.0 });
+        assert!(!controller.is_animating(), "no subsequent sample can retry");
+        run.pump();
+        assert!(
+            run.has_picture_layer(),
+            "the completed fade produces its final visible frame"
+        );
+        assert!(
+            run.opacity_alpha().is_none(),
+            "the completed fade must remove its partial-opacity layer after backpressure"
+        );
+        let included = run
+            .owner()
+            .semantics_owner()
+            .expect("semantics enabled")
+            .tree()
+            .iter()
+            .any(|(_, node)| node.label() == Some("Completing fade"));
+        assert_eq!(
+            included, !reverse,
+            "completion must deliver semantics after failure: sliver={sliver}, wake_failure={wake_failure}, reverse={reverse}"
         );
     }
 }
@@ -2744,6 +2979,80 @@ fn harness_animated_transform_singular_paints_and_hits_nothing() {
     );
 }
 
+fn harness_animated_transform_completion_keeps_semantics_after_wake_failure() {
+    fn mount(controller: &AnimationController) -> FrameRun {
+        RenderTester::mount(
+            box_node(
+                RenderSemanticsAnnotations::new(SemanticsProperties::new().with_label("Root"))
+                    .with_container(true),
+            )
+            .child(
+                box_node(RenderRepaintBoundary::new()).child(
+                    box_node(RenderAnimatedTransform::new(TransformMotion::Scale {
+                        scale: animation_from(controller),
+                    }))
+                    .child(
+                        box_node(
+                            RenderSemanticsAnnotations::new(
+                                SemanticsProperties::new().with_label("Animated target"),
+                            )
+                            .with_container(true),
+                        )
+                        .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+                    ),
+                ),
+            ),
+        )
+        .with_constraints(loose(200.0))
+        .with_semantics_enabled()
+        .run_frame()
+    }
+    fn geometry(
+        run: &FrameRun,
+    ) -> (
+        flui_foundation::geometry::Rect<f64>,
+        Option<flui_foundation::geometry::Matrix4>,
+    ) {
+        let owner = run.owner().semantics_owner().expect("semantics enabled");
+        let (_, node) = owner
+            .tree()
+            .iter()
+            .find(|(_, node)| node.label() == Some("Animated target"))
+            .expect("accessible target");
+        (node.rect(), node.transform().copied())
+    }
+    let controller = ticking_controller(100, 0.5);
+    let mut run = mount(&controller);
+    let reference = mount(&ticking_controller(100, 1.0));
+    assert_ne!(
+        geometry(&run),
+        geometry(&reference),
+        "samples have distinguishable accessible geometry"
+    );
+    controller.forward().expect("actual transform run");
+    controller.tick_at(Duration::ZERO);
+    let fail = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    run.owner_mut().set_on_need_visual_update(move || {
+        assert!(
+            !fail.swap(false, std::sync::atomic::Ordering::Relaxed),
+            "first transform wake"
+        );
+    });
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            controller.tick_at(Duration::from_millis(100));
+        }))
+        .is_err()
+    );
+    assert!(!controller.is_animating());
+    run.pump();
+    assert_eq!(
+        geometry(&run),
+        geometry(&reference),
+        "completed transform publishes final accessible geometry without another tick"
+    );
+}
+
 /// An animation whose value the test scripts directly (a controller clamps
 /// to its bounds, so it cannot produce NaN or 1e300); `controller` supplies
 /// the listener channel, and [`ScriptedAnimation::set`] fires it.
@@ -2788,20 +3097,21 @@ impl flui_foundation::Listenable for ScriptedAnimation {
 }
 
 impl Animation<f64> for ScriptedAnimation {
+    fn is_animating(&self) -> bool {
+        self.controller.is_animating()
+    }
+
+    fn subscribe_status(
+        &self,
+        callback: flui_animation::StatusCallback,
+    ) -> flui_animation::StatusSubscription {
+        self.controller.subscribe_status(callback)
+    }
     fn value(&self) -> f64 {
         *self.value.lock().expect("unpoisoned")
     }
     fn status(&self) -> flui_animation::AnimationStatus {
         self.controller.status()
-    }
-    fn add_status_listener(
-        &self,
-        callback: flui_animation::StatusCallback,
-    ) -> flui_foundation::ListenerId {
-        self.controller.add_status_listener(callback)
-    }
-    fn remove_status_listener(&self, id: flui_foundation::ListenerId) {
-        self.controller.remove_status_listener(id);
     }
 }
 
@@ -2899,21 +3209,22 @@ impl flui_foundation::Listenable for CountingAnimation {
 }
 
 impl Animation<f64> for CountingAnimation {
+    fn is_animating(&self) -> bool {
+        self.controller.is_animating()
+    }
+
+    fn subscribe_status(
+        &self,
+        callback: flui_animation::StatusCallback,
+    ) -> flui_animation::StatusSubscription {
+        self.controller.subscribe_status(callback)
+    }
     fn value(&self) -> f64 {
         self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.controller.value()
     }
     fn status(&self) -> flui_animation::AnimationStatus {
         self.controller.status()
-    }
-    fn add_status_listener(
-        &self,
-        callback: flui_animation::StatusCallback,
-    ) -> flui_foundation::ListenerId {
-        self.controller.add_status_listener(callback)
-    }
-    fn remove_status_listener(&self, id: flui_foundation::ListenerId) {
-        self.controller.remove_status_listener(id);
     }
 }
 
@@ -4252,23 +4563,24 @@ fn harness_sliver_offstage_hidden_reports_zero_geometry() {
 // makes the owner wrap the child in a 0-alpha OpacityLayer (present in
 // structure); the correct answer at alpha=0 is `None`, no layer emitted.
 fn harness_sliver_opacity_alpha_zero_emits_no_opacity_layer() {
-    let run = RenderTester::mount(viewport(
-        sliver_node(RenderSliverOpacity::transparent()) // alpha = 0
-            .label("opacity")
-            .child(fixed_extent_list(
-                30.0,
-                vec![box_node(RenderColoredBox::red(300.0, 1000.0))],
-            )),
-    ))
-    .with_size(Size::new(300.0, 100.0))
-    .run_frame();
+    for alpha in [0.0, 1e-17, 0.0025, 0.005, 0.5, 1.0 - f64::EPSILON, 1.0] {
+        let run = RenderTester::mount(viewport(
+            sliver_node(RenderSliverOpacity::new(alpha))
+                .label("opacity")
+                .child(fixed_extent_list(
+                    30.0,
+                    vec![box_node(RenderColoredBox::red(300.0, 1000.0))],
+                )),
+        ))
+        .with_size(Size::new(300.0, 100.0))
+        .run_frame();
 
-    assert!(
-        !run.structure().contains(&"Opacity"),
-        "fully-transparent sliver (alpha=0) must NOT emit an OpacityLayer \
-         (alpha=0 → no layer): {:?}",
-        run.structure(),
-    );
+        assert_eq!(
+            run.opacity_alpha(),
+            (alpha > 0.0 && alpha < 1.0).then_some(alpha)
+        );
+    }
+    exercise_static_opacity_updates(true);
 }
 
 // Compositing-hooks forwarding: RED→GREEN pipeline test.
@@ -4288,9 +4600,10 @@ fn harness_sliver_opacity_alpha_zero_emits_no_opacity_layer() {
 // ── RenderSliverAnimatedOpacity ──────────────────────────────────────────
 
 fn harness_sliver_animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255() {
-    for (value, expect_layer) in [(0.0, false), (0.5, true), (1.0, false)] {
+    for value in [0.0, 1e-17, 0.0025, 0.005, 0.5, 1.0 - f64::EPSILON, 1.0] {
+        let expect_layer = value > 0.0 && value < 1.0;
         let controller = ticking_controller(100, value);
-        let run = RenderTester::mount(viewport(
+        let mut run = RenderTester::mount(viewport(
             sliver_node(RenderSliverAnimatedOpacity::new(
                 animation_from(&controller),
                 false,
@@ -4304,6 +4617,7 @@ fn harness_sliver_animated_opacity_paint_alpha_tracks_controller_value_at_0_part
         .with_size(Size::new(300.0, 100.0))
         .run_frame();
 
+        assert_eq!(run.opacity_alpha(), expect_layer.then_some(value));
         assert_eq!(
             run.structure().contains(&"Opacity"),
             expect_layer,
@@ -4311,6 +4625,14 @@ fn harness_sliver_animated_opacity_paint_alpha_tracks_controller_value_at_0_part
             if expect_layer { "" } else { "NOT " },
             run.structure(),
         );
+        for next in [0.0, 0.0025, 0.005, 1.0, 1e-17, 0.0] {
+            controller.set_value(next);
+            run.pump();
+            assert_eq!(
+                run.opacity_alpha(),
+                (next > 0.0 && next < 1.0).then_some(next)
+            );
+        }
     }
 }
 
@@ -5327,7 +5649,7 @@ fn harness_render_animated_size_interpolates_over_several_frames_not_snap() {
     let (controller, driver) = animated_size_controller(100);
     let ro = RenderAnimatedSize::new(
         controller,
-        ArcCurve::new(Curves::Linear),
+        ArcCurve::new(curves::LINEAR),
         Alignment::CENTER,
         Clip::HardEdge,
     );
@@ -5395,23 +5717,23 @@ fn harness_render_animated_size_interpolates_over_several_frames_not_snap() {
 }
 
 /// A parent that rebuilds with the same built-in curve (a fresh
-/// `ArcCurve::new(Curves::EaseIn)` each build) must not relayout or rebuild
+/// `ArcCurve::new(curves::EASE_IN)` each build) must not relayout or rebuild
 /// the curved animation; a different curve must.
 fn harness_render_animated_size_equal_curve_is_not_a_change() {
     let (controller, _driver) = animated_size_controller(100);
     let mut ro = RenderAnimatedSize::new(
         controller,
-        ArcCurve::new(Curves::EaseIn),
+        ArcCurve::new(curves::EASE_IN),
         Alignment::CENTER,
         Clip::HardEdge,
     );
     assert_eq!(
-        ro.set_curve(ArcCurve::new(Curves::EaseIn)),
+        ro.set_curve(ArcCurve::new(curves::EASE_IN)),
         flui_rendering::RenderUpdateImpact::NONE,
         "an equal built-in curve rebuilt by the parent is not a change",
     );
     assert_eq!(
-        ro.set_curve(ArcCurve::new(Curves::EaseOut)),
+        ro.set_curve(ArcCurve::new(curves::EASE_OUT)),
         flui_rendering::RenderUpdateImpact::LAYOUT,
         "a different curve is a change",
     );
@@ -5421,7 +5743,7 @@ fn harness_render_animated_size_retarget_mid_flight_has_no_discontinuous_jump() 
     let (controller, driver) = animated_size_controller(100);
     let ro = RenderAnimatedSize::new(
         controller,
-        ArcCurve::new(Curves::Linear),
+        ArcCurve::new(curves::LINEAR),
         Alignment::CENTER,
         Clip::HardEdge,
     );
@@ -6757,12 +7079,24 @@ fn family_clips_and_effects() {
                 harness_animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255,
             ),
             (
+                "animated_opacity_completion_survives_dirty_backpressure",
+                harness_animated_opacity_completion_survives_dirty_backpressure,
+            ),
+            (
+                "animated_opacity_completion_survives_wake_failure",
+                harness_animated_opacity_completion_survives_wake_failure,
+            ),
+            (
                 "animated_transform_tick_dirty_marking",
                 harness_animated_transform_tick_dirty_marking,
             ),
             (
                 "animated_transform_singular_paints_and_hits_nothing",
                 harness_animated_transform_singular_paints_and_hits_nothing,
+            ),
+            (
+                "animated transform completion keeps semantics after wake failure",
+                harness_animated_transform_completion_keeps_semantics_after_wake_failure,
             ),
             (
                 "animated_transform_non_finite_sample_keeps_the_last_matrix",
@@ -6851,6 +7185,10 @@ fn family_semantics() {
     run_family(
         "semantics",
         &[
+            (
+                "animated_opacity_semantics_follow_accepted_visibility",
+                harness_animated_opacity_semantics_follow_accepted_visibility,
+            ),
             (
                 "offstage_hidden_drops_its_semantics_subtree",
                 harness_offstage_hidden_drops_its_semantics_subtree,
@@ -7027,6 +7365,8 @@ fn family_sliver_wrappers() {
         ("sliver_offstage_hidden_reports_zero_geometry", harness_sliver_offstage_hidden_reports_zero_geometry),
         ("sliver_opacity_alpha_zero_emits_no_opacity_layer", harness_sliver_opacity_alpha_zero_emits_no_opacity_layer),
         ("sliver_animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255", harness_sliver_animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255),
+        ("sliver opacity completion survives dirty backpressure", harness_sliver_animated_opacity_completion_survives_dirty_backpressure),
+        ("sliver opacity completion survives wake failure", harness_sliver_animated_opacity_completion_survives_wake_failure),
     ]);
 }
 

@@ -4,13 +4,13 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_animation::curve::{ArcCurve, Curve};
-use flui_animation::{Animatable, AnimatableExt, Animation, ProxyAnimation, Tween};
+use flui_animation::{AnimatedValue, MotionSpec, ProxyAnimation, SpringDescription};
 use flui_foundation::geometry::Angle;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
 use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
 
 use crate::RotationTransition;
-use crate::animated::implicitly_animated::{DEFAULT_DURATION, ImplicitController, default_curve};
+use crate::animated::implicitly_animated::{DEFAULT_DURATION, default_curve};
 use crate::animated::vsync_scope::VsyncScope;
 
 /// Which way an [`AnimatedRotation`] turns toward a new angle.
@@ -51,8 +51,7 @@ pub enum RotationPath {
 pub struct AnimatedRotation {
     angle: Angle,
     path: RotationPath,
-    duration: Duration,
-    curve: ArcCurve,
+    motion: MotionSpec,
     child: BoxedView,
 }
 
@@ -63,8 +62,10 @@ impl AnimatedRotation {
         Self {
             angle,
             path: RotationPath::default(),
-            duration: DEFAULT_DURATION,
-            curve: default_curve(),
+            motion: MotionSpec::Curve {
+                duration: DEFAULT_DURATION,
+                curve: default_curve(),
+            },
             child: child.into_view().boxed(),
         }
     }
@@ -76,10 +77,14 @@ impl AnimatedRotation {
         self
     }
 
-    /// Override the transition duration.
+    /// Select curve motion with this duration, retaining the configured easing.
     #[must_use]
     pub fn duration(mut self, duration: Duration) -> Self {
-        self.duration = duration;
+        let curve = match self.motion {
+            MotionSpec::Curve { curve, .. } => curve,
+            _ => default_curve(),
+        };
+        self.motion = MotionSpec::Curve { duration, curve };
         self
     }
 
@@ -87,7 +92,21 @@ impl AnimatedRotation {
     /// elastic and back curves.
     #[must_use]
     pub fn curve(mut self, curve: impl Curve + Send + Sync + 'static) -> Self {
-        self.curve = ArcCurve::new(curve);
+        let duration = match self.motion {
+            MotionSpec::Curve { duration, .. } => duration,
+            _ => DEFAULT_DURATION,
+        };
+        self.motion = MotionSpec::Curve {
+            duration,
+            curve: ArcCurve::new(curve),
+        };
+        self
+    }
+
+    /// Select spring motion, retaining the incoming angular velocity.
+    #[must_use]
+    pub fn spring(mut self, spring: SpringDescription) -> Self {
+        self.motion = MotionSpec::Spring(spring);
         self
     }
 }
@@ -97,58 +116,40 @@ impl std::fmt::Debug for AnimatedRotation {
         f.debug_struct("AnimatedRotation")
             .field("angle", &self.angle)
             .field("path", &self.path)
-            .field("duration", &self.duration)
+            .field("motion", &self.motion)
             .finish_non_exhaustive()
     }
 }
 
-/// The rotation in turns at a curved progress: [`RotationTransition`]'s input.
-#[derive(Debug, Clone)]
-struct Turns(Tween<Angle>);
-
-impl Animatable<f64> for Turns {
-    fn transform(&self, t: f64) -> f64 {
-        self.0.transform(t).turns()
-    }
-}
-
-/// State for [`AnimatedRotation`]: the controller, the angle tween it drives, and the
-/// [`ProxyAnimation`] the persistent [`RotationTransition`] listens to.
+/// Owns angular motion and the stable stream observed by the rotation transition.
 #[derive(Debug)]
 pub struct AnimatedRotationState {
-    controller: ImplicitController,
+    animation: AnimatedValue<f64>,
     /// The last configured angle, compared to detect a new target. With
-    /// [`RotationPath::Shorter`] the tween's end is an equivalent of it, not it.
+    /// [`RotationPath::Shorter`] the motion's goal is an equivalent of it.
     target: Angle,
-    /// The path the running tween was laid out for; a change re-anchors it.
+    /// The path the running motion was laid out for.
     path: RotationPath,
-    tween: Tween<Angle>,
     proxy: ProxyAnimation<f64>,
     child: BoxedView,
-}
-
-impl AnimatedRotationState {
-    /// The tween over the curved controller, in turns; swapped into the proxy on a
-    /// retarget or a curve change.
-    fn compose(&self) -> std::rc::Rc<dyn Animation<f64>> {
-        let curved: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(self.controller.curved());
-        Rc::new(Turns(self.tween).animate(curved))
-    }
 }
 
 impl StatefulView for AnimatedRotation {
     type State = AnimatedRotationState;
 
     fn create_state(&self) -> Self::State {
-        let controller = ImplicitController::new(self.duration, self.curve.clone());
-        let tween = Tween::new(self.angle, self.angle);
-        let curved: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(controller.curved());
-        let proxy = ProxyAnimation::new(Rc::new(Turns(tween).animate(curved)));
+        let initial = if self.angle.turns().is_finite() {
+            self.angle.turns()
+        } else {
+            0.0
+        };
+        let animation = AnimatedValue::new(initial, self.motion.clone(), None)
+            .expect("BUG: initial rotation was made finite");
+        let proxy = ProxyAnimation::new(Rc::new(animation.animation()));
         AnimatedRotationState {
-            controller,
+            animation,
             target: self.angle,
             path: self.path,
-            tween,
             proxy,
             child: self.child.clone(),
         }
@@ -157,11 +158,13 @@ impl StatefulView for AnimatedRotation {
 
 impl ViewState<AnimatedRotation> for AnimatedRotationState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.controller.rebind(VsyncScope::maybe_of(ctx).as_ref());
+        if let Err(error) = self.animation.rebind(VsyncScope::maybe_of(ctx).as_ref()) {
+            tracing::error!(%error, "rotation animation has no clock");
+        }
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
-        self.controller.rebind(VsyncScope::maybe_of(ctx).as_ref());
+        self.init_state(ctx);
     }
 
     fn build(&self, _view: &AnimatedRotation, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -171,27 +174,27 @@ impl ViewState<AnimatedRotation> for AnimatedRotationState {
     fn did_update_view(&mut self, _old_view: &AnimatedRotation, new_view: &AnimatedRotation) {
         self.child = new_view.child.clone();
         let target_changed = new_view.angle != self.target || new_view.path != self.path;
-        let from = target_changed.then(|| self.tween.transform(self.controller.value()));
-        self.controller.set_duration(new_view.duration);
-        let curve_changed = self.controller.set_curve(new_view.curve.clone());
-        if let Some(from) = from {
-            let to = match new_view.path {
-                RotationPath::Numeric => new_view.angle,
-                // Measured from the angle shown now, so a retarget mid-turn never adds a
-                // revolution.
-                RotationPath::Shorter => new_view.angle.nearest_equivalent(from),
-            };
+        let target = if target_changed {
+            match new_view.path {
+                RotationPath::Numeric => new_view.angle.turns(),
+                RotationPath::Shorter => new_view
+                    .angle
+                    .nearest_equivalent(Angle::from_turns(self.animation.value()))
+                    .turns(),
+            }
+        } else {
+            // An unrelated rebuild retains the chosen equivalent and its deadline.
+            *self.animation.target()
+        };
+        if let Err(error) = self.animation.retarget(target, new_view.motion.clone()) {
+            tracing::warn!(%error, "rotation motion refused; retaining the published run");
+        } else {
             self.target = new_view.angle;
             self.path = new_view.path;
-            self.tween = Tween::new(from, to);
-            self.controller.restart_from_zero();
-        }
-        if target_changed || curve_changed {
-            self.proxy.set_parent(self.compose());
         }
     }
 
     fn dispose(&mut self) {
-        self.controller.dispose();
+        self.animation.dispose();
     }
 }

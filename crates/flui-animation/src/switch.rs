@@ -62,6 +62,31 @@ struct SwitchOwner {
     notifier: Terminal<Rc<ChangeNotifier>>,
 }
 
+impl SwitchOwner {
+    fn reject_status<T>(&self, callback: T) {
+        let mut recovery = Retirement::new();
+        self.notifier.inherit_failure(&mut recovery.scope());
+        self.inner
+            .borrow()
+            .status_listeners
+            .inherit_failure(&mut recovery.scope());
+        recovery.retire(Terminal::new(callback));
+        recovery.finish();
+    }
+
+    fn withdraw_status(
+        &self,
+        id: ListenerId,
+        recovery: &mut RecoveryScope<'_>,
+    ) -> Option<Rc<flui_foundation::notifier_generic::NotificationCallback<AnimationStatus>>> {
+        let listeners = Rc::clone(&self.inner.borrow().status_listeners);
+        let callback = listeners.take_callback(id);
+        listeners.inherit_failure(recovery);
+        self.notifier.inherit_failure(recovery);
+        callback
+    }
+}
+
 impl Drop for SwitchOwner {
     fn drop(&mut self) {
         let mut recovery = Retirement::new();
@@ -96,7 +121,7 @@ struct AnimationSwitchInner {
     /// Listener IDs for cleanup.
     current_listener_id: Option<ListenerId>,
     next_listener_id: Option<ListenerId>,
-    current_status_listener_id: Option<ListenerId>,
+    current_status_subscription: Option<Terminal<crate::StatusSubscription>>,
     /// Switch-owned status listeners.
     ///
     /// Owned here (not delegated to `current`) because `current` changes on
@@ -111,18 +136,26 @@ fn detach_parents(
     current: &Rc<dyn Animation<f64>>,
     next: Option<&Terminal<Rc<dyn Animation<f64>>>>,
     value_id: Option<ListenerId>,
-    status_id: Option<ListenerId>,
+    status_subscription: Option<Terminal<crate::StatusSubscription>>,
     next_id: Option<ListenerId>,
     retirement: &mut RecoveryScope<'_>,
 ) {
     if let Some(id) = value_id {
         retirement.run(|| current.remove_listener(id));
     }
-    if let Some(id) = status_id {
-        retirement.run(|| current.remove_status_listener(id));
-    }
+    cancel_status_subscription(status_subscription, retirement);
     if let (Some(id), Some(next)) = (next_id, next) {
         retirement.run(|| next.remove_listener(id));
+    }
+}
+
+fn cancel_status_subscription(
+    subscription: Option<Terminal<crate::StatusSubscription>>,
+    recovery: &mut RecoveryScope<'_>,
+) {
+    if let Some(mut subscription) = subscription {
+        subscription.get_mut().cancel_with_recovery(recovery);
+        recovery.retire(subscription);
     }
 }
 
@@ -134,7 +167,7 @@ impl Drop for AnimationSwitchInner {
         let next = self.next.take();
         let callback = self.on_switched.take();
         let value_id = self.current_listener_id.take();
-        let status_id = self.current_status_listener_id.take();
+        let status_subscription = self.current_status_subscription.take();
         let next_id = self.next_listener_id.take();
         let listeners = self.status_listeners.dispose_and_take_callbacks();
         let mut retirement = Retirement::new();
@@ -142,7 +175,7 @@ impl Drop for AnimationSwitchInner {
             &current,
             next.as_ref(),
             value_id,
-            status_id,
+            status_subscription,
             next_id,
             &mut retirement.scope(),
         );
@@ -173,34 +206,22 @@ impl AnimationSwitch {
         let next = next.map(Terminal::new);
         let notifier = Rc::new(ChangeNotifier::new());
 
-        let mode = if let Some(ref next_anim) = next {
+        let (actual_current, actual_next, mode) = if let Some(ref next_anim) = next {
             let current_value = current.value();
             let next_value = next_anim.value();
 
-            if (current_value - next_value).abs() < 1e-6 {
-                // Same value - immediately switch to next, no callback
-                None // Will be handled specially
-            } else if current_value > next_value {
-                Some(SwitchMode::Maximize)
+            if current_value == next_value {
+                (Terminal::new(next_anim.get().clone()), None, None)
             } else {
-                Some(SwitchMode::Minimize)
+                let mode = if current_value > next_value {
+                    SwitchMode::Maximize
+                } else {
+                    SwitchMode::Minimize
+                };
+                (current, next, Some(mode))
             }
         } else {
-            None
-        };
-
-        // If values are equal, start with next animation
-        let (actual_current, actual_next) = if let Some(ref next_anim) = next {
-            let current_value = current.value();
-            let next_value = next_anim.value();
-
-            if (current_value - next_value).abs() < 1e-6 {
-                (Terminal::new(next_anim.get().clone()), None)
-            } else {
-                (current, next)
-            }
-        } else {
-            (current, next)
+            (current, None, None)
         };
 
         let inner = AnimationSwitchInner {
@@ -212,7 +233,7 @@ impl AnimationSwitch {
             last_status: None,
             current_listener_id: None,
             next_listener_id: None,
-            current_status_listener_id: None,
+            current_status_subscription: None,
             status_listeners: Rc::new(flui_foundation::Notifier::new()),
             disposed: false,
         };
@@ -249,7 +270,7 @@ impl AnimationSwitch {
     /// Returns the currently active animation.
     #[must_use]
     pub fn current(&self) -> Rc<dyn Animation<f64>> {
-        self.owner.inner.borrow_mut().current.get().clone()
+        self.owner.inner.borrow().current.get().clone()
     }
 
     /// Builds the status forwarder that re-emits the current animation's
@@ -259,8 +280,8 @@ impl AnimationSwitch {
     ) -> crate::animation::StatusObserver {
         let inner_weak = inner_weak.clone();
         Rc::new(move |status, recovery| {
-            if let Some(inner_arc) = inner_weak.upgrade() {
-                let mut inner = inner_arc.borrow_mut();
+            if let Some(state) = inner_weak.upgrade() {
+                let mut inner = state.borrow_mut();
                 if inner.disposed {
                     return;
                 }
@@ -282,9 +303,9 @@ impl AnimationSwitch {
         let status_callback_for_handler = Rc::clone(&status_callback);
 
         let value_handler = move |recovery: &mut RecoveryScope<'_>| {
-            if let Some(inner_arc) = inner_weak.upgrade() {
+            if let Some(state) = inner_weak.upgrade() {
                 let (current, next, mode) = {
-                    let inner = inner_arc.borrow();
+                    let inner = state.borrow();
                     if inner.disposed {
                         return;
                     }
@@ -302,7 +323,7 @@ impl AnimationSwitch {
                 } else {
                     false
                 };
-                let mut inner = inner_arc.borrow_mut();
+                let mut inner = state.borrow_mut();
                 if inner.disposed || !Rc::ptr_eq(inner.current.get(), &current) {
                     return;
                 }
@@ -320,28 +341,30 @@ impl AnimationSwitch {
                         std::mem::replace(&mut inner.current, Terminal::new(Rc::clone(&next)));
                     inner.mode = None;
                     let old_value_id = inner.current_listener_id.take();
-                    let old_status_id = inner.current_status_listener_id.take();
+                    let old_status_subscription = inner.current_status_subscription.take();
                     inner.current_listener_id = inner.next_listener_id.take();
                     callback.clone_from(&inner.on_switched);
-                    rebind = Some((old_current, old_value_id, old_status_id, next));
+                    rebind = Some((old_current, old_value_id, old_status_subscription, next));
                 }
                 // Release the lock before touching other animations' listener
                 // registries or running user callbacks.
                 drop(inner);
 
-                if let Some((old_current, old_value_id, old_status_id, new_current)) = rebind {
+                if let Some((old_current, old_value_id, old_status_subscription, new_current)) =
+                    rebind
+                {
                     if let Some(id) = old_value_id {
-                        old_current.remove_listener(id);
+                        recovery.run(|| old_current.remove_listener(id));
                     }
-                    if let Some(id) = old_status_id {
-                        old_current.remove_status_listener(id);
-                    }
-                    let status_id =
-                        new_current.add_status_observer(Rc::clone(&status_callback_for_handler));
+                    cancel_status_subscription(old_status_subscription, recovery);
+                    let mut subscription = Some(Terminal::new(
+                        new_current
+                            .subscribe_status_observer(Rc::clone(&status_callback_for_handler)),
+                    ));
                     let admitted = {
-                        let mut inner = inner_arc.borrow_mut();
+                        let mut inner = state.borrow_mut();
                         if !inner.disposed && Rc::ptr_eq(inner.current.get(), &new_current) {
-                            inner.current_status_listener_id = Some(status_id);
+                            inner.current_status_subscription = subscription.take();
                             true
                         } else {
                             false
@@ -349,9 +372,8 @@ impl AnimationSwitch {
                     };
                     if admitted {
                         status_callback_for_handler(new_current.status(), recovery);
-                    } else {
-                        new_current.remove_status_listener(status_id);
                     }
+                    cancel_status_subscription(subscription, recovery);
                 }
                 if let Some(callback) = callback {
                     recovery.run(&**callback);
@@ -377,20 +399,21 @@ impl AnimationSwitch {
             self.admit_value_subscription(next, next_id);
         }
         let status_parent = Terminal::new(self.current());
-        let status_id = status_parent.add_status_observer(status_callback);
-        let admitted = {
+        let mut subscription = Some(Terminal::new(
+            status_parent.subscribe_status_observer(status_callback),
+        ));
+        let previous = {
             let mut inner = self.owner.inner.borrow_mut();
             if !inner.disposed && Rc::ptr_eq(inner.current.get(), &status_parent) {
-                Some(inner.current_status_listener_id.replace(status_id))
+                std::mem::replace(&mut inner.current_status_subscription, subscription.take())
             } else {
                 None
             }
         };
-        match admitted {
-            Some(Some(old)) => status_parent.remove_status_listener(old),
-            Some(None) => {}
-            None => status_parent.remove_status_listener(status_id),
-        }
+        let mut recovery = Retirement::new();
+        cancel_status_subscription(previous, &mut recovery.scope());
+        cancel_status_subscription(subscription, &mut recovery.scope());
+        recovery.finish();
     }
 
     fn admit_value_subscription(&self, parent: &Rc<dyn Animation<f64>>, id: ListenerId) {
@@ -440,7 +463,7 @@ fn dispose_switch(
     owner_notifier: &Rc<ChangeNotifier>,
     retirement: &mut RecoveryScope<'_>,
 ) {
-    let (current, next, value_id, status_id, next_id, callback, listeners) = {
+    let (current, next, value_id, status_subscription, next_id, callback, listeners) = {
         let mut inner = owner_inner.borrow_mut();
         if inner.disposed {
             return;
@@ -451,7 +474,7 @@ fn dispose_switch(
             Terminal::new(inner.current.get().clone()),
             inner.next.take(),
             inner.current_listener_id.take(),
-            inner.current_status_listener_id.take(),
+            inner.current_status_subscription.take(),
             inner.next_listener_id.take(),
             inner.on_switched.take(),
             Rc::clone(&inner.status_listeners),
@@ -461,7 +484,7 @@ fn dispose_switch(
         &current,
         next.as_ref(),
         value_id,
-        status_id,
+        status_subscription,
         next_id,
         retirement,
     );
@@ -512,24 +535,28 @@ impl Animation<f64> for AnimationSwitch {
     /// `current` changes on a train-hop, so a delegated id would later be
     /// removed against the wrong animation. The internal per-current
     /// forwarder re-emits the active animation's transitions here.
-    fn add_status_listener(&self, callback: StatusCallback) -> ListenerId {
+    fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription {
+        if self.owner.inner.borrow().disposed {
+            self.owner.reject_status(callback);
+            return crate::StatusSubscription::default();
+        }
         let listeners = Rc::clone(&self.owner.inner.borrow().status_listeners);
-        listeners.add(Rc::new(move |status| callback(*status)))
+        let id = listeners.add(Rc::new(move |status| callback(*status)));
+        crate::StatusSubscription::new(&self.owner, id, SwitchOwner::withdraw_status)
     }
 
-    fn add_status_observer(&self, observer: crate::animation::StatusObserver) -> ListenerId {
+    fn subscribe_status_observer(
+        &self,
+        observer: crate::animation::StatusObserver,
+    ) -> crate::StatusSubscription {
+        if self.owner.inner.borrow().disposed {
+            self.owner.reject_status(observer);
+            return crate::StatusSubscription::default();
+        }
         let listeners = Rc::clone(&self.owner.inner.borrow().status_listeners);
-        listeners.add_with_recovery(Rc::new(move |status, recovery| observer(*status, recovery)))
-    }
-
-    fn remove_status_listener(&self, id: ListenerId) {
-        let listeners = Rc::clone(&self.owner.inner.borrow().status_listeners);
-        let callback = listeners.take_callback(id);
-        let mut recovery = Retirement::new();
-        listeners.inherit_failure(&mut recovery.scope());
-        self.owner.notifier.inherit_failure(&mut recovery.scope());
-        recovery.retire(callback);
-        recovery.finish();
+        let id = listeners
+            .add_with_recovery(Rc::new(move |status, recovery| observer(*status, recovery)));
+        crate::StatusSubscription::new(&self.owner, id, SwitchOwner::withdraw_status)
     }
 }
 
@@ -585,76 +612,5 @@ impl fmt::Debug for AnimationSwitch {
             .field("status", &current.status())
             .field("has_next", &has_next)
             .finish_non_exhaustive()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::AnimationController;
-
-    use std::time::Duration;
-
-    fn create_controller(value: f64) -> Rc<AnimationController> {
-        let controller = Rc::new(AnimationController::builder(Duration::from_millis(100)).build());
-        controller.set_value(value);
-        controller
-    }
-
-    /// Disposing an `AnimationSwitch` detaches from **both** trains: status +
-    /// value listeners from the current train, and the value listener from the
-    /// next one. The route layer disposes a hopper that never hopped, so a leak
-    /// here would keep a disposed route's controller alive and notifying.
-    ///
-    /// This pins the *pre-hop* case.
-    ///
-    /// Red-check: delete the `next_listener_id` branch of `AnimationSwitch::dispose`.
-    #[test]
-    fn dispose_before_a_hop_detaches_from_both_trains() {
-        let controller1 = create_controller(0.8);
-        let controller2 = create_controller(0.3);
-
-        let value1 = controller1.debug_value_listener_count();
-        let value2 = controller2.debug_value_listener_count();
-        let status1 = controller1.debug_status_listener_count();
-
-        let switch = AnimationSwitch::new(
-            controller1.clone() as Rc<dyn Animation<f64>>,
-            Some(controller2.clone() as Rc<dyn Animation<f64>>),
-        );
-        assert_eq!(controller1.debug_value_listener_count(), value1 + 1);
-        assert_eq!(controller2.debug_value_listener_count(), value2 + 1);
-        assert_eq!(controller1.debug_status_listener_count(), status1 + 1);
-
-        switch.dispose();
-
-        assert_eq!(
-            controller1.debug_value_listener_count(),
-            value1,
-            "the current train's value listener must be removed"
-        );
-        assert_eq!(
-            controller1.debug_status_listener_count(),
-            status1,
-            "the current train's status listener must be removed"
-        );
-        assert_eq!(
-            controller2.debug_value_listener_count(),
-            value2,
-            "the NEXT train's value listener must be removed too"
-        );
-
-        // And a disposed switch never hops.
-        controller1.set_value(0.2);
-        assert!(
-            Rc::ptr_eq(
-                &switch.current(),
-                &(controller1.clone() as Rc<dyn Animation<f64>>)
-            ),
-            "a disposed switch must not hop"
-        );
-
-        crate::test_cases::dispose_controller(&controller1);
-        crate::test_cases::dispose_controller(&controller2);
     }
 }

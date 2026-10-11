@@ -703,7 +703,7 @@ fn rejected_viewport_resize_preserves_the_fractional_page() {
 }
 
 fn rejected_tight_text_layout_does_not_stop_the_size_controller() {
-    use flui_animation::{Animation as _, AnimationController, Curves, curve::ArcCurve};
+    use flui_animation::{Animation as _, AnimationController, curve::ArcCurve, curves};
     use flui_objects::RenderAnimatedSize;
     use flui_painting::{Alignment, paint::Clip};
 
@@ -712,7 +712,7 @@ fn rejected_tight_text_layout_does_not_stop_the_size_controller() {
         &ui_runtime_text(),
         box_node(RenderAnimatedSize::new(
             controller.clone(),
-            ArcCurve::new(Curves::Linear),
+            ArcCurve::new(curves::LINEAR),
             Alignment::CENTER,
             Clip::HardEdge,
         ))

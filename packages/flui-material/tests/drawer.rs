@@ -1,38 +1,10 @@
-//! `Drawer`/`DrawerController`/`Scaffold` drawer-slot end-to-end coverage —
-//! a real [`Vsync`] clock drives the settle animation, matching
-//! `tests/show_dialog.rs`'s harness. Sections, in file order: (1) closed-state
-//! edge-strip translucent hit-testing, (2) mid-drag panel geometry, (3) the
-//! scrim's mount, tap-to-close, and settle-to-unmount, (4) the
-//! [`ScaffoldScope`] handle's data surface (`has_drawer`/`is_drawer_open`)
-//! and the no-flash mount timing, (5) `on_drawer_changed`'s forward to the
-//! app author, (6) the dynamic child order when both drawers are configured.
+//! Mounted drawer behavior through public handles, pointer input and painting.
 //!
-//! Pure value/status math (fling threshold, direction factor, the three
-//! `on_drawer_changed` firing paths) is ALSO covered at the
-//! `DrawerControllerCore` unit level in
-//! `packages/flui-material/src/drawer.rs`'s own test module — deterministic
-//! there (no real-clock-dependent velocity simulation needed); this file
-//! additionally covers what only a real mounted tree can prove: geometry,
-//! hit-testing, the `GlobalKey` bridge, and `Scaffold`'s own relay of the
-//! per-drawer callback.
-//!
-//! # `themed` vs `themed_animated` — the `VsyncScope` requirement
-//!
-//! [`DrawerControllerState::init_state`] resolves its `Vsync` via
-//! `ctx.get::<VsyncScope, _>` — an ordinary ANCESTOR-WIDGET lookup, entirely
-//! separate from [`common::lay_out_animated`]'s `vsync` parameter (which
-//! only adopts a `Vsync` onto the *binding*, i.e. what `pump_for`/`tick_all`
-//! iterate). A tree with no `VsyncScope` ancestor leaves
-//! `DrawerControllerCore::vsync` `None`, so nothing ever registers with the
-//! adopted `Vsync`, and `pump_for` ticks precisely zero controllers no
-//! matter how large the budget — a `close()`/`open()` fling then never
-//! progresses past its very first simulated value, and a mount/unmount that
-//! depends on the fling actually *settling* (not just starting) never
-//! happens. [`themed_animated`] wraps `vsync` in [`flui_sdk::widgets::VsyncScope`]
-//! so the tree-side registration and the binding-side pump are the SAME
-//! clock; plain [`themed`] (no `VsyncScope`) is for tests that only need
-//! synchronous effects (a bare `set_value`, or a same-tick status flip) and
-//! never call `pump_for`/`tick_all` expecting real animation progress.
+//! [`themed_animated`] provides the same [`Vsync`] to the widget's ambient
+//! registry scope and the binding driven by [`common::lay_out_animated`].
+//! This exercises actual settling, retained panel and scrim geometry,
+//! interruption, gesture recovery and registration release. [`themed`] is
+//! used for cases that need synchronous behavior without a bound clock.
 //!
 //! Pointer moves and cancellation use the binding's captured Down route.
 //! Cancellation coverage below uses the ordinary edge width.
@@ -71,6 +43,562 @@ pub fn drawer_settling_uses_the_captured_fling_profile() {
 
 pub fn open_drawer_settling_uses_the_captured_fling_profile() {
     drawer_settling_uses_profile(true);
+}
+
+pub fn a_drawer_release_keeps_finger_speed() {
+    use flui_sdk::painting::Color;
+    use flui_sdk::widgets::ColoredBox;
+    let color = Color::rgb(17, 83, 149);
+    let painted_x = |laid: &common::LaidOut| {
+        drawer_scene_sample(laid.layer_tree().expect("committed scene"), color).0
+    };
+    for (configured, viewport, end) in [
+        (150.0, 400.0, false),
+        (1200.0, 1320.0, false),
+        (304.0, 100.0, false),
+        (150.0, 400.0, true),
+        (1200.0, 1320.0, true),
+    ] {
+        let vsync = Vsync::new();
+        let drawer = Drawer::new()
+            .width(configured)
+            .child(SizedBox::height(400.0).child(ColoredBox::new(color)));
+        let scaffold = if end {
+            Scaffold::new().end_drawer(drawer)
+        } else {
+            Scaffold::new().drawer(drawer)
+        };
+        let mut laid = lay_out_animated(
+            themed_animated(scaffold, &vsync),
+            tight(viewport, 400.0),
+            vsync,
+        );
+        let sign = if end { -1.0 } else { 1.0 };
+        let mut x = if end { viewport - 5.0 } else { 5.0 };
+        laid.dispatch_pointer_down(x, 200.0);
+        for _ in 0..5 {
+            x += sign * 15.0;
+            laid.dispatch_pointer_move_after(x, 200.0, Duration::from_millis(10));
+            laid.pump();
+        }
+        laid.pump();
+        let seam = painted_x(&laid);
+        laid.dispatch_pointer_up(x, 200.0);
+        laid.pump();
+        assert!((painted_x(&laid) - seam).abs() < 1e-9);
+        let step = Duration::from_micros(100);
+        let mut samples = Vec::new();
+        for _ in 0..3 {
+            laid.pump_for(step);
+            samples.push(painted_x(&laid));
+        }
+        let pair = samples
+            .windows(2)
+            .find(|pair| pair[1] != pair[0])
+            .expect("the drawer moves after release");
+        let speed = (pair[1] - pair[0]) / step.as_secs_f64();
+        assert!(
+            (speed - sign * 1500.0).abs() < 150.0,
+            "configured {configured}, viewport {viewport}, end {end}: painted speed {speed}"
+        );
+        laid.pump_widget(SizedBox::shrink());
+    }
+}
+
+pub fn grabbing_a_closing_drawer_preserves_its_panel() {
+    fn cancel_start() {
+        grabbing_closing_drawer(false, InterruptedContact::Cancel, 32, true);
+    }
+    fn release_start() {
+        grabbing_closing_drawer(false, InterruptedContact::Release, 32, true);
+    }
+    fn cancel_end() {
+        grabbing_closing_drawer(true, InterruptedContact::Cancel, 32, true);
+    }
+    fn release_end() {
+        grabbing_closing_drawer(true, InterruptedContact::Release, 32, true);
+    }
+    fn close_start() {
+        grabbing_closing_drawer(false, InterruptedContact::DragClosed, 32, true);
+    }
+    fn close_end() {
+        grabbing_closing_drawer(true, InterruptedContact::DragClosed, 32, true);
+    }
+    fn cancel_start_below_half() {
+        grabbing_closing_drawer(false, InterruptedContact::Cancel, 128, false);
+    }
+    fn release_start_below_half() {
+        grabbing_closing_drawer(false, InterruptedContact::Release, 128, false);
+    }
+    fn cancel_end_below_half() {
+        grabbing_closing_drawer(true, InterruptedContact::Cancel, 128, false);
+    }
+    fn release_end_below_half() {
+        grabbing_closing_drawer(true, InterruptedContact::Release, 128, false);
+    }
+    common::run_cases(&[
+        ("cancel_start", cancel_start),
+        ("release_start", release_start),
+        ("cancel_end", cancel_end),
+        ("release_end", release_end),
+        ("close_start", close_start),
+        ("close_end", close_end),
+        ("cancel_start_below_half", cancel_start_below_half),
+        ("release_start_below_half", release_start_below_half),
+        ("cancel_end_below_half", cancel_end_below_half),
+        ("release_end_below_half", release_end_below_half),
+    ]);
+}
+
+enum InterruptedContact {
+    Cancel,
+    Release,
+    DragClosed,
+}
+
+fn grabbing_closing_drawer(
+    end: bool,
+    finish: InterruptedContact,
+    closing_millis: u64,
+    above_half: bool,
+) {
+    use flui_sdk::painting::Color;
+    use flui_sdk::widgets::ColoredBox;
+
+    let vsync = Vsync::new();
+    let slot = Rc::new(RefCell::new(None));
+    let marker = Color::rgb(17, 83, 149);
+    let drawer = Drawer::new()
+        .width(150.0)
+        .child(SizedBox::height(400.0).child(ColoredBox::new(marker)));
+    let scaffold = if end {
+        Scaffold::new().end_drawer(drawer)
+    } else {
+        Scaffold::new().drawer(drawer)
+    }
+    .body(HandleProbe {
+        slot: Rc::clone(&slot),
+        on_tap: Rc::new(|_| {}),
+    });
+    let mut laid = lay_out_animated(
+        themed_animated(scaffold, &vsync),
+        tight(400.0, 400.0),
+        vsync.clone(),
+    );
+    let handle = slot.borrow().clone().expect("drawer handle captured");
+    laid.enter_owner_scope(|| {
+        if end {
+            handle.open_end_drawer();
+        } else {
+            handle.open_drawer();
+        }
+    });
+    laid.pump_for(Duration::ZERO);
+    assert_eq!(
+        drawer_panels(&laid).len(),
+        1,
+        "opening mounts at zero before the first advancing frame"
+    );
+    assert_eq!(
+        drawer_scene_sample(laid.layer_tree().expect("scene"), marker).0,
+        if end { 400.0 } else { -150.0 },
+        "the newly mounted panel starts outside the viewport"
+    );
+    for _ in 0..FLING_SETTLE_PUMPS {
+        laid.pump_for(FRAME);
+    }
+    let open_x = if end { 250.0 } else { 0.0 };
+    assert_eq!(
+        drawer_scene_sample(laid.layer_tree().expect("scene"), marker).0,
+        open_x
+    );
+
+    laid.enter_owner_scope(|| {
+        if end {
+            handle.close_end_drawer();
+        } else {
+            handle.close_drawer();
+        }
+    });
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(closing_millis));
+    let before = drawer_scene_sample(laid.layer_tree().expect("scene"), marker).0;
+    let fraction = if end {
+        (400.0 - before) / 150.0
+    } else {
+        (before + 150.0) / 150.0
+    };
+    assert!(
+        fraction > 0.0 && fraction < 1.0,
+        "closing panel is interior: {fraction}"
+    );
+    assert_eq!(
+        fraction > 0.5,
+        above_half,
+        "independent painted position at {closing_millis}ms: {fraction}"
+    );
+
+    let contact_x = if end { 395.0 } else { 5.0 };
+    laid.dispatch_pointer_down(contact_x, 200.0);
+    laid.pump();
+    assert_eq!(
+        drawer_scene_sample(laid.layer_tree().expect("scene"), marker).0,
+        before,
+        "a contact stops the closing run without removing or moving the panel"
+    );
+    let direction = if end { 1.0 } else { -1.0 };
+    let reopened = match finish {
+        InterruptedContact::Cancel => {
+            laid.dispatch_pointer_cancel();
+            above_half
+        }
+        InterruptedContact::Release => {
+            laid.dispatch_pointer_up(contact_x, 200.0);
+            above_half
+        }
+        InterruptedContact::DragClosed => {
+            laid.dispatch_pointer_move_after(contact_x + direction * 300.0, 200.0, FRAME);
+            laid.pump();
+            laid.dispatch_pointer_cancel();
+            false
+        }
+    };
+    for _ in 0..FLING_SETTLE_PUMPS {
+        laid.pump_for(FRAME);
+    }
+    if !reopened {
+        assert!(
+            drawer_panels(&laid).is_empty(),
+            "a closed settle removes the panel"
+        );
+        laid.enter_owner_scope(|| {
+            if end {
+                handle.open_end_drawer();
+            } else {
+                handle.open_drawer();
+            }
+        });
+        for _ in 0..FLING_SETTLE_PUMPS {
+            laid.pump_for(FRAME);
+        }
+    }
+    assert_eq!(
+        drawer_scene_sample(laid.layer_tree().expect("scene"), marker).0,
+        open_x
+    );
+    assert!(if end {
+        handle.is_end_drawer_open()
+    } else {
+        handle.is_drawer_open()
+    });
+
+    // A fresh contact can close the retained panel after interruption recovery.
+    laid.dispatch_pointer_down(contact_x, 200.0);
+    laid.dispatch_pointer_move_after(contact_x + direction * 30.0, 200.0, FRAME);
+    laid.pump();
+    laid.dispatch_pointer_move_after(contact_x + direction * 130.0, 200.0, FRAME);
+    laid.pump();
+    laid.dispatch_pointer_up(contact_x + direction * 130.0, 200.0);
+    for _ in 0..FLING_SETTLE_PUMPS {
+        laid.pump_for(FRAME);
+    }
+    assert!(
+        drawer_panels(&laid).is_empty(),
+        "the next drag closes and unmounts the panel"
+    );
+    laid.pump_widget(SizedBox::shrink());
+    assert!(
+        vsync.is_empty(),
+        "unmount releases the drawer's registration"
+    );
+}
+
+/// Observe the authored rectangle in the committed scene, including the
+/// compositor ancestors that move and fade a retained picture.
+fn drawer_scene_sample(
+    tree: &flui_layer::LayerTree,
+    color: flui_sdk::painting::Color,
+) -> (f64, f64) {
+    use flui_layer::Layer;
+    use flui_sdk::geometry::Point;
+    use flui_sdk::painting::DrawOp;
+    for (_, node) in tree.iter() {
+        let Layer::Picture(picture) = node.layer() else {
+            continue;
+        };
+        for command in picture.picture() {
+            let DrawOp::Rect { rect, paint } = &command.op else {
+                continue;
+            };
+            if paint.color.to_rgba_f32_array()[..3] != color.to_rgba_f32_array()[..3] {
+                continue;
+            }
+            let (x, y) = command.transform.transform_point(rect.left(), rect.top());
+            let mut point = Point::new(x, y);
+            let mut alpha = f64::from(paint.color.opacity());
+            let mut parent = node.parent();
+            while let Some(id) = parent {
+                let ancestor = tree.get(id).expect("scene parent exists");
+                match ancestor.layer() {
+                    Layer::Transform(layer) => point = layer.transform_point(point),
+                    Layer::Offset(layer) => point += layer.offset(),
+                    Layer::Opacity(layer) => {
+                        point += layer.offset();
+                        alpha *= layer.alpha();
+                    }
+                    _ => {}
+                }
+                parent = ancestor.parent();
+            }
+            return (point.x, alpha);
+        }
+    }
+    panic!("authored rectangle must exist in the committed scene");
+}
+
+pub fn drawer_slides_without_rebuilding_per_frame() {
+    use flui_sdk::geometry::Offset;
+    use flui_sdk::painting::Color;
+    use flui_sdk::widgets::{ColoredBox, FocusRoot, GestureArenaScope};
+    use flui_testing::{HeadlessBinding, MountOptions, MountOwners, PointerScript};
+
+    for (end, settling_frames, panel_tap, both) in [
+        (false, 0, false, false),
+        (true, 0, false, false),
+        (false, 0, true, false),
+        (true, 0, true, false),
+        (false, 8, true, false),
+        (true, 8, true, false),
+        (true, 8, true, true),
+    ] {
+        let mut binding = HeadlessBinding::new();
+        let taps = Rc::new(std::cell::Cell::new(0));
+        let tapped = Rc::clone(&taps);
+        let marker = Color::rgb(17, 83, 149);
+        let scrim = Color::rgba(63, 11, 109, 180);
+        let drawer = Drawer::new().width(150.0).child(
+            GestureDetector::new()
+                .on_tap(move |_| tapped.set(tapped.get() + 1))
+                .child(SizedBox::height(400.0).child(ColoredBox::new(marker))),
+        );
+        let scaffold = if both {
+            Scaffold::new().drawer(Drawer::new()).end_drawer(drawer)
+        } else if end {
+            Scaffold::new().end_drawer(drawer)
+        } else {
+            Scaffold::new().drawer(drawer)
+        }
+        .drawer_scrim_color(scrim);
+        let root = GestureArenaScope::new(
+            binding.arena().clone(),
+            FocusRoot::new(themed_animated(scaffold, binding.vsync())),
+        );
+        let _ = binding.mount_root(
+            &root,
+            MountOwners::fresh(),
+            MountOptions::tight(400.0, 400.0),
+        );
+        binding.pump_frame(FRAME);
+        let start = if end { 395.0 } else { 5.0 };
+        let finish = start + if end { -80.0 } else { 80.0 };
+        let drag = PointerScript::drag(
+            Offset::new(start, 200.0),
+            Offset::new(finish, 200.0),
+            5,
+            Duration::from_millis(10),
+        );
+        let mut previous_at = Duration::ZERO;
+        for (index, event) in drag.events().iter().enumerate() {
+            binding.pump_frame(event.at.saturating_sub(previous_at));
+            previous_at = event.at;
+            // The early moves win the gesture arena and mount the panel.
+            // Later moves update render geometry even across the open-state
+            // threshold. Two slots additionally need one ordering update.
+            let before = (4..=5).contains(&index).then(|| {
+                drawer_scene_sample(binding.layer_tree().expect("dragging panel"), marker).0
+            });
+            binding.dispatch_pointer(&event.to_event(), |position| binding.hit_test(position));
+            if let Some(before) = before {
+                binding.pump_frame(Duration::ZERO);
+                if !(both && index == 5) {
+                    assert_eq!(
+                        binding.last_frame_report().build.elements_built,
+                        0,
+                        "end {end}, move {index}, prior panel x {before}: an interior pointer move must not rebuild the drawer: {:?}",
+                        binding.last_frame_report().build
+                    );
+                }
+                assert!(
+                    !binding.vsync().has_running(),
+                    "drag geometry is observed before a settling run starts"
+                );
+                let scene = binding.layer_tree().expect("committed dragging panel");
+                let x = drawer_scene_sample(scene, marker).0;
+                let directed_travel = (x - before) * if end { -1.0 } else { 1.0 };
+                assert!(
+                    (directed_travel - 16.0).abs() < 1e-6,
+                    "panel follows this pointer move: {directed_travel}"
+                );
+                let value = if end {
+                    (400.0 - x) / 150.0
+                } else {
+                    (x + 150.0) / 150.0
+                };
+                let alpha = drawer_scene_sample(scene, scrim).1;
+                assert!(
+                    (alpha - value * f64::from(scrim.opacity())).abs() <= 1.0 / 255.0,
+                    "dragged panel and scrim consume the same value"
+                );
+            }
+        }
+        assert!(
+            binding.vsync().has_running(),
+            "the release must start a settling animation"
+        );
+        // Consume the status change that mounts the panel before measuring
+        // running frames. pump_frame never dirties the logical root itself.
+        binding.pump_frame(FRAME);
+        let mut previous =
+            drawer_scene_sample(binding.layer_tree().expect("mounted panel"), marker).0;
+        for _ in 0..settling_frames {
+            binding.pump_frame(FRAME);
+            let report = binding.last_frame_report();
+            assert_eq!(
+                report.build.elements_built, 0,
+                "end {end}: running drawer rebuilt: {:?}",
+                report.build
+            );
+            let scene = binding.layer_tree().expect("committed drawer scene");
+            let x = drawer_scene_sample(scene, marker).0;
+            assert!(
+                (x - previous) * if end { -1.0 } else { 1.0 } > 0.0,
+                "the panel must move toward its open edge"
+            );
+            let value = if end {
+                (400.0 - x) / 150.0
+            } else {
+                (x + 150.0) / 150.0
+            };
+            let alpha = drawer_scene_sample(scene, scrim).1;
+            assert!(
+                (alpha - value * f64::from(scrim.opacity())).abs() <= 1.0 / 255.0,
+                "scrim alpha follows the same motion"
+            );
+            previous = x;
+        }
+        if settling_frames == 0 {
+            let open_fraction = if end {
+                (400.0 - previous) / 150.0
+            } else {
+                (previous + 150.0) / 150.0
+            };
+            assert!(
+                (0.3..0.6).contains(&open_fraction),
+                "hit testing is exercised on a partly revealed panel"
+            );
+        }
+        if panel_tap {
+            binding.replay(&PointerScript::tap(Offset::new(
+                if end { 380.0 } else { 20.0 },
+                200.0,
+            )));
+            assert_eq!(taps.get(), 1, "the visible panel receives its tap");
+        }
+        binding.replay(&PointerScript::tap(Offset::new(
+            if both {
+                5.0
+            } else if end {
+                20.0
+            } else {
+                380.0
+            },
+            200.0,
+        )));
+        binding.pump_frame(FRAME);
+        let before_close =
+            drawer_scene_sample(binding.layer_tree().expect("closing panel"), marker).0;
+        binding.pump_frame(FRAME);
+        let after_close =
+            drawer_scene_sample(binding.layer_tree().expect("closing panel"), marker).0;
+        assert!(
+            (after_close - before_close) * if end { 1.0 } else { -1.0 } > 0.0,
+            "scrim tap closes the panel"
+        );
+        assert_eq!(
+            binding.last_frame_report().build.elements_built,
+            0,
+            "closing value ticks do not rebuild"
+        );
+    }
+}
+
+pub fn incoming_end_drawer_scrim_covers_the_outgoing_start_panel() {
+    use flui_sdk::painting::Color;
+    use flui_sdk::widgets::ColoredBox;
+
+    let vsync = Vsync::new();
+    let slot = Rc::new(RefCell::new(None));
+    let taps = Rc::new(std::cell::Cell::new(0));
+    let tapped = Rc::clone(&taps);
+    let start_marker = Color::rgb(31, 79, 127);
+    let end_marker = Color::rgb(173, 43, 89);
+    let scaffold = Scaffold::new()
+        .drawer(
+            Drawer::new().width(150.0).child(
+                GestureDetector::new()
+                    .on_tap(move |_| tapped.set(tapped.get() + 1))
+                    .child(SizedBox::height(400.0).child(ColoredBox::new(start_marker))),
+            ),
+        )
+        .end_drawer(
+            Drawer::new()
+                .width(150.0)
+                .child(SizedBox::height(400.0).child(ColoredBox::new(end_marker))),
+        )
+        .body(HandleProbe {
+            slot: Rc::clone(&slot),
+            on_tap: Rc::new(|_| {}),
+        });
+    let mut laid = lay_out_animated(
+        themed_animated(scaffold, &vsync),
+        tight(400.0, 400.0),
+        vsync,
+    );
+    let handle = slot.borrow().clone().expect("mounted drawer handle");
+    laid.enter_owner_scope(|| handle.open_drawer());
+    for _ in 0..FLING_SETTLE_PUMPS {
+        laid.pump_for(FRAME);
+    }
+    laid.dispatch_pointer_down(20.0, 200.0);
+    laid.dispatch_pointer_up(20.0, 200.0);
+    assert_eq!(taps.get(), 1, "the open start panel receives this point");
+
+    laid.enter_owner_scope(|| handle.open_end_drawer());
+    laid.pump_for(FRAME);
+    laid.pump_for(FRAME);
+    let scene = laid.layer_tree().expect("both panels are still painted");
+    let start_x = drawer_scene_sample(scene, start_marker).0;
+    let end_x = drawer_scene_sample(scene, end_marker).0;
+    assert!(
+        start_x < 0.0 && start_x + 150.0 > 20.0,
+        "the outgoing start panel still covers the tested point: {start_x}"
+    );
+    assert!(
+        (250.0..400.0).contains(&end_x),
+        "the incoming end panel is not settled: {end_x}"
+    );
+    assert!(handle.is_end_drawer_open());
+    laid.dispatch_pointer_down(20.0, 200.0);
+    laid.dispatch_pointer_up(20.0, 200.0);
+    assert_eq!(
+        taps.get(),
+        1,
+        "the incoming scrim intercepts the still-visible outgoing panel"
+    );
+    assert!(
+        !handle.is_end_drawer_open(),
+        "the same tap closes the incoming drawer"
+    );
 }
 
 fn drawer_settling_uses_profile(initially_open: bool) {
@@ -186,7 +714,7 @@ const PUMPS: usize = (SETTLE.as_millis() / FRAME.as_millis()) as usize + 2;
 /// A fling's settling time depends on the spring simulation, not `SETTLE` —
 /// a full-distance fling (e.g. `close()` from a fully open, fully rested
 /// drawer) measured empirically at 36 `FRAME`-sized ticks (~576ms) to reach
-/// `AnimationStatus::Dismissed`. This budget carries generous margin over
+/// `AnimationStatus::ReverseSettled`. This budget carries generous margin over
 /// that measurement. Tests that fling across the drawer's *entire* range
 /// (not a drag-shortened one) and need to observe the *settled* result
 /// (mount/unmount, not just the synchronous `on_open_changed` report) use

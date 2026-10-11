@@ -11,7 +11,7 @@ use flui_animation::Vsync;
 use flui_painting::display_list::DrawOp;
 use flui_rendering::layer::Layer;
 use flui_testing::a11y::Role;
-use flui_view::ViewExt;
+use flui_view::{SignalWriteExt, ViewExt};
 use flui_widgets::{
     ActivityIndicator, Center, RefreshController, RefreshIndicator, Row, ScrollController,
     SizedBox, TickerMode, VsyncScope,
@@ -188,6 +188,186 @@ fn announced_as_a_loading_spinner() {
     assert_eq!(node.role(), Role::ProgressIndicator);
 }
 
+fn reduced_motion_keeps_visible_loading_without_continuation() {
+    use flui_animation::MotionPreference;
+    fn live() {
+        policy_case(false);
+    }
+    fn initial() {
+        policy_case(true);
+    }
+    fn policy_case(initially_reduced: bool) {
+        let vsync = Vsync::new();
+        let mut laid = lay_out_animated(
+            VsyncScope::new(vsync.clone(), SizedBox::shrink()),
+            loose(200.0),
+            vsync.clone(),
+        );
+        laid.set_motion_preference(if initially_reduced {
+            MotionPreference::Reduce
+        } else {
+            MotionPreference::Full
+        });
+        laid.pump_widget(VsyncScope::new(
+            vsync.clone(),
+            Center::new().child(ActivityIndicator::new()),
+        ));
+        laid.pump_for(Duration::ZERO);
+        if !initially_reduced {
+            laid.pump_for(ms(300));
+            laid.set_motion_preference(MotionPreference::Reduce);
+            laid.pump_for(Duration::ZERO);
+        }
+        let stopped = only_arc(&laid);
+        assert!(stopped.1 > 0.0, "static loading stays visible");
+        laid.pump_for(ms(350));
+        assert_eq!(only_arc(&laid), stopped, "Reduce stops visible motion");
+        assert!(
+            !vsync.has_running(),
+            "a parked indicator needs no continuation"
+        );
+        laid.enable_semantics();
+        laid.tick();
+        let tree = laid.a11y_tree().expect("semantics enabled");
+        let node = tree
+            .find_by_label("Loading")
+            .expect("loading label retained");
+        assert_eq!(node.role(), Role::ProgressIndicator);
+        assert_eq!(node.value(), None, "unknown work has no percentage");
+        laid.set_motion_preference(MotionPreference::Full);
+        laid.pump_for(Duration::ZERO);
+        let resumed = only_arc(&laid);
+        laid.pump_for(ms(300));
+        assert_ne!(only_arc(&laid), resumed, "Full resumes visible motion");
+        laid.pump_widget(VsyncScope::new(vsync.clone(), SizedBox::shrink()));
+        assert!(
+            vsync.is_empty(),
+            "unmount releases the parked or resumed owner"
+        );
+    }
+    crate::common::cases::run_cases(
+        "reduced indicator",
+        &[("live preference", live), ("initial preference", initial)],
+    );
+}
+
+#[derive(Clone)]
+struct KeyedIndicator {
+    key: flui_view::GlobalKey<KeyedIndicatorState>,
+    registry: std::rc::Rc<std::cell::RefCell<Option<Vsync>>>,
+    inits: std::rc::Rc<std::cell::Cell<usize>>,
+}
+
+struct KeyedIndicatorState {
+    registry: std::rc::Rc<std::cell::RefCell<Option<Vsync>>>,
+    inits: std::rc::Rc<std::cell::Cell<usize>>,
+}
+
+impl flui_view::View for KeyedIndicator {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+    fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
+        Some(&self.key)
+    }
+}
+
+impl flui_view::StatefulView for KeyedIndicator {
+    type State = KeyedIndicatorState;
+    fn create_state(&self) -> Self::State {
+        KeyedIndicatorState {
+            registry: self.registry.clone(),
+            inits: self.inits.clone(),
+        }
+    }
+}
+
+impl flui_view::ViewState<KeyedIndicator> for KeyedIndicatorState {
+    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
+        self.inits.set(self.inits.get() + 1);
+        self.did_change_dependencies(ctx);
+    }
+    fn did_change_dependencies(&mut self, ctx: &dyn flui_view::LifecycleContext) {
+        *self.registry.borrow_mut() = VsyncScope::maybe_of(ctx);
+    }
+    fn build(
+        &self,
+        _view: &KeyedIndicator,
+        _ctx: &dyn flui_view::BuildContext,
+    ) -> impl flui_view::IntoView {
+        ActivityIndicator::new()
+    }
+}
+
+fn keyed_indicator_moves_between_configured_permissions_without_restarting() {
+    use flui_animation::MotionPreference;
+    let root = Vsync::new();
+    let registry = std::rc::Rc::new(std::cell::RefCell::new(None::<Vsync>));
+    let inits = std::rc::Rc::new(std::cell::Cell::new(0));
+    let key = flui_view::GlobalKey::new();
+    let tree = |moved, enabled| {
+        let child = KeyedIndicator {
+            key: key.clone(),
+            registry: registry.clone(),
+            inits: inits.clone(),
+        };
+        let empty = SizedBox::shrink().boxed();
+        let (left, right) = if moved {
+            (empty, child.boxed())
+        } else {
+            (child.boxed(), empty)
+        };
+        VsyncScope::new(
+            root.clone(),
+            Row::new((
+                TickerMode::new(left),
+                TickerMode::new(right).enabled(enabled),
+            )),
+        )
+    };
+    let mut laid = lay_out_animated(tree(false, false), loose(200.0), root.clone());
+    laid.set_motion_preference(MotionPreference::Full);
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(ms(300));
+    let shown = only_arc(&laid);
+    let old = registry
+        .borrow()
+        .clone()
+        .expect("old registry captured through lifecycle");
+    laid.pump_widget(tree(true, false));
+    let next = registry
+        .borrow()
+        .clone()
+        .expect("new registry captured through lifecycle");
+    assert!(!old.is_same(&next));
+    assert!(old.is_empty());
+    assert_eq!(next.len(), 1);
+    assert_eq!(
+        inits.get(),
+        1,
+        "GlobalKey retains the actual indicator subtree"
+    );
+    let stopped = only_arc(&laid);
+    assert!(stopped.1 > 0.0);
+    laid.pump_for(ms(500));
+    assert_eq!(only_arc(&laid), stopped);
+    laid.pump_widget(tree(true, true));
+    laid.pump_for(Duration::ZERO);
+    assert_eq!(
+        only_arc(&laid),
+        shown,
+        "migration preserves the old run's phase"
+    );
+    laid.pump_for(ms(300));
+    assert_ne!(
+        only_arc(&laid),
+        shown,
+        "the retained run advances after resumption"
+    );
+    laid.pump_widget(VsyncScope::new(root, SizedBox::shrink()));
+    assert!(next.is_empty());
+}
+
 #[test]
 fn activity_indicator_arc_follows_keyframes() {
     crate::common::cases::run_cases(
@@ -202,6 +382,14 @@ fn activity_indicator_arc_follows_keyframes() {
             ("zero_dt", zero_dt),
             ("ten_hours", ten_hours),
             ("semantics", announced_as_a_loading_spinner),
+            (
+                "reduced motion",
+                reduced_motion_keeps_visible_loading_without_continuation,
+            ),
+            (
+                "keyed permission migration",
+                keyed_indicator_moves_between_configured_permissions_without_restarting,
+            ),
         ],
     );
 }
@@ -259,6 +447,157 @@ fn two_indicators_share_one_vsync() {
 
 #[test]
 fn indicator_unmount_mid_frame_releases_controller() {
+    fn first_source_requests_removal() {
+        indicator_callback_requests_removal(0);
+    }
+    fn second_source_requests_removal() {
+        indicator_callback_requests_removal(1);
+    }
+    crate::common::cases::run_cases(
+        "indicator retirement",
+        &[
+            ("first repaint source", first_source_requests_removal),
+            ("second repaint source", second_source_requests_removal),
+            (
+                "inherited registry replacement",
+                indicator_rebind_after_unmount,
+            ),
+        ],
+    );
+}
+
+#[derive(Clone)]
+struct VisibleIndicators(flui_view::Signal<usize>);
+
+impl flui_view::View for VisibleIndicators {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
+    }
+}
+
+impl flui_view::StatelessView for VisibleIndicators {
+    fn build(&self, ctx: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
+        two_indicators(self.0.get(ctx))
+    }
+}
+
+fn indicator_callback_requests_removal(source: usize) {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let vsync = Vsync::new();
+    let mut laid = lay_out_animated(SizedBox::shrink(), loose(200.0), vsync.clone());
+    let reactive = laid.with_build_owner_mut(|owner| owner.reactive().clone());
+    let count = reactive.signal(2usize);
+    laid.pump_widget(VsyncScope::new(vsync.clone(), VisibleIndicators(count)));
+    laid.pump_for(Duration::ZERO);
+    // The mounted painter's public repaint source is the indicator's real
+    // animation. Copy the handles before invoking any callbacks or pumping.
+    let animations = laid.pipeline_owner().with(|owner| {
+        owner
+            .render_tree()
+            .iter()
+            .filter_map(|(id, node)| {
+                node.downcast_render_object::<flui_objects::RenderCustomPaint>()
+                    .and_then(|paint| paint.painter())
+                    .and_then(|painter| painter.repaint())
+                    .map(|animation| (id, animation))
+            })
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(animations.len(), 2);
+    let deliveries = Rc::new([Cell::new(0usize), Cell::new(0usize)]);
+    let monitors = animations
+        .iter()
+        .enumerate()
+        .map(|(index, (_, animation))| {
+            animation.add_listener(Rc::new({
+                let deliveries = deliveries.clone();
+                move || deliveries[index].set(deliveries[index].get() + 1)
+            }))
+        })
+        .collect::<Vec<_>>();
+    let requested = Rc::new(Cell::new(false));
+    let callback = animations[source].1.add_listener(Rc::new({
+        let requested = requested.clone();
+        move || {
+            if !requested.replace(true) {
+                count
+                    .set(&reactive, 1)
+                    .expect("callback may update visibility");
+            }
+        }
+    }));
+    laid.pump_for(ms(300));
+    assert!(
+        requested.get(),
+        "removal originates in the indicator callback"
+    );
+    assert_eq!(
+        vsync.len(),
+        1,
+        "same-frame reconciliation retires the owner"
+    );
+    let retained = laid.pipeline_owner().with(|owner| {
+        owner
+            .render_tree()
+            .iter()
+            .filter_map(|(id, node)| {
+                node.downcast_render_object::<flui_objects::RenderCustomPaint>()
+                    .map(|_| id)
+            })
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(retained.len(), 1);
+    let survivor = animations
+        .iter()
+        .position(|(id, _)| *id == retained[0])
+        .expect("reconciliation retains one original indicator");
+    let departed = 1 - survivor;
+    assert_eq!(deliveries[survivor].get(), 1, "survivor receives this tick");
+    assert_eq!(deliveries[departed].get(), 1, "departure follows this tick");
+    let (start, _) = only_arc(&laid);
+    assert_angle(
+        start,
+        expected_rotation(ms(300)),
+        "survivor paints this tick",
+    );
+    laid.pump_for(ms(300));
+    assert_eq!(
+        deliveries[survivor].get(),
+        2,
+        "survivor receives the next tick"
+    );
+    assert_eq!(
+        deliveries[departed].get(),
+        1,
+        "disposed source delivers nothing more"
+    );
+    let (start, _) = only_arc(&laid);
+    assert_angle(
+        start,
+        expected_rotation(ms(600)),
+        "survivor advances next frame",
+    );
+    laid.pump_widget(VsyncScope::new(vsync.clone(), SizedBox::shrink()));
+    assert!(
+        vsync.is_empty(),
+        "retained repaint handles do not retain registrations"
+    );
+    let after_teardown = deliveries.each_ref().map(Cell::get);
+    laid.pump_for(ms(300));
+    assert_eq!(deliveries.each_ref().map(Cell::get), after_teardown);
+    assert!(
+        arcs(&laid).is_empty(),
+        "disposed indicators paint no further arcs"
+    );
+    animations[source].1.remove_listener(callback);
+    for ((_, animation), monitor) in animations.iter().zip(monitors) {
+        animation.remove_listener(monitor);
+    }
+}
+
+fn indicator_rebind_after_unmount() {
     let vsync = Vsync::new();
     let mut laid = lay_out_animated(
         VsyncScope::new(vsync.clone(), two_indicators(2)),
@@ -303,42 +642,62 @@ fn indicator_ui_runtime_stop_mid_repeat() {
 
 #[test]
 fn refresh_indicator_spins_while_refreshing() {
-    let scroll = ScrollController::new();
-    scroll.update_dimensions(300.0, 0.0, 4700.0);
-    let refresh = RefreshController::new();
-    let vsync = Vsync::new();
-    let mut laid = lay_out_animated(
-        VsyncScope::new(
+    use flui_animation::MotionPreference;
+    fn full() {
+        refreshing_case(MotionPreference::Full);
+    }
+    fn reduced() {
+        refreshing_case(MotionPreference::Reduce);
+    }
+    fn refreshing_case(preference: MotionPreference) {
+        let scroll = ScrollController::new();
+        scroll.update_dimensions(300.0, 0.0, 4700.0);
+        let refresh = RefreshController::new();
+        let vsync = Vsync::new();
+        let mut laid = lay_out_animated(
+            VsyncScope::new(
+                vsync.clone(),
+                RefreshIndicator::new()
+                    .controller(refresh.clone())
+                    .scroll_controller(scroll)
+                    .child(SizedBox::new(300.0, 5000.0)),
+            ),
+            tight(300.0, 300.0),
             vsync.clone(),
-            RefreshIndicator::new()
-                .controller(refresh.clone())
-                .scroll_controller(scroll)
-                .child(SizedBox::new(300.0, 5000.0)),
-        ),
-        tight(300.0, 300.0),
-        vsync.clone(),
-    );
-    let idle = vsync.len();
-    assert!(arcs(&laid).is_empty(), "no spinner while idle");
+        );
+        let idle = vsync.len();
+        laid.set_motion_preference(preference);
+        laid.pump_for(Duration::ZERO);
+        assert!(arcs(&laid).is_empty(), "no spinner while idle");
 
-    laid.dispatch_pointer_down(150.0, 40.0);
-    laid.dispatch_pointer_move(150.0, 140.0);
-    laid.dispatch_pointer_up(150.0, 140.0);
-    laid.pump();
-    assert!(refresh.is_refreshing());
-    assert_eq!(
-        vsync.len(),
-        idle + 1,
-        "the spinner registered its controller"
-    );
-    laid.pump_for(Duration::ZERO);
-    let first = only_arc(&laid);
-    laid.pump_for(ms(300));
-    let later = only_arc(&laid);
-    assert_ne!(first, later, "the spinner moves");
+        laid.dispatch_pointer_down(150.0, 40.0);
+        laid.dispatch_pointer_move(150.0, 140.0);
+        laid.dispatch_pointer_up(150.0, 140.0);
+        laid.pump();
+        assert!(refresh.is_refreshing());
+        assert_eq!(
+            vsync.len(),
+            idle + 1,
+            "the spinner registered its controller"
+        );
+        laid.pump_for(Duration::ZERO);
+        let first = only_arc(&laid);
+        laid.pump_for(ms(300));
+        let later = only_arc(&laid);
+        if preference == MotionPreference::Full {
+            assert_ne!(first, later, "the spinner moves");
+        } else {
+            assert_eq!(
+                first, later,
+                "refresh stays visible without cosmetic motion"
+            );
+            assert!(first.1 > 0.0);
+        }
 
-    refresh.finish();
-    laid.pump();
-    assert!(arcs(&laid).is_empty(), "no spinner after finish");
-    assert_eq!(vsync.len(), idle, "the spinner's controller is released");
+        refresh.finish();
+        laid.pump();
+        assert!(arcs(&laid).is_empty(), "no spinner after finish");
+        assert_eq!(vsync.len(), idle, "the spinner's controller is released");
+    }
+    crate::common::cases::run_cases("refresh loading", &[("Full", full), ("Reduce", reduced)]);
 }

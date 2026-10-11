@@ -13,15 +13,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::common::{LaidOut, lay_out_animated, loose, tight};
-use flui_animation::{ArcCurve, Curves, Vsync};
+use flui_animation::{ArcCurve, Vsync, curves};
 use flui_foundation::geometry::{Angle, EdgeInsets, Matrix4};
 use flui_painting::Alignment;
 use flui_painting::styling::Color;
 use flui_view::prelude::{BuildContext, StatefulView};
-use flui_view::{IntoView, ViewState};
+use flui_view::{IntoView, ViewExt, ViewState};
 use flui_widgets::{
     AnimatedAlign, AnimatedContainer, AnimatedOpacity, AnimatedPadding, AnimatedRotation,
-    Container, RotationPath, SizedBox, VsyncScope,
+    RotationPath, SizedBox, VsyncScope,
 };
 use parking_lot::Mutex;
 
@@ -36,7 +36,7 @@ fn assert_target_and_curve_retarget_preserves_sample<V: flui_view::View, const N
 ) {
     let registry = Vsync::new();
     let mut laid = lay_out_animated(
-        tree(registry.clone(), initial, ArcCurve::new(Curves::Linear)),
+        tree(registry.clone(), initial, ArcCurve::new(curves::LINEAR)),
         loose(200.0),
         registry.clone(),
     );
@@ -44,7 +44,7 @@ fn assert_target_and_curve_retarget_preserves_sample<V: flui_view::View, const N
     laid.pump_widget(tree(
         registry.clone(),
         target,
-        ArcCurve::new(Curves::Linear),
+        ArcCurve::new(curves::LINEAR),
     ));
     laid.pump_for(FRAME);
     laid.pump_for(FRAME);
@@ -57,7 +57,7 @@ fn assert_target_and_curve_retarget_preserves_sample<V: flui_view::View, const N
         "the mounted property actually moved: {initial_sample:?} to {displayed:?}",
     );
 
-    laid.pump_widget(tree(registry, replacement, ArcCurve::new(Curves::EaseIn)));
+    laid.pump_widget(tree(registry, replacement, ArcCurve::new(curves::EASE_IN)));
     let retargeted = sample(&mut laid);
     for (before, after) in displayed.into_iter().zip(retargeted) {
         assert!(
@@ -80,6 +80,96 @@ pub(crate) fn opacity_retarget_with_a_new_curve_keeps_the_displayed_sample() {
         |laid| [laid.opacity(laid.current_root())],
         [0.0, 1.0, 0.0],
     );
+}
+
+pub(crate) fn opacity_retarget_preserves_the_painted_velocity() {
+    let registry = Vsync::new();
+    let tree = |target, curve: ArcCurve| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedOpacity::new(target, SizedBox::new(100.0, 50.0))
+                .duration(Duration::from_secs(1))
+                .curve(curve),
+        )
+    };
+    let mut laid = lay_out_animated(
+        tree(0.0, ArcCurve::new(curves::LINEAR)),
+        tight(100.0, 50.0),
+        registry.clone(),
+    );
+    laid.pump_widget(tree(1.0, ArcCurve::new(curves::LINEAR)));
+    laid.pump_for(Duration::from_millis(1));
+    laid.pump_for(Duration::from_millis(250));
+    let h = Duration::from_micros(100);
+    let previous = laid.opacity(laid.current_root());
+    laid.pump_for(h);
+    let seam = laid.opacity(laid.current_root());
+    let arriving = (seam - previous) / h.as_secs_f64();
+    assert!(
+        arriving > 0.1,
+        "the rendered opacity was moving before retarget"
+    );
+    laid.pump_widget(tree(0.0, ArcCurve::new(curves::EASE_IN)));
+    assert!((laid.opacity(laid.current_root()) - seam).abs() < 1e-12);
+    laid.pump_for(h);
+    let departing = (laid.opacity(laid.current_root()) - seam) / h.as_secs_f64();
+    assert!(
+        (departing - arriving).abs() < 0.01,
+        "the painted path must inherit its velocity: before {arriving}, after {departing}"
+    );
+}
+
+pub(crate) fn padding_retarget_preserves_the_laid_out_velocity() {
+    let registry = Vsync::new();
+    let tree = |padding, curve: ArcCurve| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedPadding::new(padding, SizedBox::new(20.0, 10.0))
+                .duration(Duration::from_secs(1))
+                .curve(curve),
+        )
+    };
+    let mut laid = lay_out_animated(
+        tree(EdgeInsets::ZERO, ArcCurve::new(curves::LINEAR)),
+        tight(100.0, 80.0),
+        registry.clone(),
+    );
+    let position = |laid: &mut LaidOut| laid.offset(laid.child(laid.current_root(), 0));
+    laid.pump_widget(tree(
+        EdgeInsets::new(10.0, 0.0, 0.0, 20.0),
+        ArcCurve::new(curves::LINEAR),
+    ));
+    laid.pump_for(Duration::from_millis(1));
+    laid.pump_for(Duration::from_millis(250));
+    let h = Duration::from_micros(100);
+    let previous = position(&mut laid);
+    laid.pump_for(h);
+    let seam = position(&mut laid);
+    let arriving = [
+        (seam.dx - previous.dx) / h.as_secs_f64(),
+        (seam.dy - previous.dy) / h.as_secs_f64(),
+    ];
+    assert!(
+        arriving.iter().all(|velocity| *velocity > 1.0),
+        "both layout components must be moving"
+    );
+    laid.pump_widget(tree(
+        EdgeInsets::new(30.0, 0.0, 0.0, 5.0),
+        ArcCurve::new(curves::EASE_IN),
+    ));
+    assert_eq!(position(&mut laid), seam);
+    laid.pump_for(h);
+    let after = position(&mut laid);
+    let departing = [
+        (after.dx - seam.dx) / h.as_secs_f64(),
+        (after.dy - seam.dy) / h.as_secs_f64(),
+    ];
+    for (arriving, departing) in arriving.into_iter().zip(departing) {
+        assert!(
+            (arriving - departing).abs() < 0.05,
+            "laid-out velocity was lost: {arriving} -> {departing}"
+        );
+    }
 }
 
 pub(crate) fn padding_retarget_with_a_new_curve_keeps_the_displayed_sample() {
@@ -120,6 +210,392 @@ pub(crate) fn container_retarget_with_a_new_curve_keeps_the_displayed_sample() {
     );
 }
 
+pub(crate) fn container_retarget_preserves_the_laid_out_size_velocity() {
+    let registry = Vsync::new();
+    let tree = |width, height, curve: ArcCurve| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedContainer::new(SizedBox::shrink())
+                .width(width)
+                .height(height)
+                .duration(Duration::from_secs(1))
+                .curve(curve),
+        )
+    };
+    let mut laid = lay_out_animated(
+        tree(20.0, 30.0, ArcCurve::new(curves::LINEAR)),
+        loose(200.0),
+        registry.clone(),
+    );
+    laid.pump_widget(tree(100.0, 90.0, ArcCurve::new(curves::LINEAR)));
+    laid.pump_for(Duration::from_millis(1));
+    laid.pump_for(Duration::from_millis(250));
+    // Layout rounds sizes to hundredths of a logical pixel. A 5 ms interval
+    // resolves both moving axes; the tolerance includes that quantization.
+    let h = Duration::from_millis(5);
+    let previous = laid.size(laid.current_root());
+    laid.pump_for(h);
+    let seam = laid.size(laid.current_root());
+    let arriving = [
+        (seam.width - previous.width) / h.as_secs_f64(),
+        (seam.height - previous.height) / h.as_secs_f64(),
+    ];
+    assert!(
+        arriving.iter().all(|v| *v > 1.0),
+        "size must be moving: previous {previous:?}, seam {seam:?}, velocities {arriving:?}"
+    );
+    laid.pump_widget(tree(40.0, 10.0, ArcCurve::new(curves::EASE_IN)));
+    assert_eq!(laid.size(laid.current_root()), seam);
+    laid.pump_for(h);
+    let after = laid.size(laid.current_root());
+    let departing = [
+        (after.width - seam.width) / h.as_secs_f64(),
+        (after.height - seam.height) / h.as_secs_f64(),
+    ];
+    for (arriving, departing) in arriving.into_iter().zip(departing) {
+        assert!(
+            (arriving - departing).abs() < 5.0,
+            "container size velocity was lost: {arriving} -> {departing}"
+        );
+    }
+}
+
+pub(crate) fn container_color_retarget_preserves_painted_alpha_progress() {
+    use flui_painting::display_list::DrawOp;
+    let alpha = |laid: &LaidOut| {
+        laid.draw_ops()
+            .into_iter()
+            .find_map(|command| {
+                if let DrawOp::Rect { paint, .. } = command.op {
+                    Some(f64::from(paint.color.alpha_f32()))
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0.0)
+    };
+    let registry = Vsync::new();
+    let tree = |color, curve: ArcCurve| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedContainer::new(SizedBox::square(20.0))
+                .color(color)
+                .duration(Duration::from_secs(1))
+                .curve(curve),
+        )
+    };
+    let mut laid = lay_out_animated(
+        tree(Color::TRANSPARENT, ArcCurve::new(curves::LINEAR)),
+        loose(200.0),
+        registry.clone(),
+    );
+    laid.pump_widget(tree(Color::WHITE, ArcCurve::new(curves::LINEAR)));
+    laid.pump_for(Duration::from_millis(1));
+    for (delta, t) in [(30, 0.03_f64), (10, 0.04)] {
+        laid.pump_for(Duration::from_millis(delta));
+        let expected = t * t * (3.0 - 2.0 * t);
+        assert!(
+            (alpha(&laid) - expected).abs() < 1e-8,
+            "implicit container must record fractional alpha: {} vs {expected}",
+            alpha(&laid)
+        );
+    }
+    laid.pump_for(Duration::from_millis(210));
+    let h = Duration::from_millis(20);
+    let previous = alpha(&laid);
+    laid.pump_for(h);
+    let seam = alpha(&laid);
+    let arriving = seam - previous;
+    assert!(
+        arriving >= 3.0 / 255.0,
+        "painted alpha must be moving: {arriving}"
+    );
+    laid.pump_widget(tree(Color::BLACK, ArcCurve::new(curves::EASE_IN)));
+    assert_eq!(alpha(&laid), seam);
+    laid.pump_for(h);
+    let departing = alpha(&laid) - seam;
+    assert!(
+        (departing - arriving).abs() <= 2.0 / 255.0,
+        "painted alpha progress was lost: {arriving} -> {departing}"
+    );
+}
+
+pub(crate) fn container_property_motion_settles_and_unmounts_independently() {
+    for spring in [false, true] {
+        let registry = Vsync::new();
+        let curve = ArcCurve::new(curves::LINEAR);
+        let tree = |size, scale, color| {
+            let mut container = AnimatedContainer::new(SizedBox::shrink())
+                .width(size)
+                .height(size)
+                .color(color)
+                .transform(Matrix4::scaling(scale, scale, 1.0))
+                .duration(RUN)
+                .curve(curve.clone());
+            if spring {
+                container = container.spring(
+                    flui_animation::SpringDescription::with_damping_ratio(1.0, 100.0, 1.0)
+                        .expect("admitted spring"),
+                );
+            }
+            VsyncScope::new(registry.clone(), container)
+        };
+        let mut laid = lay_out_animated(
+            tree(20.0, 1.0, Color::BLACK),
+            loose(200.0),
+            registry.clone(),
+        );
+        laid.pump_widget(tree(100.0, 2.0, Color::BLACK));
+        laid.pump_for(Duration::from_millis(1));
+        laid.pump_for(Duration::from_millis(40));
+        let seam = laid.size(laid.current_root());
+        assert!(seam.width > 20.0 && seam.width < 100.0);
+        laid.pump_widget(tree(100.0, 2.0, Color::WHITE));
+        assert_eq!(laid.size(laid.current_root()), seam);
+        laid.pump_for(if spring {
+            Duration::from_secs(3)
+        } else {
+            Duration::from_millis(60)
+        });
+        let settled = laid.size(laid.current_root());
+        assert_eq!(
+            (settled.width, settled.height),
+            (100.0, 100.0),
+            "color replacement cannot delay size settlement"
+        );
+        assert_eq!(layer_scale(&mut laid), 2.0);
+        laid.pump_widget(SizedBox::square(10.0));
+        assert!(
+            registry.is_empty(),
+            "all property owners withdraw on unmount"
+        );
+    }
+}
+
+fn assert_refused_container_motion_preserves_the_admitted_run(accepted_slopes: usize) {
+    use flui_animation::curve::Curve;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    struct RefusingCurve {
+        calls: AtomicUsize,
+        accepted: usize,
+        refused: Arc<AtomicBool>,
+    }
+    impl Curve for RefusingCurve {
+        fn transform(&self, t: f64) -> f64 {
+            t
+        }
+        fn slope(&self, _t: f64) -> f64 {
+            if self.calls.fetch_add(1, Ordering::Relaxed) < self.accepted {
+                1.0
+            } else {
+                self.refused.store(true, Ordering::Relaxed);
+                f64::NAN
+            }
+        }
+    }
+
+    let registry = Vsync::new();
+    let tree = |size, scale, curve| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedContainer::new(SizedBox::shrink())
+                .width(size)
+                .height(size)
+                .transform(Matrix4::scaling(scale, scale, 1.0))
+                .duration(RUN)
+                .curve(curve),
+        )
+    };
+    let linear = || ArcCurve::new(curves::LINEAR);
+    let mut laid = lay_out_animated(tree(20.0, 1.0, linear()), loose(300.0), registry.clone());
+    laid.pump_widget(tree(100.0, 2.0, linear()));
+    laid.pump_for(Duration::from_millis(1));
+    laid.pump_for(Duration::from_millis(40));
+    let seam = laid.size(laid.current_root());
+    let scale = layer_scale(&mut laid);
+    assert!(seam.width > 20.0 && seam.width < 100.0);
+    assert!(scale > 1.0 && scale < 2.0);
+
+    let refused = Arc::new(AtomicBool::new(false));
+    laid.pump_widget(tree(
+        200.0,
+        3.0,
+        ArcCurve::new(RefusingCurve {
+            calls: AtomicUsize::new(0),
+            accepted: accepted_slopes,
+            refused: Arc::clone(&refused),
+        }),
+    ));
+    assert!(
+        refused.load(Ordering::Relaxed),
+        "the update must encounter refusal"
+    );
+    assert_eq!(laid.size(laid.current_root()), seam);
+    assert_eq!(layer_scale(&mut laid), scale);
+    laid.pump_for(Duration::from_millis(60));
+    let settled = laid.size(laid.current_root());
+    assert_eq!(
+        (settled.width, settled.height),
+        (100.0, 100.0),
+        "refused motion must preserve both previously admitted goals"
+    );
+    assert_eq!(
+        layer_scale(&mut laid),
+        2.0,
+        "refused progress must preserve the previously admitted matrix run"
+    );
+
+    laid.pump_widget(tree(200.0, 4.0, linear()));
+    laid.pump_for(Duration::from_millis(1));
+    laid.pump_for(RUN);
+    let recovered = laid.size(laid.current_root());
+    assert_eq!((recovered.width, recovered.height), (200.0, 200.0));
+    assert_eq!(layer_scale(&mut laid), 4.0);
+    laid.pump_widget(SizedBox::shrink());
+    assert!(registry.is_empty());
+}
+
+pub(crate) fn container_refused_property_motion_preserves_the_admitted_goals() {
+    // A scalar segment prepares its start and end slopes. Width prepares
+    // successfully; the same curve then refuses height preparation.
+    assert_refused_container_motion_preserves_the_admitted_run(2);
+}
+
+pub(crate) fn container_refused_transform_motion_preserves_the_admitted_matrix() {
+    assert_refused_container_motion_preserves_the_admitted_run(0);
+    // Both numeric segments prepare before matrix progress refuses its slope.
+    assert_refused_container_motion_preserves_the_admitted_run(4);
+}
+
+pub(crate) fn an_absent_container_transform_owns_no_frame_registration() {
+    let registry = Vsync::new();
+    let tree = |transform: Option<Matrix4>| {
+        let mut container = AnimatedContainer::new(SizedBox::new(20.0, 20.0))
+            .duration(RUN)
+            .curve(curves::LINEAR);
+        if let Some(transform) = transform {
+            container = container.transform(transform);
+        }
+        VsyncScope::new(registry.clone(), container)
+    };
+    let mut laid = lay_out_animated(tree(None), loose(200.0), registry.clone());
+    assert!(
+        registry.is_empty(),
+        "absent properties have no motion owner to register"
+    );
+    laid.pump_widget(tree(Some(Matrix4::scaling(2.0, 2.0, 1.0))));
+    assert_eq!(
+        layer_scale(&mut laid),
+        2.0,
+        "appearance snaps to its only endpoint"
+    );
+    assert!(!registry.is_empty());
+    laid.pump_widget(tree(Some(Matrix4::scaling(4.0, 4.0, 1.0))));
+    laid.pump_for(Duration::from_millis(1));
+    laid.pump_for(Duration::from_millis(40));
+    assert!(layer_scale(&mut laid) > 2.0 && layer_scale(&mut laid) < 4.0);
+    laid.pump_widget(tree(None));
+    assert!(
+        registry.is_empty(),
+        "disappearance withdraws the moving transform owner"
+    );
+    assert_eq!(laid.transform_layer_matrices(), [] as [Matrix4; 0]);
+    laid.pump_widget(tree(Some(Matrix4::scaling(3.0, 3.0, 1.0))));
+    assert_eq!(layer_scale(&mut laid), 3.0);
+    laid.pump_widget(SizedBox::shrink());
+    assert!(registry.is_empty());
+}
+
+fn assert_registry_migration_survives_a_wake_failure<V: flui_view::View>(
+    tree: impl Fn(Vsync, bool) -> V,
+) {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let outer = Vsync::new();
+    let old = Vsync::new();
+    let next = Vsync::new();
+    outer.attach_child(&old).unwrap();
+    outer.attach_child(&next).unwrap();
+    let mut laid = lay_out_animated(tree(old.clone(), false), loose(300.0), outer);
+    laid.pump_widget(tree(old.clone(), true));
+    laid.pump_for(Duration::from_millis(1));
+    laid.pump_for(Duration::from_millis(40));
+    assert!(old.has_running());
+    let woke = Rc::new(Cell::new(false));
+    let migrated = Rc::new(Cell::new(false));
+    next.set_frame_requester(Some(Rc::new({
+        let woke = Rc::clone(&woke);
+        let migrated = Rc::clone(&migrated);
+        let old = old.clone();
+        move || {
+            woke.set(true);
+            migrated.set(old.is_empty());
+            panic!("migration wake failed");
+        }
+    })));
+    // The owner-call boundary may contain the callback failure. In either
+    // case every property belongs to the new scope before it can wake.
+    let _outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        laid.pump_widget(tree(next.clone(), true));
+    }));
+    assert!(
+        woke.get(),
+        "the new registry must encounter the failing wake hook"
+    );
+    assert!(
+        old.is_empty(),
+        "a wake failure must not leave any property on its previous clock"
+    );
+    assert!(
+        migrated.get(),
+        "all properties must leave the old registry before the wake callback"
+    );
+    next.set_frame_requester(None);
+    laid.pump_widget(SizedBox::shrink());
+    laid.pump_widget(tree(next.clone(), false));
+    laid.pump_widget(tree(next.clone(), true));
+    laid.pump_for(Duration::from_millis(1));
+    laid.pump_for(Duration::from_secs(1));
+    assert!(!next.has_running());
+    laid.pump_widget(SizedBox::shrink());
+    assert!(old.is_empty() && next.is_empty());
+}
+
+pub(crate) fn container_registry_migration_finishes_before_a_wake_failure() {
+    assert_registry_migration_survives_a_wake_failure(|registry, changed| {
+        let size = if changed { 100.0 } else { 20.0 };
+        let scale = if changed { 2.0 } else { 1.0 };
+        VsyncScope::new(
+            registry,
+            AnimatedContainer::new(SizedBox::shrink())
+                .width(size)
+                .height(size)
+                .transform(Matrix4::scaling(scale, scale, 1.0))
+                .duration(RUN)
+                .curve(curves::LINEAR),
+        )
+    });
+}
+
+pub(crate) fn align_registry_migration_finishes_before_a_wake_failure() {
+    assert_registry_migration_survives_a_wake_failure(|registry, changed| {
+        let (alignment, factor) = if changed {
+            (Alignment::BOTTOM_RIGHT, 2.0)
+        } else {
+            (Alignment::TOP_LEFT, 1.0)
+        };
+        VsyncScope::new(
+            registry,
+            AnimatedAlign::new(alignment, SizedBox::new(20.0, 20.0))
+                .width_factor(factor)
+                .height_factor(factor)
+                .duration(RUN)
+                .curve(curves::LINEAR),
+        )
+    });
+}
+
 pub(crate) fn align_retarget_with_a_new_curve_keeps_the_displayed_sample() {
     assert_target_and_curve_retarget_preserves_sample(
         |registry, target, curve| {
@@ -142,6 +618,186 @@ pub(crate) fn align_retarget_with_a_new_curve_keeps_the_displayed_sample() {
             [offset.dx, offset.dy]
         },
         [0.0, 1.0, 0.0],
+    );
+}
+
+pub(crate) fn align_retarget_preserves_the_laid_out_velocity() {
+    let registry = Vsync::new();
+    let tree = |target, curve: ArcCurve| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedAlign::new(target, SizedBox::new(20.0, 10.0))
+                .duration(Duration::from_secs(1))
+                .curve(curve),
+        )
+    };
+    let mut laid = lay_out_animated(
+        tree(Alignment::TOP_LEFT, ArcCurve::new(curves::LINEAR)),
+        tight(100.0, 80.0),
+        registry.clone(),
+    );
+    let position = |laid: &mut LaidOut| laid.offset(laid.child(laid.current_root(), 0));
+    laid.pump_widget(tree(Alignment::BOTTOM_RIGHT, ArcCurve::new(curves::LINEAR)));
+    laid.pump_for(Duration::from_millis(1));
+    laid.pump_for(Duration::from_millis(250));
+    let h = Duration::from_micros(100);
+    let previous = position(&mut laid);
+    laid.pump_for(h);
+    let seam = position(&mut laid);
+    let arriving = [
+        (seam.dx - previous.dx) / h.as_secs_f64(),
+        (seam.dy - previous.dy) / h.as_secs_f64(),
+    ];
+    assert!(arriving.iter().all(|velocity| *velocity > 1.0));
+    laid.pump_widget(tree(Alignment::TOP_LEFT, ArcCurve::new(curves::EASE_IN)));
+    assert_eq!(
+        position(&mut laid),
+        seam,
+        "the layout seam must be continuous"
+    );
+    laid.pump_for(h);
+    let after = position(&mut laid);
+    let departing = [
+        (after.dx - seam.dx) / h.as_secs_f64(),
+        (after.dy - seam.dy) / h.as_secs_f64(),
+    ];
+    for (arriving, departing) in arriving.into_iter().zip(departing) {
+        assert!(
+            (arriving - departing).abs() < 0.1,
+            "laid-out alignment velocity was lost: {arriving} -> {departing}"
+        );
+    }
+}
+
+pub(crate) fn align_changes_leave_an_unchanged_factor_on_its_original_deadline() {
+    let registry = Vsync::new();
+    let curve = ArcCurve::new(curves::LINEAR);
+    let tree = |alignment, factor| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedAlign::new(alignment, SizedBox::square(10.0))
+                .width_factor(factor)
+                .duration(RUN)
+                .curve(curve.clone()),
+        )
+    };
+    let mut laid = lay_out_animated(tree(Alignment::CENTER, 2.0), loose(200.0), registry.clone());
+    laid.pump_widget(tree(Alignment::BOTTOM_RIGHT, 5.0));
+    laid.pump_for(Duration::from_millis(1));
+    laid.pump_for(Duration::from_millis(40));
+    let seam = laid.size(laid.current_root()).width;
+    assert!(seam > 20.0 && seam < 50.0, "factor motion is live: {seam}");
+    laid.pump_widget(tree(Alignment::TOP_LEFT, 5.0));
+    assert_eq!(laid.size(laid.current_root()).width, seam);
+    laid.pump_for(Duration::from_millis(60));
+    assert_eq!(
+        laid.size(laid.current_root()).width,
+        50.0,
+        "changing alignment must not extend the factor's deadline"
+    );
+}
+
+pub(crate) fn align_spring_settles_and_optional_factors_snap_independently() {
+    let registry = Vsync::new();
+    let tree = |alignment, width: Option<f64>| {
+        let mut align = AnimatedAlign::new(alignment, SizedBox::square(10.0)).spring(
+            flui_animation::SpringDescription::with_damping_ratio(1.0, 100.0, 1.0)
+                .expect("admitted spring"),
+        );
+        if let Some(width) = width {
+            align = align.width_factor(width);
+        }
+        VsyncScope::new(registry.clone(), align)
+    };
+    let mut laid = lay_out_animated(
+        tree(Alignment::TOP_LEFT, None),
+        loose(200.0),
+        registry.clone(),
+    );
+    assert_eq!(laid.size(laid.current_root()).width, 200.0);
+    laid.pump_widget(tree(Alignment::BOTTOM_RIGHT, Some(3.0)));
+    assert_eq!(laid.size(laid.current_root()).width, 30.0);
+    laid.pump_for(Duration::from_millis(1));
+    laid.pump_for(Duration::from_millis(200));
+    let child = laid.child(laid.current_root(), 0);
+    let seam = laid.offset(child).dx;
+    assert!(seam > 0.0 && seam < 20.0, "alignment spring moved: {seam}");
+    laid.pump_widget(tree(Alignment::BOTTOM_RIGHT, None));
+    assert_eq!(laid.size(laid.current_root()).width, 200.0);
+    laid.pump_for(Duration::from_secs(3));
+    let child = laid.child(laid.current_root(), 0);
+    assert_eq!(laid.offset(child).dx, 190.0);
+    assert_eq!(laid.offset(child).dy, 190.0);
+    laid.pump_widget(SizedBox::square(10.0));
+    assert!(registry.is_empty(), "unmount withdraws all property motion");
+}
+
+pub(crate) fn invalid_align_targets_preserve_all_running_layout_properties() {
+    let registry = Vsync::new();
+    let curve = ArcCurve::new(curves::LINEAR);
+    let tree = |alignment, factor| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedAlign::new(alignment, SizedBox::square(10.0))
+                .width_factor(factor)
+                .duration(RUN)
+                .curve(curve.clone()),
+        )
+    };
+    let mut laid = lay_out_animated(
+        tree(Alignment::TOP_LEFT, 2.0),
+        loose(200.0),
+        registry.clone(),
+    );
+    laid.pump_widget(tree(Alignment::BOTTOM_RIGHT, 5.0));
+    laid.pump_for(Duration::from_millis(1));
+    laid.pump_for(Duration::from_millis(40));
+    let size = laid.size(laid.current_root());
+    let child = laid.child(laid.current_root(), 0);
+    let offset = laid.offset(child);
+    laid.pump_widget(tree(Alignment::TOP_LEFT, f64::NAN));
+    assert_eq!(laid.size(laid.current_root()), size);
+    let child = laid.child(laid.current_root(), 0);
+    assert_eq!(laid.offset(child), offset);
+    laid.pump_for(Duration::from_millis(60));
+    assert_eq!(laid.size(laid.current_root()).width, 50.0);
+    let child = laid.child(laid.current_root(), 0);
+    assert_eq!(laid.offset(child).dx, 40.0);
+    assert_eq!(laid.offset(child).dy, 190.0);
+}
+
+pub(crate) fn rotation_retarget_preserves_the_painted_velocity() {
+    let registry = Vsync::new();
+    let tree = |target, curve: ArcCurve| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedRotation::new(Angle::from_turns(target), SizedBox::new(20.0, 10.0))
+                .path(RotationPath::Numeric)
+                .duration(Duration::from_secs(1))
+                .curve(curve),
+        )
+    };
+    let mut laid = lay_out_animated(
+        tree(0.0, ArcCurve::new(curves::LINEAR)),
+        tight(100.0, 80.0),
+        registry.clone(),
+    );
+    laid.pump_widget(tree(0.25, ArcCurve::new(curves::LINEAR)));
+    laid.pump_for(Duration::from_millis(1));
+    laid.pump_for(Duration::from_millis(250));
+    let h = Duration::from_micros(100);
+    let previous = layer_turns(&mut laid);
+    laid.pump_for(h);
+    let seam = layer_turns(&mut laid);
+    let arriving = (seam - previous) / h.as_secs_f64();
+    assert!(arriving > 0.1, "the painted rotation was moving");
+    laid.pump_widget(tree(0.0, ArcCurve::new(curves::EASE_IN)));
+    assert!((layer_turns(&mut laid) - seam).abs() < 1e-12);
+    laid.pump_for(h);
+    let departing = (layer_turns(&mut laid) - seam) / h.as_secs_f64();
+    assert!(
+        (departing - arriving).abs() < 0.01,
+        "rotation must inherit velocity: before {arriving}, after {departing}"
     );
 }
 
@@ -172,16 +828,16 @@ pub(crate) fn changing_only_the_curve_keeps_the_existing_deadline() {
         )
     };
     let mut laid = lay_out_animated(
-        tree(0.0, ArcCurve::new(Curves::Linear)),
+        tree(0.0, ArcCurve::new(curves::LINEAR)),
         tight(100.0, 50.0),
         registry.clone(),
     );
-    laid.pump_widget(tree(1.0, ArcCurve::new(Curves::Linear)));
+    laid.pump_widget(tree(1.0, ArcCurve::new(curves::LINEAR)));
     laid.pump_for(FRAME);
     laid.pump_for(FRAME);
     let linear = laid.opacity(laid.current_root());
     assert!(linear > 0.1 && linear < 0.3);
-    laid.pump_widget(tree(1.0, ArcCurve::new(Curves::EaseIn)));
+    laid.pump_widget(tree(1.0, ArcCurve::new(curves::EASE_IN)));
     laid.pump_for(RUN.checked_sub(FRAME).expect("run exceeds one frame"));
     assert_eq!(
         laid.opacity(laid.current_root()),
@@ -217,7 +873,8 @@ pub(crate) fn swapping_the_scope_registry_preserves_an_implicit_run() {
         "the retained widget releases its old registry"
     );
     assert_eq!(new.len(), 1);
-    laid.adopt_vsync(new.clone());
+    laid.adopt_vsync(new.clone())
+        .expect("replacement clock admission");
     laid.pump_for(Duration::ZERO);
     assert!((laid.opacity(laid.current_root()) - displayed).abs() < 1e-9);
     laid.pump_for(FRAME);
@@ -227,15 +884,274 @@ pub(crate) fn swapping_the_scope_registry_preserves_an_implicit_run() {
     assert!(new.is_empty(), "unmount releases the owning handle");
 }
 
-pub(crate) fn a_detached_ticker_mode_lands_an_implicit_run() {
-    let tree = |target| {
-        VsyncScope::detached(flui_widgets::TickerMode::new(
-            AnimatedOpacity::new(target, SizedBox::new(100.0, 50.0)).duration(RUN),
-        ))
+pub(crate) fn switching_entries_migrate_their_incoming_and_outgoing_runs() {
+    exercise_switching_registry(false);
+}
+
+pub(crate) fn switching_entries_finish_migration_before_a_wake_failure() {
+    exercise_switching_registry(true);
+}
+
+pub(crate) fn outgoing_switcher_retirement_preserves_independent_captures() {
+    let Some(case) = crate::common::child_process::selected_case() else {
+        crate::common::child_process::run_rows(
+            "contracts::animation_and_visibility",
+            &["switcher_outgoing_retirement"],
+        );
+        return;
     };
-    let mut laid = crate::common::lay_out(tree(0.0), tight(100.0, 50.0));
-    laid.pump_widget(tree(1.0));
-    assert_eq!(laid.opacity(laid.current_root()), 1.0);
+    assert_eq!(case, "switcher_outgoing_retirement");
+
+    use flui_view::{BoxedView, StatelessView, ValueKey, View};
+    use flui_widgets::AnimatedSwitcher;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    #[derive(Clone)]
+    struct ObservedView {
+        key: ValueKey<u64>,
+        role: &'static str,
+        child: BoxedView,
+        armed: Rc<Cell<bool>>,
+        fail_once: Rc<Cell<bool>>,
+        drops: Rc<RefCell<Vec<(&'static str, bool)>>>,
+    }
+    impl View for ObservedView {
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::stateless(self)
+        }
+        fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
+            Some(&self.key)
+        }
+    }
+    impl StatelessView for ObservedView {
+        fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+            self.child.clone()
+        }
+    }
+    impl Drop for ObservedView {
+        fn drop(&mut self) {
+            if !self.armed.get() {
+                return;
+            }
+            let panicking = std::thread::panicking();
+            self.drops.borrow_mut().push((self.role, panicking));
+            assert!(
+                !(self.role == "outgoing child" && self.fail_once.replace(false)),
+                "outgoing switcher capture failed"
+            );
+        }
+    }
+
+    let registry = Vsync::new();
+    let armed = Rc::new(Cell::new(false));
+    let fail_once = Rc::new(Cell::new(true));
+    let drops = Rc::new(RefCell::new(Vec::new()));
+    let template = AnimatedSwitcher::new(RUN).transition_builder({
+        let (armed, fail_once, drops) = (armed.clone(), fail_once.clone(), drops.clone());
+        move |child, animation| {
+            ObservedView {
+                key: ValueKey::new(99),
+                role: "transition",
+                child: AnimatedSwitcher::default_transition_builder(child, animation),
+                armed: armed.clone(),
+                fail_once: fail_once.clone(),
+                drops: drops.clone(),
+            }
+            .boxed()
+        }
+    });
+    let tree = |replacement| {
+        VsyncScope::new(
+            registry.clone(),
+            template.clone().child(ObservedView {
+                key: ValueKey::new(u64::from(replacement)),
+                role: if replacement {
+                    "incoming child"
+                } else {
+                    "outgoing child"
+                },
+                child: SizedBox::new(100.0, 100.0).boxed(),
+                armed: armed.clone(),
+                fail_once: fail_once.clone(),
+                drops: drops.clone(),
+            }),
+        )
+    };
+    let mut laid = lay_out_animated(tree(false), tight(100.0, 100.0), registry.clone());
+    laid.pump_widget(tree(true));
+    for _ in 0..4 {
+        laid.pump_for(FRAME);
+    }
+    assert_eq!(
+        laid.find_all_by_render_type("RenderAnimatedOpacity").len(),
+        2
+    );
+    armed.set(true);
+    let mut result = Ok(());
+    for _ in 0..4 {
+        result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            laid.pump_for(FRAME);
+        }));
+        if result.is_err() || !fail_once.get() {
+            break;
+        }
+    }
+    armed.set(false);
+    assert!(!fail_once.get(), "the actual outgoing capture must retire");
+    if let Err(failure) = result {
+        assert_eq!(
+            flui_foundation::panic::payload_text(failure.as_ref()),
+            Some("outgoing switcher capture failed")
+        );
+    }
+    assert!(
+        !drops
+            .borrow()
+            .iter()
+            .any(|(role, panicking)| *role == "transition" && *panicking),
+        "an independent transition cannot retire during the outgoing child failure: {:?}",
+        drops.borrow()
+    );
+    laid.pump_widget(SizedBox::new(100.0, 100.0));
+    assert!(registry.is_empty(), "faulted switcher owners are withdrawn");
+    laid.pump_widget(tree(false));
+    laid.pump_widget(tree(true));
+    for _ in 0..6 {
+        laid.pump_for(FRAME);
+    }
+    assert_eq!(
+        laid.find_all_by_render_type("RenderAnimatedOpacity").len(),
+        1
+    );
+    crate::common::child_process::pass();
+}
+
+fn exercise_switching_registry(fail_wake: bool) {
+    use flui_widgets::{AnimatedSwitcher, ColoredBox};
+
+    let old = Vsync::new();
+    let next = Vsync::new();
+    let tree = |registry, replacement| {
+        let child = if replacement {
+            ColoredBox::new(Color::rgb(10, 20, 30)).boxed()
+        } else {
+            SizedBox::new(100.0, 100.0).boxed()
+        };
+        VsyncScope::new(registry, AnimatedSwitcher::new(RUN).child(child))
+    };
+    let mut laid = lay_out_animated(tree(old.clone(), false), tight(100.0, 100.0), old.clone());
+    laid.pump_widget(tree(old.clone(), true));
+    laid.pump_for(FRAME);
+    laid.pump_for(FRAME);
+    let mut fades = laid.find_all_by_render_type("RenderAnimatedOpacity");
+    assert_eq!(fades.len(), 2, "both cross-fade participants are present");
+    let mut samples: Vec<_> = fades.iter().map(|id| laid.opacity(*id)).collect();
+    assert!(samples.iter().all(|value| *value > 0.0 && *value < 1.0));
+    assert!(old.has_running());
+
+    let woke = std::rc::Rc::new(std::cell::Cell::new(false));
+    let committed = std::rc::Rc::new(std::cell::Cell::new(true));
+    if fail_wake {
+        next.set_frame_requester(Some(std::rc::Rc::new({
+            let (woke, committed, old) = (woke.clone(), committed.clone(), old.clone());
+            move || {
+                woke.set(true);
+                committed.set(committed.get() && old.is_empty());
+                panic!("switcher migration wake failed");
+            }
+        })));
+    }
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        laid.pump_widget(tree(next.clone(), true));
+    }));
+    if let Err(payload) = outcome {
+        assert!(fail_wake);
+        assert_eq!(
+            flui_foundation::panic::payload_text(payload.as_ref()),
+            Some("switcher migration wake failed")
+        );
+    }
+    next.set_frame_requester(None);
+    assert!(old.is_empty(), "incoming and outgoing owners both migrate");
+    if fail_wake {
+        assert!(woke.get(), "migration reaches the failing hook");
+        assert!(
+            committed.get(),
+            "all seats transfer before the first callout"
+        );
+        assert!(
+            next.is_empty(),
+            "the failed lifecycle actor retires all its owners"
+        );
+        laid.pump_widget(SizedBox::shrink());
+        laid.pump_widget(tree(next.clone(), false));
+        laid.pump_widget(tree(next.clone(), true));
+        laid.adopt_vsync(next.clone())
+            .expect("replacement clock admission");
+        laid.pump_for(FRAME);
+        laid.pump_for(FRAME);
+        fades = laid.find_all_by_render_type("RenderAnimatedOpacity");
+        assert_eq!(
+            fades.len(),
+            2,
+            "a fresh actor starts both cross-fade participants"
+        );
+        samples = fades.iter().map(|id| laid.opacity(*id)).collect();
+        assert!(samples.iter().all(|value| *value > 0.0 && *value < 1.0));
+    }
+    laid.adopt_vsync(next.clone())
+        .expect("replacement clock admission");
+    laid.pump_for(Duration::ZERO);
+    for (id, before) in fades.iter().zip(&samples) {
+        assert!((laid.opacity(*id) - before).abs() < 1e-8);
+    }
+    laid.pump_for(FRAME);
+    for (id, before) in fades.iter().zip(&samples) {
+        let advanced = laid.opacity(*id);
+        assert!(advanced > 0.0 && advanced < 1.0);
+        assert!(
+            (advanced - before).abs() > 0.01,
+            "each cross-fade run advances"
+        );
+    }
+    laid.pump_for(RUN);
+    let remaining = laid.find_all_by_render_type("RenderAnimatedOpacity");
+    assert_eq!(
+        remaining.len(),
+        1,
+        "the outgoing child retires after completion"
+    );
+    assert_eq!(laid.opacity(remaining[0]), 1.0);
+    assert!(!next.has_running());
+    laid.pump_widget(SizedBox::shrink());
+    assert!(next.is_empty());
+}
+
+pub(crate) fn a_detached_ticker_mode_lands_an_implicit_run() {
+    for closed_parent in [false, true] {
+        let parent = Vsync::new();
+        if closed_parent {
+            parent.prepare_close().finish();
+        }
+        let tree = |target| {
+            let mode = flui_widgets::TickerMode::new(
+                AnimatedOpacity::new(target, SizedBox::new(100.0, 50.0)).duration(RUN),
+            );
+            if closed_parent {
+                VsyncScope::new(parent.clone(), mode)
+            } else {
+                VsyncScope::detached(mode)
+            }
+        };
+        let mut laid = crate::common::lay_out(tree(0.0), tight(100.0, 50.0));
+        laid.pump_widget(tree(1.0));
+        assert_eq!(
+            laid.opacity(laid.current_root()),
+            1.0,
+            "absent or refused parent clocks must settle the implicit run"
+        );
+    }
 }
 
 #[derive(Clone)]
@@ -529,7 +1445,7 @@ pub(crate) fn animated_container_interpolates_size_over_frames() {
 // A curve change swaps in a fresh curved animation over the SAME controller,
 // without restarting it (a restart is strictly gated on a genuine target
 // change). Both probes below
-// start a genuine 0->target run under `Curves::Linear`, advance it to raw
+// start a genuine 0->target run under `curves::LINEAR`, advance it to raw
 // progress `0.4`, then swap ONLY the curve to a step at `0.5` (target held
 // fixed) — a run-restart would also produce a value change, so the "target
 // unchanged" half of each probe's second `pump()` is what isolates a curve
@@ -547,7 +1463,7 @@ pub(crate) fn animated_container_interpolates_size_over_frames() {
 // ----------------------------------------------------------------------------
 
 /// A container whose one animated property is set by `configure` from a shared
-/// value, eased along `Curves::EaseOutBack` (which overshoots past the target).
+/// value, eased along `curves::EASE_OUT_BACK` (which overshoots past the target).
 #[derive(Clone, StatefulView)]
 struct OvershootProbe {
     vsync: Vsync,
@@ -573,7 +1489,7 @@ impl ViewState<OvershootProbe> for OvershootProbeState {
     fn build(&self, _view: &OvershootProbe, _ctx: &dyn BuildContext) -> impl IntoView {
         let container = AnimatedContainer::new(SizedBox::new(10.0, 10.0))
             .duration(RUN)
-            .curve(Curves::EaseOutBack);
+            .curve(curves::EASE_OUT_BACK);
         VsyncScope::new(
             self.probe.vsync.clone(),
             (self.probe.configure)(container, *self.probe.value.lock()),
@@ -654,34 +1570,41 @@ pub(crate) fn overshooting_size_stays_non_negative() {
     );
 }
 
-/// A NaN width or height reaches the container as NaN, the way a plain
-/// `Container` takes it, instead of being replaced by zero (ADR-0149).
-pub(crate) fn nan_size_passes_through_like_container() {
-    let animated = lay_out_animated(
+/// Owning motion refuses non-finite components before changing live goals.
+pub(crate) fn non_finite_container_targets_preserve_the_last_admitted_layout() {
+    let registry = Vsync::new();
+    let mut animated = lay_out_animated(
         VsyncScope::new(
-            Vsync::new(),
+            registry.clone(),
             AnimatedContainer::new(SizedBox::new(10.0, 10.0))
                 .width(f64::NAN)
                 .height(f64::NAN),
         ),
         loose(200.0),
-        Vsync::new(),
+        registry.clone(),
     );
-    let plain = lay_out_animated(
-        Container::new()
-            .width(f64::NAN)
-            .height(f64::NAN)
-            .child(SizedBox::new(10.0, 10.0)),
-        loose(200.0),
-        Vsync::new(),
-    );
-    let size = |laid: &LaidOut| laid.try_size(laid.find_by_render_type("RenderContainer"));
-    let (animated, plain) = (size(&animated), size(&plain));
-    assert_eq!(
-        format!("{animated:?}"),
-        format!("{plain:?}"),
-        "AnimatedContainer laid out NaN size as {animated:?}, Container as {plain:?}"
-    );
+    assert_eq!(animated.size(animated.current_root()).width, 10.0);
+    let tree = |width, height| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedContainer::new(SizedBox::square(10.0))
+                .width(width)
+                .height(height)
+                .duration(RUN)
+                .curve(curves::LINEAR),
+        )
+    };
+    animated.pump_widget(tree(20.0, 30.0));
+    animated.pump_widget(tree(100.0, 90.0));
+    animated.pump_for(Duration::from_millis(1));
+    animated.pump_for(Duration::from_millis(40));
+    let seam = animated.size(animated.current_root());
+    assert!(seam.width > 20.0 && seam.width < 100.0);
+    animated.pump_widget(tree(40.0, f64::INFINITY));
+    assert_eq!(animated.size(animated.current_root()), seam);
+    animated.pump_for(Duration::from_millis(60));
+    let settled = animated.size(animated.current_root());
+    assert_eq!((settled.width, settled.height), (100.0, 90.0));
 }
 
 // ----------------------------------------------------------------------------
@@ -717,7 +1640,7 @@ impl ViewState<TransformProbe> for TransformProbeState {
                 .transform(*self.probe.transform.lock())
                 .color(*self.probe.color.lock())
                 .duration(RUN)
-                .curve(Curves::Linear),
+                .curve(curves::LINEAR),
         )
     }
 }
@@ -857,7 +1780,7 @@ impl ViewState<RotationProbe> for RotationProbeState {
             AnimatedRotation::new(*self.probe.angle.lock(), SizedBox::new(10.0, 10.0))
                 .path(*self.probe.path.lock())
                 .duration(RUN)
-                .curve(Curves::Linear),
+                .curve(curves::LINEAR),
         )
     }
 }
@@ -910,7 +1833,8 @@ pub(crate) fn animated_rotation_takes_the_numeric_arc() {
 }
 
 /// Changing only the path mid-run re-anchors from the angle shown now: a
-/// `Numeric` 0 → ¾ turn switched to `Shorter` a quarter of the way turns back.
+/// `Numeric` 0 → ¾ turn switched to `Shorter` a quarter of the way brakes its
+/// incoming velocity before turning back to the nearest equivalent.
 pub(crate) fn animated_rotation_retargets_on_a_path_change() {
     let vsync = Vsync::new();
     let angle = Arc::new(Mutex::new(Angle::ZERO));
@@ -932,14 +1856,24 @@ pub(crate) fn animated_rotation_retargets_on_a_path_change() {
     );
     *path.lock() = RotationPath::Shorter;
     laid.pump();
-    laid.pump_for(FRAME); // detection
+    assert!((layer_turns(&mut laid) - before).abs() < 1e-12);
+    laid.pump_for(Duration::from_micros(100));
+    assert!(
+        layer_turns(&mut laid) > before,
+        "changing the path preserves the incoming direction at the seam"
+    );
     // Kept short so both candidate angles stay inside (-½, ½] turn, where the
     // read-back rotation is unambiguous.
-    laid.pump_for(RUN / 10);
+    laid.pump_for(RUN / 2);
     let after = layer_turns(&mut laid);
     assert!(
         after < before,
         "the shorter arc turns back from {before}: now {after} turns"
     );
     assert!(after > 0.0, "still short of the target: {after} turns");
+    laid.pump_for(RUN);
+    assert!(
+        (layer_turns(&mut laid) + 0.25).abs() < 1e-12,
+        "the shorter path settles at the nearest equivalent"
+    );
 }

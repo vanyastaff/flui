@@ -47,6 +47,186 @@ use flui_testing::HeadlessBinding;
 use flui_testing::bootstrap::{MountOptions, MountOwners};
 use flui_widgets::{FocusRoot, GestureArenaScope, MediaQuery, MediaQueryData, VsyncScope};
 
+#[expect(
+    dead_code,
+    reason = "the interactive example's main is not used by acceptance tests"
+)]
+#[path = "../examples/motion_lab.rs"]
+mod motion_lab;
+
+#[test]
+fn motion_lab_buttons_drive_independent_property_deadlines_and_reduce() {
+    use flui_animation::MotionPreference;
+    use flui_layer::Layer;
+    use flui_painting::DrawOp;
+    use flui_testing::widgets::{LaidOut, lay_out, tight};
+
+    fn tap(laid: &mut LaidOut, label: &str) {
+        let id = laid.find_text(label).expect("the demo button is visible");
+        let offset = laid.absolute_offset(id);
+        let size = laid.size(id);
+        let x = offset.dx + size.width / 2.0;
+        let y = offset.dy + size.height / 2.0;
+        laid.dispatch_pointer_down(x, y);
+        laid.dispatch_pointer_up(x, y);
+        laid.pump();
+    }
+
+    fn moving_box(laid: &LaidOut) -> (f64, f64) {
+        for (_, node) in laid.layer_tree().expect("a committed demo scene").iter() {
+            let Layer::Picture(picture) = node.layer() else {
+                continue;
+            };
+            for command in picture.picture() {
+                if let DrawOp::Rect { rect, paint } = &command.op
+                    && paint.color == flui_painting::styling::Color::rgb(35, 94, 180)
+                    && rect.height() != 52.0
+                {
+                    return (rect.width(), rect.height());
+                }
+            }
+        }
+        panic!("the demo paints its moving blue rectangle");
+    }
+
+    fn indicator_arc(laid: &LaidOut) -> (f64, f64) {
+        for command in laid.draw_ops() {
+            if let DrawOp::Arc {
+                start_angle,
+                sweep_angle,
+                ..
+            } = command.op
+            {
+                return (start_angle, sweep_angle);
+            }
+        }
+        panic!("the actual demo retains visible loading feedback");
+    }
+
+    for preference in [MotionPreference::Full, MotionPreference::Reduce] {
+        let mut laid = lay_out(motion_lab::MotionLab, tight(720.0, 760.0));
+        laid.set_motion_preference(preference);
+        laid.pump();
+        assert_eq!(moving_box(&laid), (90.0, 40.0));
+        tap(&mut laid, "Change width");
+        laid.pump_for(Duration::from_millis(16));
+        laid.pump_for(Duration::from_millis(400));
+        let (width, _) = moving_box(&laid);
+        if preference == MotionPreference::Full {
+            assert!((90.0..360.0).contains(&width));
+        } else {
+            assert_eq!(width, 360.0);
+        }
+        tap(&mut laid, "Change height");
+        laid.pump_for(Duration::from_millis(16));
+        laid.pump_for(Duration::from_millis(1200));
+        let (width, height) = moving_box(&laid);
+        assert_eq!(width, 360.0, "height must not restart width's deadline");
+        if preference == MotionPreference::Full {
+            assert!((40.0..120.0).contains(&height));
+        } else {
+            assert_eq!(height, 120.0);
+        }
+        laid.pump_for(Duration::from_millis(500));
+        assert_eq!(moving_box(&laid), (360.0, 120.0));
+    }
+
+    use flui_interaction::events::{Code, Key, NamedKey};
+    use flui_interaction::testing::input::KeyEventBuilder;
+    use flui_testing::a11y::Role;
+    let mut laid = lay_out(motion_lab::MotionLab, tight(720.0, 760.0));
+    laid.set_motion_preference(MotionPreference::Full);
+    laid.enable_semantics();
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(300));
+    let tree = laid.a11y_tree().expect("semantics enabled");
+    let pause = tree
+        .find_by_label("Pause activity")
+        .expect("the real demo exposes its pause control");
+    assert_eq!(pause.role(), Role::Button);
+    assert!(!pause.is_disabled());
+    let tab = KeyEventBuilder::new(Code::Tab)
+        .with_key(Key::Named(NamedKey::Tab))
+        .build();
+    let enter = KeyEventBuilder::new(Code::Enter)
+        .with_key(Key::Named(NamedKey::Enter))
+        .build();
+    let mut reached = false;
+    for _ in 0..20 {
+        assert!(laid.focus_manager().dispatch_key_event(&tab).is_handled());
+        laid.tick();
+        let tree = laid.a11y_tree().expect("semantics enabled");
+        if tree
+            .focus()
+            .is_some_and(|node| node.label() == Some("Pause activity"))
+        {
+            reached = true;
+            break;
+        }
+    }
+    assert!(reached, "Tab traversal reaches the actual pause button");
+    assert!(laid.focus_manager().dispatch_key_event(&enter).is_handled());
+    laid.tick();
+    let paused = indicator_arc(&laid);
+    assert!(paused.1 > 0.0);
+    let tree = laid.a11y_tree().expect("semantics enabled");
+    assert_eq!(
+        tree.focus().and_then(|node| node.label()),
+        Some("Resume activity"),
+        "changing the action name retains keyboard focus"
+    );
+    assert_eq!(
+        tree.find_by_label("Resume activity")
+            .expect("changed control name")
+            .role(),
+        Role::Button
+    );
+    assert!(laid.focus_manager().dispatch_key_event(&tab).is_handled());
+    laid.tick();
+    assert_ne!(
+        laid.a11y_tree()
+            .expect("semantics enabled")
+            .focus()
+            .and_then(|node| node.label()),
+        Some("Resume activity")
+    );
+    laid.pump_for(Duration::from_millis(137));
+    assert_eq!(
+        indicator_arc(&laid),
+        paused,
+        "pause survives moving focus at a non-cycle-aligned sample"
+    );
+    tap(&mut laid, "Change width");
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(1600));
+    assert_eq!(moving_box(&laid), (360.0, 40.0));
+    assert_eq!(
+        indicator_arc(&laid),
+        paused,
+        "other controls remain operable without resuming the indicator"
+    );
+    laid.pump_for(Duration::from_millis(6137));
+    assert_eq!(
+        indicator_arc(&laid),
+        paused,
+        "pause survives moving focus and more than five seconds"
+    );
+    laid.set_motion_preference(MotionPreference::Reduce);
+    laid.tick();
+    tap(&mut laid, "Resume activity");
+    laid.pump_for(Duration::from_millis(300));
+    assert_eq!(indicator_arc(&laid), paused, "Resume respects Reduce");
+    laid.set_motion_preference(MotionPreference::Full);
+    laid.pump_for(Duration::ZERO);
+    let resumed = indicator_arc(&laid);
+    laid.pump_for(Duration::from_millis(300));
+    assert_ne!(
+        indicator_arc(&laid),
+        resumed,
+        "returning to Full resumes the real indicator"
+    );
+}
+
 /// The mounted root's logical width — wide enough for a card row.
 const ROOT_WIDTH: f64 = 480.0;
 /// The mounted root's logical height — tall enough to show several cards but

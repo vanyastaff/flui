@@ -271,11 +271,11 @@ impl GpuReplay {
         resources: &mut GpuResources,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
-    ) {
+    ) -> crate::error::EngineResult<()> {
         let pending_images = &segment.cached_images[range];
 
         if pending_images.is_empty() {
-            return;
+            return Ok(());
         }
 
         let mut active_texture_id: Option<crate::texture_cache::TextureKey> = None;
@@ -284,15 +284,25 @@ impl GpuReplay {
         // texture-change forces an early flush.
         let mut active_scissor: ScissorRect = None;
         let mut active_mode = flui_painting::BlendMode::SrcOver;
+        let mut active_filter = None;
 
-        for (texture_id, instance, scissor, mode) in pending_images {
+        for draw in pending_images {
+            let crate::command_ir::CachedImageDraw {
+                key: texture_id,
+                instance,
+                scissor,
+                mode,
+                filter,
+            } = draw;
             if active_texture_id.as_ref() != Some(texture_id)
                 || active_scissor != *scissor
                 || active_mode != *mode
+                || active_filter != *filter
             {
                 if let Some(texture_view) = active_texture_view.as_ref() {
-                    self.flush_texture_batch_premultiplied_with_mode(
+                    self.flush_cached_texture_batch(
                         active_mode,
+                        active_filter,
                         device,
                         queue,
                         pipelines,
@@ -302,7 +312,7 @@ impl GpuReplay {
                         view,
                         texture_view,
                         active_scissor,
-                    );
+                    )?;
                 }
                 active_texture_id = Some(texture_id.clone());
                 active_texture_view = resources
@@ -313,11 +323,13 @@ impl GpuReplay {
 
             active_scissor = *scissor;
             active_mode = *mode;
+            active_filter = *filter;
             if let Some(texture_view) = active_texture_view.as_ref()
                 && self.texture_batch.add(*instance)
             {
-                self.flush_texture_batch_premultiplied_with_mode(
+                self.flush_cached_texture_batch(
                     active_mode,
+                    active_filter,
                     device,
                     queue,
                     pipelines,
@@ -327,13 +339,14 @@ impl GpuReplay {
                     view,
                     texture_view,
                     active_scissor,
-                );
+                )?;
             }
         }
 
         if let Some(texture_view) = active_texture_view.as_ref() {
-            self.flush_texture_batch_premultiplied_with_mode(
+            self.flush_cached_texture_batch(
                 active_mode,
+                active_filter,
                 device,
                 queue,
                 pipelines,
@@ -343,8 +356,9 @@ impl GpuReplay {
                 view,
                 texture_view,
                 active_scissor,
-            );
+            )?;
         }
+        Ok(())
     }
 
     // =========================================================================
@@ -623,6 +637,77 @@ impl GpuReplay {
         texture_view: &wgpu::TextureView,
         scissor: ScissorRect,
     ) {
+        self.flush_texture_batch_with_filter_binding(
+            mode,
+            None,
+            device,
+            queue,
+            pipelines,
+            resources,
+            viewport_size,
+            encoder,
+            view,
+            texture_view,
+            scissor,
+        );
+    }
+
+    fn flush_cached_texture_batch(
+        &mut self,
+        mode: flui_painting::BlendMode,
+        filter: Option<crate::image_source_filter::ImageSourceFilter>,
+        device: &Arc<wgpu::Device>,
+        queue: &Arc<wgpu::Queue>,
+        pipelines: &mut PipelineSet,
+        resources: &mut GpuResources,
+        viewport_size: (u32, u32),
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        texture_view: &wgpu::TextureView,
+        scissor: ScissorRect,
+    ) -> crate::error::EngineResult<()> {
+        let binding = match filter
+            .map(|filter| {
+                filter.prepare_bind_group(device, &pipelines.image_filter_layout, resources)
+            })
+            .transpose()
+        {
+            Ok(binding) => binding,
+            Err(error) => {
+                self.texture_batch.clear();
+                return Err(error);
+            }
+        };
+        self.flush_texture_batch_with_filter_binding(
+            mode,
+            binding.as_ref(),
+            device,
+            queue,
+            pipelines,
+            resources,
+            viewport_size,
+            encoder,
+            view,
+            texture_view,
+            scissor,
+        );
+        Ok(())
+    }
+
+    fn flush_texture_batch_with_filter_binding(
+        &mut self,
+        mode: flui_painting::BlendMode,
+        filter_binding: Option<&wgpu::BindGroup>,
+        device: &Arc<wgpu::Device>,
+        queue: &Arc<wgpu::Queue>,
+        pipelines: &mut PipelineSet,
+        resources: &mut GpuResources,
+        viewport_size: (u32, u32),
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        texture_view: &wgpu::TextureView,
+        scissor: ScissorRect,
+    ) {
         if self.texture_batch.is_empty() {
             return;
         }
@@ -636,10 +721,11 @@ impl GpuReplay {
 
         // Ensure the per-mode pipeline is in the cache. The `&mut` borrow of
         // `pipelines` ends at the semicolon; subsequent accesses are `&`.
-        pipelines.ensure_texture_composite(device, mode);
+        if filter_binding.is_none() {
+            pipelines.ensure_texture_composite(device, mode);
+        }
 
         // Both of these are now `&pipelines` (shared) borrows — no conflict.
-        let pipeline = pipelines.texture_composite_for(mode);
         let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("SSAA Tile Composite Bind Group"),
             layout: &pipelines.texture_bind_group_layout,
@@ -661,6 +747,11 @@ impl GpuReplay {
             "SSAA Tile Composite Instance Buffer",
             self.texture_batch.as_bytes(),
         );
+        let pipeline = if filter_binding.is_some() {
+            pipelines.filtered_texture_composite(device, mode)
+        } else {
+            pipelines.texture_composite_for(mode)
+        };
 
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("SSAA Tile Composite Render Pass"),
@@ -682,6 +773,9 @@ impl GpuReplay {
         render_pass.set_pipeline(pipeline);
         render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
         render_pass.set_bind_group(1, &texture_bind_group, &[]);
+        if let Some(binding) = filter_binding {
+            render_pass.set_bind_group(3, binding, &[]);
+        }
         render_pass.set_vertex_buffer(0, self.unit_quad_buffer.slice(..));
         render_pass.set_vertex_buffer(1, instance_buffer.slice(..));
         render_pass.set_index_buffer(

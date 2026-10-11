@@ -30,6 +30,46 @@ deepest-first element unmount so view lifecycle hooks remain canonical.
 
 ## Mapping decisions
 
+### UI subscriptions retain invalidation independently of external pressure
+
+Render attachment hooks receive `LocalRenderInvalidationHandle`; worker
+producers retain the bounded `RenderInvalidationHandle`. Local marks coalesce
+by attachment and phase before waking and replay through canonical dirty walks.
+Detach withdraws pending metadata before user cleanup. See
+[ADR-0190](../../docs/adr/ADR-0190-owner-local-render-invalidation.md).
+The public `lifecycle_matrix` rows
+`local_marks_survive_a_failed_wake_and_coalesce` and
+`local_marks_wait_for_a_hook_and_end_with_the_attachment` pin wake recovery,
+coalescing, removal and owner release.
+`owner_release_withdraws_peer_handles_before_user_drop` checks that all peer
+admission ends before user destructors, including owner release from a wake.
+`subtree_cleanup_withdraws_all_selected_handles_before_user_code` pins batch-wide
+withdrawal before parent-data cleanup, membership wakes and render detach hooks.
+Removal and relocation close every selected interval first; detaching nodes
+cannot reattach until their lifecycle hook runs. Unselected nodes stay attached,
+and relocation later reopens fresh intervals.
+
+### Semantics geometry follows committed paint transforms
+
+Full semantics assembly and partial graft reconstruction compose parent edges
+through `RenderNode::apply_paint_transform`, including the committed child
+offset. The resulting root transform projects node bounds, unclipped reveal
+geometry and parent clips. Recomputing only layout offsets leaves animation
+bounds behind the painted child; reconstructing only offsets above a graft
+also loses unchanged transformed ancestors.
+
+Projected corners and the resulting dimensions must remain finite. An
+unrepresentable node bound is omitted while its children are still visited;
+an unrepresentable clip refuses coverage. Later finite geometry can publish
+again. Authored zero-size nodes retain the existing empty-bound behavior.
+
+`animated_slide_publishes_bounds_at_its_current_sample` observes public
+AccessKit bounds through running LTR/RTL transitions, including a graft beneath
+translated and scaled ancestors. `animated_scale_and_rotation_publish_clipped_bounds`
+checks centered scale/rotation with clips under a scaled ancestor.
+`unrepresentable_projected_bounds_are_withdrawn_and_recover` checks overflow and
+recovery. Restoring the offset-only assembler makes all three rows fail.
+
 ### Incomplete presentation geometry is unavailable
 
 `PipelineCell` carries layout publication readiness independently of its owner
@@ -55,6 +95,12 @@ The public widget row
 `show_on_screen_failure_continues_live_ancestors_and_fresh_requests_recover`
 checks render notification after a value failure, live ancestor reveal and a
 fresh request after recovery.
+
+Framework command operations can lend their RecoveryScope to pixel publication
+and both notification channels. They do not start an independent healthy
+receipt after an earlier command-retirement failure. The mounted widget row
+`replacing_pending_scroll_motion_delivers_and_recovers_after_user_failure`
+checks inherited custody with a self-removing observer's actual destructor.
 
 ### Ordinary text rejection remains a layout error
 
@@ -426,8 +472,15 @@ reverted. The one place the protocols genuinely diverge is the
 never sets `transform`, so the transform arm of `own_effect_layers` stays
 unexercised for slivers.
 
-**Known gap:** neither opacity render object has an `always_include_semantics`
-field. Both report semantics unconditionally on a visibility flip.
+The static opacity objects retain child semantics; neither exposes an
+`always_include_semantics` flag. The animated box and sliver variants visit
+child semantics when their accepted opacity is positive or that flag is set.
+A zero crossing publishes the sample and admits all required paint, compositing and
+semantics work together before waking the owner. The public harness row
+`harness_animated_opacity_semantics_follow_accepted_visibility` covers both
+protocols, both flag values and repeated visibility changes. The opacity
+completion rows also cover final semantics delivery after channel backpressure
+or a failing wake, when no later animation sample can retry.
 
 **`RenderTransform`.** A transform change is also served as a layer update.
 The transitions (`SlideTransition`, `ScaleTransition`, `RotationTransition`)

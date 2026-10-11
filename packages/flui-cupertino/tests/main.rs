@@ -55,6 +55,14 @@ fn cupertino_activity_indicator_ticks_step() {
             "activity_indicator::unmount releases the controller",
             activity_indicator::unmount_releases_the_controller,
         ),
+        (
+            "activity_indicator::reduced motion keeps visible loading without continuation",
+            activity_indicator::reduced_motion_keeps_visible_loading_without_continuation,
+        ),
+        (
+            "activity_indicator::inactive loading stays visible and resumes",
+            activity_indicator::inactive_loading_stays_visible_and_resumes,
+        ),
     ]);
 }
 
@@ -69,6 +77,14 @@ fn component_contracts() {
         (
             "button::tap callback writes a signal and rebuilds its reader",
             button::tap_callback_writes_a_signal_and_rebuilds_its_reader,
+        ),
+        (
+            "button::an active press fade migrates and retires",
+            button::an_active_button_press_fade_migrates_and_retires,
+        ),
+        (
+            "button::an active release fade migrates and retires",
+            button::an_active_button_release_fade_migrates_and_retires,
         ),
         (
             "button::cupertino button with text child announces one labelled button node",
@@ -139,6 +155,10 @@ fn navigation_contracts() {
         (
             "route::cupertino page route slides in from off the right edge over 500ms",
             route::cupertino_page_route_slides_in_from_off_the_right_edge_over_500ms,
+        ),
+        (
+            "route::cupertino route does not slide under reduced motion",
+            route::cupertino_route_does_not_slide_under_reduced_motion,
         ),
         (
             "tab_scaffold::an inactive tabs state survives switching away and back",

@@ -67,7 +67,7 @@ use flui_sdk::platform::Brightness;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     Column, CrossAxisAlignment, DecoratedBox, IgnorePointer, MainAxisSize, MouseRegion, Padding,
-    Text, WidgetState, WidgetStateProperty, WidgetStates, WidgetStatesController,
+    Text, WidgetState, WidgetStates, WidgetStatesController,
 };
 
 use crate::color_scheme::ColorScheme;
@@ -139,43 +139,39 @@ impl Default for InputDecoration {
 /// hover treatment is a separate alpha blend over this color, not a fill
 /// state — see [`hover_blended_fill`] and the module doc on why this
 /// deliberately does not fold hover into the table.
-fn default_fill_color(colors: ColorScheme) -> WidgetStateProperty<Option<Color>> {
-    WidgetStateProperty::resolve_with(move |states| {
-        Some(if states.contains_state(WidgetState::Disabled) {
-            colors.on_surface.with_opacity(0.04)
-        } else {
-            colors.surface_container_highest
-        })
-    })
+fn default_fill_color(colors: &ColorScheme, states: &WidgetStates) -> Color {
+    if states.contains_state(WidgetState::Disabled) {
+        colors.on_surface.with_opacity(0.04)
+    } else {
+        colors.surface_container_highest
+    }
 }
 
 /// M3 default `activeIndicatorBorder` (the bottom underline) —
 /// `_InputDecoratorDefaultsM3.activeIndicatorBorder`
 /// (`input_decorator.dart:5972-5992`).
-fn default_active_indicator(colors: ColorScheme) -> WidgetStateProperty<Option<BorderSide<f64>>> {
-    WidgetStateProperty::resolve_with(move |states| {
-        Some(if states.contains_state(WidgetState::Disabled) {
-            BorderSide::new(
-                colors.on_surface.with_opacity(0.38),
-                1.0,
-                BorderStyle::Solid,
-            )
-        } else if states.contains_state(WidgetState::Error) {
-            if states.contains_state(WidgetState::Focused) {
-                BorderSide::new(colors.error, 2.0, BorderStyle::Solid)
-            } else if states.contains_state(WidgetState::Hovered) {
-                BorderSide::new(colors.on_error_container, 1.0, BorderStyle::Solid)
-            } else {
-                BorderSide::new(colors.error, 1.0, BorderStyle::Solid)
-            }
-        } else if states.contains_state(WidgetState::Focused) {
-            BorderSide::new(colors.primary, 2.0, BorderStyle::Solid)
+fn default_active_indicator(colors: &ColorScheme, states: &WidgetStates) -> BorderSide<f64> {
+    if states.contains_state(WidgetState::Disabled) {
+        BorderSide::new(
+            colors.on_surface.with_opacity(0.38),
+            1.0,
+            BorderStyle::Solid,
+        )
+    } else if states.contains_state(WidgetState::Error) {
+        if states.contains_state(WidgetState::Focused) {
+            BorderSide::new(colors.error, 2.0, BorderStyle::Solid)
         } else if states.contains_state(WidgetState::Hovered) {
-            BorderSide::new(colors.on_surface, 1.0, BorderStyle::Solid)
+            BorderSide::new(colors.on_error_container, 1.0, BorderStyle::Solid)
         } else {
-            BorderSide::new(colors.on_surface_variant, 1.0, BorderStyle::Solid)
-        })
-    })
+            BorderSide::new(colors.error, 1.0, BorderStyle::Solid)
+        }
+    } else if states.contains_state(WidgetState::Focused) {
+        BorderSide::new(colors.primary, 2.0, BorderStyle::Solid)
+    } else if states.contains_state(WidgetState::Hovered) {
+        BorderSide::new(colors.on_surface, 1.0, BorderStyle::Solid)
+    } else {
+        BorderSide::new(colors.on_surface_variant, 1.0, BorderStyle::Solid)
+    }
 }
 
 /// M3 default `hintStyle` — `_InputDecoratorDefaultsM3.hintStyle`
@@ -183,14 +179,12 @@ fn default_active_indicator(colors: ColorScheme) -> WidgetStateProperty<Option<B
 /// the oracle's hint style carries no base font — a bare
 /// `TextStyle(color: ...)`, unlike [`default_label_style`]/
 /// [`default_helper_style`] which start from a `TextTheme` role.
-fn default_hint_style(colors: ColorScheme) -> WidgetStateProperty<Option<TextStyle>> {
-    WidgetStateProperty::resolve_with(move |states| {
-        Some(if states.contains_state(WidgetState::Disabled) {
-            TextStyle::default().with_color(colors.on_surface.with_opacity(0.38))
-        } else {
-            TextStyle::default().with_color(colors.on_surface_variant)
-        })
-    })
+fn default_hint_style(colors: &ColorScheme, states: &WidgetStates) -> TextStyle {
+    if states.contains_state(WidgetState::Disabled) {
+        TextStyle::default().with_color(colors.on_surface.with_opacity(0.38))
+    } else {
+        TextStyle::default().with_color(colors.on_surface_variant)
+    }
 }
 
 /// M3 default `labelStyle` — `_InputDecoratorDefaultsM3.labelStyle`
@@ -199,47 +193,35 @@ fn default_hint_style(colors: ColorScheme) -> WidgetStateProperty<Option<TextSty
 /// one slot serves both the floating and inline positions — see the
 /// module doc's `String`-only-slots note and [`InputDecorationThemeData::label_style`].
 /// `base` is the ambient `TextTheme.bodyLarge` role.
-fn default_label_style(
-    colors: ColorScheme,
-    base: TextStyle,
-) -> WidgetStateProperty<Option<TextStyle>> {
-    WidgetStateProperty::resolve_with(move |states| {
-        let base = base.clone();
-        Some(if states.contains_state(WidgetState::Disabled) {
-            base.with_color(colors.on_surface.with_opacity(0.38))
-        } else if states.contains_state(WidgetState::Error) {
-            if states.contains_state(WidgetState::Focused) {
-                base.with_color(colors.error)
-            } else if states.contains_state(WidgetState::Hovered) {
-                base.with_color(colors.on_error_container)
-            } else {
-                base.with_color(colors.error)
-            }
-        } else if states.contains_state(WidgetState::Focused) {
-            base.with_color(colors.primary)
+fn default_label_style(colors: &ColorScheme, base: TextStyle, states: &WidgetStates) -> TextStyle {
+    if states.contains_state(WidgetState::Disabled) {
+        base.with_color(colors.on_surface.with_opacity(0.38))
+    } else if states.contains_state(WidgetState::Error) {
+        if states.contains_state(WidgetState::Focused) {
+            base.with_color(colors.error)
+        } else if states.contains_state(WidgetState::Hovered) {
+            base.with_color(colors.on_error_container)
         } else {
-            // Hovered and the oracle's unconditional fallback both resolve
-            // to `onSurfaceVariant` (`input_decorator.dart:6060-6063`).
-            base.with_color(colors.on_surface_variant)
-        })
-    })
+            base.with_color(colors.error)
+        }
+    } else if states.contains_state(WidgetState::Focused) {
+        base.with_color(colors.primary)
+    } else {
+        // Hovered and the oracle's unconditional fallback both resolve
+        // to `onSurfaceVariant` (`input_decorator.dart:6060-6063`).
+        base.with_color(colors.on_surface_variant)
+    }
 }
 
 /// M3 default `helperStyle` — `_InputDecoratorDefaultsM3.helperStyle`
 /// (`input_decorator.dart:6090-6097`). `base` is the ambient
 /// `TextTheme.bodySmall` role.
-fn default_helper_style(
-    colors: ColorScheme,
-    base: TextStyle,
-) -> WidgetStateProperty<Option<TextStyle>> {
-    WidgetStateProperty::resolve_with(move |states| {
-        Some(if states.contains_state(WidgetState::Disabled) {
-            base.clone()
-                .with_color(colors.on_surface.with_opacity(0.38))
-        } else {
-            base.clone().with_color(colors.on_surface_variant)
-        })
-    })
+fn default_helper_style(colors: &ColorScheme, base: TextStyle, states: &WidgetStates) -> TextStyle {
+    if states.contains_state(WidgetState::Disabled) {
+        base.with_color(colors.on_surface.with_opacity(0.38))
+    } else {
+        base.with_color(colors.on_surface_variant)
+    }
 }
 
 /// M3 default `errorStyle` — `_InputDecoratorDefaultsM3.errorStyle`
@@ -247,11 +229,8 @@ fn default_helper_style(
 /// oracle applies no other branch (not even `disabled`: an error line only
 /// ever appears on an enabled, invalid field). `base` is the ambient
 /// `TextTheme.bodySmall` role.
-fn default_error_style(
-    colors: ColorScheme,
-    base: TextStyle,
-) -> WidgetStateProperty<Option<TextStyle>> {
-    WidgetStateProperty::resolve_with(move |_states| Some(base.clone().with_color(colors.error)))
+fn default_error_style(colors: &ColorScheme, base: TextStyle) -> TextStyle {
+    base.with_color(colors.error)
 }
 
 /// M3 default content padding for the filled, non-outline, non-dense case —
@@ -492,7 +471,7 @@ impl ViewState<InputDecorator> for InputDecoratorState {
                 .fill_color
                 .as_ref()
                 .map_or_else(
-                    || default_fill_color(colors).resolve(&states),
+                    || Some(default_fill_color(&colors, &states)),
                     |p| p.resolve(&states),
                 )
                 .unwrap_or(Color::TRANSPARENT)
@@ -512,7 +491,7 @@ impl ViewState<InputDecorator> for InputDecoratorState {
             .active_indicator
             .as_ref()
             .map_or_else(
-                || default_active_indicator(colors).resolve(&states),
+                || Some(default_active_indicator(&colors, &states)),
                 |p| p.resolve(&states),
             )
             .unwrap_or_else(BorderSide::none);
@@ -542,8 +521,11 @@ impl ViewState<InputDecorator> for InputDecoratorState {
         if let Some(label_text) = decoration.label_text.clone() {
             let base_label_style = decoration_theme.label_style.as_ref().map_or_else(
                 || {
-                    default_label_style(colors, text_theme.body_large.clone().unwrap_or_default())
-                        .resolve(&states)
+                    Some(default_label_style(
+                        &colors,
+                        text_theme.body_large.clone().unwrap_or_default(),
+                        &states,
+                    ))
                 },
                 |p| p.resolve(&states),
             );
@@ -563,7 +545,7 @@ impl ViewState<InputDecorator> for InputDecoratorState {
                 .hint_style
                 .as_ref()
                 .map_or_else(
-                    || default_hint_style(colors).resolve(&states),
+                    || Some(default_hint_style(&colors, &states)),
                     |p| p.resolve(&states),
                 )
                 .unwrap_or_default();
@@ -595,12 +577,12 @@ impl ViewState<InputDecorator> for InputDecoratorState {
             let base = text_theme.body_small.unwrap_or_default();
             let style = if is_error {
                 decoration_theme.error_style.as_ref().map_or_else(
-                    || default_error_style(colors, base).resolve(&states),
+                    || Some(default_error_style(&colors, base)),
                     |p| p.resolve(&states),
                 )
             } else {
                 decoration_theme.helper_style.as_ref().map_or_else(
-                    || default_helper_style(colors, base).resolve(&states),
+                    || Some(default_helper_style(&colors, base, &states)),
                     |p| p.resolve(&states),
                 )
             }

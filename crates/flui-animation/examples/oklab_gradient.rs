@@ -11,25 +11,11 @@
 use flui_animation::{Animatable, ColorTween};
 use flui_painting::styling::{Color, Oklab};
 
-/// Rounds a channel value into `0..=255`.
-#[expect(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "rounded and clamped into 0..=255 first"
-)]
-fn channel(value: f32) -> u8 {
-    value.round().clamp(0.0, 255.0) as u8
-}
-
 /// A gamma-sRGB channel mix, for comparison.
 fn srgb_mix(from: Color, to: Color, t: f32) -> Color {
-    let mix = |a: u8, b: u8| channel(f32::from(a) + (f32::from(b) - f32::from(a)) * t);
-    Color::rgba(
-        mix(from.r, to.r),
-        mix(from.g, to.g),
-        mix(from.b, to.b),
-        mix(from.a, to.a),
-    )
+    let from = from.to_rgba_f32_array();
+    let to = to.to_rgba_f32_array();
+    Color::from_rgba_f32_array(std::array::from_fn(|i| from[i] + (to[i] - from[i]) * t))
 }
 
 /// An Oklab mix with straight (unpremultiplied) alpha, for comparison.
@@ -41,11 +27,12 @@ fn straight_oklab_mix(from: Color, to: Color, t: f32) -> Color {
         a: mix(a.a, b.a),
         b: mix(a.b, b.b),
     };
-    Color::from_oklab(lab, channel(mix(f32::from(from.a), f32::from(to.a))))
+    Color::from_oklab(lab, 255).with_opacity(f64::from(mix(from.opacity(), to.opacity())))
 }
 
 fn brightness(c: Color) -> u16 {
-    u16::from(c.r) + u16::from(c.g) + u16::from(c.b)
+    let [r, g, b, _] = c.to_rgba8();
+    u16::from(r) + u16::from(g) + u16::from(b)
 }
 
 fn main() {
@@ -56,15 +43,16 @@ fn main() {
     for step in 0u8..=10 {
         let t = f32::from(step) / 10.0;
         let (s, o) = (srgb_mix(blue, yellow, t), across.transform(f64::from(t)));
+        let ([sr, sg, sb, _], [or, og, ob, _]) = (s.to_rgba8(), o.to_rgba8());
         println!(
             "  {t:4.1}   ({:3},{:3},{:3})  {:4}   ({:3},{:3},{:3})       {:4}",
-            s.r,
-            s.g,
-            s.b,
+            sr,
+            sg,
+            sb,
             brightness(s),
-            o.r,
-            o.g,
-            o.b,
+            or,
+            og,
+            ob,
             brightness(o),
         );
     }
@@ -77,9 +65,7 @@ fn main() {
         let t = f32::from(step) / 10.0;
         let s = straight_oklab_mix(red, Color::TRANSPARENT, t);
         let p = fade.transform(f64::from(t));
-        println!(
-            "  {t:4.1}   ({:3},{:3},{:3},{:3})        ({:3},{:3},{:3},{:3})",
-            s.r, s.g, s.b, s.a, p.r, p.g, p.b, p.a,
-        );
+        let ([sr, sg, sb, sa], [pr, pg, pb, pa]) = (s.to_rgba8(), p.to_rgba8());
+        println!("  {t:4.1}   ({sr:3},{sg:3},{sb:3},{sa:3})        ({pr:3},{pg:3},{pb:3},{pa:3})");
     }
 }

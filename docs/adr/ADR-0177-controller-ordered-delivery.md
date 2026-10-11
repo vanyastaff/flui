@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Superseded-by:** [ADR-0178](ADR-0178-notification-first-failure-custody.md) for the shared notification failure policy and owner-local callback integration.
+- **Superseded-by:** [ADR-0193](ADR-0193-directional-phase-names.md) for settled-phase vocabulary only.
 - **Date:** 2026-10-08
 - **Related:** [ADR-0064](ADR-0064-animation-completion-is-one-controller-resolved-future.md),
   [ADR-0106](ADR-0106-ticker-continuation-ownership-and-terminal-waiters.md),
@@ -11,7 +12,7 @@
 
 Animation status listeners can reverse a controller, dispose it, or remove another
 listener. Recursive delivery allowed a later listener to receive Reverse before
-the Completed transition that caused the reversal. A listener failure also
+the ForwardSettled transition that caused the reversal. A listener failure also
 discarded the healthy tail after the transition had already been committed.
 Vsync propagated one controller's failure before ticking remaining frame peers.
 

@@ -34,17 +34,20 @@ src/
 ├── vsync.rs          # Vsync registry: drives many controllers per frame
 │
 ├── curved.rs         # CurvedAnimation (applies curve)
-├── tween.rs          # TweenAnimation<T> (maps to type T)
+├── tween.rs          # TweenAnimation<A> (maps through Animatable A)
 ├── reverse.rs        # ReverseAnimation (inverts value)
 ├── proxy.rs          # ProxyAnimation (hot-swappable parent)
 ├── constant.rs       # ConstantAnimation (fixed value)
 ├── switch.rs         # AnimationSwitch (crossover switching)
 │
-├── curve.rs          # Curve trait, Curves, implementations
+├── curve.rs          # Curve trait, curves, implementations
 ├── tween_types.rs    # Animatable, Tween, all tween types
 ├── status.rs         # AnimationStatus, AnimationBehavior
 ├── simulation.rs     # Simulation trait, Spring, Friction, bounded and bouncing scroll
-├── spring.rs         # AnimatedValue, TwoWayConverter
+├── value_conversion.rs # TwoWayConverter, fixed component arrays
+├── animated_value.rs # AnimatedValue owner, AnimatedValueView, vector sample commits
+├── animated_value/motion_update.rs # Coordinated changes to value motion
+├── animated_value/vsync_update.rs # Coordinated registry migration and publication
 ├── retarget.rs       # Interruptible scalar motion segments
 │
 ├── keyframes.rs      # Keyframes, KeyframesBuilder, KeyframesError
@@ -55,6 +58,19 @@ src/
 ```
 
 ## Core Abstractions
+
+### Nested value conversion
+
+`TwoWayConverter` is the fixed-width extension contract for custom animation
+values. Its derive concatenates concrete field vectors in declaration order;
+`AnimationVector::COMPONENTS` exposes the sealed array width. One `AnimatedValue`
+owns the entire vector, so nested geometry and color share admission, time,
+retargeting and cancellation. Derived `Lerp` delegates to each field, preserving
+its interpolation contract instead of interpreting scalar color components.
+Generic-dependent widths require a manual representation because stable Rust
+cannot express their sum as an array length. Empty derives are refused.
+`two_way_converter_derive_contract` pins nested conversion, perceptual fading
+and velocity-preserving interruption through an actual Vsync registration.
 
 ### Controller delivery
 
@@ -67,12 +83,213 @@ Callback custody remains alive through the round and retires in registration
 order under the existing first-failure policy. Vsync continues its admitted frame
 peers after a controller or child-registry failure, then resumes that failure.
 
+Owning controller and typed-value teardown closes admission before user cleanup.
+Outgoing registry, motion and exact-target custody joins this FIFO, including
+release inside a continuation or waiter whose failure has not yet returned to
+the controller. Healthy cleanup retires resources individually; a caught failure
+retains their opaque custody. The public rows
+`owner_retirement_joins_every_delivery_channel`,
+`owner_retirement_keeps_its_first_destructor_failure` and
+`reentrant_owner_retirement_joins_registry_custody` pin closure, failure priority,
+healthy tails and subsequent recovery (ADR-0178).
+
+`retired_owner_cleanup_passes_a_stale_settlement_fence` verifies that a stale
+instant-settlement request cannot defer a retired owner's cancellation and
+healthy cleanup. Only an eligible new settlement is limited to the next round.
+
 `status_delivery_contract` pins ordering, A to B to A, late subscription, published
 outcomes and subsequent frames. `status_delivery_failure_custody` covers hostile
 captures and competing payloads in a bounded child process. The current ownership
 and foundation value-notifier policies retain their separate contracts.
 
+### Published samples and run anchors
+
+Retarget continuation carries the source run generation and the raw elapsed
+time of its published seam. A recent registry dispatch also records its generation
+and elapsed time. Matching both coordinates lets the next tick advance from the
+published seam even when an intervening dispatch failed. Replacing a run several
+times before another sample preserves those source coordinates. An idle run
+anchors on its first observed frame instead.
+
+The registry frame counter saturates. At its terminal value, continuation
+eligibility is disabled and replacement runs use a fresh anchor; admitted runs
+still advance on subsequent ticks. `vsync_nesting_and_reentrancy` includes the
+private terminal-counter case. The public `controller_retarget_frame_boundaries`
+table covers repeated replacements, completion callbacks, idle intervals,
+rejected frames and both cross-controller visit orders.
+
+Retarget preparation retries one invalidated seam. Repeated reentry refuses
+with `AnimationError::ReentrantMotion`, preserving the latest installed run;
+silently replacing its velocity with zero would violate the seam contract.
+Invalid results from displaced sources are discarded before another callout.
+Curve motion corrects both departure and arrival velocity: it inherits the seam
+velocity and approaches zero before the controller stops. A curve's nonzero
+endpoint derivative would otherwise be cut off at completion.
+`controller_retarget_is_c0_and_c1_at_the_seam` covers retry, refusal and the last
+position interval before rest.
+
+Interruptible spring motion retains the native analytic trajectory until the
+physical simulation's distance and speed rest threshold. Stopping there would
+freeze an arbitrary near-target sample and cut off its residual velocity.
+A cubic Hermite transition instead inherits that position and velocity, then
+arrives exactly at the target with zero velocity. Its duration is
+`min(1 / omega, distance_tolerance / abs(velocity))`, with the second term
+omitted for zero velocity. The remaining displacement is bounded by
+`distance_tolerance * 31 / 27`; both joins preserve position and velocity.
+Completion occurs at the computed threshold plus that duration, independently
+of the observing frame. Standalone physics simulations retain their own rest
+contract. `a_controller_spring_arrives_at_rest_independently_of_frames` uses
+the registry and different frame partitions; the public
+`a_controller_spring_enters_and_leaves_rest_continuously` probes both joins
+with position differences and an independent early-trajectory reference.
+
+Retargeting a scalar controller to the same target with the same spring replaces
+the run future while continuing the existing physical trajectory. A flat elapsed
+offset carries its analytic and exact-rest suffix; repeated replacements do not
+nest simulations or recompute the rest deadline. If bounds changed the published
+value, the new segment instead starts from that actual value.
+`same_scalar_spring_target_keeps_the_rest_trajectory` compares uninterrupted and
+repeatedly retargeted public traces, velocities and completion for underdamped,
+critical and overdamped springs across their rest intervals. Rebuilding the
+segment at every identical target fails that row.
+
+### Owning vector motion
+
+`TwoWayConverter::rest_thresholds` specifies one positive finite distance per
+component in its vector's own units ([ADR-0186](../../../docs/adr/ADR-0186-typed-animation-rest-thresholds.md)).
+Geometry uses 0.01 logical pixels; scalar, alignment and premultiplied Oklab
+components use 0.001. Speed limits derive from each spring's natural rate.
+Derived values concatenate field thresholds without converting error values
+through nonlinear value conversion. Curve motion ignores spring thresholds.
+Preparation validates thresholds before admission, so invalid distances retain
+the previous run and refuse a coordinated update without admitting a prefix.
+`owning_animated_value_contract` covers distinct geometry/scalar completion and
+single/grouped refusal; `two_way_converter_derive_contract` proves that nested
+geometry retains its own completion timing inside a nested vector. A vector's
+spring components share the latest native rest start and the shortest permitted
+rest interval. This keeps premultiplied color relationships intact while
+respecting every component's distance bound. The color fade case in
+`tolerance_constructors_validate_and_scale_with_dpr` verifies its visible hue.
+
+`AnimatedValue<T>` owns one `DrivenController` for all its scalar components.
+`VsyncUpdate` stages property owners and plain controller owners together. It
+commits every new seat before delivering any clock transition. `prepare` returns
+an owned `VsyncPublication` without controller borrows, so a widget can restore
+temporarily extracted owner storage before a reentrant callback observes it.
+Explicit publication and ordinary drop complete the accepted tail. Drop during
+unwind preserves the incoming failure while still delivering settlement.
+`grouped_registry_migration_commits_before_delivery` in the public owning-value
+table verifies immediate delivery, ordinary drop and unwind, with live and absent
+clocks and competing callback failures.
+
+The controller's generated value-motion branch evaluates components outside
+its borrow, stages one vector sample and publishes that sample together with
+elapsed time only after its sample identity survives. The commit copies fixed
+arrays: `AnimationVector` is sealed to `[f64; N]`, so user implementations of
+`AsMut` cannot run inside the controller borrow. A failed later component leaves
+the whole previous sample and clock authoritative. The sample identity is checked
+between each component's position and velocity callouts. Owner release, replacement
+or a nested frame stops the displaced sample before the next framework callout.
+
+Target and motion preparation invoke converters and curves outside borrows.
+Admission commits the exact target, component sample, motion and reversal state
+before status, cancellation or value callbacks. Repeating a motion-equivalent
+target retains the run's future and deadline, while notifying observers of its
+exact target representation (transparent color channels can differ). A curve-only
+update uses the current segment's remaining deadline; explicitly changing its
+duration configures a new segment duration. `retarget(target, motion)` admits
+both changes in one transaction.
+
+`AnimatedValueView<T>` observes the published sample and controller; it owns no
+registry seat or moving source. Dropping or disposing the owner unregisters and
+cancels, even when views survive. Views keep the last sample; at rest they keep
+the exact target, including components not recoverable from its motion vector.
+Reading an exact target clones its `Rc` under the target borrow, then invokes
+`T::clone` after releasing that borrow. Conversion from a sampled vector likewise
+runs without state guards. Outgoing targets and curves retire separately under
+the controller's enclosing first-failure custody.
+
+`owning_animated_value_contract` covers component publication before cancellation,
+repeated configuration deadlines, unbound settlement, surviving observers,
+converter and target-clone reentry, component failure, owner release inside a curve
+and exact-target delivery.
+The existing physical properties use replayed public Vsync traces for independent
+derivative probes; there is no production `advance(dt)` or owner clone.
+`a_steady_state_frame_allocates_nothing` measures running scalar, four-component
+and nested geometry/color owners, observer reads, keyframe sampling and listener
+relays. It also advances and queries a warmed root/child/grandchild registry with
+an actual running controller and listener delivery. Every measured component
+must advance; the run-start negative control verifies that the counter is live.
+This steady-state contract does not exclude allocations during topology growth
+or overlapping reentrant walks.
+
+### Source-bound status removal
+
+`StatusSubscription` holds weak source ownership, a `Copy` registration token and
+a removal function pointer. Dropping it withdraws that registration; `detach`
+disables removal without touching the source's callback. Custom sources construct
+the same guard and receive the borrowed recovery context during withdrawal. The
+remover returns outgoing callback custody after committing membership changes.
+The guard releases its temporary source reference before retiring that custody
+through the context. Capture destruction can therefore release the last owner
+and reenter only after its channels close. Deferred delivery custody stays in
+the source's existing queue. The private guard envelope contains no user captures.
+
+`Animation<T>::subscribe_status` exposes that ownership contract through the
+common observation surface. Its framework relay variant borrows the current
+delivery recovery context. Parent links and switch hops retain status guards;
+they cancel them through that same context after releasing state borrows.
+Framework owners in higher layers use `cancel_with_recovery` when status cleanup
+belongs to an already-started retirement round. This preserves its first failure
+and opaque capture policy rather than starting independent cleanup.
+
+Controller withdrawal commits removal under its existing state borrow. During
+delivery, callback retirement joins its existing FIFO; outside delivery it runs
+after releasing the borrow. The guard neither owns a second channel nor keeps the
+controller owner alive. Scrollable activity and AnimatedSize completion callbacks
+retain the owning subscription beside their driven controller.
+
+Disposed controller and switch status admission returns an inert guard and
+retires rejected captures outside state borrows, using any established delivery
+failure. The controller refuses before minting an identity. A live exhausted
+counter refuses permanently after releasing the borrow; panic hooks can read
+the public source. `exhausted_status_identities_refuse_outside_the_state_borrow`
+pins hook reentry, permanent refusal and delivery to the last admitted callback.
+
+Reverse, curved and tween subscriptions identify their shared `ParentLinks`
+owner, while proxy and switch subscriptions identify their respective owners.
+An owning guard survives a parent replacement or a switch hop without delegating
+its removal token to the active parent. It does not extend wrapper lifetime:
+the last wrapper clone closes both channels even if a guard survives. Withdrawal
+inherits both channel failure histories before retiring captures; proxy removal
+during delivery joins the existing deferred retirement queue.
+
+`owning_status_subscription_contract` uses bounded child-process rows for source
+and channel independence, detach, source teardown, custom-source construction,
+self/later removal during delivery, reentrant capture retirement, first-failure
+custody, recovery, disposed admission, shared wrapper lifetime, proxy replacement
+and switch hops.
+
 ### Registration tokens and removal
+
+Child registries form a tree. One optional weak parent seat prevents conflicting
+presentation policies and duplicate child sampling. `attach_child` preflights
+closed state, ancestor cycles, existing parent and identity capacity before
+committing either edge. Refusals are typed; upward cycle checking allocates no
+descendant snapshot. Wake failure withdraws the new edge before recovery.
+The public `vsync_admission_contract` pins these rules and reattachment; existing
+closure rows retain nested first-failure and independent-owner coverage (ADR-0191).
+
+Frame delivery retains the entry child snapshot until each child's turn, even
+when an earlier callback detaches it. Each visited or skipped child retires
+independently outside borrows through the walk's first-failure custody. Only
+empty snapshot storage returns to the registry for reuse; cached storage never
+retains detached owners. Reentrant walks own separate populated snapshots.
+Activity and frame-demand queries traverse borrowed children directly because
+their private probes invoke no user code or owned-value destruction.
+`child_snapshot_custody_survives_reentry_and_retires_outside_borrows`, a row of
+`vsync_admission_contract`, pins last-owner timing, muting, reentry, competing
+callback/capture failures and the next healthy frame.
 
 A `VsyncRegistration` names the registry that issued it (a weak identity) and
 one slot from a monotonic namespace that controllers and children share
@@ -108,12 +325,14 @@ where
     /// Current value
     fn value(&self) -> T;
     
-    /// Current status (Forward, Reverse, Completed, Dismissed)
+    /// Current status (Forward, Reverse, ForwardSettled, ReverseSettled)
     fn status(&self) -> AnimationStatus;
+
+    /// Installed run, independent of directional status; includes paused runs.
+    fn is_animating(&self) -> bool;
     
     /// Listen to status changes
-    fn add_status_listener(&self, callback: StatusCallback) -> ListenerId;
-    fn remove_status_listener(&self, id: ListenerId);
+    fn subscribe_status(&self, callback: StatusCallback) -> StatusSubscription;
 }
 ```
 
@@ -122,6 +341,24 @@ Design decisions:
 - **Extends Listenable** — integrates with change notification system
 - **Owner-local** — UI state and callbacks stay on one owner
 - **Debug required** — all animations inspectable
+
+Run ownership is required rather than inferred from status. Owners inspect their
+run, combinators forward their source's answer, and `ConstantAnimation` reports
+`false` for every phase. A manually positioned controller can have a directional
+phase without an installed run. `controller_robustness_contract` verifies the
+constant case through proxy, reverse, curve, tween and switch combinators;
+`is_animating_false_after_set_value` covers manually positioned controllers.
+The live-source row `a_switch_tracks_activity_after_hopping_to_a_live_source`
+also checks a tween over a switch before and after adoption, completion,
+restarting the old source and switch disposal.
+
+`AnimationSwitch` retains its current source until the values actually cross.
+Only exactly equal initial values adopt the next source immediately; a fixed
+epsilon would cause premature switching and discard meaningful values close
+to zero. Construction selects the mode and source from one pair of samples.
+`nearby_values_wait_for_their_actual_crossing` covers both directions and the
+subsequent source custody; `equal_initial_values_adopt_the_next_source` preserves
+the immediate-adoption case.
 
 ### Curve Trait
 
@@ -137,21 +374,25 @@ pub trait Curve {
 }
 ```
 
-### Animatable<T> and Tween<T> Traits
+### Animatable mappings and Tween values
 
 ```rust
-/// Maps t ∈ [0,1] → value of type T
-pub trait Animatable<T> {
-    fn transform(&self, t: f64) -> T;
+/// Maps progress to one associated value type.
+pub trait Animatable {
+    type Value;
+    fn transform(&self, t: f64) -> Self::Value;
 }
 
-/// Animatable with explicit begin/end
-pub trait Tween<T>: Animatable<T> {
-    fn begin(&self) -> &T;
-    fn end(&self) -> &T;
-    fn lerp(&self, t: f64) -> T;
+/// A concrete linear mapping between two Lerp values.
+pub struct Tween<V> {
+    pub begin: V,
+    pub end: V,
 }
 ```
+
+`TweenAnimation<A>` retains the mapping and its parent subscription, exposing
+`A::Value` through `Animation`. A mapping specifies its output once; consumers
+such as Hero accept `Animatable<Value = Rect>`, including owner-local captures.
 
 ### Simulation Trait
 
@@ -184,29 +425,20 @@ Observer clones retain the kernel without retaining that registration.
 
 ### State Machine
 
-```
-                forward()
-    ┌─────────────────────────────────────┐
-    │                                     ▼
-┌───────────┐                       ┌───────────┐
-│ Dismissed │◄──────────────────────│  Forward  │
-│  (0.0)    │      reaches 0.0      │ (running) │
-└───────────┘                       └─────┬─────┘
-    ▲                                     │
-    │               reaches 1.0           │
-    │         ┌───────────────────────────┘
-    │         ▼
-    │   ┌───────────┐
-    │   │ Completed │
-    │   │   (1.0)   │
-    │   └─────┬─────┘
-    │         │ reverse()
-    │         ▼
-    │   ┌───────────┐
-    └───│  Reverse  │
-        │ (running) │
-        └───────────┘
-```
+The directional phase is separate from position and run ownership:
+
+| Operation | Phase |
+| --- | --- |
+| Admit a forward run | `Forward` |
+| Settle that run, or stop it at an interior value | `ForwardSettled` |
+| Admit a reverse run | `Reverse` |
+| Settle that run, or stop it at an interior value | `ReverseSettled` |
+
+A stopped run retains its current position, including an interior position.
+A manually assigned value also selects a phase without installing a run.
+Stopping at a bound selects that bound's settled phase.
+Use the controller's value for endpoint decisions, `is_animating()` for run
+ownership and the run future for success or cancellation (ADR-0193).
 
 ### Tick Cycle
 
@@ -263,7 +495,7 @@ value cannot replace the decoding or range error.
 `Ok(())` on a normal finish and `Err(RunCanceled)` when it is superseded
 or torn down. `AnimationControllerInner.active_run: Option<RunCompleter>`
 is the one completer this controller ever holds; every run-ending or
-run-starting site funnels through `AnimationController::finish`, the single
+run-starting site funnels through `AnimationController::deliver_transition`, the single
 chokepoint that owns `drop(inner)` then delivers — see
 `docs/adr/ADR-0064-animation-completion-is-one-controller-resolved-future.md`
 for why resolution moved here rather than staying on `Ticker` (a lock-order
@@ -278,6 +510,7 @@ fact).
 | `tick_time_based` (non-repeating end) | the finishing run, complete | — |
 | `tick_repeat` (exhausted end) | the finishing run, complete | — |
 | `tick_simulation` (`is_done`) | the finishing run, complete | — |
+| public `finish` (a finite run with a declared endpoint) | original run, complete at its endpoint | completed simulation and curve, retired after delivery |
 | `stop`/`set_value` (`stop_running`) | — | `active_run`, canceled |
 | `reset` (`stop_running`) | — | `active_run`, canceled |
 | `dispose` | — | `active_run`, canceled |
@@ -292,9 +525,23 @@ leave the run `Ok`: the controller drains the admitted `RunDelivery` with
 the already-published outcome, even after containing a listener failure.
 
 **Status-before-cancel.** A run-starting site displaces `active_run` under
-the lock, but `finish` fires the run's own (new) status listeners **before**
+the lock, but transition delivery fires the run's own (new) status listeners **before**
 delivering the displaced run's cancellation — the observable order a caller
 sees is "the new run started" then "the old one was canceled".
+
+**Explicit successful completion.** `AnimationController::finish()` is an
+application-authoring command, independent of frame demand and playback rate.
+It commits the original finite run's endpoint and successful outcome before
+calling listeners. Idle calls are silent; disposed calls fail. Infinite repeats
+and arbitrary custom simulations have no declared endpoint and are refused
+without sampling or canceling their run. Finite repeat parity determines the
+endpoint; native flings use their bound and property motion uses its target.
+Completed sources leave the kernel before delivery and retire afterward through
+the existing recovery custody. A listener's replacement run remains authoritative.
+The public cases `explicit_finish_completes_the_original_finite_run` and
+`explicit_finish_retires_sources_with_failure_custody` pin these guarantees;
+`explicit_finish_commits_an_authored_page_and_retires_the_old_route` exercises
+the command through an application-authored navigator page and committed opacity.
 
 ### Direction is chosen by the method; a run ends in its direction's settled status
 
@@ -303,13 +550,13 @@ sees is "the new run started" then "the old one was canceled".
 whether `target` is above or below the current value: the caller's choice of
 method is the one bit of direction information it carries. Every run ends in its direction's
 settled status with no bound check
-(`AnimationDirection::settled_status`: `Forward` → `Completed`, `Reverse` →
-`Dismissed`), at every run end: `tick_time_based`'s non-repeat end,
+(`AnimationDirection::settled_status`: `Forward` → `ForwardSettled`, `Reverse` →
+`ReverseSettled`), at every run end: `tick_time_based`'s non-repeat end,
 `tick_repeat`'s exhaustion end, `tick_simulation`'s `is_done`, and
 `settle_at_target`. The rule is unconditional, so `animate_to(lower_bound)` from mid-range ends
-`Completed`, not `Dismissed` — and the same holds through
+`ForwardSettled`, not `ReverseSettled` — and the same holds through
 `tick_simulation`: `animate_with(sim)` landing on a BOUNDED controller's
-lower bound also ends `Completed`. A fling's own end is unaffected:
+lower bound also ends `ForwardSettled`. A fling's own end is unaffected:
 `fling`/`fling_with` pick `direction` from the sign of `velocity`, not from
 where the simulation happens to land.
 
@@ -322,13 +569,13 @@ current one: `scroll_controller.rs`'s ballistic fling (`animate_to_curved`
 toward an arbitrary pixel offset) and `flui-cupertino`'s `CupertinoButton`
 (`animate_to_curved` for both the press-in fade toward `1.0` and the
 release fade toward `0.0`). The scroll controller's
-status listener matches `Completed | Dismissed` identically (it only ends
+status listener matches `ForwardSettled | ReverseSettled` identically (it only ends
 the scroll activity), so its `animate_to` toward a SMALLER pixel value
-reporting `Forward`/`Completed` instead of `Reverse`/`Dismissed` changes
+reporting `Forward`/`ForwardSettled` instead of `Reverse`/`ReverseSettled` changes
 nothing observable. The button's release fade is the consumer the rule
-reached: its start was chained off a status listener watching `Completed`,
+reached: its start was chained off a status listener watching `ForwardSettled`,
 which stops distinguishing "the press just landed" from "the release just
-landed" once both report `Completed`, so the listener re-triggered a
+landed" once both report `ForwardSettled`, so the listener re-triggered a
 redundant zero-distance settle when the release it started reached its own
 end (no observable trace — same-status writes are deduplicated — but the
 wrong shape). It now chains the release on the press fade's own
@@ -341,7 +588,7 @@ still check `is_at_upper_bound`/`is_at_lower_bound` first, falling back to
 direction only for a non-bound stop. This is FLUI's own frame-driver
 contract: a scroll gesture's every-frame `set_value` must
 report the bound it actually reached, not the gesture's nominal direction,
-so a driver polling `status().is_running()` sees a real settle.
+so a driver polling `status().is_directional()` sees a real settle.
 
 ### `settle_at_target` also covers zero-duration runs, and gates value notification on real movement
 
@@ -350,8 +597,19 @@ settle chokepoint for BOTH zero-DISTANCE runs (`forward()` already at the
 upper bound) and zero-DURATION runs (`forward(..., Some(Duration::ZERO))`, or
 a zero base `duration`): `forward_from`/`reverse_from`/`drive_to` compute the
 run duration before their settle check and gate on
-`distance < BOUND_EPSILON || run_duration.is_zero()`, which covers both causes
+`value == target || run_duration.is_zero()`, which covers both causes
 identically.
+
+Representable differences are preserved regardless of value units. Timed runs
+retain their authored duration for distinct targets; bound phases require exact
+endpoint equality, and value notifications compare exact entry and exit values.
+Numerical solver accuracy and physical rest thresholds do not define equality.
+`small_distances_keep_their_authored_duration`,
+`small_remaining_distance_runs_until_its_scaled_deadline`,
+`small_from_jumps_notify_their_exact_value`,
+`small_zero_duration_settlement_notifies_the_endpoint` and
+`nearby_interior_positions_keep_their_directional_phase` pin these rules through
+public controller commands in both directions.
 
 It also notifies value listeners only when the value actually moved,
 measured against the value at METHOD ENTRY, before
@@ -379,14 +637,14 @@ disposed mid-run therefore keeps whatever status it had (e.g. `Forward`):
 controller may already be disposed, and a manufactured settled status would
 be visible there.
 
-**`status().is_running()` is not proof a run is installed; `active_run.is_some()`
+**`status().is_directional()` is not proof a run is installed; `active_run.is_some()`
 is.** Two independent paths leave `status` reporting a RUNNING value
 (`Forward`/`Reverse`) with no run actually installed: a mid-run `dispose()`
 (above), and `set_value` at an interior value. `set_value` calls
 `stop_running()`, clearing `active_run`, but still reports a directional
 running status (`AnimationControllerInner::settled_status_keep_direction`).
 
-A `Vsync`-driven controller polled on `status().is_running()` after a
+A `Vsync`-driven controller polled on `status().is_directional()` after a
 mid-run `set_value` would therefore look like it still has a run to
 advance. The NEXT `tick_all` would then recompute its value from the
 stale, already-stopped run's `start_value`/`target_value`, silently
@@ -396,7 +654,7 @@ overwriting what `set_value` had just set.
 `!disposed && active_run.is_some()`, the two facts that are always
 consistent with "is there a run to advance". Both
 `AnimationController::tick_at`'s own guard and `Vsync::has_running`/
-`tick_all` read it instead of bare `status().is_running()`.
+`tick_all` read it instead of bare `status().is_directional()`.
 
 ### Repeat sampling is a pure function of elapsed time
 
@@ -438,17 +696,16 @@ with that leg's own settled status.** Wrapping with `% 1.0` would make a
 bounce exhaustion would report the direction of the NEXT leg it never runs
 (`count: 1` bounce ends `dismissed` at value `1.0`). FLUI lands on the
 endpoint its own final retired leg actually reached, with that leg's own
-direction settled (`Completed` at `max`, `Dismissed` at `min`) — matching
+direction settled (`ForwardSettled` at `max`, `ReverseSettled` at `min`) — matching
 the Web Animations spec's fill behavior ("holding the endpoint of the final iteration rather
 than the start of the next"), Android's `ValueAnimator`, and Compose's
 `VectorizedRepeatableSpec`, all of which land on the actual endpoint.
-The tests `repeat_tick_at_infinity_exhausts_a_finite_count_instead_of_rewinding`
-and `repeat_bounce_finite_count_and_absolute_time_rewind`'s
-exhaustion assertion (`crates/flui-animation/src/controller_tests.rs`) pin
+The tests `maximum_elapsed_time_exhausts_a_finite_repeat`
+and `finite_bounce_holds_stale_samples_and_settles_on_its_final_leg`'s
+exhaustion assertion (`tests/contracts/controller_commands.rs`) pin
 the landing/status.
-(The `repeat_*` and `without_ticker_bounds_*` names in this document are rows of the table tests
-`repeat_contract` and `controller_contract` in
-`src/controller_tests.rs`; a failure names its row.)
+These public scenarios are rows of `repeat_contract` and `controller_contract`
+in `tests/contracts/controller_commands.rs`; a failure names its row.
 
 **`min == max` stays rejected.** The degenerate range is refused, the same contract `with_bounds`
 already applies to an empty range (`repeat_with_rejects_equal_min_and_max`
@@ -463,8 +720,8 @@ explicitly "ignores the repeat count and skips to the end" for a
 0-duration animator; Compose's `InfiniteRepeatableSpec` throws
 ("Animation to be infinitely repeated cannot have a 0-duration",
 `AnimationSpec.kt`'s `init` block). FLUI repairs rather
-than rejects (the house rule — see `with_bounds`'s own `InvalidBounds`
-contract for the cases that DO reject): an infinite zero-period repeat
+than rejects (the house rule — see `ValueRange`'s validation contract for
+the cases that DO reject): an infinite zero-period repeat
 that ticked once per frame would hold the frame loop open forever doing
 nothing, so `repeat_with` settles it synchronously through the same
 `settle_at_target` chokepoint a zero-distance/zero-duration
@@ -473,7 +730,7 @@ endpoint for the finite count (or cycle 0's end for an infinite one) — a
 documented exception to "an infinite repeat's future resolves only by
 cancellation". `count: Some(0)` (any period), separately: zero CYCLES run
 at all, so there is no cycle to land on — the settle value is the plain
-CLAMPED CURRENT value, not a landing jump, status `Completed` (Web
+CLAMPED CURRENT value, not a landing jump, status `ForwardSettled` (Web
 Animations semantics for an empty active interval; Compose throws for
 `iterations < 1`).
 
@@ -515,12 +772,24 @@ as a wide-open one: nothing in this workspace needs it, and allowing it
 would make the "bounded means finite" rule incidental complexity with no
 consumer.
 
+**Explicit initial values share direct-assignment canonicalization.** A finite
+input clamps to the configured range. For bounded controllers, NaN and negative
+infinity select the lower endpoint; positive infinity selects the upper endpoint.
+For unbounded controllers, non-finite inputs retain the default zero. A shared
+pure helper applies this rule at construction and in `set_value`; construction
+does not invoke the assignment command's notification or cancellation machinery.
+The finite state and warning latch are committed before calling diagnostics,
+with no controller borrow held. Non-finite initialization and subsequent direct
+assignments share the once-per-controller warning. `controller_builder_contract`
+pins all six bounded/unbounded non-finite cases, warning count and subsequent
+successful motion.
+
 **Initial value and status, and a recorded cost.** `value = 0.0`
 (never `lower_bound`, which is `-inf`). The initial `status` is computed by
 the SAME rule `set_value` applies,
 `AnimationControllerInner::settled_status_keep_direction`, applied once at
-construction for every constructor, not hard-coded `Dismissed`: a bounded
-controller at `lower_bound` still reports `Dismissed` (unchanged), but an
+construction for every constructor, not hard-coded `ReverseSettled`: a bounded
+controller at `lower_bound` still reports `ReverseSettled` (unchanged), but an
 unbounded one at `0.0`, with `AnimationDirection` defaulted `Forward` and
 neither infinite bound ever "at", reports **`Forward`**.
 
@@ -529,7 +798,7 @@ neither infinite bound ever "at", reports **`Forward`**.
 general case.
 
 The recorded cost: a never-run unbounded controller reports
-`status().is_running() == true` from the moment it is constructed. The
+`status().is_directional() == true` from the moment it is constructed. The
 real "is a run installed" fact stays `is_animating()`/the internal
 `active_run`, never `status`, exactly as
 [`AnimationController::walk_probe`]'s own doc already documented before
@@ -537,14 +806,14 @@ this change (`set_value`'s interior-value status already had the identical
 property).
 
 One direct, load-bearing consequence: **the first `stop()` on a fresh
-unbounded controller emits `Forward → Completed`.**
+unbounded controller emits `Forward → ForwardSettled`.**
 `settled_status_directed`'s bound checks are both false on an infinite
-range, so it falls to `match direction { Forward => Completed }`. Every
+range, so it falls to `match direction { Forward => ForwardSettled }`. Every
 `jump_to` on a fresh `Scrollable`/`RefreshIndicator` (both migrated to
 `unbounded_without_ticker` below) triggers exactly this event through the
 fling controller's `stop_hook`.
 
-**Refusals: `NonFiniteTarget`, additive `#[non_exhaustive]` variant.**
+**Refusals carry typed input, range or arithmetic causes (ADR-0198).**
 Derived from `!lower_bound.is_finite()` (both bounds are `+-inf` together
 by construction, so either alone detects it): `forward`/`forward_from`,
 `reverse`/`reverse_from`, `fling`/`fling_with`, and `repeat`/`repeat_with`
@@ -570,20 +839,19 @@ extreme `animate_to`), and `drive_simulation`/`animate_with` refuse a
 simulation whose `x(0.0)` is already non-finite.
 
 Every refusal runs BEFORE any state mutation. `fling_with` in particular
-used to write `inner.direction` before its `InvalidSpring` check,
+used to write `inner.direction` before its underdamped-spring check,
 corrupting direction on a refused fling (observable only via a LATER
 `stop()`); fixed by computing `direction`/`target` into locals and
 assigning only once every check passes.
 
-Every refusal is also emitted as a `tracing::warn!`, once per call, after
-the guard drops (`warn_non_finite_target`, mirroring `warn_if_no_ticker`'s
-pattern): every production caller of these methods discards the `Result`
-(`let _ = fling.animate_to_curved(..)`, `let _ =
-fc_fling.animate_with(sim)`), and a silent no-op here would hide the
-caller bug.
+Scalar input and missing-bound refusals retain their per-call `tracing::warn!`
+after the guard drops (`controller/admission.rs::warn_refused_input`). The
+diagnostic names the operation; its typed returned error carries the cause and
+values. Built-in drivers can discard the result, so a silent no-op would hide
+the caller bug. Range-shape validation continues to return directly.
 
-**`repeat_with`'s NaN endpoint is `InvalidBounds`, a range-SHAPE error,
-distinct from the unbounded-range `NonFiniteTarget` above.** A
+**`repeat_with` reports `InvalidRepeatRange` with endpoints, controller bounds
+and a `RangeDefect`.** A
 caller-supplied `Some(f64::NAN)` `min`/`max` is checked BEFORE defaulting
 against the controller's own bounds, on ANY controller: it widens
 `lo >= hi`'s inversion check to include non-finite endpoints (`!(lo < hi)
@@ -596,10 +864,13 @@ silently installing a broken run.
 
 The unbounded-range case (both `min`/`max` unset, or one side unset on an
 unbounded controller) is checked SEPARATELY, after the shape check, and
-maps to `NonFiniteTarget` instead: a range that is not inverted but has a
-side that defaulted through an infinite bound has a shape problem of a
-different kind. There is no finite range to repeat inside, not an invalid
-one.
+reports `RangeDefect::NonFinite`: a range that is not inverted but has a side
+that defaulted through an infinite bound has no finite range to repeat inside.
+Finite endpoints also require a representable span before admission; otherwise
+`repeat_sample` would compute an infinite difference and publish NaN or infinity.
+The public `overflowing_repeat_span_preserves_the_run` case verifies refusal,
+the unchanged displayed value, original pending future and successful later
+completion of that original run.
 
 **`set_value`/simulation NaN canonicalization stays infallible, latched.**
 `set_value` on a BOUNDED controller keeps its existing canonicalization
@@ -620,7 +891,7 @@ unchanged, which returns a `NaN` self as-is.
 
 Both paths share ONE latch, `AnimationControllerInner::non_finite_warned:
 bool`, fired at most once per controller (`warn_non_finite_value`),
-distinct from `NonFiniteTarget`'s per-call warn: a NaN-producing drag or a
+distinct from admission's per-call warn: a NaN-producing drag or a
 misbehaving simulation must warn once, not every frame.
 
 **`tick_time_based` reads `start_value`/`target_value` DIRECTLY at the
@@ -647,7 +918,7 @@ still running. A refused start (a non-finite target reaching this call)
 must not park the scrollable in "scrolling" forever, and a start that
 settles SYNCHRONOUSLY (target already equals the just-synced current
 value) already reported its own end through the fling status listener
-installed above; checking `is_running()` rather than firing
+installed above; checking `is_directional()` rather than firing
 unconditionally on `Ok` keeps that already-correct settle from being
 clobbered back to `true`.
 
@@ -665,21 +936,19 @@ no-op that leaves `value` wherever it already was, never snapping it to
 reset always has a value to land on.
 
 **Cost (2): status at `0.0` is path-dependent.** `reset()` on an unbounded
-controller lands at `0.0` with status `Dismissed` (its documented
+controller lands at `0.0` with status `ReverseSettled` (its documented
 contract); construction, or a later `set_value(0.0)`, lands at the SAME
 `0.0` with status `Forward` (the keep-direction rule above). Two different
 routes to the identical value report two different statuses: a caller
 that only inspects `value() == 0.0` cannot infer `status()` from it on an
 unbounded controller the way it could reason "at the lower bound implies
-Dismissed" on a bounded one.
+ReverseSettled" on a bounded one.
 
-**Tests inverted, not fixed.** `without_ticker_bounds_rejects_wide_open_ones`
-and its `with_detached_ticker_bounds` twin used to assert that a wide-open
-`(NEG_INFINITY, INFINITY)` pair was ACCEPTED, landing `value() ==
-NEG_INFINITY`. Under this change that same input is REJECTED, and the
-tests were rewritten (not merely patched) to assert the rejection plus the
-unbounded constructor's own `0.0` start, each documenting why the old
-assertion no longer holds.
+**Bounded ranges and unbounded initialization have separate contracts.**
+`bounded_ranges_refuse_infinity_and_unbounded_starts_at_zero` rejects a
+wide-open `(NEG_INFINITY, INFINITY)` range and drives an explicitly unbounded
+controller from zero. Infinite endpoints cannot serve as the initial value
+of a bounded controller.
 
 ### Friction numerical range
 
@@ -697,6 +966,20 @@ round trips, unreachable queries and the remaining-glide rest.
   refuses NaN, infinite and non-positive inputs (an undamped spring never
   rests) and constants that overflow (`SimulationError`), the same in debug
   and release. `spring_constructors_refuse_outside_the_admitted_domain`.
+- `SpringSimulation::new` is the sole constructor and takes an explicit
+  tolerance. Unrepresentable coefficients return `SimulationError::Overflow`;
+  admission never substitutes a motion already resting at the target. Fling
+  constructs its simulation before replacing any live source, direction or
+  future, and preserves the typed cause as `AnimationError::Simulation`.
+  `fling_with_overflowing_spring_preserves_the_admitted_run` checks the refused
+  replacement, continued original trajectory, successful original completion
+  and a healthy subsequent command in `springs_at_the_edge_of_f64_stay_finite_and_rest`.
+- Policy and missing-clock settlement finish native flings at their declared
+  bound. The bounded probe of arbitrary simulations cannot identify a slow
+  fling's endpoint. `fling_settlement_reaches_its_declared_bound` in
+  `simulation_settle_grid` covers both directions under Reduce, missing clock
+  and exhausted clock, endpoint publication before completion delivery, one
+  transition and healthy subsequent motion.
 - The motion is one closed form for every `ζ`:
   `x = e^{−at}[x0·C + (a·x0 + v0)·S]`, `v = e^{−at}[v0·C − (ω²x0 + a·v0)·S]`,
   `a = ζω`, with `C`, `S` summed as series where `|ω²(1 − ζ²)t²| < 10⁻²`
@@ -734,31 +1017,24 @@ AnimationController (produces 0.0 → 1.0)
 CurvedAnimation (applies easing curve)
         │
         ▼ Rc<dyn Animation<f64>>
-TweenAnimation<Color> (maps to Color)
+TweenAnimation<ColorTween> (maps to Color)
         │
         ▼ Animation<Color>
 ```
 
-Each wrapper stores parent as `Rc<dyn Animation<f64>>`:
+The wrappers share a private `ParentLinks` allocation containing the parent,
+separate value/status notifiers and one subscription to each parent channel.
+Cloning a wrapper shares these links; final retirement withdraws outgoing
+callbacks before detaching the subscriptions. curves and animatables remain
+owned by each value clone and follow terminal retirement when authored
+destruction fails.
 
-```rust
-pub struct CurvedAnimation<C: Curve> {
-    parent: Rc<dyn Animation<f64>>,
-    curve: C,
-    reverse_curve: Option<C>,
-}
-
-impl<C: Curve> Animation<f64> for CurvedAnimation<C> {
-    fn value(&self) -> f64 {
-        let t = self.parent.value();
-        self.curve.transform(t)
-    }
-    
-    fn status(&self) -> AnimationStatus {
-        self.parent.status()  // Pass through
-    }
-}
-```
+`CurvedAnimation` also shares the run's entering direction in an owner-local
+`Cell`. A direction change during that run keeps the selected curve; resting
+status clears the selection so the next run can choose its forward or reverse
+curve. Value evaluation and authored destruction execute after storage borrows
+end. `TweenAnimation` maps the sampled parent value, while `ReverseAnimation`
+mirrors both value and status.
 
 ## UI ownership
 
@@ -770,22 +1046,18 @@ they do not retain UI callback storage.
 
 ## Error Handling
 
-```rust
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[non_exhaustive]
-pub enum AnimationError {
-    Disposed,                // operation on a disposed controller
-    InvalidBounds(String),   // lower >= upper, non-finite bound/span, bad repeat range
-    IdentityExhausted,        // run or sample identity namespace exhausted
-    InvalidSpring(String),   // oscillating spring passed to fling
-    NonFiniteTarget(String), // non-finite target, `from`, velocity or simulation start
-}
-```
+[`error.rs`](../src/error.rs) defines the authoritative public error variants.
+`ValueRange::new` returns the narrow `RangeDefect`; controller and animated-value
+operations return `AnimationError`. `AnimationInput` identifies the refused
+value. Numeric fields, component indices and original `SimulationError` causes
+remain matchable without parsing a message. Construction of an already-validated
+`ValueRange` cannot produce a controller-lifetime error.
 
-Design:
-- `#[non_exhaustive]` — can add variants without breaking
-- `Clone` — an outcome can retain its error value
-- All fallible operations return `Result<_, AnimationError>`
+The error enums are `#[non_exhaustive]`; outcomes can clone their causes. Typed
+refusals commit no run change, and diagnostics run after borrows end. The public
+`typed_refusals_preserve_the_original_run` case checks exact input kinds and
+values, bounded infinity clamping, unchanged samples and original-future delivery.
+ADR-0198 records migration and optional serde limits.
 
 ## Memory Management
 

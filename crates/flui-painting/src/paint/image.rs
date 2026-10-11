@@ -228,7 +228,7 @@ impl Image {
     #[inline]
     pub fn solid_color(width: u32, height: u32, color: Color) -> Self {
         let pixel_count = (width * height) as usize;
-        let pixel = [color.r, color.g, color.b, color.a];
+        let pixel = color.to_rgba8();
         let data: Vec<u8> = pixel
             .iter()
             .copied()
@@ -428,7 +428,7 @@ impl Default for ImageConfiguration {
 /// ## Copy semantics
 ///
 /// `ColorFilter` is `Copy`: all variants are plain-old-data.  `Matrix`
-/// wraps `ColorMatrix` (a `[f64;20]` newtype) which also derives `Copy`.
+/// wraps `ColorMatrix` (a `[f32; 20]` value) which also derives `Copy`.
 ///
 /// ## Stability
 ///
@@ -488,7 +488,7 @@ impl ColorFilter {
     pub fn modifies_transparent_black(&self) -> bool {
         match self {
             ColorFilter::Mode { color, blend_mode } => {
-                color.a > 0
+                !color.is_transparent()
                     && !matches!(
                         blend_mode,
                         BlendMode::Clear

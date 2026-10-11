@@ -60,7 +60,8 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use flui_animation::{
-    Animation, AnimationController, AnimationStatus, Curves, DrivenController, Vsync,
+    Animation, AnimationController, AnimationStatus, DrivenController, StatusSubscription, Vsync,
+    curves,
 };
 use flui_foundation::geometry::Axis;
 use flui_foundation::{Listenable, ListenerId};
@@ -537,10 +538,10 @@ pub struct ScrollableState {
     /// controller swap moves it onto the new controller), removed in
     /// `dispose`.
     fling_listener_id: Option<ListenerId>,
-    /// Status-listener ID on `fling_controller` that marks the shared
+    /// Owning status subscription on `fling_controller` that marks the shared
     /// `ScrollPosition` idle when the ballistic run settles or is stopped.
-    /// Same install/remove lifecycle as `fling_listener_id`.
-    fling_status_listener_id: Option<ListenerId>,
+    /// Withdrawn before controller teardown or attachment replacement.
+    fling_status_subscription: Option<StatusSubscription>,
     /// Listener ID on the *scroll* controller that services an
     /// `animate_to`/`jump_to`-queued command
     /// ([`ScrollController::service_pending_command`]). Installed by
@@ -599,6 +600,7 @@ impl StatefulView for Scrollable {
         // `without_ticker_bounds` now REJECTS a wide-open pair. No ticker:
         // `Vsync` drives this controller once registered below.
         let fling_controller = AnimationController::builder(Duration::from_millis(1))
+            .behavior(flui_animation::AnimationBehavior::Preserve)
             .unbounded()
             .build_on(None);
 
@@ -612,7 +614,7 @@ impl StatefulView for Scrollable {
             wheel_motion: Rc::new(RefCell::new(None)),
             fling_endpoint: RefCell::new(None),
             fling_listener_id: None,
-            fling_status_listener_id: None,
+            fling_status_subscription: None,
             post_frame: None,
             command_listener: None,
             pipeline: None,
@@ -632,10 +634,12 @@ impl ScrollableState {
             return;
         }
         self.fling_clock = incoming;
-        self.wheel_motion.borrow_mut().take();
-        // Cancel at the sampled pixels before a missing clock can settle the
-        // finite run. Gesture contacts remain owned by their admitted position.
-        let _ = self.fling_controller.controller().stop();
+        if self.fling_clock.is_none() {
+            self.wheel_motion.borrow_mut().take();
+            // A missing clock must not jump a physical scroll to its unbound
+            // settlement. A transfer between clocks preserves the accepted run.
+            let _ = self.fling_controller.controller().stop();
+        }
         if let Err(error) = self.fling_controller.rebind(self.fling_clock.as_ref()) {
             tracing::error!(%error, "Scrollable lost its frame registry");
         }
@@ -775,7 +779,7 @@ impl ScrollableState {
         self.remove_command_listener();
         let scroll_ref = self.scroll_controller.clone();
         let fling_ref = self.fling_controller.controller().clone();
-        let listenable = self.scroll_controller.as_listenable();
+        let listenable = self.scroll_controller.listenable();
         let listener_id = listenable.add_listener(std::rc::Rc::new(move || {
             scroll_ref.service_pending_command(&fling_ref);
         }));
@@ -801,29 +805,25 @@ impl ScrollableState {
     }
 
     /// Installs the status listener that ends the position's scroll
-    /// activity when the ballistic run settles (`Completed`) or is stopped
-    /// by a grab or teardown (`Dismissed`). The activity signal is what a
+    /// activity when the ballistic run settles or is stopped by a grab or
+    /// teardown (`ForwardSettled` or `ReverseSettled`). The activity signal is what a
     /// floating header's snap trigger listens to — without this half, a
     /// fling would leave `is_scrolling` stuck true forever.
     fn install_fling_status_listener(&mut self) {
-        if let Some(id) = self.fling_status_listener_id.take() {
-            self.fling_controller
-                .controller()
-                .remove_status_listener(id);
-        }
+        drop(self.fling_status_subscription.take());
         let position = self.scroll_controller.position();
-        let listener_id = self
+        let subscription = self
             .fling_controller
             .controller()
-            .add_status_listener(std::rc::Rc::new(move |status| {
+            .subscribe_status(std::rc::Rc::new(move |status| {
                 if matches!(
                     status,
-                    AnimationStatus::Completed | AnimationStatus::Dismissed
+                    AnimationStatus::ForwardSettled | AnimationStatus::ReverseSettled
                 ) {
                     position.set_is_scrolling(false);
                 }
             }));
-        self.fling_status_listener_id = Some(listener_id);
+        self.fling_status_subscription = Some(subscription);
     }
 }
 
@@ -1056,7 +1056,7 @@ impl ViewState<Scrollable> for ScrollableState {
                             .filter(|motion| {
                                 motion.generation.get().is_none_or(|generation| {
                                     generation == fling_wheel.run_generation()
-                                        && fling_wheel.status().is_running()
+                                        && fling_wheel.status().is_directional()
                                 })
                             })
                             .map_or(pixels, |motion| motion.target)
@@ -1110,10 +1110,10 @@ impl ViewState<Scrollable> for ScrollableState {
                         let started = fling_wheel.animate_to_curved(
                             target,
                             Some(Duration::from_millis(150)),
-                            Rc::new(Curves::EaseOut),
+                            Rc::new(curves::EASE_OUT),
                         );
                         if is_current() {
-                            if started.is_ok() && fling_wheel.status().is_running() {
+                            if started.is_ok() && fling_wheel.status().is_directional() {
                                 motion.generation.set(Some(fling_wheel.run_generation()));
                                 position.set_is_scrolling(true);
                                 if !is_current() {
@@ -1157,7 +1157,7 @@ impl ViewState<Scrollable> for ScrollableState {
                                 .schedule(move |_timing| {
                                     // A subsequent notch may have started after
                                     // this immediate tick but before the frame.
-                                    if !motion_end.status().is_running() {
+                                    if !motion_end.status().is_directional() {
                                         pulse_end.set_is_scrolling(false);
                                     }
                                 })
@@ -1233,11 +1233,7 @@ impl ViewState<Scrollable> for ScrollableState {
         if let Some(id) = self.fling_listener_id.take() {
             self.fling_controller.controller().remove_listener(id);
         }
-        if let Some(id) = self.fling_status_listener_id.take() {
-            self.fling_controller
-                .controller()
-                .remove_status_listener(id);
-        }
+        drop(self.fling_status_subscription.take());
         self.remove_command_listener();
         // Release the vsync registration so the binding does not hold a
         // reference to the disposed controller.

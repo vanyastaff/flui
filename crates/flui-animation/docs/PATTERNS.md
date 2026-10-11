@@ -23,6 +23,20 @@ observer.forward().expect("live controller");
 drop(owner); // unregister, then cancel
 ```
 
+## Motion belongs to the presentation
+
+Keep motion policy on the runtime's presentation clocks. Controller builders
+select immutable Normal or Preserve behavior; widget builds may read the
+resolved MediaQuery policy but do not change clocks or sample controllers.
+Preserve is appropriate for elapsed-time obligations and physical inertia.
+An ordinary decorative transition stays Normal, including on an unbounded
+controller.
+
+Retain owners while their Normal repeat is parked under Reduce. Parking
+removes continuous frame demand without completing the run; rebinding or
+returning to Full can request one sample to anchor resumption. The registration
+owns that wake obligation, independently of continuous animation activity.
+
 ## Validated configuration
 
 `ValueRange` validates finite endpoints and a finite positive span before a

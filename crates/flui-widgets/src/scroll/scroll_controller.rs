@@ -2,9 +2,9 @@
 //! position.
 //!
 //! A `ScrollController` is cheaply cloneable: every clone shares the same
-//! underlying state via an `Arc`. Gesture callbacks inside `Scrollable` hold
+//! owner-local state via an `Rc`. Gesture callbacks inside `Scrollable` hold
 //! a clone and mutate the position; `AnimatedView`'s listenable subscription
-//! on the same `Arc` triggers a rebuild whenever the position changes.
+//! on the same position observes changes.
 //!
 //! # Handle and position
 //!
@@ -17,10 +17,10 @@
 //!
 //! - Multiple attached positions (one controller → many scrollables).
 //!
-//! # `animate_to` (ADR-0037)
+//! # Programmatic motion
 //!
 //! [`ScrollController::animate_to`] queues a `PendingScrollCommand` — a
-//! private, mutex-guarded cell — rather than driving a ticker itself: the
+//! private, owner-local cell — rather than driving a ticker itself: the
 //! controller has no `AnimationController` of its own to animate with.
 //! `Scrollable`'s `ScrollableState` (`scrollable.rs`) already owns one (the
 //! vsync-registered fling controller its module docs describe) and services
@@ -35,13 +35,11 @@
 //! **No completion future.** There is no widget-level async gate to await
 //! from `build`/event-handler code, so `animate_to` returns
 //! nothing — a caller cannot observe when the run finishes short of polling
-//! [`ScrollController::pixels`] or watching [`ScrollController::as_listenable`].
-//! Named follow-up: `flui-material`'s `TabController`/`TabBarView`
-//! (`tab_controller.rs`'s "`animate_to` is a documented alias" section)
-//! documents `TabController::animate_to` as a plain `set_index` alias
-//! specifically because no real `AnimationController`/`Ticker` wiring existed
-//! anywhere in this crate yet — that rebase is this PR's closure signal, not
-//! something this change reaches into `flui-material` to do itself.
+//! [`ScrollController::pixels`] or watching [`ScrollController::listenable`].
+//! Replacement commits the incoming command before retiring the outgoing
+//! curve outside the cell's borrow. Delivery and retirement share first-failure
+//! custody. A jump publishes its pixels before displaced pending curve destruction;
+//! a command admitted by that destruction remains newer than the jump.
 //!
 //! # Content-dimension feedback
 //!
@@ -53,12 +51,13 @@
 //! directly — see that type's docs for the coalesced post-frame flush that
 //! replaces a synchronous notify from inside layout.
 
+use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::Mutex;
 use std::time::Duration;
 
-use flui_animation::{AnimationController, Curve};
+use flui_animation::{Animation, AnimationController, ArcCurve, MotionSpec};
 use flui_foundation::Listenable;
+use flui_foundation::panic::PanicRecovery;
 use flui_rendering::view::{ScrollPosition, ViewportOffset};
 
 /// The synchronous `jump_to` cancellation hook — see [`ScrollController`]'s
@@ -84,11 +83,19 @@ pub(super) enum PendingScrollCommand {
     AnimateTo {
         target_pixels: f64,
         duration: Duration,
-        curve: Rc<dyn Curve + Send + Sync>, // see PopPacing's doc (navigator/binding.rs) — same erased easing-curve boundary
+        curve: ArcCurve,
     },
     /// Stop whatever is currently driving the fling controller — `jump_to`
     /// supersedes any pending or in-flight `animate_to`.
     Cancel,
+}
+
+#[derive(Default)]
+struct CommandSlot {
+    pending: Option<PendingScrollCommand>,
+    // A live admission keeps its identity even after the widget takes its
+    // command. Pointer identity cannot wrap or alias another live admission.
+    authority: Option<Rc<()>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -120,43 +127,28 @@ pub(super) enum PendingScrollCommand {
 #[derive(Clone)]
 pub struct ScrollController {
     position: ScrollPosition,
-    /// See `PendingScrollCommand`'s docs. Behind a private lock — never
-    /// exposed through the public API — and shared across clones via the
-    /// same `Arc` every other piece of this controller's state rides on.
-    pending_command: Rc<Mutex<Option<PendingScrollCommand>>>,
+    /// The latest unserviced command, shared only within the owning UI lane.
+    /// Replacement moves outgoing ownership beyond the cell borrow.
+    pending_command: Rc<RefCell<CommandSlot>>,
     /// A synchronous cancellation hook `ScrollableState::init_state` installs
     /// (mirroring `ScrollPosition::set_flush_handle`'s install lifecycle),
     /// closing over the fling `AnimationController` to call `stop()` on it
     /// immediately.
     ///
-    /// Needed alongside `PendingScrollCommand::Cancel`, not instead of it:
-    /// `flui-testing`'s `pump_frame` ticks vsync-registered controllers
-    /// *before* draining the rebuild queue that services a merely-queued
-    /// pending command (see its "Ordering" doc). Without this hook, `jump_to`
-    /// during an active `animate_to`/fling would queue a `Cancel` that only
-    /// takes effect on the NEXT frame's rebuild — one frame too late, since
-    /// that same frame's tick step would already have advanced (and
-    /// overwritten) the position via the not-yet-stopped controller's value
-    /// listener. Calling `stop()` here, synchronously, at `jump_to` call time
-    /// closes that gap: the activity goes idle before `pixels` is touched.
-    stop_hook: Rc<Mutex<Option<StopHook>>>,
+    /// An equal-pixel jump does not notify position listeners, so its pending
+    /// cancellation would otherwise wait for another position change. The
+    /// hook stops the live driver synchronously even for that equal-pixel jump.
+    stop_hook: Rc<RefCell<Option<StopHook>>>,
 }
 
 impl std::fmt::Debug for ScrollController {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let has_pending_command = self.pending_command.borrow().pending.is_some();
+        let has_stop_hook = self.stop_hook.borrow().is_some();
         f.debug_struct("ScrollController")
             .field("position", &self.position)
-            .field(
-                "has_pending_command",
-                &self
-                    .pending_command
-                    .lock()
-                    .is_ok_and(|guard| guard.is_some()),
-            )
-            .field(
-                "has_stop_hook",
-                &self.stop_hook.lock().is_ok_and(|guard| guard.is_some()),
-            )
+            .field("has_pending_command", &has_pending_command)
+            .field("has_stop_hook", &has_stop_hook)
             .finish()
     }
 }
@@ -178,8 +170,8 @@ impl ScrollController {
     pub fn new() -> Self {
         Self {
             position: ScrollPosition::zero(),
-            pending_command: Rc::new(Mutex::new(None)),
-            stop_hook: Rc::new(Mutex::new(None)),
+            pending_command: Rc::new(RefCell::new(CommandSlot::default())),
+            stop_hook: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -263,23 +255,28 @@ impl ScrollController {
     /// in favor of this jump.
     pub fn jump_to(&self, pixels: f64) {
         let clamped = pixels.clamp(self.min_scroll_extent(), self.max_scroll_extent());
-        // Clone the hook `Arc` out and drop the lock BEFORE calling it — do
-        // NOT invoke it while still holding the guard. `hook()` synchronously
-        // calls `fling.stop()`, which fires `fling`'s OWN status listeners
-        // synchronously (`AnimationController::stop`); a status listener that
-        // re-enters `jump_to` (directly, or via any other `stop_hook` caller)
-        // would try to re-lock this same, non-reentrant `std::sync::Mutex` on
-        // the same thread — a guaranteed deadlock, not just a slow path.
-        let hook = self
-            .stop_hook
-            .lock()
-            .expect("BUG: stop_hook mutex poisoned — a panic escaped a locked section")
-            .clone();
+        let mut recovery = PanicRecovery::new();
+        let (authority, retired) = self.replace_pending_command(PendingScrollCommand::Cancel);
+        // Stopping can synchronously reenter through the driver's listeners.
+        let hook = self.stop_hook.borrow().clone();
         if let Some(hook) = hook {
-            hook();
+            recovery.scope().run(|| hook());
+            recovery.scope().retire(hook);
         }
-        self.set_pending_command(PendingScrollCommand::Cancel);
-        self.position.set_pixels(clamped);
+        let current = self
+            .pending_command
+            .borrow()
+            .authority
+            .as_ref()
+            .is_some_and(|current| Rc::ptr_eq(current, &authority));
+        if current {
+            self.position
+                .set_pixels_with_recovery(clamped, &mut recovery.scope());
+        }
+        // Pixel publication precedes pending-curve destruction, so a newer jump
+        // or animation cannot be overwritten by this jump's accepted tail.
+        recovery.scope().retire(retired);
+        recovery.finish();
     }
 
     /// Animate the scroll offset from its current value to `target_pixels`
@@ -303,38 +300,37 @@ impl ScrollController {
     ///
     /// `ScrollController` is deliberately physics-agnostic (see this module's
     /// docs), so there is no physics-derived tolerance for "close enough to
-    /// jump instead". The call short-circuits on EXACT equality only (below),
+    /// jump instead". Exact equality short-circuits only while at rest,
     /// which skips the queued-command round-trip's one-frame delay for the
     /// common "already there" case, but still queues (and pays that one frame)
     /// for a target merely *close* to, but not exactly at, the current
     /// position.
     ///
     /// See this module's docs for why this returns no completion future.
-    pub fn animate_to(
-        &self,
-        target_pixels: f64,
-        duration: Duration,
-        curve: Rc<dyn Curve + Send + Sync>, // see PopPacing's doc (navigator/binding.rs) — same erased easing-curve boundary
-    ) {
+    pub fn animate_to(&self, target_pixels: f64, duration: Duration, curve: ArcCurve) {
         if duration.is_zero() {
             self.jump_to(target_pixels);
             return;
         }
         let target = target_pixels.clamp(self.min_scroll_extent(), self.max_scroll_extent());
-        if target == self.pixels() {
-            // Already there: jump (a no-op write, since the value doesn't
+        if target == self.pixels() && !self.position.is_scrolling() {
+            // Already resting there: jump (a no-op write, since the value doesn't
             // change) rather than queuing a command whose own servicing
-            // would just reach `AnimationController::drive_to`'s identical
-            // "already at target" fast path one frame later.
+            // would just reach `AnimationController::retarget`'s identical
+            // "already at target" fast path one frame later. A moving position
+            // instead retains its velocity and brakes through retarget.
             self.jump_to(target);
             return;
         }
-        self.set_pending_command(PendingScrollCommand::AnimateTo {
+        let mut recovery = PanicRecovery::new();
+        let (_, retired) = self.replace_pending_command(PendingScrollCommand::AnimateTo {
             target_pixels: target,
             duration,
             curve,
         });
-        self.position.notify();
+        recovery.scope().retire(retired);
+        self.position.notify_with_recovery(&mut recovery.scope());
+        recovery.finish();
     }
 
     /// Update the scroll extents and viewport dimension, then unconditionally
@@ -397,11 +393,7 @@ impl ScrollController {
     /// mirroring `ScrollPosition::set_flush_handle`'s own re-install
     /// tolerance.
     pub(crate) fn set_stop_hook(&self, hook: StopHook) {
-        let retired = self
-            .stop_hook
-            .lock()
-            .expect("BUG: stop_hook mutex poisoned — a panic escaped a locked section")
-            .replace(hook);
+        let retired = self.stop_hook.borrow_mut().replace(hook);
         drop(retired);
     }
 
@@ -409,10 +401,7 @@ impl ScrollController {
     /// have replaced it on the same shared controller.
     pub(crate) fn clear_stop_hook(&self, owned: &StopHook) -> bool {
         let retired = {
-            let mut hook = self
-                .stop_hook
-                .lock()
-                .expect("BUG: stop_hook mutex poisoned — a panic escaped a locked section");
+            let mut hook = self.stop_hook.borrow_mut();
             if hook
                 .as_ref()
                 .is_some_and(|current| Rc::ptr_eq(current, owned))
@@ -429,20 +418,22 @@ impl ScrollController {
 
     /// Overwrites the pending-command slot — a later command always
     /// supersedes an earlier, not-yet-serviced one.
-    fn set_pending_command(&self, command: PendingScrollCommand) {
-        *self
-            .pending_command
-            .lock()
-            .expect("BUG: pending_command mutex poisoned — a panic escaped a locked section") =
-            Some(command);
+    fn replace_pending_command(
+        &self,
+        command: PendingScrollCommand,
+    ) -> (Rc<()>, Option<PendingScrollCommand>) {
+        let authority = Rc::new(());
+        let retired = {
+            let mut slot = self.pending_command.borrow_mut();
+            slot.authority = Some(Rc::clone(&authority));
+            slot.pending.replace(command)
+        };
+        (authority, retired)
     }
 
     /// Takes (and clears) the pending command, if any.
     pub(super) fn take_pending_command(&self) -> Option<PendingScrollCommand> {
-        self.pending_command
-            .lock()
-            .expect("BUG: pending_command mutex poisoned — a panic escaped a locked section")
-            .take()
+        self.pending_command.borrow_mut().pending.take()
     }
 
     /// Drops any not-yet-serviced pending command — called from
@@ -480,14 +471,16 @@ impl ScrollController {
                 duration,
                 curve,
             } => {
-                // Sync `fling`'s own value to the true current pixel position
-                // first: its value listener only pushes FROM the controller
-                // INTO this position, so if pixels moved without ticking it (a
-                // `jump_to`, or this being the very first animation `fling`
-                // has ever driven), its value is stale and animating from it
-                // would visibly jump instead of starting from where the
-                // position actually sits.
-                fling.set_value(self.pixels());
+                if !target_pixels.is_finite() {
+                    return;
+                }
+                // External position writes can leave the driver behind. Sync
+                // those writes, but keep a current driver's published velocity
+                // and frame origin when interrupting its existing motion.
+                let pixels = self.pixels();
+                if fling.value() != pixels {
+                    fling.set_value(pixels);
+                }
                 // `animate_to` runs inside a driven scroll activity, so
                 // the scrolling notifier holds true for the run — while the
                 // USER direction stays idle, because nobody's finger is down. The
@@ -495,23 +488,12 @@ impl ScrollController {
                 // `ScrollableState`) ends the activity when the run settles,
                 // exactly as it does for a ballistic fling.
                 //
-                // #1183: raise the activity only after the run start
-                // returned `Ok`, and only if it's still actually running.
-                // `target_pixels` reaching here NaN (`f64::clamp` passes NaN
-                // through unchanged, since every NaN comparison is `false`
-                // -- `ScrollController::animate_to`'s own pre-clamp does not
-                // filter it) must not park the scrollable in "scrolling"
-                // forever; and a start that settles SYNCHRONOUSLY (target ==
-                // the just-synced current value) already reported its own
-                // end through the status listener above -- checking
-                // `is_running()` after the call, rather than unconditionally
-                // on `Ok`, keeps that already-correct settle from being
-                // clobbered back to `true`.
-                use flui_animation::Animation;
+                // Rejected or synchronously settled motion must not raise an
+                // activity that has no running driver to end it.
                 if fling
-                    .animate_to_curved(target_pixels, Some(duration), curve)
+                    .retarget(target_pixels, &MotionSpec::Curve { duration, curve })
                     .is_ok()
-                    && fling.status().is_running()
+                    && fling.status().is_directional()
                 {
                     self.position().set_is_scrolling(true);
                 }
@@ -524,14 +506,14 @@ impl ScrollController {
 
     // -- Listenable bridge ---------------------------------------------------
 
-    /// Return an `Arc<dyn Listenable>` pointing at the same shared position.
+    /// Return an `Rc<dyn Listenable>` pointing at the same shared position.
     ///
     /// Used by `Scrollable` when implementing `AnimatedView::listenable()` —
-    /// the `Arc` upcast avoids an extra allocation and keeps all clones
+    /// the `Rc` upcast avoids an extra allocation and keeps all clones
     /// sharing a single notifier.
     #[must_use]
-    pub fn as_listenable(&self) -> std::rc::Rc<dyn Listenable> {
-        self.position.as_listenable()
+    pub fn listenable(&self) -> std::rc::Rc<dyn Listenable> {
+        self.position.listenable()
     }
 
     // -- Scrollbar helpers ---------------------------------------------------
@@ -600,16 +582,9 @@ mod tests {
             .build()
     }
 
-    /// Regression (latent deadlock): `jump_to` must clone the `stop_hook`
-    /// `Arc` out and drop the mutex guard BEFORE invoking it — not call it
-    /// while still holding the lock. `fling.stop()` (what the installed hook
-    /// calls) fires `fling`'s own status listeners SYNCHRONOUSLY on a real
-    /// status transition; a status listener that itself calls `jump_to`
-    /// again (directly, or through anything else that touches `stop_hook`)
-    /// would try to re-lock this same, non-reentrant `std::sync::Mutex` on
-    /// the SAME thread — an unconditional deadlock if the guard were still
-    /// held, since `std::sync::Mutex` never grants a second lock to the
-    /// thread already holding it.
+    /// `jump_to` snapshots its cancellation hook before calling it. Stopping
+    /// a driver can synchronously invoke a status listener that jumps through
+    /// the same handle; that call must find no outstanding controller borrow.
     ///
     /// The risky call runs on a background thread with a bounded
     /// `recv_timeout`: a real deadlock would hang forever, so this turns a
@@ -638,7 +613,7 @@ mod tests {
                 .animate_to(1_000_000.0, None)
                 .expect("fling_stub is not disposed, animate_to() must succeed");
             assert!(
-                fling.status().is_running(),
+                fling.status().is_directional(),
                 "sanity: animate_to() leaves the fling controller running, so the \
              stop() fired from jump_to's hook below is a genuine status \
              transition (not a no-op the listener would never see)"
@@ -648,9 +623,11 @@ mod tests {
             // fires synchronously from inside `fling.stop()` (called by the
             // installed hook), on whichever thread calls it.
             let reentrant_controller = controller.clone();
-            fling.add_status_listener(std::rc::Rc::new(move |_status| {
-                reentrant_controller.jump_to(0.0);
-            }));
+            fling
+                .subscribe_status(std::rc::Rc::new(move |_status| {
+                    reentrant_controller.jump_to(0.0);
+                }))
+                .detach();
 
             let hook_target = fling;
             controller.set_stop_hook(Rc::new(move || {
@@ -664,8 +641,8 @@ mod tests {
         assert!(
             rx.recv_timeout(Duration::from_secs(2)).is_ok(),
             "jump_to must not deadlock when its stop_hook synchronously \
-             re-enters jump_to via a status listener — the stop_hook Arc must \
-             be cloned out of the mutex guard before the hook is invoked"
+             re-enters jump_to via a status listener — snapshot the hook \
+             and release its storage before invocation"
         );
     }
 }

@@ -1268,7 +1268,7 @@ impl Renderer {
     fn select_surface_format(
         surface_caps: &wgpu::SurfaceCapabilities,
     ) -> EngineResult<(wgpu::TextureFormat, wgpu::SurfaceColorSpace)> {
-        // Color::to_f32_array and the shaders preserve encoded values. Plain
+        // Color::to_rgba_f32_array and the shaders preserve encoded values. Plain
         // UNorm stores those bytes without another transfer function; explicit
         // Srgb tells the compositor how to interpret them. An FP16/Auto surface
         // can instead select ExtendedSrgbLinear and brighten the same values.

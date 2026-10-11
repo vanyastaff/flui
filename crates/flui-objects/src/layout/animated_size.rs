@@ -53,7 +53,7 @@ use flui_rendering::{
         PaintCx,
     },
     parent_data::BoxParentData,
-    pipeline::RenderInvalidationHandle,
+    pipeline::LocalRenderInvalidationHandle,
     traits::{RenderBox, TextBaseline},
 };
 
@@ -209,7 +209,7 @@ impl RenderAnimatedSize {
             self.size_tween = SizeTween::new(self.current_size, child_size);
             self.restart_animation();
             self.state = AnimatedSizeState::Changed;
-        } else if self.controller.status() == AnimationStatus::Completed {
+        } else if self.controller.status() == AnimationStatus::ForwardSettled {
             // Both ends already equal `child_size`; a no-op snap that just
             // clears any float drift (detected via `status()` rather than by
             // comparing the controller value with its upper bound).
@@ -272,7 +272,7 @@ impl RenderAnimatedSize {
             AnimatedSizeState::Stable => {
                 if self.size_tween.end != child_size {
                     constraints.constrain(self.current_size)
-                } else if self.controller.status() == AnimationStatus::Completed {
+                } else if self.controller.status() == AnimationStatus::ForwardSettled {
                     constraints.constrain(child_size)
                 } else {
                     constraints.constrain(self.size_tween.transform(self.animation.value()))
@@ -458,7 +458,7 @@ impl RenderBox for RenderAnimatedSize {
         self.inner.hit_test(ctx)
     }
 
-    fn attach(&mut self, handle: RenderInvalidationHandle) {
+    fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
         let mark_handle = handle.clone();
         self.listener_id = Some(self.controller.add_listener(std::rc::Rc::new(move || {
             let _ = mark_handle.mark_needs_layout();

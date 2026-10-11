@@ -164,6 +164,15 @@ TickerCanceled, TickerFuture, TickerState}` (`lib.rs:167-171`), `ALWAYS_COMPLETE
 (`constant.rs`, строки `globals` в `Cargo.toml:67-68`) → `ConstantAnimation::completed(1.0)` /
 `dismissed(0.0)` в `transition_route.rs:59,72,78`. Каждое удаление сверяется с `flui-sdk/tests/surface.rs` (ADR-0088 §4), `packages/` — в том же PR; правки `flui-scheduler` исполняет владелец motion-clock.
 
+### Постоянная анимация с авторской фазой
+
+Владелец согласовал сохранение `ConstantAnimation::with_status(value, phase)` как API для
+авторов приложений. Он представляет неизменное значение с выбранной фазой, например для
+подстановки в композицию анимаций. Фаза не устанавливает активный запуск, не создаёт future
+и не доказывает успешное завершение: `is_animating()` остаётся `false` для всех четырёх фаз.
+Разделение значения, фазы и запуска следует ADR-0193. Публичный контракт закрепляет
+`a_constant_phase_does_not_install_a_run`, включая чтение через animation wrappers.
+
 ## 4. Инварианты
 
 1. Контроллер продвигается только `tick_at`; старт прогона не вызывает чужой код под guard.

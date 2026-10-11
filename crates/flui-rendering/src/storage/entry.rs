@@ -33,6 +33,7 @@ use crate::protocol::{Protocol, ProtocolConstraints, ProtocolGeometry, RenderObj
 enum AttachmentState {
     Detached(Option<AttachmentEpoch>),
     Attached(AttachmentEpoch),
+    Detaching(AttachmentEpoch),
 }
 
 impl AttachmentState {
@@ -40,14 +41,14 @@ impl AttachmentState {
         match self {
             Self::Detached(None) => Some(AttachmentEpoch::FIRST),
             Self::Detached(Some(previous)) => Some(previous.next()),
-            Self::Attached(_) => None,
+            Self::Attached(_) | Self::Detaching(_) => None,
         }
     }
 
     fn epoch(self) -> Option<AttachmentEpoch> {
         match self {
             Self::Attached(epoch) => Some(epoch),
-            Self::Detached(_) => None,
+            Self::Detached(_) | Self::Detaching(_) => None,
         }
     }
 
@@ -104,6 +105,7 @@ pub struct RenderEntry<P: Protocol> {
     /// Kept outside `RenderState`: attachment is storage lifecycle, not
     /// protocol geometry or per-frame state.
     attachment: AttachmentState,
+    local_invalidation: Option<crate::pipeline::LocalRenderInvalidationHandle>,
 }
 
 /// Custody for the user-owned render object and parent data.
@@ -128,6 +130,9 @@ impl<P: Protocol> Drop for RetiringEntry<P> {
 
 impl<P: Protocol> Drop for RenderEntry<P> {
     fn drop(&mut self) {
+        if let Some(handle) = self.local_invalidation.take() {
+            handle.withdraw();
+        }
         let mut retiring = RetiringEntry {
             object: self.render_object.take(),
             parent_data: self.state.take_parent_data(),
@@ -172,6 +177,7 @@ impl<P: Protocol> RenderEntry<P> {
             state: RenderState::new(),
             links: NodeLinks::new(),
             attachment: AttachmentState::Detached(None),
+            local_invalidation: None,
         }
     }
 
@@ -186,6 +192,7 @@ impl<P: Protocol> RenderEntry<P> {
             state: RenderState::new(),
             links: NodeLinks::with_parent(parent, depth),
             attachment: AttachmentState::Detached(None),
+            local_invalidation: None,
         }
     }
 
@@ -193,20 +200,44 @@ impl<P: Protocol> RenderEntry<P> {
         self.attachment.next_epoch()
     }
 
-    pub(crate) fn begin_attachment(&mut self, epoch: AttachmentEpoch) -> bool {
+    pub(crate) fn begin_attachment(
+        &mut self,
+        epoch: AttachmentEpoch,
+        handle: crate::pipeline::LocalRenderInvalidationHandle,
+    ) -> bool {
         if self.attachment.next_epoch() != Some(epoch) {
             return false;
         }
         self.attachment = AttachmentState::Attached(epoch);
+        self.local_invalidation = Some(handle);
+        true
+    }
+
+    /// Withdraw admission without calling user code. The whole selected batch
+    /// enters this state before its first parent-data or render-object cleanup.
+    pub(crate) fn begin_detachment(&mut self) -> bool {
+        let AttachmentState::Attached(epoch) = self.attachment else {
+            return false;
+        };
+        self.attachment = AttachmentState::Detaching(epoch);
+        if let Some(handle) = self.local_invalidation.take() {
+            handle.withdraw();
+        }
         true
     }
 
     pub(crate) fn end_attachment(&mut self) -> bool {
-        let AttachmentState::Attached(epoch) = self.attachment else {
+        let AttachmentState::Detaching(epoch) = self.attachment else {
             return false;
         };
         self.attachment = AttachmentState::Detached(Some(epoch));
         true
+    }
+
+    pub(crate) fn local_invalidation(
+        &self,
+    ) -> Option<crate::pipeline::LocalRenderInvalidationHandle> {
+        self.local_invalidation.clone()
     }
 
     pub(crate) fn is_attached_for(&self, epoch: AttachmentEpoch) -> bool {

@@ -11,9 +11,10 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::time::Duration;
 
 use flui_animation::{
-    Animatable, Curve, Curves, JumpAt, Keyframes, KeyframesError, Lerp, Linear, Stagger,
-    StaggerOrigin, Steps, TwoWayConverter,
+    Animatable, Curve, JumpAt, Keyframes, KeyframesError, Lerp, Linear, Stagger, StaggerOrigin,
+    Steps, TwoWayConverter, curves,
 };
+use flui_foundation::geometry::Rect;
 use proptest::prelude::*;
 
 fn ms(value: u64) -> Duration {
@@ -101,8 +102,8 @@ fn keyframes_segments_follow_each_other() {
 
 fn eased_boundaries_are_keyframes() {
     let track = Keyframes::builder(0.1, ms(300))
-        .to(0.7, ms(100), Curves::EaseInOut)
-        .to(0.3, ms(100), Curves::EaseIn)
+        .to(0.7, ms(100), curves::EASE_IN_OUT)
+        .to(0.3, ms(100), curves::EASE_IN)
         .build()
         .expect("fits");
     assert_eq!(track.value_at(ms(0)).to_bits(), 0.1_f64.to_bits());
@@ -384,6 +385,9 @@ impl Lerp for Volatile {
 
 impl TwoWayConverter for Volatile {
     type Vector = [f64; 1];
+    fn rest_thresholds() -> Self::Vector {
+        [0.001]
+    }
     fn to_vector(&self) -> [f64; 1] {
         [self.0]
     }
@@ -538,6 +542,50 @@ fn cubic_hits_a_late_keyframe_at_its_time() {
     assert_eq!(track.value_at(Duration::from_secs(1)), 1.0);
 }
 
+fn rectangle_tracks_animate_bounds_without_normalizing() {
+    for (start, end) in [
+        (
+            Rect::from_ltrb(10.0, 20.0, 40.0, 60.0),
+            Rect::from_ltrb(50.0, 60.0, 100.0, 120.0),
+        ),
+        (
+            Rect::from_ltrb(40.0, 60.0, 10.0, 20.0),
+            Rect::from_ltrb(100.0, 120.0, 50.0, 60.0),
+        ),
+        (
+            Rect::from_ltrb(10.0, 20.0, 10.0, 20.0),
+            Rect::from_ltrb(50.0, 60.0, 50.0, 60.0),
+        ),
+        (
+            Rect::from_ltrb(-1e308, 0.0, 1e308, 20.0),
+            Rect::from_ltrb(-1e308, 40.0, 1e308, 60.0),
+        ),
+    ] {
+        let track = Keyframes::builder(start, ms(1000))
+            .cubic(end, ms(1000))
+            .build()
+            .expect("finite bounds do not require a finite derived width");
+        assert_eq!(track.value_at(Duration::ZERO), start);
+        assert_eq!(track.value_at(ms(1000)), end);
+        let quarter = track.value_at(ms(250));
+        // Both endpoint tangents are zero, so h01(1/4) = 5/32.
+        for (actual, begin, finish) in [
+            (quarter.min.x, start.min.x, end.min.x),
+            (quarter.min.y, start.min.y, end.min.y),
+            (quarter.max.x, start.max.x, end.max.x),
+            (quarter.max.y, start.max.y, end.max.y),
+        ] {
+            let expected = if begin == finish {
+                begin
+            } else {
+                begin + (finish - begin) * (5.0 / 32.0)
+            };
+            assert!(actual.is_finite(), "bounds remain finite: {quarter:?}");
+            assert_close(actual, expected, "cubic rectangle bound");
+        }
+    }
+}
+
 fn cubic_hermite_midpoint() {
     // Keys 0, 1, 0 at 0, 1, 2 s. The end velocities are zero and the middle
     // tangent (0 − 0) / 2 s is zero, so each half is the Hermite basis
@@ -591,10 +639,85 @@ fn custom_slope_seeds_the_next_cubic() {
     assert_close(cubic_midpoint_after(DeclaredFlat), 1.5, "declared flat end");
 }
 
+fn hold_and_jump_seed_zero_cubic_velocity() {
+    let held = Keyframes::builder(1.0, ms(2000))
+        .hold(ms(1000))
+        .cubic(2.0, ms(1000))
+        .build()
+        .expect("held track");
+    let jumped = Keyframes::builder(-4.0, ms(2000))
+        .to(-2.0, ms(1000), Linear)
+        .jump(1.0)
+        .cubic(2.0, ms(1000))
+        .build()
+        .expect("jumped track");
+    for (label, track) in [("hold", held), ("jump", jumped)] {
+        // Zero velocities at both ends give h01(1/4) = 5/32.
+        assert_close(track.value_at(ms(1250)), 1.0 + 5.0 / 32.0, label);
+        let (_, outgoing) = one_sided_slopes(&track, ms(1000), Duration::from_micros(10));
+        assert!(outgoing.abs() < 1e-6, "{label}: start velocity {outgoing}");
+    }
+}
+
+fn cubic_borrows_the_following_eased_velocity() {
+    // Square's incoming slope is zero. Its mirrored curve has incoming
+    // slope two, so a two-unit rise in one second starts at four units/s.
+    for (curve, velocity) in [
+        (flui_animation::ArcCurve::new(Square), 0.0),
+        (
+            flui_animation::ArcCurve::new(flui_animation::FlippedCurve::new(Square)),
+            4.0,
+        ),
+    ] {
+        let track = Keyframes::builder(0.0, ms(2000))
+            .cubic(1.0, ms(1000))
+            .to(3.0, ms(1000), curve)
+            .build()
+            .expect("mixed track");
+        // h01(1/2) = 1/2, h11(1/2) = -1/8, initial velocity zero.
+        assert_close(
+            track.value_at(ms(500)),
+            0.5 - velocity / 8.0,
+            "outgoing tangent",
+        );
+        let (left, right) = one_sided_slopes(&track, ms(1000), Duration::from_micros(10));
+        assert!(
+            (left - velocity).abs() < 1e-6,
+            "cubic velocity {left}, expected {velocity}"
+        );
+        assert!(
+            (right - velocity).abs() < 1e-6,
+            "eased velocity {right}, expected {velocity}"
+        );
+    }
+}
+
+fn cubic_before_hold_and_jump_has_zero_final_velocity() {
+    let held = Keyframes::builder(0.0, ms(2000))
+        .cubic(1.0, ms(1000))
+        .hold(ms(1000))
+        .build()
+        .expect("cubic then hold");
+    let jumped = Keyframes::builder(0.0, ms(2000))
+        .cubic(1.0, ms(1000))
+        .jump(3.0)
+        .build()
+        .expect("cubic then jump");
+    for (label, track) in [("before hold", held), ("before jump", jumped)] {
+        // Read before the join: the jump replaces the value at the join itself.
+        assert_close(track.value_at(ms(250)), 5.0 / 32.0, label);
+        assert_close(track.value_at(ms(500)), 0.5, label);
+    }
+}
+
 #[test]
 fn cubic_keyframes_pass_through_keys() {
     crate::run_table(&[
         ("late keyframe", cubic_hits_a_late_keyframe_at_its_time),
+        (
+            "rectangle bounds preserve their geometry",
+            rectangle_tracks_animate_bounds_without_normalizing,
+        ),
         ("Hermite midpoint", cubic_hermite_midpoint),
         (
             "steps hand over no velocity",
@@ -603,6 +726,18 @@ fn cubic_keyframes_pass_through_keys() {
         (
             "custom slope seeds the next cubic",
             custom_slope_seeds_the_next_cubic,
+        ),
+        (
+            "hold and jump seed zero cubic velocity",
+            hold_and_jump_seed_zero_cubic_velocity,
+        ),
+        (
+            "cubic borrows following eased velocity",
+            cubic_borrows_the_following_eased_velocity,
+        ),
+        (
+            "cubic before hold and jump",
+            cubic_before_hold_and_jump_has_zero_final_velocity,
         ),
     ]);
 }
@@ -629,7 +764,7 @@ proptest! {
         for &(millis, value, kind) in &segments {
             let over = ms(millis);
             builder = match kind {
-                0 => builder.to(value, over, Curves::EaseInOut),
+                0 => builder.to(value, over, curves::EASE_IN_OUT),
                 1 => builder.cubic(value, over),
                 2 => builder.hold(over),
                 _ => builder.jump(value),

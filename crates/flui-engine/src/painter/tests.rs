@@ -222,7 +222,23 @@ fn clear_offscreen_result(nested: bool) {
 /// composites with its own blend mode.
 #[test]
 fn painter_images_and_offscreen_results_read_back_as_specified() {
-    let cases: [(&str, fn()); 89] = [
+    let cases: [(&str, fn()); 93] = [
+        (
+            "filtered image device limits refuse and recover",
+            image_boundary::filtered_image_device_limits_refuse_and_recover,
+        ),
+        (
+            "filtered image matrix range",
+            image_boundary::filtered_image_matrix_range,
+        ),
+        (
+            "filtered image preparation failure recovers",
+            image_boundary::filtered_image_preparation_failure_recovers,
+        ),
+        (
+            "filtered image independent clip coverage",
+            image_boundary::filtered_image_independent_clip_coverage,
+        ),
         (
             "image feathered Src transparent texels",
             image_boundary::feathered_src_transparency,

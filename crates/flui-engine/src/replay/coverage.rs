@@ -37,7 +37,7 @@ pub(super) fn run_needs_portable(
             run.clip.has_antialias()
                 && segment.cached_images[range.clone()]
                     .iter()
-                    .any(|(_, _, _, mode)| image_needs_portable(*mode))
+                    .any(|draw| image_needs_portable(draw.mode))
         }
         DrawRun::Tess(range) => {
             run.clip.has_antialias()
@@ -224,7 +224,14 @@ impl GpuReplay {
         target: RenderTarget<'_>,
     ) -> EngineResult<()> {
         if let DrawRun::CachedImage(range) = run {
-            for (key, instance, scissor, mode) in &segment.cached_images[range.clone()] {
+            for draw in &segment.cached_images[range.clone()] {
+                let crate::command_ir::CachedImageDraw {
+                    key,
+                    instance,
+                    scissor,
+                    mode,
+                    filter,
+                } = draw;
                 let Some(crop) = crop(
                     instance.corners().into_iter(),
                     self.uniform_size,
@@ -268,7 +275,13 @@ impl GpuReplay {
                         },
                     ],
                 });
-                let (mapping_layout, pipeline) = pipelines.image_isolation(device);
+                let filter_binding = filter
+                    .map(|filter| {
+                        filter.prepare_bind_group(device, &pipelines.image_filter_layout, resources)
+                    })
+                    .transpose()?;
+                let (mapping_layout, pipeline) =
+                    pipelines.image_isolation(device, filter_binding.is_some());
                 let mapping = mapping_binding(device, mapping_layout, crop.region, viewport);
                 {
                     let mut pass = isolation_pass(encoder, &scratch, &crop);
@@ -276,6 +289,9 @@ impl GpuReplay {
                     pass.set_bind_group(0, &self.viewport_bind_group, &[]);
                     pass.set_bind_group(1, &texture_binding, &[]);
                     pass.set_bind_group(2, &mapping, &[]);
+                    if let Some(binding) = &filter_binding {
+                        pass.set_bind_group(3, binding, &[]);
+                    }
                     pass.set_vertex_buffer(0, self.unit_quad_buffer.slice(..));
                     pass.set_vertex_buffer(1, buffer.slice(..));
                     pass.set_index_buffer(

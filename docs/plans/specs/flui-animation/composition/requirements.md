@@ -93,7 +93,8 @@ ID — только в этом каталоге. «Таблица» = стро�
 
 ### Потребители
 
-- **R13.** КОГДА `ActivityIndicator` смонтирован и `VsyncScope` есть, СИСТЕМА ДОЛЖНА рисовать
+- **R13.** КОГДА `ActivityIndicator` смонтирован, `VsyncScope` привязан, политика Full и
+  настроенный `TickerMode` разрешает движение, СИСТЕМА ДОЛЖНА рисовать
   дугу, чья длина и поворот в моменты 0, 300, 1500, 1800, 3000, 4800, 6000 мс равны эталону из
   констант Material 3 Compose `ProgressIndicator.kt` (androidx `e5da4a9c`: 6000 мс, 0.1/0.87,
   шаги поворота 90° за 300 мс через 1500 мс, глобальный поворот 1080°), повторяясь каждые 6 с,
@@ -101,13 +102,16 @@ ID — только в этом каталоге. «Таблица» = стро�
   `tests/main.rs`, `DrawOp::Arc`; плюс счётчик build не растёт между кадрами).
 - **R14.** КОГДА `RefreshIndicator` в фазе refreshing, СИСТЕМА ДОЛЖНА показывать
   `ActivityIndicator` вместо `ColoredBox`; после `finish()` контроллер спиннера остановлен и
-  снят с Vsync. Тест: `refresh_indicator_spins_while_refreshing`.
-- **R15.** КОГДА `LinearProgressIndicator` без значения, СИСТЕМА ДОЛЖНА двигать две полосы по
+  снят с Vsync. Под Reduce обратная связь остаётся видимой статичной. Тест:
+  `refresh_indicator_spins_while_refreshing` (Full и Reduce).
+- **R15.** КОГДА `LinearProgressIndicator` без значения, привязан, политика Full и настроенный
+  `TickerMode` разрешает движение, СИСТЕМА ДОЛЖНА двигать две полосы по
   четырём дорожкам с ведущими задержками 0/250/650/900 мс и длительностями 1000/1000/850/850 мс
   в цикле 1750 мс (Compose, тот же коммит); со значением — рисовать долю без контроллера.
   Тест: `linear_progress_indeterminate_keyframes` и `linear_progress_switches_to_determinate`
   (flui-material `tests/main.rs`).
-- **R16.** КОГДА `CupertinoActivityIndicator` анимируется, СИСТЕМА ДОЛЖНА давать тику `i` в
+- **R16.** КОГДА `CupertinoActivityIndicator` привязан, политика Full и настроенный `TickerMode`
+  разрешает движение, СИСТЕМА ДОЛЖНА давать тику `i` в
   момент `t` альфу `A[(i − ⌊8·t/1 с⌋) mod 8]`, `A = [47,47,47,47,72,97,122,147]` (Flutter
   `activity_indicator.dart:139`, `:177-182` @ `d454b1b8`); формула считается в тесте
   независимо от production. Тест: `cupertino_activity_indicator_ticks_step`.
@@ -131,10 +135,12 @@ ID — только в этом каталоге. «Таблица» = стро�
 - **R22.** КОГДА `pump_for(0)` или скачок времени в часы, СИСТЕМА ДОЛЖНА рисовать кадр,
   равный чистой функции от времени (циклическое чтение), без накопления. Тест: строки
   `zero_dt` и `ten_hours` в `activity_indicator_arc_follows_keyframes`.
-- **R23.** КОГДА включён `TickerMode(false)` или политика reduce motion (спека `reduce-motion`;
-  поведение индикатора `Normal`/`Preserve` — открытое решение владельца в `review.md`),
-  СИСТЕМА ДОЛЖНА рисовать конечный статичный кадр (время 0). Тест:
-  `indicator_paused_paints_static_frame`.
+- **R23.** КОГДА настроенный `TickerMode` запрещает движение, контроллер не привязан или
+  политика Reduce, СИСТЕМА ДОЛЖНА рисовать видимую статичную обратную связь без процента:
+  начальную непустую дугу, восемь начальных тиков либо центральный сегмент 37.5–62.5% трека.
+  Индикаторы используют `Normal`; прежнее решение X9 о Preserve пересмотрено ADR-0192.
+  Тесты: семейства R13/R15/R16, `indicator_paused_paints_static_frame` и
+  `keyed_indicator_moves_between_configured_permissions_without_restarting`.
 
 Дорожка — значение без слушателей: reentry, add/remove во время раздачи и retarget в последнем
 кадре — темы `listener-delivery`, `controller-robustness`, `retarget`; потребители проходят R18–R20.

@@ -30,6 +30,7 @@ workspace = true
 # Core FLUI types
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
+flui-platform-api.workspace = true
 # `#[derive(TwoWayConverter)]` — re-exported for user-defined animatable types.
 flui-macros = { path = "../flui-macros", version = "=0.2.0-dev" }
 
@@ -75,8 +76,3 @@ layer = 3
 tier = "S"
 tier-kind = "internal"
 order = 6
-# Process-global state, checked by `cargo xtask globals` (ADR-0097).
-globals = [
-    { item = "constant::ALWAYS_COMPLETE", grant = "ADR-0097", class = "immutable", reason = "a constant animation that is always complete" },
-    { item = "constant::ALWAYS_DISMISSED", grant = "ADR-0097", class = "immutable", reason = "a constant animation that is always dismissed" },
-]

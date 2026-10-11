@@ -27,12 +27,16 @@ use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 use std::rc::{Rc, Weak};
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use crate::AnimationController;
 use crate::animation::{Retirement, Terminal};
+use crate::controller::RunStart;
 use crate::{AnimationTime, FrameTick};
 use std::time::Duration;
+
+mod retirement;
+pub use retirement::VsyncRetirement;
 
 /// Opaque identity for one admission to a [`Vsync`] registry.
 ///
@@ -53,6 +57,19 @@ impl PartialEq for VsyncRegistration {
 impl Eq for VsyncRegistration {}
 
 impl VsyncRegistration {
+    pub(crate) fn is_registered(&self) -> bool {
+        self.owner
+            .upgrade()
+            .is_some_and(|owner| owner.borrow().controllers.contains_key(&self.slot))
+    }
+
+    pub(crate) fn requires_sample(&self, probe: &crate::controller::WalkProbe) -> bool {
+        let Some(owner) = self.owner.upgrade() else {
+            return false;
+        };
+        probe.needs_sample(owner.borrow().last_tick)
+    }
+
     pub(crate) fn owner_is_alive(&self) -> bool {
         self.owner.strong_count() != 0
     }
@@ -80,29 +97,30 @@ impl Hash for VsyncRegistration {
     }
 }
 
-/// A controller could not be admitted to a virtual frame registry.
+/// A controller or child could not be admitted to a virtual frame registry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum VsyncRegistrationError {
     /// The registry permanently consumed its available registration identities.
     #[error("Vsync registration capacity exhausted")]
     Exhausted,
+    /// The owning presentation permanently closed this registry.
+    #[error("Vsync registry is closed")]
+    Closed,
+    /// The child already belongs to a live parent, including this parent.
+    #[error("Vsync child already has a parent")]
+    AlreadyAttached,
+    /// Attaching the child would make an ancestor its own descendant.
+    #[error("Vsync attachment would create a cycle")]
+    WouldCycle,
 }
 
-/// Seconds from `start` to `now`, both readings of a nanosecond clock, taken on
-/// that clock's integer grid.
-///
-/// Subtracting the two `f64` readings directly leaves the difference one ulp
-/// off the value a `Duration` of the same length converts to (`0.12 - 0.02` is
-/// `0.09999999999999999`), so a 100 ms run anchored at 20 ms would stop one ulp
-/// short of its end and never complete. Measuring elapsed time in integer
-/// nanoseconds avoids the trap.
 /// One registered controller plus the registry's per-run anchor.
 ///
-/// `run_start_secs` is the virtual instant treated as the current run's
-/// `t = 0`; `last_gen` is the controller's `run_generation` observed when that
-/// anchor was set. `run_start_secs` is `None` until the first tick anchors it,
-/// so registration needs no clock reading.
+/// Registration needs no clock reading: the first sample establishes an anchor.
+/// `last_gen` identifies the run whose anchor and last dispatched tick are stored.
+/// Elapsed arithmetic stays on the clock's integer nanosecond grid, so a run
+/// reaches its exact deadline without subtracting rounded floating-point times.
 ///
 /// Keyed by the registration id (the `u64` inside [`VsyncRegistration`]) in
 /// [`VsyncInner::controllers`] rather than carrying its own id — the map key
@@ -111,6 +129,15 @@ struct RegisteredController {
     controller: AnimationController,
     anchor: RunAnchor,
     last_gen: u64,
+    last_tick: Option<RegistryTick>,
+}
+
+#[derive(Clone, Copy)]
+struct RegistryTick {
+    frame: u64,
+    now: AnimationTime,
+    generation: u64,
+    elapsed: Duration,
 }
 
 enum RunAnchor {
@@ -152,6 +179,7 @@ struct RegisteredChild {
 
 #[derive(Default)]
 struct VsyncInner {
+    frame: u64,
     /// Keyed by the registration id, which is also the registration
     /// *order*: ids are `next_id` post-increments and are never reused, so
     /// ascending key order is ascending registration order. `tick_all`'s
@@ -164,11 +192,72 @@ struct VsyncInner {
     /// children's. A nested unmuted registry cannot re-enable a muted
     /// ancestor, because the ancestor never forwards the tick.
     children: Vec<RegisteredChild>,
-    parents: Vec<VsyncRegistration>,
+    /// Reusable allocation for an entry snapshot. Stored empty: only the active
+    /// walk owns child handles, so a detached child is never retained by a cache.
+    child_snapshot: Vec<(u64, Terminal<Vsync>)>,
+    parent: Option<VsyncRegistration>,
     request_frame: Option<Rc<dyn Fn()>>,
     next_id: u64,
+    closed: bool,
     muted: bool,
-    last_time: crate::AnimationTime,
+    last_tick: Option<FrameTick>,
+    /// Backend identity of the ultimate live parent at the last frame. Weak custody
+    /// neither retains the old presentation nor permits address reuse to alias it.
+    frame_authority: Option<Weak<RefCell<VsyncInner>>>,
+    /// Admission and gate mutations invalidate cached ancestry for active walks.
+    /// Saturation disables caching instead of reusing an earlier revision.
+    walk_revision: u64,
+}
+
+/// Borrowed admission chain for one recursive frame delivery. A callback can
+/// withdraw or mute any ancestor while a descendant is being sampled.
+/// Root revisions cache a successful chain only until its next mutation.
+/// `saturated_walk_revisions_revalidate_ancestor_admission` pins the uncached
+/// fallback when no fresh revision can be issued.
+struct FrameWalk<'a> {
+    registry: &'a Vsync,
+    parent: Option<(&'a Self, u64)>,
+    authority: &'a Weak<RefCell<VsyncInner>>,
+    validated_revision: Cell<Option<u64>>,
+}
+
+impl FrameWalk<'_> {
+    #[inline]
+    fn has_live_parent(&self) -> bool {
+        let Some((parent, slot)) = self.parent else {
+            return true;
+        };
+        let revision = self
+            .authority
+            .upgrade()
+            .map(|root| root.borrow().walk_revision);
+        if revision.is_some_and(|revision| {
+            revision != u64::MAX && self.validated_revision.get() == Some(revision)
+        }) {
+            return true;
+        }
+        let attached = {
+            let inner = self.registry.inner.borrow();
+            inner.parent.as_ref().is_some_and(|seat| {
+                seat.slot == slot
+                    && std::ptr::eq(seat.owner.as_ptr(), Rc::as_ptr(&parent.registry.inner))
+            })
+        };
+        let live = attached && parent.is_live();
+        if live {
+            self.validated_revision.set(revision);
+        }
+        live
+    }
+
+    #[inline]
+    fn is_live(&self) -> bool {
+        let enabled = {
+            let inner = self.registry.inner.borrow();
+            !inner.closed && !inner.muted
+        };
+        enabled && self.has_live_parent()
+    }
 }
 
 impl VsyncInner {
@@ -203,9 +292,16 @@ impl Vsync {
     /// # Panics
     /// Propagates the first callback or capture-retirement failure after recovery.
     pub fn set_frame_requester(&self, request_frame: Option<Rc<dyn Fn()>>) {
-        let outgoing = std::mem::replace(&mut self.inner.borrow_mut().request_frame, request_frame);
+        let outgoing = {
+            let mut inner = self.inner.borrow_mut();
+            if inner.closed {
+                request_frame
+            } else {
+                std::mem::replace(&mut inner.request_frame, request_frame)
+            }
+        };
         let mut retirement = Retirement::new();
-        if self.has_running() {
+        if self.has_frame_demand(None) {
             Self::request_frame_from(&self.inner, &mut retirement.scope());
         }
         retirement.retire(outgoing);
@@ -213,19 +309,25 @@ impl Vsync {
     }
 
     fn request_frame_from(owner: &Rc<RefCell<VsyncInner>>, retirement: &mut RecoveryScope<'_>) {
-        let (request, parents) = {
+        let (request, parent) = {
             let mut inner = owner.borrow_mut();
             if inner.muted {
                 return;
             }
-            inner.parents.retain(VsyncRegistration::owner_is_alive);
-            (inner.request_frame.clone(), inner.parents.clone())
+            if inner
+                .parent
+                .as_ref()
+                .is_some_and(|parent| !parent.owner_is_alive())
+            {
+                inner.parent = None;
+            }
+            (inner.request_frame.clone(), inner.parent.clone())
         };
         if let Some(request) = request {
             retirement.run(|| request());
             retirement.retire(request);
         }
-        for parent in parents {
+        if let Some(parent) = parent {
             parent.request_frame(retirement);
         }
     }
@@ -245,6 +347,9 @@ impl Vsync {
     ) -> Result<VsyncRegistration, VsyncRegistrationError> {
         let last_gen = controller.run_generation();
         let mut inner = self.inner.borrow_mut();
+        if inner.closed {
+            return Err(VsyncRegistrationError::Closed);
+        }
         let id = inner
             .reserve_slot()
             .ok_or(VsyncRegistrationError::Exhausted)?;
@@ -254,6 +359,7 @@ impl Vsync {
                 controller: controller.clone(),
                 anchor,
                 last_gen,
+                last_tick: None,
             },
         );
         let registration = VsyncRegistration {
@@ -286,20 +392,35 @@ impl Vsync {
     /// Nest `child` under this registry: [`tick_all`](Self::tick_all) forwards
     /// to it — unless this registry is [`muted`](Self::set_muted).
     ///
-    /// A cycle would hang the tick walk; nesting a registry under itself (or
-    /// under one of its own descendants) is a caller bug, so it is refused and
-    /// logged rather than linked.
-    /// A registry whose identities are exhausted also refuses attachment.
-    pub fn attach_child(&self, child: &Vsync) -> Option<VsyncRegistration> {
-        if child.contains(self) {
-            tracing::error!(
-                "BUG: a Vsync registry cannot be nested inside itself or its own \
-                 descendant; the child is not attached and its controllers will not tick"
-            );
-            return None;
+    /// A registry has at most one live parent. Failure changes neither edge nor
+    /// registration identity; detach the existing seat before moving a child.
+    /// A released parent does not prevent a surviving child from attaching again.
+    ///
+    /// # Errors
+    /// Returns [`VsyncRegistrationError::Closed`] if either registry is closed,
+    /// [`VsyncRegistrationError::WouldCycle`] for self or ancestor attachment,
+    /// [`VsyncRegistrationError::AlreadyAttached`] for a live existing parent,
+    /// or [`VsyncRegistrationError::Exhausted`] for permanent identity exhaustion.
+    pub fn attach_child(&self, child: &Vsync) -> Result<VsyncRegistration, VsyncRegistrationError> {
+        if self.inner.borrow().closed || child.inner.borrow().closed {
+            return Err(VsyncRegistrationError::Closed);
+        }
+        if self.has_ancestor(child) {
+            return Err(VsyncRegistrationError::WouldCycle);
+        }
+        if child
+            .inner
+            .borrow()
+            .parent
+            .as_ref()
+            .is_some_and(VsyncRegistration::owner_is_alive)
+        {
+            return Err(VsyncRegistrationError::AlreadyAttached);
         }
         let mut inner = self.inner.borrow_mut();
-        let slot = inner.reserve_slot()?;
+        let slot = inner
+            .reserve_slot()
+            .ok_or(VsyncRegistrationError::Exhausted)?;
         inner.children.push(RegisteredChild {
             slot,
             child: child.clone(),
@@ -309,16 +430,19 @@ impl Vsync {
             slot,
         };
         drop(inner);
-        child.inner.borrow_mut().parents.push(registration.clone());
+        child.invalidate_walks();
+        child.inner.borrow_mut().parent = Some(registration.clone());
+        self.invalidate_walks();
         let mut retirement = Retirement::new();
-        if child.has_running() {
+        let tick = self.inner.borrow().last_tick;
+        if child.has_frame_demand(tick) {
             registration.request_frame(&mut retirement.scope());
         }
         if retirement.has_failure() {
             retirement.run(|| self.detach_child(&registration));
         }
         retirement.finish();
-        Some(registration)
+        Ok(registration)
     }
 
     /// Detach the child registry previously attached under `id`. Idempotent.
@@ -337,12 +461,12 @@ impl Vsync {
         // Removing one child preserves the remaining registration order. Its
         // last controller captures must retire after releasing the parent guard.
         if let Some(removed) = removed {
-            removed
-                .child
-                .inner
-                .borrow_mut()
-                .parents
-                .retain(|parent| parent != id);
+            self.invalidate_walks();
+            let mut child = removed.child.inner.borrow_mut();
+            if child.parent.as_ref() == Some(id) {
+                child.parent = None;
+            }
+            drop(child);
             drop(removed);
         }
     }
@@ -355,19 +479,29 @@ impl Vsync {
         Rc::ptr_eq(&self.inner, &other.inner)
     }
 
-    /// Whether `other` is this registry or one of its (transitive) children.
-    fn contains(&self, other: &Vsync) -> bool {
-        if Rc::ptr_eq(&self.inner, &other.inner) {
-            return true;
+    /// Upward traversal needs no descendant snapshot or frame-path cycle stack:
+    /// the owner-local tree admits every edge only after this check.
+    fn has_ancestor(&self, other: &Vsync) -> bool {
+        let mut ancestor = Some(self.clone());
+        while let Some(current) = ancestor {
+            if current.is_same(other) {
+                return true;
+            }
+            ancestor = current
+                .inner
+                .borrow()
+                .parent
+                .as_ref()
+                .and_then(|parent| parent.owner.upgrade())
+                .map(|inner| Vsync { inner });
+            debug_assert!(
+                ancestor
+                    .as_ref()
+                    .is_none_or(|parent| !parent.is_same(&current)),
+                "BUG: every admitted registry edge is acyclic"
+            );
         }
-        let children: Vec<Vsync> = self
-            .inner
-            .borrow_mut()
-            .children
-            .iter()
-            .map(|registered| registered.child.clone())
-            .collect();
-        children.iter().any(|child| child.contains(other))
+        false
     }
 
     /// Whether this registry is muted — its controllers and every nested
@@ -381,7 +515,7 @@ impl Vsync {
     /// own controllers or to a nested registry's.
     ///
     /// **The clock keeps running.** Run anchors are absolute, so an unmuted
-    /// controller lands where the wall clock says it should be — it does not
+    /// controller lands where its presentation clock says it should be — it does not
     /// resume from where it stopped: a muted clock still runs, only the
     /// callback is withheld.
     pub fn set_muted(&self, muted: bool) {
@@ -391,24 +525,50 @@ impl Vsync {
             inner.muted = muted;
             changed
         };
-        if changed && !muted && self.has_running() {
+        if changed {
+            self.invalidate_walks();
+        }
+        if changed && !muted && self.has_frame_demand(None) {
             let mut retirement = Retirement::new();
             Self::request_frame_from(&self.inner, &mut retirement.scope());
             retirement.finish();
         }
     }
 
+    /// Include one-shot settlement and resumption in wake demand, without
+    /// making parked or paused work request continuous frames. Ancestor policy
+    /// also reaches children that have not observed it while muted.
+    fn has_frame_demand(&self, inherited: Option<FrameTick>) -> bool {
+        let inner = self.inner.borrow();
+        if inner.muted {
+            return false;
+        }
+        let tick = inherited.map_or(inner.last_tick, |tick| {
+            Some(tick.hold_after(inner.last_tick.unwrap_or(tick)))
+        });
+        // These probes read framework-owned scalar state only. No callback or
+        // outgoing ownership is invoked or retired while this borrow is held.
+        inner
+            .controllers
+            .values()
+            .any(|registered| registered.controller.walk_probe().needs_sample(tick))
+            || inner
+                .children
+                .iter()
+                .any(|registered| registered.child.has_frame_demand(tick))
+    }
+
     /// The number of controllers registered **with this registry**, not
     /// counting nested ones (see [`attach_child`](Self::attach_child)).
     #[must_use]
     pub fn len(&self) -> usize {
-        self.inner.borrow_mut().controllers.len()
+        self.inner.borrow().controllers.len()
     }
 
     /// Whether no controllers are registered.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.inner.borrow_mut().controllers.is_empty()
+        self.inner.borrow().controllers.is_empty()
     }
 
     /// Whether at least one registered controller is currently running.
@@ -427,43 +587,40 @@ impl Vsync {
     /// which nothing here provides.
     ///
     /// Reads the controller's crate-private `walk_probe().live_running`, not
-    /// bare `status().is_running()`: a controller `dispose()`d mid-run keeps
+    /// bare `status().is_directional()`: a controller `dispose()`d mid-run keeps
     /// whatever running status it had (`dispose()` deliberately leaves
     /// `status` untouched), so `live_running` is what tells this apart from
     /// a genuinely live run — otherwise a disposed-but-not-yet-unregistered
     /// controller would hold the frame loop open forever.
     #[must_use]
     pub fn has_running(&self) -> bool {
-        let (mine, children) = {
-            let inner = self.inner.borrow_mut();
-            // A muted registry advances nothing — not its own controllers, not a
-            // nested registry's — so nothing under it can hold the frame loop
-            // open.
-            if inner.muted {
-                return false;
-            }
-            (
-                inner
-                    .controllers
-                    .values()
-                    .any(|c| c.controller.walk_probe().live_running),
-                inner
-                    .children
-                    .iter()
-                    .map(|registered| registered.child.clone())
-                    .collect::<Vec<_>>(),
-            )
-        };
+        let inner = self.inner.borrow();
+        // A muted registry advances nothing — not its own controllers, not a
+        // nested registry's — so nothing under it can hold the frame loop open.
+        if inner.muted {
+            return false;
+        }
         // Nested registries hold real controllers: a `TickerMode` (and so every
         // `Hero` child) puts its subtree's animations in one, and a frame-loop
         // gate that only looked at this level would stall them after one frame.
-        mine || children.iter().any(Vsync::has_running)
+        // Recursive probes invoke no user code and retire no owned values.
+        inner
+            .controllers
+            .values()
+            .any(|registered| registered.controller.walk_probe().live_running)
+            || inner
+                .children
+                .iter()
+                .any(|registered| registered.child.has_running())
     }
 
     /// Advance live controller registrations using a presentation's typed tick.
     ///
     /// A fresh run anchors on its first observed frame. Registration migration
-    /// preserves its last sampled elapsed time. Older ticks hold at this
+    /// preserves its last sampled elapsed time. Moving a child subtree to another
+    /// root also re-anchors on its first delivered frame, without replacing runs.
+    /// Reattaching under the same root retains the existing absolute anchors.
+    /// Older ticks from the same root hold at this
     /// registry's last accepted time; stopped and disposed kernels are skipped.
     ///
     /// State borrows end before sampling user curves or delivering callbacks.
@@ -486,49 +643,136 @@ impl Vsync {
     /// preserving that failure through callback and capture retirement.
     pub fn tick_all(&self, tick: &FrameTick) {
         let mut retirement = Retirement::new();
-        retirement.run_with(|retirement| self.tick_all_with_retirement(tick.now(), retirement));
+        let authority = self.frame_authority();
+        retirement.run_with(|retirement| {
+            self.tick_all_with_retirement(*tick, &authority, None, retirement);
+        });
         retirement.finish();
     }
 
-    fn tick_all_with_retirement(
-        &self,
-        now: crate::AnimationTime,
+    /// A directly ticked subtree retains the clock authority of its live parent
+    /// chain. Single-parent acyclic admission bounds this upward traversal.
+    fn frame_authority(&self) -> Weak<RefCell<VsyncInner>> {
+        let mut registry = Rc::clone(&self.inner);
+        loop {
+            let parent = {
+                let inner = registry.borrow();
+                inner.parent.as_ref().and_then(|seat| seat.owner.upgrade())
+            };
+            let Some(parent) = parent else {
+                return Rc::downgrade(&registry);
+            };
+            registry = parent;
+        }
+    }
+
+    /// No user code runs between a hierarchy mutation and its invalidation.
+    /// Walks revalidate their own ancestry, so unrelated healthy peers continue.
+    fn invalidate_walks(&self) {
+        let root = self
+            .frame_authority()
+            .upgrade()
+            .expect("BUG: synchronous authority lookup retains a live root");
+        let mut inner = root.borrow_mut();
+        inner.walk_revision = inner.walk_revision.saturating_add(1);
+    }
+
+    fn tick_all_with_retirement<'a>(
+        &'a self,
+        tick: FrameTick,
+        authority: &Weak<RefCell<VsyncInner>>,
+        parent: Option<(&'a FrameWalk<'a>, u64)>,
         retirement: &mut RecoveryScope<'_>,
     ) {
-        let (fence, children, muted) = {
+        let walk = FrameWalk {
+            registry: self,
+            parent,
+            authority,
+            validated_revision: Cell::new(None),
+        };
+        if !walk.has_live_parent() {
+            return;
+        }
+        let (fence, mut children) = {
             let mut inner = self.inner.borrow_mut();
-            inner.last_time = inner.last_time.max(now);
-            (
-                inner.next_id,
+            if inner
+                .frame_authority
+                .as_ref()
+                .is_some_and(|previous| !Weak::ptr_eq(previous, authority))
+            {
+                inner.last_tick = None;
+                for registered in inner.controllers.values_mut() {
+                    // Published elapsed may precede a failed source's dispatched
+                    // tick. Resume the actual sample, as an individual rebind does.
+                    registered.anchor = RunAnchor::Resume(registered.controller.last_elapsed());
+                    registered.last_gen = registered.controller.run_generation();
+                    registered.last_tick = None;
+                }
+            }
+            if inner
+                .frame_authority
+                .as_ref()
+                .is_none_or(|previous| !Weak::ptr_eq(previous, authority))
+            {
+                inner.frame_authority = Some(authority.clone());
+            }
+            inner.last_tick = Some(tick.hold_after(inner.last_tick.unwrap_or(tick)));
+            inner.frame = inner.frame.saturating_add(1);
+            let mut children = std::mem::take(&mut inner.child_snapshot);
+            children.extend(
                 inner
                     .children
                     .iter()
-                    .map(|registered| registered.child.clone())
-                    .collect::<Vec<_>>(),
-                inner.muted,
-            )
+                    .map(|registered| (registered.slot, Terminal::new(registered.child.clone()))),
+            );
+            (inner.next_id, children)
         };
 
         // A muted registry delivers no tick — not to its own controllers, not
         // to a nested registry's. The anchors are absolute and left alone, so
         // the clock keeps running underneath: an unmute lands the animation
-        // where the wall clock says.
-        if muted {
-            return;
-        }
-
-        for child in children {
-            let child = Terminal::new(child);
-            let now = self.inner.borrow().last_time;
-            retirement.run_with(|retirement| child.tick_all_with_retirement(now, retirement));
+        // where its presentation clock says. A new root first establishes its
+        // own anchors instead of comparing unrelated absolute clock readings.
+        for (slot, child) in children.drain(..) {
+            if walk.is_live() {
+                let tick = self
+                    .inner
+                    .borrow()
+                    .last_tick
+                    .expect("BUG: registry frame stores its tick before walking children");
+                retirement.run_with(|retirement| {
+                    child.tick_all_with_retirement(
+                        tick,
+                        authority,
+                        Some((&walk, slot)),
+                        retirement,
+                    );
+                });
+            }
+            // Retire visited and withdrawn entries independently, before the
+            // next peer. A failed destructor joins this walk's first failure.
             retirement.retire(child);
+        }
+        {
+            let mut inner = self.inner.borrow_mut();
+            // A reentrant walk may have returned another empty allocation.
+            // Preserve the larger one; neither buffer owns user captures here.
+            if children.capacity() > inner.child_snapshot.capacity() {
+                std::mem::swap(&mut children, &mut inner.child_snapshot);
+            }
         }
 
         let mut cursor = 0u64;
         loop {
+            if !walk.has_live_parent() {
+                break;
+            }
             let step = {
                 let mut inner = self.inner.borrow_mut();
-                let now = inner.last_time;
+                let tick = inner
+                    .last_tick
+                    .expect("BUG: registry frame stores its tick before walking controllers");
+                let frame = inner.frame;
                 // Re-read per iteration, not only captured at entry above: a
                 // listener that mutes the registry mid-walk must stop the
                 // rest of this frame's entries from ticking.
@@ -538,19 +782,65 @@ impl Vsync {
                     inner.controllers.range_mut(cursor..fence).next()
                 {
                     cursor = id + 1;
-                    // One lock instead of two: `walk_probe` reads
+                    // One borrow instead of two: `walk_probe` reads
                     // `run_generation` AND `live_running` (which folds in
                     // `disposed` — see its own doc) under a single
-                    // controller lock.
+                    // controller borrow.
                     let probe = registered.controller.walk_probe();
+                    let now = tick.time(probe.behavior);
+                    let exhausted = now.as_duration() == Duration::MAX;
                     if probe.generation != registered.last_gen {
                         registered.last_gen = probe.generation;
-                        registered.anchor = RunAnchor::Fresh;
+                        registered.anchor = match (probe.start, registered.last_tick) {
+                            (
+                                RunStart::Continue {
+                                    generation,
+                                    elapsed,
+                                },
+                                Some(last),
+                            ) if frame != u64::MAX
+                                && last.frame >= frame.saturating_sub(1)
+                                && generation == last.generation =>
+                            {
+                                RunAnchor::Established {
+                                    at: last.now,
+                                    // A source failure may leave the published
+                                    // seam earlier than the dispatched tick.
+                                    elapsed: last.elapsed.saturating_sub(elapsed),
+                                }
+                            }
+                            _ => RunAnchor::Fresh,
+                        };
                     }
-                    if probe.live_running {
-                        // `run_start_secs` is `Some` here — set in the branch
-                        // above on this same call if it was `None`.
+                    let resumed = probe.can_resume(tick)
+                        && registered.controller.resume_motion_run(probe.generation);
+                    if resumed {
+                        registered.anchor = RunAnchor::Fresh;
+                        registered.last_tick = None;
+                    }
+                    if probe.has_run
+                        && !probe.parked
+                        && (exhausted
+                            || (probe.behavior == crate::AnimationBehavior::Normal
+                                && tick.policy() == crate::MotionPolicy::Reduce))
+                    {
+                        RegistryWalkStep::Settling(
+                            registered.controller.clone(),
+                            probe.generation,
+                            if exhausted {
+                                crate::controller::SettleReason::ExhaustedClock
+                            } else {
+                                crate::controller::SettleReason::ReducedMotion
+                            },
+                        )
+                    } else if probe.live_running || resumed {
                         let elapsed = registered.anchor.elapsed(now);
+                        registered.last_tick = Some(RegistryTick {
+                            frame,
+                            now,
+                            generation: probe.generation,
+                            elapsed,
+                        });
                         RegistryWalkStep::Running(registered.controller.clone(), elapsed)
                     } else {
                         RegistryWalkStep::NotRunning
@@ -563,6 +853,13 @@ impl Vsync {
             match step {
                 RegistryWalkStep::Finished => break,
                 RegistryWalkStep::NotRunning => {}
+                RegistryWalkStep::Settling(controller, generation, reason) => {
+                    let controller = Terminal::new(controller);
+                    retirement.run_with(|retirement| {
+                        controller.settle_run(generation, reason, retirement);
+                    });
+                    retirement.retire(controller);
+                }
                 RegistryWalkStep::Running(controller, elapsed) => {
                     let controller = Terminal::new(controller);
                     retirement.run_with(|retirement| {
@@ -582,9 +879,10 @@ enum RegistryWalkStep {
     Finished,
     /// The controller at this position is not running; skip it and continue.
     NotRunning,
-    /// The controller is running; tick it with the given elapsed seconds
-    /// once the registry lock guarding this step is released.
+    /// The controller is running; tick it with the given elapsed duration
+    /// once the registry borrow guarding this step is released.
     Running(AnimationController, Duration),
+    Settling(AnimationController, u64, crate::controller::SettleReason),
 }
 
 impl std::fmt::Debug for Vsync {
@@ -603,110 +901,53 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::{Animation, AnimationStatus};
+    use crate::Animation;
 
-    fn controller(ms: u64) -> AnimationController {
-        AnimationController::builder(Duration::from_millis(ms)).build()
-    }
-
-    /// Muting is **structural**, so nesting composes as a logical AND: an inner
-    /// registry that is itself unmuted still never advances while an ancestor
-    /// is muted — the ancestor simply never forwards the tick. There is no
-    /// flag to compose, and no way to get the composition wrong.
-    fn a_muted_ancestor_starves_an_unmuted_descendant() {
-        let outer = Vsync::new();
-        let middle = Vsync::new();
-        let inner = Vsync::new();
-        outer.attach_child(&middle).expect("nested");
-        middle.attach_child(&inner).expect("nested");
-
-        let animation = controller(1000);
-        inner
-            .try_register_resuming(&animation, Duration::ZERO)
-            .expect("private token admission");
-        let _ = animation.forward();
-
-        middle.set_muted(true);
-        assert!(!inner.is_muted(), "the innermost registry is enabled");
-
-        outer.tick_all(&crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)));
-        outer.tick_all(&crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.5)));
-        assert_eq!(
-            animation.value(),
-            0.0,
-            "a muted ancestor starves the enabled descendant"
-        );
-
-        // Unmute: the first tick through anchors this run's `t = 0` (a
-        // controller that has never been ticked has no anchor yet), the next
-        // one advances it.
-        middle.set_muted(false);
-        outer.tick_all(&crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(1.0)));
-        outer.tick_all(&crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(1.4)));
-        assert!(
-            animation.value() > 0.0,
-            "the tick flows through the unmuted ancestor"
-        );
-
-        crate::test_cases::dispose_controller(&animation);
-    }
-
-    /// A cycle would hang the tick walk, so nesting a registry inside itself
-    /// (or inside one of its own descendants) is refused, not linked.
-    fn a_cyclic_nesting_is_refused() {
-        let outer = Vsync::new();
-        let inner = Vsync::new();
-        outer.attach_child(&inner).expect("nested");
-
-        assert!(
-            inner.attach_child(&outer).is_none(),
-            "nesting an ancestor under its own descendant is refused"
-        );
-        assert!(
-            outer.attach_child(&outer).is_none(),
-            "and so is nesting a registry under itself"
-        );
-
-        // The tick walk still terminates.
-        outer.tick_all(&crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)));
-    }
-
-    /// A status listener that unregisters its own controller — what a route does
-    /// when its exit transition reaches `dismissed` and it disposes itself — must
-    /// not deadlock.
-    ///
-    /// Regression: `tick_all` used to hold the registry lock across `tick_at`, so
-    /// the listener's `unregister` re-entered a non-reentrant `parking_lot::Mutex`
-    /// and hung. Found by the first end-to-end `PopupRoute` pop and recorded in
-    /// ADR-0020 ("A real deadlock in `flui-animation`, found by the first end-to-end
-    /// pop").
-    fn a_listener_may_unregister_from_inside_tick_all() {
-        let vsync = Vsync::new();
-        let controller = AnimationController::builder(Duration::from_millis(100)).build();
-        let registration = vsync
-            .try_register_resuming(&controller, Duration::ZERO)
-            .expect("private token admission");
-
-        let slot: Rc<RefCell<Option<VsyncRegistration>>> =
-            Rc::new(RefCell::new(Some(registration)));
-        let vsync_for_listener = vsync.clone();
-        let slot_for_listener = Rc::clone(&slot);
-        controller.add_status_listener(Rc::new(move |status| {
-            if status == AnimationStatus::Completed
-                && let Some(registration) = slot_for_listener.borrow_mut().take()
-            {
-                vsync_for_listener.unregister(&registration);
+    fn saturated_walk_revisions_revalidate_ancestor_admission() {
+        for revision in [u64::MAX - 1, u64::MAX] {
+            for mute in [false, true] {
+                let root = Vsync::new();
+                let middle = Vsync::new();
+                let leaf = Vsync::new();
+                let seat = root.attach_child(&middle).expect("middle admission");
+                middle.attach_child(&leaf).expect("leaf admission");
+                let trigger =
+                    AnimationController::builder(Duration::from_millis(50)).build_on(Some(&leaf));
+                let resident =
+                    AnimationController::builder(Duration::from_millis(200)).build_on(Some(&leaf));
+                trigger.controller().forward().expect("trigger starts");
+                let run = resident.controller().forward().expect("resident starts");
+                // Only a private seed can reach the saturation boundary.
+                root.inner.borrow_mut().walk_revision = revision;
+                let mut clock = crate::MotionClock::new();
+                root.tick_all(&clock.frame(Duration::ZERO));
+                let changing_root = root.clone();
+                let _subscription = trigger.controller().subscribe_status(Rc::new(move |_| {
+                    if mute {
+                        changing_root.set_muted(true);
+                    } else {
+                        changing_root.detach_child(&seat);
+                    }
+                }));
+                root.tick_all(&clock.frame(Duration::from_millis(100)));
+                assert_eq!(
+                    resident.controller().value(),
+                    0.0,
+                    "saturation cannot preserve stale admission: revision={revision}, mute={mute}"
+                );
+                assert!(run.is_pending());
+                if mute {
+                    root.set_muted(false);
+                } else {
+                    root.attach_child(&middle).expect("fresh admission");
+                }
+                root.tick_all(&clock.frame(Duration::from_millis(200)));
+                assert!(
+                    run.is_complete(),
+                    "a recovered admission remains deliverable"
+                );
             }
-        }));
-
-        controller.forward().expect("fresh controller forwards");
-        vsync.tick_all(&crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)));
-        vsync.tick_all(&crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.2))); // past the 100 ms duration → Completed → unregisters
-
-        assert!(slot.borrow().is_none(), "the listener ran and unregistered");
-        assert_eq!(vsync.len(), 0, "and the registry dropped the controller");
-
-        crate::test_cases::dispose_controller(&controller);
+        }
     }
 
     fn registration_exhaustion_preserves_admitted_work() {
@@ -758,7 +999,10 @@ mod tests {
                     handle.try_register_resuming(&refused, Duration::ZERO),
                     Err(VsyncRegistrationError::Exhausted)
                 );
-                assert!(handle.attach_child(&Vsync::new()).is_none());
+                assert_eq!(
+                    handle.attach_child(&Vsync::new()),
+                    Err(VsyncRegistrationError::Exhausted)
+                );
             }
             registry.tick_all(
                 &crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)),
@@ -799,7 +1043,7 @@ mod tests {
                 Err(VsyncRegistrationError::Exhausted)
             );
             assert!(
-                registry.attach_child(&child).is_none(),
+                registry.attach_child(&child) == Err(VsyncRegistrationError::Exhausted),
                 "removal cannot reset exhaustion"
             );
 
@@ -813,9 +1057,12 @@ mod tests {
             let drops = Rc::new(std::sync::atomic::AtomicUsize::new(0));
             let mut rejected = AnimationController::builder(Duration::from_secs(1)).build_on(None);
             let probe = RejectedCapture(drops.clone());
-            rejected.controller().add_status_listener(Rc::new(move |_| {
-                let _capture = &probe;
-            }));
+            rejected
+                .controller()
+                .subscribe_status(Rc::new(move |_| {
+                    let _capture = &probe;
+                }))
+                .detach();
             assert_eq!(
                 rejected.rebind(Some(&registry)),
                 Err(VsyncRegistrationError::Exhausted)
@@ -861,6 +1108,58 @@ mod tests {
     }
 
     fn rebind_refused_by_an_exhausted_registry_settles_unbound() {
+        for fails in [false, true] {
+            let old = Vsync::new();
+            let exhausted = Vsync::new();
+            let healthy = Vsync::new();
+            exhausted.inner.borrow_mut().next_id = u64::MAX;
+            let motion = crate::MotionSpec::Curve {
+                duration: Duration::from_secs(1),
+                curve: crate::ArcCurve::new(crate::curves::LINEAR),
+            };
+            let mut refused = crate::AnimatedValue::new(0.0, motion.clone(), Some(&old)).unwrap();
+            let mut accepted = crate::AnimatedValue::new(0.0, motion, Some(&old)).unwrap();
+            let refused_run = refused.animate_to(1.0).unwrap();
+            let accepted_run = accepted.animate_to(2.0).unwrap();
+            refused_run.when_complete_or_cancel({
+                let old = old.clone();
+                let healthy = healthy.clone();
+                move |result| {
+                    assert!(result.is_ok());
+                    assert!(old.is_empty());
+                    assert_eq!(
+                        healthy.len(),
+                        1,
+                        "accepted tail binds before refusal delivery"
+                    );
+                    assert!(!fails, "refused migration delivery failure");
+                }
+            });
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                crate::VsyncUpdate::run(|update| {
+                    update.rebind(&mut refused, Some(&exhausted));
+                    update.rebind(&mut accepted, Some(&healthy));
+                })
+            }));
+            if fails {
+                assert_eq!(
+                    flui_foundation::panic::payload_text(result.unwrap_err().as_ref()),
+                    Some("refused migration delivery failure")
+                );
+            } else {
+                assert_eq!(result.unwrap(), Err(VsyncRegistrationError::Exhausted));
+            }
+            assert!(old.is_empty() && exhausted.is_empty());
+            assert_eq!(refused.value(), 1.0);
+            assert!(refused_run.is_complete() && accepted_run.is_pending());
+            let mut clock = crate::MotionClock::new();
+            healthy.tick_all(&clock.frame(Duration::ZERO));
+            healthy.tick_all(&clock.frame(Duration::from_secs(1)));
+            assert_eq!(accepted.value(), 2.0);
+            assert!(accepted_run.is_complete());
+            drop((refused, accepted));
+            assert!(healthy.is_empty());
+        }
         for repeat in [false, true] {
             let old = Vsync::new();
             let exhausted = Vsync::new();
@@ -908,9 +1207,52 @@ mod tests {
         }
     }
 
+    fn a_terminal_frame_counter_still_delivers_fresh_runs() {
+        use crate::{Animation, ArcCurve, MotionClock, MotionSpec, curves};
+        let registry = Vsync::new();
+        registry.inner.borrow_mut().frame = u64::MAX - 2;
+        let mut clock = MotionClock::new();
+        let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
+        let controller = owner.controller();
+        let _old = controller.forward().expect("initial run");
+        registry.tick_all(&clock.frame(Duration::ZERO));
+        registry.tick_all(&clock.frame(Duration::from_millis(100)));
+        for millis in [200, 400] {
+            let seam = controller.value();
+            let _next = controller
+                .retarget(
+                    0.8,
+                    &MotionSpec::Curve {
+                        duration: Duration::from_secs(1),
+                        curve: ArcCurve::new(curves::LINEAR),
+                    },
+                )
+                .expect("terminal counter retains run admission");
+            registry.tick_all(&clock.frame(Duration::from_millis(millis)));
+            assert_eq!(
+                controller.value(),
+                seam,
+                "exhausted frame stamps cannot qualify a continuation"
+            );
+            registry.tick_all(&clock.frame(Duration::from_millis(millis + 100)));
+            assert!(
+                controller.value() > seam,
+                "subsequent frames still advance the admitted run"
+            );
+        }
+    }
+
     #[test]
     fn vsync_nesting_and_reentrancy() {
         crate::test_cases::run_cases(&[
+            (
+                "saturated walk revisions revalidate ancestor admission",
+                saturated_walk_revisions_revalidate_ancestor_admission,
+            ),
+            (
+                "a terminal frame counter still delivers fresh runs",
+                a_terminal_frame_counter_still_delivers_fresh_runs,
+            ),
             (
                 "exhausted registry leaves an owner unbound",
                 rebind_refused_by_an_exhausted_registry_settles_unbound,
@@ -918,15 +1260,6 @@ mod tests {
             (
                 "registration exhaustion preserves admitted work",
                 registration_exhaustion_preserves_admitted_work,
-            ),
-            (
-                "a muted ancestor starves an unmuted descendant",
-                a_muted_ancestor_starves_an_unmuted_descendant,
-            ),
-            ("a cyclic nesting is refused", a_cyclic_nesting_is_refused),
-            (
-                "a listener may unregister from inside tick all",
-                a_listener_may_unregister_from_inside_tick_all,
             ),
         ]);
     }

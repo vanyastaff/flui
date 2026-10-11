@@ -357,6 +357,37 @@ charge through cache ownership and submitted work. Imported GPU allocation bytes
 are excluded from prepared-resource quotas; a managed producer factory and the
 whole-engine ledger remain follow-ups in the resource migration plan.
 
+### Decoded image source filters
+
+Decoded image filters retain the original texture allocation and floating
+parameters in `CachedImageDraw`. Each guarded mip-zero texel is transformed
+before premultiplication, bilinear interpolation and Paint tint. Consecutive
+draws batch only when texture, scissor, blend and effective filter agree.
+`image_source_filter.rs` uses the generated uniform type and binding layout;
+the standalone schema generates group zero, and image pipelines bind that
+layout at group three, after viewport, source and optional isolation mapping.
+Ordinary replay and portable coverage isolation both prepare the same filter.
+`color_filter.wgsl` owns Mode, Matrix and gamma arithmetic shared with layer
+effects. Matrix evaluation bounds intermediate arithmetic before rescaling;
+GPU cancellation retains f32 precision and device subnormal behavior.
+Nonfinite matrix coefficients omit the complete image operation.
+
+`a_decoration_image_filter_preserves_fractional_alpha_before_modulation` checks
+actual DecorationImage pixels, nonlinear filtering before interpolation and
+distinct filters on one allocation. The
+`painter_images_and_offscreen_results_read_back_as_specified` family pins
+finite matrix cancellation and malformed matrix omission, coverage-weighted
+source with independent clip coverage, and resource/device-limit failure followed
+by a valid frame. Its preparation-failure row needs the private DeviceDomain budget seam:
+target bindings fit but the filter uniform does not. Prepared bindings consume
+quota before allocation; failure withdraws the scratch batch before returning.
+Filtered pipelines require four bind groups and the generated uniform size;
+these limits are admitted before lazy pipeline creation. A three-group device
+refuses a filtered draw through `PreparedResourceLimit` and still renders an
+unfiltered image in the following frame.
+As with other encoding failures, the caller discards the encoder and finishes
+the frame before retrying after resource retirement.
+
 ### Bounded gradient work and failed frame diagnostics
 
 Linear, radial and sweep shaders currently scan stops linearly. Each draw accepts
@@ -457,7 +488,7 @@ family checks allocation reuse after the previous dimensions filled the pool.
 
 ### Encoded sRGB surface presentation
 
-The current shaders emit the encoded components supplied by `Color::to_f32_array`;
+The current shaders emit the encoded components supplied by `Color::to_rgba_f32_array`;
 blending remains in that encoded space. Windowed rendering therefore selects only
 an advertised `Bgra8Unorm` or `Rgba8Unorm` format paired with explicit `Srgb`
 presentation, preferring BGRA when both work. Format and presentation color space

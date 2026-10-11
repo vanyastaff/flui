@@ -123,7 +123,10 @@ impl PanicRecovery {
         }
     }
 
-    pub(crate) fn inherit_failure(&mut self) {
+    /// Preserve a failure already held by the enclosing framework owner.
+    /// Delivery continues, while outgoing opaque ownership and later payloads
+    /// are retained. This context does not acquire or resume that outer payload.
+    pub fn inherit_failure(&mut self) {
         self.incoming = true;
     }
 

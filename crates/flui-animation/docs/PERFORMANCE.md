@@ -5,7 +5,331 @@ Performance characteristics of `flui_animation`.
 Every `rust` block is compiled as a doctest against the current API. Lines
 starting with `#` are hidden setup.
 
+## Motion policy and idle frames
+
+`Vsync::has_running` describes continuous animation activity. A parked Normal
+repeat under Reduce contributes no continuous demand, while a Preserve
+indicator still does. Pending settlement and Full resumption can require a
+single frame even when continuous demand is false, including with paused
+playback. The registry retains that obligation across gates and rebinding.
+
+Property owners keep independent timelines: retargeting one property does not
+restart unchanged properties. Render-owned opacity, rotation, Drawer and
+Dismissible transitions invalidate their retained render path instead of
+rebuilding content on every sample. The workspace `motion_lab` example makes
+these paths interactive; its activity indicator intentionally keeps frames
+running, so it is not an idle-frame benchmark.
+
+The historical timing tables below do not measure the current policy path.
+
+## Registry workload validation
+
+The registry benchmark retains one `MotionClock` and advances a 60 Hz timestamp
+on every iteration. Active and stopped populations both cover 100, 1,000, 5,000
+and 10,000 owners. Active runs last 136 years of virtual time; untimed checks
+verify progress on successive frames and that the measured loop leaves them
+running. The mixed population retains exactly 100 active owners out of 1,000.
+Active results include sampling and delivery, not just registry lookup.
+
+Validate the workloads without collecting performance measurements with:
+
+```bash
+cargo bench --profile dev -p flui-animation --bench vsync_registry -- --test
+```
+
+This smoke run is not a timing result. Earlier migrated benchmark code created
+a new clock and repeated one timestamp, so it did not measure sustained active
+frames. Comparisons need baseline and final runs with the same corrected
+workload, release profile and host conditions.
+
+### Same-host registry comparison, 2026-10-10
+
+The corrected workload ran sequentially on Windows x86_64 MSVC, an Intel
+i9-13900K (24 cores, 32 logical processors), with Rust 1.99.0, Criterion 0.8.2
+and the workspace's optimized bench profile. Each row used 10 samples, a
+500 ms warm-up and a one-second measurement. Builds used six jobs; each
+checkout had its own target directory. Other host activity and CPU frequency
+were not controlled.
+
+The baseline was `c297b6c89bc93941e28c738c9dfac3d623a2dae2` from `origin/main`.
+Only its benchmark was changed to use the same advancing-clock workload as
+the candidate, `b241a4f54a7fc2d8b3eb07a24bc2fed417555738`. The two workload
+files were byte-identical. Baseline production code was unchanged. This
+compares against that historical main, which already has owner-local controllers;
+it does not attribute the performance of the whole owner-local migration.
+
+Criterion median estimates, in microseconds:
+
+| Population / operation | Owners | Baseline | Candidate |
+|---|---:|---:|---:|
+| Stopped frame | 100 | 1.445 | 1.429 |
+| Stopped frame | 1,000 | 28.432 | 27.289 |
+| Stopped frame | 5,000 | 212.185 | 213.512 |
+| Stopped frame | 10,000 | 431.753 | 443.140 |
+| Active frame | 100 | 5.971 | 5.983 |
+| Active frame | 1,000 | 75.052 | 74.843 |
+| Active frame | 5,000 | 495.902 | 485.488 |
+| Active frame | 10,000 | 992.824 | 1,013.251 |
+| Frame with 10% active | 1,000 | 33.283 | 31.135 |
+| Retire all owners | 1,000 | 95.275 | 99.776 |
+| Retire all owners | 10,000 | 1,346.989 | 1,447.577 |
+
+A filtered repeat exposed a benchmark assertion on unmeasured populations.
+Both copies now check post-measurement progress only when the measured loop
+advanced time; their untimed progress and activity checks remain. This changes
+no timed operation. The repeated workload files were again byte-identical.
+Repeat with:
+
+```bash
+cargo bench -p flui-animation --bench vsync_registry --locked -- --noplot 'unregister_all|running_vsync_registry/10000|stopped_vsync_registry/10000'
+```
+
+| Repeated operation | Owners | Baseline | Candidate |
+|---|---:|---:|---:|
+| Stopped frame | 10,000 | 451.371 | 440.448 |
+| Active frame | 10,000 | 1,058.414 | 1,069.997 |
+| Retire all owners | 1,000 | 95.360 | 106.933 |
+| Retire all owners | 10,000 | 1,331.156 | 1,463.162 |
+
+The active 10,000-owner repeat has overlapping 95% median confidence intervals
+(baseline 1,050–1,081 µs, candidate 1,046–1,100 µs). Same-version runs vary
+about 6% on this shared host. Owner retirement was consistently slower in
+the candidate: roughly 5–12% at 1,000 owners and 7–10% at 10,000. The latter
+has broad confidence intervals. These results require profiling retirement;
+they do not establish an improvement for every row. Admission, retarget
+latency and a historical baseline remain separate measurements.
+
+The retirement workload explicitly calls `dispose`, then drops the owner.
+The candidate's repeated `dispose` still constructed recovery and published
+an empty retirement receipt. An already retired owner now returns immediately
+from the public `dispose` entry; first retirement and grouped preparation
+retain their existing closure and delivery paths. The public ownership table's
+`dispose_then_drop_is_one_retirement` checks repeated disposal and exactly one
+run outcome.
+
+Additional sequential Criterion slope estimates (µs) from the same filtered
+workload:
+
+| Owner retirement | 1,000 | 10,000 |
+|---|---:|---:|
+| With the retired-owner return | 92.216 | 1,223.9 |
+| Return removed for control | 94.965 | 1,295.4 |
+| Return restored | 89.912 | 1,151.8 |
+
+The restored run's Criterion comparison with the control reported improvement
+in both rows. The first control comparison had overlapping intervals, however,
+and this shared-host experiment does not establish a fixed speedup percentage.
+The structural result is removal of redundant recovery on repeated disposal;
+these numbers do not replace the remaining admission/retarget or full-frame
+measurements.
+
+### Nested admission validation, 2026-10-10
+
+The same benchmark now places 100 or 1,000 active owners at the leaf of a
+registry chain, with depths 1, 8 and 32. The root receives each advancing
+frame. Untimed checks verify leaf progress and that runs remain active.
+This includes the live ancestor checks that prevent a callback from moving
+or muting an ancestor while the old frame continues sampling its descendants.
+
+The unchanged production baseline remains `c297b6c89bc93941e28c738c9dfac3d623a2dae2`;
+it is not the newest main. Its benchmark and the candidate's were identical
+(SHA-256 `623a1d597cb0fc812ea1495440dc956d7258d310546f0298e07fbc7ad638d62f`).
+Both used the host, profile and sampling settings above. The candidate was
+`4f3fb8ede776a6369da2b73b471cc507063d10da`, followed by a local change comparing a parent's backend pointers
+directly instead of temporarily constructing a weak handle. A borrowed parent
+keeps that backend alive throughout the comparison. This comparison measures
+all intervening changes; it does not isolate the cost of one repair.
+
+Criterion time estimates in microseconds (95% intervals in parentheses):
+
+| Active owners | Depth | Historical baseline | Candidate | Direct pointer comparison |
+|---:|---:|---:|---:|---:|
+| 100 | 1 | 6.10 (6.04–6.16) | 6.73 (6.68–6.78) | 6.55 (6.52–6.57) |
+| 100 | 8 | 6.28 (6.23–6.33) | 8.39 (8.36–8.42) | 8.01 (7.96–8.05) |
+| 100 | 32 | 7.23 (7.16–7.33) | 19.39 (19.24–19.63) | 17.02 (16.86–17.18) |
+| 1,000 | 1 | 76.77 (76.21–77.24) | 89.07 (83.70–95.94) | 93.75 (92.69–95.00) |
+| 1,000 | 8 | 77.02 (76.24–77.52) | 96.48 (96.06–97.24) | 105.17 (103.70–107.61) |
+| 1,000 | 32 | 78.94 (78.00–80.05) | 150.03 (148.97–150.70) | 141.30 (140.57–141.95) |
+
+The uncached admission validation measured here costs O(owners × depth). The deeper rows improved
+after removing temporary weak handles, but shallower 1,000-owner rows became
+slower in the subsequent run. CPU frequency and other activity were uncontrolled;
+these measurements do not establish a uniform speedup. The historical baseline
+also lacks the repaired stale-walk behavior, so its faster timings cannot replace
+the correctness checks.
+
+In the same sequence, retirement of 1,000 owners took 101.25 µs on the baseline,
+136.32 µs on the candidate and 135.50 µs after the pointer change; 10,000 owners
+took 1,364.8, 1,663.1 and 1,642.6 µs respectively. This is a remaining profiling
+concern. The earlier redundant-disposal optimization does not establish parity
+after subsequent failure-custody changes. Full-frame cost, admission and retarget
+latency remain separate measurements.
+
+Reproduce these workloads with:
+
+```bash
+cargo bench -p flui-animation --bench vsync_registry --locked -- --noplot 'nested_vsync_registry|running_vsync_registry/10000|stopped_vsync_registry/10000|unregister_all'
+```
+
+### Revision-cached ancestry, 2026-10-11
+
+`f3caf36c5ec70284025a1c2ae8085c3df89f5d5c` caches a successful ancestry check
+for the root's current hierarchy revision. Attachment, withdrawal, mute and
+closure invalidate that revision before user callbacks or capture retirement.
+A changed revision revalidates the affected walk; unrelated healthy peers can
+continue. Saturation permanently uses full validation, preserving delivery
+without recycling a revision. The cache uses a cell in the borrowed walk and
+a counter in the existing registry; it allocates no additional collection.
+
+Unchanged hierarchies now perform constant-time revision checks between owner
+samples instead of walking every ancestor. Public admission/reentry scenarios
+and a privately seeded saturation case fail when invalidation or the saturation
+fallback is removed. The restored ownership, clocks, status, registry and mounted
+animation/sliver selection passed 61 tests.
+
+The same advancing-clock workload and optimized profile ran sequentially on the
+Windows host above. The control was the exact production source from
+`0260bc33041a80ac03c831135158e9fec9b89fcb`, temporarily restored before rebuilding.
+The cached binary was retained separately; restoring its source preserved both
+modified files' SHA-256 hashes. No builds read source during restoration.
+
+Criterion time estimates in microseconds (95% intervals in parentheses):
+
+| Operation | Control | Cache without inline hints | Final cache |
+|---|---:|---:|---:|
+| Active frame, 10,000 owners | 1,120.5 (1,101.6–1,154.1) | 1,344.4 (1,330.1–1,358.6) | 1,101.7 (1,079.2–1,125.7) |
+| 1,000 owners, depth 1 | 82.10 (81.79–82.54) | 85.82 (85.34–86.83) | 83.94 (83.57–84.54) |
+| 1,000 owners, depth 8 | 93.23 (92.56–94.05) | 85.23 (84.91–85.64) | 83.08 (82.84–83.41) |
+| 1,000 owners, depth 32 | 140.34 (139.66–141.91) | 86.42 (85.46–87.46) | 84.85 (84.33–85.53) |
+
+The initial cache made the flat active frame slower in repeated measurements.
+Inline hints on the admission predicates restored that row to an interval
+overlapping the control while retaining the deeper-row improvement. This is
+an observed code-generation sensitivity, not assembly-level attribution. Host
+activity and CPU frequency remain uncontrolled; these results do not establish
+a fixed speedup or an improvement for every configuration. Retirement, admission,
+retarget, allocation and full-frame measurements remain separate work.
+
+Reproduce the selected rows with:
+
+```bash
+cargo bench -p flui-animation --bench vsync_registry --locked -- --noplot 'running_vsync_registry/10000|nested_vsync_registry/1000'
+```
+
+### Complete registry workload, 2026-10-11
+
+The same historical baseline, `c297b6c89bc93941e28c738c9dfac3d623a2dae2`,
+was compared with the ownership and continuous-color candidate published as
+`8cbca605836b65a0af7899378d4a27f5309075d4`, before typed registry cleanup.
+The benchmark files were identical, baseline production was unchanged, and
+release runs used separate target directories on the Windows host above.
+All populations used ten samples, a 500 ms warm-up and a one-second measurement.
+Other host activity and CPU frequency remained uncontrolled.
+
+Criterion time estimates in microseconds (95% intervals in parentheses):
+
+| Operation | Owners / depth | Baseline | Current |
+|---|---:|---:|---:|
+| Stopped frame | 100 | 1.508 (1.477–1.536) | 1.635 (1.630–1.641) |
+| Stopped frame | 1,000 | 37.524 (31.590–42.132) | 33.062 (29.322–36.304) |
+| Stopped frame | 5,000 | 289.300 (279.610–298.110) | 261.809 (241.135–279.267) |
+| Stopped frame | 10,000 | 570.540 (528.860–603.440) | 638.878 (596.917–681.474) |
+| Active frame | 100 | 8.362 (7.531–9.074) | 7.394 (6.706–8.496) |
+| Active frame | 1,000 | 102.330 (86.196–119.390) | 97.139 (86.175–105.480) |
+| Active frame | 5,000 | 613.400 (560.140–703.090) | 701.020 (675.283–725.097) |
+| Active frame | 10,000 | 1,205.300 (1,052.400–1,404.200) | 1,461.036 (1,283.028–1,654.705) |
+| Nested active frame | 100 / 1 | 7.342 (6.742–8.418) | 7.913 (7.121–8.838) |
+| Nested active frame | 100 / 8 | 8.783 (7.459–9.958) | 9.185 (7.577–11.015) |
+| Nested active frame | 100 / 32 | 9.155 (8.282–9.787) | 10.087 (8.473–11.643) |
+| Nested active frame | 1,000 / 1 | 99.525 (87.466–106.350) | 115.918 (101.012–123.840) |
+| Nested active frame | 1,000 / 8 | 110.570 (97.225–122.410) | 118.837 (105.819–134.217) |
+| Nested active frame | 1,000 / 32 | 111.020 (96.406–120.480) | 109.481 (92.513–125.867) |
+| Frame with 10% active | 1,000 | 34.185 (31.861–39.612) | 41.432 (35.805–46.697) |
+| Retire all owners | 1,000 | 127.970 (112.860–136.840) | 132.810 (129.621–137.715) |
+| Retire all owners | 10,000 | 1,352.600 (1,247.700–1,458.800) | 2,123.230 (1,871.866–2,317.069) |
+
+The retirement row remains a profiling concern. A longer serial repeat with
+50 samples, a one-second warm-up and a three-second measurement produced
+1,551.1 µs (1,479.7–1,627.0) on the baseline and 1,918.3 µs
+(1,810.1–2,048.6) on that candidate. These intervals do not overlap;
+the observed cost increase must not be described as performance parity.
+Same-version runs also varied substantially. The measurements do not isolate
+the cause, establish whole-frame latency or replace admission and retarget tests.
+
+Registry defaults are configured before Criterion parses command-line options,
+so longer samples can be requested without changing the timed workload:
+
+```bash
+cargo bench --locked -p flui-animation --bench vsync_registry -- unregister_all/10000 --sample-size 50 --measurement-time 3 --warm-up-time 1 --noplot
+```
+
+Earlier per-group configuration overrode these command-line options. Its
+reported ten-sample results above remain ten-sample results; they must not be
+relabelled as longer measurements.
+
+### Typed registry retirement, 2026-10-11
+
+Idle owner retirement allocated once per owner to erase registry cleanup into
+a boxed callback. A registry's custody type is known: the controller delivery
+queue now stores it directly and retires it at the same FIFO position under the
+same recovery scope. Generic outgoing property cleanup still requires erasure.
+Dropping the registry early would change ownership after a later failure and
+is not the optimization measured here.
+
+The public `retiring_idle_registry_owners_allocates_nothing` case measures
+1, 1,000 and 10,000 owners. Admission is a positive allocator control; observing
+controller clones remain alive while disposal withdraws seats and refuses new
+runs. The old production path allocates 16 bytes per owner; typed custody
+allocates nothing. Reverting only the production repair makes the case fail.
+Existing owner-retirement and first-failure families remain acceptance criteria.
+This does not promise allocation-free active cancellation, callbacks, admission
+or arbitrary property capture retirement.
+
+Serial release measurements on the Windows host compare the exact boxed
+production source from `8cbca605836b65a0af7899378d4a27f5309075d4` with the typed
+repair. The rest of the source and timed benchmark are unchanged. Both runs
+used 50 samples, a one-second warm-up and a three-second measurement. Estimates
+are microseconds with 95% intervals:
+
+| Retired owners | Boxed cleanup | Typed cleanup |
+| ---: | ---: | ---: |
+| 1,000 | 134.67 (133.37–135.87) | 114.60 (113.32–115.65) |
+| 10,000 | 1,549.8 (1,522.6–1,577.5) | 1,335.7 (1,315.4–1,356.8) |
+
+These paired intervals do not overlap. Same-version timing varied between
+earlier runs; host load and CPU frequency remain uncontrolled. The comparison
+isolates this source change, not all retirement cost or whole-frame latency.
+It does not establish parity with the older historical main.
+
 ## Measured benchmarks
+
+### Continuous color, 2026-10-11
+
+The byte-color baseline was `1a1720bb126b27c3a1e80bbb0a7f0c38d1b57dd0`;
+the candidate uses ADR-0194's normalized color storage. Both runs used the
+same `animation_bench.rs` source on the Windows host above, separate target
+directories, the optimized bench profile and six build jobs. Criterion used
+50 samples, a one-second warm-up and a three-second measurement. Runs were
+sequential; other host activity and CPU frequency were not controlled.
+
+Criterion time estimates in nanoseconds (95% intervals in parentheses):
+
+| Operation | Byte color | Continuous color |
+|---|---:|---:|
+| Mixed-alpha `ColorTween::transform` | 39.441 (39.223–39.642) | 118.62 (118.10–119.11) |
+| First advancing `AnimatedValue<Color>` frame after retarget | 288.90 (281.03–298.26) | 288.70 (281.73–296.36) |
+
+Continuous conversion makes the isolated tween approximately three times
+more expensive. The active property-frame intervals overlap. The latter
+workload constructs and retargets a fresh owner, primes its zero frame outside
+measurement, then advances one 60 Hz frame and reads its color. Batched
+bookkeeping remains part of the measurement; these are property-operation
+costs, not whole UI frames or image-filter throughput. The frame result does
+not establish a general absence of performance regressions.
+
+```bash
+cargo bench --locked -p flui-animation --bench animation_bench -- 'tween_transform/color|spring/animated_value_color_frame' --sample-size 50 --measurement-time 3 --warm-up-time 1 --noplot
+```
 
 The benchmark tables below are historical measurements from before the
 owner-local controller migration. They are not measurements of the current
@@ -16,7 +340,8 @@ standalone prototype; those experiments are not committed, and the command
 below does not reproduce their attribution percentages or the 15,000–30,000
 controller samples. Absolute numbers are machine-relative and both hosts below
 were shared with other builds, so read them as orders of magnitude and as a
-regression baseline, not as a hardware promise. Run the committed targets with:
+historical context, not as a current regression baseline or hardware promise.
+Run the committed targets with:
 
 ```bash
 cargo bench -p flui-animation --bench animation_bench --bench vsync_registry
@@ -42,10 +367,20 @@ the early return of a settled controller.
 | `controller/status_fan_out/8` | 531 ns |
 | `controller/forward` | 206 ns |
 
-A steady-state frame (`Vsync::tick_all` on a running controller with four
-value listeners and one status listener) performs no heap allocation; the
-`tick_allocation` test target pins that with a counting allocator. The
-notifier's listener snapshot holds four callbacks inline, so a fifth value
+A counting allocator in the standalone `tick_allocation` target measures
+10,000 advancing frames on one presentation clock. The registry holds a live
+scalar controller, four-component insets and a seven-component derived value
+containing geometry, color and a scalar, each with four value listeners.
+Reading both value observers and evaluating a scalar cubic keyframe track are
+included: the measured window makes zero allocating calls and allocates zero
+bytes. Progress and listener-delivery assertions prevent an idle workload from
+satisfying this claim; starting another run provides the allocator's negative
+control. Relay depths of 1, 5 and 32 also allocate nothing while delivering
+each measured frame.
+
+Admission, retargeting and teardown are outside this steady-state measurement.
+It does not promise allocation-free user converters or listener callbacks.
+The notifier's listener snapshot holds four callbacks inline, so a fifth value
 listener spills it to the heap on every notification.
 
 ### Curves, tweens and simulations
@@ -197,14 +532,21 @@ them. What matters for cost is what each type holds:
 
 | Type | Holds |
 |------|-------|
-| `AnimationController` | two `Rc`s (state behind one `parking_lot::Mutex`, and the value notifier); `clone()` shares the controller |
-| `CurvedAnimation<C>` | the curve(s) and one `Rc` of links: the parent `Rc<dyn Animation<f64>>`, a notifier, a curve-direction `Mutex` and two parent subscriptions (value and status) |
-| `TweenAnimation<T, A>` | the parent `Rc<dyn Animation<f64>>`, the animatable, a notifier and a parent subscription |
-| `ReverseAnimation` | the parent `Rc<dyn Animation<f64>>`, a notifier and a parent subscription |
+| `AnimationController` | two `Rc`s: owner-local state in a `RefCell` and the value notifier; `clone()` shares both |
+| `CurvedAnimation<C>` | curve values owned by each clone, shared `Rc<Cell<Option<AnimationStatus>>>` for the entering direction, and shared parent links |
+| `TweenAnimation<A>` | the animatable owned by each clone and shared parent links |
+| `ReverseAnimation` | shared parent links |
 | `ConstantAnimation<T>` | the value and a status; no notifier, since it never changes |
 | `Cubic`, `ElasticOutCurve`, `Interval<C>` | plain `f64` parameters (plus the inner curve) |
 | `Steps` | step count and jump placement |
 | `Keyframes<T>` | starting value, total duration and an immutable boxed segment slice |
+
+`ParentLinks` shares a parent `Rc<dyn Animation<f64>>`, separate value and status
+notifiers, and one subscription to each parent channel. Wrapper clones share
+those links rather than installing another subscription pair. Final retirement
+withdraws both outgoing channels before detaching the parent subscriptions;
+authored callback destruction occurs outside notifier borrows. These are
+owner-local capabilities (ADR-0175), so their cost has no per-animation lock.
 
 ---
 
@@ -247,12 +589,12 @@ that hop plus a cubic solve.
 ```rust
 # use std::rc::Rc;
 # use std::time::Duration;
-# use flui_animation::{Animation, AnimationController, CurvedAnimation, Curves};
+# use flui_animation::{Animation, AnimationController, CurvedAnimation, curves};
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 let shared = controller.clone(); // shares the controller, no copy
 let animation: Rc<dyn Animation<f64>> = Rc::new(CurvedAnimation::new(
     Rc::new(shared),
-    Curves::EaseInOut,
+    curves::EASE_IN_OUT,
 ));
 let value = animation.value(); // dynamic dispatch into the curved layer
 # drop(controller);
@@ -264,8 +606,10 @@ let value = animation.value(); // dynamic dispatch into the curved layer
 
 Value and status listeners are `Rc<dyn Fn ...>` callbacks. Reusing one
 callback across several animations shares its `Rc` and captures, but
-`add_listener` still wraps each registration in a fresh `Rc` (plus any map
-growth), so every registration costs at least one allocation:
+notifier-backed `add_listener` still wraps each registration in a fresh `Rc`
+(plus any map growth), so each such registration costs at least one allocation.
+Fixed animations such as `ConstantAnimation` do not store callbacks or allocate
+registration wrappers:
 
 ```rust
 # use std::rc::Rc;
@@ -314,8 +658,8 @@ controller.forward()?;
 # use flui_animation::{Animation, AnimationController, AnimationStatus};
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 // React to the transition once instead of reading status every frame
-controller.add_status_listener(Rc::new(|status| {
-    if status == AnimationStatus::Completed { /* ... */ }
+let _subscription = controller.subscribe_status(Rc::new(|status| {
+    if status == AnimationStatus::ForwardSettled { /* ... */ }
 }));
 # drop(controller);
 ```
@@ -342,13 +686,13 @@ Up to four value listeners notify without allocating; a fifth spills the
 notifier's snapshot to the heap on every frame. Fan out from one listener
 when a controller needs many observers.
 
-### 5. Built-in Curves Are Plain Values
+### 5. Built-in curves Are Plain Values
 
-`Curves::EaseInOut` is `Cubic::new(0.42, 0.0, 0.58, 1.0)`: a named constant
+`curves::EASE_IN_OUT` is `Cubic::new(0.42, 0.0, 0.58, 1.0)`: a named constant
 costs exactly what the equivalent hand-written `Cubic` costs.
 
 ```rust
-use flui_animation::{Cubic, Curves};
+use flui_animation::{Cubic, curves};
 
-assert_eq!(Curves::EaseInOut, Cubic::new(0.42, 0.0, 0.58, 1.0));
+assert_eq!(curves::EASE_IN_OUT, Cubic::new(0.42, 0.0, 0.58, 1.0));
 ```

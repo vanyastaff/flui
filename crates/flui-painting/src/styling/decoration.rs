@@ -445,15 +445,9 @@ where
     }
 }
 
-/// The alpha of `color` scaled by `factor`, rounded to 8 bits.
+/// Scale alpha without introducing a byte export boundary.
 fn scale_alpha(color: Color, factor: f64) -> Color {
-    #[expect(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "clamped to 0..=255 first"
-    )]
-    let alpha = (f64::from(color.a) * factor).clamp(0.0, 255.0).round() as u8;
-    color.with_alpha(alpha)
+    color.with_opacity(f64::from(color.opacity()) * factor)
 }
 
 /// Every side's width scaled by `factor`.

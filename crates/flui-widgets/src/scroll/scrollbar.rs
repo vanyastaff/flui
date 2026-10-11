@@ -132,7 +132,7 @@ impl StatelessView for Scrollbar {
         let thumb_width = self.thumb_width;
         let child = self.child.clone();
 
-        AnimatedBuilder::new(self.controller.as_listenable(), move || {
+        AnimatedBuilder::new(self.controller.listenable(), move || {
             let viewport_dim = controller.viewport_dimension_pixels();
             let fraction = controller.thumb_fraction();
             let offset_fraction = controller.thumb_offset_fraction();

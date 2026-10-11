@@ -1,0 +1,11 @@
+error: #[derive(TwoWayConverter)] requires concrete field types; stable Rust cannot sum generic-dependent vector widths
+ --> tests/ui/generic_motion_width.rs:4:43
+  |
+4 | struct Generic<T: TwoWayConverter + Lerp>(T);
+  |                                           ^
+
+error: #[derive(TwoWayConverter)] requires concrete field types; stable Rust cannot sum generic-dependent vector widths
+ --> tests/ui/generic_motion_width.rs:7:37
+  |
+7 | struct GenericArray<const N: usize>([f64; N]);
+  |                                     ^^^^^^^^

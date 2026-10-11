@@ -267,7 +267,7 @@ pub(crate) type RouteModals = Rc<super::lifecycle::TerminalMap<RouteId, ModalHan
 ///
 /// A back-gesture release animates back with a duration/curve computed from
 /// the drag (the fling velocity, or the flat 350ms/
-/// `Curves::FastEaseInToSlowEaseOut` "stay" pacing) — never the route's plain
+/// `curves::FAST_EASE_IN_TO_SLOW_EASE_OUT` "stay" pacing) — never the route's plain
 /// reverse. FLUI has no `Route` object a gesture controller can reach to
 /// override, so the navigator publishes the override here, keyed by the one
 /// route it applies to, and [`RouteBinding::take_pop_pacing`] consumes it

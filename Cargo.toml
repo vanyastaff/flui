@@ -182,6 +182,7 @@ repository = "https://github.com/vanyastaff/flui"
 [workspace.dependencies]
 # ASYNC RUNTIME — tokio 1.43 = LTS floor (lock resolves latest 1.x)
 tokio = { version = "1.43" }
+zbus = { version = "5.19", default-features = false, features = ["tokio"] }
 # Structured cancellation for the runtime-owned execution services
 # (`CancellationToken`; adoption sanctioned by
 # docs/research/2026-08-01-runtime-dependency-adoption-guide.md with the
@@ -194,6 +195,7 @@ tokio-util = { version = "0.7", default-features = false }
 # wasm32 `spawn_local` on the browser's microtask queue: the web runner's frame
 # loop and the execution services' sequential IO lane.
 wasm-bindgen-futures = "0.4"
+wasm-bindgen-test = "=0.3.77"
 js-sys = "0.3"
 keyboard-types = "0.8"
 
@@ -352,10 +354,8 @@ futures-core = { version = "0.3", default-features = false, features = ["std"] }
 # Used by flui-widgets' image decode cache to coalesce concurrent async image
 # loads: `FutureExt::shared()` lets N `Image` widgets mounted with the same
 # provider key await ONE underlying load instead of starting N. `alloc` only
-# (no `std`/`io`/`channel`/proc-macro features) — this is the one place the
-# `futures-core`-only policy above is deliberately NOT enough, because
-# coalescing genuinely needs the `Shared` combinator, not just the `Future`
-# trait.
+# (no `std`/`io`/`channel`/proc-macro features). The Linux preference source
+# also needs StreamExt to await portal notifications on its existing executor.
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
 
 # Count-bounded LRU — flui-widgets' decoded-image cache
@@ -380,6 +380,8 @@ glam = { version = "0.33", default-features = false, features = ["std", "f64"] }
 # kurbo: the curve model behind flui-painting's `Path` (ADR-0098 §7): arcs and ovals as
 # curves, exact winding and tight bounds. Crate-internal; no kurbo type is public.
 kurbo = "0.13"
+# Private sRGB/Oklab conversions; FLUI owns admission and interpolation policy.
+color = "0.3.3"
 # bytemuck: zero-copy Pod/Zeroable derives used by flui-engine.
 bytemuck = { version = "1.24", features = ["derive"] }
 
@@ -459,6 +461,8 @@ static_assertions = "1.1"
 # each drives `tests/<dir>/*.rs` fixtures and pins the diagnostic text a
 # wrong program receives, not merely that it fails.
 trybuild = "1.0"
+# Main-thread native test processes with the standard Cargo/nextest protocol.
+libtest-mimic = "0.8"
 
 # FAST HASHING - Used by flui-rendering (FxHashSet for layout cycle guard;
 # deterministic + faster than std SipHash for small keys like RenderId)
@@ -846,6 +850,11 @@ serde = [
 [[example]]
 name = "material_demo"
 path = "examples/material_demo/main.rs"
+required-features = ["material"]
+
+[[example]]
+name = "motion_lab"
+path = "examples/motion_lab.rs"
 required-features = ["material"]
 
 [[example]]

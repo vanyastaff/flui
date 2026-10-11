@@ -32,8 +32,6 @@ use flui_rendering::{
 pub struct RenderOpacity {
     /// Opacity value (0.0 = transparent, 1.0 = opaque).
     opacity: f64,
-    /// Alpha as u8 (0-255) for efficient layer operations.
-    alpha: u8,
     /// Whether we have a child.
     has_child: bool,
     /// Whether opacity is always needed for compositing.
@@ -50,10 +48,9 @@ impl RenderOpacity {
     /// * `opacity` - Opacity value (0.0 = transparent, 1.0 = opaque). Values
     ///   outside [0.0, 1.0] are clamped.
     pub fn new(opacity: f64) -> Self {
-        let clamped = opacity.clamp(0.0, 1.0);
+        let clamped = PaintOpacity::new(opacity).alpha();
         Self {
             opacity: clamped,
-            alpha: Self::opacity_to_alpha(clamped),
             has_child: false,
             always_needs_compositing: false,
         }
@@ -80,18 +77,17 @@ impl RenderOpacity {
     ///
     /// * `opacity` - Opacity value (0.0 = transparent, 1.0 = opaque).
     pub fn set_opacity(&mut self, opacity: f64) -> flui_rendering::RenderUpdateImpact {
-        let clamped = opacity.clamp(0.0, 1.0);
-        if (self.opacity - clamped).abs() <= f64::EPSILON {
+        let clamped = PaintOpacity::new(opacity).alpha();
+        if self.opacity == clamped {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
         let old_needs_compositing = self.needs_compositing();
-        let old_is_visible = self.alpha > 0;
+        let old_is_visible = self.opacity > 0.0;
         // Whether this node suppresses its subtree's paint entirely. Read
         // through the trait method rather than re-deriving `alpha == 0`, so
         // this stays correct if that predicate changes.
         let old_skips_paint = <Self as RenderBox>::skip_paint(self);
         self.opacity = clamped;
-        self.alpha = Self::opacity_to_alpha(clamped);
         // A pure alpha change lands ONLY on the `OpacityLayer` this node
         // pushes, so the frame can rebuild that layer and replay the enclosing
         // repaint boundary's retained output rather than repainting the
@@ -105,13 +101,13 @@ impl RenderOpacity {
             // — which is the only way to serve a structural change.
             impact |= flui_rendering::RenderUpdateImpact::COMPOSITING_BITS;
         }
-        if old_is_visible != (self.alpha > 0) {
+        if old_is_visible != (self.opacity > 0.0) {
             impact |= flui_rendering::RenderUpdateImpact::SEMANTICS;
         }
         // Starting or stopping suppressing the subtree's paint is a change to
         // what the frame CONTAINS, not to a layer property, and it is invisible
         // to the layer-update path: WITHOUT the always-compositing flag this
-        // node emits no `OpacityLayer` at either alpha 255 or alpha 0, so it
+        // node emits no `OpacityLayer` at either alpha 1 or alpha 0, so it
         // has no effect-layer slot for an update to patch, and only a repaint
         // can add or remove that content.
         //
@@ -137,11 +133,6 @@ impl RenderOpacity {
         impact
     }
 
-    /// Returns the alpha value (0-255).
-    pub fn alpha(&self) -> u8 {
-        self.alpha
-    }
-
     /// Sets whether this render object always needs compositing.
     ///
     /// When true, an opacity layer is always created even when opacity is 1.0.
@@ -161,16 +152,11 @@ impl RenderOpacity {
     /// Returns whether compositing is needed.
     ///
     /// Returns `true` only when `always_needs_compositing` is set OR the alpha
-    /// is non-trivially blended (`0 < alpha < 255`). Fully-transparent
+    /// is non-trivially blended (`0 < alpha < 1`). Fully-transparent
     /// (`alpha == 0`) does not need compositing because the subtree is skipped
     /// entirely.
     pub fn needs_compositing(&self) -> bool {
-        self.always_needs_compositing || (self.alpha > 0 && self.alpha != 255)
-    }
-
-    /// Converts opacity (0.0-1.0) to alpha (0-255).
-    fn opacity_to_alpha(opacity: f64) -> u8 {
-        (opacity * 255.0).round() as u8
+        self.always_needs_compositing || (self.opacity > 0.0 && self.opacity < 1.0)
     }
 }
 
@@ -233,18 +219,18 @@ impl RenderBox for RenderOpacity {
     // through `&dyn RenderObject<BoxProtocol>`; the blanket impl forwards
     // here.
     fn paint_effects(&self, _size: Size) -> PaintEffects {
-        // None when fully opaque (255) OR fully transparent (0) without the
+        // None when fully opaque (1) OR fully transparent (0) without the
         // always-needs-compositing flag: neither requires an OpacityLayer.
-        if (self.alpha == 255 || self.alpha == 0) && !self.always_needs_compositing {
+        if (self.opacity == 1.0 || self.opacity == 0.0) && !self.always_needs_compositing {
             PaintEffects::NONE
         } else {
-            PaintEffects::NONE.with_opacity(PaintOpacity::new(self.alpha))
+            PaintEffects::NONE.with_opacity(PaintOpacity::new(self.opacity))
         }
     }
 
     fn skip_paint(&self) -> bool {
         // Fully transparent without the always-compositing flag: suppress child
         // paint entirely.
-        self.alpha == 0 && !self.always_needs_compositing
+        self.opacity == 0.0 && !self.always_needs_compositing
     }
 }

@@ -11,7 +11,7 @@ use std::{
 
 use slab::Slab;
 
-/// Completion state of a ticker future.
+/// Resolution state of an animation run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AnimationRunFutureState {
     /// Not yet resolved.
@@ -28,11 +28,9 @@ type Continuation = Box<dyn FnMut(Result<(), RunCanceled>)>;
 type PanicPayload = Box<dyn std::any::Any + Send>;
 
 /// The durable resolution plus whatever fan-out was registered before it was
-/// known. Both live behind ONE lock so [`RunCompleter::complete`]/
-/// [`cancel`](RunCompleter::cancel) can publish the resolution and take
-/// every already-registered continuation in a single critical section — a
-/// registration landing between two separate locks would be pushed into a
-/// `Vec` that publish already drained and never run.
+/// known. A single `RefCell` borrow lets [`RunCompleter::complete`]/
+/// [`cancel`](RunCompleter::cancel) publish the resolution and withdraw every
+/// registered continuation before reentrant user code can register more work.
 struct FutureState {
     resolution: AnimationRunFutureState,
     continuations: Vec<Continuation>,
@@ -61,16 +59,16 @@ impl AnimationRunFutureInner {
     }
 }
 
-/// A terminal ticker outcome: [`AnimationRunFutureState`] with `Pending` made
+/// A terminal run outcome: [`AnimationRunFutureState`] with `Pending` made
 /// unrepresentable, so a resolved value cannot be handled as if it might still
 /// be waiting.
 ///
 /// Carries no derives on purpose: it is constructed and matched, never
 /// compared, cloned, or formatted.
 enum Resolved {
-    /// The ticker stopped normally.
+    /// The run ended successfully.
     Complete,
-    /// The ticker was canceled.
+    /// The run was canceled.
     Canceled,
 }
 
@@ -84,8 +82,8 @@ impl Resolved {
     }
 }
 
-/// Register under the same lock that publishes terminal state. The previous
-/// waker is retired outside the lock, and repeated polls reuse one live slot.
+/// Register through the same state cell that publishes the terminal outcome.
+/// The previous waker is retired after releasing the borrow; repeated polls reuse one live slot.
 fn poll_resolution(
     inner: &AnimationRunFutureInner,
     registration: &mut Option<usize>,
@@ -110,7 +108,7 @@ fn poll_resolution(
         }
     }
     // RawWaker cloning can execute foreign code. Preserve the old registration
-    // if cloning fails, and recheck publication after reacquiring the lock.
+    // if cloning fails, and recheck publication after borrowing state again.
     let replacement = cx.waker().clone();
     let mut state = inner.state.borrow_mut();
     let resolved = match state.resolution {
@@ -190,7 +188,7 @@ fn finish_delivery(first: Option<PanicPayload>) {
 }
 
 /// Every continuation runs before waiters wake. Foreign code and owning waker
-/// retirement run outside all locks; a failure cannot starve the remaining tail.
+/// retirement run outside all state borrows; a failure cannot starve the remaining tail.
 fn deliver_now(
     outcome: Result<(), RunCanceled>,
     continuations: Vec<Continuation>,
@@ -259,11 +257,7 @@ impl AnimationRunFuture {
         )
     }
 
-    /// Create an already-completed ticker future.
-    ///
-    /// This is useful for implementing objects that normally defer to a ticker
-    /// but sometimes can skip the ticker because the animation is of zero
-    /// duration, but which still need to represent the completed animation.
+    /// Create an already-successful run future, such as for an immediate transition.
     pub(crate) fn complete() -> Self {
         Self {
             inner: Rc::new(AnimationRunFutureInner::new(
@@ -273,12 +267,12 @@ impl AnimationRunFuture {
         }
     }
 
-    /// Check if the ticker completed normally
+    /// Whether the run resolved successfully.
     pub fn is_complete(&self) -> bool {
         self.inner.read_state() == AnimationRunFutureState::Complete
     }
 
-    /// Check if the ticker was canceled
+    /// Whether the run resolved by cancellation.
     pub fn is_canceled(&self) -> bool {
         self.inner.read_state() == AnimationRunFutureState::Canceled
     }
@@ -333,10 +327,9 @@ impl Clone for AnimationRunFuture {
     }
 }
 
-/// Resolves when the ticker run this future was created for ends, either way.
+/// Resolves when this animation run ends, successfully or by cancellation.
 ///
-///
-/// Wakers run after publication and outside the waitset lock, so inline polling
+/// Wakers run after publication and outside the state borrow, so inline polling
 /// or dropping a clone is supported. Panicking wakers cannot starve later waiters.
 impl Future for AnimationRunFuture {
     type Output = Result<(), RunCanceled>;
@@ -383,10 +376,10 @@ impl std::fmt::Debug for AnimationRunFuture {
 /// The write half of a [`AnimationRunFuture`], created by [`AnimationRunFuture::pending`].
 ///
 /// [`complete`](Self::complete)/[`cancel`](Self::cancel) publish the durable
-/// outcome — and take every continuation registered so far — in one locked
+/// outcome — and take every continuation registered so far — in one borrowed
 /// step, then hand back a [`RunDelivery`] that runs the user-code side
 /// (continuations, then wakers) once the caller is ready for it, typically
-/// after releasing a lock of its own. Dropped without either call, the
+/// after releasing its own state borrow. Dropped without either call, the
 /// completer publishes `Err(RunCanceled)` and delivers it itself — a run
 /// nobody explicitly ended still settles rather than hanging its awaiters
 /// forever.
@@ -396,6 +389,13 @@ pub struct RunCompleter {
 }
 
 impl RunCompleter {
+    pub(crate) fn future(&self) -> AnimationRunFuture {
+        AnimationRunFuture {
+            inner: Rc::clone(&self.inner),
+            registration: None,
+        }
+    }
+
     /// Publish `target`, returning the continuations to run iff this call
     /// performed the (once-only) transition — `None` means the future was
     /// already resolved by an earlier call, so there is nothing left to
@@ -461,8 +461,8 @@ impl std::fmt::Debug for RunCompleter {
 /// run this settles is never stuck on it — only the fan-out's TIMING (now,
 /// via [`deliver`](Self::deliver), or later, on `Drop`) is this type's
 /// choice. Splitting resolution from delivery lets a caller finish a state
-/// change while still holding its own lock and defer the user-code fan-out
-/// (continuations, wakers) until after that lock is released.
+/// change while still borrowing its own state and defer the user-code fan-out
+/// (continuations, wakers) until after that borrow is released.
 #[must_use = "a RunDelivery delivers on drop; call deliver() where continuations may run"]
 pub struct RunDelivery {
     _inner: Rc<AnimationRunFutureInner>,

@@ -451,10 +451,8 @@ fn describe(span: &SpanInfo, root: Option<Color>) -> String {
         parts.push(format!("size={size:.2}"));
     }
     if let Some(color) = span.color.filter(|color| Some(*color) != root) {
-        parts.push(format!(
-            "color=#{:02x}{:02x}{:02x}{:02x}",
-            color.r, color.g, color.b, color.a
-        ));
+        let [r, g, b, a] = color.to_rgba8();
+        parts.push(format!("color=#{:02x}{:02x}{:02x}{:02x}", r, g, b, a));
     }
     parts.join(" ")
 }

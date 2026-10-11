@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Superseded-by:** [ADR-0179](ADR-0179-controller-registration-ownership.md),
   public controller admission and explicit caller-managed controller removal only.
+  [ADR-0191](ADR-0191-single-parent-animation-registries.md) supersedes child attachment refusal and topology.
 - **Date:** 2026-10-05
 - **Supersedes:** ADR-0020 §1, registration token identity and removal signatures only
 
@@ -33,7 +34,7 @@ without retiring caller-owned values. The existing owned `register` delegates to
 it and panics with `Vsync registration capacity exhausted` on exhaustion, after
 releasing the registry mutex. Its rejected owner is secured before admission so
 ordinary rejected-value destruction cannot replace that failure. Child attachment
-continues returning `None` for a cycle or exhaustion. No process-wide allocator
+now returns typed refusals under ADR-0191. No process-wide allocator
 or automatic token removal is introduced.
 
 ## Migration and validation

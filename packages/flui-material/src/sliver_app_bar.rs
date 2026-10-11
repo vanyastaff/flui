@@ -203,7 +203,7 @@ impl SliverAppBar {
     /// Snap a [`floating`](Self::floating) bar fully open when a scroll
     /// gesture toward the start ends, instead of leaving it partially
     /// revealed. Ignored unless `floating` is also set. The animation uses
-    /// the default snap curve and duration (`Curves.ease`, 300ms).
+    /// the default snap curve and duration (`curves.ease`, 300ms).
     #[must_use]
     pub fn snap(mut self, snap: bool) -> Self {
         self.snap = snap;
@@ -362,11 +362,11 @@ impl SliverPersistentHeaderDelegate for SliverAppBarDelegate {
 
     fn snap_configuration(&self) -> Option<flui_sdk::widgets::FloatingHeaderSnapConfiguration> {
         // The oracle's own defaults (`FloatingHeaderSnapConfiguration`,
-        // `rendering/sliver_persistent_header.dart:488-491`): Curves.ease
+        // `rendering/sliver_persistent_header.dart:488-491`): curves.ease
         // over 300ms.
         self.snap.then(|| {
             flui_sdk::widgets::FloatingHeaderSnapConfiguration::new(
-                flui_sdk::animation::ArcCurve::new(flui_sdk::animation::Curves::Ease),
+                flui_sdk::animation::ArcCurve::new(flui_sdk::animation::curves::EASE),
                 std::time::Duration::from_millis(300),
             )
         })

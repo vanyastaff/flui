@@ -2,13 +2,12 @@
 //!
 //! Each widget here animates a visual property *implicitly*: you rebuild it with
 //! a new target value and it animates from the old value to the new one, with no
-//! explicit `Animation` to manage. Internally each holds a persistent
-//! [`AnimationController`](flui_animation::AnimationController) and returns an
-//! [`AnimatedBuilder`](crate::AnimatedBuilder) over it.
+//! explicit `Animation` to manage. Owning motion retains values and velocities
+//! across reconfiguration; inner builders observe its published samples.
 //!
 //! Drive them deterministically by wrapping the subtree in a [`VsyncScope`] over
-//! a binding's [`Vsync`](flui_animation::Vsync); without a scope, each is driven
-//! by its own scheduler ticker on a real display.
+//! a binding's [`Vsync`](flui_animation::Vsync); without a scope, newly admitted
+//! motion settles synchronously.
 
 mod animated_align;
 mod animated_container;
@@ -18,6 +17,7 @@ mod animated_rotation;
 mod animated_size;
 mod animated_switcher;
 mod implicitly_animated;
+mod property_motion;
 mod ticker_mode;
 mod vsync_scope;
 

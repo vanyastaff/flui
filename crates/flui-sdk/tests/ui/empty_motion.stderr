@@ -1,0 +1,17 @@
+error: #[derive(TwoWayConverter)] requires a struct with at least one field
+ --> tests/ui/empty_motion.rs:4:8
+  |
+4 | struct Empty;
+  |        ^^^^^
+
+error: #[derive(TwoWayConverter)] requires a struct with at least one field
+ --> tests/ui/empty_motion.rs:7:8
+  |
+7 | struct EmptyNamed {}
+  |        ^^^^^^^^^^
+
+error: #[derive(TwoWayConverter)] requires a struct with at least one field
+  --> tests/ui/empty_motion.rs:10:8
+   |
+10 | struct EmptyTuple();
+   |        ^^^^^^^^^^

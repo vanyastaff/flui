@@ -38,6 +38,7 @@
 mod image;
 mod interaction;
 mod layout;
+mod opacity_sample;
 mod proxy;
 mod sliver;
 mod text;

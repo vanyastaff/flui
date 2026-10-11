@@ -29,7 +29,7 @@ use flui_rendering::{
     context::{BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext, PaintCx},
     delegates::CustomPainter,
     parent_data::BoxParentData,
-    pipeline::RenderInvalidationHandle,
+    pipeline::LocalRenderInvalidationHandle,
     traits::RenderBox,
 };
 
@@ -40,7 +40,7 @@ use flui_rendering::{
 /// [`Self::preferred_size`] (constrained by the incoming
 /// [`BoxConstraints`]).
 // NOT `Clone`: this render object holds live per-node lifecycle state (a
-// `RenderInvalidationHandle` bound to its `RenderId` plus repaint-`Listenable`
+// `LocalRenderInvalidationHandle` bound to its `RenderId` plus repaint-`Listenable`
 // subscription ids). Cloning would duplicate ids the clone does not own,
 // so — like `RenderAnimatedSize` (the ADR-0013 sibling) — it is move-only.
 #[derive(Debug)]
@@ -60,7 +60,7 @@ pub struct RenderCustomPaint {
     /// Self-dirty handle, held between [`RenderBox::attach`] and
     /// [`RenderBox::detach`] so a painter's repaint `Listenable` can mark this
     /// node needing paint (ADR-0013). `None` while detached.
-    render_invalidation_handle: Option<RenderInvalidationHandle>,
+    render_invalidation_handle: Option<LocalRenderInvalidationHandle>,
     /// Active `add_listener` id on `painter`'s repaint listenable, torn down
     /// in `detach` and on a background-painter swap.
     painter_listener: Option<ListenerId>,
@@ -420,7 +420,7 @@ impl RenderBox for RenderCustomPaint {
     /// Subscribes both painters' repaint listenables (ADR-0013): a notify from
     /// a painter's `repaint()` listenable now marks this node needing paint,
     /// so an animation-driven painter repaints without a widget rebuild.
-    fn attach(&mut self, handle: RenderInvalidationHandle) {
+    fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
         self.render_invalidation_handle = Some(handle);
         self.painter_listener = self.subscribe(self.painter.as_ref());
         self.foreground_listener = self.subscribe(self.foreground_painter.as_ref());

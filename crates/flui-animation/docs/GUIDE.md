@@ -22,6 +22,52 @@ assert_eq!(controller.value(), 0.5);
 owner returned by `build_on(Some(&vsync))`; its controller receives the
 presentation's `FrameTick` through that Vsync registry.
 
+## Motion preferences
+
+Use `AppConfig::with_motion_preference` to choose FollowSystem, Reduce or Full
+for an application. Widgets read the resolved `MediaQuery::motion_of`; they
+do not subscribe to another host preference producer. Under FollowSystem,
+Normal motion takes the host duration scale into account. Preserve motion
+keeps authored timing, including while the resolved policy is Reduce.
+
+This standalone example drives the same registry policy used by runtime
+frames. Policy changes take effect on a tick, so listeners see committed
+controller state rather than a synchronous sample during configuration.
+
+```rust
+use std::time::Duration;
+use flui_animation::{Animation, AnimationBehavior, AnimationController,
+    MotionClock, MotionPreference, Vsync};
+
+let vsync = Vsync::new();
+let mut clock = MotionClock::new();
+clock.set_preference(MotionPreference::Reduce);
+let transition = AnimationController::builder(Duration::from_secs(1))
+    .build_on(Some(&vsync));
+let timer = AnimationController::builder(Duration::from_secs(3))
+    .behavior(AnimationBehavior::Preserve)
+    .build_on(Some(&vsync));
+let _ = transition.controller().forward().expect("live transition");
+let _ = timer.controller().forward().expect("live timer");
+vsync.tick_all(&clock.frame(Duration::ZERO));
+assert_eq!(transition.controller().value(), 1.0);
+assert_eq!(timer.controller().value(), 0.0);
+vsync.tick_all(&clock.frame(Duration::from_secs(1)));
+assert!((timer.controller().value() - 1.0 / 3.0).abs() < 1e-9);
+```
+
+A finite repeat settles at its last leg's endpoint. An infinite Normal
+repeat parks at its first leg's start and keeps its run future pending;
+Full resumes it from a new zero-time anchor. A saturated selected timeline
+also settles finite work and parks infinite work; that timeline cannot
+resume until the owner is rebound to a registry with time available.
+
+For interactive inspection, run the workspace `motion_lab` example with
+`--full`, `--reduce` or `--system`. On Windows, `--system` follows the existing
+host Animation effects preference while the window is open. In headless
+tests, `HeadlessHost::set_motion_preference` and `LaidOut::set_motion_preference`
+use the runtime's application override path; pump a frame after changing it.
+
 ## AnimationController
 
 ### Creating
@@ -29,7 +75,7 @@ presentation's `FrameTick` through that Vsync registry.
 ```rust
 # use std::time::Duration;
 # use flui_animation::{AnimationController, AnimationError};
-# fn main() -> Result<(), AnimationError> {
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
 // Simple
 let controller = AnimationController::builder(Duration::from_millis(300)).build();
 
@@ -71,7 +117,7 @@ controller.reverse_from(Some(0.8))?;
 // Stop at current position
 controller.stop()?;
 
-// Jump to lower_bound, status = Dismissed
+// Jump to lower_bound, status = ReverseSettled
 controller.reset()?;
 
 // Set value directly (no animation)
@@ -80,6 +126,33 @@ controller.set_value(0.5);
 # Ok(())
 # }
 ```
+
+### Finishing a transition
+
+An application can finish a finite transition immediately, keeping the original
+run future successful. This also works while the run is paused.
+
+```rust
+use flui_animation::{Animation, AnimationController};
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll, Waker};
+use std::time::Duration;
+
+let controller = AnimationController::builder(Duration::from_millis(300)).build();
+let mut run = controller.forward().expect("live controller");
+controller.tick_at(Duration::from_millis(150));
+assert_eq!(controller.value(), 0.5);
+controller.finish().expect("finite transition");
+assert_eq!(controller.value(), 1.0);
+assert!(!controller.is_animating());
+let mut context = Context::from_waker(Waker::noop());
+assert_eq!(Pin::new(&mut run).poll(&mut context), Poll::Ready(Ok(())));
+```
+
+`finish()` leaves an idle controller idle. Infinite repeats and arbitrary custom
+simulations refuse with `AnimationError::NoFiniteEndpoint` and keep their original
+run. Use `stop()` to cancel at the current value instead.
 
 ### Repeating
 
@@ -115,11 +188,11 @@ controller.fling(1.0)?;   // toward upper_bound
 controller.fling(-1.0)?;  // toward lower_bound
 
 // Custom spring (fling refuses an oscillating spring)
-let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0);
+let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0).expect("valid spring");
 controller.fling_with(1.0, Some(spring))?;
 
 // Arbitrary simulation
-let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0);
+let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0, flui_animation::Tolerance::DEFAULT)?;
 controller.animate_with(sim)?;
 # drop(controller);
 # Ok(())
@@ -137,9 +210,9 @@ use flui_animation::Animation;
 let value = controller.value();   // Current value
 let status = controller.status(); // AnimationStatus
 
-controller.is_animating(); // Forward or Reverse
-controller.is_completed(); // At upper_bound
-controller.is_dismissed(); // At lower_bound
+controller.is_animating(); // Owns a run, including a paused run
+controller.is_forward_settled(); // Forward phase settled; value may be interior
+controller.is_reverse_settled(); // Reverse phase settled; value may be interior
 # drop(controller);
 ```
 
@@ -161,14 +234,14 @@ let id = controller.add_listener(Rc::new(move || {
 controller.remove_listener(id);
 
 // Status changes
-let id = controller.add_status_listener(Rc::new(|status| {
+let subscription = controller.subscribe_status(Rc::new(|status| {
     match status {
-        AnimationStatus::Completed => println!("done"),
-        AnimationStatus::Dismissed => println!("reset"),
+        AnimationStatus::ForwardSettled => println!("forward phase settled"),
+        AnimationStatus::ReverseSettled => println!("reverse phase settled"),
         _ => {}
     }
 }));
-controller.remove_status_listener(id);
+drop(subscription);
 # drop(controller);
 ```
 
@@ -188,36 +261,36 @@ assert!(matches!(controller.forward(), Err(AnimationError::Disposed)));
 
 ## Curves
 
-### Using Predefined Curves
+### Using predefined curves
 
 ```rust
-use flui_animation::{Curve, Curves};
+use flui_animation::{Curve, curves};
 # let t = 0.25;
 
-let value = Curves::EaseIn.transform(0.5);
-let value = Curves::BounceOut.transform(t);
-let value = Curves::ElasticOut.transform(t);
+let value = curves::EASE_IN.transform(0.5);
+let value = curves::BOUNCE_OUT.transform(t);
+let value = curves::ELASTIC_OUT.transform(t);
 ```
 
-### Available Curves
+### Available curves
 
 | Category | Curves |
 |----------|--------|
-| Linear | `Linear` |
-| Ease | `EaseIn`, `EaseOut`, `EaseInOut` |
-| Material | `FastOutSlowIn`, `SlowOutFastIn` |
-| Sine | `EaseInSine`, `EaseOutSine`, `EaseInOutSine` |
-| Expo | `EaseInExpo`, `EaseOutExpo`, `EaseInOutExpo` |
-| Circ | `EaseInCirc`, `EaseOutCirc`, `EaseInOutCirc` |
-| Back | `EaseInBack`, `EaseOutBack`, `EaseInOutBack` |
-| Elastic | `ElasticIn`, `ElasticOut`, `ElasticInOut` |
-| Bounce | `BounceIn`, `BounceOut`, `BounceInOut` |
-| Other | `Decelerate` |
+| Linear | `LINEAR` |
+| CSS easing | `EASE`, `EASE_IN`, `EASE_OUT`, `EASE_IN_OUT` |
+| Material | `FAST_OUT_SLOW_IN`, `LINEAR_OUT_SLOW_IN` |
+| Sine approximation | `EASE_IN_SINE`, `EASE_OUT_SINE`, `EASE_IN_OUT_SINE` |
+| Exponential approximation | `EASE_IN_EXPO`, `EASE_OUT_EXPO`, `EASE_IN_OUT_EXPO` |
+| Circular approximation | `EASE_IN_CIRC`, `EASE_OUT_CIRC`, `EASE_IN_OUT_CIRC` |
+| Back | `EASE_IN_BACK`, `EASE_OUT_BACK`, `EASE_IN_OUT_BACK` |
+| Elastic | `ELASTIC_IN`, `ELASTIC_OUT`, `ELASTIC_IN_OUT` |
+| Bounce | `BOUNCE_IN`, `BOUNCE_OUT`, `BOUNCE_IN_OUT` |
+| Other | `DECELERATE` |
 
-### Custom Curves
+### Custom curves
 
 ```rust
-use flui_animation::{Cubic, Curves, ElasticOutCurve, Interval};
+use flui_animation::{Cubic, curves, ElasticOutCurve, Interval};
 
 // Cubic bezier (CSS-style control points)
 let curve = Cubic::new(0.25, 0.1, 0.25, 1.0);
@@ -226,7 +299,7 @@ let curve = Cubic::new(0.25, 0.1, 0.25, 1.0);
 let elastic = ElasticOutCurve::new(0.3);
 
 // Active only in [0.2, 0.8]
-let interval = Interval::new(0.2, 0.8, Curves::EaseIn);
+let interval = Interval::new(0.2, 0.8, curves::EASE_IN);
 
 ```
 
@@ -312,7 +385,7 @@ end from zero:
 | Segment | Moves | Velocity at a join with `cubic` |
 |---|---|---|
 | `to(value, over, curve)` | eases into `value`; the curve belongs to this segment | the curve's slope at that end |
-| `cubic(value, over)` | Catmull-Rom spline through the keyframe *times* | the chord of the neighbouring keys |
+| `cubic(value, over)` | cubic spline through the keyframe *times* | the neighbouring chord between consecutive cubic segments; an eased neighbour's velocity; zero beside hold/jump or a track endpoint |
 | `hold(over)` | keeps the value | zero |
 | `jump(value)` | changes the value instantly | zero |
 
@@ -324,7 +397,7 @@ keyframe as a `KeyframesError`.
 
 ```rust
 use std::time::Duration;
-use flui_animation::{Animatable, Curves, Keyframes};
+use flui_animation::{Animatable, curves, Keyframes};
 
 let ms = Duration::from_millis;
 // Keys 0, 1, 0 at 0, 1, 2 s on a spline: half way up at 0.5 s.
@@ -339,7 +412,7 @@ assert_eq!(arc.value_at(ms(1000)), 1.0);
 // One controller's progress reads every track of a group at one time.
 let fade = Keyframes::builder(1.0, ms(2000))
     .hold(ms(1000)) // a delay is a leading hold
-    .to(0.0, ms(1000), Curves::EaseIn)
+    .to(0.0, ms(1000), curves::EASE_IN)
     .build()
     .expect("fits");
 assert_eq!(fade.transform(0.5), 1.0);
@@ -347,19 +420,25 @@ assert_eq!(fade.transform(0.5), 1.0);
 
 Repeat with a repeating controller (or `value_at_looped`). `Stagger` gives
 element `i` of `n` the delay `step · |origin − i|` (`First`, `Last`,
-`Center`, `Index`), so one controller drives every element:
-`track.value_at_looped(elapsed + track.total() - stagger.delay(i, n))`.
+`Center`, `Index`), so one controller drives every element. For a repeating
+track, sample the phase `(elapsed − delay) mod total`. Compute this in `u128`
+nanoseconds, reducing elapsed and delay modulo the period before subtraction;
+`(phase + period − delay) mod period` then stays nonnegative and fits `u128`.
+Direct `Duration` addition or subtraction can overflow when elapsed is near
+`Duration::MAX` or a delay exceeds the period.
 
 ### Chaining and Composition
 
 ```rust
-use flui_animation::{ChainedTween, CurveTween, Curves, FloatTween, ReverseTween};
+use flui_animation::{Animatable, Curve, curves, FloatTween, ReverseTween};
 let tween = FloatTween::new(0.0, 100.0);
 // A curve, then a value tween
-let eased = ChainedTween::new(CurveTween::new(Curves::EaseIn), tween);
+let eased = tween.transform(curves::EASE_IN.transform(0.5));
+assert!(eased < 50.0);
 
 // Reverse
 let reversed = ReverseTween::new(tween);
+assert_eq!(reversed.transform(0.25), 75.0);
 ```
 
 ---
@@ -377,13 +456,13 @@ Apply curve to animation output:
 ```rust
 # use std::rc::Rc;
 # use std::time::Duration;
-# use flui_animation::{AnimationController, Curves};
+# use flui_animation::{AnimationController, curves};
 use flui_animation::CurvedAnimation;
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 
 let curved = CurvedAnimation::new(
     Rc::new(controller.clone()),
-    Curves::EaseInOut,
+    curves::EASE_IN_OUT,
 );
 
 # drop(controller);
@@ -420,7 +499,7 @@ use flui_animation::ReverseAnimation;
 
 let reversed = ReverseAnimation::new(Rc::new(controller.clone()));
 // value = 1.0 - parent.value()
-// Forward ↔ Reverse, Completed ↔ Dismissed
+// Forward ↔ Reverse, ForwardSettled ↔ ReverseSettled
 
 # drop(controller);
 ```
@@ -449,14 +528,14 @@ proxy.set_parent(Rc::new(controller2.clone()));
 Fixed value:
 
 ```rust
-use flui_animation::{ALWAYS_COMPLETE, ALWAYS_DISMISSED, Animation, AnimationStatus, ConstantAnimation};
+use flui_animation::{UNIT_END_ANIMATION, UNIT_START_ANIMATION, Animation, AnimationStatus, ConstantAnimation};
 
-let stopped = ConstantAnimation::with_status(0.5, AnimationStatus::Completed);
-let complete = ConstantAnimation::completed(1.0);
+let stopped = ConstantAnimation::with_status(0.5, AnimationStatus::ForwardSettled);
+let end = ConstantAnimation::forward_settled(1.0);
 
-// Global statics
-assert_eq!(ALWAYS_COMPLETE.value(), 1.0);
-assert_eq!(ALWAYS_DISMISSED.value(), 0.0);
+// Fixed normalized endpoints
+assert_eq!(UNIT_END_ANIMATION.value(), 1.0);
+assert_eq!(UNIT_START_ANIMATION.value(), 0.0);
 ```
 
 ### AnimationSwitch
@@ -497,8 +576,8 @@ use std::time::Duration;
 let physical = SpringDescription::new(1.0, 500.0, 10.0)?; // mass, stiffness, damping
 let perceptual = SpringDescription::with_duration_and_bounce(Duration::from_millis(500), 0.3)?;
 let response = SpringDescription::with_response_and_damping(Duration::from_millis(300), 0.8)?;
-// For constants: panics on invalid input.
-let critical = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0);
+// A damping ratio uses the same fallible contract as the physical coefficients.
+let critical = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0)?;
 # let _ = (physical, perceptual, response, critical);
 # Ok(())
 # }
@@ -510,8 +589,8 @@ let critical = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0);
 use flui_animation::simulation::{Simulation, SpringDescription, SpringSimulation, Tolerance};
 
 # fn main() -> Result<(), flui_animation::simulation::SimulationError> {
-let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 0.7);
-let sim = SpringSimulation::try_new(spring, 0.0, 1.0, 0.0, Tolerance::DEFAULT)?;
+let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 0.7)?;
+let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0, Tolerance::DEFAULT)?;
 assert!(sim.dx(0.1).is_finite()); // velocity at t = 0.1 s
 assert!(sim.is_done(5.0));
 assert_eq!(sim.x(5.0), 1.0);
@@ -522,12 +601,12 @@ assert_eq!(sim.x(5.0), 1.0);
 ### FrictionSimulation
 
 ```rust
-use flui_animation::simulation::{FrictionSimulation, Tolerance};
+use flui_animation::simulation::{FrictionSimulation, Simulation, Tolerance};
 
 # fn main() -> Result<(), flui_animation::simulation::SimulationError> {
 // drag in (0, 1), position, velocity
 let sim = FrictionSimulation::new(0.05, 0.0, 100.0, Tolerance::DEFAULT)?;
-let resting = sim.final_x();
+let resting = sim.x(f64::INFINITY);
 assert!(sim.time_at_x(resting / 2.0) > 0.0);
 # Ok(())
 # }
@@ -550,12 +629,13 @@ use flui_animation::{AnimationController, AnimationError};
 match controller.forward() {
     Ok(_future) => { /* started; the future resolves when the run ends */ }
     Err(AnimationError::Disposed) => { /* disposed */ }
-    Err(AnimationError::NonFiniteTarget(why)) => { /* refused input */ }
+    Err(AnimationError::NonFiniteInput { input, value }) => { /* refused scalar input */ }
+    Err(AnimationError::NonFiniteComponent { input, component, value }) => { /* refused vector input */ }
     Err(e) => { /* other error */ }
 }
 
 // Propagation
-fn animate(d: Duration) -> Result<AnimationController, AnimationError> {
+fn animate(d: Duration) -> Result<AnimationController, Box<dyn std::error::Error>> {
     let controller = AnimationController::builder(d)
         .bounds(flui_animation::ValueRange::new(0.0, 100.0)?)
         .build();
@@ -592,10 +672,10 @@ controller, it does not copy it.
 ```rust
 # use std::rc::Rc;
 # use std::time::Duration;
-# use flui_animation::{AnimationController, CurvedAnimation, Curves};
+# use flui_animation::{AnimationController, CurvedAnimation, curves};
 let controller = AnimationController::builder(Duration::from_millis(300)).build();
-let curved1 = CurvedAnimation::new(Rc::new(controller.clone()), Curves::EaseIn);
-let curved2 = CurvedAnimation::new(Rc::new(controller.clone()), Curves::EaseOut);
+let curved1 = CurvedAnimation::new(Rc::new(controller.clone()), curves::EASE_IN);
+let curved2 = CurvedAnimation::new(Rc::new(controller.clone()), curves::EASE_OUT);
 # drop(controller);
 ```
 
@@ -622,11 +702,11 @@ controller.forward()?;
 # use flui_animation::{Animation, AnimationController, AnimationStatus};
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 // Bad: check every frame
-if controller.status() == AnimationStatus::Completed { /* ... */ }
+if controller.status() == AnimationStatus::ForwardSettled { /* ... */ }
 
 // Good: react to changes
-controller.add_status_listener(Rc::new(|status| {
-    if status == AnimationStatus::Completed { /* ... */ }
+let _subscription = controller.subscribe_status(Rc::new(|status| {
+    if status == AnimationStatus::ForwardSettled { /* ... */ }
 }));
 # drop(controller);
 ```

@@ -1744,7 +1744,7 @@ impl ElementTree {
     }
 
     /// Reactivate a subtree and schedule dependency lifecycle work for every
-    /// node that was detached from at least one provider.
+    /// node with an inherited read, including a lookup that found no provider.
     fn activate_subtree(&mut self, root: ElementId, owner: &mut crate::ElementOwner<'_>) {
         let mut stack = vec![root];
         while let Some(id) = stack.pop() {

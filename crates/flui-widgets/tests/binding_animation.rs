@@ -79,7 +79,7 @@ pub(crate) fn registered_controller_advances_fade_opacity_frame_to_frame() {
     );
     assert_eq!(
         controller.status(),
-        AnimationStatus::Completed,
+        AnimationStatus::ForwardSettled,
         "a fully pumped forward run completes",
     );
 }

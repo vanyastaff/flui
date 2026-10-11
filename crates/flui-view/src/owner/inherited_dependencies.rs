@@ -20,6 +20,10 @@ pub(crate) type ProviderIds = SmallVec<[ElementId; 2]>;
 pub(crate) struct InheritedDependencies {
     /// Active dependent -> providers currently retaining it.
     active: HashMap<ElementId, ProviderIds>,
+    /// A failed lookup still depends on ancestry. Lifecycle reads accumulate;
+    /// build reads belong only to the latest successful build (ADR-0074 §5.5).
+    lifecycle_misses: HashSet<ElementId>,
+    build_misses: HashSet<ElementId>,
     /// Deactivated elements that had dependencies.
     ///
     /// Provider registrations are removed during `deactivate`, and
@@ -30,6 +34,18 @@ pub(crate) struct InheritedDependencies {
 }
 
 impl InheritedDependencies {
+    pub(crate) fn register_miss(&mut self, dependent: ElementId, lifecycle: bool) {
+        if lifecycle {
+            self.lifecycle_misses.insert(dependent);
+        } else {
+            self.build_misses.insert(dependent);
+        }
+    }
+
+    pub(crate) fn reset_build_misses(&mut self, dependent: ElementId) {
+        self.build_misses.remove(&dependent);
+    }
+
     /// Record one active dependency, deduplicating repeated reads.
     pub(crate) fn register(&mut self, dependent: ElementId, provider: ElementId) {
         let providers = self.active.entry(dependent).or_default();
@@ -64,7 +80,9 @@ impl InheritedDependencies {
     /// that a reactivation must run `didChangeDependencies`.
     pub(crate) fn deactivate(&mut self, dependent: ElementId) -> ProviderIds {
         let providers = self.active.remove(&dependent).unwrap_or_default();
-        if !providers.is_empty() {
+        let lifecycle_miss = self.lifecycle_misses.remove(&dependent);
+        let build_miss = self.build_misses.remove(&dependent);
+        if !providers.is_empty() || lifecycle_miss || build_miss {
             self.inactive_with_dependencies.insert(dependent);
         }
         providers
@@ -73,6 +91,8 @@ impl InheritedDependencies {
     /// Complete permanent teardown and return any still-active providers.
     pub(crate) fn unmount(&mut self, dependent: ElementId) -> ProviderIds {
         self.inactive_with_dependencies.remove(&dependent);
+        self.lifecycle_misses.remove(&dependent);
+        self.build_misses.remove(&dependent);
         self.active.remove(&dependent).unwrap_or_default()
     }
 

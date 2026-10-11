@@ -173,6 +173,69 @@ fn gesture_fixture(
 // 3. Non-opted hero un-hidden (the endFlight else-branch)
 // ============================================================================
 
+pub(crate) fn an_excluding_gesture_restores_pending_programmatic_placeholders() {
+    let navigator = NavigatorHandle::new();
+    navigator.seed_initial(hero_page(false, 40.0, 24.0));
+    let mut harness = mount_navigator(&navigator);
+    let controller = install(&navigator);
+    let destination = navigator.current().expect("the initial Hero page mounted");
+    let route = hero_page(false, 30.0, 18.0).back_gesture(true);
+    let transition = route.transition_handle();
+    let _push = harness.enter_owner_scope(|| navigator.push(route));
+    harness.tick();
+    let source = navigator.current().expect("the covering Hero page mounted");
+    let from = navigator
+        .route_modal(source)
+        .expect("the source modal")
+        .all_heroes()
+        .remove(&hero_tag())
+        .expect("the source Hero mounted");
+    let to = navigator
+        .route_modal(destination)
+        .expect("the destination modal")
+        .all_heroes()
+        .remove(&hero_tag())
+        .expect("the destination Hero mounted");
+    assert_eq!(
+        controller.flights().len(),
+        1,
+        "the programmatic flight started"
+    );
+    assert!(from.placeholder_size().is_some() && to.placeholder_size().is_some());
+    let animation = transition
+        .controller()
+        .expect("the route owns its animation");
+    animation.set_value(1.0);
+    assert_eq!(
+        controller.flights().len(),
+        1,
+        "the shuttle has not drained completion yet"
+    );
+
+    let gesture = BackGestureController::new(navigator, source, animation);
+    for hero in [&from, &to] {
+        assert_eq!(
+            hero.placeholder_size(),
+            None,
+            "gesture exclusion restores the preceding programmatic placeholder"
+        );
+    }
+    harness.tick();
+    for hero in [&from, &to] {
+        assert_eq!(
+            hero.placeholder_size(),
+            None,
+            "deferred completion cannot refreeze an excluded Hero"
+        );
+    }
+    assert_eq!(controller.flights().len(), 0);
+    assert!(
+        !gesture.drag_end(0.0),
+        "the already completed route needs no settling run"
+    );
+    harness.tick();
+}
+
 // ============================================================================
 // 4. Mid-drag return to zero: deferral, not teardown
 // ============================================================================
@@ -191,9 +254,9 @@ fn gesture_fixture(
 /// release's own 350ms pacing run actually settles (driven here by
 /// `AnimationController::tick_at`) and
 /// the navigator reports the gesture stopped, the parked terminal status
-/// replays and the flight lands: `finish`'s `Completed` arm keeps the
-/// (now-gone) from-hero's placeholder rather than clearing it
-/// (`from_hero.end_flight(status.is_completed())`).
+/// replays and the flight lands. The source stays frozen until its route
+/// unmounts; disposal withdraws that placeholder from any retained handle.
+/// The destination's real child returns at its committed size.
 pub(crate) fn complete_release_pops_to_the_destination_route_and_the_flight_lands() {
     let (navigator, mut harness, controller, to, from, from_controller) =
         gesture_fixture(true, true);
@@ -224,6 +287,10 @@ pub(crate) fn complete_release_pops_to_the_destination_route_and_the_flight_land
     if still_settling {
         navigator.did_stop_user_gesture();
     }
+    assert!(
+        from_hero.placeholder_size().is_some(),
+        "the source remains frozen until its route unmounts"
+    );
     // The parked terminal status was just replayed (written + the shuttle
     // woken); this tick is what actually drains it and calls `finish`.
     harness.tick();
@@ -232,10 +299,32 @@ pub(crate) fn complete_release_pops_to_the_destination_route_and_the_flight_land
         controller.flights().get(&hero_tag()).is_none(),
         "the flight lands once the release genuinely settles"
     );
-    assert!(
-        from_hero.placeholder_size().is_some(),
-        "a Completed pop keeps the from-hero's placeholder (heroes.dart:614) — \
-         its route is gone, so its child must not reappear"
+    assert_eq!(
+        from_hero.render_id(),
+        None,
+        "the popped source cannot reappear"
+    );
+    assert_eq!(
+        from_hero.placeholder_size(),
+        None,
+        "the unmounted handle has no live placeholder"
+    );
+    let destination = navigator
+        .route_modal(to)
+        .expect("the destination route remains mounted")
+        .all_heroes()
+        .get(&hero_tag())
+        .cloned()
+        .expect("the destination hero remains registered");
+    assert_eq!(destination.placeholder_size(), None);
+    let render = destination
+        .render_id()
+        .expect("the real destination child is attached");
+    assert_eq!(
+        harness
+            .pipeline_owner()
+            .with(|owner| owner.box_size(render)),
+        Some(flui_foundation::geometry::Size::new(40.0, 24.0))
     );
 }
 

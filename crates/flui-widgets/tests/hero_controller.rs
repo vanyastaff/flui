@@ -113,6 +113,103 @@ pub(crate) fn a_hero_controller_does_not_deadlock_the_observer_callback() {
     assert_eq!(controller.measurements().len(), 2);
 }
 
+pub(crate) fn replacing_a_hero_navigator_retires_routes_after_attachment() {
+    let Some(case) = crate::common::child_process::selected_case() else {
+        crate::common::child_process::run_rows(
+            "contracts::navigator_failure_containment_and_reentrancy",
+            &[
+                "hero_attachment_retirement",
+                "hero_attachment_replacement",
+                "hero_attachment_failure",
+                "hero_attachment_alias",
+            ],
+        );
+        return;
+    };
+    let nested = case == "hero_attachment_replacement";
+    let fails = case == "hero_attachment_failure";
+    let retains_alias = case == "hero_attachment_alias";
+
+    struct OnDrop(Box<dyn Fn()>);
+    impl Drop for OnDrop {
+        fn drop(&mut self) {
+            (self.0)();
+        }
+    }
+
+    let controller = HeroController::new();
+    let replacement = seeded_navigator();
+    let final_attachment = seeded_navigator();
+    let observed = std::rc::Rc::new(std::cell::Cell::new(false));
+    let callback_observed = std::rc::Rc::clone(&observed);
+    let callback_controller = Arc::downgrade(&controller);
+    let callback_replacement = replacement.clone();
+    let callback_final = final_attachment.clone();
+    let capture = OnDrop(Box::new(move || {
+        eprintln!("entered retired Hero navigator route capture");
+        let controller = callback_controller
+            .upgrade()
+            .expect("controller remains owned");
+        let attached = controller
+            .navigator()
+            .expect("replacement is already attached");
+        assert!(attached.is_same(&callback_replacement));
+        callback_observed.set(true);
+        if nested {
+            controller.did_attach(callback_final.clone());
+        }
+        assert!(!fails, "outgoing Hero navigator capture failed");
+    }));
+    let old = NavigatorHandle::new();
+    old.seed_initial(SimpleRoute::<()>::new(move |_ctx| {
+        let _capture = &capture;
+        SizedBox::new(10.0, 10.0).into_view().boxed()
+    }));
+    let alias = retains_alias.then(|| old.clone());
+    controller.did_attach(old);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        controller.did_attach(replacement.clone());
+    }));
+    if fails {
+        let failure = result.expect_err("authored retirement failure propagates");
+        assert_eq!(
+            failure.downcast_ref::<&str>().copied(),
+            Some("outgoing Hero navigator capture failed")
+        );
+    } else {
+        assert!(result.is_ok());
+    }
+    if retains_alias {
+        assert!(
+            !observed.get(),
+            "an independently owned route remains alive"
+        );
+    }
+    drop(alias);
+    assert!(observed.get(), "the outgoing route capture must retire");
+    assert!(
+        controller
+            .navigator()
+            .expect("attachment committed")
+            .is_same(if nested {
+                &final_attachment
+            } else {
+                &replacement
+            })
+    );
+    controller.did_detach();
+    assert!(controller.navigator().is_none());
+    controller.did_attach(replacement.clone());
+    assert!(
+        controller
+            .navigator()
+            .expect("reattached")
+            .is_same(&replacement)
+    );
+    controller.did_detach();
+    crate::common::child_process::pass();
+}
+
 // ============================================================================
 // Hero discovery and manifests
 // ============================================================================

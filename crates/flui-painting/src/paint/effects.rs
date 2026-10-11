@@ -336,34 +336,18 @@ impl ColorMatrix {
     /// Transformed color as [r, g, b, a]
     #[inline]
     pub fn apply(&self, color: [f32; 4]) -> [f32; 4] {
-        let [r, g, b, a] = color;
-
-        [
-            (self.values[0] * r
-                + self.values[1] * g
-                + self.values[2] * b
-                + self.values[3] * a
-                + self.values[4])
-                .clamp(0.0, 1.0),
-            (self.values[5] * r
-                + self.values[6] * g
-                + self.values[7] * b
-                + self.values[8] * a
-                + self.values[9])
-                .clamp(0.0, 1.0),
-            (self.values[10] * r
-                + self.values[11] * g
-                + self.values[12] * b
-                + self.values[13] * a
-                + self.values[14])
-                .clamp(0.0, 1.0),
-            (self.values[15] * r
-                + self.values[16] * g
-                + self.values[17] * b
-                + self.values[18] * a
-                + self.values[19])
-                .clamp(0.0, 1.0),
-        ]
+        // Every finite f32 product and four-term sum fits in f64. Narrow only
+        // after saturation, so intermediate overflow cannot erase cancellation.
+        std::array::from_fn(|row| {
+            let weights = &self.values[row * 5..row * 5 + 5];
+            let transformed = weights[..4]
+                .iter()
+                .zip(color)
+                .fold(0.0_f64, |sum, (weight, channel)| {
+                    sum + f64::from(*weight) * f64::from(channel)
+                });
+            (transformed + f64::from(weights[4])).clamp(0.0, 1.0) as f32
+        })
     }
 
     /// Multiply this matrix with another matrix.

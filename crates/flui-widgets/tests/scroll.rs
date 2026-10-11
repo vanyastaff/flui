@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::common::{LaidOut, lay_out, tight};
-use flui_animation::{Curves, Vsync};
+use flui_animation::{ArcCurve, Vsync, curves};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::view::ScrollDirection;
 use flui_view::{IntoView, ViewExt};
@@ -355,7 +355,7 @@ pub(crate) fn a_remaining_touch_continues_scroll_without_an_intermediate_fling()
 fn fling_scoped(widget: Scrollable, vsync: Vsync, constraints: BoxConstraints) -> LaidOut {
     let wrapped = VsyncScope::new(vsync.clone(), widget);
     let mut scoped = lay_out(wrapped, constraints);
-    scoped.adopt_vsync(vsync);
+    scoped.adopt_vsync(vsync).expect("clock admission");
     scoped
 }
 
@@ -364,6 +364,14 @@ fn fling_scoped(widget: Scrollable, vsync: Vsync, constraints: BoxConstraints) -
 /// animation frames — confirming that the fling animation controller is wired
 /// to the scroll controller and the vsync is driving it.
 pub(crate) fn scrollable_fling_advances_offset_past_release() {
+    exercise_fling_registry(false);
+}
+
+pub(crate) fn an_active_fling_migrates_between_registries() {
+    exercise_fling_registry(true);
+}
+
+fn exercise_fling_registry(migrate: bool) {
     let controller = ScrollController::new();
     // Large extent prevents the fling from hitting the boundary on the first
     // frame — we want to observe forward motion, not clamping.
@@ -374,7 +382,7 @@ pub(crate) fn scrollable_fling_advances_offset_past_release() {
         .controller(controller.clone())
         .child(SizedBox::new(300.0, 5000.0));
 
-    let mut scoped = fling_scoped(widget, vsync, tight(300.0, 300.0));
+    let mut scoped = fling_scoped(widget.clone(), vsync.clone(), tight(300.0, 300.0));
 
     // Upward drag well past the 18 px slop to establish a recognizable fling
     // velocity. The first move crosses slop (on_pan_start). The second fires
@@ -405,6 +413,36 @@ pub(crate) fn scrollable_fling_advances_offset_past_release() {
          release={pixels_at_release:.1}, now={:.1}",
         controller.pixels()
     );
+    if migrate {
+        let before = controller.pixels();
+        assert!(vsync.has_running());
+        let next = Vsync::new();
+        scoped.pump_widget(VsyncScope::new(next.clone(), widget));
+        assert!(
+            vsync.is_empty(),
+            "fling owner withdraws its old registry seat"
+        );
+        scoped
+            .adopt_vsync(next.clone())
+            .expect("replacement clock admission");
+        scoped.pump_for(Duration::ZERO);
+        assert!((controller.pixels() - before).abs() < 1e-8);
+        scoped.pump_for(Duration::from_millis(16));
+        assert!(
+            controller.pixels() > before,
+            "the transferred fling continues scrolling"
+        );
+        assert!(next.has_running());
+        scoped.pump_widget(SizedBox::shrink());
+        assert!(next.is_empty());
+        let retired = controller.pixels();
+        scoped.pump_for(Duration::from_secs(1));
+        assert_eq!(
+            controller.pixels(),
+            retired,
+            "removed fling stops publishing scroll offsets"
+        );
+    }
 }
 
 /// Bouncing physics allows the drag to carry the scroll position past
@@ -458,17 +496,54 @@ pub(crate) fn bouncing_physics_fling_springs_back_after_overscroll() {
 // Scrollable — animate_to (ADR-0037)
 // ============================================================================
 
-/// `jump_to` called while an `animate_to` is in flight must cancel it
-/// SYNCHRONOUSLY — a subsequent frame must not resume driving toward the
-/// original target, and must not even transiently show a stale fling-tick
-/// value before the cancellation "catches up" (see `ScrollController`'s
-/// `stop_hook` field docs for the one-frame race a merely QUEUED
-/// cancellation would otherwise leave open, since `flui-testing::pump_frame`
-/// ticks registered controllers before draining the rebuild queue that
-/// services a queued command).
-///
-/// `jump_to` first cancels whatever activity currently owns the position
-/// (goes idle) before touching the pixel offset.
+pub(crate) fn scrollable_retarget_preserves_the_position_velocity() {
+    assert_scroll_retarget_preserves_velocity(|_| 100.0);
+}
+
+pub(crate) fn scrollable_retarget_at_the_current_position_brakes_continuously() {
+    assert_scroll_retarget_preserves_velocity(std::convert::identity);
+}
+
+fn assert_scroll_retarget_preserves_velocity(target: fn(f64) -> f64) {
+    let controller = ScrollController::new();
+    let registry = Vsync::new();
+    let widget = Scrollable::new()
+        .controller(controller.clone())
+        .child(SizedBox::new(300.0, 5000.0));
+    let mut laid = fling_scoped(widget, registry, tight(300.0, 300.0));
+    controller.animate_to(
+        1000.0,
+        Duration::from_secs(1),
+        ArcCurve::new(curves::LINEAR),
+    );
+    laid.pump_for(Duration::from_millis(1));
+    laid.pump_for(Duration::from_millis(250));
+    let h = Duration::from_micros(100);
+    let previous = controller.pixels();
+    laid.pump_for(h);
+    let seam = controller.pixels();
+    let arriving = (seam - previous) / h.as_secs_f64();
+    assert!(arriving > 100.0, "the mounted position was moving");
+    let target = target(seam);
+    controller.animate_to(
+        target,
+        Duration::from_secs(1),
+        ArcCurve::new(curves::EASE_IN),
+    );
+    assert!((controller.pixels() - seam).abs() < 1e-12);
+    assert!(controller.position().is_scrolling());
+    laid.pump_for(h);
+    let departing = (controller.pixels() - seam) / h.as_secs_f64();
+    assert!(
+        (departing - arriving).abs() < 1.0,
+        "scroll retarget must inherit velocity: before {arriving}, after {departing}"
+    );
+    laid.pump_for(Duration::from_secs(2));
+    assert_eq!(controller.pixels(), target);
+    assert!(!controller.position().is_scrolling());
+}
+
+/// Jumping cancels before another frame can publish the displaced run's value.
 pub(crate) fn scrollable_jump_to_during_animate_to_cancels_it_synchronously() {
     let controller = ScrollController::new();
     controller.update_dimensions(300.0, 0.0, 4700.0);
@@ -483,7 +558,7 @@ pub(crate) fn scrollable_jump_to_during_animate_to_cancels_it_synchronously() {
     controller.animate_to(
         1000.0,
         Duration::from_millis(300),
-        std::rc::Rc::new(Curves::Linear),
+        ArcCurve::new(curves::LINEAR),
     );
     // Three pumps of warm-up, one more than a direct `animate_with` fling:
     // `animate_to` queues a command, and pump 1's rebuild services it after
@@ -533,6 +608,281 @@ pub(crate) fn scrollable_jump_to_during_animate_to_cancels_it_synchronously() {
 // ============================================================================
 // Scrollbar — thumb drag
 // ============================================================================
+
+pub(crate) fn replacing_pending_scroll_motion_delivers_and_recovers_after_user_failure() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct RetiringCurve {
+        drops: Arc<AtomicUsize>,
+        fails: bool,
+    }
+
+    impl flui_animation::Curve for RetiringCurve {
+        fn transform(&self, progress: f64) -> f64 {
+            curves::LINEAR.transform(progress)
+        }
+    }
+
+    impl Drop for RetiringCurve {
+        fn drop(&mut self) {
+            self.drops.fetch_add(1, Ordering::SeqCst);
+            assert!(!self.fails, "pending scroll curve retirement failure");
+        }
+    }
+
+    struct RetiringObserver(Arc<AtomicUsize>);
+    impl RetiringObserver {
+        fn observe(&self) {
+            assert_eq!(self.0.load(Ordering::SeqCst), 0);
+        }
+    }
+    impl Drop for RetiringObserver {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    for jumps in [false, true] {
+        for (retirement_fails, notification_fails) in
+            [(false, false), (true, false), (false, true), (true, true)]
+        {
+            let controller = ScrollController::new();
+            controller.update_dimensions(300.0, 0.0, 4700.0);
+            let drops = Arc::new(AtomicUsize::new(0));
+            controller.animate_to(
+                100.0,
+                Duration::from_secs(1),
+                ArcCurve::new(RetiringCurve {
+                    drops: Arc::clone(&drops),
+                    fails: retirement_fails,
+                }),
+            );
+            let attempts = Rc::new(Cell::new(0));
+            let calls = Rc::clone(&attempts);
+            let listenable = controller.listenable();
+            let listener = listenable.add_listener(Rc::new(move || {
+                calls.set(calls.get() + 1);
+                assert!(!notification_fails, "pending scroll notification failure");
+            }));
+            let observer_drops = Arc::new(AtomicUsize::new(0));
+            let observer = RetiringObserver(Arc::clone(&observer_drops));
+            let identity = Rc::new(Cell::new(None));
+            let owned_identity = Rc::clone(&identity);
+            let removal = Rc::clone(&listenable);
+            let self_removing = listenable.add_listener(Rc::new(move || {
+                observer.observe();
+                removal.remove_listener(owned_identity.take().expect("registered observer"));
+            }));
+            identity.set(Some(self_removing));
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if jumps {
+                    controller.jump_to(200.0);
+                } else {
+                    controller.animate_to(
+                        200.0,
+                        Duration::from_secs(1),
+                        ArcCurve::new(curves::LINEAR),
+                    );
+                }
+            }));
+            assert_eq!(
+                drops.load(Ordering::SeqCst),
+                usize::from(!(jumps && notification_fails)),
+                "jump notification failure retains opaque outgoing ownership"
+            );
+            assert_eq!(attempts.get(), 1, "accepted replacement is delivered");
+            assert_eq!(
+                observer_drops.load(Ordering::SeqCst),
+                usize::from(!notification_fails && (jumps || !retirement_fails)),
+                "observer retirement inherits the enclosing failure custody"
+            );
+            if retirement_fails || notification_fails {
+                assert_scroll_failure(
+                    &outcome.expect_err("authored failure propagates after delivery"),
+                    if retirement_fails && !(jumps && notification_fails) {
+                        "pending scroll curve retirement failure"
+                    } else {
+                        "pending scroll notification failure"
+                    },
+                );
+            } else {
+                assert!(outcome.is_ok(), "healthy replacement completes");
+            }
+            listenable.remove_listener(listener);
+            let mut laid = fling_scoped(
+                Scrollable::new()
+                    .controller(controller.clone())
+                    .child(SizedBox::new(300.0, 5000.0)),
+                Vsync::new(),
+                tight(300.0, 300.0),
+            );
+            laid.pump_for(Duration::ZERO);
+            laid.pump_for(Duration::from_secs(2));
+            assert_eq!(
+                controller.pixels(),
+                200.0,
+                "mounted consumer keeps accepted command"
+            );
+            controller.jump_to(75.0);
+            controller.animate_to(280.0, Duration::from_secs(1), ArcCurve::new(curves::LINEAR));
+            laid.pump_for(Duration::ZERO);
+            laid.pump_for(Duration::from_millis(400));
+            assert!(
+                controller.pixels() > 75.0 && controller.pixels() < 280.0,
+                "a fresh mounted run advances after containment"
+            );
+            laid.pump_for(Duration::from_secs(2));
+            assert_eq!(controller.pixels(), 280.0, "fresh motion completes");
+        }
+    }
+}
+
+pub(crate) fn stopping_scroll_motion_preserves_commands_admitted_by_activity_observers() {
+    for newer_jumps in [false, true] {
+        let controller = ScrollController::new();
+        let mut laid = fling_scoped(
+            Scrollable::new()
+                .controller(controller.clone())
+                .child(SizedBox::new(300.0, 5000.0)),
+            Vsync::new(),
+            tight(300.0, 300.0),
+        );
+        controller.animate_to(
+            1000.0,
+            Duration::from_secs(1),
+            ArcCurve::new(curves::LINEAR),
+        );
+        laid.pump_for(Duration::ZERO);
+        laid.pump_for(Duration::from_millis(200));
+        assert!(
+            controller.pixels() > 0.0 && controller.position().is_scrolling(),
+            "mounted driver is active before cancellation"
+        );
+        let armed = Rc::new(Cell::new(true));
+        let once = Rc::clone(&armed);
+        let reentry = controller.clone();
+        let listener = controller
+            .position()
+            .add_activity_listener(Rc::new(move || {
+                if !reentry.position().is_scrolling() && once.replace(false) {
+                    if newer_jumps {
+                        reentry.jump_to(325.0);
+                    } else {
+                        reentry.animate_to(
+                            275.0,
+                            Duration::from_secs(1),
+                            ArcCurve::new(curves::LINEAR),
+                        );
+                    }
+                }
+            }));
+        controller.jump_to(200.0);
+        assert!(
+            !armed.get(),
+            "actual cancellation delivered the activity callback"
+        );
+        if newer_jumps {
+            assert_eq!(
+                controller.pixels(),
+                325.0,
+                "newer jump survives outer cancellation"
+            );
+        }
+        laid.pump_for(Duration::ZERO);
+        laid.pump_for(Duration::from_secs(2));
+        assert_eq!(
+            controller.pixels(),
+            if newer_jumps { 325.0 } else { 275.0 },
+            "newer mounted command survives the older cancellation tail"
+        );
+        controller.position().remove_activity_listener(listener);
+    }
+}
+
+pub(crate) fn retiring_scroll_curves_preserves_newer_reentrant_commands() {
+    use std::cell::RefCell;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    thread_local! {
+        static REENTRY: RefCell<Option<(ScrollController, bool)>> = const { RefCell::new(None) };
+    }
+    struct ReentrantCurve(Arc<AtomicUsize>);
+    impl flui_animation::Curve for ReentrantCurve {
+        fn transform(&self, progress: f64) -> f64 {
+            curves::LINEAR.transform(progress)
+        }
+    }
+    impl Drop for ReentrantCurve {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            let (controller, jumps) = REENTRY
+                .with(|slot| slot.borrow_mut().take())
+                .expect("armed owner-local curve retirement");
+            if jumps {
+                controller.jump_to(325.0);
+            } else {
+                controller.animate_to(275.0, Duration::from_secs(1), ArcCurve::new(curves::LINEAR));
+            }
+        }
+    }
+    for mounted in [false, true] {
+        for outer_jumps in [false, true] {
+            for newer_jumps in [false, true] {
+                let controller = ScrollController::new();
+                controller.update_dimensions(300.0, 0.0, 4700.0);
+                let drops = Arc::new(AtomicUsize::new(0));
+                let content = || {
+                    Scrollable::new()
+                        .controller(controller.clone())
+                        .child(SizedBox::new(300.0, 5000.0))
+                };
+                let mut mounted_scene =
+                    mounted.then(|| fling_scoped(content(), Vsync::new(), tight(300.0, 300.0)));
+                controller.animate_to(
+                    100.0,
+                    Duration::from_secs(1),
+                    ArcCurve::new(ReentrantCurve(Arc::clone(&drops))),
+                );
+                if let Some(laid) = &mut mounted_scene {
+                    laid.pump_for(Duration::ZERO);
+                    laid.pump_for(Duration::from_millis(200));
+                    assert!(
+                        controller.position().is_scrolling(),
+                        "custom curve drives mounted motion"
+                    );
+                }
+                REENTRY.with(|slot| *slot.borrow_mut() = Some((controller.clone(), newer_jumps)));
+                if outer_jumps {
+                    controller.jump_to(200.0);
+                } else {
+                    controller.animate_to(
+                        200.0,
+                        Duration::from_secs(1),
+                        ArcCurve::new(curves::LINEAR),
+                    );
+                }
+                assert_eq!(
+                    drops.load(Ordering::SeqCst),
+                    1,
+                    "outgoing destruction actually reenters"
+                );
+                assert!(REENTRY.with(|slot| slot.borrow().is_none()));
+                let mut laid = mounted_scene
+                    .unwrap_or_else(|| fling_scoped(content(), Vsync::new(), tight(300.0, 300.0)));
+                laid.pump_for(Duration::ZERO);
+                laid.pump_for(Duration::from_secs(2));
+                let expected = if newer_jumps { 325.0 } else { 275.0 };
+                assert_eq!(
+                    controller.pixels(),
+                    expected,
+                    "mounted consumer retains the newest command"
+                );
+                laid.pump_for(Duration::from_secs(2));
+                assert_eq!(controller.pixels(), expected, "older command cannot resume");
+            }
+        }
+    }
+}
 
 pub(crate) fn scrollbar_thumb_stays_inside_short_tracks_and_drag_remains_bounded() {
     fn short_track() {
@@ -622,7 +972,7 @@ pub(crate) fn dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_ti
     scroll.animate_to(
         1000.0,
         Duration::from_millis(300),
-        std::rc::Rc::new(Curves::Linear),
+        ArcCurve::new(curves::LINEAR),
     );
     advance_scroll_run(&mut laid);
     assert!(scroll.pixels() > 0.0 && scroll.pixels() < 1000.0);
@@ -658,7 +1008,7 @@ pub(crate) fn dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_ti
     scroll.animate_to(
         4000.0,
         Duration::from_millis(300),
-        std::rc::Rc::new(Curves::Linear),
+        ArcCurve::new(curves::LINEAR),
     );
     advance_scroll_run(&mut laid);
     assert!(
@@ -871,7 +1221,7 @@ pub(crate) fn a_failed_refresh_notification_releases_activity_and_recovers() {
         let watched = refresh.clone();
         let fail_callback = fail.clone();
         let failed_callback = failed.clone();
-        let listenable = refresh.as_listenable();
+        let listenable = refresh.listenable();
         let listener = listenable.add_listener(std::rc::Rc::new(move || {
             if watched.is_refreshing() && fail_callback.swap(false, Ordering::SeqCst) {
                 failed_callback.store(true, Ordering::SeqCst);
@@ -1139,7 +1489,7 @@ pub(crate) fn a_fast_gesture_while_refreshing_does_not_start_a_fling() {
     );
 }
 
-pub(crate) fn a_refresh_controller_swap_retires_the_old_fling_and_drives_the_new_position() {
+pub(crate) fn a_refresh_scroll_controller_swap_retires_the_old_fling_and_drives_the_new_position() {
     let a = ScrollController::new();
     let b = ScrollController::new();
     for scroll in [&a, &b] {
@@ -1237,7 +1587,7 @@ fn nested_scrollables(outer: &ScrollController, inner: &ScrollController, vsync:
 
     let wrapped = VsyncScope::new(vsync.clone(), outer_scrollable);
     let mut scoped = lay_out(wrapped, tight(300.0, 300.0));
-    scoped.adopt_vsync(vsync);
+    scoped.adopt_vsync(vsync).expect("clock admission");
     scoped
 }
 
@@ -1485,7 +1835,7 @@ fn advance_scroll_run(laid: &mut LaidOut) {
     }
 }
 
-pub(crate) fn replacing_vsync_retires_old_motion_and_drives_fresh_contacts() {
+pub(crate) fn replacing_vsync_releases_old_seats_and_drives_fresh_contacts() {
     use flui_foundation::geometry::EdgeInsets;
     use flui_widgets::{InteractiveViewer, TransformationController};
 
@@ -1562,6 +1912,11 @@ pub(crate) fn replacing_vsync_retires_old_motion_and_drives_fresh_contacts() {
         }));
         let replacement = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             laid.pump_widget(VsyncScope::new(second.clone(), child.clone()));
+            if family == "scrollable" && fail_stop {
+                // Clock transfer preserves scrolling. Explicit cancellation
+                // still exercises the one-shot activity failure and recovery.
+                scroll.jump_to(pixels());
+            }
         }));
         if let Err(payload) = replacement {
             assert!(fail_stop, "healthy clock replacement must not unwind");
@@ -1574,7 +1929,7 @@ pub(crate) fn replacing_vsync_retires_old_motion_and_drives_fresh_contacts() {
         assert_eq!(
             attempted.get(),
             usize::from(fail_stop),
-            "{family}: replacement reaches the one-shot activity failure"
+            "{family}: retirement reaches the one-shot activity failure"
         );
         let replaced = pixels();
         // Repeating the accepted new registry cannot hide a seat left on the
@@ -2143,6 +2498,41 @@ pub(crate) fn notched_wheel_accumulates_distance_and_eases_out_in_150ms() {
     );
 }
 
+pub(crate) fn a_notched_wheel_run_migrates_with_its_accepted_destination() {
+    use flui_platform_api::pointer::ScrollPrecision::Notched;
+    let scroll = ScrollController::new();
+    let old = Vsync::new();
+    let next = Vsync::new();
+    let mut laid = crate::common::lay_out_animated(
+        animated_scroll_content(&scroll, &old),
+        tight(300.0, 300.0),
+        old.clone(),
+    );
+    dispatch_typed_wheel(&laid, Notched, 100.0);
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(30));
+    let before = scroll.pixels();
+    assert!(before > 0.0 && before < 100.0);
+    assert!(old.has_running());
+    laid.pump_widget(animated_scroll_content(&scroll, &next));
+    assert!(old.is_empty());
+    laid.adopt_vsync(next.clone())
+        .expect("replacement clock admission");
+    laid.pump_for(Duration::ZERO);
+    assert!((scroll.pixels() - before).abs() < 1e-8);
+    laid.pump_for(Duration::from_millis(16));
+    assert!(scroll.pixels() > before);
+    // A subsequent notch accumulates against the retained destination, not
+    // the intermediate painted position at registry replacement.
+    dispatch_typed_wheel(&laid, Notched, 50.0);
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(150));
+    assert_eq!(scroll.pixels(), 150.0);
+    assert!(!scroll.position().is_scrolling());
+    laid.pump_widget(SizedBox::shrink());
+    assert!(next.is_empty());
+}
+
 pub(crate) fn precise_and_unknown_wheels_interrupt_synthetic_motion_once() {
     use flui_platform_api::pointer::ScrollPrecision::{Notched, Precise, Unknown};
     for precision in [Precise, Unknown] {
@@ -2303,7 +2693,7 @@ pub(crate) fn a_scrollable_swap_stops_old_motion_and_retires_its_jump_hook() {
     old.animate_to(
         1000.0,
         Duration::from_millis(300),
-        std::rc::Rc::new(Curves::Linear),
+        ArcCurve::new(curves::LINEAR),
     );
     advance_scroll_run(&mut laid);
     assert!(old.pixels() > 0.0);
@@ -2319,7 +2709,7 @@ pub(crate) fn a_scrollable_swap_stops_old_motion_and_retires_its_jump_hook() {
     new.animate_to(
         900.0,
         Duration::from_millis(300),
-        std::rc::Rc::new(Curves::Linear),
+        ArcCurve::new(curves::LINEAR),
     );
     advance_scroll_run(&mut laid);
     let before = new.pixels();
@@ -2344,7 +2734,7 @@ pub(crate) fn a_same_position_scrollable_rebuild_preserves_motion() {
     scroll.animate_to(
         1000.0,
         Duration::from_millis(300),
-        std::rc::Rc::new(Curves::Linear),
+        ArcCurve::new(curves::LINEAR),
     );
     advance_scroll_run(&mut laid);
     let before = scroll.pixels();
@@ -2396,7 +2786,7 @@ pub(crate) fn retiring_one_scrollable_preserves_a_later_owners_jump_hook() {
     scroll.animate_to(
         900.0,
         Duration::from_millis(300),
-        std::rc::Rc::new(Curves::Linear),
+        ArcCurve::new(curves::LINEAR),
     );
     advance_scroll_run(&mut second);
     assert!(scroll.pixels() > before, "next command still progresses");
@@ -2660,8 +3050,22 @@ pub(crate) fn bouncing_fling_into_the_edge_overscrolls_and_returns() {
 /// the build phase every frame, driven by pointer events between frames.
 struct RefreshHarness {
     binding: flui_testing::HeadlessBinding,
+    mounted: flui_testing::Mounted,
     scroll: ScrollController,
     refresh: RefreshController,
+    content_builds: Rc<Cell<usize>>,
+}
+
+#[derive(Clone, flui_view::prelude::StatelessView)]
+struct RefreshContent {
+    builds: Rc<Cell<usize>>,
+}
+
+impl flui_view::StatelessView for RefreshContent {
+    fn build(&self, _ctx: &dyn flui_view::BuildContext) -> impl IntoView {
+        self.builds.set(self.builds.get() + 1);
+        SizedBox::new(300.0, 5000.0)
+    }
 }
 
 const REFRESH_FRAME: Duration = Duration::from_nanos(16_666_667);
@@ -2671,15 +3075,18 @@ impl RefreshHarness {
         let scroll = ScrollController::new();
         scroll.update_dimensions(300.0, 0.0, 4700.0);
         let refresh = RefreshController::new();
+        let content_builds = Rc::new(Cell::new(0));
         let mut binding = flui_testing::HeadlessBinding::new();
         let root = flui_widgets::GestureArenaScope::new(
             binding.arena().clone(),
             flui_widgets::FocusRoot::new(VsyncScope::new(
                 binding.vsync().clone(),
-                refresh_content(&scroll, &refresh),
+                refresh_content(&scroll, &refresh).child(RefreshContent {
+                    builds: Rc::clone(&content_builds),
+                }),
             )),
         );
-        let _ = binding.mount_root(
+        let mounted = binding.mount_root(
             &root,
             flui_testing::MountOwners::fresh(),
             flui_testing::MountOptions::tight(300.0, 300.0),
@@ -2687,8 +3094,10 @@ impl RefreshHarness {
         binding.pump_frame(REFRESH_FRAME);
         Self {
             binding,
+            mounted,
             scroll,
             refresh,
+            content_builds,
         }
     }
 
@@ -2704,10 +3113,46 @@ impl RefreshHarness {
         binding.dispatch_pointer(&event, |position| binding.hit_test(position));
     }
 
+    fn replace_refresh(&mut self, refresh: RefreshController) {
+        let root = flui_widgets::GestureArenaScope::new(
+            self.binding.arena().clone(),
+            flui_widgets::FocusRoot::new(VsyncScope::new(
+                self.binding.vsync().clone(),
+                refresh_content(&self.scroll, &refresh).child(RefreshContent {
+                    builds: Rc::clone(&self.content_builds),
+                }),
+            )),
+        );
+        self.binding.swap_root_view(
+            self.mounted.root_element,
+            &flui_view::RootRenderView::new(root, 300.0, 300.0),
+        );
+        self.refresh = refresh;
+        self.frame();
+    }
+
     /// Pumps one frame and returns how many elements it rebuilt.
     fn frame(&mut self) -> usize {
         self.binding.pump_frame(REFRESH_FRAME);
         self.binding.last_frame_report().build.elements_built
+    }
+
+    fn paints_indicator(&self) -> bool {
+        self.binding
+            .layer_tree()
+            .expect("committed refresh scene")
+            .iter()
+            .any(|(_, node)| {
+                if let flui_rendering::layer::Layer::Picture(picture) = node.layer() {
+                    picture.picture().iter().any(|command| {
+                        matches!(&command.op,
+                    flui_painting::display_list::DrawOp::Arc { paint, .. }
+                    if paint.color == flui_painting::styling::Color::rgba(33, 150, 243, 204))
+                    })
+                } else {
+                    false
+                }
+            })
     }
 
     /// Where the content's top edge is painted, in root coordinates.
@@ -2765,17 +3210,84 @@ pub(crate) fn refresh_indicator_drag_scrolls_without_rebuilding() {
     }
 }
 
+/// A retained overlay follows its replacement refresh source and withdraws
+/// delivery from the previous source, without rebuilding scroll content.
+pub(crate) fn refresh_controller_replacement_rebinds_the_retained_indicator() {
+    use flui_testing::PointerPhase::{Down, Move, Up};
+
+    for initially_refreshing in [false, true] {
+        let mut harness = RefreshHarness::mount();
+        if initially_refreshing {
+            harness.pointer(Down, 40.0);
+            harness.pointer(Move, 140.0);
+            harness.pointer(Up, 140.0);
+            harness.frame();
+            assert!(harness.paints_indicator());
+        }
+        let retired = harness.refresh.clone();
+        harness.replace_refresh(RefreshController::new());
+        assert!(!harness.paints_indicator(), "the replacement starts idle");
+        assert_eq!(harness.frame(), 0, "configuration replacement settles");
+        let content_builds = harness.content_builds.get();
+
+        retired.finish();
+        assert_eq!(
+            harness.frame(),
+            0,
+            "the old source cannot rebuild the overlay"
+        );
+        assert!(!harness.paints_indicator());
+
+        harness.pointer(Down, 40.0);
+        harness.pointer(Move, 140.0);
+        assert_eq!(harness.frame(), 0, "new pull distance does not rebuild");
+        harness.pointer(Up, 140.0);
+        assert!(
+            harness.refresh.is_refreshing(),
+            "the gesture uses the new source"
+        );
+        harness.frame();
+        assert!(
+            harness.paints_indicator(),
+            "new phase delivery paints its arc"
+        );
+        assert_eq!(harness.frame(), 0);
+        assert_eq!(harness.content_builds.get(), content_builds);
+
+        retired.finish();
+        assert_eq!(
+            harness.frame(),
+            0,
+            "old completion cannot hide the new indicator"
+        );
+        assert!(harness.paints_indicator());
+        harness.refresh.finish();
+        harness.frame();
+        assert!(
+            !harness.paints_indicator(),
+            "new completion removes the arc"
+        );
+        assert_eq!(harness.frame(), 0);
+        assert_eq!(harness.content_builds.get(), content_builds);
+    }
+}
+
 /// A pull changes only the pull distance: no rebuild, while an external
 /// listener still hears every change. Entering and leaving the refreshing
 /// phase rebuilds, once each.
 pub(crate) fn refresh_indicator_rebuilds_only_on_a_phase_change() {
     use flui_testing::PointerPhase::{Down, Move, Up};
     let mut harness = RefreshHarness::mount();
+    let content_builds = harness.content_builds.get();
+    assert!(
+        !harness.paints_indicator(),
+        "idle content has no loading arc"
+    );
     let heard = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let counter = Arc::clone(&heard);
     let _subscription = harness
         .refresh
-        .as_listenable()
+        .listenable()
         .add_listener(std::rc::Rc::new(move || {
             counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }));
@@ -2801,11 +3313,105 @@ pub(crate) fn refresh_indicator_rebuilds_only_on_a_phase_change() {
         "entering the refreshing phase rebuilds"
     );
     assert_eq!(harness.frame(), 0, "and then settles");
+    assert!(
+        harness.paints_indicator(),
+        "the refreshing frame paints its loading arc"
+    );
+    assert_eq!(
+        harness.content_builds.get(),
+        content_builds,
+        "starting refresh rebuilds only the indicator"
+    );
 
     harness.refresh.finish();
     assert!(harness.frame() > 0, "leaving the refreshing phase rebuilds");
     assert_eq!(harness.frame(), 0, "and then settles");
+    assert!(
+        !harness.paints_indicator(),
+        "completion removes the loading arc"
+    );
+    assert_eq!(
+        harness.content_builds.get(),
+        content_builds,
+        "finishing refresh rebuilds only the indicator"
+    );
 }
+pub(crate) fn a_refresh_completed_by_a_listener_allows_the_next_pull() {
+    use flui_testing::PointerPhase::{Down, Move, Up};
+
+    for bind_first in [false, true] {
+        let refresh = RefreshController::new();
+        let finish_first = Rc::new(Cell::new(true));
+        let notifications = Rc::new(Cell::new(0));
+        let listenable = refresh.listenable();
+        let callback: flui_foundation::ListenerCallback = Rc::new({
+            let watched = refresh.clone();
+            let finish_first = Rc::clone(&finish_first);
+            let notifications = Rc::clone(&notifications);
+            move || {
+                notifications.set(notifications.get() + 1);
+                if watched.is_refreshing() && finish_first.replace(false) {
+                    watched.finish();
+                }
+            }
+        });
+        let mut harness = RefreshHarness::mount();
+        let listener = if bind_first {
+            harness.replace_refresh(refresh.clone());
+            listenable.add_listener(callback)
+        } else {
+            let listener = listenable.add_listener(callback);
+            harness.replace_refresh(refresh.clone());
+            listener
+        };
+        let content_builds = harness.content_builds.get();
+
+        for attempt in 0..2 {
+            harness.scroll.set_pixels(0.0);
+            harness.pointer(Down, 40.0);
+            for y in [60.0, 80.0, 100.0, 120.0, 140.0] {
+                harness.pointer(Move, y);
+            }
+            harness.pointer(Up, 140.0);
+            assert!(
+                !finish_first.get(),
+                "the observer completed the first refresh"
+            );
+            assert_eq!(
+                refresh.is_refreshing(),
+                attempt == 1,
+                "only the subsequent pull remains refreshing; bind_first={bind_first}"
+            );
+            harness.frame();
+            assert_eq!(
+                harness.paints_indicator(),
+                attempt == 1,
+                "the committed indicator follows the latest phase; bind_first={bind_first}"
+            );
+            assert_eq!(harness.content_builds.get(), content_builds);
+        }
+
+        let heard = notifications.get();
+        refresh.finish();
+        assert_eq!(notifications.get(), heard + 1);
+        harness.frame();
+        assert!(
+            !harness.paints_indicator(),
+            "normal completion removes the arc"
+        );
+        let heard = notifications.get();
+        refresh.finish();
+        assert_eq!(
+            notifications.get(),
+            heard + 1,
+            "an idle finish still notifies the external channel"
+        );
+        assert_eq!(harness.frame(), 0, "an unchanged phase does not rebuild");
+        assert_eq!(harness.content_builds.get(), content_builds);
+        listenable.remove_listener(listener);
+    }
+}
+
 fn nested_fling_content(
     outer: &ScrollController,
     inner: &ScrollController,
@@ -3221,7 +3827,7 @@ pub(crate) fn nested_fling_failure_keeps_first_panic_and_a_new_gesture_makes_pro
         outer.jump_to(600.0);
         inner.jump_to(650.0);
         laid.tick();
-        let listenable = outer.as_listenable();
+        let listenable = outer.listenable();
         let first = Arc::new(AtomicBool::new(true));
         let fail = Arc::clone(&first);
         let first_id = listenable.add_listener(std::rc::Rc::new(move || {
@@ -3333,7 +3939,7 @@ pub(crate) fn nested_fling_equal_edge_jump_cancels_old_handoff_and_next_gesture_
     let pending_jump = Arc::new(AtomicBool::new(true));
     let jump = Arc::clone(&pending_jump);
     let controller = inner.clone();
-    let listenable = inner.as_listenable();
+    let listenable = inner.listenable();
     let listener = listenable.add_listener(std::rc::Rc::new(move || {
         if controller.pixels() == 800.0 && jump.swap(false, Ordering::SeqCst) {
             // Explicit programmatic cancellation must win even when it leaves
@@ -3432,7 +4038,7 @@ pub(crate) fn nested_fling_skips_saturated_parent_and_reentrant_jump_retires_tra
     let once = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let entered = Arc::clone(&once);
     let reentrant = outer.clone();
-    let listenable = outer.as_listenable();
+    let listenable = outer.listenable();
     let listener = listenable.add_listener(std::rc::Rc::new(move || {
         if entered.swap(false, std::sync::atomic::Ordering::SeqCst) {
             reentrant.jump_to(123.0);
@@ -3793,7 +4399,7 @@ pub(crate) fn show_on_screen_failure_continues_live_ancestors_and_fresh_requests
         );
         let first = Arc::new(AtomicBool::new(true));
         let failed = Arc::clone(&first);
-        let inner_listenable = inner.as_listenable();
+        let inner_listenable = inner.listenable();
         let first_id = inner_listenable.add_listener(std::rc::Rc::new(move || {
             assert!(
                 !failed.swap(false, Ordering::SeqCst),
@@ -3802,7 +4408,7 @@ pub(crate) fn show_on_screen_failure_continues_live_ancestors_and_fresh_requests
         }));
         let second = Arc::new(AtomicBool::new(competing));
         let failed = Arc::clone(&second);
-        let outer_listenable = outer.as_listenable();
+        let outer_listenable = outer.listenable();
         let second_id = outer_listenable.add_listener(std::rc::Rc::new(move || {
             assert!(
                 !failed.swap(false, Ordering::SeqCst),
@@ -3890,7 +4496,7 @@ pub(crate) fn show_on_screen_same_pipeline_reentry_keeps_one_reveal_and_recovers
         })
         .expect("actual automatic ancestor reveal");
     let _scope = RestoreScope(PENDING_REVEAL.with(|slot| slot.replace(Some(invocation))));
-    let listenable = inner.as_listenable();
+    let listenable = inner.listenable();
     let listener = listenable.add_listener(std::rc::Rc::new(|| {
         // The notification runs on the same owner thread. Resolve its local
         // pending request without making that request cross-thread ownership.
@@ -4005,7 +4611,7 @@ pub(crate) fn show_on_screen_sibling_reentry_delivers_last_target_without_stale_
         let _scope = RestoreScope(PENDING_SIBLING.with(|slot| slot.replace(Some(invocation))));
         let notifications = Arc::new(AtomicUsize::new(0));
         let seen = Arc::clone(&notifications);
-        let listenable = controller.as_listenable();
+        let listenable = controller.listenable();
         let listener = listenable.add_listener(std::rc::Rc::new(move || {
             seen.fetch_add(1, Ordering::SeqCst);
             let invocation = PENDING_SIBLING.with(|slot| slot.borrow_mut().take());

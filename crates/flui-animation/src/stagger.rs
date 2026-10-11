@@ -6,9 +6,12 @@ use std::time::Duration;
 ///
 /// Element `i` of `count` waits `step · |origin − i|`. One controller drives
 /// every element: read a [`Keyframes`](crate::Keyframes) track at
-/// `elapsed − delay` for a one-shot stagger, or at
-/// `elapsed + total − delay` with
-/// [`value_at_looped`](crate::Keyframes::value_at_looped) for a cycle.
+/// `elapsed.saturating_sub(delay)` for a one-shot stagger. For a cycle, sample
+/// the phase `(elapsed − delay) mod total` with
+/// [`value_at_looped`](crate::Keyframes::value_at_looped). Compute that phase
+/// in `u128` nanoseconds: reduce elapsed and delay modulo total, then use
+/// `(phase + total − delay) mod total`. Direct `Duration` addition/subtraction
+/// can overflow near [`Duration::MAX`] or when delay exceeds total.
 ///
 /// # Examples
 ///

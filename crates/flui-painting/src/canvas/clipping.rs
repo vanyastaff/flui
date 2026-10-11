@@ -12,17 +12,17 @@ use super::Canvas;
 use crate::display_list::DrawOp;
 
 impl Canvas {
-    /// Clips to a rectangle (intersect, anti-aliased).
+    /// Clips to a rectangle (intersect, hard edge).
     pub fn clip_rect(&mut self, rect: Rect<f64>) {
         self.clip_rect_ext(rect, ClipOp::default(), Clip::default());
     }
 
-    /// Clips to a rounded rectangle (intersect, anti-aliased).
+    /// Clips to a rounded rectangle (intersect, hard edge).
     pub fn clip_rrect(&mut self, rrect: RRect) {
         self.clip_rrect_ext(rrect, ClipOp::default(), Clip::default());
     }
 
-    /// Clips to a rounded superellipse (intersect, anti-aliased).
+    /// Clips to a rounded superellipse (intersect, hard edge).
     ///
     /// The command carries the squircle itself; the engine evaluates it as a
     /// signed distance field rather than approximating it with an rrect.
@@ -30,7 +30,7 @@ impl Canvas {
         self.clip_rsuperellipse_ext(rsuperellipse, ClipOp::default(), Clip::default());
     }
 
-    /// Clips to a path (intersect, anti-aliased).
+    /// Clips to a path (intersect, hard edge).
     pub fn clip_path(&mut self, path: &Path) {
         self.clip_path_ext(path, ClipOp::default(), Clip::default());
     }

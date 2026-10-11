@@ -1,12 +1,15 @@
 //! Parent queries may reenter the proxy without holding its parent lock.
 
+use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use crate::child_process;
 use flui_animation::{
-    Animation, AnimationStatus, ConstantAnimation, ProxyAnimation, StatusCallback,
+    Animation, AnimationController, AnimationStatus, ConstantAnimation, ProxyAnimation,
+    StatusCallback,
 };
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
 
@@ -22,7 +25,7 @@ struct ReentrantParent {
     proxy: Mutex<Option<Weak<ProxyAnimation<f64>>>>,
     reentry: Reentry,
     values: ChangeNotifier,
-    statuses: ChangeNotifier,
+    statuses: Rc<ChangeNotifier>,
 }
 
 impl ReentrantParent {
@@ -30,9 +33,9 @@ impl ReentrantParent {
         let proxy = self.proxy.lock().expect("parent hook lock").take();
         if let Some(proxy) = proxy.and_then(|proxy| proxy.upgrade()) {
             let replacement = if matches!(self.reentry, Reentry::Removal) {
-                ConstantAnimation::dismissed(0.75)
+                ConstantAnimation::reverse_settled(0.75)
             } else {
-                ConstantAnimation::completed(0.75)
+                ConstantAnimation::forward_settled(0.75)
             };
             proxy.set_parent(std::rc::Rc::new(replacement));
         }
@@ -55,6 +58,10 @@ impl Listenable for ReentrantParent {
 }
 
 impl Animation<f64> for ReentrantParent {
+    fn is_animating(&self) -> bool {
+        false
+    }
+
     fn value(&self) -> f64 {
         if matches!(self.reentry, Reentry::Value) {
             self.reenter();
@@ -67,11 +74,15 @@ impl Animation<f64> for ReentrantParent {
         }
         AnimationStatus::Forward
     }
-    fn add_status_listener(&self, _callback: StatusCallback) -> ListenerId {
-        self.statuses.add_listener(std::rc::Rc::new(|| {}))
-    }
-    fn remove_status_listener(&self, id: ListenerId) {
-        self.statuses.remove_listener(id);
+
+    fn subscribe_status(&self, callback: StatusCallback) -> flui_animation::StatusSubscription {
+        let id = self.statuses.add_listener(Rc::new(move || {
+            let _keep = &callback;
+        }));
+        flui_animation::StatusSubscription::new(&self.statuses, id, |source, id, recovery| {
+            source.inherit_failure(recovery);
+            source.take_listener(id)
+        })
     }
 }
 
@@ -80,7 +91,7 @@ fn fixture(reentry: Reentry) -> (Rc<ProxyAnimation<f64>>, Rc<AtomicUsize>) {
         proxy: Mutex::new(None),
         reentry,
         values: ChangeNotifier::new(),
-        statuses: ChangeNotifier::new(),
+        statuses: Rc::new(ChangeNotifier::new()),
     });
     let proxy = Rc::new(ProxyAnimation::new(parent.clone()));
     *parent.proxy.lock().expect("set parent hook") = Some(Rc::downgrade(&proxy));
@@ -94,10 +105,24 @@ fn fixture(reentry: Reentry) -> (Rc<ProxyAnimation<f64>>, Rc<AtomicUsize>) {
 
 fn next_swap_still_notifies(proxy: &ProxyAnimation<f64>, changes: &AtomicUsize) {
     let before = changes.load(Ordering::Relaxed);
-    proxy.set_parent(std::rc::Rc::new(ConstantAnimation::dismissed(0.5)));
+    proxy.set_parent(std::rc::Rc::new(ConstantAnimation::reverse_settled(0.5)));
     assert_eq!(proxy.value(), 0.5);
-    assert_eq!(proxy.status(), AnimationStatus::Dismissed);
+    assert_eq!(proxy.status(), AnimationStatus::ReverseSettled);
     assert_eq!(changes.load(Ordering::Relaxed), before + 1);
+}
+
+fn swap_with_status_change_fires_listeners() {
+    let first = AnimationController::builder(Duration::from_millis(100)).build_on(None);
+    let second = AnimationController::builder(Duration::from_millis(100)).build_on(None);
+    second.controller().set_value(1.0);
+    let proxy = ProxyAnimation::new(Rc::new(first.controller().clone()));
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let observed = Rc::clone(&seen);
+    let _subscription = proxy.subscribe_status(Rc::new(move |status| {
+        observed.borrow_mut().push(status);
+    }));
+    proxy.set_parent(Rc::new(second.controller().clone()));
+    assert_eq!(seen.borrow().as_slice(), &[AnimationStatus::ForwardSettled]);
 }
 
 fn parent_value_may_replace_the_proxy_parent() {
@@ -111,7 +136,7 @@ fn parent_value_may_replace_the_proxy_parent() {
 fn parent_status_may_replace_the_proxy_parent() {
     let (proxy, changes) = fixture(Reentry::Status);
     assert_eq!(proxy.status(), AnimationStatus::Forward);
-    assert_eq!(proxy.status(), AnimationStatus::Completed);
+    assert_eq!(proxy.status(), AnimationStatus::ForwardSettled);
     assert_eq!(proxy.value(), 0.75);
     assert_eq!(changes.load(Ordering::Relaxed), 1);
     next_swap_still_notifies(&proxy, &changes);
@@ -119,13 +144,13 @@ fn parent_status_may_replace_the_proxy_parent() {
 
 fn old_parent_status_may_reenter_during_a_swap() {
     let (proxy, changes) = fixture(Reentry::Status);
-    proxy.set_parent(std::rc::Rc::new(ConstantAnimation::completed(1.0)));
+    proxy.set_parent(std::rc::Rc::new(ConstantAnimation::forward_settled(1.0)));
     assert_eq!(
         proxy.value(),
         1.0,
         "outer swap finishes after reentrant swap"
     );
-    assert_eq!(proxy.status(), AnimationStatus::Completed);
+    assert_eq!(proxy.status(), AnimationStatus::ForwardSettled);
     assert_eq!(changes.load(Ordering::Relaxed), 2);
     next_swap_still_notifies(&proxy, &changes);
 }
@@ -133,6 +158,10 @@ fn old_parent_status_may_reenter_during_a_swap() {
 #[test]
 fn proxy_parent_queries_allow_reentrant_replacement() {
     let cases: &[(&str, fn())] = &[
+        (
+            "parent status change",
+            swap_with_status_change_fires_listeners,
+        ),
         ("parent value", parent_value_may_replace_the_proxy_parent),
         ("parent status", parent_status_may_replace_the_proxy_parent),
         (
@@ -163,16 +192,18 @@ fn old_parent_removal_keeps_committed_notification_order() {
     let (proxy, changes) = fixture(Reentry::Removal);
     let statuses = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let observed = statuses.clone();
-    proxy.add_status_listener(std::rc::Rc::new(move |status| {
-        observed.borrow_mut().push(status);
-    }));
-    proxy.set_parent(std::rc::Rc::new(ConstantAnimation::completed(1.0)));
+    proxy
+        .subscribe_status(std::rc::Rc::new(move |status| {
+            observed.borrow_mut().push(status);
+        }))
+        .detach();
+    proxy.set_parent(std::rc::Rc::new(ConstantAnimation::forward_settled(1.0)));
     assert_eq!(
         proxy.value(),
         0.75,
         "removal reentry is the last committed parent"
     );
-    assert_eq!(proxy.status(), AnimationStatus::Dismissed);
+    assert_eq!(proxy.status(), AnimationStatus::ReverseSettled);
     assert_eq!(
         changes.load(Ordering::Relaxed),
         2,
@@ -180,7 +211,10 @@ fn old_parent_removal_keeps_committed_notification_order() {
     );
     assert_eq!(
         statuses.borrow().as_slice(),
-        &[AnimationStatus::Completed, AnimationStatus::Dismissed]
+        &[
+            AnimationStatus::ForwardSettled,
+            AnimationStatus::ReverseSettled
+        ]
     );
     next_swap_still_notifies(&proxy, &changes);
 }
