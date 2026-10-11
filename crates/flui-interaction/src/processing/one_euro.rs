@@ -222,13 +222,14 @@ impl OneEuroFilter {
 /// caller only feeds `(time, position)` pairs:
 ///
 /// ```
-/// use std::time::{Duration, Instant};
+/// use std::time::Duration;
 ///
 /// use flui_interaction::processing::OneEuroFilter2D;
+/// use flui_interaction::{MonotonicClock, SystemClock};
 /// use flui_foundation::geometry::Offset;
 ///
 /// let mut filter = OneEuroFilter2D::default();
-/// let t0 = Instant::now();
+/// let t0 = SystemClock.now();
 /// let p0 = filter.filter(t0, Offset::new(10.0, 10.0)).expect("finite sample");
 /// assert_eq!(p0.dx, 10.0); // first sample passes through
 /// let _p1 = filter.filter(

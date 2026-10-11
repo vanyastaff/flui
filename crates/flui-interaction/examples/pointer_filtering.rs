@@ -8,10 +8,11 @@
 //!
 //! Run with: `cargo run -p flui-interaction --example pointer_filtering`
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use flui_foundation::geometry::Offset;
 use flui_interaction::processing::{OneEuroFilter2D, VelocityEstimator, VelocityTracker};
+use flui_interaction::{MonotonicClock, SystemClock};
 use flui_platform_api::pointer::PointerKind;
 
 fn main() {
@@ -22,7 +23,7 @@ fn main() {
     // ------------------------------------------------------------------
     println!("1. One Euro Filter (slow jitter suppressed, fast motion tracked):");
     let mut filter = OneEuroFilter2D::default();
-    let t0 = Instant::now();
+    let t0 = SystemClock.now();
     let dt = Duration::from_millis(8); // ~120 Hz input
 
     println!("   slow phase (true position 100, ±1 px sensor jitter):");
@@ -65,7 +66,7 @@ fn main() {
     let mut lsq = VelocityTracker::new();
 
     let mut pos = 0.0_f64;
-    let mut t = Instant::now();
+    let mut t = SystemClock.now();
     for _ in 0..4 {
         impulse.add_position(t, Offset::new(pos, 0.0));
         lsq.add_position(t, Offset::new(pos, 0.0));
