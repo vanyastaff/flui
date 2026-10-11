@@ -483,7 +483,7 @@ fn displaced_exact_endpoints_share_failure_custody() {
         );
         let view = owner.animation();
         let listener = view.add_listener(Rc::new(move || {
-            assert!(!delivery_fails, "admission delivery")
+            assert!(!delivery_fails, "admission delivery");
         }));
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             owner
@@ -644,6 +644,38 @@ fn converters_can_reenter_the_registry_and_replace_a_visible_target() {
         1.0,
         "replacement committed without a target borrow held across Clone"
     );
+
+    let registry = Vsync::new();
+    let mut clock = MotionClock::new();
+    let anchor = clock.frame(Duration::ZERO);
+    let advance = clock.frame(Duration::from_millis(250));
+    let origin = ReentrantValue {
+        position: 0.0,
+        vector_hook: Rc::new(|| {}),
+        clone_hook: Rc::new({
+            let registry = registry.clone();
+            let once = Cell::new(false);
+            move || {
+                if !once.replace(true) {
+                    registry.tick_all(&advance);
+                }
+            }
+        }),
+    };
+    let mut owner = AnimatedValue::new(origin, curve(curves::LINEAR), Some(&registry)).unwrap();
+    let run = owner.animate_to(plain(1.0)).unwrap();
+    let view = owner.animation();
+    registry.tick_all(&anchor);
+    assert_eq!(
+        view.value().position,
+        0.0,
+        "origin Clone retains its read snapshot through a nested frame"
+    );
+    assert!(
+        view.value().position > 0.0,
+        "nested sampling completes without an endpoint borrow"
+    );
+    assert!(run.is_pending());
 }
 
 struct FailingComponent {
