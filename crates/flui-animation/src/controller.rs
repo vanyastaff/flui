@@ -2401,20 +2401,6 @@ impl AnimationController {
         self.inner.borrow().disposed
     }
 
-    /// Number of registered value listeners. Test-only: lets combinator tests
-    /// assert that a parent subscription is added on construct and removed on drop.
-    #[cfg(test)]
-    pub(crate) fn debug_value_listener_count(&self) -> usize {
-        self.notifier.len()
-    }
-
-    /// Number of registered status listeners. Test-only, for the same reason:
-    /// `AnimationSwitch::dispose` must detach both of the listeners it attached.
-    #[cfg(test)]
-    pub(crate) fn debug_status_listener_count(&self) -> usize {
-        self.inner.borrow_mut().status_listeners.len()
-    }
-
     /// Establish a fresh run epoch before publishing its callbacks.
     fn begin_run(inner: &mut AnimationControllerInner) {
         inner.run_start = RunStart::Fresh;

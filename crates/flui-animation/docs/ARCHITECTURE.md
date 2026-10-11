@@ -678,13 +678,12 @@ direction settled (`ForwardSettled` at `max`, `ReverseSettled` at `min`) — mat
 the Web Animations spec's fill behavior ("holding the endpoint of the final iteration rather
 than the start of the next"), Android's `ValueAnimator`, and Compose's
 `VectorizedRepeatableSpec`, all of which land on the actual endpoint.
-The tests `repeat_tick_at_infinity_exhausts_a_finite_count_instead_of_rewinding`
-and `repeat_bounce_finite_count_and_absolute_time_rewind`'s
-exhaustion assertion (`crates/flui-animation/src/controller_tests.rs`) pin
+The tests `maximum_elapsed_time_exhausts_a_finite_repeat`
+and `finite_bounce_holds_stale_samples_and_settles_on_its_final_leg`'s
+exhaustion assertion (`tests/contracts/controller_commands.rs`) pin
 the landing/status.
-(The `repeat_*` and `without_ticker_bounds_*` names in this document are rows of the table tests
-`repeat_contract` and `controller_contract` in
-`src/controller_tests.rs`; a failure names its row.)
+These public scenarios are rows of `repeat_contract` and `controller_contract`
+in `tests/contracts/controller_commands.rs`; a failure names its row.
 
 **`min == max` stays rejected.** The degenerate range is refused, the same contract `with_bounds`
 already applies to an empty range (`repeat_with_rejects_equal_min_and_max`
@@ -923,13 +922,11 @@ that only inspects `value() == 0.0` cannot infer `status()` from it on an
 unbounded controller the way it could reason "at the lower bound implies
 ReverseSettled" on a bounded one.
 
-**Tests inverted, not fixed.** `without_ticker_bounds_rejects_wide_open_ones`
-and its `with_detached_ticker_bounds` twin used to assert that a wide-open
-`(NEG_INFINITY, INFINITY)` pair was ACCEPTED, landing `value() ==
-NEG_INFINITY`. Under this change that same input is REJECTED, and the
-tests were rewritten (not merely patched) to assert the rejection plus the
-unbounded constructor's own `0.0` start, each documenting why the old
-assertion no longer holds.
+**Bounded ranges and unbounded initialization have separate contracts.**
+`bounded_ranges_refuse_infinity_and_unbounded_starts_at_zero` rejects a
+wide-open `(NEG_INFINITY, INFINITY)` range and drives an explicitly unbounded
+controller from zero. Infinite endpoints cannot serve as the initial value
+of a bounded controller.
 
 ### Friction numerical range
 

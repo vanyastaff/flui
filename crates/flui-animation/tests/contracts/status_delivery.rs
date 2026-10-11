@@ -6,8 +6,10 @@
 //! The delivery and recovery rows run in the ordinary suite.
 
 use std::any::Any;
+use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind, panic_any};
+use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
@@ -1463,6 +1465,151 @@ fn frame_failure_retains_run_captures(nested: bool) {
 
 // --- AnimationSwitch -----------------------------------------------------------
 
+type WeakStatusCallback = Weak<dyn Fn(AnimationStatus)>;
+
+/// A custom source can observe the lifetime of callbacks admitted through its
+/// public animation/listenable contracts without inspecting a controller.
+struct ObservedTrain {
+    value: Cell<f64>,
+    values: ChangeNotifier,
+    statuses: Rc<ChangeNotifier>,
+    value_callbacks: RefCell<Vec<Weak<dyn Fn()>>>,
+    status_callbacks: RefCell<Vec<WeakStatusCallback>>,
+}
+
+impl ObservedTrain {
+    fn new(value: f64) -> Rc<Self> {
+        Rc::new(Self {
+            value: Cell::new(value),
+            values: ChangeNotifier::new(),
+            statuses: Rc::new(ChangeNotifier::new()),
+            value_callbacks: RefCell::new(Vec::new()),
+            status_callbacks: RefCell::new(Vec::new()),
+        })
+    }
+
+    fn set_value(&self, value: f64) {
+        self.value.set(value);
+        self.values.notify_listeners();
+    }
+}
+
+impl std::fmt::Debug for ObservedTrain {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ObservedTrain")
+    }
+}
+
+impl Listenable for ObservedTrain {
+    fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
+        self.value_callbacks
+            .borrow_mut()
+            .push(Rc::downgrade(&callback));
+        self.values.add_listener(callback)
+    }
+
+    fn remove_listener(&self, id: ListenerId) {
+        self.values.remove_listener(id);
+    }
+
+    fn remove_all_listeners(&self) {
+        self.values.remove_all_listeners();
+    }
+}
+
+impl Animation<f64> for ObservedTrain {
+    fn is_animating(&self) -> bool {
+        false
+    }
+
+    fn value(&self) -> f64 {
+        self.value.get()
+    }
+
+    fn status(&self) -> AnimationStatus {
+        Forward
+    }
+
+    fn subscribe_status(&self, callback: StatusCallback) -> StatusSubscription {
+        self.status_callbacks
+            .borrow_mut()
+            .push(Rc::downgrade(&callback));
+        let id = self
+            .statuses
+            .add_listener(Rc::new(move || callback(Forward)));
+        StatusSubscription::new(&self.statuses, id, |source, id, recovery| {
+            source.inherit_failure(recovery);
+            source.take_listener(id)
+        })
+    }
+}
+
+fn dispose_before_a_hop_detaches_from_both_trains() {
+    let current = ObservedTrain::new(0.8);
+    let next = ObservedTrain::new(0.3);
+    let changes = Rc::new(Cell::new(0));
+    for source in [&current, &next] {
+        let changes = Rc::clone(&changes);
+        source.add_listener(Rc::new(move || changes.set(changes.get() + 1)));
+    }
+    let current_parent: Rc<dyn Animation<f64>> = current.clone();
+    let switch = AnimationSwitch::new(current_parent.clone(), Some(next.clone()));
+    let current_value = current
+        .value_callbacks
+        .borrow()
+        .last()
+        .expect("current value callback")
+        .clone();
+    let next_value = next
+        .value_callbacks
+        .borrow()
+        .last()
+        .expect("next value callback")
+        .clone();
+    let current_status = current
+        .status_callbacks
+        .borrow()
+        .last()
+        .expect("current status callback")
+        .clone();
+    assert!(current_value.upgrade().is_some());
+    assert!(next_value.upgrade().is_some());
+    assert!(current_status.upgrade().is_some());
+
+    switch.dispose();
+    assert!(
+        current_value.upgrade().is_none(),
+        "current value capture released"
+    );
+    assert!(
+        next_value.upgrade().is_none(),
+        "next value capture released"
+    );
+    assert!(
+        current_status.upgrade().is_none(),
+        "current status capture released"
+    );
+    current.set_value(0.2);
+    next.set_value(0.9);
+    assert!(
+        Rc::ptr_eq(&switch.current(), &current_parent),
+        "a disposed switch must not hop"
+    );
+    assert_eq!(
+        changes.get(),
+        2,
+        "unrelated source listeners remain deliverable"
+    );
+
+    let fresh = AnimationSwitch::new(current_parent, Some(next.clone()));
+    current.set_value(1.0);
+    let next_parent: Rc<dyn Animation<f64>> = next;
+    assert!(
+        Rc::ptr_eq(&fresh.current(), &next_parent),
+        "a fresh switch still hops"
+    );
+}
+
 #[derive(Clone, Copy)]
 enum Reentry {
     Value,
@@ -1713,6 +1860,10 @@ fn reentrant_set_parent_last_commit_wins() {
 #[test]
 fn status_delivery_contract() {
     crate::run_table(&[
+        (
+            "dispose before a hop releases both trains",
+            dispose_before_a_hop_detaches_from_both_trains,
+        ),
         (
             "reentrant transitions retain A to B to A and respect subscription admission",
             reentrant_transitions_keep_the_return_to_the_original_status,

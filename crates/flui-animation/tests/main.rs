@@ -24,6 +24,12 @@ mod builder;
 #[path = "contracts/controller_sources.rs"]
 mod controller_sources;
 
+#[path = "contracts/controller_commands.rs"]
+mod controller_commands;
+
+#[path = "contracts/vsync.rs"]
+mod vsync;
+
 #[path = "contracts/controller_robustness.rs"]
 mod controller_robustness;
 

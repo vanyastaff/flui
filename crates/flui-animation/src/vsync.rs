@@ -901,11 +901,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::{Animation, AnimationStatus};
-
-    fn controller(ms: u64) -> AnimationController {
-        AnimationController::builder(Duration::from_millis(ms)).build()
-    }
+    use crate::Animation;
 
     fn saturated_walk_revisions_revalidate_ancestor_admission() {
         for revision in [u64::MAX - 1, u64::MAX] {
@@ -952,108 +948,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    /// Muting is **structural**, so nesting composes as a logical AND: an inner
-    /// registry that is itself unmuted still never advances while an ancestor
-    /// is muted — the ancestor simply never forwards the tick. There is no
-    /// flag to compose, and no way to get the composition wrong.
-    fn a_muted_ancestor_starves_an_unmuted_descendant() {
-        let outer = Vsync::new();
-        let middle = Vsync::new();
-        let inner = Vsync::new();
-        outer.attach_child(&middle).expect("nested");
-        middle.attach_child(&inner).expect("nested");
-
-        let animation = controller(1000);
-        inner
-            .try_register_resuming(&animation, Duration::ZERO)
-            .expect("private token admission");
-        let _ = animation.forward();
-
-        middle.set_muted(true);
-        assert!(!inner.is_muted(), "the innermost registry is enabled");
-
-        outer.tick_all(&crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)));
-        outer.tick_all(&crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.5)));
-        assert_eq!(
-            animation.value(),
-            0.0,
-            "a muted ancestor starves the enabled descendant"
-        );
-
-        // Unmute: the first tick through anchors this run's `t = 0` (a
-        // controller that has never been ticked has no anchor yet), the next
-        // one advances it.
-        middle.set_muted(false);
-        outer.tick_all(&crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(1.0)));
-        outer.tick_all(&crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(1.4)));
-        assert!(
-            animation.value() > 0.0,
-            "the tick flows through the unmuted ancestor"
-        );
-
-        crate::test_cases::dispose_controller(&animation);
-    }
-
-    /// A cycle would hang the tick walk, so nesting a registry inside itself
-    /// (or inside one of its own descendants) is refused, not linked.
-    fn a_cyclic_nesting_is_refused() {
-        let outer = Vsync::new();
-        let inner = Vsync::new();
-        outer.attach_child(&inner).expect("nested");
-
-        assert!(
-            inner.attach_child(&outer) == Err(VsyncRegistrationError::WouldCycle),
-            "nesting an ancestor under its own descendant is refused"
-        );
-        assert!(
-            outer.attach_child(&outer) == Err(VsyncRegistrationError::WouldCycle),
-            "and so is nesting a registry under itself"
-        );
-
-        // The tick walk still terminates.
-        outer.tick_all(&crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)));
-    }
-
-    /// A status listener that unregisters its own controller — what a route does
-    /// when its exit transition reaches `dismissed` and it disposes itself — must
-    /// not deadlock.
-    ///
-    /// Regression: `tick_all` used to hold the registry lock across `tick_at`, so
-    /// the listener's `unregister` re-entered a non-reentrant `parking_lot::Mutex`
-    /// and hung. Found by the first end-to-end `PopupRoute` pop and recorded in
-    /// ADR-0020 ("A real deadlock in `flui-animation`, found by the first end-to-end
-    /// pop").
-    fn a_listener_may_unregister_from_inside_tick_all() {
-        let vsync = Vsync::new();
-        let controller = AnimationController::builder(Duration::from_millis(100)).build();
-        let registration = vsync
-            .try_register_resuming(&controller, Duration::ZERO)
-            .expect("private token admission");
-
-        let slot: Rc<RefCell<Option<VsyncRegistration>>> =
-            Rc::new(RefCell::new(Some(registration)));
-        let vsync_for_listener = vsync.clone();
-        let slot_for_listener = Rc::clone(&slot);
-        controller
-            .subscribe_status(Rc::new(move |status| {
-                if status == AnimationStatus::ForwardSettled
-                    && let Some(registration) = slot_for_listener.borrow_mut().take()
-                {
-                    vsync_for_listener.unregister(&registration);
-                }
-            }))
-            .detach();
-
-        controller.forward().expect("fresh controller forwards");
-        vsync.tick_all(&crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)));
-        vsync.tick_all(&crate::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.2))); // past the 100 ms duration → ForwardSettled → unregisters
-
-        assert!(slot.borrow().is_none(), "the listener ran and unregistered");
-        assert_eq!(vsync.len(), 0, "and the registry dropped the controller");
-
-        crate::test_cases::dispose_controller(&controller);
     }
 
     fn registration_exhaustion_preserves_admitted_work() {
@@ -1366,15 +1260,6 @@ mod tests {
             (
                 "registration exhaustion preserves admitted work",
                 registration_exhaustion_preserves_admitted_work,
-            ),
-            (
-                "a muted ancestor starves an unmuted descendant",
-                a_muted_ancestor_starves_an_unmuted_descendant,
-            ),
-            ("a cyclic nesting is refused", a_cyclic_nesting_is_refused),
-            (
-                "a listener may unregister from inside tick all",
-                a_listener_may_unregister_from_inside_tick_all,
             ),
         ]);
     }

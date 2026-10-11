@@ -1,12 +1,15 @@
 //! Parent queries may reenter the proxy without holding its parent lock.
 
+use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use crate::child_process;
 use flui_animation::{
-    Animation, AnimationStatus, ConstantAnimation, ProxyAnimation, StatusCallback,
+    Animation, AnimationController, AnimationStatus, ConstantAnimation, ProxyAnimation,
+    StatusCallback,
 };
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
 
@@ -108,6 +111,20 @@ fn next_swap_still_notifies(proxy: &ProxyAnimation<f64>, changes: &AtomicUsize) 
     assert_eq!(changes.load(Ordering::Relaxed), before + 1);
 }
 
+fn swap_with_status_change_fires_listeners() {
+    let first = AnimationController::builder(Duration::from_millis(100)).build_on(None);
+    let second = AnimationController::builder(Duration::from_millis(100)).build_on(None);
+    second.controller().set_value(1.0);
+    let proxy = ProxyAnimation::new(Rc::new(first.controller().clone()));
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let observed = Rc::clone(&seen);
+    let _subscription = proxy.subscribe_status(Rc::new(move |status| {
+        observed.borrow_mut().push(status);
+    }));
+    proxy.set_parent(Rc::new(second.controller().clone()));
+    assert_eq!(seen.borrow().as_slice(), &[AnimationStatus::ForwardSettled]);
+}
+
 fn parent_value_may_replace_the_proxy_parent() {
     let (proxy, changes) = fixture(Reentry::Value);
     assert_eq!(proxy.value(), 0.25, "query samples its original parent");
@@ -141,6 +158,10 @@ fn old_parent_status_may_reenter_during_a_swap() {
 #[test]
 fn proxy_parent_queries_allow_reentrant_replacement() {
     let cases: &[(&str, fn())] = &[
+        (
+            "parent status change",
+            swap_with_status_change_fires_listeners,
+        ),
         ("parent value", parent_value_may_replace_the_proxy_parent),
         ("parent status", parent_status_may_replace_the_proxy_parent),
         (

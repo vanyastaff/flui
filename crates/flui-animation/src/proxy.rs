@@ -348,36 +348,3 @@ where
             .finish()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::AnimationController;
-
-    use std::time::Duration;
-
-    #[test]
-    fn swap_with_status_change_fires_listeners() {
-        let controller1 = Rc::new(AnimationController::builder(Duration::from_millis(100)).build());
-        let controller2 = Rc::new(AnimationController::builder(Duration::from_millis(100)).build());
-        controller2.set_value(1.0); // ForwardSettled
-
-        let proxy = ProxyAnimation::new(controller1.clone() as Rc<dyn Animation<f64>>);
-
-        let seen = Rc::new(RefCell::new(Vec::new()));
-        let seen2 = Rc::clone(&seen);
-        proxy
-            .subscribe_status(Rc::new(move |status| {
-                seen2.borrow_mut().push(status);
-            }))
-            .detach();
-
-        // ReverseSettled -> ForwardSettled across the swap must fire once with the new
-        // status.
-        proxy.set_parent(controller2.clone() as Rc<dyn Animation<f64>>);
-        assert_eq!(seen.borrow().as_slice(), &[AnimationStatus::ForwardSettled]);
-
-        crate::test_cases::dispose_controller(&controller1);
-        crate::test_cases::dispose_controller(&controller2);
-    }
-}
