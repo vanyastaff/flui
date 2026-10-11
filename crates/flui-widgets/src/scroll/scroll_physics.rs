@@ -419,7 +419,7 @@ impl ScrollPhysics for BouncingScrollPhysics {
             None
         };
         if let Some(edge) = edge {
-            let spring = SpringSimulation::try_new(
+            let spring = SpringSimulation::new(
                 self.spring,
                 metrics.pixels,
                 edge,

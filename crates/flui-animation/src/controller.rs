@@ -42,7 +42,6 @@ fn default_fling_spring() -> SpringDescription {
 const FLING_TOLERANCE: Tolerance = Tolerance {
     distance: 0.01,
     velocity: f64::INFINITY,
-    time: 1e-3,
 };
 
 /// Whether `AnimationController::finish` must notify value listeners,
@@ -1538,6 +1537,8 @@ impl AnimationController {
     /// Returns [`AnimationError::NonFiniteTarget`] under the same conditions
     /// as [`fling`](Self::fling).
     /// Returns [`AnimationError::InvalidSpring`] if the spring is underdamped.
+    /// Returns [`AnimationError::Simulation`] if its coefficients cannot be
+    /// represented. Every refusal preserves the preceding run and its future.
     pub fn fling_with(
         &self,
         velocity: f64,
@@ -1578,15 +1579,15 @@ impl AnimationController {
         }
 
         let spring = spring.unwrap_or_else(default_fling_spring);
-        let sim =
-            SpringSimulation::new(spring, inner.value, target, velocity).with_snap_to_end(true);
-        if sim.spring_type() == SpringType::Underdamped {
+        if spring.spring_type() == SpringType::Underdamped {
             return Err(AnimationError::InvalidSpring(
                 "Underdamped springs oscillate and cannot be used for fling. \
                  Use animate_with() for oscillating springs."
                     .to_string(),
             ));
         }
+
+        let sim = SpringSimulation::new(spring, inner.value, target, velocity, Tolerance::DEFAULT)?;
 
         inner.direction = direction;
         inner.clear_run_modes(&mut retired);
@@ -1634,11 +1635,11 @@ impl AnimationController {
     ///
     /// ```
     /// # use flui_animation::{AnimationController, simulation::SpringSimulation};
-    /// # use flui_animation::simulation::SpringDescription;
+    /// # use flui_animation::simulation::{SpringDescription, Tolerance};
     /// # use std::time::Duration;
     /// let controller = AnimationController::builder(Duration::from_millis(300)).build();
     /// let spring = SpringDescription::with_damping_ratio(1.0, 300.0, 0.5).unwrap();
-    /// let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0);
+    /// let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0, Tolerance::DEFAULT).unwrap();
     /// controller.animate_with(sim).unwrap();
     /// ```
     pub fn animate_with<S: Simulation + 'static>(

@@ -286,7 +286,7 @@ fn reduced_friction_reaches_its_analytic_rest() {
 fn reduced_spring_reaches_its_exact_endpoint() {
     use flui_animation::simulation::{SpringDescription, SpringSimulation, Tolerance};
     settle_simulation(
-        SpringSimulation::try_new(
+        SpringSimulation::new(
             SpringDescription::new(1.0, 100.0, 20.0).expect("spring description"),
             7.0,
             13.0,
@@ -1284,7 +1284,7 @@ fn rate_change_mid_run_keeps_value_continuous(kind: &str) {
         "curve" => controller.animate_to_curved(1.0, None, curves::DECELERATE),
         "repeat" => controller.repeat_with(None, None, false, None, None),
         "spring" => controller.animate_with(
-            SpringSimulation::try_new(
+            SpringSimulation::new(
                 SpringDescription::new(1.0, 1.0, 2.0).expect("critical spring"),
                 0.0,
                 1.0,

@@ -148,7 +148,7 @@ controller.repeat_with(Some(0.2), Some(0.8), true, None, Some(3))?;
 
 ```rust
 # use std::time::Duration;
-# use flui_animation::{AnimationController, AnimationError, SpringDescription, SpringSimulation};
+# use flui_animation::{AnimationController, AnimationError, SpringDescription, SpringSimulation, Tolerance};
 # fn main() -> Result<(), AnimationError> {
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 // Fling with velocity (uses spring physics)
@@ -161,7 +161,7 @@ controller.fling_with(1.0, Some(spring))?;
 
 // Arbitrary simulation, oscillating springs included
 let bouncy = SpringDescription::with_damping_ratio(1.0, 500.0, 0.7).expect("valid spring");
-let sim = SpringSimulation::new(bouncy, 0.0, 1.0, 2.0);
+let sim = SpringSimulation::new(bouncy, 0.0, 1.0, 2.0, Tolerance::DEFAULT)?;
 controller.animate_with(sim)?;
 # drop(controller);
 # Ok(())
@@ -604,7 +604,7 @@ use flui_animation::simulation::{Simulation, SpringDescription, SpringSimulation
 
 # fn main() -> Result<(), flui_animation::simulation::SimulationError> {
 let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 0.7)?;
-let sim = SpringSimulation::try_new(spring, 0.0, 1.0, 0.0, Tolerance::DEFAULT)?;
+let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0, Tolerance::DEFAULT)?;
 
 assert_eq!(sim.x(0.0), 0.0);
 assert!(sim.dx(0.05) > 0.0);
@@ -716,7 +716,7 @@ dropping the owner unregisters and cancels the run. A manual controller from
 
 Simulation constructors return `Err(SimulationError)` on invalid input
 (`SpringDescription::new`, `with_damping_ratio`, `with_duration_and_bounce`,
-`with_response_and_damping`, `SpringSimulation::try_new`,
+`with_response_and_damping`, `SpringSimulation::new`,
 `FrictionSimulation::new`, `BoundedFrictionSimulation::new`,
 `BouncingScrollSimulation::new`, `SimulationBounds::new`, `Tolerance::new`,
 `Tolerance::for_device_pixel_ratio`). These constructors, meant for constants,
@@ -724,7 +724,6 @@ panic instead:
 
 | Constructor | Panics if |
 |-------------|-----------|
-| `SpringSimulation::new` | start, end or velocity is not finite |
 | `Steps::new` | count = 0, or count = 1 with `JumpAt::None` |
 | `Interval::new` | begin/end not finite or outside [0,1], end < begin |
 | `Cubic::new` | any argument not finite, x1 or x2 outside [0,1], y1 or y2 outside [-1e6, 1e6] |

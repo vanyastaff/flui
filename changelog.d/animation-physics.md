@@ -5,11 +5,10 @@
   `with_damping_ratio`, `with_duration_and_bounce` and `with_response_and_damping` return
   `Result<_, SimulationError>`, and the perceptual constructors take a
   `Duration`; an undamped or non-finite spring is refused in debug and release.
-  `SpringSimulation::try_new` takes a `Tolerance` and returns `Result`;
-  `SpringSimulation::new` remains for constants and panics on non-finite input; where `try_new`
-  would refuse finite inputs as unrepresentable, `SpringSimulation::new`
-  returns a spring already at rest at `end`.
-- `flui-animation`: every spring `try_new` builds publishes finite samples at
+  `SpringSimulation::new` takes an explicit `Tolerance` and returns
+  `Result<_, SimulationError>`; unrepresentable construction is refused
+  without substituting a spring already at rest.
+- `flui-animation`: every successfully constructed spring publishes finite samples at
   every time and rests at a finite time; a position past the `f64` range
   saturates at `±f64::MAX`, and a spring whose rest or oscillation phase is not
   representable is refused with `SimulationError::Overflow`.
@@ -26,7 +25,7 @@
   `time_at_x` answers `+inf` for a position the motion never reaches.
 - `flui-animation`: `Tolerance` is built with `Tolerance::new(distance, velocity)`
   or `Tolerance::for_device_pixel_ratio`; an infinite velocity limit derives one
-  from the motion's time scale. `Simulation::tolerance` has a default body.
+  from the motion's time scale.
 - `flui-animation`: `AnimatedValue::new`, `animate_to` and `set_value` refuse
   non-finite components and leave the value unchanged; `advance` takes a
   `Duration`.
@@ -50,4 +49,5 @@
   `GravitySimulation`, `ClampedSimulation`, `FrictionSimulation::through` and
   `with_tolerance`, `SpringSimulation::with_snap_to_end` and `end_position`,
   `SpringDescription::{damping_ratio, bounce, smooth, snappy, bouncy}` and its
-  public fields, and `Tolerance`'s public fields.
+  public fields, `Simulation::tolerance`, `Tolerance::time` and `Tolerance`'s
+  public fields.

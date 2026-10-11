@@ -256,7 +256,7 @@ pub(crate) fn gated_presentations_hold_samples_then_catch_up_when_visible() {
                 (kind == "finite repeat").then_some(3),
             ),
             "spring" => controller.animate_with(
-                SpringSimulation::try_new(
+                SpringSimulation::new(
                     SpringDescription::new(1.0, 100.0, 20.0).expect("critical spring"),
                     0.0,
                     1.0,

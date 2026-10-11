@@ -380,9 +380,6 @@ impl Simulation for GoesNanMidRun {
     fn is_done(&self, _time: f64) -> bool {
         false
     }
-    fn tolerance(&self) -> Tolerance {
-        Tolerance::DEFAULT
-    }
 }
 
 /// A mid-run non-finite sample ENDS the run at the last finite value --
@@ -727,9 +724,6 @@ impl Simulation for InstantSimulation {
     }
     fn is_done(&self, _time: f64) -> bool {
         true
-    }
-    fn tolerance(&self) -> Tolerance {
-        Tolerance::DEFAULT
     }
 }
 

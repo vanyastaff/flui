@@ -165,7 +165,7 @@ let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0).expect("vali
 controller.fling_with(1.0, Some(spring))?;
 
 // Arbitrary simulation
-let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0);
+let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0, flui_animation::Tolerance::DEFAULT)?;
 controller.animate_with(sim)?;
 # drop(controller);
 # Ok(())
@@ -559,7 +559,7 @@ use flui_animation::simulation::{Simulation, SpringDescription, SpringSimulation
 
 # fn main() -> Result<(), flui_animation::simulation::SimulationError> {
 let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 0.7)?;
-let sim = SpringSimulation::try_new(spring, 0.0, 1.0, 0.0, Tolerance::DEFAULT)?;
+let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0, Tolerance::DEFAULT)?;
 assert!(sim.dx(0.1).is_finite()); // velocity at t = 0.1 s
 assert!(sim.is_done(5.0));
 assert_eq!(sim.x(5.0), 1.0);

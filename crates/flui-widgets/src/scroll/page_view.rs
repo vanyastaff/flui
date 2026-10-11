@@ -151,7 +151,7 @@ impl ScrollPhysics for PageScrollPhysics {
         let target = metrics.pixels_from_page(self.viewport_fraction, page.round());
 
         if (target - metrics.pixels).abs() > f64::EPSILON {
-            let spring = SpringSimulation::try_new(
+            let spring = SpringSimulation::new(
                 self.spring,
                 metrics.pixels,
                 target,

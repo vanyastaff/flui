@@ -21,7 +21,7 @@
 /// let result = controller.forward();
 /// assert!(matches!(result, Err(AnimationError::Disposed)));
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum AnimationError {
@@ -78,6 +78,11 @@ pub enum AnimationError {
     /// for oscillating springs.
     #[error("Invalid spring configuration: {0}")]
     InvalidSpring(String),
+
+    /// The physical simulation could not represent the admitted finite inputs.
+    /// A refused fling leaves the preceding run and its future unchanged.
+    #[error("cannot construct animation simulation: {0}")]
+    Simulation(#[from] crate::simulation::SimulationError),
 
     /// A caller-supplied value-space input (a `target`, a `from`, a fling
     /// `velocity`, or a simulation's initial sample) was not finite, or

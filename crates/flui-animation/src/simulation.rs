@@ -22,7 +22,7 @@
 //!
 //! # fn main() -> Result<(), flui_animation::simulation::SimulationError> {
 //! let spring = SpringDescription::with_duration_and_bounce(Duration::from_millis(500), 0.2)?;
-//! let sim = SpringSimulation::try_new(spring, 0.0, 1.0, 0.0, Tolerance::DEFAULT)?;
+//! let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0, Tolerance::DEFAULT)?;
 //!
 //! assert_eq!(sim.x(0.0), 0.0);
 //! assert!(sim.x(0.1) > 0.0);
@@ -42,6 +42,7 @@ use std::time::Duration;
 
 /// The input a [`SimulationError::OutOfRange`] refers to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum SimulationParameter {
     /// A spring's mass.
@@ -91,6 +92,7 @@ impl fmt::Display for SimulationParameter {
 
 /// Why a simulation, spring, tolerance or bounds value could not be built.
 #[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum SimulationError {
     /// One input is NaN, infinite, or outside its documented range.
@@ -179,9 +181,6 @@ fn before_start(time: f64) -> bool {
 pub struct Tolerance {
     pub(crate) distance: f64,
     pub(crate) velocity: f64,
-    /// Not read by any simulation; the controller still builds a tolerance
-    /// by struct literal and must name it.
-    pub(crate) time: f64,
 }
 
 impl Tolerance {
@@ -189,7 +188,6 @@ impl Tolerance {
     pub const DEFAULT: Self = Self {
         distance: 1e-3,
         velocity: 1e-3,
-        time: 1e-3,
     };
 
     /// A tolerance of `distance` (finite, `> 0`) in position units and
@@ -215,11 +213,7 @@ impl Tolerance {
         if velocity.is_nan() || velocity <= 0.0 {
             return Err(out_of_range(SimulationParameter::Velocity, velocity));
         }
-        Ok(Self {
-            distance,
-            velocity,
-            time: 1e-3,
-        })
+        Ok(Self { distance, velocity })
     }
 
     /// Half a device pixel at `device_pixel_ratio` device pixels per logical
@@ -283,12 +277,6 @@ pub trait Simulation {
 
     /// Whether the motion has come to rest at `time` seconds.
     fn is_done(&self, time: f64) -> bool;
-
-    /// The tolerance this simulation rests within. Drivers do not read it;
-    /// the default returns [`Tolerance::DEFAULT`].
-    fn tolerance(&self) -> Tolerance {
-        Tolerance::DEFAULT
-    }
 }
 
 /// Lets a `Box<dyn Simulation>` (as `ScrollPhysics` returns) be passed where
@@ -307,11 +295,6 @@ impl<S: Simulation + ?Sized> Simulation for Box<S> {
     #[inline]
     fn is_done(&self, time: f64) -> bool {
         (**self).is_done(time)
-    }
-
-    #[inline]
-    fn tolerance(&self) -> Tolerance {
-        (**self).tolerance()
     }
 }
 
@@ -577,52 +560,10 @@ impl SpringSimulation {
     }
 
     /// A spring from `start` to `end` with initial `velocity`, resting within
-    /// [`Tolerance::DEFAULT`].
+    /// `tolerance`.
     ///
-    /// Meant for inputs already known to be finite; [`try_new`](Self::try_new)
-    /// is the fallible form. Where `try_new` would refuse finite inputs with
-    /// [`SimulationError::Overflow`], this returns a spring already at rest:
-    /// it reports done from `t = 0` on, at `end` with zero velocity.
-    ///
-    /// # Panics
-    ///
-    /// When `start`, `end` or `velocity` is not finite.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_animation::simulation::{Simulation, SpringDescription, SpringSimulation};
-    ///
-    /// let spring = SpringDescription::with_damping_ratio(1.0, 300.0, 0.5)?;
-    /// let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0);
-    /// assert_eq!(sim.x(0.0), 0.0);
-    /// # Ok::<(), flui_animation::simulation::SimulationError>(())
-    /// ```
-    #[must_use]
-    pub fn new(spring: SpringDescription, start: f64, end: f64, velocity: f64) -> Self {
-        match Self::try_new(spring, start, end, velocity, Tolerance::DEFAULT) {
-            Ok(simulation) => simulation,
-            Err(SimulationError::Overflow) => Self {
-                start,
-                end,
-                x0: 0.0,
-                v0: velocity,
-                a: 0.0,
-                q: 0.0,
-                position_s: 0.0,
-                velocity_s: 0.0,
-                omega: spring.omega,
-                zeta: spring.zeta,
-                roots: Roots::Critical,
-                rest_secs: 0.0,
-                tolerance: Tolerance::DEFAULT,
-            },
-            Err(error) => panic!("invalid spring simulation: {error}"),
-        }
-    }
-
-    /// A spring from `start` to `end` with initial `velocity` (position units
-    /// per second), resting within `tolerance`.
+    /// Initial `velocity` is in position units per second; rest is determined
+    /// by `tolerance`. Refusal never constructs an already-resting substitute.
     ///
     /// # Errors
     ///
@@ -641,12 +582,12 @@ impl SpringSimulation {
     /// use flui_animation::simulation::{Simulation, SpringDescription, SpringSimulation, Tolerance};
     ///
     /// let spring = SpringDescription::new(1.0, 100.0, 10.0)?;
-    /// let sim = SpringSimulation::try_new(spring, 0.0, 100.0, 0.0, Tolerance::new(0.5, f64::INFINITY)?)?;
+    /// let sim = SpringSimulation::new(spring, 0.0, 100.0, 0.0, Tolerance::new(0.5, f64::INFINITY)?)?;
     /// assert!(!sim.is_done(0.1));
-    /// assert!(SpringSimulation::try_new(spring, f64::NAN, 1.0, 0.0, Tolerance::DEFAULT).is_err());
+    /// assert!(SpringSimulation::new(spring, f64::NAN, 1.0, 0.0, Tolerance::DEFAULT).is_err());
     /// # Ok::<(), flui_animation::simulation::SimulationError>(())
     /// ```
-    pub fn try_new(
+    pub fn new(
         spring: SpringDescription,
         start: f64,
         end: f64,
@@ -720,13 +661,6 @@ impl SpringSimulation {
             zeta: self.zeta,
         }
         .spring_type()
-    }
-
-    /// Accepted for source compatibility: a spring always settles exactly at
-    /// `end` once at rest.
-    #[must_use]
-    pub(crate) fn with_snap_to_end(self, _snap: bool) -> Self {
-        self
     }
 
     /// `(e^{-at}*C(t), e^{-at}*S(t))`, where `C = cos(ω_d*t)`,
@@ -903,10 +837,6 @@ impl Simulation for SpringSimulation {
 
     fn is_done(&self, time: f64) -> bool {
         time >= self.rest_secs
-    }
-
-    fn tolerance(&self) -> Tolerance {
-        self.tolerance
     }
 }
 
@@ -1101,7 +1031,6 @@ pub struct FrictionSimulation {
     velocity: f64,
     final_x: f64,
     rest_secs: f64,
-    tolerance: Tolerance,
 }
 
 impl FrictionSimulation {
@@ -1155,7 +1084,6 @@ impl FrictionSimulation {
             velocity,
             final_x,
             rest_secs,
-            tolerance,
         })
     }
 
@@ -1215,10 +1143,6 @@ impl Simulation for FrictionSimulation {
 
     fn is_done(&self, time: f64) -> bool {
         time >= self.rest_secs
-    }
-
-    fn tolerance(&self) -> Tolerance {
-        self.tolerance
     }
 }
 
@@ -1358,10 +1282,6 @@ impl Simulation for BoundedFrictionSimulation {
     fn is_done(&self, time: f64) -> bool {
         time >= self.rest_secs
     }
-
-    fn tolerance(&self) -> Tolerance {
-        self.friction.tolerance
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1400,7 +1320,7 @@ impl BouncingScrollSimulation {
     ///
     /// # Errors
     ///
-    /// As [`FrictionSimulation::new`] and [`SpringSimulation::try_new`].
+    /// As [`FrictionSimulation::new`] and [`SpringSimulation::new`].
     ///
     /// # Examples
     ///
@@ -1426,8 +1346,7 @@ impl BouncingScrollSimulation {
         bounds: SimulationBounds,
         tolerance: Tolerance,
     ) -> Result<Self, SimulationError> {
-        let edge_spring =
-            |edge, from, v| SpringSimulation::try_new(spring, from, edge, v, tolerance);
+        let edge_spring = |edge, from, v| SpringSimulation::new(spring, from, edge, v, tolerance);
         let position = finite(SimulationParameter::Position, position)?;
         let phase = if position < bounds.min {
             BouncingPhase::Spring(edge_spring(bounds.min, position, velocity)?)
@@ -1511,14 +1430,5 @@ impl Simulation for BouncingScrollSimulation {
 
     fn is_done(&self, time: f64) -> bool {
         time >= self.rest_secs
-    }
-
-    fn tolerance(&self) -> Tolerance {
-        match &self.phase {
-            BouncingPhase::Friction(friction) => friction.tolerance,
-            BouncingPhase::Spring(spring) | BouncingPhase::Handoff { spring, .. } => {
-                spring.tolerance
-            }
-        }
     }
 }

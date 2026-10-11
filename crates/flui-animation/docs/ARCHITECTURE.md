@@ -918,6 +918,14 @@ round trips, unreachable queries and the remaining-glide rest.
   refuses NaN, infinite and non-positive inputs (an undamped spring never
   rests) and constants that overflow (`SimulationError`), the same in debug
   and release. `spring_constructors_refuse_outside_the_admitted_domain`.
+- `SpringSimulation::new` is the sole constructor and takes an explicit
+  tolerance. Unrepresentable coefficients return `SimulationError::Overflow`;
+  admission never substitutes a motion already resting at the target. Fling
+  constructs its simulation before replacing any live source, direction or
+  future, and preserves the typed cause as `AnimationError::Simulation`.
+  `fling_with_overflowing_spring_preserves_the_admitted_run` checks the refused
+  replacement, continued original trajectory, successful original completion
+  and a healthy subsequent command in `springs_at_the_edge_of_f64_stay_finite_and_rest`.
 - The motion is one closed form for every `ζ`:
   `x = e^{−at}[x0·C + (a·x0 + v0)·S]`, `v = e^{−at}[v0·C − (ω²x0 + a·v0)·S]`,
   `a = ζω`, with `C`, `S` summed as series where `|ω²(1 − ζ²)t²| < 10⁻²`
@@ -985,13 +993,14 @@ they do not retain UI callback storage.
 ## Error Handling
 
 ```rust
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum AnimationError {
     Disposed,                // operation on a disposed controller
     InvalidBounds(String),   // lower >= upper, non-finite bound/span, bad repeat range
     IdentityExhausted,        // run or sample identity namespace exhausted
     InvalidSpring(String),   // oscillating spring passed to fling
+    Simulation(#[from] SimulationError), // typed physical construction refusal
     NonFiniteTarget(String), // non-finite target, `from`, velocity or simulation start
 }
 ```

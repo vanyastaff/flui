@@ -302,7 +302,7 @@ impl Segment {
         }
         Ok(match motion {
             MotionSpec::Spring(spring) => {
-                let simulation = SpringSimulation::try_new(*spring, x0, target, v0, tolerance)?;
+                let simulation = SpringSimulation::new(*spring, x0, target, v0, tolerance)?;
                 let rest = SpringRest::new(&simulation, x0, v0, target)?;
                 Self::Spring {
                     simulation,
