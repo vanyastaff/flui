@@ -1215,9 +1215,68 @@ fn scale_captures_the_selected_estimator() {
     selected_velocity_cases("scale");
 }
 
+fn after_route_up_must_not_sweep_a_reentrant_replacement() {
+    let arena = GestureArena::binding_driven(Arc::new(ManualClock::new()));
+    let pointer = id(91);
+    let replacement_starts = counter();
+    let observed = replacement_starts.clone();
+    let first = DragGestureRecognizer::builder(arena.clone(), DragAxis::Free)
+        .on_start(move |_| observed.set(observed.get() + 1))
+        .build();
+    let second = DragGestureRecognizer::builder(arena.clone(), DragAxis::Horizontal).build();
+    let reentrant_arena = arena.clone();
+    let (replacement_first, replacement_second) = (first.clone(), second.clone());
+    let tapped = counter();
+    let observed_taps = tapped.clone();
+    let tap = TapGestureRecognizer::builder(arena.clone())
+        .on_tap(move || {
+            observed_taps.set(observed_taps.get() + 1);
+            let next_down = down(pointer, at(90.0, 0.0), PointerKind::Touch);
+            replacement_first.add_pointer(PointerDispatch::at_root(&next_down));
+            replacement_second.add_pointer(PointerDispatch::at_root(&next_down));
+            run_pointer_lifecycle(&reentrant_arena, &next_down);
+        })
+        .build();
+    let old_down = down(pointer, Offset::ZERO, PointerKind::Touch);
+    tap.add_pointer(PointerDispatch::at_root(&old_down));
+    run_pointer_lifecycle(&arena, &old_down);
+    arena.drain_deferred_resolutions();
+    let old_up = up(pointer, Offset::ZERO, PointerKind::Touch);
+    tap.handle_event(PointerDispatch::at_root(&old_up));
+    assert_eq!(
+        tapped.get(),
+        1,
+        "old route readmits the pointer before lifecycle finish"
+    );
+    run_pointer_lifecycle(&arena, &old_up);
+    assert_eq!(
+        replacement_starts.get(),
+        0,
+        "old Up must not grant the replacement contact before its own movement"
+    );
+    first.handle_event(PointerDispatch::at_root(&motion(
+        pointer,
+        at(120.0, 0.0),
+        PointerKind::Touch,
+    )));
+    assert_eq!(
+        replacement_starts.get(),
+        1,
+        "replacement makes progress on its own input"
+    );
+    first.cancel();
+    second.cancel();
+    arena.drain_deferred_resolutions();
+    assert!(arena.is_empty());
+}
+
 #[test]
 fn gesture_lifecycle_matrix() {
     let cases: &[(&str, fn())] = &[
+        (
+            "after-route Up must not sweep a reentrant replacement",
+            after_route_up_must_not_sweep_a_reentrant_replacement,
+        ),
         (
             "standalone arena capacity is not an admission limit",
             standalone_arena_capacity_does_not_refuse_contacts,
