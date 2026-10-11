@@ -119,6 +119,7 @@ enum ControllerDelivery {
     ),
     Run(Terminal<RunDelivery>),
     Retire(RetiredSources),
+    RetireRegistry(Terminal<crate::Vsync>),
     RetireOwned(Terminal<RetirementAction>),
 }
 

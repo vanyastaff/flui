@@ -16,10 +16,22 @@ impl AnimationController {
         recovery: &mut RecoveryScope<'_>,
     ) {
         let action = Terminal::new(Box::new(action) as RetirementAction);
+        self.enqueue_and_drain(ControllerDelivery::RetireOwned(action), recovery);
+    }
+
+    /// A registry has a known custody type, so waiting for the same delivery
+    /// round does not require allocating an erased cleanup closure.
+    pub(crate) fn retire_registry_with_delivery(
+        &self,
+        registry: Terminal<crate::Vsync>,
+        recovery: &mut RecoveryScope<'_>,
+    ) {
+        self.enqueue_and_drain(ControllerDelivery::RetireRegistry(registry), recovery);
+    }
+
+    fn enqueue_and_drain(&self, delivery: ControllerDelivery, recovery: &mut RecoveryScope<'_>) {
         let mut inner = self.inner.borrow_mut();
-        inner
-            .pending_delivery
-            .push_back(ControllerDelivery::RetireOwned(action));
+        inner.pending_delivery.push_back(delivery);
         let drain = !inner.delivering;
         inner.delivering = true;
         drop(inner);
@@ -143,6 +155,7 @@ impl AnimationController {
                     });
                 }
                 ControllerDelivery::Retire(retired) => retirement.retire(retired),
+                ControllerDelivery::RetireRegistry(registry) => retirement.retire(registry),
                 ControllerDelivery::RetireOwned(action) => {
                     if retirement.has_failure() {
                         retirement.retire(action);

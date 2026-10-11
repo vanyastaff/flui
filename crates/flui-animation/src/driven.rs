@@ -32,12 +32,9 @@ pub(crate) struct DrivenRetirement {
 
 impl DrivenRetirement {
     pub(crate) fn publish(self, recovery: &mut RecoveryScope<'_>) {
-        let registry = self.registry;
-        if registry.get().is_some() {
+        if let Some(registry) = self.registry.into_inner() {
             self.controller
-                .retire_with_delivery(move |scope| scope.retire(registry), recovery);
-        } else {
-            recovery.retire(registry);
+                .retire_registry_with_delivery(Terminal::new(registry), recovery);
         }
         if let Some(publication) = self.publication {
             publication.publish(recovery);

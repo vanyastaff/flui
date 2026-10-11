@@ -1,4 +1,4 @@
-//! A steady-state frame of a running animation must not allocate.
+//! Running frames and retirement of idle registry owners must not allocate.
 //!
 //! One `Vsync::tick_all` advances a live scalar controller, four-component
 //! insets and a seven-component nested geometry/color value, each with four
@@ -7,11 +7,10 @@
 //! allocator is process-wide, which is why this file is a test target of its
 //! own rather than a module of `tests/main.rs`.
 //!
-//! The measured claim and its negative control share ONE test: under bare
-//! `cargo test` (one process, a thread per test) a second test's allocations
-//! could land inside the measured window. The counters are also per-thread
-//! for the same reason: libtest's harness thread keeps running beside the
-//! test thread.
+//! Each measured claim includes a positive allocation control. Counters are
+//! per-thread, so concurrent lifecycle cases and libtest's harness thread cannot
+//! add allocations to another case's measured window. The retirement case has
+//! no active run or user callbacks; admission remains outside its window.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -84,6 +83,52 @@ const NEVER_ENDING: Duration = Duration::from_secs(u32::MAX as u64);
 
 /// One frame at 60 Hz, in seconds.
 const FRAME: f64 = 1.0 / 60.0;
+
+/// Idle owner teardown has no user run or callback to prepare. Admission is
+/// measured separately as a positive control; observers keep the allocation
+/// alive while actual disposal must withdraw the registry and refuse new runs.
+#[test]
+fn retiring_idle_registry_owners_allocates_nothing() {
+    for count in [1, 1_000, 10_000] {
+        let admission_before = read(&ALLOC_COUNT);
+        let registry = Vsync::new();
+        let mut observers = Vec::with_capacity(count);
+        let owners: Vec<_> = (0..count)
+            .map(|_| {
+                let owner =
+                    AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
+                observers.push(owner.controller().clone());
+                owner
+            })
+            .collect();
+        assert_eq!(registry.len(), count);
+        assert!(
+            read(&ALLOC_COUNT) > admission_before,
+            "admission must exercise the same counting allocator"
+        );
+        let calls_before = read(&ALLOC_COUNT);
+        let bytes_before = read(&ALLOC_BYTES);
+        for mut owner in owners {
+            black_box(&mut owner).dispose();
+        }
+        let calls = read(&ALLOC_COUNT) - calls_before;
+        let bytes = read(&ALLOC_BYTES) - bytes_before;
+        assert!(registry.is_empty(), "every retired seat is withdrawn");
+        for observer in observers {
+            assert!(
+                matches!(
+                    observer.forward(),
+                    Err(flui_animation::AnimationError::Disposed)
+                ),
+                "an observing clone cannot restart the retired owner"
+            );
+        }
+        assert_eq!(
+            calls, 0,
+            "retiring {count} idle registry owners allocated {calls} times ({bytes} bytes)"
+        );
+    }
+}
 
 /// 1. **The claim:** after warmup, every `tick_all` that advances a running
 ///    controller and notifies its four value listeners allocates nothing.

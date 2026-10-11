@@ -219,7 +219,8 @@ cargo bench -p flui-animation --bench vsync_registry --locked -- --noplot 'runni
 ### Complete registry workload, 2026-10-11
 
 The same historical baseline, `c297b6c89bc93941e28c738c9dfac3d623a2dae2`,
-was compared with the current ownership and continuous-color implementation.
+was compared with the ownership and continuous-color candidate published as
+`8cbca605836b65a0af7899378d4a27f5309075d4`, before typed registry cleanup.
 The benchmark files were identical, baseline production was unchanged, and
 release runs used separate target directories on the Windows host above.
 All populations used ten samples, a 500 ms warm-up and a one-second measurement.
@@ -250,7 +251,7 @@ Criterion time estimates in microseconds (95% intervals in parentheses):
 The retirement row remains a profiling concern. A longer serial repeat with
 50 samples, a one-second warm-up and a three-second measurement produced
 1,551.1 µs (1,479.7–1,627.0) on the baseline and 1,918.3 µs
-(1,810.1–2,048.6) on the current implementation. These intervals do not overlap;
+(1,810.1–2,048.6) on that candidate. These intervals do not overlap;
 the observed cost increase must not be described as performance parity.
 Same-version runs also varied substantially. The measurements do not isolate
 the cause, establish whole-frame latency or replace admission and retarget tests.
@@ -265,6 +266,40 @@ cargo bench --locked -p flui-animation --bench vsync_registry -- unregister_all/
 Earlier per-group configuration overrode these command-line options. Its
 reported ten-sample results above remain ten-sample results; they must not be
 relabelled as longer measurements.
+
+### Typed registry retirement, 2026-10-11
+
+Idle owner retirement allocated once per owner to erase registry cleanup into
+a boxed callback. A registry's custody type is known: the controller delivery
+queue now stores it directly and retires it at the same FIFO position under the
+same recovery scope. Generic outgoing property cleanup still requires erasure.
+Dropping the registry early would change ownership after a later failure and
+is not the optimization measured here.
+
+The public `retiring_idle_registry_owners_allocates_nothing` case measures
+1, 1,000 and 10,000 owners. Admission is a positive allocator control; observing
+controller clones remain alive while disposal withdraws seats and refuses new
+runs. The old production path allocates 16 bytes per owner; typed custody
+allocates nothing. Reverting only the production repair makes the case fail.
+Existing owner-retirement and first-failure families remain acceptance criteria.
+This does not promise allocation-free active cancellation, callbacks, admission
+or arbitrary property capture retirement.
+
+Serial release measurements on the Windows host compare the exact boxed
+production source from `8cbca605836b65a0af7899378d4a27f5309075d4` with the typed
+repair. The rest of the source and timed benchmark are unchanged. Both runs
+used 50 samples, a one-second warm-up and a three-second measurement. Estimates
+are microseconds with 95% intervals:
+
+| Retired owners | Boxed cleanup | Typed cleanup |
+| ---: | ---: | ---: |
+| 1,000 | 134.67 (133.37–135.87) | 114.60 (113.32–115.65) |
+| 10,000 | 1,549.8 (1,522.6–1,577.5) | 1,335.7 (1,315.4–1,356.8) |
+
+These paired intervals do not overlap. Same-version timing varied between
+earlier runs; host load and CPU frequency remain uncontrolled. The comparison
+isolates this source change, not all retirement cost or whole-frame latency.
+It does not establish parity with the older historical main.
 
 ## Measured benchmarks
 
