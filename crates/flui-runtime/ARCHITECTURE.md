@@ -152,6 +152,10 @@ host.
   operation-specific admission rules.
   Checkout restoration and deferred mutations are unwind-safe, and
   UI runtime-owning values are dropped after every mutable host borrow is released.
+  A contained callback panic, including installation initialization, emits a
+  typed report at its presentation address before returning the runtime lease.
+  Reporting does not increment frame-failure streaks or replace the original
+  panic; diagnostics retain their own containment boundary (ADR-0185).
 - **Owner operations form a closed vocabulary.** Input, lifecycle, normalized
   metrics, close, install, uninstall, pump and background-pump are typed
   operations or explicit methods. The host accepts no arbitrary

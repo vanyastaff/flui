@@ -18,7 +18,7 @@ pub(crate) fn closed_presentation_animation_cannot_wake_a_surviving_window() {
     runtime.set_now_secs_for_test(0.0);
     let _ = runtime.pump(&mut SampledClock(origin), &mut sink);
     assert!(
-        !runtime.scheduler().has_scheduled_frame(),
+        !runtime.scheduler().is_frame_scheduled(),
         "survivor quiesces"
     );
 
@@ -29,14 +29,14 @@ pub(crate) fn closed_presentation_animation_cannot_wake_a_surviving_window() {
         .forward()
         .expect("retained clock run");
     assert!(
-        !runtime.scheduler().has_scheduled_frame(),
+        !runtime.scheduler().is_frame_scheduled(),
         "a closed presentation cannot request a sibling's frame"
     );
     let live_owner =
         AnimationController::builder(Duration::from_secs(1)).build_on(Some(&runtime.vsync()));
     live_owner.controller().forward().expect("survivor run");
     assert!(
-        runtime.scheduler().has_scheduled_frame(),
+        runtime.scheduler().is_frame_scheduled(),
         "live driver still wakes"
     );
 }
@@ -57,19 +57,19 @@ pub(crate) fn starting_an_idle_presentation_animation_requests_its_first_frame()
         "mount frame presents"
     );
     assert!(
-        !runtime.scheduler().has_scheduled_frame(),
+        !runtime.scheduler().is_frame_scheduled(),
         "presentation quiesces"
     );
 
     let owner =
         AnimationController::builder(Duration::from_millis(100)).build_on(Some(&runtime.vsync()));
     assert!(
-        !runtime.scheduler().has_scheduled_frame(),
+        !runtime.scheduler().is_frame_scheduled(),
         "an idle seat needs no frame"
     );
     owner.controller().forward().expect("fresh run");
     assert!(
-        runtime.scheduler().has_scheduled_frame(),
+        runtime.scheduler().is_frame_scheduled(),
         "accepted run wakes the driver before a pump"
     );
 

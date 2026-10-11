@@ -281,12 +281,9 @@ impl UiRuntime {
     /// Wake the platform event loop so the next frame is rendered — sets
     /// `needs_redraw` AND pokes the installed window.
     ///
-    /// Deadlock-safety: this only ever touches the `Send + Sync` state
-    /// captured in the UI runtime's `wake` (an `Arc<AtomicBool>` plus an `Arc<Mutex<Option<Arc<dyn
-    /// PlatformWindow>>>>` on `AppRuntime` — see `FrameWakeHandle` in
-    /// `runtime.rs`), never this UI runtime's own `widgets`/`renderer`/gesture
-    /// locks, so it is safe to call from inside a build/layout/paint
-    /// callback without risking a lock-ordering cycle against those.
+    /// The host supplies a `Send + Sync` closure over this runtime's redraw
+    /// debt and a weak reference to its own window. Invoking it does not borrow
+    /// widget, renderer or interaction state and keeps no native window alive.
     pub fn wake_frame(&self) {
         (self.wake)();
     }

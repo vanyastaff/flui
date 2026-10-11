@@ -218,6 +218,7 @@ impl NativeBindings {
         self.0.drivers.borrow_mut().sweep_retired();
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(in crate::app) fn text_sizing_deadline(&self) -> Option<web_time::Instant> {
         self.0
             .text_sizing
@@ -225,6 +226,18 @@ impl NativeBindings {
             .iter()
             .filter_map(|entry| entry.deadline())
             .min()
+    }
+
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    pub(in crate::app) fn frame_deadline(
+        &self,
+        logical: &flui_runtime::owner::OwnerHost,
+    ) -> Option<web_time::Instant> {
+        self.0.drivers.borrow().next_wake(logical)
     }
 
     pub(super) fn refresh_text_sizing(

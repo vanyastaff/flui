@@ -72,6 +72,7 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
         owner_frame_claimed: _,
         execution_release,
         execution_failure,
+        execution_owner,
     } = &*scheduler.inner;
     assert!(
         execution_release.try_borrow_mut().is_ok(),
@@ -80,6 +81,10 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
     assert!(
         execution_failure.try_borrow_mut().is_ok(),
         "execution failure receipt is not borrowed through user code"
+    );
+    assert!(
+        execution_owner.try_borrow_mut().is_ok(),
+        "execution owner metadata is not borrowed through user code"
     );
 
     let FrameState {
@@ -169,6 +174,7 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
 
     let BindingState {
         lifecycle_state: _,
+        lifecycle_delivery: _,
         timings_callbacks,
         pending_timings,
         last_timings_report,

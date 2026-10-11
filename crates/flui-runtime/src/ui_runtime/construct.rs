@@ -314,28 +314,30 @@ impl UiRuntime {
     /// presentation's close, the presentation closing, which may already be
     /// gone. The payload stays the caller's: it is read, never dropped here.
     ///
-    /// Not yet delivered to the registered [`FrameFailureHandler`]: the
-    /// panic is only traced.
+    /// Delivered through tracing and the registered [`FrameFailureHandler`].
     pub fn report_contained_panic(
         &self,
         address: flui_foundation::PresentationAddress,
         payload: &(dyn std::any::Any + Send),
     ) {
         let (message, internal_invariant) = self.frame_failure_detail.get().panic_text(payload);
-        // Diagnostics are foreign code through tracing subscribers; a failed
-        // diagnostic must not unwind into the host's containment boundary.
-        if let Err(failure) = catch_unwind(AssertUnwindSafe(|| {
-            tracing::error!(
-                { flui_foundation::diagnostics::PRESENTATION_ID } =
-                    address.presentation_id.as_u64(),
-                ui_runtime_id = address.ui_runtime_id.as_u64(),
-                internal_invariant,
-                panic_message = %message,
-                "application callback panic contained; the ui_runtime keeps running"
-            );
-        })) {
-            flui_foundation::panic::retain_opaque_payload(failure);
+        if address.ui_runtime_id != self.id {
+            return;
         }
+        let consecutive_failures = self
+            .presentations
+            .iter()
+            .find(|presentation| presentation.id() == address.presentation_id)
+            .map_or(0, PresentationState::frame_failure_streak);
+        self.deliver_failure_report(FrameFailureReport {
+            address,
+            kind: FrameFailureKind::CallbackPanic {
+                message,
+                internal_invariant,
+            },
+            disposition: FailureDisposition::Contained,
+            consecutive_failures,
+        });
     }
 
     /// Surface one frame-failure report for `presentation` through tracing
@@ -374,6 +376,11 @@ impl UiRuntime {
             disposition,
             consecutive_failures,
         };
+        self.deliver_failure_report(report);
+    }
+
+    fn deliver_failure_report(&self, report: FrameFailureReport) {
+        let consecutive_failures = report.consecutive_failures;
         // Diagnostics are foreign code through tracing subscribers. A failed
         // diagnostic must not prevent the report's callback or sibling frames.
         if let Err(payload) = catch_unwind(AssertUnwindSafe(|| match &report.kind {

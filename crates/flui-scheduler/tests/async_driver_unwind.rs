@@ -402,7 +402,7 @@ fn independent_owner_turn_preserves_pending_demand() {
         let token = driver.spawn_local(Box::pin(async move {
             observed.set(true);
         }));
-        assert!(scheduler.has_scheduled_frame());
+        assert!(scheduler.is_frame_scheduled());
         if direct {
             assert_eq!(
                 foreign.pump_background(|| {}).expect("foreign owner turn"),
@@ -420,7 +420,7 @@ fn independent_owner_turn_preserves_pending_demand() {
                 .expect("foreign owner frame");
         }
         assert!(
-            scheduler.has_scheduled_frame(),
+            scheduler.is_frame_scheduled(),
             "an independent owner must not consume another scheduler's demand"
         );
         assert!(!ran.get());

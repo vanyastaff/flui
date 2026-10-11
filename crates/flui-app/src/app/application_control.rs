@@ -34,6 +34,12 @@ pub enum AppControlError {
 #[derive(Debug, Clone, thiserror::Error)]
 #[non_exhaustive]
 pub enum AppWindowError {
+    /// A requested setting has no host implementation yet.
+    #[error("unsupported application setting: {setting}")]
+    UnsupportedConfiguration {
+        /// Configuration field that cannot be honored.
+        setting: &'static str,
+    },
     /// Native creation failed; retains the original platform error.
     #[error("native window creation failed: {source}")]
     Native {
@@ -97,7 +103,16 @@ pub enum AppWindowError {
     },
 }
 
-type Reply = ClaimSlot<Result<PresentationAddress, AppWindowError>>;
+#[cfg(feature = "persist")]
+impl From<super::config::UnsupportedSetting> for AppWindowError {
+    fn from(error: super::config::UnsupportedSetting) -> Self {
+        Self::UnsupportedConfiguration {
+            setting: error.setting,
+        }
+    }
+}
+
+pub(crate) type Reply = ClaimSlot<Result<PresentationAddress, AppWindowError>>;
 const WAITER_CAPACITY: usize = 64;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Phase {
@@ -130,7 +145,7 @@ impl std::fmt::Debug for AppHandle {
 }
 impl AppHandle {
     /// Admit a coalesced show request. Dropping its receiver does not cancel intent.
-    pub fn request_show_main_window(&self) -> Result<MainWindowRequest, AppControlError> {
+    pub fn request_show_main_window(&self) -> Result<WindowRequest, AppControlError> {
         self.ingress.request_show()
     }
     /// Fence new work immediately and request ordinary application shutdown.
@@ -144,13 +159,19 @@ impl AppHandle {
     }
 }
 
-/// Reply to a show request. Success means mounted/wired and redraw requested,
+/// Receipt for opening or showing a window. Success means mounted/wired and redraw requested,
 /// not that the compositor presented a frame or the OS granted focus.
+/// Dropping the receipt abandons observation, without cancelling admitted work.
 #[derive(Debug)]
-pub struct MainWindowRequest {
+#[must_use = "observe window installation success or failure"]
+pub struct WindowRequest {
     reply: ClaimHandle<Result<PresentationAddress, AppWindowError>>,
 }
-impl MainWindowRequest {
+impl WindowRequest {
+    pub(crate) fn new() -> (Arc<Reply>, Self) {
+        let (reply, receiver) = claim_slot(Arc::new(|| {}));
+        (Arc::new(reply), Self { reply: receiver })
+    }
     /// Take a completed result without blocking the owner thread.
     pub fn try_result(&mut self) -> Option<Result<PresentationAddress, AppWindowError>> {
         let mut cx = Context::from_waker(std::task::Waker::noop());
@@ -160,7 +181,7 @@ impl MainWindowRequest {
         }
     }
 }
-impl Future for MainWindowRequest {
+impl Future for WindowRequest {
     type Output = Result<PresentationAddress, AppWindowError>;
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match Pin::new(&mut self.reply).poll(cx) {
@@ -200,7 +221,7 @@ impl Ingress {
             ingress: Arc::clone(self),
         }
     }
-    fn request_show(&self) -> Result<MainWindowRequest, AppControlError> {
+    fn request_show(&self) -> Result<WindowRequest, AppControlError> {
         let (reply, receiver) = claim_slot(Arc::new(|| {}));
         let mut state = self.state.lock();
         if state.phase != Phase::Accepting {
@@ -221,7 +242,7 @@ impl Ingress {
             state.intent = true;
             state.replies.push(reply);
         }
-        Ok(MainWindowRequest { reply: receiver })
+        Ok(WindowRequest { reply: receiver })
     }
     pub(crate) fn request_native_show(&self) {
         let mut state = self.state.lock();

@@ -28,7 +28,8 @@ use parking_lot::Mutex;
 
 #[cfg(not(target_arch = "wasm32"))]
 use super::lifecycle::{
-    ServiceDefinition, ServiceRegistry, ServiceShutdownReport, ServiceStartError,
+    PreparedService, ServiceAdmission, ServiceDefinition, ServiceLaunch, ServiceRegistry,
+    ServiceShutdownReport, ServiceStartError,
 };
 use super::runner::{FontRegistrationError, InstalledHost};
 #[cfg(not(target_arch = "wasm32"))]
@@ -628,10 +629,10 @@ impl AppRuntime {
     /// the registry has already begun shutting down, or the service's own
     /// factory panicked (contained, not unwound).
     #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn start_service(
+    pub(super) fn prepare_service(
         &mut self,
         definition: &ServiceDefinition,
-    ) -> Result<(), ServiceStartError> {
+    ) -> Result<(u64, ServiceAdmission), ServiceStartError> {
         // Admission first: a refused late start (after loop-exit teardown,
         // before any next install) must not resurrect execution services
         // as a side effect of the check.
@@ -639,7 +640,38 @@ impl AppRuntime {
             return Err(ServiceStartError::Spawn(SpawnError::ShuttingDown));
         }
         let services = Arc::clone(self.ensure_execution());
-        self.service_registry.start(definition, &services)
+        Ok((
+            self.owner_install_generation,
+            self.service_registry.prepare(definition, &services)?,
+        ))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn commit_service(
+        &mut self,
+        generation: u64,
+        prepared: PreparedService,
+    ) -> Result<ServiceLaunch, PreparedService> {
+        if generation != self.owner_install_generation {
+            return Err(prepared);
+        }
+        self.service_registry.commit(prepared)
+    }
+
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(super) fn start_service(
+        &mut self,
+        definition: &ServiceDefinition,
+    ) -> Result<(), ServiceStartError> {
+        let (generation, admission) = self.prepare_service(definition)?;
+        let prepared = admission.construct(definition)?;
+        match self.commit_service(generation, prepared) {
+            Ok(launch) => launch.spawn(),
+            Err(prepared) => {
+                prepared.refuse();
+                Err(ServiceStartError::Spawn(SpawnError::ShuttingDown))
+            }
+        }
     }
 
     /// Install the notifier fired when a `KeepsAppAlive` service reports
@@ -786,11 +818,10 @@ impl AppRuntime {
     /// iteration has already returned and every UI runtime slot is back in
     /// place.
     ///
-    /// Only UI runtime-owned sources participate. The former standalone gesture
-    /// timer service was retired because it duplicated gesture-arena
-    /// deadlines without a production drain path. Keeping this aggregate
-    /// owner-local means every deadline returned here is advanced by the
-    /// same UI runtime frame path that the wake re-enters.
+    /// Folds logical runtime, native text-sizing and desktop presentation
+    /// deadlines. Logical runtime checkout must have returned; desktop pacing
+    /// metadata remains readable while a native frame driver is leased.
+    #[cfg(not(target_arch = "wasm32"))]
     #[must_use]
     pub(super) fn next_wake(&self) -> Option<web_time::Instant> {
         let runtime = self
@@ -798,10 +829,25 @@ impl AppRuntime {
             .logical()
             .next_wake()
             .expect("BUG: wake deadline read before owner checkout returned");
-        [runtime, self.installed_host.native().text_sizing_deadline()]
-            .into_iter()
-            .flatten()
-            .min()
+        #[cfg(all(
+            not(target_os = "android"),
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        ))]
+        let frame = self
+            .installed_host
+            .native()
+            .frame_deadline(self.installed_host.logical());
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        let frame = None;
+        [
+            runtime,
+            frame,
+            self.installed_host.native().text_sizing_deadline(),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 
     pub(super) fn close_requests(&self) -> Arc<super::close_request::CloseRequestRouter> {
@@ -908,8 +954,9 @@ impl AppRuntime {
     ///
     /// Every production bootstrap wires and calls this indirectly through
     /// [`Self::frame_wake_callback`]'s `Send + Sync` closure instead of this
-    /// direct form (the closure is what a `UiRuntime`/cross-thread hook needs
-    /// to capture); this method stays a direct, same-thread convenience —
+    /// direct form for cross-thread infrastructure notifications such as the
+    /// host font feed. Each UI runtime has its own weak-window wake instead.
+    /// This method stays a direct, same-thread convenience —
     /// exercised today by this module's own tests and the ordering proof in
     /// `runner.rs`'s `desktop_bootstrap_stores_the_window_before_the_first_synchronous_redraw_observes_it`.
     #[cfg_attr(
@@ -924,27 +971,8 @@ impl AppRuntime {
         self.wake_handle().wake_frame();
     }
 
-    /// Request a redraw without poking the window — the flag-only half of
-    /// [`Self::wake_frame`], for callers already inside a live dispatch that
-    /// does not need to wake an idle loop (mirrors the retired
-    /// `AppBinding::request_redraw`).
-    #[expect(
-        dead_code,
-        reason = "production redraw requests are ui_runtime-scoped \
-                  (UiRuntime::request_redraw, sharing this same needs_redraw \
-                  atomic via needs_redraw_handle); no loop-scoped caller \
-                  needs the direct form yet, and no test exercises the \
-                  flag-only form in isolation from wake_frame either"
-    )]
-    pub(super) fn request_redraw(&self) {
-        self.needs_redraw.store(true, Ordering::Relaxed);
-    }
-
-    /// A clone of the `needs_redraw` flag, for a `UiRuntime`'s own
-    /// flag-only redraw requests (its `attach_root_widget`/
-    /// `handle_input_entered` call sites) — the SAME atomic this runtime
-    /// reads, so either side observes the other's writes.
-    pub(super) fn needs_redraw_handle(&self) -> Arc<AtomicBool> {
+    #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
+    pub(super) fn loop_wake_pending(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.needs_redraw)
     }
 

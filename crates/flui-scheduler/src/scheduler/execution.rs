@@ -83,6 +83,7 @@ struct ExecutionPermit<'a> {
 struct FailureScope<'a> {
     scheduler: crate::WeakUpdateScheduler,
     owner: &'a OwnerCleanup,
+    previous: Option<Weak<FailureSignal>>,
 }
 
 impl Drop for FailureScope<'_> {
@@ -90,10 +91,18 @@ impl Drop for FailureScope<'_> {
         // Upgrade implies another strong owner already exists. This owner-local
         // metadata cleanup calls no user code, so its temporary cannot be last.
         if let Some(scheduler) = self.scheduler.upgrade() {
-            scheduler.inner.execution_failure.borrow_mut().take();
-            scheduler.inner.wake.wake_delivery.bind_failure_signal(None);
+            scheduler
+                .inner
+                .execution_failure
+                .borrow_mut()
+                .clone_from(&self.previous);
+            scheduler
+                .inner
+                .wake
+                .wake_delivery
+                .bind_failure_signal(self.previous.clone());
         }
-        self.owner.bind_owner_failure_signal(None);
+        self.owner.bind_owner_failure_signal(self.previous.take());
     }
 }
 
@@ -209,6 +218,11 @@ impl OwnerCleanup {
     }
 
     fn bind_failure_scope<'a>(&'a self, scheduler: Option<&UpdateScheduler>) -> FailureScope<'a> {
+        let previous =
+            scheduler.and_then(|scheduler| scheduler.inner.execution_failure.borrow().clone());
+        if let Some(inherited) = previous.as_ref().and_then(Weak::upgrade) {
+            *self.execution.failed.borrow_mut() = inherited;
+        }
         let signal = Arc::downgrade(&self.execution.failed.borrow());
         if let Some(scheduler) = scheduler {
             *scheduler.inner.execution_failure.borrow_mut() = Some(signal.clone());
@@ -222,6 +236,7 @@ impl OwnerCleanup {
         FailureScope {
             scheduler: self.scheduler.clone(),
             owner: self,
+            previous,
         }
     }
     pub(crate) fn record_execution_failure(&self) {
@@ -442,7 +457,7 @@ impl OwnerFrame {
         });
         recovery.retire(prepare);
         if recovery.first.is_some()
-            && (self.ready_task_count() != 0 || scheduler.has_scheduled_frame())
+            && (self.ready_task_count() != 0 || scheduler.is_frame_scheduled())
         {
             recovery.attempt(|| {
                 request_frame_impl_preserving_failure(&scheduler.inner.wake, true);

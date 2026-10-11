@@ -17,6 +17,14 @@ the dispatch layer moves there too.
   in `flui-platform/ARCHITECTURE.md`; rendered browser live-update acceptance
   remains separate.
 
+- **Window delivery retains its address.** Runtime wakes and redraw debt are
+  independent; a sibling frame cannot clear another runtime's pending redraw.
+  The desktop owner installs one deadline hook, folding every open presentation's
+  metadata even while a native driver is leased. Service factories and executor
+  calls run outside app storage; registration validates the original owner
+  before invoking an executor. `host_delivery_contract` and
+  `installed_frame_driver_contract` cover these contracts (ADR-0185).
+
 - **Native numeric text preparation is an addressed owner service.** Android
   and UIKit installation retain one native capsule and the sole numeric admission
   writer per presentation. Runtime receives its read source before root mounting;
@@ -62,14 +70,14 @@ the dispatch layer moves there too.
   `deferred_native_reads_preserve_accepted_preferences` checks the next build and
   subsequent successful refresh through the app builder.
   Mobile live refresh and end-to-end OS-generated change acceptance remain pending.
-  `preferences_wake_each_isolated_window` constructs two runtimes with the shared
-  host wake, points the legacy redraw slot at the newer window, and verifies
+  `preferences_wake_each_isolated_window` constructs two runtimes with separate
+  host wakes, points the loop's infrastructure redraw slot at the newer window, and verifies
   that preference publication requests each native redraw before pumping it.
   The presentation's build-scheduling callback supplies this addressed wake.
 
 - **Admission is not window readiness.** A desktop rendered installation publishes its
   native driver and logical membership together, then applies initial facts
-  through the runtime owner before reporting success. The main-window request
+  through the runtime owner before reporting success. The window request
   waits for that receipt; secondary completion retains its loop-liveness
   reservation through initialization. `main_window_waits_for_deferred_runtime_publication`
   and `secondary_installation_contract` cover delayed publication, early native

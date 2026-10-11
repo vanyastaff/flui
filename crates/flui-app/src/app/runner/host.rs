@@ -9,8 +9,28 @@ use crate::app::runtime::{AppRuntime, ExitPolicy};
 /// currently mutably borrowed when this is called (it takes a shared
 /// borrow); every call site here is either before a UI runtime is installed or
 /// after one has been taken out of the slot for dispatch.
+#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
 pub(super) fn runtime_wake_callback() -> Arc<dyn Fn() + Send + Sync> {
     APP_RUNTIME.with(|slot| slot.borrow().frame_wake_callback())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn start_service(
+    definition: &crate::app::lifecycle::ServiceDefinition,
+) -> Result<(), crate::app::lifecycle::ServiceStartError> {
+    let (generation, admission) =
+        APP_RUNTIME.with(|slot| slot.borrow_mut().prepare_service(definition))?;
+    let prepared = admission.construct(definition)?;
+    let result = APP_RUNTIME.with(|slot| slot.borrow_mut().commit_service(generation, prepared));
+    match result {
+        Ok(launch) => launch.spawn(),
+        Err(prepared) => {
+            prepared.refuse();
+            Err(crate::app::lifecycle::ServiceStartError::Spawn(
+                flui_runtime::execution::SpawnError::ShuttingDown,
+            ))
+        }
+    }
 }
 
 /// The platform clipboard for [`crate::app::ui_runtime::UiRuntime::new`]'s
@@ -116,22 +136,37 @@ pub(super) fn drive_native_text_sizing() {
     });
 }
 
-/// Builds a runner's UI runtime over the runtime's shared services: `wake`, the
-/// loop's `needs_redraw` flag, the platform clipboard, the app's font
+/// Builds a runner's UI runtime with its own window wake and redraw debt,
+/// the platform clipboard and the app's font
 /// collection and the host's byte storage. Every runner site and secondary
 /// window builds its UI runtime through this one call, so a UI runtime cannot be
 /// handed a stand-in for any of them.
 pub(super) fn build_ui_runtime(
-    wake: &Arc<dyn Fn() + Send + Sync>,
     window: impl Into<crate::app::presentation::PresentationWindow>,
     scale_factor: f64,
 ) -> Result<crate::app::ui_runtime::UiRuntime, HostServicesError> {
+    let window = window.into();
+    let redraw = Arc::new(AtomicBool::new(false));
+    let pending = Arc::clone(&redraw);
+    let target = Arc::downgrade(window.window());
+    #[cfg(target_os = "ios")]
+    let proxy = with_owner_platform(flui_platform::OwnerPlatform::proxy);
+    let wake = Arc::new(move || {
+        pending.store(true, std::sync::atomic::Ordering::Release);
+        if let Some(window) = target.upgrade() {
+            window.request_redraw();
+        }
+        #[cfg(target_os = "ios")]
+        if let Some(proxy) = &proxy {
+            let _ = proxy.wake();
+        }
+    });
     let preferences =
         APP_RUNTIME.with(|slot| slot.borrow().installed_host.logical().preferences())?;
     let fonts = runtime_font_collection();
     let mut host = crate::app::ui_runtime::RuntimeHostServices::new(
-        Arc::clone(wake),
-        runtime_needs_redraw_handle(),
+        wake,
+        redraw,
         runtime_clipboard(),
         &fonts,
         flui_scheduler::ClockSource::Platform,
@@ -147,12 +182,6 @@ pub(super) fn build_ui_runtime(
         scale_factor,
         host,
     )?)
-}
-
-/// A clone of the loop-scoped `needs_redraw` flag, for [`crate::app::ui_runtime::UiRuntime::new`]'s
-/// `needs_redraw` parameter.
-pub(super) fn runtime_needs_redraw_handle() -> Arc<AtomicBool> {
-    APP_RUNTIME.with(|slot| slot.borrow().needs_redraw_handle())
 }
 
 // ============================================================================
@@ -315,6 +344,12 @@ pub(crate) fn install_owner_platform(
     // Publish the new incarnation before retiring old callbacks and native
     // resources. No outgoing destructor runs under the composition-root borrow.
     let mut first = None;
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    super::installed_host::contain(&mut first, install_wake_deadline_hook);
     super::installed_host::contain(&mut first, || {
         if let Err(error) = refresh_preferences_with(flui_platform::OwnerPlatform::preferences) {
             tracing::warn!(%error, "initial system preference observation failed");
@@ -447,24 +482,10 @@ pub(super) fn install_platform_quit_hook() {
 /// backend consults, once per idle iteration, for the earliest instant it
 /// should wake at instead of blocking forever — see
 /// [`flui_platform::traits::Platform::set_wake_deadline_hook`]'s doc for the
-/// full contract. Call once, alongside [`install_exit_policy_hook`], from
-/// every backend that wants this: today, that is `run_desktop` only —
-/// Android/web bootstraps never call this (their platforms don't override
-/// that trait method either, so it would be inert there anyway; see
-/// `DeviceRecoveryBackoff`'s own doc for what that means for a device-
-/// recovery deadline specifically on Android).
-///
-/// `secondary_deadline` merges an additional wake-deadline SOURCE into this
-/// hook's answer (the earliest of the two wins) without this function
-/// needing to know what produces it — `bootstrap_desktop` passes a closure
-/// over its own `DeviceRecoveryBackoff`, so a device stuck retrying under
-/// backoff still gets `ControlFlow::WaitUntil`'s efficient wait instead of
-/// this hook silently only ever answering the UI runtime's own deadline. Kept
-/// generic (not `DeviceRecoveryBackoff`-typed) so this function's own `cfg`
-/// gate can stay as broad as it already is (`not(ios)`, wider than that
-/// type's `not(ios), not(wasm32)`) without needing a matching narrow gate
-/// here too — only the (already desktop-only) call site's closure captures
-/// the concrete backoff type.
+/// full contract. Installed once with the desktop owner platform.
+/// `AppRuntime::next_wake` folds every live runtime and presentation's
+/// deadlines. A window install never replaces this hook; closing a window
+/// withdraws only its contribution. Android and web use their own drivers.
 ///
 /// The hook itself re-enters `APP_RUNTIME` only when the PLATFORM calls it
 /// later (`about_to_wait`) — never synchronously from this function, which
@@ -473,50 +494,29 @@ pub(super) fn install_platform_quit_hook() {
 /// unlike `install_exit_policy_hook`'s `&mut self` — no deferred-mutation
 /// drain needed here, since computing a wake deadline never touches the
 /// UI runtime registry itself.
-#[cfg_attr(
-    not(any(
-        test,
-        all(
-            not(target_os = "android"),
-            not(target_os = "ios"),
-            not(target_arch = "wasm32")
-        )
-    )),
-    expect(
-        dead_code,
-        reason = "run_desktop (its one caller) is desktop-only -- android/wasm32 bootstraps \
-                  never call this"
-    )
-)]
-#[cfg_attr(
-    all(test, any(target_os = "android", target_os = "ios")),
-    expect(
-        dead_code,
-        reason = "desktop wake-deadline tests are excluded on mobile"
-    )
-)]
-pub(super) fn install_wake_deadline_hook(
-    secondary_deadline: impl Fn() -> Option<web_time::Instant> + Send + Sync + 'static,
-) {
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(super) fn install_wake_deadline_hook() {
+    let identity = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity));
     with_owner_platform(|owner| {
         owner.shared().set_wake_deadline_hook(Box::new(move || {
-            let ui_runtime_deadline = APP_RUNTIME.with(|slot| slot.borrow().next_wake());
-            merge_wake_deadlines(ui_runtime_deadline, secondary_deadline())
+            APP_RUNTIME.with(|slot| {
+                let state = slot.borrow();
+                if Arc::ptr_eq(&state.loop_identity, &identity) {
+                    state.next_wake()
+                } else {
+                    None
+                }
+            })
         }));
     });
 }
 
-/// The earlier of two optional wake deadlines, treating `None` as "no
-/// opinion" rather than as a value that could win a `min` against a real
-/// deadline — the same fold `AppRuntime::next_wake` (`runtime.rs`) itself
-/// uses across UI runtimes, pulled out here as its own named, unit-tested
-/// function because it is exactly what [`install_wake_deadline_hook`]'s
-/// entire non-blocking desktop design now rests on: this whole module's
-/// device-recovery deadline reaches the platform's `ControlFlow::WaitUntil`
-/// only through this fold correctly picking the earlier of the UI runtime's own
-/// deadline and the secondary (device-recovery) one, and correctly leaving
-/// the UI runtime's deadline untouched when the secondary source has nothing
-/// pending.
+/// The earliest armed source; an absent source contributes no deadline.
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) fn merge_wake_deadlines(
     a: Option<web_time::Instant>,
     b: Option<web_time::Instant>,
@@ -524,14 +524,7 @@ pub(super) fn merge_wake_deadlines(
     [a, b].into_iter().flatten().min()
 }
 
-/// Whether an armed device-recovery deadline should actually be reported to
-/// [`install_wake_deadline_hook`]'s secondary-source closure this call —
-/// pulled out as its own pure function for the same reason `frame_is_dirty`
-/// was: the real closure captures `APP_RUNTIME` state no unit test can drive
-/// directly, so the decision this function makes is tested here in
-/// isolation instead, and the closure calls this rather than reimplementing
-/// it (round 6's own lesson about what happens to a predicate reimplemented
-/// in two places).
+/// Gate a presentation's visual deadline on its current frame eligibility.
 ///
 /// `frames_enabled == false` suppresses the deadline unconditionally,
 /// regardless of how soon it is due: while frames are disabled

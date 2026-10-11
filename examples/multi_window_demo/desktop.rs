@@ -4,6 +4,7 @@
 use flui::app::AppWindowError;
 use flui::prelude::*;
 use flui::view::StateCell;
+use std::{cell::RefCell, rc::Rc};
 
 #[derive(Clone, StatelessView)]
 struct App;
@@ -19,6 +20,9 @@ struct Root;
 
 struct RootState {
     opened: StateCell<bool>,
+    opening: StateCell<bool>,
+    driver: Option<flui::view::AsyncDriver>,
+    request_task: Rc<RefCell<Option<flui::view::TaskToken>>>,
 }
 
 impl StatefulView for Root {
@@ -26,6 +30,9 @@ impl StatefulView for Root {
     fn create_state(&self) -> Self::State {
         RootState {
             opened: StateCell::new(false),
+            opening: StateCell::new(false),
+            driver: None,
+            request_task: Rc::new(RefCell::new(None)),
         }
     }
 }
@@ -33,12 +40,22 @@ impl StatefulView for Root {
 impl ViewState<Root> for RootState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.opened.bind(ctx);
+        self.opening.bind(ctx);
+        self.driver = ctx.async_driver();
     }
 
     fn build(&self, _view: &Root, _ctx: &dyn BuildContext) -> impl IntoView {
         let opened = self.opened.clone();
+        let opening = self.opening.clone();
+        let driver = self
+            .driver
+            .clone()
+            .expect("BUG: mounted root has an async driver");
+        let request_task = Rc::clone(&self.request_task);
         let label = if opened.get() {
             "Secondary opened"
+        } else if opening.get() {
+            "Opening secondary"
         } else {
             "Open secondary"
         };
@@ -47,7 +64,7 @@ impl ViewState<Root> for RootState {
             Column::new(flui::widgets::column![
                 Text::new("Primary window"),
                 ElevatedButton::new(Text::new(label)).on_pressed(move |_cx| {
-                    if opened.get() {
+                    if opened.get() || opening.get() {
                         return;
                     }
                     let result = flui::app::open_window(
@@ -56,7 +73,22 @@ impl ViewState<Root> for RootState {
                         Secondary,
                     );
                     match result {
-                        Ok(()) => opened.set(true),
+                        Ok(request) => {
+                            opening.set(true);
+                            let opened = opened.clone();
+                            let opening = opening.clone();
+                            let task = driver.spawn_local(Box::pin(async move {
+                                match request.await {
+                                    Ok(_) => opened.set(true),
+                                    Err(error) => {
+                                        eprintln!("secondary installation failed: {error}");
+                                    }
+                                }
+                                opening.set(false);
+                            }));
+                            let outgoing = request_task.borrow_mut().replace(task);
+                            drop(outgoing);
+                        }
                         Err(AppWindowError::AdmissionClosed) => {
                             eprintln!("the application is quitting; no new window");
                         }

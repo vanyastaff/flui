@@ -540,7 +540,6 @@ pub(crate) fn a_failed_handler_envelope_is_retained_through_ui_runtime_teardown(
 /// exactly one contained `CallbackPanic`, addressed to the presentation the
 /// host named, with the panic's text; the dropped-frame streak is untouched.
 #[test]
-#[ignore = "contract: a contained callback panic reaches the frame-failure handler"]
 fn a_contained_callback_panic_reports_once() {
     let ui_runtime = UiRuntime::for_test();
     let seen = install_collecting_handler(&ui_runtime);

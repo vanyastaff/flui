@@ -82,6 +82,7 @@ use crate::{
 
 pub(crate) mod execution;
 mod identity;
+mod observer_delivery;
 mod post_frame_dispatch;
 mod teardown;
 
@@ -796,10 +797,11 @@ struct CallbackState {
 struct BindingState {
     /// Application lifecycle state
     lifecycle_state: AtomicU8,
+    lifecycle_delivery: observer_delivery::LifecycleDelivery,
     /// Timings callbacks for performance reporting
     timings_callbacks: RefCell<Vec<TimingsCallback>>,
     /// Pending frame timings awaiting report
-    pending_timings: RefCell<Vec<FrameTiming>>,
+    pending_timings: RefCell<VecDeque<FrameTiming>>,
     /// Last timings report time
     last_timings_report: RefCell<Instant>,
 }
@@ -838,6 +840,7 @@ struct SchedulerInner {
     /// caller that still owns its produced output. Ordinary turns use no sink.
     execution_release: RefCell<Option<teardown::ExecutionRelease>>,
     execution_failure: RefCell<Option<std::sync::Weak<crate::wake_delivery::FailureSignal>>>,
+    execution_owner: RefCell<std::rc::Weak<crate::post_frame::OwnerCleanup>>,
 }
 
 /// Main scheduler for frame and task management
@@ -847,8 +850,9 @@ struct SchedulerInner {
 /// - PersistentCallbacks: Rendering pipeline
 /// - PostFrameCallbacks: Cleanup
 ///
-/// `UpdateScheduler` shares one owner-local allocation through `Rc`.
-/// It is neither `Send` nor `Sync`. [`UpdateScheduler::downgrade`]
+/// `UpdateScheduler` is an owner-thread handle over one `Rc` allocation.
+/// It is neither `Send` nor `Sync`; use [`FrameWaker`] to request work from
+/// another thread. [`UpdateScheduler::downgrade`]
 /// vends a [`WeakUpdateScheduler`] for a handle that must not keep a dead UI runtime's
 /// scheduler alive (see that type's doc).
 ///
@@ -1086,14 +1090,16 @@ impl UpdateScheduler {
             },
             binding: BindingState {
                 lifecycle_state: AtomicU8::new(AppLifecycleState::Resumed as u8),
+                lifecycle_delivery: observer_delivery::LifecycleDelivery::default(),
                 timings_callbacks: RefCell::new(Vec::new()),
-                pending_timings: RefCell::new(Vec::new()),
+                pending_timings: RefCell::new(VecDeque::new()),
                 last_timings_report: RefCell::new(Instant::now()),
             },
             task_queue,
             owner_frame_claimed: AtomicBool::new(false),
             execution_release: RefCell::new(None),
             execution_failure: RefCell::new(None),
+            execution_owner: RefCell::new(std::rc::Weak::new()),
         });
 
         Self { inner }
@@ -1152,6 +1158,12 @@ impl UpdateScheduler {
 
     pub(crate) fn inner_post_frame_storage(&self) -> &RefCell<crate::post_frame::PostFrameStorage> {
         &self.inner.callbacks.post_frame
+    }
+
+    pub(crate) fn register_execution_owner(&self, owner: &Rc<crate::post_frame::OwnerCleanup>) {
+        *self.inner.execution_owner.borrow_mut() = Rc::downgrade(owner);
+        let receipt = self.inner.execution_failure.borrow().clone();
+        owner.bind_owner_failure_signal(receipt);
     }
 
     /// Check if currently in a frame
@@ -1463,8 +1475,15 @@ impl UpdateScheduler {
                     .fetch_add(1, Ordering::Relaxed);
             }
 
-            // Record timing for batched reporting
-            self.inner.binding.pending_timings.borrow_mut().push(timing);
+            // Telemetry is opt-in and bounded even when failed frames postpone
+            // normal reporting. Retain the newest samples during recovery.
+            if !self.inner.binding.timings_callbacks.borrow().is_empty() {
+                let mut pending = self.inner.binding.pending_timings.borrow_mut();
+                if pending.len() == 128 {
+                    pending.pop_front();
+                }
+                pending.push_back(timing);
+            }
 
             // Drain BEFORE invoking: a post-frame callback that registers another
             // one must not have it run in this same frame. The owner frame's
@@ -1536,6 +1555,16 @@ impl UpdateScheduler {
         // Return to idle
         self.set_scheduler_phase(SchedulerPhase::Idle);
         *self.inner.frame.current_vsync_time.borrow_mut() = None;
+        let interval = if cfg!(debug_assertions) {
+            Duration::from_millis(100)
+        } else {
+            Duration::from_secs(1)
+        };
+        let due = self.inner.binding.pending_timings.borrow().len() == 128
+            || self.time_since_last_timings_report() >= interval;
+        if due {
+            self.report_timings();
+        }
     }
 
     /// Abandon the open frame: return to [`SchedulerPhase::Idle`] **without**
@@ -1624,19 +1653,9 @@ impl UpdateScheduler {
     ///
     /// # Id order is structural, not incidental
     ///
-    /// The id is minted INSIDE the same `transient` lock acquisition as the
-    /// push, not before it: `handle_begin_frame`'s id-watermark bound
-    /// (issue #1057) assumes the deque's push order and its ids' numeric
-    /// order always agree, and `UpdateScheduler` is `Sync` — two threads
-    /// racing this method with the mint OUTSIDE the lock could push
-    /// `[id6, id5]` (whichever thread reaches the lock first pushes,
-    /// regardless of which minted first). `back().id` (5) then sits BELOW
-    /// `front().id` (6), so the watermark loop's very first check fails and
-    /// NEITHER callback ever runs, every frame, until a later registration
-    /// happens to raise the watermark. Minting under the lock makes
-    /// whichever thread acquires it first also mint the smaller id first,
-    /// structurally, the same discipline `with_post_frame_registration`
-    /// already uses for post-frame registration.
+    /// Minting and insertion share one owner-local borrow. The deque's push
+    /// order therefore agrees with numeric ID order, which the frame's
+    /// registration watermark uses to defer callbacks accepted during delivery.
     pub fn schedule_frame_callback(&self, callback: OneShotFrameCallback) -> CallbackId {
         let id = {
             let mut cbs = self.inner.callbacks.transient.borrow_mut();
@@ -1770,9 +1789,9 @@ impl UpdateScheduler {
     /// it would otherwise drop the demand, rather than trusting an earlier
     /// edge to have covered it: if frames are enabled and the completion
     /// registry still holds a live entry once the latch is clear, it
-    /// re-issues the demand right here. This method is `pub` and takes
-    /// `&self` on the owner-local scheduler; call it only from the owner
-    /// wake arm documented above. Worker threads retain [`FrameWaker`].
+    /// re-issues the demand right here. Only owner execution calls this
+    /// private completion step; foreign producers request work through
+    /// [`FrameWaker::request_frame`].
     ///
     /// # A store-buffering hazard makes `SeqCst` load-bearing here
     ///
@@ -2159,13 +2178,11 @@ impl UpdateScheduler {
     ///
     /// # Thread affinity
     ///
-    /// Listener callbacks fire synchronously, on whatever thread calls this
-    /// method — there is no dispatch/queueing here. Production callers are
-    /// expected to already be on the UI runtime's owner thread (the platform
-    /// event-loop thread that drives `flui-app`'s UI runtime dispatch); this
-    /// method does not itself verify that, since the scheduler has no
-    /// notion of "UI runtime" or "owner thread" to assert against. A caller with
-    /// that context cheaply available should assert it before calling in.
+    /// The owner-local handle enforces thread affinity. State and frame
+    /// eligibility commit before notifications. Reentrant transitions join
+    /// a FIFO and finish after the current transition's surviving listeners.
+    /// A listener removed before its turn is skipped. Callback panics do not
+    /// discard the accepted tail; the first panic propagates after delivery.
     ///
     /// # Example
     ///
@@ -2217,24 +2234,12 @@ impl UpdateScheduler {
         // Resumed/Inactive never wakes: nothing else re-requests a frame
         // that was never scheduled while frames were off, so the pipeline
         // sits idle until some unrelated event happens to nudge it.
-        if !frames_were_enabled && should_render {
-            self.request_frame();
-        }
-
-        // Only notify if state actually changed
         if old_state != new_state {
-            // Notify listeners (clone to avoid holding lock during callbacks)
-            let listeners = {
-                let listeners = self.inner.callbacks.lifecycle_listeners.borrow_mut();
-                listeners
-                    .iter()
-                    .map(|l| l.callback.clone())
-                    .collect::<Vec<_>>()
-            };
-
-            for callback in listeners {
-                callback(new_state);
-            }
+            self.inner.binding.lifecycle_delivery.deliver(
+                self,
+                new_state,
+                !frames_were_enabled && should_render,
+            );
         }
     }
 
@@ -2489,16 +2494,6 @@ impl UpdateScheduler {
     // Binding Methods (formerly on SchedulerBinding trait)
     // =========================================================================
 
-    /// Get the current scheduler phase (alias for `phase()`)
-    pub fn scheduler_phase(&self) -> SchedulerPhase {
-        self.phase()
-    }
-
-    /// Check if a frame has been scheduled (alias for `is_frame_scheduled()`)
-    pub fn has_scheduled_frame(&self) -> bool {
-        self.is_frame_scheduled()
-    }
-
     /// Check whether frame scheduling is enabled
     pub fn frames_enabled(&self) -> bool {
         self.inner.wake.frames_enabled.load(Ordering::Acquire)
@@ -2634,14 +2629,19 @@ impl UpdateScheduler {
                 .extract_if(.., |existing| Rc::ptr_eq(existing, callback))
                 .collect()
         };
-        drop(removed);
+        if self.inner.binding.timings_callbacks.borrow().is_empty() {
+            self.inner.binding.pending_timings.borrow_mut().clear();
+        }
+        execution::retire_with_execution_custody(&self.inner.execution_failure, removed);
     }
 
     /// Report pending frame timings to registered callbacks.
     ///
     /// Timings are batched and reported approximately once per second in
-    /// release mode, or every ~100ms in debug/profile builds. Call this
-    /// from the event loop to flush pending timings.
+    /// release mode, or every ~100ms in debug builds, at a completed frame's
+    /// idle boundary. A full batch flushes earlier. Collection requires a
+    /// subscriber and retains at most the newest 128 timings during recovery.
+    /// Call this to flush a partial batch explicitly.
     ///
     /// Returns the number of timings reported.
     pub fn report_timings(&self) -> usize {
@@ -2653,14 +2653,30 @@ impl UpdateScheduler {
             pending.drain(..).collect()
         };
 
-        let callbacks = self.inner.binding.timings_callbacks.borrow_mut().clone();
+        let callbacks = self.inner.binding.timings_callbacks.borrow().clone();
         let count = timings.len();
-
-        for callback in &callbacks {
-            callback(&timings);
-        }
-
         *self.inner.binding.last_timings_report.borrow_mut() = Instant::now();
+        let mut first = None;
+        let custody = observer_delivery::FailureCustody::new(self);
+        for callback in callbacks {
+            observer_delivery::preserve_first_failure(
+                &custody,
+                &mut first,
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| callback(&timings))),
+            );
+            if first.is_some() {
+                std::mem::forget(callback);
+            } else {
+                observer_delivery::preserve_first_failure(
+                    &custody,
+                    &mut first,
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(callback))),
+                );
+            }
+        }
+        if let Some(first) = first {
+            std::panic::resume_unwind(first);
+        }
         count
     }
 

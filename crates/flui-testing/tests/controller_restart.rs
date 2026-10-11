@@ -77,7 +77,7 @@ pub(crate) fn adopting_a_registry_revokes_the_previous_driver_binding() {
         .forward()
         .expect("standalone old registry run");
     assert!(
-        !binding.scheduler().has_scheduled_frame(),
+        !binding.scheduler().is_frame_scheduled(),
         "an obsolete registry cannot wake the binding that replaced it"
     );
     let new_owner =
@@ -87,7 +87,7 @@ pub(crate) fn adopting_a_registry_revokes_the_previous_driver_binding() {
         .forward()
         .expect("current registry run");
     assert!(
-        binding.scheduler().has_scheduled_frame(),
+        binding.scheduler().is_frame_scheduled(),
         "the replacement registry retains its frame driver"
     );
 }
@@ -169,7 +169,7 @@ pub(crate) fn starting_an_idle_bound_controller_requests_its_first_frame() {
     let owner =
         AnimationController::builder(Duration::from_millis(100)).build_on(Some(binding.vsync()));
     assert!(
-        !binding.scheduler().has_scheduled_frame(),
+        !binding.scheduler().is_frame_scheduled(),
         "registering an idle controller must leave the frame driver idle",
     );
 
@@ -178,7 +178,7 @@ pub(crate) fn starting_an_idle_bound_controller_requests_its_first_frame() {
         .forward()
         .expect("a fresh controller forwards");
     assert!(
-        binding.scheduler().has_scheduled_frame(),
+        binding.scheduler().is_frame_scheduled(),
         "accepting a bound run must request its first frame before any manual pump",
     );
 

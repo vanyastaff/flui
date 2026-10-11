@@ -14,10 +14,7 @@ use super::frame_pacing::{
     DEFAULT_DISPLAY_PERIOD, FallbackWake, WakeAction, frame_is_dirty, install_pre_present_hook,
     keeps_frame_gate_open, wake_action,
 };
-use super::host::{
-    APP_RUNTIME, desktop_secondary_wake_deadline, install_wake_deadline_hook, merge_wake_deadlines,
-    runtime_wake_callback,
-};
+use super::host::{APP_RUNTIME, desktop_secondary_wake_deadline, merge_wake_deadlines};
 use super::owner_dispatch::{
     PresentationDispatcher, RuntimeEvent, RuntimeTask, close_this_window,
     dispatch_platform_ui_runtime, install_input_wiring, prepare_ui_runtime_alongside,
@@ -81,12 +78,8 @@ where
         dispatcher: None,
         committed: false,
     };
-    // 0c. This window's device-recovery backoff, constructed here (not
-    // down at step 6 alongside the renderer it paces) so the
-    // wake-deadline hook below can be wired to it from the start — one
-    // instance shared by the installed frame driver and deadline hook,
-    // so the underlying counters/deadline persist across deliveries. See
-    // `DeviceRecoveryBackoff`'s own doc.
+    // Recovery and reveal deadlines belong to this presentation. The native
+    // frame registry retains their metadata even while its driver is leased.
     let device_recovery_backoff = Arc::new(new_device_recovery_backoff());
 
     // 0d. The window's deferred first reveal (see `FirstReveal`): the
@@ -122,8 +115,7 @@ where
     // built pipeline before returning, so the RenderView configuration
     // and the first frame agree on the scale from construction.
     let scale_factor = window.scale_factor();
-    let wake = runtime_wake_callback();
-    let ui_runtime = match super::host::build_ui_runtime(&wake, presentation_window, scale_factor) {
+    let ui_runtime = match super::host::build_ui_runtime(presentation_window, scale_factor) {
         Ok(ui_runtime) => ui_runtime,
         Err(e) => {
             tracing::error!(error = %e, "UiRuntime construction failed");
@@ -215,43 +207,10 @@ where
     // THIS ui_runtime's `frames_enabled` state each time it runs — see the
     // closure body's own comment for why that lookup, not just
     // `next_attempt_at()`, is required.
-    install_wake_deadline_hook({
-        let device_recovery_backoff = Arc::clone(&device_recovery_backoff);
-        let fallback = Arc::clone(&fallback);
-        let first_reveal = Arc::clone(&first_reveal);
-        let ui_runtime_id = owner_dispatch.address.ui_runtime_id;
-        move || {
-            // The frames-enabled gate itself is `desktop_secondary_
-            // wake_deadline` — a pure, unit-tested function (see its own
-            // doc for why an unconditional report here would reproduce
-            // `WinitApp::new_events`'s named busy-spin one layer up).
-            // Only the `frames_enabled` LOOKUP is inline here, since it
-            // needs live `APP_RUNTIME` state no pure function can carry.
-            let frames_enabled = APP_RUNTIME.with(|slot| {
-                slot.borrow()
-                    .installed_host
-                    .logical()
-                    .runtime_status(ui_runtime_id)
-                    .is_ok_and(|status| status.frames_enabled)
-            });
-            // Both secondary sources fold through the same
-            // frames-enabled gate: a deferred ticker wake is worth
-            // nothing to a backgrounded app, and an armed deadline
-            // reported while frames are disabled is the busy-spin
-            // `desktop_secondary_wake_deadline`'s own doc names.
-            // `FallbackWake::next_wake` self-clears a deadline that has
-            // already passed, so a wake this hook asks for and never
-            // gets (a hidden Wayland surface withholds redraws) cannot
-            // be re-reported in the past forever.
-            let deadlines = merge_wake_deadlines(
-                merge_wake_deadlines(
-                    device_recovery_backoff.next_attempt_at(),
-                    fallback.next_wake(web_time::Instant::now()),
-                ),
-                first_reveal.next_deadline(),
-            );
-            desktop_secondary_wake_deadline(deadlines, frames_enabled)
-        }
+    let deadlines = Arc::new(DesktopWakeDeadlines {
+        device_recovery_backoff: Arc::clone(&device_recovery_backoff),
+        fallback: Arc::clone(&fallback),
+        first_reveal: Arc::clone(&first_reveal),
     });
 
     // 4. Adopt the raster mailbox (ADR-0045's inline lane). The lane's
@@ -284,9 +243,7 @@ where
             DesktopFrameDriver {
                 lane: Arc::clone(&lane),
                 worker_reload,
-                device_recovery_backoff,
-                fallback: Arc::clone(&fallback),
-                first_reveal: Arc::clone(&first_reveal),
+                deadlines,
                 reveal_window: Arc::downgrade(&window),
             },
         ))
@@ -492,12 +449,33 @@ where
 }
 
 pub(super) struct DesktopFrameDriver {
+    pub(super) deadlines: Arc<DesktopWakeDeadlines>,
     lane: Arc<Mutex<crate::app::raster_lane::RasterLane<Renderer>>>,
     worker_reload: WorkerReload,
-    device_recovery_backoff: Arc<super::device_recovery::DeviceRecoveryBackoff>,
-    fallback: Arc<FallbackWake>,
-    first_reveal: Arc<FirstReveal>,
     reveal_window: std::sync::Weak<dyn PlatformWindow>,
+}
+
+/// Presentation-owned pacing sources, retained even while its driver is leased.
+pub(super) struct DesktopWakeDeadlines {
+    pub(super) device_recovery_backoff: Arc<super::device_recovery::DeviceRecoveryBackoff>,
+    pub(super) fallback: Arc<FallbackWake>,
+    pub(super) first_reveal: Arc<FirstReveal>,
+}
+
+impl DesktopWakeDeadlines {
+    pub(super) fn next_wake(&self, frames_enabled: bool) -> Option<web_time::Instant> {
+        if !frames_enabled {
+            return None;
+        }
+        let deadline = merge_wake_deadlines(
+            merge_wake_deadlines(
+                self.device_recovery_backoff.next_attempt_at(),
+                self.fallback.next_wake(web_time::Instant::now()),
+            ),
+            self.first_reveal.next_deadline(),
+        );
+        desktop_secondary_wake_deadline(deadline, frames_enabled)
+    }
 }
 
 impl DesktopFrameDriver {
@@ -515,9 +493,9 @@ impl DesktopFrameDriver {
     pub(super) fn wake(&mut self, ui_runtime: &mut crate::app::ui_runtime::UiRuntime) {
         let lane_frame = &self.lane;
         let worker_reload_frame = &self.worker_reload;
-        let device_recovery_backoff = &self.device_recovery_backoff;
-        let fallback = &self.fallback;
-        let first_reveal = &self.first_reveal;
+        let device_recovery_backoff = &self.deadlines.device_recovery_backoff;
+        let fallback = &self.deadlines.fallback;
+        let first_reveal = &self.deadlines.first_reveal;
         let reveal_window = &self.reveal_window;
         // The gate half of the wake runs inside one ui_runtime entry and
         // decides; the pump below enters the ui_runtime itself.

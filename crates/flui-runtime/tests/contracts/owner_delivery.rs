@@ -307,7 +307,19 @@ fn failed_frame_preserves_cross_runtime_fifo_for_the_next_opportunity() {
         }
     }
     let owner = OwnerHost::new();
-    let first = install(&owner, runtime());
+    let failures = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let reports = std::sync::Arc::clone(&failures);
+    let first_runtime = runtime();
+    first_runtime.set_frame_failure_handler(Some(
+        flui_runtime::frame_failure::FrameFailureHandler::new(move |report| {
+            assert!(matches!(
+                report.kind,
+                flui_runtime::frame_failure::FrameFailureKind::CallbackPanic { .. }
+            ));
+            reports.lock().expect("reports").push(report.address);
+        }),
+    ));
+    let first = install(&owner, first_runtime);
     let second = install(&owner, runtime());
     let effects = Effects {
         first: owner.frame_dispatcher(first).expect("first"),
@@ -321,6 +333,11 @@ fn failed_frame_preserves_cross_runtime_fifo_for_the_next_opportunity() {
     }))
     .expect_err("frame panic propagates");
     assert_eq!(failure.downcast_ref::<&str>(), Some(&"frame failed"));
+    assert_eq!(
+        *failures.lock().expect("reports"),
+        [first],
+        "the production owner boundary reports its contained failure exactly once"
+    );
     assert_eq!(*effects.delivered.borrow(), [first]);
     assert_eq!(effects.requests.get(), 1);
     owner.continue_work(&effects);

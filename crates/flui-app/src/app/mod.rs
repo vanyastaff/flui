@@ -103,4 +103,4 @@ pub use application::{AppRunError, Application, StartupWindow};
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-pub use application_control::{AppControlError, AppHandle, AppWindowError, MainWindowRequest};
+pub use application_control::{AppControlError, AppHandle, AppWindowError, WindowRequest};

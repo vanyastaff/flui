@@ -251,6 +251,7 @@ impl OwnerFrame {
             tasks: Rc::downgrade(&tasks),
             execution: crate::scheduler::execution::ExecutionState::default(),
         });
+        scheduler.register_execution_owner(&cleanup);
         Ok(Self {
             scheduler: scheduler.downgrade(),
             post_frame,
