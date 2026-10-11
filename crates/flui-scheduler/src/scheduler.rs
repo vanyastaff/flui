@@ -2376,7 +2376,7 @@ impl UpdateScheduler {
             // The predicate is LIVE entries, not `is_empty()`. A tombstone
             // left by a cancelled waiter says nothing about whether a frame
             // is still coming: `frame_scheduled` has a second clearer
-            // besides `handle_begin_frame` — the public `finish_async_pump`
+            // besides `handle_begin_frame` — the owner-local `finish_async_pump`
             // — so a demand can be revoked with no drain, and `is_empty()`
             // would then be sound only through an untested coupling across
             // the registry, that latch, and `frames_enabled`.

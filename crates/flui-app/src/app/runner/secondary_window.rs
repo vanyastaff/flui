@@ -1520,6 +1520,7 @@ mod tests {
                         close_request_handler: None,
                         frame_failure_detail: AppConfig::new().frame_failure_detail,
                         pointer_resampling: AppConfig::new().pointer_resampling,
+                        motion_preference: AppConfig::new().motion_preference,
                     };
                     PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
                         queue.borrow_mut().push(PendingCompletion {
@@ -1605,6 +1606,7 @@ mod tests {
                         close_request_handler: None,
                         frame_failure_detail: AppConfig::new().frame_failure_detail,
                         pointer_resampling: AppConfig::new().pointer_resampling,
+                        motion_preference: AppConfig::new().motion_preference,
                     };
                     let stage = if first {
                         let receipt = super::super::owner_dispatch::prepare_ui_runtime_alongside(
@@ -1693,6 +1695,7 @@ mod tests {
                     close_request_handler: None,
                     frame_failure_detail: AppConfig::new().frame_failure_detail,
                     pointer_resampling: AppConfig::new().pointer_resampling,
+                    motion_preference: AppConfig::new().motion_preference,
                 };
                 PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| queue.borrow_mut().push(
                     PendingCompletion {
