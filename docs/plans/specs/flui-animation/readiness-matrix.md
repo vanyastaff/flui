@@ -27,7 +27,7 @@
 | M-INT-7, M-INT-8, M-INT-9, M-INT-10 | Базовые reverse/seek/cancel/completion тесты проходят; reentrant delivery и lifecycle ещё красные | A1, A4 |
 | M-INT-11 | Согласован application-authoring `AnimationController::finish()`, сохраняющий исходный future; ADR-0197, controller contracts и публичный authored-page paint/disposal сценарий | A1 |
 | M-INT-12 | Конечность/bounds должны сохраняться при hostile curve/simulation и reentry | A1 |
-| M-INT-13 | Аддитивная композиция вынесена при условии непрерывного retarget; условие ещё не закрыто в виджетах | A4, условный вынос |
+| M-INT-13 | Условие выноса аддитивной композиции подтверждено: `repeated_interruption_keeps_position_and_velocity_continuous` проверяет 120 прерываний Curve/Spring для scalar/Offset; `opacity_retarget_preserves_the_painted_velocity` и `padding_retarget_preserves_the_laid_out_velocity` проверяют C0/C1 реальных implicit-потребителей. Это не контракт независимых аддитивных слоёв | A4, согласованный вынос |
 
 ## Физика и кривые
 
@@ -64,7 +64,7 @@
 | M-CMP-7 | Решение удалить Compound ещё требует сверки финального surface: тип остаётся в baseline | A7 |
 | M-CMP-8, M-CMP-10 | Switch/proxy delivery и reentry остаются среди красных контрактов | A1, A2 |
 | M-CMP-9 | Reverse duration/curve есть; проверить сквозную активность и inherited velocity | A4 |
-| M-CMP-11 | Phase animator условно вынесен, если keyframes закрывают выбранный сценарий; требуется демонстрация | A7, условный вынос |
+| M-CMP-11 | Вынос подтверждён для двух сценариев из composition/requirements: циклические фазы через hold+repeat (`indeterminate_bars_follow_the_published_timing`, записанные прямоугольники Material); переходы по состоянию через implicit+retarget (`container_retarget_preserves_the_laid_out_size_velocity`, `container_color_retarget_preserves_painted_alpha_progress`). Произвольный PhaseAnimator не заявлен | A7, согласованный вынос |
 
 ## Доступность, владение, интеграция, качество
 
