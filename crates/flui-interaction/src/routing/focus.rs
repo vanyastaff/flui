@@ -831,10 +831,12 @@ impl FocusManager {
             let Some(handler) = handler else {
                 continue;
             };
-            let mut failure = FocusClosePanic::for_rejection(self.close_mode.mode());
+            let mut failure = FocusClosePanic::for_rejection(self.notification_failure_mode());
+            let failure_guard = self.notification_failure_scope(&failure);
             let result = failure
                 .invoke(|| handler(event))
                 .unwrap_or(KeyEventResult::Ignored);
+            failure_guard.preserve(failure.preserving());
             failure.retire(handler);
             failure.finish();
             if result != KeyEventResult::Ignored {

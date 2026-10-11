@@ -603,6 +603,12 @@ observer failures and recovery. The private terminal-counter row of
 `focus_traversal_matrix` proves identities cannot be reused.
 `manager_listener_withdrawal_preserves_a_caught_failure` pins the same cleanup
 policy for individual and bulk focus-manager callback withdrawal.
+Nested global key dispatch inherits a focus notification's saved failure before
+invoking a callback, and keeps that scoped policy until the protected callback
+snapshot retires. Withdrawing the current registration cannot make its last
+dispatch clone run hostile captures under an ordinary cleanup policy. The
+nested-dispatch rows in `scoped_global_key_registration_contracts` pin healthy
+and failing key callbacks, the first focus failure and subsequent delivery.
 
 Focus closure detaches the complete node tree and withdraws node properties
 before callbacks can inspect or reenter it. The first callback or retirement
