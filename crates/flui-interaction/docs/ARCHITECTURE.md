@@ -41,6 +41,22 @@ implementations cannot change arena ordering or bypass exact membership checks.
 
 Local design choices and why. Each entry names the conflict, the choice, and the reference (a strategy clause, a design rule, or a precedent plan).
 
+- **Position interpolation does not measure a sensor.** A synthetic interpolated
+  position keeps the prior accepted reading's pressure, orientation, twist and
+  contact metadata, including absent sensors. It must not borrow a future
+  reading. Admission tracking and queued delivery are distinct: `Leave` ends
+  future tracking without erasing already accepted boundaries or hover packets.
+  `resampler_interpolates_on_event_time_and_never_drops_terminals` pins both
+  sensor provenance and terminal/hover delivery.
+- **Force recognition follows measured chronology.** Coalesced readings and the
+  current reading progress pressure and motion in order; predicted readings
+  never recognize a gesture. A missing pressure still checks motion, but cannot
+  rewrite coordinates attached to the prior measured pressure. Callback failures
+  preserve the first failure while the still-current tail progresses. Exact
+  contact replacement revokes the old tail, even when the pointer ID is reused.
+  `scale_and_force_press_owner_lifecycle` pins ordinary/coalesced equivalence,
+  threshold excursions, missing sensors, replacement and recovery.
+
 - **Standalone admission differs from mounted admission.** A resampler's
   100-event threshold is a pressure policy, not a hard memory limit. Admission
   preserves `Down`, `Up`, `Cancel`, `Enter` and `Leave` in order; pressure

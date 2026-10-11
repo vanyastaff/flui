@@ -87,9 +87,7 @@ pub use multidrag::{
     MultiDragGestureRecognizerBuilder, MultiDragHandle, MultiDragStartCallback,
     MultiDragUpdateDetails,
 };
-pub use recognizer::{
-    CancelOutcome, GestureRecognizer, GestureRecognizerState, cancel_all, constants,
-};
+pub use recognizer::{CancelOutcome, GestureRecognizer, GestureRecognizerState, cancel_all};
 pub use scale::{ScaleGestureRecognizer, ScaleGestureRecognizerBuilder};
 pub use set::RecognizerSet;
 pub use tap::{

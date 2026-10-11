@@ -239,6 +239,22 @@ fn scale_and_force_press_owner_lifecycle() {
             force_start_can_cancel_reentrantly_without_delivering_a_stale_peak,
         ),
         (
+            "measured pressure excursions survive packet coalescing",
+            force_history_preserves_thresholds_and_first_failure,
+        ),
+        (
+            "measured pressure and geometry keep chronological order",
+            force_history_geometry_keeps_chronological_order,
+        ),
+        (
+            "replacement revokes old pressure history",
+            force_history_replacement_revokes_tail,
+        ),
+        (
+            "missing pressure preserves the measured claim coordinates",
+            force_missing_pressure_preserves_claim_coordinates,
+        ),
+        (
             "scale start reenters cancel",
             scale_start_can_cancel_reentrantly_and_begin_a_healthy_later_scale,
         ),
@@ -249,4 +265,260 @@ fn scale_and_force_press_owner_lifecycle() {
             std::panic::resume_unwind(payload);
         }
     }
+}
+
+fn force_history_preserves_thresholds_and_first_failure() {
+    use flui_platform_api::EventTime;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    for failing in [false, true] {
+        let arena = GestureArena::new();
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let first_start = Rc::new(Cell::new(failing));
+        let first_peak = Rc::new(Cell::new(failing));
+        let (s, p, u, e) = (log.clone(), log.clone(), log.clone(), log.clone());
+        let recognizer = ForcePressGestureRecognizer::builder(arena.clone())
+            .on_start(move |_| {
+                s.borrow_mut().push("start");
+                if first_start.replace(false) {
+                    panic!("first historical pressure failure");
+                }
+            })
+            .on_peak(move |_| {
+                p.borrow_mut().push("peak");
+                if first_peak.replace(false) {
+                    panic!("later peak failure");
+                }
+            })
+            .on_update(move |_| u.borrow_mut().push("update"))
+            .on_end(move |_| e.borrow_mut().push("end"))
+            .build();
+        for attempt in 0..2 {
+            admit(&*recognizer, &arena, &pressure(down(1, 0.0), 0.2), 1);
+            let sample = |reading, time| {
+                let PointerEvent::Move(movement) = pressure(
+                    make_move_event_for_id(pointer(1), Offset::ZERO, PointerKind::Touch)
+                        .expect("Move"),
+                    reading,
+                ) else {
+                    unreachable!("Move fixture")
+                };
+                let mut sample = *movement.current();
+                sample.time = EventTime::from_nanos(time);
+                sample
+            };
+            let PointerEvent::Move(movement) = pressure(
+                make_move_event_for_id(pointer(1), Offset::ZERO, PointerKind::Touch).expect("Move"),
+                0.2,
+            ) else {
+                unreachable!("Move fixture")
+            };
+            let packet = PointerEvent::Move(
+                flui_interaction::events::PointerMove::new(
+                    movement.pointer,
+                    movement.buttons,
+                    sample(0.2, 3),
+                )
+                .with_coalesced(vec![sample(0.7, 1), sample(0.9, 2)])
+                .with_predicted(vec![sample(1.0, 4)]),
+            );
+            let outcome = catch_unwind(AssertUnwindSafe(|| {
+                recognizer.handle_event(PointerDispatch::at_root(&packet))
+            }));
+            if failing && attempt == 0 {
+                let failure = outcome.expect_err("first historical observer failure must escape");
+                assert_eq!(
+                    failure.downcast_ref::<&str>(),
+                    Some(&"first historical pressure failure")
+                );
+            } else {
+                outcome.expect("healthy packet delivery");
+            }
+            assert_eq!(
+                &*log.borrow(),
+                &["start", "peak", "update", "end"],
+                "measured thresholds progress in order, including after caught observer failures"
+            );
+            log.borrow_mut().clear();
+            assert_eq!(
+                recognizer.cancel(),
+                CancelOutcome::Idle,
+                "pressure release withdrew the exact contact"
+            );
+            assert!(arena.is_empty());
+        }
+    }
+}
+
+fn force_sample(
+    reading: Option<f32>,
+    x: f64,
+    time: u64,
+) -> flui_platform_api::pointer::PointerSample {
+    let PointerEvent::Move(movement) =
+        make_move_event_for_id(pointer(1), Offset::new(x, 0.0), PointerKind::Touch)
+            .expect("valid measured position")
+    else {
+        unreachable!("Move fixture")
+    };
+    let mut sample = *movement.current();
+    sample.time = flui_platform_api::EventTime::from_nanos(time);
+    sample.pressure = reading.map(|reading| {
+        flui_platform_api::pointer::Pressure::try_new(reading).expect("valid measured pressure")
+    });
+    sample
+}
+
+fn force_packet(samples: &[flui_platform_api::pointer::PointerSample]) -> PointerEvent {
+    let PointerEvent::Move(movement) =
+        make_move_event_for_id(pointer(1), Offset::ZERO, PointerKind::Touch).expect("Move")
+    else {
+        unreachable!("Move fixture")
+    };
+    PointerEvent::Move(
+        flui_interaction::events::PointerMove::new(
+            movement.pointer,
+            movement.buttons,
+            *samples.last().expect("nonempty history"),
+        )
+        .with_coalesced(samples[..samples.len() - 1].to_vec())
+        .with_predicted(vec![force_sample(Some(1.0), 0.0, 10)]),
+    )
+}
+
+fn force_history_geometry_keeps_chronological_order() {
+    for excursion_first in [false, true] {
+        for coalesced in [false, true] {
+            let arena = GestureArena::new();
+            let log = Rc::new(RefCell::new(Vec::new()));
+            let (s, p, u, e) = (log.clone(), log.clone(), log.clone(), log.clone());
+            let recognizer = ForcePressGestureRecognizer::builder(arena.clone())
+                .on_start(move |_| s.borrow_mut().push("start"))
+                .on_peak(move |_| p.borrow_mut().push("peak"))
+                .on_update(move |_| u.borrow_mut().push("update"))
+                .on_end(move |_| e.borrow_mut().push("end"))
+                .build();
+            admit(&*recognizer, &arena, &pressure(down(1, 0.0), 0.2), 1);
+            let readings = if excursion_first {
+                [
+                    (None, 100.0),
+                    (Some(0.7), 1.0),
+                    (Some(0.9), 2.0),
+                    (None, 0.0),
+                ]
+            } else {
+                [
+                    (Some(0.7), 1.0),
+                    (Some(0.9), 2.0),
+                    (None, 100.0),
+                    (None, 0.0),
+                ]
+            };
+            let samples: Vec<_> = readings
+                .into_iter()
+                .enumerate()
+                .map(|(index, (reading, x))| force_sample(reading, x, index as u64 + 1))
+                .collect();
+            if coalesced {
+                recognizer.handle_event(PointerDispatch::at_root(&force_packet(&samples)));
+            } else {
+                for sample in samples {
+                    recognizer.handle_event(PointerDispatch::at_root(&force_packet(&[sample])));
+                }
+            }
+            let expected: &[&str] = if excursion_first {
+                &[]
+            } else {
+                &["start", "peak", "update", "end"]
+            };
+            assert_eq!(
+                &*log.borrow(),
+                expected,
+                "excursion_first={excursion_first}, coalesced={coalesced}"
+            );
+            assert_eq!(recognizer.cancel(), CancelOutcome::Idle);
+            assert!(arena.is_empty());
+        }
+    }
+    let arena = GestureArena::new();
+    let starts = Rc::new(Cell::new(0));
+    let seen = starts.clone();
+    let recognizer = ForcePressGestureRecognizer::builder(arena.clone())
+        .on_start(move |_| seen.set(seen.get() + 1))
+        .build();
+    admit(&*recognizer, &arena, &pressure(down(1, 0.0), 0.2), 1);
+    recognizer.handle_event(PointerDispatch::at_root(&force_packet(&[force_sample(
+        None, 1.0, 1,
+    )])));
+    assert_eq!(starts.get(), 0, "predicted pressure is not measured input");
+    recognizer.cancel();
+}
+
+fn force_history_replacement_revokes_tail() {
+    let arena = GestureArena::new();
+    let owner = Rc::new(RefCell::new(Weak::<ForcePressGestureRecognizer>::new()));
+    let starts = Rc::new(Cell::new(0));
+    let peaks = Rc::new(Cell::new(0));
+    let (s, p, weak, reentrant_arena) =
+        (starts.clone(), peaks.clone(), owner.clone(), arena.clone());
+    let recognizer = ForcePressGestureRecognizer::builder(arena.clone())
+        .on_start(move |_| {
+            s.set(s.get() + 1);
+            if s.get() == 1 {
+                let owner = weak.borrow().upgrade().expect("live owner");
+                owner.cancel();
+                admit(&*owner, &reentrant_arena, &pressure(down(1, 0.0), 0.2), 1);
+            }
+        })
+        .on_peak(move |_| p.set(p.get() + 1))
+        .build();
+    *owner.borrow_mut() = Rc::downgrade(&recognizer);
+    admit(&*recognizer, &arena, &pressure(down(1, 0.0), 0.2), 1);
+    recognizer.handle_event(PointerDispatch::at_root(&force_packet(&[
+        force_sample(Some(0.7), 1.0, 1),
+        force_sample(Some(0.9), 2.0, 2),
+    ])));
+    assert_eq!(
+        (starts.get(), peaks.get()),
+        (1, 0),
+        "old tail cannot drive the replacement contact"
+    );
+    recognizer.handle_event(PointerDispatch::at_root(&force_packet(&[force_sample(
+        Some(0.9),
+        1.0,
+        3,
+    )])));
+    assert_eq!(
+        (starts.get(), peaks.get()),
+        (2, 1),
+        "new contact accepts its own fresh sample"
+    );
+    recognizer.cancel();
+    assert!(arena.is_empty());
+}
+
+fn force_missing_pressure_preserves_claim_coordinates() {
+    let arena = GestureArena::new();
+    let starts = Rc::new(RefCell::new(Vec::new()));
+    let observed = starts.clone();
+    let recognizer = ForcePressGestureRecognizer::builder(arena.clone())
+        .on_start(move |details| observed.borrow_mut().push(details))
+        .build();
+    let down = pressure(down(1, 0.0), 0.2);
+    recognizer.add_pointer(PointerDispatch::at_root(&down));
+    recognizer.handle_event(PointerDispatch::at_root(&force_packet(&[
+        force_sample(Some(0.7), 1.0, 1),
+        force_sample(None, 2.0, 2),
+    ])));
+    assert!(starts.borrow().is_empty(), "arena is still open");
+    arena.close(pointer(1));
+    arena.drain_deferred_resolutions();
+    let details = starts.borrow();
+    assert_eq!(details.len(), 1);
+    assert_eq!(details[0].global_position, Offset::new(1.0, 0.0));
+    assert_eq!(details[0].local_position, Offset::new(1.0, 0.0));
+    assert!((details[0].pressure - 0.7).abs() < 1e-6);
+    drop(details);
+    recognizer.cancel();
+    assert!(arena.is_empty());
 }
