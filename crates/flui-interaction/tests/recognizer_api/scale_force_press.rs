@@ -566,6 +566,12 @@ fn carried_scale_does_not_underflow_its_intermediate_ratio() {
             "a representable carried factor must not collapse to zero: {factor}"
         );
     }
+    motion(2, 0.0);
+    assert_eq!(
+        *updates.borrow().last().expect("zero-span scale update"),
+        (0.0, 0.0),
+        "coincident contacts still publish an actual zero factor"
+    );
     recognizer.cancel();
     assert!(arena.is_empty());
     admit(&*recognizer, &arena, &down(1, 0.0), 1);
