@@ -42,10 +42,12 @@ use flui_foundation::geometry::Offset;
 /// sampling period `te` (seconds).
 #[inline]
 fn smoothing_alpha(fc: f64, te: f64) -> f64 {
-    // Multiplying the cutoff and interval first preserves, for example, a
-    // huge cutoff paired with a very short interval. A genuinely overflowing
-    // positive product has a smoothing-factor limit of one.
-    let r = core::f64::consts::TAU * (fc * te);
+    // Apply TAU to the smaller factor first: neither a huge cutoff paired
+    // with a short interval nor a subnormal cutoff multiplied by a fraction
+    // loses its representable contribution. A genuinely overflowing positive
+    // product has a smoothing-factor limit of one.
+    let (smaller, larger) = if fc < te { (fc, te) } else { (te, fc) };
+    let r = (core::f64::consts::TAU * smaller) * larger;
     if r.is_infinite() { 1.0 } else { r / (1.0 + r) }
 }
 

@@ -150,6 +150,10 @@ fn extreme_cutoff_and_interval_keep_meaningful_smoothing() {
         output > 1e-15 && output < 1e-13,
         "tiny cutoff lost its finite contribution: {output}"
     );
+
+    low.reset();
+    low.filter(0.0, 0.0).expect("new first sample");
+    assert_eq!(low.filter(1.0, 0.25), Ok(f64::from_bits(2)));
 }
 
 fn fixed_cutoff_matches_a_known_scalar_step() {
