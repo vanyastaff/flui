@@ -699,8 +699,8 @@ explicitly "ignores the repeat count and skips to the end" for a
 0-duration animator; Compose's `InfiniteRepeatableSpec` throws
 ("Animation to be infinitely repeated cannot have a 0-duration",
 `AnimationSpec.kt`'s `init` block). FLUI repairs rather
-than rejects (the house rule — see `with_bounds`'s own `InvalidBounds`
-contract for the cases that DO reject): an infinite zero-period repeat
+than rejects (the house rule — see `ValueRange`'s validation contract for
+the cases that DO reject): an infinite zero-period repeat
 that ticked once per frame would hold the frame loop open forever doing
 nothing, so `repeat_with` settles it synchronously through the same
 `settle_at_target` chokepoint a zero-distance/zero-duration
@@ -780,7 +780,7 @@ range, so it falls to `match direction { Forward => ForwardSettled }`. Every
 `unbounded_without_ticker` below) triggers exactly this event through the
 fling controller's `stop_hook`.
 
-**Refusals: `NonFiniteTarget`, additive `#[non_exhaustive]` variant.**
+**Refusals carry typed input, range or arithmetic causes (ADR-0198).**
 Derived from `!lower_bound.is_finite()` (both bounds are `+-inf` together
 by construction, so either alone detects it): `forward`/`forward_from`,
 `reverse`/`reverse_from`, `fling`/`fling_with`, and `repeat`/`repeat_with`
@@ -806,20 +806,19 @@ extreme `animate_to`), and `drive_simulation`/`animate_with` refuse a
 simulation whose `x(0.0)` is already non-finite.
 
 Every refusal runs BEFORE any state mutation. `fling_with` in particular
-used to write `inner.direction` before its `InvalidSpring` check,
+used to write `inner.direction` before its underdamped-spring check,
 corrupting direction on a refused fling (observable only via a LATER
 `stop()`); fixed by computing `direction`/`target` into locals and
 assigning only once every check passes.
 
-Every refusal is also emitted as a `tracing::warn!`, once per call, after
-the guard drops (`warn_non_finite_target`, mirroring `warn_if_no_ticker`'s
-pattern): every production caller of these methods discards the `Result`
-(`let _ = fling.animate_to_curved(..)`, `let _ =
-fc_fling.animate_with(sim)`), and a silent no-op here would hide the
-caller bug.
+Scalar input and missing-bound refusals retain their per-call `tracing::warn!`
+after the guard drops (`controller/admission.rs::warn_refused_input`). The
+diagnostic names the operation; its typed returned error carries the cause and
+values. Built-in drivers can discard the result, so a silent no-op would hide
+the caller bug. Range-shape validation continues to return directly.
 
-**`repeat_with`'s NaN endpoint is `InvalidBounds`, a range-SHAPE error,
-distinct from the unbounded-range `NonFiniteTarget` above.** A
+**`repeat_with` reports `InvalidRepeatRange` with endpoints, controller bounds
+and a `RangeDefect`.** A
 caller-supplied `Some(f64::NAN)` `min`/`max` is checked BEFORE defaulting
 against the controller's own bounds, on ANY controller: it widens
 `lo >= hi`'s inversion check to include non-finite endpoints (`!(lo < hi)
@@ -832,10 +831,13 @@ silently installing a broken run.
 
 The unbounded-range case (both `min`/`max` unset, or one side unset on an
 unbounded controller) is checked SEPARATELY, after the shape check, and
-maps to `NonFiniteTarget` instead: a range that is not inverted but has a
-side that defaulted through an infinite bound has a shape problem of a
-different kind. There is no finite range to repeat inside, not an invalid
-one.
+reports `RangeDefect::NonFinite`: a range that is not inverted but has a side
+that defaulted through an infinite bound has no finite range to repeat inside.
+Finite endpoints also require a representable span before admission; otherwise
+`repeat_sample` would compute an infinite difference and publish NaN or infinity.
+The public `overflowing_repeat_span_preserves_the_run` case verifies refusal,
+the unchanged displayed value, original pending future and successful later
+completion of that original run.
 
 **`set_value`/simulation NaN canonicalization stays infallible, latched.**
 `set_value` on a BOUNDED controller keeps its existing canonicalization
@@ -856,7 +858,7 @@ unchanged, which returns a `NaN` self as-is.
 
 Both paths share ONE latch, `AnimationControllerInner::non_finite_warned:
 bool`, fired at most once per controller (`warn_non_finite_value`),
-distinct from `NonFiniteTarget`'s per-call warn: a NaN-producing drag or a
+distinct from admission's per-call warn: a NaN-producing drag or a
 misbehaving simulation must warn once, not every frame.
 
 **`tick_time_based` reads `start_value`/`target_value` DIRECTLY at the
@@ -1013,23 +1015,18 @@ they do not retain UI callback storage.
 
 ## Error Handling
 
-```rust
-#[derive(Debug, Clone, PartialEq, thiserror::Error)]
-#[non_exhaustive]
-pub enum AnimationError {
-    Disposed,                // operation on a disposed controller
-    InvalidBounds(String),   // lower >= upper, non-finite bound/span, bad repeat range
-    IdentityExhausted,        // run or sample identity namespace exhausted
-    InvalidSpring(String),   // oscillating spring passed to fling
-    Simulation(#[from] SimulationError), // typed physical construction refusal
-    NonFiniteTarget(String), // non-finite target, `from`, velocity or simulation start
-}
-```
+[`error.rs`](../src/error.rs) defines the authoritative public error variants.
+`ValueRange::new` returns the narrow `RangeDefect`; controller and animated-value
+operations return `AnimationError`. `AnimationInput` identifies the refused
+value. Numeric fields, component indices and original `SimulationError` causes
+remain matchable without parsing a message. Construction of an already-validated
+`ValueRange` cannot produce a controller-lifetime error.
 
-Design:
-- `#[non_exhaustive]` — can add variants without breaking
-- `Clone` — an outcome can retain its error value
-- All fallible operations return `Result<_, AnimationError>`
+The error enums are `#[non_exhaustive]`; outcomes can clone their causes. Typed
+refusals commit no run change, and diagnostics run after borrows end. The public
+`typed_refusals_preserve_the_original_run` case checks exact input kinds and
+values, bounded infinity clamping, unchanged samples and original-future delivery.
+ADR-0198 records migration and optional serde limits.
 
 ## Memory Management
 

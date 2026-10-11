@@ -101,6 +101,7 @@ pub enum SimulationError {
         /// The refused input.
         parameter: SimulationParameter,
         /// Its value (a duration in seconds).
+        #[cfg_attr(feature = "serde", serde(with = "crate::error::diagnostic_number"))]
         value: f64,
     },
     /// Every input is in range, but a constant derived from them is not a
@@ -112,8 +113,10 @@ pub enum SimulationError {
     #[error("bounds must be finite and ordered, got [{min}, {max}]")]
     InvalidBounds {
         /// The refused lower bound.
+        #[cfg_attr(feature = "serde", serde(with = "crate::error::diagnostic_number"))]
         min: f64,
         /// The refused upper bound.
+        #[cfg_attr(feature = "serde", serde(with = "crate::error::diagnostic_number"))]
         max: f64,
     },
 }
@@ -468,6 +471,10 @@ impl SpringDescription {
             std::cmp::Ordering::Equal => SpringType::CriticallyDamped,
             std::cmp::Ordering::Greater => SpringType::Overdamped,
         }
+    }
+
+    pub(crate) const fn damping_ratio(self) -> f64 {
+        self.zeta
     }
 
     fn from_omega_zeta(omega: f64, zeta: f64) -> Result<Self, SimulationError> {

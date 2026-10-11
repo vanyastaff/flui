@@ -275,7 +275,7 @@ fn without_ticker_bounds_rejects_wide_open_ones() {
             .bounds(bounds)
             .build()
     });
-    assert!(matches!(rejected, Err(AnimationError::InvalidBounds(_))));
+    assert!(matches!(rejected, Err(crate::RangeDefect::Inverted)));
 
     let wide_open = crate::ValueRange::new(f64::NEG_INFINITY, f64::INFINITY).map(|bounds| {
         AnimationController::builder(Duration::from_millis(1))
@@ -283,7 +283,7 @@ fn without_ticker_bounds_rejects_wide_open_ones() {
             .build()
     });
     assert!(
-        matches!(wide_open, Err(AnimationError::InvalidBounds(_))),
+        matches!(wide_open, Err(crate::RangeDefect::NonFinite)),
         "a wide-open pair is unboundedness spelled as bounds -- reject it; \
          use unbounded_without_ticker instead"
     );
@@ -358,7 +358,9 @@ fn bounded_controller_clamps_infinite_target_and_from_to_the_pointed_at_bound() 
 fn fling_refuses_a_non_finite_velocity() {
     let c = controller(100);
     let r = c.fling(f64::NAN);
-    assert!(matches!(r, Err(AnimationError::NonFiniteTarget(_))));
+    assert!(matches!(r, Err(AnimationError::NonFiniteInput {
+        input: crate::AnimationInput::Velocity, value,
+    }) if value.is_nan()));
     assert!(!c.is_animating());
 }
 
@@ -479,7 +481,15 @@ fn repeat_consumes_all_cycles_in_one_long_frame() {
 fn repeat_with_rejects_equal_min_and_max() {
     let c = controller(100);
     let r = c.repeat_with(Some(0.5), Some(0.5), false, None, None);
-    assert!(matches!(r, Err(AnimationError::InvalidBounds(_))));
+    assert!(matches!(
+        r,
+        Err(AnimationError::InvalidRepeatRange {
+            min: 0.5,
+            max: 0.5,
+            defect: crate::RangeDefect::Inverted,
+            ..
+        })
+    ));
     crate::test_cases::dispose_controller(&c);
 }
 

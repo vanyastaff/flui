@@ -150,7 +150,7 @@ pub use constant::{ConstantAnimation, UNIT_END_ANIMATION, UNIT_START_ANIMATION};
 pub use controller::AnimationController;
 pub use curved::CurvedAnimation;
 pub use driven::DrivenController;
-pub use error::AnimationError;
+pub use error::{AnimationError, AnimationInput, RangeDefect};
 pub use ext::AnimatableExt;
 pub use keyframes::{Keyframes, KeyframesBuilder, KeyframesError};
 pub use motion::{

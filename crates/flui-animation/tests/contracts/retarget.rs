@@ -910,7 +910,10 @@ fn fling_across_hands_the_gesture_velocity_to_the_spring() {
     for (velocity, extent) in [(f64::NAN, 1.0), (f64::INFINITY, 1.0), (f64::MAX, 0.5)] {
         assert!(matches!(
             controller.fling_across(velocity, extent),
-            Err(flui_animation::AnimationError::NonFiniteTarget(_))
+            Err(flui_animation::AnimationError::NonFiniteInput {
+                input: flui_animation::AnimationInput::Velocity,
+                ..
+            } | flui_animation::AnimationError::VelocityOverflow { .. })
         ));
         assert_eq!(
             (
@@ -1552,7 +1555,10 @@ fn a_non_finite_controller_retarget_changes_nothing() {
         let motion = MotionSpec::Spring(spring(10.0, 0.5));
         assert!(matches!(
             controller.retarget(target, &motion),
-            Err(AnimationError::NonFiniteTarget(_))
+            Err(AnimationError::NonFiniteInput {
+                input: flui_animation::AnimationInput::Target,
+                ..
+            })
         ));
         assert_eq!(controller.value(), 0.25);
         assert!(poll_run(&mut old).is_pending());
@@ -1591,7 +1597,10 @@ fn a_non_finite_inherited_velocity_changes_nothing() {
         assert!(
             matches!(
                 controller.retarget(0.8, &linear_spec(1000)),
-                Err(AnimationError::NonFiniteTarget(_))
+                Err(AnimationError::NonFiniteInput {
+                    input: flui_animation::AnimationInput::InheritedVelocity,
+                    ..
+                })
             ),
             "invalid inherited slope {slope} over {duration:?} must refuse"
         );

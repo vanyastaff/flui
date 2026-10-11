@@ -75,7 +75,7 @@ use the runtime's application override path; pump a frame after changing it.
 ```rust
 # use std::time::Duration;
 # use flui_animation::{AnimationController, AnimationError};
-# fn main() -> Result<(), AnimationError> {
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
 // Simple
 let controller = AnimationController::builder(Duration::from_millis(300)).build();
 
@@ -625,12 +625,13 @@ use flui_animation::{AnimationController, AnimationError};
 match controller.forward() {
     Ok(_future) => { /* started; the future resolves when the run ends */ }
     Err(AnimationError::Disposed) => { /* disposed */ }
-    Err(AnimationError::NonFiniteTarget(why)) => { /* refused input */ }
+    Err(AnimationError::NonFiniteInput { input, value }) => { /* refused scalar input */ }
+    Err(AnimationError::NonFiniteComponent { input, component, value }) => { /* refused vector input */ }
     Err(e) => { /* other error */ }
 }
 
 // Propagation
-fn animate(d: Duration) -> Result<AnimationController, AnimationError> {
+fn animate(d: Duration) -> Result<AnimationController, Box<dyn std::error::Error>> {
     let controller = AnimationController::builder(d)
         .bounds(flui_animation::ValueRange::new(0.0, 100.0)?)
         .build();

@@ -952,7 +952,8 @@ fn assert_fling_refusal_preserves_run(damping_ratio: f64) {
     if damping_ratio < 1.0 {
         assert!(matches!(
             refused,
-            Err(flui_animation::AnimationError::InvalidSpring(_))
+            Err(flui_animation::AnimationError::UnderdampedFlingSpring { damping_ratio: ratio })
+                if ratio == damping_ratio
         ));
     } else {
         assert!(matches!(

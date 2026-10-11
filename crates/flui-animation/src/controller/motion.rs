@@ -10,7 +10,7 @@ use super::{
 };
 use crate::retarget::Segment;
 use crate::run_future::RunCompleter;
-use crate::{AnimationError, AnimationRunFuture, MotionSpec, Simulation};
+use crate::{AnimationError, AnimationInput, AnimationRunFuture, MotionSpec, Simulation};
 
 struct Seam {
     value: f64,
@@ -144,9 +144,10 @@ impl Seam {
         if velocity.is_finite() {
             Ok(velocity)
         } else {
-            Err(AnimationError::NonFiniteTarget(format!(
-                "retarget inherited velocity {velocity} is not finite"
-            )))
+            Err(AnimationError::NonFiniteInput {
+                input: AnimationInput::InheritedVelocity,
+                value: velocity,
+            })
         }
     }
 }
@@ -317,10 +318,13 @@ impl AnimationController {
         if let Err(error) = &result
             && matches!(
                 error,
-                AnimationError::NonFiniteTarget(_) | AnimationError::ReentrantMotion
+                AnimationError::NonFiniteInput { .. }
+                    | AnimationError::SpanOverflow { .. }
+                    | AnimationError::Simulation(_)
+                    | AnimationError::ReentrantMotion
             )
         {
-            recovery.run(|| tracing::warn!("{error}"));
+            recovery.run(|| tracing::warn!("retarget: {error}"));
         }
         recovery.finish();
         result
@@ -337,15 +341,17 @@ impl AnimationController {
                 let inner = self.inner.borrow();
                 Self::check_run_admission(&inner)?;
                 if !target.is_finite() {
-                    return Err(AnimationError::NonFiniteTarget(format!(
-                        "retarget target {target} is not finite"
-                    )));
+                    return Err(AnimationError::NonFiniteInput {
+                        input: AnimationInput::Target,
+                        value: target,
+                    });
                 }
                 let target = target.clamp(inner.lower_bound, inner.upper_bound);
                 if !(target - inner.value).is_finite() {
-                    return Err(AnimationError::NonFiniteTarget(
-                        "retarget span overflows f64".into(),
-                    ));
+                    return Err(AnimationError::SpanOverflow {
+                        from: inner.value,
+                        to: target,
+                    });
                 }
                 (Opaque::new(Seam::capture(&inner)), target)
             };
@@ -374,9 +380,7 @@ impl AnimationController {
                         1.0,
                         crate::simulation::Tolerance::DEFAULT,
                     )
-                    .map_err(|error| {
-                        AnimationError::NonFiniteTarget(format!("retarget motion: {error}"))
-                    })?;
+                    .map_err(AnimationError::Simulation)?;
                     SimulationRun::Motion {
                         source: Rc::new(source),
                         elapsed_offset: 0.0,

@@ -160,9 +160,42 @@ fn refused_threshold<const CASE: usize>() {
     let spring = MotionSpec::Spring(
         SpringDescription::with_damping_ratio(1.0, 100.0, 1.0).expect("admitted spring"),
     );
+    let error = owner
+        .retarget(InvalidThreshold(2.0), spring)
+        .expect_err("invalid rest threshold");
+    #[cfg(feature = "serde")]
+    {
+        let wire = serde_json::to_value(&error).expect("serialize component cause");
+        let decoded: AnimationError =
+            serde_json::from_value(wire.clone()).expect("decode component cause");
+        let expected = [
+            serde_json::json!(0.0),
+            serde_json::json!(-1.0),
+            serde_json::json!("NaN"),
+            serde_json::json!("Infinity"),
+        ][CASE]
+            .clone();
+        assert_eq!(
+            wire["ComponentSimulation"]["source"]["OutOfRange"]["value"],
+            expected
+        );
+        assert!(matches!(decoded, AnimationError::ComponentSimulation {
+            component: 0,
+            source: flui_animation::SimulationError::OutOfRange {
+                parameter: flui_animation::SimulationParameter::Distance,
+                value,
+            }
+        } if value == InvalidThreshold::<CASE>::rest_thresholds()[0] || (CASE == 2 && value.is_nan())));
+    }
     assert!(matches!(
-        owner.retarget(InvalidThreshold(2.0), spring),
-        Err(AnimationError::InvalidSpring(_))
+        error,
+        AnimationError::ComponentSimulation {
+            component: 0,
+            source: flui_animation::SimulationError::OutOfRange {
+                parameter: flui_animation::SimulationParameter::Distance,
+                ..
+            },
+        }
     ));
     assert!(old.is_pending(), "refusal cannot cancel accepted motion");
     assert_eq!((owner.value().0, owner.velocity()), seam);
@@ -176,7 +209,16 @@ fn refused_threshold<const CASE: usize>() {
             ),
         )
     });
-    assert!(matches!(refused, Err(AnimationError::InvalidSpring(_))));
+    assert!(matches!(
+        refused,
+        Err(AnimationError::ComponentSimulation {
+            component: 0,
+            source: flui_animation::SimulationError::OutOfRange {
+                parameter: flui_animation::SimulationParameter::Distance,
+                ..
+            },
+        })
+    ));
     assert!(old.is_pending() && healthy_old.is_pending());
     assert_eq!((healthy.value(), healthy.velocity()), healthy_seam);
     registry.tick_all(&clock.frame(Duration::from_secs(1)));
@@ -1427,7 +1469,9 @@ fn an_ignored_refusal_keeps_every_old_run() {
         );
         Ok(())
     });
-    assert!(matches!(result, Err(AnimationError::NonFiniteTarget(_))));
+    assert!(matches!(result, Err(AnimationError::NonFiniteComponent {
+        input: flui_animation::AnimationInput::Target, component: 0, value,
+    }) if value.is_nan()));
     assert!(left_old.is_pending() && right_old.is_pending());
     registry.tick_all(&clock.frame(Duration::from_secs(1)));
     assert_eq!((left.value(), right.value()), (1.0, 2.0));

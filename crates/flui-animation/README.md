@@ -88,7 +88,7 @@ The primary driver. Holds a value in `[lower_bound, upper_bound]` (default 0.0â€
 ```rust
 # use std::time::Duration;
 # use flui_animation::{AnimationController, AnimationError};
-# fn main() -> Result<(), AnimationError> {
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
 # let duration = Duration::from_millis(300);
 let controller = AnimationController::builder(Duration::from_millis(300)).build();
 
@@ -708,22 +708,47 @@ assert_eq!(screen, Tolerance::new(0.25, f64::INFINITY)?);
 
 ## Error Handling
 
-Fallible operations return `Result<_, AnimationError>`:
+Controller operations return `Result<_, AnimationError>`:
 
 | Variant | When |
 |---------|------|
 | `Disposed` | Fallible driving operations refuse; queries remain readable and closed channels do not resume delivery |
-| `InvalidBounds(String)` | `lower >= upper`, a non-finite bound or span, or a bad `repeat_with` range |
+| `NoFiniteEndpoint` | `finish()` refuses an infinite repeat or a custom simulation without a declared endpoint |
 | `IdentityExhausted` | A run or sample namespace has exhausted its non-reusable identities |
-| `InvalidSpring(String)` | An underdamped (oscillating) spring passed to `fling_with`; use `animate_with` for those |
-| `NonFiniteTarget(String)` | A `NaN` target or `from` (always), an infinite one when the bound it would clamp to is itself infinite (on a bounded controller infinities clamp to the bound), or a non-finite fling velocity or simulation start |
+| `ReentrantMotion` | User motion code repeatedly replaces the run while retargeting is prepared |
+| `AdmissionAborted` | Grouped preparation was interrupted before admission |
+| `InvalidExtent` | The gesture extent is not finite and strictly positive |
+| `InvalidRepeatRange { .. }` | Repeat endpoints or their span are invalid; `defect` identifies the range failure |
+| `UnderdampedFlingSpring { .. }` | The supplied damping ratio oscillates; use `animate_with` for that motion |
+| `NonFiniteInput { .. }` | A scalar input or inherited velocity is not finite; `input` and `value` identify it |
+| `UnboundedTarget { .. }` | The input requests an endpoint the unbounded controller does not have |
+| `SpanOverflow { .. }` | The finite `from` and `to` have an unrepresentable difference |
+| `VelocityOverflow { .. }` | Finite gesture velocity, extent and span yield an unrepresentable converted velocity |
+| `NonFiniteComponent { .. }` | A converter produces a non-finite component before admission |
+| `ComponentSimulation { .. }` | A vector component's motion construction fails; the original `SimulationError` is preserved |
+| `Simulation(_)` | Scalar physical motion construction fails with a typed `SimulationError` |
 
 ```rust
-# use std::time::Duration;
-# use flui_animation::{AnimationController, AnimationError};
-let err = flui_animation::ValueRange::new(1.0, 0.0);
-assert!(matches!(err, Err(AnimationError::InvalidBounds(_))));
+use flui_animation::{RangeDefect, ValueRange};
+
+assert_eq!(ValueRange::new(1.0, 0.0), Err(RangeDefect::Inverted));
+assert_eq!(ValueRange::new(f64::NAN, 1.0), Err(RangeDefect::NonFinite));
+assert_eq!(ValueRange::new(-f64::MAX, f64::MAX), Err(RangeDefect::SpanOverflow));
 ```
+
+`ValueRange::new()` returns the narrow `RangeDefect`, so configuration code
+can distinguish invalid endpoint data, ordering and span overflow without
+parsing a message. Controller lifetime and admission errors remain separate.
+
+Bounded `target` and `from` infinities still clamp to the indicated finite
+bound. A refused operation preserves the installed run, its displayed value
+and its original future. [ADR-0198](../../docs/adr/ADR-0198-typed-animation-admission-errors.md)
+records the input, range and physical-construction error boundaries.
+
+With optional serde, human-readable error diagnostics encode finite values as
+numbers and non-finite values as the exact strings `NaN`, `Infinity` and
+`-Infinity`, including nested simulation causes. Decoding rejects null and other
+strings. NaN payload bits are canonicalized; binary formats retain native floats.
 
 ---
 

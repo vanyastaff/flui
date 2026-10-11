@@ -253,7 +253,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
         let initial = Terminal::new(Rc::new(initial));
         let motion = Terminal::new(motion);
         let vector = initial.to_vector();
-        validate(&vector)?;
+        validate(&vector, crate::AnimationInput::InitialValue)?;
         let published = Rc::new(Cell::new(Sample {
             value: vector,
             velocity: vector.zero(),
@@ -299,7 +299,9 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
     ///
     /// # Errors
     /// Refuses invalid inputs or repeated preparation reentry before mutation.
-    /// A spring converter's invalid rest distance returns `InvalidSpring`
+    /// A spring converter's invalid rest distance returns
+    /// [`AnimationError::ComponentSimulation`] with the component index and
+    /// the original [`crate::SimulationError`]
     /// without cancelling the previous run.
     pub fn retarget(
         &mut self,
@@ -449,10 +451,10 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
         let controller = self.driven.controller().clone();
         let seam = controller.value_seam()?;
         let goal = target.to_vector();
-        validate(&goal)?;
+        validate(&goal, crate::AnimationInput::Target)?;
         let origin_vector = origin.map(|origin| origin.to_vector());
         if let Some(origin) = &origin_vector {
-            validate(origin)?;
+            validate(origin, crate::AnimationInput::From)?;
         }
         let target_changed = origin.is_some() || goal.as_ref() != self.target_vector.as_ref();
         if !matches!(change, Change::Snap)
@@ -540,10 +542,9 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
                 |(component, (((&position, &velocity), &target), &threshold))| {
                     let tolerance = if matches!(segment_motion.get(), MotionSpec::Spring(_)) {
                         crate::simulation::Tolerance::new(threshold, f64::INFINITY).map_err(
-                            |error| {
-                                AnimationError::InvalidSpring(format!(
-                                    "component {component} rest threshold: {error}"
-                                ))
+                            |error| AnimationError::ComponentSimulation {
+                                component,
+                                source: error,
                             },
                         )?
                     } else {
@@ -557,9 +558,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
                         shortening,
                         tolerance,
                     )
-                    .map_err(|error| {
-                        AnimationError::NonFiniteTarget(format!("animated value motion: {error}"))
-                    })
+                    .map_err(|source| AnimationError::ComponentSimulation { component, source })
                 },
             )
             .collect::<Result<SmallVec<[Segment; 4]>, _>>()?;
@@ -573,11 +572,12 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
                 .filter_map(|component| component.rest_duration_at(start))
                 .reduce(f64::min)
                 .expect("BUG: a spring rest start has a duration");
-            for component in &mut components {
+            for (index, component) in components.iter_mut().enumerate() {
                 component
                     .synchronize_rest(start, duration)
-                    .map_err(|error| {
-                        AnimationError::InvalidSpring(format!("vector rest transition: {error}"))
+                    .map_err(|source| AnimationError::ComponentSimulation {
+                        component: index,
+                        source,
                     })?;
             }
         }
@@ -770,17 +770,23 @@ impl<T: TwoWayConverter + 'static> Drop for AnimatedValue<T> {
     }
 }
 
-fn validate(vector: &impl AsRef<[f64]>) -> Result<(), AnimationError> {
-    if vector
+fn validate(
+    vector: &impl AsRef<[f64]>,
+    input: crate::AnimationInput,
+) -> Result<(), AnimationError> {
+    if let Some((component, &value)) = vector
         .as_ref()
         .iter()
-        .all(|component| component.is_finite())
+        .enumerate()
+        .find(|(_, value)| !value.is_finite())
     {
-        Ok(())
+        Err(AnimationError::NonFiniteComponent {
+            input,
+            component,
+            value,
+        })
     } else {
-        Err(AnimationError::NonFiniteTarget(
-            "animated value components must be finite".into(),
-        ))
+        Ok(())
     }
 }
 

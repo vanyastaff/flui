@@ -120,6 +120,75 @@ fn a_constant_phase_does_not_install_a_run() {
 }
 
 #[cfg(feature = "serde")]
+fn admission_error_wire_values() {
+    use flui_animation::{AnimationError, AnimationInput, RangeDefect};
+
+    let controller = AnimationController::builder(Duration::from_secs(1))
+        .unbounded()
+        .build();
+    for (error, expected) in [
+        (
+            controller
+                .animate_to(f64::NAN, None)
+                .expect_err("NaN target"),
+            serde_json::json!({"NonFiniteInput": {"input": "Target", "value": "NaN"}}),
+        ),
+        (
+            controller.forward().expect_err("missing upper endpoint"),
+            serde_json::json!({"UnboundedTarget": {"input": "Target", "value": "Infinity"}}),
+        ),
+        (
+            controller.reverse().expect_err("missing lower endpoint"),
+            serde_json::json!({"UnboundedTarget": {"input": "Target", "value": "-Infinity"}}),
+        ),
+    ] {
+        let wire = serde_json::to_value(&error).expect("serialize refused admission");
+        let decoded: AnimationError =
+            serde_json::from_value(wire.clone()).expect("decode refused admission");
+        assert_eq!(wire, expected);
+        match decoded {
+            AnimationError::NonFiniteInput { input, value } => {
+                assert_eq!(input, AnimationInput::Target);
+                assert!(value.is_nan());
+            }
+            AnimationError::UnboundedTarget { input, value } => {
+                assert_eq!(input, AnimationInput::Target);
+                assert!(value.is_infinite());
+                assert_eq!(
+                    value.is_sign_negative(),
+                    expected["UnboundedTarget"]["value"] == "-Infinity"
+                );
+            }
+            other => panic!("unexpected decoded refusal: {other:?}"),
+        }
+    }
+    let error = controller
+        .repeat_with(Some(f64::NAN), Some(5.0), false, None, None)
+        .expect_err("NaN repeat endpoint");
+    let wire = serde_json::to_value(&error).expect("serialize repeat refusal");
+    assert_eq!(wire["InvalidRepeatRange"]["max"], 5.0);
+    assert_eq!(wire["InvalidRepeatRange"]["lower"], "-Infinity");
+    assert_eq!(wire["InvalidRepeatRange"]["upper"], "Infinity");
+    assert!(matches!(
+        serde_json::from_value::<AnimationError>(wire).expect("decode repeat refusal"),
+        AnimationError::InvalidRepeatRange { min, max: 5.0, defect: RangeDefect::NonFinite, .. }
+            if min.is_nan()
+    ));
+    for rejected in [
+        serde_json::Value::Null,
+        serde_json::json!("nan"),
+        serde_json::json!("1.0"),
+    ] {
+        assert!(
+            serde_json::from_value::<AnimationError>(serde_json::json!({
+                "NonFiniteInput": {"input": "Target", "value": rejected}
+            }))
+            .is_err()
+        );
+    }
+}
+
+#[cfg(feature = "serde")]
 fn directional_phase_wire_names() {
     for (phase, wire) in [
         (AnimationStatus::Forward, "\"Forward\""),
@@ -807,6 +876,14 @@ fn explicit_finish_retires_sources_with_failure_custody() {
 fn controller_robustness_contract() {
     crate::run_table(&[
         (
+            "typed input refusals",
+            typed_refusals_preserve_the_original_run,
+        ),
+        (
+            "overflowing repeat span",
+            overflowing_repeat_span_preserves_the_run,
+        ),
+        (
             "explicit finish releases its owner during delivery",
             explicit_finish_allows_owner_release_during_delivery,
         ),
@@ -842,6 +919,8 @@ fn controller_robustness_contract() {
             "explicit finish refuses unknown endpoints atomically",
             explicit_finish_refuses_an_undeclared_endpoint_without_sampling,
         ),
+        #[cfg(feature = "serde")]
+        ("admission error wire values", admission_error_wire_values),
         #[cfg(feature = "serde")]
         ("directional phase wire names", directional_phase_wire_names),
         (
@@ -961,6 +1040,117 @@ fn explicit_finish_preserves_success_after_waker_failure() {
     controller.finish().unwrap();
     assert_eq!(controller.value(), 0.0);
     assert!(next.is_complete());
+}
+
+fn typed_refusals_preserve_the_original_run() {
+    use flui_animation::{AnimationError, AnimationInput, AnimationRunFuture};
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::task::{Context, Poll, Waker};
+
+    type Attempt = fn(&AnimationController) -> Result<AnimationRunFuture, AnimationError>;
+    let attempts: [(AnimationInput, Attempt); 3] = [
+        (AnimationInput::Target, |controller| {
+            controller.animate_to(f64::NAN, None)
+        }),
+        (AnimationInput::From, |controller| {
+            controller.forward_from(Some(f64::NAN))
+        }),
+        (AnimationInput::Velocity, |controller| {
+            controller.fling(f64::NAN)
+        }),
+    ];
+    let controller = controller();
+    let mut run = controller.forward().expect("finite run");
+    controller.tick_at(Duration::from_millis(250));
+    let mut context = Context::from_waker(Waker::noop());
+    for (expected, attempt) in attempts {
+        assert!(
+            matches!(attempt(&controller), Err(AnimationError::NonFiniteInput {
+            input, value,
+        }) if input == expected && value.is_nan())
+        );
+        assert_eq!(controller.value(), 0.25);
+        assert_eq!(controller.status(), AnimationStatus::Forward);
+        assert_eq!(Pin::new(&mut run).poll(&mut context), Poll::Pending);
+    }
+    controller.tick_at(Duration::from_secs(1));
+    assert_eq!(Pin::new(&mut run).poll(&mut context), Poll::Ready(Ok(())));
+
+    controller.reset().expect("live controller");
+    let mut clamped = controller
+        .animate_to(f64::INFINITY, None)
+        .expect("finite bound");
+    controller.tick_at(Duration::from_secs(1));
+    assert_eq!(controller.value(), 1.0);
+    assert_eq!(
+        Pin::new(&mut clamped).poll(&mut context),
+        Poll::Ready(Ok(()))
+    );
+
+    let unbounded = AnimationController::builder(Duration::from_secs(1))
+        .unbounded()
+        .build();
+    let mut run = unbounded.animate_to(10.0, None).expect("finite target");
+    unbounded.tick_at(Duration::from_millis(250));
+    assert!(
+        matches!(unbounded.forward(), Err(AnimationError::UnboundedTarget {
+        input: AnimationInput::Target, value,
+    }) if value == f64::INFINITY)
+    );
+    assert_eq!(unbounded.value(), 2.5);
+    assert_eq!(Pin::new(&mut run).poll(&mut context), Poll::Pending);
+    unbounded.tick_at(Duration::from_secs(1));
+    assert_eq!(Pin::new(&mut run).poll(&mut context), Poll::Ready(Ok(())));
+
+    let extreme = AnimationController::builder(Duration::from_secs(1))
+        .unbounded()
+        .initial_value(-f64::MAX)
+        .build();
+    let mut run = extreme
+        .animate_to(-f64::MAX / 2.0, None)
+        .expect("finite span");
+    assert!(
+        matches!(extreme.animate_to(f64::MAX, None), Err(AnimationError::SpanOverflow {
+        from, to,
+    }) if from == -f64::MAX && to == f64::MAX)
+    );
+    assert_eq!(extreme.value(), -f64::MAX);
+    assert_eq!(Pin::new(&mut run).poll(&mut context), Poll::Pending);
+    extreme.tick_at(Duration::from_secs(1));
+    assert_eq!(extreme.value(), -f64::MAX / 2.0);
+    assert_eq!(Pin::new(&mut run).poll(&mut context), Poll::Ready(Ok(())));
+}
+
+fn overflowing_repeat_span_preserves_the_run() {
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::task::{Context, Poll, Waker};
+
+    let controller = AnimationController::builder(Duration::from_secs(1))
+        .unbounded()
+        .build();
+    let mut run = controller.animate_to(10.0, None).expect("finite run");
+    controller.tick_at(Duration::from_millis(250));
+    assert_eq!(controller.value(), 2.5);
+    let refused = controller.repeat_with(Some(-f64::MAX), Some(f64::MAX), true, None, None);
+    assert!(
+        matches!(refused, Err(flui_animation::AnimationError::InvalidRepeatRange {
+        min, max, lower, upper, defect: flui_animation::RangeDefect::SpanOverflow,
+    }) if min == -f64::MAX && max == f64::MAX && lower == f64::NEG_INFINITY && upper == f64::INFINITY),
+        "finite endpoints must not admit an overflowing repeat span"
+    );
+    assert_eq!(
+        controller.value(),
+        2.5,
+        "refusal preserves the displayed value"
+    );
+    assert!(controller.is_animating());
+    let mut context = Context::from_waker(Waker::noop());
+    assert_eq!(Pin::new(&mut run).poll(&mut context), Poll::Pending);
+    controller.tick_at(Duration::from_secs(1));
+    assert_eq!(controller.value(), 10.0);
+    assert_eq!(Pin::new(&mut run).poll(&mut context), Poll::Ready(Ok(())));
 }
 
 #[test]

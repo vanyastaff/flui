@@ -1,5 +1,6 @@
 //! `AnimationController` - The primary animation driver.
 
+mod admission;
 mod completion;
 mod delivery;
 mod motion;
@@ -16,7 +17,7 @@ use crate::PlaybackRate;
 use crate::animation::StatusObserver;
 use crate::animation::{Animation, AnimationDirection, Retirement, StatusCallback, Terminal};
 use crate::curve::Curve;
-use crate::error::AnimationError;
+use crate::error::{AnimationError, AnimationInput, RangeDefect};
 use crate::retarget::Segment;
 use crate::run_future::{RunCompleter, RunDelivery};
 use crate::simulation::{Simulation, SpringDescription, SpringSimulation, SpringType, Tolerance};
@@ -725,8 +726,9 @@ impl AnimationController {
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
-    /// Returns [`AnimationError::NonFiniteTarget`] if `from` is `NaN`, if
-    /// `from` is infinite toward a bound this controller does not have, or
+    /// Returns [`AnimationError::NonFiniteInput`] if `from` is `NaN`.
+    /// Returns [`AnimationError::UnboundedTarget`] if `from` is infinite
+    /// toward a bound this controller does not have, or
     /// if this controller is [`unbounded`](crate::AnimationControllerBuilder::unbounded) (`forward`
     /// always targets `upper_bound`, which has no finite value to run to).
     pub fn forward_from(&self, from: Option<f64>) -> Result<AnimationRunFuture, AnimationError> {
@@ -738,25 +740,24 @@ impl AnimationController {
         // `from`, so `forward()` (no `from` at all) is refused on an
         // unbounded controller too, not only an explicit non-finite `from`.
         if !inner.upper_bound.is_finite() {
-            let err = AnimationError::NonFiniteTarget(
-                "forward/forward_from targets the upper bound, which is not finite on an \
-                 unbounded controller"
-                    .to_string(),
-            );
-            return Err(Self::warn_non_finite_target(inner, err));
+            let err = AnimationError::UnboundedTarget {
+                input: AnimationInput::Target,
+                value: inner.upper_bound,
+            };
+            return Err(Self::warn_refused_input(inner, "forward_from", err));
         }
         let entry_value = inner.value;
 
         let from = match from {
             Some(raw) => {
                 match Self::canonicalize_value_target(
-                    "forward_from's from",
+                    AnimationInput::From,
                     raw,
                     inner.lower_bound,
                     inner.upper_bound,
                 ) {
                     Ok(canonical) => Some(canonical),
-                    Err(err) => return Err(Self::warn_non_finite_target(inner, err)),
+                    Err(err) => return Err(Self::warn_refused_input(inner, "forward_from", err)),
                 }
             }
             None => None,
@@ -831,8 +832,9 @@ impl AnimationController {
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
-    /// Returns [`AnimationError::NonFiniteTarget`] if `from` is `NaN`, if
-    /// `from` is infinite toward a bound this controller does not have, or
+    /// Returns [`AnimationError::NonFiniteInput`] if `from` is `NaN`.
+    /// Returns [`AnimationError::UnboundedTarget`] if `from` is infinite
+    /// toward a bound this controller does not have, or
     /// if this controller is [`unbounded`](crate::AnimationControllerBuilder::unbounded) (`reverse`
     /// always targets `lower_bound`, which has no finite value to run to).
     pub fn reverse_from(&self, from: Option<f64>) -> Result<AnimationRunFuture, AnimationError> {
@@ -843,25 +845,24 @@ impl AnimationController {
         // See `forward_from`'s own comment: refuse before touching `from`,
         // so `reverse()` (no `from` at all) is refused too.
         if !inner.lower_bound.is_finite() {
-            let err = AnimationError::NonFiniteTarget(
-                "reverse/reverse_from targets the lower bound, which is not finite on an \
-                 unbounded controller"
-                    .to_string(),
-            );
-            return Err(Self::warn_non_finite_target(inner, err));
+            let err = AnimationError::UnboundedTarget {
+                input: AnimationInput::Target,
+                value: inner.lower_bound,
+            };
+            return Err(Self::warn_refused_input(inner, "reverse_from", err));
         }
         let entry_value = inner.value;
 
         let from = match from {
             Some(raw) => {
                 match Self::canonicalize_value_target(
-                    "reverse_from's from",
+                    AnimationInput::From,
                     raw,
                     inner.lower_bound,
                     inner.upper_bound,
                 ) {
                     Ok(canonical) => Some(canonical),
-                    Err(err) => return Err(Self::warn_non_finite_target(inner, err)),
+                    Err(err) => return Err(Self::warn_refused_input(inner, "reverse_from", err)),
                 }
             }
             None => None,
@@ -1001,9 +1002,10 @@ impl AnimationController {
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
-    /// Returns [`AnimationError::NonFiniteTarget`] if `target` is `NaN`, if
-    /// `target` is infinite toward a bound this controller does not have,
-    /// or if `target - value` overflows `f64`.
+    /// Returns [`AnimationError::NonFiniteInput`] if `target` is `NaN`,
+    /// [`AnimationError::UnboundedTarget`] if an infinite target has no finite
+    /// bound to clamp to, or [`AnimationError::SpanOverflow`] when
+    /// `target - value` overflows `f64`.
     ///
     /// # Examples
     ///
@@ -1040,7 +1042,8 @@ impl AnimationController {
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
-    /// Returns [`AnimationError::NonFiniteTarget`] under the same conditions
+    /// Returns [`AnimationError::NonFiniteInput`], [`AnimationError::UnboundedTarget`]
+    /// or [`AnimationError::SpanOverflow`] under the same conditions
     /// as [`animate_to`](Self::animate_to).
     pub fn animate_back(
         &self,
@@ -1056,7 +1059,8 @@ impl AnimationController {
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
-    /// Returns [`AnimationError::NonFiniteTarget`] under the same conditions
+    /// Returns [`AnimationError::NonFiniteInput`], [`AnimationError::UnboundedTarget`]
+    /// or [`AnimationError::SpanOverflow`] under the same conditions
     /// as [`animate_to`](Self::animate_to).
     pub fn animate_to_curved(
         &self,
@@ -1078,7 +1082,8 @@ impl AnimationController {
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
-    /// Returns [`AnimationError::NonFiniteTarget`] under the same conditions
+    /// Returns [`AnimationError::NonFiniteInput`], [`AnimationError::UnboundedTarget`]
+    /// or [`AnimationError::SpanOverflow`] under the same conditions
     /// as [`animate_to`](Self::animate_to).
     pub fn animate_back_curved(
         &self,
@@ -1127,13 +1132,13 @@ impl AnimationController {
             AnimationDirection::Reverse => "animate_back's target",
         };
         let target = match Self::canonicalize_value_target(
-            caller,
+            AnimationInput::Target,
             target,
             inner.lower_bound,
             inner.upper_bound,
         ) {
             Ok(target) => target,
-            Err(err) => return Err(Self::warn_non_finite_target(inner, err)),
+            Err(err) => return Err(Self::warn_refused_input(inner, caller, err)),
         };
         // `target - value` overflowing f64 (e.g. `set_value(-f64::MAX)` then
         // `animate_to(f64::MAX)`) would make `tick_time_based`'s
@@ -1143,10 +1148,11 @@ impl AnimationController {
         // run install with a span nothing downstream can interpolate.
         let span = target - entry_value;
         if !span.is_finite() {
-            let err = AnimationError::NonFiniteTarget(format!(
-                "{caller}: span ({target} - {entry_value}) overflows f64"
-            ));
-            return Err(Self::warn_non_finite_target(inner, err));
+            let err = AnimationError::SpanOverflow {
+                from: entry_value,
+                to: target,
+            };
+            return Err(Self::warn_refused_input(inner, caller, err));
         }
         inner.clear_run_modes(&mut retired);
         inner.run_curve = curve.take();
@@ -1261,7 +1267,7 @@ impl AnimationController {
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
-    /// Returns [`AnimationError::NonFiniteTarget`] on an
+    /// Returns [`AnimationError::InvalidRepeatRange`] on an
     /// [`unbounded`](crate::AnimationControllerBuilder::unbounded) controller — a default repeat targets
     /// this controller's own (infinite) bounds; use
     /// [`repeat_with`](Self::repeat_with) with an explicit finite range
@@ -1308,14 +1314,12 @@ impl AnimationController {
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
-    /// Returns [`AnimationError::InvalidBounds`] if `min`/`max` are `NaN` or
-    /// describe an inverted or empty range (a range-shape error, on any
-    /// controller). Returns [`AnimationError::NonFiniteTarget`] if the
-    /// EFFECTIVE range (after defaulting unset endpoints to this
-    /// controller's own bounds) is not finite — only reachable on an
-    /// [`unbounded`](crate::AnimationControllerBuilder::unbounded) controller with `min`/`max` left
-    /// unset (or set on only one side); pass an explicit finite range to
-    /// repeat on an unbounded controller.
+    /// Returns [`AnimationError::InvalidRepeatRange`] with the effective
+    /// endpoints and a [`RangeDefect`] for NaN, non-finite, empty or inverted
+    /// ranges, or a span that overflows `f64`. NaN is checked before clamping.
+    /// On an [`unbounded`](crate::AnimationControllerBuilder::unbounded)
+    /// controller, provide both finite endpoints rather than defaulting to
+    /// its infinite bounds.
     pub fn repeat_with(
         &self,
         min: Option<f64>,
@@ -1337,15 +1341,19 @@ impl AnimationController {
         // *effective*-range non-finiteness an unbounded controller's own
         // defaulted bound produces below.
         if min.is_some_and(f64::is_nan) || max.is_some_and(f64::is_nan) {
-            return Err(AnimationError::InvalidBounds(format!(
-                "repeat range endpoints must not be NaN (min={min:?}, max={max:?})"
-            )));
+            return Err(AnimationError::InvalidRepeatRange {
+                min: min.unwrap_or(inner.lower_bound),
+                max: max.unwrap_or(inner.upper_bound),
+                lower: inner.lower_bound,
+                upper: inner.upper_bound,
+                defect: RangeDefect::NonFinite,
+            });
         }
 
         // Clamp the repeat range into the controller's bounds and reject an
         // empty/inverted range, so a repeat run can never start `value` (or its
         // ticks) outside `[lower_bound, upper_bound]` — consistent with
-        // [`with_bounds`]'s `InvalidBounds` contract.
+        // the validated `ValueRange` contract.
         // `min == max` is refused: a repeat that can structurally never
         // change value is a caller error that would hold the frame loop open
         // doing nothing, the same contract `with_bounds` already applies to
@@ -1357,10 +1365,13 @@ impl AnimationController {
             .unwrap_or(inner.upper_bound)
             .clamp(inner.lower_bound, inner.upper_bound);
         if lo >= hi {
-            return Err(AnimationError::InvalidBounds(format!(
-                "repeat min ({lo}) must be less than max ({hi}) within bounds [{}, {}]",
-                inner.lower_bound, inner.upper_bound
-            )));
+            return Err(AnimationError::InvalidRepeatRange {
+                min: lo,
+                max: hi,
+                lower: inner.lower_bound,
+                upper: inner.upper_bound,
+                defect: RangeDefect::Inverted,
+            });
         }
         // The range wasn't inverted, but a side that defaulted from an
         // unbounded controller's own +-inf bound leaked through: there is no
@@ -1368,11 +1379,24 @@ impl AnimationController {
         // None, ..)` on an unbounded controller is refused this way; an
         // explicit finite range on both sides never reaches here.
         if !lo.is_finite() || !hi.is_finite() {
-            let err = AnimationError::NonFiniteTarget(format!(
-                "repeat range [{lo}, {hi}] is not finite; this controller is unbounded in \
-                 that direction -- pass an explicit finite range"
-            ));
-            return Err(Self::warn_non_finite_target(inner, err));
+            let err = AnimationError::InvalidRepeatRange {
+                min: lo,
+                max: hi,
+                lower: inner.lower_bound,
+                upper: inner.upper_bound,
+                defect: RangeDefect::NonFinite,
+            };
+            return Err(Self::warn_refused_input(inner, "repeat_with", err));
+        }
+
+        if !(hi - lo).is_finite() {
+            return Err(AnimationError::InvalidRepeatRange {
+                min: lo,
+                max: hi,
+                lower: inner.lower_bound,
+                upper: inner.upper_bound,
+                defect: RangeDefect::SpanOverflow,
+            });
         }
 
         // A leftover per-run mode (an `animate_to_curved` curve, a fling
@@ -1482,11 +1506,12 @@ impl AnimationController {
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
-    /// Returns [`AnimationError::NonFiniteTarget`] if `velocity` is not
-    /// finite, or if this controller is [`unbounded`](crate::AnimationControllerBuilder::unbounded) in
+    /// Returns [`AnimationError::NonFiniteInput`] if `velocity` is not finite,
+    /// or [`AnimationError::UnboundedTarget`] if this controller is
+    /// [`unbounded`](crate::AnimationControllerBuilder::unbounded) in
     /// the direction `velocity` drives toward (a fling has no finite end to
     /// spring at).
-    /// Returns [`AnimationError::InvalidSpring`] if the spring is underdamped
+    /// Returns [`AnimationError::UnderdampedFlingSpring`] if the spring is underdamped
     /// (would oscillate).
     ///
     /// # Example
@@ -1506,8 +1531,10 @@ impl AnimationController {
     ///
     /// # Errors
     /// Returns [`AnimationError::InvalidExtent`] for non-finite or non-positive
-    /// extents. Non-finite input or unrepresentable converted velocity returns
-    /// [`AnimationError::NonFiniteTarget`]. Other refusals match [`Self::fling`].
+    /// extents, [`AnimationError::NonFiniteInput`] for non-finite velocity,
+    /// [`AnimationError::UnboundedTarget`] for an infinite controller span, or
+    /// [`AnimationError::VelocityOverflow`] for an unrepresentable converted
+    /// velocity. Other refusals match [`Self::fling`].
     pub fn fling_across(
         &self,
         velocity: f64,
@@ -1520,11 +1547,27 @@ impl AnimationController {
         }
         let span = inner.upper_bound - inner.lower_bound;
         let converted = crate::retarget::rate(velocity, span, extent);
-        if !velocity.is_finite() || !span.is_finite() || !converted.is_finite() {
-            let error = AnimationError::NonFiniteTarget(format!(
-                "gesture velocity {velocity} across extent {extent} and range {span} must yield a finite velocity"
-            ));
-            return Err(Self::warn_non_finite_target(inner, error));
+        let refusal = if !velocity.is_finite() {
+            Some(AnimationError::NonFiniteInput {
+                input: AnimationInput::Velocity,
+                value: velocity,
+            })
+        } else if !span.is_finite() {
+            Some(AnimationError::UnboundedTarget {
+                input: AnimationInput::Velocity,
+                value: velocity,
+            })
+        } else if !converted.is_finite() {
+            Some(AnimationError::VelocityOverflow {
+                velocity,
+                extent,
+                span,
+            })
+        } else {
+            None
+        };
+        if let Some(error) = refusal {
+            return Err(Self::warn_refused_input(inner, "fling_across", error));
         }
         drop(inner);
         self.fling(converted)
@@ -1535,9 +1578,10 @@ impl AnimationController {
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
-    /// Returns [`AnimationError::NonFiniteTarget`] under the same conditions
+    /// Returns [`AnimationError::NonFiniteInput`] or [`AnimationError::UnboundedTarget`]
+    /// under the same conditions
     /// as [`fling`](Self::fling).
-    /// Returns [`AnimationError::InvalidSpring`] if the spring is underdamped.
+    /// Returns [`AnimationError::UnderdampedFlingSpring`] if the spring is underdamped.
     /// Returns [`AnimationError::Simulation`] if its coefficients cannot be
     /// represented. Every refusal preserves the preceding run and its future.
     pub fn fling_with(
@@ -1550,15 +1594,16 @@ impl AnimationController {
         Self::check_run_admission(&inner)?;
 
         if !velocity.is_finite() {
-            let err = AnimationError::NonFiniteTarget(format!(
-                "fling velocity {velocity} must be finite"
-            ));
-            return Err(Self::warn_non_finite_target(inner, err));
+            let err = AnimationError::NonFiniteInput {
+                input: AnimationInput::Velocity,
+                value: velocity,
+            };
+            return Err(Self::warn_refused_input(inner, "fling_with", err));
         }
 
         // Compute into locals; every refusal below must leave `inner`
         // untouched, so `direction` is assigned to the controller only
-        // after the InvalidSpring check too -- assigning it any earlier
+        // after the underdamped-spring check too -- assigning it any earlier
         // would corrupt `direction` on a refused fling, observable only via
         // a later `stop()`.
         let direction = if velocity < 0.0 {
@@ -1572,20 +1617,18 @@ impl AnimationController {
             inner.upper_bound + FLING_TOLERANCE.distance
         };
         if !target.is_finite() {
-            let err = AnimationError::NonFiniteTarget(format!(
-                "fling target {target} is not finite; this controller is unbounded in the \
-                 direction velocity {velocity} drives toward"
-            ));
-            return Err(Self::warn_non_finite_target(inner, err));
+            let err = AnimationError::UnboundedTarget {
+                input: AnimationInput::Velocity,
+                value: velocity,
+            };
+            return Err(Self::warn_refused_input(inner, "fling_with", err));
         }
 
         let spring = spring.unwrap_or_else(default_fling_spring);
         if spring.spring_type() == SpringType::Underdamped {
-            return Err(AnimationError::InvalidSpring(
-                "Underdamped springs oscillate and cannot be used for fling. \
-                 Use animate_with() for oscillating springs."
-                    .to_string(),
-            ));
+            return Err(AnimationError::UnderdampedFlingSpring {
+                damping_ratio: spring.damping_ratio(),
+            });
         }
 
         let sim = SpringSimulation::new(spring, inner.value, target, velocity, Tolerance::DEFAULT)?;
@@ -1629,7 +1672,7 @@ impl AnimationController {
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
-    /// Returns [`AnimationError::NonFiniteTarget`] if `simulation.x(0.0)` is
+    /// Returns [`AnimationError::NonFiniteInput`] if `simulation.x(0.0)` is
     /// not finite.
     ///
     /// # Example
@@ -1655,7 +1698,7 @@ impl AnimationController {
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
-    /// Returns [`AnimationError::NonFiniteTarget`] under the same condition
+    /// Returns [`AnimationError::NonFiniteInput`] under the same condition
     /// as [`animate_with`](Self::animate_with).
     pub fn animate_back_with<S: Simulation + 'static>(
         &self,
@@ -1688,10 +1731,15 @@ impl AnimationController {
         Self::check_run_admission(&inner)?;
 
         if !initial.is_finite() {
-            let err = AnimationError::NonFiniteTarget(format!(
-                "simulation.x(0.0) = {initial} is not finite"
-            ));
-            return Err(Self::warn_non_finite_target(inner, err));
+            let err = AnimationError::NonFiniteInput {
+                input: AnimationInput::SimulationStart,
+                value: initial,
+            };
+            let operation = match direction {
+                AnimationDirection::Forward => "animate_with",
+                AnimationDirection::Reverse => "animate_back_with",
+            };
+            return Err(Self::warn_refused_input(inner, operation, err));
         }
 
         inner.clear_run_modes(&mut retired);
@@ -2345,78 +2393,6 @@ impl AnimationController {
 
     pub(crate) fn is_disposed(&self) -> bool {
         self.inner.borrow().disposed
-    }
-
-    fn check_disposed(inner: &AnimationControllerInner) -> Result<(), AnimationError> {
-        if inner.disposed {
-            Err(AnimationError::Disposed)
-        } else {
-            Ok(())
-        }
-    }
-
-    fn check_run_admission(inner: &AnimationControllerInner) -> Result<(), AnimationError> {
-        Self::check_disposed(inner)?;
-        if inner.run_generation == u64::MAX || inner.sample_epoch == u64::MAX {
-            Err(AnimationError::IdentityExhausted)
-        } else {
-            Ok(())
-        }
-    }
-
-    /// Canonicalize a caller-supplied value-space input — `animate_to`/
-    /// `animate_back`'s `target`, `forward_from`/`reverse_from`'s `from` —
-    /// against this controller's bounds. `caller` names the method and
-    /// parameter (e.g. `"animate_to's target"`) so the `NonFiniteTarget`
-    /// message identifies which call and argument is at fault — the only
-    /// place that identity is visible, since production callers of these
-    /// methods discard the `Result` and read only the `tracing::warn!` this
-    /// error also reaches.
-    ///
-    /// `NaN` is always refused: there is no finite value to repair toward,
-    /// and letting it through would poison every downstream curve/tween
-    /// evaluation for the rest of the run (`clamp` propagates `NaN`
-    /// unchanged rather than rejecting it). `+-inf` clamps to whichever
-    /// bound it points at when that bound is finite — the "go to
-    /// the end" idiom, e.g. `animate_to(f64::INFINITY)` on a bounded
-    /// controller — and is refused when that bound is itself non-finite: an
-    /// unbounded controller has no end in that direction to go to.
-    fn canonicalize_value_target(
-        caller: &str,
-        raw: f64,
-        lower_bound: f64,
-        upper_bound: f64,
-    ) -> Result<f64, AnimationError> {
-        if raw.is_nan() {
-            return Err(AnimationError::NonFiniteTarget(format!(
-                "{caller} must be finite, got NaN"
-            )));
-        }
-        let clamped = raw.clamp(lower_bound, upper_bound);
-        if !clamped.is_finite() {
-            return Err(AnimationError::NonFiniteTarget(format!(
-                "{caller} = {raw} has no finite bound to run to in that direction \
-                 (bounds are [{lower_bound}, {upper_bound}])"
-            )));
-        }
-        Ok(clamped)
-    }
-
-    /// Emit the "refused for a non-finite input" warning every
-    /// [`AnimationError::NonFiniteTarget`]-returning call site needs:
-    /// production callers of these methods discard the `Result` (the three
-    /// workspace fling controllers spell `let _ = fling.animate_to_curved(..)`
-    /// and friends), so this is the only place the refusal becomes
-    /// observable. Call only once the refusal is fully decided and no
-    /// mutation has been applied — it releases the controller's borrow before
-    /// warning, so an arbitrary subscriber can reenter the controller.
-    fn warn_non_finite_target(
-        inner: std::cell::RefMut<'_, AnimationControllerInner>,
-        err: AnimationError,
-    ) -> AnimationError {
-        drop(inner);
-        tracing::warn!("{err}");
-        err
     }
 
     /// Number of registered value listeners. Test-only: lets combinator tests

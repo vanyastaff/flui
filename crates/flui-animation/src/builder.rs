@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use crate::{AnimationController, AnimationError, DrivenController, Vsync};
+use crate::{AnimationController, DrivenController, RangeDefect, Vsync};
 
 /// Finite controller bounds with a finite, positive span.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -21,17 +21,19 @@ impl ValueRange {
     /// Validate endpoints and their difference before constructing a range.
     ///
     /// # Errors
-    /// Returns `AnimationError::InvalidBounds` for non-finite endpoints or span,
-    /// or when `lower >= upper`.
-    pub fn new(lower: f64, upper: f64) -> Result<Self, AnimationError> {
-        if !lower.is_finite()
-            || !upper.is_finite()
-            || lower >= upper
-            || !(upper - lower).is_finite()
-        {
-            return Err(AnimationError::InvalidBounds(format!(
-                "bounds ({lower}, {upper}) must have finite endpoints and a finite positive span"
-            )));
+    /// Returns [`RangeDefect::NonFinite`] for a NaN or infinite endpoint,
+    /// [`RangeDefect::Inverted`] when `lower >= upper`, or
+    /// [`RangeDefect::SpanOverflow`] when the ordered endpoints' difference
+    /// overflows `f64`. These checks run in that order.
+    pub fn new(lower: f64, upper: f64) -> Result<Self, RangeDefect> {
+        if !lower.is_finite() || !upper.is_finite() {
+            return Err(RangeDefect::NonFinite);
+        }
+        if lower >= upper {
+            return Err(RangeDefect::Inverted);
+        }
+        if !(upper - lower).is_finite() {
+            return Err(RangeDefect::SpanOverflow);
         }
         Ok(Self { lower, upper })
     }
