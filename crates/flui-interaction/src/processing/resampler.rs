@@ -114,6 +114,8 @@ struct Anchor {
     position: Offset<f64>,
     timestamp: Instant,
     nanos: u64,
+    /// Sensor values from the most recently delivered reading, never the future bracket.
+    sample: PointerSample,
 }
 
 /// Pointer event resampler for smooth motion
@@ -387,15 +389,21 @@ impl ResamplerInner {
         self.last_emitted_nanos = nanos;
         match &event {
             PointerEvent::Down(..) | PointerEvent::Move(..) => {
+                let sample = match &event {
+                    PointerEvent::Down(button) => button.sample,
+                    PointerEvent::Move(movement) => *movement.current(),
+                    _ => unreachable!("BUG: contact sample matched above"),
+                };
                 self.anchor = Some(Anchor {
                     position: event
                         .position()
                         .expect("BUG: measured contact carries position"),
                     timestamp: at,
                     nanos,
+                    sample,
                 });
             }
-            PointerEvent::Up(..) | PointerEvent::Cancel(..) => self.anchor = None,
+            PointerEvent::Up(..) | PointerEvent::Cancel(..) | PointerEvent::Leave(..) => self.anchor = None,
             _ => {}
         }
         out.push(event);
@@ -437,8 +445,9 @@ impl PointerEventResampler {
     /// The binding dispatches the `Down` event directly (synchronously, to
     /// close the arena and cache the hit test), so the resampler must not also
     /// re-emit it on the next `sample()`. This establishes the tracking state
-    /// that `sample()` requires (`is_tracked`) so subsequent moves are paced
-    /// instead of silently dropped.
+    /// reported by [`Self::is_tracked`]. Sampling always advances accepted
+    /// source events, including hover and a queued Leave; no separate tracking
+    /// call is required when feeding the standalone queue.
     pub fn start_tracking(&self) {
         let mut inner = self.inner.lock();
         inner.is_down = true;
@@ -509,6 +518,9 @@ impl PointerEventResampler {
     ///   point and that move, at the fraction
     ///   `(sample_time - last) / (next - last)`; it is skipped when the
     ///   position did not change.
+    ///   Sensors retain the last emitted reading (including `None`); pressure,
+    ///   orientation and contact size are not copied from the future bracket
+    ///   or interpolated. Synthetic moves contain no measured/predicted history.
     /// - A sample time earlier than the previous one, or less than 1 ms after
     ///   it, prepares no new output. Previously prepared delivery debt remains
     ///   consumable even when sampling does not advance or tracking was reset.
@@ -537,8 +549,8 @@ impl PointerEventResampler {
         {
             let mut inner = self.inner.lock();
 
-            // Skip if not tracking or no events
-            if !inner.is_tracked || inner.event_queue.is_empty() {
+            // Admission state does not revoke accepted source delivery.
+            if inner.event_queue.is_empty() {
                 return inner.prepared_events(SmallVec::new(), &self.inner);
             }
 
@@ -601,7 +613,7 @@ impl PointerEventResampler {
                     } else {
                         anchor.nanos
                     };
-                    let mut sample = *next_move.current();
+                    let mut sample = anchor.sample;
                     sample.position =
                         PointerPosition::try_new(Point::new(position.dx, position.dy))
                             .expect("BUG: finite interpolated position checked above");
@@ -693,12 +705,17 @@ impl PointerEventResampler {
         }
     }
 
-    /// Checks if the pointer is currently down
+    /// Whether the latest admitted boundary leaves the pointer down.
+    ///
+    /// This describes admission, not which events callbacks have observed.
     pub fn is_down(&self) -> bool {
         self.inner.lock().is_down
     }
 
-    /// Checks if the pointer is being tracked
+    /// Whether the latest admitted Down/start-tracking has not been followed by Leave/stop.
+    ///
+    /// This admission query does not gate delivery of accepted events. A queued
+    /// Leave can make it false while its earlier events still await sampling.
     pub fn is_tracked(&self) -> bool {
         self.inner.lock().is_tracked
     }

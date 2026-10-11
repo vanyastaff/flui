@@ -591,6 +591,76 @@ fn interpolation_uses_the_bracketing_samples() {
     );
 }
 
+fn interpolation_does_not_publish_future_sensor_readings() {
+    use flui_interaction::events::{PointerMove, PointerSample};
+    use flui_platform_api::{EventTime, pointer::Pressure};
+
+    for (previous, next) in [(Some(0.2), Some(0.9)), (None, Some(0.9)), (Some(0.2), None)] {
+        let at = origin();
+        let resampler = PointerEventResampler::new(contact());
+        let pointer = match move_to(0.0) {
+            PointerEvent::Move(movement) => movement.pointer,
+            _ => unreachable!("Move fixture"),
+        };
+        let reading = |x, nanos, pressure: Option<f32>| {
+            let mut sample = PointerSample::new(
+                EventTime::from_nanos(nanos),
+                PointerPosition::try_new(flui_foundation::geometry::Point::new(x, 0.0))
+                    .expect("finite fixture"),
+            );
+            sample.pressure = pressure.map(|value| Pressure::try_new(value).expect("pressure"));
+            PointerEvent::Move(PointerMove::new(pointer, Default::default(), sample))
+        };
+        resampler.start_tracking();
+        resampler.add_event_at(reading(0.0, 0, previous), at);
+        resampler.add_event_at(reading(10.0, 10_000_000, next), at + ms(10.0));
+        let output = sample_all(&resampler, at + ms(5.0));
+        let PointerEvent::Move(interpolated) = output.last().expect("interpolated output") else {
+            panic!("expected Move");
+        };
+        assert_eq!(event_x(output.last().expect("output")), Some(5.0));
+        assert_eq!(
+            interpolated.current().pressure.map(Pressure::get), previous,
+            "intermediate geometry must not publish a later hardware sensor reading"
+        );
+        let measured = sample_all(&resampler, at + ms(10.0));
+        let PointerEvent::Move(measured) = measured.last().expect("later measured output") else {
+            panic!("expected measured Move");
+        };
+        assert_eq!(measured.current().pressure.map(Pressure::get), next);
+    }
+}
+
+fn queued_leave_does_not_starve_accepted_boundaries() {
+    use flui_platform_api::{EventTime, pointer::PointerSignal};
+    for contact_sequence in [false, true] {
+        let at = origin();
+        let resampler = PointerEventResampler::new(contact());
+        let pointer = match move_to(0.0) {
+            PointerEvent::Move(movement) => movement.pointer,
+            _ => unreachable!("Move fixture"),
+        };
+        let signal = PointerSignal::new(pointer, EventTime::from_nanos(3));
+        let mut admitted = vec![PointerEvent::Enter(PointerSignal::new(pointer, EventTime::from_nanos(0)))];
+        if contact_sequence {
+            admitted.push(with_time(make_down_event_for_id(contact(), Offset::ZERO, PointerKind::Touch)
+                .expect("Down"), 1));
+            admitted.push(with_time(make_up_event_for_id(contact(), Offset::ZERO, PointerKind::Touch)
+                .expect("Up"), 2));
+        }
+        admitted.push(PointerEvent::Leave(signal));
+        for event in &admitted {
+            resampler.add_event_at(event.clone(), at);
+        }
+        let delivered = sample_all(&resampler, at + ms(1.0));
+        assert_eq!(delivered, admitted, "sampling must deliver accepted Enter/contact/Leave in order");
+        assert!(!resampler.has_pending_events());
+        resampler.add_event_at(move_to(9.0), at + ms(2.0));
+        assert_eq!(sample_all(&resampler, at + ms(2.0)).len(), 1,
+            "standalone sampling also delivers an admitted hover Move without a Down");
+    }
+}
+
 /// Events delivered in one burst keep their own spacing: the later event
 /// lies in the future of a sample taken between them.
 fn burst_keeps_event_time_spacing() {
@@ -830,6 +900,8 @@ fn resampler_interpolates_on_event_time_and_never_drops_terminals() {
                 "interpolation factor",
                 interpolation_uses_the_bracketing_samples,
             ),
+            ("sensor readings never come from the future", interpolation_does_not_publish_future_sensor_readings),
+            ("Leave does not starve accepted boundaries", queued_leave_does_not_starve_accepted_boundaries),
             ("burst keeps event spacing", burst_keeps_event_time_spacing),
             (
                 "overflow keeps terminals",
