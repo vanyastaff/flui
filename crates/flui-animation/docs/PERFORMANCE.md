@@ -151,7 +151,7 @@ Criterion time estimates in microseconds (95% intervals in parentheses):
 | 1,000 | 8 | 77.02 (76.24–77.52) | 96.48 (96.06–97.24) | 105.17 (103.70–107.61) |
 | 1,000 | 32 | 78.94 (78.00–80.05) | 150.03 (148.97–150.70) | 141.30 (140.57–141.95) |
 
-Live admission validation costs O(owners × depth). The deeper rows improved
+The uncached admission validation measured here costs O(owners × depth). The deeper rows improved
 after removing temporary weak handles, but shallower 1,000-owner rows became
 slower in the subsequent run. CPU frequency and other activity were uncontrolled;
 these measurements do not establish a uniform speedup. The historical baseline
@@ -169,6 +169,51 @@ Reproduce these workloads with:
 
 ```bash
 cargo bench -p flui-animation --bench vsync_registry --locked -- --noplot 'nested_vsync_registry|running_vsync_registry/10000|stopped_vsync_registry/10000|unregister_all'
+```
+
+### Revision-cached ancestry, 2026-10-11
+
+`f3caf36c5ec70284025a1c2ae8085c3df89f5d5c` caches a successful ancestry check
+for the root's current hierarchy revision. Attachment, withdrawal, mute and
+closure invalidate that revision before user callbacks or capture retirement.
+A changed revision revalidates the affected walk; unrelated healthy peers can
+continue. Saturation permanently uses full validation, preserving delivery
+without recycling a revision. The cache uses a cell in the borrowed walk and
+a counter in the existing registry; it allocates no additional collection.
+
+Unchanged hierarchies now perform constant-time revision checks between owner
+samples instead of walking every ancestor. Public admission/reentry scenarios
+and a privately seeded saturation case fail when invalidation or the saturation
+fallback is removed. The restored ownership, clocks, status, registry and mounted
+animation/sliver selection passed 61 tests.
+
+The same advancing-clock workload and optimized profile ran sequentially on the
+Windows host above. The control was the exact production source from
+`0260bc33041a80ac03c831135158e9fec9b89fcb`, temporarily restored before rebuilding.
+The cached binary was retained separately; restoring its source preserved both
+modified files' SHA-256 hashes. No builds read source during restoration.
+
+Criterion time estimates in microseconds (95% intervals in parentheses):
+
+| Operation | Control | Cache without inline hints | Final cache |
+|---|---:|---:|---:|
+| Active frame, 10,000 owners | 1,120.5 (1,101.6–1,154.1) | 1,344.4 (1,330.1–1,358.6) | 1,101.7 (1,079.2–1,125.7) |
+| 1,000 owners, depth 1 | 82.10 (81.79–82.54) | 85.82 (85.34–86.83) | 83.94 (83.57–84.54) |
+| 1,000 owners, depth 8 | 93.23 (92.56–94.05) | 85.23 (84.91–85.64) | 83.08 (82.84–83.41) |
+| 1,000 owners, depth 32 | 140.34 (139.66–141.91) | 86.42 (85.46–87.46) | 84.85 (84.33–85.53) |
+
+The initial cache made the flat active frame slower in repeated measurements.
+Inline hints on the admission predicates restored that row to an interval
+overlapping the control while retaining the deeper-row improvement. This is
+an observed code-generation sensitivity, not assembly-level attribution. Host
+activity and CPU frequency remain uncontrolled; these results do not establish
+a fixed speedup or an improvement for every configuration. Retirement, admission,
+retarget, allocation and full-frame measurements remain separate work.
+
+Reproduce the selected rows with:
+
+```bash
+cargo bench -p flui-animation --bench vsync_registry --locked -- --noplot 'running_vsync_registry/10000|nested_vsync_registry/1000'
 ```
 
 ## Measured benchmarks
