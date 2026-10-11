@@ -166,6 +166,40 @@ fn fixed_cutoff_matches_a_known_scalar_step() {
     );
 }
 
+fn constant_extremes_and_opposite_signs_keep_their_meaning() {
+    let cutoff = 3.0 / (7.0 * std::f64::consts::TAU);
+    for value in [f64::MAX, -f64::MAX] {
+        let mut filter = OneEuroFilter::new(cutoff, 0.0, 1.0).expect("fixed cutoff");
+        assert_eq!(filter.filter(value, 0.0), Ok(value));
+        assert_eq!(
+            filter.filter(value, 1.0),
+            Ok(value),
+            "constant signal drifted"
+        );
+        assert_eq!(
+            filter.filter(value, 1.0),
+            Ok(value),
+            "constant signal gained speed"
+        );
+    }
+
+    // Half smoothing at a two-second interval. Opposite-sign positions have
+    // a representable slope and must cancel without overflowing their difference.
+    let mut crossing =
+        OneEuroFilter::new(1.0 / (2.0 * std::f64::consts::TAU), 0.0, 1.0).expect("half smoothing");
+    crossing.filter(f64::MAX, 0.0).expect("first sample");
+    assert_eq!(crossing.filter(-f64::MAX, 2.0), Ok(0.0));
+
+    // A positive cutoff/interval product below representable alpha holds
+    // the previous endpoint, while the overflowing positive limit picks next.
+    let mut held = OneEuroFilter::new(f64::from_bits(1), 0.0, 1.0).expect("tiny cutoff");
+    held.filter(0.0, 0.0).expect("first sample");
+    assert_eq!(held.filter(1.0, 0.0625), Ok(0.0));
+    let mut direct = OneEuroFilter::new(f64::MAX, 0.0, 1.0).expect("large cutoff");
+    direct.filter(0.0, 0.0).expect("first sample");
+    assert_eq!(direct.filter(42.0, 1.0), Ok(42.0));
+}
+
 fn rejected_axis_does_not_commit_another_axis_or_clock() {
     let start = Instant::now();
     let mut actual = OneEuroFilter2D::default();
@@ -234,6 +268,10 @@ fn one_euro_admission_and_recovery() {
             extreme_cutoff_and_interval_keep_meaningful_smoothing,
         ),
         ("known step", fixed_cutoff_matches_a_known_scalar_step),
+        (
+            "stable extremes",
+            constant_extremes_and_opposite_signs_keep_their_meaning,
+        ),
         (
             "atomic axes",
             rejected_axis_does_not_commit_another_axis_or_clock,

@@ -51,6 +51,20 @@ fn smoothing_alpha(fc: f64, te: f64) -> f64 {
     if r.is_infinite() { 1.0 } else { r / (1.0 + r) }
 }
 
+/// Preserve constant signals and endpoint limits without overflowing the
+/// difference between opposite-sign extremes.
+fn low_pass(previous: f64, next: f64, alpha: f64) -> f64 {
+    if alpha == 0.0 {
+        previous
+    } else if alpha == 1.0 {
+        next
+    } else if previous.is_sign_negative() == next.is_sign_negative() {
+        alpha.mul_add(next - previous, previous)
+    } else {
+        alpha * next + (1.0 - alpha) * previous
+    }
+}
+
 /// Invalid tuning, input, or arithmetic rejected without changing filter state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
@@ -180,7 +194,7 @@ impl OneEuroFilter {
             return Err(OneEuroFilterError::ArithmeticOverflow);
         }
         let a_d = smoothing_alpha(self.d_cutoff, te);
-        let dx_hat = a_d * dx + (1.0 - a_d) * self.dx_prev;
+        let dx_hat = low_pass(self.dx_prev, dx, a_d);
         if !dx_hat.is_finite() {
             return Err(OneEuroFilterError::ArithmeticOverflow);
         }
@@ -191,7 +205,7 @@ impl OneEuroFilter {
             return Err(OneEuroFilterError::ArithmeticOverflow);
         }
         let a = smoothing_alpha(fc, te);
-        let x_hat = a * x + (1.0 - a) * x_prev;
+        let x_hat = low_pass(x_prev, x, a);
         if !x_hat.is_finite() {
             return Err(OneEuroFilterError::ArithmeticOverflow);
         }
