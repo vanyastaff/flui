@@ -3,14 +3,13 @@
 //! ## Implemented subset
 //!
 //! `size`, `device_pixel_ratio`, `text_sizing`, `font_weight_adjustment`, `padding`,
-//! `view_insets`, `platform_brightness`, `high_contrast`, `preferred_locales` — presentation and
+//! `view_insets`, `platform_brightness`, `high_contrast`, `preferred_locales`, `motion` — presentation and
 //! preference fields for layout and theming.
 //!
 //! ## Deferred (not yet implemented)
 //!
 //! View padding, system gesture insets, 24-hour-format preference,
-//! accessible navigation, inverted colors, disabled
-//! animations, display features, and navigation mode. Text-weight observation
+//! accessible navigation, inverted colors, display features, and navigation mode. Text-weight observation
 //! is implemented by the UIKit backend; other backends leave it unavailable.
 //! These require platform event plumbing (accessibility bridge, IME state)
 //! that lives above this layer.

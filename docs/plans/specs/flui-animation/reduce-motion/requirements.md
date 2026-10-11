@@ -68,9 +68,10 @@
   последовательности смен политики/масштаба и разбиения кадров; эталон — тот же запуск на втором
   `Vsync` с `Full`.
 - **R6.** Builder ДОЛЖЕН давать `Normal` по умолчанию для любой формы (`unbounded()` поведение не
-  меняет); `behavior` задаётся явно. Скролл (3 сайта), таймеры (snackbar, InkWell) и индикаторы
-  загрузки (`ActivityIndicator`, `LinearProgressIndicator`, `CupertinoActivityIndicator`) —
-  `.behavior(Preserve)`; implicit-анимации и `AnimatedValue` — `Normal` (решения X2, X9,
+  меняет); `behavior` задаётся явно. Скролл (3 сайта) и таймеры (snackbar, InkWell) —
+  `.behavior(Preserve)`; индикаторы загрузки (`ActivityIndicator`, `LinearProgressIndicator`,
+  `CupertinoActivityIndicator`) — `Normal` с видимой статичной обратной связью под Reduce
+  (ADR-0192 пересматривает прежнее решение X9); implicit-анимации и `AnimatedValue` — `Normal` (решение X2,
   orchestration «По итогам adversarial review»). Тест: `default_behavior_is_normal` (таблица
   builder'ов) и строка `implicit_opacity_settles_under_reduce`.
 

@@ -22,8 +22,9 @@ repeat parks without completing its future or requesting continuous frames.
 Full resumes a parked repeat with a fresh time anchor. Under FollowSystem,
 a positive host duration scale multiplies Normal durations.
 
-Select `AnimationBehavior::Preserve` for physical inertia, activity indicators
-and essential timers. It keeps authored timing under motion preferences;
+Select `AnimationBehavior::Preserve` for physical inertia and essential timers.
+Loading indicators use Normal and visible static feedback under Reduce (ADR-0192).
+Preserve keeps authored timing under motion preferences;
 debug playback and registry muting still apply. Changing policy commits clock
 state without sampling controllers or invoking their listeners.
 

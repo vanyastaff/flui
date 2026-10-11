@@ -89,6 +89,20 @@ fn motion_lab_buttons_drive_independent_property_deadlines_and_reduce() {
         panic!("the demo paints its moving blue rectangle");
     }
 
+    fn indicator_arc(laid: &LaidOut) -> (f64, f64) {
+        for command in laid.draw_ops() {
+            if let DrawOp::Arc {
+                start_angle,
+                sweep_angle,
+                ..
+            } = command.op
+            {
+                return (start_angle, sweep_angle);
+            }
+        }
+        panic!("the actual demo retains visible loading feedback");
+    }
+
     for preference in [MotionPreference::Full, MotionPreference::Reduce] {
         let mut laid = lay_out(motion_lab::MotionLab, tight(720.0, 760.0));
         laid.set_motion_preference(preference);
@@ -116,6 +130,86 @@ fn motion_lab_buttons_drive_independent_property_deadlines_and_reduce() {
         laid.pump_for(Duration::from_millis(500));
         assert_eq!(moving_box(&laid), (360.0, 120.0));
     }
+
+    use flui_interaction::events::{Code, Key, NamedKey};
+    use flui_interaction::testing::input::KeyEventBuilder;
+    use flui_testing::a11y::Role;
+    let mut laid = lay_out(motion_lab::MotionLab, tight(720.0, 760.0));
+    laid.set_motion_preference(MotionPreference::Full);
+    laid.enable_semantics();
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(300));
+    let tree = laid.a11y_tree().expect("semantics enabled");
+    let pause = tree
+        .find_by_label("Pause activity")
+        .expect("the real demo exposes its pause control");
+    assert_eq!(pause.role(), Role::Button);
+    assert!(!pause.is_disabled());
+    let tab = KeyEventBuilder::new(Code::Tab)
+        .with_key(Key::Named(NamedKey::Tab))
+        .build();
+    let enter = KeyEventBuilder::new(Code::Enter)
+        .with_key(Key::Named(NamedKey::Enter))
+        .build();
+    let mut reached = false;
+    for _ in 0..20 {
+        assert!(laid.focus_manager().dispatch_key_event(&tab).is_handled());
+        laid.tick();
+        let tree = laid.a11y_tree().expect("semantics enabled");
+        if tree
+            .focus()
+            .is_some_and(|node| node.label() == Some("Pause activity"))
+        {
+            reached = true;
+            break;
+        }
+    }
+    assert!(reached, "Tab traversal reaches the actual pause button");
+    assert!(laid.focus_manager().dispatch_key_event(&enter).is_handled());
+    laid.tick();
+    let paused = indicator_arc(&laid);
+    assert!(paused.1 > 0.0);
+    let tree = laid.a11y_tree().expect("semantics enabled");
+    assert_eq!(
+        tree.focus().and_then(|node| node.label()),
+        Some("Resume activity"),
+        "changing the action name retains keyboard focus"
+    );
+    assert_eq!(
+        tree.find_by_label("Resume activity")
+            .expect("changed control name")
+            .role(),
+        Role::Button
+    );
+    assert!(laid.focus_manager().dispatch_key_event(&tab).is_handled());
+    laid.tick();
+    assert_ne!(
+        laid.a11y_tree()
+            .expect("semantics enabled")
+            .focus()
+            .and_then(|node| node.label()),
+        Some("Resume activity")
+    );
+    laid.pump_for(Duration::from_secs(6));
+    assert_eq!(
+        indicator_arc(&laid),
+        paused,
+        "pause survives moving focus and more than five seconds"
+    );
+    laid.set_motion_preference(MotionPreference::Reduce);
+    laid.tick();
+    tap(&mut laid, "Resume activity");
+    laid.pump_for(Duration::from_millis(300));
+    assert_eq!(indicator_arc(&laid), paused, "Resume respects Reduce");
+    laid.set_motion_preference(MotionPreference::Full);
+    laid.pump_for(Duration::ZERO);
+    let resumed = indicator_arc(&laid);
+    laid.pump_for(Duration::from_millis(300));
+    assert_ne!(
+        indicator_arc(&laid),
+        resumed,
+        "returning to Full resumes the real indicator"
+    );
 }
 
 /// The mounted root's logical width — wide enough for a card row.

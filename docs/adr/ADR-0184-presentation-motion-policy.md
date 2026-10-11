@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-09
+- **Superseded-by:** [ADR-0192](ADR-0192-accessible-loading-motion.md), loading indicator behavior only.
 - **Related:** [ADR-0172](ADR-0172-host-owned-system-preferences.md),
   [ADR-0176](ADR-0176-presentation-animation-playback.md),
   [ADR-0179](ADR-0179-controller-registration-ownership.md)
@@ -61,8 +62,9 @@ Application overrides apply before runners mount their first root and seed later
 presentations in the same runtime.
 
 Controllers default to Normal, including unbounded controllers. Physical scroll
-and viewer inertia, loading indicators, snackbar display timers and press-delay
-timers explicitly use Preserve. Cupertino route composition reads the inherited
+and viewer inertia, snackbar display timers and press-delay timers explicitly
+use Preserve. Loading indicators use Normal and visible static feedback under
+Reduce, as specified by ADR-0192. Cupertino route composition reads the inherited
 policy and returns its static child under Reduce.
 
 ## Alternatives

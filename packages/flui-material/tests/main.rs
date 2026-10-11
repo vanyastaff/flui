@@ -434,6 +434,18 @@ fn linear_progress_indeterminate_keyframes() {
             "progress_indicator::announced as progress",
             progress_indicator::announced_as_progress,
         ),
+        (
+            "progress_indicator::reduced motion keeps visible loading without continuation",
+            progress_indicator::reduced_motion_keeps_visible_loading_without_continuation,
+        ),
+        (
+            "progress_indicator::initially inactive loading stays visible without a percentage",
+            progress_indicator::initially_inactive_loading_stays_visible_without_a_percentage,
+        ),
+        (
+            "progress_indicator::nested pause and policy changes retain visible loading",
+            progress_indicator::nested_pause_and_policy_changes_retain_visible_loading,
+        ),
     ]);
 }
 
@@ -441,6 +453,10 @@ fn linear_progress_indeterminate_keyframes() {
 #[test]
 fn linear_progress_switches_to_determinate() {
     common::run_cases(&[
+        (
+            "progress_indicator::reduced motion determinate switches keep their meaning",
+            progress_indicator::reduced_motion_determinate_switches_keep_their_meaning,
+        ),
         (
             "progress_indicator::switching to a value stops the bars",
             progress_indicator::switching_to_a_value_stops_the_bars,

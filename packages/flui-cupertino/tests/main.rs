@@ -55,6 +55,14 @@ fn cupertino_activity_indicator_ticks_step() {
             "activity_indicator::unmount releases the controller",
             activity_indicator::unmount_releases_the_controller,
         ),
+        (
+            "activity_indicator::reduced motion keeps visible loading without continuation",
+            activity_indicator::reduced_motion_keeps_visible_loading_without_continuation,
+        ),
+        (
+            "activity_indicator::inactive loading stays visible and resumes",
+            activity_indicator::inactive_loading_stays_visible_and_resumes,
+        ),
     ]);
 }
 

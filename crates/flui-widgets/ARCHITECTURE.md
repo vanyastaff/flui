@@ -344,8 +344,13 @@ pinned by `a_size_only_change_rebuilds_size_and_whole_readers_only`.
 
 `MediaQuery::motion_of` observes the presentation's resolved policy, while
 controllers obey the clock rather than an inherited subtree override. Physical
-scroll and viewer inertia and the activity indicator explicitly use Preserve;
-ordinary transitions remain Normal (ADR-0184). Runtime publication is pinned by
+scroll and viewer inertia explicitly use Preserve; ordinary transitions remain
+Normal (ADR-0184). Loading indicators use Normal and visible static feedback under
+Reduce (ADR-0192). `TickerMode::is_enabled` exposes effective configured permission
+for representation; registry topology still owns delivery. The private inherited
+wrapper remains present across permission and binding changes, retaining descendants.
+`keyed_indicator_moves_between_configured_permissions_without_restarting` pins
+that continuity. Runtime publication is pinned by
 `system_motion_change_reaches_media_query_and_the_clock`.
 
 `WidgetsApp` resolves supported resources from ordered `preferred_locales`,

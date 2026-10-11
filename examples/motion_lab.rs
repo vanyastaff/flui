@@ -8,7 +8,9 @@
 //! Change width, then height before width finishes: the first property's
 //! deadline survives the second change. Reverse a target repeatedly to inspect
 //! continuity. Under Reduce, property transitions settle on the next frame,
-//! while the activity indicator and the three-second snack-bar timer continue.
+//! while loading stays visible without motion and the three-second snack-bar
+//! timer keeps its duration. Pause activity also stops the indicator while
+//! leaving the other controls usable; Resume activity respects the preference.
 //! Drag the card, or open the drawer and release it halfway through a drag.
 
 use std::time::Duration;
@@ -19,8 +21,8 @@ use flui::material::ScaffoldScope;
 use flui::painting::styling::Color;
 use flui::prelude::*;
 use flui::widgets::{
-    ActivityIndicator, AnimatedContainer, AnimatedOpacity, AnimatedRotation, Dismissible, column,
-    row,
+    ActivityIndicator, AnimatedContainer, AnimatedOpacity, AnimatedRotation, Dismissible,
+    TickerMode, column, row,
 };
 
 const BLUE: Color = Color::rgb(35, 94, 180);
@@ -62,6 +64,7 @@ struct LabState {
     faded: Signal<bool>,
     turned: Signal<bool>,
     dismissed: Signal<bool>,
+    activity_paused: Signal<bool>,
 }
 
 impl StatefulView for LabControls {
@@ -79,6 +82,7 @@ impl ViewState<LabControls> for LabState {
         self.faded = ctx.signal(false);
         self.turned = ctx.signal(false);
         self.dismissed = ctx.signal(false);
+        self.activity_paused = ctx.signal(false);
     }
 
     fn build(&self, _view: &LabControls, ctx: &dyn BuildContext) -> impl IntoView {
@@ -87,6 +91,8 @@ impl ViewState<LabControls> for LabState {
         let faded = self.faded;
         let turned = self.turned;
         let dismissed = self.dismissed;
+        let activity_paused = self.activity_paused;
+        let paused = activity_paused.get(ctx);
         let drawer = ScaffoldScope::of(ctx);
         let messenger = ScaffoldMessengerScope::of(ctx);
 
@@ -168,9 +174,21 @@ impl ViewState<LabControls> for LabState {
                 ]),
                 SizedBox::height(16.0),
                 Row::new(row![
-                    SizedBox::new(36.0, 36.0).child(ActivityIndicator::new()),
+                    TickerMode::new(SizedBox::new(36.0, 36.0).child(ActivityIndicator::new()))
+                        .enabled(!paused),
                     SizedBox::width(16.0),
-                    Text::new("Activity keeps running under Reduce"),
+                    Text::new(if paused {
+                        "Activity paused"
+                    } else {
+                        "Activity follows motion preference"
+                    }),
+                    SizedBox::width(12.0),
+                    FilledButton::new(Text::new(if paused {
+                        "Resume activity"
+                    } else {
+                        "Pause activity"
+                    }))
+                    .on_pressed(move |cx| activity_paused.update(cx, |value| *value = !*value)),
                 ]),
                 SizedBox::height(12.0),
                 FilledButton::new(Text::new("Show message for 3 seconds")).on_pressed(move |_| {

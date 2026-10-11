@@ -15,7 +15,7 @@ use flui_rendering::{delegates::CustomPainter, semantics::SemanticsRole};
 use flui_view::prelude::*;
 
 use crate::animated::VsyncScope;
-use crate::{CustomPaint, Semantics};
+use crate::{CustomPaint, MediaQuery, Semantics, TickerMode};
 
 /// One cycle of the indicator's motion.
 const CYCLE: Duration = Duration::from_secs(6);
@@ -49,8 +49,10 @@ const DEFAULT_COLOR: Color = Color::rgb(38, 102, 192);
 /// controller each frame; the indicator never rebuilds to animate.
 ///
 /// The controller is registered with the ambient [`VsyncScope`]; without
-/// one, or under a disabled [`TickerMode`](crate::TickerMode), the indicator
-/// paints the cycle's first frame. It is exposed to assistive technology as a
+/// one, or under a disabled [`TickerMode`], the indicator
+/// paints a visible static arc. Reduced motion also selects this representation
+/// and parks the repeating run without requesting continuation frames. It is
+/// exposed to assistive technology as a
 /// [`SemanticsRole::LoadingSpinner`] with its [`label`](Self::label).
 ///
 /// # Examples
@@ -152,9 +154,7 @@ impl StatefulView for ActivityIndicator {
 
     fn create_state(&self) -> Self::State {
         ActivityIndicatorState {
-            controller: AnimationController::builder(CYCLE)
-                .behavior(flui_animation::AnimationBehavior::Preserve)
-                .build_on(None),
+            controller: AnimationController::builder(CYCLE).build_on(None),
             motion: Arc::new(Motion::new()),
         }
     }
@@ -174,9 +174,12 @@ impl ViewState<ActivityIndicator> for ActivityIndicatorState {
         }
     }
 
-    fn build(&self, view: &ActivityIndicator, _ctx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, view: &ActivityIndicator, ctx: &dyn BuildContext) -> impl IntoView {
+        let enabled = TickerMode::is_enabled(ctx);
+        let reduced = MediaQuery::motion_of(ctx) == Some(flui_animation::MotionPolicy::Reduce);
         let painter = ArcPainter {
-            controller: self.controller.controller().clone(),
+            controller: (self.controller.is_bound() && enabled && !reduced)
+                .then(|| self.controller.controller().clone()),
             motion: Arc::clone(&self.motion),
             color: view.color,
         };
@@ -198,7 +201,7 @@ impl ViewState<ActivityIndicator> for ActivityIndicatorState {
 /// Paints the arc at the controller's current progress.
 #[derive(Debug)]
 struct ArcPainter {
-    controller: AnimationController,
+    controller: Option<AnimationController>,
     motion: Arc<Motion>,
     color: Color,
 }
@@ -209,7 +212,7 @@ impl CustomPainter for ArcPainter {
         if !side.is_finite() || side <= STROKE {
             return;
         }
-        let progress = self.controller.value();
+        let progress = self.controller.as_ref().map_or(0.0, Animation::value);
         let degrees = self.motion.turn.transform(progress) + self.motion.steps.transform(progress);
         let sweep = self.motion.sweep.transform(progress) * TAU;
         let inset = STROKE / 2.0;
@@ -226,13 +229,17 @@ impl CustomPainter for ArcPainter {
     }
 
     fn should_repaint(&self, old: &dyn CustomPainter) -> bool {
-        old.as_any()
-            .downcast_ref::<Self>()
-            .is_none_or(|old| old.color != self.color || !Arc::ptr_eq(&old.motion, &self.motion))
+        old.as_any().downcast_ref::<Self>().is_none_or(|old| {
+            old.color != self.color
+                || old.controller.is_some() != self.controller.is_some()
+                || !Arc::ptr_eq(&old.motion, &self.motion)
+        })
     }
 
     fn repaint(&self) -> Option<std::rc::Rc<dyn Listenable>> {
-        Some(std::rc::Rc::new(self.controller.clone()))
+        self.controller
+            .as_ref()
+            .map(|controller| std::rc::Rc::new(controller.clone()) as std::rc::Rc<dyn Listenable>)
     }
 
     fn as_any(&self) -> &dyn Any {

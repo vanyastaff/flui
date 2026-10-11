@@ -46,7 +46,8 @@ const TICK_COLOR: CupertinoDynamicColor = CupertinoDynamicColor::with_brightness
 /// the brightest one stepping clockwise once per tick per eighth of a second.
 ///
 /// Its controller is registered with the ambient [`VsyncScope`]; without one,
-/// or under a disabled `TickerMode`, it paints the cycle's first frame.
+/// under a disabled `TickerMode`, or with reduced motion, it paints eight static
+/// ticks. Reduced motion parks the repeating run without continuation frames.
 /// Assistive technology sees a [`SemanticsRole::LoadingSpinner`] labelled
 /// "Loading".
 ///
@@ -117,9 +118,7 @@ impl StatefulView for CupertinoActivityIndicator {
 
     fn create_state(&self) -> Self::State {
         CupertinoActivityIndicatorState {
-            controller: AnimationController::builder(CYCLE)
-                .behavior(flui_sdk::animation::AnimationBehavior::Preserve)
-                .build_on(None),
+            controller: AnimationController::builder(CYCLE).build_on(None),
             phases: Arc::new(Phases::new()),
         }
     }
@@ -140,8 +139,12 @@ impl ViewState<CupertinoActivityIndicator> for CupertinoActivityIndicatorState {
     }
 
     fn build(&self, _view: &CupertinoActivityIndicator, ctx: &dyn BuildContext) -> impl IntoView {
+        let enabled = flui_sdk::widgets::TickerMode::is_enabled(ctx);
+        let reduced = flui_sdk::widgets::MediaQuery::motion_of(ctx)
+            == Some(flui_sdk::animation::MotionPolicy::Reduce);
         let painter = TickPainter {
-            controller: self.controller.controller().clone(),
+            controller: (self.controller.is_bound() && enabled && !reduced)
+                .then(|| self.controller.controller().clone()),
             phases: Arc::clone(&self.phases),
             color: TICK_COLOR.resolve_from(ctx),
         };
@@ -162,7 +165,7 @@ impl ViewState<CupertinoActivityIndicator> for CupertinoActivityIndicatorState {
 
 #[derive(Debug)]
 struct TickPainter {
-    controller: AnimationController,
+    controller: Option<AnimationController>,
     phases: Arc<Phases>,
     color: Color,
 }
@@ -173,7 +176,12 @@ impl CustomPainter for TickPainter {
         if !radius.is_finite() || radius <= 0.0 {
             return;
         }
-        let elapsed = CYCLE.mul_f64(self.controller.value().clamp(0.0, 1.0));
+        let elapsed = CYCLE.mul_f64(
+            self.controller
+                .as_ref()
+                .map_or(0.0, Animation::value)
+                .clamp(0.0, 1.0),
+        );
         // A tick: a rounded bar from a third of the radius to the rim, at 12
         // o'clock before rotation, `radius / 5` wide.
         let half_width = radius / RADIUS;
@@ -194,13 +202,17 @@ impl CustomPainter for TickPainter {
     }
 
     fn should_repaint(&self, old: &dyn CustomPainter) -> bool {
-        old.as_any()
-            .downcast_ref::<Self>()
-            .is_none_or(|old| old.color != self.color)
+        old.as_any().downcast_ref::<Self>().is_none_or(|old| {
+            old.color != self.color
+                || old.controller.is_some() != self.controller.is_some()
+                || !Arc::ptr_eq(&old.phases, &self.phases)
+        })
     }
 
     fn repaint(&self) -> Option<std::rc::Rc<dyn Listenable>> {
-        Some(std::rc::Rc::new(self.controller.clone()))
+        self.controller
+            .as_ref()
+            .map(|controller| std::rc::Rc::new(controller.clone()) as std::rc::Rc<dyn Listenable>)
     }
 
     fn as_any(&self) -> &dyn Any {
