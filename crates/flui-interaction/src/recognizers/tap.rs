@@ -538,7 +538,7 @@ impl GestureRecognizer for TapGestureRecognizer {
                             global_position: sequence.down.global_position,
                             local_position: sequence.down.local_position,
                             kind: sequence.down.kind,
-                        })
+                        });
                     },
                 );
             });

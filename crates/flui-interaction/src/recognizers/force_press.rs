@@ -426,7 +426,7 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
                             Offset::new(local_position.x, local_position.y),
                             Offset::new(root_position.x, root_position.y),
                             local.pressure.map(|pressure| f64::from(pressure.get())),
-                        )
+                        );
                     });
                     RoutePanic::preserve_first(&mut first, candidate, "measured pressure history");
                 }
