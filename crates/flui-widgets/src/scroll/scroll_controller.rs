@@ -35,7 +35,7 @@
 //! **No completion future.** There is no widget-level async gate to await
 //! from `build`/event-handler code, so `animate_to` returns
 //! nothing — a caller cannot observe when the run finishes short of polling
-//! [`ScrollController::pixels`] or watching [`ScrollController::as_listenable`].
+//! [`ScrollController::pixels`] or watching [`ScrollController::listenable`].
 //! Replacement commits the incoming command before retiring the outgoing
 //! curve outside the cell's borrow. Delivery and retirement share first-failure
 //! custody. A jump publishes its pixels before displaced pending curve destruction;
@@ -512,8 +512,8 @@ impl ScrollController {
     /// the `Rc` upcast avoids an extra allocation and keeps all clones
     /// sharing a single notifier.
     #[must_use]
-    pub fn as_listenable(&self) -> std::rc::Rc<dyn Listenable> {
-        self.position.as_listenable()
+    pub fn listenable(&self) -> std::rc::Rc<dyn Listenable> {
+        self.position.listenable()
     }
 
     // -- Scrollbar helpers ---------------------------------------------------

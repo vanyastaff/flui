@@ -1,18 +1,16 @@
 //! [`TransformationController`] — the external handle for
 //! [`InteractiveViewer`](super::InteractiveViewer)'s transform.
 
-use std::fmt;
-use std::rc::Rc;
+use std::{cell::Cell, fmt, rc::Rc};
 
 use flui_foundation::geometry::Matrix4;
 use flui_foundation::geometry::Offset;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
-use std::cell::RefCell;
 
 /// The heap-allocated state shared by every clone of a
 /// [`TransformationController`].
 struct Inner {
-    value: RefCell<Matrix4>,
+    value: Cell<Matrix4>,
     notifier: ChangeNotifier,
 }
 
@@ -33,14 +31,9 @@ impl Listenable for Inner {
 /// A shared, cheaply-cloneable handle to an `InteractiveViewer`'s
 /// transformation matrix.
 ///
-/// A thin wrapper on a notifier whose value is a `Matrix4`. It is
-/// shaped the way sibling controllers in this crate are shaped (see
-/// [`ScrollController`](crate::ScrollController) /
-/// `flui_rendering::view::ScrollPosition`): `Arc`-backed shared state plus a
-/// [`ChangeNotifier`], so every clone observes the same transform and the
-/// same notifications, and [`as_listenable`](Self::as_listenable) hands out
-/// a stable `Arc<dyn Listenable>` (`Arc::ptr_eq`-stable across calls) for
-/// `AnimatedBuilder`'s subscribe/swap machinery.
+/// Every clone shares the transform and notification channel on the owning UI
+/// thread through `Rc`. [`listenable`](Self::listenable) returns that same channel,
+/// so subscribers can retain their subscription when given another clone.
 ///
 /// The value defaults to [`Matrix4::identity`] — no transformation.
 #[derive(Clone)]
@@ -50,8 +43,9 @@ pub struct TransformationController {
 
 impl fmt::Debug for TransformationController {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = self.inner.value.get();
         f.debug_struct("TransformationController")
-            .field("value", &*self.inner.value.borrow_mut())
+            .field("value", &value)
             .finish_non_exhaustive()
     }
 }
@@ -77,7 +71,7 @@ impl TransformationController {
     pub fn with_value(value: Matrix4) -> Self {
         Self {
             inner: Rc::new(Inner {
-                value: RefCell::new(value),
+                value: Cell::new(value),
                 notifier: ChangeNotifier::new(),
             }),
         }
@@ -86,23 +80,21 @@ impl TransformationController {
     /// The current transform.
     #[must_use]
     pub fn value(&self) -> Matrix4 {
-        *self.inner.value.borrow_mut()
+        self.inner.value.get()
     }
 
     /// Replaces the transform and notifies listeners if it actually changed.
     ///
     /// No clamping is applied here.
     /// `InteractiveViewer`'s own gesture handling is what runs a candidate
-    /// transform through `boundaryMargin`/`minScale`/`maxScale` before
+    /// transform through `boundary_margin`/`min_scale`/`max_scale` before
     /// writing it through this setter; a direct `set_value` call (from a
     /// test, or an external animation) bypasses those clamps entirely.
     pub fn set_value(&self, value: Matrix4) {
-        let mut guard = self.inner.value.borrow_mut();
-        if guard.m == value.m {
+        if self.inner.value.get().m == value.m {
             return;
         }
-        *guard = value;
-        drop(guard);
+        self.inner.value.set(value);
         self.inner.notifier.notify_listeners();
     }
 
@@ -126,17 +118,14 @@ impl TransformationController {
         Offset::new(x, y)
     }
 
-    /// An `Arc<dyn Listenable>` sharing this controller's notifier.
+    /// An `Rc<dyn Listenable>` sharing this controller's notification channel.
     ///
-    /// The same `Arc<Inner>` is coerced on every call (not a fresh
-    /// allocation), so `Arc::ptr_eq` across two calls on the same controller
-    /// — or on two clones of it — is stable. This is what lets
-    /// `AnimatedBuilder`/`ValueListenableBuilder`-style subscribers detect
-    /// "same controller, just a different clone" instead of resubscribing on
-    /// every rebuild.
+    /// Each call clones the existing `Rc`, retaining pointer identity without
+    /// allocating a new channel. Replacing a handle with another clone therefore
+    /// does not require subscribers to detach and register again.
     #[must_use]
-    pub fn as_listenable(&self) -> std::rc::Rc<dyn Listenable> {
-        Rc::clone(&self.inner) as std::rc::Rc<dyn Listenable>
+    pub fn listenable(&self) -> Rc<dyn Listenable> {
+        Rc::clone(&self.inner) as Rc<dyn Listenable>
     }
 
     /// The number of listeners currently registered.

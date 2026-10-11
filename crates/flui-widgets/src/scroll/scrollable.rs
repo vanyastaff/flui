@@ -779,7 +779,7 @@ impl ScrollableState {
         self.remove_command_listener();
         let scroll_ref = self.scroll_controller.clone();
         let fling_ref = self.fling_controller.controller().clone();
-        let listenable = self.scroll_controller.as_listenable();
+        let listenable = self.scroll_controller.listenable();
         let listener_id = listenable.add_listener(std::rc::Rc::new(move || {
             scroll_ref.service_pending_command(&fling_ref);
         }));

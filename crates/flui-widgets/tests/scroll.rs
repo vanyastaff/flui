@@ -659,7 +659,7 @@ pub(crate) fn replacing_pending_scroll_motion_delivers_and_recovers_after_user_f
             );
             let attempts = Rc::new(Cell::new(0));
             let calls = Rc::clone(&attempts);
-            let listenable = controller.as_listenable();
+            let listenable = controller.listenable();
             let listener = listenable.add_listener(Rc::new(move || {
                 calls.set(calls.get() + 1);
                 assert!(!notification_fails, "pending scroll notification failure");
@@ -1221,7 +1221,7 @@ pub(crate) fn a_failed_refresh_notification_releases_activity_and_recovers() {
         let watched = refresh.clone();
         let fail_callback = fail.clone();
         let failed_callback = failed.clone();
-        let listenable = refresh.as_listenable();
+        let listenable = refresh.listenable();
         let listener = listenable.add_listener(std::rc::Rc::new(move || {
             if watched.is_refreshing() && fail_callback.swap(false, Ordering::SeqCst) {
                 failed_callback.store(true, Ordering::SeqCst);
@@ -3287,7 +3287,7 @@ pub(crate) fn refresh_indicator_rebuilds_only_on_a_phase_change() {
     let counter = Arc::clone(&heard);
     let _subscription = harness
         .refresh
-        .as_listenable()
+        .listenable()
         .add_listener(std::rc::Rc::new(move || {
             counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }));
@@ -3336,6 +3336,82 @@ pub(crate) fn refresh_indicator_rebuilds_only_on_a_phase_change() {
         "finishing refresh rebuilds only the indicator"
     );
 }
+pub(crate) fn a_refresh_completed_by_a_listener_allows_the_next_pull() {
+    use flui_testing::PointerPhase::{Down, Move, Up};
+
+    for bind_first in [false, true] {
+        let refresh = RefreshController::new();
+        let finish_first = Rc::new(Cell::new(true));
+        let notifications = Rc::new(Cell::new(0));
+        let listenable = refresh.listenable();
+        let callback: flui_foundation::ListenerCallback = Rc::new({
+            let watched = refresh.clone();
+            let finish_first = Rc::clone(&finish_first);
+            let notifications = Rc::clone(&notifications);
+            move || {
+                notifications.set(notifications.get() + 1);
+                if watched.is_refreshing() && finish_first.replace(false) {
+                    watched.finish();
+                }
+            }
+        });
+        let mut harness = RefreshHarness::mount();
+        let listener = if bind_first {
+            harness.replace_refresh(refresh.clone());
+            listenable.add_listener(callback)
+        } else {
+            let listener = listenable.add_listener(callback);
+            harness.replace_refresh(refresh.clone());
+            listener
+        };
+        let content_builds = harness.content_builds.get();
+
+        for attempt in 0..2 {
+            harness.scroll.set_pixels(0.0);
+            harness.pointer(Down, 40.0);
+            for y in [60.0, 80.0, 100.0, 120.0, 140.0] {
+                harness.pointer(Move, y);
+            }
+            harness.pointer(Up, 140.0);
+            assert!(
+                !finish_first.get(),
+                "the observer completed the first refresh"
+            );
+            assert_eq!(
+                refresh.is_refreshing(),
+                attempt == 1,
+                "only the subsequent pull remains refreshing; bind_first={bind_first}"
+            );
+            harness.frame();
+            assert_eq!(
+                harness.paints_indicator(),
+                attempt == 1,
+                "the committed indicator follows the latest phase; bind_first={bind_first}"
+            );
+            assert_eq!(harness.content_builds.get(), content_builds);
+        }
+
+        let heard = notifications.get();
+        refresh.finish();
+        assert_eq!(notifications.get(), heard + 1);
+        harness.frame();
+        assert!(
+            !harness.paints_indicator(),
+            "normal completion removes the arc"
+        );
+        let heard = notifications.get();
+        refresh.finish();
+        assert_eq!(
+            notifications.get(),
+            heard + 1,
+            "an idle finish still notifies the external channel"
+        );
+        assert_eq!(harness.frame(), 0, "an unchanged phase does not rebuild");
+        assert_eq!(harness.content_builds.get(), content_builds);
+        listenable.remove_listener(listener);
+    }
+}
+
 fn nested_fling_content(
     outer: &ScrollController,
     inner: &ScrollController,
@@ -3751,7 +3827,7 @@ pub(crate) fn nested_fling_failure_keeps_first_panic_and_a_new_gesture_makes_pro
         outer.jump_to(600.0);
         inner.jump_to(650.0);
         laid.tick();
-        let listenable = outer.as_listenable();
+        let listenable = outer.listenable();
         let first = Arc::new(AtomicBool::new(true));
         let fail = Arc::clone(&first);
         let first_id = listenable.add_listener(std::rc::Rc::new(move || {
@@ -3863,7 +3939,7 @@ pub(crate) fn nested_fling_equal_edge_jump_cancels_old_handoff_and_next_gesture_
     let pending_jump = Arc::new(AtomicBool::new(true));
     let jump = Arc::clone(&pending_jump);
     let controller = inner.clone();
-    let listenable = inner.as_listenable();
+    let listenable = inner.listenable();
     let listener = listenable.add_listener(std::rc::Rc::new(move || {
         if controller.pixels() == 800.0 && jump.swap(false, Ordering::SeqCst) {
             // Explicit programmatic cancellation must win even when it leaves
@@ -3962,7 +4038,7 @@ pub(crate) fn nested_fling_skips_saturated_parent_and_reentrant_jump_retires_tra
     let once = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let entered = Arc::clone(&once);
     let reentrant = outer.clone();
-    let listenable = outer.as_listenable();
+    let listenable = outer.listenable();
     let listener = listenable.add_listener(std::rc::Rc::new(move || {
         if entered.swap(false, std::sync::atomic::Ordering::SeqCst) {
             reentrant.jump_to(123.0);
@@ -4323,7 +4399,7 @@ pub(crate) fn show_on_screen_failure_continues_live_ancestors_and_fresh_requests
         );
         let first = Arc::new(AtomicBool::new(true));
         let failed = Arc::clone(&first);
-        let inner_listenable = inner.as_listenable();
+        let inner_listenable = inner.listenable();
         let first_id = inner_listenable.add_listener(std::rc::Rc::new(move || {
             assert!(
                 !failed.swap(false, Ordering::SeqCst),
@@ -4332,7 +4408,7 @@ pub(crate) fn show_on_screen_failure_continues_live_ancestors_and_fresh_requests
         }));
         let second = Arc::new(AtomicBool::new(competing));
         let failed = Arc::clone(&second);
-        let outer_listenable = outer.as_listenable();
+        let outer_listenable = outer.listenable();
         let second_id = outer_listenable.add_listener(std::rc::Rc::new(move || {
             assert!(
                 !failed.swap(false, Ordering::SeqCst),
@@ -4420,7 +4496,7 @@ pub(crate) fn show_on_screen_same_pipeline_reentry_keeps_one_reveal_and_recovers
         })
         .expect("actual automatic ancestor reveal");
     let _scope = RestoreScope(PENDING_REVEAL.with(|slot| slot.replace(Some(invocation))));
-    let listenable = inner.as_listenable();
+    let listenable = inner.listenable();
     let listener = listenable.add_listener(std::rc::Rc::new(|| {
         // The notification runs on the same owner thread. Resolve its local
         // pending request without making that request cross-thread ownership.
@@ -4535,7 +4611,7 @@ pub(crate) fn show_on_screen_sibling_reentry_delivers_last_target_without_stale_
         let _scope = RestoreScope(PENDING_SIBLING.with(|slot| slot.replace(Some(invocation))));
         let notifications = Arc::new(AtomicUsize::new(0));
         let seen = Arc::clone(&notifications);
-        let listenable = controller.as_listenable();
+        let listenable = controller.listenable();
         let listener = listenable.add_listener(std::rc::Rc::new(move || {
             seen.fetch_add(1, Ordering::SeqCst);
             let invocation = PENDING_SIBLING.with(|slot| slot.borrow_mut().take());

@@ -28,12 +28,7 @@
 //! v1 uses a synchronous completion model rather than a future because the view
 //! layer has no async executor.
 
-use std::{
-    cell::Cell,
-    rc::Rc,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::{cell::Cell, rc::Rc, sync::Arc, time::Duration};
 
 use flui_animation::{Animation, AnimationController, AnimationStatus, DrivenController, Vsync};
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
@@ -68,61 +63,19 @@ const INDICATOR_HEIGHT_PX: f64 = 56.0;
 const INDICATOR_COLOR: Color = Color::rgba(33, 150, 243, 204);
 
 // ---------------------------------------------------------------------------
-// RefreshControllerInner — Arc-shared state
+// RefreshControllerInner — owner-local shared state
 // ---------------------------------------------------------------------------
 
-/// Whether a refresh is running, and how many times that has changed.
-///
-/// The epoch is bumped under the same lock as the flag, so a listener that
-/// reads both learns the order of the mutation it observed: notifications
-/// on two threads may finish in either order, but the epoch only grows.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct Phase {
-    refreshing: bool,
-    epoch: u64,
-}
-
-impl Phase {
-    fn set(&mut self, refreshing: bool) {
-        if self.refreshing != refreshing {
-            self.refreshing = refreshing;
-            self.epoch = self.epoch.saturating_add(1);
-        }
-    }
-}
-
-/// The last [`Phase`] a listener acted on, advanced only forward.
-#[derive(Debug)]
-struct PhaseTracker(Mutex<Phase>);
-
-impl PhaseTracker {
-    /// Records `observed` if it is newer than the tracked phase; returns
-    /// whether that flipped the refresh flag. An older observation finishing
-    /// late is ignored, so it cannot restore a superseded phase.
-    fn advance(&self, observed: Phase) -> bool {
-        let mut last = self
-            .0
-            .lock()
-            .expect("BUG: PhaseTracker is never held across a panic");
-        if observed.epoch <= last.epoch {
-            return false;
-        }
-        let flipped = last.refreshing != observed.refreshing;
-        *last = observed;
-        flipped
-    }
-}
-
 struct RefreshControllerInner {
-    pull_distance_px: Mutex<f64>,
-    phase: Mutex<Phase>,
+    pull_distance_px: Cell<f64>,
+    refreshing: Cell<bool>,
     notifier: ChangeNotifier,
 }
 
 impl std::fmt::Debug for RefreshControllerInner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let is_refreshing = self.phase.lock().is_ok_and(|g| g.refreshing);
-        let pull = self.pull_distance_px.lock().map_or(0.0, |g| *g);
+        let is_refreshing = self.refreshing.get();
+        let pull = self.pull_distance_px.get();
         f.debug_struct("RefreshControllerInner")
             .field("is_refreshing", &is_refreshing)
             .field("pull_distance_px", &pull)
@@ -155,7 +108,7 @@ impl Listenable for RefreshControllerInner {
 /// [`RefreshIndicator::controller`], and call [`finish`](Self::finish) after
 /// the refresh operation completes to dismiss the spinner.
 ///
-/// Every clone shares the same inner state via `Arc`.
+/// Every clone shares the same state on the owning UI thread via `Rc`.
 #[derive(Clone, Debug)]
 pub struct RefreshController {
     inner: Rc<RefreshControllerInner>,
@@ -165,8 +118,8 @@ impl Default for RefreshController {
     fn default() -> Self {
         Self {
             inner: Rc::new(RefreshControllerInner {
-                pull_distance_px: Mutex::new(0.0),
-                phase: Mutex::new(Phase::default()),
+                pull_distance_px: Cell::new(0.0),
+                refreshing: Cell::new(false),
                 notifier: ChangeNotifier::new(),
             }),
         }
@@ -184,16 +137,7 @@ impl RefreshController {
     /// been called but [`finish`](Self::finish) has not yet been called.
     #[must_use]
     pub fn is_refreshing(&self) -> bool {
-        self.phase().refreshing
-    }
-
-    /// The refresh phase and its mutation epoch, read together.
-    fn phase(&self) -> Phase {
-        *self
-            .inner
-            .phase
-            .lock()
-            .expect("BUG: RefreshController phase mutex is never held across a panic; poisoning means a bug elsewhere already corrupted controller state")
+        self.inner.refreshing.get()
     }
 
     /// The current pull distance in logical pixels.
@@ -202,46 +146,31 @@ impl RefreshController {
     /// Resets to `0.0` when the pointer lifts or a refresh begins.
     #[must_use]
     pub fn pull_distance_px(&self) -> f64 {
-        *self
-            .inner
-            .pull_distance_px
-            .lock()
-            .expect("BUG: RefreshController pull_distance_px mutex is never held across a panic; poisoning means a bug elsewhere already corrupted controller state")
+        self.inner.pull_distance_px.get()
     }
 
     /// Signal that the refresh operation is complete. Hides the spinner and
     /// transitions back to idle.
     ///
-    /// Calling when not refreshing is a no-op (safe to call defensively).
+    /// Calling while idle leaves the phase unchanged and still notifies listeners.
     pub fn finish(&self) {
-        let mut guard = self
-            .inner
-            .phase
-            .lock()
-            .expect("BUG: RefreshController phase mutex is never held across a panic; poisoning means a bug elsewhere already corrupted controller state");
-        guard.set(false);
-        drop(guard);
+        self.inner.refreshing.set(false);
         self.inner.notifier.notify_listeners();
     }
 
-    /// An `Arc<dyn Listenable>` pointing at the same inner state.
+    /// An `Rc<dyn Listenable>` sharing this controller's notification channel.
     ///
     /// Subscribe via [`AnimatedBuilder`](crate::transitions::AnimatedBuilder) to rebuild when the refresh phase or
     /// pull distance changes.
     #[must_use]
-    pub fn as_listenable(&self) -> std::rc::Rc<dyn Listenable> {
-        Rc::clone(&self.inner) as std::rc::Rc<dyn Listenable>
+    pub fn listenable(&self) -> Rc<dyn Listenable> {
+        Rc::clone(&self.inner) as Rc<dyn Listenable>
     }
 
     // -- crate-internal mutation called from gesture callbacks ----------------
 
     pub(super) fn set_pull_distance_px(&self, distance_px: f64) {
-        *self
-            .inner
-            .pull_distance_px
-            .lock()
-            .expect("BUG: RefreshController pull_distance_px mutex is never held across a panic; poisoning means a bug elsewhere already corrupted controller state") =
-            distance_px;
+        self.inner.pull_distance_px.set(distance_px);
         self.inner.notifier.notify_listeners();
     }
 
@@ -250,31 +179,12 @@ impl RefreshController {
         Rc::ptr_eq(&self.inner, &other.inner)
     }
 
-    #[cfg(test)]
-    fn begin_refresh(&self) {
-        let mut recovery = flui_foundation::panic::PanicRecovery::new();
-        recovery.run_with(|recovery| self.begin_refresh_with_recovery(recovery));
-        recovery.finish();
-    }
-
     fn begin_refresh_with_recovery(
         &self,
         recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
     ) {
-        {
-            let mut refreshing = self
-                .inner
-                .phase
-                .lock()
-                .expect("BUG: RefreshController phase mutex is never held across a panic; poisoning means a bug elsewhere already corrupted controller state");
-            let mut pull = self
-                .inner
-                .pull_distance_px
-                .lock()
-                .expect("BUG: RefreshController pull_distance_px mutex is never held across a panic; poisoning means a bug elsewhere already corrupted controller state");
-            refreshing.set(true);
-            *pull = 0.0;
-        }
+        self.inner.refreshing.set(true);
+        self.inner.pull_distance_px.set(0.0);
         self.inner.notifier.notify_listeners_with_recovery(recovery);
     }
 }
@@ -481,33 +391,20 @@ impl StatefulView for RefreshIndicator {
     }
 }
 
-/// Calls `on_flip` whenever `controller`'s refresh flag flips relative to
-/// `snapshot`, the phase the caller last built against. After registering it
-/// catches up with a change made between the snapshot and the registration,
-/// which no notification would report.
-fn listen_for_phase_flips(
+/// Observes refresh-state changes, committing each observation before the callback.
+/// Registration does not call listeners, so the initial observation cannot go stale.
+fn listen_for_refresh_changes(
     controller: &RefreshController,
-    snapshot: Phase,
-    on_flip: impl Fn() + Send + Sync + 'static,
+    on_change: impl Fn() + 'static,
 ) -> ListenerId {
-    let tracker = Arc::new(PhaseTracker(Mutex::new(snapshot)));
-    let on_flip = Arc::new(on_flip);
-    let id = controller.inner.add_listener(std::rc::Rc::new({
-        let watched = controller.clone();
-        let tracker = Arc::clone(&tracker);
-        let on_flip = Arc::clone(&on_flip);
-        move || {
-            // Ordered by the mutation's epoch, not by which notification
-            // finishes first.
-            if tracker.advance(watched.phase()) {
-                on_flip();
-            }
+    let watched = controller.clone();
+    let refreshing = Cell::new(watched.is_refreshing());
+    controller.inner.add_listener(Rc::new(move || {
+        let current = watched.is_refreshing();
+        if refreshing.replace(current) != current {
+            on_change();
         }
-    }));
-    // The lifecycle build immediately following registration reads the latest
-    // phase. Catch up the tracker without scheduling inside that build scope.
-    tracker.advance(controller.phase());
-    id
+    }))
 }
 
 impl RefreshIndicatorState {
@@ -590,13 +487,13 @@ impl StatefulView for RefreshOverlay {
 impl RefreshOverlayState {
     /// Listens to `controller` and rebuilds only when its refresh phase
     /// flips: a pull-distance change alone reaches external listeners of
-    /// [`RefreshController::as_listenable`] but rebuilds nothing here.
+    /// [`RefreshController::listenable`] but rebuilds nothing here.
     fn subscribe_phase(&mut self, controller: &RefreshController) {
         self.unsubscribe_phase();
         let Some(rebuild) = self.rebuild.clone() else {
             return;
         };
-        let id = listen_for_phase_flips(controller, controller.phase(), move || {
+        let id = listen_for_refresh_changes(controller, move || {
             rebuild.schedule(RebuildReason::StateChange);
         });
         self.phase_subscription = Some((controller.clone(), id));
@@ -842,73 +739,5 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
         drop(self.fling_status_subscription.take());
         self.scroll_controller.position().set_is_scrolling(false);
         self.fling_controller.dispose();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // The start notification read the refreshing phase, then stalled while
-    // `finish` ran and its notification completed. When the start resumes it
-    // must be ignored, or the tracker records `refreshing` while the
-    // controller is idle and the next start schedules no rebuild. A private
-    // seam: the public surface cannot pause one notification inside another.
-    #[test]
-    fn phase_tracker_follows_mutation_order() {
-        let idle = Phase::default();
-        let mut refreshing = idle;
-        refreshing.set(true);
-        let mut finished = refreshing;
-        finished.set(false);
-        let mut restarted = finished;
-        restarted.set(true);
-
-        let tracker = PhaseTracker(Mutex::new(idle));
-        assert!(
-            !tracker.advance(finished),
-            "idle to idle (through a refresh) changes nothing visible"
-        );
-        assert!(
-            !tracker.advance(refreshing),
-            "the older notification finishing late must be ignored"
-        );
-        assert!(
-            tracker.advance(restarted),
-            "the next refresh must still schedule a rebuild"
-        );
-    }
-
-    // `finish` ran between the subscriber's phase snapshot (refreshing) and
-    // its registration, so no notification reports it. The catch-up read
-    // after registration must, or the next refresh flips nothing and its
-    // indicator never shows. A private seam: the public surface cannot run a
-    // mutation inside the subscription.
-    #[test]
-    fn phase_change_before_registration_is_caught_up() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        let controller = RefreshController::new();
-        controller.begin_refresh();
-        let stale = controller.phase();
-        controller.finish();
-        let flips = Arc::new(AtomicUsize::new(0));
-        let id = listen_for_phase_flips(&controller, stale, {
-            let flips = Arc::clone(&flips);
-            move || {
-                flips.fetch_add(1, Ordering::SeqCst);
-            }
-        });
-        assert_eq!(
-            flips.load(Ordering::SeqCst),
-            0,
-            "the following build reads the missed finish without scheduling"
-        );
-        controller.begin_refresh();
-        assert_eq!(
-            flips.load(Ordering::SeqCst),
-            1,
-            "the next refresh must flip"
-        );
-        controller.inner.remove_listener(id);
     }
 }

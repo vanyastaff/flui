@@ -724,7 +724,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
             .clone()
             .expect("BUG: InteractiveViewer initialized before build");
 
-        let listenable = controller.as_listenable();
+        let listenable = controller.listenable();
 
         AnimatedBuilder::new(listenable, move || {
             let matrix = controller.value();

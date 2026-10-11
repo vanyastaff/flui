@@ -360,10 +360,10 @@ impl PageController {
         self.scroll.clone()
     }
 
-    /// An `Arc<dyn Listenable>` pointing at the same shared position.
+    /// An `Rc<dyn Listenable>` sharing this controller's position channel.
     #[must_use]
-    pub fn as_listenable(&self) -> std::rc::Rc<dyn Listenable> {
-        self.scroll.as_listenable()
+    pub fn listenable(&self) -> std::rc::Rc<dyn Listenable> {
+        self.scroll.listenable()
     }
 }
 
@@ -526,7 +526,7 @@ pub struct PageViewState {
     /// The listenable the listener is registered on, alongside its id.
     /// Stored together (not looked up fresh from `self.controller` at
     /// removal time) because a controller SWAP changes which listenable
-    /// `self.controller.as_listenable()` resolves to — each notifier keeps
+    /// `self.controller.listenable()` resolves to — each notifier keeps
     /// its own `ListenerId` counter, so removing by id from a DIFFERENT
     /// notifier than the one that issued it can collide with an unrelated
     /// listener there (silently removing the wrong one and leaking the
@@ -638,7 +638,7 @@ impl PageViewState {
             .clone()
             .expect("BUG: init_state mints the rebuild handle before registering the listener");
 
-        let listenable = self.controller.as_listenable();
+        let listenable = self.controller.listenable();
         let listener_id = listenable.add_listener(std::rc::Rc::new(move || {
             if !position.has_applied_viewport_dimension() {
                 return;
@@ -762,13 +762,13 @@ impl ViewState<PageView> for PageViewState {
         };
 
         // Detect an actual controller SWAP by listenable identity — mirrors
-        // `AnimatedBehavior::on_view_updated`'s `Arc::ptr_eq` guard
+        // `AnimatedBehavior::on_view_updated`'s `Rc::ptr_eq` guard
         // (`crates/flui-view/src/element/behavior.rs`): a rebuild that hands
         // back the SAME controller (by far the common case when one IS
         // explicitly supplied) must not tear down and rebuild the
         // subscription.
-        let old_listenable = self.controller.as_listenable();
-        let new_listenable = new_controller.as_listenable();
+        let old_listenable = self.controller.listenable();
+        let new_listenable = new_controller.listenable();
         let controller_swapped = !std::rc::Rc::ptr_eq(&old_listenable, &new_listenable);
 
         self.controller = new_controller.clone();

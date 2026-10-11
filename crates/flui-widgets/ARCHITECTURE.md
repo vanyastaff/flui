@@ -2611,6 +2611,17 @@ counts builds in the actual content and observes the loading arc's appearance
 and removal in the committed scene; scroll and pull frames remain free of
 element rebuilds.
 
+The refresh controller's pull distance and refreshing flag are owner-local Copy
+values in `Cell`. Each overlay listener keeps its own last observed flag and
+commits that observation before scheduling a rebuild. Listener registration does
+not call owner code, so reading the initial flag and subscribing requires no
+version counter or catch-up protocol. External listeners still receive every
+pull write and `finish()` call, including an idle finish; the overlay rebuilds
+only when the flag changes. `a_refresh_completed_by_a_listener_allows_the_next_pull`
+completes refresh from an observer registered before or after overlay binding,
+then observes the next pull's painted indicator and its later removal without
+rebuilding content.
+
 `refresh_controller_replacement_rebinds_the_retained_indicator` changes the
 refresh source while idle or refreshing. The old source's completion cannot
 invalidate the retained overlay; a new real pull and release must show its

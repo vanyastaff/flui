@@ -392,12 +392,12 @@ impl FlushState {
 /// The heap-allocated state shared by every clone of a [`ScrollPosition`].
 struct Inner {
     state: RefCell<State>,
-    /// `Listenable` sink — what `ScrollController::as_listenable()` and
+    /// `Listenable` sink — what `ScrollController::listenable()` and
     /// `AnimatedBuilder` subscribe to.
     notifier: ChangeNotifier,
     /// The `ViewportOffset` trait's own ptr-eq listener list, kept separate
     /// from `notifier` because it has a different identity contract
-    /// (`Arc::ptr_eq` removal, not a `ListenerId`).
+    /// (`Rc::ptr_eq` removal, not a `ListenerId`).
     offset_listeners: RefCell<Vec<(flui_foundation::ListenerId, std::rc::Weak<dyn Fn()>)>>,
     offset_notifier: ChangeNotifier,
     flush: RefCell<FlushState>,
@@ -495,7 +495,7 @@ impl Listenable for Inner {
 /// implementation (consumed by `RenderViewport`) that is also
 /// [`Listenable`] (consumed by `ScrollController`/`AnimatedBuilder`).
 ///
-/// All clones point at the same underlying state via an `Arc`, so a gesture
+/// All clones point at the same underlying state via an `Rc`, so a gesture
 /// handler holding one clone and a `RenderViewport` holding another observe
 /// each other's writes immediately — no separate push step is needed once
 /// both sides share the same `ScrollPosition`.
@@ -855,10 +855,10 @@ impl ScrollPosition {
         self.notify();
     }
 
-    /// Returns an `Arc<dyn Listenable>` pointing at the same shared state —
-    /// the upcast `ScrollController::as_listenable()` hands to `AnimatedBuilder`.
+    /// Returns an `Rc<dyn Listenable>` sharing this position's notification channel.
+    /// Each call retains the same channel identity without allocating a new notifier.
     #[must_use]
-    pub fn as_listenable(&self) -> Rc<dyn Listenable> {
+    pub fn listenable(&self) -> Rc<dyn Listenable> {
         Rc::clone(&self.inner) as Rc<dyn Listenable>
     }
 
@@ -892,7 +892,7 @@ impl ScrollPosition {
     }
 
     /// Whether `self` and `other` are clones of the same underlying position
-    /// (share one `Arc`-backed inner state), not merely equal by value. A
+    /// (share one `Rc`-backed inner state), not merely equal by value. A
     /// widget reconciling an injected `ScrollPosition` against the one
     /// already installed on its render object uses this to decide whether a
     /// swap is actually a change — replacing a same-identity offset would
