@@ -4,8 +4,7 @@
 //!
 //! 1. [`OneEuroFilter2D`] — speed-adaptive jitter removal (Casiez CHI 2012);
 //! 2. [`VelocityEstimator::Impulse`] next to the default least-squares
-//!    [`VelocityTracker`], showing how
-//!    the impulse model discounts stale samples after a sharp deceleration.
+//!    [`VelocityTracker`], comparing their estimates after a sharp deceleration.
 //!
 //! Run with: `cargo run -p flui-interaction --example pointer_filtering`
 
@@ -85,8 +84,8 @@ fn main() {
     println!("   impulse:                   {impulse_v:8.1} px/s");
     println!("   least-squares:             {lsq_v:8.1} px/s");
     println!(
-        "\n   The impulse model weights each interval by the velocity CHANGE it\n   \
-         represents, so the release velocity tracks the finger's final intent\n   \
-         instead of averaging the whole window."
+        "\n   These are estimates from the recent history, not the known final\n   \
+         segment velocity of 200 px/s. Sharp deceleration can make a quadratic\n   \
+         fit extrapolate a reversal; compare each model against your input traces."
     );
 }
