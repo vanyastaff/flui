@@ -438,13 +438,14 @@ fn wrap_angle(angle: f64) -> f64 {
 /// `carried * current / baseline`, the factor reached so far times the ratio
 /// since the last baseline, or `None` for a degenerate baseline. The two
 /// orders of evaluation are tried so an intermediate quotient or product that
-/// overflows does not hide a finite result.
+/// overflows or underflows does not hide a representable result. A zero span
+/// or carried factor still publishes zero.
 fn carried_ratio(carried: f64, current: f64, baseline: f64) -> Option<f64> {
     if baseline <= DEGENERATE_SPAN {
         return None;
     }
     let direct = carried * (current / baseline);
-    if direct.is_finite() {
+    if direct.is_finite() && (direct != 0.0 || current == 0.0 || carried == 0.0) {
         return Some(direct);
     }
     Some((carried * current) / baseline)
