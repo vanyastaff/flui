@@ -263,12 +263,14 @@ fn scale_and_force_press_owner_lifecycle() {
             scale_start_can_cancel_reentrantly_and_begin_a_healthy_later_scale,
         ),
     ];
+    let mut failures = Vec::new();
     for &(name, case) in cases {
         if let Err(payload) = std::panic::catch_unwind(case) {
-            eprintln!("case {name}");
-            std::panic::resume_unwind(payload);
+            flui_foundation::panic::retain_opaque_payload(payload);
+            failures.push(name);
         }
     }
+    assert!(failures.is_empty(), "failed cases: {failures:?}");
 }
 
 fn force_history_preserves_thresholds_and_first_failure() {

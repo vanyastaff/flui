@@ -56,6 +56,13 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   contact replacement revokes the old tail, even when the pointer ID is reused.
   `scale_and_force_press_owner_lifecycle` pins ordinary/coalesced equivalence,
   threshold excursions, missing sensors, replacement and recovery.
+- **Scale continuity includes representable contraction.** Changing the contact
+  set carries the prior factor into a newly measured baseline. The ratio retries
+  product-first evaluation when quotient-first loses a nonzero result through
+  intermediate underflow, as well as on overflow. A real zero span still reports
+  zero; an unrepresentable final result follows the existing finite-publication
+  policy. `scale_and_force_press_owner_lifecycle` pins huge rebaselines, tiny
+  contractions, actual zero and fresh-contact recovery through public callbacks.
 
 - **Standalone admission differs from mounted admission.** A resampler's
   100-event threshold is a pressure policy, not a hard memory limit. Admission
