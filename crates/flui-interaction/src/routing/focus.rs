@@ -20,6 +20,41 @@ use crate::routing::focus_scope::{
 /// Callback invoked after primary focus or its focus-tree ancestry changes.
 pub type FocusChangeCallback = Rc<dyn Fn(Option<Rc<FocusNode>>, Option<Rc<FocusNode>>)>;
 
+/// A global key handler could not be registered with this presentation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum GlobalKeyRegistrationError {
+    /// The presentation's focus owner has permanently closed.
+    #[error("global key handler owner is closed")]
+    OwnerClosed,
+    /// No new registration identity can be allocated without reuse.
+    #[error("global key handler registration identity capacity exhausted")]
+    IdentityExhausted,
+}
+
+/// Scoped ownership of one presentation's global key handler.
+///
+/// Dropping the token withdraws only this registration before retiring its
+/// callback captures. A withdrawal during dispatch revokes a later snapshot
+/// entry immediately; a re-registration waits until the next dispatch.
+/// The token holds its manager weakly and is inert after manager teardown.
+/// Healthy retirement can propagate a capture's panic; retirement while an
+/// earlier failure is owed follows the owner's panic-preservation policy.
+#[must_use = "retain this registration while the global key handler should remain installed"]
+#[derive(Debug)]
+pub struct GlobalKeyRegistration {
+    owner: Weak<FocusManager>,
+    registration: u64,
+}
+
+impl Drop for GlobalKeyRegistration {
+    fn drop(&mut self) {
+        if let Some(owner) = self.owner.upgrade() {
+            owner.remove_global_key_handler(self.registration);
+        }
+    }
+}
+
 pub(super) use crate::__runtime::ClosePanic as FocusClosePanic;
 use crate::__runtime::{CloseMode, CloseTombstone};
 
@@ -513,13 +548,17 @@ impl FocusManager {
                 .position(|(held, _)| *held == id)
                 .map(|index| listeners.remove(index))
         };
-        drop(removed);
+        let mut failure = FocusClosePanic::for_rejection(self.notification_failure_mode());
+        if let Some((_, callback)) = removed {
+            failure.retire(callback);
+        }
+        failure.finish();
     }
 
     /// Remove all focus-change listeners.
     pub fn clear_listeners(&self) {
         let listeners = std::mem::take(&mut *self.listeners.borrow_mut());
-        let mut failure = FocusClosePanic::for_rejection(self.close_mode.mode());
+        let mut failure = FocusClosePanic::for_rejection(self.notification_failure_mode());
         for (_, listener) in listeners {
             failure.retire(listener);
         }
@@ -675,33 +714,84 @@ impl FocusManager {
         FocusScopeNode::perform_with_manager(self, step)
     }
 
-    /// Register an owner-local handler that runs before the focus-tree walk.
+    /// Install a presentation-lived handler before the focus-tree walk.
+    ///
+    /// This registration stays installed until [`Self::clear_global_key_handlers`]
+    /// or owner teardown. Independently mounted owners should instead retain a
+    /// token from [`Self::register_global_key_handler`].
     ///
     /// A closed owner rejects incoming callback ownership. Healthy rejection
     /// runs its destructor outside internal borrows; rejection during an active
     /// unwind retains it to preserve the original failure.
     pub fn add_global_key_handler(&self, handler: KeyEventHandler) {
-        if self.closed.get() {
-            let mut failure = FocusClosePanic::for_rejection(self.close_mode.mode());
+        if self.install_global_key_handler(handler)
+            == Err(GlobalKeyRegistrationError::IdentityExhausted)
+        {
+            panic!("BUG: global key handler registrations exhausted");
+        }
+    }
+
+    /// Register a global key handler owned by the returned scoped token.
+    ///
+    /// Rejection retires incoming callback ownership outside internal borrows;
+    /// a hostile destructor can propagate its panic on healthy rejection.
+    /// Closed owners and exhausted identities return an explicit error rather
+    /// than an accepted token. Exhausted identities are permanently refused.
+    pub fn register_global_key_handler(
+        self: &Rc<Self>,
+        handler: KeyEventHandler,
+    ) -> Result<GlobalKeyRegistration, GlobalKeyRegistrationError> {
+        let registration = self.install_global_key_handler(handler)?;
+        Ok(GlobalKeyRegistration {
+            owner: Rc::downgrade(self),
+            registration,
+        })
+    }
+
+    fn install_global_key_handler(
+        &self,
+        handler: KeyEventHandler,
+    ) -> Result<u64, GlobalKeyRegistrationError> {
+        let registration = self.next_global_key_handler.get();
+        let error = if self.closed.get() {
+            Some(GlobalKeyRegistrationError::OwnerClosed)
+        } else if registration.checked_add(1).is_none() {
+            Some(GlobalKeyRegistrationError::IdentityExhausted)
+        } else {
+            None
+        };
+        if let Some(error) = error {
+            let mut failure = FocusClosePanic::for_rejection(self.notification_failure_mode());
             failure.retire(handler);
             failure.finish();
-        } else {
-            let registration = self.next_global_key_handler.get();
-            self.next_global_key_handler.set(
-                registration
-                    .checked_add(1)
-                    .expect("BUG: global key handler registrations exhausted"),
-            );
-            self.global_key_handlers
-                .borrow_mut()
-                .push((registration, handler));
+            return Err(error);
         }
+        self.next_global_key_handler.set(registration + 1);
+        self.global_key_handlers
+            .borrow_mut()
+            .push((registration, handler));
+        Ok(registration)
+    }
+
+    fn remove_global_key_handler(&self, registration: u64) {
+        let removed = {
+            let mut handlers = self.global_key_handlers.borrow_mut();
+            handlers
+                .iter()
+                .position(|(id, _)| *id == registration)
+                .map(|index| handlers.remove(index))
+        };
+        let mut failure = FocusClosePanic::for_rejection(self.notification_failure_mode());
+        if let Some((_, handler)) = removed {
+            failure.retire(handler);
+        }
+        failure.finish();
     }
 
     /// Remove all global key handlers.
     pub fn clear_global_key_handlers(&self) {
         let handlers = std::mem::take(&mut *self.global_key_handlers.borrow_mut());
-        let mut failure = FocusClosePanic::for_rejection(self.close_mode.mode());
+        let mut failure = FocusClosePanic::for_rejection(self.notification_failure_mode());
         for (_, handler) in handlers {
             failure.retire(handler);
         }
@@ -994,6 +1084,10 @@ mod tests {
     fn focus_traversal_matrix() {
         let cases: &[(&str, fn())] = &[
             (
+                "global_key_registration_exhaustion_keeps_existing_handlers",
+                global_key_registration_exhaustion_keeps_existing_handlers,
+            ),
+            (
                 "focus_node_identity_exhaustion_preserves_notifications",
                 crate::routing::focus_scope::focus_node_identity_exhaustion_preserves_notifications,
             ),
@@ -1016,6 +1110,35 @@ mod tests {
                 std::panic::resume_unwind(payload);
             }
         }
+    }
+
+    fn global_key_registration_exhaustion_keeps_existing_handlers() {
+        let manager = FocusManager::new();
+        manager.next_global_key_handler.set(u64::MAX - 1);
+        let last = manager
+            .register_global_key_handler(Rc::new(|_| KeyEventResult::Handled))
+            .expect("final available registration");
+        for _ in 0..2 {
+            assert!(matches!(
+                manager.register_global_key_handler(Rc::new(|_| panic!(
+                    "exhausted registration invoked"
+                ))),
+                Err(GlobalKeyRegistrationError::IdentityExhausted)
+            ));
+            assert_eq!(
+                manager.dispatch_key_event(&key_event()),
+                KeyEventResult::Handled
+            );
+        }
+        drop(last);
+        assert!(matches!(
+            manager.register_global_key_handler(Rc::new(|_| KeyEventResult::Handled)),
+            Err(GlobalKeyRegistrationError::IdentityExhausted)
+        ));
+        assert_eq!(
+            manager.dispatch_key_event(&key_event()),
+            KeyEventResult::Ignored
+        );
     }
 
     fn key_dispatch_walks_leaf_to_root_and_honors_skip() {

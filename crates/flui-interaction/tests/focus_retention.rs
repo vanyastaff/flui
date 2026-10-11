@@ -1756,6 +1756,355 @@ fn manager_withdrawal_after_failure(withdrawal: usize) {
     );
 }
 
+#[test]
+fn scoped_global_key_registration_contracts() {
+    let cases: &[(&str, fn())] = &[
+        ("independent owners", scoped_keys_withdraw_only_their_owner),
+        (
+            "snapshot revocation",
+            scoped_keys_revoke_before_their_dispatch_turn,
+        ),
+        (
+            "stale token",
+            scoped_keys_stale_tokens_do_not_remove_new_registrations,
+        ),
+        (
+            "owner closes first",
+            scoped_keys_do_not_retain_their_manager,
+        ),
+        ("closed rejection", scoped_keys_reject_closed_owners),
+        (
+            "healthy retirement failure",
+            scoped_keys_retire_outside_borrows_and_recover,
+        ),
+        ("active unwind", scoped_keys_preserve_an_active_unwind),
+        (
+            "caught observer failure",
+            scoped_keys_preserve_a_caught_observer_failure,
+        ),
+        (
+            "self withdrawal failure",
+            scoped_keys_can_withdraw_the_current_failing_callback,
+        ),
+    ];
+    let mut failed = Vec::new();
+    for &(name, case) in cases {
+        if let Err(payload) = catch_unwind(case) {
+            failed.push(name);
+            flui_foundation::panic::retain_opaque_payload(payload);
+        }
+    }
+    assert!(failed.is_empty(), "failed cases: {failed:?}");
+}
+
+fn scoped_keys_withdraw_only_their_owner() {
+    let manager = FocusManager::new();
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let log = Rc::clone(&calls);
+    let first = manager
+        .register_global_key_handler(Rc::new(move |_| {
+            log.borrow_mut().push("first");
+            KeyEventResult::Ignored
+        }))
+        .expect("live first owner");
+    let log = Rc::clone(&calls);
+    let second = manager
+        .register_global_key_handler(Rc::new(move |_| {
+            log.borrow_mut().push("second");
+            KeyEventResult::Handled
+        }))
+        .expect("live second owner");
+    assert_eq!(
+        manager.dispatch_key_event(&key_event()),
+        KeyEventResult::Handled
+    );
+    assert_eq!(*calls.borrow(), ["first", "second"]);
+    calls.borrow_mut().clear();
+    drop(first);
+    assert_eq!(
+        manager.dispatch_key_event(&key_event()),
+        KeyEventResult::Handled
+    );
+    assert_eq!(*calls.borrow(), ["second"]);
+    drop(second);
+    assert_eq!(
+        manager.dispatch_key_event(&key_event()),
+        KeyEventResult::Ignored
+    );
+}
+
+fn scoped_keys_revoke_before_their_dispatch_turn() {
+    let manager = FocusManager::new();
+    let pending = Rc::new(RefCell::new(None));
+    let replacement = Rc::new(RefCell::new(None));
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let log = Rc::clone(&calls);
+    let later: flui_interaction::routing::KeyEventHandler = Rc::new(move |_| {
+        log.borrow_mut().push("later");
+        KeyEventResult::Handled
+    });
+    let owner = Rc::downgrade(&manager);
+    let revoked = Rc::clone(&pending);
+    let installed = Rc::clone(&replacement);
+    let same_handler = Rc::clone(&later);
+    let log = Rc::clone(&calls);
+    let first = manager
+        .register_global_key_handler(Rc::new(move |_| {
+            log.borrow_mut().push("first");
+            let withdrawn = revoked.borrow_mut().take();
+            if withdrawn.is_some() {
+                drop(withdrawn);
+                let token = owner
+                    .upgrade()
+                    .expect("live manager")
+                    .register_global_key_handler(Rc::clone(&same_handler))
+                    .expect("replacement accepted");
+                *installed.borrow_mut() = Some(token);
+            }
+            KeyEventResult::Ignored
+        }))
+        .expect("first accepted");
+    *pending.borrow_mut() = Some(
+        manager
+            .register_global_key_handler(later)
+            .expect("later accepted"),
+    );
+    assert_eq!(
+        manager.dispatch_key_event(&key_event()),
+        KeyEventResult::Ignored
+    );
+    assert_eq!(*calls.borrow(), ["first"]);
+    calls.borrow_mut().clear();
+    assert_eq!(
+        manager.dispatch_key_event(&key_event()),
+        KeyEventResult::Handled
+    );
+    assert_eq!(*calls.borrow(), ["first", "later"]);
+    drop(first);
+}
+
+fn scoped_keys_do_not_retain_their_manager() {
+    for close_first in [false, true] {
+        let manager = FocusManager::new();
+        let weak = Rc::downgrade(&manager);
+        let (capture, probe) = capture();
+        let token = manager
+            .register_global_key_handler(Rc::new(move |_| {
+                let _ = &capture;
+                KeyEventResult::Handled
+            }))
+            .expect("owner live");
+        if close_first {
+            manager.close();
+            assert!(probe.upgrade().is_none());
+        }
+        drop(manager);
+        assert!(weak.upgrade().is_none(), "token cannot retain the owner");
+        assert!(probe.upgrade().is_none(), "callback retires with manager");
+        drop(token);
+    }
+}
+
+fn scoped_keys_stale_tokens_do_not_remove_new_registrations() {
+    let manager = FocusManager::new();
+    let handler: flui_interaction::KeyEventHandler = Rc::new(|_| KeyEventResult::Handled);
+    let old = manager
+        .register_global_key_handler(Rc::clone(&handler))
+        .expect("old registration");
+    manager.clear_global_key_handlers();
+    let current = manager
+        .register_global_key_handler(handler)
+        .expect("new registration");
+    drop(old);
+    assert_eq!(
+        manager.dispatch_key_event(&key_event()),
+        KeyEventResult::Handled
+    );
+    drop(current);
+    assert_eq!(
+        manager.dispatch_key_event(&key_event()),
+        KeyEventResult::Ignored
+    );
+}
+
+fn scoped_keys_reject_closed_owners() {
+    let manager = FocusManager::new();
+    manager.close();
+    let (capture, probe) = capture();
+    let result = manager.register_global_key_handler(Rc::new(move |_| {
+        let _ = &capture;
+        panic!("closed owner invoked rejected callback");
+    }));
+    assert!(matches!(
+        result,
+        Err(flui_interaction::GlobalKeyRegistrationError::OwnerClosed)
+    ));
+    assert!(
+        probe.upgrade().is_none(),
+        "healthy rejection retires ownership"
+    );
+    assert_eq!(
+        manager.dispatch_key_event(&key_event()),
+        KeyEventResult::Ignored
+    );
+}
+
+struct KeyCaptureRetirement {
+    drops: Rc<Cell<usize>>,
+    owner: Weak<FocusManager>,
+}
+
+impl Drop for KeyCaptureRetirement {
+    fn drop(&mut self) {
+        self.drops.set(self.drops.get() + 1);
+        if let Some(owner) = self.owner.upgrade() {
+            owner.add_global_key_handler(Rc::new(|_| KeyEventResult::Handled));
+        }
+        panic!("key capture retirement");
+    }
+}
+
+fn hostile_key_registration(
+    manager: &Rc<FocusManager>,
+    drops: Rc<Cell<usize>>,
+) -> flui_interaction::GlobalKeyRegistration {
+    let capture = KeyCaptureRetirement {
+        drops,
+        owner: Rc::downgrade(manager),
+    };
+    manager
+        .register_global_key_handler(Rc::new(move |_| {
+            let _ = &capture;
+            KeyEventResult::Ignored
+        }))
+        .expect("live owner accepts hostile capture")
+}
+
+fn scoped_keys_retire_outside_borrows_and_recover() {
+    let manager = FocusManager::new();
+    let drops = Rc::new(Cell::new(0));
+    let token = hostile_key_registration(&manager, Rc::clone(&drops));
+    let failure =
+        catch_unwind(AssertUnwindSafe(|| drop(token))).expect_err("retirement panic propagates");
+    assert_eq!(
+        failure.downcast_ref::<&str>(),
+        Some(&"key capture retirement")
+    );
+    assert_eq!(drops.get(), 1);
+    assert_eq!(
+        manager.dispatch_key_event(&key_event()),
+        KeyEventResult::Handled,
+        "destructor reentry registered a healthy sibling"
+    );
+}
+
+fn scoped_keys_preserve_an_active_unwind() {
+    let manager = FocusManager::new();
+    let drops = Rc::new(Cell::new(0));
+    let token = hostile_key_registration(&manager, Rc::clone(&drops));
+    let failure = catch_unwind(AssertUnwindSafe(move || {
+        let _token = token;
+        panic!("earlier unwind");
+    }))
+    .expect_err("earlier unwind propagates");
+    assert_eq!(failure.downcast_ref::<&str>(), Some(&"earlier unwind"));
+    assert_eq!(drops.get(), 0);
+    assert_eq!(
+        manager.dispatch_key_event(&key_event()),
+        KeyEventResult::Ignored
+    );
+    let healthy = manager
+        .register_global_key_handler(Rc::new(|_| KeyEventResult::Handled))
+        .expect("recovered owner");
+    assert_eq!(
+        manager.dispatch_key_event(&key_event()),
+        KeyEventResult::Handled
+    );
+    drop(healthy);
+}
+
+fn scoped_keys_preserve_a_caught_observer_failure() {
+    let manager = FocusManager::new();
+    let node = FocusNode::new();
+    let _attachment = manager
+        .root_scope()
+        .attach_node(&node)
+        .expect("attach node");
+    let drops = Rc::new(Cell::new(0));
+    let token = Rc::new(RefCell::new(Some(hostile_key_registration(
+        &manager,
+        Rc::clone(&drops),
+    ))));
+    let first = manager.add_listener(Rc::new(|_, _| panic!("first observer")));
+    let withdrawn = Rc::clone(&token);
+    let second = manager.add_listener(Rc::new(move |_, _| {
+        let retired = withdrawn.borrow_mut().take();
+        drop(retired);
+        panic!("competing observer");
+    }));
+    let failure = catch_unwind(AssertUnwindSafe(|| node.request_focus()))
+        .expect_err("first observer propagates");
+    assert_eq!(failure.downcast_ref::<&str>(), Some(&"first observer"));
+    assert_eq!(drops.get(), 0);
+    assert_eq!(
+        manager.dispatch_key_event(&key_event()),
+        KeyEventResult::Ignored
+    );
+    manager.remove_listener(first);
+    manager.remove_listener(second);
+    manager.unfocus();
+    let healthy = manager
+        .register_global_key_handler(Rc::new(|_| KeyEventResult::Handled))
+        .expect("healthy registration");
+    assert_eq!(
+        manager.dispatch_key_event(&key_event()),
+        KeyEventResult::Handled
+    );
+    drop(healthy);
+}
+
+fn scoped_keys_can_withdraw_the_current_failing_callback() {
+    let manager = FocusManager::new();
+    let drops = Rc::new(Cell::new(0));
+    let installed = Rc::new(RefCell::new(None));
+    let withdrawn = Rc::clone(&installed);
+    let capture = KeyCaptureRetirement {
+        drops: Rc::clone(&drops),
+        owner: Rc::downgrade(&manager),
+    };
+    let registration = manager
+        .register_global_key_handler(Rc::new(move |_| {
+            let _ = &capture;
+            let retired = withdrawn.borrow_mut().take();
+            drop(retired);
+            panic!("first key callback");
+        }))
+        .expect("live owner");
+    *installed.borrow_mut() = Some(registration);
+    let failure = catch_unwind(AssertUnwindSafe(|| {
+        manager.dispatch_key_event(&key_event())
+    }))
+    .expect_err("callback failure propagates");
+    assert_eq!(failure.downcast_ref::<&str>(), Some(&"first key callback"));
+    assert_eq!(
+        drops.get(),
+        0,
+        "protected callback retires after its failure is saved"
+    );
+    assert_eq!(
+        manager.dispatch_key_event(&key_event()),
+        KeyEventResult::Ignored
+    );
+    let healthy = manager
+        .register_global_key_handler(Rc::new(|_| KeyEventResult::Handled))
+        .expect("recovered owner");
+    assert_eq!(
+        manager.dispatch_key_event(&key_event()),
+        KeyEventResult::Handled
+    );
+    drop(healthy);
+}
+
 impl Drop for DropRecorder {
     fn drop(&mut self) {
         self.1.borrow_mut().push(self.0);

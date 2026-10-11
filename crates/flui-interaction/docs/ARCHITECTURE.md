@@ -565,6 +565,29 @@ policy replacement, last-owner retirement competition and subsequent traversal.
 
 ## Terminal focus ownership
 
+Global keyboard registrations have two lifetimes. `add_global_key_handler`
+installs a presentation-lived callback, withdrawn by clear-all or owner teardown.
+`register_global_key_handler` returns a non-cloneable `GlobalKeyRegistration`
+whose Drop withdraws exactly its registration. The weak owner prevents the token
+from retaining a presentation. This scoped capability is part of the supported
+consumer interface even when no framework widget needs a presentation-global
+handler; widget key handlers remain node-owned `FocusNodeRegistration`s.
+
+Withdrawal commits before callback retirement and runs no user code under a
+borrow. Dispatch snapshots contain registration identities and recheck live
+membership: withdrawing a later handler skips it immediately; re-registering
+the same callback creates a new identity that waits until the next dispatch.
+Closed owners return `GlobalKeyRegistrationError::OwnerClosed`; identity
+exhaustion permanently returns `IdentityExhausted`, preserving older handlers.
+Healthy rejection retires incoming captures; an earlier unwind or caught focus
+observer failure selects the owner's existing preservation policy.
+`scoped_global_key_registration_contracts` covers independent owners, snapshot
+revocation, weak ownership, rejection, hostile retirement, reentry, competing
+observer failures and recovery. The private terminal-counter row of
+`focus_traversal_matrix` proves identities cannot be reused.
+`manager_listener_withdrawal_preserves_a_caught_failure` pins the same cleanup
+policy for individual and bulk focus-manager callback withdrawal.
+
 Focus closure detaches the complete node tree and withdraws node properties
 before callbacks can inspect or reenter it. The first callback or retirement
 failure remains authoritative; later opaque owners are retained. Ordinary
