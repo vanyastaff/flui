@@ -46,7 +46,7 @@
 | M-CRV-8 | Экстраполяция кривой вынесена; не смешивать с экстраполяцией интерполируемого значения | Вне текущего scope |
 | M-CRV-9 | Cubic keyframes заменяют CatmullRom; подтвердить потребителя, а не только math tests | A7 |
 | M-CRV-10 | Sampled spring curve не подтверждена; не помечать закрытой по наличию SpringSimulation | A7 |
-| M-CRV-11, M-CRV-12 | Политика NaN/вне диапазона и checked construction/serde покрыты библиотечными тестами; сохранить при миграции | A7, A8 |
+| M-CRV-11, M-CRV-12 | Input policy проверяется отдельно от параметров. `curve_parameters_reject_invalid_input` сопоставляет независимый ожидаемый CurveError с try_new, panic new и численным serde decode для Cubic, ThreePointCubic, Interval и всех Elastic; включает NaN/±∞ и границы допустимых параметров. Steps проверяет отказ try_new/new и JSON decode в существующих таблицах. Обход проверки x2 или NaN только при decode воспроизводимо нарушает новые случаи. Это не закрывает неподтверждённые authoring-возможности M-CRV-7/M-CRV-10 | A7, A8 |
 
 ## Интерполяция и композиция
 
@@ -91,8 +91,8 @@
 | M-INTG-10 | Новый настраиваемый hit-test surface вынесен; корректность существующих hooks обязательна | A6, без расширения surface |
 | M-QLT-1, M-QLT-2 | Обычные numerical/property tests проходят; это не закрывает 32 ignored contracts | A8, A9 |
 | M-QLT-3 | Чистая clock math не доказывает partition invariance всей цепочки runtime→widget | A3 |
-| M-QLT-4 | Бенчи есть; измерить конечный активный путь на одинаковой конфигурации | A8 |
-| M-QLT-5 | Allocation test проходит только для зафиксированных workloads; расширить доказательство по принятому scope | A8 |
+| M-QLT-4 | `bench_live_tick` сохраняет живой run; mounted_motion предварительно проверяет 96 движущихся кадров, submitted scene и изменение progress, затем настоящий idle. Активная работа, admission retarget и idle измеряются отдельно. Парное CPU-измерение одинаковых fixtures выполнено; результаты ограничены конфигурацией и измеренными revision, не являются бюджетом GPU/frame latency | A8 |
+| M-QLT-5 | `a_steady_state_frame_allocates_nothing` измеряет allocation calls и bytes на 10 000 продвигающихся tick для scalar, geometry/color/keyframes и relay depth 1/5/32, с положительным контролем и проверкой прогресса. `retiring_idle_registry_owners_allocates_nothing` проверяет retirement отдельно. Полный mounted frame не объявлен безаллокирующим | A8 |
 | M-QLT-6 | Документацию синхронизировать с конечным поведением и scope | A8 |
 | M-QLT-7 | 137 doctests проходят, 0 ignored на baseline | A8, A9 |
 | M-QLT-8 | animation_it существует; окончательную раскладку public/private tests проверить при миграции | A8 |

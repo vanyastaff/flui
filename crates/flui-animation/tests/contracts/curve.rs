@@ -1142,6 +1142,219 @@ fn error_messages_name_the_parameter() {
     );
 }
 
+fn range_error(parameter: &'static str, value: f64, allowed: &'static str) -> CurveError {
+    CurveError::OutOfRange {
+        parameter,
+        value,
+        allowed,
+    }
+}
+
+// These numeric fields exercise serde admission itself, including IEEE values
+// JSON cannot represent. Parser rejection is not parameter validation.
+#[cfg(feature = "serde")]
+#[derive(Clone, Copy)]
+enum CurveField {
+    Number(f64),
+    Point([f64; 2]),
+    Unit,
+}
+
+#[cfg(feature = "serde")]
+impl serde::de::IntoDeserializer<'_, serde::de::value::Error> for CurveField {
+    type Deserializer = Self;
+
+    fn into_deserializer(self) -> Self {
+        self
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserializer<'de> for CurveField {
+    type Error = serde::de::value::Error;
+
+    fn deserialize_any<V: serde::de::Visitor<'de>>(
+        self,
+        visitor: V,
+    ) -> Result<V::Value, Self::Error> {
+        match self {
+            Self::Number(value) => visitor.visit_f64(value),
+            Self::Point(value) => {
+                visitor.visit_seq(serde::de::value::SeqDeserializer::new(value.into_iter()))
+            }
+            Self::Unit => visitor.visit_unit(),
+        }
+    }
+
+    serde::forward_to_deserialize_any! { bool i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 char str string
+    bytes byte_buf option unit unit_struct newtype_struct seq tuple tuple_struct map struct enum
+    identifier ignored_any }
+}
+
+#[cfg(feature = "serde")]
+fn rejects_numeric_fields<T: serde::de::DeserializeOwned + std::fmt::Debug, const N: usize>(
+    fields: [(&'static str, CurveField); N],
+    error: &CurveError,
+) {
+    let decoder =
+        serde::de::value::MapDeserializer::<_, serde::de::value::Error>::new(fields.into_iter());
+    let failure = T::deserialize(decoder).expect_err("invalid curve parameters");
+    assert_eq!(failure.to_string(), error.to_string());
+}
+
+fn cubic_validation_is_shared_by_construction_paths() {
+    for (index, value, expected) in [
+        (0, -0.1, range_error("x1", -0.1, "[0, 1]")),
+        (2, 1.1, range_error("x2", 1.1, "[0, 1]")),
+        (1, -1.5e6, range_error("y1", -1.5e6, "[-1e6, 1e6]")),
+        (3, 1.5e6, range_error("y2", 1.5e6, "[-1e6, 1e6]")),
+        (0, f64::NAN, CurveError::NonFinite { parameter: "x1" }),
+        (1, f64::INFINITY, CurveError::NonFinite { parameter: "y1" }),
+        (
+            3,
+            f64::NEG_INFINITY,
+            CurveError::NonFinite { parameter: "y2" },
+        ),
+    ] {
+        let mut values = [0.25, 0.1, 0.75, 1.0];
+        values[index] = value;
+        let [a, b, c, d] = values;
+        assert_eq!(Cubic::try_new(a, b, c, d).err(), Some(expected));
+        assert_panics("Cubic admission", || Cubic::new(a, b, c, d));
+        #[cfg(feature = "serde")]
+        rejects_numeric_fields::<Cubic, 4>(
+            [
+                ("a", CurveField::Number(a)),
+                ("b", CurveField::Number(b)),
+                ("c", CurveField::Number(c)),
+                ("d", CurveField::Number(d)),
+            ],
+            &expected,
+        );
+    }
+}
+
+fn three_point_validation_is_shared_by_construction_paths() {
+    for (point, axis, value, expected) in [
+        (2, 0, 1.0, range_error("midpoint.x", 1.0, "(0, 1)")),
+        (2, 1, 0.0, range_error("midpoint.y", 0.0, "(0, 1)")),
+        (0, 0, 0.6, range_error("a1.x", 0.6, "[0, midpoint.x]")),
+        (1, 0, -0.1, range_error("b1.x", -0.1, "[0, midpoint.x]")),
+        (3, 0, 0.4, range_error("a2.x", 0.4, "[midpoint.x, 1]")),
+        (4, 0, 1.1, range_error("b2.x", 1.1, "[midpoint.x, 1]")),
+        (0, 1, 1.5e6, range_error("a1.y", 1.5e6, "[-1e6, 1e6]")),
+        (1, 1, -1.5e6, range_error("b1.y", -1.5e6, "[-1e6, 1e6]")),
+        (3, 1, 1.5e6, range_error("a2.y", 1.5e6, "[-1e6, 1e6]")),
+        (4, 1, -1.5e6, range_error("b2.y", -1.5e6, "[-1e6, 1e6]")),
+        (1, 1, f64::NAN, CurveError::NonFinite { parameter: "b1.y" }),
+        (
+            3,
+            1,
+            f64::INFINITY,
+            CurveError::NonFinite { parameter: "a2.y" },
+        ),
+        (
+            4,
+            0,
+            f64::NEG_INFINITY,
+            CurveError::NonFinite { parameter: "b2.x" },
+        ),
+    ] {
+        let mut points = [[0.1, 0.0], [0.2, 0.1], [0.5, 0.5], [0.6, 0.9], [0.7, 1.0]];
+        points[point][axis] = value;
+        let [a1, b1, midpoint, a2, b2] = points.map(|[x, y]| (x, y));
+        assert_eq!(
+            ThreePointCubic::try_new(a1, b1, midpoint, a2, b2).err(),
+            Some(expected)
+        );
+        assert_panics("ThreePointCubic admission", || {
+            ThreePointCubic::new(a1, b1, midpoint, a2, b2)
+        });
+        #[cfg(feature = "serde")]
+        rejects_numeric_fields::<ThreePointCubic, 5>(
+            [
+                ("a1", CurveField::Point(points[0])),
+                ("b1", CurveField::Point(points[1])),
+                ("midpoint", CurveField::Point(points[2])),
+                ("a2", CurveField::Point(points[3])),
+                ("b2", CurveField::Point(points[4])),
+            ],
+            &expected,
+        );
+    }
+}
+
+fn interval_validation_is_shared_by_construction_paths() {
+    for (begin, end, expected) in [
+        (-0.1, 0.5, range_error("begin", -0.1, "[0, 1]")),
+        (0.2, 1.5, range_error("end", 1.5, "[0, 1]")),
+        (
+            0.6,
+            0.4,
+            CurveError::IntervalReversed {
+                begin: 0.6,
+                end: 0.4,
+            },
+        ),
+        (f64::NAN, 0.5, CurveError::NonFinite { parameter: "begin" }),
+        (
+            0.2,
+            f64::INFINITY,
+            CurveError::NonFinite { parameter: "end" },
+        ),
+        (
+            f64::NEG_INFINITY,
+            0.5,
+            CurveError::NonFinite { parameter: "begin" },
+        ),
+    ] {
+        assert_eq!(Interval::try_new(begin, end, Linear).err(), Some(expected));
+        assert_panics("Interval admission", || Interval::new(begin, end, Linear));
+        #[cfg(feature = "serde")]
+        rejects_numeric_fields::<Interval, 3>(
+            [
+                ("begin", CurveField::Number(begin)),
+                ("end", CurveField::Number(end)),
+                ("curve", CurveField::Unit),
+            ],
+            &expected,
+        );
+    }
+}
+
+fn elastic_validation_is_shared_by_construction_paths() {
+    for period in [
+        0.0,
+        -0.4,
+        1e-300,
+        1.5e6,
+        f64::NAN,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+    ] {
+        let expected = if period.is_finite() {
+            range_error("period", period, "[1e-6, 1e6]")
+        } else {
+            CurveError::NonFinite {
+                parameter: "period",
+            }
+        };
+        assert_eq!(ElasticInCurve::try_new(period).err(), Some(expected));
+        assert_eq!(ElasticOutCurve::try_new(period).err(), Some(expected));
+        assert_eq!(ElasticInOutCurve::try_new(period).err(), Some(expected));
+        assert_panics("ElasticIn admission", || ElasticInCurve::new(period));
+        assert_panics("ElasticOut admission", || ElasticOutCurve::new(period));
+        assert_panics("ElasticInOut admission", || ElasticInOutCurve::new(period));
+        #[cfg(feature = "serde")]
+        {
+            let fields = [("period", CurveField::Number(period))];
+            rejects_numeric_fields::<ElasticInCurve, 1>(fields, &expected);
+            rejects_numeric_fields::<ElasticOutCurve, 1>(fields, &expected);
+            rejects_numeric_fields::<ElasticInOutCurve, 1>(fields, &expected);
+        }
+    }
+}
+
 #[test]
 fn curve_parameters_reject_invalid_input() {
     crate::run_table(&[
@@ -1182,6 +1395,22 @@ fn curve_parameters_reject_invalid_input() {
         (
             "error messages name the parameter",
             error_messages_name_the_parameter,
+        ),
+        (
+            "cubic construction paths",
+            cubic_validation_is_shared_by_construction_paths,
+        ),
+        (
+            "three-point construction paths",
+            three_point_validation_is_shared_by_construction_paths,
+        ),
+        (
+            "interval construction paths",
+            interval_validation_is_shared_by_construction_paths,
+        ),
+        (
+            "elastic construction paths",
+            elastic_validation_is_shared_by_construction_paths,
         ),
     ]);
 }
@@ -1335,6 +1564,8 @@ fn steps_reject_invalid_counts() {
         Err(CurveError::TooFewSteps)
     );
     assert!(Steps::try_new(2, JumpAt::None).is_ok());
+    assert_panics("Steps zero count", || Steps::new(0, JumpAt::End));
+    assert_panics("Steps no jump", || Steps::new(1, JumpAt::None));
 }
 
 #[test]
