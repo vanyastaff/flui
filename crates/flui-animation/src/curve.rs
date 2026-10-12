@@ -6,6 +6,11 @@ use crate::curves;
 use std::fmt;
 use std::sync::Arc;
 
+mod piecewise;
+mod spring;
+pub use piecewise::{LinearEasingError, LinearStop, PiecewiseLinear};
+pub use spring::SpringCurve;
+
 /// An easing function: maps animation progress `t` to eased progress.
 ///
 /// # Contract
@@ -179,6 +184,8 @@ mod builtin {
                 Builtin::ElasticOut(curve) => curve.transform(t),
                 Builtin::ElasticInOut(curve) => curve.transform(t),
                 Builtin::Steps(curve) => curve.transform(t),
+                Builtin::PiecewiseLinear(curve) => curve.transform(t),
+                Builtin::Spring(curve) => curve.transform(t),
                 Builtin::Interval { begin, end, curve } => {
                     interval_transform(*begin, *end, t, |local| curve.transform(local))
                 }
@@ -199,6 +206,8 @@ mod builtin {
                 Builtin::ElasticOut(curve) => curve.slope(t),
                 Builtin::ElasticInOut(curve) => curve.slope(t),
                 Builtin::Steps(curve) => curve.slope(t),
+                Builtin::PiecewiseLinear(curve) => curve.slope(t),
+                Builtin::Spring(curve) => curve.slope(t),
                 Builtin::Interval { begin, end, curve } => interval_slope(
                     *begin,
                     *end,
@@ -230,6 +239,8 @@ mod builtin {
         ElasticOut(ElasticOutCurve),
         ElasticInOut(ElasticInOutCurve),
         Steps(Steps),
+        PiecewiseLinear(super::PiecewiseLinear),
+        Spring(super::SpringCurve),
         Interval {
             begin: f64,
             end: f64,

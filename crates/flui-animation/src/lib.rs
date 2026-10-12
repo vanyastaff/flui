@@ -183,7 +183,8 @@ pub use vsync::{Vsync, VsyncRegistration, VsyncRegistrationError, VsyncRetiremen
 pub use curve::{
     ArcCurve, BounceInCurve, BounceInOutCurve, BounceOutCurve, Cubic, Curve, CurveError,
     DecelerateCurve, ElasticInCurve, ElasticInOutCurve, ElasticOutCurve, FlippedCurve, Interval,
-    JumpAt, Linear, Split, Steps, ThreePointCubic,
+    JumpAt, Linear, LinearEasingError, LinearStop, PiecewiseLinear, Split, SpringCurve, Steps,
+    ThreePointCubic,
 };
 pub use status::{AnimationBehavior, AnimationStatus};
 pub use tween_types::{
