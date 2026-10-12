@@ -106,6 +106,13 @@ native answer may physically finish, but its settlement returns `false` and
 cannot authorize replacement geometry. Completion becomes eligible only after
 a coherent replacement completes.
 
+Restoring retained layout eligibility uses the rendering owner's existing
+queue, after the presentation withdraws the old attempt. It admits no new input,
+requests no wake by itself and proves no geometry or completion. The runtime
+owns the replacement barrier and drives the coherent successor. Deterministic
+authored text rejection retains ADR-0181's changed-input policy; this seam does
+not turn unchanged invalid text into an automatic retry loop.
+
 The first failure remains authoritative through recovery, secondary callouts
 and opaque retirement. A local failure discovered while preserving an earlier
 owner failure can still supply its addressed report without replacing the
@@ -121,6 +128,13 @@ extension query, callback, tracing or user destruction while registry or host
 storage may be borrowed. Guard-free owner execution refreshes observations
 after work capable of changing deadline sources, including input, build,
 completion, asynchronous/background work and deferred text grants.
+
+Metadata refresh shares the enclosing owner opportunity. A deadline source can
+reenter an inbox operation, but that nested operation cannot restart discovery
+of the source already being observed or acquire a separate polling budget.
+Nested command admission still follows the ordinary owner rules; duplicated
+metadata refresh waits for the enclosing operation to finish. Source revisions
+and accepted wake debt remain authoritative across this deferral.
 
 An outside-frame observation report is retained as framework-owned data until
 the runtime lease is restored. An owned delivery batch invokes diagnostics and
@@ -201,7 +215,8 @@ IME, mobile lifecycle or compositor execution.
   covers frozen ticks, rejected old receipts, fresh geometry and report-driven
   premise invalidation through actual sizing work and completion.
 - `owner_sampling_contract` covers inert observations, restored-lease report
-  delivery, competing diagnostics, publisher updates and completion refresh.
+  delivery, competing diagnostics, publisher updates, completion refresh and
+  `deadline_query_reentry_does_not_rediscover_its_active_source`.
 - `sampling_preserves_failure_origin_and_publication_integrity`,
   `owner_deadline_recovery_matrix` and
   `recovery_preserves_provenance_and_owned_failure` pin the producer,

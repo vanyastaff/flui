@@ -40,7 +40,7 @@ host.
   distinguish displayed values, build, completion, addressed reports and the
   next healthy operation.
 
-- **Scheduling observation invokes no foreign code.** Host wake and pending
+- **Scheduling reads invoke no foreign code.** Host wake and pending
   getters read committed deadline snapshots. Guard-free owner execution refreshes
   changed observations; scheduling reports wait until runtime checkout returns.
   Explicit deadline update authority commits each revision before waking.
@@ -50,6 +50,12 @@ host.
   owner boundary, inert reads, competing diagnostics and live publisher updates;
   interaction's `owner_deadline_recovery_matrix` pins quarantine and revision
   identity. The interval is FLUI recovery policy, not an OS execution guarantee.
+  Deadline-query reentry shares the enclosing owner opportunity; nested inbox
+  work does not recursively rediscover its active source or restart a poll
+  budget. The table's
+  `deadline_query_reentry_does_not_rediscover_its_active_source` row distinguishes
+  one admitted observation from a second nested query and checks inert wake
+  reads afterwards.
 
 - **Completion belongs to a presentation.** Assembly installs that
   presentation's weak post-frame handle before mounting elements. An incomplete
