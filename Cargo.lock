@@ -2215,6 +2215,8 @@ dependencies = [
  "flui-platform-api",
  "flui-semantics",
  "futures-util",
+ "icu_normalizer",
+ "icu_properties",
  "jni",
  "js-sys",
  "keyboard-types",
