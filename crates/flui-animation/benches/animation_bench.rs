@@ -174,7 +174,10 @@ fn bench_live_tick(
     variant: &str,
     controller: &AnimationController,
 ) {
-    assert!(controller.is_animating(), "the {variant} run must be installed");
+    assert!(
+        controller.is_animating(),
+        "the {variant} run must be installed"
+    );
     let mut t = 0.0_f64;
     group.bench_function(BenchmarkId::new("tick_at", variant), |b| {
         b.iter(|| {
