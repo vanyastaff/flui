@@ -3,6 +3,8 @@
 #[path = "contracts/frame_clock.rs"]
 mod frame_clock;
 
+#[path = "contracts/numeric_text_answers.rs"]
+mod numeric_text_answers;
 #[path = "contracts/owner_close.rs"]
 mod owner_close;
 #[path = "contracts/owner_delivery.rs"]
