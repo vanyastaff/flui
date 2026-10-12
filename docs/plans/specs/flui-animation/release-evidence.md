@@ -3,11 +3,11 @@
 Дата проверки: 2026-10-12. Production revision:
 `61ea713380a449777ffa791b61a3a01e3fd81c5a`.
 Native assertion revision: `a73d351ce3ae9a6a0df3119d95304b0b80f09426`.
-Validation code revision: `e0961a73f8650e6e5e497a23336c3cefbf6df509`.
+Validation code revision: `71f13790b43df65be2ef441aaca904aac6c353f8`.
 Framework production-код относительно указанной базы не менялся; изменены
 assertions, benchmark validation и foreground helper инструмента проверки.
 A8 завершён в указанных границах Windows/native/GPU и измеренных workloads.
-A9 остаётся открыт до зелёного CI финальной validation revision.
+A9 завершён в принятом scope: CI указанной code revision прошёл успешно.
 CI production-базы, локальный gate и CI каждой validation revision — отдельные receipts.
 
 ## Среда и метод
@@ -343,7 +343,18 @@ revision завершён успешно. Это receipt исходной реа
 test, test-nested, test-trybuild, test-features, live-smoke, doc, deps, wasm-check,
 Windows/macOS/Android/iOS cross-typecheck и агрегатор CI. Configured skipped jobs
 не объявляются выполненными. Этот receipt не покрывает последующие изменения
-benchmark oracle; A9 ожидает CI их финальной revision.
+benchmark oracle и Windows input driver.
+[Final code CI](https://github.com/vanyastaff/flui/actions/runs/38306186115) на
+`71f13790b43df65be2ef441aaca904aac6c353f8` завершён успешно: checks, clippy,
+test, test-nested, test-trybuild, test-features, live-smoke, doc, deps, wasm-check,
+Windows/macOS/Android/iOS cross-typecheck и агрегатор CI. Это receipt конечных
+assertions, finite benchmark oracle и исправленного probe lifetime/ownership.
+Локальный `check-changed --base 8e1f7b36deb5f57f3c06081144ebc3e8b08ea6e8`
+прошёл на этих исходниках: clippy, 47/47 xtask tests, strict rustdoc и Windows
+type-check. Configured skips не считаются выполненными, а native recovery после
+позднего ручного фокуса по-прежнему не объявляется проверенным live-путём.
+Последующее закрытие checklist меняет только эти выпускные документы;
+его static checks и docs-only CI являются отдельной проверкой.
 [Weekly](https://github.com/vanyastaff/flui/actions/runs/38253895275) на
 `f8759e33d6729434d0b2b8ffac21411c0679cc59` имеет failures в latest-deps,
 release-clippy и CLI live-web; он не объявляется зелёным по результату main CI.

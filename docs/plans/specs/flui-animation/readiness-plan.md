@@ -3,8 +3,8 @@
 - **Дата исходного плана:** 2026-10-08; актуализация: 2026-10-12.
 - **Production база выпускной проверки:** `61ea713380a449777ffa791b61a3a01e3fd81c5a`.
   Исторический аудит закреплён на `91bb1fe1d2a349f62915846303f6f25780ae5c6d`.
-- **Статус:** A0–A8 завершены в принятом scope; A9 ожидает зелёный CI финальной
-  validation revision. Контракт и доказательство каждой
+- **Статус:** A0–A9 завершены в принятом scope; code revision `71f13790b`
+  прошла validation CI. Контракт и доказательство каждой
   из 110 строк назначены в актуальной матрице. CPU/allocation измерения,
   Windows native/GPU и локальный consumer gate исполнены 2026-10-12.
   Другие native-платформы и CI каждой validation revision имеют отдельные границы в release-evidence.
@@ -26,7 +26,7 @@
 не были сквозными. Это историческое основание плана. В текущем дереве принятые
 сценарии проходят через production consumers и публичные тесты; отключённых
 контрактов в animation tests нет. Измерения, physical native/GPU execution и
-ledger результатов зафиксированы; остаток выпуска — CI финальной validation revision.
+ledger результатов и успешный CI конечной code revision зафиксированы.
 
 ## Подход и альтернативы
 
@@ -75,7 +75,7 @@ send-flip T* в графе — исторический маршрут, не н�
 | A6 | Согласованная геометрия paint/hit/semantics и жест→settle | A1/A2; motion часть A4 | objects/rendering + Drawer/Dismissible | Loose/tight/RTL/vertical, resize/cancel; экранная скорость; semantics bounds; hit coordinate snapshot; GPU readback и build count |
 | A7 | Замкнуть composition и public surface | A2/A4/A5 | animation/macros/sdk/packages | Каждый сохраняемый pub имеет caller или явное принятое решение; cubic-track consumer; derive nested; indicators Normal и видимая статичная загрузка при Reduce/запрете TickerMode/отсутствии привязки (ADR-0192); delete/migrate старые экспорты |
 | A8 | Измерение готового пути и актуальные docs | A1–A7 | benches, perf scenarios, README/GUIDE/PATTERNS/PERFORMANCE | Завершён 2026-10-12: paired registry/primitive/mounted CPU и allocation requests/bytes; результаты и границы в release-evidence |
-| A9 | Выпускная проверка | A8 | whole consumer graph + CI/native owners | Открыт до зелёного CI финальной validation revision. Required GPU, Windows preferences/input/UIA и code-head consumer gate выполнены; receipts каждой revision и ограничения платформ в release-evidence |
+| A9 | Выпускная проверка | A8 | whole consumer graph + CI/native owners | Завершён в принятом scope: code revision `71f13790b` прошла CI. Required GPU, Windows preferences/input/UIA и code-head consumer gate выполнены; receipts каждой revision и ограничения платформ в release-evidence |
 
 ```mermaid
 flowchart LR
@@ -232,9 +232,9 @@ CompoundAnimation предписано удалить, а не оставить 
       follow-up gate на code head `b1c8c2fea` с base `e7dadda5c` тоже успешен.
       Package/facade, serde, doctests и SDK surface проверены. Windows self-rebuild
       обойдён byte-identical runner copy с обычным host lock, см. release-evidence.
-- [ ] Финальная validation revision прошла workspace/wasm/cross-typecheck CI.
-      Production-база `61ea71338` и предыдущая validation revision `e7dadda5c`
-      имеют успешные CI receipts; они не заменяют CI последующих изменений.
+- [x] Финальная code revision `71f13790b` прошла workspace/wasm/cross-typecheck CI.
+      Production-база `61ea71338`, предыдущие validation revisions и конечный
+      input driver имеют отдельные успешные receipts в release-evidence.
 - [x] Windows native и GPU readback имеют датированные прогоны; другие native-пути обозначены
       как выполненные, только compiled или unavailable, без расширения результатов Linux CI.
 - [x] Performance и allocations измерены на одинаковом хосте/профиле; workloads и исходные результаты
