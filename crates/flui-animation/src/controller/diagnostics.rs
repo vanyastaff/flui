@@ -68,11 +68,7 @@ impl Transition {
         delivery: Option<&RunDelivery>,
     ) -> Option<Self> {
         let state = State::capture(inner);
-        let previous = inner
-            .diagnostics
-            .previous
-            .replace(state)
-            .expect("BUG: diagnostics is seeded before a controller is published");
+        let previous = inner.diagnostics.previous.replace(state)?;
         let outcome = delivery.map_or("none", RunDelivery::diagnostic_outcome);
         let kind = if state.disposed != previous.disposed {
             "dispose"
