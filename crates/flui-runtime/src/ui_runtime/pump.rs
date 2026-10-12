@@ -338,9 +338,16 @@ impl UiRuntime {
         } else {
             crate::owner::RecoveryState::Healthy
         };
+        let outer_turn_finished = self.geometry_turn.borrow().is_none();
         let refresh = catch_unwind(AssertUnwindSafe(|| {
             match deadlines {
-                DeadlineWork::Observe => self.refresh_deadline_observations(state),
+                // An inbox drain can precede its enclosing frame's sampling.
+                // Discovery waits for the completed owner transaction, so a
+                // failed retained attempt cannot be replaced in that same pump.
+                DeadlineWork::Observe if outer_turn_finished => {
+                    self.refresh_deadline_observations(state);
+                }
+                DeadlineWork::Observe => {}
                 // A native background wake runs no visual sampling. Its input
                 // deadlines must still progress while frame gates are closed.
                 DeadlineWork::Poll => self.sample_background_deadlines(state),
@@ -354,7 +361,6 @@ impl UiRuntime {
         );
         // An inbox drain can run inside a larger pump/background transaction.
         // Its reports wait for that enclosing turn as well as any owner lease.
-        let outer_turn_finished = self.geometry_turn.borrow().is_none();
         if outer_turn_finished {
             let delivery = catch_unwind(AssertUnwindSafe(|| {
                 self.deliver_sampling_reports_if_unleased();
