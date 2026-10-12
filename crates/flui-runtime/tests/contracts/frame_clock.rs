@@ -165,6 +165,10 @@ fn presentation_delivery_failure_keeps_healthy_sampling_build_and_completion() {
                 "run completion delivery failure",
                 run_completion_delivery_failure_preserves_completion,
             ),
+            (
+                "late font diagnostic delivery failure",
+                late_font_diagnostic_failure_preserves_fresh_sibling_frame,
+            ),
         ],
     );
 }
@@ -187,6 +191,266 @@ fn final_status_delivery_failure_preserves_completion() {
 
 fn run_completion_delivery_failure_preserves_completion() {
     delivery_case(Delivery::Completion);
+}
+
+#[derive(Default)]
+struct FontWidthSink(Vec<f64>);
+
+impl FrameSink for FontWidthSink {
+    fn surface_size(&mut self) -> (u32, u32) {
+        (800, 600)
+    }
+
+    fn submit(&mut self, scene: flui_layer::Scene) -> SubmitVerdict {
+        self.0 = scene
+            .tree()
+            .iter()
+            .filter_map(|(_, node)| match node.layer() {
+                flui_layer::Layer::Picture(picture) => Some(picture),
+                _ => None,
+            })
+            .flat_map(|picture| picture.picture().iter())
+            .filter_map(|command| match &command.op {
+                flui_painting::DrawOp::Paragraph { paragraph, .. } => Some(paragraph.size().width),
+                _ => None,
+            })
+            .collect();
+        SubmitVerdict::Presented
+    }
+}
+
+struct LateFontDiagnostic {
+    armed: AtomicBool,
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl tracing::Subscriber for LateFontDiagnostic {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        struct FontChangeMessage(bool);
+
+        impl tracing::field::Visit for FontChangeMessage {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "message" {
+                    self.0 = format!("{value:?}")
+                        == "the font collection changed; laying out the text measured on it again";
+                }
+            }
+        }
+
+        let mut message = FontChangeMessage(false);
+        event.record(&mut message);
+        if event.metadata().target() == "flui_rendering::pipeline::owner::accessors"
+            && message.0
+            && self.armed.swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            std::panic::panic_any("late-font-diagnostic");
+        }
+    }
+
+    fn enter(&self, _: &tracing::span::Id) {}
+
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+fn late_font_diagnostic_failure_preserves_fresh_sibling_frame() {
+    use flui_painting::typography::{FontWeight, TextStyle};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let mut clock = ManualClock::new();
+    let fonts = flui_painting::FontCollection::new();
+    let mut runtime = UiRuntime::new(
+        crate::owner_publication::window(),
+        1.0,
+        RuntimeHostServices::new(
+            Arc::new(|| {}),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            &fonts,
+            flui_scheduler::ClockSource::Manual(clock.clone()),
+        ),
+    )
+    .expect("late font runtime");
+    runtime.set_frame_failure_detail(FrameFailureDetail::Verbatim);
+    let primary_id = runtime.presentation_id();
+    let primary_mounted = Rc::new(RefCell::new(None));
+    let primary_builds = Rc::new(RefCell::new(Vec::new()));
+    runtime
+        .attach_root_widget_with_size(
+            &SamplingView {
+                mounted: Rc::clone(&primary_mounted),
+                built_samples: Rc::clone(&primary_builds),
+            },
+            800.0,
+            600.0,
+        )
+        .expect("primary late font root");
+    let sibling_id = runtime
+        .install_presentation(runtime.assemble_presentation(crate::owner_publication::window()));
+    let sibling_mounted = Rc::new(RefCell::new(None));
+    let sibling_builds = Rc::new(RefCell::new(Vec::new()));
+    runtime
+        .attach_root_widget_with_size_to(
+            sibling_id,
+            &flui_widgets::Column::new(vec![
+                SamplingView {
+                    mounted: Rc::clone(&sibling_mounted),
+                    built_samples: Rc::clone(&sibling_builds),
+                }
+                .boxed(),
+                flui_widgets::Center::new()
+                    .child(
+                        flui_widgets::Text::new("AAAA").style(
+                            TextStyle::default()
+                                .with_font_family("FLUI Probe Mono")
+                                .with_font_weight(FontWeight::W100)
+                                .with_font_size(20.0),
+                        ),
+                    )
+                    .boxed(),
+            ]),
+            800.0,
+            600.0,
+        )
+        .expect("fresh sibling with real text");
+    let mut sink = FontWidthSink::default();
+    assert!(runtime.pump(&mut clock, &mut sink).presented());
+    assert_eq!(sink.0.len(), 1);
+    assert!(
+        (sink.0[0] - 80.0).abs() > 1.0,
+        "the unregistered probe family paints a distinguishable fallback"
+    );
+    let primary = primary_mounted.take().expect("primary animation mounted");
+    let sibling = sibling_mounted.take().expect("sibling animation mounted");
+    let _primary_run = run_source(&primary.controller, SourceFailure::Curve);
+    let _sibling_run = sibling.controller.forward().expect("sibling animation");
+    let _ = runtime.pump(&mut clock, &mut sink);
+    let primary_before = primary_builds.borrow().len();
+    let sibling_before = sibling_builds.borrow().len();
+    let primary_completed = Rc::new(Cell::new(0));
+    let sibling_completed = Rc::new(Cell::new(0));
+    for (handle, completed) in [
+        (&primary.completion, &primary_completed),
+        (&sibling.completion, &sibling_completed),
+    ] {
+        let observed = Rc::clone(completed);
+        handle
+            .schedule(move |_| observed.set(observed.get() + 1))
+            .expect("completion admitted before font diagnostic");
+    }
+    let reports = Arc::new(Mutex::new(Vec::new()));
+    let reported = Arc::clone(&reports);
+    let registered = fonts.clone();
+    let register_once = AtomicBool::new(true);
+    runtime.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
+        reported
+            .lock()
+            .expect("late font failure observations")
+            .push(record_failure(report));
+        if report.address.presentation_id == primary_id
+            && matches!(report.kind, FrameFailureKind::SamplingPanic { .. })
+            && register_once.swap(false, Ordering::SeqCst)
+        {
+            registered
+                .register_font(include_bytes!(
+                    "../../../flui-painting/assets/fonts/probe-mono-100.ttf"
+                ))
+                .expect("actual probe face registration");
+        }
+    })));
+    clock.advance(Duration::from_millis(250));
+    let diagnostic_calls = Arc::new(AtomicUsize::new(0));
+    let attempt = {
+        let _diagnostics = tracing::subscriber::set_default(LateFontDiagnostic {
+            armed: AtomicBool::new(true),
+            calls: Arc::clone(&diagnostic_calls),
+        });
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            runtime.pump(&mut clock, &mut sink)
+        }))
+    };
+    assert_eq!(diagnostic_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(sibling.controller.value(), 0.25);
+    assert!(
+        sibling_builds.borrow().len() > sibling_before,
+        "a post-commit font diagnostic must not discard the sibling's coherent fresh frame"
+    );
+    assert_eq!(sibling_builds.borrow().last().copied(), Some(0.25));
+    assert_eq!(
+        sibling_completed.get(),
+        1,
+        "delivery cannot cancel completion"
+    );
+    assert!(attempt.expect("font diagnostic is contained").presented());
+    assert_eq!(primary_builds.borrow().len(), primary_before);
+    assert_eq!(primary_completed.get(), 0);
+    assert_eq!(sink.0.len(), 1);
+    assert!(
+        (sink.0[0] - 80.0).abs() < 0.01,
+        "same-pump paint uses four one-em probe glyphs at 20 px: {:?}",
+        sink.0
+    );
+    let address = |presentation_id| flui_foundation::PresentationAddress {
+        ui_runtime_id: runtime.id(),
+        presentation_id,
+    };
+    assert_eq!(
+        reports
+            .lock()
+            .expect("late font failure observations")
+            .as_slice(),
+        &[
+            RecordedFailure {
+                address: address(primary_id),
+                disposition: FailureDisposition::FrameDropped,
+                consecutive_failures: 1,
+                sampling: Some(RecordedSampling {
+                    first: (SamplingStage::Animation, SamplingFailureOrigin::Computation),
+                    blocking: Some((SamplingStage::Animation, SamplingFailureOrigin::Computation)),
+                    admitted_attempt: true,
+                    message: PanicText::Verbatim("curve computation".into()),
+                    internal_invariant: false,
+                }),
+            },
+            RecordedFailure {
+                address: address(sibling_id),
+                disposition: FailureDisposition::Contained,
+                consecutive_failures: 0,
+                sampling: Some(RecordedSampling {
+                    first: (SamplingStage::Preparation, SamplingFailureOrigin::Delivery),
+                    blocking: None,
+                    admitted_attempt: true,
+                    message: PanicText::Verbatim("late-font-diagnostic".into()),
+                    internal_invariant: false,
+                }),
+            },
+        ]
+    );
+    clock.advance(Duration::from_millis(250));
+    let _ = runtime.pump(&mut clock, &mut sink);
+    assert_eq!(sibling.controller.value(), 0.5);
+    assert_eq!(sibling_builds.borrow().last().copied(), Some(0.5));
+    assert_eq!(primary_completed.get(), 1);
+    assert_eq!(sibling_completed.get(), 1);
+    assert_eq!(
+        reports
+            .lock()
+            .expect("late font failure observations")
+            .len(),
+        2
+    );
 }
 
 struct BackgroundDeadline {
