@@ -290,7 +290,7 @@ impl UiRuntime {
                         ui_runtime.drain_owner_inbox();
                     })
                     .expect("BUG: the runtime's live frame owner must admit its background turn");
-            })
+            });
         }));
         let admitted = turn.is_some();
         drop(turn);

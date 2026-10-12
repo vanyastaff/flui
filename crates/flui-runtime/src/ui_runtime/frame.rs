@@ -111,11 +111,9 @@ impl UiRuntime {
 
             let scoped =
                 self.scheduler.phase() == flui_scheduler::SchedulerPhase::PersistentCallbacks;
-            if scoped {
-                if completion && !pending && !woken && !resuming {
-                    presentation.complete_segment();
-                    continue;
-                }
+            if scoped && completion && !pending && !woken && !resuming {
+                presentation.complete_segment();
+                continue;
             }
 
             // The presentation-frame transaction boundary (ADR-0048): a
