@@ -1,13 +1,16 @@
 # Animation: план до production ready
 
-- **Дата:** 2026-10-08.
-- **Проверенная база:** `91bb1fe1d2a349f62915846303f6f25780ae5c6d`.
-- **Статус:** реализация продолжается. Доставка ядра, владеющие контроллеры и
-  типизированный playback подключены к runtime, testing, widgets и packages;
-  закрытие старых API и полная приёмка A1–A3 ещё не завершены. A4–A9 остаются
-  открытыми; удаление неиспользуемых composition-экспортов не закрывает A7.
-- **Основание:** [аудит](readiness-audit.md), [прогоны](readiness-evidence.md),
-  [матрица покрытия требований](readiness-matrix.md), восстановленные 12 тематических спек.
+- **Дата исходного плана:** 2026-10-08; актуализация: 2026-10-12.
+- **Production база выпускной проверки:** `61ea713380a449777ffa791b61a3a01e3fd81c5a`.
+  Исторический аудит закреплён на `91bb1fe1d2a349f62915846303f6f25780ae5c6d`.
+- **Статус:** A0–A7 интегрированы; контракт и доказательство каждой из 110 строк
+  назначены в актуальной матрице. A8 завершён датированными CPU/allocation
+  измерениями. Native input/UIA, required GPU и Windows preferences исполнены;
+  A9 завершает финальный gate. Граница платформ сохраняется в release-evidence.
+- **Основание:** [актуальные контракты](readiness-status.md),
+  [выпускные свидетельства](release-evidence.md). Исторические
+  [аудит](readiness-audit.md), [прогоны](readiness-evidence.md),
+  [маршрут требований](readiness-matrix.md) и 12 тематических спек сохраняют исходную постановку.
 - **Сравнение:** [анимация у конкурентов](animation-competitors.md), включая проверку утверждений
   приложенного архитектурного обзора. Это источник acceptance-сценариев, не автоматическое
   расширение scope и не основание копировать интерфейсы.
@@ -17,11 +20,12 @@
 
 ## Проблема для пользователя
 
-Зелёный обычный CI не запускает 32 красных контракта ядра. Виджет может потерять уведомление,
-оставить контроллер живым после удаления, зависнуть при reentry или получить NaN. Улучшенная
-математика retarget уже есть, но обычный implicit-виджет ей не пользуется. Системное предпочтение
-меньшего движения не достигает анимации. Поэтому дальнейшие косметические улучшения кривых
-не снимают главные риски выпуска.
+Аудит 2026-10-08 обнаружил 32 отключённых красных контракта: потерю доставки,
+владения, reentry/recovery и численные ошибки; implicit retarget и системная policy
+не были сквозными. Это историческое основание плана. В текущем дереве принятые
+сценарии проходят через production consumers и публичные тесты; отключённых
+контрактов в animation tests нет. Остаток выпуска — актуальные измерения,
+physical native/GPU execution и проверяемый ledger результатов.
 
 ## Подход и альтернативы
 
@@ -35,18 +39,17 @@
 | Продолжать чинить Arc/Mutex/atomic протоколы по одному | Быстрый локальный fix конкретного воспроизводимого дефекта | Повторная миграция и новые гонки; допустим только отдельный срочный fix, не финальная архитектура |
 | Считать merged PR достаточными и обновить статусы | Минимальные изменения | Отвергнут: 32 воспроизведённых отказа и отсутствующие consumers |
 
-Это предложение последовательности, а не одобрение новых интерфейсов или частичного send-flip.
-Действующая спека send-flip запрещает отдельно вливать части core flip. Сначала её владелец
-закрепляет integration point; при иной принятой архитектуре задачам ниже обновляют дизайн,
-сохраняя поведенческие критерии и красные доказательства.
+Это исходное обоснование последовательности. Исторические agent assignments и
+промежуточные send-flip ветки не служат списком оставшейся реализации; текущая
+архитектура и контракты ниже имеют принятую ADR authority.
 
 Для текущей реализации общий owner-local контракт закреплён
 [ADR-0175](../../../adr/ADR-0175-owner-local-scheduling-and-animation.md),
 а custody первой ошибки —
 [ADR-0178](../../../adr/ADR-0178-notification-first-failure-custody.md).
 Общий scheduler/notifier/controller путь и его consumers меняются вместе.
-Это не закрывает оставшийся ledger ADR-0136 и не разрешает считать draft
-выпускной проверкой. Playback-контракт описан в
+Исторический ledger ADR-0136 не заменяет актуальную матрицу и выпускную проверку.
+Playback-контракт описан в
 [ADR-0176](../../../adr/ADR-0176-presentation-animation-playback.md).
 
 ## Рабочие пакеты и зависимости
@@ -54,6 +57,10 @@
 Пакет — область результата, а не обещание одного маленького коммита. Перед исполнением
 разделять его на вертикальные PR с конкретным сценарием, production caller и тестом.
 На каждый shared-файл один владелец; чужие worktree не редактировать.
+
+A0–A7 описывают интегрированные результаты и их сохраняемые критерии. Ссылки
+send-flip T* в графе — исторический маршрут, не назначения новой реализации.
+Текущий остаток A8–A9 фиксируется release checklist и выпускными свидетельствами.
 
 | Пакет | Результат | Зависимость | Владелец/изменяемая область | Приёмка |
 |---|---|---|---|---|
@@ -65,7 +72,7 @@
 | A5 | Системная и app motion policy | A1–A3; merged SystemPreferences producer | platform owner → realm projection → animation/widgets | Первый кадр и live update; User/Always/Never; Preserve; конечный scale; completion ровно раз; два realm независимы |
 | A6 | Согласованная геометрия paint/hit/semantics и жест→settle | A1/A2; motion часть A4 | objects/rendering + Drawer/Dismissible | Loose/tight/RTL/vertical, resize/cancel; экранная скорость; semantics bounds; hit coordinate snapshot; GPU readback и build count |
 | A7 | Замкнуть composition и public surface | A2/A4/A5 | animation/macros/sdk/packages | Каждый сохраняемый pub имеет caller или явное принятое решение; cubic-track consumer; derive nested; indicators Normal и видимая статичная загрузка при Reduce/запрете TickerMode/отсутствии привязки (ADR-0192); delete/migrate старые экспорты |
-| A8 | Измерение готового пути и актуальные docs | A1–A7 | benches, perf scenarios, README/GUIDE/PATTERNS/PERFORMANCE | Same-host baseline vs final, active/idle N, allocation bound, актуальные примеры и усиленные lints |
+| A8 | Измерение готового пути и актуальные docs | A1–A7 | benches, perf scenarios, README/GUIDE/PATTERNS/PERFORMANCE | Завершён 2026-10-12: paired registry/primitive/mounted CPU и allocation requests/bytes; результаты и границы в release-evidence |
 | A9 | Выпускная проверка | A8 | whole consumer graph + CI/native owners | Ниже приведённый release checklist, SHA и evidence на каждую строку |
 
 ```mermaid
@@ -88,6 +95,9 @@ flowchart LR
 ```
 
 ## Первые исполнимые срезы
+
+Эта последовательность сохраняет исходный порядок внедрения A1–A3; перечисленные
+пути уже интегрированы и не являются новым handoff. Текущий остаток — release checklist.
 
 1. **A1: status fan-out.** Начать с `status_listener_panic_finishes_the_round` и
    `reentrant_status_keeps_commit_order`; затем конкурирующая паника, remove/dispose,
@@ -175,7 +185,7 @@ preferred frame rate и отдельный cross-fade-флаг вынесены.
 вынесены **условно**, при доказанном покрытии retarget и keyframes соответственно.
 CompoundAnimation предписано удалить, а не оставить без тестов. Builder сохраняется.
 
-Нужно закрыть несогласованности до реализации затронутого пакета:
+Принятые уточнения и проверенные контракты:
 
 - M-TIME-12: историческая матрица требует отрицательные rate, более подробный R4 motion-clock
   их отвергает. План следует конечному rate ≥ 0 и явному reverse; обновление матрицы требует
@@ -186,14 +196,17 @@ CompoundAnimation предписано удалить, а не оставить 
   с публичной математической и mounted Hero paint-приёмкой (readiness-matrix).
   Они сохраняют принятый Curve-контракт: normalized endpoints, NaN и exterior clamp;
   raw CSS parsing/extrapolation и velocity-inheriting spring retarget здесь не заявлены.
-- M-INTP-3: «без 8-битной ступени» не совпадает с текущим u8 Color. Предложение: отдельно оценить
-  float paint interpolation и consumer path; не расширять public Color автоматически.
-- M-INTP-9: порог покоя на тип проверить отдельно от существующего DPR tolerance скролла.
+- M-INTP-3: continuous Color и paint/filter consumers реализованы по ADR-0194.
+  Fractional-alpha readbacks отличают точный путь от u8 quantization; current-head
+  GPU execution фиксируется в выпускных свидетельствах.
+- M-INTP-9: component thresholds имеют единицы scalar/geometry и проверены
+  independent settlement/invalid admission сценариями по ADR-0186; это отдельный
+  контракт от DPR tolerance скролла.
 - Исторические номера ADR 0143–0150 не резервировать заново: сверить реестр; сохранить действующие
   ADR-0149 и ADR-0155, новые номера брать из свободных на момент PR.
 
-Эти пункты оформлены как открытые решения, а не скрытое сокращение scope. Остальные задачи
-не обязаны ждать решения о precision цвета или sampled easing.
+Эти уточнения отражены в актуальной матрице; precision цвета и sampled easing
+не остаются неутверждёнными implementation proposals.
 
 Владелец согласовал 2026-10-11 завершение и слияние проверенных изменений без ожидания
 оставшихся решений и полного прохода по acceptance-матрице. Неподтверждённые строки
@@ -206,29 +219,28 @@ CompoundAnimation предписано удалить, а не оставить 
       ложных обещаний в именах и оставшихся callers старого контракта.
 - [ ] Матрица доставки выше пройдена для затронутых каналов; FIFO/coalescing, subscribe/catch-up,
       retry debt и failure custody описаны и проверены, включая следующий кадр.
-- [ ] 32 исторических красных контракта исполнены и зелёные; соответствующие ignore удалены.
-- [ ] Все 110 исходных market-ID имеют актуальный consumer/test/evidence либо принятое scope-решение;
+- [x] Исторические 32 отказа связаны с текущими исполняемыми контрактами или
+      типизированными ограничениями; 29 имён сохранены, три замены явно отражены
+      в release-evidence. Соответствующих ignore нет.
+- [x] Все 110 исходных market-ID имеют актуальный consumer/test/evidence либо принятое scope-решение;
       условные исключения имеют доказательство выполнения условия.
 - [ ] A1–A7 проверены через пользовательские швы; future/cancellation, reentry, competing failures,
       unmount, mutation during build и следующий кадр учтены.
 - [ ] `cargo xtask check-changed --base <фиксированный-base>` зелёный для implementation PR;
       package/facade, serde, doctests и SDK surface мигрированы.
 - [ ] Финальная интеграция прошла требуемые workspace/wasm/cross-typecheck CI на конечном SHA.
-- [ ] Windows native и GPU readback имеют датированные прогоны; другие native-пути обозначены
+- [x] Windows native и GPU readback имеют датированные прогоны; другие native-пути обозначены
       как выполненные, только compiled или unavailable, без расширения результатов Linux CI.
-- [ ] Performance и allocations измерены на одинаковом хосте/профиле; workloads и исходные результаты
+- [x] Performance и allocations измерены на одинаковом хосте/профиле; workloads и исходные результаты
       воспроизводимы, параметры не берутся из старых scratch-прототипов.
 - [ ] Документация не обещает behavior, которого нет; нужные cross-crate ADR приняты; нового
       unwired public surface нет; deprecated path и старые handoff-заметки убраны после миграции.
 
 ## Handoff для следующей сессии
 
-Прочитать этот план, audit/evidence и спецификацию своего пакета. Получить fresh `origin/main`,
-зафиксировать новый SHA, проверить merged state PR1515 и send-flip. Повторить узкий красный
-сценарий на новом SHA: он мог быть исправлен другим владельцем. На каждый срез записать
-требование → production consumer → red → change → green → regression proof → SHA/PR.
-Не возобновлять старые агентские ветки или их назначения только по историческим отчётам.
-
-Новых архитектурных решений и реализации в этом проходе не принято: результат — восстановленная
-база требований, проверенный аудит и reviewable план. Начинать реализацию следует с A1 на
-согласованной ветке владельца core, а не с массовой переписи всего animation.
+Прочитать актуальную матрицу и выпускные свидетельства, получить fresh `origin/main`
+и зафиксировать SHA. Остатки определяются непроверенными строками текущего release
+checklist; исторические red receipts остаются привязаны к своим revisions.
+Для нового дефекта повторить публичный reproducer на свежей базе и записать
+consumer → red → change → green → counterfactual → SHA. Не возобновлять старые
+агентские ветки и не запускать A1 заново только по аудиту 2026-10-08.

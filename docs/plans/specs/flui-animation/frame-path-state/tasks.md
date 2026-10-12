@@ -1,6 +1,9 @@
 # frame-path-state — задачи
 
-- **Статус:** черновик
+- **Статус:** исторический план; текущие контракты —
+  [readiness-status](../readiness-status.md), выпускная приёмка —
+  [release-evidence](../release-evidence.md). Строки ниже сохраняют исходный маршрут,
+  а не список незавершённой реализации.
 - **Дата:** 2026-10-06
 - **Design:** [design.md](design.md); требования — [requirements.md](requirements.md)
 - **База:** `main` @ `9a4daa3ed` (F1, F2 — от `main` после Q0; F3–F5 — от `send-flip/core` после T5)
