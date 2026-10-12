@@ -37,6 +37,14 @@ producers retain the bounded `RenderInvalidationHandle`. Local marks coalesce
 by attachment and phase before waking and replay through canonical dirty walks.
 Detach withdraws pending metadata before user cleanup. See
 [ADR-0190](../../docs/adr/ADR-0190-owner-local-render-invalidation.md).
+Runtime preparation drains accepted local, external and font invalidations
+through `drain_pending_dirty_with_recovery`, borrowing the presentation's
+existing custody rather than resuming a payload into a blanket preparation
+catch. Canonical dirty admission has no user callout; an unproved walk is
+`Unknown`. A visual-update callout after that admission is `Delivery` and a
+failed wake leaves the accepted mark live. Stale-request diagnostics have no
+such commit proof and remain `Unknown`. The standalone drain finishes its own
+first-failure boundary after attempting the accepted tail.
 The public `lifecycle_matrix` rows
 `local_marks_survive_a_failed_wake_and_coalesce` and
 `local_marks_wait_for_a_hook_and_end_with_the_attachment` pin wake recovery,
@@ -1188,9 +1196,13 @@ the pipeline's `TextMeasurers`, a set of `RenderId`s), and `lend` inserts the no
 borrows. `PipelineOwner::apply_font_change` reads the collection's generation through a
 `try_borrow` of the context: while the context is lent (a drain run from inside a
 measurement) it does nothing and the change waits for the next drain, rather than panic. When
-the generation differs from the one the pipeline last applied, it takes the set and marks each node still in the tree for layout and paint, through the ordinary
-`mark_needs_layout` (which clears cached intrinsics up the ancestor walk and requests a visual
-update) and `mark_needs_paint`. `drain_pending_dirty` calls it last. `run_frame`
+the generation differs from the one the pipeline last applied, it admits that
+generation and takes the complete measured set before diagnostics. Each live
+node receives independent layout and paint marks through the canonical dirty
+commits; the layout walk clears cached intrinsics and unpoisons affected nodes.
+Visual-update delivery follows each admitted mark outside notifier storage
+guards and borrows the same recovery scope. `drain_pending_dirty` applies the
+font change last. `run_frame`
 drains before its first phase; runtime owner activity applies queued admissions
 outside caller-held storage guards. Host-facing pending-work reads inspect
 accepted metadata and do not drain callbacks or diagnostics. A test's

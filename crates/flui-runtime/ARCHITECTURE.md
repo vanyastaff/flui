@@ -88,12 +88,17 @@ host.
 
 - **Registered text preparation resumes the same presentation segment.** The
   saved segment owns its original tick, host instant, constraints, accepted DPR,
-  numeric policy, multi-source cohort and opaque layout/build premises. Actual
+  numeric policy, multi-source cohort and sealed layout/build identity premises. Actual
   admission advances premises before deduplication; retained transport does not.
   Dirty-channel requests are applied before compatibility is checked. Premises
   are checked again immediately before a segment, after sampling and its
   diagnostics. An obsolete retained sample is withdrawn and retried with
   a fresh next-pump tick; it cannot discharge completion debt.
+  The sampled retained identity remains authoritative even if diagnostics
+  remove the saved segment or replace it. A later preparation report gets one
+  passive validation of its own admissions, without recursively draining
+  callbacks or reporting. Fresh input remains same-pump eligible when the
+  sampled operation had no former retained attempt.
   `a_sibling_animation_admission_replaces_ready_text_before_geometry_publication`
   pins accepted sibling input, withheld completion and the repaired glyph size.
   Native service receives an owned frontier after Runtime checkout returns and settles
@@ -110,6 +115,9 @@ host.
   table's `unknown_deadline_withdraws_the_old_receipt_and_recovers_fresh_geometry`
   and `a_sampling_report_replaces_ready_text_before_geometry_publication` rows
   distinguish rejected late settlement from valid replacement geometry.
+  Withdrawn closed numeric cohorts release their answer pins outside borrows;
+  preserving an incoming opaque failure does not keep obsolete numeric answers
+  pinned indefinitely.
 
 - **Inherited DPR agrees with the render pipeline.** Initial media data uses
   the pipeline's accepted ratio. Direct updates reject non-positive and
