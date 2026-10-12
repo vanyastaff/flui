@@ -31,10 +31,14 @@ pub(crate) fn background_clear_value() -> wgpu::Color {
 
 /// The parts of a frame that depend on where it is presented.
 pub(crate) trait FrameSteps {
-    /// Clears `view` to [`BACKGROUND`] and submits the pass.
-    fn clear(&mut self, view: &wgpu::TextureView) -> EngineResult<()>;
+    /// Encodes the clear before any destination reads.
+    fn clear(
+        &mut self,
+        view: &wgpu::TextureView,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> EngineResult<()>;
 
-    /// Records and submits the frame's content into `(view, texture)`;
+    /// Records and encodes the frame's content into `(view, texture)`;
     /// `retained` says the target is the retained texture rather than the
     /// surface, `partial` the damage a partial frame scissors to. Returns
     /// whether an advanced shape straddled that damage, in which case the
@@ -48,10 +52,35 @@ pub(crate) trait FrameSteps {
         texture: &wgpu::Texture,
         retained: bool,
         partial: Option<Rect<f64>>,
+        encoder: &mut wgpu::CommandEncoder,
     ) -> EngineResult<bool>;
 
     /// Copies the whole retained texture onto the surface's view.
-    fn blit(&mut self, retained: &wgpu::Texture, surface: &wgpu::TextureView) -> EngineResult<()>;
+    fn blit(
+        &mut self,
+        retained: &wgpu::Texture,
+        surface: &wgpu::Texture,
+        view: &wgpu::TextureView,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> EngineResult<Arc<crate::device_domain::PreparedPermit>>;
+
+    /// Transfers all prepared ownership with the complete ordered frame.
+    fn submit(
+        &mut self,
+        encoder: wgpu::CommandEncoder,
+        permits: Vec<Arc<crate::device_domain::PreparedPermit>>,
+    ) -> EngineResult<()>;
+
+    /// Resets frame-local state on success, error and unwind.
+    fn finish(&mut self);
+}
+
+struct FrameCleanup<'a, S: FrameSteps>(&'a mut S);
+
+impl<S: FrameSteps> Drop for FrameCleanup<'_, S> {
+    fn drop(&mut self) {
+        self.0.finish();
+    }
 }
 
 /// Font blob ids are local to the image that shapes a scene.
@@ -296,6 +325,12 @@ impl FrameProtocol {
         }
         self.force_full_next_frame = true;
         let _submission_scope = domain.begin_frame_scope()?;
+        let steps = FrameCleanup(steps);
+        let mut encoder = domain
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("FLUI Complete Frame Encoder"),
+            });
         let (retained, partial) = match plan {
             FramePlan::Skip => return Ok(()),
             FramePlan::Direct => {
@@ -303,11 +338,17 @@ impl FrameProtocol {
                 (None, None)
             }
             FramePlan::RetainedFull => (
-                Some(self.retained.begin(domain, size, format, false)?),
+                Some(
+                    self.retained
+                        .begin_encoded(domain, size, format, false, &mut encoder)?,
+                ),
                 None,
             ),
             FramePlan::RetainedPartial(damage) => (
-                Some(self.retained.begin(domain, size, format, true)?),
+                Some(
+                    self.retained
+                        .begin_encoded(domain, size, format, true, &mut encoder)?,
+                ),
                 Some(damage),
             ),
         };
@@ -316,11 +357,24 @@ impl FrameProtocol {
             None => (surface_view, surface_texture),
         };
         if partial.is_none() {
-            steps.clear(view)?;
+            steps.0.clear(view, &mut encoder)?;
         }
-        let straddled = steps.content(view, texture, retained.is_some(), partial)?;
+        let straddled =
+            steps
+                .0
+                .content(view, texture, retained.is_some(), partial, &mut encoder)?;
+        let mut permits = Vec::new();
+        if let Some(candidate) = retained.as_ref() {
+            permits = candidate.submission_permits();
+            permits.push(steps.0.blit(
+                candidate.texture(),
+                surface_texture,
+                surface_view,
+                &mut encoder,
+            )?);
+        }
+        steps.0.submit(encoder, permits)?;
         if let Some(candidate) = retained {
-            steps.blit(candidate.texture(), surface_view)?;
             self.retained.commit(candidate);
         }
         self.force_full_next_frame = straddled;

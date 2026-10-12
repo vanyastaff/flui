@@ -304,6 +304,17 @@ where
             );
         }));
 
+        window.on_safe_area_change(Box::new(move |insets| {
+            let _ = dispatch_platform_ui_runtime(
+                owner_dispatch,
+                RuntimeTask::Event(RuntimeEvent::SafeAreaChanged(insets)),
+            );
+        }));
+        let _ = dispatch_platform_ui_runtime(
+            owner_dispatch,
+            RuntimeTask::Event(RuntimeEvent::SafeAreaChanged(window.safe_area_insets())),
+        );
+
         // 8. Lifecycle callbacks
         //
         // Detached is ui_runtime-dispatched so interrupted gesture state is drained

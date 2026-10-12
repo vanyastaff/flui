@@ -25,6 +25,13 @@ finalization release consume that token, returning it inside a typed failure
 after mutation-free preflight when owner, epoch, live-node, or topology checks
 fail. Finalization release does not delete nodes; it authorizes the existing
 deepest-first element unmount so view lifecycle hooks remain canonical.
+Fresh attachment reenrolls every repaint boundary in the batch, including
+nested retained boundaries. A root-only invalidation could replay a stale
+capture over a painter updated while detached; old paint flags cannot stand
+in for a queue entry from the new attachment interval.
+`isolated_keyed_indicator_moves_between_configured_permissions_without_restarting`
+in flui-widgets exercises relocation, pause and resumed visible motion through
+the public widget composition.
 
 ---
 

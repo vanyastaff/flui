@@ -67,10 +67,8 @@ impl SparseChildren {
 
     /// Iterate over all currently-built `(logical_index, ElementId)` pairs.
     ///
-    /// Used by the adaptor element's `on_unmount` to find and subtree-remove
-    /// every lazy child: since the host's `child_ids` stays empty by
-    /// invariant, the generic tree-walk that covers dense children cannot
-    /// reach them.
+    /// Supplies the owned-child walk while keeping lazy residents out of the
+    /// host's dense reconciliation slots.
     pub(crate) fn iter_built(&self) -> impl Iterator<Item = (usize, ElementId)> + '_ {
         self.by_logical_index
             .iter()
@@ -130,7 +128,7 @@ impl SparseChildren {
         tree: &mut ElementTree,
         owner: &mut ElementOwner<'_>,
     ) -> bool {
-        let Some(child) = self.by_logical_index.remove(&logical_index) else {
+        let Some(child) = self.by_logical_index.get(&logical_index).copied() else {
             return false;
         };
         // Use `remove_subtree` so the child's entire descendant subtree is
@@ -138,6 +136,7 @@ impl SparseChildren {
         // and leaks every descendant (e.g. the Padding and Text inside a
         // Container child stay as orphaned slab entries and dangling render nodes).
         tree.remove_subtree(child, owner, SubtreeRemoval::DeactivateKeyed);
+        self.by_logical_index.remove(&logical_index);
         tracing::trace!(logical_index, ?child, "SparseChildren evicted lazy child");
         true
     }
@@ -410,7 +409,7 @@ impl SparseChildren {
                 {
                     let resident = &residents[pos];
                     if resident.index != *index {
-                        tree.relocate_sparse_child(resident.id, *index);
+                        tree.relocate_sparse_child(resident.id, *index, owner);
                         tracing::trace!(
                             from = resident.index,
                             to = *index,

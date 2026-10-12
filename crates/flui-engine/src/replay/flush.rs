@@ -178,6 +178,7 @@ impl GpuReplay {
         pipelines: &mut PipelineSet,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
+        load: wgpu::LoadOp<wgpu::Color>,
     ) {
         let Some(prepared) = prepared else {
             return;
@@ -189,7 +190,7 @@ impl GpuReplay {
                 resolve_target: None,
                 depth_slice: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
+                    load,
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -200,6 +201,27 @@ impl GpuReplay {
         });
 
         render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
+        self.replay_tessellated_geometry(
+            segment,
+            range,
+            prepared,
+            viewport_size,
+            device,
+            pipelines,
+            &mut render_pass,
+        );
+    }
+
+    fn replay_tessellated_geometry(
+        &self,
+        segment: &DrawSegment,
+        range: std::ops::Range<usize>,
+        prepared: &PreparedTess,
+        viewport_size: (u32, u32),
+        device: &Arc<wgpu::Device>,
+        pipelines: &mut PipelineSet,
+        render_pass: &mut wgpu::RenderPass<'_>,
+    ) {
         render_pass.set_vertex_buffer(0, prepared.vertex_buffer.slice(..));
         render_pass.set_index_buffer(prepared.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
 
@@ -230,7 +252,7 @@ impl GpuReplay {
             }
 
             if !set_clamped_scissor(
-                &mut render_pass,
+                render_pass,
                 batch.scissor,
                 full_w,
                 full_h,
@@ -247,8 +269,6 @@ impl GpuReplay {
             let end = start + batch.index_count;
             render_pass.draw_indexed(start..end, 0, 0..1);
         }
-
-        drop(render_pass);
     }
 
     // =========================================================================

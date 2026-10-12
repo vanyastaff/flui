@@ -88,6 +88,7 @@ fn router_registration_reentry_keeps_fresh_work_for_the_next_event() {
 }
 
 thread_local! {
+    #[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static ROUTER_DIAGNOSTIC: std::cell::RefCell<Option<std::rc::Rc<flui_interaction::PointerRouter>>> = const { std::cell::RefCell::new(None) };
 }
 

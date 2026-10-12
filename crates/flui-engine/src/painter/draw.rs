@@ -253,6 +253,10 @@ impl super::WgpuPainter {
 
     /// Draw an arbitrary path.
     ///
+    /// Known rounded rectangles with circular corners use the direct shape
+    /// route for antialiased SrcOver fills without shaders. Other geometry
+    /// and paint semantics retain the path route below.
+    ///
     /// The path is tessellated by lyon into a triangle mesh for filled paths or
     /// a stroke quad-mesh for stroked paths.  For `SrcOver` blend mode the mesh
     /// is accumulated in the current `DrawSegment`; for advanced (dst-read)
@@ -266,6 +270,29 @@ impl super::WgpuPainter {
         path: &flui_painting::paint::path::Path,
         paint: &flui_painting::Paint,
     ) {
+        // Material surfaces retain their exact rounded-rectangle source in
+        // Path. Keep that geometry on the direct shape route instead of
+        // creating a supersampled attachment, resolve and composite per card.
+        // Elliptical corners stay on the path route: the direct shape shader
+        // currently uses circular radii. Strokes and other Paint semantics
+        // likewise retain their existing path implementation.
+        if paint.style == flui_painting::PaintStyle::Fill
+            && paint.blend_mode == flui_painting::BlendMode::SrcOver
+            && paint.anti_alias
+            && !paint.has_shader()
+            && let Some(rrect) = path.rrect_hint()
+            && [
+                rrect.top_left,
+                rrect.top_right,
+                rrect.bottom_right,
+                rrect.bottom_left,
+            ]
+            .into_iter()
+            .all(|radius| radius.x == radius.y)
+        {
+            self.draw_rrect(rrect, paint);
+            return;
+        }
         self.batcher.draw_path(
             &mut self.current_segment,
             &mut self.draw_order,

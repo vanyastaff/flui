@@ -56,6 +56,7 @@ struct Record {
 thread_local! {
     /// The loop's attachment, which `window_opened` drops, ending the loop
     /// while the hook is lent. Owner-thread state, as the attachment is.
+    #[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static RELEASE: std::cell::RefCell<Option<DevAgentAttachment>> =
         const { std::cell::RefCell::new(None) };
 }

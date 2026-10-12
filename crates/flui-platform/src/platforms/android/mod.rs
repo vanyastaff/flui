@@ -44,6 +44,7 @@
 
 pub mod input;
 mod preferences;
+mod safe_area;
 pub(crate) mod text_sizing;
 pub mod window;
 
@@ -313,7 +314,7 @@ impl AndroidPlatform {
                             any_handled
                         }
                         InputEvent::KeyEvent(key) => {
-                            if let Some(platform_input) = input::convert_key_event(key) {
+                            if let Some(platform_input) = input::convert_key_event(&self.app, key) {
                                 let result = callbacks.dispatch_input(platform_input);
                                 result.default_prevented
                             } else {
@@ -390,7 +391,14 @@ impl Platform for AndroidPlatform {
             // Public ViewConfiguration getters have no complete public change
             // notification. Bound refresh to 500ms, independently of a surface.
             let now = web_time::Instant::now();
+            let window = platform.window.lock().clone();
+            if let Some(window) = window.as_ref() {
+                window.settle_safe_area();
+            }
             if now >= next_preference_sample {
+                if let Some(window) = window.as_ref() {
+                    window.request_safe_area();
+                }
                 platform.refresh_scroll_factors();
                 if let Err(error) = platform.refresh_preferences() {
                     tracing::warn!(%error, "Android preference query failed");

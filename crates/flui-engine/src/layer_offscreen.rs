@@ -194,6 +194,7 @@ impl GpuReplay {
             resources,
             encoder,
             RenderTarget::sampleable(offscreen_view, offscreen.texture()),
+            wgpu::LoadOp::Load,
         )?;
 
         Ok(offscreen)
@@ -389,6 +390,7 @@ impl GpuReplay {
                         resources,
                         encoder,
                         offscreen_target,
+                        wgpu::LoadOp::Load,
                     )?;
                 }
                 DrawItem::OpacityLayer(nested) => {
@@ -488,6 +490,7 @@ impl GpuReplay {
                             resources,
                             encoder,
                             offscreen_target,
+                            wgpu::LoadOp::Load,
                         )?;
                     }
                 }
@@ -614,6 +617,7 @@ impl GpuReplay {
                 resources,
                 encoder,
                 offscreen_target,
+                wgpu::LoadOp::Load,
             )?;
         }
 

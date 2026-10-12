@@ -72,6 +72,7 @@ impl GpuReplay {
         let binding = self.prepare_clip_binding(
             context,
             chain,
+            false,
             viewport_size,
             device,
             pipelines,

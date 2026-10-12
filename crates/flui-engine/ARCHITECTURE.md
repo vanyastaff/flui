@@ -24,6 +24,33 @@ Cross-crate contracts carry an ADR; crate-local shapes are recorded under
 
 ## Module map
 
+Clip preparation keeps immutable bindings within one submission encoder. Its
+key includes the clip snapshot, attachment mapping, dimensions and uniform
+origin; a later encoder cannot borrow an earlier encoder's mask production.
+Integral hard rectangular intersections use the exact root scissor only for
+draw families that install it, including analytic shadows. Fractional edges,
+antialiasing, nonrectangular clips and attachment rebases retain masks.
+`integral_hard_rect_clip_needs_no_mask_texture` and
+`shared_clip_snapshot_survives_segment_barriers_with_one_mask_budget` pin pixel
+coverage and resource admission through the painter. Unrepresentable clip
+extents refuse without overflowing integer subtraction; the same case then
+renders a healthy frame with the original budget.
+
+Known circular-corner rounded rectangle path fills reuse the existing direct
+shape route for antialiased SrcOver fills without shaders. Elliptical corners,
+strokes and other paint semantics retain path tessellation. SSAA tile admission
+intersects recorded tessellation scissors before allocating attachments, and
+the downsample pass owns its transparent clear. Supersampled color and
+independent coverage attachments clear in their first geometry pass, including
+pool-bucket padding; destination-reading routes initialize before copying their
+backdrop. `reused_ssaa_tiles_do_not_retain_previous_geometry` pins the clear
+against preceding geometry in the same pooled allocation.
+`closed_form_path_fill_fits_without_ssaa_attachments` and
+`clipped_out_ssaa_path_needs_no_tile_or_mask_allocation` pin these routes.
+`rounded_rect_route_quality` compares direct and SSAA rounded rectangle fills
+against independent geometric area coverage under fractional, scaled, rotated
+and translucent drawing in the painter readback table.
+
 | Concern | Files | What lives there |
 |---|---|---|
 | Entry points | `renderer.rs`, `headless.rs` | `Renderer` (a window's device, queue, surface, recovery) and `HeadlessRenderer` (rasterise a tree to RGBA8 bytes) |
@@ -42,6 +69,26 @@ Cross-crate contracts carry an ADR; crate-local shapes are recorded under
 into `OUT_DIR` from `build.rs`; each `<filter>/generated.rs` is the committed
 `include!` shim plus the `const` layout assertions that fail the build if the
 generated struct drifts from the hand-written one.
+
+Retained presentation copies texture bytes directly when the concrete surface
+supports COPY_DST and matches the candidate's format and extent. Other targets
+use the existing nearest-neighbour shader blit, including format conversion and
+scaling. The presentation step keeps DeviceDomain admission and queue ordering;
+candidate promotion still follows successful submission (ADR-0100).
+`retained_presentation_preserves_bytes_and_fallbacks` exercises both routes with
+RGBA/BGRA, sRGB, transparency, differing sizes/formats and missing copy usages
+in the painter GPU readback table. Its private seam supplies otherwise
+inaccessible surface capabilities; partial-frame readbacks also use this
+presentation step through the production FrameProtocol.
+
+FrameProtocol records seed, clear, ordered content and presentation into one
+frame-owned encoder and submits once. Candidate and seed-source charges join
+the painter's prepared ownership until GPU completion; candidate promotion
+follows successful admission and submission. A cleanup guard finishes painter
+maintenance once on success, error or unwind, after abandoning unsubmitted
+commands. `retained_frame_submits_once_and_recovers_without_changing_committed_pixels`
+uses the production capture protocol with a private one-submission quota and
+checks direct, full, partial and failed-frame recovery against actual pixels.
 
 `OffscreenRenderer` caches only the intermediate-to-surface presentation blit.
 Shader masks and backdrop filters use ordered painter IR and the shared layer
@@ -249,6 +296,29 @@ loom backend or the mailbox moves to `std::sync`.
 ---
 
 ## Mapping decisions
+
+### Adjacent geometry shares a render pass
+
+Ordinary tessellated and instanced runs replay in recorded order in one pass on
+the same attachment. Texture runs and portable destination-reading coverage
+remain pass boundaries. Tessellation invalidates the quad state cache: the next
+quad restores vertex/index inputs, pipeline, secondary bindings and scissor.
+`tess_merge_preserves_order_and_clip_boundaries` samples small quads before and
+after clipped tessellation, including untouched pixels that catch oversized
+geometry from stale vertex inputs. The painter GPU readback table also pins
+gradient, glyph, blend, clip and offscreen semantics across replay.
+
+### A frame owns one ordered GPU submission
+
+Seed copies and clears precede replay's destination reads in the same encoder;
+presentation follows all draws. Prepared charges and external leases transfer
+together before the candidate is committed. Frame-local pools reset only after
+the complete encoder is submitted or discarded. The private capture quota seam
+pins this through
+`retained_frame_submits_once_and_recovers_without_changing_committed_pixels`,
+which reads direct, retained and partial output and the previous committed image
+after an injected content failure. Its quota does not count readback submissions
+outside the managed frame scope.
 
 ### Solid shader fills own the source RGBA
 

@@ -71,6 +71,52 @@ pub(crate) struct ClipTape {
 }
 
 impl ClipChain {
+    /// These clips have exact hardware-scissor coverage in root device pixels.
+    pub(crate) fn integral_rect_scissor(&self) -> crate::command_ir::ScissorRect {
+        if self.is_unclipped() {
+            return None;
+        }
+        let mut cursor = self.0.as_deref();
+        while let Some(link) = cursor {
+            let ValidatedClip::Rect(rect) = link.shape else {
+                return None;
+            };
+            let matrix = link.affine.matrix();
+            if !link.hard
+                || link.op != ClipOp::Intersect
+                || matrix.x_axis.y != 0.0
+                || matrix.y_axis.x != 0.0
+                || matrix.x_axis.x <= 0.0
+                || matrix.y_axis.y <= 0.0
+            {
+                return None;
+            }
+            let Ok(Some(bounds)) = link.affine.map_bounds(rect) else {
+                return None;
+            };
+            if [bounds.left(), bounds.top(), bounds.right(), bounds.bottom()]
+                .into_iter()
+                .any(|edge| (edge as f32).fract() != 0.0)
+            {
+                return None;
+            }
+            cursor = link.parent.0.as_deref();
+        }
+        // Geometry and scissor producers pack coordinates into the same f32
+        // device lattice. Harmless f64 DPR roundoff must not allocate a mask.
+        let bounds = self.root_bounds().ok().flatten()?;
+        let x = bounds.left() as f32 as i64;
+        let y = bounds.top() as f32 as i64;
+        let right = bounds.right() as f32 as i64;
+        let bottom = bounds.bottom() as f32 as i64;
+        Some((
+            x,
+            y,
+            u32::try_from(right.checked_sub(x)?).ok()?,
+            u32::try_from(bottom.checked_sub(y)?).ok()?,
+        ))
+    }
+
     /// Conservative root-space output bound; Difference never shrinks it.
     /// None is unbounded. A disjoint or singular intersection is empty.
     pub(crate) fn root_bounds(&self) -> EngineResult<Option<Rect<f64>>> {

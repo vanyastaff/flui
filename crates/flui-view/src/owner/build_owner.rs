@@ -44,6 +44,7 @@ use super::external_build_inbox::{BuildPremise, PendingBuilds};
 
 #[cfg(test)]
 thread_local! {
+    #[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static LAYOUT_SCOPE_CLASSIFICATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -2595,6 +2596,12 @@ impl BuildOwner {
         self.inactive_elements
             .sort_by_key(|entry| std::cmp::Reverse(entry.depth()));
 
+        let mut elements_to_unmount = Vec::new();
+        for inactive in &self.inactive_elements {
+            self.collect_elements_to_unmount(tree, inactive.id(), &mut elements_to_unmount);
+        }
+        tree.preflight_unmount(&elements_to_unmount);
+
         // Take ownership of inactive elements to avoid borrow conflicts.
         // `mem::take` snapshots the queue before the unmount sweep so
         // mid-iteration `ElementOwner::push_inactive` calls (e.g. children
@@ -2628,11 +2635,7 @@ impl BuildOwner {
             });
         }
 
-        // Collect all elements to unmount (including children)
-        let mut elements_to_unmount = Vec::new();
-        for inactive in &inactive_elements {
-            Self::collect_elements_to_unmount(tree, inactive.id(), &mut elements_to_unmount);
-        }
+        tree.retire_sparse_children(&elements_to_unmount, &self.child_manager_registry);
 
         // Build the split-borrow handle once for the entire unmount sweep.
         // The handle survives `tree.get_mut` borrows because it points into
@@ -2711,15 +2714,22 @@ impl BuildOwner {
     /// worst case (each node pushed/popped exactly once); the work-stack
     /// peaks at O(n) heap in the degenerate all-siblings case and O(tree
     /// height) for a chain. Call-stack usage is constant.
-    fn collect_elements_to_unmount(tree: &ElementTree, id: ElementId, result: &mut Vec<ElementId>) {
+    fn collect_elements_to_unmount(
+        &self,
+        tree: &ElementTree,
+        id: ElementId,
+        result: &mut Vec<ElementId>,
+    ) {
         let mut stack: Vec<ElementId> = vec![id];
         while let Some(id) = stack.pop() {
             result.push(id);
             // The `tree.get` shared borrow ends with the statement; the
             // extend writes only into the local stack, never the slab.
-            if let Some(node) = tree.get(id) {
-                stack.extend(node.child_ids().iter().rev().copied());
-            }
+            stack.extend(
+                tree.owned_children(id, &self.child_manager_registry)
+                    .into_iter()
+                    .rev(),
+            );
         }
     }
 

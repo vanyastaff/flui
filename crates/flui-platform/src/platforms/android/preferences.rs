@@ -36,7 +36,7 @@ enum ReadScope {
     unsafe_code,
     reason = "AndroidApp lends live VM and Activity references to JNI"
 )]
-fn with_activity<T>(
+pub(super) fn with_activity<T>(
     app: &AndroidApp,
     query: impl FnOnce(&mut jni::Env<'_>, &JObject<'_>) -> jni::errors::Result<T>,
 ) -> Result<T, PreferenceQueryError> {

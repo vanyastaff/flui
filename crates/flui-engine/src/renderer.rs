@@ -686,11 +686,9 @@ impl Renderer {
             );
         }
 
-        let surface_usage = if supports_copy_src {
-            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC
-        } else {
-            wgpu::TextureUsages::RENDER_ATTACHMENT
-        };
+        let surface_usage = wgpu::TextureUsages::RENDER_ATTACHMENT
+            | (surface_caps.usages
+                & (wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST));
 
         let config = wgpu::SurfaceConfiguration {
             usage: surface_usage,
@@ -1791,11 +1789,9 @@ impl Renderer {
         let mut profile_frame =
             crate::profiler::ProfileFrame::begin(&mut self.gpu_profiler, &self.device);
         let mut steps = SwapchainFrame {
-            device: &self.device,
             painter: &mut self.painter,
             offscreen: &mut self.offscreen,
             scene,
-            format: surface_format,
             #[cfg(feature = "gpu-profiler")]
             gpu_profiler: profile_frame.profiler(),
         };
@@ -2026,24 +2022,20 @@ impl Renderer {
 ///
 /// [`FrameProtocol::run`]: crate::frame_protocol::FrameProtocol::run
 struct SwapchainFrame<'a> {
-    device: &'a wgpu::Device,
     painter: &'a mut crate::painter::WgpuPainter,
     offscreen: &'a mut crate::offscreen::OffscreenRenderer,
     scene: &'a flui_layer::Scene,
-    format: wgpu::TextureFormat,
     #[cfg(feature = "gpu-profiler")]
     gpu_profiler: &'a mut Option<crate::profiler::GpuFrameProfiler>,
 }
 
 impl crate::frame_protocol::FrameSteps for SwapchainFrame<'_> {
-    /// Submits the clear pass at once, so mid-frame copies (backdrop blur
-    /// reads the target) see a cleared target.
-    fn clear(&mut self, render_view: &wgpu::TextureView) -> EngineResult<()> {
-        let mut clear_encoder =
-            self.device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("FLUI Clear Encoder"),
-                });
+    /// Encode before content so ordered backdrop copies see a cleared target.
+    fn clear(
+        &mut self,
+        render_view: &wgpu::TextureView,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> EngineResult<()> {
         // Hoist the color attachments array before the #[cfg] split so both
         // the profiled and non-profiled paths share one definition. The descriptor
         // borrows `render_view`, so the array binding must live at the same scope level.
@@ -2065,13 +2057,12 @@ impl crate::frame_protocol::FrameSteps for SwapchainFrame<'_> {
             multiview_mask: None,
         };
         // Profiler scope wraps the clear render pass. The scope borrows
-        // `clear_encoder` exclusively; we access the encoder through
+        // the frame encoder exclusively; we access the encoder through
         // `scope.recorder` so the pass sees the same underlying encoder.
-        // Scope drops at end of block → end_query fires → resolve_queries
-        // copies the result → encoder finishes and is submitted.
+        // Scope drops at the end of the block; queries resolve at submission.
         #[cfg(feature = "gpu-profiler")]
         if let Some(profiler) = self.gpu_profiler.as_ref() {
-            let mut scope = profiler.scope("clear", &mut clear_encoder);
+            let mut scope = profiler.scope("clear", encoder);
             {
                 let _pass = scope.recorder().begin_render_pass(&clear_pass_desc);
             }
@@ -2081,18 +2072,12 @@ impl crate::frame_protocol::FrameSteps for SwapchainFrame<'_> {
             // fall back to the unprofiled clear pass so the surface is still
             // cleared. Branching on the Option, not just the Cargo feature, is
             // what makes the documented "graceful no-op" actually graceful.
-            let _pass = clear_encoder.begin_render_pass(&clear_pass_desc);
+            let _pass = encoder.begin_render_pass(&clear_pass_desc);
         }
         #[cfg(not(feature = "gpu-profiler"))]
         {
-            let _pass = clear_encoder.begin_render_pass(&clear_pass_desc);
+            let _pass = encoder.begin_render_pass(&clear_pass_desc);
         }
-        // Resolve query results into the GPU buffer before finishing the encoder.
-        #[cfg(feature = "gpu-profiler")]
-        if let Some(profiler) = self.gpu_profiler.as_mut() {
-            profiler.resolve_queries(&mut clear_encoder);
-        }
-        self.painter.submit_encoder(clear_encoder)?;
         Ok(())
     }
 
@@ -2104,28 +2089,15 @@ impl crate::frame_protocol::FrameSteps for SwapchainFrame<'_> {
         render_texture: &wgpu::Texture,
         _intermediate_active: bool,
         partial_damage: Option<flui_foundation::geometry::Rect<f64>>,
+        encoder: &mut wgpu::CommandEncoder,
     ) -> EngineResult<bool> {
-        let straddled = Renderer::record_frame_content(self.painter, self.scene, partial_damage);
-        let straddled = match straddled {
-            Ok(straddled) => straddled,
-            Err(error) => {
-                self.painter.finish_frame();
-                return Err(error);
-            }
-        };
+        let straddled = Renderer::record_frame_content(self.painter, self.scene, partial_damage)?;
         let painter = &mut *self.painter;
 
-        // Final flush — submit remaining painter batches.
-        let mut final_encoder =
-            self.device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("FLUI Final Render Encoder"),
-                });
         // Profiler scope wraps painter.render. The scope borrows
-        // `final_encoder` exclusively; we pass `scope.recorder` so
+        // the frame encoder exclusively; we pass `scope.recorder` so
         // painter.render writes into the same underlying encoder.
-        // Scope drops at end of block → end_query fires → resolve_queries
-        // copies the result → encoder finishes and is submitted.
+        // Scope drops at the end of the block; queries resolve at submission.
         // Branch on the Option (runtime), not just the Cargo feature
         // (compile-time): when the feature is compiled but `gpu_profiler` is
         // None (incapable adapter), the render must STILL run — otherwise the
@@ -2144,42 +2116,49 @@ impl crate::frame_protocol::FrameSteps for SwapchainFrame<'_> {
             crate::render_target::RenderTarget::sampleable(render_view, render_texture);
         #[cfg(feature = "gpu-profiler")]
         let render_result = if let Some(profiler) = self.gpu_profiler.as_ref() {
-            let mut scope = profiler.scope("final_render", &mut final_encoder);
+            let mut scope = profiler.scope("final_render", encoder);
             painter.render(frame_target, scope.recorder())
             // scope drops here → end_query fires
         } else {
-            painter.render(frame_target, &mut final_encoder)
+            painter.render(frame_target, encoder)
         };
         #[cfg(not(feature = "gpu-profiler"))]
-        let render_result = painter.render(frame_target, &mut final_encoder);
-        if let Err(error) = render_result {
-            // The frame is not presented; the per-frame painter state is
-            // still reset so the next frame starts clean, and the caller's
-            // classifier (`Recoverability`, `RasterOwner::handle_render_failure`)
-            // finally sees the error `render_scene` documents.
-            drop(final_encoder);
-            painter.finish_frame();
-            return Err(error);
-        }
-        // Resolve before finishing the encoder.
-        #[cfg(feature = "gpu-profiler")]
-        if let Some(profiler) = self.gpu_profiler.as_mut() {
-            profiler.resolve_queries(&mut final_encoder);
-        }
-        let submitted = painter.submit_encoder(final_encoder);
-
-        // Frame boundary: run texture-cache maintenance ONCE, after the
-        // final flush. `painter.render` runs per-pass (backdrop-filter
-        // flushes call it mid-frame), so maintenance lives here — not inside
-        // `render` — to avoid resetting use-counters between passes.
-        painter.finish_frame();
-        submitted?;
+        let render_result = painter.render(frame_target, encoder);
+        render_result?;
         Ok(straddled)
     }
 
-    fn blit(&mut self, retained: &wgpu::Texture, surface: &wgpu::TextureView) -> EngineResult<()> {
+    fn blit(
+        &mut self,
+        retained: &wgpu::Texture,
+        surface: &wgpu::Texture,
+        view: &wgpu::TextureView,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> EngineResult<Arc<crate::device_domain::PreparedPermit>> {
         self.offscreen
-            .blit_to_surface(retained, surface, self.format)
+            .encode_presentation(retained, surface, view, encoder)
+    }
+
+    fn submit(
+        &mut self,
+        encoder: wgpu::CommandEncoder,
+        permits: Vec<Arc<crate::device_domain::PreparedPermit>>,
+    ) -> EngineResult<()> {
+        #[cfg(feature = "gpu-profiler")]
+        let encoder = {
+            let mut encoder = encoder;
+            if let Some(profiler) = self.gpu_profiler.as_mut() {
+                profiler.resolve_queries(&mut encoder);
+            }
+            encoder
+        };
+        self.painter
+            .submit_frame_encoder(encoder, permits)
+            .map(|_| ())
+    }
+
+    fn finish(&mut self) {
+        self.painter.finish_frame();
     }
 }
 

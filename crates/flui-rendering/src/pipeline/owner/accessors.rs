@@ -1638,10 +1638,10 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 
     /// Schedules first paint for a freshly attached render object.
     ///
-    /// New render state starts with `NEEDS_PAINT`, but no repaint boundary has
-    /// produced a retained layer yet. Initial attachment therefore queues the
-    /// new node directly once; every subsequent invalidation must go through
-    /// [`Self::mark_needs_paint`].
+    /// New render state starts with `NEEDS_PAINT` without a queue entry.
+    /// Reattachment also enrolls its retained boundaries directly because
+    /// detach withdrew their old entries. Ordinary invalidation within an
+    /// open attachment interval goes through [`Self::mark_needs_paint`].
     pub(super) fn schedule_initial_paint(&mut self, id: RenderId) {
         let Some(node) = self.render_tree.get(id) else {
             return;

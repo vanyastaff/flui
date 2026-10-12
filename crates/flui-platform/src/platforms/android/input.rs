@@ -596,7 +596,10 @@ fn owned_modifiers(meta: android_activity::input::MetaState) -> OwnedModifiers {
 }
 
 /// Convert an Android `KeyEvent` to a `PlatformInput`.
-pub fn convert_key_event(event: &android_activity::input::KeyEvent<'_>) -> Option<PlatformInput> {
+pub fn convert_key_event(
+    app: &android_activity::AndroidApp,
+    event: &android_activity::input::KeyEvent<'_>,
+) -> Option<PlatformInput> {
     let action = event.action();
     let state = match action {
         KeyAction::Up => KeyState::Up,
@@ -611,15 +614,14 @@ pub fn convert_key_event(event: &android_activity::input::KeyEvent<'_>) -> Optio
     let named_key = ui_events::keyboard::android::keycode_to_named_key(keycode_i32);
     let location = ui_events::keyboard::android::keycode_to_location(keycode_i32);
 
-    // Derive the Key from the named key mapping
-    let key = if named_key == NamedKey::Unidentified {
-        // Try to map character keys (A-Z, 0-9, symbols)
-        keycode_to_character(keycode_i32).map_or(Key::Named(NamedKey::Unidentified), |ch| {
-            Key::Character(ch.to_string())
-        })
+    let mapped = if named_key == NamedKey::Unidentified {
+        app.device_key_character_map(event.device_id())
+            .and_then(|map| map.get(event.key_code(), event.meta_state()))
+            .ok()
     } else {
-        Key::Named(named_key)
+        None
     };
+    let key = mapped_key(named_key, mapped);
 
     let modifiers = convert_meta_state(event.meta_state());
     let repeat = event.repeat_count() > 0;
@@ -636,6 +638,18 @@ pub fn convert_key_event(event: &android_activity::input::KeyEvent<'_>) -> Optio
         },
         u64::try_from(event.event_time()).ok()?,
     ))
+}
+
+fn mapped_key(named: NamedKey, mapped: Option<android_activity::input::KeyMapChar>) -> Key {
+    use android_activity::input::KeyMapChar;
+    if named != NamedKey::Unidentified {
+        return Key::Named(named);
+    }
+    match mapped {
+        Some(KeyMapChar::Unicode(character)) => Key::Character(character.to_string()),
+        Some(KeyMapChar::CombiningAccent(_)) => Key::Named(NamedKey::Dead),
+        Some(KeyMapChar::None) | None => Key::Named(NamedKey::Unidentified),
+    }
 }
 
 /// Convert Android `MetaState` to `keyboard_types::Modifiers`.
@@ -674,81 +688,50 @@ fn convert_meta_state(meta: android_activity::input::MetaState) -> Modifiers {
     mods
 }
 
-/// Map Android keycode to a character, for keys that produce printable
-/// characters.
-fn keycode_to_character(keycode: i32) -> Option<char> {
-    use ui_events::keyboard::android::{
-        KEYCODE_0, KEYCODE_1, KEYCODE_2, KEYCODE_3, KEYCODE_4, KEYCODE_5, KEYCODE_6, KEYCODE_7,
-        KEYCODE_8, KEYCODE_9, KEYCODE_A, KEYCODE_APOSTROPHE, KEYCODE_AT, KEYCODE_B,
-        KEYCODE_BACKSLASH, KEYCODE_C, KEYCODE_COMMA, KEYCODE_D, KEYCODE_E, KEYCODE_EQUALS,
-        KEYCODE_F, KEYCODE_G, KEYCODE_GRAVE, KEYCODE_H, KEYCODE_I, KEYCODE_J, KEYCODE_K, KEYCODE_L,
-        KEYCODE_LEFT_BRACKET, KEYCODE_M, KEYCODE_MINUS, KEYCODE_N, KEYCODE_O, KEYCODE_P,
-        KEYCODE_PERIOD, KEYCODE_PLUS, KEYCODE_POUND, KEYCODE_Q, KEYCODE_R, KEYCODE_RIGHT_BRACKET,
-        KEYCODE_S, KEYCODE_SEMICOLON, KEYCODE_SLASH, KEYCODE_SPACE, KEYCODE_STAR, KEYCODE_T,
-        KEYCODE_U, KEYCODE_V, KEYCODE_W, KEYCODE_X, KEYCODE_Y, KEYCODE_Z,
-    };
-
-    match keycode {
-        KEYCODE_A => Some('a'),
-        KEYCODE_B => Some('b'),
-        KEYCODE_C => Some('c'),
-        KEYCODE_D => Some('d'),
-        KEYCODE_E => Some('e'),
-        KEYCODE_F => Some('f'),
-        KEYCODE_G => Some('g'),
-        KEYCODE_H => Some('h'),
-        KEYCODE_I => Some('i'),
-        KEYCODE_J => Some('j'),
-        KEYCODE_K => Some('k'),
-        KEYCODE_L => Some('l'),
-        KEYCODE_M => Some('m'),
-        KEYCODE_N => Some('n'),
-        KEYCODE_O => Some('o'),
-        KEYCODE_P => Some('p'),
-        KEYCODE_Q => Some('q'),
-        KEYCODE_R => Some('r'),
-        KEYCODE_S => Some('s'),
-        KEYCODE_T => Some('t'),
-        KEYCODE_U => Some('u'),
-        KEYCODE_V => Some('v'),
-        KEYCODE_W => Some('w'),
-        KEYCODE_X => Some('x'),
-        KEYCODE_Y => Some('y'),
-        KEYCODE_Z => Some('z'),
-        KEYCODE_0 => Some('0'),
-        KEYCODE_1 => Some('1'),
-        KEYCODE_2 => Some('2'),
-        KEYCODE_3 => Some('3'),
-        KEYCODE_4 => Some('4'),
-        KEYCODE_5 => Some('5'),
-        KEYCODE_6 => Some('6'),
-        KEYCODE_7 => Some('7'),
-        KEYCODE_8 => Some('8'),
-        KEYCODE_9 => Some('9'),
-        KEYCODE_SPACE => Some(' '),
-        KEYCODE_COMMA => Some(','),
-        KEYCODE_PERIOD => Some('.'),
-        KEYCODE_MINUS => Some('-'),
-        KEYCODE_EQUALS => Some('='),
-        KEYCODE_LEFT_BRACKET => Some('['),
-        KEYCODE_RIGHT_BRACKET => Some(']'),
-        KEYCODE_BACKSLASH => Some('\\'),
-        KEYCODE_SEMICOLON => Some(';'),
-        KEYCODE_APOSTROPHE => Some('\''),
-        KEYCODE_SLASH => Some('/'),
-        KEYCODE_GRAVE => Some('`'),
-        KEYCODE_AT => Some('@'),
-        KEYCODE_STAR => Some('*'),
-        KEYCODE_POUND => Some('#'),
-        KEYCODE_PLUS => Some('+'),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use flui_platform_api::pointer::{PenTool, PointerKind};
+
+    #[test]
+    fn android_native_key_map_preserves_logical_keys() {
+        use android_activity::input::KeyMapChar;
+        for (named, mapped, expected) in [
+            (
+                NamedKey::Unidentified,
+                Some(KeyMapChar::Unicode('A')),
+                Key::Character("A".into()),
+            ),
+            (
+                NamedKey::Unidentified,
+                Some(KeyMapChar::Unicode('Я')),
+                Key::Character("Я".into()),
+            ),
+            (
+                NamedKey::Unidentified,
+                Some(KeyMapChar::Unicode('!')),
+                Key::Character("!".into()),
+            ),
+            (
+                NamedKey::Unidentified,
+                Some(KeyMapChar::CombiningAccent('´')),
+                Key::Named(NamedKey::Dead),
+            ),
+            (
+                NamedKey::Unidentified,
+                Some(KeyMapChar::None),
+                Key::Named(NamedKey::Unidentified),
+            ),
+            (
+                NamedKey::Unidentified,
+                None,
+                Key::Named(NamedKey::Unidentified),
+            ),
+            (NamedKey::Enter, None, Key::Named(NamedKey::Enter)),
+        ] {
+            assert_eq!(mapped_key(named, mapped), expected);
+        }
+    }
 
     #[test]
     fn android_native_pointer_readings() {

@@ -21,6 +21,14 @@ application's logging backend, not the CLI's.
 
 ## Mapping decisions
 
+### Android runs build for the selected device's native ABI
+
+The run session reads the selected device's ordered ABI list before invoking
+cargo-ndk. It chooses the first supported ABI instead of forcing ARM64 on x86
+emulators. A failed build with hot reload disabled exits as a build failure;
+there is no watcher that could repair it. `android_run_builds_the_selected_device_native_abi`
+pins both the target argument and bounded failure through the CLI process.
+
 ### Local source dependencies are explicit Cargo paths
 
 `flui create NAME --local` selects the current working directory as the source
