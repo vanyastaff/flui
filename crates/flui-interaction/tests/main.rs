@@ -12,6 +12,7 @@ mod multi_tap;
 mod interaction_lane;
 
 mod lane_retirement;
+mod deadline_recovery;
 
 #[path = "text_input_retirement.rs"]
 mod text_input_retirement;

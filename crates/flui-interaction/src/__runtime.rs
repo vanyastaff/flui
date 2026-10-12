@@ -102,6 +102,32 @@ pub fn set_pointer_capture_wake(
     owner.set_pointer_capture_wake(window);
 }
 
+/// Sample gesture deadlines under the presentation's failure custody.
+pub fn tick_deadlines_with_recovery(
+    owner: &crate::GestureBinding,
+    _now: web_time::Instant,
+    recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
+) {
+    recovery.run(|| owner.tick_deadlines());
+}
+
+/// Refresh scheduling observation during a guard-free owner operation.
+pub fn refresh_deadlines_with_recovery(
+    owner: &crate::GestureBinding,
+    _now: web_time::Instant,
+    recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
+) {
+    recovery.run(|| {
+        let _ = owner.next_deadline();
+    });
+}
+
+/// Read the last owner scheduling observation without executing member code.
+#[must_use]
+pub fn next_deadline_snapshot(owner: &crate::GestureBinding) -> Option<web_time::Instant> {
+    owner.next_deadline()
+}
+
 /// Withdraw mouse publication and callback ownership for a terminal presentation.
 pub fn close_mouse_tracker(owner: &crate::routing::MouseTracker, mode: CloseMode) {
     owner.close_with_mode(mode);
