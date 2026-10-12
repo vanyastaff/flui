@@ -1,0 +1,197 @@
+//! Required samples and committed notices share one addressed owner's custody.
+
+use flui_animation::curve::Curve;
+use flui_animation::simulation::Simulation;
+use flui_animation::{Animation, AnimationController, DrivenController, MotionClock, Vsync};
+use flui_foundation::Listenable;
+use flui_foundation::panic::{FailureClass, PanicRecovery};
+use std::cell::Cell;
+use std::rc::Rc;
+use std::time::Duration;
+
+struct FailingCurve(Rc<Cell<bool>>);
+
+impl Curve for FailingCurve {
+    fn transform(&self, t: f64) -> f64 {
+        if self.0.replace(false) {
+            panic!("source computation");
+        }
+        t
+    }
+}
+
+struct FailingSimulation {
+    armed: Rc<Cell<bool>>,
+    fail_done: bool,
+}
+
+impl Simulation for FailingSimulation {
+    fn x(&self, time: f64) -> f64 {
+        if !self.fail_done && self.armed.replace(false) {
+            panic!("source computation");
+        }
+        time
+    }
+
+    fn dx(&self, _: f64) -> f64 {
+        1.0
+    }
+
+    fn is_done(&self, time: f64) -> bool {
+        if self.fail_done && self.armed.replace(false) {
+            panic!("source computation");
+        }
+        time >= 1.0
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Fault {
+    Delivery,
+    Curve,
+    Position,
+    Done,
+}
+
+fn admit(vsync: &Vsync, fault: Fault, armed: Rc<Cell<bool>>) -> DrivenController {
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(vsync));
+    let controller = owner.controller();
+    match fault {
+        Fault::Delivery => {
+            controller.add_listener(Rc::new(move || {
+                if armed.replace(false) {
+                    panic!("first delivery");
+                }
+            }));
+            controller.forward().expect("delivery run");
+        }
+        Fault::Curve => {
+            controller
+                .animate_to_curved(1.0, Some(Duration::from_secs(1)), FailingCurve(armed))
+                .expect("curve run");
+        }
+        Fault::Position | Fault::Done => {
+            controller
+                .animate_with(FailingSimulation {
+                    armed,
+                    fail_done: matches!(fault, Fault::Done),
+                })
+                .expect("simulation run");
+        }
+    }
+    owner
+}
+
+fn sample(first: Fault, second: Option<Fault>) {
+    let vsync = Vsync::new();
+    // This healthy commit precedes either failure and must never be rolled back.
+    let healthy = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
+    healthy.controller().forward().expect("healthy run");
+    let first_armed = Rc::new(Cell::new(false));
+    let first_owner = admit(&vsync, first, Rc::clone(&first_armed));
+    let second_armed = Rc::new(Cell::new(false));
+    let second_owner = second.map(|fault| admit(&vsync, fault, Rc::clone(&second_armed)));
+    let tail = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
+    tail.controller().forward().expect("healthy tail run");
+    let mut clock = MotionClock::new();
+    vsync.tick_all(&clock.frame(Duration::ZERO));
+    first_armed.set(true);
+    second_armed.set(true);
+    let mut recovery = PanicRecovery::new();
+    vsync.tick_all_with_recovery(
+        &clock.frame(Duration::from_millis(250)),
+        &mut recovery.scope(),
+    );
+    assert_eq!(
+        healthy.controller().value(),
+        0.25,
+        "accepted earlier sample remains"
+    );
+    assert_eq!(
+        tail.controller().value(),
+        0.25,
+        "live frame peers remain deliverable"
+    );
+    let first_class = if matches!(first, Fault::Delivery) {
+        FailureClass::Delivery
+    } else {
+        FailureClass::Computation
+    };
+    let blocked = !matches!(first, Fault::Delivery)
+        || second.is_some_and(|fault| !matches!(fault, Fault::Delivery));
+    assert_eq!(recovery.first_failure_class(), Some(first_class));
+    assert_eq!(
+        recovery.blocking_failure_class(),
+        blocked.then_some(FailureClass::Computation)
+    );
+    let failure = recovery
+        .into_failure()
+        .expect("the sampling owner receives first failure");
+    let message = if matches!(first, Fault::Delivery) {
+        "first delivery"
+    } else {
+        "source computation"
+    };
+    assert_eq!(failure.payload().downcast_ref::<&str>(), Some(&message));
+    assert_eq!(
+        first_owner.controller().value(),
+        if matches!(first, Fault::Delivery) {
+            0.25
+        } else {
+            0.0
+        }
+    );
+    if let (Some(owner), Some(fault)) = (&second_owner, second) {
+        assert_eq!(
+            owner.controller().value(),
+            if matches!(fault, Fault::Delivery) {
+                0.25
+            } else {
+                0.0
+            }
+        );
+    }
+    drop(failure);
+    let mut next = PanicRecovery::new();
+    vsync.tick_all_with_recovery(&clock.frame(Duration::from_millis(500)), &mut next.scope());
+    assert!(
+        next.into_failure().is_none(),
+        "the repaired operation progresses"
+    );
+    assert_eq!(first_owner.controller().value(), 0.5);
+    if let Some(owner) = second_owner {
+        assert_eq!(owner.controller().value(), 0.5);
+    }
+    assert_eq!(tail.controller().value(), 0.5);
+}
+
+fn delivery_only() {
+    sample(Fault::Delivery, None);
+}
+fn curve_computation() {
+    sample(Fault::Curve, None);
+}
+fn position_computation() {
+    sample(Fault::Position, None);
+}
+fn done_computation() {
+    sample(Fault::Done, None);
+}
+fn delivery_then_computation() {
+    sample(Fault::Delivery, Some(Fault::Curve));
+}
+fn computation_then_delivery() {
+    sample(Fault::Curve, Some(Fault::Delivery));
+}
+
+#[test]
+fn sampling_preserves_failure_origin_and_publication_integrity() {
+    crate::run_table(&[
+        ("committed delivery", delivery_only),
+        ("curve computation", curve_computation),
+        ("simulation position", position_computation),
+        ("simulation completion", done_computation),
+        ("delivery before computation", delivery_then_computation),
+        ("computation before delivery", computation_then_delivery),
+    ]);
+}

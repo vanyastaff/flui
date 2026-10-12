@@ -30,6 +30,9 @@ mod controller_commands;
 #[path = "contracts/vsync.rs"]
 mod vsync;
 
+#[path = "contracts/sampling.rs"]
+mod sampling;
+
 #[path = "contracts/controller_robustness.rs"]
 mod controller_robustness;
 

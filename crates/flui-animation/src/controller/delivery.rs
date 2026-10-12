@@ -4,7 +4,7 @@ use super::{
     AnimationController, AnimationControllerInner, AnimationStatus, ControllerDelivery,
     RetiredSources, RetirementAction, RunDelivery, Terminal, ValueChange,
 };
-use flui_foundation::panic::RecoveryScope;
+use flui_foundation::panic::{FailureClass, RecoveryScope};
 
 impl AnimationController {
     /// Logical teardown has already committed. Physical custody waits for the
@@ -76,13 +76,16 @@ impl AnimationController {
         drain: bool,
         retirement: &mut RecoveryScope<'_>,
     ) {
-        if value_change == ValueChange::Notify {
-            retirement
-                .run_with(|retirement| self.notifier.notify_listeners_with_recovery(retirement));
-        }
-        if drain {
-            self.drain_delivery(retirement);
-        }
+        retirement.run_classified(FailureClass::Delivery, |retirement| {
+            if value_change == ValueChange::Notify {
+                retirement.run_with(|retirement| {
+                    self.notifier.notify_listeners_with_recovery(retirement)
+                });
+            }
+            if drain {
+                self.drain_delivery(retirement);
+            }
+        });
     }
 
     /// The outermost caller drains accepted work; reentry only appends to it.
@@ -136,16 +139,18 @@ impl AnimationController {
                                     .any(|(candidate, _)| candidate == id)
                         };
                         if live {
-                            retirement.run_with(|recovery| callback.get().invoke(status, recovery));
+                            retirement.run_classified(FailureClass::Delivery, |recovery| {
+                                callback.get().invoke(status, recovery);
+                            });
                         }
                     }
                     for (_, callback) in listeners {
-                        retirement.retire(callback);
+                        retirement.retire_classified(FailureClass::Delivery, callback);
                     }
                 }
                 ControllerDelivery::Run(delivery) => {
                     let retain = retirement.has_failure();
-                    retirement.run(|| {
+                    retirement.run_classified(FailureClass::Delivery, |_| {
                         let delivery = delivery.into_inner();
                         if retain {
                             delivery.deliver_after_failure();
@@ -154,13 +159,19 @@ impl AnimationController {
                         }
                     });
                 }
-                ControllerDelivery::Retire(retired) => retirement.retire(retired),
-                ControllerDelivery::RetireRegistry(registry) => retirement.retire(registry),
+                ControllerDelivery::Retire(retired) => {
+                    retirement.retire_classified(FailureClass::Delivery, retired);
+                }
+                ControllerDelivery::RetireRegistry(registry) => {
+                    retirement.retire_classified(FailureClass::Delivery, registry);
+                }
                 ControllerDelivery::RetireOwned(action) => {
                     if retirement.has_failure() {
                         retirement.retire(action);
                     } else {
-                        retirement.run_with(|recovery| action.into_inner()(recovery));
+                        retirement.run_classified(FailureClass::Unknown, |recovery| {
+                            action.into_inner()(recovery);
+                        });
                     }
                 }
             }
