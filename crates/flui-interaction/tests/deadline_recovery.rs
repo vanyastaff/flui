@@ -1283,6 +1283,93 @@ fn nested_public_held_release_retirement_precedes_later_callback_failure() {
     );
 }
 
+fn an_open_deadline_poll_preserves_nested_retirement_before_its_later_panic() {
+    struct NestedPollMember {
+        arena: flui_interaction::GestureArena,
+        due: Instant,
+        polls: Rc<Cell<usize>>,
+    }
+
+    impl GestureArenaMember for NestedPollMember {
+        fn accept_gesture(&self, _: PointerId) {}
+        fn reject_gesture(&self, _: PointerId) {}
+        fn deadline(&self) -> Option<Instant> {
+            Some(self.due)
+        }
+        fn poll_deadline(&self, _: Instant) {
+            self.polls.set(self.polls.get() + 1);
+            self.arena.abandon(pointer(2));
+            panic!("later open deadline poll failure");
+        }
+    }
+
+    let clock = ManualClock::new();
+    let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
+    let polls = Rc::new(Cell::new(0));
+    let member = Rc::new(NestedPollMember {
+        arena: binding.arena().clone(),
+        due: clock.now(),
+        polls: Rc::clone(&polls),
+    });
+    let _deadline_entry = binding.arena().add(pointer(1), &member);
+    let child_owner = Rc::new(RefCell::new(None));
+    let child_drops = Rc::new(Cell::new(0));
+    let child_notices = Rc::new(Cell::new(0));
+    let child = Rc::new(VerdictMember {
+        owner: Rc::downgrade(&child_owner),
+        notifications: Rc::clone(&child_notices),
+        drops: Rc::clone(&child_drops),
+        panic_on_drop: true,
+        panic_on_notify: false,
+        reenter: RefCell::new(None),
+        _drop_capture: None,
+    });
+    let _child_entry = binding.arena().add(pointer(2), &child);
+    *child_owner.borrow_mut() = Some(child);
+    let mut recovery = PanicRecovery::new();
+    flui_interaction::__runtime::tick_deadlines_with_recovery(
+        &binding,
+        clock.now(),
+        &mut recovery.scope(),
+    );
+    assert_eq!(child_notices.get(), 1);
+    assert_eq!(child_drops.get(), 1);
+    assert!(child_owner.borrow().is_none());
+    assert_eq!(recovery.first_failure_class(), Some(FailureClass::Unknown));
+    assert_eq!(
+        recovery.blocking_failure_class(),
+        Some(FailureClass::Unknown)
+    );
+    let failure = recovery.into_failure().expect("nested retirement failure");
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.payload()),
+        Some("opaque arena member retirement"),
+        "the nested failure predates the open poll's escaped payload"
+    );
+    assert_eq!(polls.get(), 1);
+    assert!(!sample(&binding, clock.now()));
+    assert_eq!(polls.get(), 1, "the unknown poll revision is quarantined");
+
+    let owner = Rc::new(RefCell::new(None));
+    let drops = Rc::new(Cell::new(0));
+    let notices = Rc::new(Cell::new(0));
+    let fresh = Rc::new(VerdictMember {
+        owner: Rc::downgrade(&owner),
+        notifications: Rc::clone(&notices),
+        drops: Rc::clone(&drops),
+        panic_on_drop: false,
+        panic_on_notify: false,
+        reenter: RefCell::new(None),
+        _drop_capture: None,
+    });
+    let _fresh_entry = binding.arena().add(pointer(3), &fresh);
+    *owner.borrow_mut() = Some(fresh);
+    binding.arena().abandon(pointer(3));
+    assert_eq!(notices.get(), 1, "the next independent verdict is delivered");
+    assert!(owner.borrow().is_none());
+    assert_eq!(drops.get(), 1, "the next operation keeps ordinary retirement");
+}
+
 #[test]
 fn owner_deadline_recovery_matrix() {
     if std::env::var_os("FLUI_DEADLINE_WAKE_CHILD").is_some() {
@@ -1438,6 +1525,10 @@ fn owner_deadline_recovery_matrix() {
         (
             "nested_public_held_release_retirement_precedes_later_callback_failure",
             nested_public_held_release_retirement_precedes_later_callback_failure as fn(),
+        ),
+        (
+            "an_open_deadline_poll_preserves_nested_retirement_before_its_later_panic",
+            an_open_deadline_poll_preserves_nested_retirement_before_its_later_panic as fn(),
         ),
     ] {
         if let Err(payload) = std::panic::catch_unwind(case) {
