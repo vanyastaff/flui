@@ -14,6 +14,7 @@ use crate::common;
 use common::{lay_out, tight};
 use flui_cupertino::CupertinoNavigationBar;
 use flui_sdk::widgets::{MediaQuery, MediaQueryData, SizedBox, Text};
+use flui_testing::a11y::Role;
 
 /// `leading`/`middle`/`trailing` all reach the mounted render tree, not just
 /// the constructor's stored fields — proven by a delta against a bar with
@@ -46,4 +47,27 @@ pub fn leading_middle_and_trailing_all_mount() {
         empty_constrained_box_count + 2,
         "both the leading and trailing SizedBox must mount, on top of the bar's own"
     );
+}
+
+/// The middle is the page title, so a screen reader's heading navigation
+/// reaches it as a level-one heading named by its text.
+pub fn the_middle_announces_as_a_level_one_heading() {
+    let mut laid = lay_out(
+        MediaQuery::new(
+            MediaQueryData::default(),
+            CupertinoNavigationBar::new().middle(Text::new("Settings")),
+        ),
+        tight(400.0, 44.0),
+    );
+    laid.enable_semantics();
+    laid.pump();
+    let tree = laid
+        .a11y_tree()
+        .expect("semantics enabled before the frame");
+
+    let heading = tree
+        .find(Role::Heading)
+        .unwrap_or_else(|error| panic!("{error}\n{}", tree.describe()));
+    assert_eq!(heading.label(), Some("Settings"), "{}", tree.describe());
+    assert_eq!(heading.heading_level(), Some(1), "{}", tree.describe());
 }
