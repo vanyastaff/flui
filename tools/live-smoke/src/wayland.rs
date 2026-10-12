@@ -180,6 +180,9 @@ impl HeadlessCompositor {
         let log_path = runtime_dir.join("weston.log");
         let log_file = std::fs::File::create(&log_path)
             .with_context(|| format!("creating {}", log_path.display()))?;
+        let stdout_log = log_file
+            .try_clone()
+            .context("cloning the weston log handle")?;
 
         let child = Command::new("weston")
             .arg("--backend=headless-backend.so")
@@ -198,7 +201,7 @@ impl HeadlessCompositor {
             .env_remove("WAYLAND_DISPLAY")
             .env_remove("DISPLAY")
             .stdin(Stdio::null())
-            .stdout(log_file.try_clone().context("cloning the weston log handle")?)
+            .stdout(stdout_log)
             .stderr(log_file)
             .spawn()
             .context("spawning weston")?;

@@ -15,7 +15,8 @@ use anyhow::{Context, bail};
 
 use super::exec::{Cmd, Host, Runner, Step, installed, installed_targets};
 use super::{
-    WASM_TARGET, driver_tests, engine_testing_clippy, hack_passes, native, wasm_facade_check,
+    WASM_TARGET, driver_tests, engine_testing_clippy, hack_passes, native, reload_fixture_build,
+    wasm_facade_check,
 };
 use crate::change_scope;
 use crate::util::repo_root;
@@ -134,6 +135,14 @@ fn plan(
         let split_driver = host == Host::Windows && lane.packages.is_empty();
         if split_driver {
             steps.push(driver_tests().into());
+        }
+        if lane.packages.is_empty()
+            || lane
+                .packages
+                .split_whitespace()
+                .any(|name| name == "flui-hot-reload-lifecycle-fixture")
+        {
+            steps.push(reload_fixture_build().into());
         }
         let mut tests = Cmd::cargo(["nextest", "run"])
             .split(&lane.test_args)
@@ -451,6 +460,9 @@ mod tests {
                 "$ cargo clippy -p flui-engine --all-targets --locked --features testing -- -D warnings",
             ]
         );
+        assert!(steps.iter().any(
+            |step| step == "$ cargo build -p flui-hot-reload-lifecycle-fixture --lib --locked"
+        ));
         lane.packages = "flui-engine-extra".to_owned();
         assert!(!lane.has_engine());
         lane.packages = "flui flui-engine".to_owned();

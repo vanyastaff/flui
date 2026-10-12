@@ -249,11 +249,7 @@ impl Loader<'_> {
                             .iter()
                             .any(|attr| attr.path().is_ident("macro_export")) =>
                 {
-                    let name = mac
-                        .ident
-                        .as_ref()
-                        .map(ToString::to_string)
-                        .unwrap_or_default();
+                    let name = mac.ident.as_ref().map_or_default(ToString::to_string);
                     let owner = module.first().cloned().unwrap_or_default();
                     self.scan.macro_exports.insert(name, owner);
                 }

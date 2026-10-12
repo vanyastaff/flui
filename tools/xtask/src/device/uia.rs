@@ -273,8 +273,7 @@ fn visit(
             element.CurrentControlType().unwrap_or_default(),
             element
                 .CurrentName()
-                .map(|name| name.to_string())
-                .unwrap_or_default(),
+                .map_or_default(|name| name.to_string()),
         )
     };
     // SAFETY: as above. A null first child or next sibling is the end of

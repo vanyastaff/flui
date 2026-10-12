@@ -355,8 +355,7 @@ impl Members {
                 order,
                 edge_exceptions: edge_exceptions(&flui, &rel)?,
                 reach_forbid: package_names(&flui, "reach-forbid", &rel)?
-                    .map(|names| names.into_iter().collect())
-                    .unwrap_or_default(),
+                    .map_or_default(|names| names.into_iter().collect()),
                 reach_exceptions: reach_exceptions(&flui, &rel)?,
                 layer,
                 allowed_dependents,

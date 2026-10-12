@@ -1775,8 +1775,7 @@ impl ElementTree {
         while let Some(id) = stack.pop() {
             let children = self
                 .get(id)
-                .map(|node| node.child_ids().to_vec())
-                .unwrap_or_default();
+                .map_or_default(|node| node.child_ids().to_vec());
             self.deactivate_inherited_dependencies(id, owner);
             if let Some(node) = self.get_mut(id) {
                 node.element_mut().deactivate(owner);

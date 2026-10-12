@@ -905,10 +905,7 @@ impl RenderTree {
         let mut stack: smallvec::SmallVec<[RenderId; 32]> = smallvec::SmallVec::new();
         stack.push(root_id);
         while let Some(id) = stack.pop() {
-            let children: Vec<RenderId> = self
-                .get(id)
-                .map(|n| n.children().to_vec())
-                .unwrap_or_default();
+            let children: Vec<RenderId> = self.get(id).map_or_default(|n| n.children().to_vec());
             f(self, id);
             // Reverse push so pop() yields original child-order
             // (pre-order traversal).

@@ -377,8 +377,8 @@ impl State<'_> {
         match work {
             Work::Add(at) => {
                 if !std::mem::replace(&mut self.added[at], true) {
-                    for edge in 0..graph.packages[at].deps.len() {
-                        if !graph.packages[at].deps[edge].optional {
+                    for (edge, declared) in graph.packages[at].deps.iter().enumerate() {
+                        if !declared.optional {
                             self.link(at, edge);
                         }
                     }
@@ -387,8 +387,7 @@ impl State<'_> {
             Work::Enable(at, value) => self.apply(at, &value)?,
             Work::Activate(at, key) => {
                 if self.active[at].insert(key.clone()) {
-                    for edge in 0..graph.packages[at].deps.len() {
-                        let declared = &graph.packages[at].deps[edge];
+                    for (edge, declared) in graph.packages[at].deps.iter().enumerate() {
                         if declared.optional && declared.key == key {
                             self.link(at, edge);
                         }
