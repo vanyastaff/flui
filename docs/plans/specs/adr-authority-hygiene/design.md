@@ -1,6 +1,6 @@
 # ADR authority and retirement design
 
-**Status:** Approved by the maintainer on 2026-10-11; documentation implementation in progress.
+**Status:** Approved by the maintainer on 2026-10-11; implemented and locally validated on 2026-10-12. PR publication and CI acceptance remain pending.
 
 **Requirements:** [#1553](https://github.com/vanyastaff/flui/issues/1553).
 

@@ -1,6 +1,6 @@
 # ADR hygiene: current authority, scoped consolidation and obsolete records
 
-**Status:** Approved by the maintainer on 2026-10-11. Documentation implementation in progress within the stated scope; conditional deletions and unresolved semantic policies remain excluded.
+**Status:** Approved by the maintainer on 2026-10-11. Implementation and available local validation completed on 2026-10-12; PR publication and CI acceptance remain pending. Conditional deletions and unresolved semantic policies remain excluded.
 
 **Issue:** [#1553](https://github.com/vanyastaff/flui/issues/1553). **Date:** 2026-10-11. **Evidence baseline:** `6af2cf426809dbf8a33bbb415e904f0bfdc847c4`; all 160 existing ADR records reviewed.
 
