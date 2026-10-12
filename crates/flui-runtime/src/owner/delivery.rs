@@ -329,9 +329,22 @@ struct RuntimeLease {
 
 impl RuntimeLease {
     fn checkout(core: &Rc<OwnerCore>, work: &RuntimeWork) -> Result<Self, DispatchError> {
+        Self::checkout_validated(core, |state| work.validate(state))
+    }
+
+    fn checkout_runtime(core: &Rc<OwnerCore>, id: UiRuntimeId) -> Result<Self, DispatchError> {
+        Self::checkout_validated(core, |state| {
+            state.runtime_index(id).map_err(DispatchError::from)
+        })
+    }
+
+    fn checkout_validated(
+        core: &Rc<OwnerCore>,
+        validate: impl FnOnce(&super::OwnerState) -> Result<usize, DispatchError>,
+    ) -> Result<Self, DispatchError> {
         let runtime = {
             let mut state = core.state.borrow_mut();
-            let index = work.validate(&state)?;
+            let index = validate(&state)?;
             let entry = &mut state.runtimes[index];
             let previous = std::mem::replace(&mut entry.residence, Residence::CheckedOut);
             let Residence::Resident(runtime) = previous else {
@@ -341,11 +354,35 @@ impl RuntimeLease {
             state.active_runtime = Some(runtime.id());
             runtime
         };
+        runtime.owner_checkout_active.set(true);
         Ok(Self {
             core: Rc::clone(core),
             id: runtime.id(),
             runtime: Some(runtime),
         })
+    }
+
+    /// Refresh while the registry is released, then return the runtime before
+    /// invoking observers. Unwinding restoration itself never queries user code.
+    fn return_to_owner(self, first: &mut Failure, incoming: RecoveryState) {
+        let runtime = self
+            .runtime
+            .as_deref()
+            .expect("BUG: returning lease owns its runtime");
+        let state = if first.is_some() {
+            RecoveryState::PreservingFailure
+        } else {
+            incoming
+        };
+        let refresh = catch_unwind(AssertUnwindSafe(|| {
+            runtime.refresh_deadline_observations(state);
+        }))
+        .err();
+        preserve_first_lifecycle_panic(first, refresh, "owner scheduling observation");
+        let reports = runtime.take_pending_sampling_reports();
+        drop(self);
+        let delivery = catch_unwind(AssertUnwindSafe(|| reports.deliver())).err();
+        preserve_first_lifecycle_panic(first, delivery, "owner scheduling reports");
     }
 }
 
@@ -354,6 +391,7 @@ impl Drop for RuntimeLease {
         let Some(runtime) = self.runtime.take() else {
             return;
         };
+        runtime.owner_checkout_active.set(false);
         let retired = {
             let mut state = self.core.state.borrow_mut();
             if state.active_runtime == Some(self.id) {
@@ -383,6 +421,27 @@ impl Drop for RuntimeLease {
 }
 
 impl OwnerCore {
+    /// Completion effects can change sources through retained capabilities.
+    /// Visit the finite resident identity snapshot with no registry borrow held.
+    fn refresh_resident_deadlines(self: &Rc<Self>, first: &mut Failure) {
+        let ids: Vec<_> = {
+            let state = self.state.borrow();
+            state
+                .runtimes
+                .iter()
+                .filter(|entry| !state.closed && matches!(entry.residence, Residence::Resident(_)))
+                .map(|entry| entry.id)
+                .collect()
+        };
+        for id in ids {
+            let Ok(lease) = RuntimeLease::checkout_runtime(self, id) else {
+                continue;
+            };
+            let incoming = RecoveryState::current(first);
+            lease.return_to_owner(first, incoming);
+        }
+    }
+
     pub(super) fn continue_work(self: &Rc<Self>, effects: &dyn OwnerEffects) {
         let claimed = {
             let mut state = self.state.borrow_mut();
@@ -451,7 +510,7 @@ impl OwnerCore {
                                 .as_deref()
                                 .expect("BUG: stop owns runtime lease"),
                         );
-                        let failure = catch_unwind(AssertUnwindSafe(|| {
+                        let mut failure = catch_unwind(AssertUnwindSafe(|| {
                             work.run(
                                 self,
                                 lease
@@ -469,7 +528,12 @@ impl OwnerCore {
                                 .expect("BUG: stop owns runtime lease")
                                 .report_contained_panic(address, payload.as_ref());
                         }
-                        drop(lease);
+                        let incoming = if first.is_some() {
+                            RecoveryState::PreservingFailure
+                        } else {
+                            RecoveryState::current(&first_failure)
+                        };
+                        lease.return_to_owner(&mut failure, incoming);
                         preserve_first_lifecycle_panic(
                             &mut first,
                             failure,
@@ -518,9 +582,13 @@ impl OwnerCore {
                                             .expect("BUG: initialization retains its runtime lease")
                                             .report_contained_panic(address, payload.as_ref());
                                     }
-                                    drop(lease);
-                                    if let Err(failure) = result {
-                                        first = Some(failure);
+                                    let failed = result.is_err();
+                                    first = result.err();
+                                    lease.return_to_owner(
+                                        &mut first,
+                                        RecoveryState::current(&first_failure),
+                                    );
+                                    if failed || first.is_some() {
                                         super::InitializationOutcome::Failed
                                     } else if self.state.borrow().authorizer(address).is_ok() {
                                         super::InitializationOutcome::Ready
@@ -584,7 +652,7 @@ impl OwnerCore {
                     } else {
                         Vec::new()
                     };
-                    drop(lease);
+                    lease.return_to_owner(&mut failure, RecoveryState::current(&first_failure));
                     self.state.borrow_mut().claim = DeliveryClaim::Completing;
                     for work in frontiers {
                         let frontier = super::TextSizingFrontier::new(self, id, work);
@@ -627,6 +695,7 @@ impl OwnerCore {
             }))
             .err();
             preserve_first_lifecycle_panic(&mut first_failure, failure, "owner completion");
+            self.refresh_resident_deadlines(&mut first_failure);
             self.drain_retired(&mut first_failure);
             if first_failure.is_some() && !completing_stop {
                 self.state.borrow_mut().callback_remaining = 0;
