@@ -2,9 +2,13 @@
 
 Дата проверки: 2026-10-12. Production revision:
 `61ea713380a449777ffa791b61a3a01e3fd81c5a`.
-Acceptance assertion revision: `a73d351ce3ae9a6a0df3119d95304b0b80f09426`;
-production-код относительно указанной базы не менялся.
-Текущая проверка A8–A9 выполняется; незавершённый прогон не считается успешным.
+Native assertion revision: `a73d351ce3ae9a6a0df3119d95304b0b80f09426`.
+Validation code revision: `e0961a73f8650e6e5e497a23336c3cefbf6df509`.
+Framework production-код относительно указанной базы не менялся; изменены
+assertions, benchmark validation и foreground helper инструмента проверки.
+A8–A9 завершены в указанных границах Windows/native/GPU и измеренных workloads.
+CI production-базы и локальный gate изменений — отдельные receipts;
+CI нового validation PR ожидает его публикации.
 
 ## Среда и метод
 
@@ -258,6 +262,45 @@ receipts не заменяются новым чтением исходнико�
 | `frame_scheduled_hook_may_query_vsync` | `wake_replacement_retires_captures_outside_borrows`: requester заменяет hook того же registry, а outgoing capture проверяет `has_running` вне borrow; recovery и следующая доставка сохранены |
 
 `rg -n '#\[ignore' crates/flui-animation/tests` не находит отключённых контрактов.
+
+### Локальный gate
+
+Scope gate `check-changed --base 61ea713380a449777ffa791b61a3a01e3fd81c5a`
+завершился с exit 0 на validation code revision. Scope: flui-animation,
+flui-platform, xtask и 24 dependents. Результаты:
+
+- fmt и strict clippy всех targets, включая engine/testing;
+- nextest: 733/733 за 589.400 s, 19 configured skips, два slow завершены;
+  repeated interruption — 145.573 s;
+- отдельный platform compiler guard: 1/1 за 11.985 s, без skips;
+- strict private rustdoc; doctests: 472 passed, 175 ignored, без failures;
+- Windows source-check с максимальными optional features и wasm32 checks;
+- 56 library feature cases и 56 tests/benches/examples feature cases.
+
+Apple/Android source checks локально пропущены из-за отсутствующих SDK/tools.
+Linux native platform suite требует xvfb-run и исполнена в production CI;
+локальные Windows preferences/input/UIA receipts приведены выше.
+Ignored doc blocks, configured skips и platform compilation не расширяют scope
+на неисполненные сценарии.
+
+Первый attempt остановился на fmt одного assertion; после formatting-only
+исправления обычный Windows запуск упёрся в self-rebuild `xtask.exe`
+(`Access is denied`). Gate выполнен тем же скомпилированным runner из копии
+в target этого checkout, с обычным host lock. Source/target не разделялись
+между checkout. SHA-256 оригинала и копии:
+`A1FC1730513DC35F113EE4A7C97D6184FB4C7F1D83611ADDE22A90957C43A28E`.
+Воспроизводимый обход блокировки для изменённого xtask на Windows:
+
+```powershell
+cargo build --locked -p xtask
+Copy-Item -LiteralPath target/debug/xtask.exe -Destination target/xtask-check.exe
+./target/xtask-check.exe check-changed --base 61ea713380a449777ffa791b61a3a01e3fd81c5a
+```
+
+Финальный форматированный micro fixture побайтово совпадает на обеих сторонах:
+SHA-256 `3FFEE32A8EB756E372C6349D6E1BD97413AA433929AFE55598E1A90EDA6311B9`.
+От timed fixture `771980A9…` отличается только переносом одного assertion;
+timed loops и controls не менялись, timings повторно не объявляются новым прогоном.
 
 ### CI
 

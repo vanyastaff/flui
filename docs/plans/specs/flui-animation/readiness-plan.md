@@ -3,10 +3,10 @@
 - **Дата исходного плана:** 2026-10-08; актуализация: 2026-10-12.
 - **Production база выпускной проверки:** `61ea713380a449777ffa791b61a3a01e3fd81c5a`.
   Исторический аудит закреплён на `91bb1fe1d2a349f62915846303f6f25780ae5c6d`.
-- **Статус:** A0–A7 интегрированы; контракт и доказательство каждой из 110 строк
-  назначены в актуальной матрице. A8 завершён датированными CPU/allocation
-  измерениями. Native input/UIA, required GPU и Windows preferences исполнены;
-  A9 завершает финальный gate. Граница платформ сохраняется в release-evidence.
+- **Статус:** A0–A9 завершены в принятом scope; контракт и доказательство каждой
+  из 110 строк назначены в актуальной матрице. CPU/allocation измерения,
+  Windows native/GPU и локальный consumer gate исполнены 2026-10-12.
+  Другие native-платформы и CI validation PR имеют отдельные границы в release-evidence.
 - **Основание:** [актуальные контракты](readiness-status.md),
   [выпускные свидетельства](release-evidence.md). Исторические
   [аудит](readiness-audit.md), [прогоны](readiness-evidence.md),
@@ -60,7 +60,8 @@ Playback-контракт описан в
 
 A0–A7 описывают интегрированные результаты и их сохраняемые критерии. Ссылки
 send-flip T* в графе — исторический маршрут, не назначения новой реализации.
-Текущий остаток A8–A9 фиксируется release checklist и выпускными свидетельствами.
+Приёмка A8–A9 закреплена release checklist и выпускными свидетельствами;
+их границы нельзя расширять по одному зелёному library-прогону.
 
 | Пакет | Результат | Зависимость | Владелец/изменяемая область | Приёмка |
 |---|---|---|---|---|
@@ -73,7 +74,7 @@ send-flip T* в графе — исторический маршрут, не н�
 | A6 | Согласованная геометрия paint/hit/semantics и жест→settle | A1/A2; motion часть A4 | objects/rendering + Drawer/Dismissible | Loose/tight/RTL/vertical, resize/cancel; экранная скорость; semantics bounds; hit coordinate snapshot; GPU readback и build count |
 | A7 | Замкнуть composition и public surface | A2/A4/A5 | animation/macros/sdk/packages | Каждый сохраняемый pub имеет caller или явное принятое решение; cubic-track consumer; derive nested; indicators Normal и видимая статичная загрузка при Reduce/запрете TickerMode/отсутствии привязки (ADR-0192); delete/migrate старые экспорты |
 | A8 | Измерение готового пути и актуальные docs | A1–A7 | benches, perf scenarios, README/GUIDE/PATTERNS/PERFORMANCE | Завершён 2026-10-12: paired registry/primitive/mounted CPU и allocation requests/bytes; результаты и границы в release-evidence |
-| A9 | Выпускная проверка | A8 | whole consumer graph + CI/native owners | Ниже приведённый release checklist, SHA и evidence на каждую строку |
+| A9 | Выпускная проверка | A8 | whole consumer graph + CI/native owners | Завершён 2026-10-12: required GPU, Windows preferences/input/UIA, code-head consumer gate; CI production-базы и ограничения платформ в release-evidence |
 
 ```mermaid
 flowchart LR
@@ -215,25 +216,28 @@ CompoundAnimation предписано удалить, а не оставить 
 
 ## Release checklist
 
-- [ ] Naming соответствует реальным ролям, областям времени, состояниям и outcomes; нет
+- [x] Naming соответствует реальным ролям, областям времени, состояниям и outcomes; нет
       ложных обещаний в именах и оставшихся callers старого контракта.
-- [ ] Матрица доставки выше пройдена для затронутых каналов; FIFO/coalescing, subscribe/catch-up,
+- [x] Матрица доставки выше пройдена для затронутых каналов; FIFO/coalescing, subscribe/catch-up,
       retry debt и failure custody описаны и проверены, включая следующий кадр.
 - [x] Исторические 32 отказа связаны с текущими исполняемыми контрактами или
       типизированными ограничениями; 29 имён сохранены, три замены явно отражены
       в release-evidence. Соответствующих ignore нет.
 - [x] Все 110 исходных market-ID имеют актуальный consumer/test/evidence либо принятое scope-решение;
       условные исключения имеют доказательство выполнения условия.
-- [ ] A1–A7 проверены через пользовательские швы; future/cancellation, reentry, competing failures,
+- [x] A1–A7 проверены через пользовательские швы; future/cancellation, reentry, competing failures,
       unmount, mutation during build и следующий кадр учтены.
-- [ ] `cargo xtask check-changed --base <фиксированный-base>` зелёный для implementation PR;
-      package/facade, serde, doctests и SDK surface мигрированы.
-- [ ] Финальная интеграция прошла требуемые workspace/wasm/cross-typecheck CI на конечном SHA.
+- [x] Scope gate зелёный на code head `e0961a73` с base `61ea71338`;
+      package/facade, serde, doctests и SDK surface проверены. Windows self-rebuild
+      обойдён byte-identical runner copy с обычным host lock, см. release-evidence.
+- [x] Production-интеграция прошла workspace/wasm/cross-typecheck CI на `61ea71338`.
+      Validation follow-up прошёл локальный gate; его PR CI — отдельный следующий
+      шаг после публикации, а не объявленный здесь успешный run.
 - [x] Windows native и GPU readback имеют датированные прогоны; другие native-пути обозначены
       как выполненные, только compiled или unavailable, без расширения результатов Linux CI.
 - [x] Performance и allocations измерены на одинаковом хосте/профиле; workloads и исходные результаты
       воспроизводимы, параметры не берутся из старых scratch-прототипов.
-- [ ] Документация не обещает behavior, которого нет; нужные cross-crate ADR приняты; нового
+- [x] Документация не обещает behavior, которого нет; нужные cross-crate ADR приняты; нового
       unwired public surface нет; deprecated path и старые handoff-заметки убраны после миграции.
 
 ## Handoff для следующей сессии
