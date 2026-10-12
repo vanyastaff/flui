@@ -274,7 +274,7 @@ fn terminal_delivery(stage: TerminalDelivery) {
     });
     match stage {
         TerminalDelivery::Status => {}
-        TerminalDelivery::Continuation => run.then(|outcome| {
+        TerminalDelivery::Continuation => run.when_complete_or_cancel(|outcome| {
             assert!(
                 outcome.is_ok(),
                 "completion committed before its continuation"
@@ -315,9 +315,7 @@ fn terminal_delivery(stage: TerminalDelivery) {
     );
     drop(receipt);
     drop((status_failure, tail_subscription));
-    controller
-        .set_value(0.5)
-        .expect("next operation remains usable");
+    controller.set_value(0.5);
     assert_eq!(controller.value(), 0.5);
 }
 
@@ -329,6 +327,70 @@ fn continuation_delivery() {
 }
 fn waiter_delivery() {
     terminal_delivery(TerminalDelivery::Waiter);
+}
+
+struct RetiredListenerCapture(Rc<Cell<usize>>);
+
+impl Drop for RetiredListenerCapture {
+    fn drop(&mut self) {
+        self.0.set(self.0.get() + 1);
+        panic!("committed listener retirement");
+    }
+}
+
+fn withdrawn_value_listener_retirement_preserves_the_commit() {
+    let vsync = Vsync::new();
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
+    let controller = owner.controller();
+    let run = controller.forward().expect("listener retirement run");
+    let identity = Rc::new(Cell::new(None));
+    let callback_identity = Rc::clone(&identity);
+    let callback_controller = controller.clone();
+    let armed = Rc::new(Cell::new(false));
+    let callback_armed = Rc::clone(&armed);
+    let drops = Rc::new(Cell::new(0));
+    let capture = RetiredListenerCapture(Rc::clone(&drops));
+    identity.set(Some(controller.add_listener(Rc::new(move || {
+        let _capture = &capture;
+        if callback_armed.get() {
+            callback_controller.remove_listener(
+                callback_identity
+                    .take()
+                    .expect("the live listener removes its own identity"),
+            );
+        }
+    }))));
+    let tail = Rc::new(Cell::new(0));
+    let delivered = Rc::clone(&tail);
+    controller.add_listener(Rc::new(move || delivered.set(delivered.get() + 1)));
+    let mut clock = MotionClock::new();
+    vsync.tick_all(&clock.frame(Duration::ZERO));
+    armed.set(true);
+    tail.set(0);
+    let mut recovery = PanicRecovery::new();
+    vsync.tick_all_with_recovery(
+        &clock.frame(Duration::from_millis(250)),
+        &mut recovery.scope(),
+    );
+    assert_eq!(controller.value(), 0.25, "the valid sample stays published");
+    assert!(run.is_pending(), "retirement does not cancel the run");
+    assert_eq!(tail.get(), 1, "the healthy value tail receives the commit");
+    assert_eq!(drops.get(), 1, "healthy-path destruction still runs");
+    let receipt = recovery
+        .into_failure()
+        .expect("listener retirement failure");
+    assert_eq!(receipt.class(), FailureClass::Delivery);
+    assert_eq!(receipt.blocking_class(), None);
+    assert_eq!(
+        receipt.payload().downcast_ref::<&str>(),
+        Some(&"committed listener retirement")
+    );
+    drop(receipt);
+    let mut next = PanicRecovery::new();
+    vsync.tick_all_with_recovery(&clock.frame(Duration::from_millis(500)), &mut next.scope());
+    assert!(next.into_failure().is_none(), "the next sample progresses");
+    assert_eq!(controller.value(), 0.5);
+    assert_eq!(tail.get(), 2);
 }
 
 #[test]
@@ -347,5 +409,9 @@ fn sampling_preserves_failure_origin_and_publication_integrity() {
         ("committed status delivery", status_delivery),
         ("committed continuation delivery", continuation_delivery),
         ("committed waiter delivery", waiter_delivery),
+        (
+            "withdrawn value listener retirement",
+            withdrawn_value_listener_retirement_preserves_the_commit,
+        ),
     ]);
 }
