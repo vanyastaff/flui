@@ -8,7 +8,7 @@ use std::{
 
 use flui_foundation::{
     geometry::Offset,
-    panic::{FailureClass, PanicRecovery, RecoveryScope},
+    panic::{FailureClass, RecoveryScope},
 };
 use web_time::{Duration, Instant};
 
@@ -244,9 +244,9 @@ impl PrimaryContact {
 
     /// Claim this contact's exact arena entry.
     pub fn accept(&self) {
-        let mut recovery = PanicRecovery::new();
-        self.accept_with_recovery(&mut recovery.scope());
-        recovery.finish();
+        self.arena().run_owned_recovery(|recovery| {
+            self.accept_with_recovery(recovery);
+        });
     }
 
     pub(crate) fn accept_with_recovery(&self, recovery: &mut RecoveryScope<'_>) {
@@ -258,9 +258,10 @@ impl PrimaryContact {
 
     /// Bow out without cancelling the remaining competition.
     pub fn withdraw(&self) -> Option<ContactSnapshot> {
-        let mut recovery = PanicRecovery::new();
-        let outgoing = self.withdraw_with_recovery(&mut recovery.scope());
-        recovery.finish();
+        let mut outgoing = None;
+        self.arena().run_owned_recovery(|recovery| {
+            outgoing = self.withdraw_with_recovery(recovery);
+        });
         outgoing
     }
 
@@ -271,11 +272,12 @@ impl PrimaryContact {
         let outgoing = self.current.borrow_mut().take()?;
         outgoing._deadline_registration.withdraw();
         outgoing.entry.reject_without_self_with_recovery(recovery);
-        recovery.run_classified(FailureClass::Delivery, |_| {
-            tracing::debug!(name: "recognizer.reject", pointer = ?outgoing.snapshot.pointer,
-                event = %crate::observability::GestureEvent::ArenaRejected,
-                "recognizer rejected gesture");
-        });
+        self.arena()
+            .invoke_with_recovery(FailureClass::Delivery, recovery, |_| {
+                tracing::debug!(name: "recognizer.reject", pointer = ?outgoing.snapshot.pointer,
+                    event = %crate::observability::GestureEvent::ArenaRejected,
+                    "recognizer rejected gesture");
+            });
         Some(outgoing.snapshot)
     }
 
@@ -403,6 +405,10 @@ impl PrimaryContact {
 
     pub(crate) fn now(&self) -> Instant {
         self.membership.now()
+    }
+
+    pub(crate) fn arena(&self) -> &GestureArena {
+        self.membership.arena()
     }
 
     pub(crate) fn entry(&self) -> Option<GestureArenaEntry> {

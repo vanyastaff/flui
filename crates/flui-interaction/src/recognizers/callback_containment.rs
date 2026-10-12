@@ -92,9 +92,9 @@ pub(crate) fn finish_containment(first: Option<RoutePanic>, incoming_failure: bo
 }
 
 pub(crate) fn withdraw_cancelled(entry: &GestureArenaEntry, arena: &GestureArena) {
-    let mut recovery = flui_foundation::panic::PanicRecovery::new();
-    withdraw_cancelled_with_recovery(entry, arena, &mut recovery.scope());
-    recovery.finish();
+    arena.run_owned_recovery(|recovery| {
+        withdraw_cancelled_with_recovery(entry, arena, recovery);
+    });
 }
 
 pub(crate) fn withdraw_cancelled_with_recovery(
