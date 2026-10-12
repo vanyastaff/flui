@@ -1044,6 +1044,14 @@ fn finish_prepared_text(
 }
 
 fn an_animated_size_resumes_its_original_tick_after_host_service_yields() {
+    animated_preparation_retains_its_tick(false);
+}
+
+fn deadline_delivery_does_not_discard_the_retained_animation_tick() {
+    animated_preparation_retains_its_tick(true);
+}
+
+fn animated_preparation_retains_its_tick(failing_deadline: bool) {
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
     use std::time::Duration;
@@ -1189,6 +1197,42 @@ fn an_animated_size_resumes_its_original_tick_after_host_service_yields() {
             |request| request.size.value() == 18.5 && request.profile == TextScaleProfile::Body
         )
     );
+    let deadline_calls = Rc::new(Cell::new(0));
+    let reports = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let reported = Arc::clone(&reports);
+    runtime.set_frame_failure_handler(Some(flui_runtime::frame_failure::FrameFailureHandler::new(
+        move |report| {
+            reported.lock().push((
+                report.address,
+                report.disposition,
+                report.consecutive_failures,
+            ));
+        },
+    )));
+    let _deadline = failing_deadline.then(|| {
+        use flui_interaction::GestureRecognizer as _;
+        let calls = Rc::clone(&deadline_calls);
+        let recognizer = flui_interaction::LongPressGestureRecognizer::builder(
+            runtime.gestures().arena().clone(),
+        )
+        .settings(
+            flui_interaction::settings::GestureSettings::touch_defaults()
+                .with_long_press_timeout(Duration::from_millis(10)),
+        )
+        .on_long_press_start(move |_| {
+            calls.set(calls.get() + 1);
+            std::panic::panic_any("retained deadline delivery");
+        })
+        .build();
+        let down = flui_interaction::events::make_down_event_for_id(
+            flui_platform_api::PointerId::new(std::num::NonZeroU64::MIN),
+            flui_foundation::geometry::Offset::new(10.0, 10.0),
+            flui_platform_api::PointerKind::Touch,
+        )
+        .expect("finite retained contact");
+        recognizer.add_pointer(flui_interaction::PointerDispatch::at_root(&down));
+        recognizer
+    });
     for _ in 0..2 {
         assert!(runtime.settle_text_sizing(work, TextSizingSettlement::Waiting));
         clock.advance(Duration::from_millis(20));
@@ -1208,6 +1252,27 @@ fn an_animated_size_resumes_its_original_tick_after_host_service_yields() {
         work = frontier
             .pop()
             .expect("explicitly serviced fractional frontier");
+    }
+    if failing_deadline {
+        assert_eq!(
+            deadline_calls.get(),
+            1,
+            "committed activation is not replayed"
+        );
+        assert_eq!(
+            reports.lock().as_slice(),
+            &[(
+                flui_foundation::PresentationAddress {
+                    ui_runtime_id: runtime.id(),
+                    presentation_id: runtime.presentation_id(),
+                },
+                flui_runtime::frame_failure::FailureDisposition::Contained,
+                0,
+            )],
+            "delivery cannot reject the compatible frozen text attempt"
+        );
+    } else {
+        assert!(reports.lock().is_empty());
     }
     answer_prepared_frontier(&work, &mut writer);
     assert!(runtime.settle_text_sizing(work, TextSizingSettlement::Ready));
@@ -1430,6 +1495,160 @@ fn pending_editable() -> PendingEditable {
         completed,
         work: frontiers.pop().expect("actual receipt frontier"),
     }
+}
+
+struct UnknownRetainedDeadline {
+    due: web_time::Instant,
+    effects: std::rc::Rc<std::cell::Cell<usize>>,
+}
+
+impl flui_interaction::arena::GestureArenaMember for UnknownRetainedDeadline {
+    fn accept_gesture(&self, _: flui_platform_api::PointerId) {}
+
+    fn reject_gesture(&self, _: flui_platform_api::PointerId) {}
+
+    fn deadline(&self) -> Option<web_time::Instant> {
+        Some(self.due)
+    }
+
+    fn poll_deadline(&self, _: web_time::Instant) {
+        self.effects.set(self.effects.get() + 1);
+        std::panic::panic_any("unknown retained deadline progress");
+    }
+}
+
+fn unknown_deadline_withdraws_the_old_receipt_and_recovers_fresh_geometry() {
+    use flui_foundation::MonotonicClock as _;
+    use flui_platform_api::text_store::{
+        LockGrant, LockOutcome, LockTiming, TextStoreError, Utf16Offset, Utf16Range,
+    };
+    use flui_runtime::frame_failure::{FailureDisposition, FrameFailureHandler};
+    use flui_runtime::ui_runtime::TextSizingSettlement;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    let PendingEditable {
+        mut clock,
+        mut runtime,
+        mut sink,
+        mut writer,
+        store,
+        completed,
+        work,
+    } = pending_editable();
+    let before = sink.submitted;
+    let reports = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let reported = Arc::clone(&reports);
+    runtime.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
+        reported.lock().push((
+            report.address,
+            report.disposition,
+            report.consecutive_failures,
+        ));
+    })));
+    let effects = Rc::new(Cell::new(0));
+    let member = Rc::new(UnknownRetainedDeadline {
+        due: clock.now(),
+        effects: Rc::clone(&effects),
+    });
+    let _entry = runtime.gestures().arena().add(
+        flui_platform_api::PointerId::new(std::num::NonZeroU64::new(99).expect("contact")),
+        &member,
+    );
+    let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        runtime.pump(&mut clock, &mut sink)
+    }));
+    assert_eq!(
+        effects.get(),
+        1,
+        "the open extension performed its side effect"
+    );
+    let _ = attempt.expect("unknown deadline failure is presentation-local");
+    assert_eq!(
+        sink.submitted, before,
+        "withdrawal cannot publish old geometry"
+    );
+    assert_eq!(completed.get(), 0);
+    assert!(
+        !runtime.settle_text_sizing(work, TextSizingSettlement::Ready),
+        "late receipt cannot authorize the withdrawn attempt"
+    );
+    let premature = Rc::new(Cell::new(false));
+    let prematurely_granted = Rc::clone(&premature);
+    assert_eq!(
+        store.request_lock(
+            LockGrant::read(move |_| prematurely_granted.set(true)),
+            LockTiming::Sync,
+        ),
+        Err(TextStoreError::SyncLockUnavailable),
+        "withdrawal cannot open the document barrier before replacement"
+    );
+    assert!(!premature.get());
+    let geometry = Rc::new(RefCell::new(None));
+    let observed = Rc::clone(&geometry);
+    assert_eq!(
+        store.request_lock(
+            LockGrant::read(move |session| {
+                *observed.borrow_mut() =
+                    Some(session.rect_for_range(Utf16Range::collapsed(Utf16Offset::new(7))));
+            }),
+            LockTiming::Async,
+        ),
+        Ok(LockOutcome::Deferred)
+    );
+    assert!(!runtime.pump(&mut clock, &mut sink).presented());
+    assert_eq!(
+        effects.get(),
+        1,
+        "unknown side effects cannot automatically replay"
+    );
+    assert!(
+        geometry.borrow().is_none(),
+        "replacement is still uncommitted"
+    );
+    let mut replacement = runtime.take_text_sizing_frontiers();
+    assert_eq!(
+        replacement.len(),
+        1,
+        "fresh layout is runnable without another input or synthetic root redraw"
+    );
+    let work = replacement.pop().expect("actual replacement frontier");
+    answer_prepared_frontier(&work, &mut writer);
+    assert!(runtime.settle_text_sizing(work, TextSizingSettlement::Ready));
+    finish_prepared_text(
+        "unknown deadline replacement",
+        &mut runtime,
+        &mut clock,
+        &mut sink,
+        &mut writer,
+    );
+    assert_eq!(effects.get(), 1, "same deadline revision stays quarantined");
+    assert_eq!(sink.submitted, before + 1);
+    sink.assert_text_size("receipt", 24.0);
+    assert_eq!(
+        completed.get(),
+        1,
+        "accepted completion survives withdrawal"
+    );
+    assert!(
+        geometry
+            .borrow()
+            .as_ref()
+            .expect("replacement grant")
+            .is_ok()
+    );
+    assert_eq!(
+        reports.lock().as_slice(),
+        &[(
+            flui_foundation::PresentationAddress {
+                ui_runtime_id: runtime.id(),
+                presentation_id: runtime.presentation_id(),
+            },
+            FailureDisposition::FrameDropped,
+            1,
+        )],
+        "one unresolved operation rejects the retained attempt only once"
+    );
 }
 
 fn a_dropped_receipt_retries_only_after_its_deadline_and_completes() {
@@ -2071,6 +2290,14 @@ fn registered_text_preparation_preserves_the_actual_presentation_attempt() {
             (
                 "an_animated_size_resumes_its_original_tick_after_host_service_yields",
                 an_animated_size_resumes_its_original_tick_after_host_service_yields as fn(),
+            ),
+            (
+                "deadline_delivery_does_not_discard_the_retained_animation_tick",
+                deadline_delivery_does_not_discard_the_retained_animation_tick as fn(),
+            ),
+            (
+                "unknown_deadline_withdraws_the_old_receipt_and_recovers_fresh_geometry",
+                unknown_deadline_withdraws_the_old_receipt_and_recovers_fresh_geometry as fn(),
             ),
             (
                 "a_same_queued_rebuild_admission_cancels_the_old_preparation_premise",
