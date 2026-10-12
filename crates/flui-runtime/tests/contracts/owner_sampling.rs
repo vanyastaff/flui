@@ -2,7 +2,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::num::NonZeroU64;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -53,6 +53,7 @@ struct Effects {
 
 struct RuntimeObservation {
     queries_before: usize,
+    queries_after_wake: usize,
     queries_after: usize,
     wakes: Vec<Option<web_time::Instant>>,
     pending: Vec<bool>,
@@ -94,14 +95,12 @@ impl OwnerEffects for Effects {
             return;
         }
         let queries_before = self.query_calls.get();
-        let mut wakes = Vec::new();
-        let mut pending = Vec::new();
-        for _ in 0..3 {
-            wakes.push(runtime.next_wake());
-            pending.push(runtime.has_pending_work());
-        }
+        let wakes = (0..3).map(|_| runtime.next_wake()).collect();
+        let queries_after_wake = self.query_calls.get();
+        let pending = (0..3).map(|_| runtime.has_pending_work()).collect();
         self.runtime_observation.replace(Some(RuntimeObservation {
             queries_before,
+            queries_after_wake,
             queries_after: self.query_calls.get(),
             wakes,
             pending,
@@ -127,6 +126,10 @@ fn scheduling_observation_case(scope: ObservationScope) {
     let clock = ManualClock::new();
     let due = clock.now() + Duration::from_secs(1);
     let (runtime, _window) = manual_runtime(clock);
+    assert!(
+        !runtime.has_pending_work(),
+        "the empty presentation has no unrelated work before deadline admission"
+    );
     let query_calls = Rc::new(Cell::new(0));
     let member = Rc::new(DeadlineQuery {
         calls: Rc::clone(&query_calls),
@@ -173,8 +176,12 @@ fn scheduling_observation_case(scope: ObservationScope) {
                 .take()
                 .expect("runtime getters observed during owner execution");
             assert_eq!(
-                observed.queries_after, observed.queries_before,
-                "runtime wake or pending observation executed the external deadline query"
+                observed.queries_after_wake, observed.queries_before,
+                "runtime wake observation executed the external deadline query"
+            );
+            assert_eq!(
+                observed.queries_after, observed.queries_after_wake,
+                "runtime pending observation executed the external deadline query"
             );
             assert_eq!(observed.wakes, [Some(due); 3]);
             assert_eq!(observed.pending, [true; 3]);
@@ -880,6 +887,186 @@ fn standalone_owner_drain_delivers_its_query_report_and_progresses() {
     assert_eq!(reports.lock().expect("reports").len(), 1);
 }
 
+struct SamplingSink;
+
+impl flui_runtime::sink::FrameSink for SamplingSink {
+    fn surface_size(&mut self) -> (u32, u32) {
+        (800, 600)
+    }
+
+    fn submit(&mut self, _: flui_layer::Scene) -> flui_runtime::sink::SubmitVerdict {
+        flui_runtime::sink::SubmitVerdict::Presented
+    }
+}
+
+thread_local! {
+    static PENDING_RUNTIME: RefCell<Option<Weak<UiRuntime>>> = const { RefCell::new(None) };
+}
+
+struct PendingProbeScope;
+
+impl PendingProbeScope {
+    fn install(runtime: &Rc<UiRuntime>) -> Self {
+        let previous = PENDING_RUNTIME.with(|slot| slot.replace(Some(Rc::downgrade(runtime))));
+        assert!(previous.is_none(), "pending probe is not nested");
+        Self
+    }
+}
+
+impl Drop for PendingProbeScope {
+    fn drop(&mut self) {
+        let retired = PENDING_RUNTIME.with(RefCell::take);
+        drop(retired);
+    }
+}
+
+#[derive(Default)]
+struct TraceCalls {
+    events: AtomicUsize,
+    reentries: AtomicUsize,
+    refused_reentries: AtomicUsize,
+    inside_event: AtomicBool,
+}
+
+struct PendingDiagnostics(Arc<TraceCalls>);
+
+impl tracing::Subscriber for PendingDiagnostics {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+    fn event(&self, _: &tracing::Event<'_>) {
+        self.0.events.fetch_add(1, Ordering::Relaxed);
+        if self.0.inside_event.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let runtime = PENDING_RUNTIME
+            .with(|slot| slot.borrow().clone())
+            .and_then(|owner| owner.upgrade());
+        if let Some(runtime) = runtime {
+            self.0.reentries.fetch_add(1, Ordering::Relaxed);
+            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| runtime.has_pending_work()))
+                .is_err()
+            {
+                self.0.refused_reentries.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        self.0.inside_event.store(false, Ordering::Relaxed);
+    }
+
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+fn mounted_root_invalidation(
+    runtime: &UiRuntime,
+) -> flui_rendering::pipeline::RenderInvalidationHandle {
+    runtime
+        .widgets()
+        .pipeline_owner()
+        .expect("mounted pipeline")
+        .with(|owner| {
+            owner
+                .render_invalidation_handle(owner.root_id().expect("mounted root render object"))
+                .expect("attached root has an invalidation capability")
+        })
+}
+
+fn queued_render_invalidation_is_observed_without_foreign_work() {
+    let mut clock = ManualClock::new();
+    let (mut runtime, window) = manual_runtime(clock.clone());
+    runtime
+        .attach_root_widget_with_size(&flui_widgets::SizedBox::square(10.0), 800.0, 600.0)
+        .expect("first root");
+    let _ = runtime.pump(&mut clock, &mut SamplingSink);
+    assert!(
+        !runtime.has_pending_work(),
+        "a real frame settles the first tree"
+    );
+    let retired = mounted_root_invalidation(&runtime);
+    runtime.enter(|runtime| runtime.widgets().detach_root_widget());
+    runtime
+        .attach_root_widget_with_size(&flui_widgets::SizedBox::square(20.0), 800.0, 600.0)
+        .expect("replacement root");
+    clock.advance(Duration::from_millis(20));
+    let _ = runtime.pump(&mut clock, &mut SamplingSink);
+    assert!(
+        !runtime.has_pending_work(),
+        "replacement frame settles unrelated work"
+    );
+    let live = mounted_root_invalidation(&runtime);
+    let wakes = Arc::new(AtomicUsize::new(0));
+    let observed_wakes = Arc::clone(&wakes);
+    window.on_request_frame(Box::new(move || {
+        observed_wakes.fetch_add(1, Ordering::Relaxed);
+    }));
+    retired
+        .mark_needs_paint()
+        .expect("the live pipeline accepts the queued old attachment");
+    let wakes_before_getter = wakes.load(Ordering::Relaxed);
+    let mut runtime = Rc::new(runtime);
+    let scope = PendingProbeScope::install(&runtime);
+    let calls = Arc::new(TraceCalls::default());
+    let diagnostics = tracing::subscriber::set_default(PendingDiagnostics(Arc::clone(&calls)));
+    let pending: Vec<_> = (0..3).map(|_| runtime.has_pending_work()).collect();
+    drop(diagnostics);
+    drop(scope);
+    assert_eq!(
+        calls.events.load(Ordering::Relaxed),
+        0,
+        "pending observation must not drain or trace stale work"
+    );
+    assert_eq!(
+        calls.reentries.load(Ordering::Relaxed),
+        0,
+        "a getter invokes no subscriber reentry"
+    );
+    assert_eq!(
+        wakes.load(Ordering::Relaxed),
+        wakes_before_getter,
+        "a getter invokes no native wake callback"
+    );
+    assert_eq!(
+        pending, [true; 3],
+        "queued work remains pending until a real drain"
+    );
+
+    let runtime = Rc::get_mut(&mut runtime).expect("the native host exclusively owns its runtime");
+    clock.advance(Duration::from_millis(20));
+    let _ = runtime.pump(&mut clock, &mut SamplingSink);
+    assert!(
+        !runtime.has_pending_work(),
+        "the real frame retires the stale request"
+    );
+
+    live.mark_needs_layout()
+        .expect("live attachment admits an invalidation");
+    let wakes_before_getter = wakes.load(Ordering::Relaxed);
+    let calls = Arc::new(TraceCalls::default());
+    let diagnostics = tracing::subscriber::set_default(PendingDiagnostics(Arc::clone(&calls)));
+    let pending: Vec<_> = (0..3).map(|_| runtime.has_pending_work()).collect();
+    drop(diagnostics);
+    assert_eq!(calls.events.load(Ordering::Relaxed), 0);
+    assert_eq!(wakes.load(Ordering::Relaxed), wakes_before_getter);
+    assert_eq!(
+        pending, [true; 3],
+        "fresh accepted work is visible without executing its notifier"
+    );
+    clock.advance(Duration::from_millis(20));
+    let _ = runtime.pump(&mut clock, &mut SamplingSink);
+    assert!(
+        !runtime.has_pending_work(),
+        "the next real frame completes fresh work"
+    );
+}
+
 #[test]
 fn owner_sampling_contract() {
     crate::table_test::run_table(
@@ -924,6 +1111,10 @@ fn owner_sampling_contract() {
             (
                 "standalone owner drain delivers query report and recovery",
                 standalone_owner_drain_delivers_its_query_report_and_progresses,
+            ),
+            (
+                "queued render invalidation observation executes no foreign work",
+                queued_render_invalidation_is_observed_without_foreign_work,
             ),
         ],
     );
