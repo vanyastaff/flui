@@ -19,6 +19,7 @@ fn unavailable_observations_do_not_claim_system_defaults() {
 )]
 fn windows_reads_preferences_before_a_user_window_exists() {
     use flui_platform::Platform;
+    use windows::UI::ViewManagement::UISettings;
 
     // A later host must not reuse an activation factory from a retired apartment.
     {
@@ -39,6 +40,7 @@ fn windows_reads_preferences_before_a_user_window_exists() {
         ),
         "a foreign thread must not create an independent native observation set"
     );
+    let native_ui = UISettings::new().expect("independent native preference reader");
     for _ in 0..3 {
         let observed = platform
             .preferences()
@@ -48,7 +50,17 @@ fn windows_reads_preferences_before_a_user_window_exists() {
                 .text_scale()
                 .is_some_and(|scale| scale.is_finite() && scale > 0.0)
         );
-        assert!(observed.motion().is_some());
+        assert_eq!(
+            observed
+                .motion()
+                .map(|motion| motion == flui_platform::MotionPreference::NoPreference),
+            Some(
+                native_ui
+                    .AnimationsEnabled()
+                    .expect("native animation preference")
+            ),
+            "the public observation must match Windows, not just contain a value"
+        );
         assert!(observed.high_contrast().is_some());
         assert!(
             observed

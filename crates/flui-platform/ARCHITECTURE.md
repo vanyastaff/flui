@@ -135,7 +135,9 @@ native interfaces and subscriptions. Foreign reads are refused. Direct
 host after its apartment ended reproduced a stale-factory access violation with
 `UISettings::new`. `windows_reads_preferences_before_a_user_window_exists` in
 `preferences_contract` exercises successive host lifetimes, refusal, repeated
-native reads and subsequent native window creation.
+native reads and subsequent native window creation. Its independent `UISettings`
+reader compares the public motion observation with the current Windows animation
+setting; merely returning a present value cannot satisfy the assertion.
 
 UI languages use `GetUserPreferredUILanguages`, sharing this source's receiver,
 cache and retry lifetime (ADR-0173). The private
