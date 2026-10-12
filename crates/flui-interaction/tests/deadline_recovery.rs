@@ -133,6 +133,13 @@ impl Drop for VerdictMember {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RejectionDeadlineObservation {
+    Unobserved,
+    Armed(Instant),
+    Disarmed,
+}
+
 struct DeadlineMember {
     due: Cell<Option<Instant>>,
     fail_query: Cell<bool>,
@@ -144,7 +151,7 @@ struct DeadlineMember {
     release_owner: RefCell<Option<MemberOwner>>,
     drops: Rc<Cell<usize>>,
     rejection_binding: RefCell<Option<Rc<GestureBinding>>>,
-    rejection_deadline: Cell<Option<Option<Instant>>>,
+    rejection_deadline: Cell<RejectionDeadlineObservation>,
 }
 
 impl DeadlineMember {
@@ -160,7 +167,7 @@ impl DeadlineMember {
             release_owner: RefCell::new(None),
             drops: Rc::new(Cell::new(0)),
             rejection_binding: RefCell::new(None),
-            rejection_deadline: Cell::new(None),
+            rejection_deadline: Cell::new(RejectionDeadlineObservation::Unobserved),
         })
     }
 }
@@ -170,12 +177,13 @@ impl GestureArenaMember for DeadlineMember {
     fn reject_gesture(&self, _: PointerId) {
         let binding = self.rejection_binding.borrow().clone();
         if let Some(binding) = binding
-            && self.rejection_deadline.get().is_none()
+            && self.rejection_deadline.get() == RejectionDeadlineObservation::Unobserved
         {
-            self.rejection_deadline
-                .set(Some(flui_interaction::__runtime::next_deadline_snapshot(
-                    &binding,
-                )));
+            let observation = match flui_interaction::__runtime::next_deadline_snapshot(&binding) {
+                Some(due) => RejectionDeadlineObservation::Armed(due),
+                None => RejectionDeadlineObservation::Disarmed,
+            };
+            self.rejection_deadline.set(observation);
         }
     }
     fn deadline(&self) -> Option<Instant> {
@@ -675,7 +683,7 @@ fn disarm_wake_cannot_make_an_old_up_retire_a_replacement_contact() {
             let down = make_down_event_for_id(pointer(2), Offset::ZERO, PointerKind::Touch)
                 .expect("replacement down");
             replacement.add_pointer(PointerDispatch::at_root(&down));
-        }))
+        }));
     });
     let up = make_up_event_for_id(pointer(1), Offset::ZERO, PointerKind::Touch).expect("old up");
     recognizer.handle_event(PointerDispatch::at_root(&up));
@@ -705,10 +713,10 @@ fn a_wake_failure_retains_the_last_backend_owner_before_unwind() {
             *action.borrow_mut() = Some(Box::new(move || {
                 drop(released.lock().expect("backend owner fixture").take());
                 panic!("wake delivery first failure");
-            }))
+            }));
         });
         let member = DeadlineMember::new(clock.now());
-        let erased: Rc<dyn GestureArenaMember> = member.clone();
+        let erased: Rc<dyn GestureArenaMember> = member;
         let registration = binding
             .arena()
             .register_deadline_member(pointer(1), &erased)
@@ -805,7 +813,7 @@ fn a_member_withdrawal_removes_its_snapshot_before_rejection_delivery() {
     entry.resolve(flui_interaction::GestureDisposition::Rejected);
     assert_eq!(
         member.rejection_deadline.get(),
-        Some(Some(healthy_due)),
+        RejectionDeadlineObservation::Armed(healthy_due),
         "rejection observes only the still-admitted member's timing"
     );
 }
@@ -837,7 +845,7 @@ fn abandoned_generations_are_withdrawn_before_rejection(all_pointers: bool) {
     }
     assert_eq!(
         member.rejection_deadline.get(),
-        Some(None),
+        RejectionDeadlineObservation::Disarmed,
         "all detached generations lose timing before the first rejection"
     );
 }

@@ -394,7 +394,7 @@ fn late_font_diagnostic_case(change_on_report: bool) {
     }
     let reports = Arc::new(Mutex::new(Vec::new()));
     let reported = Arc::clone(&reports);
-    let registered = fonts.clone();
+    let registered = fonts;
     let register_once = AtomicBool::new(true);
     let authored_size = Arc::clone(&size);
     let rebuild = rebuild
@@ -897,7 +897,7 @@ fn delivery_case(delivery: Delivery) {
         use std::future::Future as _;
         use std::pin::Pin;
         use std::task::{Context, Poll, Waker};
-        let mut outcome = primary_run.clone();
+        let mut outcome = primary_run;
         assert!(
             matches!(
                 Pin::new(&mut outcome).poll(&mut Context::from_waker(Waker::noop())),

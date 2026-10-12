@@ -1629,7 +1629,7 @@ fn retained_deadline_failure_case(background: bool, fail_query: bool) {
         1,
         "the open extension was evaluated through the runtime owner turn"
     );
-    let _ = attempt.expect("unknown deadline failure is presentation-local");
+    attempt.expect("unknown deadline failure is presentation-local");
     assert_eq!(
         sink.submitted, before,
         "withdrawal cannot publish old geometry"
