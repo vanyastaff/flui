@@ -4,13 +4,15 @@ use std::cell::{Cell, RefCell};
 use std::num::NonZeroU64;
 use std::rc::Rc;
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use std::time::Duration;
 
 use flui_foundation::{ManualClock, MonotonicClock, PresentationAddress, UiRuntimeId};
-use flui_interaction::{arena::GestureArenaMember, ids::PointerId};
+use flui_interaction::{
+    GestureDeadlineError, GestureDeadlineUpdate, arena::GestureArenaMember, ids::PointerId,
+};
 use flui_runtime::frame_failure::{
     FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind,
     FrameFailureReport, PanicText, SamplingFailure, SamplingFailureOrigin, SamplingStage,
@@ -507,6 +509,377 @@ fn original_owner_failure_survives_query_report_competition() {
     query_report_case(true, true, true);
 }
 
+struct PublishedDeadline {
+    due: Cell<Option<web_time::Instant>>,
+    queries: Rc<Cell<usize>>,
+}
+
+impl GestureArenaMember for PublishedDeadline {
+    fn accept_gesture(&self, _: PointerId) {}
+
+    fn reject_gesture(&self, _: PointerId) {}
+
+    fn deadline(&self) -> Option<web_time::Instant> {
+        self.queries.set(self.queries.get() + 1);
+        self.due.get()
+    }
+}
+
+fn observe_owner_deadline(
+    owner: &OwnerHost,
+    queries: &Cell<usize>,
+    expected: Option<web_time::Instant>,
+) {
+    let before = queries.get();
+    let wakes: Vec<_> = (0..3).map(|_| owner.next_wake()).collect();
+    assert_eq!(
+        queries.get(),
+        before,
+        "wake getters are not discovery opportunities"
+    );
+    assert_eq!(wakes, [Ok(expected); 3]);
+}
+
+fn retained_deadline_publisher_updates_cancels_and_refuses_stale_authority() {
+    let clock = ManualClock::new();
+    let now = clock.now();
+    let initial = now + Duration::from_secs(1);
+    let earlier = now + Duration::from_millis(250);
+    let successor_due = now + Duration::from_millis(500);
+    let (runtime, window) = manual_runtime(clock);
+    let wakes = Arc::new(AtomicUsize::new(0));
+    let wake_count = Arc::clone(&wakes);
+    window.on_request_frame(Box::new(move || {
+        wake_count.fetch_add(1, Ordering::Relaxed);
+    }));
+    let queries = Rc::new(Cell::new(0));
+    let member = Rc::new(PublishedDeadline {
+        due: Cell::new(Some(initial)),
+        queries: Rc::clone(&queries),
+    });
+    let erased: Rc<dyn GestureArenaMember> = member.clone();
+    let pointer = PointerId::new(NonZeroU64::MIN);
+    let arena = runtime.gestures().arena().clone();
+    let registration = arena
+        .register_deadline_member(pointer, &erased)
+        .expect("admit external deadline source");
+    let publisher = registration.update_handle();
+    let before = wakes.load(Ordering::Relaxed);
+    publisher
+        .publish(Some(initial))
+        .expect("publish initial timing");
+    assert!(
+        wakes.load(Ordering::Relaxed) > before,
+        "publication wakes its native owner"
+    );
+    assert_eq!(
+        queries.get(),
+        0,
+        "publishing committed timing is not a query"
+    );
+
+    let owner = OwnerHost::new();
+    let address = owner
+        .publication(owner.prepare_runtime(runtime))
+        .expect("publish runtime")
+        .commit();
+    let frame = owner.frame_dispatcher(address).expect("frame authority");
+    let effects = Effects {
+        query_calls: Rc::clone(&queries),
+        frames: Cell::new(0),
+        fail_operation: Cell::new(false),
+        probe_runtime: Cell::new(true),
+        runtime_observation: RefCell::new(None),
+    };
+    assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+    observe_owner_deadline(&owner, &queries, Some(initial));
+
+    let before = wakes.load(Ordering::Relaxed);
+    member.due.set(Some(earlier));
+    publisher
+        .publish(Some(earlier))
+        .expect("retained authority publishes earlier timing");
+    assert!(
+        wakes.load(Ordering::Relaxed) > before,
+        "earlier timing wakes without a manual poke"
+    );
+    observe_owner_deadline(&owner, &queries, Some(earlier));
+    assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+    let observed = effects
+        .runtime_observation
+        .take()
+        .expect("runtime wake gate");
+    assert_eq!(observed.queries_after, observed.queries_before);
+    assert_eq!(observed.wakes, [Some(earlier); 3]);
+    assert_eq!(observed.pending, [true; 3]);
+    assert_eq!(
+        queries.get(),
+        0,
+        "explicit publishers need no foreign discovery"
+    );
+
+    let before = wakes.load(Ordering::Relaxed);
+    member.due.set(None);
+    publisher.publish(None).expect("cancel timing");
+    assert!(wakes.load(Ordering::Relaxed) > before);
+    observe_owner_deadline(&owner, &queries, None);
+    drop(registration);
+
+    // Reuse the same pointer and member under a new registration. Old weak
+    // authority must neither cancel nor rearm this successor.
+    let before = wakes.load(Ordering::Relaxed);
+    assert_eq!(
+        publisher.publish(Some(earlier)),
+        Err(GestureDeadlineError::Retired)
+    );
+    assert_eq!(publisher.refresh(), Err(GestureDeadlineError::Retired));
+    assert_eq!(wakes.load(Ordering::Relaxed), before);
+    observe_owner_deadline(&owner, &queries, None);
+
+    let successor_registration = arena
+        .register_deadline_member(pointer, &erased)
+        .expect("register successor under the reused pointer");
+    let successor = successor_registration.update_handle();
+    member.due.set(Some(successor_due));
+    successor
+        .publish(Some(successor_due))
+        .expect("successor timing");
+    observe_owner_deadline(&owner, &queries, Some(successor_due));
+    let before = wakes.load(Ordering::Relaxed);
+    assert_eq!(publisher.publish(None), Err(GestureDeadlineError::Retired));
+    assert_eq!(
+        publisher.publish(Some(earlier)),
+        Err(GestureDeadlineError::Retired)
+    );
+    assert_eq!(publisher.refresh(), Err(GestureDeadlineError::Retired));
+    assert_eq!(wakes.load(Ordering::Relaxed), before);
+    observe_owner_deadline(&owner, &queries, Some(successor_due));
+    member.due.set(None);
+    successor.publish(None).expect("cancel successor timing");
+    observe_owner_deadline(&owner, &queries, None);
+}
+
+struct CompletionRefresh {
+    member: Rc<PublishedDeadline>,
+    publisher: GestureDeadlineUpdate,
+    due: web_time::Instant,
+}
+
+struct CompletionEffects {
+    frame_effects: Effects,
+    owner: OwnerHost,
+    refresh: RefCell<Option<CompletionRefresh>>,
+    observation: RefCell<Option<CompletionObservation>>,
+}
+
+struct CompletionObservation {
+    executing: Result<bool, DispatchError>,
+    previous_wake: Result<Option<web_time::Instant>, DispatchError>,
+    queries_before: usize,
+    queries_after: usize,
+    accepted: Result<(), GestureDeadlineError>,
+}
+
+impl OwnerEffects for CompletionEffects {
+    fn runtime_lifecycle(&self, _: UiRuntimeId, _: flui_scheduler::AppLifecycleState) {}
+    fn runtimes_stopped(&self, _: RecoveryState) {}
+    fn retire_host(&self, _: &[PresentationAddress], _: RecoveryState) {}
+    fn commit_install(&self, _: InstallToken, _: RecoveryState) -> Option<InstallInitialization> {
+        panic!("no pending installation");
+    }
+    fn finish_install(&self, _: PresentationAddress, _: InitializationOutcome, _: RecoveryState) {}
+    fn cancel_install(&self, _: InstallToken, _: RecoveryState) {
+        panic!("no pending installation");
+    }
+    fn resize_surface(
+        &self,
+        _: PresentationAddress,
+        _: flui_foundation::geometry::Size<f64>,
+        _: f64,
+    ) {
+    }
+    fn frame(&self, address: PresentationAddress, runtime: &mut UiRuntime) {
+        self.frame_effects.frame(address, runtime);
+    }
+    fn retire_presentation(&self, _: PresentationAddress, _: Option<PresentationAddress>) {}
+    fn after_turn(&self, _: RecoveryState) {
+        let Some(refresh) = self.refresh.take() else {
+            return;
+        };
+        let executing = self.owner.is_executing();
+        let previous_wake = self.owner.next_wake();
+        let queries_before = refresh.member.queries.get();
+        refresh.member.due.set(Some(refresh.due));
+        let accepted = refresh.publisher.refresh();
+        self.observation.replace(Some(CompletionObservation {
+            executing,
+            previous_wake,
+            queries_before,
+            queries_after: refresh.member.queries.get(),
+            accepted,
+        }));
+    }
+    fn request_continuation(&self) -> bool {
+        true
+    }
+}
+
+fn completion_refresh_observes_timing_after_the_runtime_lease_returns() {
+    let clock = ManualClock::new();
+    let now = clock.now();
+    let initial = now + Duration::from_secs(1);
+    let completed = now + Duration::from_millis(150);
+    let (runtime, _window) = manual_runtime(clock);
+    let queries = Rc::new(Cell::new(0));
+    let member = Rc::new(PublishedDeadline {
+        due: Cell::new(Some(initial)),
+        queries: Rc::clone(&queries),
+    });
+    let erased: Rc<dyn GestureArenaMember> = member.clone();
+    let registration = runtime
+        .gestures()
+        .arena()
+        .register_deadline_member(PointerId::new(NonZeroU64::MIN), &erased)
+        .expect("register source");
+    let publisher = registration.update_handle();
+    publisher.publish(Some(initial)).expect("initial timing");
+    let owner = OwnerHost::new();
+    let address = owner
+        .publication(owner.prepare_runtime(runtime))
+        .expect("publish runtime")
+        .commit();
+    let effects = CompletionEffects {
+        frame_effects: Effects {
+            query_calls: Rc::clone(&queries),
+            frames: Cell::new(0),
+            fail_operation: Cell::new(false),
+            probe_runtime: Cell::new(true),
+            runtime_observation: RefCell::new(None),
+        },
+        owner: owner.clone(),
+        refresh: RefCell::new(Some(CompletionRefresh {
+            member,
+            publisher,
+            due: completed,
+        })),
+        observation: RefCell::new(None),
+    };
+    assert_eq!(
+        owner
+            .frame_dispatcher(address)
+            .expect("frame authority")
+            .deliver(&effects),
+        Ok(Delivery::Driven)
+    );
+    let before_completion = effects
+        .frame_effects
+        .runtime_observation
+        .take()
+        .expect("frame wake gate");
+    assert_eq!(
+        before_completion.wakes,
+        [Some(initial); 3],
+        "frame body still observes the old timing"
+    );
+    assert_eq!(
+        before_completion.queries_before,
+        before_completion.queries_after
+    );
+    let completion = effects.observation.take().expect("completion callback");
+    assert_eq!(completion.executing, Ok(false));
+    assert_eq!(completion.previous_wake, Ok(Some(initial)));
+    assert_eq!(completion.accepted, Ok(()));
+    assert_eq!(
+        completion.queries_after, completion.queries_before,
+        "refresh admission never executes the source"
+    );
+    assert!(
+        queries.get() > completion.queries_after,
+        "completion frontier performs the requested query"
+    );
+    observe_owner_deadline(&owner, &queries, Some(completed));
+}
+
+#[derive(Debug)]
+struct StandaloneReport {
+    address: PresentationAddress,
+    first: SamplingFailure,
+    admitted_attempt: bool,
+    disposition: FailureDisposition,
+    consecutive_failures: u32,
+}
+
+fn standalone_owner_drain_delivers_its_query_report_and_progresses() {
+    let clock = ManualClock::new();
+    let now = clock.now();
+    let due = now + Duration::from_secs(1);
+    let (runtime, _window) = manual_runtime(clock.clone());
+    let reports = Arc::new(Mutex::new(Vec::new()));
+    let collected = Arc::clone(&reports);
+    runtime.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
+        if let FrameFailureKind::SamplingPanic {
+            first,
+            admitted_attempt,
+            ..
+        } = &report.kind
+        {
+            collected.lock().expect("reports").push(StandaloneReport {
+                address: report.address,
+                first: *first,
+                admitted_attempt: *admitted_attempt,
+                disposition: report.disposition,
+                consecutive_failures: report.consecutive_failures,
+            });
+        }
+    })));
+    let queries = Rc::new(Cell::new(0));
+    let member = Rc::new(DeadlineQuery {
+        calls: Rc::clone(&queries),
+        due,
+        fail: Cell::new(false),
+    });
+    let _entry = runtime
+        .gestures()
+        .arena()
+        .add(PointerId::new(NonZeroU64::MIN), &member);
+    runtime.enter(UiRuntime::drain_owner_inbox);
+    let before = queries.get();
+    member.fail.set(true);
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        runtime.enter(UiRuntime::drain_owner_inbox)
+    }))
+    .expect("standalone owner drain contains discovery failure");
+    {
+        let observed = reports.lock().expect("reports");
+        assert_eq!(
+            observed.len(),
+            1,
+            "the completed drain delivers its report: {observed:?}"
+        );
+        let observed = &observed[0];
+        assert_eq!(
+            observed.address,
+            PresentationAddress {
+                ui_runtime_id: runtime.id(),
+                presentation_id: runtime.presentation_id()
+            }
+        );
+        assert_eq!(observed.first.stage, SamplingStage::DeadlineDiscovery);
+        assert_eq!(observed.first.origin, SamplingFailureOrigin::Unknown);
+        assert!(!observed.admitted_attempt);
+        assert_eq!(observed.disposition, FailureDisposition::Contained);
+        assert_eq!(observed.consecutive_failures, 0);
+    }
+    assert_eq!(queries.get(), before + 1);
+    assert_eq!(runtime.next_wake(), Some(now + Duration::from_millis(100)));
+    member.fail.set(false);
+    clock.advance(Duration::from_millis(100));
+    runtime.enter(UiRuntime::drain_owner_inbox);
+    assert!(queries.get() > before + 1);
+    assert_eq!(runtime.next_wake(), Some(due));
+    assert_eq!(reports.lock().expect("reports").len(), 1);
+}
+
 #[test]
 fn owner_sampling_contract() {
     crate::table_test::run_table(
@@ -539,6 +912,18 @@ fn owner_sampling_contract() {
             (
                 "original owner failure survives query report competition",
                 original_owner_failure_survives_query_report_competition,
+            ),
+            (
+                "retained deadline publisher changes timing and refuses stale authority",
+                retained_deadline_publisher_updates_cancels_and_refuses_stale_authority,
+            ),
+            (
+                "completion refresh observes timing after runtime lease return",
+                completion_refresh_observes_timing_after_the_runtime_lease_returns,
+            ),
+            (
+                "standalone owner drain delivers query report and recovery",
+                standalone_owner_drain_delivers_its_query_report_and_progresses,
             ),
         ],
     );
