@@ -2174,6 +2174,158 @@ fn a_sibling_animation_admission_replaces_ready_text_before_geometry_publication
     );
 }
 
+fn a_sampling_report_replaces_ready_text_before_geometry_publication() {
+    use flui_foundation::Listenable as _;
+    use flui_runtime::frame_failure::{FailureDisposition, FrameFailureHandler};
+    use flui_runtime::ui_runtime::TextSizingSettlement;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    let mut clock = flui_foundation::ManualClock::new();
+    let (mut runtime, _) = prepared_runtime(&clock);
+    let size = Arc::new(AtomicU64::new(20.0_f64.to_bits()));
+    let rebuild = Arc::new(parking_lot::Mutex::new(None));
+    let post_frame = Rc::new(RefCell::new(None));
+    runtime
+        .attach_root_widget_with_size(
+            &PreparedTextProbe {
+                child: AuthoredText {
+                    font_size: Arc::clone(&size),
+                    rebuild: Arc::clone(&rebuild),
+                }
+                .boxed(),
+                rebuild: Rc::new(RefCell::new(None)),
+                post_frame: Rc::clone(&post_frame),
+            },
+            400.0,
+            400.0,
+        )
+        .expect("mount target text with its ordinary cross-thread rebuild handle");
+    let mut sink = PreparedTextSink::default();
+    assert!(runtime.pump(&mut clock, &mut sink).presented());
+    let sibling = runtime.assemble_presentation(crate::owner_publication::window());
+    let sibling_id = runtime.install_presentation(sibling);
+    let animation_slot = Rc::new(RefCell::new(None));
+    runtime
+        .attach_root_widget_with_size_to(
+            sibling_id,
+            &PreparedSibling {
+                animation: Rc::clone(&animation_slot),
+                post_frame: Rc::new(RefCell::new(None)),
+                focus: flui_interaction::routing::FocusNode::new(),
+            },
+            400.0,
+            400.0,
+        )
+        .expect("mount actual sibling animation");
+    assert!(runtime.pump(&mut clock, &mut sink).presented());
+    let animation = animation_slot
+        .borrow()
+        .as_ref()
+        .expect("sibling lifecycle owns animation")
+        .clone();
+    let _run = animation.forward().expect("start sibling animation");
+    let _ = runtime.pump(&mut clock, &mut sink);
+    let (_, mut writer) = flui_painting::TextSizing::captured();
+    let completed = Rc::new(Cell::new(0));
+    let completion = Rc::clone(&completed);
+    post_frame
+        .borrow()
+        .as_ref()
+        .expect("target completion handle")
+        .schedule(move |_| completion.set(completion.get() + 1))
+        .expect("completion admitted before retained preparation");
+    assert!(runtime.install_captured_text_sizing_for(runtime.presentation_id(), writer.source()));
+    let _ = runtime.pump(&mut clock, &mut sink);
+    let mut frontiers = runtime.take_text_sizing_frontiers();
+    assert_eq!(frontiers.len(), 1);
+    let ready = frontiers.pop().expect("original target frontier");
+    assert!(
+        ready
+            .requests()
+            .iter()
+            .all(|request| request.size.value() == 20.0)
+    );
+    answer_prepared_frontier(&ready, &mut writer);
+    assert!(runtime.settle_text_sizing(ready, TextSizingSettlement::Ready));
+    let handle = rebuild
+        .lock()
+        .as_ref()
+        .expect("target lifecycle rebuild handle")
+        .clone();
+    let reports = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let reported = Arc::clone(&reports);
+    runtime.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
+        reported.lock().push((report.address, report.disposition));
+        size.store(22.75_f64.to_bits(), Ordering::SeqCst);
+        handle.schedule(flui_foundation::RebuildReason::StateChange);
+    })));
+    let armed = Rc::new(Cell::new(true));
+    let failing = Rc::clone(&armed);
+    let listener = animation.add_listener(Rc::new(move || {
+        if failing.replace(false) {
+            std::panic::panic_any("sibling delivery before ready text");
+        }
+    }));
+    clock.advance(Duration::from_millis(20));
+    let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        runtime.pump(&mut clock, &mut sink)
+    }));
+    let _ = attempt.expect("sampling report delivery cannot escape the pump");
+    assert!(!armed.get(), "the actual animation listener failed");
+    assert_eq!(
+        reports.lock().as_slice(),
+        &[(
+            flui_foundation::PresentationAddress {
+                ui_runtime_id: runtime.id(),
+                presentation_id: sibling_id,
+            },
+            FailureDisposition::Contained,
+        )]
+    );
+    assert_eq!(
+        completed.get(),
+        0,
+        "diagnostic-side admission cannot complete obsolete ready geometry"
+    );
+    let mut replacement = runtime.take_text_sizing_frontiers();
+    if replacement.is_empty() {
+        let _ = runtime.pump(&mut clock, &mut sink);
+        replacement = runtime.take_text_sizing_frontiers();
+    }
+    assert_eq!(
+        replacement.len(),
+        1,
+        "target requires an exact fresh frontier"
+    );
+    let work = replacement.pop().expect("replacement target frontier");
+    assert_eq!(work.presentation(), runtime.presentation_id());
+    assert!(
+        work.requests()
+            .iter()
+            .all(|request| request.size.value() == 22.75)
+    );
+    animation.remove_listener(listener);
+    animation.stop().expect("stop observed sibling");
+    assert!(
+        runtime.close_presentation_entered(sibling_id),
+        "one sink can now observe the target's actual scene"
+    );
+    answer_prepared_frontier(&work, &mut writer);
+    assert!(runtime.settle_text_sizing(work, TextSizingSettlement::Ready));
+    finish_prepared_text(
+        "diagnostic-side replacement",
+        &mut runtime,
+        &mut clock,
+        &mut sink,
+        &mut writer,
+    );
+    sink.assert_text_size("measured", 34.125);
+    assert_eq!(completed.get(), 1, "replacement completes once");
+    assert_eq!(reports.lock().len(), 1);
+}
+
 fn a_waiting_presentation_does_not_suspend_sibling_animation_completion_or_ime() {
     use flui_animation::Animation as _;
     use flui_platform_api::text_store::{
@@ -2307,6 +2459,10 @@ fn registered_text_preparation_preserves_the_actual_presentation_attempt() {
                 "a_sibling_animation_admission_replaces_ready_text_before_geometry_publication",
                 a_sibling_animation_admission_replaces_ready_text_before_geometry_publication
                     as fn(),
+            ),
+            (
+                "a_sampling_report_replaces_ready_text_before_geometry_publication",
+                a_sampling_report_replaces_ready_text_before_geometry_publication as fn(),
             ),
             (
                 "a_dropped_receipt_retries_only_after_its_deadline_and_completes",
