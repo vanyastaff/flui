@@ -1250,7 +1250,7 @@ mod tests {
                             .upgrade()
                             .expect("live owner")
                             .dispatch_focus_observation(false, move || {
-                                state.store(false, Ordering::SeqCst)
+                                state.store(false, Ordering::SeqCst);
                             });
                     }
                     assert!(!fail_notification, "competing focus failure");
