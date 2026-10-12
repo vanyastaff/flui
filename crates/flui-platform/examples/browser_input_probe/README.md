@@ -11,6 +11,23 @@ check pointer/wheel events and display bounds. Each check reports PASS or FAIL
 from the translated public results. These are actual DOM events dispatched to
 the platform canvas; physical mouse hardware delivery is a separate smoke test.
 
+Install input retains the returned window/platform owner in the page. Reinstall
+closes and frees that owner first. Keyboard controls focus and target the owned
+canvas; global Window dispatch does not represent canvas input. On a fresh page,
+the canvas-ownership control checks foreign-input exclusion, initial focus,
+callback-entry getters, same-target observers, propagation/default cancellation,
+duplicate-owner refusal, repeated close, immediate capture retirement and reopen.
+It keeps the embedder's canvas after teardown.
+
+The dispatch control compares all keyboard result bits for both states,
+cancelable/noncancelable and already-cancelled sources. The rollback control
+makes a mandatory add install its listener and then throw, checks no Created
+was published and opens a healthy replacement. The frame control runs the
+actual platform RAF source without GPU setup: its old callback reopens through
+the same owner, the old receipt cannot publish a redraw for the newer slot,
+and the new frame publishes one healthy redraw before closing. Run each in a
+fresh page. These checks establish DOM/owner behavior, not host idle pacing.
+
 Run each callback check in a fresh page with an external deadline. A backend
 that calls a handler while holding its mutex can block or abort the wasm
 instance before the page can report a result. The fixture exercises reentrant

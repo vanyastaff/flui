@@ -3,7 +3,7 @@
 //! Registers DOM event listeners on the canvas and converts browser events
 //! into FLUI's owned PlatformInput types.
 
-use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
+use std::{rc::Rc, sync::Arc};
 
 use flui_foundation::geometry::{Point, Size};
 use flui_platform_api::{
@@ -26,22 +26,27 @@ use wasm_bindgen::prelude::*;
 
 use crate::{shared::WindowCallbacks, traits::PlatformInput};
 
-use super::window::WebWindow;
+use super::{
+    registration::{Registration, effective_focus},
+    window::WebWindow,
+};
 
 /// Register all DOM event listeners on the canvas.
 ///
-/// Closures are intentionally leaked via `forget()` — they must live for the
-/// lifetime of the page because DOM event listeners hold references to them.
-pub fn register_event_listeners(window: &WebWindow) {
+/// Failure rolls back the installed prefix through the registration's Drop.
+pub(super) fn register_event_listeners(
+    window: &WebWindow,
+    registration: &mut Registration,
+) -> Result<(), crate::OpenWindowError> {
     let canvas = window.canvas();
     let callbacks = Arc::clone(window.callbacks());
 
-    register_pointer_events(canvas, &callbacks);
-    register_keyboard_events(&callbacks);
-    register_focus_events(canvas, &callbacks);
-    register_wheel_events(canvas, &callbacks);
-    register_context_menu_block(canvas);
-    register_layout_events(window);
+    register_pointer_events(canvas, &callbacks, registration)?;
+    register_keyboard_events(canvas, &callbacks, registration)?;
+    register_focus_events(window, registration)?;
+    register_wheel_events(canvas, &callbacks, registration)?;
+    register_context_menu_block(canvas, registration)?;
+    register_layout_events(window, registration)
 }
 
 // ==================== Layout (size) ====================
@@ -54,45 +59,25 @@ pub fn register_event_listeners(window: &WebWindow) {
 /// the device pixel ratio without necessarily moving the box, and the
 /// observer reports boxes, not ratios. `LayoutSync::sync` is a no-op when
 /// nothing changed, so the two overlapping sources cost nothing.
-fn register_layout_events(window: &WebWindow) {
-    let sync = Arc::new(window.layout_sync());
-
-    {
-        let sync = Arc::clone(&sync);
-        // The observer passes (entries, observer); neither is needed — the
-        // sync re-reads the live box — so the closure takes no arguments,
-        // which JavaScript permits.
-        let closure = Closure::<dyn FnMut()>::new(move || sync.sync());
-        match web_sys::ResizeObserver::new(closure.as_ref().unchecked_ref()) {
-            Ok(observer) => {
-                observer.observe(window.canvas());
-                // The observer lives as long as the page, like every other
-                // listener here; dropping the handle does not disconnect it.
-                std::mem::forget(observer);
-                closure.forget();
-            }
-            Err(error) => {
-                tracing::warn!(
-                    ?error,
-                    "ResizeObserver unavailable; canvas size follows the window's resize event only"
-                );
-            }
-        }
-    }
-
-    if let Some(browser_window) = web_sys::window() {
-        let closure =
-            Closure::<dyn FnMut(web_sys::Event)>::new(move |_: web_sys::Event| sync.sync());
-        let _ = browser_window
-            .add_event_listener_with_callback("resize", closure.as_ref().unchecked_ref());
-        closure.forget();
-    }
+fn register_layout_events(
+    window: &WebWindow,
+    registration: &mut Registration,
+) -> Result<(), crate::OpenWindowError> {
+    let sync = Rc::new(window.layout_sync());
+    let observer_sync = Rc::clone(&sync);
+    registration.observe(move || observer_sync.sync())?;
+    let browser = web_sys::window().expect("BUG: window construction verified browser environment");
+    registration.listen(browser.as_ref(), "resize", move |_| sync.sync())
 }
 
 // ==================== Pointer Events ====================
 
-fn register_pointer_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<WindowCallbacks>) {
-    let active = Rc::new(RefCell::new(HashMap::new()));
+fn register_pointer_events(
+    canvas: &web_sys::HtmlCanvasElement,
+    callbacks: &Arc<WindowCallbacks>,
+    registration: &mut Registration,
+) -> Result<(), crate::OpenWindowError> {
+    let active = Rc::clone(&registration.pointers);
     // DOM getters and application callbacks can synchronously dispatch another
     // pointer event. Listener captures are immutable; mutable state is scoped
     // inside the active-pointer cell instead of the JavaScript closure.
@@ -101,7 +86,7 @@ fn register_pointer_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<
         let callbacks = Arc::clone(callbacks);
         let active = Rc::clone(&active);
         let capture = canvas.clone();
-        let closure = Closure::<dyn Fn(web_sys::Event)>::new(move |e: web_sys::Event| {
+        registration.listen(canvas.as_ref(), "pointerdown", move |e: web_sys::Event| {
             let pe: web_sys::PointerEvent = e.unchecked_into();
             let id = pe.pointer_id();
             let buttons = pe.buttons();
@@ -115,17 +100,14 @@ fn register_pointer_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<
             if let Some(input) = input {
                 callbacks.dispatch_input(input);
             }
-        });
-        let _ = canvas
-            .add_event_listener_with_callback("pointerdown", closure.as_ref().unchecked_ref());
-        closure.forget();
+        })?;
     }
 
     // pointermove
     {
         let callbacks = Arc::clone(callbacks);
         let active = Rc::clone(&active);
-        let closure = Closure::<dyn Fn(web_sys::Event)>::new(move |e: web_sys::Event| {
+        registration.listen(canvas.as_ref(), "pointermove", move |e: web_sys::Event| {
             let pe: web_sys::PointerEvent = e.unchecked_into();
             let id = pe.pointer_id();
             let buttons = pe.buttons();
@@ -137,10 +119,7 @@ fn register_pointer_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<
             if let Some(input) = input {
                 callbacks.dispatch_input(input);
             }
-        });
-        let _ = canvas
-            .add_event_listener_with_callback("pointermove", closure.as_ref().unchecked_ref());
-        closure.forget();
+        })?;
     }
 
     // pointerup
@@ -148,7 +127,7 @@ fn register_pointer_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<
         let callbacks = Arc::clone(callbacks);
         let active = Rc::clone(&active);
         let capture = canvas.clone();
-        let closure = Closure::<dyn Fn(web_sys::Event)>::new(move |e: web_sys::Event| {
+        registration.listen(canvas.as_ref(), "pointerup", move |e: web_sys::Event| {
             let pe: web_sys::PointerEvent = e.unchecked_into();
             let id = pe.pointer_id();
             let was_active = active.borrow_mut().remove(&id).is_some();
@@ -160,10 +139,7 @@ fn register_pointer_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<
             if let Some(input) = input {
                 callbacks.dispatch_input(input);
             }
-        });
-        let _ =
-            canvas.add_event_listener_with_callback("pointerup", closure.as_ref().unchecked_ref());
-        closure.forget();
+        })?;
     }
 
     // A browser gesture takeover is a terminal event even when no release
@@ -172,164 +148,138 @@ fn register_pointer_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<
         let callbacks = Arc::clone(callbacks);
         let active = Rc::clone(&active);
         let capture = canvas.clone();
-        let closure = Closure::<dyn Fn(web_sys::Event)>::new(move |e: web_sys::Event| {
-            let pe: web_sys::PointerEvent = e.unchecked_into();
-            let id = pe.pointer_id();
-            let was_active = active.borrow_mut().remove(&id).is_some();
-            if !was_active {
-                return;
-            }
-            release_pointer_capture(&capture, id);
-            if let Some(input) = convert_pointer_cancel(&pe, CancelReason::Platform) {
-                callbacks.dispatch_input(input);
-            }
-        });
-        let _ = canvas
-            .add_event_listener_with_callback("pointercancel", closure.as_ref().unchecked_ref());
-        closure.forget();
+        registration.listen(
+            canvas.as_ref(),
+            "pointercancel",
+            move |e: web_sys::Event| {
+                let pe: web_sys::PointerEvent = e.unchecked_into();
+                let id = pe.pointer_id();
+                let was_active = active.borrow_mut().remove(&id).is_some();
+                if !was_active {
+                    return;
+                }
+                release_pointer_capture(&capture, id);
+                if let Some(input) = convert_pointer_cancel(&pe, CancelReason::Platform) {
+                    callbacks.dispatch_input(input);
+                }
+            },
+        )?;
     }
 
     {
         let callbacks = Arc::clone(callbacks);
-        let closure = Closure::<dyn Fn(web_sys::Event)>::new(move |e: web_sys::Event| {
-            let pe: web_sys::PointerEvent = e.unchecked_into();
-            let id = pe.pointer_id();
-            // Up/cancel removes admission before releasing capture. The loss
-            // notification following that terminal edge must stay inert.
-            let was_active = active.borrow_mut().remove(&id).is_some();
-            if was_active
-                && let Some(input) = convert_pointer_cancel(&pe, CancelReason::CaptureLost)
-            {
-                callbacks.dispatch_input(input);
-            }
-        });
-        let _ = canvas.add_event_listener_with_callback(
+        registration.listen(
+            canvas.as_ref(),
             "lostpointercapture",
-            closure.as_ref().unchecked_ref(),
-        );
-        closure.forget();
+            move |e: web_sys::Event| {
+                let pe: web_sys::PointerEvent = e.unchecked_into();
+                let id = pe.pointer_id();
+                // Up/cancel removes admission before releasing capture. The loss
+                // notification following that terminal edge must stay inert.
+                let was_active = active.borrow_mut().remove(&id).is_some();
+                if was_active
+                    && let Some(input) = convert_pointer_cancel(&pe, CancelReason::CaptureLost)
+                {
+                    callbacks.dispatch_input(input);
+                }
+            },
+        )?;
     }
+    Ok(())
 }
 
-fn release_pointer_capture(canvas: &web_sys::HtmlCanvasElement, pointer: i32) {
-    if canvas.has_pointer_capture(pointer)
-        && let Err(error) = canvas.release_pointer_capture(pointer)
-    {
+pub(super) fn release_pointer_capture(canvas: &web_sys::HtmlCanvasElement, pointer: i32) {
+    if let Err(error) = super::registration::release_capture(canvas, pointer) {
         tracing::debug!(?error, "browser pointer capture release failed");
     }
 }
 
 // ==================== Keyboard Events ====================
 
-fn register_keyboard_events(callbacks: &Arc<WindowCallbacks>) {
-    let browser_window = web_sys::window().expect("no global window");
-
-    // keydown
-    {
+fn register_keyboard_events(
+    canvas: &web_sys::HtmlCanvasElement,
+    callbacks: &Arc<WindowCallbacks>,
+    registration: &mut Registration,
+) -> Result<(), crate::OpenWindowError> {
+    for (kind, state) in [("keydown", KeyState::Down), ("keyup", KeyState::Up)] {
         let callbacks = Arc::clone(callbacks);
-        let closure = Closure::<dyn Fn(web_sys::Event)>::new(move |e: web_sys::Event| {
-            let ke: web_sys::KeyboardEvent = e.unchecked_into();
-            let input = convert_keyboard_event(&ke, KeyState::Down);
-            callbacks.dispatch_input(input);
-        });
-        let _ = browser_window
-            .add_event_listener_with_callback("keydown", closure.as_ref().unchecked_ref());
-        closure.forget();
+        let target = canvas.clone();
+        let accepting = Rc::clone(&registration.accepting);
+        registration.listen(canvas.as_ref(), kind, move |event| {
+            if !effective_focus(&target) || event.target().as_ref() != Some(target.as_ref()) {
+                return;
+            }
+            if !accepting.get() {
+                return;
+            }
+            let input = convert_keyboard_event(event.unchecked_ref(), state);
+            // DOM getters can close this registration before callback admission.
+            if !accepting.get() {
+                return;
+            }
+            let result = callbacks.dispatch_input(input);
+            if !result.propagate {
+                event.stop_propagation();
+            }
+            if result.default_prevented {
+                event.prevent_default();
+            }
+        })?;
     }
-
-    // keyup
-    {
-        let callbacks = Arc::clone(callbacks);
-        let closure = Closure::<dyn Fn(web_sys::Event)>::new(move |e: web_sys::Event| {
-            let ke: web_sys::KeyboardEvent = e.unchecked_into();
-            let input = convert_keyboard_event(&ke, KeyState::Up);
-            callbacks.dispatch_input(input);
-        });
-        let _ = browser_window
-            .add_event_listener_with_callback("keyup", closure.as_ref().unchecked_ref());
-        closure.forget();
-    }
+    Ok(())
 }
 
 // ==================== Focus Events ====================
 
-fn register_focus_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<WindowCallbacks>) {
-    // focus
-    {
-        let callbacks = Arc::clone(callbacks);
-        let closure = Closure::<dyn FnMut(web_sys::Event)>::new(move |_: web_sys::Event| {
-            callbacks.dispatch_active_status_change(true);
-        });
-        let _ = canvas.add_event_listener_with_callback("focus", closure.as_ref().unchecked_ref());
-        closure.forget();
+fn register_focus_events(
+    window: &WebWindow,
+    registration: &mut Registration,
+) -> Result<(), crate::OpenWindowError> {
+    let focus = Rc::new(window.focus_sync());
+    let browser = web_sys::window().expect("BUG: construction verified browser");
+    for target in [window.canvas().as_ref(), browser.as_ref()] {
+        for kind in ["focus", "blur"] {
+            let focus = Rc::clone(&focus);
+            registration.listen(target, kind, move |_| focus.sync())?;
+        }
     }
-
-    // blur
-    {
-        let callbacks = Arc::clone(callbacks);
-        let closure = Closure::<dyn FnMut(web_sys::Event)>::new(move |_: web_sys::Event| {
-            callbacks.dispatch_active_status_change(false);
-        });
-        let _ = canvas.add_event_listener_with_callback("blur", closure.as_ref().unchecked_ref());
-        closure.forget();
+    for (kind, hovered) in [("pointerenter", true), ("pointerleave", false)] {
+        let callbacks = Arc::clone(window.callbacks());
+        registration.listen(window.canvas().as_ref(), kind, move |_| {
+            callbacks.dispatch_hover_status_change(hovered)
+        })?;
     }
-
-    // pointerenter → hover
-    {
-        let callbacks = Arc::clone(callbacks);
-        let closure = Closure::<dyn FnMut(web_sys::Event)>::new(move |_: web_sys::Event| {
-            callbacks.dispatch_hover_status_change(true);
-        });
-        let _ = canvas
-            .add_event_listener_with_callback("pointerenter", closure.as_ref().unchecked_ref());
-        closure.forget();
-    }
-
-    // pointerleave → hover
-    {
-        let callbacks = Arc::clone(callbacks);
-        let closure = Closure::<dyn FnMut(web_sys::Event)>::new(move |_: web_sys::Event| {
-            callbacks.dispatch_hover_status_change(false);
-        });
-        let _ = canvas
-            .add_event_listener_with_callback("pointerleave", closure.as_ref().unchecked_ref());
-        closure.forget();
-    }
+    Ok(())
 }
 
 // ==================== Wheel Events ====================
 
-fn register_wheel_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<WindowCallbacks>) {
+fn register_wheel_events(
+    canvas: &web_sys::HtmlCanvasElement,
+    callbacks: &Arc<WindowCallbacks>,
+    registration: &mut Registration,
+) -> Result<(), crate::OpenWindowError> {
     let callbacks = Arc::clone(callbacks);
     let target = canvas.clone();
-    let closure = Closure::<dyn Fn(web_sys::Event)>::new(move |e: web_sys::Event| {
+    registration.listen(canvas.as_ref(), "wheel", move |e: web_sys::Event| {
         e.prevent_default();
         let we: web_sys::WheelEvent = e.unchecked_into();
         let input = convert_wheel_event(&we, &target);
         if let Some(input) = input {
             callbacks.dispatch_input(input);
         }
-    });
-
-    let options = web_sys::AddEventListenerOptions::new();
-    options.set_passive(false); // Non-passive to allow preventDefault
-    let _ = canvas.add_event_listener_with_callback_and_add_event_listener_options(
-        "wheel",
-        closure.as_ref().unchecked_ref(),
-        &options,
-    );
-    closure.forget();
+    })
 }
 
 // ==================== Context Menu Block ====================
 
-fn register_context_menu_block(canvas: &web_sys::HtmlCanvasElement) {
-    let closure = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
+fn register_context_menu_block(
+    canvas: &web_sys::HtmlCanvasElement,
+    registration: &mut Registration,
+) -> Result<(), crate::OpenWindowError> {
+    registration.listen(canvas.as_ref(), "contextmenu", move |e: web_sys::Event| {
         e.prevent_default();
-    });
-    let _ =
-        canvas.add_event_listener_with_callback("contextmenu", closure.as_ref().unchecked_ref());
-    closure.forget();
+    })
 }
 
 // ==================== Event Conversion ====================

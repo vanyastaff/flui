@@ -321,7 +321,7 @@ enum WindowCallbackEvent {
     Resize(Size<f64>, f64),
     Moved,
     Close,
-    Active(bool),
+    Active(bool, Option<Box<dyn FnOnce() + Send>>),
     Execution(WindowExecutionState),
     Visibility(bool),
     Hover(bool),
@@ -379,6 +379,13 @@ impl<'a, E> DispatchDrain<'a, E> {
         state.dispatching = false;
         self.active = false;
         None
+    }
+
+    fn abort(&mut self) -> VecDeque<E> {
+        let mut state = self.state.lock();
+        state.dispatching = false;
+        self.active = false;
+        std::mem::take(&mut state.pending)
     }
 }
 
@@ -472,7 +479,14 @@ impl<T> Drop for CallbackLease<'_, T> {
             // may re-enter platform code that locks this same
             // (non-reentrant) mutex.
             drop(slot);
-            drop(callback);
+            if std::thread::panicking() {
+                // An invocation failure remains authoritative. Retire this
+                // individual outgoing capture after releasing its slot guard;
+                // its destructor must not abort the original unwind.
+                super::panic_boundary::contain_owner_callback(|| drop(callback));
+            } else {
+                drop(callback);
+            }
             return;
         }
         *slot = Some(callback);
@@ -592,8 +606,8 @@ impl WindowCallbacks {
     /// running callback returns and the queued clear runs, not when this call
     /// returns: a backend uses it to order a notice after the release of what
     /// those callbacks own (a renderer and its surface). If the running
-    /// callback unwinds, its drain discards the queued clear and the notice
-    /// with it, since nothing was retired.
+    /// callback unwinds, terminal clear and retirement notices still finish;
+    /// ordinary nested events from the aborted transaction are discarded.
     pub fn clear_then(&self, on_retired: impl FnOnce() + Send + 'static) {
         self.clear_with(Some(Box::new(on_retired)));
     }
@@ -660,6 +674,31 @@ impl WindowCallbacks {
         &self,
         mut drain: DispatchDrain<'_, WindowCallbackEvent>,
     ) -> Option<DispatchEventResult> {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.drain_event_loop(&mut drain)
+        })) {
+            Ok(result) => result,
+            Err(failure) => {
+                let pending = drain.abort();
+                if self.lifecycle_closed.load(Ordering::SeqCst) {
+                    self.clear_now();
+                }
+                for event in pending {
+                    if let WindowCallbackEvent::Clear(Some(retired)) = event {
+                        super::panic_boundary::contain_owner_callback(retired);
+                    } else {
+                        super::panic_boundary::contain_owner_callback(|| drop(event));
+                    }
+                }
+                std::panic::resume_unwind(failure);
+            }
+        }
+    }
+
+    fn drain_event_loop(
+        &self,
+        drain: &mut DispatchDrain<'_, WindowCallbackEvent>,
+    ) -> Option<DispatchEventResult> {
         let mut input_result = None;
         while let Some(event) = drain.next() {
             match event {
@@ -711,7 +750,10 @@ impl WindowCallbacks {
                         callback(state);
                     }
                 }
-                WindowCallbackEvent::Active(is_active) => {
+                WindowCallbackEvent::Active(is_active, commit) => {
+                    if let Some(commit) = commit {
+                        commit();
+                    }
                     let mut lease =
                         CallbackLease::take(&self.on_active_status_change, &self.cleared);
                     if let Some(callback) = lease.callback_mut() {
@@ -867,9 +909,27 @@ impl WindowCallbacks {
 
     /// Dispatch active status change (focus gained/lost).
     pub fn dispatch_active_status_change(&self, is_active: bool) {
-        let Some(drain) =
-            DispatchDrain::begin(&self.event_dispatch, WindowCallbackEvent::Active(is_active))
-        else {
+        let Some(drain) = DispatchDrain::begin(
+            &self.event_dispatch,
+            WindowCallbackEvent::Active(is_active, None),
+        ) else {
+            return;
+        };
+        self.drain_events(drain);
+    }
+
+    /// Publish a backend observation at its causal delivery point, so getters
+    /// inside a queued focus callback describe that callback's own observation.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn dispatch_focus_observation(
+        &self,
+        focused: bool,
+        commit: impl FnOnce() + Send + 'static,
+    ) {
+        let Some(drain) = DispatchDrain::begin(
+            &self.event_dispatch,
+            WindowCallbackEvent::Active(focused, Some(Box::new(commit))),
+        ) else {
             return;
         };
         self.drain_events(drain);

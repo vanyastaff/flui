@@ -51,6 +51,44 @@ trait depends on `flui-platform-api` instead.
 
 ## Mapping decisions
 
+### Web subscriptions belong to one actual canvas registration
+
+The canvas owns an exact DOM-object registration claim. Another live owner of
+that same node is refused before modifying its layout or title; identifiers
+and labels are not ownership. Keyboard listeners on the canvas require both
+that source target and effective document/root focus before reading key data.
+The existing dispatch result independently controls ancestor propagation and
+cancelable defaults. A moved canvas retains ownership inside open or closed
+shadow DOM; unrelated host inputs remain outside it.
+
+Each private immutable Fn token owns its body and exact removal identity. JS
+wrappers hold weak body references. Close fences delivery before detaching all
+subscriptions and disconnecting the resize observer, and preserves admitted
+callback/close order through the existing window FIFO. Final owner Drop uses
+the same idempotent retirement. A refused detach transfers only its inert
+weak wrapper to wasm-bindgen's managed JS lifetime; application captures still
+retire. Normal removal drops the token without page-lifetime retention.
+Installation rolls back its prefix before Created. ResizeObserver absence uses
+the explicit window-resize fallback; failure of that mandatory fallback refuses
+opening. The platform frame slot retires by callback-set identity, so stale
+owners cannot erase replacements or publish redraws.
+
+Native focus observations carry their cache commit in the existing FIFO. A
+queued callback therefore observes its own delivered value through getters,
+even when input or focus callbacks synchronously trigger opposing transitions.
+Terminal clear and retirement notices finish after an admitted callback unwinds;
+ordinary nested events from the aborted transaction remain discarded. The
+portable `panics_in_callbacks_and_tasks_leave_the_dispatcher_usable` family
+pins capture release, the original failure, a competing retirement failure and
+a subsequent healthy owner. It does not establish wasm panic-abort recovery.
+
+The `browser_input_probe` canvas-ownership control and existing vocabulary,
+pointer/wheel and getter-reentry controls exercise real registered DOM delivery
+through retained public handles. Their README gives execution instructions;
+browser compilation alone does not prove these manual contracts. Headless
+source-focus controls are distinct from real system/page focus transitions,
+and constructor events do not establish physical keyboard layouts or OS IME.
+
 ### Native text sizing captures conversion inputs on the owner lane
 
 `HostWindow` and `OwnerPlatform` acquire an owner-local `CapturedTextSizing`;

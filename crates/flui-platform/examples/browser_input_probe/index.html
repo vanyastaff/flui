@@ -14,6 +14,10 @@ pre { position: relative; z-index: 9999; background: white; width: max-content; 
   <button id="fractional">Check fractional positions</button>
   <button id="owned-wheel">Check wheel units and precision</button>
   <button id="owned-keyboard">Check Web key vocabulary and Unicode</button>
+  <button id="canvas-ownership">Check canvas ownership and recovery (fresh page)</button>
+  <button id="keyboard-dispatch">Check independent keyboard dispatch bits (fresh page)</button>
+  <button id="registration-rollback">Check registration rollback (fresh page)</button>
+  <button id="frame-retirement">Check frame retirement and replacement (fresh page)</button>
   <button id="keyboard-getter-reentry">Check keyboard getter reentry (fresh page)</button>
   <button id="wheel-getter-reentry">Check wheel getter reentry (fresh page)</button>
   <button id="pen-samples">Check pen samples</button>
@@ -29,7 +33,7 @@ pre { position: relative; z-index: 9999; background: white; width: max-content; 
 <pre id="loaded">Loading wasm</pre>
 <script type="module">
 import init, {
-  input_probe, display_probe, created_callback_probe, quit_callback_probe,
+  input_probe, keyboard_window_probe, frame_retirement_probe, display_probe, created_callback_probe, quit_callback_probe,
 } from './browser_input_probe.js';
 
 const report = (id, text) => {
@@ -59,7 +63,167 @@ const equal = (actual, expected) => {
 
 await init();
 report('loaded', 'wasm loaded');
-document.getElementById('input').onclick = () => check('input-check', input_probe);
+let inputOwner;
+document.getElementById('input').onclick = () => check('input-check', () => {
+  inputOwner?.close();
+  inputOwner?.free();
+  inputOwner = input_probe();
+});
+document.getElementById('canvas-ownership').onclick = () => check('canvas-ownership-check', () => {
+  if (inputOwner) throw new Error('Run on a fresh page');
+  const host = document.createElement('input');
+  document.body.append(host);
+  host.focus();
+  const owner = keyboard_window_probe('contract', false, true);
+  const canvas = document.querySelector('canvas');
+  equal(JSON.parse(owner.snapshot()), { focused: false, active: false, capture_alive: true });
+  const key = (target, value) => {
+    const event = new KeyboardEvent('keydown', { key: value, bubbles: true, cancelable: true });
+    target.dispatchEvent(event);
+    return event;
+  };
+  let ancestors = 0;
+  let peers = 0;
+  const ancestor = () => { ancestors += 1; };
+  const peer = () => { peers += 1; };
+  document.body.addEventListener('keydown', ancestor);
+  canvas.addEventListener('keydown', peer);
+  try {
+    equal({ prevented: key(host, 'h').defaultPrevented }, { prevented: false });
+    canvas.focus();
+    equal({ prevented: key(canvas, 'q').defaultPrevented }, { prevented: true });
+    equal({ ancestors, peers, keys: document.getElementById('focus-keys-contract')?.textContent }, { ancestors: 1, peers: 1, keys: 'q,' });
+    equal({ focus: document.getElementById('focus-state-contract')?.textContent }, { focus: 'true:true:true,' });
+    let refused = false;
+    try { keyboard_window_probe('duplicate', true, false); } catch { refused = true; }
+    if (!refused) throw new Error('Second live owner was admitted');
+    host.focus();
+    equal({ focus: document.getElementById('focus-state-contract')?.textContent }, { focus: 'true:true:true,false:false:false,' });
+    owner.close();
+    owner.close();
+    equal(JSON.parse(owner.snapshot()), { capture_alive: false });
+    equal({ capture: owner.install_late_input() }, { capture: false });
+    canvas.focus();
+    equal({ prevented: key(canvas, 'r').defaultPrevented }, { prevented: false });
+    const next = owner.reopen('reopened', true, false);
+    try {
+      key(canvas, 's');
+      equal({ old: document.getElementById('focus-keys-contract')?.textContent, next: document.getElementById('focus-keys-reopened')?.textContent }, { old: 'q,', next: 's,' });
+    } finally { next.close(); next.free(); }
+  } finally {
+    document.body.removeEventListener('keydown', ancestor);
+    canvas.removeEventListener('keydown', peer);
+    owner.close(); owner.free(); host.remove();
+  }
+});
+document.getElementById('keyboard-dispatch').onclick = () => check('keyboard-dispatch-check', () => {
+  if (inputOwner) throw new Error('Run on a fresh page');
+  let row = 0;
+  for (const propagate of [false, true]) for (const prevent of [false, true]) {
+    const owner = keyboard_window_probe(`dispatch-${row++}`, propagate, prevent);
+    const canvas = document.querySelector('canvas');
+    canvas.focus();
+    let ancestors = 0;
+    let peers = 0;
+    const ancestor = () => { ancestors += 1; };
+    const peer = () => { peers += 1; };
+    document.body.addEventListener('keydown', ancestor);
+    document.body.addEventListener('keyup', ancestor);
+    canvas.addEventListener('keydown', peer);
+    canvas.addEventListener('keyup', peer);
+    try {
+      for (const type of ['keydown', 'keyup']) for (const cancelable of [false, true]) for (const cancelled of [false, true]) {
+        const source = new KeyboardEvent(type, { key: 'q', bubbles: true, cancelable });
+        if (cancelled) source.preventDefault();
+        const beforeAncestor = ancestors;
+        const beforePeer = peers;
+        const accepted = canvas.dispatchEvent(source);
+        const prevented = cancelable && (prevent || cancelled);
+        equal({ prevented: source.defaultPrevented, accepted, ancestors: ancestors - beforeAncestor, peers: peers - beforePeer }, {
+          prevented, accepted: !prevented, ancestors: Number(propagate), peers: 1,
+        });
+      }
+    } finally {
+      for (const type of ['keydown', 'keyup']) {
+        document.body.removeEventListener(type, ancestor);
+        canvas.removeEventListener(type, peer);
+      }
+      owner.close(); owner.free();
+    }
+  }
+});
+document.getElementById('registration-rollback').onclick = () => check('registration-rollback-check', () => {
+  if (inputOwner) throw new Error('Run on a fresh page');
+  const canvas = document.createElement('canvas');
+  canvas.id = 'flui-canvas';
+  document.body.append(canvas);
+  const original = canvas.addEventListener;
+  let refused = false;
+  canvas.addEventListener = function(type, listener, options) {
+    original.call(this, type, listener, options);
+    if (type === 'keyup') throw new Error('installed prefix failure');
+  };
+  try { keyboard_window_probe('failed', true, false); } catch { refused = true; }
+  finally { canvas.addEventListener = original; }
+  if (!refused || document.getElementById('created-failed')) throw new Error('Partial opening published Created');
+  const next = keyboard_window_probe('retry', true, false);
+  try {
+    canvas.focus();
+    canvas.dispatchEvent(new KeyboardEvent('keydown', { key: 'r' }));
+    equal({ keys: document.getElementById('focus-keys-retry')?.textContent }, { keys: 'r,' });
+  } finally { next.close(); next.free(); }
+});
+document.getElementById('frame-retirement').onclick = async () => {
+  let owner;
+  let timer;
+  report('frame-callbacks', '');
+  report('frame-redraws', '');
+  const callbacks = document.getElementById('frame-callbacks');
+  const redraws = document.getElementById('frame-redraws');
+  const text = Object.getOwnPropertyDescriptor(Node.prototype, 'textContent');
+  try {
+    if (inputOwner) throw new Error('Run on a fresh page');
+    let oldFrames = 0;
+    let newFrames = 0;
+    let complete;
+    const finished = new Promise((resolve, reject) => {
+      complete = resolve;
+      timer = setTimeout(() => reject(new Error('Frame contract timed out')), 3000);
+    });
+    Object.defineProperty(callbacks, 'textContent', {
+      configurable: true,
+      get() { return text.get.call(this); },
+      set(value) {
+        text.set.call(this, value);
+        if (value.endsWith('old,')) {
+          oldFrames += 1;
+          owner.reopen('new');
+        } else if (value.endsWith('new,')) newFrames += 1;
+      },
+    });
+    Object.defineProperty(redraws, 'textContent', {
+      configurable: true,
+      get() { return text.get.call(this); },
+      set(value) {
+        text.set.call(this, value);
+        // The old receipt cannot emit a redraw for the newly installed slot.
+        if (newFrames === 0) throw new Error('Retired receipt published redraw');
+        owner.close();
+        complete();
+      },
+    });
+    owner = frame_retirement_probe('old');
+    await finished;
+    equal({ oldFrames, newFrames, active: owner.platform_active(), redraws: redraws.textContent }, { oldFrames: 1, newFrames: 1, active: false, redraws: 'redraw,' });
+    report('frame-retirement-check', 'PASS');
+  } catch (error) { report('frame-retirement-check', `FAIL: ${error}`); }
+  finally {
+    clearTimeout(timer);
+    delete callbacks.textContent;
+    delete redraws.textContent;
+    owner?.free();
+  }
+};
 document.getElementById('display').onclick = () => check('display-check', () => {
   const actual = JSON.parse(display_probe());
   const expected = {
@@ -126,7 +290,9 @@ document.getElementById('owned-wheel').onclick = () => check('owned-wheel-check'
   }
 });
 document.getElementById('owned-keyboard').onclick = () => check('owned-keyboard-check', () => {
-  if (!document.querySelector('canvas')) throw new Error('Install input first');
+  const canvas = document.querySelector('canvas');
+  if (!canvas) throw new Error('Install input first');
+  canvas.focus();
   for (const [key, expectedKey, key_kind, code, location, expectedLocation] of [
     ['Dead', 'Dead', 'Named', 'Quote', 0, 'Standard'],
     ['AudioVolumeUp', 'AudioVolumeUp', 'Named', 'AudioVolumeUp', 0, 'Standard'],
@@ -175,7 +341,7 @@ document.getElementById('owned-keyboard').onclick = () => check('owned-keyboard-
       });
       equal(source, { key, code, location, repeat: true, isComposing: true });
       report('keyboard', 'null');
-      window.dispatchEvent(source);
+      canvas.dispatchEvent(source);
       equal(JSON.parse(document.getElementById('keyboard').textContent), {
         key: expectedKey, key_kind, code, time: Math.trunc(source.timeStamp * 1_000_000),
         state, location: expectedLocation, repeat, composition: 'Active',
@@ -187,7 +353,7 @@ document.getElementById('owned-keyboard').onclick = () => check('owned-keyboard-
   for (const [type, state] of [['keydown', 'Down'], ['keyup', 'Up']]) {
     const source = new KeyboardEvent(type, { key: 'z', code: 'KeyZ' });
     report('keyboard', 'null');
-    window.dispatchEvent(source);
+    canvas.dispatchEvent(source);
     equal(JSON.parse(document.getElementById('keyboard').textContent), {
       key: 'z', key_kind: 'Character', code: 'KeyZ',
       time: Math.trunc(source.timeStamp * 1_000_000), state, location: 'Standard',
@@ -197,19 +363,21 @@ document.getElementById('owned-keyboard').onclick = () => check('owned-keyboard-
   }
 });
 document.getElementById('keyboard-getter-reentry').onclick = () => check('keyboard-getter-reentry-check', () => {
-  if (!document.querySelector('canvas')) throw new Error('Install input first');
+  const canvas = document.querySelector('canvas');
+  if (!canvas) throw new Error('Install input first');
+  canvas.focus();
   report('keyboard-sequence', '');
   const outer = new KeyboardEvent('keydown', { key: 'q', code: 'KeyQ' });
   let reads = 0;
   Object.defineProperty(outer, 'key', { get() {
     reads += 1;
-    if (reads === 1) window.dispatchEvent(new KeyboardEvent('keydown', { key: 'r', code: 'KeyR' }));
+    if (reads === 1) canvas.dispatchEvent(new KeyboardEvent('keydown', { key: 'r', code: 'KeyR' }));
     return 'q';
   } });
-  window.dispatchEvent(outer);
+  canvas.dispatchEvent(outer);
   equal({ reads, sequence: document.getElementById('keyboard-sequence').textContent }, { reads: 1, sequence: 'r,q,' });
-  window.dispatchEvent(new KeyboardEvent('keyup', { key: 'q', code: 'KeyQ' }));
-  window.dispatchEvent(new KeyboardEvent('keydown', { key: 's', code: 'KeyS' }));
+  canvas.dispatchEvent(new KeyboardEvent('keyup', { key: 'q', code: 'KeyQ' }));
+  canvas.dispatchEvent(new KeyboardEvent('keydown', { key: 's', code: 'KeyS' }));
   equal({ sequence: document.getElementById('keyboard-sequence').textContent }, { sequence: 'r,q,q,s,' });
 });
 document.getElementById('wheel-getter-reentry').onclick = () => check('wheel-getter-reentry-check', () => {
