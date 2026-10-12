@@ -1292,11 +1292,12 @@ fn nested_public_held_release_retirement_precedes_later_callback_failure() {
     );
 }
 
-fn an_open_deadline_poll_preserves_nested_retirement_before_its_later_panic() {
+fn open_deadline_poll_with_nested_retirement(panic_after_retirement: bool) {
     struct NestedPollMember {
         arena: flui_interaction::GestureArena,
         due: Instant,
         polls: Rc<Cell<usize>>,
+        panic_after_retirement: bool,
     }
 
     impl GestureArenaMember for NestedPollMember {
@@ -1308,7 +1309,10 @@ fn an_open_deadline_poll_preserves_nested_retirement_before_its_later_panic() {
         fn poll_deadline(&self, _: Instant) {
             self.polls.set(self.polls.get() + 1);
             self.arena.abandon(pointer(2));
-            panic!("later open deadline poll failure");
+            assert!(
+                !self.panic_after_retirement,
+                "later open deadline poll failure"
+            );
         }
     }
 
@@ -1319,6 +1323,7 @@ fn an_open_deadline_poll_preserves_nested_retirement_before_its_later_panic() {
         arena: binding.arena().clone(),
         due: clock.now(),
         polls: Rc::clone(&polls),
+        panic_after_retirement,
     });
     let _deadline_entry = binding.arena().add(pointer(1), &member);
     let child_owner = Rc::new(RefCell::new(None));
@@ -1358,7 +1363,7 @@ fn an_open_deadline_poll_preserves_nested_retirement_before_its_later_panic() {
     assert_eq!(
         flui_foundation::panic::payload_text(failure.payload()),
         Some("opaque arena member retirement"),
-        "the nested failure predates the open poll's escaped payload"
+        "the nested retirement remains the first failure of the open poll"
     );
     assert_eq!(polls.get(), 1);
     assert!(!sample(&binding, clock.now()));
@@ -1382,6 +1387,14 @@ fn an_open_deadline_poll_preserves_nested_retirement_before_its_later_panic() {
     assert_eq!(notices.get(), 1, "the next independent verdict is delivered");
     assert!(owner.borrow().is_none());
     assert_eq!(drops.get(), 1, "the next operation keeps ordinary retirement");
+}
+
+fn an_open_deadline_poll_preserves_nested_retirement_before_its_later_panic() {
+    open_deadline_poll_with_nested_retirement(true);
+}
+
+fn a_returning_open_deadline_poll_quarantines_its_nested_unknown_retirement() {
+    open_deadline_poll_with_nested_retirement(false);
 }
 
 #[test]
@@ -1543,6 +1556,10 @@ fn owner_deadline_recovery_matrix() {
         (
             "an_open_deadline_poll_preserves_nested_retirement_before_its_later_panic",
             an_open_deadline_poll_preserves_nested_retirement_before_its_later_panic as fn(),
+        ),
+        (
+            "a_returning_open_deadline_poll_quarantines_its_nested_unknown_retirement",
+            a_returning_open_deadline_poll_quarantines_its_nested_unknown_retirement as fn(),
         ),
     ] {
         if let Err(payload) = std::panic::catch_unwind(case) {
