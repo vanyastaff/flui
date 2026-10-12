@@ -447,6 +447,8 @@ language-tags = "0.3.2"
 # A character's Unicode script, for the painting test harness's
 # fallback-coverage query. The copy Parley already builds.
 icu_properties = { version = "2.3", default-features = false, features = ["compiled_data"] }
+# Web logical-key admission uses the same ICU4X data cohort for NFC and combining classes.
+icu_normalizer = { version = "2.3", default-features = false, features = ["compiled_data"] }
 # Parley shaping and measurement (ADR-0092 §10).
 # No `system`: fontique's host scan reaches `windows`, which tier S forbids.
 parley = { version = "0.11.1", default-features = false, features = ["std"] }

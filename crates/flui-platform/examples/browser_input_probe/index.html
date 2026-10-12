@@ -13,7 +13,7 @@ pre { position: relative; z-index: 9999; background: white; width: max-content; 
   <button id="capture-loss">Check capture loss</button>
   <button id="fractional">Check fractional positions</button>
   <button id="owned-wheel">Check wheel units and precision</button>
-  <button id="owned-keyboard">Check native key vocabulary</button>
+  <button id="owned-keyboard">Check Web key vocabulary and Unicode</button>
   <button id="keyboard-getter-reentry">Check keyboard getter reentry (fresh page)</button>
   <button id="wheel-getter-reentry">Check wheel getter reentry (fresh page)</button>
   <button id="pen-samples">Check pen samples</button>
@@ -126,25 +126,73 @@ document.getElementById('owned-wheel').onclick = () => check('owned-wheel-check'
   }
 });
 document.getElementById('owned-keyboard').onclick = () => check('owned-keyboard-check', () => {
-  for (const [key, expectedKey, code, location, expectedLocation] of [
-    ['Dead', 'Dead', 'Quote', 0, 'Standard'],
-    ['AudioVolumeUp', 'AudioVolumeUp', 'AudioVolumeUp', 0, 'Standard'],
-    ['Enter', 'Enter', 'NumpadEnter', 3, 'Numpad'],
-    ['ж', 'ж', 'KeyA', 0, 'Standard'],
-    ['Hyper', 'Meta', 'MetaLeft', 1, 'Left'],
-    ['Super', 'Meta', 'MetaRight', 2, 'Right'],
+  if (!document.querySelector('canvas')) throw new Error('Install input first');
+  for (const [key, expectedKey, key_kind, code, location, expectedLocation] of [
+    ['Dead', 'Dead', 'Named', 'Quote', 0, 'Standard'],
+    ['AudioVolumeUp', 'AudioVolumeUp', 'Named', 'AudioVolumeUp', 0, 'Standard'],
+    ['Enter', 'Enter', 'Named', 'NumpadEnter', 3, 'Numpad'],
+    ['Tab', 'Tab', 'Named', 'Tab', 0, 'Standard'],
+    ['Hyper', 'Meta', 'Named', 'MetaLeft', 1, 'Left'],
+    ['Super', 'Meta', 'Named', 'MetaRight', 2, 'Right'],
+    ['a', 'a', 'Character', 'KeyA', 0, 'Standard'],
+    ['ж', 'ж', 'Character', 'KeyA', 0, 'Standard'],
+    ['😀', '😀', 'Character', 'KeyA', 0, 'Standard'],
+    [' ', ' ', 'Character', 'Space', 0, 'Standard'],
+    ['\u200c', '\u200c', 'Character', 'KeyA', 0, 'Standard'],
+    ['ﬃ', 'ﬃ', 'Character', 'KeyA', 0, 'Standard'],
+    ['"', '"', 'Character', 'Quote', 0, 'Standard'],
+    ['\\', '\\', 'Character', 'Backslash', 0, 'Standard'],
+    ['\u1e0d\u0307', '\u1e0d\u0307', 'Character', 'KeyD', 0, 'Standard'],
+    ['\u0915\u093e', '\u0915\u093e', 'Character', 'KeyK', 0, 'Standard'],
+    ['\u0301', '\u0301', 'Character', 'KeyA', 0, 'Standard'],
+    ['\u0301\u0307', '\u0301\u0307', 'Character', 'KeyA', 0, 'Standard'],
+    ['\u093e', '\u093e', 'Character', 'KeyA', 0, 'Standard'],
+    ['\u093e\u093e', '\u093e\u093e', 'Character', 'KeyA', 0, 'Standard'],
+    ['FutureKey', 'Unidentified', 'Named', 'KeyA', 0, 'Standard'],
+    ['', 'Unidentified', 'Named', 'KeyA', 0, 'Standard'],
+    ['ab', 'Unidentified', 'Named', 'KeyA', 0, 'Standard'],
+    ['e\u0301', 'Unidentified', 'Named', 'KeyE', 0, 'Standard'],
+    ['\u0301a', 'Unidentified', 'Named', 'KeyA', 0, 'Standard'],
+    ['a\u200c', 'Unidentified', 'Named', 'KeyA', 0, 'Standard'],
+    ['a\ufe0f', 'Unidentified', 'Named', 'KeyA', 0, 'Standard'],
+    ['\u0307\u0323', 'Unidentified', 'Named', 'KeyA', 0, 'Standard'],
+    ['\u0000', 'Unidentified', 'Named', 'KeyA', 0, 'Standard'],
+    ['\u0009', 'Unidentified', 'Named', 'Tab', 0, 'Standard'],
+    ['\u007f', 'Unidentified', 'Named', 'KeyA', 0, 'Standard'],
+    ['\u0085', 'Unidentified', 'Named', 'KeyA', 0, 'Standard'],
+    ['a\u0000', 'Unidentified', 'Named', 'KeyA', 0, 'Standard'],
+    ['\ud800', 'Unidentified', 'Named', 'KeyA', 0, 'Standard'],
+    ['\udc00', 'Unidentified', 'Named', 'KeyA', 0, 'Standard'],
+    ['\ufffd', '\ufffd', 'Character', 'KeyA', 0, 'Standard'],
+    ['z', 'z', 'Character', 'KeyZ', 0, 'Standard'],
   ]) {
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      key, code, location, repeat: true, isComposing: true, shiftKey: true,
-    }));
+    for (const [type, state, repeat] of [
+      ['keydown', 'Down', 'AutoRepeat'], ['keyup', 'Up', 'First'],
+    ]) {
+      const source = new KeyboardEvent(type, {
+        key, code, location, repeat: true, isComposing: true,
+        shiftKey: true, ctrlKey: true, altKey: true, metaKey: true,
+      });
+      equal(source, { key, code, location, repeat: true, isComposing: true });
+      report('keyboard', 'null');
+      window.dispatchEvent(source);
+      equal(JSON.parse(document.getElementById('keyboard').textContent), {
+        key: expectedKey, key_kind, code, time: Math.trunc(source.timeStamp * 1_000_000),
+        state, location: expectedLocation, repeat, composition: 'Active',
+        shift: true, control: true, alt: true, meta: true,
+      });
+    }
+  }
+  // A refused key must not leave composition, modifiers or repeat on the next event.
+  for (const [type, state] of [['keydown', 'Down'], ['keyup', 'Up']]) {
+    const source = new KeyboardEvent(type, { key: 'z', code: 'KeyZ' });
+    report('keyboard', 'null');
+    window.dispatchEvent(source);
     equal(JSON.parse(document.getElementById('keyboard').textContent), {
-      key: expectedKey, code, state: 'Down', location: expectedLocation,
-      repeat: 'AutoRepeat', composition: 'Active', shift: true,
-    });
-    window.dispatchEvent(new KeyboardEvent('keyup', { key, code, location }));
-    equal(JSON.parse(document.getElementById('keyboard').textContent), {
-      key: expectedKey, code, state: 'Up', location: expectedLocation,
-      repeat: 'First', composition: 'Inactive', shift: false,
+      key: 'z', key_kind: 'Character', code: 'KeyZ',
+      time: Math.trunc(source.timeStamp * 1_000_000), state, location: 'Standard',
+      repeat: 'First', composition: 'Inactive',
+      shift: false, control: false, alt: false, meta: false,
     });
   }
 });

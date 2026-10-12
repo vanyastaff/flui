@@ -251,6 +251,7 @@ fn focus_actions_and_shortcuts() {
             ("shortcuts::activation_tests::enter_space_and_select_activate_the_focused_control", crate::shortcuts::activation_tests::enter_space_and_select_activate_the_focused_control),
             ("shortcuts::activator_tests::a_shift_produced_character_matches_when_shift_is_ignored", crate::shortcuts::activator_tests::a_shift_produced_character_matches_when_shift_is_ignored),
             ("shortcuts::intent_tests::a_shortcut_dispatches_its_intent_through_the_actions_chain", crate::shortcuts::intent_tests::a_shortcut_dispatches_its_intent_through_the_actions_chain),
+            ("shortcuts::intent_tests::a_multiscalar_character_shortcut_reaches_the_focused_action", crate::shortcuts::intent_tests::a_multiscalar_character_shortcut_reaches_the_focused_action),
             ("shortcuts::tab_tests::tab_and_shift_tab_move_the_focus_through_the_actions_chain", crate::shortcuts::tab_tests::tab_and_shift_tab_move_the_focus_through_the_actions_chain),
             ("shortcuts::tab_tests::tab_traversal_preserves_failure_before_policy_and_candidate_retirement", crate::shortcuts::tab_tests::tab_traversal_preserves_failure_before_policy_and_candidate_retirement),
             ("shortcuts::event_cx_tests::callback_shortcut_writes_a_signal_and_rebuilds_its_reader", crate::shortcuts::event_cx_tests::callback_shortcut_writes_a_signal_and_rebuilds_its_reader),
