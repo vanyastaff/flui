@@ -452,6 +452,43 @@ sampled the current frame, preserving local-time continuity.
 
 ## Mapping decisions
 
+### Immutable authored easing retains the existing Curve domain
+
+`PiecewiseLinear` canonicalizes a borrowed stop slice once, then shares the
+finite ordered knots immutably. Missing endpoints become 0/1, decreasing inputs
+are raised before omitted interior inputs are distributed, and an interior
+equal-input group selects its last output. Endpoints remain exactly 0/1,
+outside inputs clamp, and NaN propagates. This adopts CSS Easing Level 2's stop
+placement without its extrapolating/source-text interface. The explicit stop
+count bound keeps spacing ratios exactly representable as integer inputs.
+
+Interpolation uses foundation's stable Lerp across opposite finite extremes.
+Regular-knot slopes select the outgoing segment (incoming at 1), repeated-input
+jumps select zero, and unrepresentable finite-segment rates saturate finitely.
+`SpringCurve` reuses the validated physical `SpringSimulation`, including its
+conservative rest estimate. It samples normalized progress times an upward-rounded
+`Duration`, retaining overshoot. It is a pure duration-based authoring value;
+`MotionSpec::Spring` remains the velocity-inheriting motion contract.
+
+Both concrete curves participate in `ArcCurve`'s built-in value comparison.
+Equivalent recreated configuration retains the original AnimatedValue run and
+future, rather than rediscovering equality through allocation identity. Neither
+curve adds user callbacks, shared mutation, frame state or retirement obligations.
+Admission can allocate; query-time storage is immutable. Optional piecewise serde
+uses the same checked constructor and serializes canonical points.
+
+The owner permits retaining these authoring surfaces before a stock widget
+requires them. `authored_easing_contract` asserts canonical placement, finite
+extremes, independent spring ODE references, input policy, recreated-run lifetime,
+natural conservative duration and once-only original-future completion.
+`authored_piecewise_hero_geometry_is_painted_and_retraced` and
+`authored_spring_hero_geometry_is_painted_and_retraced` pass them through the real
+Hero factory, compare painted bounds to independent references, reverse an
+airborne flight, and verify silence after unmount. Each paint case fails under
+its independent interpolation/time-scale negative control. The existing
+`a_steady_state_frame_allocates_nothing` includes 10,000 advancing samples of
+both eased tracks, with the allocation counter's positive control.
+
 ### Run and sample identities never wrap
 
 Each admitted run consumes a monotonically increasing generation; each sample

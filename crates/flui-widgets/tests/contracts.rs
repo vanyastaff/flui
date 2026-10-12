@@ -553,6 +553,8 @@ fn hero_flights() {
             ("hero_gesture::an_excluding_gesture_restores_pending_programmatic_placeholders", crate::hero_gesture::an_excluding_gesture_restores_pending_programmatic_placeholders),
             ("hero_public::a_hero_push_flight_runs_and_settles", crate::hero_public::a_hero_push_flight_runs_and_settles),
             ("hero_waypoint_tracks::authored_cubic_hero_geometry_is_painted_and_retraced", crate::hero_waypoint_tracks::authored_cubic_hero_geometry_is_painted_and_retraced),
+            ("hero_waypoint_tracks::authored_piecewise_hero_geometry_is_painted_and_retraced", crate::hero_waypoint_tracks::authored_piecewise_hero_geometry_is_painted_and_retraced),
+            ("hero_waypoint_tracks::authored_spring_hero_geometry_is_painted_and_retraced", crate::hero_waypoint_tracks::authored_spring_hero_geometry_is_painted_and_retraced),
             ("hero_public::replacing_the_hero_observer_inside_its_builder_cancels_the_flight", crate::hero_public::replacing_the_hero_observer_inside_its_builder_cancels_the_flight),
             ("hero_public::replacing_the_hero_observer_cancels_queued_measurement", crate::hero_public::replacing_the_hero_observer_cancels_queued_measurement),
             ("hero_public::a_failed_hero_builder_restores_its_child_and_allows_a_fresh_flight", crate::hero_public::a_failed_hero_builder_restores_its_child_and_allows_a_fresh_flight),

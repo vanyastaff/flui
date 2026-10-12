@@ -1,5 +1,6 @@
 //! Canonical stops for a normalized piecewise-linear easing.
 
+use flui_foundation::geometry::Lerp;
 use std::sync::Arc;
 
 use super::{Builtin, BuiltinCurve, Curve};
@@ -21,7 +22,10 @@ impl LinearStop {
     /// An output whose input progress will be assigned during canonicalization.
     #[must_use]
     pub const fn new(output: f64) -> Self {
-        Self { output, input: None }
+        Self {
+            output,
+            input: None,
+        }
     }
 
     /// Place this stop at `input` progress, normalized to `[0, 1]`.
@@ -33,7 +37,7 @@ impl LinearStop {
 }
 
 /// Why [`PiecewiseLinear::new`] refused its stops.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum LinearEasingError {
     /// A normalized curve requires at least a start and an end.
@@ -48,12 +52,19 @@ pub enum LinearEasingError {
         /// The refused stop's zero-based index.
         index: usize,
     },
-    /// An explicit input of zero-based stop `index` is outside `[0, 1]`,
-    /// including NaN and infinity.
-    #[error("stop {index} has an input outside [0, 1]")]
-    InvalidInput {
+    /// An explicit input of zero-based stop `index` is NaN or infinite.
+    #[error("stop {index} has a non-finite input")]
+    NonFiniteInput {
         /// The refused stop's zero-based index.
         index: usize,
+    },
+    /// An explicit input of zero-based stop `index` is finite but outside `[0, 1]`.
+    #[error("stop {index} has input {value} outside [0, 1]")]
+    InputOutOfRange {
+        /// The refused stop's zero-based index.
+        index: usize,
+        /// The refused finite input progress.
+        value: f64,
     },
     /// Canonical endpoints must be `(input, output) = (0, 0)` and `(1, 1)`.
     #[error("piecewise linear easing must start at (0, 0) and end at (1, 1)")]
@@ -95,7 +106,10 @@ struct Knot {
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(try_from = "Vec<LinearStop>", into = "Vec<LinearStop>"))]
+#[cfg_attr(
+    feature = "serde",
+    serde(try_from = "Vec<LinearStop>", into = "Vec<LinearStop>")
+)]
 pub struct PiecewiseLinear {
     knots: Arc<[Knot]>,
 }
@@ -118,12 +132,24 @@ impl PiecewiseLinear {
             if !stop.output.is_finite() {
                 return Err(LinearEasingError::NonFiniteOutput { index });
             }
-            if stop.input.is_some_and(|input| !(0.0..=1.0).contains(&input)) {
-                return Err(LinearEasingError::InvalidInput { index });
+            if let Some(input) = stop.input {
+                if !input.is_finite() {
+                    return Err(LinearEasingError::NonFiniteInput { index });
+                }
+                if !(0.0..=1.0).contains(&input) {
+                    return Err(LinearEasingError::InputOutOfRange {
+                        index,
+                        value: input,
+                    });
+                }
             }
         }
         stops[0].input.get_or_insert(0.0);
-        stops.last_mut().expect("BUG: two stops were admitted").input.get_or_insert(1.0);
+        stops
+            .last_mut()
+            .expect("BUG: two stops were admitted")
+            .input
+            .get_or_insert(1.0);
         let mut maximum: f64 = 0.0;
         for stop in &mut stops {
             if let Some(input) = &mut stop.input {
@@ -136,8 +162,12 @@ impl PiecewiseLinear {
             let right = (left + 1..count)
                 .find(|&index| stops[index as usize].input.is_some())
                 .expect("BUG: the last stop has an input");
-            let begin = stops[left as usize].input.expect("BUG: the preceding input is known");
-            let end = stops[right as usize].input.expect("BUG: the following input is known");
+            let begin = stops[left as usize]
+                .input
+                .expect("BUG: the preceding input is known");
+            let end = stops[right as usize]
+                .input
+                .expect("BUG: the following input is known");
             for index in left + 1..right {
                 let fraction = f64::from(index - left) / f64::from(right - left);
                 stops[index as usize].input = Some(begin + (end - begin) * fraction);
@@ -146,23 +176,61 @@ impl PiecewiseLinear {
         }
         let first = stops[0];
         let last = *stops.last().expect("BUG: two stops were admitted");
-        if first.input != Some(0.0) || first.output != 0.0
-            || last.input != Some(1.0) || last.output != 1.0
+        if first.input != Some(0.0)
+            || first.output != 0.0
+            || last.input != Some(1.0)
+            || last.output != 1.0
         {
             return Err(LinearEasingError::InvalidEndpoints);
         }
         Ok(Self {
-            knots: stops.into_iter().map(|stop| Knot {
-                input: stop.input.expect("BUG: every input was canonicalized"),
-                output: stop.output,
-            }).collect(),
+            knots: stops
+                .into_iter()
+                .map(|stop| Knot {
+                    input: stop.input.expect("BUG: every input was canonicalized"),
+                    output: stop.output,
+                })
+                .collect(),
         })
     }
 }
 
 impl Curve for PiecewiseLinear {
-    fn transform(&self, t: f64) -> f64 { t }
-    fn slope(&self, _t: f64) -> f64 { 1.0 }
+    fn transform(&self, t: f64) -> f64 {
+        if let Some(endpoint) = super::settled(t) {
+            return endpoint;
+        }
+        let right = self.knots.partition_point(|knot| knot.input <= t);
+        let from = self.knots[right - 1];
+        if from.input == t {
+            return from.output;
+        }
+        let to = self.knots[right];
+        let fraction = (t - from.input) / (to.input - from.input);
+        // Stable Lerp preserves opposite extreme endpoints whose difference
+        // overflows. Rounding a convex combination at MAX may saturate.
+        from.output
+            .lerp_to(&to.output, fraction)
+            .clamp(-f64::MAX, f64::MAX)
+    }
+
+    /// The outgoing segment's derivative at an interior knot, the incoming
+    /// derivative at 1, and zero at a repeated-input jump. A mathematically
+    /// unrepresentable finite-segment rate saturates to signed `f64::MAX`.
+    fn slope(&self, t: f64) -> f64 {
+        if let Some(slope) = super::settled_slope(t) {
+            return slope;
+        }
+        let right = self.knots.partition_point(|knot| knot.input <= t);
+        let left = self.knots.partition_point(|knot| knot.input < t);
+        if right - left > 1 {
+            return 0.0;
+        }
+        let next = right.min(self.knots.len() - 1);
+        let from = self.knots[next - 1];
+        let to = self.knots[next];
+        ((to.output - from.output) / (to.input - from.input)).clamp(-f64::MAX, f64::MAX)
+    }
     fn builtin(&self) -> Option<BuiltinCurve> {
         Some(BuiltinCurve::new(Builtin::PiecewiseLinear(self.clone())))
     }
@@ -171,12 +239,18 @@ impl Curve for PiecewiseLinear {
 #[cfg(feature = "serde")]
 impl TryFrom<Vec<LinearStop>> for PiecewiseLinear {
     type Error = LinearEasingError;
-    fn try_from(stops: Vec<LinearStop>) -> Result<Self, Self::Error> { Self::new(&stops) }
+    fn try_from(stops: Vec<LinearStop>) -> Result<Self, Self::Error> {
+        Self::new(&stops)
+    }
 }
 
 #[cfg(feature = "serde")]
 impl From<PiecewiseLinear> for Vec<LinearStop> {
     fn from(curve: PiecewiseLinear) -> Self {
-        curve.knots.iter().map(|knot| LinearStop::new(knot.output).at(knot.input)).collect()
+        curve
+            .knots
+            .iter()
+            .map(|knot| LinearStop::new(knot.output).at(knot.input))
+            .collect()
     }
 }

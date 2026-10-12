@@ -19,8 +19,9 @@ use std::hint::black_box;
 use std::time::Duration;
 
 use flui_animation::{
-    AnimatedValue, Animation, AnimationController, ArcCurve, Keyframes, MotionClock, MotionSpec,
-    ReverseAnimation, TwoWayConverter, Vsync, curves,
+    AnimatedValue, Animation, AnimationController, ArcCurve, Keyframes, LinearStop, MotionClock,
+    MotionSpec, PiecewiseLinear, ReverseAnimation, SpringCurve, SpringDescription, Tolerance,
+    TwoWayConverter, Vsync, curves,
 };
 use flui_foundation::Listenable;
 use flui_foundation::geometry::{EdgeInsets, Offset};
@@ -209,6 +210,33 @@ fn a_steady_state_frame_allocates_nothing() {
         .cubic(0.0, Duration::from_mins(30))
         .build()
         .expect("finite scalar keyframe track");
+    let eased_tracks = [
+        Keyframes::builder(0.0, Duration::from_secs(3600))
+            .to(
+                1.0,
+                Duration::from_secs(3600),
+                PiecewiseLinear::new(&[
+                    LinearStop::new(0.0),
+                    LinearStop::new(0.25),
+                    LinearStop::new(1.0),
+                ])
+                .expect("normalized stops"),
+            )
+            .build()
+            .expect("finite piecewise track"),
+        Keyframes::builder(0.0, Duration::from_secs(3600))
+            .to(
+                1.0,
+                Duration::from_secs(3600),
+                SpringCurve::new(
+                    SpringDescription::new(1.0, 100.0, 20.0).expect("critical spring"),
+                    Tolerance::DEFAULT,
+                )
+                .expect("finite spring duration"),
+            )
+            .build()
+            .expect("finite spring track"),
+    ];
 
     // Warmup: the first frame anchors the run; later ones settle any
     // one-time lazy initialisation outside the measured path.
@@ -229,6 +257,9 @@ fn a_steady_state_frame_allocates_nothing() {
     let start_nested = nested_stream.value();
     let deliveries_before = nested_deliveries.get();
     let start_track = track.value_at(Duration::from_secs_f64(now));
+    let start_eased = eased_tracks
+        .each_ref()
+        .map(|track| track.value_at(Duration::from_secs_f64(now)));
     for _ in 0..FRAMES {
         let calls_before = read(&ALLOC_COUNT);
         let bytes_before = read(&ALLOC_BYTES);
@@ -239,6 +270,9 @@ fn a_steady_state_frame_allocates_nothing() {
         black_box(stream.value());
         black_box(nested_stream.value());
         black_box(track.value_at(Duration::from_secs_f64(now)));
+        for track in &eased_tracks {
+            black_box(track.value_at(Duration::from_secs_f64(now)));
+        }
         let calls = read(&ALLOC_COUNT) - calls_before;
         let bytes = read(&ALLOC_BYTES) - bytes_before;
         total_calls += calls;
@@ -249,6 +283,12 @@ fn a_steady_state_frame_allocates_nothing() {
         }
     }
 
+    for (track, start) in eased_tracks.iter().zip(start_eased) {
+        assert!(
+            track.value_at(Duration::from_secs_f64(now)) > start,
+            "authored easing advances throughout the measured window"
+        );
+    }
     assert!(
         controller.status().is_directional() && controller.value() > start_value,
         "the measured frames must advance a live run, or they priced an early return"

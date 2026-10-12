@@ -15,8 +15,8 @@ enum Shape {
     Overshoots,
 }
 
-/// Every curve the crate ships, plus one constructed instance of each
-/// parameterized curve and combinator.
+/// Predefined curves, plus constructed instances of the parameterized curves
+/// and combinators. Authored piecewise/spring curves have their own contract table.
 fn catalog() -> Vec<(&'static str, ArcCurve, Shape)> {
     use Shape::{Monotone, Overshoots};
     vec![

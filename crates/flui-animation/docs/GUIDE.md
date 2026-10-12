@@ -287,6 +287,46 @@ let value = curves::ELASTIC_OUT.transform(t);
 | Bounce | `BOUNCE_IN`, `BOUNCE_OUT`, `BOUNCE_IN_OUT` |
 | Other | `DECELERATE` |
 
+### Authored piecewise and spring easing
+
+```rust
+use flui_animation::{ArcCurve, Curve, LinearStop, PiecewiseLinear, SpringCurve,
+    SpringDescription, Tolerance};
+
+let piecewise = PiecewiseLinear::new(&[
+    LinearStop::new(0.0), LinearStop::new(0.25), LinearStop::new(1.0),
+])?;
+assert_eq!(piecewise.transform(0.5), 0.25);
+let spring = SpringCurve::new(
+    SpringDescription::new(1.0, 100.0, 20.0)?, Tolerance::DEFAULT,
+)?;
+assert!(!spring.duration().is_zero());
+let shared = ArcCurve::new(spring);
+assert_eq!(shared.transform(1.0), 1.0);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+`LinearStop::at` supplies normalized input progress. Missing first/last inputs
+become 0/1; missing interior inputs are spaced between their explicit neighbours,
+after decreasing explicit inputs have been raised. The first and last outputs
+must be 0 and 1. Interior outputs can overshoot, and interior equal inputs jump
+to the last output at that input. At a regular knot `slope` selects the outgoing
+segment; at a jump it returns zero. Unrepresentable rates saturate finitely.
+Optional serde stores canonical stops, including their assigned inputs.
+
+This borrows the stop-placement rules of
+[CSS Easing Level 2](https://drafts.csswg.org/css-easing-2/#linear-easing-function)
+while retaining FLUI's exact endpoints, NaN preservation and exterior clamp.
+It does not promise CSS parsing, source-text serialization or extrapolation.
+
+`SpringCurve` maps progress to physical time without accumulating frame state.
+Its tolerance is in unit-output distance and output units per physical second;
+distance must be less than 1. `duration()` rounds the conservative rest upward
+to nanoseconds. A too-slow spring whose rest exceeds `Duration` is refused.
+No sample table, frame clock or controller is retained. Physical velocity
+inheritance belongs to `MotionSpec::Spring`; stretching this easing's assigned
+keyframe duration intentionally changes its playback time scale.
+
 ### Custom curves
 
 ```rust

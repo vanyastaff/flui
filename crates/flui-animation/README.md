@@ -299,6 +299,49 @@ assert_eq!(ticks.transform(0.125), 0.125);
 
 ---
 
+### Authored easing
+
+`PiecewiseLinear` places omitted inputs evenly between their neighbours and
+raises decreasing inputs to the preceding maximum. Equal interior inputs make
+a right-continuous jump; repeated outputs make a plateau. Endpoints, exterior
+inputs and NaN follow the normalized `Curve` contract.
+
+```rust
+use flui_animation::{Curve, LinearStop, PiecewiseLinear};
+
+let easing = PiecewiseLinear::new(&[
+    LinearStop::new(0.0),
+    LinearStop::new(0.5).at(0.25),
+    LinearStop::new(0.5).at(0.75),
+    LinearStop::new(1.0),
+])?;
+assert_eq!(easing.transform(0.5), 0.5);
+# Ok::<(), flui_animation::LinearEasingError>(())
+```
+
+`SpringCurve` samples a zero-velocity unit spring analytically. Its duration
+comes from the conservative physical rest boundary; place a keyframe over that
+duration to retain the spring's time scale. Interior overshoot remains visible.
+Use `MotionSpec::Spring` for physical motion that inherits velocity on retarget.
+
+```rust
+use flui_animation::{Keyframes, SpringCurve, SpringDescription, Tolerance};
+
+let easing = SpringCurve::new(
+    SpringDescription::new(1.0, 100.0, 10.0)?, Tolerance::DEFAULT,
+)?;
+let duration = easing.duration();
+let track = Keyframes::builder(0.0, duration)
+    .to(100.0, duration, easing)
+    .build()?;
+assert_eq!(track.value_at(duration), 100.0);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Both types are immutable and compare by canonical value through `ArcCurve`.
+They are application-authoring surfaces; a stock widget consumer can be added
+when its visual contract calls for these curves.
+
 ### Curve Modifiers
 
 ```rust
