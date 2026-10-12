@@ -237,7 +237,7 @@ fn degenerate_rounded_paths_preserve_contour_coverage() {
                 PathCommand::MoveTo(point) => contours.move_to(point),
                 PathCommand::LineTo(point) => contours.line_to(point),
                 PathCommand::QuadraticTo(control, end) => {
-                    contours.quadratic_bezier_to(control, end)
+                    contours.quadratic_bezier_to(control, end);
                 }
                 PathCommand::CubicTo(first, second, end) => contours.cubic_to(first, second, end),
                 PathCommand::Close => contours.close(),
