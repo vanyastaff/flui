@@ -90,6 +90,27 @@ case checks that native local coordinates remain authoritative; browser rounding
 on transformed wheel coordinates is not repaired by guessing an inverse from
 an axis-aligned bounding rectangle.
 
+The observed-modifiers control runs keyboard Down/Up, pointer Down/Move/Up and
+wheel sources through the actual retained public input callback. It compares
+all twelve canonical source observations, convenience booleans, legacy
+Hyper/Super-to-Meta observations and healthy next input. Keyboard metadata,
+pointer positions/buttons and fractional wheel deltas remain observable. The
+control also checks that Ctrl+Alt, AltRight and the named AltGraph key do not
+invent an AltGraph observation. Constructor observations are sampled rather
+than assuming every browser honours every initializer. FnLock and SymbolLock
+each have a separately labelled controlled getModifierState row because a
+constructor may not supply those observations.
+
+The modifier-getter-reentry control synchronously dispatches an inner keyboard,
+pointer or wheel event from an outer getModifierState call. Distinct modifiers
+must reach the public callback in inner/outer order, followed by healthy input.
+The modifier-getter-retirement control runs on a fresh page: the same source
+getter closes the old owner and opens a replacement, refuses stale delivery to
+either owner and checks the replacement's next input. Overrides belong to
+individual source events. These controls establish DOM producer behavior, not
+physical AltGr layouts, OS modifier provenance, arbitrary JavaScript getter
+exceptions or Rust unwind recovery in the default wasm panic-abort build.
+
 The pen sample check supplies coalesced and predicted lists of actual DOM
 PointerEvent objects through explicitly overridden methods; the DOM constructor
 has no arguments for those lists. Each source object's target, fractional
