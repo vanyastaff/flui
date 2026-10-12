@@ -39,6 +39,7 @@ pub(super) struct PresentationSampling<'runtime> {
     blocking: Option<SamplingFailure>,
     admission: Admission,
     completion_entered: bool,
+    retained_sample: Option<text_preparation::RetainedSample>,
 }
 
 impl<'runtime> PresentationSampling<'runtime> {
@@ -56,6 +57,7 @@ impl<'runtime> PresentationSampling<'runtime> {
             blocking: None,
             admission,
             completion_entered,
+            retained_sample: None,
         }
     }
 
@@ -90,17 +92,16 @@ impl<'runtime> PresentationSampling<'runtime> {
     ) {
         let presentation = self.presentation;
         let mut prepared = false;
-        let mut retained_tick = None;
+        let mut retained_sample = None;
         self.run(SamplingStage::Preparation, |recovery| {
-            text_preparation::reconcile_with_recovery(presentation, constraints, recovery);
-            retained_tick = presentation
-                .text_preparation
-                .borrow()
-                .segment
-                .as_ref()
-                .map(|saved| saved.tick);
+            text_preparation::reconcile_with_recovery(presentation, constraints, None, recovery);
+            retained_sample = text_preparation::retained_sample(presentation);
             prepared = true;
         });
+        let retained_tick = retained_sample
+            .as_ref()
+            .map(text_preparation::RetainedSample::tick);
+        self.retained_sample = retained_sample;
         if prepared {
             self.run(SamplingStage::Animation, |recovery| {
                 if let Some(tick) = retained_tick {
@@ -256,7 +257,12 @@ impl<'runtime> PresentationSampling<'runtime> {
         }
         let mut changed = false;
         recovery.run_with(|scope| {
-            changed = text_preparation::reconcile_with_recovery(presentation, constraints, scope);
+            changed = text_preparation::reconcile_with_recovery(
+                presentation,
+                constraints,
+                self.retained_sample.as_ref(),
+                scope,
+            );
         });
         if recovery.blocking_failure_class().is_some() {
             recovery.run_with(|scope| {
@@ -301,7 +307,11 @@ impl<'runtime> PresentationSampling<'runtime> {
                 },
             );
             if !changed
-                && text_preparation::retained_needs_reconciliation(presentation, constraints)
+                && text_preparation::retained_needs_reconciliation(
+                    presentation,
+                    constraints,
+                    self.retained_sample.as_ref(),
+                )
             {
                 // This observer admitted new retained inputs. Withdraw before
                 // publication, without recursively preparing or reporting.
