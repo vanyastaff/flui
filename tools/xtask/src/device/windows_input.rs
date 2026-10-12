@@ -23,7 +23,7 @@
 //! take the measurement.
 
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::UI::HiDpi::{
@@ -190,7 +190,7 @@ pub(super) fn centre(rect: RECT) -> POINT {
     }
 }
 
-/// Brings `hwnd` forward, or prints why the host refused.
+/// Brings `hwnd` forward, allowing bounded time for the operator to focus it.
 pub(super) fn foreground(hwnd: HWND) -> Option<()> {
     // SAFETY: `hwnd` is the probe's live top-level window; both calls only
     // read or request foreground state.
@@ -200,6 +200,16 @@ pub(super) fn foreground(hwnd: HWND) -> Option<()> {
         if GetForegroundWindow() == hwnd {
             return Some(());
         }
+    }
+    println!("Click the probe's title bar to focus it (waiting up to 30 seconds).");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline {
+        // SAFETY: reads foreground state only. No input is sent until the
+        // probe's own live window has acquired the foreground.
+        if unsafe { GetForegroundWindow() } == hwnd {
+            return Some(());
+        }
+        std::thread::sleep(HOLD);
     }
     println!(
         "CANNOT_VERIFY: Windows would not bring the probe's window to the foreground (the foreground lock), so input sent now could reach another application"
