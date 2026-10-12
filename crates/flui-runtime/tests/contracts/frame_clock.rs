@@ -36,11 +36,12 @@ struct SamplingView {
 
 struct MountedAnimation {
     controller: AnimationController,
+    peer: AnimationController,
     completion: flui_scheduler::PostFrameHandle,
 }
 
 struct SamplingState {
-    driven: Option<flui_animation::DrivenController>,
+    driven: Option<[flui_animation::DrivenController; 2]>,
     mounted: Rc<RefCell<Option<MountedAnimation>>>,
 }
 
@@ -60,21 +61,20 @@ impl ViewState<SamplingView> for SamplingState {
         let registry = flui_widgets::VsyncScope::maybe_of(ctx)
             .expect("mounted animation receives its presentation registry");
         let driven = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
+        let peer = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
         let completion = ctx
             .post_frame_handle()
             .expect("presentation completion lane");
         *self.mounted.borrow_mut() = Some(MountedAnimation {
             controller: driven.controller().clone(),
+            peer: peer.controller().clone(),
             completion,
         });
-        self.driven = Some(driven);
+        self.driven = Some([driven, peer]);
     }
 
     fn build(&self, view: &SamplingView, _: &dyn BuildContext) -> impl IntoView {
-        let controller = self
-            .driven
-            .as_ref()
-            .expect("mounted animation owner")
+        let controller = self.driven.as_ref().expect("mounted animation owners")[0]
             .controller()
             .clone();
         let read = controller.clone();
@@ -287,6 +287,285 @@ fn delivery_case(delivery: Delivery) {
     );
     primary.controller.remove_listener(listener);
     primary.controller.remove_listener(later_listener);
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SourceFailure {
+    Curve,
+    SimulationPosition,
+    SimulationCompletion,
+    DeliveryThenComputation,
+    ComputationThenDelivery,
+}
+
+#[derive(Debug)]
+struct FailingCurve {
+    armed: AtomicBool,
+}
+
+impl flui_animation::Curve for FailingCurve {
+    fn transform(&self, time: f64) -> f64 {
+        if self.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            std::panic::panic_any("curve computation");
+        }
+        time
+    }
+}
+
+struct FailingSimulation {
+    completion: bool,
+    armed: Cell<bool>,
+}
+
+impl flui_animation::simulation::Simulation for FailingSimulation {
+    fn x(&self, time: f64) -> f64 {
+        if !self.completion && time > 0.0 && self.armed.replace(false) {
+            std::panic::panic_any("simulation position computation");
+        }
+        time
+    }
+
+    fn dx(&self, _: f64) -> f64 {
+        1.0
+    }
+
+    fn is_done(&self, time: f64) -> bool {
+        if self.completion && time > 0.0 && self.armed.replace(false) {
+            std::panic::panic_any("simulation completion computation");
+        }
+        time >= 1.0
+    }
+}
+
+#[test]
+fn presentation_computation_failure_rejects_its_frame_and_preserves_healthy_work() {
+    crate::table_test::run_table(
+        "presentation sampling computation",
+        &[
+            (
+                "curve computation",
+                curve_computation_preserves_healthy_work,
+            ),
+            (
+                "simulation position computation",
+                simulation_position_computation_preserves_healthy_work,
+            ),
+            (
+                "simulation completion computation",
+                simulation_completion_computation_preserves_healthy_work,
+            ),
+            (
+                "delivery then computation",
+                delivery_then_computation_rejects_the_frame,
+            ),
+            (
+                "computation then delivery",
+                computation_then_delivery_rejects_the_frame,
+            ),
+        ],
+    );
+}
+
+fn curve_computation_preserves_healthy_work() {
+    source_failure_case(SourceFailure::Curve);
+}
+
+fn simulation_position_computation_preserves_healthy_work() {
+    source_failure_case(SourceFailure::SimulationPosition);
+}
+
+fn simulation_completion_computation_preserves_healthy_work() {
+    source_failure_case(SourceFailure::SimulationCompletion);
+}
+
+fn delivery_then_computation_rejects_the_frame() {
+    source_failure_case(SourceFailure::DeliveryThenComputation);
+}
+
+fn computation_then_delivery_rejects_the_frame() {
+    source_failure_case(SourceFailure::ComputationThenDelivery);
+}
+
+fn run_source(
+    controller: &AnimationController,
+    failure: SourceFailure,
+) -> flui_animation::AnimationRunFuture {
+    match failure {
+        SourceFailure::SimulationPosition | SourceFailure::SimulationCompletion => controller
+            .animate_with(FailingSimulation {
+                completion: failure == SourceFailure::SimulationCompletion,
+                armed: Cell::new(true),
+            })
+            .expect("admitted finite simulation"),
+        SourceFailure::Curve
+        | SourceFailure::DeliveryThenComputation
+        | SourceFailure::ComputationThenDelivery => controller
+            .animate_to_curved(
+                1.0,
+                Some(Duration::from_secs(1)),
+                FailingCurve {
+                    armed: AtomicBool::new(true),
+                },
+            )
+            .expect("admitted curved run"),
+    }
+}
+
+fn source_failure_case(failure: SourceFailure) {
+    let mut clock = ManualClock::new();
+    let mut runtime = UiRuntime::new(
+        crate::owner_publication::window(),
+        1.0,
+        RuntimeHostServices::new(
+            Arc::new(|| {}),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            &flui_painting::FontCollection::new(),
+            flui_scheduler::ClockSource::Manual(clock.clone()),
+        ),
+    )
+    .expect("runtime");
+    let reports = Arc::new(Mutex::new(Vec::new()));
+    let reported = Arc::clone(&reports);
+    runtime.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
+        reported.lock().expect("failure observations").push((
+            report.address,
+            report.disposition,
+            report.consecutive_failures,
+        ));
+    })));
+    let primary_mounted = Rc::new(RefCell::new(None));
+    let primary_builds = Rc::new(RefCell::new(Vec::new()));
+    runtime
+        .attach_root_widget_with_size(
+            &SamplingView {
+                mounted: Rc::clone(&primary_mounted),
+                built_samples: Rc::clone(&primary_builds),
+            },
+            800.0,
+            600.0,
+        )
+        .expect("primary root");
+    let _ = runtime.pump(&mut clock, &mut Sink);
+    let sibling = runtime.assemble_presentation(crate::owner_publication::window());
+    let sibling_id = runtime.install_presentation(sibling);
+    let sibling_mounted = Rc::new(RefCell::new(None));
+    let sibling_builds = Rc::new(RefCell::new(Vec::new()));
+    runtime
+        .attach_root_widget_with_size_to(
+            sibling_id,
+            &SamplingView {
+                mounted: Rc::clone(&sibling_mounted),
+                built_samples: Rc::clone(&sibling_builds),
+            },
+            800.0,
+            600.0,
+        )
+        .expect("sibling root");
+    let _ = runtime.pump(&mut clock, &mut Sink);
+    let primary = primary_mounted.take().expect("primary animations mounted");
+    let sibling = sibling_mounted.take().expect("sibling animations mounted");
+    let (source, healthy) = if failure == SourceFailure::DeliveryThenComputation {
+        (&primary.peer, &primary.controller)
+    } else {
+        (&primary.controller, &primary.peer)
+    };
+    let source_run = run_source(source, failure);
+    let _healthy_run = healthy.forward().expect("healthy peer run");
+    let _sibling_run = sibling.controller.forward().expect("sibling run");
+    let _ = runtime.pump(&mut clock, &mut Sink);
+    let primary_before = primary_builds.borrow().len();
+    let sibling_before = sibling_builds.borrow().len();
+    let mixed = matches!(
+        failure,
+        SourceFailure::DeliveryThenComputation | SourceFailure::ComputationThenDelivery
+    );
+    let armed = Rc::new(Cell::new(true));
+    let fail_once = Rc::clone(&armed);
+    let listener = healthy.add_listener(Rc::new(move || {
+        if mixed && fail_once.replace(false) {
+            std::panic::panic_any("value delivery");
+        }
+    }));
+    let delivered = Rc::new(RefCell::new(Vec::new()));
+    let recorded = Rc::clone(&delivered);
+    let read = healthy.clone();
+    let later_listener = healthy.add_listener(Rc::new(move || {
+        recorded.borrow_mut().push(read.value());
+    }));
+    let primary_completed = Rc::new(Cell::new(0));
+    let sibling_completed = Rc::new(Cell::new(0));
+    for (completion, count) in [
+        (&primary.completion, Rc::clone(&primary_completed)),
+        (&sibling.completion, Rc::clone(&sibling_completed)),
+    ] {
+        completion
+            .schedule(move |_| count.set(count.get() + 1))
+            .expect("completion admitted to the presentation");
+    }
+    clock.advance(Duration::from_millis(250));
+    let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        runtime.pump(&mut clock, &mut Sink)
+    }));
+    assert_eq!(
+        source.value(),
+        0.0,
+        "failed proposal does not publish its candidate"
+    );
+    assert_eq!(healthy.value(), 0.25, "valid peer commit is preserved");
+    assert_eq!(delivered.borrow().as_slice(), &[0.25]);
+    assert_eq!(
+        sibling.controller.value(),
+        0.25,
+        "healthy sibling receives the admitted tick"
+    );
+    let _ = attempt.expect("computation failure cannot escape the runtime pump");
+    assert_eq!(
+        primary_builds.borrow().len(),
+        primary_before,
+        "invalid sampling cohort cannot run a primary build"
+    );
+    assert!(sibling_builds.borrow().len() > sibling_before);
+    assert_eq!(sibling_builds.borrow().last().copied(), Some(0.25));
+    assert_eq!(primary_completed.get(), 0, "rejected frame cannot complete");
+    assert_eq!(sibling_completed.get(), 1, "healthy sibling completes");
+    assert!(
+        source_run.is_pending(),
+        "source failure does not invent completion"
+    );
+    {
+        let reports = reports.lock().expect("failure observations");
+        assert_eq!(
+            reports.as_slice(),
+            &[(
+                flui_foundation::PresentationAddress {
+                    ui_runtime_id: runtime.id(),
+                    presentation_id: runtime.presentation_id(),
+                },
+                FailureDisposition::FrameDropped,
+                1,
+            )],
+            "a competing failure still drops the admitted attempt only once"
+        );
+    }
+    clock.advance(Duration::from_millis(250));
+    let _ = runtime.pump(&mut clock, &mut Sink);
+    assert_eq!(
+        source.value(),
+        0.5,
+        "next owner turn recovers the original run time"
+    );
+    assert_eq!(healthy.value(), 0.5);
+    assert_eq!(primary_builds.borrow().last().copied(), Some(0.5));
+    assert_eq!(
+        primary_completed.get(),
+        1,
+        "accepted completion survives rejection"
+    );
+    assert_eq!(sibling_completed.get(), 1, "old completion is not replayed");
+    assert_eq!(reports.lock().expect("failure observations").len(), 1);
+    healthy.remove_listener(listener);
+    healthy.remove_listener(later_listener);
 }
 
 impl FrameSink for Sink {
