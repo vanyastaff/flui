@@ -1077,7 +1077,9 @@ fn nested_public_verdict_operation(
     });
     let child_entry = binding.arena().add(pointer(2), &child);
     *child_owner.borrow_mut() = Some(child);
-    if action == NestedVerdictAction::HeldRelease {
+    if action == NestedVerdictAction::Resolve {
+        binding.arena().close(pointer(2));
+    } else if action == NestedVerdictAction::HeldRelease {
         child_entry.hold();
         child_entry.sweep();
     }
@@ -1116,8 +1118,13 @@ fn nested_public_verdict_operation(
         clock.now(),
         &mut recovery.scope(),
     );
+    let child_released = child_owner.borrow().is_none();
+    if !child_released {
+        // A failed fixture assertion must not run the leftover opaque destructor.
+        std::mem::forget(child_owner.borrow_mut().take());
+    }
     assert_eq!(child_notices.get(), 1);
-    assert!(child_owner.borrow().is_none());
+    assert!(child_released);
     assert_eq!(notices.get(), 1, "healthy deadline tail still progresses");
     if incoming {
         assert_eq!(
@@ -1175,7 +1182,9 @@ fn nested_public_verdict_operation(
     });
     let fresh_entry = binding.arena().add(pointer(3), &fresh);
     *owner.borrow_mut() = Some(fresh);
-    if action == NestedVerdictAction::HeldRelease {
+    if action == NestedVerdictAction::Resolve {
+        binding.arena().close(pointer(3));
+    } else if action == NestedVerdictAction::HeldRelease {
         fresh_entry.hold();
         fresh_entry.sweep();
     }
@@ -1332,9 +1341,14 @@ fn an_open_deadline_poll_preserves_nested_retirement_before_its_later_panic() {
         clock.now(),
         &mut recovery.scope(),
     );
+    let child_released = child_owner.borrow().is_none();
+    if !child_released {
+        // Keep the original failed observation while protecting assertion unwind.
+        std::mem::forget(child_owner.borrow_mut().take());
+    }
     assert_eq!(child_notices.get(), 1);
     assert_eq!(child_drops.get(), 1);
-    assert!(child_owner.borrow().is_none());
+    assert!(child_released);
     assert_eq!(recovery.first_failure_class(), Some(FailureClass::Unknown));
     assert_eq!(
         recovery.blocking_failure_class(),
