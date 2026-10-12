@@ -690,7 +690,7 @@ pub(crate) fn source_composition_leaves_traversal_and_activation_unclaimed() {
                 Focus::new(SizedBox::new(20.0, 20.0)).focus_node(Rc::clone(&right)),
             )))
             .action(CallbackAction::new(move |_, _: &ActivateIntent| {
-                observed.set(observed.get() + 1)
+                observed.set(observed.get() + 1);
             })),
         );
         let _ = left.request_focus();
