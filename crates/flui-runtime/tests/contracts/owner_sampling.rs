@@ -41,6 +41,7 @@ impl GestureArenaMember for DeadlineQuery {
 struct Effects {
     query_calls: Rc<Cell<usize>>,
     frames: Cell<usize>,
+    fail_operation: Cell<bool>,
     probe_runtime: Cell<bool>,
     runtime_observation: RefCell<Option<RuntimeObservation>>,
 }
@@ -79,6 +80,9 @@ impl OwnerEffects for Effects {
 
     fn frame(&self, _: PresentationAddress, runtime: &mut UiRuntime) {
         self.frames.set(self.frames.get() + 1);
+        if self.fail_operation.replace(false) {
+            std::panic::panic_any("primary owner operation");
+        }
         // The native host services geometry before consulting its wake gate.
         runtime.enter(UiRuntime::drain_owner_inbox);
         if !self.probe_runtime.get() {
@@ -117,7 +121,7 @@ enum ObservationScope {
 fn scheduling_observation_case(scope: ObservationScope) {
     let clock = ManualClock::new();
     let due = clock.now() + Duration::from_secs(1);
-    let runtime = manual_runtime(clock);
+    let (runtime, _window) = manual_runtime(clock);
     let query_calls = Rc::new(Cell::new(0));
     let member = Rc::new(DeadlineQuery {
         calls: Rc::clone(&query_calls),
@@ -137,6 +141,7 @@ fn scheduling_observation_case(scope: ObservationScope) {
     let effects = Effects {
         query_calls: Rc::clone(&query_calls),
         frames: Cell::new(0),
+        fail_operation: Cell::new(false),
         probe_runtime: Cell::new(false),
         runtime_observation: RefCell::new(None),
     };
@@ -172,9 +177,12 @@ fn scheduling_observation_case(scope: ObservationScope) {
     }
 }
 
-fn manual_runtime(clock: ManualClock) -> UiRuntime {
-    UiRuntime::new(
-        crate::owner_publication::window(),
+fn manual_runtime(clock: ManualClock) -> (UiRuntime, Arc<dyn flui_platform_api::PlatformWindow>) {
+    let window = crate::owner_publication::window();
+    // A native host owns the window; the runtime intentionally holds it weakly.
+    let native_window = Arc::clone(window.window());
+    let runtime = UiRuntime::new(
+        window,
         1.0,
         RuntimeHostServices::new(
             Arc::new(|| {}),
@@ -184,7 +192,8 @@ fn manual_runtime(clock: ManualClock) -> UiRuntime {
             flui_scheduler::ClockSource::Manual(clock),
         ),
     )
-    .expect("manual-clock runtime")
+    .expect("manual-clock runtime");
+    (runtime, native_window)
 }
 
 fn owner_wake_uses_the_committed_scheduling_observation() {
@@ -201,6 +210,7 @@ struct ReportProbe {
     effects: Rc<Effects>,
     fail_handler: bool,
     observations: RefCell<Vec<ReportObservation>>,
+    callback_observations: RefCell<Vec<(PresentationAddress, PanicText)>>,
 }
 
 #[derive(Debug)]
@@ -247,6 +257,21 @@ impl Drop for ScopedReportProbe {
 }
 
 fn observe_sampling_report(report: &FrameFailureReport) {
+    let probe = REPORT_PROBE
+        .with(|slot| slot.borrow().clone())
+        .expect("report has a scoped owner probe");
+    if let FrameFailureKind::CallbackPanic { message, .. } = &report.kind {
+        // Existing callback reports keep their original delivery boundary.
+        // Only sampling observation reports promise delivery after lease return.
+        probe
+            .callback_observations
+            .borrow_mut()
+            .push((report.address, message.clone()));
+        if probe.fail_handler {
+            std::panic::panic_any("owner callback report handler");
+        }
+        return;
+    }
     let FrameFailureKind::SamplingPanic {
         first,
         blocking,
@@ -257,9 +282,6 @@ fn observe_sampling_report(report: &FrameFailureReport) {
     else {
         return;
     };
-    let probe = REPORT_PROBE
-        .with(|slot| slot.borrow().clone())
-        .expect("report has a scoped owner probe");
     let queries_before = probe.effects.query_calls.get();
     let executing = probe.owner.is_executing();
     let runtimes = probe.owner.runtime_ids();
@@ -315,11 +337,11 @@ impl tracing::Subscriber for FailingDiagnostics {
     fn exit(&self, _: &tracing::span::Id) {}
 }
 
-fn query_report_case(fail_handler: bool, fail_diagnostics: bool) {
+fn query_report_case(fail_handler: bool, fail_diagnostics: bool, fail_operation: bool) {
     let clock = ManualClock::new();
     let now = clock.now();
     let due = now + Duration::from_secs(1);
-    let runtime = manual_runtime(clock.clone());
+    let (runtime, _window) = manual_runtime(clock.clone());
     runtime.set_frame_failure_detail(FrameFailureDetail::Verbatim);
     runtime.set_frame_failure_handler(Some(FrameFailureHandler::new(observe_sampling_report)));
     let query_calls = Rc::new(Cell::new(0));
@@ -341,6 +363,7 @@ fn query_report_case(fail_handler: bool, fail_diagnostics: bool) {
     let effects = Rc::new(Effects {
         query_calls: Rc::clone(&query_calls),
         frames: Cell::new(0),
+        fail_operation: Cell::new(false),
         probe_runtime: Cell::new(false),
         runtime_observation: RefCell::new(None),
     });
@@ -353,20 +376,41 @@ fn query_report_case(fail_handler: bool, fail_diagnostics: bool) {
         effects: Rc::clone(&effects),
         fail_handler,
         observations: RefCell::new(Vec::new()),
+        callback_observations: RefCell::new(Vec::new()),
     });
     let _probe_scope = ScopedReportProbe::install(Rc::clone(&probe));
     let diagnostic_calls = Arc::new(AtomicUsize::new(0));
     let diagnostics = fail_diagnostics
         .then(|| tracing::subscriber::set_default(FailingDiagnostics(Arc::clone(&diagnostic_calls))));
     member.fail.set(true);
-    assert_eq!(
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            frame.deliver(effects.as_ref())
-        }))
-        .expect("deadline discovery and its diagnostics are contained"),
-        Ok(Delivery::Driven)
-    );
+    effects.fail_operation.set(fail_operation);
+    let delivered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        frame.deliver(effects.as_ref())
+    }));
     drop(diagnostics);
+    if fail_operation {
+        let payload = delivered.expect_err("the original owner operation still propagates");
+        assert_eq!(
+            payload.downcast_ref::<&str>(),
+            Some(&"primary owner operation"),
+            "query, tracing and handler failures cannot replace the owner cause"
+        );
+        assert_eq!(
+            *probe.callback_observations.borrow(),
+            [(address, PanicText::Verbatim("primary owner operation".into()))]
+        );
+        // The failed callback owes the work admitted by its sampling report.
+        // A real next native opportunity supplies the normal FIFO budget.
+        let callback = owner.begin_callback(effects.as_ref()).expect("next callback");
+        owner.continue_work(effects.as_ref());
+        drop(callback);
+    } else {
+        assert_eq!(
+            delivered.expect("deadline discovery and its diagnostics are contained"),
+            Ok(Delivery::Driven)
+        );
+        assert!(probe.callback_observations.borrow().is_empty());
+    }
 
     {
         let observed = probe.observations.borrow();
@@ -409,19 +453,23 @@ fn query_report_case(fail_handler: bool, fail_diagnostics: bool) {
 }
 
 fn query_failure_reports_after_lease_return_and_recovers() {
-    query_report_case(false, false);
+    query_report_case(false, false, false);
 }
 
 fn failing_query_report_handler_preserves_recovery() {
-    query_report_case(true, false);
+    query_report_case(true, false, false);
 }
 
 fn failing_query_diagnostics_preserve_report_and_recovery() {
-    query_report_case(false, true);
+    query_report_case(false, true, false);
 }
 
 fn competing_query_diagnostics_and_handler_preserve_recovery() {
-    query_report_case(true, true);
+    query_report_case(true, true, false);
+}
+
+fn original_owner_failure_survives_query_report_competition() {
+    query_report_case(true, true, true);
 }
 
 #[test]
@@ -452,6 +500,10 @@ fn owner_sampling_contract() {
             (
                 "query diagnostics and handler competition keeps recovery",
                 competing_query_diagnostics_and_handler_preserve_recovery,
+            ),
+            (
+                "original owner failure survives query report competition",
+                original_owner_failure_survives_query_report_competition,
             ),
         ],
     );
