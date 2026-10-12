@@ -26,9 +26,9 @@ use std::time::Duration;
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 
 use flui_animation::{
-    Animatable, AnimatedValue, Animation, AnimationController, ColorTween, Curve, CurvedAnimation,
-    FloatTween, FrictionSimulation, MotionClock, MotionSpec, Simulation, SpringDescription,
-    SpringSimulation, Tolerance, Tween, Vsync, curves,
+    Animatable, AnimatedValue, Animation, AnimationController, Curve, CurvedAnimation,
+    FrictionSimulation, MotionClock, MotionSpec, Simulation, SpringDescription, SpringSimulation,
+    Tolerance, Tween, Vsync, curves,
 };
 use flui_foundation::Listenable;
 use flui_foundation::geometry::Offset;
@@ -45,14 +45,14 @@ const NEVER_ENDING: Duration = Duration::from_secs(u32::MAX as u64);
 fn tween_transform(c: &mut Criterion) {
     let mut group = c.benchmark_group("tween_transform");
 
-    let f = FloatTween::new(0.0, 100.0);
+    let f = Tween::new(0.0, 100.0);
     group.bench_function("f64", |b| {
         b.iter(|| black_box(f.transform(black_box(0.37))));
     });
 
     // Premultiplied Oklab: prices the two colour-space conversions (powf/cbrt per
     // channel) each interior frame pays.
-    let col = ColorTween::new(Color::rgba(0, 0, 255, 255), Color::rgba(255, 255, 0, 128));
+    let col = Tween::new(Color::rgba(0, 0, 255, 255), Color::rgba(255, 255, 0, 128));
     group.bench_function("color", |b| {
         b.iter(|| black_box(col.transform(black_box(0.37))));
     });

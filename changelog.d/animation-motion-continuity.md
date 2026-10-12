@@ -136,7 +136,7 @@
 - Preserve a Hero mapping's evaluation failure through opaque mapping retirement;
   a competing destructor failure no longer aborts before frame containment.
 - Give `Animatable` an associated `Value` type. Manual implementations now
-  declare `type Value`; `TweenAnimation` and `ReverseTween` take only the mapping
+  declare `type Value`; `TweenAnimation` takes only the mapping
   type. Hero rect mappings accept owner-local captures.
 
 - Scalar and geometry interpolation preserve representable extrapolations

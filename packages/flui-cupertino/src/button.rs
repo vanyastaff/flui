@@ -43,11 +43,11 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use flui_sdk::animation::ext::AnimatableExt;
+use flui_sdk::animation::Animatable;
 
 use flui_sdk::animation::{
-    Animation, AnimationController, AnimationRunFuture, CurvedAnimation, DrivenController,
-    FloatTween, curves,
+    Animation, AnimationController, AnimationRunFuture, CurvedAnimation, DrivenController, Tween,
+    curves,
 };
 use flui_sdk::geometry::EdgeInsets;
 use flui_sdk::painting::Alignment;
@@ -394,7 +394,7 @@ fn resolve_foreground_color(
 /// contract — "disables the fade animation entirely". Driving the controller
 /// anyway would tick invisibly (the tween's begin/end both collapse to
 /// `1.0`). Skipping the run here has no observable paint difference —
-/// `build`'s `opacity` `FloatTween` also collapses to `1.0..=1.0` in that
+/// `build`'s `opacity` `Tween` also collapses to `1.0..=1.0` in that
 /// case — it only removes wasted ticking and rebuild-scheduling.
 fn start_press_fade(
     controller: &AnimationController,
@@ -549,7 +549,7 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
                     curves::DECELERATE,
                 ));
                 std::rc::Rc::new(
-                    FloatTween::new(1.0, pressed_opacity)
+                    Tween::new(1.0, pressed_opacity)
                         .animate(curved as std::rc::Rc<dyn Animation<f64>>),
                 )
             }

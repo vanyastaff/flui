@@ -1,15 +1,14 @@
 //! The SDK's surface is the measured list, and each re-export is the item it
 //! names, not a copy.
 //!
-//! The list is every path `flui-material`, `flui-cupertino` and `flui-devtools`
-//! import from the internal crates outside their tests, rewritten to its SDK
-//! path (an associated item reduced to its type), plus `painting::DrawOp`,
+//! The list starts with the package imports measured in ARCHITECTURE.md and
+//! pins subsequent consumer additions and removals, plus `painting::DrawOp`,
 //! which the design systems' paint tests read, `view::dev_reload`, the
 //! hook `flui-hot-reload`'s host drivers implement (ADR-0094 §1), and
 //! `view::dev_agent`, the hook `flui-devtools`' agent server implements
 //! (ADR-0095 §3), and `view::FrameWaker`, the one scheduler capability a
 //! package hands a worker thread (ADR-0136 §2).
-//! ARCHITECTURE.md records how it was measured.
+//! Animation prelude imports also pin the shared package-author entry point.
 
 /// Every measured item through its SDK path: removing or moving one fails to
 /// build this test.
@@ -18,18 +17,21 @@
     reason = "each import only has to resolve; nothing here is used"
 )]
 mod measured {
-    use flui_sdk::animation::ext::AnimatableExt as _;
+    use flui_sdk::animation::prelude::{
+        Animatable as _, AnimatedValue as _, Animation as _, AnimationController as _,
+        AnimationStatus as _, ArcCurve as _, Curve as _, DrivenController as _, Keyframes as _,
+        Listenable as _, MotionSpec as _, Tween as _, TwoWayConverter as _,
+    };
     use flui_sdk::animation::{
         Animatable as _, AnimatedValue as _, AnimatedValueView as _, Animation as _,
         AnimationBehavior as _, AnimationController as _, AnimationError as _, AnimationInput as _,
         AnimationRunFuture as _, AnimationStatus as _, AnimationVector as _, ArcCurve as _,
         ConstantAnimation as _, Cubic as _, Curve as _, CurvedAnimation as _,
-        DrivenController as _, FloatTween as _, JumpAt as _, Keyframes as _, MotionPolicy as _,
-        MotionSpec as _, MotionUpdate as _, PlaybackRate as _, RangeDefect as _, RunCanceled as _,
-        Stagger as _, StaggerOrigin as _, StatusSubscription as _, Steps as _, Tween as _,
-        TwoWayConverter as _, ValueRange as _, Vsync as _, VsyncPublication as _,
-        VsyncRegistration as _, VsyncRegistrationError as _, VsyncRetirement as _,
-        VsyncUpdate as _, animate as _, curves as _,
+        DrivenController as _, JumpAt as _, Keyframes as _, MotionPolicy as _, MotionSpec as _,
+        MotionUpdate as _, PlaybackRate as _, RangeDefect as _, RunCanceled as _, Stagger as _,
+        StaggerOrigin as _, StatusSubscription as _, Steps as _, Tween as _, TwoWayConverter as _,
+        ValueRange as _, Vsync as _, VsyncPublication as _, VsyncRegistration as _,
+        VsyncRegistrationError as _, VsyncRetirement as _, VsyncUpdate as _, curves as _,
     };
     use flui_sdk::foundation::notifier::Listenable as _;
     use flui_sdk::foundation::observe::{
@@ -120,6 +122,20 @@ mod measured {
 #[test]
 fn the_re_exports_are_the_facades_types() {
     let _: fn(flui::animation::AnimationController) -> flui_sdk::animation::AnimationController =
+        |x| x;
+    let _: fn(flui::animation::DrivenController) -> flui_sdk::animation::prelude::DrivenController =
+        |x| x;
+    let _: fn(
+        flui::animation::AnimatedValue<f64>,
+    ) -> flui_sdk::animation::prelude::AnimatedValue<f64> = |x| x;
+    let _: fn(
+        flui::animation::AnimatedValueView<f64>,
+    ) -> flui_sdk::animation::prelude::AnimatedValueView<f64> = |x| x;
+    let _: fn(
+        flui::animation::AnimationRunFuture,
+    ) -> flui_sdk::animation::prelude::AnimationRunFuture = |x| x;
+    let _: fn(flui::animation::MotionSpec) -> flui_sdk::animation::prelude::MotionSpec = |x| x;
+    let _: fn(flui::animation::Keyframes<f64>) -> flui_sdk::animation::prelude::Keyframes<f64> =
         |x| x;
     let _: fn(flui::foundation::ElementId) -> flui_sdk::foundation::ElementId = |x| x;
     let _: fn(flui::geometry::Rect) -> flui_sdk::geometry::Rect = |x| x;

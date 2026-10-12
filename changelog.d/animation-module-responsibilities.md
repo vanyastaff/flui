@@ -1,3 +1,6 @@
 ### Changed
 
-- Value conversion lives in `flui_animation::value_conversion`; value ownership lives in `flui_animation::animated_value`, with motion updates and registry updates in dedicated modules. The former `spring` module is removed; root exports of the value types remain available.
+- Animation value conversion and ownership use crate-root exports:
+  `flui_animation::{AnimationVector, TwoWayConverter, AnimatedValue, AnimatedValueView}`.
+  Their implementation modules and motion/registry update helpers are private;
+  the former `spring` module is removed.

@@ -4,15 +4,6 @@ use crate::animation::{Animation, StatusCallback};
 use crate::status::AnimationStatus;
 use flui_foundation::{Listenable, ListenerCallback, ListenerId};
 use std::fmt;
-use std::sync::atomic::{AtomicUsize, Ordering};
-
-/// Counter for generating unique listener IDs (starts at 1, not 0).
-///
-/// These ids live in `ConstantAnimation`'s own namespace: they are only ever
-/// handed back to [`ConstantAnimation::remove_listener`]-style no-ops and are
-/// never valid for any `ChangeNotifier`-backed animation (which mints ids
-/// from its own counter).
-static LISTENER_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
 /// An animation that always returns the same value.
 ///
@@ -32,11 +23,11 @@ static LISTENER_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
 /// assert_eq!(animation.status(), AnimationStatus::Forward);
 ///
 /// // A settled phase does not imply a particular value or a completed run.
-/// let stopped = ConstantAnimation::forward_settled(0.5);
+/// let stopped = ConstantAnimation::with_status(0.5, AnimationStatus::ForwardSettled);
 /// assert_eq!(stopped.status(), AnimationStatus::ForwardSettled);
 /// assert_eq!(stopped.value(), 0.5);
 ///
-/// let reverse = ConstantAnimation::reverse_settled(0.5);
+/// let reverse = ConstantAnimation::with_status(0.5, AnimationStatus::ReverseSettled);
 /// assert_eq!(reverse.status(), AnimationStatus::ReverseSettled);
 /// ```
 ///
@@ -70,33 +61,11 @@ where
     pub fn with_status(value: T, status: AnimationStatus) -> Self {
         Self { value, status }
     }
-
-    /// Creates a constant value with a forward-settled phase.
-    ///
-    /// The status is [`AnimationStatus::ForwardSettled`].
-    #[must_use]
-    pub fn forward_settled(value: T) -> Self {
-        Self {
-            value,
-            status: AnimationStatus::ForwardSettled,
-        }
-    }
-
-    /// Creates a constant value with a reverse-settled phase.
-    ///
-    /// The status is [`AnimationStatus::ReverseSettled`].
-    #[must_use]
-    pub fn reverse_settled(value: T) -> Self {
-        Self {
-            value,
-            status: AnimationStatus::ReverseSettled,
-        }
-    }
 }
 
 impl<T> Animation<T> for ConstantAnimation<T>
 where
-    T: Clone + fmt::Debug + 'static,
+    T: Clone + 'static,
 {
     #[inline]
     fn value(&self) -> T {
@@ -123,9 +92,14 @@ where
     T: Clone + 'static,
 {
     fn add_listener(&self, _callback: ListenerCallback) -> ListenerId {
-        // Value never changes, so we don't need to store the listener.
-        // Return a unique ID anyway for API consistency.
-        ListenerId::new(LISTENER_ID_COUNTER.fetch_add(1, Ordering::Relaxed))
+        // No registration is admitted. Core notifiers check the successor
+        // before minting an ID, so MAX is outside their allocated namespace.
+        ListenerId::new(usize::MAX)
+    }
+
+    fn add_observer(&self, _observer: flui_foundation::notifier::ListenerObserver) -> ListenerId {
+        // Retire the inert relay directly, without the default wrapper allocation.
+        ListenerId::new(usize::MAX)
     }
 
     fn remove_listener(&self, _id: ListenerId) {
@@ -139,13 +113,12 @@ where
 
 impl<T> fmt::Debug for ConstantAnimation<T>
 where
-    T: Clone + fmt::Debug + 'static,
+    T: Clone + 'static,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ConstantAnimation")
-            .field("value", &self.value)
             .field("status", &self.status)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

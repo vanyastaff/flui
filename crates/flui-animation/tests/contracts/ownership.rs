@@ -15,8 +15,8 @@ use std::time::Duration;
 
 use crate::child_process;
 use flui_animation::{
-    Animation, AnimationController, AnimationStatus, AnimationSwitch, CurvedAnimation, FloatTween,
-    ProxyAnimation, ReverseAnimation, TweenAnimation, Vsync, curves,
+    Animation, AnimationController, AnimationStatus, AnimationSwitch, CurvedAnimation,
+    ProxyAnimation, ReverseAnimation, Tween, TweenAnimation, Vsync, curves,
 };
 use flui_foundation::Listenable;
 
@@ -1652,6 +1652,45 @@ fn dispose_releases_value_listeners() {
 }
 
 #[test]
+fn constant_listener_tokens_never_withdraw_live_callbacks() {
+    use flui_animation::ConstantAnimation;
+    use flui_foundation::ChangeNotifier;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let notifier = ChangeNotifier::new();
+    let calls = Rc::new(Cell::new(0));
+    notifier.add_listener({
+        let calls = Rc::clone(&calls);
+        Rc::new(move || calls.set(calls.get() + 1))
+    });
+    let constant = ConstantAnimation::new(0.5);
+    let capture = Rc::new(());
+    let token = constant.add_listener({
+        let capture = Rc::clone(&capture);
+        Rc::new(move || {
+            let _ = &capture;
+            panic!("a constant cannot notify");
+        })
+    });
+    assert_eq!(
+        Rc::strong_count(&capture),
+        1,
+        "an inert callback retires at admission"
+    );
+    notifier.remove_listener(token);
+    notifier.notify_listeners();
+    assert_eq!(
+        calls.get(),
+        1,
+        "an unregistered constant token cannot remove live work"
+    );
+    constant.remove_listener(token);
+    notifier.notify_listeners();
+    assert_eq!(calls.get(), 2);
+}
+
+#[test]
 fn last_handle_drop_releases_a_running_controller() {
     let (drops, probe) = drop_probe();
     let controller = AnimationController::builder(Duration::from_secs(1)).build();
@@ -1720,7 +1759,7 @@ fn curved_over_disposed_source() {
 }
 fn tween_over_disposed_source() {
     wrapper_over_a_disposed_source(|parent| {
-        std::rc::Rc::new(TweenAnimation::new(FloatTween::new(0.0, 10.0), parent))
+        std::rc::Rc::new(TweenAnimation::new(Tween::new(0.0, 10.0), parent))
     });
 }
 fn proxy_over_disposed_source() {
@@ -1781,7 +1820,7 @@ fn curved_status_listener_dies_with_the_wrapper() {
 #[test]
 fn tween_status_listener_dies_with_the_wrapper() {
     wrapper_status_listener_dies_with_the_wrapper(|parent| {
-        TweenAnimation::new(FloatTween::new(0.0, 10.0), parent)
+        TweenAnimation::new(Tween::new(0.0, 10.0), parent)
     });
 }
 

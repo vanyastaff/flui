@@ -80,7 +80,7 @@ impl Animation<f64> for ReverseAnimation {
 
     fn subscribe_status_observer(
         &self,
-        observer: crate::animation::StatusObserver,
+        observer: crate::StatusObserver,
     ) -> crate::StatusSubscription {
         self.links.subscribe_status_observer(observer)
     }

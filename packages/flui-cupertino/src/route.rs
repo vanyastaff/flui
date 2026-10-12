@@ -60,7 +60,7 @@
 
 use std::time::Duration;
 
-use flui_sdk::animation::{Animation, ArcCurve, Curve, CurvedAnimation, Tween, animate, curves};
+use flui_sdk::animation::{Animatable, Animation, ArcCurve, Curve, CurvedAnimation, Tween, curves};
 use flui_sdk::painting::Color;
 use flui_sdk::pipeline::TranslationFraction;
 use flui_sdk::view::prelude::BuildContext;
@@ -148,7 +148,7 @@ fn cupertino_page_transitions(
         .is_some_and(|navigator| navigator.user_gesture_in_progress());
 
     let primary_position = if linear_transition {
-        animate(right_middle_tween(), std::rc::Rc::clone(primary))
+        right_middle_tween().animate(std::rc::Rc::clone(primary))
     } else {
         let curved = CurvedAnimation::new(
             std::rc::Rc::clone(primary),
@@ -158,17 +158,17 @@ fn cupertino_page_transitions(
             curves::FAST_EASE_IN_TO_SLOW_EASE_OUT.flipped(),
         ));
         let curved: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(curved);
-        animate(right_middle_tween(), curved)
+        right_middle_tween().animate(curved)
     };
 
     let secondary_position = if linear_transition {
-        animate(middle_left_tween(), std::rc::Rc::clone(secondary))
+        middle_left_tween().animate(std::rc::Rc::clone(secondary))
     } else {
         let curved =
             CurvedAnimation::new(std::rc::Rc::clone(secondary), curves::LINEAR_TO_EASE_OUT)
                 .with_reverse_curve(curves::EASE_IN_TO_LINEAR);
         let curved: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(curved);
-        animate(middle_left_tween(), curved)
+        middle_left_tween().animate(curved)
     };
 
     let text_direction = Directionality::maybe_of(ctx);

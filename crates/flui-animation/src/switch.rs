@@ -277,7 +277,7 @@ impl AnimationSwitch {
     /// status transitions through our notifier.
     fn make_status_callback(
         inner_weak: &std::rc::Weak<RefCell<AnimationSwitchInner>>,
-    ) -> crate::animation::StatusObserver {
+    ) -> crate::StatusObserver {
         let inner_weak = inner_weak.clone();
         Rc::new(move |status, recovery| {
             if let Some(state) = inner_weak.upgrade() {
@@ -547,7 +547,7 @@ impl Animation<f64> for AnimationSwitch {
 
     fn subscribe_status_observer(
         &self,
-        observer: crate::animation::StatusObserver,
+        observer: crate::StatusObserver,
     ) -> crate::StatusSubscription {
         if self.owner.inner.borrow().disposed {
             self.owner.reject_status(observer);
