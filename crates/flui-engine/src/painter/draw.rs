@@ -281,6 +281,9 @@ impl super::WgpuPainter {
             && paint.anti_alias
             && !paint.has_shader()
             && let Some(rrect) = path.rrect_hint()
+            && rrect.bounding_rect().is_finite()
+            && rrect.bounding_rect().width() > 0.0
+            && rrect.bounding_rect().height() > 0.0
             && [
                 rrect.top_left,
                 rrect.top_right,
@@ -288,7 +291,17 @@ impl super::WgpuPainter {
                 rrect.bottom_left,
             ]
             .into_iter()
-            .all(|radius| radius.x == radius.y)
+            .all(|radius| {
+                radius.x == radius.y
+                    && radius.x.is_finite()
+                    && radius.x >= 0.0
+                    && radius.x
+                        <= rrect
+                            .bounding_rect()
+                            .width()
+                            .min(rrect.bounding_rect().height())
+                            * 0.5
+            })
         {
             self.draw_rrect(rrect, paint);
             return;

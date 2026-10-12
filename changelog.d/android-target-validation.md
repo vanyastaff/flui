@@ -9,4 +9,8 @@
 - Submit seed, clear, drawing and presentation commands together while preserving retained-frame recovery and GPU resource retirement.
 - Share render passes between adjacent tessellated and instanced geometry while preserving texture and destination-read boundaries.
 - Retire lazy sliver descendants before their host render objects during scene replacement.
-- Preserve Android keyboard layout and modifier-dependent characters instead of substituting lowercase ASCII.
+- Preserve Android keyboard layout and modifier-dependent characters, with a US keycode fallback for synthetic devices or failed native map lookups.
+
+### Changed
+
+- Require Android API 23 or newer in SDK-tools APK packaging and generated Gradle projects, matching the native safe-area capture API.

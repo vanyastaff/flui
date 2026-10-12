@@ -37,7 +37,8 @@ extents refuse without overflowing integer subtraction; the same case then
 renders a healthy frame with the original budget.
 
 Known circular-corner rounded rectangle path fills reuse the existing direct
-shape route for antialiased SrcOver fills without shaders. Elliptical corners,
+shape route for antialiased SrcOver fills without shaders. Radii must be finite,
+nonnegative and no larger than half either extent. Degenerate and elliptical corners,
 strokes and other paint semantics retain path tessellation. SSAA tile admission
 intersects recorded tessellation scissors before allocating attachments, and
 the downsample pass owns its transparent clear. Supersampled color and
@@ -50,6 +51,8 @@ against preceding geometry in the same pooled allocation.
 `rounded_rect_route_quality` compares direct and SSAA rounded rectangle fills
 against independent geometric area coverage under fractional, scaled, rotated
 and translucent drawing in the painter readback table.
+`degenerate_rounded_paths_preserve_contour_coverage` compares negative and
+oversized radii against the same public path commands without a shape hint.
 
 | Concern | Files | What lives there |
 |---|---|---|

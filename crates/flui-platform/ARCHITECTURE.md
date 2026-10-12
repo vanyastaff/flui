@@ -55,6 +55,8 @@ trait depends on `flui-platform-api` instead.
 ### Android captures safe-area geometry on the Java view thread
 
 System-bar and display-cutout insets are sampled from the Activity decor view.
+Packaged applications require API 23, where `View.getRootWindowInsets` becomes
+available; both SDK-tools packaging and generated Gradle configuration enforce it.
 The owner accepts a reply only while its window remains live and the sampled
 physical size matches the current native window. Stable insets exclude keyboard
 occlusion. One query may be outstanding; accepted changes dispatch callbacks
@@ -64,8 +66,9 @@ rotation and resume additionally require a device run.
 
 Android printable keyboard keys come from the input device's `KeyCharacterMap`
 using the event's native meta-state. Physical codes and named keys keep their
-existing translation. A dead key remains `NamedKey::Dead`; unavailable maps do
-not invent an ASCII character. `android_native_key_map_preserves_logical_keys`
+existing translation. A dead key remains `NamedKey::Dead`; unavailable maps
+retain the legacy US keycode fallback, including Shift and Caps Lock. A successful
+map reporting no character remains unidentified. `android_native_key_map_preserves_logical_keys`
 pins the projection, while actual layout and Shift mapping require live input.
 
 ### Web subscriptions belong to one actual canvas registration

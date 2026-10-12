@@ -621,9 +621,8 @@ pub fn convert_key_event(
     } else {
         None
     };
-    let key = mapped_key(named_key, mapped);
-
     let modifiers = convert_meta_state(event.meta_state());
+    let key = mapped_key(named_key, mapped, keycode_i32, modifiers);
     let repeat = event.repeat_count() > 0;
 
     Some(keyboard_input(
@@ -640,7 +639,12 @@ pub fn convert_key_event(
     ))
 }
 
-fn mapped_key(named: NamedKey, mapped: Option<android_activity::input::KeyMapChar>) -> Key {
+fn mapped_key(
+    named: NamedKey,
+    mapped: Option<android_activity::input::KeyMapChar>,
+    keycode: i32,
+    modifiers: Modifiers,
+) -> Key {
     use android_activity::input::KeyMapChar;
     if named != NamedKey::Unidentified {
         return Key::Named(named);
@@ -648,8 +652,61 @@ fn mapped_key(named: NamedKey, mapped: Option<android_activity::input::KeyMapCha
     match mapped {
         Some(KeyMapChar::Unicode(character)) => Key::Character(character.to_string()),
         Some(KeyMapChar::CombiningAccent(_)) => Key::Named(NamedKey::Dead),
-        Some(KeyMapChar::None) | None => Key::Named(NamedKey::Unidentified),
+        Some(KeyMapChar::None) => Key::Named(NamedKey::Unidentified),
+        None => fallback_character(keycode, modifiers)
+            .map_or(Key::Named(NamedKey::Unidentified), |character| {
+                Key::Character(character.to_string())
+            }),
     }
+}
+
+/// Legacy US keycode fallback only when the native map lookup fails.
+fn fallback_character(keycode: i32, modifiers: Modifiers) -> Option<char> {
+    use ui_events::keyboard::android::{
+        KEYCODE_0, KEYCODE_9, KEYCODE_A, KEYCODE_APOSTROPHE, KEYCODE_AT, KEYCODE_BACKSLASH,
+        KEYCODE_COMMA, KEYCODE_EQUALS, KEYCODE_GRAVE, KEYCODE_LEFT_BRACKET, KEYCODE_MINUS,
+        KEYCODE_PERIOD, KEYCODE_PLUS, KEYCODE_POUND, KEYCODE_RIGHT_BRACKET, KEYCODE_SEMICOLON,
+        KEYCODE_SLASH, KEYCODE_SPACE, KEYCODE_STAR, KEYCODE_Z,
+    };
+    let shift = modifiers.contains(Modifiers::SHIFT);
+    if (KEYCODE_A..=KEYCODE_Z).contains(&keycode) {
+        let base = if shift ^ modifiers.contains(Modifiers::CAPS_LOCK) {
+            b'A'
+        } else {
+            b'a'
+        };
+        return u8::try_from(keycode - KEYCODE_A)
+            .ok()
+            .map(|offset| char::from(base + offset));
+    }
+    if (KEYCODE_0..=KEYCODE_9).contains(&keycode) {
+        let offset = usize::try_from(keycode - KEYCODE_0).ok()?;
+        return Some(char::from(if shift {
+            b")!@#$%^&*("[offset]
+        } else {
+            b"0123456789"[offset]
+        }));
+    }
+    let (plain, shifted) = match keycode {
+        KEYCODE_SPACE => (' ', ' '),
+        KEYCODE_COMMA => (',', '<'),
+        KEYCODE_PERIOD => ('.', '>'),
+        KEYCODE_MINUS => ('-', '_'),
+        KEYCODE_EQUALS => ('=', '+'),
+        KEYCODE_LEFT_BRACKET => ('[', '{'),
+        KEYCODE_RIGHT_BRACKET => (']', '}'),
+        KEYCODE_BACKSLASH => ('\\', '|'),
+        KEYCODE_SEMICOLON => (';', ':'),
+        KEYCODE_APOSTROPHE => ('\'', '"'),
+        KEYCODE_SLASH => ('/', '?'),
+        KEYCODE_GRAVE => ('`', '~'),
+        KEYCODE_AT => ('@', '@'),
+        KEYCODE_PLUS => ('+', '+'),
+        KEYCODE_POUND => ('#', '#'),
+        KEYCODE_STAR => ('*', '*'),
+        _ => return None,
+    };
+    Some(if shift { shifted } else { plain })
 }
 
 /// Convert Android `MetaState` to `keyboard_types::Modifiers`.
@@ -722,14 +779,31 @@ mod tests {
                 Some(KeyMapChar::None),
                 Key::Named(NamedKey::Unidentified),
             ),
-            (
-                NamedKey::Unidentified,
-                None,
-                Key::Named(NamedKey::Unidentified),
-            ),
+            (NamedKey::Unidentified, None, Key::Character("a".into())),
             (NamedKey::Enter, None, Key::Named(NamedKey::Enter)),
         ] {
-            assert_eq!(mapped_key(named, mapped), expected);
+            assert_eq!(
+                mapped_key(
+                    named,
+                    mapped,
+                    ui_events::keyboard::android::KEYCODE_A,
+                    Modifiers::empty()
+                ),
+                expected
+            );
+        }
+        for (code, modifiers, expected) in [
+            (29, Modifiers::SHIFT, "A"),
+            (54, Modifiers::CAPS_LOCK, "Z"),
+            (29, Modifiers::SHIFT | Modifiers::CAPS_LOCK, "a"),
+            (8, Modifiers::SHIFT, "!"),
+            (11, Modifiers::empty(), "4"),
+            (76, Modifiers::SHIFT, "?"),
+        ] {
+            assert_eq!(
+                mapped_key(NamedKey::Unidentified, None, code, modifiers),
+                Key::Character(expected.into())
+            );
         }
     }
 

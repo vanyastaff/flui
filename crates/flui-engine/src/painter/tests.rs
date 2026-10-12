@@ -218,6 +218,45 @@ fn reused_ssaa_tiles_do_not_retain_previous_geometry() {
     );
 }
 
+fn degenerate_rounded_paths_preserve_contour_coverage() {
+    use flui_foundation::geometry::RRect;
+    use flui_painting::{
+        Paint,
+        paint::path::{Path, PathCommand},
+        styling::Color,
+    };
+    let (device, queue) = test_device_and_queue();
+    for radius in [-8.0, 20.0, 48.0] {
+        let hinted = Path::from_rrect(RRect::from_rect_circular(
+            Rect::from_xywh(24.0, 24.0, 32.0, 24.0),
+            radius,
+        ));
+        let mut contours = Path::with_fill_type(hinted.fill_type());
+        for command in hinted.commands() {
+            match command {
+                PathCommand::MoveTo(point) => contours.move_to(point),
+                PathCommand::LineTo(point) => contours.line_to(point),
+                PathCommand::QuadraticTo(control, end) => {
+                    contours.quadratic_bezier_to(control, end)
+                }
+                PathCommand::CubicTo(first, second, end) => contours.cubic_to(first, second, end),
+                PathCommand::Close => contours.close(),
+            }
+        }
+        let render = |path: &Path| {
+            render_to_rgba(&device, &queue, 96, wgpu::Color::BLACK, |painter| {
+                painter.draw_path(path, &Paint::fill(Color::RED));
+            })
+        };
+        let actual = render(&hinted);
+        let expected = render(&contours);
+        assert!(
+            actual == expected,
+            "radius {radius} must retain explicit contour coverage"
+        );
+    }
+}
+
 fn rounded_rect_route_quality() {
     use flui_foundation::geometry::{Offset, Point, RRect};
     use flui_painting::{
@@ -754,7 +793,11 @@ fn retained_presentation_preserves_bytes_and_fallbacks() {
 /// composites with its own blend mode.
 #[test]
 fn painter_images_and_offscreen_results_read_back_as_specified() {
-    let cases: [(&str, fn()); 96] = [
+    let cases: [(&str, fn()); 97] = [
+        (
+            "degenerate rounded path coverage",
+            degenerate_rounded_paths_preserve_contour_coverage,
+        ),
         (
             "retained presentation copy and fallback",
             retained_presentation_preserves_bytes_and_fallbacks,

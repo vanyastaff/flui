@@ -29,6 +29,12 @@ emulators. A failed build with hot reload disabled exits as a build failure;
 there is no watcher that could repair it. `android_run_builds_the_selected_device_native_abi`
 pins both the target argument and bounded failure through the CLI process.
 
+Both SDK-tools APK packaging and generated Gradle projects require API 23,
+matching the platform's [View.getRootWindowInsets](https://developer.android.com/reference/android/view/View#getRootWindowInsets()) safe-area capture boundary.
+`apk_link_requires_supported_window_insets_api` pins the aapt2 invocation;
+`scaffolded_platforms_ignore_and_clean_what_builds_write` checks the generated
+application configuration through the CLI.
+
 ### Local source dependencies are explicit Cargo paths
 
 `flui create NAME --local` selects the current working directory as the source

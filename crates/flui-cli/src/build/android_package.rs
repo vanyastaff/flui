@@ -52,7 +52,8 @@ pub(crate) struct BuildTools {
     java_home: Option<PathBuf>,
 }
 
-const MIN_SDK: u32 = 21;
+// View.getRootWindowInsets is the native safe-area capture boundary.
+const MIN_SDK: u32 = 23;
 const DEBUG_ALIAS: &str = "androiddebugkey";
 const DEBUG_PASSWORD: &str = "android";
 
@@ -308,6 +309,23 @@ fn newest_platform(platforms: &Path) -> Option<(PathBuf, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn apk_link_requires_supported_window_insets_api() {
+        let tools = BuildTools {
+            aapt2: PathBuf::new(),
+            zipalign: PathBuf::new(),
+            apksigner: PathBuf::new(),
+            android_jar: PathBuf::from("android.jar"),
+            api_level: 35,
+            java_home: None,
+        };
+        let args = tools.link_args(Path::new("AndroidManifest.xml"), Path::new("base.apk"));
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--min-sdk-version", "23"])
+        );
+    }
 
     #[test]
     fn native_libraries_are_appended_stored_under_their_abi() {
