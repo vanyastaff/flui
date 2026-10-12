@@ -1316,6 +1316,23 @@ impl PresentationState {
         });
     }
 
+    /// Read host scheduling state without applying invalidations or calling
+    /// observers. Queued stale work and a checked-out pipeline conservatively
+    /// contribute until the next owner preparation or frame operation.
+    #[must_use]
+    pub(crate) fn has_pending_work_snapshot(&self) -> bool {
+        self.widgets.has_pending_builds()
+            || self.has_pending_layout_builder_work()
+            || self
+                .renderer
+                .root_pipeline_owner()
+                .try_with(|owner| {
+                    owner.has_pending_invalidations()
+                        || owner.has_dirty_nodes() && !owner.layout_waits_for_input()
+                })
+                .unwrap_or(true)
+    }
+
     #[must_use]
     pub(crate) fn has_pending_work(&self) -> bool {
         self.widgets.has_pending_builds()

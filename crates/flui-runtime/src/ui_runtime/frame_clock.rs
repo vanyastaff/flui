@@ -466,9 +466,12 @@ impl UiRuntime {
     /// although secondary windows are contentless today, so the union must
     /// remain presentation-wide rather than assuming the primary is the
     /// UI runtime's only source of pending work.
+    /// This observation applies no invalidation, queries no deadline extension
+    /// and invokes no observer or diagnostics. Queued requests, including ones
+    /// whose attachment later retired, contribute until the next owner turn.
     pub fn has_pending_work(&self) -> bool {
         self.presentations.iter().any(|presentation| {
-            presentation.has_pending_work()
+            presentation.has_pending_work_snapshot()
                 || presentation.has_eligible_completion()
                 || presentation.gestures().has_pending_motion()
                 || flui_interaction::__runtime::has_pending_deadlines_snapshot(

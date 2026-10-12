@@ -1662,9 +1662,17 @@ fn a_drain_while_the_context_is_lent_defers_the_change() {
     let (mut owner, paragraph, _) = laid_out_paragraph_and_box(&text);
 
     text.with(|lent| {
+        assert!(
+            !owner.has_pending_invalidations(),
+            "a measurement loan alone does not invent pending work"
+        );
         lent.fonts()
             .register_font(PROBE_MONO)
             .expect("the probe face loads");
+        assert!(
+            !owner.has_pending_invalidations(),
+            "the collection change waits for the current text loan to return"
+        );
         owner.drain_pending_dirty();
     });
     assert!(
@@ -1672,10 +1680,18 @@ fn a_drain_while_the_context_is_lent_defers_the_change() {
         "the change waits while the context is lent"
     );
 
+    assert!(
+        owner.has_pending_invalidations(),
+        "the returned loan exposes the accepted collection generation"
+    );
     owner.drain_pending_dirty();
     assert!(
         needs_layout(&owner, paragraph),
         "the next drain lays the paragraph out again"
+    );
+    assert!(
+        !owner.has_pending_invalidations(),
+        "the applied collection change owes no second invalidation"
     );
 }
 
