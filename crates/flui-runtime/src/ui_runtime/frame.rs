@@ -211,7 +211,7 @@ impl UiRuntime {
                     );
                     self.report_frame_failure(presentation, FrameFailureKind::Pipeline { error });
                     FramePaintOutcome::Errored {
-                        retry: !waits_for_input || presentation.has_pending_work(),
+                        retry: !waits_for_input || presentation.has_pending_work_snapshot(),
                     }
                 }
                 Err(payload) => {

@@ -158,7 +158,7 @@ impl<'runtime> PresentationSampling<'runtime> {
             }
             presentation.reconcile_semantics_enablement();
             let woken = presentation.take_redraw_pending();
-            let pending = presentation.has_pending_work();
+            let pending = presentation.prepare_pending_work();
             let blocked = presentation.pipeline().with(PipelineOwner::layout_waits_for_input);
             if (woken && !blocked) || pending || resuming {
                 presentation.clock().mark_demand(DemandKind::Dirty);
