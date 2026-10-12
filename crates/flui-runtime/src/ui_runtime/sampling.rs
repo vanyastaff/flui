@@ -26,6 +26,11 @@ enum Admission {
     Segment(AdmittedSegment),
 }
 
+enum DeadlineOperation {
+    Observe,
+    PollDue,
+}
+
 /// One presentation's first failure and its independent publication evidence.
 pub(super) struct PresentationSampling<'runtime> {
     presentation: &'runtime PresentationState,
@@ -316,15 +321,19 @@ impl<'runtime> PresentationSampling<'runtime> {
 impl UiRuntime {
     /// Refresh extension observations after an owner operation, never from a getter.
     pub(crate) fn refresh_deadline_observations(&self, state: crate::owner::RecoveryState) {
-        self.enter(|runtime| runtime.sample_deadline_operations(state, false));
+        self.enter(|runtime| runtime.sample_deadline_operations(state, DeadlineOperation::Observe));
     }
 
     /// Input correctness progresses even while native frame production is disabled.
     pub(super) fn sample_background_deadlines(&self, state: crate::owner::RecoveryState) {
-        self.enter(|runtime| runtime.sample_deadline_operations(state, true));
+        self.enter(|runtime| runtime.sample_deadline_operations(state, DeadlineOperation::PollDue));
     }
 
-    fn sample_deadline_operations(&self, state: crate::owner::RecoveryState, poll: bool) {
+    fn sample_deadline_operations(
+        &self,
+        state: crate::owner::RecoveryState,
+        deadlines: DeadlineOperation,
+    ) {
         let now = flui_foundation::MonotonicClock::now(&self.clock);
         let mut sampling: Vec<_> = self
             .presentations
@@ -337,6 +346,13 @@ impl UiRuntime {
                 operation.recovery.inherit_failure();
             }
             let presentation = operation.presentation;
+            // Host observations only read admissions. Apply their queued work
+            // here, after caller-held registry guards have been released.
+            operation.run(SamplingStage::Preparation, |_| {
+                presentation.pipeline().with_mut(|owner| {
+                    owner.drain_pending_dirty();
+                });
+            });
             operation.run(SamplingStage::DeadlineDiscovery, |recovery| {
                 flui_interaction::__runtime::refresh_deadlines_with_recovery(
                     presentation.gestures(),
@@ -344,7 +360,7 @@ impl UiRuntime {
                     recovery,
                 );
             });
-            if poll {
+            if matches!(deadlines, DeadlineOperation::PollDue) {
                 operation.run(SamplingStage::GestureDeadline, |recovery| {
                     flui_interaction::__runtime::tick_deadlines_with_recovery(
                         presentation.gestures(),
