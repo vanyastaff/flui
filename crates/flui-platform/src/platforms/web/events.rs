@@ -648,7 +648,7 @@ fn convert_keyboard_event(ke: &web_sys::KeyboardEvent, state: KeyState) -> Platf
         modifiers |= Modifiers::META;
     }
 
-    let key = map_key_value(&ke.key());
+    let key = map_key_value(ke.key());
 
     let location = match ke.location() {
         1 => Location::Left,
@@ -701,12 +701,12 @@ fn extract_modifiers_from_mouse(e: &web_sys::MouseEvent) -> Modifiers {
 }
 
 /// Named values precede source-specific Unicode admission; refusal preserves the event.
-fn map_key_value(key: &str) -> Key {
-    if matches!(key, "Hyper" | "Super") {
+fn map_key_value(key: String) -> Key {
+    if matches!(key.as_str(), "Hyper" | "Super") {
         Key::Named(NamedKey::Meta)
-    } else if let Some(named) = NamedKey::from_w3c(key) {
+    } else if let Some(named) = NamedKey::from_w3c(&key) {
         Key::Named(named)
-    } else if is_web_key_string(key) {
+    } else if is_web_key_string(&key) {
         Key::character(key)
     } else {
         Key::Named(NamedKey::Unidentified)

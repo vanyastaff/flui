@@ -180,6 +180,18 @@ document.getElementById('owned-keyboard').onclick = () => check('owned-keyboard-
       });
     }
   }
+  // A refused key must not leave composition, modifiers or repeat on the next event.
+  for (const [type, state] of [['keydown', 'Down'], ['keyup', 'Up']]) {
+    const source = new KeyboardEvent(type, { key: 'z', code: 'KeyZ' });
+    report('keyboard', 'null');
+    window.dispatchEvent(source);
+    equal(JSON.parse(document.getElementById('keyboard').textContent), {
+      key: 'z', key_kind: 'Character', code: 'KeyZ',
+      time: Math.trunc(source.timeStamp * 1_000_000), state, location: 'Standard',
+      repeat: 'First', composition: 'Inactive',
+      shift: false, control: false, alt: false, meta: false,
+    });
+  }
 });
 document.getElementById('keyboard-getter-reentry').onclick = () => check('keyboard-getter-reentry-check', () => {
   if (!document.querySelector('canvas')) throw new Error('Install input first');
