@@ -17,6 +17,7 @@
   2026-09-26. §4.2 is implemented (2026-09-29): `runtime-internals` is gone and its items are
   at `flui_view::__runtime`; the facade and the SDK shadow it.
 - **Date:** 2026-09-25
+- **Amended:** 2026-10-11 — current manifest inventory and testing/runtime order are distinguished from the original tier-migration evidence; qualified acceptance remains unchanged.
 - **Amended by (on acceptance):** [ADR-0098](ADR-0098-owned-f64-geometry-values.md) (§8) — `flui-geometry` and
   `flui-types` are deleted; the V tier's values live in `flui-foundation` and their owners
   above it, so the tier table and the `mint` findings below name crates that no longer exist.
@@ -139,20 +140,22 @@ optional under `testing`) exited with ADR-0082: both now name `flui-platform-api
 their entries are gone. `flui-app -> flui-hot-reload` exited with ADR-0094's hook (2026-09-29:
 `flui-app` reaches a reload tool only through an installed `DevReloadHook`). Three remain:
 `flui -> flui-hot-reload` exits with ADR-0094; `flui -> flui-material` and
-`flui -> flui-cupertino` exit with ADR-0088. In K, `flui-widgets` names `flui-testing` as an
-optional normal dependency (`crates/flui-widgets/Cargo.toml:89`), so `flui-testing` has the
-smaller `order`; moving the harness above the runtime removes that edge first.
+`flui -> flui-cupertino` exit with ADR-0088. That paragraph describes the original
+migration's refused edges. Current `flui-widgets` reaches `flui-testing` only as a
+dev dependency; `flui-runtime` is K/internal order 4 and `flui-testing` is K/internal
+order 6. Manifest metadata is the current inventory; implemented reach/kind rules
+do not by themselves approve this record's remaining Proposed clauses.
 
 | Tier | Contains | Forbidden in the normal graph (reach fact) |
 |---|---|---|
-| **V** values | `flui-geometry`, `flui-types`, `flui-macros`, `flui-foundation` (with the signal read contract; [ADR-0085](ADR-0085-reactive-core-placement-and-phase-subscribers.md) keeps the graph in `flui-view`) | everything in S's set, plus `tokio` |
+| **V** values | `flui-macros`, `flui-foundation` (owned geometry and the signal read contract; [ADR-0085](ADR-0085-reactive-core-placement-and-phase-subscribers.md) keeps the graph in `flui-view`) | everything in S's set, plus `tokio` |
 | **C** contracts | `flui-platform-api` ([ADR-0082](ADR-0082-platform-api-contract-crate.md)), `flui-protocol` ([ADR-0095](ADR-0095-agent-protocol-schema-crate.md)) | S's set |
 | **S** substrate | `flui-log`, `flui-scheduler`, `flui-painting`, `flui-interaction`, `flui-semantics`, `flui-animation`, `flui-assets` | K's set |
 | **R** render machine | `flui-layer`, `flui-rendering`, `flui-objects`, `flui-engine` (and a CPU backend, [ADR-0087](ADR-0087-raster-contract-and-cpu-backend.md)) | K's set; `wgpu` stays in it, and only `flui-engine`'s `grant` (§2) admits it |
 | **K** spine and runtime | `flui-view`, `flui-widgets`, `flui-runtime` ([ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md)), `flui-testing`, `flui-sdk` ([ADR-0088](ADR-0088-official-packages-sdk-and-facade.md)) | `flui-platform`, `winit`, `android-activity`, `ndk`, `windows`, `objc2-app-kit`, `objc2-ui-kit`, `wgpu`, `flui-engine`, `flui-app` |
 | **H** hosts | `flui-platform` (OS backends), `flui-app` (runners), `flui-cli`, the `flui` facade | none |
 | **pkg** official packages | `flui-material`, `flui-cupertino`, `flui-devtools`, `flui-hot-reload`, later packages | K's set, plus any other OS crate, with named exceptions |
-| **deleted** | `flui-tree`, `flui-localizations` (removed 2026-09-26) | — |
+| **deleted** | `flui-tree`, `flui-localizations` (removed 2026-09-26); `flui-geometry`, `flui-types` (their values moved to owners under ADR-0098) | — |
 
 The K set is the corrected list from owner decision 4. Generic FFI crates (`windows-sys`,
 `jni`, bare `objc2`, `core-foundation`) are **not** forbidden in K: they arrive through

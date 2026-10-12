@@ -204,8 +204,9 @@ back-links.
 - **Status:** Resolved by the owner on 2026-09-25.
 - **Decision:** back-links are added only in the PR that accepts each new ADR. There is **no**
   symmetry gate. The lines that are already missing (ADR-0065 lacks `Amended by: ADR-0067`;
-  ADR-0016 lacks `Amended by: ADR-0065, ADR-0067`) are fixed at acceptance time too; no older ADR
-  is edited now.
+  ADR-0016 lacked `Amended by: ADR-0065, ADR-0067`) were to be fixed at acceptance time;
+  no older ADR was edited by that original decision. Current authority is Accepted
+  ADR-0092: it fully supersedes the retired ADR-0016 and retains its immutable history.
 
 ---
 

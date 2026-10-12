@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-05
+- **Amended:** 2026-10-11 — the unconditional focus-drop example is identified as the former motivating defect; operation boundaries and exceptional retention remain unchanged.
 - **Supersedes:** [ADR-0119](ADR-0119-inert-panic-payload-retirement.md), in part:
   its statement that callback captures, queued obligations and render-object
   destruction keep their existing ownership policies. Its payload rule stands.
@@ -60,8 +61,8 @@ double-panic is not among the cases a container claims to survive.
 
 Containers that still drop user values during unwinding, or after a caught
 failure in the same operation, disagree with this decision and are defects. For
-example, `FocusManager::close` drops its taken callback vectors unconditionally.
-They are brought into line by the retirement changes to focus, text input,
+example, the former `FocusManager::close` dropped its taken callback vectors unconditionally.
+That path now follows first-failure retirement. The policy is applied by the changes to focus, text input,
 pointer routes, navigation, animation, rendering, notifiers and presentation
 close that cite this ADR.
 

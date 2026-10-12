@@ -15,6 +15,7 @@
   headless sink; `HeadlessBinding::pump_frame` remains for the raw-owner suites until move 6b.
   The rest of §1 and §2, §3, the rest of §4 and §5 remain Proposed.
 - **Date:** 2026-09-25
+- **Amended:** 2026-10-11 — the current animation clock and complete-turn owner APIs are distinguished from migration-era scheduler signatures.
 - **Supersedes in part:** [ADR-0041](ADR-0041-workspace-topology-contract.md)
   (the paragraph "No `flui-runtime` without two consumers")
 - **Amends (on acceptance):** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) §9 (the public
@@ -130,8 +131,8 @@ before `flui-testing` and `flui-sdk`. It owns:
   `scheduler.rs:1552`, which runs the post-frame callbacks of both queues). The
   per-presentation panic boundary of ADR-0048 moves with it unchanged. The clock is read once
   per pump: it is the scheduler's frame timestamp and the time the UI runtime's `Vsync` controllers
-  tick at. A scheduler `Ticker` still measures elapsed time on the wall clock, a divergence
-  from Flutter's `Ticker._tick` recorded and pinned in `flui-scheduler`'s `ARCHITECTURE.md`.
+  tick at, after projection through each presentation's `MotionClock` (ADR-0176/0195).
+  Scheduler tickers are retired under ADR-0175; they are not a second animation clock.
   Whether a wake becomes a frame stays the runner's per-backend wake gate (ADR-0058); a wake
   with frames disabled calls `UiRuntime::pump_background` (clear the frame latch, then poll the
   async driver) and runs no frame;

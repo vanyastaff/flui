@@ -131,7 +131,7 @@ host.
   `PhantomData` marker; pinned by `assert_not_impl_any!` in the UI runtime tests).
   Everything that crosses a thread goes through a `UiCommandSender` into a
   bounded inbox that the owner drains only while the scheduler is idle.
-- **The owner host is an ordinary owner-affine value.** The planned
+- **The owner host is an ordinary owner-affine value.** The implemented
   `OwnerHost` is `!Send + !Sync` and owns only the UI runtime registry, one
   host-wide FIFO of typed operations carrying `PresentationAddress`, UI runtime
   checkout/restore state and deferred UI runtime-map mutations. It owns no TLS,
@@ -213,8 +213,8 @@ host.
   draw frame (persistent callbacks, then the pipeline and the submit through
   the sink) → end frame (both post-frame queues, the UI runtime's owner-local lane
   included). Its clock is read once: that timestamp is the scheduler's
-  frame time and the time `Vsync` controllers tick at, though a scheduler
-  `Ticker` still reads the wall clock (see "`Vsync` controllers tick at the
+  frame time projected through each presentation's motion clock before `Vsync`
+  controllers tick (see "`Vsync` controllers tick at the
   frame's timestamp" below).
   Scheduler execution runs through `OwnerFrame::drive_frame`. A wake with
   frames disabled runs `OwnerFrame::pump_background` instead: consume old
@@ -532,6 +532,13 @@ and on the UI runtime side by `surface_lost_keeps_needs_redraw_armed_for_a_retry
 
 ### `Vsync` controllers tick at the frame's timestamp
 
+Playback/debug progression is [ADR-0176](../../docs/adr/ADR-0176-presentation-animation-playback.md).
+Host/application Normal/Preserve policy and rebasing are
+[ADR-0195](../../docs/adr/ADR-0195-presentation-motion-policy.md). Their loading
+feedback consumer is [ADR-0192](../../docs/adr/ADR-0192-accessible-loading-motion.md).
+Registry ownership/topology and notification custody retain their separate
+animation/foundation authorities; clock projection does not create a second driver.
+
 The UI runtime's `Vsync` registry ticks at the timestamp the
 pump's `FrameClockSource` returned (`raw_frame_time` reads it for the
 frame's duration, relative to the UI runtime's start), so a controller advances by
@@ -594,16 +601,15 @@ the stop entry's lifecycle commit fails the same scenario.
 
 ### `Vsync` ticks in the persistent phase, not among the transient callbacks
 
-Tickers registered with a scheduler are transient frame callbacks, so they run
+Scheduler tickers are retired under ADR-0175. Transient frame callbacks run
 in begin frame, before the microtask flush and before any persistent callback.
 The UI runtime's `Vsync` registry is ticked by `draw_frame_entered` before a new
 presentation segment in the scheduler's persistent phase: after the transient
 callbacks and microtasks, and after any persistent callback registered before
 the pipeline. A controller's listener that schedules a microtask therefore
 sees it flushed at the next frame's begin, not this one's. The two sets are
-disjoint (a controller registered with a scheduler ticks in begin frame, one
-registered with `Vsync` ticks here), so no controller advances twice, and the
-tick precedes that segment's build. Registered text preparation retains its
+separate from the animation registry, so a controller has no second scheduler
+ticker admission. The registry tick precedes that segment's build. Registered text preparation retains its
 original tick and resumes only its layout/fixpoint tail; an intervening pump does
 not advance that controller or reenter its widget build. Healthy presentations
 can enter their own new segments. The public row

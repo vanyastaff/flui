@@ -46,8 +46,8 @@
 //!
 //! # Contract
 //!
-//! The execution contract this scope is designed for, the three defined
-//! outcomes of violating it, and why the third one cannot arise inside a
+//! The execution contract this scope is designed for, the ordinary
+//! outcomes of violating it, and why the third example cannot arise inside a
 //! real UI runtime are documented on [`GlobalKeyScope`] itself — the type this
 //! module exists to define — not here.
 
@@ -235,8 +235,9 @@ impl ScopeState {
 /// This type does not enforce that contract — it cannot see thread
 /// scheduling or segment boundaries, only claims. Violating the contract
 /// (a hand-rolled multi-owner rig driving claim/release/retake/finalize in
-/// an order a real UI runtime would never produce) still yields one of three
-/// defined outcomes, never undefined behavior:
+/// an order a real UI runtime would never produce) has the ordinary outcomes
+/// below. User-defined hash/equality callbacks also have failure and bounded
+/// unstable-comparison refusal under ADR-0126; this list is not exhaustive.
 ///
 /// 1. **An eager panic naming both owners** — the ordinary case: a
 ///    cross-owner conflict is detected the moment a second owner tries to

@@ -14,9 +14,11 @@
     included;
   - `UiCommand::SignalWrite` opening its write through a `WriterSource` (the ADR-0074 §5.8
     amendment; the command still runs `FnMut(&Reactive)`);
-  - `&Reactive` removal and both `reactive()` accessors (§8 step 3);
-  - `StateCell::schedule` refused during `build` (§7).
+  - `&Reactive` removal and both `reactive()` accessors (§8 step 3).
+  Bound `StateCell`/`StateHandle` mutation refusal during `build` (§7) is implemented;
+  it is not an outstanding schedule-method migration.
 - **Date:** 2026-09-25
+- **Amended:** 2026-10-11 — implemented local-state write refusal and current method names are distinguished from outstanding proposal items.
 - **Superseded-by:** [ADR-0161](ADR-0161-immutable-owner-local-gesture-recognizers.md),
   only §4's gesture extension signature compatibility promise; the signal write
   boundary and widget-side `WriterSource` wrapping remain in force
@@ -314,8 +316,8 @@ originating-context contract is settled with that dispatch path; the `TabControl
 `CupertinoTabController` listeners notify from a method the application calls, so their `cx`
 arrives with the listener family (§5) as a caller-supplied context, as the form handles do;
 `UiCommand::SignalWrite` still opens its write on `&Reactive` (§3, ADR-0074 §5.8); the
-`&Reactive` target and both `reactive()` accessors go in §8 step 3; and `StateCell::schedule`
-is refused during `build` per §7. These boundaries follow §5 rather than weakening types or
+`&Reactive` target and both `reactive()` accessors go in §8 step 3; bound local-state mutations
+are already refused during `build` per §7. These boundaries follow §5 rather than weakening types or
 adding an ambient graph. The inventory of what still requires `Send` on the callback path —
 the families ADR-0091 §1 flips, the edges that stay `Send` by design, and the `Send + Sync`
 values that are data rather than callbacks — is kept with the `!Send` flip's row of
@@ -349,7 +351,8 @@ listener topology or promise bounded event latency.
 
 Neither takes `&mut Writer`. `StateCell` is already a capability bound in `init_state`
 (`state_cell.rs:189`) and works unbound; `RebuildHandle` stays as ADR-0018 defines it. The guard
-is extended so that `StateCell::schedule` during `build` is refused like a signal write. The
+already refuses bound `StateCell::set`/`update` and `StateHandle` mutation during `build`,
+before changing storage or scheduling a rebuild. Unbound state remains ordinary local storage. The
 compile-time claim of this record is limited to writes into `Signal<T>`.
 
 ### 8. Order and rollback
@@ -524,7 +527,7 @@ Marked **(exists)** where the item is in the repository.
   `flui-view/tests/writer_source.rs::a_callback_run_inside_its_widgets_build_is_refused_by_the_guard`**)**.
 - A test that `AnimatedSize` no longer calls `on_end` from `build` **(exists**:
   `crates/flui-widgets/tests/animated_size.rs::animated_size_completion_writes_a_signal_after_build`**)**.
-- A test that `StateCell::schedule` during `build` is refused.
+- `bound_local_state_refuses_build_mutation_then_recovers` covers bound local-state mutation refusal through the public writer-source family.
 - ADR-0085's multi-presentation routing test, now written through `WriterSource`.
 - The completed §6 table, reproduced by its grep command, in the change that alters setter
   signatures; `flui migrate` applied to `examples/` with `cargo xtask check-changed` green.

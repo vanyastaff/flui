@@ -313,13 +313,22 @@ catches a failure, including before returning to its parent. Channel depth owns
 signal reset; nested completion cannot clear an enclosing failed delivery.
 Signal links borrow their enclosing stack frames and channel-local atomics;
 wrapper depth does not grow a heap collection or retain channel storage.
+The recovery decisions also retain independent scopes: exact inert-payload release
+is [ADR-0119](../../docs/adr/ADR-0119-inert-panic-payload-retirement.md), exceptional
+user-ownership retirement is [ADR-0127](../../docs/adr/ADR-0127-exceptional-path-retention.md),
+and live notification membership plus borrowed first-failure custody is
+[ADR-0178](../../docs/adr/ADR-0178-notification-first-failure-custody.md). An enclosing
+operation owns recovery; this map does not join independent runtime or platform
+operations into one global failure boundary.
+
 The notifier's owned snapshot prevents a removed callback from disappearing
-while it runs. After a caught listener failure, the payload and snapshot remain
-retained: opaque capture or panic-payload aggregates can double-panic during
-drop before catch_unwind regains control. Later listeners and later notification
-rounds still progress. Reporting borrows the original payload behind a separate
+while it runs. After a caught listener failure, the recovery owns the original
+payload until completing delivery, and exceptional outgoing opaque custody
+follows ADR-0127. Arbitrary capture or panic-payload aggregates can double-panic
+during drop before catch_unwind regains control. Healthy live listeners and later
+notification rounds still progress. Reporting borrows the original payload behind a separate
 unwind boundary; a panicking tracing subscriber cannot interrupt notification,
-and its secondary payload is also retained. Normal success retires callback
+and its secondary payload follows the exact inert/opaque distinction below. Normal success retires callback
 envelopes one at a time in registration order; a retirement failure propagates
 after retaining the remaining envelopes. An individual aggregate double-panic
 during ordinary successful-round retirement keeps Rust's abort behavior.
@@ -331,7 +340,8 @@ and subsequent progress, including recursive relay retirement through the same
 channel. The common exceptional-payload operation is
 `panic::retain_opaque_payload`, used by notifications, signal reads
 and the test-table runner. This contract is recorded in
-[ADR-0104](../../docs/adr/ADR-0104-borrowed-notification-and-opaque-panic-retention.md).
+[ADR-0104](../../docs/adr/ADR-0104-borrowed-notification-and-opaque-panic-retention.md),
+with current delivery/propagation custody under ADR-0178.
 As refined by [ADR-0119](../../docs/adr/ADR-0119-inert-panic-payload-retirement.md),
 the shared operation releases exact `&'static str` and `String` payloads, whose
 destruction cannot call user code. Other dynamic payload types remain retained;

@@ -12,13 +12,15 @@ ellipsis. One shaper, one font door, and a shaped paragraph on the wire make
   font doors became a per-UI runtime context over one collection; part 2: the `Paragraph` payload is
   a `ShapedParagraph`)
 - **Date:** 2026-09-18
+- **Amended:** 2026-10-11 — original font-system doors are explicitly historical; live font registration and paragraph authority remain ADR-0092.
 - **Deciders:** @vanyastaff
-- **Scope:** `flui-painting`'s font-system surface (`SharedFontSystem`,
+- **Original scope (2026-09-18):** `flui-painting`'s font-system surface (`SharedFontSystem`,
   `Shaper`, `fonts`), its `TextLayout`/`TextPainter` paint path, the
   `DrawCommand` text vocabulary, and `flui-engine`'s `TextRenderer`. Amends
-  [ADR-0016](ADR-0016-unified-font-system-registration.md): the shared
-  `FontSystem` stays the boundary; what changes is who may mutate it and what
-  the engine reads.
+  [ADR-0016](https://github.com/vanyastaff/flui/blob/6af2cf426809dbf8a33bbb415e904f0bfdc847c4/docs/adr/ADR-0016-unified-font-system-registration.md): the shared
+  `FontSystem` was the boundary; this changed who could mutate it and what
+  the engine read. That predecessor is retired; current shared collection and
+  per-UI-runtime shaping ownership are ADR-0092 §§1–5.
 
 ---
 
@@ -53,7 +55,7 @@ an engine-owned rasteriser, which is its own project.
 
 ## Decision
 
-### Part 1 — the font system has three doors
+### Part 1 — original font-system doors (replaced by ADR-0092)
 
 `SharedFontSystem` exposes exactly:
 
@@ -73,6 +75,11 @@ faces move to `flui_painting::fonts` behind the default-on `bundled-fonts`
 feature and are installed at font-system construction — Roboto when the host
 database is empty, each icon family when absent — before the generic
 families are bound. The engine never touches `db_mut`.
+
+The original `SharedFontSystem` doors above are removed. Under ADR-0092 §§2–3,
+`FontCollection::register_font` admits a face to the shared collection and each
+UI runtime owns its shaping context. The collection generation reaches measured
+render objects at the next frame, and paint consumes the carried shaped runs.
 
 ### Part 2 — one `Paragraph` op on the wire
 
@@ -117,17 +124,12 @@ itself and calls `draw_paragraph`.
   the same day.
 - A headless process measures icons in the face the app paints.
   **Unasserted:** no test pins this.
-- **Named gap, not closed:** a registration invalidates caches, but nothing
-  marks text render objects dirty on registration (Flutter's
-  `PaintingBinding.systemFonts` listener). That is a UI runtime-level broadcast
-  owned by flui-app.
-- **Deferred with a trigger:** a `FontContext` handle threaded through
-  layout instead of the `OnceLock` static. Its cost is every capability
-  context constructor in flui-rendering plus the test bootstraps, and it
-  buys nothing behaviourally while all UI runtimes share one font collection
-  (as Flutter's do). It returns when a second font source (per-UI runtime fonts,
-  sharded databases) or closing the ambient-reach ratchet becomes a
-  requirement (ADR-0027 follow-up 6).
+- **The former registration gap is closed by ADR-0092 §2.** A collection generation
+  change reaches every owning runtime; its pipelines mark the render objects that
+  measured through that runtime's context for layout and paint at the next frame.
+- **The former ambient context deferral is implemented by ADR-0092 §3.** Pipelines
+  borrow the runtime-owned shaping context explicitly; the process `OnceLock` font
+  system and its shared-font-system door are removed.
 
 ## Alternatives rejected
 

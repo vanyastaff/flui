@@ -33,8 +33,10 @@ config.rs        WindowConfiguration, fullscreen/monitor selection
 
 - **Windows** — creation, bounds, appearance, fullscreen, and `WindowEvent`
   dispatch (`Resized`, `ScaleFactorChanged`, `RedrawRequested`, ...).
-- **Events** — native input converted to W3C-compliant `ui-events` types
-  (`PointerEvent`, `KeyboardEvent`) wrapped in `PlatformInput`.
+- **Events** — native input converted to FLUI-owned pointer and keyboard values
+  wrapped in `PlatformInput`. Named-key spellings and pointer fields map the
+  applicable W3C vocabularies; native adapters keep their platform contracts
+  (ADR-0143), with execution evidence distinct from type compatibility.
 - **Executor** — `BackgroundExecutor` runs thread-safe work on a multi-threaded
   tokio runtime. UI-owner commands stay private to each backend's bounded,
   wake-integrated control path.

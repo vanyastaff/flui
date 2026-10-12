@@ -1033,7 +1033,7 @@ impl PresentationState {
     }
 
     /// A clone of this presentation's own implicit-animation controller
-    /// registry. `Vsync` is `Arc`-backed, so this is cheap and every clone
+    /// registry. `Vsync` is owner-local `Rc`-backed state, so this is cheap and every clone
     /// observes the same registry — the same handle shape
     /// `UiRuntime::vsync()` used to hand out from its own UI runtime-level slot
     /// (issue #556: the registry moved here, one per presentation).

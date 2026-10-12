@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-06
+- **Amended:** 2026-10-11 — current runner/raster ownership and swapchain configuration are distinguished from historical accounting and the unimplemented production backpressure target.
 - **Amended by:** ADR-0058 (§4, the Wayland row)
 - **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) §1 (sanctioned leapfrog zone: runtime/scheduling topology is not Flutter-loyal by the Prime Directive's own carve-out); [ADR-0058](ADR-0058-the-platform-paces-production-not-a-sleep.md) (the pacing mechanism this record's "real pacer" column defers to on every platform)
 - **Issue:** #556 — Runtime `UpdateScheduler`, presentation `FrameClock`, raster backpressure
@@ -29,7 +30,12 @@ An earlier design pass split this into two pieces of work specifically because t
 
 ### What already existed, verified against this tree before deciding anything
 
-- **The pump's own frame-production call site is `bootstrap_desktop`'s `window.on_request_frame` closure** (`crates/flui-app/src/app/runner.rs`), which every desktop backend (winit-backed X11/Wayland, and the native Win32/AppKit backends sharing the same `run_desktop` bootstrap) wires identically. `PlatformWindow::request_redraw()` — called from `UiRuntime::wake_frame`'s underlying `FrameWakeHandle` — is what the winit backend's `WinitWindowEvent::RedrawRequested` handler responds to by calling `win.callbacks().dispatch_request_frame()`, which is exactly this closure. There is a **second, separate** `WindowEvent::RedrawRequested` the winit backend also dispatches through its generic `lease_window_event_handler()` path — but `runner/owner_dispatch.rs`'s `PlatformToUi` enum has no variant for it, and `flui_platform::traits::Platform::on_window_event` has zero callers in `flui-app`, so that specific plumbing genuinely drives nothing. The functional actuator — what a caller means by "the wake channel" — has always been `on_request_frame`/`dispatch_request_frame`, under a name that does not mention `RedrawRequested` anywhere in `runner.rs` outside a comment. **This record does not add a second, parallel produce path off the same native event** — doing so would double-produce every delivered `RedrawRequested`. Instead, the existing `on_request_frame` closure gains the two capabilities below.
+- **The desktop frame-production callback** is `window.on_request_frame` in
+  `crates/flui-app/src/app/runner/desktop.rs`. The native driver queues the addressed
+  owner operation which reaches `UiRuntime::pump`; the generic window-event route
+  is not a second frame producer. The former single `runner.rs` locator and its
+  helper names describe the original wiring. Native backends still owe exactly
+  one accepted production path per delivered frame request.
 - **`request_redraw()` (the native platform call) fires unconditionally today, once per `wake()` invocation**, from several call sites (`WidgetsBinding::set_on_need_frame`, `BuildOwner::set_on_build_scheduled`, and — before this record — `draw_frame_entered`'s vsync-continuation check on every tick a controller was running). On real winit this is harmless (the platform's own `request_redraw()` already coalesces to at most one pending event), but nothing in FLUI's own layer modeled or tested that coalescing discipline, and a deterministic test double has no such coalescing for free.
 - **Wayland's frame-callback pacing is not a free-running signal — but it is not the ONLY reason `RedrawRequested` fires, either.** `WinitWindowEvent::RedrawRequested` on Wayland fires in response to a prior `request_redraw()` call, at the compositor's next frame-callback slot, and only while the surface is visible (see ADR-0058's per-backend facts) — winit's own docs and behavior also deliver it for OS-driven signals FLUI never asked for (an expose/damage event after another window stops occluding this one, a resize-triggered redraw), which have nothing to do with a prior `request_redraw()` call at all. X11 delivers the equivalent event immediately, with no compositor pacing at all. Neither "always caused by our own request" nor "always compositor-paced" is a universal property of `RedrawRequested` — both are per-platform, per-event facts, which is why the table below exists as a checked deliverable rather than an assumption baked into one code path, and why §3 below could not simply treat every delivered tick as demand.
 - **`Vsync::has_running()`, sampled to decide whether to keep the pump alive across an animation's duration, was never wired to mark `FrameClock`'s own `DemandKind::Animation`.** A running controller with no other tree-visible side effect (no listener dirtying a widget) would keep the platform loop alive (`wake_frame()` fired every tick) but the segment gate itself would never see nonzero demand from that fact alone — silently diverging from Flutter's own `Ticker`-driven `scheduleFrame`, where the running ticker alone is sufficient to schedule a frame.
@@ -165,9 +171,22 @@ The clock-level half is simple: an empty mask, no gating, and `poll` returns `Sk
 
 ### 9. Raster backpressure: a reliable in-flight counter with a retire→wake edge
 
-The third owner's wiring: `RasterOwner`/`RasterHandle` (`crates/flui-engine/src/raster_owner.rs`) gained an RAII `InFlightTicket` (increment on accepted submit, decrement on `Drop` — panic-safe: a panicking `render_scene` still unwinds through the ticket's `Drop`, covered by an injected-panic test) and a registered wake hook invoked on every retire, never only on the lossy ack lane. `RasterOptions` (`crates/flui-engine/src/raster_options.rs`: `target_frame_rate`, `max_frames_in_flight`) is the typed, tested configuration surface a `FrameClock` would read these numbers from. Three decrement sites are covered — supersede (submit side, under the mailbox lock), frame completion (raster side, after `render_scene` returns), and shutdown/device-loss (drains and retires any pending frame so recovery is never stalled behind a phantom permit) — and the accounting path allocates nothing per cycle. `desired_maximum_frame_latency` stays pinned at `1` everywhere (the documented anti-resize-jitter fix); `RasterOptions::max_frames_in_flight` is deliberately NOT threaded into it.
+The third owner's accounting: `RasterOwner`/`RasterHandle`
+(`crates/flui-engine/src/raster_owner.rs`) owns an RAII `InFlightTicket`, incremented
+on accepted submit and decremented on retirement, including unwind through a
+panicking `render_scene`. Its retire wake is independent of the lossy ack lane.
+Supersede, frame completion and shutdown/device-loss all retire their tickets.
+The former `RasterOptions` configuration type is removed. Current renderer
+surface configuration uses `desired_maximum_frame_latency: 2`; that swapchain
+setting is not a production `FrameClock` backpressure permit.
 
-**Honest boundary, stated plainly:** this is contract + accounting + threaded-harness evidence, matching `RasterOwner`'s own pre-existing "zero production consumers" posture. No production `FrameClock` calls `record_submit`/`record_retire`/reads a live `RasterOptions` yet — wiring a live raster owner into the real per-presentation produce path is issue #559's job. `poll` therefore never actually returns `Skip(Backpressure)` in production today; §2's honest limitation about that skip reason's liveness dependency is answered at the CONTRACT level (the retire→wake edge exists and is tested) but not yet at the PRODUCTION level (nothing exercises it end to end outside this record's own test harness).
+**Current boundary:** `flui-app`'s `app/raster_lane.rs` drives a production
+`RasterOwner` synchronously through the inline mailbox protocol. This is a real
+consumer; it does not establish the proposed threaded raster lane. Production
+frame-clock backpressure integration remains separate work: the current producer
+does not read that accounting through `FrameClock::record_submit`/`record_retire`.
+The retire→wake accounting edge is implemented and tested; a threaded pacing or
+backpressure claim still requires its actual producer and execution evidence.
 
 ## What this buys
 

@@ -1,6 +1,7 @@
 # ADR-0089: Stable signatures carry no upstream type except raw-window-handle
 
 - **Status:** Proposed
+- **Amended:** 2026-10-11 — verification distinguishes implemented vocabulary checks from the still-proposed API-closure migration.
 - **Date:** 2026-09-25
 - **Related:** [ADR-0030](ADR-0030-platform-text-input-ime-capability.md) §1 (`ImeEvent` mirrors
   winit but is our own type), [ADR-0031](ADR-0031-platform-haptics-capability-and-system-chrome-deferral.md) §1,
@@ -193,11 +194,14 @@ scratch crate with `pub fn f() -> accesskit::Role` must be rejected (its `--self
 
 ## Verification
 
-Only §4's generator, round trip and diff check exist so far
-([ADR-0143](ADR-0143-flui-owned-input-event-vocabulary.md) §4); the rest do not yet.
+§4's generator, round trip and diff check exist
+([ADR-0143](ADR-0143-flui-owned-input-event-vocabulary.md) §4). The owned input and
+semantics vocabularies also expose their outbound `ALL` sets, and the AccessKit
+translation has exhaustive inbound matches and its outbound role-family test.
+The remaining API-closure and Stable-signature migration checks below are still pending.
 
 - `api-closure` with its self-test probe (§6), in `cargo xtask checks`.
-- The outbound `ALL` test and the exhaustive inbound matches in `flui-semantics` (§3).
+- The implemented outbound `ALL` role test and exhaustive inbound matches in `flui-semantics` (§3).
 - The generated-key round-trip test and the keyboard-types diff check (§4).
 - A `compile_fail` or closure-gate case showing `RawWindowHandle` cannot appear in a Stable
   signature (§2).

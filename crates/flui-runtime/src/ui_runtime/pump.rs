@@ -201,9 +201,9 @@ impl UiRuntime {
     ///
     /// The clock is read once. That instant is the scheduler's frame
     /// timestamp and the time the UI runtime's `Vsync` controllers tick at
-    /// (`raw_frame_time` reads it for the frame's duration); a scheduler `Ticker`
-    /// still measures elapsed time on the wall clock (`flui-scheduler`'s
-    /// `ARCHITECTURE.md`).
+    /// (`raw_frame_time` reads it for the frame's duration), projected through
+    /// each presentation's motion clock. Scheduler tickers are retired;
+    /// complete owner execution is described by ADR-0175/0182.
     /// Whether a wake becomes a frame at all is the host's decision (its wake
     /// gate, ADR-0058), not this method's.
     pub fn pump(

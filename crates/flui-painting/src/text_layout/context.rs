@@ -1282,7 +1282,7 @@ mod tests {
     }
 
     /// The family rule (`resolve_family_name`) over what a collection holds,
-    /// and what it keeps out of a shaped run (ADR-0059; ADR-0092 §7, gate 5).
+    /// and what it keeps out of a shaped run (ADR-0092 §7, gate 5).
     mod family_resolution {
         use std::sync::Arc;
 

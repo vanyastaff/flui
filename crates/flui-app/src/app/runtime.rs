@@ -171,7 +171,8 @@ pub enum ExitPolicy {
 /// - [`WindowPolicy::Isolated`] (the default): the new window gets its own
 ///   state, keys and scheduler, as if it were a separate application that
 ///   shares only the GPU and font services. The same `GlobalKey` can be
-///   mounted in both windows, and a slow frame in one never delays the other.
+///   mounted in both windows. Their UI state and scheduling are independent;
+///   managed windows still execute serially on the same owner thread.
 /// - [`WindowPolicy::Shared`]: the new window is a second view of the same
 ///   session — for example a detached inspector panel. Both windows share one
 ///   `GlobalKey` scope, so mounting the same key in both fails at the second
@@ -195,8 +196,9 @@ pub enum ExitPolicy {
 )]
 pub enum WindowPolicy {
     /// The new window gets its own state, `GlobalKey` scope and scheduler,
-    /// sharing only the GPU and font services. The default: a slow window can
-    /// never delay another's frames.
+    /// sharing host services. UI state and scheduler ownership are isolated;
+    /// a long synchronous callback can still delay other managed windows on
+    /// the same owner thread.
     #[doc(alias = "SeparateRuntimes")]
     #[default]
     Isolated,
