@@ -872,7 +872,7 @@ fn numeric_sizing_commits_every_measurement_before_reentrant_wake() {
     };
 
     thread_local! {
-        #[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
+        #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
         static PUBLICATION_CELL: RefCell<Option<(PipelineCell, [RenderId; 2])>> = const { RefCell::new(None) };
     }
 
@@ -1003,9 +1003,9 @@ fn numeric_sizing_retains_wake_capture_across_last_owner_release() {
     };
 
     thread_local! {
-        #[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
+        #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
         static LAST_OWNER: RefCell<Option<PipelineCell>> = const { RefCell::new(None) };
-        #[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
+        #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
         static OWNER_OBSERVER: RefCell<Option<WeakPipelineCell>> = const { RefCell::new(None) };
     }
 

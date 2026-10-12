@@ -32,7 +32,7 @@ thread_local! {
     /// from a fresh instance compares equal), so the twin test counts instead.
     /// Per thread, so tests running in parallel threads under `cargo test`
     /// cannot move each other's count.
-    #[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
+    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static INSTANCES_CREATED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 

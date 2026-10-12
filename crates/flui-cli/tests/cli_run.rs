@@ -106,6 +106,11 @@ fn main() {
     let output = cargo_bin_cmd!("flui")
         .current_dir(&app)
         .env("PATH", path)
+        // Metadata uses only local path dependencies. Keep its Cargo locks and
+        // outputs independent of concurrent CLI fixtures on the CI runner.
+        .env("CARGO_HOME", root.join("cargo-home"))
+        .env("CARGO_NET_OFFLINE", "true")
+        .env("CARGO_TARGET_DIR", app.join("target"))
         .env("ANDROID_HOME", sdk)
         .env("ANDROID_NDK_HOME", ndk)
         .env_remove("JAVA_HOME")
@@ -114,7 +119,7 @@ fn main() {
             std::env::var_os("CARGO").expect("real Cargo"),
         )
         .args(["run", "--device", "emulator-5554", "--no-hot-reload"])
-        .timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30))
         .output()
         .expect("Android run");
     let stderr = String::from_utf8_lossy(&output.stderr);

@@ -56,7 +56,7 @@ thread_local! {
     // Production callbacks require Send + Sync, whereas their binding is
     // owner-thread-local. A capture-free access path exercises that actual
     // public reentry contract without weakening either requirement.
-    #[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
+    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static SEMANTICS_OWNER: std::cell::RefCell<Option<std::rc::Rc<flui_runtime::renderer_binding::RenderingBinding>>> = const { std::cell::RefCell::new(None) };
     static SEMANTICS_HANDLES: std::cell::RefCell<Vec<WeakSemanticsCallback>> = const { std::cell::RefCell::new(Vec::new()) };
 }

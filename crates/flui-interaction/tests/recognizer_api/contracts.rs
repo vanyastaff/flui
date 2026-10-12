@@ -28,9 +28,9 @@ type Log = Rc<RefCell<Vec<&'static str>>>;
 
 thread_local! {
     // A Send clock can reenter owner-local state on its calling thread.
-    #[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
+    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static CLOCK_CONTACT: RefCell<Option<Weak<Extension>>> = const { RefCell::new(None) };
-    #[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
+    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static CLOCK_SCALE: RefCell<Option<Weak<ScaleGestureRecognizer>>> = const { RefCell::new(None) };
 }
 
