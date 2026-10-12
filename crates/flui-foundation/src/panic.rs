@@ -137,6 +137,10 @@ pub struct RecoveryFailure {
 
 impl RecoveryFailure {
     /// Borrow the original payload while this receipt retains its ownership.
+    ///
+    /// # Panics
+    ///
+    /// Panics if FLUI violates the live receipt's payload ownership invariant.
     #[must_use]
     pub fn payload(&self) -> &(dyn Any + Send) {
         self.captured
@@ -146,6 +150,10 @@ impl RecoveryFailure {
     }
 
     /// The class stamped at the first failure's actual capture seam.
+    ///
+    /// # Panics
+    ///
+    /// Panics if FLUI violates the live receipt's payload ownership invariant.
     #[must_use]
     pub fn class(&self) -> FailureClass {
         self.captured
