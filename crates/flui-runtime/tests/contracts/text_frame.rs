@@ -2327,15 +2327,29 @@ impl ViewState<AuthorityAnimatedText> for AuthorityAnimatedTextState {
 thread_local! {
     // The report is Send + Sync; its UI runtime remains owner-thread local.
     // Release this borrow before invoking the real authority operation.
-    static AUTHORITY_REPORT_RUNTIME: std::cell::RefCell<Option<std::rc::Rc<flui_runtime::ui_runtime::UiRuntime>>> = const { std::cell::RefCell::new(None) };
+    static AUTHORITY_REPORT_CONTEXT: std::cell::RefCell<Option<std::rc::Rc<AuthorityReportContext>>> = const { std::cell::RefCell::new(None) };
+}
+
+struct AuthorityReportContext {
+    runtime: std::rc::Rc<flui_runtime::ui_runtime::UiRuntime>,
+    source: flui_painting::TextSizingSource,
+    replacement: flui_painting::TextSizingSource,
 }
 
 struct AuthorityReportScope;
 
 impl AuthorityReportScope {
-    fn install(runtime: &std::rc::Rc<flui_runtime::ui_runtime::UiRuntime>) -> Self {
-        let previous =
-            AUTHORITY_REPORT_RUNTIME.with(|slot| slot.replace(Some(std::rc::Rc::clone(runtime))));
+    fn install(
+        runtime: &std::rc::Rc<flui_runtime::ui_runtime::UiRuntime>,
+        source: &flui_painting::TextSizingSource,
+        replacement: &flui_painting::TextSizingSource,
+    ) -> Self {
+        let context = std::rc::Rc::new(AuthorityReportContext {
+            runtime: std::rc::Rc::clone(runtime),
+            source: source.clone(),
+            replacement: replacement.clone(),
+        });
+        let previous = AUTHORITY_REPORT_CONTEXT.with(|slot| slot.replace(Some(context)));
         assert!(previous.is_none(), "authority report scope is not nested");
         Self
     }
@@ -2343,7 +2357,7 @@ impl AuthorityReportScope {
 
 impl Drop for AuthorityReportScope {
     fn drop(&mut self) {
-        let retired = AUTHORITY_REPORT_RUNTIME.with(std::cell::RefCell::take);
+        let retired = AUTHORITY_REPORT_CONTEXT.with(std::cell::RefCell::take);
         drop(retired);
     }
 }
@@ -2541,20 +2555,24 @@ fn authority_report_case(late: bool, replace: bool, retained: bool) {
             return;
         }
         if report.address.presentation_id == if late { target_id } else { primary_id } {
-            let runtime = AUTHORITY_REPORT_RUNTIME
+            let context = AUTHORITY_REPORT_CONTEXT
                 .with(|slot| slot.borrow().clone())
                 .expect("scoped shared runtime");
             let changed = if replace {
-                runtime.install_captured_text_sizing_for(target_id, replacement.clone())
+                context
+                    .runtime
+                    .install_captured_text_sizing_for(target_id, context.replacement.clone())
             } else {
-                runtime.withdraw_captured_text_sizing_for(target_id, &source)
+                context
+                    .runtime
+                    .withdraw_captured_text_sizing_for(target_id, &context.source)
             };
             if changed {
                 accepted_changes.fetch_add(1, Ordering::SeqCst);
             }
         }
     })));
-    let scope = AuthorityReportScope::install(&runtime);
+    let scope = AuthorityReportScope::install(&runtime, &source, &replacement);
     let armed = Rc::new(Cell::new(true));
     let failure = Rc::clone(&armed);
     let listener = primary.add_listener(Rc::new(move || {
