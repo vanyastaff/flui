@@ -86,6 +86,46 @@ impl Drop for CallbackCapture {
 
 type MemberOwner = Rc<RefCell<Option<Rc<DeadlineMember>>>>;
 
+struct VerdictMember {
+    owner: std::rc::Weak<RefCell<Option<Rc<Self>>>>,
+    notifications: Rc<Cell<usize>>,
+    drops: Rc<Cell<usize>>,
+    panic_on_drop: bool,
+    _drop_capture: Option<VerdictDropFailure>,
+}
+
+struct VerdictDropFailure;
+
+impl Drop for VerdictDropFailure {
+    fn drop(&mut self) {
+        panic!("opaque arena member capture retirement");
+    }
+}
+
+impl VerdictMember {
+    fn notified(&self) {
+        self.notifications.set(self.notifications.get() + 1);
+        let owner = self.owner.upgrade().expect("live external owner slot");
+        drop(owner.borrow_mut().take());
+    }
+}
+
+impl GestureArenaMember for VerdictMember {
+    fn accept_gesture(&self, _: PointerId) {
+        self.notified();
+    }
+    fn reject_gesture(&self, _: PointerId) {
+        self.notified();
+    }
+}
+
+impl Drop for VerdictMember {
+    fn drop(&mut self) {
+        self.drops.set(self.drops.get() + 1);
+        assert!(!self.panic_on_drop, "opaque arena member retirement");
+    }
+}
+
 struct DeadlineMember {
     due: Cell<Option<Instant>>,
     fail_query: Cell<bool>,
@@ -803,10 +843,169 @@ fn cancel_all_withdraws_every_batch_before_first_rejection() {
     abandoned_generations_are_withdrawn_before_rejection(true);
 }
 
+fn builtin_deadline_verdict_retirement(kind: &str, incoming_failure: bool, panic_on_drop: bool) {
+    use flui_interaction::events::{PointerKind, make_down_event_for_id, make_up_event_for_id};
+    use flui_interaction::routing::PointerDispatch;
+    use flui_interaction::{
+        DoubleTapGestureRecognizer, GestureRecognizer as _, LongPressGestureRecognizer,
+        MultiTapGestureRecognizer,
+    };
+    let clock = ManualClock::new();
+    let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
+    let down = make_down_event_for_id(pointer(1), Offset::ZERO, PointerKind::Touch)
+        .expect("verdict down fixture");
+    let notices = Rc::new(Cell::new(0));
+    let captured = Rc::clone(&notices);
+    let recognizer: Rc<dyn flui_interaction::GestureRecognizer> = match kind {
+        "long press" => LongPressGestureRecognizer::builder(binding.arena().clone())
+            .on_long_press(move || captured.set(captured.get() + 1))
+            .build(),
+        "double tap" => DoubleTapGestureRecognizer::builder(binding.arena().clone())
+            .on_double_tap_cancel(move |_| captured.set(captured.get() + 1))
+            .build(),
+        _ => MultiTapGestureRecognizer::builder(binding.arena().clone(), 2)
+            .on_multi_tap_cancel(move |_| captured.set(captured.get() + 1))
+            .build(),
+    };
+    recognizer.add_pointer(PointerDispatch::at_root(&down));
+    let owner = Rc::new(RefCell::new(None));
+    let drops = Rc::new(Cell::new(0));
+    let notifications = Rc::new(Cell::new(0));
+    let member = Rc::new(VerdictMember {
+        owner: Rc::downgrade(&owner),
+        notifications: Rc::clone(&notifications),
+        drops: Rc::clone(&drops),
+        panic_on_drop,
+        _drop_capture: std::env::var_os("FLUI_DEADLINE_VERDICT_CHILD")
+            .map(|_| VerdictDropFailure),
+    });
+    let _entry = binding.arena().add(pointer(1), &member);
+    *owner.borrow_mut() = Some(member);
+    binding.arena().close(pointer(1));
+    if kind == "double tap" {
+        let up = make_up_event_for_id(pointer(1), Offset::ZERO, PointerKind::Touch)
+            .expect("verdict up fixture");
+        recognizer.handle_event(PointerDispatch::at_root(&up));
+    }
+    if kind != "long press" {
+        binding.arena().sweep(pointer(1));
+    }
+    clock.advance(Duration::from_secs(1));
+    let mut recovery = PanicRecovery::new();
+    if incoming_failure {
+        recovery
+            .scope()
+            .run_classified(FailureClass::Computation, |_| {
+                panic!("earlier animation computation");
+            });
+    }
+    flui_interaction::__runtime::tick_deadlines_with_recovery(
+        &binding,
+        clock.now(),
+        &mut recovery.scope(),
+    );
+    assert_eq!(
+        notifications.get(),
+        1,
+        "{kind} delivers the committed verdict"
+    );
+    assert!(
+        owner.borrow().is_none(),
+        "{kind} callback releases external ownership"
+    );
+    assert_eq!(
+        notices.get(),
+        1,
+        "{kind} completes its healthy callback tail"
+    );
+    if incoming_failure {
+        assert_eq!(
+            drops.get(),
+            0,
+            "{kind} inherits first-failure retirement custody"
+        );
+        assert_eq!(
+            recovery.first_failure_class(),
+            Some(FailureClass::Computation)
+        );
+        let failure = recovery.into_failure().expect("original failure");
+        assert_eq!(
+            flui_foundation::panic::payload_text(failure.payload()),
+            Some("earlier animation computation")
+        );
+    } else if panic_on_drop {
+        assert_eq!(drops.get(), 1, "{kind} ordinary retirement runs");
+        assert_eq!(recovery.first_failure_class(), Some(FailureClass::Unknown));
+        assert_eq!(
+            recovery.blocking_failure_class(),
+            Some(FailureClass::Unknown)
+        );
+    } else {
+        assert_eq!(drops.get(), 1, "{kind} keeps healthy-path destruction");
+        assert!(!recovery.has_failure());
+    }
+}
+
+fn long_press_verdict_inherits_incoming_retirement_custody() {
+    builtin_deadline_verdict_retirement("long press", true, false);
+}
+
+fn double_tap_verdict_inherits_incoming_retirement_custody() {
+    builtin_deadline_verdict_retirement("double tap", true, false);
+}
+
+fn multi_tap_verdict_inherits_incoming_retirement_custody() {
+    builtin_deadline_verdict_retirement("multi tap", true, false);
+}
+
+fn long_press_opaque_retirement_is_unknown() {
+    builtin_deadline_verdict_retirement("long press", false, true);
+}
+
+fn double_tap_opaque_retirement_is_unknown() {
+    builtin_deadline_verdict_retirement("double tap", false, true);
+}
+
+fn multi_tap_opaque_retirement_is_unknown() {
+    builtin_deadline_verdict_retirement("multi tap", false, true);
+}
+
+fn builtin_verdict_healthy_destruction_remains() {
+    for kind in ["long press", "double tap", "multi tap"] {
+        builtin_deadline_verdict_retirement(kind, false, false);
+    }
+}
+
+fn builtin_incoming_verdict_retains_double_panicking_aggregate() {
+    const CHILD: &str = "FLUI_DEADLINE_VERDICT_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        builtin_deadline_verdict_retirement("long press", true, true);
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        .args([
+            "--exact",
+            "deadline_recovery::owner_deadline_recovery_matrix",
+            "--nocapture",
+        ])
+        .env(CHILD, "1")
+        .output()
+        .expect("isolated verdict retirement process");
+    assert!(
+        output.status.success(),
+        "incoming verdict retirement child failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 fn owner_deadline_recovery_matrix() {
     if std::env::var_os("FLUI_DEADLINE_WAKE_CHILD").is_some() {
         a_wake_failure_retains_the_last_backend_owner_before_unwind();
+        return;
+    }
+    if std::env::var_os("FLUI_DEADLINE_VERDICT_CHILD").is_some() {
+        builtin_incoming_verdict_retains_double_panicking_aggregate();
         return;
     }
     let mut first_failure = None;
@@ -878,6 +1077,38 @@ fn owner_deadline_recovery_matrix() {
         (
             "cancel_all_withdraws_every_batch_before_first_rejection",
             cancel_all_withdraws_every_batch_before_first_rejection as fn(),
+        ),
+        (
+            "long_press_verdict_inherits_incoming_retirement_custody",
+            long_press_verdict_inherits_incoming_retirement_custody as fn(),
+        ),
+        (
+            "double_tap_verdict_inherits_incoming_retirement_custody",
+            double_tap_verdict_inherits_incoming_retirement_custody as fn(),
+        ),
+        (
+            "multi_tap_verdict_inherits_incoming_retirement_custody",
+            multi_tap_verdict_inherits_incoming_retirement_custody as fn(),
+        ),
+        (
+            "long_press_opaque_retirement_is_unknown",
+            long_press_opaque_retirement_is_unknown as fn(),
+        ),
+        (
+            "double_tap_opaque_retirement_is_unknown",
+            double_tap_opaque_retirement_is_unknown as fn(),
+        ),
+        (
+            "multi_tap_opaque_retirement_is_unknown",
+            multi_tap_opaque_retirement_is_unknown as fn(),
+        ),
+        (
+            "builtin_verdict_healthy_destruction_remains",
+            builtin_verdict_healthy_destruction_remains as fn(),
+        ),
+        (
+            "builtin_incoming_verdict_retains_double_panicking_aggregate",
+            builtin_incoming_verdict_retains_double_panicking_aggregate as fn(),
         ),
     ] {
         if let Err(payload) = std::panic::catch_unwind(case) {
