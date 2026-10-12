@@ -105,27 +105,31 @@ pub fn set_pointer_capture_wake(
 /// Sample gesture deadlines under the presentation's failure custody.
 pub fn tick_deadlines_with_recovery(
     owner: &crate::GestureBinding,
-    _now: web_time::Instant,
+    now: web_time::Instant,
     recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
 ) {
-    recovery.run(|| owner.tick_deadlines());
+    owner.deadlines_with_recovery(now, true, recovery);
 }
 
 /// Refresh scheduling observation during a guard-free owner operation.
 pub fn refresh_deadlines_with_recovery(
     owner: &crate::GestureBinding,
-    _now: web_time::Instant,
+    now: web_time::Instant,
     recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
 ) {
-    recovery.run(|| {
-        let _ = owner.next_deadline();
-    });
+    owner.deadlines_with_recovery(now, false, recovery);
 }
 
 /// Read the last owner scheduling observation without executing member code.
 #[must_use]
 pub fn next_deadline_snapshot(owner: &crate::GestureBinding) -> Option<web_time::Instant> {
-    owner.next_deadline()
+    owner.arena().next_deadline_snapshot()
+}
+
+/// Read ordinary deadline demand, excluding quarantined discovery and polling.
+#[must_use]
+pub fn has_pending_deadlines_snapshot(owner: &crate::GestureBinding) -> bool {
+    owner.arena().has_pending_deadlines_snapshot()
 }
 
 /// Withdraw mouse publication and callback ownership for a terminal presentation.

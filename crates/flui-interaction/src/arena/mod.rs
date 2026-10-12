@@ -68,6 +68,9 @@ use flui_foundation::{MonotonicClock, SystemClock};
 mod composition;
 use composition::{BranchPosition, CompositionBranch};
 pub use composition::{CompositionError, GestureBranches, GestureCompetition};
+mod deadline;
+use deadline::{DeadlinePoll, DeadlineRegistry};
+pub use deadline::{GestureDeadlineError, GestureDeadlineRegistration, GestureDeadlineUpdate};
 
 // ============================================================================
 // GestureDisposition enum
@@ -161,6 +164,23 @@ pub trait GestureArenaMember {
     fn deadline(&self) -> Option<Instant> {
         None
     }
+
+    /// Runtime integration for one deadline invocation under owner custody.
+    ///
+    /// The default preserves the open hook's unknown postcondition after an
+    /// unwind. Built-ins separate preparation from committed notification
+    /// delivery. `true` proves this invocation's required transition returned
+    /// or committed; an older failure in the same scope cannot change it.
+    #[doc(hidden)]
+    fn poll_deadline_with_recovery(
+        &self,
+        now: Instant,
+        recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
+    ) -> bool {
+        recovery.run_classified(flui_foundation::panic::FailureClass::Unknown, |_| {
+            self.poll_deadline(now);
+        })
+    }
 }
 
 // ============================================================================
@@ -231,105 +251,6 @@ pub struct GestureArenaEntry {
     generation: ArenaGeneration,
     slot: Weak<ArenaSlot>,
     member: Weak<dyn GestureArenaMember>,
-}
-
-/// Registration of one recognizer whose timer must outlive arena resolution.
-///
-/// Primary-pointer deadlines are scheduled independently from the
-/// gesture arena: a lone long press can win the arena's default resolution on
-/// Down and still fire after its hold timeout. FLUI drives those timers from
-/// the owner frame clock, so this token keeps only the polling registration
-/// alive. The registry itself stores a weak recognizer identity and therefore
-/// cannot keep an unmounted recognizer alive or form an arena cycle.
-pub(crate) struct GestureDeadlineRegistration {
-    registry: Weak<DeadlineRegistry>,
-    id: u64,
-}
-
-impl Drop for GestureDeadlineRegistration {
-    fn drop(&mut self) {
-        if let Some(registry) = self.registry.upgrade() {
-            registry.unregister(self.id);
-        }
-    }
-}
-
-struct DeadlineWatcher {
-    id: u64,
-    pointer: PointerId,
-    member: Weak<dyn GestureArenaMember>,
-}
-
-struct DeadlinePoll {
-    registration: Option<u64>,
-    pointer: PointerId,
-    member: Weak<dyn GestureArenaMember>,
-}
-
-struct DeadlineRegistry {
-    next_id: Cell<u64>,
-    watchers: RefCell<Vec<DeadlineWatcher>>,
-}
-
-impl DeadlineRegistry {
-    fn new() -> Self {
-        Self {
-            next_id: Cell::new(1),
-            watchers: RefCell::new(Vec::new()),
-        }
-    }
-
-    fn register(
-        self: &Rc<Self>,
-        pointer: PointerId,
-        member: &Rc<dyn GestureArenaMember>,
-    ) -> GestureDeadlineRegistration {
-        let id = self.next_id.get();
-        self.next_id.set(
-            id.checked_add(1)
-                .expect("BUG: gesture deadline registration ID exhausted"),
-        );
-        self.watchers.borrow_mut().push(DeadlineWatcher {
-            id,
-            pointer,
-            member: Rc::downgrade(member),
-        });
-        GestureDeadlineRegistration {
-            registry: Rc::downgrade(self),
-            id,
-        }
-    }
-
-    fn unregister(&self, id: u64) {
-        self.watchers
-            .borrow_mut()
-            .retain(|watcher| watcher.id != id);
-    }
-
-    fn contains(&self, id: u64) -> bool {
-        self.watchers
-            .borrow()
-            .iter()
-            .any(|watcher| watcher.id == id)
-    }
-
-    fn snapshot(&self) -> SmallVec<[DeadlinePoll; 8]> {
-        let mut watchers = self.watchers.borrow_mut();
-        let mut live = SmallVec::new();
-        watchers.retain(|watcher| {
-            if watcher.member.strong_count() != 0 {
-                live.push(DeadlinePoll {
-                    registration: Some(watcher.id),
-                    pointer: watcher.pointer,
-                    member: watcher.member.clone(),
-                });
-                true
-            } else {
-                false
-            }
-        });
-        live
-    }
 }
 
 impl GestureArenaEntry {
@@ -1014,6 +935,7 @@ struct DeferredResolution {
 pub(crate) struct DetachedArenaBatch {
     pointer: PointerId,
     slots: SmallVec<[Rc<ArenaSlot>; 2]>,
+    deadlines: Rc<DeadlineRegistry>,
 }
 
 impl GestureArena {
@@ -1066,7 +988,11 @@ impl GestureArena {
     }
 
     fn remove_exact_slot(&self, pointer: PointerId, slot: &Rc<ArenaSlot>) -> bool {
-        self.remove_current_slot(pointer, slot) || self.remove_retained_slot(slot)
+        let removed = self.remove_current_slot(pointer, slot) || self.remove_retained_slot(slot);
+        if removed {
+            self.deadlines.withdraw_generation(slot.generation);
+        }
+        removed
     }
 
     fn is_live_slot(&self, pointer: PointerId, slot: &Rc<ArenaSlot>) -> bool {
@@ -1217,12 +1143,32 @@ impl GestureArena {
     /// The returned token controls the active lifetime. Arena resolution does
     /// not remove it; the recognizer drops it when its deadline fires or the
     /// pointer sequence terminates.
-    pub(crate) fn register_deadline_member(
+    ///
+    /// Registration is inert: publish timing with the token's update handle
+    /// after committing contact state. One registration covers the member's
+    /// aggregate query and poll hook, even across several pointer memberships.
+    ///
+    /// # Errors
+    /// Refuses a closed arena, a duplicate member registration or exhausted IDs.
+    pub fn register_deadline_member(
         &self,
         pointer: PointerId,
         member: &Rc<dyn GestureArenaMember>,
-    ) -> GestureDeadlineRegistration {
-        self.deadlines.register(pointer, member)
+    ) -> Result<GestureDeadlineRegistration, GestureDeadlineError> {
+        let weak = Rc::downgrade(member);
+        let generations = self
+            .deadline_members_snapshot()
+            .into_iter()
+            .find(|poll| Weak::ptr_eq(&poll.member, &weak))
+            .map_or_else(SmallVec::new, |poll| poll.generations);
+        self.deadlines.register(pointer, member, generations)
+    }
+
+    pub(crate) fn set_deadline_wake(
+        &self,
+        window: std::sync::Weak<dyn flui_platform_api::PlatformWindow>,
+    ) {
+        self.deadlines.set_wake(window);
     }
 
     /// Add a member to the arena for a specific pointer.
@@ -1307,6 +1253,7 @@ impl GestureArena {
         if !admitted {
             return None;
         }
+        self.deadlines.admit_generation(member, slot.generation);
 
         Some(GestureArenaEntry::new(self.clone(), pointer, &slot, member))
     }
@@ -1659,7 +1606,11 @@ impl GestureArena {
             }
         }
 
-        DetachedArenaBatch { pointer, slots }
+        DetachedArenaBatch {
+            pointer,
+            slots,
+            deadlines: Rc::clone(&self.deadlines),
+        }
     }
 
     /// Run pointer-up sweep semantics over an already detached batch.
@@ -1677,6 +1628,7 @@ impl GestureArena {
                 }
                 entry.sweep()
             };
+            batch.deadlines.withdraw_generation(slot.generation);
             Self::dispatch_pending_into(pending, batch.pointer, &mut first_panic);
         }
         if let Some(payload) = first_panic {
@@ -1688,6 +1640,7 @@ impl GestureArena {
     pub(crate) fn abandon_detached(batch: DetachedArenaBatch) {
         let mut first_panic = None;
         for slot in batch.slots {
+            batch.deadlines.withdraw_generation(slot.generation);
             let pending = slot.data.borrow_mut().resolve(None);
             Self::dispatch_pending_into(pending, batch.pointer, &mut first_panic);
         }
@@ -1699,6 +1652,7 @@ impl GestureArena {
     pub(crate) fn close_owner(&self, mode: CloseMode) {
         let mut failure = ClosePanic::for_close(mode, self.close_mode.clone());
         self.owner_closed.set(true);
+        self.deadlines.close();
         let mut pointers: Vec<_> = self.entries.borrow().keys().copied().collect();
         pointers.extend(self.retained.borrow().values().map(|slot| slot.pointer));
         pointers.sort_unstable();
@@ -1749,6 +1703,7 @@ impl GestureArena {
         let mut first_panic = None;
         for batch in batches {
             for slot in batch.slots {
+                batch.deadlines.withdraw_generation(slot.generation);
                 let pending = slot.data.borrow_mut().resolve(None);
                 Self::dispatch_pending_into(pending, batch.pointer, &mut first_panic);
             }
@@ -1783,14 +1738,19 @@ impl GestureArena {
         let mut members: SmallVec<[DeadlinePoll; 8]> = SmallVec::new();
         let mut collect_slot = |slot: &ArenaSlot| {
             for member in &slot.data.borrow().members {
-                if !members
-                    .iter()
-                    .any(|existing| Weak::ptr_eq(&existing.member, member))
+                if let Some(existing) = members
+                    .iter_mut()
+                    .find(|existing| Weak::ptr_eq(&existing.member, member))
                 {
+                    if !existing.generations.contains(&slot.generation) {
+                        existing.generations.push(slot.generation);
+                    }
+                } else {
                     members.push(DeadlinePoll {
                         registration: None,
                         pointer: slot.pointer,
                         member: member.clone(),
+                        generations: smallvec::smallvec![slot.generation],
                     });
                 }
             }
@@ -1802,14 +1762,36 @@ impl GestureArena {
             collect_slot(slot);
         }
         for poll in self.deadlines.snapshot() {
-            if !members
-                .iter()
-                .any(|existing| Weak::ptr_eq(&existing.member, &poll.member))
+            if let Some(existing) = members
+                .iter_mut()
+                .find(|existing| Weak::ptr_eq(&existing.member, &poll.member))
             {
+                existing.registration = poll.registration;
+            } else {
                 members.push(poll);
             }
         }
         members
+    }
+
+    pub(crate) fn deadlines_with_recovery(
+        &self,
+        now: Instant,
+        poll_due: bool,
+        recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
+    ) {
+        if !self.owner_closed.get() {
+            self.deadlines
+                .refresh(self.deadline_members_snapshot(), now, poll_due, recovery);
+        }
+    }
+
+    pub(crate) fn next_deadline_snapshot(&self) -> Option<Instant> {
+        self.deadlines.next_snapshot()
+    }
+
+    pub(crate) fn has_pending_deadlines_snapshot(&self) -> bool {
+        self.deadlines.has_pending_snapshot()
     }
 
     /// Poll every active member's time-based deadline (e.g. long-press hold).
