@@ -79,6 +79,7 @@ flui = { path = "…" }
 | `a11y` | off | native accessibility: the AccessKit adapters that hand the semantics tree to VoiceOver / Narrator / Orca (off by default because the Linux adapter carries a D-Bus stack) |
 | `testing` | off | `flui::testing` for headless application tests; add it to the development dependency, as the counter template does |
 | `serde` | off | serialization for supported geometry, painting, locale, layout, interaction, and animation values |
+| `animation-diagnostics` | off | structured animation transition events and CPU spans through `tracing`; devtools `profiling` also enables them |
 
 A module whose feature is off is *absent*, not empty. Every supported
 combination is compiled in isolation by CI (`cargo xtask facade-combos`), so a

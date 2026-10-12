@@ -657,10 +657,12 @@ impl Vsync {
     /// walk. Neither path loses live peers or admitted delivery on failure.
     #[doc(hidden)]
     pub fn tick_all_with_recovery(&self, tick: &FrameTick, retirement: &mut RecoveryScope<'_>) {
+        let profile = crate::observability::ProfileSpan::tick();
         retirement.run_with(|retirement| {
             let authority = self.frame_authority();
             self.tick_all_with_retirement(*tick, &authority, None, retirement);
         });
+        profile.close(retirement.has_failure());
     }
 
     /// A directly ticked subtree retains the clock authority of its live parent

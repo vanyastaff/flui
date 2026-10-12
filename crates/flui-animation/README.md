@@ -8,6 +8,29 @@ rendered page leaves out.
 
 ## Core Concepts
 
+### Optional diagnostics and profiling
+
+Enable `diagnostics` on this crate, or `animation-diagnostics` on `flui` /
+`flui-sdk`, to compile structured DEBUG events at `flui_animation::diagnostics`.
+For example, `RUST_LOG=info,flui_animation::diagnostics=debug` admits these
+events with FLUI's managed log subscriber. The subscriber supplies controller
+span identities; run generations and resolved outcome generations correlate
+start, replacement, cancellation, completion, disposal, direction, playback
+and clock/policy changes. Ordinary unchanged samples emit no transition event.
+
+The same feature emits `animation_tick`, `animation_sampling` and
+`animation_listeners` CPU spans at target `flui_animation`.
+`flui-devtools/profiling` enables it and attributes those spans to their owning
+scheduler frame (ADR-0201). Tick durations include sampling and delivery;
+they are not three additive portions of a CPU total. Standalone ticks have no
+frame attribution, and these spans do not measure GPU execution.
+
+Instrumentation is off by default. Enabled but filtered observation emits no
+events or spans; active profiling carries the subscriber's timing/allocation
+cost. Subscriber callouts run outside controller borrows, with independent
+panic containment and explicit failure custody during span retirement.
+Observation can lose data on failure, but does not own animation outcomes.
+
 ### Imports and ownership
 
 Use `flui_animation::prelude::*` for common motion, observation and mapping.

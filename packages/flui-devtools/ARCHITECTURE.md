@@ -6,6 +6,22 @@ The feature and production wiring map is in [README.md](README.md).
 
 ## Mapping decisions
 
+### Animation work belongs to its nearest scheduler frame
+
+Optional animation spans arrive through SDK-enabled tracing instrumentation,
+without a framework-to-devtools dependency (ADR-0201). Tick, sampling and
+listener timings are inclusive extents. Reentrant spans in the same phase do
+not add a second duration for overlapping work. Animation span names are
+accepted only from their declared target.
+
+The layer owns one scheduler frame by span identity. A nested foreign frame
+and its phases are dropped whole; merely finding the owning frame somewhere
+among a phase's ancestors would blend two runtimes. The nested-runtime row in
+`developer_history_respects_capacity_and_clear` pumps an actual animation in
+that foreign frame and checks the idle owning frame contains no sampling or
+listener work. `a_real_animation_reaches_the_profiler_with_its_work` covers
+time, spring and repeat producers, paint, successful completion and idle silence.
+
 ### Clearing history invalidates outstanding event guards
 
 Timeline guards identify an event independently of its current buffer position.

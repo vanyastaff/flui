@@ -7,7 +7,7 @@ itself, opens a TCP port, or watches files.
 
 | Module | Feature | What it is |
 |--------|---------|------------|
-| `profiler` + `frame_timing_layer` | `profiling` | Per-frame build/layout/paint/compositing timings, jank detection, FPS and history. Fed by a `tracing` layer that subscribes to the framework's own frame spans. |
+| `profiler` + `frame_timing_layer` | `profiling` | Per-frame build/layout/paint/compositing and animation timings, jank detection, FPS and history. Fed by a `tracing` layer that subscribes to the framework's own frame spans. |
 | `timeline` | `timeline` | An event recorder with Chrome trace (`chrome://tracing`) and JSON export, plus a bridge that turns the scheduler's `FrameSnapshot`s into trace events. |
 | `inspector` | `inspector` | `InspectorCounters`, a counting `TreeObserver` over the ADR-0040 observation seam: mounts, moves, rebuilds per cause, unmounts. |
 | `agent` | `agent` | `AgentServer`, a `DevAgentHook` that serves the application's semantics tree to an agent over a local endpoint, in debug builds only. Off by default. |
@@ -18,7 +18,10 @@ devtools cost by not depending on this crate, not by a feature flag here.
 ## Profiling a running app
 
 The framework emits a `frame` span from `UpdateScheduler::drive_frame` and
-`build`, `layout`, `paint`, `compositing` spans from the pipeline.
+`build`, `layout`, `paint`, `compositing` spans from the pipeline. The
+`profiling` feature also enables animation instrumentation through the SDK:
+registry walks, source sampling and listener/future delivery become
+`Animation tick`, `Animation sampling` and `Animation listeners` phases.
 `FrameTimingLayer` subscribes to them; it never needs to be called.
 
 ```rust
@@ -37,9 +40,21 @@ flui_log::install_subscriber(subscriber, InstallPolicy::Auto, LogBridgePolicy::A
 // run the app; `flui-app` inherits an installed subscriber
 ```
 
-The layer carries its own per-layer filter that admits exactly the five spans
-above. FLUI's default `INFO` log filter therefore does not starve it, and
+The layer carries its own per-layer filter that admits the frame/phase spans
+and animation controller span identities. It admits no events. FLUI's default
+`INFO` log filter therefore does not starve it, and
 attaching it does not turn on `DEBUG` logging for the whole process.
+
+Animation timings are inclusive: tick includes sampling and listeners, so
+adding the three is not a frame CPU total. Reentrant work inside the same
+phase is measured once. A phase belongs to its nearest scheduler frame;
+standalone controller ticks and nested frames from another runtime are not
+blended into the owning frame. CPU spans do not measure GPU execution.
+
+Transition events can be logged separately with `animation-diagnostics` on
+`flui` or `flui-sdk`, or `diagnostics` on `flui-animation`, and a DEBUG filter
+for `flui_animation::diagnostics`. Instrumentation is off without these features
+or devtools `profiling`; an interested subscriber is still required.
 
 ```rust
 if let Some(frame) = profiler.frame_stats() {

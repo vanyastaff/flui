@@ -48,6 +48,14 @@ impl AnimationController {
         retired: RetiredSources,
         mut inner: std::cell::RefMut<'_, AnimationControllerInner>,
     ) -> bool {
+        #[cfg(feature = "diagnostics")]
+        if let Some(transition) =
+            super::diagnostics::Transition::capture(&mut inner, delivery.as_ref())
+        {
+            inner
+                .pending_delivery
+                .push_back(ControllerDelivery::Diagnostic(transition));
+        }
         inner.enqueue_status_change(status);
         if let Some(delivery) = delivery {
             inner
@@ -78,9 +86,11 @@ impl AnimationController {
     ) {
         retirement.run_classified(FailureClass::Delivery, |retirement| {
             if value_change == ValueChange::Notify {
+                let profile = crate::observability::ProfileSpan::listeners();
                 retirement.run_with(|retirement| {
                     self.notifier.notify_listeners_with_recovery(retirement);
                 });
+                profile.close(retirement.has_failure());
             }
             if drain {
                 self.drain_delivery(retirement);
@@ -111,6 +121,8 @@ impl AnimationController {
                 delivery
             };
             match delivery {
+                #[cfg(feature = "diagnostics")]
+                ControllerDelivery::Diagnostic(transition) => transition.emit(),
                 ControllerDelivery::RequestFrame => {
                     let probe = self.walk_probe();
                     if probe.has_run {
@@ -129,6 +141,11 @@ impl AnimationController {
                     });
                 }
                 ControllerDelivery::Status(status, listeners) => {
+                    let profile = if listeners.is_empty() {
+                        None
+                    } else {
+                        Some(crate::observability::ProfileSpan::listeners())
+                    };
                     for (id, callback) in &listeners {
                         let live = {
                             let inner = self.inner.borrow_mut();
@@ -147,8 +164,12 @@ impl AnimationController {
                     for (_, callback) in listeners {
                         retirement.retire_classified(FailureClass::Delivery, callback);
                     }
+                    if let Some(profile) = profile {
+                        profile.close(retirement.has_failure());
+                    }
                 }
                 ControllerDelivery::Run(delivery) => {
+                    let profile = crate::observability::ProfileSpan::listeners();
                     let retain = retirement.has_failure();
                     retirement.run_classified(FailureClass::Delivery, |_| {
                         let delivery = delivery.into_inner();
@@ -158,6 +179,7 @@ impl AnimationController {
                             delivery.deliver();
                         }
                     });
+                    profile.close(retirement.has_failure());
                 }
                 ControllerDelivery::Retire(retired) => {
                     retirement.retire_classified(FailureClass::Delivery, retired);

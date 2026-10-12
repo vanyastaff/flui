@@ -124,6 +124,187 @@ fn a_real_frame_reaches_the_profiler_with_its_phases() {
     );
 }
 
+#[test]
+fn a_real_animation_reaches_the_profiler_with_its_work() {
+    use flui_sdk::animation::{Animation, AnimationController, MotionSpec, SpringDescription};
+    use flui_sdk::foundation::Listenable;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    flui_testing::log_capture::disarm_interest_cache();
+    let profiler = Arc::new(Profiler::new());
+    let subscriber =
+        tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
+    let notifications = Rc::new(Cell::new(0));
+    tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+        for source in ["time", "spring", "repeat"] {
+            let mut binding = HeadlessBinding::new();
+            let mounted =
+                binding.mount_root(&Leaf, MountOwners::fresh(), MountOptions::tight(64.0, 64.0));
+            let owner = AnimationController::builder(Duration::from_millis(100))
+                .build_on(Some(binding.vsync()));
+            let controller = owner.controller();
+            let pipeline = binding.pipeline_owner().expect("mounted pipeline").clone();
+            let delivered = Rc::clone(&notifications);
+            controller.add_listener(Rc::new(move || {
+                delivered.set(delivered.get() + 1);
+                pipeline.with_mut(|pipeline| pipeline.mark_needs_paint(mounted.render_root));
+            }));
+            let run = match source {
+                "time" => controller.forward().expect("registered run"),
+                "spring" => controller
+                    .retarget(
+                        1.0,
+                        &MotionSpec::Spring(
+                            SpringDescription::with_damping_ratio(1.0, 100.0, 1.0).expect("spring"),
+                        ),
+                    )
+                    .expect("spring run"),
+                "repeat" => controller
+                    .repeat_with(None, None, false, Some(Duration::from_millis(100)), Some(1))
+                    .expect("finite repeat"),
+                _ => unreachable!(),
+            };
+            binding.pump_frame(Duration::ZERO);
+            binding.pump_frame(Duration::from_millis(50));
+            if source == "spring" {
+                assert!(controller.value() > 0.0 && controller.value() < 1.0);
+            } else {
+                assert!((controller.value() - 0.5).abs() < 1e-9);
+            }
+            assert!(
+                binding.did_paint_last_frame(),
+                "the animation listener must produce paint"
+            );
+            assert!(notifications.get() >= 2);
+            assert!(controller.is_animating());
+            let frame = profiler.frame_stats().expect("real pumped frame");
+            for phase in [
+                "Animation tick",
+                "Animation sampling",
+                "Animation listeners",
+            ] {
+                assert!(
+                    frame.phase(FramePhase::Custom(phase)).is_some(),
+                    "a real progressing animation must profile {phase}: {frame:?}"
+                );
+            }
+            binding.pump_frame(Duration::from_secs(5));
+            assert!(run.is_complete());
+            binding.pump_frame(Duration::from_millis(50));
+            let idle = profiler.frame_stats().expect("idle frame");
+            assert!(
+                idle.phase(FramePhase::Custom("Animation sampling"))
+                    .is_none()
+            );
+            assert!(
+                idle.phase(FramePhase::Custom("Animation listeners"))
+                    .is_none()
+            );
+        }
+    });
+}
+
+fn a_nested_runtime_cannot_blend_its_animation_into_the_owning_frame() {
+    use flui_sdk::animation::{Animation, AnimationController};
+    use flui_sdk::view::PostFrameHandle;
+    use std::{cell::RefCell, rc::Rc};
+    flui_testing::log_capture::disarm_interest_cache();
+    let profiler = Arc::new(Profiler::new());
+    let subscriber =
+        tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
+    tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+        let mut outer = HeadlessBinding::new();
+        outer.mount_root(&Leaf, MountOwners::fresh(), MountOptions::tight(64.0, 64.0));
+        let mut inner = HeadlessBinding::new();
+        inner.mount_root(&Leaf, MountOwners::fresh(), MountOptions::tight(64.0, 64.0));
+        let owner =
+            AnimationController::builder(Duration::from_millis(100)).build_on(Some(inner.vsync()));
+        let controller = owner.controller().clone();
+        let run = controller.forward().expect("inner run");
+        inner.pump_frame(Duration::ZERO);
+        let inner = Rc::new(RefCell::new(inner));
+        let nested = Rc::clone(&inner);
+        let previous_frames = profiler.frame_history().len();
+        PostFrameHandle::new(outer.scheduler())
+            .schedule(move |_| {
+                nested.borrow_mut().pump_frame(Duration::from_millis(50));
+                assert!((controller.value() - 0.5).abs() < 1e-9);
+                assert!(!run.is_complete());
+            })
+            .expect("nested runtime callback");
+        outer.pump_frame(Duration::from_millis(16));
+        // Keep foreign owners alive through the outer frame: cancellation in
+        // its post-frame callback would be real outer delivery work.
+        drop(owner);
+        drop(inner);
+        let history = profiler.frame_history();
+        assert_eq!(
+            history.len(),
+            previous_frames + 1,
+            "the nested frame is dropped whole"
+        );
+        let owning = history.last().expect("outer frame");
+        assert!(owning.phase(FramePhase::Custom("Animation tick")).is_some());
+        assert!(
+            owning
+                .phase(FramePhase::Custom("Animation sampling"))
+                .is_none(),
+            "inner sampling must not blend into an idle outer frame: {owning:?}"
+        );
+        assert!(
+            owning
+                .phase(FramePhase::Custom("Animation listeners"))
+                .is_none(),
+            "inner delivery must not blend into an idle outer frame: {owning:?}"
+        );
+    });
+}
+
+fn a_runtime_driven_fade_reaches_the_profiler() {
+    use flui_sdk::animation::{Animation, AnimationController, Vsync};
+    use flui_sdk::rendering::BoxConstraints;
+    use flui_sdk::widgets::{FadeTransition, SizedBox};
+    use std::rc::Rc;
+
+    flui_testing::log_capture::disarm_interest_cache();
+    let profiler = Arc::new(Profiler::new());
+    let subscriber =
+        tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
+    tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+        let registry = Vsync::new();
+        let owner =
+            AnimationController::builder(Duration::from_millis(100)).build_on(Some(&registry));
+        let controller = owner.controller();
+        let mut laid = flui_testing::widgets::lay_out_animated(
+            FadeTransition::new(Rc::new(controller.clone()), SizedBox::new(32.0, 32.0)),
+            BoxConstraints::tight(flui_sdk::geometry::Size::new(64.0, 64.0)),
+            registry,
+        );
+        let run = controller.forward().expect("runtime fade");
+        laid.pump_for(Duration::ZERO);
+        laid.pump_for(Duration::from_millis(50));
+        assert!((controller.value() - 0.5).abs() < 1e-9);
+        assert!((laid.opacity(laid.root()) - 0.5).abs() < 1e-9);
+        assert!(laid.did_paint_last_frame());
+        let frame = profiler.frame_stats().expect("runtime frame");
+        for phase in [
+            "Animation tick",
+            "Animation sampling",
+            "Animation listeners",
+            "Compositing",
+        ] {
+            assert!(
+                frame.phase(FramePhase::Custom(phase)).is_some(),
+                "runtime {phase}: {frame:?}"
+            );
+        }
+        assert!(frame.phase(FramePhase::Paint).is_some());
+        laid.pump_for(Duration::from_millis(50));
+        assert!(run.is_complete());
+    });
+}
+
 fn zero_history_capacity_keeps_counters_without_frames() {
     let profiler = Profiler::with_config(flui_devtools::ProfilerConfig {
         max_frame_history: 0,
@@ -138,6 +319,60 @@ fn zero_history_capacity_keeps_counters_without_frames() {
         assert!(profiler.frame_stats().is_none());
     }
     assert_eq!(profiler.jank_percentage(), 100.0);
+}
+
+fn animation_phase_names_and_inclusive_extents_are_respected() {
+    fn phase_span(name: &str) -> tracing::Span {
+        match name {
+            "Animation tick" => tracing::debug_span!(target: "flui_animation", "animation_tick"),
+            "Animation sampling" => {
+                tracing::debug_span!(target: "flui_animation", "animation_sampling")
+            }
+            "Animation listeners" => {
+                tracing::debug_span!(target: "flui_animation", "animation_listeners")
+            }
+            _ => unreachable!(),
+        }
+    }
+    // Consumer-only spans pin filtering and inclusive timing. The real
+    // controller and mounted FadeTransition rows pin the producer separately.
+    for name in [
+        "Animation tick",
+        "Animation sampling",
+        "Animation listeners",
+    ] {
+        flui_testing::log_capture::disarm_interest_cache();
+        let profiler = Arc::new(Profiler::new());
+        let subscriber =
+            tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
+        tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+            let _frame = tracing::debug_span!("frame").entered();
+            let _outer = phase_span(name).entered();
+            let _nested = phase_span(name).entered();
+            std::thread::sleep(Duration::from_millis(20));
+        });
+        let frame = profiler.frame_stats().expect("consumer frame");
+        let measured = frame.phase(FramePhase::Custom(name)).expect("phase extent");
+        assert!(
+            measured.duration <= frame.total_time,
+            "overlapping {name} spans cannot exceed their enclosing frame: {frame:?}"
+        );
+    }
+    flui_testing::log_capture::disarm_interest_cache();
+    let profiler = Arc::new(Profiler::new());
+    let subscriber =
+        tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
+    tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+        let _frame = tracing::debug_span!("frame").entered();
+        let _foreign = tracing::debug_span!(target: "application", "animation_sampling").entered();
+    });
+    assert!(
+        profiler
+            .frame_stats()
+            .expect("filtered frame")
+            .phase(FramePhase::Custom("Animation sampling"))
+            .is_none()
+    );
 }
 
 #[cfg(feature = "timeline")]
@@ -284,6 +519,18 @@ fn developer_history_respects_capacity_and_clear() {
         (
             "zero_capacity",
             zero_history_capacity_keeps_counters_without_frames,
+        ),
+        (
+            "nested_runtime_animation",
+            a_nested_runtime_cannot_blend_its_animation_into_the_owning_frame,
+        ),
+        (
+            "runtime_fade_animation",
+            a_runtime_driven_fade_reaches_the_profiler,
+        ),
+        (
+            "animation_phase_contract",
+            animation_phase_names_and_inclusive_extents_are_respected,
         ),
         #[cfg(feature = "timeline")]
         (

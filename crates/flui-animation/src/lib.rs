@@ -71,6 +71,7 @@
 //!
 //! ## Feature Flags
 //!
+//! - `diagnostics` - Optional structured transition events and CPU spans (ADR-0201)
 //! - `serde` - Enable serialization/deserialization support for animation types
 //!
 //! [`Animation<T>`]: crate::Animation
@@ -120,6 +121,7 @@ mod driven;
 mod error;
 mod keyframes;
 mod motion;
+mod observability;
 mod proxy;
 mod retarget;
 mod reverse;

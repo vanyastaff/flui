@@ -19,6 +19,12 @@ crate.
   that packages use, at the same paths.
 - `pipeline` (Evolving): render-object internals the facade does not expose.
 
+## Optional diagnostics
+
+The additive `animation-diagnostics` feature enables animation transition
+events and CPU spans through `tracing`. It is off by default; devtools'
+`profiling` feature enables it through this SDK (ADR-0201).
+
 ## What is not
 
 No `flui-app`, `flui-engine` or `wgpu` in its normal dependency graph, which

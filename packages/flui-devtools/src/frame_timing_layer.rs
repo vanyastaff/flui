@@ -19,6 +19,14 @@
 //! | `layout` | `PipelineOwner::run_layout` (`flui-rendering`) | [`Layout`](crate::profiler::FramePhase::Layout) |
 //! | `paint` | `PipelineOwner::run_paint` (`flui-rendering`) | [`Paint`](crate::profiler::FramePhase::Paint) |
 //! | `compositing` | the compositing pass (`flui-rendering`) | `Custom("Compositing")` |
+//! | `animation_tick` | the public Vsync registry walk (`flui-animation`) | `Custom("Animation tick")` |
+//! | `animation_sampling` | time, simulation or repeat computation (`flui-animation`) | `Custom("Animation sampling")` |
+//! | `animation_listeners` | value/status listeners and run delivery (`flui-animation`) | `Custom("Animation listeners")` |
+//!
+//! Animation spans require the `flui_animation` target (ADR-0201).
+//! `profiling` enables their optional producer through the SDK. Their durations
+//! are inclusive: tick contains sampling and listener work. Do not sum them.
+//! A reentrant phase inside the same phase is covered by its outer extent.
 //!
 //! A frame is delimited by the `frame` span `UpdateScheduler::drive_frame`
 //! opens — the one driver every runner and `HeadlessBinding::pump_frame`
@@ -39,7 +47,8 @@
 //! # The layer carries its own filter
 //!
 //! [`FrameTimingLayer::new`] returns the layer behind a per-layer filter that
-//! admits exactly the five spans above and nothing else. Two things follow.
+//! admits the frame/phase spans above and animation controller identities,
+//! without events. Two things follow.
 //! A log layer with an `INFO` filter beside it (FLUI's default) does not
 //! starve the profiler: the registry records a `DEBUG` frame span for this
 //! layer while the log layer never sees it. And attaching the profiler does
@@ -51,7 +60,7 @@
 //! # One frame at a time, by span identity
 //!
 //! The layer owns at most one frame at a time, keyed by the frame span's `Id`.
-//! Phase spans count only when they are *descendants* of that owning span, and
+//! Phase spans count only when their nearest frame is that owning span, and
 //! only its own close ends the frame. So when two `UiRuntime`s render
 //! concurrently under one shared subscriber, the second UI runtime's frame — and
 //! every phase inside it — is **dropped whole** rather than mixed into the
@@ -88,14 +97,26 @@ fn phase_for(name: &str) -> Option<FramePhase> {
         "layout" => Some(FramePhase::Layout),
         "paint" => Some(FramePhase::Paint),
         "compositing" => Some(FramePhase::Custom("Compositing")),
+        "animation_tick" => Some(FramePhase::Custom("Animation tick")),
+        "animation_sampling" => Some(FramePhase::Custom("Animation sampling")),
+        "animation_listeners" => Some(FramePhase::Custom("Animation listeners")),
         _ => None,
     }
 }
 
-/// The per-layer filter: the frame span and its phase spans, nothing else —
-/// no events, no other spans, at any level.
+/// Frame/phase spans and controller identities; no events or unrelated spans.
 fn is_frame_or_phase(metadata: &Metadata<'_>) -> bool {
-    metadata.is_span() && (metadata.name() == FRAME_SPAN || phase_for(metadata.name()).is_some())
+    if matches!(
+        metadata.name(),
+        "animation_tick" | "animation_sampling" | "animation_listeners"
+    ) {
+        return metadata.is_span() && metadata.target() == "flui_animation";
+    }
+    metadata.is_span()
+        && (metadata.name() == FRAME_SPAN
+            || phase_for(metadata.name()).is_some()
+            || (metadata.target() == "flui_animation::diagnostics"
+                && metadata.name() == "animation_controller"))
 }
 
 /// The filter [`FrameTimingLayer::new`] wraps the layer in.
@@ -196,7 +217,21 @@ where
         // attributed to the frame being measured.
         let owning_frame = self.active_frame.lock().clone();
         let Some(frame_id) = owning_frame else { return };
-        if !span.scope().any(|ancestor| ancestor.id() == frame_id) {
+        if !span
+            .scope()
+            .find(|ancestor| ancestor.name() == FRAME_SPAN)
+            .is_some_and(|owner| owner.id() == frame_id)
+        {
+            return;
+        }
+
+        // A reentrant walk/sample is already covered by the same phase's
+        // enclosing extent. Adding both guards would double-count its work.
+        if span
+            .scope()
+            .skip(1)
+            .any(|ancestor| phase_for(ancestor.name()) == Some(phase))
+        {
             return;
         }
 
