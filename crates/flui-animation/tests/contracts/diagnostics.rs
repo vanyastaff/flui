@@ -15,6 +15,8 @@ use tracing_subscriber::{Layer, layer::Context, prelude::*, registry::LookupSpan
 
 thread_local! {
     static OBSERVED: RefCell<Option<AnimationController>> = const { RefCell::new(None) };
+    #[cfg(feature = "diagnostics")]
+    static OBSERVED_OWNER: RefCell<Option<flui_animation::DrivenController>> = const { RefCell::new(None) };
 }
 
 #[derive(Default)]
@@ -694,7 +696,107 @@ fn animation_observation_contract() {
             "subscriber_cancels_before_simulation_sampling",
             subscriber_cancellation_silences_the_displaced_simulation,
         ),
+        #[cfg(feature = "diagnostics")]
+        (
+            "subscriber_disposes_before_value_delivery",
+            subscriber_disposal_silences_value_delivery,
+        ),
     ]);
+}
+
+#[cfg(feature = "diagnostics")]
+fn subscriber_disposal_silences_value_delivery() {
+    struct DisposeListeners {
+        armed: Arc<AtomicBool>,
+        hook: Hook,
+    }
+    impl DisposeListeners {
+        fn dispose(&self, hook: Hook, name: &str) {
+            if self.hook == hook
+                && name == "animation_listeners"
+                && self.armed.swap(false, Ordering::Relaxed)
+            {
+                let mut owner = OBSERVED_OWNER
+                    .with(|slot| slot.borrow_mut().take())
+                    .expect("owning controller");
+                owner.dispose();
+                OBSERVED_OWNER.with(|slot| *slot.borrow_mut() = Some(owner));
+            }
+        }
+    }
+    impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for DisposeListeners {
+        fn on_new_span(
+            &self,
+            attrs: &tracing::span::Attributes<'_>,
+            _: &tracing::span::Id,
+            _: Context<'_, S>,
+        ) {
+            self.dispose(Hook::New, attrs.metadata().name());
+        }
+        fn on_enter(&self, id: &tracing::span::Id, ctx: Context<'_, S>) {
+            if let Some(span) = ctx.span(id) {
+                self.dispose(Hook::Enter, span.name());
+            }
+        }
+    }
+    let mut failures = Vec::new();
+    for hook in [Hook::New, Hook::Enter] {
+        flui_testing::log_capture::disarm_interest_cache();
+        let armed = Arc::new(AtomicBool::new(false));
+        let observer = DisposeListeners {
+            armed: Arc::clone(&armed),
+            hook,
+        };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            tracing::subscriber::with_default(
+                tracing_subscriber::registry().with(observer),
+                || {
+                    let registry = Vsync::new();
+                    let owner = AnimationController::builder(Duration::from_millis(100))
+                        .build_on(Some(&registry));
+                    let controller = owner.controller().clone();
+                    OBSERVED_OWNER.with(|slot| *slot.borrow_mut() = Some(owner));
+                    let notifications = Rc::new(std::cell::Cell::new(0));
+                    let delivered = Rc::clone(&notifications);
+                    controller.add_listener(Rc::new(move || delivered.set(delivered.get() + 1)));
+                    let original = controller.forward().expect("owned run");
+                    let peer = AnimationController::builder(Duration::from_millis(100))
+                        .build_on(Some(&registry));
+                    let peer_run = peer.controller().forward().expect("peer run");
+                    let mut clock = flui_animation::MotionClock::new();
+                    registry.tick_all(&clock.frame(Duration::ZERO));
+                    let before_disposal = notifications.get();
+                    armed.store(true, Ordering::Relaxed);
+                    registry.tick_all(&clock.frame(Duration::from_millis(50)));
+                    assert!(!armed.load(Ordering::Relaxed), "{hook:?} disposal ran");
+                    assert!(original.is_canceled());
+                    assert_eq!(
+                        notifications.get(),
+                        before_disposal,
+                        "disposed listeners stay silent"
+                    );
+                    assert_eq!(
+                        controller.forward().expect_err("retired controller"),
+                        flui_animation::AnimationError::Disposed
+                    );
+                    assert!((peer.controller().value() - 0.5).abs() < 1e-9);
+                    registry.tick_all(&clock.frame(Duration::from_millis(100)));
+                    assert!(peer_run.is_complete());
+                    let fresh = AnimationController::builder(Duration::from_millis(100))
+                        .build_on(Some(&registry));
+                    let next = fresh.controller().forward().expect("fresh owner");
+                    registry.tick_all(&clock.frame(Duration::from_millis(100)));
+                    registry.tick_all(&clock.frame(Duration::from_millis(200)));
+                    assert!(next.is_complete());
+                },
+            );
+        }));
+        OBSERVED_OWNER.with(|slot| drop(slot.borrow_mut().take()));
+        if result.is_err() {
+            failures.push(hook);
+        }
+    }
+    assert!(failures.is_empty(), "disposal hooks failed: {failures:?}");
 }
 
 fn a_rate_command_during_sampling_remains_pending() {

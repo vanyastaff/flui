@@ -321,6 +321,124 @@ fn zero_history_capacity_keeps_counters_without_frames() {
     assert_eq!(profiler.jank_percentage(), 100.0);
 }
 
+fn application_frame_names_do_not_hide_real_animation_work() {
+    use flui_sdk::animation::{Animation, AnimationController};
+    use flui_sdk::view::PostFrameHandle;
+
+    flui_testing::log_capture::disarm_interest_cache();
+    let profiler = Arc::new(Profiler::new());
+    let subscriber = tracing_subscriber::registry()
+        .with(tracing_subscriber::layer::Identity::new())
+        .with(FrameTimingLayer::new(Arc::clone(&profiler)));
+    tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+        let mut binding = HeadlessBinding::new();
+        binding.mount_root(&Leaf, MountOwners::fresh(), MountOptions::tight(64.0, 64.0));
+        let controller = AnimationController::builder(Duration::from_millis(100)).build();
+        let run = controller.forward().expect("manual run");
+        PostFrameHandle::new(binding.scheduler())
+            .schedule(move |_| {
+                let frame = tracing::Span::current();
+                {
+                    let _reentered = frame.enter();
+                }
+                let _application = tracing::debug_span!(target: "application", "frame").entered();
+                controller.tick_at(Duration::from_millis(50));
+                assert!((controller.value() - 0.5).abs() < 1e-9);
+                assert!(!run.is_complete());
+            })
+            .expect("animation callback");
+        binding.pump_frame(Duration::from_millis(16));
+        let frame = profiler.frame_stats().expect("scheduler frame");
+        for phase in ["Animation sampling", "Animation listeners"] {
+            assert!(
+                frame.phase(FramePhase::Custom(phase)).is_some(),
+                "{phase}: {frame:?}"
+            );
+        }
+        let previous_frames = profiler.frame_history().len();
+        {
+            let _application = tracing::debug_span!(target: "application", "frame").entered();
+        }
+        assert_eq!(profiler.frame_history().len(), previous_frames);
+    });
+}
+
+fn retained_sampling_spans_end_at_exit_and_do_not_charge_a_later_frame() {
+    use flui_sdk::animation::{Animation, AnimationController, Curve};
+    use flui_sdk::view::PostFrameHandle;
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+    };
+
+    struct RetainingCurve(Rc<RefCell<Option<tracing::Span>>>, Rc<Cell<Duration>>);
+    impl Curve for RetainingCurve {
+        fn transform(&self, t: f64) -> f64 {
+            let started = std::time::Instant::now();
+            let span = tracing::Span::current();
+            {
+                let _reentered = span.enter();
+            }
+            std::thread::sleep(Duration::from_millis(20));
+            self.1.set(started.elapsed());
+            *self.0.borrow_mut() = Some(span);
+            t.clamp(0.0, 1.0)
+        }
+    }
+    flui_testing::log_capture::disarm_interest_cache();
+    let profiler = Arc::new(Profiler::new());
+    let subscriber =
+        tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
+    tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+        let mut binding = HeadlessBinding::new();
+        binding.mount_root(&Leaf, MountOwners::fresh(), MountOptions::tight(64.0, 64.0));
+        let retained = Rc::new(RefCell::new(None));
+        let source_time = Rc::new(Cell::new(Duration::ZERO));
+        let owner = AnimationController::builder(Duration::from_millis(100))
+            .build_on(Some(binding.vsync()));
+        let controller = owner.controller();
+        let run = controller
+            .animate_to_curved(
+                1.0,
+                None,
+                RetainingCurve(Rc::clone(&retained), Rc::clone(&source_time)),
+            )
+            .expect("curved run");
+        binding.pump_frame(Duration::ZERO);
+        binding.pump_frame(Duration::from_millis(50));
+        assert!(!run.is_complete());
+        assert!((controller.value() - 0.5).abs() < 1e-9);
+        let frame = profiler.frame_stats().expect("sampled frame");
+        let sampling = frame.phase(FramePhase::Custom("Animation sampling"));
+        let current_is_correct = sampling.is_some_and(|phase| {
+            phase.duration >= source_time.get() && phase.duration <= frame.total_time
+        });
+        assert!(retained.borrow().is_some());
+        controller.stop().expect("stop before the next frame");
+        assert!(run.is_canceled());
+        PostFrameHandle::new(binding.scheduler())
+            .schedule(move |_| {
+                let span = retained
+                    .borrow_mut()
+                    .take()
+                    .expect("retained sampling span");
+                let _late_entry = span.enter();
+            })
+            .expect("release retained span in next frame");
+        binding.pump_frame(Duration::from_millis(16));
+        let next = profiler.frame_stats().expect("next frame");
+        assert_eq!(
+            (
+                current_is_correct,
+                next.phase(FramePhase::Custom("Animation sampling"))
+                    .is_none()
+            ),
+            (true, true),
+            "current: {frame:?}; later: {next:?}"
+        );
+    });
+}
+
 fn animation_phase_names_and_inclusive_extents_are_respected() {
     fn phase_span(name: &str) -> tracing::Span {
         match name {
@@ -346,7 +464,9 @@ fn animation_phase_names_and_inclusive_extents_are_respected() {
         let subscriber =
             tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
         tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
-            let _frame = tracing::debug_span!("frame").entered();
+            let _frame =
+                tracing::debug_span!(target: "flui_scheduler::scheduler::execution", "frame")
+                    .entered();
             let _outer = phase_span(name).entered();
             let _nested = phase_span(name).entered();
             std::thread::sleep(Duration::from_millis(20));
@@ -363,7 +483,8 @@ fn animation_phase_names_and_inclusive_extents_are_respected() {
     let subscriber =
         tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
     tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
-        let _frame = tracing::debug_span!("frame").entered();
+        let _frame =
+            tracing::debug_span!(target: "flui_scheduler::scheduler::execution", "frame").entered();
         let _foreign = tracing::debug_span!(target: "application", "animation_sampling").entered();
     });
     assert!(
@@ -531,6 +652,14 @@ fn developer_history_respects_capacity_and_clear() {
         (
             "animation_phase_contract",
             animation_phase_names_and_inclusive_extents_are_respected,
+        ),
+        (
+            "application_frame_name",
+            application_frame_names_do_not_hide_real_animation_work,
+        ),
+        (
+            "retained_sampling_span",
+            retained_sampling_spans_end_at_exit_and_do_not_charge_a_later_frame,
         ),
         #[cfg(feature = "timeline")]
         (

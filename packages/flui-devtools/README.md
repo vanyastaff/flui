@@ -50,6 +50,9 @@ adding the three is not a frame CPU total. Reentrant work inside the same
 phase is measured once. A phase belongs to its nearest scheduler frame;
 standalone controller ticks and nested frames from another runtime are not
 blended into the owning frame. CPU spans do not measure GPU execution.
+Scheduler frames are recognized by their producer target as well as their name.
+Animation phases and frames end at their outermost span exit; retaining a span
+clone in application code cannot extend their timing into another frame.
 
 Transition events can be logged separately with `animation-diagnostics` on
 `flui` or `flui-sdk`, or `diagnostics` on `flui-animation`, and a DEBUG filter

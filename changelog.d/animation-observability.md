@@ -6,3 +6,5 @@
 ### Fixed
 
 - Include headless animation sampling inside its scheduler frame so actual animation work reaches the frame profiler.
+- Keep animation and frame timings bounded by their outermost entered visits, including retained span clones and same-span reentry; application spans named `frame` do not hide scheduler work.
+- Preserve cancellation delivery and silent value listeners when an optional animation subscriber disposes the owning controller during listener-span creation or entry.

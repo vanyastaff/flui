@@ -14,6 +14,15 @@ listener timings are inclusive extents. Reentrant spans in the same phase do
 not add a second duration for overlapping work. Animation span names are
 accepted only from their declared target.
 
+Scheduler frames are recognized by their producer target and span identity;
+an application's same-named span is not a runtime boundary. Animation phases
+and scheduler frames finish at their outermost exit, with depth accounting for
+same-span reentry. A source retaining its current span also retains its parent
+frame identity, but neither lifetime can delay timing into a later frame.
+The application-frame and retained-sampling rows in
+`developer_history_respects_capacity_and_clear` pin both boundaries through real
+controller work, including late entry and release in the next idle frame.
+
 The layer owns one scheduler frame by span identity. A nested foreign frame
 and its phases are dropped whole; merely finding the owning frame somewhere
 among a phase's ancestors would blend two runtimes. The nested-runtime row in

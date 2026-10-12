@@ -87,9 +87,12 @@ impl AnimationController {
         retirement.run_classified(FailureClass::Delivery, |retirement| {
             if value_change == ValueChange::Notify {
                 let profile = crate::observability::ProfileSpan::listeners();
-                retirement.run_with(|retirement| {
-                    self.notifier.notify_listeners_with_recovery(retirement);
-                });
+                // Span creation/entry can dispose the owning controller.
+                if !self.notifier.is_disposed() {
+                    retirement.run_with(|retirement| {
+                        self.notifier.notify_listeners_with_recovery(retirement);
+                    });
+                }
                 profile.close(retirement);
             }
             if drain {

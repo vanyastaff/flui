@@ -61,7 +61,9 @@
 //!
 //! The layer owns at most one frame at a time, keyed by the frame span's `Id`.
 //! Phase spans count only when their nearest frame is that owning span, and
-//! only its own close ends the frame. So when two `UiRuntime`s render
+//! only its outermost exit ends the frame. Scheduler frames are recognized by
+//! target as well as name, so an application's `frame` span cannot hide them.
+//! So when two `UiRuntime`s render
 //! concurrently under one shared subscriber, the second UI runtime's frame — and
 //! every phase inside it — is **dropped whole** rather than mixed into the
 //! first UI runtime's measurements: a missing frame is honest, a blended one is a
@@ -71,11 +73,12 @@
 //! # Timing comes from the span, not the callback
 //!
 //! Duration is measured by a [phase guard](crate::profiler::PhaseGuard) parked
-//! in the span's own extensions: created when the span is *entered*, dropped
-//! when it closes. That measures the span's real extent even when a subscriber
-//! callback runs late, and it means a span entered and exited repeatedly (as
-//! `layout` is, across a fixpoint) still reports one contiguous phase rather
-//! than a sum of visits.
+//! in the span's own extensions. Animation phases record each outermost
+//! entered visit at exit, including reentry depth. Retaining a span clone
+//! cannot postpone its measurement into another frame. Scheduler frames also
+//! end at their outermost exit: a retained child keeps its parent's identity
+//! alive, but cannot extend the frame's measurement. Other rendering phases
+//! retain their existing close-based contiguous extent across repeated visits.
 
 use std::sync::Arc;
 
@@ -89,6 +92,21 @@ use crate::profiler::{FramePhase, PhaseGuard, Profiler};
 
 /// The span `UpdateScheduler::drive_frame` opens around every frame.
 const FRAME_SPAN: &str = "frame";
+
+/// The scheduler's frame boundary, not an application's same-named span.
+fn is_scheduler_frame(metadata: &Metadata<'_>) -> bool {
+    metadata.is_span()
+        && metadata.name() == FRAME_SPAN
+        && metadata.target() == "flui_scheduler::scheduler::execution"
+}
+
+fn is_animation_phase(metadata: &Metadata<'_>) -> bool {
+    metadata.target() == "flui_animation"
+        && matches!(
+            metadata.name(),
+            "animation_tick" | "animation_sampling" | "animation_listeners"
+        )
+}
 
 /// Maps a span name to the phase it measures, or `None` if it is not a phase.
 fn phase_for(name: &str) -> Option<FramePhase> {
@@ -110,10 +128,10 @@ fn is_frame_or_phase(metadata: &Metadata<'_>) -> bool {
         metadata.name(),
         "animation_tick" | "animation_sampling" | "animation_listeners"
     ) {
-        return metadata.is_span() && metadata.target() == "flui_animation";
+        return metadata.is_span() && is_animation_phase(metadata);
     }
     metadata.is_span()
-        && (metadata.name() == FRAME_SPAN
+        && (is_scheduler_frame(metadata)
             || phase_for(metadata.name()).is_some()
             || (metadata.target() == "flui_animation::diagnostics"
                 && metadata.name() == "animation_controller"))
@@ -128,8 +146,15 @@ pub type FrameSpanFilter = FilterFn<fn(&Metadata<'_>) -> bool>;
 /// collide with another layer storing the same type in the same extensions map.
 // The field is never read on purpose: the guard records the phase duration when
 // it is *dropped*, which is the whole mechanism.
-#[expect(dead_code)]
-struct ActivePhase(PhaseGuard);
+struct ActivePhase {
+    _guard: PhaseGuard,
+    entries: usize,
+}
+
+struct ActiveFrame {
+    id: Id,
+    entries: usize,
+}
 
 /// Subscriber layer that turns the framework's frame spans into
 /// [frame statistics](crate::profiler::FrameStats).
@@ -157,9 +182,9 @@ pub struct FrameTimingLayer {
     ///
     /// Shared across clones (`Arc`) so a cloned layer still sees the same
     /// single-frame ownership. `Some` from the owning span's creation until
-    /// its close; a frame span created while this is `Some` belongs to a
+    /// its outermost exit; a frame span created while this is `Some` belongs to a
     /// concurrently rendering UI runtime and is ignored entirely.
-    active_frame: Arc<parking_lot::Mutex<Option<Id>>>,
+    active_frame: Arc<parking_lot::Mutex<Option<ActiveFrame>>>,
 }
 
 impl FrameTimingLayer {
@@ -189,7 +214,7 @@ where
     S: Subscriber + for<'a> LookupSpan<'a>,
 {
     fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, _ctx: Context<'_, S>) {
-        if attrs.metadata().name() != FRAME_SPAN {
+        if !is_scheduler_frame(attrs.metadata()) {
             return;
         }
         // Frame boundaries open here rather than on enter: a frame span is
@@ -202,12 +227,24 @@ where
             // frame would blend two ui_runtimes' timings into one measurement.
             return;
         }
-        *active_frame = Some(id.clone());
+        *active_frame = Some(ActiveFrame {
+            id: id.clone(),
+            entries: 0,
+        });
         self.profiler.begin_frame();
     }
 
     fn on_enter(&self, id: &Id, ctx: Context<'_, S>) {
         let Some(span) = ctx.span(id) else { return };
+        if is_scheduler_frame(span.metadata()) {
+            let mut active_frame = self.active_frame.lock();
+            if let Some(active) = active_frame.as_mut()
+                && active.id == *id
+            {
+                active.entries += 1;
+            }
+            return;
+        }
         let Some(phase) = phase_for(span.name()) else {
             return;
         };
@@ -215,11 +252,15 @@ where
         // Only phases inside the owning frame span count. A phase from a
         // concurrently rendering ui_runtime — or outside any frame — must not be
         // attributed to the frame being measured.
-        let owning_frame = self.active_frame.lock().clone();
+        let owning_frame = self
+            .active_frame
+            .lock()
+            .as_ref()
+            .map(|active| active.id.clone());
         let Some(frame_id) = owning_frame else { return };
         if !span
             .scope()
-            .find(|ancestor| ancestor.name() == FRAME_SPAN)
+            .find(|ancestor| is_scheduler_frame(ancestor.metadata()))
             .is_some_and(|owner| owner.id() == frame_id)
         {
             return;
@@ -227,21 +268,61 @@ where
 
         // A reentrant walk/sample is already covered by the same phase's
         // enclosing extent. Adding both guards would double-count its work.
-        if span
-            .scope()
-            .skip(1)
-            .any(|ancestor| phase_for(ancestor.name()) == Some(phase))
-        {
+        if span.scope().skip(1).any(|ancestor| {
+            phase_for(ancestor.name()) == Some(phase)
+                && ancestor.extensions().get::<ActivePhase>().is_some()
+        }) {
             return;
         }
 
         let mut extensions = span.extensions_mut();
-        if extensions.get_mut::<ActivePhase>().is_some() {
+        if let Some(active) = extensions.get_mut::<ActivePhase>() {
+            if is_animation_phase(span.metadata()) {
+                active.entries += 1;
+            }
             // Re-entered without closing: the guard already running measures
             // the full extent, so a second one would double-count.
             return;
         }
-        extensions.insert(ActivePhase(self.profiler.profile_phase(phase)));
+        extensions.insert(ActivePhase {
+            _guard: self.profiler.profile_phase(phase),
+            entries: 1,
+        });
+    }
+
+    fn on_exit(&self, id: &Id, ctx: Context<'_, S>) {
+        let Some(span) = ctx.span(id) else { return };
+        if is_scheduler_frame(span.metadata()) {
+            let mut active_frame = self.active_frame.lock();
+            if let Some(active) = active_frame.as_mut()
+                && active.id == *id
+            {
+                active.entries -= 1;
+                if active.entries == 0 {
+                    self.profiler.end_frame();
+                    *active_frame = None;
+                }
+            }
+            return;
+        }
+        if !is_animation_phase(span.metadata()) {
+            return;
+        }
+        // User sources can retain or reenter Span::current(). The outermost
+        // exit ends this visit; external clones must not extend its CPU time.
+        let finished = {
+            let mut extensions = span.extensions_mut();
+            let Some(active) = extensions.get_mut::<ActivePhase>() else {
+                return;
+            };
+            active.entries -= 1;
+            if active.entries == 0 {
+                extensions.remove::<ActivePhase>()
+            } else {
+                None
+            }
+        };
+        drop(finished);
     }
 
     fn on_close(&self, id: Id, ctx: Context<'_, S>) {
@@ -254,12 +335,11 @@ where
             return;
         }
 
-        if name == FRAME_SPAN {
-            // Only the owning span's close ends the frame; the lock is held
-            // across `end_frame` so a frame beginning on another thread
-            // cannot slot in between the release and the recording.
+        if is_scheduler_frame(span.metadata()) {
+            // Fallback for a frame closed without entry. Normal frames end
+            // at exit even if a retained child keeps this span alive.
             let mut active_frame = self.active_frame.lock();
-            if active_frame.as_ref() == Some(&id) {
+            if active_frame.as_ref().is_some_and(|active| active.id == id) {
                 self.profiler.end_frame();
                 *active_frame = None;
             }
@@ -294,7 +374,9 @@ mod tests {
     #[test]
     fn the_frameworks_phase_spans_become_profiler_phases() {
         let profiler = profile(|| {
-            let _frame = tracing::debug_span!("frame").entered();
+            let _frame =
+                tracing::debug_span!(target: "flui_scheduler::scheduler::execution", "frame")
+                    .entered();
             {
                 let _build = tracing::debug_span!("build", dirty_elements = 3).entered();
             }

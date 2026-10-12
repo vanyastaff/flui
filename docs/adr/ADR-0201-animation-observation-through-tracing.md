@@ -60,6 +60,13 @@ pipeline closure before build/layout/paint, matching runtime sampling placement.
 Standalone controller tests and direct registry benchmarks still work without
 inventing a frame.
 
+The profiler recognizes scheduler frames by their producer target and span
+identity, rather than an arbitrary application's `frame` label. It finishes
+animation phases and scheduler frames at their outermost entered exit, accounting
+for same-span reentry. Retained current-span clones also retain parent identities;
+they cannot extend either timing into another frame. Rendering phases preserve
+their existing close-based extent.
+
 Each subscriber callout is independently contained through foundation panic
 custody. Observation failures retire exact text and retain opaque payloads under
 the existing policy; they cannot replace an animation source/listener failure or
@@ -76,6 +83,9 @@ Sampling revalidates its run and sample identity after span creation/entry,
 before invoking a user curve or simulation, and again before publication after
 span closure. A subscriber that cancels or replaces the captured run cannot
 leave its old source callable by the displaced sample.
+Value notification likewise revalidates notifier liveness after opening its
+listener span. A subscriber may dispose the owning controller at creation or
+entry; value listeners then stay silent while cancellation delivery still drains.
 Subscriber-internal partial registration or an aggregate destructor that
 double-panics remains outside this guarantee; failed observation may lose data.
 
@@ -98,3 +108,9 @@ futures are canceled, healthy peers advance and a fresh run completes.
 span-exit, span-close and last-subscriber destructor failures in a child process.
 `developer_history_respects_capacity_and_clear` also covers a runtime-driven
 `FadeTransition` and real animation in a nested foreign scheduler frame.
+Its application-frame row also proves a same-named application span cannot hide
+real animation phases, and its retained-sampling row measures an actual curved
+run despite current-span retention/reentry and release in the next idle frame.
+`animation_observation_contract` disposes an owning controller from both listener
+span creation and entry, then checks cancellation, silent listeners, healthy peers
+and a fresh owner's completion.
