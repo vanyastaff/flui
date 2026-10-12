@@ -856,8 +856,7 @@ fn builtin_deadline_verdict_retirement(kind: &str, incoming_failure: bool, fault
     use flui_interaction::events::{PointerKind, make_down_event_for_id, make_up_event_for_id};
     use flui_interaction::routing::PointerDispatch;
     use flui_interaction::{
-        DoubleTapGestureRecognizer, GestureRecognizer as _, LongPressGestureRecognizer,
-        MultiTapGestureRecognizer,
+        DoubleTapGestureRecognizer, LongPressGestureRecognizer, MultiTapGestureRecognizer,
     };
     let clock = ManualClock::new();
     let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
@@ -886,8 +885,7 @@ fn builtin_deadline_verdict_retirement(kind: &str, incoming_failure: bool, fault
         drops: Rc::clone(&drops),
         panic_on_drop: fault != VerdictFault::None,
         panic_on_notify: fault == VerdictFault::NotificationAndRetirement,
-        _drop_capture: std::env::var_os("FLUI_DEADLINE_VERDICT_CHILD")
-            .map(|_| VerdictDropFailure),
+        _drop_capture: std::env::var_os("FLUI_DEADLINE_VERDICT_CHILD").map(|_| VerdictDropFailure),
     });
     let _entry = binding.arena().add(pointer(1), &member);
     *owner.borrow_mut() = Some(member);
@@ -944,7 +942,11 @@ fn builtin_deadline_verdict_retirement(kind: &str, incoming_failure: bool, fault
             Some("earlier animation computation")
         );
     } else if fault == VerdictFault::NotificationAndRetirement {
-        assert_eq!(drops.get(), 0, "{kind} callback failure protects final ownership");
+        assert_eq!(
+            drops.get(),
+            0,
+            "{kind} callback failure protects final ownership"
+        );
         assert_eq!(recovery.first_failure_class(), Some(FailureClass::Delivery));
         assert_eq!(recovery.blocking_failure_class(), None);
         let failure = recovery.into_failure().expect("verdict callback failure");

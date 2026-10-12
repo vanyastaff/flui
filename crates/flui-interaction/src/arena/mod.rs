@@ -19,6 +19,11 @@
 //! 8. Pointer Up → Sweep (cleanup)
 //! ```
 //!
+//! Runtime deadline decisions borrow the presentation's recovery custody through
+//! verdict delivery and snapshot retirement. Committed member notifications are
+//! delivery; destruction of an opaque member establishes no valid postcondition.
+//! Standalone entrypoints own local recovery and propagate its first failure.
+//!
 //! # GestureArenaEntry Handle Pattern
 //!
 //! When adding a member to the arena, you receive a [`GestureArenaEntry`]
@@ -63,7 +68,10 @@ use web_time::Instant;
 use crate::__runtime::{CloseMode, ClosePanic, CloseTombstone};
 use crate::ids::PointerId;
 use crate::retain::Retain;
-use flui_foundation::{MonotonicClock, SystemClock};
+use flui_foundation::{
+    MonotonicClock, SystemClock,
+    panic::{FailureClass, PanicRecovery, RecoveryScope},
+};
 
 mod composition;
 use composition::{BranchPosition, CompositionBranch};
@@ -284,15 +292,37 @@ impl GestureArenaEntry {
     ///
     /// It's safe to call this on an arena that has already been resolved.
     pub fn resolve(&self, disposition: GestureDisposition) {
+        let mut recovery = PanicRecovery::new();
+        self.resolve_with_recovery(disposition, &mut recovery.scope());
+        recovery.finish();
+    }
+
+    pub(crate) fn resolve_with_recovery(
+        &self,
+        disposition: GestureDisposition,
+        recovery: &mut RecoveryScope<'_>,
+    ) {
         let (Some(slot), Some(member)) = (self.slot.upgrade(), self.member.upgrade()) else {
             return;
         };
-        self.arena
-            .resolve_entry(self.pointer, &slot, member, disposition);
+        self.arena.resolve_entry_notifying(
+            self.pointer,
+            &slot,
+            member,
+            disposition,
+            None,
+            recovery,
+        );
     }
 
     /// Withdraw an already locally retired member without rejecting its later contact.
     pub(crate) fn reject_without_self(&self) {
+        let mut recovery = PanicRecovery::new();
+        self.reject_without_self_with_recovery(&mut recovery.scope());
+        recovery.finish();
+    }
+
+    pub(crate) fn reject_without_self_with_recovery(&self, recovery: &mut RecoveryScope<'_>) {
         let (Some(slot), Some(member)) = (self.slot.upgrade(), self.member.upgrade()) else {
             return;
         };
@@ -302,6 +332,7 @@ impl GestureArenaEntry {
             member,
             GestureDisposition::Rejected,
             Some(&self.member),
+            recovery,
         );
     }
 
@@ -345,11 +376,17 @@ impl GestureArenaEntry {
 
     /// Release a hold on this exact arena generation.
     pub fn release(&self) {
+        let mut recovery = PanicRecovery::new();
+        self.release_with_recovery(&mut recovery.scope());
+        recovery.finish();
+    }
+
+    pub(crate) fn release_with_recovery(&self, recovery: &mut RecoveryScope<'_>) {
         if self.arena.owner_closed.get() {
             return;
         }
         if let Some(slot) = self.slot.upgrade() {
-            self.arena.release_slot(&slot);
+            self.arena.release_slot_with_recovery(&slot, recovery);
         }
     }
 
@@ -410,19 +447,24 @@ impl GestureArenaEntry {
 
     /// Cancel the contact after this member has retired its local state.
     /// Its own stale rejection must not reach a reentrantly admitted contact.
-    pub(crate) fn abandon_without_self(&self) {
+    pub(crate) fn abandon_without_self_with_recovery(&self, recovery: &mut RecoveryScope<'_>) {
         if self.arena.owner_closed.get() {
             return;
         }
         let Some(slot) = self.slot.upgrade() else {
             return;
         };
-        if !self.arena.remove_exact_slot(slot.pointer, &slot) {
-            return;
+        let mut pending = None;
+        recovery.run_classified(FailureClass::Unknown, |_| {
+            if self.arena.remove_exact_slot(slot.pointer, &slot) {
+                let mut notifications = slot.data.borrow_mut().resolve(None);
+                notifications.retain(|(member, _)| !Weak::ptr_eq(member, &self.member));
+                pending = Some(notifications);
+            }
+        });
+        if let Some(pending) = pending {
+            GestureArena::dispatch_pending_with_recovery(pending, slot.pointer, recovery);
         }
-        let mut pending = slot.data.borrow_mut().resolve(None);
-        pending.retain(|(member, _)| !Weak::ptr_eq(member, &self.member));
-        GestureArena::dispatch_pending(pending, slot.pointer);
     }
 
     /// Get the pointer ID for this entry.
@@ -1299,41 +1341,37 @@ impl GestureArena {
     /// arena). See [`PendingNotifications`].
     #[inline]
     fn dispatch_pending(pending: PendingNotifications, pointer: PointerId) {
-        if let Some(payload) = Self::dispatch_pending_capturing(pending, pointer) {
-            resume_unwind(payload);
-        }
+        let mut recovery = PanicRecovery::new();
+        Self::dispatch_pending_with_recovery(pending, pointer, &mut recovery.scope());
+        recovery.finish();
     }
 
-    fn dispatch_pending_capturing(
+    /// Verdicts are committed; their opaque snapshots have separate retirement custody.
+    fn dispatch_pending_with_recovery(
         pending: PendingNotifications,
         pointer: PointerId,
-    ) -> Option<Box<dyn Any + Send>> {
-        let mut first_panic = None;
-        Self::dispatch_pending_into(pending, pointer, &mut first_panic);
-        first_panic
-    }
-
-    fn dispatch_pending_into(
-        pending: PendingNotifications,
-        pointer: PointerId,
-        first_panic: &mut Option<Box<dyn Any + Send>>,
+        recovery: &mut RecoveryScope<'_>,
     ) {
         for (member, disposition) in pending {
             let Some(member) = member.upgrade() else {
                 continue;
             };
-            let candidate = catch_unwind(AssertUnwindSafe(|| match disposition {
+            recovery.run_classified(FailureClass::Delivery, |_| match disposition {
                 GestureDisposition::Accepted => member.accept_gesture(pointer),
                 GestureDisposition::Rejected => member.reject_gesture(pointer),
-            }))
-            .err();
-            Self::preserve_first_panic(first_panic, candidate, pointer);
-            if first_panic.is_some() || std::thread::panicking() {
-                member.retain();
-            } else {
-                let drop_candidate = catch_unwind(AssertUnwindSafe(|| drop(member))).err();
-                Self::preserve_first_panic(first_panic, drop_candidate, pointer);
-            }
+            });
+            Self::retire_member_with_recovery(member, recovery);
+        }
+    }
+
+    fn retire_member_with_recovery(
+        member: Rc<dyn GestureArenaMember>,
+        recovery: &mut RecoveryScope<'_>,
+    ) {
+        if recovery.has_failure() {
+            member.retain();
+        } else {
+            recovery.run_classified(FailureClass::Unknown, |_| drop(member));
         }
     }
 
@@ -1347,7 +1385,16 @@ impl GestureArena {
         member: Rc<dyn GestureArenaMember>,
         disposition: GestureDisposition,
     ) {
-        self.resolve_entry_notifying(pointer, slot, member, disposition, None);
+        let mut recovery = PanicRecovery::new();
+        self.resolve_entry_notifying(
+            pointer,
+            slot,
+            member,
+            disposition,
+            None,
+            &mut recovery.scope(),
+        );
+        recovery.finish();
     }
 
     fn resolve_entry_notifying(
@@ -1357,46 +1404,43 @@ impl GestureArena {
         member: Rc<dyn GestureArenaMember>,
         disposition: GestureDisposition,
         excluded: Option<&Weak<dyn GestureArenaMember>>,
+        recovery: &mut RecoveryScope<'_>,
     ) {
         if self.owner_closed.get() {
-            let mut failure = ClosePanic::for_rejection(self.close_mode.mode());
-            failure.retire(member);
-            failure.finish();
+            if self.close_mode.mode() == CloseMode::PreservingFailure {
+                member.retain();
+            } else {
+                Self::retire_member_with_recovery(member, recovery);
+            }
             return;
         }
-        let (mut pending, follow_up) = {
-            let mut entry = slot.data.borrow_mut();
-            match disposition {
-                GestureDisposition::Accepted => {
-                    let follow_up = entry.accept(&member);
-                    (PendingNotifications::new(), follow_up)
+        let mut notifications = None;
+        recovery.run_classified(FailureClass::Unknown, |_| {
+            let (mut pending, follow_up) = {
+                let mut entry = slot.data.borrow_mut();
+                match disposition {
+                    GestureDisposition::Accepted => {
+                        let follow_up = entry.accept(&member);
+                        (PendingNotifications::new(), follow_up)
+                    }
+                    GestureDisposition::Rejected => entry.reject(&member),
                 }
-                GestureDisposition::Rejected => entry.reject(&member),
+            };
+            if disposition.is_rejected() {
+                self.deadlines
+                    .withdraw_member_generation(&Rc::downgrade(&member), slot.generation);
             }
-        };
-        if disposition.is_rejected() {
-            self.deadlines
-                .withdraw_member_generation(&Rc::downgrade(&member), slot.generation);
+            pending.extend(self.collect_follow_up(pointer, slot, follow_up));
+            if let Some(excluded) = excluded {
+                pending.retain(|(member, _)| !Weak::ptr_eq(member, excluded));
+            }
+            notifications = Some(pending);
+        });
+        if let Some(pending) = notifications {
+            Self::dispatch_with_recovery(pending, pointer, Some(member), recovery);
+        } else {
+            Self::retire_member_with_recovery(member, recovery);
         }
-        pending.extend(self.collect_follow_up(pointer, slot, follow_up));
-        if let Some(excluded) = excluded {
-            pending.retain(|(member, _)| !Weak::ptr_eq(member, excluded));
-        }
-        Self::dispatch_with_candidate(pending, pointer, Some(member));
-    }
-
-    /// Drop the caller's candidate after the slot borrow is released and
-    /// before any callback runs, so a panicking callback can never leave it as
-    /// the last owner to be destroyed during that unwind. A panic from its own
-    /// destructor is held and resumed once the callbacks were dispatched.
-    fn retire_candidate(
-        candidate: Option<Rc<dyn GestureArenaMember>>,
-    ) -> Option<Box<dyn std::any::Any + Send>> {
-        if std::thread::panicking() {
-            candidate.retain();
-            return None;
-        }
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(candidate))).err()
     }
 
     fn dispatch_with_candidate(
@@ -1404,11 +1448,22 @@ impl GestureArena {
         pointer: PointerId,
         candidate: Option<Rc<dyn GestureArenaMember>>,
     ) {
-        let mut first_panic = Self::retire_candidate(candidate);
-        Self::dispatch_pending_into(pending, pointer, &mut first_panic);
-        if let Some(payload) = first_panic {
-            resume_unwind(payload);
+        let mut recovery = PanicRecovery::new();
+        Self::dispatch_with_recovery(pending, pointer, candidate, &mut recovery.scope());
+        recovery.finish();
+    }
+
+    fn dispatch_with_recovery(
+        pending: PendingNotifications,
+        pointer: PointerId,
+        candidate: Option<Rc<dyn GestureArenaMember>>,
+        recovery: &mut RecoveryScope<'_>,
+    ) {
+        // Release the caller's snapshot before callbacks can release its owner.
+        if let Some(candidate) = candidate {
+            Self::retire_member_with_recovery(candidate, recovery);
         }
+        Self::dispatch_pending_with_recovery(pending, pointer, recovery);
     }
 
     /// Accept gesture for a member - the member wants to handle this gesture.
@@ -1458,14 +1513,15 @@ impl GestureArena {
         }
     }
 
-    fn release_slot(&self, slot: &Rc<ArenaSlot>) {
-        let should_sweep = {
+    fn release_slot_with_recovery(&self, slot: &Rc<ArenaSlot>, recovery: &mut RecoveryScope<'_>) {
+        let mut should_sweep = false;
+        recovery.run_classified(FailureClass::Unknown, |_| {
             let mut entry = slot.data.borrow_mut();
             entry.release();
-            std::mem::take(&mut entry.has_pending_sweep)
-        };
+            should_sweep = std::mem::take(&mut entry.has_pending_sweep);
+        });
         if should_sweep {
-            self.sweep_slot(slot);
+            self.sweep_slot_with_recovery(slot, recovery);
         }
     }
 
@@ -1553,7 +1609,14 @@ impl GestureArena {
     }
 
     fn sweep_slot(&self, slot: &Rc<ArenaSlot>) {
-        let pending = {
+        let mut recovery = PanicRecovery::new();
+        self.sweep_slot_with_recovery(slot, &mut recovery.scope());
+        recovery.finish();
+    }
+
+    fn sweep_slot_with_recovery(&self, slot: &Rc<ArenaSlot>, recovery: &mut RecoveryScope<'_>) {
+        let mut pending = None;
+        recovery.run_classified(FailureClass::Unknown, |_| {
             let mut entry = slot.data.borrow_mut();
             if entry.is_held || entry.has_blocked_fallback() {
                 // The pointer is up: its held generation leaves the active
@@ -1568,10 +1631,13 @@ impl GestureArena {
                     .insert(slot.generation, Rc::clone(slot));
                 return;
             }
-            entry.sweep()
-        };
-        self.remove_exact_slot(slot.pointer, slot);
-        Self::dispatch_pending(pending, slot.pointer);
+            pending = Some(entry.sweep());
+            drop(entry);
+            self.remove_exact_slot(slot.pointer, slot);
+        });
+        if let Some(pending) = pending {
+            Self::dispatch_pending_with_recovery(pending, slot.pointer, recovery);
+        }
     }
 
     fn abandon_slot(&self, slot: &Rc<ArenaSlot>) {
@@ -1629,7 +1695,7 @@ impl GestureArena {
 
     /// Run pointer-up sweep semantics over an already detached batch.
     pub(crate) fn sweep_detached(&self, batch: DetachedArenaBatch) {
-        let mut first_panic = None;
+        let mut recovery = PanicRecovery::new();
         for slot in batch.slots {
             let pending = {
                 let mut entry = slot.data.borrow_mut();
@@ -1643,11 +1709,9 @@ impl GestureArena {
                 entry.sweep()
             };
             batch.deadlines.withdraw_generation(slot.generation);
-            Self::dispatch_pending_into(pending, batch.pointer, &mut first_panic);
+            Self::dispatch_pending_with_recovery(pending, batch.pointer, &mut recovery.scope());
         }
-        if let Some(payload) = first_panic {
-            resume_unwind(payload);
-        }
+        recovery.finish();
     }
 
     /// Reject every member of an already detached batch without a winner.
@@ -1655,14 +1719,12 @@ impl GestureArena {
         for slot in &batch.slots {
             batch.deadlines.withdraw_generation(slot.generation);
         }
-        let mut first_panic = None;
+        let mut recovery = PanicRecovery::new();
         for slot in batch.slots {
             let pending = slot.data.borrow_mut().resolve(None);
-            Self::dispatch_pending_into(pending, batch.pointer, &mut first_panic);
+            Self::dispatch_pending_with_recovery(pending, batch.pointer, &mut recovery.scope());
         }
-        if let Some(payload) = first_panic {
-            resume_unwind(payload);
-        }
+        recovery.finish();
     }
 
     pub(crate) fn close_owner(&self, mode: CloseMode) {
@@ -1721,16 +1783,14 @@ impl GestureArena {
                 batch.deadlines.withdraw_generation(slot.generation);
             }
         }
-        let mut first_panic = None;
+        let mut recovery = PanicRecovery::new();
         for batch in batches {
             for slot in batch.slots {
                 let pending = slot.data.borrow_mut().resolve(None);
-                Self::dispatch_pending_into(pending, batch.pointer, &mut first_panic);
+                Self::dispatch_pending_with_recovery(pending, batch.pointer, &mut recovery.scope());
             }
         }
-        if let Some(payload) = first_panic {
-            resume_unwind(payload);
-        }
+        recovery.finish();
     }
 
     fn preserve_first_panic(
@@ -2040,7 +2100,7 @@ impl GestureArena {
         }
         let queued = std::mem::take(&mut *self.deferred.borrow_mut());
         let mut resolved = 0;
-        let mut first_panic = None;
+        let mut recovery = PanicRecovery::new();
 
         for token in queued {
             let Some(slot) = token.slot.upgrade() else {
@@ -2067,12 +2127,10 @@ impl GestureArena {
             };
             self.remove_exact_slot(token.pointer, &slot);
             resolved += 1;
-            Self::dispatch_pending_into(pending, token.pointer, &mut first_panic);
+            Self::dispatch_pending_with_recovery(pending, token.pointer, &mut recovery.scope());
         }
 
-        if let Some(payload) = first_panic {
-            resume_unwind(payload);
-        }
+        recovery.finish();
         resolved
     }
 }

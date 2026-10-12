@@ -92,10 +92,20 @@ pub(crate) fn finish_containment(first: Option<RoutePanic>, incoming_failure: bo
 }
 
 pub(crate) fn withdraw_cancelled(entry: &GestureArenaEntry, arena: &GestureArena) {
+    let mut recovery = flui_foundation::panic::PanicRecovery::new();
+    withdraw_cancelled_with_recovery(entry, arena, &mut recovery.scope());
+    recovery.finish();
+}
+
+pub(crate) fn withdraw_cancelled_with_recovery(
+    entry: &GestureArenaEntry,
+    arena: &GestureArena,
+    recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
+) {
     if arena.sweep_model() == SweepModel::SelfDriven {
-        entry.abandon_without_self();
+        entry.abandon_without_self_with_recovery(recovery);
     } else {
-        entry.reject_without_self();
+        entry.reject_without_self_with_recovery(recovery);
     }
 }
 

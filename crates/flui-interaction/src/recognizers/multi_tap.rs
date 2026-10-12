@@ -4,6 +4,7 @@ use super::{
     ArenaMembership, CancelOutcome, ContactId,
     callback_containment::{
         CallbackSequence, finish_containment, retire_callbacks, withdraw_cancelled,
+        withdraw_cancelled_with_recovery,
     },
     recognizer::{GestureRecognizer, measured_positions},
 };
@@ -466,10 +467,12 @@ impl GestureArenaMember for MultiTapGestureRecognizer {
                 registration.withdraw();
             }
             for contact in sequence.contacts.values() {
-                recovery.run_classified(FailureClass::Delivery, |_| {
-                    withdraw_cancelled(&contact.entry, self.membership.arena())
+                recovery.run_classified(FailureClass::Unknown, |scope| {
+                    withdraw_cancelled_with_recovery(&contact.entry, self.membership.arena(), scope)
                 });
-                recovery.run_classified(FailureClass::Delivery, |_| contact.entry.release());
+                recovery.run_classified(FailureClass::Unknown, |scope| {
+                    contact.entry.release_with_recovery(scope)
+                });
             }
             let preserving = recovery.has_failure();
             recovery.run_classified(FailureClass::Delivery, |_| {

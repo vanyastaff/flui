@@ -437,14 +437,16 @@ impl GestureArenaMember for DoubleTapGestureRecognizer {
             return false;
         }
         if let Some((details, first_entry)) = prepared {
-            recovery.run_classified(FailureClass::Delivery, |_| {
-                self.contact.withdraw();
+            recovery.run_classified(FailureClass::Unknown, |scope| {
+                self.contact.withdraw_with_recovery(scope);
             });
             if let Some(entry) = first_entry {
-                recovery.run_classified(FailureClass::Delivery, |_| {
-                    entry.resolve(GestureDisposition::Rejected)
+                recovery.run_classified(FailureClass::Unknown, |scope| {
+                    entry.resolve_with_recovery(GestureDisposition::Rejected, scope)
                 });
-                recovery.run_classified(FailureClass::Delivery, |_| entry.release());
+                recovery.run_classified(FailureClass::Unknown, |scope| {
+                    entry.release_with_recovery(scope)
+                });
             }
             let preserving = recovery.has_failure();
             recovery.run_classified(FailureClass::Delivery, |_| {

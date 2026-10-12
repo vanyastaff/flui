@@ -276,7 +276,9 @@ impl LongPressGestureRecognizer {
         };
         recovery.run_classified(FailureClass::Delivery, |_| self.contact.disarm_deadline());
         if self.contact.is_current(contact.id) {
-            recovery.run_classified(FailureClass::Delivery, |_| self.contact.accept());
+            recovery.run_classified(FailureClass::Unknown, |scope| {
+                self.contact.accept_with_recovery(scope)
+            });
         }
         let preserving = recovery.has_failure();
         recovery.run_classified(FailureClass::Delivery, |_| {
