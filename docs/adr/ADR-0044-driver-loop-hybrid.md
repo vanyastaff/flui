@@ -3,6 +3,9 @@
 - **Status:** Accepted
 - **Date:** 2026-08-06
 - **Amended by:** ADR-0058 (§4, the Wayland row)
+- **Superseded-by:** [ADR-0199](ADR-0199-presentation-sampling-recovery.md), in
+  part: the exclusion of due gesture deadlines while the UI runtime's
+  `frames_enabled` gate selects background work.
 - **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) §1 (sanctioned leapfrog zone: runtime/scheduling topology is not Flutter-loyal by the Prime Directive's own carve-out); [ADR-0058](ADR-0058-the-platform-paces-production-not-a-sleep.md) (the pacing mechanism this record's "real pacer" column defers to on every platform)
 - **Issue:** #556 — Runtime `UpdateScheduler`, presentation `FrameClock`, raster backpressure
 
@@ -113,7 +116,12 @@ The fix is `set_presentation_hidden`'s own unhide branch: it wakes the platform 
 
 The covered sequence is occlude → dirty → several pumps with zero produces, zero submits and no additional wakes while hidden → unhide, which wakes exactly once and produces exactly once, then settles. Unhiding an undirtied presentation wakes nothing.
 
-Gesture-arena deadlines are the other half of the gating story, and were already correct by construction *before* this section, not newly fixed by it: `draw_frame_entered`'s gesture-deadline tick (`presentation.gestures().tick_deadlines()`) runs unconditionally in the UI runtime's FIRST per-presentation loop, before the second loop's `FrameClock::poll` gate is even consulted — so a gated presentation with an in-flight long-press still resolves it through the arena's own callback, with zero GPU submits, exactly matching §2 of this issue's plan ("arena deadlines are input-correctness, not frame production" — they survive clock gating structurally, by not being inside the gated loop at all).
+Gesture-arena deadlines are input correctness, independent of presentation frame
+production. The presentation sampling operation advances them before fresh
+admission consults `FrameClock::poll`, so a frame-gated presentation can resolve
+an in-flight deadline without a GPU submit. [ADR-0199](ADR-0199-presentation-sampling-recovery.md)
+defines that operation's containment and extends deadline progression to
+background owner work; neither path bypasses the frame clock to produce a segment.
 
 **Scope is backend-conditional.** Per winit 0.30.13's `platform_impl` and its own `WindowEvent::Occluded` doc: the emitting backends are **X11** (Xlib's `VisibilityFullyObscured` state — fires only on FULL obscuration, never partial), **macOS**, **iOS**, and **Web**. Winit's own doc states plainly: "Android / Wayland / Windows / Orbital: Unsupported." **There is no Wayland emitter anywhere in `platform_impl` at all** — not a compositor-dependent one, none. On this workspace's own Wayland/GNOME desktop reference, `set_presentation_hidden(true)` is therefore never called via this path today; on X11 (this repo's actual CI device, via `xvfb-run`) it fires only when a window is fully covered, which a compositing window manager may rarely or never produce. Where the signal is never delivered, this presentation's clock is simply never marked hidden and behavior is unchanged from before this section — the fallback wake deadline (ADR-0058) still bounds the degenerate spin case regardless. `flui-platform`'s CI coverage for this backend runs under `FLUI_HEADLESS=1`/`xvfb-run` (X11) — the automated coverage is at the `UiRuntime`/`FrameClock` level, not a live-window occlusion measurement on any backend.
 
@@ -153,9 +161,25 @@ producer's half of this contract (the invariant at the end of this section).
 Replacing the hook discards a deadline armed by the old one. Input, paint and quit messages are
 dispatched as usual while a deadline is armed.
 
-**The deadline itself, and why a boolean was not enough.** The gesture arena's pre-existing `has_pending_deadline`/`has_pending_deadlines` answer only "is one armed", never "when". `GestureArenaMember` gains a parallel `next_deadline(&self) -> Option<web_time::Instant>` (default `None`, mirrors `has_pending_deadline`'s own default-false shape), implemented for `LongPressGestureRecognizer` (`down_time + long_press_timeout()`, guarded by the same `Possible`-phase check `has_pending_deadline` uses) and `DoubleTapGestureRecognizer` (`first_tap_time + double_tap_timeout()`, guarded by the same `WaitingForSecond`-phase check) — both computed from state the recognizer already held privately, not a new clock read. `GestureArena::next_deadline`/`GestureBinding::next_deadline` aggregate the min over live members, same snapshot discipline as `has_pending_deadlines`.
+**The deadline itself, and why a boolean was not enough.** Scheduling needs the
+due instant, not just whether a timer is armed. The current open member hook is
+`GestureArenaMember::deadline() -> Option<web_time::Instant>`. Standalone
+`GestureArena::next_deadline`/`GestureBinding::next_deadline` perform live queries.
+Runtime-hosted sources instead publish or refresh identity-bound observations
+under [ADR-0199](ADR-0199-presentation-sampling-recovery.md), so host scheduling
+reads their cached due time without executing the member. Built-in recognizers
+publish the deadline derived from their committed contact state.
 
-**N UI runtimes on one loop thread.** `UiRuntime::next_wake` is the min over that UI runtime's own presentations' `GestureBinding::next_deadline`; `AppRuntime::next_wake` is the min over every hosted UI runtime's `next_wake` — the loop-owning `AppRuntime` is the only component that can see every UI runtime at once (a UI runtime cannot see its siblings). The aggregate takes the earlier of any two UI runtimes' deadlines regardless of install order. A UI runtime currently checked out for dispatch (`slot.UI runtime` is `None`) contributes nothing — correct, since `next_wake` is only ever consulted from `about_to_wait`, after every dispatch for that iteration has already returned every UI runtime to its slot.
+**N UI runtimes on one loop thread.** `UiRuntime::next_wake` folds its
+presentations' current owner observations, including cached gesture deadlines;
+`AppRuntime::next_wake` folds every resident runtime's result. The loop owner can
+see these runtimes together; one runtime cannot inspect its siblings. The fold
+chooses the earlier due time regardless of install order and skips a currently
+checked-out runtime until restoration. Owner activity refreshes observations
+outside storage guards. An idle-loop hook folds the current snapshots without
+querying foreign members, tracing or retiring user-owned values under the host
+registry borrow. A changed external deadline uses ADR-0199's update authority;
+silent mutation has no wake guarantee.
 
 **The abandoned ambient alternative is retired.** An earlier version folded a standalone process-global timer service into `AppRuntime::next_wake`. Nothing on the wake path drained that service, so a past deadline could re-arm itself indefinitely; a standalone probe measured ~310K–390K `about_to_wait` iterations per 500 ms with that source present, versus 6 without it. The service had zero production callers and duplicated the UI runtime-owned arena, so it was removed instead of gaining a second lifecycle. The invariant: every source in the aggregate has one explicit UI runtime owner and is drained by the path its wake re-enters.
 
@@ -204,4 +228,9 @@ Every produce still has exactly the trigger it always had — a demand mark (`Di
 - The table's Wayland row (the load-bearing one) and the Windows/macOS/Android/web rows are none of them freshly measured for this record — see the honesty notes in §4 for what each claim is actually sourced from; the same is true of §6's occlusion-delivery claims (no live Wayland minimize/restore pass in this environment).
 - `try_arm_redraw_request`'s latch has one open half of its documented liveness dependency (§2): the `Backpressure` skip reason's own retire→wake edge is now BUILT at the contract level (§9 — `RasterOwner`'s reliable in-flight counter, threaded-harness-tested), but no production `FrameClock` reads a live raster owner yet, so this latch's `Backpressure` half stays dormant in production until issue #559 wires that connection (the `Hidden` half closed in §6).
 - General application timers remain a separate future capability. They must enter through an owner-scoped scheduling abstraction whose wake source and drain path are inseparable, not by restoring the retired ambient service.
-- A UI runtime fully backgrounded via the coarser, pre-existing `AppLifecycleState`-driven `frames_enabled`/`WakeAction::PumpAsync` gate still skips `tick_deadlines` entirely (that arm never calls `draw_frame_entered` at all) — a genuinely different, larger change than this record's own bounded scope, named rather than silently left unexamined.
+- **Superseded in part by ADR-0199:** the `AppLifecycleState`-driven
+  `frames_enabled`/`WakeAction::PumpBackground` gate now advances due input
+  deadlines after its admitted background transaction. It still executes no
+  animation sample or build/layout/paint segment. Frame-clock admission, native
+  wake folding and platform pacing retain this record's rules; operating-system
+  suspension does not promise an executing owner turn.

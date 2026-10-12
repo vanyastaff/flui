@@ -3,7 +3,9 @@
 - **Status:** Accepted
 - **Date:** 2026-10-11
 - **Supersedes:** [ADR-0048](ADR-0048-frame-transaction-boundary.md), in part:
-  its exclusion of animation and gesture-deadline sampling before the segment.
+  its exclusion of animation and gesture-deadline sampling before the segment;
+  [ADR-0044](ADR-0044-driver-loop-hybrid.md), in part: its exclusion of due
+  gesture deadlines while the runtime's frame gate selects background work.
 - **Related:** [ADR-0123](ADR-0123-exceptional-presentation-close.md),
   [ADR-0127](ADR-0127-exceptional-path-retention.md),
   [ADR-0177](ADR-0177-controller-ordered-delivery.md),
@@ -129,8 +131,9 @@ A direct runtime transaction delivers its queued reports after its own
 transaction ends.
 
 Background pumping advances due input deadlines even when frame production is
-disabled. It does not sample animation, build, paint or complete a presentation
-segment. A failure without a retained attempt is contained; a blocker against
+disabled. The private `WakeAction::PumpBackground` action names this complete
+owner operation. It does not sample animation, build, paint or complete a
+presentation segment. A failure without a retained attempt is contained; a blocker against
 an existing retained attempt withdraws that attempt and reports its rejection.
 These guarantees require an executing owner turn, not background execution
 while the operating system suspends the application.
@@ -176,7 +179,11 @@ remaining state is unsafe under reentry. Replacing the complete gesture API
 with a universal proposal protocol is larger than the scheduling contract;
 explicit unknown consistency gives open extensions an honest bounded fallback.
 
-This decision preserves ADR-0048's segment and local build recovery, submit
+This decision preserves ADR-0044's frame-clock admission, native wake folding
+and platform pacing. Only its background-deadline exclusion is superseded;
+background pumping does not become a frame produce trigger.
+
+It preserves ADR-0048's segment and local build recovery, submit
 semantics and detail policy, and ADR-0123's terminal close policy. It adds no
 parallel execution, performance isolation or simultaneous native multi-surface
 submission. Logical Windows tests do not establish native pen/touch, browser

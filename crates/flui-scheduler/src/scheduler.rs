@@ -1728,7 +1728,7 @@ impl UpdateScheduler {
     /// Clears the `frame_scheduled` latch for a wake that will call
     /// [`OwnerFrame::poll_ready`](crate::OwnerFrame::poll_ready) WITHOUT a surrounding
     /// [`handle_begin_frame`](Self::handle_begin_frame) — the frames-disabled
-    /// `PumpAsync` path (`ADR-0035`'s `wake_action`), which deliberately
+    /// `PumpBackground` path (`ADR-0035`'s `wake_action`), which deliberately
     /// never begins/draws a real frame.
     ///
     /// # Why this exists
@@ -1736,10 +1736,10 @@ impl UpdateScheduler {
     /// `on_frame_scheduled` fires only on `frame_scheduled`'s false→true
     /// transition, and exactly two places ever clear the latch back to
     /// `false`: `handle_begin_frame`, unconditionally at the top of every
-    /// real frame, and this method. A `PumpAsync` wake has no frame to do
+    /// real frame, and this method. A `PumpBackground` wake has no frame to do
     /// that clearing —
     /// without this call, a `request_frame()` made before entering
-    /// `PumpAsync` (a task's initial spawn, or an earlier wake) leaves the
+    /// `PumpBackground` (a task's initial spawn, or an earlier wake) leaves the
     /// latch `true` forever: a LATER, independent wake (a network
     /// response's `Waker::wake()`, arriving on a different thread after this
     /// pump cycle already returned) finds the latch already set, never
@@ -1769,7 +1769,7 @@ impl UpdateScheduler {
     /// short of a frames-enabled edge re-issuing a demand it never recorded
     /// as lost would ever wake it again (issue #1162). Reachable, but not
     /// off a runner's own decide-then-pump order: every `flui-app` runner
-    /// calls this method only from `wake_action`'s `PumpAsync` arm, chosen
+    /// calls this method only from `wake_action`'s `PumpBackground` arm, chosen
     /// iff `!frames_enabled` at that same read, with this call following
     /// immediately on the same thread and no application code in between
     /// (`frame_pacing.rs`'s `wake_action`) — so a register → disable →
@@ -2779,7 +2779,7 @@ mod tests {
 
     /// #1162: a live `end_of_frame` waiter whose demand survives a
     /// disable->enable edge with `frame_scheduled` already latched `true`
-    /// must not be silently dropped by a LATER `PumpAsync` cycle that clears
+    /// must not be silently dropped by a LATER `PumpBackground` cycle that clears
     /// that same latch. The disable->enable edge itself fires no NEW wake
     /// here: `frame_scheduled` was already `true` from the waiter's own
     /// registration and disabling frames never clears it, so
