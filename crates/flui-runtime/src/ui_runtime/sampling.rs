@@ -151,14 +151,14 @@ impl<'runtime> PresentationSampling<'runtime> {
         }
         let mut selected = None;
         let mut completion_entered = self.completion_entered;
-        self.run(SamplingStage::Preparation, |_| {
+        self.run(SamplingStage::Preparation, |recovery| {
             let resuming = presentation.text_preparation.borrow().segment.is_some();
             if !text_preparation::can_run(presentation) {
                 return;
             }
             presentation.reconcile_semantics_enablement();
             let woken = presentation.take_redraw_pending();
-            let pending = presentation.prepare_pending_work();
+            let pending = presentation.prepare_pending_work(recovery);
             let blocked = presentation.pipeline().with(PipelineOwner::layout_waits_for_input);
             if (woken && !blocked) || pending || resuming {
                 presentation.clock().mark_demand(DemandKind::Dirty);
@@ -352,9 +352,9 @@ impl UiRuntime {
             let presentation = operation.presentation;
             // Host observations only read admissions. Apply their queued work
             // here, after caller-held registry guards have been released.
-            operation.run(SamplingStage::Preparation, |_| {
+            operation.run(SamplingStage::Preparation, |recovery| {
                 presentation.pipeline().with_mut(|owner| {
-                    owner.drain_pending_dirty();
+                    owner.drain_pending_dirty_with_recovery(recovery);
                 });
             });
             operation.run(SamplingStage::DeadlineDiscovery, |recovery| {

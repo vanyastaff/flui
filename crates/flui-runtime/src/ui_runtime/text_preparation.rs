@@ -144,7 +144,7 @@ pub(crate) fn reconcile_with_recovery(
     recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
 ) -> bool {
     presentation.pipeline().with_mut(|owner| {
-        owner.drain_pending_dirty();
+        owner.drain_pending_dirty_with_recovery(recovery);
     });
     let compatible = presentation
         .text_preparation
