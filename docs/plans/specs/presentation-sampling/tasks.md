@@ -1,6 +1,6 @@
 # Presentation sampling implementation tasks
 
-**Status:** Approved by the maintainer on 2026-10-11; implementation in progress. All acceptance items remain open until their observable evidence is recorded.
+**Status:** Approved by the maintainer on 2026-10-11. Implementation and local acceptance completed on 2026-10-12. Publication, CI and merge status are tracked in [#1552](https://github.com/vanyastaff/flui/issues/1552).
 
 **Requirements:** https://github.com/vanyastaff/flui/issues/1552.
 
@@ -28,3 +28,45 @@ The graph has independent producer work after baseline acceptance: animation pro
 Every new behavior has producer-level red/green evidence; migration reaches production callers; no callback/guard/debt is unaccounted at a failure boundary; compatible retained work and standalone semantics remain. A subsequent valid operation progresses after single and competing faults. Native execution/support is neither inferred from headless cases nor silently removed from the verification inventory.
 
 ADR hygiene has its own approval/implementation package. Native protocol, composition, identity, MIME, accessibility and CLI/tooling backlog remains separate; it is not declared closed by sampling merge.
+
+## Completion record
+
+Implementation and consumer migration (orders 1–8) are complete. The lasting
+decision is [ADR-0199](../../../adr/ADR-0199-presentation-sampling-recovery.md),
+with producer/runtime contracts in the corresponding module and architecture
+documentation. Public acceptance covers first cause versus publication blocker,
+healthy sampling/build/completion, no-attempt reports, bounded deadline recovery,
+retained authority withdrawal/replacement, numeric-answer release and fresh
+operation progress after single and competing failures.
+
+Counterfactual checks (order 9) reproduced the intended failures when producer
+classification/receipt chronology, accepted font-tail delivery, retained report
+revalidation or closed numeric-cohort retirement were reverted. Original source
+bytes were restored before verification. Ordinary withdrawal and fresh-attempt
+controls remained valid; compile-only fixture corrections are not counted as
+behavioral RED evidence.
+
+Final local verification used source commit
+`23005febe9dedc947096e56a2fad1547e1436f5c` and completed
+`cargo xtask check-changed --base 6af2cf426809dbf8a33bbb415e904f0bfdc847c4`:
+
+- scoped and engine/testing strict clippy passed;
+- 853 nextest tests passed, with 19 configured skips;
+- strict rustdoc and doctests passed, including the executable custom timer
+  cancellation/retired-authority example;
+- Windows native-feature clippy, wasm32 clippy and the facade without default
+  features passed;
+- both 78-case feature clippy passes completed, covering production and
+  tests/benches/examples;
+- the platform compiler-guard family passed.
+
+MacOS/iOS and Android source checks require SDK/toolchains unavailable on this
+host; the Linux native platform suite requires `xvfb-run`. CI owns those paths.
+Physical pen/touch, browser IME and native compositor/mobile execution were not
+performed. Existing ignored doctests and configured skips remain explicit
+verification limits.
+
+Independent Standards and Spec reviews (order 10) have zero unresolved findings,
+including full source/consumer paths, reentry, retirement and recovery. PR
+publication, exact-head CI and merge are tracked through the linked issue; this
+record does not authorize a merge or close other architecture scopes.

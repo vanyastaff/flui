@@ -1,6 +1,6 @@
 # Presentation sampling: failure provenance, healthy continuation and recovery
 
-**Status:** Approved by the maintainer on 2026-10-11. Implementation in progress; acceptance remains subject to the specified tests, migration and review.
+**Status:** Approved by the maintainer on 2026-10-11. Implementation and local acceptance completed on 2026-10-12. Publication, CI and merge status are tracked in [#1552](https://github.com/vanyastaff/flui/issues/1552).
 
 **Issue:** [#1552](https://github.com/vanyastaff/flui/issues/1552). **Date:** 2026-10-11. **Evidence baseline:** `6af2cf426809dbf8a33bbb415e904f0bfdc847c4`.
 

@@ -1,8 +1,11 @@
-# Presentation sampling design proposal
+# Presentation sampling design
 
-**Status:** Approved by the maintainer on 2026-10-11; implementation in progress.
+**Status:** Approved by the maintainer on 2026-10-11. Implementation and local acceptance completed on 2026-10-12. Publication, CI and merge status are tracked in [#1552](https://github.com/vanyastaff/flui/issues/1552).
 
 **Requirements:** https://github.com/vanyastaff/flui/issues/1552.
+
+The lasting implemented contract is recorded in
+[ADR-0199](../../../adr/ADR-0199-presentation-sampling-recovery.md).
 
 ## One owner operation
 
