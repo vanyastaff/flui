@@ -103,6 +103,10 @@ fn component_contracts() {
             nav_bar::leading_middle_and_trailing_all_mount,
         ),
         (
+            "nav_bar::the middle announces as a level one heading",
+            nav_bar::the_middle_announces_as_a_level_one_heading,
+        ),
+        (
             "page_scaffold::content is padded below the nav bar plus the top inset",
             page_scaffold::content_is_padded_below_the_nav_bar_plus_the_top_inset,
         ),

@@ -162,16 +162,23 @@ wire-имя роли должны быть стабильны и сериали�
 
 1. **Авторский API типизирован для частых форм:** `Semantics::heading(HeadingLevel)`,
    `checkbox(Toggled)`, `toggle_button(Toggled)`, `switch(bool)`, `slider(NumericRange)`, `text_input(TextInputKind)`,
-   `list_item(SetPosition)` выставляют роль и её данные вместе.
+   `list_item(index)` выставляют роль и её данные вместе.
 2. **Остальное проверяет `validate`** при публикации по таблице применимости ARIA
    (`applicable(role, attribute) -> bool`): неприменимое не публикуется, `tracing::warn!` один
    раз на изменение узла (R3). Это требование ARIA 1.2 к пользовательскому агенту («MUST ignore
    non-global states and properties» на роли, которая их не поддерживает), и Chromium делает так
    же — фильтрует при сериализации, без DCHECK. Harness `flui-testing` переводит предупреждение
    в падение теста, чтобы ошибку автора видел его тест, а не приложение пользователя.
-3. **Имя у роли, где оно запрещено** (`generic`, `presentation`/`none`, `paragraph` и т.п. по
-   ARIA 1.2), переносится в описание, а не отбрасывается — правило Chromium
-   (`GetProhibitedNameError`): текст не теряется для пользователя.
+   Предупреждения копятся во время публикации (с дедупликацией по узлу и атрибуту) и
+   выдаются после того, как владелец зафиксировал публикацию и отпустил все заимствования:
+   подписчик `tracing` — пользовательский код и может войти в того же владельца. Тест —
+   повторный вход через публичный handle.
+3. **Имя у роли, где оно запрещено** (`paragraph`, `code` и т.п. по ARIA 1.2), переносится в
+   описание, а не отбрасывается — правило Chromium (`GetProhibitedNameError`): текст не
+   теряется для пользователя. Узел без роли (`generic`, `presentation`/`none`) публикуется с
+   именем как статичный текст (`Label`), а не как `GenericContainer` с описанием:
+   `accesskit_consumer::common_filter` исключает такой контейнер, и его описание не
+   наследуется детьми.
 
 `role: None` — роль не объявлена: узел с именем публикуется как статичный текст (`Label`, как
 сейчас, ARCHITECTURE.md решение 4), без имени — как `GenericContainer`; корень окна — `Window`.
@@ -184,27 +191,42 @@ wire-имя роли должны быть стабильны и сериали�
 
 `SemanticsAction` выравнивается по `accesskit::Action`: `Click`, `Focus`, `Blur`, `Expand`,
 `Collapse`, `Increment`, `Decrement`, `ScrollUp/Down/Left/Right`, `ScrollIntoView`,
-`ScrollToPoint`, `SetScrollOffset`, `SetTextSelection`, `ReplaceSelectedText`, `SetValue`,
+`SetScrollOffset`, `SetTextSelection`, `ReplaceSelectedText`, `SetValue`, `SetNumericValue`,
 `ShowContextMenu`, `ShowTooltip`, `HideTooltip`, `CustomAction`. Удаляются `LongPress` (это
 `ShowContextMenu`), `MoveCursor*` (это `SetTextSelection`), `DidGain/LoseAccessibilityFocus`
 (понятие Android без пути в AccessKit), `Copy`, `Cut`, `Paste`, `Dismiss` (нет пути).
 
-Аргументы типизированы и привязаны к действию:
+Обработчик получает `ActionCall` — действие вместе ровно с теми данными, которые оно
+принимает, так что несовпадение действия и данных невыразимо:
 
 ```rust
-pub enum ActionArgs {
-    None,
-    Value(ValueWrite),                       // ADR-0124: Text(String) | Number(f64), проверка по диапазону
-    TextSelection(TextSelection),            // позиции в единицах редактора (h)
+pub enum ActionCall {
+    Click, Focus, Blur, Expand, Collapse, Increment, Decrement,
+    ScrollUp(ScrollUnit), ScrollDown(ScrollUnit), ScrollLeft(ScrollUnit), ScrollRight(ScrollUnit),
+    ScrollIntoView(Option<Reveal>),          // None — сам узел; Some — предок раскрывает потомка (ADR-0168)
+    SetScrollOffset(Offset),
+    SetTextSelection(TextSelection),         // позиции в единицах редактора (h)
     ReplaceSelectedText(String),
-    ScrollOffset(Point), ScrollToPoint(Point),
-    ShowOnScreen { target: Rect, viewport: Rect, scroll_position: Option<f64> }, // ADR-0168
-    Custom(CustomActionId),
+    SetValue(String), SetNumericValue(f64),  // ADR-0124: число проверяется по диапазону
+    ShowContextMenu, ShowTooltip, HideTooltip,
+    CustomAction(CustomActionId),
 }
 ```
 
-`SetSequentialFocusNavigationStartingPoint` маршрутизируется в focus-keyboard (ставит точку
-обхода) — единственное действие без обработчика узла.
+- `SetValue` и `SetNumericValue` — два действия FLUI, оба публикуются как `SetValue`
+  AccessKit: какое из них узел принимает, решает, что он публикует (паттерн значения UIA и
+  записываемость диапазона).
+- `ScrollUnit { Item, Page }` из `ActionData::ScrollUnit` доходит до обработчика; без данных —
+  `Page`, как у адаптеров, которые его не шлют. `ActionData::ScrollHint` у `ScrollIntoView` —
+  пожелание о положении цели; FLUI раскрывает с минимальным сдвигом и подсказку не передаёт
+  (записанное ограничение, не потеря действия).
+- Запрос, чьи данные не подходят действию или отсутствуют, отклоняется при декодировании
+  (`ActionDecodeError`) до вызова обработчика.
+- `ScrollToPoint` (точка в пикселях окна, переводу нужен масштаб презентации) и
+  `SetSequentialFocusNavigationStartingPoint` (точка обхода фокуса, а не обработчик узла) не
+  маршрутизируются: у focus-keyboard нет API точки начала обхода. Каждое получает маршрут с
+  первым потребителем — отдельной работой focus-keyboard с end-to-end тестом действия; до
+  тех пор декодер отклоняет их как `Unrouted`, а не теряет молча.
 
 ## (d) Слияние (ADR-0202)
 
@@ -218,14 +240,20 @@ pub enum ActionArgs {
 | прочие `naming` | первый выигрывает | то же |
 | каждое поле `states` | `StateMerge::conflicts` типа | `StateMerge::merge` типа |
 | `range`, `collection`, `text`, `scroll`, `live`, `platform_view` | конфликт, если оба есть | получатель |
-| `relations`, `custom_actions`, `tags` | объединение | то же |
+| `relations`, `tags` | объединение | то же |
+| `custom_actions` | объединение по `CustomActionId`, каждое со своим обработчиком | то же; действие, чей обработчик не сохранить, не публикуется |
 | `traversal` | первый выигрывает | то же |
 | `handlers` | объединение; один и тот же action у обоих — конфликт | получатель; `blocks_user_actions` фильтрует вклад |
 
+Пользовательские действия делят одно `SemanticsAction::CustomAction`, поэтому их обработчики
+хранятся по `CustomActionId`, а не по действию: иначе слитый узел публиковал бы действие
+вкладчика и отдавал его чужому обработчику.
+
 **Порядок специфичности ролей** при принудительном слиянии переносит ARCHITECTURE.md решения
-1–2 с флагов на роли: отмечаемые (`Switch`, `RadioButton`, `CheckBox`, `MenuItemCheckBox`,
-`MenuItemRadio`) > `Button` > `Link`, текстовые поля, `Slider` > `Image`, `Heading` > структурные.
-Это одна функция и одна таблица, а не каскад `if` по битам.
+1–2 с флагов на роли: авторская структурная роль (вкладка, элемент списка, диалог, …) >
+отмечаемые (`Switch`, `RadioButton`, `CheckBox`) > `Button` > `Link`, текстовые поля,
+`Slider` > содержимое (`Image`, `Heading`, текстовые роли вроде `Paragraph`); при равенстве
+остаётся роль получателя. Это одна функция и одна таблица, а не каскад `if` по битам.
 
 Порядок специфичности — решение FLUI, а не перенос: Compose и Flutter при слиянии оставляют
 роль родителя или первую найденную. Здесь это дало бы `Button` для плитки с радио, что
@@ -250,6 +278,10 @@ pub enum ActionArgs {
 - `role_for(SemanticsRole) -> accesskit::Role` — `match` по всем вариантам; тест
   `every_role_maps_to_accesskit` обходит `SemanticsRole::ALL` (перечисление
   `#[non_exhaustive]` в другом крейте, поэтому полноту ловит тест, а не компилятор).
+  `ALL` выводится из самого перечисления и не доказывает полноту словаря, поэтому
+  `every_aria_role_is_covered` сверяет его с независимым списком: роли ARIA 1.2, переписанные
+  из спецификации, каждая — либо `SemanticsRole`, либо в списке исключённых с причиной
+  (абстрактная, устаревшая, без аналога в AccessKit).
 - Атрибуты переводятся исчерпывающим деструктурированием (R19).
 - `validate` — таблица применимости ARIA (b).
 - **Матрица покрытия** — табличный тест: для каждой роли и каждого атрибута ожидаемое свойство
@@ -269,7 +301,7 @@ pub enum ActionArgs {
 - `SemanticsOwner`: дифф с зеркалом, индексы фокуса и связей без изменений; добавляются
   синтетические узлы (h) и объявитель (j).
 - Сборка (`flui-rendering`) меняет только типы вызовов `set_index_in_parent` →
-  `set_set_position`, `set_scroll_child_count` → размер набора (i).
+  `set_position_in_set`, `set_scroll_child_count` → размер набора у контейнера (i).
 
 ## (g) Связи
 
@@ -326,9 +358,17 @@ pub struct TextRun {
   ограничивается тем, что прогоны строят только поля ввода (Q5) и только при изменении текста
   или раскладки.
 - Графемы и слова — из **одного** источника, `flui-painting::text_boundaries` (ICU4X), тем же,
-  что использует навигация редактора. Вторая реализация в
-  `crates/flui-widgets/src/text/controller.rs:1074` переводится на него (иначе Narrator и
-  Ctrl+стрелки разойдутся — «Риски» 2).
+  что использует навигация редактора: `crates/flui-widgets/src/text/controller.rs` строит
+  остановки Ctrl+стрелок (`next_word_boundary`, `prev_word_boundary`) поверх
+  `word_segments_from`. Публикуемые `word_starts` вызывают ту же политику, а не копию, и
+  помощники контроллера остаются (иначе Narrator и Ctrl+стрелки разойдутся — «Риски» 2).
+- `character_lengths` в AccessKit — `u8`: кластер длиннее 255 байт UTF-8 публикуется как
+  несколько символов, разрезанных по границам `char` (каждый ≤ 255 байт), так что длины
+  по-прежнему суммируются в длину прогона; грубее становятся только позиции внутри кластера.
+- Идентичность прогона: прогон сохраняет синтетический id, пока он тот же — тот же порядковый
+  номер, то же начало в поле и тот же текст; иначе получает новый (ADR-0204). Вставка перед
+  существующими прогонами перевыдаёт их id, и устаревшая `TextPosition` отклоняется, а не
+  указывает на чужой текст.
 - Позиции и ширины — из раскладки (`get_boxes_for_selection` по графеме, кешируется до
   следующего `layout`), не из оценки.
 - Пароль (R13): прогон строится по маске, длины — по маске; число символов совпадает.
@@ -342,7 +382,8 @@ pub struct TextRun {
 
 ```rust
 pub struct Collection {
-    set_position: Option<SetPosition>,   // index ≥ 1, size: SetSize::Known(n) | Unknown
+    position_in_set: Option<usize>,      // у элемента; с нуля, как в AccessKit
+    set_size: Option<SetSize>,           // у контейнера: Known(n) | Unknown
     level: Option<NonZeroU32>,           // aria-level: заголовок, элемент дерева/списка, строка
     table: Option<TableShape>,           // rows/cols: Known | Unknown — у таблицы/сетки
     cell: Option<CellPosition>,          // row, col, row_span, col_span — у ячейки/заголовка
@@ -350,24 +391,31 @@ pub struct Collection {
 }
 ```
 
+- Соглашения AccessKit 0.25: `position_in_set` отсчитывается с нуля (`accesskit_windows`
+  прибавляет единицу), а `size_of_set` ищется `accesskit_consumer` у предков — поэтому
+  размер лежит на контейнере, а не на элементе.
 - Позиция, которую сегодня ставит сборка из `IndexedSemantics`
-  (`semantics.rs:1034`, `:1067`), становится `SetPosition`; размер — `scroll_child_count`, а
-  если он неизвестен — `SetSize::Unknown`, не число построенных строк (R17).
+  (`semantics.rs:1034`, `:1067`), становится `position_in_set`; размер контейнера —
+  `scroll_child_count`, а если он неизвестен — `SetSize::Unknown`, не число построенных строк
+  (R17).
 - AccessKit получает `position_in_set`/`size_of_set`, `level`, `row_count`/`column_count`,
   `row_index`/`column_index`, `row_span`/`column_span`, `sort_direction`.
 
 ## (j) Live-регионы и объявления
 
-- `Live { politeness: Politeness, atomic: bool }`, `Politeness { Off, Polite, Assertive }`.
+- `Live { setting: LiveSetting, atomic: bool }`, `LiveSetting { Off, Polite, Assertive }`.
   Неявные значения по ARIA 1.2 (R8): `Alert` — assertive и atomic, `Status` — polite и
-  atomic, `Log` — polite, `Timer` и `Marquee` — off. Явное значение побеждает. `busy` —
-  состояние (R10).
+  atomic, `Log` — polite, `Timer` и `Marquee` — off. Явное значение побеждает. `Off`
+  публикуется явно: при отсутствии свойства потребители AccessKit наследуют настройку
+  родителя, и `Timer` внутри polite-региона остался бы живым. `busy` — состояние (R10).
+- Срочность объявления — отдельный тип `Urgency { Polite, Assertive }`: у объявления нет
+  значения `Off`, а у объявителя ровно два узла.
 - **Live-регион — основной путь, объявление — вторичный.** Android в API 36 объявил
   `announceForAccessibility` устаревшим в пользу live-регионов; у AccessKit 0.25 нет API
   объявлений вовсе (`accesskit_windows` поднимает только `UIA_LiveRegionChangedEventId`).
 - **Объявитель (Q3)** повторяет рекомендованный AccessKit приём (`example_common`): владелец
   держит два синтетических узла роли `Label` — polite и assertive — последними детьми корня;
-  `SemanticsOwner::announce(message, Politeness)` пишет текст в `value` нужного узла (macOS и
+  `SemanticsOwner::announce(message, Urgency)` пишет текст в `value` нужного узла (macOS и
   iOS реагируют на смену `value`, не `label`: AccessKit #765). Сообщения одного кадра
   объединяются, повтор того же текста чередует невидимый разделитель, чтобы адаптер увидел
   изменение. Runtime (`SemanticsHost::announce`) получает production-путь через presentation;
@@ -395,17 +443,17 @@ pub struct Collection {
 // flui-semantics
 pub struct SemanticsAttributes { /* (a), чтение методами */ }
 #[non_exhaustive] pub enum Toggled { Off, On, Mixed }
-#[non_exhaustive] pub enum Politeness { Polite, Assertive }
-pub struct SetPosition { /* index: NonZeroU32, size: SetSize */ }
+#[non_exhaustive] pub enum Urgency { Polite, Assertive }
+pub struct SetSize { /* Known(n) | Unknown, у контейнера */ }
 #[non_exhaustive] pub enum AttributeError { NonFinite, PositionOutOfSet, /* … */ }
 impl SemanticsConfiguration {
     pub fn set_role(&mut self, role: SemanticsRole);
     pub fn set_toggled(&mut self, toggled: Toggled);
-    pub fn set_set_position(&mut self, position: SetPosition) -> Result<(), AttributeError>;
+    pub fn set_position_in_set(&mut self, index: usize);
     // … по группам
 }
 impl SemanticsOwner {
-    pub fn announce(&mut self, message: &str, politeness: Politeness);
+    pub fn announce(&mut self, message: &str, urgency: Urgency);
 }
 ```
 
@@ -478,7 +526,7 @@ impl SemanticsOwner {
 9. **W9.** Оставшиеся свойства (`orientation`, `current`, `has_popup`, `autocomplete`,
    `keyboard_shortcut`, `language`, `url`, `role_description`) и роли из матрицы.
 
-W2–W3 — фундамент; W4–W9 независимы друг от друга после W3.
+W2–W3 — фундамент. W6–W8 зависят от W4: коллекциям нужны роли деревьев и сеток, live-регионам — `Log`, `Timer`, `Marquee`, тексту — `SetTextSelection`, `ReplaceSelectedText` и типизированные данные действий; W5 и W9 тоже идут после W4. После W4 работы W5–W9 независимы друг от друга.
 
 ## Риски
 
@@ -486,8 +534,8 @@ W2–W3 — фундамент; W4–W9 независимы друг от др�
    или слить узлы иначе; правило «вложенный merger остаётся узлом» меняет дерево намеренно.
    Смягчение: W2 не меняет поведения; W3 сравнивает опубликованные деревья всех тестов виджетов
    до и после, каждое расхождение объясняется (намеренное — тестом) или исправляется.
-2. **Две реализации границ слов.** Расхождение публикуемых слов с навигацией редактора.
-   Смягчение: один источник в W8 и тест «опубликованные начала слов = остановки Ctrl+→».
+2. **Расхождение слов с редактором.** Публикуемые начала слов могут разойтись с навигацией
+   редактора. Смягчение: W8 вызывает политику контроллера, а не копию, и тест «опубликованные начала слов = остановки Ctrl+→».
 3. **Bump AccessKit.** Смягчение: тест сверки (R21) и матрица покрытия.
 4. **Объём W4.** Затрагивает много крейтов одним PR. Смягчение: механическая замена через
    `ast-grep`, поведение закреплено существующими тестами.

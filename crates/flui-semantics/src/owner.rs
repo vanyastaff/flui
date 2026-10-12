@@ -330,7 +330,9 @@ pub struct SemanticsOwner {
     /// node's translation before the addressability check discards an
     /// unpublishable one), so it reports `tree.len()`; an incremental
     /// flush reports the dirty set's live, still-dirty survivors —
-    /// including unpublishable ones, whose focus claims it must examine.
+    /// including unpublishable ones, whose focus claims it must examine —
+    /// plus every clean relation source it re-translates, so an incremental
+    /// flush is O(dirty + relation sources) and says so.
     #[cfg(any(test, feature = "testing"))]
     examined_last_flush: usize,
 }
@@ -1113,6 +1115,10 @@ impl SemanticsOwner {
             let Some(node) = self.tree.get(sid).filter(|node| !node.is_dirty()) else {
                 continue;
             };
+            #[cfg(any(test, feature = "testing"))]
+            {
+                examined += 1;
+            }
             let Some(data) = self.tree.publish_view(node) else {
                 continue;
             };
@@ -1305,5 +1311,42 @@ mod tests {
                 SemanticsActionError::NodeNotFound { node_id: target },
             );
         }
+    }
+
+    /// The scaling oracle counts the clean relation sources an incremental
+    /// flush re-translates, so a flush that does O(sources) work cannot report
+    /// O(dirty).
+    #[test]
+    fn an_incremental_flush_counts_the_relation_sources_it_retranslates() {
+        let mut owner = SemanticsOwner::new(Arc::new(|_: &crate::TreeUpdate| {}));
+        let root = owner.insert(SemanticsNode::new().with_source_render_id(RenderId::new(1)));
+        let anchor = crate::SemanticsAnchor::new();
+        let mut title = SemanticsNode::new().with_source_render_id(RenderId::new(2));
+        title.config_mut().set_label("Title");
+        title.config_mut().add_anchor(anchor.clone());
+        let title = owner.insert(title);
+        let mut sources = Vec::new();
+        for index in 3..6 {
+            let mut source = SemanticsNode::new().with_source_render_id(RenderId::new(index));
+            source.config_mut().set_label("Dialog");
+            source
+                .config_mut()
+                .add_relation(crate::SemanticsRelation::LabelledBy, anchor.clone());
+            sources.push(owner.insert(source));
+        }
+        owner.add_child(root, title);
+        for &source in &sources {
+            owner.add_child(root, source);
+        }
+        owner.set_root(Some(root));
+        owner.flush();
+
+        owner.mark_dirty(title);
+        owner.flush();
+        assert_eq!(
+            owner.examined_last_flush(),
+            1 + sources.len(),
+            "one dirty node plus every clean relation source"
+        );
     }
 }
