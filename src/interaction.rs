@@ -28,6 +28,79 @@
 //!     .build();
 //! ```
 //!
+//! A custom member retains its timer registration and publishes timing after
+//! committing contact state. The weak update handle can publish cancellation
+//! when the arena settles; the registration keeps that authority live until
+//! its owner drops it. One registration covers the member's aggregate timer,
+//! including when that member participates in several pointer arenas.
+//!
+//! ```rust
+//! use std::{cell::{Cell, RefCell}, num::NonZeroU64, rc::Rc, time::Duration};
+//! use flui::interaction::{
+//!     GestureArena, GestureArenaMember, GestureDeadlineError,
+//!     GestureDeadlineRegistration, GestureDeadlineUpdate, GestureDisposition, PointerId,
+//! };
+//!
+//! struct TimedMember {
+//!     armed: Cell<bool>,
+//!     registration: RefCell<Option<GestureDeadlineRegistration>>,
+//!     update: RefCell<Option<GestureDeadlineUpdate>>,
+//! }
+//!
+//! impl TimedMember {
+//!     fn settle(&self) {
+//!         self.armed.set(false);
+//!         let update = self.update.borrow().clone();
+//!         if let Some(update) = update {
+//!             update.publish(None).expect("live timer registration");
+//!         }
+//!     }
+//! }
+//!
+//! impl GestureArenaMember for TimedMember {
+//!     fn accept_gesture(&self, _: PointerId) { self.settle(); }
+//!     fn reject_gesture(&self, _: PointerId) { self.settle(); }
+//! }
+//!
+//! let arena = GestureArena::new();
+//! let pointer = PointerId::new(NonZeroU64::MIN);
+//! let member = Rc::new(TimedMember {
+//!     armed: Cell::new(false),
+//!     registration: RefCell::new(None),
+//!     update: RefCell::new(None),
+//! });
+//! let deadline_member: Rc<dyn GestureArenaMember> = member.clone();
+//! let registration: GestureDeadlineRegistration = arena
+//!     .register_deadline_member(pointer, &deadline_member)
+//!     .expect("one timer authority");
+//! let update = registration.update_handle();
+//! *member.registration.borrow_mut() = Some(registration);
+//! *member.update.borrow_mut() = Some(update.clone());
+//! assert!(matches!(
+//!     arena.register_deadline_member(pointer, &deadline_member),
+//!     Err(GestureDeadlineError::AlreadyRegistered),
+//! ));
+//!
+//! // Explicit refresh requests a new owner query without calling the member here.
+//! update.refresh().expect("fresh discovery revision");
+//! member.armed.set(true);
+//! update.publish(Some(arena.now() + Duration::from_millis(300)))
+//!     .expect("committed timing publication");
+//! let entry = arena.add(pointer, &member);
+//! entry.resolve(GestureDisposition::Accepted);
+//! arena.close(pointer);
+//! assert!(!member.armed.get());
+//!
+//! let retired = member.registration.borrow_mut().take();
+//! drop(retired);
+//! assert!(matches!(update.publish(None), Err(GestureDeadlineError::Retired)));
+//! ```
+//!
+//! This example covers timer ownership and arena-driven cancellation. A
+//! deadline-driven recognizer also implements its own deadline query and poll
+//! policy through [`GestureArenaMember`]; runtime publication wakes its owner
+//! without requiring a separate manual redraw request.
+//!
 //! The owning layer's internal runtime bridge is not part of this facade:
 //!
 //! ```compile_fail,E0432
@@ -35,7 +108,8 @@
 //! ```
 
 pub use flui_interaction::arena::{
-    GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition, SweepModel,
+    GestureArena, GestureArenaEntry, GestureArenaMember, GestureDeadlineError,
+    GestureDeadlineRegistration, GestureDeadlineUpdate, GestureDisposition, SweepModel,
 };
 pub use flui_interaction::events::{
     CursorIcon, PointerButtons, PointerEvent, PointerEventExt, PointerKind,
