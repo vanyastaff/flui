@@ -168,11 +168,31 @@ fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
         Unchanged,
     }
     for (case, change, expected) in [
-        ("initially unfocused window", NativeChange::InitiallyUnfocused, AppLifecycleState::Inactive),
-        ("focus lost during mount", NativeChange::FocusLost, AppLifecycleState::Inactive),
-        ("visibility lost during mount", NativeChange::Hidden, AppLifecycleState::Hidden),
-        ("execution suspended during mount", NativeChange::Suspended, AppLifecycleState::Paused),
-        ("unchanged focused window", NativeChange::Unchanged, AppLifecycleState::Resumed),
+        (
+            "initially unfocused window",
+            NativeChange::InitiallyUnfocused,
+            AppLifecycleState::Inactive,
+        ),
+        (
+            "focus lost during mount",
+            NativeChange::FocusLost,
+            AppLifecycleState::Inactive,
+        ),
+        (
+            "visibility lost during mount",
+            NativeChange::Hidden,
+            AppLifecycleState::Hidden,
+        ),
+        (
+            "execution suspended during mount",
+            NativeChange::Suspended,
+            AppLifecycleState::Paused,
+        ),
+        (
+            "unchanged focused window",
+            NativeChange::Unchanged,
+            AppLifecycleState::Resumed,
+        ),
     ] {
         let _clear = OwnerHostClearGuard::arm();
         let window = crate::app::window_test_support::headless_test_window();
@@ -203,7 +223,9 @@ fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
         match change {
             NativeChange::FocusLost => native.simulate_focus(false),
             NativeChange::Hidden => native.simulate_visibility(false),
-            NativeChange::Suspended => native.simulate_execution_state(WindowExecutionState::Suspended),
+            NativeChange::Suspended => {
+                native.simulate_execution_state(WindowExecutionState::Suspended)
+            }
             NativeChange::InitiallyUnfocused | NativeChange::Unchanged => {}
         }
         let mut installation = prepare_replacement_ui_runtime(runtime, Arc::clone(&window));
@@ -226,12 +248,20 @@ fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
             expected,
             "{case}: startup adopts native state after observers are installed"
         );
-        if matches!(change, NativeChange::InitiallyUnfocused | NativeChange::FocusLost) {
-            assert!(observe_runtime(dispatcher, |runtime| runtime.scheduler().frames_enabled()),
-                "an unfocused visible running canvas remains eligible for rendering");
+        if matches!(
+            change,
+            NativeChange::InitiallyUnfocused | NativeChange::FocusLost
+        ) {
+            assert!(
+                observe_runtime(dispatcher, |runtime| runtime.scheduler().frames_enabled()),
+                "an unfocused visible running canvas remains eligible for rendering"
+            );
             native.simulate_focus(true);
-            assert_eq!(observe_runtime(dispatcher, |runtime| runtime.scheduler().lifecycle_state()),
-                AppLifecycleState::Resumed, "restored native focus reaches the installed owner");
+            assert_eq!(
+                observe_runtime(dispatcher, |runtime| runtime.scheduler().lifecycle_state()),
+                AppLifecycleState::Resumed,
+                "restored native focus reaches the installed owner"
+            );
         }
         teardown_platform_ui_runtime();
     }
