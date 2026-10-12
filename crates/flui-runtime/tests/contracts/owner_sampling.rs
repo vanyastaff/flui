@@ -1271,6 +1271,88 @@ fn hosted_background_services_deadlines_after_its_admitted_transaction() {
     observe_owner_deadline(&owner, &queries, None);
 }
 
+struct ReentrantDeadlineQuery {
+    runtime: Weak<UiRuntime>,
+    due: web_time::Instant,
+    queries: Cell<usize>,
+    reentries: Cell<usize>,
+    enter_once: Cell<bool>,
+    drained_redraw: Cell<bool>,
+}
+
+impl GestureArenaMember for ReentrantDeadlineQuery {
+    fn accept_gesture(&self, _: PointerId) {}
+    fn reject_gesture(&self, _: PointerId) {}
+
+    fn deadline(&self) -> Option<web_time::Instant> {
+        self.queries.set(self.queries.get() + 1);
+        if self.enter_once.replace(false) {
+            self.reentries.set(self.reentries.get() + 1);
+            let runtime = self
+                .runtime
+                .upgrade()
+                .expect("the query's owner remains live");
+            runtime.command_sender().request_redraw();
+            self.drained_redraw
+                .set(runtime.enter(UiRuntime::drain_owner_inbox));
+        }
+        Some(self.due)
+    }
+}
+
+fn deadline_query_reentry_does_not_rediscover_its_active_source() {
+    let clock = ManualClock::new();
+    let due = clock.now() + Duration::from_secs(1);
+    let (runtime, _window) = manual_runtime(clock);
+    let runtime = Rc::new(runtime);
+    let member = Rc::new(ReentrantDeadlineQuery {
+        runtime: Rc::downgrade(&runtime),
+        due,
+        queries: Cell::new(0),
+        reentries: Cell::new(0),
+        enter_once: Cell::new(true),
+        drained_redraw: Cell::new(false),
+    });
+    let _entry = runtime
+        .gestures()
+        .arena()
+        .add(PointerId::new(NonZeroU64::MIN), &member);
+    runtime.enter(UiRuntime::drain_owner_inbox);
+    assert!(
+        member.drained_redraw.get(),
+        "the nested drain still receives accepted redraw demand"
+    );
+    assert_eq!(
+        member.reentries.get(),
+        1,
+        "the accepted reentrant owner drain ran"
+    );
+    assert_eq!(
+        member.queries.get(),
+        1,
+        "reentry must not rediscover the already active source"
+    );
+    let before = member.queries.get();
+    for _ in 0..3 {
+        assert_eq!(runtime.next_wake(), Some(due));
+    }
+    assert_eq!(
+        member.queries.get(),
+        before,
+        "wake reads remain inert after query reentry"
+    );
+
+    runtime.enter(UiRuntime::drain_owner_inbox);
+    assert_eq!(
+        member.queries.get(),
+        2,
+        "the next ordinary owner frontier still observes its source"
+    );
+    assert_eq!(member.reentries.get(), 1);
+    assert_eq!(runtime.next_wake(), Some(due));
+    assert_eq!(member.queries.get(), 2);
+}
+
 #[test]
 fn owner_sampling_contract() {
     crate::table_test::run_table(
@@ -1327,6 +1409,10 @@ fn owner_sampling_contract() {
             (
                 "hosted background services deadlines after its admitted transaction",
                 hosted_background_services_deadlines_after_its_admitted_transaction,
+            ),
+            (
+                "deadline query reentry does not rediscover its active source",
+                deadline_query_reentry_does_not_rediscover_its_active_source,
             ),
         ],
     );
