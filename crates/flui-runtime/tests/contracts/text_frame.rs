@@ -2259,6 +2259,14 @@ fn a_sibling_animation_admission_replaces_ready_text_before_geometry_publication
 }
 
 fn a_sampling_report_replaces_ready_text_before_geometry_publication() {
+    sampling_report_replacement_case(false);
+}
+
+fn a_late_preparation_report_replaces_its_own_ready_text_before_geometry_publication() {
+    sampling_report_replacement_case(true);
+}
+
+fn sampling_report_replacement_case(late_preparation: bool) {
     use flui_foundation::Listenable as _;
     use flui_runtime::frame_failure::{
         FailureDisposition, FrameFailureHandler, FrameFailureKind, SamplingFailureOrigin,
@@ -2341,6 +2349,31 @@ fn a_sampling_report_replaces_ready_text_before_geometry_publication() {
         .as_ref()
         .expect("target lifecycle rebuild handle")
         .clone();
+    let wake_failures = Arc::new(AtomicUsize::new(0));
+    let wake_armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let paint = late_preparation.then(|| {
+        let pipeline = runtime
+            .widgets()
+            .pipeline_owner()
+            .expect("mounted target owns its real pipeline");
+        let paint = pipeline.with(|owner| {
+            owner
+                .render_invalidation_handle(owner.root_id().expect("mounted root render object"))
+                .expect("actual root admits external paint invalidation")
+        });
+        let armed = Arc::clone(&wake_armed);
+        let failures = Arc::clone(&wake_failures);
+        pipeline.with_mut(|owner| {
+            owner.set_on_need_visual_update(move || {
+                if armed.swap(false, Ordering::SeqCst) {
+                    failures.fetch_add(1, Ordering::SeqCst);
+                    std::panic::panic_any("late retained paint wake");
+                }
+            });
+        });
+        paint
+    });
+    let target_id = runtime.presentation_id();
     let reports = Arc::new(parking_lot::Mutex::new(Vec::new()));
     let reported = Arc::clone(&reports);
     runtime.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
@@ -2356,8 +2389,22 @@ fn a_sampling_report_replaces_ready_text_before_geometry_publication() {
         reported
             .lock()
             .push((report.address, report.disposition, sampling));
-        size.store(22.75_f64.to_bits(), Ordering::SeqCst);
-        handle.schedule(flui_foundation::RebuildReason::StateChange);
+        if let Some(paint) = &paint {
+            if report.address.presentation_id == sibling_id {
+                paint
+                    .mark_needs_paint()
+                    .expect("accepted paint-only input preserves the saved layout premise");
+                // The enqueue's wake succeeded. Fail only the canonical
+                // mark's later delivery during this target's reconciliation.
+                wake_armed.store(true, Ordering::SeqCst);
+            } else if report.address.presentation_id == target_id {
+                size.store(22.75_f64.to_bits(), Ordering::SeqCst);
+                handle.schedule(flui_foundation::RebuildReason::StateChange);
+            }
+        } else {
+            size.store(22.75_f64.to_bits(), Ordering::SeqCst);
+            handle.schedule(flui_foundation::RebuildReason::StateChange);
+        }
     })));
     let armed = Rc::new(Cell::new(true));
     let failing = Rc::clone(&armed);
@@ -2373,19 +2420,35 @@ fn a_sampling_report_replaces_ready_text_before_geometry_publication() {
     let _ = attempt.expect("sampling report delivery cannot escape the pump");
     assert!(!armed.get(), "the actual animation listener failed");
     assert_eq!(
-        reports.lock().as_slice(),
-        &[(
+        wake_failures.load(Ordering::SeqCst),
+        usize::from(late_preparation),
+        "the late case failed only after the actual paint mark committed"
+    );
+    let mut expected = vec![(
+        flui_foundation::PresentationAddress {
+            ui_runtime_id: runtime.id(),
+            presentation_id: sibling_id,
+        },
+        FailureDisposition::Contained,
+        Some((
+            (SamplingStage::Animation, SamplingFailureOrigin::Delivery),
+            None,
+        )),
+    )];
+    if late_preparation {
+        expected.push((
             flui_foundation::PresentationAddress {
                 ui_runtime_id: runtime.id(),
-                presentation_id: sibling_id,
+                presentation_id: target_id,
             },
             FailureDisposition::Contained,
             Some((
-                (SamplingStage::Animation, SamplingFailureOrigin::Delivery),
+                (SamplingStage::Preparation, SamplingFailureOrigin::Delivery),
                 None,
             )),
-        )]
-    );
+        ));
+    }
+    assert_eq!(reports.lock().as_slice(), expected);
     assert_eq!(
         completed.get(),
         0,
@@ -2425,7 +2488,7 @@ fn a_sampling_report_replaces_ready_text_before_geometry_publication() {
     );
     sink.assert_text_size("measured", 34.125);
     assert_eq!(completed.get(), 1, "replacement completes once");
-    assert_eq!(reports.lock().len(), 1);
+    assert_eq!(reports.lock().len(), expected.len());
 }
 
 fn a_waiting_presentation_does_not_suspend_sibling_animation_completion_or_ime() {
@@ -2575,6 +2638,11 @@ fn registered_text_preparation_preserves_the_actual_presentation_attempt() {
             (
                 "a_sampling_report_replaces_ready_text_before_geometry_publication",
                 a_sampling_report_replaces_ready_text_before_geometry_publication as fn(),
+            ),
+            (
+                "a_late_preparation_report_replaces_its_own_ready_text_before_geometry_publication",
+                a_late_preparation_report_replaces_its_own_ready_text_before_geometry_publication
+                    as fn(),
             ),
             (
                 "a_dropped_receipt_retries_only_after_its_deadline_and_completes",
