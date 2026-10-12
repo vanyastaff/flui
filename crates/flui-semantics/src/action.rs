@@ -19,28 +19,29 @@ use crate::identity::AccessibilityNodeId;
 /// offers [`SemanticsAction::Expand`] while collapsed and
 /// [`SemanticsAction::Collapse`] while expanded, and the owner routes that one
 /// request to the tap handler. A node registering either discrete action offers
-/// only what it registers. `actions` are effective action bits and `flags` the
-/// node's flag bits.
-pub(crate) fn tap_disclosure_transition(actions: u64, flags: u64) -> Option<SemanticsAction> {
+/// only what it registers. `actions` are effective action bits and `expanded`
+/// the node's declared expanded state.
+pub(crate) fn tap_disclosure_transition(
+    actions: u64,
+    expanded: Option<bool>,
+) -> Option<SemanticsAction> {
     let has = |action: SemanticsAction| actions & action.value() != 0;
     if !has(SemanticsAction::Tap) || has(SemanticsAction::Expand) || has(SemanticsAction::Collapse)
     {
         return None;
     }
-    disclosure_transition(flags)
+    disclosure_transition(expanded)
 }
 
 /// The one transition a node's expanded state allows: `Expand` while
 /// collapsed, `Collapse` while expanded, and none without an expanded state.
-pub(crate) fn disclosure_transition(flags: u64) -> Option<SemanticsAction> {
-    let flagged = |flag: crate::SemanticsFlag| flags & (flag as u64) != 0;
-    if !flagged(crate::SemanticsFlag::HasExpandedState) {
-        return None;
-    }
-    Some(if flagged(crate::SemanticsFlag::IsExpanded) {
-        SemanticsAction::Collapse
-    } else {
-        SemanticsAction::Expand
+pub(crate) fn disclosure_transition(expanded: Option<bool>) -> Option<SemanticsAction> {
+    expanded.map(|expanded| {
+        if expanded {
+            SemanticsAction::Collapse
+        } else {
+            SemanticsAction::Expand
+        }
     })
 }
 

@@ -258,7 +258,7 @@ For the accepted part:
 - **Mapping pinned.** `cargo nextest run -p flui-semantics agent`:
   `every_role_but_the_documented_ones_reads_as_a_wire_role` walks every semantics role (`none`,
   `drag_handle` and `hot_key` are the documented exceptions, published as a container the wire
-  lifts), with `every_role_bearing_flag_reads_as_the_role_uia_reports`,
+  lifts), with `every_interactive_role_reads_as_the_role_uia_reports`,
   `wire_role_matches_the_windows_adapter_for_every_role_flui_publishes`,
   `the_role_fold_was_transcribed_from_the_locked_windows_adapter`,
   `generic_containers_are_lifted_and_hidden_subtrees_dropped`,

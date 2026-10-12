@@ -70,164 +70,38 @@ children list pointing at it and defeat `add_child`'s automatic reparenting.
 owner wrapper, refused detachment, reparenting, published parent child lists,
 and a successful detach followed by reattachment.
 
-### 1. Role resolution is a single-valued specificity cascade, and checkable state outranks the broad `IsButton`
+### 1. One role per node; a forced merge keeps the more specific one
 
-**Superseded by [ADR-0202](../../docs/adr/ADR-0202-typed-semantics-attributes.md)** (one role
-per node, role precedence for forced merges). The cascade below stays in force until the
-semantics-model merge table replaces it (work W3 of
-[the spec](../../docs/plans/specs/semantics-model/design.md)); the role precedence keeps its
-outcome for the fixtures named here.
+**Rule.** [ADR-0202](../../docs/adr/ADR-0202-typed-semantics-attributes.md): a node has one
+`SemanticsRole`, interactive kinds included (`Button`, `CheckBox`, `RadioButton`, `Switch`,
+`Link`, `Slider`, `Image`, `Heading`, the text-input kinds), and typed `States`. Two
+configurations that each declare a role, or each declare the same state, form separate nodes
+(`is_compatible_with`); a state declared `false` counts, so a node's shape does not depend on
+its current values. A forced merge (`MergeSemantics`) cannot separate them and takes the role
+by `more_specific_role`: an authored structural role (tab, list item, dialog, …) over any
+interactive kind, then a checkable role, then `Button`, then link, text field or slider, then
+image or heading; on a tie the receiver keeps its own. States merge by their type's rule
+(`Mixed` over `On` over `Off`; a declared `true` over a declared `false`).
 
-**Rule:** a semantics node carries a *set* of flags, and a radio tile, for example,
-carries `IsButton`, `HasCheckedState`, `HasEnabledState`, `IsInMutuallyExclusiveGroup`,
-`IsFocusable` and `HasSelectedState` together. The shape FLUI exports into is
-single-valued, so the precedence below is a rule FLUI has to define.
+**Why.** The flag set this replaces let one node carry several role-bearing flags and picked
+one by a cascade; the role sent to the OS was implicit and invalid combinations were
+representable. One role is AccessKit's, Chromium's and ARIA's model. The precedence keeps the
+outcome the cascade was tuned for: `MergeSemantics` over a `ListTile` carrying a `Radio` is one
+radio button, not a button, and a structural role (a navigation tab that is also tappable)
+stays structural. Outside a forced merge two roles are two nodes: `Semantics::new().button(true)`
+over a `Radio` now publishes the button and the radio, where the cascade published one radio
+button and dropped the button.
 
-**Choice:** AccessKit's `Node::role` is one `Role`, so `resolve_role` picks
-exactly one from the union of flags the node carries, in this order:
+A node that merges its own descendants keeps its node inside an outer merge
+(`nested_merge_semantics_keeps_its_own_node`): a card merging its content still lets a screen
+reader stop on the tile inside it.
 
-```
-HasToggledState                        → Role::Switch
-HasCheckedState + IsInMutuallyExclusiveGroup → Role::RadioButton
-HasCheckedState                        → Role::CheckBox
-IsButton                               → Role::Button
-IsLink, IsSlider, IsTextField, …       → their own roles
-IsImage, IsHeader                      → their own roles
-otherwise                              → Role::GenericContainer
-```
-
-**Why the checkable states are tested first.** They are strictly more specific
-than `IsButton`: a control that reports a checked or toggled state *is* a
-checkable, whatever else it also is. This is not a stylistic preference, because
-of how flags arrive:
-
-**Flags from an annotated, non-boundary ancestor can absorb into the
-descendant's node**, so one node can arrive here carrying both an ancestor's
-`IsButton` and a descendant's checkable flags. Measured, the shape
-`Semantics::new().button(true).child(Radio::new(..))` is exactly that: its node
-resolves `Button` under the old order and `RadioButton` under this one, with the
-same node id either way. That composition is reachable through the public API —
-the `Semantics` widget and its `button` builder are both public. The other
-composition this precedence is measured to affect is
-`MergeSemantics` over a `ListTile` carrying a `Radio`, the shape of a radio list
-tile whose whole tile is a single interactive entity. Measured through `packages/flui-material/tests/list_tile.rs`'s fixture, that tree
-exports one merged node, and it resolves `Button` under the old order and
-`RadioButton` under this one.
-
-**The merge is conditional, and the condition is the part a reader gets wrong.**
-`is_compatible_with` treats *any* overlapping flag bit as a conflict, and
-`mark_configuration_conflicts` then forces that descendant into a node of its
-own. Both `ListTile` and `Radio` set `HasEnabledState` unconditionally
-(`ListTile::build` publishes `.button(on_tap.is_some()).selected(..).enabled(..)`,
-`Radio::build` publishes `.enabled(interactive)`), so the two configurations
-conflict and a `Radio` inside a real `ListTile` does **not** merge into the
-tile's node. Measured through `packages/flui-material/tests/list_tile.rs`'s own
-`MediaQuery`-wrapped fixture, that composition exports
-`[GenericContainer, Button, RadioButton]`: because the two do **not** merge, the
-radio keeps a node of its own, and that node **announces as a radio**. A `Radio`
-in a real `ListTile` therefore does announce as one.
-
-**That fix is the widget's, not this crate's.** The radio's own node carries no
-`IsButton`, so it resolves `RadioButton` under either arm order — measured, the
-composition exports the same roles with this cascade reverted — and the
-precedence above is not load-bearing for it. What makes the node announce as a
-radio is `Radio` publishing `.in_mutually_exclusive_group(true)`, the
-`flui-material` half of the same change.
-
-**The figure this entry used to carry was an artifact of a mount that panicked.**
-An earlier draft recorded the tile composition as `[GenericContainer, Button]`
-"with no `RadioButton` node at all", and read that as the tile losing the radio.
-It was produced by mounting a `ListTile` with no ambient `MediaQuery`:
-`ListTile::build` composes `SafeArea`, which reads `MediaQuery::of` and **panics**
-when no ancestor provides one, and the widget-layer harness installs none. The
-panic is contained, the test still **passes**, the tile degrades, and the `Radio`
-below `SafeArea` never mounts — so the roles that came back belonged to the live
-tile and to nothing else. `packages/flui-material/tests/list_tile.rs` mounts every
-tile under a default `MediaQueryData` for exactly this reason. Removing the
-group flag, which turns the radio's node into a `CheckBox`, is the only thing
-that changes the answer.
-
-A bare `ListTile` with a `Radio` splits into separate nodes; the like-for-like
-composition of one interactive entity is
-`MergeSemantics::new().child(ListTile…Radio)`, which exports **one** node with
-role `RadioButton`.
-
-What the merged node still lacks is named rather than left to be discovered: it
-carries **no label** (`Text` → `RenderParagraph` publishes no semantics — a
-deferral already recorded in `crates/flui-objects/src/text/paragraph.rs`'s module
-doc, so the tile's `title` cannot label it) and **no tap action** (FLUI's ink
-response does not publish `Semantics(onTap: ..)` itself — see
-`packages/flui-material/ARCHITECTURE.md`). Role matches; label and action are the
-recorded gaps.
-
-**Consequences, named rather than left to be discovered:**
-
-- **`IsButton` is now the weakest of the interactive roles, and that is a
-  behaviour change for any node that carries a checkable flag beside it.** A
-  widget that deliberately publishes both — a toggle styled as a button — now
-  resolves to `Switch`/`CheckBox`. That is the correct reading of the flag set,
-  but it is a change to existing output rather than a new capability.
-- **The cascade is still lossy, and cannot be made lossless here.** Any node
-  carrying two unrelated roles in its flag set loses one, because AccessKit's
-  role is single-valued. The mitigation is
-  order-of-specificity, not completeness — a genuinely two-role node has no
-  correct single answer, only a defensible one.
-- **The order is load-bearing and is not obvious from any single flag's
-  meaning**, so it is recorded here rather than left to the comment on the
-  function: reordering the arms is a silent behavioural change that no
-  type-checker and no single-flag test can catch.
-
-**Replacement tests:**
-
-- `packages/flui-material/tests/list_tile.rs` —
-  `merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button` is the pin
-  for the `RadioButton` arm: its merged node carries the tile's `IsButton` beside
-  the radio's checkable flags, and it resolves `Button` once the checkable arms
-  move back below `IsButton`. `crates/flui-semantics/src/agent/tests.rs` —
-  `every_role_bearing_flag_reads_as_the_role_uia_reports` sets only the checkable
-  flags, so it passes under either order and cannot pin this. The `CheckBox` and
-  `Switch` arms beside `IsButton`, and the *other* half of the cascade — the two
-  arms this reorder deliberately left below `IsButton` (see mapping decision 2):
-  **Unasserted:** no test pins this.
-- `packages/flui-material/tests/radio.rs` —
-  `a_mounted_radio_announces_as_a_radio_button` pins the direct case, and with it
-  the *widget* half of the change: without `Radio`'s group flag the node resolves
-  `CheckBox`. The composition absorbed under an annotated ancestor
-  (`Semantics::new().button(true).child(Radio::new(..))`), a radio without a tap
-  handler, and the bare-tile composition a user actually writes (`Button` from the
-  tile's own tap target, `RadioButton` from the radio's separate node):
-  **Unasserted:** no test pins this.
-- The group flag staying off other checkables (a checkbox is a `CheckBox` and
-  not a `RadioButton`): **Unasserted:** no test pins this. At the flag level,
-  `every_role_bearing_flag_reads_as_the_role_uia_reports` resolves
-  `HasCheckedState` alone to `CheckBox` and beside the group flag to
-  `RadioButton`, so the group flag is what distinguishes them rather than checked
-  state alone.
-
-### 2. `IsButton` outranks `IsLink` and `IsTextField`
-
-**Superseded by [ADR-0202](../../docs/adr/ADR-0202-typed-semantics-attributes.md)**, as decision 1;
-in force until W3.
-
-**Rule:** the cascade in mapping decision 1 leaves `IsLink`, `IsTextField`, `IsSlider`,
-`IsImage` and `IsHeader` *below* `IsButton`, so a node carrying `IsButton` beside one of them
-loses that other role. The collision is real: a dropdown's text field with a trailing button
-carries `IsTextField` and `IsButton` together, and a linked button carries `IsButton` and
-`IsLink`. `Role` is single-valued where the flag set is not, so a node reported as `Button`
-may also be a link or a text field.
-
-**Choice:** keep `IsButton` above them. This precedence predates the checkable reorder in
-decision 1, which moved only the checkable states; the behaviour is unchanged and deliberate,
-and this entry records it.
-
-**Why it is not merely theoretical.** `Semantics::new().button(true).link(true)`
-and `Semantics::new().button(true).text_field(true)` both compile today and each
-resolves `Role::Button`, which makes the `IsTextField` arm — the one carrying
-`MultilineTextInput` / `PasswordInput` / `TextInput`, a distinction a screen
-reader announces — unreachable for such a node. A widget that publishes both
-intends both.
-
-**Unasserted:** no test pins this.
+**Test.** `role_precedence_settles_forced_merges` and `state_merge_precedence` in
+`configuration.rs`; `merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button` in
+`packages/flui-material/tests/list_tile.rs`; `a_mounted_radio_announces_as_a_radio_button` in
+`packages/flui-material/tests/radio.rs`; `compatibility_rules_for_modeled_fields` for the
+conflict rows; `nested_merge_semantics_keeps_its_own_node` in
+`crates/flui-rendering/tests/semantics_assembly.rs`.
 
 ### 3. Semantics assembly is mark-scoped with a whole-tree fallback, and the tree reaches the OS through AccessKit
 
@@ -266,7 +140,7 @@ value.
 **Modal blocking is structural, not paint-ordered.** No render object blocks "previously
 painted siblings". A modal route's overlay entry tells `RenderTheater` how many entries below it
 to skip for semantics (`flui-widgets` overlay, "Modal entries"), and the dialog's own node carries
-`IsModal`, published as AccessKit's `modal`. Test:
+the `modal` state, published as AccessKit's `modal`. Test:
 `a_shown_dialog_hides_the_page_beneath_from_assistive_technology` in
 `packages/flui-material/tests/show_dialog.rs`;
 `harness_theater_semantics_blocked_entries_stay_laid_out_but_unannounced` in `flui-objects`.
@@ -373,7 +247,7 @@ in `accesskit_translation.rs` for range writability.
 
 **Why.** `SemanticsRole` lives in `flui-protocol` and is `#[non_exhaustive]`, so the match in
 this crate ends in a wildcard and the compiler no longer catches a forgotten arm. A role
-without an arm would silently fall back to the flag cascade.
+without an arm would silently publish as a label or a generic container.
 
 **Test.** `roles_and_checkbox_states_translate_to_accesskit` walks `SemanticsRole::ALL`, and
 asserts that exactly `DragHandle` and `HotKey` map to `GenericContainer`; deleting the
@@ -397,15 +271,14 @@ red with the clean-source loop removed.
 
 ### A live region's politeness is explicit, else implied by its role
 
-**Rule.** `set_live_region(Some(politeness))` sets `IsLiveRegion`, plus
-`IsLiveRegionAssertive` for `Assertiveness::Assertive`; AccessKit's `live` follows them. A node
-with neither flag takes the politeness its ARIA role implies: `Alert` assertive, `Status`
-polite. An explicit politeness wins over the role's.
+**Rule.** `set_live_region(Some(politeness))` records the node's `Assertiveness`, and
+AccessKit's `live` follows it. A node with no explicit politeness takes the one its ARIA role
+implies: `Alert` assertive, `Status` polite. An explicit politeness wins over the role's.
 
 **Why.** Live regions are how a change reaches a screen reader without the user moving to it:
 AccessKit has no imperative announcement, so `SemanticsHost::announce` has no platform path and
 a widget that must speak (a snack bar, a validation error) does it by being a live region.
-`IsLiveRegion` alone could only say polite, and an `Alert` that stayed silent until visited is
+A yes/no live flag could only say polite, and an `Alert` that stayed silent until visited is
 not an alert.
 
 **Test.** `live_regions_announce_at_their_politeness` in `accesskit_translation.rs`;
@@ -414,9 +287,9 @@ not an alert.
 
 ### A header publishes AccessKit's `Heading` at its level
 
-**Rule.** `IsHeader` resolves to `Role::Heading`, and a header's `HeadingLevel` (`H1`–`H6`,
-one-based as `aria-level` is) is published as AccessKit's zero-based `level`. A header with no
-level publishes none. An explicit role outranks the header flag and drops the level with it.
+**Rule.** `SemanticsRole::Heading` publishes `Role::Heading`, and its `HeadingLevel` (`H1`–`H6`,
+one-based as `aria-level` is) is published as AccessKit's zero-based `level`. A heading with no
+level publishes none, and a level on a node of another role is not published.
 
 **Why.** AccessKit's `Header` is HTML's `<header>` landmark: `accesskit_windows` 0.35 reports it
 as a UIA `Group` with the `banner` landmark type (`node.rs`), so a title published as one never
@@ -433,7 +306,7 @@ documented zero-based level rather than compensating for one adapter; a client r
 
 **Test.** `a_header_publishes_a_heading_at_its_level` in `accesskit_translation.rs`;
 `the_title_announces_as_a_level_one_heading` in `packages/flui-material/tests/app_bar.rs` for
-the mounted path; `every_role_bearing_flag_reads_as_the_role_uia_reports` for the wire fold;
+the mounted path; `every_interactive_role_reads_as_the_role_uia_reports` for the wire fold;
 the probe's `Probe heading` in `cargo xtask device windows-a11y` for UI Automation.
 
 ### 7. The in-process wire read projects the published AccessKit node; roles fold to what UIA reports
@@ -469,7 +342,7 @@ and a `Keyboard` key or `TabPanel` as `pane`, as the desktop server would report
 
 **Test.** `src/agent/tests.rs`: `every_role_but_the_documented_ones_reads_as_a_wire_role`
 (ADR-0095 "Mapping pinned"; `none`, `drag_handle` and `hot_key` are the documented exceptions),
-`every_role_bearing_flag_reads_as_the_role_uia_reports`,
+`every_interactive_role_reads_as_the_role_uia_reports`,
 `wire_role_matches_the_windows_adapter_for_every_role_flui_publishes` (transcribed from the
 adapter and desktop sources, and checked to cover every role FLUI publishes),
 `the_role_fold_was_transcribed_from_the_locked_windows_adapter` (fails when `Cargo.lock` moves

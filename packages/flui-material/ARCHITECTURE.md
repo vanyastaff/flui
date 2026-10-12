@@ -131,8 +131,8 @@ Tristate(Option<bool>)}` and exposes two constructors:
 - `Checkbox::tristate(Option<bool>)` — third (`None`) value always allowed
 
 There is no `.tristate(bool)` builder that could reintroduce the illegal pair.
-Semantics flags are derived from the mode via `checkbox_semantics_flags`
-(`Tristate(None)` → checked false + mixed; binary never sets mixed).
+The semantics state is derived from the mode via `checkbox_state`
+(`Tristate(None)` → `Toggled::Mixed`; binary never publishes `Mixed`).
 
 **Alternatives considered:**
 
@@ -203,49 +203,25 @@ a requirement that is now enforced in release, checked in `build`.
 
 **Unasserted:** no test pins this.
 
-### `Radio` publishes its group membership, and the role cascade has to prefer it
+### `Radio` publishes the radio role, and a forced merge keeps it over a tile's button
 
 **Rule:** a behavior the platform accessibility contract requires is dropped
 only by decision, recorded where a reader will find it.
 
-**Why:** the mutually-exclusive-group flag is what separates a radio from a
-checkbox to a screen reader: the two publish identical checked state, and only
-the group flag says the checked state is one-of-a-set rather than independent.
+**Why:** the role is what separates a radio from a checkbox to a screen reader:
+the two publish the same toggled state, and only `RadioButton` says the state is
+one-of-a-set rather than independent.
 
-**Choice:** `Radio::build` publishes
-`.checked(selected).in_mutually_exclusive_group(true).enabled(interactive)`,
-and `Semantics` grew the `in_mutually_exclusive_group(true)` builder this
-needed (it previously had no such method, which is why the flag was unwired).
+**Choice:** `Radio::build` publishes `.radio(selected).enabled(interactive)`,
+which sets `SemanticsRole::RadioButton` and the toggled state together.
 
-**Why the flag alone was not enough, and what else had to change.** Publishing
-it exposed a defect one layer up, in the role cascade rather than in this
-widget. `resolve_role` tests one flag before another to pick a single role out of
-the union a node carries, and it tested `IsButton` before the checkable flags —
-so a node that carried both resolved to `Button` and the radio-ness was
-discarded. Checkable state is the more specific of the two and now wins.
-
-The composition that reaches it is `Semantics::new().button(true).child(Radio…)`,
-which merges onto one node: measured, that node resolves `Button` under the old
-order and `RadioButton` under the new one, same node id. **It is not the
-`ListTile` composition.** A real `ListTile` publishes `.enabled(..)` and a
-`Radio` publishes `.enabled(..)` too, `is_compatible_with` treats that overlap as
-a conflict, and the two therefore never merge — they form **separate** nodes.
-Because they do not merge, the radio keeps a node of its own, and that node is
-what this change fixes: measured through this crate's own `MediaQuery`-wrapped
-fixture (`tests/list_tile.rs`'s `themed`), a `Radio` inside a real `ListTile`
-exports `[GenericContainer, Button, RadioButton]` — **it does announce as a
-radio**, and the group flag published here is what makes it. The cascade reorder
-is not load-bearing there: the radio's own node carries no `IsButton`, so it
-resolves `RadioButton` under either arm order. So the precedence neither fixes
-nor is exercised by the tile composition, while publishing the flag *does* fix
-it.
-
-A single node for a tile plus its radio is a *merge*: wrapping the `ListTile` in
-`MergeSemantics` folds the radio's own node into the parent's data, and
-measured it exports **one** node resolving `RadioButton` — the reorder above is
-what makes that merged node a radio (it resolves `Button` with the cascade
-reverted). That composition is pinned in `tests/list_tile.rs`. The precedence
-itself is flui-semantics' decision and is recorded in full in
+Inside a real `ListTile` the tile's node and the radio's node conflict (each
+declares a role, and both declare `enabled`), so they stay **separate** nodes:
+the tile exports `Button` and the radio `RadioButton`. A single node for a tile
+plus its radio is a *forced* merge: wrapping the `ListTile` in `MergeSemantics`
+folds the radio into the tile's node, and `more_specific_role` keeps
+`RadioButton` over `Button`. That composition is pinned in `tests/list_tile.rs`;
+the precedence itself is flui-semantics' decision, recorded in
 [`crates/flui-semantics/ARCHITECTURE.md`](../../crates/flui-semantics/ARCHITECTURE.md).
 
 **What is still not wired, named rather than implied.** Platform-conditional
@@ -254,7 +230,7 @@ platform dimension, so this is a deliberate drop of a platform-dependent
 behavior, not an oversight.
 `focus_node` / `autofocus` keep the whole-substrate `InkWell` gap `Checkbox` and
 `Switch` already name. And **no `Radio` gains a semantics *action*** — publishing
-the group flag changes what the control *is* to a screen reader, not what a
+the radio role changes what the control *is* to a screen reader, not what a
 platform request can *do* to it. `InkResponse` does not publish a tap semantics
 action, so a screen reader cannot activate the control through the semantics
 tree. In FLUI the widget-layer gesture callback is `Rc<dyn Fn(..)>` while
@@ -268,9 +244,9 @@ activation reaches the tree only through the pointer path.
   case.
 - `merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button`
   (`tests/list_tile.rs`) — the absorbed case, and the only leg that can fail on
-  the precedence: the merged node carries the tile's `IsButton` together with
-  the radio's checked and group flags, and resolves `Button` with the cascade
-  reverted. Mounting the radio as the render *root* makes it form its own node,
+  the precedence: the forced merge meets the tile's `Button` and the radio's
+  `RadioButton`, and resolves `Button` with the checkable rank below `Button`.
+  Mounting the radio as the render *root* makes it form its own node,
   so nothing merges and the composition never arises.
 
 ### `TextFormField` is a `FormField<String>` over `TextField`, and takes the user's edits from `on_changed`

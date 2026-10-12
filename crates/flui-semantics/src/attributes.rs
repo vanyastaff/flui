@@ -11,13 +11,13 @@ use smallvec::SmallVec;
 use smol_str::SmolStr;
 
 use crate::{
-    flags::SemanticsFlags,
     properties::{
         AttributedString, CustomSemanticsAction, HeadingLevel, SemanticsHintOverrides,
         SemanticsSortKey, SemanticsTag, TextDirection,
     },
     relation::{SemanticsAnchor, SemanticsRelation},
-    role::SemanticsRole,
+    role::{Assertiveness, SemanticsRole},
+    states::States,
 };
 
 /// Everything one semantics node publishes.
@@ -27,8 +27,10 @@ use crate::{
 /// destructure them exhaustively.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SemanticsAttributes {
-    /// Flags describing boolean properties.
-    pub(crate) flags: SemanticsFlags,
+    /// The states this node declares.
+    pub(crate) states: States,
+    /// How changes are announced, when the node is a live region.
+    pub(crate) live: Option<Assertiveness>,
     /// The label describing this node.
     pub(crate) label: Option<AttributedString>,
     /// The current value of this node.
@@ -81,6 +83,6 @@ pub struct SemanticsAttributes {
     pub(crate) anchors: SmallVec<[SemanticsAnchor; 1]>,
     /// This node's relations to the nodes other anchors name.
     pub(crate) relations: SmallVec<[(SemanticsRelation, SemanticsAnchor); 1]>,
-    /// The explicit role; [`SemanticsRole::None`] leaves it to the flags.
+    /// The node's one role; [`SemanticsRole::None`] declares none.
     pub(crate) role: SemanticsRole,
 }

@@ -323,8 +323,7 @@ impl<T: PartialEq + Clone + 'static> ViewState<Radio<T>> for RadioState {
         }
 
         Semantics::new()
-            .checked(selected)
-            .in_mutually_exclusive_group(true)
+            .radio(selected)
             .enabled(interactive)
             .child(ink_well)
     }

@@ -4,18 +4,13 @@
 //! testing consume, so this translation is deliberately the *only* place the two
 //! diverge from each other: whatever a screen reader is told, a test can assert.
 //!
-//! # Role is carried in two places
+//! # One role, typed states
 //!
-//! FLUI encodes role at two granularities:
-//!
-//! - [`SemanticsFlag`] identifies the common controls — `IsButton`, `IsLink`,
-//!   `IsTextField`, `IsSlider`. These leave [`SemanticsRole::None`].
-//! - [`SemanticsRole`] carries the structural roles a screen reader navigates by
-//!   — `Tab`, `Table`, `ColumnHeader`, `MenuItemRadio`. These have no flag.
-//!
-//! [`resolve_role`] therefore consults both, explicit role first. Reading only
-//! the enum would map every button to [`Role::Unknown`]; reading only the flags
-//! would lose every structural role.
+//! A node has one [`SemanticsRole`] and typed [`States`]
+//! (ADR-0202). [`resolve_role`] maps the role; a node that declares none is
+//! static text when it is named and a plain container otherwise. Conflicting
+//! roles never reach here: merging settled them
+//! ([`more_specific_role`](crate::configuration::more_specific_role)).
 //!
 //! # Full updates, not diffs
 //!
@@ -25,17 +20,17 @@
 //! extraneous events, so that is correct but not free. Incremental diffing is a
 //! later optimisation and needs its own oracle; it is not smuggled in here.
 
-use accesskit::{
-    Affine, Node, NodeId, Rect, Role, TextDirection, Toggled, TreeId, TreeInfo, TreeUpdate,
-};
+use accesskit::{Affine, Node, NodeId, Rect, Role, TextDirection, TreeId, TreeInfo, TreeUpdate};
 
 use crate::action::SemanticsAction;
 use crate::attributes::SemanticsAttributes;
-use crate::flags::SemanticsFlag;
 use crate::identity::AccessibilityNodeId;
 use crate::node::SemanticsNode;
 use crate::relation::{SemanticsAnchor, SemanticsRelation};
-use crate::role::SemanticsRole;
+use crate::role::{Assertiveness, SemanticsRole};
+use crate::states::{States, Toggled};
+use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 
 /// One addressable node as publication reads it: its attributes in place,
 /// and what only the tree knows — its stable identity, effective actions,
@@ -49,14 +44,6 @@ pub(crate) struct PublishView<'a> {
     pub(crate) rect: flui_foundation::geometry::Rect<f64>,
     pub(crate) children: SmallVec<[AccessibilityNodeId; 4]>,
 }
-use rustc_hash::FxHashMap;
-use smallvec::SmallVec;
-
-/// Whether `bits` carries `flag`.
-#[inline]
-fn has_flag(bits: u64, flag: SemanticsFlag) -> bool {
-    bits & (flag as u64) != 0
-}
 
 /// Whether `bits` carries `action`.
 #[inline]
@@ -66,12 +53,10 @@ fn has_action(bits: u64, action: SemanticsAction) -> bool {
 
 /// The AccessKit role for one node.
 ///
-/// An explicit [`SemanticsRole`] wins. Otherwise the role-bearing flags are
-/// consulted in specificity order; a node that claims none of them but carries
-/// a label (a plain `Text`, a labelled `Semantics` wrapper) is a
-/// [`Role::Label`] — static text — and a node with neither becomes
-/// [`Role::GenericContainer`], present in the tree for structure but making no
-/// claim about what it is.
+/// The node's role when it declares one. Otherwise a node that carries a label
+/// (a plain `Text`, a labelled `Semantics` wrapper) is a [`Role::Label`] —
+/// static text — and a node with neither becomes [`Role::GenericContainer`],
+/// present in the tree for structure but making no claim about what it is.
 ///
 /// The distinction is load-bearing at the OS boundary: AccessKit's consumer
 /// filter (`accesskit_consumer::common_filter`) drops `GenericContainer` nodes
@@ -84,71 +69,7 @@ pub(crate) fn resolve_role(data: &PublishView<'_>) -> Role {
     if let Some(role) = explicit_role(data.attrs.role) {
         return role;
     }
-
-    let flags = data.attrs.flags.bits();
-    // The checkable/toggled states are tested before the broad `IsButton`, because
-    // they are strictly more specific: a control that reports a checked or toggled
-    // state is a checkable, whatever else it also is. The ordering matters because
-    // this cascade picks exactly one role from a union of flags, and an ancestor's
-    // flags can land on a descendant's node. `Semantics::new().button(true)` over a
-    // `Radio` is that shape, and so is `MergeSemantics` over a `ListTile` carrying a
-    // `Radio` — the reference's own `RadioListTile` composition: measured, each
-    // merged node resolves `Button` under the old order and `RadioButton` under
-    // this one.
-    //
-    // A bare `ListTile` over a `Radio` is a different shape: `ListTile` and `Radio`
-    // both set `HasEnabledState`, `is_compatible_with` treats the overlap as a
-    // conflict, so they form *separate* nodes — and because they do not merge, the
-    // radio keeps a node of its own, which announces as a radio under either
-    // order. This reorder is not load-bearing there; the widget publishing the
-    // group flag is. See `crates/flui-semantics/ARCHITECTURE.md`.
-    //
-    // Only the checkable states moved. The flags left below `IsButton` — link,
-    // slider, text field, image, header — carry the same theoretical argument, and
-    // real widget trees do combine `IsButton` with `IsTextField` (a dropdown's
-    // trailing button) and with `IsLink` (a merged link child). FLUI's `Role` is
-    // single-valued rather than a flag set, so `IsButton`
-    // outranking them is deliberate rather than an absence of
-    // coverage — recorded, with its replacement test, in
-    // `crates/flui-semantics/ARCHITECTURE.md` mapping decision 2. Reordering the
-    // rest is a precedence decision that entry has now had to make explicitly.
-    if has_flag(flags, SemanticsFlag::HasToggledState) {
-        Role::Switch
-    } else if has_flag(flags, SemanticsFlag::HasCheckedState) {
-        // A checkable inside a mutually-exclusive group is a radio, not a
-        // checkbox — the distinction changes how a screen reader reads the set.
-        if has_flag(flags, SemanticsFlag::IsInMutuallyExclusiveGroup) {
-            Role::RadioButton
-        } else {
-            Role::CheckBox
-        }
-    } else if has_flag(flags, SemanticsFlag::IsButton) {
-        Role::Button
-    } else if has_flag(flags, SemanticsFlag::IsLink) {
-        Role::Link
-    } else if has_flag(flags, SemanticsFlag::IsTextField) {
-        // Multiline is a distinct AccessKit role rather than a property, and
-        // screen readers announce the two differently.
-        if has_flag(flags, SemanticsFlag::IsMultiline) {
-            Role::MultilineTextInput
-        } else if has_flag(flags, SemanticsFlag::IsObscured) {
-            Role::PasswordInput
-        } else {
-            Role::TextInput
-        }
-    } else if has_flag(flags, SemanticsFlag::IsSlider) {
-        Role::Slider
-    } else if has_flag(flags, SemanticsFlag::IsKeyboardKey) {
-        Role::Keyboard
-    } else if has_flag(flags, SemanticsFlag::IsImage) {
-        Role::Image
-    } else if has_flag(flags, SemanticsFlag::IsHeader) {
-        // A heading, not AccessKit's `Header`: that is HTML's `<header>`
-        // landmark, which `accesskit_windows` 0.35 reports as a `Group` with
-        // the `banner` landmark type, so a title published as one never
-        // reached heading navigation.
-        Role::Heading
-    } else if data
+    if data
         .attrs
         .label
         .as_ref()
@@ -160,10 +81,25 @@ pub(crate) fn resolve_role(data: &PublishView<'_>) -> Role {
     }
 }
 
-/// The AccessKit role for an explicit [`SemanticsRole`], or `None` when the node
-/// declares no role and the flags must decide.
+/// The AccessKit role for a [`SemanticsRole`], or `None` when the node
+/// declares no role.
 fn explicit_role(role: SemanticsRole) -> Option<Role> {
     Some(match role {
+        SemanticsRole::Button => Role::Button,
+        SemanticsRole::CheckBox => Role::CheckBox,
+        SemanticsRole::RadioButton => Role::RadioButton,
+        SemanticsRole::Switch => Role::Switch,
+        SemanticsRole::Link => Role::Link,
+        SemanticsRole::Slider => Role::Slider,
+        SemanticsRole::Image => Role::Image,
+        // A heading, not AccessKit's `Header`: that is HTML's `<header>`
+        // landmark, which `accesskit_windows` 0.35 reports as a `Group` with
+        // the `banner` landmark type, so a title published as one never
+        // reached heading navigation.
+        SemanticsRole::Heading => Role::Heading,
+        SemanticsRole::TextInput => Role::TextInput,
+        SemanticsRole::MultilineTextInput => Role::MultilineTextInput,
+        SemanticsRole::PasswordInput => Role::PasswordInput,
         SemanticsRole::ScrollView => Role::ScrollView,
         SemanticsRole::AlertDialog => Role::AlertDialog,
         SemanticsRole::Dialog => Role::Dialog,
@@ -207,70 +143,75 @@ fn explicit_role(role: SemanticsRole) -> Option<Role> {
     })
 }
 
-/// How a node's changes are announced: what its live-region flags say, else
-/// what its role implies (`aria-live` is `assertive` for an alert and `polite`
-/// for a status), else not at all.
-fn live_politeness(flags: u64, role: SemanticsRole) -> Option<accesskit::Live> {
-    if has_flag(flags, SemanticsFlag::IsLiveRegion) {
-        return Some(if has_flag(flags, SemanticsFlag::IsLiveRegionAssertive) {
-            accesskit::Live::Assertive
-        } else {
-            accesskit::Live::Polite
-        });
-    }
-    match role {
-        SemanticsRole::Alert => Some(accesskit::Live::Assertive),
-        SemanticsRole::Status => Some(accesskit::Live::Polite),
-        _ => None,
+/// How a node's changes are announced: its declared politeness, else what its
+/// role implies (`aria-live` is `assertive` for an alert and `polite` for a
+/// status), else not at all.
+fn live_politeness(live: Option<Assertiveness>, role: SemanticsRole) -> Option<accesskit::Live> {
+    match (live, role) {
+        (Some(Assertiveness::Assertive), _) | (None, SemanticsRole::Alert) => {
+            Some(accesskit::Live::Assertive)
+        }
+        (Some(Assertiveness::Polite), _) | (None, SemanticsRole::Status) => {
+            Some(accesskit::Live::Polite)
+        }
+        (None, _) => None,
     }
 }
 
-/// Translate one node's boolean state onto the AccessKit node.
-fn apply_state(node: &mut Node, flags: u64, role: SemanticsRole) {
-    if has_flag(flags, SemanticsFlag::HasCheckedState) {
-        node.set_toggled(if has_flag(flags, SemanticsFlag::IsCheckStateMixed) {
-            Toggled::Mixed
-        } else if has_flag(flags, SemanticsFlag::IsChecked) {
-            Toggled::True
-        } else {
-            Toggled::False
-        });
-    } else if has_flag(flags, SemanticsFlag::HasToggledState) {
-        node.set_toggled(if has_flag(flags, SemanticsFlag::IsToggled) {
-            Toggled::True
-        } else {
-            Toggled::False
+/// Translate one node's states onto the AccessKit node.
+fn apply_state(node: &mut Node, attrs: &SemanticsAttributes) {
+    // Exhaustive: a new state does not compile until it is published here
+    // or recorded as framework-only.
+    let States {
+        toggled,
+        selected,
+        expanded,
+        enabled,
+        read_only,
+        focusable: _,
+        focused: _,
+        hidden,
+        modal,
+        required,
+        invalid,
+        scopes_route: _,
+        names_route: _,
+    } = attrs.states;
+
+    if let Some(toggled) = toggled {
+        node.set_toggled(match toggled {
+            Toggled::Off => accesskit::Toggled::False,
+            Toggled::On => accesskit::Toggled::True,
+            Toggled::Mixed => accesskit::Toggled::Mixed,
         });
     }
-
-    if has_flag(flags, SemanticsFlag::IsSelected) {
+    if selected == Some(true) {
         node.set_selected(true);
     }
-    if has_flag(flags, SemanticsFlag::HasExpandedState) {
-        node.set_expanded(has_flag(flags, SemanticsFlag::IsExpanded));
+    if let Some(expanded) = expanded {
+        node.set_expanded(expanded);
     }
-    // `IsEnabled` only means anything alongside `HasEnabledState`; a node
-    // without the state bit is not "disabled", it simply has no such concept.
-    if has_flag(flags, SemanticsFlag::HasEnabledState) && !has_flag(flags, SemanticsFlag::IsEnabled)
-    {
+    // Only a declared `false` disables: a node that never declared it has no
+    // such concept.
+    if enabled == Some(false) {
         node.set_disabled();
     }
-    if has_flag(flags, SemanticsFlag::IsReadOnly) {
+    if read_only == Some(true) {
         node.set_read_only();
     }
-    if has_flag(flags, SemanticsFlag::IsHidden) {
+    if hidden == Some(true) {
         node.set_hidden();
     }
-    if let Some(live) = live_politeness(flags, role) {
+    if let Some(live) = live_politeness(attrs.live, attrs.role) {
         node.set_live(live);
     }
-    if has_flag(flags, SemanticsFlag::IsModal) {
+    if modal == Some(true) {
         node.set_modal();
     }
-    if has_flag(flags, SemanticsFlag::IsRequired) {
+    if required == Some(true) {
         node.set_required();
     }
-    if has_flag(flags, SemanticsFlag::IsInvalid) {
+    if invalid == Some(true) {
         node.set_invalid(accesskit::Invalid::True);
     }
 }
@@ -328,19 +269,19 @@ fn value_writable(data: &PublishView<'_>, role: Role) -> bool {
 /// AccessKit does not count a node with an expanded state as invocable
 /// (`accesskit_consumer` 0.39, `Node::is_invocable`), so without this a
 /// tap-only expandable node could be neither invoked nor expanded.
-fn apply_actions(node: &mut Node, actions: u64, flags: u64, value_writable: bool) {
+fn apply_actions(node: &mut Node, actions: u64, expanded: Option<bool>, value_writable: bool) {
     if has_action(actions, SemanticsAction::Tap) {
         node.add_action(accesskit::Action::Click);
     }
-    if has_flag(flags, SemanticsFlag::HasExpandedState) {
-        let fallback = crate::action::tap_disclosure_transition(actions, flags);
-        if !has_flag(flags, SemanticsFlag::IsExpanded)
+    if let Some(expanded) = expanded {
+        let fallback = crate::action::tap_disclosure_transition(actions, Some(expanded));
+        if !expanded
             && (has_action(actions, SemanticsAction::Expand)
                 || fallback == Some(SemanticsAction::Expand))
         {
             node.add_action(accesskit::Action::Expand);
         }
-        if has_flag(flags, SemanticsFlag::IsExpanded)
+        if expanded
             && (has_action(actions, SemanticsAction::Collapse)
                 || fallback == Some(SemanticsAction::Collapse))
         {
@@ -657,11 +598,11 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
         node.set_size_of_set(count as usize);
     }
 
-    apply_state(&mut node, data.attrs.flags.bits(), data.attrs.role);
+    apply_state(&mut node, data.attrs);
     apply_actions(
         &mut node,
         data.actions,
-        data.attrs.flags.bits(),
+        data.attrs.states.expanded,
         value_writable(data, role),
     );
 
@@ -769,7 +710,7 @@ fn apply_relations(node: &mut Node, data: &PublishView<'_>, anchors: &AnchorInde
     }
 }
 
-/// The node claiming [`SemanticsFlag::IsFocused`], if exactly one does.
+/// The node declaring itself focused, if exactly one does.
 ///
 /// Two nodes claiming focus is a malformed tree, and guessing between them
 /// would make the published focus depend on arena order. Reporting `None` sends
@@ -826,7 +767,7 @@ fn focused_node(tree: &crate::tree::SemanticsTree) -> Option<flui_foundation::Se
 /// # Focus
 ///
 /// An explicit `focus` wins. Otherwise focus is derived from the node carrying
-/// [`SemanticsFlag::IsFocused`], because that is where the framework records it
+/// its focused state, because that is where the framework records it
 /// — a caller should not have to re-derive what the tree already states, and a
 /// caller that forgets would silently publish the root as focused. Focus falls
 /// back to the root only when no node claims it, or when the named node is not
@@ -929,10 +870,6 @@ mod tests {
         )
     }
 
-    fn flags(bits: &[SemanticsFlag]) -> crate::SemanticsFlags {
-        crate::SemanticsFlags::from_bits(bits.iter().fold(0, |acc, f| acc | (*f as u64)))
-    }
-
     /// The two action tables' agreement, checked as a composition: every
     /// AccessKit action in [`semantics_action_for`]'s domain, when granted
     /// to a node as the FLUI action it maps to, must be advertised outbound
@@ -967,15 +904,16 @@ mod tests {
                 .expect("every action in the declared inbound domain is routable");
             // Expand and collapse are advertised only by a node with an
             // expanded state, and only the transition that state allows.
-            let state = match inbound {
-                accesskit::Action::Expand => flags(&[SemanticsFlag::HasExpandedState]),
-                accesskit::Action::Collapse => {
-                    flags(&[SemanticsFlag::HasExpandedState, SemanticsFlag::IsExpanded])
-                }
-                _ => crate::SemanticsFlags::new(),
+            let expanded = match inbound {
+                accesskit::Action::Expand => Some(false),
+                accesskit::Action::Collapse => Some(true),
+                _ => None,
             };
             let attrs = SemanticsAttributes {
-                flags: state,
+                states: States {
+                    expanded,
+                    ..States::default()
+                },
                 ..Default::default()
             };
             assert!(
@@ -1052,15 +990,15 @@ mod tests {
 
     /// The role mapping's only pin. `SemanticsRole` is `#[non_exhaustive]` and
     /// lives in flui-protocol, so `explicit_role` ends in a wildcard: deleting
-    /// any arm there sends that role to `None` (the flags decide) and nothing
-    /// but this test notices.
+    /// any arm there sends that role to `None` (static text or a container)
+    /// and nothing but this test notices.
     #[test]
     fn roles_and_checkbox_states_translate_to_accesskit() {
         let mut generic = Vec::new();
         for &role in SemanticsRole::ALL {
             let mapped = explicit_role(role);
             if role == SemanticsRole::None {
-                assert_eq!(mapped, None, "`none` declares no role; the flags decide");
+                assert_eq!(mapped, None, "`none` declares no role");
                 continue;
             }
             let mapped = mapped.unwrap_or_else(|| panic!("{role} maps to no AccessKit role"));
@@ -1076,35 +1014,25 @@ mod tests {
         );
 
         // Checkbox states: unchecked, checked and mixed stay three distinct values.
-        let checkable = [SemanticsFlag::HasCheckedState];
-        assert_eq!(
-            translate(&SemanticsAttributes {
-                flags: flags(&checkable),
-                ..Default::default()
-            })
-            .toggled(),
-            Some(Toggled::False)
-        );
-        assert_eq!(
-            translate(&SemanticsAttributes {
-                flags: flags(&[SemanticsFlag::HasCheckedState, SemanticsFlag::IsChecked]),
-                ..Default::default()
-            })
-            .toggled(),
-            Some(Toggled::True)
-        );
-        assert_eq!(
-            translate(&SemanticsAttributes {
-                flags: flags(&[
-                    SemanticsFlag::HasCheckedState,
-                    SemanticsFlag::IsCheckStateMixed
-                ]),
-                ..Default::default()
-            })
-            .toggled(),
-            Some(Toggled::Mixed),
-            "tristate must not collapse to checked/unchecked"
-        );
+        for (toggled, expected) in [
+            (Toggled::Off, accesskit::Toggled::False),
+            (Toggled::On, accesskit::Toggled::True),
+            (Toggled::Mixed, accesskit::Toggled::Mixed),
+        ] {
+            assert_eq!(
+                translate(&SemanticsAttributes {
+                    role: SemanticsRole::CheckBox,
+                    states: States {
+                        toggled: Some(toggled),
+                        ..States::default()
+                    },
+                    ..Default::default()
+                })
+                .toggled(),
+                Some(expected),
+                "tristate must not collapse to checked/unchecked"
+            );
+        }
     }
 
     /// A form control's required and invalid states and its placeholder reach
@@ -1112,7 +1040,7 @@ mod tests {
     #[test]
     fn form_states_reach_accesskit() {
         let plain = translate(&SemanticsAttributes {
-            flags: flags(&[SemanticsFlag::IsTextField]),
+            role: SemanticsRole::TextInput,
             ..Default::default()
         });
         assert!(!plain.is_required());
@@ -1120,11 +1048,12 @@ mod tests {
         assert_eq!(plain.placeholder(), None);
 
         let node = translate(&SemanticsAttributes {
-            flags: flags(&[
-                SemanticsFlag::IsTextField,
-                SemanticsFlag::IsRequired,
-                SemanticsFlag::IsInvalid,
-            ]),
+            role: SemanticsRole::TextInput,
+            states: States {
+                required: Some(true),
+                invalid: Some(true),
+                ..States::default()
+            },
             placeholder: Some("name@example.com".into()),
             ..Default::default()
         });
@@ -1137,44 +1066,32 @@ mod tests {
     /// an alert is assertive and a status polite, as their ARIA roles imply.
     #[test]
     fn live_regions_announce_at_their_politeness() {
-        use SemanticsFlag::{IsLiveRegion, IsLiveRegionAssertive};
+        use Assertiveness::{Assertive, Polite};
         use accesskit::Live;
-        let table: &[(&[SemanticsFlag], SemanticsRole, Option<Live>)] = &[
-            (&[], SemanticsRole::None, None),
-            (&[IsLiveRegion], SemanticsRole::None, Some(Live::Polite)),
-            (
-                &[IsLiveRegion, IsLiveRegionAssertive],
-                SemanticsRole::None,
-                Some(Live::Assertive),
-            ),
-            (&[], SemanticsRole::Alert, Some(Live::Assertive)),
-            (&[], SemanticsRole::Status, Some(Live::Polite)),
-            (&[IsLiveRegion], SemanticsRole::Alert, Some(Live::Polite)),
+        let table: &[(Option<Assertiveness>, SemanticsRole, Option<Live>)] = &[
+            (None, SemanticsRole::None, None),
+            (Some(Polite), SemanticsRole::None, Some(Live::Polite)),
+            (Some(Assertive), SemanticsRole::None, Some(Live::Assertive)),
+            (None, SemanticsRole::Alert, Some(Live::Assertive)),
+            (None, SemanticsRole::Status, Some(Live::Polite)),
+            (Some(Polite), SemanticsRole::Alert, Some(Live::Polite)),
         ];
-        for &(bits, role, expected) in table {
+        for &(live, role, expected) in table {
             let node = translate(&SemanticsAttributes {
-                flags: flags(bits),
+                live,
                 role,
                 ..Default::default()
             });
-            assert_eq!(node.live(), expected, "{bits:?} {role}");
+            assert_eq!(node.live(), expected, "{live:?} {role}");
         }
-
-        let mut config = crate::SemanticsConfiguration::new();
-        config.set_live_region(Some(crate::Assertiveness::Assertive));
-        config.set_live_region(Some(crate::Assertiveness::Polite));
-        assert_eq!(config.live_region(), Some(crate::Assertiveness::Polite));
-        config.set_live_region(None);
-        assert_eq!(config.flags().bits(), 0, "clearing leaves no live bits");
     }
 
-    /// A header is AccessKit's `Heading`, never its `Header` landmark, and its
+    /// A heading is AccessKit's `Heading`, never its `Header` landmark, and its
     /// one-based level reaches AccessKit's zero-based one.
     #[test]
     fn a_header_publishes_a_heading_at_its_level() {
-        let header = flags(&[SemanticsFlag::IsHeader]);
         let unleveled = translate(&SemanticsAttributes {
-            flags: header,
+            role: SemanticsRole::Heading,
             ..Default::default()
         });
         assert_eq!(unleveled.role(), Role::Heading);
@@ -1182,7 +1099,7 @@ mod tests {
 
         for (level, zero_based) in [(HeadingLevel::H1, 0), (HeadingLevel::H6, 5)] {
             let node = translate(&SemanticsAttributes {
-                flags: header,
+                role: SemanticsRole::Heading,
                 heading_level: Some(level),
                 ..Default::default()
             });
@@ -1190,9 +1107,8 @@ mod tests {
             assert_eq!(node.level(), Some(zero_based), "{level:?}");
         }
 
-        // An explicit role outranks the header flag, and its level goes with it.
+        // A level on another role is not published.
         let tab = translate(&SemanticsAttributes {
-            flags: header,
             heading_level: Some(HeadingLevel::H2),
             role: SemanticsRole::Tab,
             ..Default::default()

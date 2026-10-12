@@ -8,7 +8,6 @@ use flui_protocol::outline;
 use super::*;
 use crate::accesskit_translation::resolve_role;
 use crate::configuration::SemanticsConfiguration;
-use crate::flags::SemanticsFlag;
 use crate::node::SemanticsNode;
 use crate::role::SemanticsRole;
 
@@ -77,12 +76,9 @@ impl Fixture {
     }
 }
 
-fn published_role(role: SemanticsRole, flags: &[SemanticsFlag], label: bool) -> accesskit::Role {
+fn published_role(role: SemanticsRole, label: bool) -> accesskit::Role {
     let attrs = crate::SemanticsAttributes {
         role,
-        flags: crate::SemanticsFlags::from_bits(
-            flags.iter().fold(0, |bits, flag| bits | (*flag as u64)),
-        ),
         label: label.then(|| "label".into()),
         ..Default::default()
     };
@@ -108,7 +104,7 @@ fn every_role_but_the_documented_ones_reads_as_a_wire_role() {
         SemanticsRole::HotKey,
     ];
     for &role in SemanticsRole::ALL {
-        let published = published_role(role, &[], false);
+        let published = published_role(role, false);
         if documented.contains(&role) {
             assert_eq!(
                 published,
@@ -126,37 +122,32 @@ fn every_role_but_the_documented_ones_reads_as_a_wire_role() {
     }
 }
 
-/// The controls a flag identifies read as the role UI Automation reports for
-/// them: a multiline field is an `Edit` like any other, a keyboard key a
-/// `Pane`, a heading `Text` like static text.
+/// The interactive roles read as the role UI Automation reports for them: a
+/// multi-line field is an `Edit` like any other, a heading `Text` like static
+/// text, and a named node without a role is static text.
 #[test]
-fn every_role_bearing_flag_reads_as_the_role_uia_reports() {
-    use SemanticsFlag as F;
-    let table: &[(&[SemanticsFlag], bool, Role)] = &[
-        (&[F::IsButton], false, Role::Button),
-        (&[F::IsLink], false, Role::Link),
-        (&[F::IsTextField], false, Role::TextInput),
-        (&[F::IsTextField, F::IsMultiline], false, Role::TextInput),
-        (&[F::IsTextField, F::IsObscured], false, Role::PasswordInput),
-        (&[F::IsSlider], false, Role::Slider),
-        (&[F::IsKeyboardKey], false, Role::Pane),
-        (&[F::IsImage], false, Role::Image),
-        (&[F::IsHeader], false, Role::Label),
-        (&[F::HasCheckedState], false, Role::CheckBox),
-        (
-            &[F::HasCheckedState, F::IsInMutuallyExclusiveGroup],
-            false,
-            Role::RadioButton,
-        ),
-        (&[F::HasToggledState], false, Role::Switch),
-        (&[], true, Role::Label),
+fn every_interactive_role_reads_as_the_role_uia_reports() {
+    use SemanticsRole as S;
+    let table: &[(SemanticsRole, bool, Role)] = &[
+        (S::Button, false, Role::Button),
+        (S::Link, false, Role::Link),
+        (S::TextInput, false, Role::TextInput),
+        (S::MultilineTextInput, false, Role::TextInput),
+        (S::PasswordInput, false, Role::PasswordInput),
+        (S::Slider, false, Role::Slider),
+        (S::Image, false, Role::Image),
+        (S::Heading, false, Role::Label),
+        (S::CheckBox, false, Role::CheckBox),
+        (S::RadioButton, false, Role::RadioButton),
+        (S::Switch, false, Role::Switch),
+        (S::None, true, Role::Label),
     ];
-    for &(flags, label, expected) in table {
-        let published = published_role(SemanticsRole::None, flags, label);
+    for &(role, label, expected) in table {
+        let published = published_role(role, label);
         assert_eq!(
             wire_role(published),
             expected,
-            "{flags:?} (label: {label}) publishes {published:?}"
+            "{role} (label: {label}) publishes {published:?}"
         );
     }
 }
@@ -199,7 +190,6 @@ fn the_role_fold_was_transcribed_from_the_locked_windows_adapter() {
 
 #[test]
 fn wire_role_matches_the_windows_adapter_for_every_role_flui_publishes() {
-    use SemanticsFlag as F;
     use accesskit::Role as A;
     let table: &[(A, &str, Role)] = &[
         (A::AlertDialog, "Window, IsDialog", Role::Dialog),
@@ -253,29 +243,13 @@ fn wire_role_matches_the_windows_adapter_for_every_role_flui_publishes() {
         (A::Image, "Image", Role::Image),
     ];
 
-    // What FLUI publishes: every explicit role, every role-bearing flag,
-    // static text, a bare container, and the root's window.
+    // What FLUI publishes: every role, static text, a bare container, and
+    // the root's window.
     let mut published: Vec<A> = SemanticsRole::ALL
         .iter()
-        .map(|&role| published_role(role, &[], false))
+        .map(|&role| published_role(role, false))
         .collect();
-    for flags in [
-        &[F::IsButton][..],
-        &[F::IsLink],
-        &[F::IsTextField],
-        &[F::IsTextField, F::IsMultiline],
-        &[F::IsTextField, F::IsObscured],
-        &[F::IsSlider],
-        &[F::IsKeyboardKey],
-        &[F::IsImage],
-        &[F::IsHeader],
-        &[F::HasCheckedState],
-        &[F::HasCheckedState, F::IsInMutuallyExclusiveGroup],
-        &[F::HasToggledState],
-    ] {
-        published.push(published_role(SemanticsRole::None, flags, false));
-    }
-    published.push(published_role(SemanticsRole::None, &[], true));
+    published.push(published_role(SemanticsRole::None, true));
     published.push(A::Window);
 
     for role in &published {
@@ -440,12 +414,13 @@ fn advertised_actions_follow_the_uia_patterns() {
         c.add_action(SemanticsAction::Focus, noop());
     });
     f.add(Some(root), 3, |c| {
-        c.set_checked(Some(false));
+        c.set_role(SemanticsRole::CheckBox);
+        c.set_toggled(Some(crate::Toggled::Off));
         c.add_action(SemanticsAction::Tap, noop());
     });
     f.add(Some(root), 4, |c| {
-        c.set_checked(Some(true));
-        c.set_in_mutually_exclusive_group(true);
+        c.set_role(SemanticsRole::RadioButton);
+        c.set_toggled(Some(crate::Toggled::On));
         c.add_action(SemanticsAction::Tap, noop());
     });
     f.add(Some(root), 5, |c| {

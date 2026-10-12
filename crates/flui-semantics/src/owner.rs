@@ -288,8 +288,7 @@ pub struct SemanticsOwner {
     /// (see [`Self::set_device_pixel_ratio`]).
     device_pixel_ratio: f64,
 
-    /// Arena ids of the nodes currently claiming
-    /// [`SemanticsFlag::IsFocused`](crate::SemanticsFlag), maintained
+    /// Arena ids of the nodes currently declaring themselves focused, maintained
     /// incrementally so a flush derives focus in O(dirty) instead of
     /// re-scanning every node:
     ///
@@ -723,7 +722,7 @@ impl SemanticsOwner {
         if matches!(
             request.action,
             SemanticsAction::Expand | SemanticsAction::Collapse
-        ) && crate::action::disclosure_transition(config.flags().bits()) != Some(request.action)
+        ) && crate::action::disclosure_transition(config.expanded()) != Some(request.action)
         {
             return Err(SemanticsActionError::UnsupportedAction {
                 node_id: request.node_id,
@@ -732,7 +731,7 @@ impl SemanticsOwner {
         }
         // A tap-only expandable node receives the transition its current
         // state allows through its tap handler.
-        let routed = if crate::action::tap_disclosure_transition(actions, config.flags().bits())
+        let routed = if crate::action::tap_disclosure_transition(actions, config.expanded())
             == Some(request.action)
         {
             SemanticsAction::Tap

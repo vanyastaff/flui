@@ -50,7 +50,10 @@ impl RenderBox for SemanticLeaf {
         config.set_label(self.label.clone());
         config.set_button(self.button);
         config.set_focused(self.focused);
-        config.set_role(self.role);
+        // One role per node: an unset role leaves the button's in place.
+        if self.role != SemanticsRole::None {
+            config.set_role(self.role);
+        }
         config.set_enabled(self.enabled);
     }
 }

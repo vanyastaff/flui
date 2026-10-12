@@ -21,7 +21,7 @@ use flui_rendering::{
     parent_data::BoxParentData,
     semantics::{
         AccessibilityNodeId, AttributedString, SemanticsAction, SemanticsConfiguration,
-        SemanticsNode, SemanticsRole,
+        SemanticsNode, SemanticsRole, States,
     },
     testing::{FrameRun, Probe, RenderTester, box_node},
     traits::RenderBox,
@@ -281,7 +281,7 @@ struct PublishedNode {
     children: Vec<AccessibilityNodeId>,
     label: Option<AttributedString>,
     role: SemanticsRole,
-    flags: u64,
+    states: States,
     actions: u64,
     rect: Rect<f64>,
 }
@@ -302,8 +302,8 @@ impl PublishedNode {
     fn role(&self) -> SemanticsRole {
         self.role
     }
-    fn flags(&self) -> u64 {
-        self.flags
+    fn states(&self) -> States {
+        self.states
     }
     fn actions(&self) -> u64 {
         self.actions
@@ -341,7 +341,7 @@ fn snapshot(run: &FrameRun) -> Published {
                 .collect(),
             label: node.config().label().cloned(),
             role: node.config().role(),
-            flags: node.config().flags().bits(),
+            states: *node.config().states(),
             actions: node.config().effective_actions_as_bits(),
             rect: node.rect(),
         });
@@ -394,7 +394,7 @@ fn assert_snapshot_node(
     children: &[AccessibilityNodeId],
     label: Option<&str>,
     role: SemanticsRole,
-    flags: u64,
+    states: States,
     actions: u64,
     rect: Rect<f64>,
 ) {
@@ -409,7 +409,7 @@ fn assert_snapshot_node(
         "wrong label payload for {id}",
     );
     assert_eq!(node.role(), role, "wrong role payload for {id}");
-    assert_eq!(node.flags(), flags, "wrong flag payload for {id}");
+    assert_eq!(node.states(), states, "wrong state payload for {id}");
     assert_eq!(node.actions(), actions, "wrong action payload for {id}");
     assert_eq!(node.rect(), rect, "wrong source geometry for {id}");
 }
@@ -458,6 +458,52 @@ pub(crate) fn merge_semantics_boundary_collapses_plain_children_into_one_node() 
     assert!(
         label.contains("Alpha") && label.contains("Beta"),
         "both descendants' labels absorb into the single merged node, got {label:?}",
+    );
+}
+
+/// A merge inside a merge keeps its own node: a card that merges its content
+/// still lets a screen reader stop on the tile inside it, which merges its own
+/// label and button into one node (ADR-0202, decision 4).
+pub(crate) fn nested_merge_semantics_keeps_its_own_node() {
+    let run = RenderTester::mount(
+        box_node(SemanticsContainer::merge_semantics())
+            .child(box_node(SemanticsLeaf::new(20.0).with_label("Card")))
+            .child(
+                box_node(SemanticsContainer::merge_semantics())
+                    .child(box_node(SemanticsLeaf::new(20.0).with_label("Tile")))
+                    .child(box_node(
+                        SemanticsLeaf::new(20.0).with_label("Open").with_button(),
+                    )),
+            ),
+    )
+    .with_constraints(constraints())
+    .with_semantics_enabled()
+    .run_to_semantics();
+
+    let owner = run.semantics_owner().expect("semantics enabled");
+    let root = owner
+        .get(owner.root().expect("the outer merge forms the root"))
+        .expect("root id must resolve");
+    assert_eq!(
+        owner.tree().len(),
+        2,
+        "the outer and the inner merge, nothing else"
+    );
+    assert_eq!(root.label(), Some("Card"));
+    assert!(
+        !root.config().is_button(),
+        "the tile's button stays in the tile"
+    );
+
+    let [tile] = root.children() else {
+        panic!("the inner merge is the outer node's one child");
+    };
+    let tile = owner.get(*tile).expect("child id must resolve");
+    assert!(tile.config().is_button());
+    let label = tile.label().expect("merged tile label");
+    assert!(
+        label.contains("Tile") && label.contains("Open"),
+        "{label:?}"
     );
 }
 
@@ -529,7 +575,7 @@ pub(crate) fn explicit_child_nodes_forms_direct_contributors() {
         &[group],
         None,
         SemanticsRole::None,
-        0,
+        States::default(),
         0,
         semantics_rect(0.0, 0.0, 200.0, 200.0),
     );
@@ -540,7 +586,7 @@ pub(crate) fn explicit_child_nodes_forms_direct_contributors() {
         &[alpha, beta],
         Some("Group"),
         SemanticsRole::None,
-        0,
+        States::default(),
         0,
         semantics_rect(0.0, 0.0, 80.0, 80.0),
     );
@@ -551,7 +597,7 @@ pub(crate) fn explicit_child_nodes_forms_direct_contributors() {
         &[],
         Some("Alpha"),
         SemanticsRole::None,
-        0,
+        States::default(),
         0,
         semantics_rect(5.0, 6.0, 10.0, 10.0),
     );
@@ -562,7 +608,7 @@ pub(crate) fn explicit_child_nodes_forms_direct_contributors() {
         &[],
         Some("Beta"),
         SemanticsRole::None,
-        0,
+        States::default(),
         0,
         semantics_rect(5.0, 6.0, 12.0, 12.0),
     );

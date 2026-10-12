@@ -521,10 +521,15 @@ fn assembly_decisions(
 ) -> NodeAssemblyDecisions {
     let contributes =
         context.is_root || config.is_semantics_boundary() || config.has_been_annotated();
-    let forms_node = !context.merge_into_ancestor
-        && (context.is_root
-            || config.is_semantics_boundary()
-            || (contributes && context.parent_requires_explicit_node));
+    // A node that merges its own descendants is a unit a screen reader stops
+    // on, even inside an outer merge: the outer one takes it as a child rather
+    // than absorbing it (ADR-0202, decision 4).
+    let nested_merger = context.merge_into_ancestor && config.is_merging_semantics_of_descendants();
+    let forms_node = nested_merger
+        || (!context.merge_into_ancestor
+            && (context.is_root
+                || config.is_semantics_boundary()
+                || (contributes && context.parent_requires_explicit_node)));
     let children_require_explicit_node = context.is_root
         || config.explicit_child_nodes()
         || (!contributes && context.parent_requires_explicit_node);

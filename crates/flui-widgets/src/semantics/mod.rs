@@ -43,6 +43,7 @@ use flui_rendering::{
     semantics::{
         ActionArgs, Assertiveness, HeadingLevel, SemanticsAction, SemanticsActionHandler,
         SemanticsAnchor, SemanticsConfiguration, SemanticsRelation, SemanticsRole, TextDirection,
+        Toggled,
     },
 };
 use flui_view::{
@@ -285,37 +286,36 @@ impl Semantics {
         self
     }
 
-    /// Set whether this node has checked state and is checked.
+    /// Make this node a check box in `state`.
     #[must_use]
-    pub fn checked(mut self, checked: bool) -> Self {
-        self.configuration.set_checked(Some(checked));
+    pub fn checkbox(mut self, state: Toggled) -> Self {
+        self.configuration.set_role(SemanticsRole::CheckBox);
+        self.configuration.set_toggled(Some(state));
         self
     }
 
-    /// Set whether this node belongs to a mutually-exclusive group.
-    ///
-    /// On a checkable node this flag is what distinguishes a radio button
-    /// from a checkbox: the platform translation resolves checked state
-    /// inside a mutually-exclusive group to a radio-button role, and checked
-    /// state without it to a checkbox role.
+    /// Make this node one option of a mutually exclusive set, checked or not.
     #[must_use]
-    pub fn in_mutually_exclusive_group(mut self, in_mutually_exclusive_group: bool) -> Self {
+    pub fn radio(mut self, checked: bool) -> Self {
+        self.configuration.set_role(SemanticsRole::RadioButton);
         self.configuration
-            .set_in_mutually_exclusive_group(in_mutually_exclusive_group);
+            .set_toggled(Some(Toggled::from_bool(checked)));
         self
     }
 
-    /// Set whether this node is in a mixed checkbox state.
+    /// Make this node an on/off switch.
     #[must_use]
-    pub fn mixed(mut self, mixed: bool) -> Self {
-        self.configuration.set_mixed(mixed);
+    pub fn switch(mut self, on: bool) -> Self {
+        self.configuration.set_role(SemanticsRole::Switch);
+        self.configuration.set_toggled(Some(Toggled::from_bool(on)));
         self
     }
 
-    /// Set whether this node has toggled state and is toggled.
+    /// Set the checked state of a checkable role, or the pressed state of a
+    /// button: the node's role says which.
     #[must_use]
-    pub fn toggled(mut self, toggled: bool) -> Self {
-        self.configuration.set_toggled(Some(toggled));
+    pub fn toggled(mut self, state: Toggled) -> Self {
+        self.configuration.set_toggled(Some(state));
         self
     }
 

@@ -50,8 +50,9 @@ while Slint keeps its own model and confines AccessKit to a backend.
    are present (role, each state through `StateMerge`, non-empty value, range, collection, text,
    scroll, live, platform view). A conflict forms separate nodes; a forced merge
    (`MergeSemantics`) resolves it: states by `StateMerge::merge`, the receiver otherwise, and
-   role by specificity — checkable roles, then `Button`, then link, text inputs and slider,
-   then image and heading, then structural roles. A node that itself merges its descendants is
+   role by specificity — an authored structural role (tab, list item, dialog, …) first, then
+   checkable roles, then `Button`, then link, text inputs and slider, then image and heading;
+   on a tie the receiver keeps its own. A node that itself merges its descendants is
    never absorbed by an outer merge; it stays a node of its own.
 5. **One translation.** One module maps attributes to `accesskit::Node`; nothing else names
    AccessKit node types. A role, state or property ARIA 1.2 does not allow on the node's role is
@@ -78,4 +79,5 @@ while Slint keeps its own model and confines AccessKit to a backend.
 `merge_policy_table` (one row per group: single, conflicting, forced) and
 `state_merge_precedence` in `flui-semantics`; the coverage matrix (every role and attribute read
 through `accesskit_consumer`); `merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button`
-for the role precedence; a nested-merger row in `crates/flui-rendering/tests/semantics_assembly.rs`.
+and `role_precedence_settles_forced_merges` for the role precedence;
+`nested_merge_semantics_keeps_its_own_node` in `crates/flui-rendering/tests/semantics_assembly.rs`.

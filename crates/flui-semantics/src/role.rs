@@ -4,9 +4,9 @@
 //! Roles describe the structural type of UI element and help
 //! assistive technologies understand how to interact with elements.
 //!
-//! Note: interactive element types like Button, Checkbox,
-//! Slider are represented as flags (`SemanticsFlag`), not roles.
-//! Roles are for structural elements (tables, menus, regions, etc.).
+//! A node has one role, interactive kinds (button, checkbox, slider)
+//! included (ADR-0202); states are typed separately
+//! ([`States`](crate::States)).
 //!
 //! [`SemanticsRole`] itself lives in `flui-protocol`, the vocabulary FLUI
 //! shares with tests, devtools and agents; it is re-exported here so its path

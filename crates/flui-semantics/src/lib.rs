@@ -70,7 +70,6 @@ pub mod action;
 pub mod attributes;
 pub mod configuration;
 pub mod event;
-pub mod flags;
 pub mod identity;
 pub mod node;
 mod numeric_range;
@@ -79,6 +78,7 @@ pub mod platform;
 pub mod properties;
 pub mod relation;
 pub mod role;
+pub mod states;
 pub mod tree;
 
 // ============================================================================
@@ -113,9 +113,9 @@ pub use configuration::SemanticsConfiguration;
 // ============================================================================
 pub use event::{SemanticsEvent, SemanticsEventData, SemanticsEventType};
 // ============================================================================
-// RE-EXPORTS - Flag Types
+// RE-EXPORTS - State Types
 // ============================================================================
-pub use flags::{SemanticsFlag, SemanticsFlags};
+pub use states::{States, Toggled};
 // ============================================================================
 // RE-EXPORTS - Stable Accessibility Identity
 // ============================================================================
@@ -174,9 +174,9 @@ pub mod prelude {
         AttributedString, DebugSemanticsDumpOrder, HeadingLevel, NumericRange, NumericRangeError,
         SemanticsAction, SemanticsActionError, SemanticsActionHandler, SemanticsActionInvocation,
         SemanticsActionRequest, SemanticsAnchor, SemanticsAttributes, SemanticsConfiguration,
-        SemanticsEvent, SemanticsEventType, SemanticsFlag, SemanticsFlags, SemanticsId,
-        SemanticsNode, SemanticsOwner, SemanticsRelation, SemanticsRole, SemanticsTag,
-        SemanticsTree, TextDirection,
+        SemanticsEvent, SemanticsEventType, SemanticsId, SemanticsNode, SemanticsOwner,
+        SemanticsRelation, SemanticsRole, SemanticsTag, SemanticsTree, States, TextDirection,
+        Toggled,
     };
 }
 
