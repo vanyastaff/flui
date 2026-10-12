@@ -167,16 +167,16 @@ pub struct AppConfig {
     /// [`HostExecutors`]'s own doc for the contract layered on top.
     pub executors: Option<HostExecutors>,
 
-    /// Optional embedder callback receiving every terminal frame failure and
-    /// contained lifecycle recovery (issue #561's typed report route). `None`
-    /// (the default): both remain surfaced through `tracing`; only typed
+    /// Optional embedder callback receiving addressed sampling failures,
+    /// terminal frame failures and contained recoveries. `None`
+    /// (the default): reports remain surfaced through `tracing`; only typed
     /// delivery is skipped. See [`FrameFailureHandler`]'s own doc for the
-    /// re-entrancy contract the callback must honor.
+    /// delivery timing and owner-admission contract.
     pub frame_failure_handler: Option<FrameFailureHandler>,
 
-    /// Controls whether typed segment-panic and recovered-panic reports retain
-    /// string payloads, and whether FLUI-owned pipeline tracing materializes
-    /// error text. Debug builds default to [`FrameFailureDetail::Verbatim`];
+    /// Controls whether typed panic reports retain string payloads, and whether
+    /// FLUI-owned pipeline tracing materializes error text. Debug builds default
+    /// to [`FrameFailureDetail::Verbatim`];
     /// release builds default to [`FrameFailureDetail::Redacted`]. This is
     /// independent of [`Self::diagnostics_profile`], so changing the broader
     /// logging profile never silently changes the data retained in typed panic
@@ -401,7 +401,7 @@ impl AppConfig {
 
     /// Register a typed frame-failure callback. See
     /// [`Self::frame_failure_handler`]'s doc and
-    /// [`FrameFailureHandler`]'s re-entrancy contract.
+    /// [`FrameFailureHandler`]'s delivery timing and owner-admission contract.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_frame_failure_handler(mut self, handler: FrameFailureHandler) -> Self {
         self.frame_failure_handler = Some(handler);

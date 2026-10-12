@@ -918,6 +918,21 @@ fn dropped_frame_text(report: &FrameFailureReport) -> Option<String> {
         return None;
     }
     Some(match &report.kind {
+        FrameFailureKind::SamplingPanic {
+            first,
+            blocking,
+            message,
+            ..
+        } => match blocking {
+            Some(blocking) => format!(
+                "frame sampling panicked in {:?} ({:?}); publication blocked in {:?} ({:?}): {message}",
+                first.stage, first.origin, blocking.stage, blocking.origin,
+            ),
+            None => format!(
+                "frame sampling panicked in {:?} ({:?}): {message}",
+                first.stage, first.origin,
+            ),
+        },
         FrameFailureKind::SegmentPanic { message, phase, .. } => {
             format!("frame segment panicked in {phase:?}: {message}")
         }
