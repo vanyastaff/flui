@@ -2,6 +2,7 @@
 
 - **Status:** Consumer integration and UIKit/Android sources implemented; native mobile execution pending.
 - **Date:** 2026-10-08
+- **Amended:** 2026-10-11 — motion consumer integration is implemented independently under ADR-0195; native text-weight execution limits remain.
 - **Related:** [ADR-0172](ADR-0172-host-owned-system-preferences.md),
   [ADR-0092](ADR-0092-per-realm-text-over-parley.md).
 
@@ -94,8 +95,10 @@ exact, and errors remain errors before a later successful read. Disabling the
 SDK gate or undefined-sentinel handling independently makes the test fail.
 Android library clippy establishes Rust type compatibility only; it does not
 execute Activity JNI reads, configuration changes or owner delivery on a device.
-Native Android execution remains pending. No
-reduced-motion behavior is implied; Motion integration remains owner-deferred.
+Native Android execution remains pending. These text-weight checks imply no
+reduced-motion execution evidence. Motion observation is projected into the
+presentation clocks and inherited policy under
+[ADR-0195](ADR-0195-presentation-motion-policy.md), independently of this text-weight evidence.
 
 ## API migration
 

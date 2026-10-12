@@ -5,15 +5,16 @@
   is this ADR, the asset `REGISTRY` is removed (`AssetRegistry::global` is deleted; an
   application builds and owns its registry). The asset `INTERNER` is also removed:
   ADR-0121 makes each name owned shared data instead of a process-wide arena.
-  For the rest (`TIME_DILATION`, `ERROR_VIEW_BUILDER`, the decoded-image `CACHE`),
-  removal is the part of this ADR still Proposed.
+  `TIME_DILATION` is removed: ADR-0176 places playback on presentation clocks.
+  Removal of `ERROR_VIEW_BUILDER` and the decoded-image `CACHE` remains Proposed.
 - **Date:** 2026-09-25
+- **Amended:** 2026-10-11 — completed clock/font-global removal is distinguished from the remaining proposed removals.
 - **Amends:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (its open question "the runner's
   thread-local `AppRuntime` slot is the sanctioned transitional form" becomes a named,
   permanent exception class: OS-callback trampolines reach exactly one host cell),
   [ADR-0047](ADR-0047-unified-execution-services.md) (execution services stay loop-scoped; any
   process-global executor state the scan finds is an allowlist entry that can only shrink)
-- **Related:** [ADR-0016](ADR-0016-unified-font-system-registration.md),
+- **Related:**
   [ADR-0039](ADR-0039-event-loop-affinity-capability.md) §6,
   [ADR-0043](ADR-0043-presentation-bundled-trees-and-realm-globalkey-scope.md),
   [ADR-0050](ADR-0050-global-key-identity-and-frame-reservations.md),
@@ -218,10 +219,11 @@ runs on the pinned stable toolchain, which dylint does not.
   review.
 - ADR-0027's transitional host slot becomes permanent by name, and nothing else may join it in
   the host.
-- ADR-0016 legitimizes `FONT_SYSTEM` until ADR-0092 lands; it is allowlisted with that exit.
+- The former `FONT_SYSTEM` exception ended when ADR-0092 removed the ambient font system;
+  its current authority is the explicit collection/runtime context, not an allowlisted global.
   ADR-0092 §10 step 6a removed it and its allowlist entry.
 - Removing each entry is its own change with its own test; this ADR only freezes the count.
-- `TIME_DILATION`'s public setter moves to the presentation's clock, a breaking change for
+- `TIME_DILATION`'s public setter was replaced by the presentation's clock (ADR-0176), a breaking change for
   callers of the process-wide setter.
 - A static that is only a debug-counter under `#[cfg(test)]` stays invisible to the gate by
   design.

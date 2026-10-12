@@ -12,12 +12,13 @@ wire are gone.*
 - **Amended by:** [ADR-0092](ADR-0092-per-realm-text-over-parley.md) (`GlyphKey` names a font
   blob and face, and the atlas rasterizes through `SwashRasterizer` behind `GlyphRasterizer`)
 - **Date:** 2026-09-18
+- **Amended:** 2026-10-11 — original cosmic-text surfaces are identified as historical; ADR-0092 owns current neutral runs and font identity.
 - **Deciders:** @vanyastaff
-- **Scope:** `flui_painting::{TextLayout::placed_glyphs, SharedFontSystem::rasterize, GlyphKey, PlacedGlyph, GlyphImage}`;
+- **Original scope (2026-09-18):** `flui_painting::{TextLayout::placed_glyphs, SharedFontSystem::rasterize, GlyphKey, PlacedGlyph, GlyphImage}`;
   `flui_engine::{glyph_atlas, batches::text, GlyphInstance, DrawSegment::glyph_batch, Phase::Glyph}`.
   Completes [ADR-0065](ADR-0065-painting-owns-shaping-text-crosses-the-display-list-shaped.md)
   (which named this as its end state) and amends
-  [ADR-0016](ADR-0016-unified-font-system-registration.md) (the glyphon↔cosmic-text
+  [ADR-0016](https://github.com/vanyastaff/flui/blob/6af2cf426809dbf8a33bbb415e904f0bfdc847c4/docs/adr/ADR-0016-unified-font-system-registration.md) (the glyphon↔cosmic-text
   version coupling is gone).
 
 ---
@@ -89,10 +90,10 @@ engine consumes that invariant rather than repeating data-length validation.
 Atlas placement, replay dimension/content checks and allocation lifetime remain
 the engine's responsibility.
 
-Rasterisation sits in painting rather than the engine because it is an
-operation on the font database that the font lock already guards, and
-because keeping cosmic-text a dependency of one crate is the boundary
-ADR-0016 wanted and could not have while glyphon existed.
+Originally rasterization sat behind painting's font-system door to keep
+cosmic-text and its lock in one crate, the boundary retired ADR-0016 sought.
+The current ADR-0092 contract uses neutral run faces and a rasterizer-owned registry,
+outside shaping and without that font lock; it does not restore the old ambient door.
 
 ### The engine owns the atlas; glyphs are a batch of the segment
 

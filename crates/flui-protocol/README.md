@@ -22,7 +22,7 @@ ADR-0080's shapes:
 
 ## Versioning
 
-The schema is versioned apart from this crate: `PROTOCOL_VERSION` (`0.1`), and a
+The schema is versioned apart from this crate: `PROTOCOL_VERSION` (`0.2`), and a
 golden JSON schema per version in `tests/schema/`. Any change to the schema bumps
 the minor version and publishes the new golden file (`FLUI_PROTOCOL_BLESS=1 cargo
 nextest run -p flui-protocol --all-features`, which writes a missing golden and

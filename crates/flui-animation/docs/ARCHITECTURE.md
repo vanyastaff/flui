@@ -272,6 +272,20 @@ and switch hops.
 
 ### Registration tokens and removal
 
+The related decisions have independent scopes:
+
+| Authority | Decision |
+|---|---|
+| Backend/slot token identity, stale withdrawal and permanent exhaustion | [ADR-0125](../../../docs/adr/ADR-0125-vsync-registration-authority.md) |
+| Driven controller seat lifetime and exclusive disposal | [ADR-0179](../../../docs/adr/ADR-0179-controller-registration-ownership.md) |
+| Single-parent child topology, admission and root-clock transfer | [ADR-0191](../../../docs/adr/ADR-0191-single-parent-animation-registries.md) |
+| Presentation playback and host/application policy timelines | [ADR-0176](../../../docs/adr/ADR-0176-presentation-animation-playback.md), [ADR-0195](../../../docs/adr/ADR-0195-presentation-motion-policy.md) |
+| Visible loading representation and application pause controls | [ADR-0192](../../../docs/adr/ADR-0192-accessible-loading-motion.md) |
+| Ordered controller delivery and borrowed notification failure custody | [ADR-0177](../../../docs/adr/ADR-0177-controller-ordered-delivery.md), [ADR-0178](../../../docs/adr/ADR-0178-notification-first-failure-custody.md) |
+
+This map locates the current authority; it does not combine independently
+reversible decisions or change their recovery boundaries.
+
 Child registries form a tree. One optional weak parent seat prevents conflicting
 presentation policies and duplicate child sampling. `attach_child` preflights
 closed state, ancestor cycles, existing parent and identity capacity before

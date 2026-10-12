@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Superseded-by:** ADR-0175 (run-future placement, names and thread ownership)
 - **Date:** 2026-10-03
+- **Amended:** 2026-10-11 — current run-delivery validation replaces the retired ticker-future test locator; the scoped ADR-0175 replacement remains explicit.
 - **Supersedes:** ADR-0064 sections 3 and 6 only for continuation invocation and waiter delivery policy
 
 ## Context
@@ -55,7 +56,8 @@ Navigator push completion and Cupertino release-fade chaining borrow their captu
 queues/controllers and satisfy the new bound. Animation controller outcomes and
 callback-before-waker order remain unchanged.
 
-The public `ticker_future_delivery_recovery` table covers complete/cancel and
+The current `run_delivery_recovery` table in `flui-animation/src/run_future_recovery.rs`
+uses the production run-future delivery path and covers complete/cancel and
 implicit/unwinding delivery, captured aggregates, payload competition, ordinary
 retirement, telemetry failure, independent/replaced/dropped waiters, publication
 races, inline polling/drop, hostile wakers, healthy tails and the next independent

@@ -1241,8 +1241,12 @@ panic. The leaf, nonleaf Box, and nonleaf Sliver boundaries retain that payload
 before borrowing its text or invoking tracing subscribers. A reporting panic
 is secondary: its payload is retained without another diagnostic, preserving
 the original layout `Poisoned` error. Exceptional retention does not execute
-user `Drop`; it follows ADR-0104. Ordinary render-object destruction remains
-unchanged, including ordinary destructor failures outside these boundaries.
+user `Drop`; payload custody follows ADR-0104/0119. Outgoing user-owned render
+objects and callback envelopes separately follow
+[ADR-0127](../../docs/adr/ADR-0127-exceptional-path-retention.md): authority is
+withdrawn before callouts, healthy destruction remains ordinary, and an operation
+holding a failure retains its remaining opaque owners. These are scoped retirement
+rules, not a process-global failure boundary.
 After reporting has finished borrowing the payload, the shared foundation
 operation releases exact static-string and owned-string payloads under
 [ADR-0119](../../docs/adr/ADR-0119-inert-panic-payload-retirement.md). Arbitrary

@@ -4,12 +4,13 @@
   unit types, and keep FLUI's own value types over kurbo and glam rather than exposing either.
   Acceptance waits on the review of this record.
 - **Date:** 2026-09-28
+- **Amended:** 2026-10-11 — implemented empty-union/touching-intersection behavior is distinguished from pending containment policy; the NaN comparison explanation is corrected.
 - **Superseded-by:** [ADR-0149](ADR-0149-interpolation-contracts.md), in part: §7's `Color::lerp`
   bullet (colour now interpolates in Oklab, premultiplied)
   and [ADR-0194](ADR-0194-continuous-color-and-opacity.md), the implementation-status
   deferral of normalized `Color` storage only.
 - **Related:** [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) (kept as is: this
-  record needs no exception to it), [ADR-0077](ADR-0077-migrate-to-parley.md),
+  record needs no exception to it), [ADR-0092](ADR-0092-per-realm-text-over-parley.md),
   [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md),
   [ADR-0087](ADR-0087-raster-contract-and-cpu-backend.md),
   [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md)
@@ -109,7 +110,9 @@ Rules:
   - `expand_to_include` counts empty rectangles, so a zero-size node still contributes its
     position to bounds.
   - `intersect` returns `Option<Rect>`, with `Some` for touching rectangles.
-  - `is_empty` is `left >= right || top >= bottom`, so NaN counts as empty.
+  - The proposed empty predicate is `left >= right || top >= bottom`. These comparisons
+    detect non-positive extents; they do not make NaN empty, because comparisons with NaN
+    are false. Non-finite geometry admission requires its own explicit policy.
 - **Where FLUI is stricter than Flutter.** `Point` and `Offset` are distinct types: Flutter uses
   `Offset` for both, which lets a position be added to a position.
 - **Only what is used.** Methods are implemented only when the census shows a consumer. There is
@@ -283,9 +286,10 @@ What is deferred, each with its reason:
 - **Platform sizing formulas** (Windows physical-first, Wayland n/120, the web's
   `devicePixelContentBoxSize`). Backend changes that only the Linux path runs in CI; each needs
   its platform's smoke run.
-- **§3's semantic changes**: a half-open `Rect::contains`, empty rectangles counted by
-  `expand_to_include`, `intersect` returning `Option`. Each changes hit-testing or bounds
-  results across the widget catalog and needs its own pass over the harness.
+- **§3's remaining semantic change**: half-open `Rect::contains` remains proposed and
+  changes hit-testing across the widget catalog. Empty rectangles are already counted by
+  `expand_to_include`, and `intersect` already returns `Option` with `Some` for touching
+  rectangles; those implemented portions are no longer pending migrations.
 - **`Color` in `f32` storage behind the `color` crate, and gradient interpolation spaces**
   (Oklab, premultiplied). `Color` stays four `u8` channels, which are already lawfully
   `Eq + Hash`; wide-gamut and gradient-space work change the engine's shaders and belong

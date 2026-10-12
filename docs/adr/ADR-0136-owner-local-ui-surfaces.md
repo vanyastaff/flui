@@ -2,6 +2,7 @@
 
 - **Status:** Accepted (§2; the other sections are not decisions until adopted)
 - **Date:** 2026-10-06
+- **Amended:** 2026-10-11 — later accepted owner APIs are distinguished from this record's historical signatures and unadopted proposals.
 - **Superseded-by:** [ADR-0182](ADR-0182-complete-owner-execution.md) for scheduler execution authority and frame-entry API.
 - **Superseded-by:** [ADR-0175](ADR-0175-owner-local-scheduling-and-animation.md)
   for the transitional scheduler ownership and split post-frame queues;
@@ -16,11 +17,12 @@
   [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md),
   [ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md)
 
-This record states the decision section by section as the code adopting it lands. Section 2,
-the UI runtime's ownership of its async tasks and owner-local frame state, is in the code; the
-other sections (the thread-boundary ledger and its gate, the single post-frame queue,
-owner-local controllers, listener panics, the ban on `unsafe impl Send`/`Sync` for UI types,
-and the opt-in path to parallel layout) are added here when theirs does.
+Only section 2 was accepted in this record. Its UI-runtime ownership of async tasks
+and weak owner-local handles remains; the scheduler execution API and transitional
+queue/notification descriptions are superseded by ADR-0182, ADR-0175 and ADR-0178
+in the scopes above. The thread-boundary ledger/gate and opt-in parallel-layout
+ideas remain unadopted proposals. Later accepted records do not retroactively
+approve every reserved section here.
 
 ## Context
 
@@ -46,6 +48,11 @@ across threads.
 ## Decision
 
 ### 2. The UI runtime owns its owner-local frame state; handles are `Weak`; only wakes cross threads
+
+The following entry-point and queue signatures describe the accepted migration's
+original shape. Current complete-turn execution is ADR-0182; current scheduler
+ownership and the unified owner-local post-frame queue are ADR-0175. The remaining
+weak-handle and thread-boundary rules in this section still apply.
 
 - **`OwnerFrame`** (`flui-scheduler`, `#[doc(hidden)]`, `!Send`, not `Clone`) holds a UI runtime's
   owner-local post-frame queue and its task store. The UI runtime (`UiRuntime`, through

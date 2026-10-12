@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-08
+- **Amended:** 2026-10-11 — independent token and topology authorities are linked by scope; driven ownership remains unchanged.
 - **Supersedes:** [ADR-0125](ADR-0125-vsync-registration-authority.md), public
   controller admission and explicit caller-managed controller removal only.
 - **Related:** [ADR-0175](ADR-0175-owner-local-scheduling-and-animation.md),
@@ -24,8 +25,11 @@ admission path. Keeping a second public admission path would leave callers respo
 for coupling registration and cancellation, defeating the owning API.
 
 Child attachment remains an explicit public operation with a borrowed removal
-token. Registry identity, non-reused slots, foreign and stale token refusal,
-permanent exhaustion and child order retain ADR-0125's rules.
+token. Token identity and permanent capacity refusal remain
+[ADR-0125](ADR-0125-vsync-registration-authority.md); single-parent topology,
+clock-root transfer and child admission are
+[ADR-0191](ADR-0191-single-parent-animation-registries.md). These independent
+decisions do not restore caller-managed controller registration.
 
 ## Verification
 

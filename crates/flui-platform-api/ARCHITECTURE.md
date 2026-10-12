@@ -109,6 +109,20 @@ capability is that of its own ADR.
 
 ### A TSF-shaped pull store carries text input
 
+Text-input authority is divided by contract rather than by one combined event count:
+
+| Boundary | Authority |
+|---|---|
+| Presentation session, composing geometry and rendering | [ADR-0030](../../docs/adr/ADR-0030-platform-text-input-ime-capability.md), with its scoped successors |
+| AppKit direct-key/input-method routing | [ADR-0069](../../docs/adr/ADR-0069-a-keydown-produces-one-semantic-event.md) |
+| Portable UTF-16 store, locks, projection and conformance kit | [ADR-0090](../../docs/adr/ADR-0090-ime-pull-text-store-contract.md) |
+| Committed-text notification, owner-code containment, composition exits and commit-anchor debt | [ADR-0142](../../docs/adr/ADR-0142-text-store-commit-gate-and-owner-code-containment.md) |
+| Win32 owner-thread host, TSF document and COM lifetime | [ADR-0135](../../docs/adr/ADR-0135-win32-text-services-hold-the-text-store-on-the-owner-thread.md) |
+
+Implementation and native acceptance remain separate: ADR-0142's outstanding
+composition-exit, slot-residence and anchor-debt requirements are still obligations.
+The native adapter does not replace the portable store's lock/settle contract.
+
 `text_store` is a pull protocol (ADR-0090), not a push of whole editing values
 between engine and client: the field is
 a `TextStore` the platform locks, reads and edits, in UTF-16 offsets, the

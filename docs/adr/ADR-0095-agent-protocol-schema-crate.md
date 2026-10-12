@@ -14,6 +14,7 @@
   the `flui-mcp` library; `flui-testing`'s query types; §3's `flui mcp` and the handle table
   across windows; and §§4–5.
 - **Date:** 2026-09-25
+- **Amended:** 2026-10-11 — the current FLUI schema is 0.2 under ADR-0176; negotiated MCP versions are a separate protocol.
 - **Amends:** [ADR-0080](ADR-0080-agent-protocol-desktop-contract.md) (settles its "Not
   decided here" in-process transport; the wire contract is unchanged)
 - **Superseded in part by:** [ADR-0124](ADR-0124-controlled-numeric-and-disclosure-actions.md):
@@ -182,7 +183,7 @@ recorded by one is a valid golden file for the other.
 
 ### Versioning
 
-The schema carries its own version, `flui_protocol::PROTOCOL_VERSION` (`0.1`), serialized
+The schema carries its own version, `flui_protocol::PROTOCOL_VERSION` (`0.2`), serialized
 as the `protocol` field of a `Tree`. Each version's JSON schema is a golden file
 (`crates/flui-protocol/tests/schema/protocol-<version>.json`), and a test refuses a schema that
 differs from its version's file. Any change to the schema bumps `minor` and adds a golden

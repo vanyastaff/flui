@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-07-09
+- **Amended:** 2026-10-11 — complete owner-turn execution follows ADR-0182; weak owner-local task ownership remains ADR-0136 §2.
 - **Superseded in part by:** ADR-0078 (capability acquisition)
 
 ## Context
@@ -52,13 +53,14 @@ The ownership and task bounds in this section are superseded by
 the owner-local futures, `AsyncDriver` is a weak handle, and only wake capabilities
 cross threads. Begin-frame polling and inline eager subscription keep the order below.
 
-`AsyncDriver` (`std::future`/`std::task` only; no `tokio`, no `futures` executor) is polled
-once per frame by `Scheduler::handle_begin_frame`, in the `MidFrameMicrotasks` slot: after
-transient callbacks, before the persistent (build/layout/paint) phase, so a completion is seen
-by the same frame's `build_scope`. The poll lives in the scheduler, not in the bindings, so
-headless and production frames share one step and neither can skip or double it. It
-debug-asserts it never runs during `PersistentCallbacks`. Wakers request a frame, so a
-completion signalled from a worker thread wakes the UI.
+`AsyncDriver` uses `std::future`/`std::task`, with no ambient async runtime in the
+widget graph. The UI runtime's `OwnerFrame` owns task polling inside a complete
+frame or background turn (ADR-0182). Producer-side `UpdateScheduler` handles
+cannot independently poll tasks or consume frame demand. The frame prepares its
+runtime state inside admission, polls ready owner work before the persistent
+pipeline, and then runs build/layout/paint; the raw phase signatures originally
+named here are migration history. Wakers request a frame through cross-thread
+metadata, so a completion signalled from a worker can wake its owning UI runtime.
 
 This is Flutter's model: a Dart future's callbacks run on the UI isolate's loop, and polling on
 the frame thread reproduces that. CPU-bound work is the caller's to offload in both frameworks.
@@ -119,8 +121,10 @@ mints a new future each rebuild and re-enters `Waiting` forever — cannot be ex
 
 ## Consequences
 
-- No runtime enters the widget dependency graph; `flui-scheduler` owns a small executor.
-- A frame driver that bypasses `Scheduler::drive_frame` gets no async poll.
+- No ambient async runtime enters the widget dependency graph; the UI owner's
+  scheduler service owns the small task store.
+- A complete `OwnerFrame` operation is the execution authority (ADR-0182); a
+  producer handle cannot bypass it with a partial phase driver.
 - The keyed shape is public API; reversing it would be a full migration.
 
 ## Alternatives rejected

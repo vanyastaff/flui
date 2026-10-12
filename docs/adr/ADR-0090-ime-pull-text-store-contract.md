@@ -1,9 +1,11 @@
 # ADR-0090: IME talks to a pull text-store contract with edits and asynchronous locks
 
 - **Status:** Accepted in part (2026-09-26): §1, §2 and §4 are implemented (the migration
-  plan's IME text-store row); §3 waits for the Win32 TSF backend, §5 for exit B1. §2 was amended
+  plan's IME text-store row). The Win32 TSF host implementation now lives under ADR-0135;
+  this record's remaining §3/§5 acceptance and native exit B1 evidence stay separate. §2 was amended
   on acceptance: the projection takes an asynchronous lock, not a synchronous one (see §2).
 - **Date:** 2026-09-25
+- **Amended:** 2026-10-11 — current Win32 host/observer wiring is distinguished from pending acceptance and the controller-lock interim.
 - **Superseded-by:** [ADR-0142](ADR-0142-text-store-commit-gate-and-owner-code-containment.md),
   in part: §1's one change notification per session (the owner hears only of committed-text
   changes, after the lock is released), §2's reporting of a failure after a projected grant, §3's
@@ -12,8 +14,8 @@
 - **Supersedes in part:** [ADR-0030](ADR-0030-platform-text-input-ime-capability.md) §1
   (the winit-shaped push vocabulary as the contract) and the push-only shape of §2
 - **Related:** [ADR-0037](ADR-0037-presentation-ownership-domains.md) §5 (who owns a text-input
-  session), [ADR-0069](ADR-0069-a-keydown-produces-one-semantic-event.md) (one semantic event per
-  key; the input method is a route), [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md)
+  session), [ADR-0069](ADR-0069-a-keydown-produces-one-semantic-event.md) (one text-editing
+  authority; the input method is a route), [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md)
   (capability acquisition), [ADR-0082](ADR-0082-platform-api-contract-crate.md) (the trait moves
   to `flui-platform-api`), [ADR-0092](ADR-0092-per-realm-text-over-parley.md) (the layout that
   answers geometry queries)
@@ -201,10 +203,11 @@ controller listeners are `Send + Sync` and the store is not.
 
 A pull platform receives the focused store through an owner-thread `TextStoreHost`
 ([ADR-0135](ADR-0135-win32-text-services-hold-the-text-store-on-the-owner-thread.md));
-`TextInputOwner::active_store` is removed (ADR-0142 item 7). No window offers a host yet, so the
-production caller is still the push projection, and the observer, `rect_for_range`,
-`index_at_point` and `document_bounds` have no production caller until the Win32 window offers
-its host.
+`TextInputOwner::active_store` is removed (ADR-0142 item 7). Win32 windows activate
+their owner-thread text services and offer that host under ADR-0135. The TSF adapter
+consumes the store's observer and text-geometry queries; push-only backends still
+use the projection. This wiring does not close every native IME/UIA acceptance
+condition in §3/§5, and the controller-lock interim above remains.
 
 ## Divergences
 

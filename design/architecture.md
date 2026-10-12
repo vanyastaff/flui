@@ -708,8 +708,9 @@ and ADR-0068; decisions D5 and D6.
 
 ### 10.2 Text
 
-[ADR-0092](../docs/adr/ADR-0092-per-realm-text-over-parley.md) supersedes ADR-0077 and, on
-acceptance, ADR-0016 and ADR-0059; decision D12.
+[ADR-0092](../docs/adr/ADR-0092-per-realm-text-over-parley.md) is Accepted and owns
+the shaping, registration and family-resolution rules of retired ADR-0016/0059/0077;
+their immutable history links remain in its metadata. Decision D12.
 
 - One font `Collection { shared: true }`, immutable after load, and a lock-free per-UI runtime
   `FontContext`/`LayoutContext` replace `static FONT_SYSTEM: OnceLock<Arc<Mutex<FontState>>>`
@@ -723,9 +724,10 @@ acceptance, ADR-0016 and ADR-0059; decision D12.
 - ICU4X is the one Unicode source. The system font scan is asynchronous: bundled fonts are
   available in the first frame, system fonts arrive as a UI runtime event.
 - One shaper on every platform; only rasterisation and hinting may vary.
-- ADR-0077's precondition is a gate: a Parley glyph accepted by the existing atlas with a stable
-  key. The gate is met (swash rasterizes; 2026-09-26); ADR-0092 stays Proposed until the migration
-  lands. `flui-text` is not created before a post-Parley measurement.
+- ADR-0092 §8 carries the former spike's rasterization precondition: a Parley glyph
+  accepted by the existing atlas with a stable key. The gate and the migration are met;
+  the historical prototype result was recorded on 2026-09-26. `flui-text` is not
+  created before a post-Parley measurement.
 
 ### 10.3 GPU
 

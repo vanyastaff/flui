@@ -5,6 +5,7 @@
   public controller admission and explicit caller-managed controller removal only.
   [ADR-0191](ADR-0191-single-parent-animation-registries.md) supersedes child attachment refusal and topology.
 - **Date:** 2026-10-05
+- **Amended:** 2026-10-11 — current driven ownership is distinguished from the historical manual-registration API; identity and exhaustion rules remain in force.
 - **Supersedes:** ADR-0020 §1, registration token identity and removal signatures only
 
 ## Context
@@ -19,29 +20,36 @@ accepted work and break the exclusive fence used by the tick walk.
 `VsyncRegistration` carries weak backend ownership and a monotonically issued
 local slot. Equality and hashing use that backend identity and slot. A weak token
 reserves the allocation identity without retaining the registry or its controllers.
-Tokens are `Clone`, not `Copy`; `unregister` and `detach_child` borrow them.
+Tokens are `Clone`, not `Copy`; internal `unregister` and public `detach_child` borrow them.
 Foreign, expired, already removed and wrong-kind tokens are harmless. Clones of
 the owning registry accept the same token. Dropping a token does not unregister
-work; lifecycle owners still remove their registrations explicitly.
+work. Child owners still detach explicitly; controller seats are withdrawn by
+their `DrivenController` owner under ADR-0179.
 
 Controllers and child registries share one local identity namespace. The maximum
 counter value denotes permanent exhaustion and is never issued. Removing work
 does not restore capacity. The last admitted slot remains inside the tick fence,
 and accepted controllers and children continue advancing after refusal.
 
-`try_register` borrows a controller and reports `VsyncRegistrationError::Exhausted`
+The original manual-registration API described below is superseded by ADR-0179.
+Controller admission/removal is now internal and owned by `DrivenController`;
+recoverable public controller migration uses that owner's `rebind` operation.
+The original rejection-custody rule remains part of the internal admission path.
+
+Historically, `try_register` borrowed a controller and reported `VsyncRegistrationError::Exhausted`
 without retiring caller-owned values. The existing owned `register` delegates to
 it and panics with `Vsync registration capacity exhausted` on exhaustion, after
-releasing the registry mutex. Its rejected owner is secured before admission so
+releasing the registry borrow. Its rejected owner is secured before admission so
 ordinary rejected-value destruction cannot replace that failure. Child attachment
 now returns typed refusals under ADR-0191. No process-wide allocator
 or automatic token removal is introduced.
 
 ## Migration and validation
 
-Pass `&registration` to removal methods, and take stored `Option` tokens before
-removal when retiring their lifecycle owner. Code requiring recoverable admission
-uses `try_register(&controller)`.
+Child callers pass `&registration` to detachment and take stored `Option` tokens
+before retiring their lifecycle owner. Public controllers use `build_on` and
+`DrivenController::rebind` under ADR-0179. The former public
+`try_register(&controller)` migration is historical, not a second admission surface.
 
 `registration_identity_and_retirement` exercises actual
 foreign, stale, expired and wrong-kind tokens and subsequent virtual-clock ticks.
