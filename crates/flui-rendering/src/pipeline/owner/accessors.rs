@@ -1,13 +1,14 @@
 //! Phase-agnostic accessors, setters, insertion, dirty tracking, and hit-test
 //! for `PipelineOwner<Phase: PipelinePhase>`.
 //!
-//! These methods are pure data access or side-effect-free notifier wiring.
-//! They are valid in any phase: the borrow checker still gates `&mut self`
-//! against the typestate transitions, but the methods themselves don't
-//! care which phase the owner is in.
+//! These methods include data access, capability wiring and invalidation
+//! preparation. Preparation can invoke user callbacks; scheduling observations
+//! use the pure snapshot methods instead. The borrow checker gates `&mut self`
+//! against the typestate transitions.
 
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Offset};
+use flui_foundation::panic::{FailureClass, PanicRecovery, RecoveryScope};
 
 use crate::{
     RenderUpdateImpact,
@@ -205,6 +206,18 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// Then applies a font collection change ([`Self::apply_font_change`]),
     /// the other invalidation that arrives from outside the frame.
     pub fn drain_pending_dirty(&mut self) -> usize {
+        let mut recovery = PanicRecovery::new();
+        let drained = self.drain_pending_dirty_with_recovery(&mut recovery.scope());
+        recovery.finish();
+        drained
+    }
+
+    /// Apply accepted invalidations under an enclosing owner's panic custody.
+    /// Each mark and diagnostic is attempted independently so a failed callout
+    /// cannot erase the accepted tail. Failures remain in `recovery`; this
+    /// operation does not resume them.
+    #[doc(hidden)]
+    pub fn drain_pending_dirty_with_recovery(&mut self, recovery: &mut RecoveryScope<'_>) -> usize {
         let mut drained = 0;
         while let Ok(req) = self.dirty_rx.try_recv() {
             drained += 1;
@@ -225,21 +238,14 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 .get(req.id)
                 .is_some_and(|node| node.is_attached_for(req.attachment_epoch))
             {
-                tracing::trace!(?req, "drain_pending_dirty: stale attachment, dropped");
+                recovery.run_classified(FailureClass::Unknown, |_| {
+                    tracing::trace!(?req, "drain_pending_dirty: stale attachment, dropped");
+                });
                 continue;
             }
-            match req.kind {
-                DirtyKind::Layout => self.mark_needs_layout(req.id),
-                DirtyKind::Compositing => self.mark_needs_compositing_bits_update(req.id),
-                DirtyKind::Paint => self.mark_needs_paint(req.id),
-                DirtyKind::Semantics => self.mark_needs_semantics(req.id),
-                DirtyKind::CompositedLayerUpdate => {
-                    self.mark_needs_composited_layer_update(req.id);
-                }
-            }
+            self.apply_pending_mark(req.id, req.kind, recovery);
         }
         let mut local = self.local_dirty.take_pending();
-        let mut recovery = flui_foundation::panic::PanicRecovery::new();
         for queued in local.drain(..) {
             let Some(record) = queued.upgrade() else {
                 continue;
@@ -263,23 +269,29 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                     continue;
                 }
                 drained += 1;
-                recovery.scope().run(|| match kind {
-                    DirtyKind::Layout => self.mark_needs_layout(record.id),
-                    DirtyKind::Compositing => self.mark_needs_compositing_bits_update(record.id),
-                    DirtyKind::Paint => self.mark_needs_paint(record.id),
-                    DirtyKind::Semantics => self.mark_needs_semantics(record.id),
-                    DirtyKind::CompositedLayerUpdate => {
-                        self.mark_needs_composited_layer_update(record.id);
-                    }
-                });
+                self.apply_pending_mark(record.id, kind, recovery);
             }
         }
         self.local_dirty.recycle(local);
-        recovery.scope().run(|| {
-            self.apply_font_change();
-        });
-        recovery.finish();
+        self.apply_font_change_with_recovery(recovery);
         drained
+    }
+
+    fn apply_pending_mark(
+        &mut self,
+        id: RenderId,
+        kind: DirtyKind,
+        recovery: &mut RecoveryScope<'_>,
+    ) {
+        // A generic mark includes the canonical walk and arbitrary callouts;
+        // only its specific producer can prove a committed-delivery boundary.
+        recovery.run_classified(FailureClass::Unknown, |_| match kind {
+            DirtyKind::Layout => self.mark_needs_layout(id),
+            DirtyKind::Compositing => self.mark_needs_compositing_bits_update(id),
+            DirtyKind::Paint => self.mark_needs_paint(id),
+            DirtyKind::Semantics => self.mark_needs_semantics(id),
+            DirtyKind::CompositedLayerUpdate => self.mark_needs_composited_layer_update(id),
+        });
     }
 
     /// Lays out again, and repaints, every node that measured text since
@@ -303,6 +315,13 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// outnumber the live tree, so the record stays bounded in an app that
     /// never registers a font.
     pub fn apply_font_change(&mut self) -> bool {
+        let mut recovery = PanicRecovery::new();
+        let changed = self.apply_font_change_with_recovery(&mut recovery.scope());
+        recovery.finish();
+        changed
+    }
+
+    fn apply_font_change_with_recovery(&mut self, recovery: &mut RecoveryScope<'_>) -> bool {
         let render_tree = &self.render_tree;
         self.text_measurers
             .prune(render_tree.len(), |id| render_tree.get(id).is_some());
@@ -314,14 +333,18 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         }
         self.fonts_seen = generation;
         let measured = self.text_measurers.take();
-        tracing::debug!(
-            nodes = measured.len(),
-            "the font collection changed; laying out the text measured on it again"
-        );
+        // The generation and complete measured batch are admitted before this
+        // diagnostic. Its delivery cannot cancel their independent marks.
+        recovery.run_classified(FailureClass::Delivery, |_| {
+            tracing::debug!(
+                nodes = measured.len(),
+                "the font collection changed; laying out the text measured on it again"
+            );
+        });
         for id in measured {
             if self.render_tree.get(id).is_some() {
-                self.mark_needs_layout(id);
-                self.mark_needs_paint(id);
+                self.apply_pending_mark(id, DirtyKind::Layout, recovery);
+                self.apply_pending_mark(id, DirtyKind::Paint, recovery);
             }
         }
         true
@@ -1895,6 +1918,23 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     #[inline]
     pub fn has_dirty_nodes(&self) -> bool {
         self.scheduler.has_dirty_nodes() || self.local_dirty.has_pending()
+    }
+
+    /// Whether accepted invalidation still awaits owner-thread application.
+    ///
+    /// This observation never drains requests, marks nodes, wakes observers or
+    /// retires ownership. Queued stale requests can conservatively contribute
+    /// until the next [`Self::drain_pending_dirty`]. Font changes are observed
+    /// after the text context's current measurement loan returns, as in
+    /// [`Self::apply_font_change`]; a busy context alone invents no work.
+    #[must_use]
+    pub fn has_pending_invalidations(&self) -> bool {
+        !self.dirty_rx.is_empty()
+            || self.local_dirty.has_pending()
+            || self
+                .text
+                .fonts_generation()
+                .is_some_and(|generation| generation != self.fonts_seen)
     }
 
     /// Whether retained layout work needs a fresh layout invalidation before

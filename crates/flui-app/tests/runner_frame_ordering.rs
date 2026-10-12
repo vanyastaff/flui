@@ -165,15 +165,15 @@ fn every_runner_frame_site_drives_the_ui_runtime_pump() {
     );
 }
 
-/// Every background wake — each `WakeAction::PumpAsync` arm (desktop,
-/// Android, iOS, web) and the runtime owner turn used by iOS — must pump the async driver
+/// Every background wake — each `WakeAction::PumpBackground` arm (desktop,
+/// Android, iOS, web) and the runtime owner turn used by iOS — must service background work
 /// through `UiRuntime::pump_background`, which clears the `frame_scheduled`
 /// latch before polling; this pins that every arm reaches it. An arm that
-/// skips it silently stops a spawned future from advancing while the app is
-/// backgrounded.
+/// skips it stops async tasks and due input work from progressing while frames
+/// are disabled. Runtime contract tests cover those effects.
 ///
 /// Red-check: delete the `ui_runtime.pump_background();` call from the desktop
-/// `PumpAsync` arm and this fails (found 4, not 5).
+/// `PumpBackground` arm and this fails (found 4, not 5).
 fn every_background_wake_calls_pump_background() {
     let code_lines: Vec<&str> = RUNNER_SOURCES
         .iter()
@@ -186,7 +186,7 @@ fn every_background_wake_calls_pump_background() {
         .count();
     assert_eq!(
         background_sites, 5,
-        "expected exactly five PRODUCTION `pump_background()` call sites (the `PumpAsync` arms \
+        "expected exactly five PRODUCTION `pump_background()` call sites (the `PumpBackground` arms \
          of desktop, Android, iOS and web, and iOS's owner turn); found {background_sites}"
     );
 }

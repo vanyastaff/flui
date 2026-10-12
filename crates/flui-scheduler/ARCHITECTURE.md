@@ -652,7 +652,7 @@ That predicate has two halves, and only the first belongs to the registry:
     predates issue #1162 and is pinned by
     `lifecycle_reenable_edge_schedules_exactly_one_frame`. That is the edge a
     real app crosses, and the sequence is reachable rather than theoretical:
-    frames enabled, a demand issued, lifecycle goes `Hidden`, a `PumpAsync`
+    frames enabled, a demand issued, lifecycle goes `Hidden`, a `PumpBackground`
     tick revokes the latch through background preparation with no drain, later
     registrations stay silent behind the still-live waiter, and the resume
     edge is what recovers them. `set_frames_enabled(true)` uses the same

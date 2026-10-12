@@ -238,44 +238,66 @@ impl LongPressGestureRecognizer {
         }
     }
     fn fire_deadline(&self, now: Instant) {
-        let Some(deadline) = self.contact.deadline() else {
-            return;
-        };
-        if now < deadline {
-            return;
-        }
-        let Some(contact) = self.contact.current() else {
-            return;
-        };
-        {
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        self.fire_deadline_with_recovery(now, &mut recovery.scope());
+        recovery.finish();
+    }
+
+    fn fire_deadline_with_recovery(
+        &self,
+        now: Instant,
+        recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
+    ) -> bool {
+        use flui_foundation::panic::FailureClass;
+        let mut prepared = None;
+        let completed = recovery.run_classified(FailureClass::Unknown, |_| {
+            let Some(deadline) = self.contact.deadline() else {
+                return;
+            };
+            if now < deadline {
+                return;
+            }
+            let Some(contact) = self.contact.current() else {
+                return;
+            };
+            let details = self.details(contact.kind);
             let mut state = self.state.borrow_mut();
             if state.phase != LongPressPhase::Possible {
                 return;
             }
             state.phase = LongPressPhase::Started;
+            prepared = Some((contact, details));
+        });
+        if !completed {
+            return false;
         }
-        self.contact.disarm_deadline();
-        let details = self.details(contact.kind);
-        let mut first = RoutePanic::capture(|| self.contact.accept());
-        let mut notices = CallbackSequence::new();
+        let Some((contact, details)) = prepared else {
+            return true;
+        };
+        recovery.run_classified(FailureClass::Delivery, |_| self.contact.disarm_deadline());
         if self.contact.is_current(contact.id) {
-            notices.call(self.callbacks.on_long_press.clone(), |callback| callback());
-        }
-        if self.contact.is_current(contact.id) {
-            notices.call(self.callbacks.on_long_press_start.clone(), |callback| {
-                callback(LongPressStartDetails {
-                    global_position: details.global_position,
-                    local_position: details.local_position,
-                    kind: details.kind,
-                });
+            recovery.run_classified(FailureClass::Unknown, |scope| {
+                self.contact.accept_with_recovery(scope)
             });
         }
-        RoutePanic::preserve_first(
-            &mut first,
-            RoutePanic::capture(|| notices.finish()),
-            "long press recognition",
-        );
-        finish_containment(first, std::thread::panicking());
+        let preserving = recovery.has_failure();
+        recovery.run_classified(FailureClass::Delivery, |_| {
+            let mut notices = CallbackSequence::preserving_failure(preserving);
+            if self.contact.is_current(contact.id) {
+                notices.call(self.callbacks.on_long_press.clone(), |callback| callback());
+            }
+            if self.contact.is_current(contact.id) {
+                notices.call(self.callbacks.on_long_press_start.clone(), |callback| {
+                    callback(LongPressStartDetails {
+                        global_position: details.global_position,
+                        local_position: details.local_position,
+                        kind: details.kind,
+                    });
+                });
+            }
+            notices.finish();
+        });
+        true
     }
 }
 impl GestureRecognizer for LongPressGestureRecognizer {
@@ -427,6 +449,9 @@ impl GestureRecognizer for LongPressGestureRecognizer {
             }
             PointerEvent::Up(_) => {
                 self.contact.disarm_deadline();
+                if !self.contact.is_current(contact.id) {
+                    return;
+                }
                 let (started, velocity) = {
                     let mut state = self.state.borrow_mut();
                     let started = state.phase == LongPressPhase::Started;
@@ -508,6 +533,13 @@ impl GestureArenaMember for LongPressGestureRecognizer {
     }
     fn poll_deadline(&self, now: Instant) {
         self.fire_deadline(now);
+    }
+    fn poll_deadline_with_recovery(
+        &self,
+        now: Instant,
+        recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
+    ) -> bool {
+        self.fire_deadline_with_recovery(now, recovery)
     }
 }
 impl std::fmt::Debug for LongPressGestureRecognizer {

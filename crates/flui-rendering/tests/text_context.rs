@@ -374,8 +374,7 @@ fn a_taken_pipeline_leaves_an_owner_that_measures_through_the_same_context() {
 // A font collection change re-lays out what measured text
 // ============================================================================
 
-/// "FLUI Probe Mono" Thin, which no pipeline here names: registering it only
-/// changes the collection's generation.
+/// "FLUI Probe Mono" Thin: its `A` and space each advance exactly one em.
 const PROBE_MONO: &[u8] = include_bytes!("../../flui-painting/assets/fonts/probe-mono-100.ttf");
 
 /// A leaf that measures through the UI runtime's context and nothing else: no
@@ -1662,9 +1661,17 @@ fn a_drain_while_the_context_is_lent_defers_the_change() {
     let (mut owner, paragraph, _) = laid_out_paragraph_and_box(&text);
 
     text.with(|lent| {
+        assert!(
+            !owner.has_pending_invalidations(),
+            "a measurement loan alone does not invent pending work"
+        );
         lent.fonts()
             .register_font(PROBE_MONO)
             .expect("the probe face loads");
+        assert!(
+            !owner.has_pending_invalidations(),
+            "the collection change waits for the current text loan to return"
+        );
         owner.drain_pending_dirty();
     });
     assert!(
@@ -1672,10 +1679,18 @@ fn a_drain_while_the_context_is_lent_defers_the_change() {
         "the change waits while the context is lent"
     );
 
+    assert!(
+        owner.has_pending_invalidations(),
+        "the returned loan exposes the accepted collection generation"
+    );
     owner.drain_pending_dirty();
     assert!(
         needs_layout(&owner, paragraph),
         "the next drain lays the paragraph out again"
+    );
+    assert!(
+        !owner.has_pending_invalidations(),
+        "the applied collection change owes no second invalidation"
     );
 }
 
@@ -1743,6 +1758,181 @@ fn the_record_stays_bounded_without_a_font_change() {
     );
 }
 
+fn font_change_diagnostic_failure_preserves_every_measured_paragraph() {
+    font_change_failure_case(true, false);
+}
+
+fn font_change_wake_failure_preserves_every_measured_paragraph() {
+    font_change_failure_case(false, true);
+}
+
+fn competing_font_change_failures_preserve_the_diagnostic_and_measured_tail() {
+    font_change_failure_case(true, true);
+}
+
+fn font_change_failure_case(fail_diagnostic: bool, fail_wake: bool) {
+    use flui_painting::typography::{FontWeight, TextStyle};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
+
+    const FONT_CHANGE_MESSAGE: &str =
+        "the font collection changed; laying out the text measured on it again";
+
+    struct FontChangeMessage(bool);
+
+    impl tracing::field::Visit for FontChangeMessage {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            if field.name() == "message" {
+                self.0 = format!("{value:?}") == FONT_CHANGE_MESSAGE;
+            }
+        }
+    }
+
+    struct FailingFontDiagnostic {
+        armed: AtomicBool,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl tracing::Subscriber for FailingFontDiagnostic {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            let mut message = FontChangeMessage(false);
+            event.record(&mut message);
+            if message.0 && self.armed.swap(false, Ordering::Relaxed) {
+                self.calls.fetch_add(1, Ordering::Relaxed);
+                std::panic::panic_any("font-generation diagnostic failure");
+            }
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    let spec = || {
+        let style = TextStyle {
+            font_family: Some("FLUI Probe Mono".to_owned()),
+            font_weight: Some(FontWeight::W100),
+            font_size: Some(20.0),
+            ..TextStyle::default()
+        };
+        box_node(RenderFlex::column())
+            .child(
+                box_node(RenderParagraph::new(
+                    TextSpan::styled("AAAA", style.clone()),
+                    TextDirection::Ltr,
+                ))
+                .label("four probe glyphs"),
+            )
+            .child(
+                box_node(RenderParagraph::new(
+                    TextSpan::styled("AA", style),
+                    TextDirection::Ltr,
+                ))
+                .label("two probe glyphs"),
+            )
+    };
+    let geometry = |owner: &PipelineOwner, labels: &tree::RenderLabelRegistry| {
+        ["four probe glyphs", "two probe glyphs"].map(|label| {
+            inspect::box_geometry(owner, labels.get(label).expect("mounted paragraph"))
+                .expect("paragraph geometry")
+        })
+    };
+
+    let control_text = ui_runtime_text();
+    register_probe(&control_text);
+    let (control, control_labels) = mount(&control_text, spec());
+    let (control, result) = control.run_frame();
+    result.expect("independently registered font control lays out and paints");
+    let expected = geometry(&control, &control_labels);
+    for (actual, width) in expected.iter().zip([80.0, 40.0]) {
+        assert!(
+            (actual.width - width).abs() < 0.01,
+            "one-em probe glyphs give {width}px, got {actual:?}"
+        );
+    }
+
+    let text = ui_runtime_text();
+    let (owner, labels) = mount(&text, spec());
+    let (mut owner, result) = owner.run_frame();
+    result.expect("unregistered family lays out and paints through its fallback");
+    assert!(
+        !owner.has_dirty_nodes(),
+        "the fallback frame is clean before registration"
+    );
+    let fallback = geometry(&owner, &labels);
+    for (before, after) in fallback.iter().zip(expected) {
+        assert!(
+            (before.width - after.width).abs() > 1.0,
+            "fallback must distinguish registered geometry: {before:?} vs {after:?}"
+        );
+    }
+
+    let wake_calls = Arc::new(AtomicUsize::new(0));
+    let wake_faults = Arc::clone(&wake_calls);
+    let wake_armed = AtomicBool::new(fail_wake);
+    owner.set_on_need_visual_update(move || {
+        if wake_armed.swap(false, Ordering::Relaxed) {
+            wake_faults.fetch_add(1, Ordering::Relaxed);
+            std::panic::panic_any("font-generation wake failure");
+        }
+    });
+    register_probe(&text);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let diagnostics = fail_diagnostic.then(|| {
+        tracing::subscriber::set_default(FailingFontDiagnostic {
+            armed: AtomicBool::new(true),
+            calls: Arc::clone(&calls),
+        })
+    });
+    let failure =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| owner.drain_pending_dirty()));
+    drop(diagnostics);
+    let failure = failure.expect_err("the admitted font update reaches its failing callout");
+    let expected_failure = if fail_diagnostic {
+        "font-generation diagnostic failure"
+    } else {
+        "font-generation wake failure"
+    };
+    assert_eq!(
+        failure.downcast_ref::<&str>(),
+        Some(&expected_failure),
+        "a later wake failure cannot replace the first diagnostic failure"
+    );
+    assert_eq!(calls.load(Ordering::Relaxed), usize::from(fail_diagnostic));
+    assert_eq!(
+        wake_calls.load(Ordering::Relaxed),
+        usize::from(fail_wake),
+        "a diagnostic failure cannot suppress the accepted wake tail"
+    );
+
+    // Recovery receives no new registration, manual dirty mark or widget edit.
+    // The accepted font change must still reach both real paragraphs.
+    let (owner, result) = owner.run_frame();
+    result.expect("the next ordinary frame completes accepted font work");
+    for (index, (actual, expected)) in geometry(&owner, &labels).iter().zip(expected).enumerate() {
+        assert!(
+            (actual.width - expected.width).abs() < 0.01,
+            "paragraph {index} lost font-change layout: expected {expected:?}, got {actual:?}"
+        );
+        assert!(
+            (actual.height - expected.height).abs() < 0.01,
+            "paragraph {index} retains fallback line metrics: expected {expected:?}, got {actual:?}"
+        );
+    }
+    assert!(
+        !owner.has_dirty_nodes(),
+        "both accepted updates complete together"
+    );
+}
+
 /// A face registered on the pipeline's font collection lays out again what
 /// measured text through the pipeline's context, and nothing else.
 #[test]
@@ -1768,6 +1958,18 @@ fn font_change_contract() {
         (
             "the_record_stays_bounded_without_a_font_change",
             the_record_stays_bounded_without_a_font_change,
+        ),
+        (
+            "font_change_diagnostic_failure_preserves_every_measured_paragraph",
+            font_change_diagnostic_failure_preserves_every_measured_paragraph,
+        ),
+        (
+            "font_change_wake_failure_preserves_every_measured_paragraph",
+            font_change_wake_failure_preserves_every_measured_paragraph,
+        ),
+        (
+            "competing_font_change_failures_preserve_the_diagnostic_and_measured_tail",
+            competing_font_change_failures_preserve_the_diagnostic_and_measured_tail,
         ),
     ];
     let failed: Vec<&str> = cases

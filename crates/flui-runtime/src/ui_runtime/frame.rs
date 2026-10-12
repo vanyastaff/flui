@@ -47,127 +47,37 @@ impl UiRuntime {
 
     /// The complete build+layout+paint pipeline for one frame.
     ///
-    /// **Frame-phase parity (critical):** the UI runtime-level pre-phase (vsync
-    /// tick, then gesture-deadline tick) MUST precede every presentation's
-    /// own segment, for the identical ordering argument the retired
-    /// `AppBinding::draw_frame_entered` depended on: both tick calls can
-    /// dirty render/build state a segment's dirty sample needs to observe.
-    /// Reordering the pre-phase is out of scope for the change that
-    /// introduced the per-presentation loop below; the frame-loop tests are
-    /// the parity oracle.
+    /// Sample every presentation at the pump's selected time before any build.
+    /// Each operation owns provenance, one frame-clock admission decision and
+    /// recovery. A delivery failure preserves committed state; a computation
+    /// or unknown blocker rejects only its admitted attempt (ADR-0199).
+    /// Reports seal those decisions before diagnostics. Revalidate authority
+    /// and retained premises immediately before each segment; a newly failing
+    /// validation is a separate preparation operation.
     ///
-    /// **Per-presentation segment loop (ADR-0043 §3; issue #556):**
-    /// presentations are processed once each, in mount order. Each
-    /// presentation's own [`FrameClock`](flui_scheduler::FrameClock) —
-    /// replacing the old `take_redraw_pending() || has_pending_work()`
-    /// predicate read directly — decides whether its segment runs this pump.
-    /// The clock never inspects the tree itself (ownership rule: it never
-    /// knows phases, callbacks, or element trees), so the exact union the
-    /// old predicate read is marked as `Dirty` demand and the clock's
-    /// `poll` makes the call. A rejected text layout retains dirty work but
-    /// withholds its automatic retry until a layout invalidation; a wake alone
-    /// cannot retry unchanged rejected input. This is independent of
-    /// first-frame deferral, which never gates the segment (see
-    /// `FrameClock`'s own module doc — deferral
-    /// withholds only the submit). Production can host multiple
-    /// presentations, but secondary windows carry no widget content today,
-    /// so only the primary can produce painted output; see
-    /// `Self::draw_frame_for_presentation`'s doc for the proof that the
-    /// gate cannot skip a segment the old, ungated code would have run.
-    /// Returns the last presentation whose segment ran, paired with its
-    /// outcome. This aggregate is not a multi-surface submit contract: it
-    /// retains only one scene and receives one constraints set. Production
-    /// secondary windows are currently contentless, so at most one
-    /// presentation can paint in a pump. Supporting simultaneous paintable
-    /// presentations requires per-presentation constraints, sinks, and
-    /// submit routing under issue #559; callers must not treat the current
-    /// last-outcome tuple as last-scene-wins behavior.
+    /// Process eligible segments in mount order and return the last producer
+    /// and outcome alongside aggregate retry debt. The single constraints set
+    /// and sink do not provide simultaneous multi-surface submission.
     pub(crate) fn draw_frame_entered(
         &self,
         constraints: BoxConstraints,
     ) -> (PresentationId, FramePaintOutcome, bool) {
-        // Vsync tick + gesture-deadline tick — MUST precede every
-        // presentation's build phase. See the retired `AppBinding::
-        // draw_frame_entered`'s doc for the full disjoint-controller-set
-        // argument this ordering depends on. Each presentation ticks its OWN
-        // registry now (the registry moved off this ui_runtime's former
-        // `vsync_slot`, one per surface), off the SAME ui_runtime-relative `now`
-        // every presentation observes, so there is no clock drift between
-        // siblings sharing this one pump. Each presentation's motion clock
-        // maps that raw time to its own monotonic animation time.
-        let raw = self.raw_frame_time();
-        for presentation in self.presentations.iter() {
-            super::text_preparation::reconcile(presentation, constraints);
-            let retained_tick = presentation
-                .text_preparation
-                .borrow()
-                .segment
-                .as_ref()
-                .map(|saved| saved.tick);
-            if let Some(tick) = retained_tick {
-                presentation.sampled_motion_tick.set(Some(tick));
-                presentation.gestures().tick_deadlines();
-                continue;
-            }
-            let vsync = presentation.vsync();
-            let tick = presentation.motion_tick(raw);
-            presentation.sampled_motion_tick.set(Some(tick));
-            let animation_enabled =
-                self.scheduler.frames_enabled() && !presentation.clock().is_hidden();
-            // Sampled BEFORE `tick_all`, not after: the tick that completes
-            // a controller still delivers that controller's final value and
-            // status change (a ticker's tick calls its callback
-            // unconditionally, THEN checks whether to schedule another one), so a controller
-            // that WAS running when this tick started must still mark
-            // demand for THIS exact pump even though it may have just
-            // settled -- the identical before/after-tick question
-            // `flui-testing`'s own `pump_presentation` had to fix (see its
-            // doc), just never wired at this layer before this slice.
-            //
-            // The "does the NEXT pump need to be scheduled" question
-            // (the ticker's should-schedule-tick check, sampled AFTER the tick)
-            // is answered separately, in `render_frame`, AFTER the
-            // segment this demand mark feeds has actually rendered and
-            // `mark_rendered()`/the retry check has run -- NOT here. See
-            // that method's own comment for why: raising the continuation
-            // wake here, before this same pump's `mark_rendered()` clears
-            // `needs_redraw`, silently clobbers it within the SAME
-            // callback -- a real, probe-confirmed stall (not hypothetical)
-            // for a controller with no other tree-visible effect, since
-            // nothing else keeps `needs_redraw`/`has_pending_work()` true
-            // once that clobber happens.
-            let was_running =
-                animation_enabled && vsync.has_running() && !presentation.motion_is_paused();
-            if !was_running {
-                // Reconcile the previous pump's continuation before polling
-                // this frame. Other demand sources remain independently owned.
-                presentation.clock().clear_demand(DemandKind::Animation);
-            }
-            if animation_enabled {
-                vsync.tick_all(&tick);
-            }
-
-            if was_running {
-                // A running controller with no OTHER tree-visible effect
-                // now genuinely marks demand -- and therefore flushes --
-                // every tick (the running ticker alone is sufficient),
-                // rather than silently relying on some unrelated dirty
-                // state to also be present. This closes a gap the previous
-                // slice on this issue explicitly named and deferred.
-                presentation.clock().mark_demand(DemandKind::Animation);
-            }
-
-            presentation.gestures().tick_deadlines();
-            if presentation.gestures().has_pending_deadlines() {
-                self.wake_frame();
-            }
-        }
+        // Sampling may dirty any presentation. Finish every operation and
+        // establish recovery before the build walk.
+        let mut sampling = self.sample_presentations(constraints);
 
         // OwnerFrame's complete frame operation polls async work once in
         // the mid-frame slot, before this persistent pipeline. The pipeline
         // cannot independently poll tasks and re-enter frame capabilities.
 
-        let mut last_outcome = FramePaintOutcome::Idle;
+        let mut any_retry_needed = sampling
+            .iter()
+            .any(super::sampling::PresentationSampling::rejected);
+        let mut last_outcome = if any_retry_needed {
+            FramePaintOutcome::Errored { retry: true }
+        } else {
+            FramePaintOutcome::Idle
+        };
         let mut producer = self.presentations.primary().id();
         // Whether ANY presentation needs a failure retry THIS pump — returned separately from
         // `last_outcome`, which only ever describes the LAST segment that
@@ -176,90 +86,32 @@ impl UiRuntime {
         // must still arm the caller's retry instead of letting the pump
         // settle as rendered (`mark_rendered()` would clear the wake the
         // failure needs).
-        let mut any_retry_needed = false;
-        for presentation in self.presentations.iter() {
+        for operation in &mut sampling {
+            let presentation = operation.presentation();
             // Another presentation's animation/input callback may have changed
             // this retained attempt after its earlier pre-phase reconciliation.
             // Do not publish obsolete geometry or combine a retained old tick
             // with the new inputs: sample a fresh replacement next pump.
-            if super::text_preparation::reconcile(presentation, constraints) {
+            if operation.reconcile_for_segment(self, constraints) {
                 presentation.clock().mark_demand(DemandKind::Dirty);
                 any_retry_needed = true;
                 continue;
             }
-            if !super::text_preparation::can_run(presentation) {
+            let Some(super::sampling::AdmittedSegment {
+                decision,
+                segment_start,
+                woken,
+                pending,
+                resuming,
+                completion,
+            }) = operation.take_segment()
+            else {
                 continue;
-            }
-            // Platform-driven semantics enablement lands here, BEFORE dirty
-            // sampling: the activation listener could only flip the host
-            // flag and wake the loop (it runs on the adapter's thread), and
-            // enabling seeds the root as needing semantics — exactly the
-            // pending work the sampling below should then observe.
-            presentation.reconcile_semantics_enablement();
-            // Segment start: clear this presentation's wake bit BEFORE
-            // sampling dirty, so a mark arriving WHILE this segment runs
-            // sets the bit again and lands next pump instead of being lost.
-            // The union is fed into the clock as `Dirty` demand rather than
-            // gating directly — the clock decides, the ui_runtime only reports.
-            let woken = presentation.take_redraw_pending();
-            let resuming = presentation.text_preparation.borrow().segment.is_some();
-            let pending = presentation.has_pending_work();
-            let blocked = presentation
-                .renderer()
-                .root_pipeline_owner()
-                .with(PipelineOwner::layout_waits_for_input);
-            if (woken && !blocked) || pending || resuming {
-                presentation.clock().mark_demand(DemandKind::Dirty);
-            }
-            let completion = presentation.has_eligible_completion();
-            if completion {
-                presentation.clock().mark_demand(DemandKind::Completion);
-            }
-
-            let host_now = presentation.clock().now();
-            let segment_start = presentation
-                .text_preparation
-                .borrow()
-                .segment
-                .as_ref()
-                .map_or(host_now, |saved| saved.host_time);
-            let decision = presentation.clock().poll(host_now);
-            // `flui.pace`: the per-presentation produce decision, the one
-            // fact a pacing investigation needs next to the present trace
-            // (a wake that ran no segment must never be paced as if it had
-            // rendered and failed to present — ADR-0058).
-            tracing::trace!(
-                target: "flui.pace",
-                event = "segment_poll",
-                presentation = ?presentation.id(),
-                decision = ?decision,
-                "presentation segment poll"
-            );
-            if !decision.should_run_segment() {
-                // Nothing to flush and nobody asked, or a gate (hidden /
-                // backpressure) is closed: skip this presentation's segment
-                // entirely. Bound: each presentation builds and flushes at
-                // most once per pump; this `continue` is what makes that
-                // true rather than merely documented. First-frame deferral
-                // is NOT one of these reasons — see `FrameClock`'s module
-                // doc: deferral withholds only the submit, never the
-                // segment, so a deferred-but-demanded
-                // presentation always reaches `should_run_segment() ==
-                // true` (`PollDecision::ProduceWithheld`) below.
-                continue;
-            }
-
-            // Animation and input clocks still advance while authored text is
-            // rejected. Consume their frame demand without remeasuring unchanged
-            // input; a build or live layout invalidation resumes the pipeline.
-            if blocked && !pending && !resuming {
-                continue;
-            }
+            };
 
             let scoped =
                 self.scheduler.phase() == flui_scheduler::SchedulerPhase::PersistentCallbacks;
             if scoped {
-                presentation.begin_completion_segment();
                 if completion && !pending && !woken && !resuming {
                     presentation.complete_segment();
                     continue;
@@ -359,7 +211,7 @@ impl UiRuntime {
                     );
                     self.report_frame_failure(presentation, FrameFailureKind::Pipeline { error });
                     FramePaintOutcome::Errored {
-                        retry: !waits_for_input || presentation.has_pending_work(),
+                        retry: !waits_for_input || presentation.has_pending_work_snapshot(),
                     }
                 }
                 Err(payload) => {

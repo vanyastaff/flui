@@ -582,9 +582,9 @@ impl IosFrameDriver {
 
         match action {
             WakeAction::Skip => return,
-            WakeAction::PumpAsync => {
-                // Frames disabled (backgrounded): pump only the async
-                // driver, then sleep to bound a self-re-arming task.
+            WakeAction::PumpBackground => {
+                // Frames disabled: service owner commands, async tasks, and
+                // input deadlines, then pace a self-re-arming task.
                 ui_runtime.pump_background();
                 std::thread::sleep(BACKGROUNDED_PUMP_PACE);
                 return;

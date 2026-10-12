@@ -1,11 +1,16 @@
 //! Typed frame-failure reporting — the embedder-visible half of the
-//! presentation-frame transaction boundary (ADR-0048).
+//! presentation-frame and sampling boundaries (ADR-0048, ADR-0199).
 //!
 //! A frame attempt can fail terminally when the pipeline returns a structured
 //! [`flui_rendering::RenderError`] or a panic escapes its outer segment. A
 //! narrower lifecycle boundary can instead recover and let the attempt
-//! continue. Both outcomes surface as a [`FrameFailureReport`] instead of a
-//! silent skip: `tracing` carries the structured diagnostics, and an embedder
+//! continue. Sampling distinguishes a source that failed before commit from
+//! delivery that failed after valid state committed. Its typed
+//! [`FrameFailureKind::SamplingPanic`] preserves the first cause separately
+//! from any later publication blocker. A blocker drops only an admitted fresh
+//! or retained attempt; delivery-only and outside-frame operations without an
+//! attempt remain contained. These outcomes surface as a [`FrameFailureReport`]
+//! instead of a silent skip: `tracing` carries the structured diagnostics, and an embedder
 //! that registered a [`FrameFailureHandler`] via
 //! `flui_app::AppConfig::with_frame_failure_handler` receives the typed
 //! report synchronously on the UI thread. The types here are re-exported at
@@ -280,7 +285,8 @@ pub struct SamplingFailure {
 /// panics that escape every inner recovery layer surface as
 /// [`Self::SegmentPanic`]. Lifecycle panics recovered by a narrower boundary
 /// surface as [`Self::RecoveredPanic`] while the surrounding attempt may
-/// continue.
+/// continue. Sampling and scheduling observations use [`Self::SamplingPanic`]
+/// to preserve both the first cause and independent publication eligibility.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum FrameFailureKind {
@@ -435,11 +441,13 @@ pub struct FrameFailureReport {
 /// retained premises are reconciled again after their diagnostics. Other frame
 /// reports arrive after the complete attempt and its recovery queue are drained.
 /// Scheduling-observation reports outside a frame wait until the owner runtime
-/// lease and storage guards have returned. A frame with multiple recovered occurrences delivers
-/// one contained report for each, in recovery order. Keep it lightweight and
-/// re-entrancy-free: record/forward the report and return — do not call
-/// back into FLUI APIs (opening windows, attaching widgets) from inside
-/// the handler; the UI runtime that produced the report is mid-frame.
+/// lease and storage guards have returned. A frame with multiple recovered
+/// occurrences delivers one contained report for each, in recovery order.
+/// Keep the callback lightweight. Frame reports still run inside their frame
+/// transaction: mutations admitted through existing handles are reconciled
+/// before a retained segment publishes. Outside-frame scheduling reports can
+/// observe the restored owner's cached scheduling state; ordinary owner FIFO
+/// admission still applies to further work.
 /// Embedders that forward repeated deterministic recoveries own any desired
 /// deduplication or throttling.
 ///

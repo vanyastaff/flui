@@ -4,7 +4,9 @@
 - **Date:** 2026-08-18
 - **Superseded-by:** [ADR-0123](ADR-0123-exceptional-presentation-close.md), in
   part: the remaining-element disposal policy, during a terminal presentation
-  close that holds a failure or runs inside an unwind.
+  close that holds a failure or runs inside an unwind;
+  [ADR-0199](ADR-0199-presentation-sampling-recovery.md), in part: the exclusion
+  of animation and gesture-deadline sampling before the segment.
 - **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (runtime topology
   is a sanctioned leapfrog zone); [ADR-0043](ADR-0043-presentation-bundled-trees-and-realm-globalkey-scope.md)
   (`PresentationState` bundles the trees this boundary scopes);
@@ -382,10 +384,12 @@ benchmarks showed no statistically supported regression above 5%.
   failed interval; passing event timestamps into `flui-interaction` remains a
   future compatibility improvement if replayed kinetic fidelity becomes a
   user-visible requirement.
-- **The UI runtime-level pre-phase is outside the boundary:** vsync ticker
-  callbacks (which can run user animation listeners) and gesture-deadline
-  ticks run before the per-presentation loop; a panic there still escapes to
-  the runner.
+- **Superseded in part by ADR-0199:** animation and gesture-deadline sampling
+  now have a presentation-owned recovery operation before the segment. It
+  distinguishes computation, committed delivery and unknown consistency,
+  continues independent presentations and rejects only an admitted attempt
+  whose publication has a blocker. The segment and local build seams in this
+  ADR retain their existing policy.
 - **Semantics:** a failed frame does not publish a new semantics update; the
   last published version stands. Layer-tree/link-registry pair retention is
   narrower than a full candidate/validate/publish semantics transaction.

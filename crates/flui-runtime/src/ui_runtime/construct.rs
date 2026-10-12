@@ -7,7 +7,6 @@ use super::{DEFAULT_COMMAND_CAPACITY, UiRuntime, UiRuntimeError};
 use crate::frame_failure::{
     FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind,
     FrameFailureReport,
-    SamplingFailure, SamplingFailureOrigin, SamplingStage,
 };
 use crate::presentation::{PresentationState, PresentationWindow, RuntimeCapabilities};
 use crate::presentation_forest::PresentationForest;
@@ -366,12 +365,20 @@ impl UiRuntime {
         presentation: &PresentationState,
         kind: FrameFailureKind,
     ) {
+        self.deliver_failure_report(self.frame_failure_report(presentation, kind));
+    }
+
+    fn frame_failure_report(
+        &self,
+        presentation: &PresentationState,
+        kind: FrameFailureKind,
+    ) -> FrameFailureReport {
         let disposition = kind.disposition();
         let consecutive_failures = match disposition {
             FailureDisposition::FrameDropped => presentation.note_frame_failure(),
             FailureDisposition::Contained => presentation.frame_failure_streak(),
         };
-        let report = FrameFailureReport {
+        FrameFailureReport {
             address: flui_foundation::PresentationAddress {
                 ui_runtime_id: self.id,
                 presentation_id: presentation.id(),
@@ -379,39 +386,16 @@ impl UiRuntime {
             kind,
             disposition,
             consecutive_failures,
-        };
-        self.deliver_failure_report(report);
+        }
     }
 
-    pub(crate) fn queue_deadline_failure(
+    pub(super) fn queue_sampling_failure(
         &self,
         presentation: &PresentationState,
-        failure: &flui_foundation::panic::RecoveryFailure,
+        kind: FrameFailureKind,
     ) {
-        let (message, internal_invariant) = self.frame_failure_detail.get().panic_text(failure.payload());
-        let first = SamplingFailure {
-            stage: SamplingStage::DeadlineDiscovery,
-            origin: SamplingFailureOrigin::from_class(failure.class()),
-        };
-        let blocking = failure.blocking_class().map(|class| SamplingFailure {
-            stage: SamplingStage::DeadlineDiscovery,
-            origin: SamplingFailureOrigin::from_class(class),
-        });
-        self.pending_sampling_reports.borrow_mut().push(FrameFailureReport {
-            address: flui_foundation::PresentationAddress {
-                ui_runtime_id: self.id,
-                presentation_id: presentation.id(),
-            },
-            kind: FrameFailureKind::SamplingPanic {
-                first,
-                blocking,
-                admitted_attempt: false,
-                message,
-                internal_invariant,
-            },
-            disposition: FailureDisposition::Contained,
-            consecutive_failures: presentation.frame_failure_streak(),
-        });
+        let report = self.frame_failure_report(presentation, kind);
+        self.pending_sampling_reports.borrow_mut().push(report);
     }
 
     pub(crate) fn take_pending_sampling_reports(&self) -> PendingSamplingReports {
@@ -429,7 +413,11 @@ impl UiRuntime {
     }
 
     fn deliver_failure_report(&self, report: FrameFailureReport) {
-        Self::deliver_failure_report_to(&self.frame_failure_handler, self.frame_failure_detail.get(), report);
+        Self::deliver_failure_report_to(
+            &self.frame_failure_handler,
+            self.frame_failure_detail.get(),
+            report,
+        );
     }
 
     fn deliver_failure_report_to(

@@ -3,7 +3,7 @@ use std::sync::Mutex as StdMutex;
 use flui_widgets::SizedBox;
 
 use super::*;
-use crate::frame_failure::{FrameFailureHandler, FrameFailureKind, PanicText};
+use crate::frame_failure::{FrameFailureHandler, FrameFailureKind, PanicText, SamplingFailure};
 
 /// Failure reports collected through the real registered-handler
 /// route — the same `FrameFailureHandler` an embedder registers via
@@ -21,6 +21,13 @@ struct SeenFailure {
 
 #[derive(Debug, Clone, PartialEq)]
 enum SeenKind {
+    SamplingPanic {
+        first: SamplingFailure,
+        blocking: Option<SamplingFailure>,
+        admitted_attempt: bool,
+        message: PanicText,
+        internal_invariant: bool,
+    },
     SegmentPanic {
         message: PanicText,
         phase: SegmentPhase,
@@ -43,6 +50,19 @@ fn install_collecting_handler(ui_runtime: &UiRuntime) -> Arc<StdMutex<Vec<SeenFa
     let sink = Arc::clone(&seen);
     ui_runtime.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
         let kind = match &report.kind {
+            FrameFailureKind::SamplingPanic {
+                first,
+                blocking,
+                admitted_attempt,
+                message,
+                internal_invariant,
+            } => SeenKind::SamplingPanic {
+                first: *first,
+                blocking: *blocking,
+                admitted_attempt: *admitted_attempt,
+                message: message.clone(),
+                internal_invariant: *internal_invariant,
+            },
             FrameFailureKind::SegmentPanic {
                 message,
                 phase,
@@ -362,6 +382,7 @@ pub(crate) fn a_panicking_handler_during_a_pipeline_report_is_delivered_once_not
     let sink = Arc::clone(&delivered);
     ui_runtime.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
         sink.lock().expect("mutex").push(match &report.kind {
+            FrameFailureKind::SamplingPanic { .. } => "sampling_panic",
             FrameFailureKind::SegmentPanic { .. } => "segment_panic",
             FrameFailureKind::Pipeline { .. } => "pipeline",
             FrameFailureKind::RecoveredPanic { .. } => "recovered_panic",

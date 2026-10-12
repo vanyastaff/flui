@@ -22,7 +22,8 @@
 //! - [`lifecycle_state`]: the per-presentation application lifecycle
 //!   derivation;
 //! - [`frame_failure`]: what a contained frame failure reports and how the
-//!   application's handler disposes of it;
+//!   application's handler observes it, including sampling provenance and
+//!   whether an admitted presentation attempt was rejected;
 //! - [`renderer_binding`]: the per-presentation rendering binding over a
 //!   pipeline owner;
 //! - [`epoch`]: the tree revision a presentation's frames advance and whether

@@ -88,7 +88,7 @@ It would be convenient if the platform's own occlusion gate bounded it. It
 does not. A window AppKit reports as occluded *does* stop reaching this arm —
 `windowDidChangeOcclusionState:` → `WindowVisibility` →
 `AppLifecycleState::Hidden` → `frames_enabled == false` → `wake_action`
-short-circuits to `PumpAsync` — but that gate keys off AppKit's
+short-circuits to `PumpBackground` — but that gate keys off AppKit's
 `occlusionState`, while what withdraws the drawable is the *swapchain's* own
 availability. **Measured on cold start, they disagree**: `occlusionState`
 reported the window visible throughout the ~132 ms (12 consecutive withheld

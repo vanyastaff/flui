@@ -196,7 +196,8 @@ pub use wheel_preferences::{WheelPreferencesProvider, WheelPreferencesSource};
 // Re-exports: Gesture Recognition
 // ============================================================================
 pub use arena::{
-    GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition, SweepModel,
+    GestureArena, GestureArenaEntry, GestureArenaMember, GestureDeadlineError,
+    GestureDeadlineRegistration, GestureDeadlineUpdate, GestureDisposition, SweepModel,
 };
 // ============================================================================
 // Re-exports: Other

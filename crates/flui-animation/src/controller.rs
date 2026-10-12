@@ -1905,15 +1905,18 @@ impl AnimationController {
             )
         };
         if warn {
-            recovery
-                .run(|| tracing::warn!("animation has no clock; finite work settles immediately"));
+            recovery.run_classified(FailureClass::Delivery, |_| {
+                tracing::warn!("animation has no clock; finite work settles immediately");
+            });
         }
+        let mut committed = false;
         recovery.run_with(|recovery| match source.get() {
             TickSource::Time { target, .. } => {
                 let inner = self.inner.borrow_mut();
                 if inner.matches_sample(&identity) {
                     let direction = inner.direction;
                     self.complete_finite_run(inner, (*target, direction), recovery);
+                    committed = true;
                 }
             }
             TickSource::Repeat(run) => {
@@ -1952,6 +1955,7 @@ impl AnimationController {
                         recovery,
                     );
                 }
+                committed = true;
             }
             TickSource::Simulation(simulation) => {
                 let inner = self.inner.borrow_mut();
@@ -1960,34 +1964,48 @@ impl AnimationController {
                 }
                 if let Ok(endpoint) = inner.completion_endpoint() {
                     self.complete_finite_run(inner, endpoint, recovery);
+                    committed = true;
                     return;
                 }
                 drop(inner);
-                let mut last_finite = self.inner.borrow().value;
-                for exponent in 0..=8 {
-                    let time = 0.25 * f64::from(1u32 << exponent);
-                    let sample = simulation.x(time);
-                    if !self.inner.borrow().matches_sample(&identity) {
-                        return;
-                    }
-                    if sample.is_finite() {
-                        last_finite = sample;
-                        let done = simulation.reached_bound(sample) || simulation.is_done(time);
+                let mut prepared = None;
+                recovery.run_classified(FailureClass::Computation, |_| {
+                    let mut last_finite = self.inner.borrow().value;
+                    for exponent in 0..=8 {
+                        let time = 0.25 * f64::from(1u32 << exponent);
+                        let sample = simulation.x(time);
                         if !self.inner.borrow().matches_sample(&identity) {
                             return;
                         }
-                        if done {
-                            break;
+                        if sample.is_finite() {
+                            last_finite = sample;
+                            let done = simulation.reached_bound(sample) || simulation.is_done(time);
+                            if !self.inner.borrow().matches_sample(&identity) {
+                                return;
+                            }
+                            if done {
+                                break;
+                            }
                         }
                     }
-                }
+                    prepared = Some(last_finite);
+                });
+                let Some(last_finite) = prepared else { return };
                 let inner = self.inner.borrow_mut();
                 if inner.matches_sample(&identity) {
                     self.tick_simulation(inner, last_finite, true, recovery);
+                    committed = true;
                 }
             }
         });
-        recovery.retire(source);
+        recovery.retire_classified(
+            if committed {
+                FailureClass::Delivery
+            } else {
+                FailureClass::Unknown
+            },
+            source,
+        );
         true
     }
 
