@@ -345,7 +345,7 @@ fn a_replaced_callback_capture_cannot_replace_its_invocation_failure() {
             panic!("first invocation failure");
         }));
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            callbacks.dispatch_request_frame()
+            callbacks.dispatch_request_frame();
         }))
         .expect_err("invocation failed");
         assert_eq!(
