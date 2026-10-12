@@ -138,7 +138,11 @@ fn accepts(presentation: &PresentationState, saved: &SavedTextSegment) -> bool {
 
 /// Withdraw an obsolete retained attempt and report that its sampled premises
 /// can no longer be used. A caller after the pre-phase defers to a fresh sample.
-pub(crate) fn reconcile(presentation: &PresentationState, constraints: BoxConstraints) -> bool {
+pub(crate) fn reconcile_with_recovery(
+    presentation: &PresentationState,
+    constraints: BoxConstraints,
+    recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
+) -> bool {
     presentation.pipeline().with_mut(|owner| {
         owner.drain_pending_dirty();
     });
@@ -149,9 +153,7 @@ pub(crate) fn reconcile(presentation: &PresentationState, constraints: BoxConstr
         .as_ref()
         .is_none_or(|saved| saved.constraints == constraints && accepts(presentation, saved));
     if !compatible {
-        let retired = presentation.text_preparation.borrow_mut().segment.take();
-        presentation.pipeline().withdraw_layout();
-        drop(retired);
+        withdraw_for_retry(presentation, recovery);
     }
     !compatible
 }
@@ -163,6 +165,25 @@ pub(crate) fn can_run(presentation: &PresentationState) -> bool {
         .segment
         .as_ref()
         .is_none_or(|saved| matches!(saved.wait, Wait::Resume))
+}
+
+/// Reject the old receipt and reopen layout without acknowledging its geometry.
+/// Establish replacement custody before retiring the abandoned cohort.
+pub(crate) fn withdraw_for_retry(
+    presentation: &PresentationState,
+    recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
+) {
+    let retired = {
+        let mut state = presentation.text_preparation.borrow_mut();
+        state.replacement_barrier = true;
+        state.segment.take()
+    };
+    presentation.pipeline().withdraw_layout();
+    presentation
+        .pipeline()
+        .with_mut(PipelineOwner::resume_retained_layout);
+    presentation.text_input().set_transaction_open(true);
+    recovery.retire(retired);
 }
 
 pub(crate) fn admit(

@@ -111,6 +111,10 @@ impl GestureDisposition {
 ///
 /// External members implement this trait directly, including their own deadline
 /// query and polling hook. The arena holds members weakly; their owner keeps them alive.
+/// Runtime-hosted timers publish changes through
+/// [`GestureArena::register_deadline_member`] and its weak update handle after
+/// committing recognizer state. This also permits explicit rearm after a failed
+/// open poll, whose side effects cannot safely be repeated automatically.
 ///
 /// ```rust
 /// use flui_interaction::arena::{GestureArena, GestureArenaMember, GestureDisposition};
@@ -161,6 +165,9 @@ pub trait GestureArenaMember {
 
     /// The armed deadline, queried without invoking callbacks or calling the arena.
     /// The arena derives pending work from this one query and polls only due members.
+    /// Runtime scheduling getters read an owner snapshot instead of invoking it.
+    /// A runtime query failure gets one automatic re-probe after 100 ms, then
+    /// waits for an explicit update revision; standalone queries still propagate.
     fn deadline(&self) -> Option<Instant> {
         None
     }
@@ -311,6 +318,9 @@ impl GestureArenaEntry {
             return;
         }
         let follow_up = slot.data.borrow_mut().withdraw(&self.member);
+        self.arena
+            .deadlines
+            .withdraw_member_generation(&self.member, slot.generation);
         match follow_up {
             ArenaFollowUp::RemoveEmpty => {
                 slot.data.borrow_mut().is_resolved = true;
@@ -1364,6 +1374,10 @@ impl GestureArena {
                 GestureDisposition::Rejected => entry.reject(&member),
             }
         };
+        if disposition.is_rejected() {
+            self.deadlines
+                .withdraw_member_generation(&Rc::downgrade(&member), slot.generation);
+        }
         pending.extend(self.collect_follow_up(pointer, slot, follow_up));
         if let Some(excluded) = excluded {
             pending.retain(|(member, _)| !Weak::ptr_eq(member, excluded));
@@ -1855,7 +1869,10 @@ impl GestureArena {
     /// [`poll_deadlines`](Self::poll_deadlines), to keep producing frames
     /// while a deadline is pending. Members are snapshotted out of the
     /// per-entry borrows before querying — the same discipline `poll_deadlines`
-    /// follows — and the predicate itself is a pure state read.
+    /// follows. The member's query is contractually pure, but remains foreign
+    /// code that may unwind; this standalone entry finishes healthy queries
+    /// before resuming the first failure. Runtime host getters use cached
+    /// observation instead.
     pub fn has_pending_deadlines(&self) -> bool {
         self.next_deadline().is_some()
     }

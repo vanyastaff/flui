@@ -128,8 +128,10 @@ impl OwnerHost {
         Ok(first)
     }
 
-    /// Earliest runtime-owned wall-clock deadline after all checkouts return.
+    /// Earliest cached runtime-owned wall-clock deadline after all checkouts return.
     /// Never reports an incomplete minimum by silently skipping an active runtime.
+    /// Deadline extension queries and diagnostics run at owner execution frontiers;
+    /// this observation never calls foreign code while holding the registry borrow.
     ///
     /// # Errors
     /// Returns `Busy` during runtime execution or a pure publication.

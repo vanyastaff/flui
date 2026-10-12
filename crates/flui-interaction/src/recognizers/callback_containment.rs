@@ -61,11 +61,13 @@ impl CallbackSequence {
             let candidate = RoutePanic::capture(|| invoke(callback.as_ref()));
             RoutePanic::preserve_first(&mut self.first, candidate, "recognizer callback");
         }
-        retire_delivery_snapshot(
-            callback,
-            &mut self.first,
-            self.incoming_failure || self.preserving,
-        );
+        if self.preserving && self.first.is_none() {
+            // An earlier producer failure changes retirement policy, but a
+            // healthy callback's immutable owner still has sole capture custody.
+            callback.retain();
+        } else {
+            retire_delivery_snapshot(callback, &mut self.first, self.incoming_failure);
+        }
     }
     pub(crate) fn retire<T: ?Sized>(&mut self, callback: Option<Rc<T>>) {
         if self.incoming_failure || self.preserving {

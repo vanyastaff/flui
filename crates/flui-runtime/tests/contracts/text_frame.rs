@@ -1061,6 +1061,7 @@ fn animated_preparation_retains_its_tick(failing_deadline: bool) {
     use flui_platform_api::text_store::{
         LockGrant, LockOutcome, LockTiming, Utf16Offset, Utf16Range,
     };
+    use flui_runtime::frame_failure::{FrameFailureKind, SamplingFailureOrigin, SamplingStage};
     use flui_runtime::ui_runtime::TextSizingSettlement;
 
     let mut clock = flui_foundation::ManualClock::new();
@@ -1202,10 +1203,24 @@ fn animated_preparation_retains_its_tick(failing_deadline: bool) {
     let reported = Arc::clone(&reports);
     runtime.set_frame_failure_handler(Some(flui_runtime::frame_failure::FrameFailureHandler::new(
         move |report| {
+            let sampling = match &report.kind {
+                FrameFailureKind::SamplingPanic {
+                    first,
+                    blocking,
+                    admitted_attempt,
+                    ..
+                } => Some((
+                    (first.stage, first.origin),
+                    blocking.map(|blocker| (blocker.stage, blocker.origin)),
+                    *admitted_attempt,
+                )),
+                _ => None,
+            };
             reported.lock().push((
                 report.address,
                 report.disposition,
                 report.consecutive_failures,
+                sampling,
             ));
         },
     )));
@@ -1268,6 +1283,14 @@ fn animated_preparation_retains_its_tick(failing_deadline: bool) {
                 },
                 flui_runtime::frame_failure::FailureDisposition::Contained,
                 0,
+                Some((
+                    (
+                        SamplingStage::GestureDeadline,
+                        SamplingFailureOrigin::Delivery
+                    ),
+                    None,
+                    true,
+                )),
             )],
             "delivery cannot reject the compatible frozen text attempt"
         );
@@ -1500,6 +1523,7 @@ fn pending_editable() -> PendingEditable {
 struct UnknownRetainedDeadline {
     due: web_time::Instant,
     effects: std::rc::Rc<std::cell::Cell<usize>>,
+    fail_query: bool,
 }
 
 impl flui_interaction::arena::GestureArenaMember for UnknownRetainedDeadline {
@@ -1508,6 +1532,10 @@ impl flui_interaction::arena::GestureArenaMember for UnknownRetainedDeadline {
     fn reject_gesture(&self, _: flui_platform_api::PointerId) {}
 
     fn deadline(&self) -> Option<web_time::Instant> {
+        if self.fail_query {
+            self.effects.set(self.effects.get() + 1);
+            std::panic::panic_any("unknown retained deadline discovery");
+        }
         Some(self.due)
     }
 
@@ -1518,11 +1546,26 @@ impl flui_interaction::arena::GestureArenaMember for UnknownRetainedDeadline {
 }
 
 fn unknown_deadline_withdraws_the_old_receipt_and_recovers_fresh_geometry() {
+    retained_deadline_failure_case(false, false);
+}
+
+fn a_background_deadline_withdraws_the_old_receipt_without_opening_the_barrier() {
+    retained_deadline_failure_case(true, false);
+}
+
+fn a_background_query_failure_withdraws_the_old_receipt_without_opening_the_barrier() {
+    retained_deadline_failure_case(true, true);
+}
+
+fn retained_deadline_failure_case(background: bool, fail_query: bool) {
     use flui_foundation::MonotonicClock as _;
     use flui_platform_api::text_store::{
         LockGrant, LockOutcome, LockTiming, TextStoreError, Utf16Offset, Utf16Range,
     };
-    use flui_runtime::frame_failure::{FailureDisposition, FrameFailureHandler};
+    use flui_runtime::frame_failure::{
+        FailureDisposition, FrameFailureHandler, FrameFailureKind, SamplingFailureOrigin,
+        SamplingStage,
+    };
     use flui_runtime::ui_runtime::TextSizingSettlement;
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
@@ -1537,31 +1580,54 @@ fn unknown_deadline_withdraws_the_old_receipt_and_recovers_fresh_geometry() {
         work,
     } = pending_editable();
     let before = sink.submitted;
+    if background {
+        runtime.update_host_lifecycle(flui_scheduler::AppLifecycleState::Paused);
+        assert!(!runtime.scheduler().frames_enabled());
+    }
     let reports = Arc::new(parking_lot::Mutex::new(Vec::new()));
     let reported = Arc::clone(&reports);
     runtime.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
+        let sampling = match &report.kind {
+            FrameFailureKind::SamplingPanic {
+                first,
+                blocking,
+                admitted_attempt,
+                ..
+            } => Some((
+                (first.stage, first.origin),
+                blocking.map(|blocker| (blocker.stage, blocker.origin)),
+                *admitted_attempt,
+            )),
+            _ => None,
+        };
         reported.lock().push((
             report.address,
             report.disposition,
             report.consecutive_failures,
+            sampling,
         ));
     })));
     let effects = Rc::new(Cell::new(0));
     let member = Rc::new(UnknownRetainedDeadline {
         due: clock.now(),
         effects: Rc::clone(&effects),
+        fail_query,
     });
     let _entry = runtime.gestures().arena().add(
         flui_platform_api::PointerId::new(std::num::NonZeroU64::new(99).expect("contact")),
         &member,
     );
     let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        runtime.pump(&mut clock, &mut sink)
+        if background {
+            runtime.pump_background();
+        } else {
+            let _ = runtime.pump(&mut clock, &mut sink);
+        }
     }));
     assert_eq!(
         effects.get(),
         1,
-        "the open extension performed its side effect"
+        "the open extension was evaluated through the runtime owner turn"
     );
     let _ = attempt.expect("unknown deadline failure is presentation-local");
     assert_eq!(
@@ -1596,7 +1662,20 @@ fn unknown_deadline_withdraws_the_old_receipt_and_recovers_fresh_geometry() {
         ),
         Ok(LockOutcome::Deferred)
     );
+    if background {
+        runtime.pump_background();
+        assert_eq!(effects.get(), 1, "the same failing revision stays parked");
+        assert_eq!(sink.submitted, before);
+        assert_eq!(completed.get(), 0);
+        assert!(geometry.borrow().is_none());
+        runtime.update_host_lifecycle(flui_scheduler::AppLifecycleState::Resumed);
+    }
     assert!(!runtime.pump(&mut clock, &mut sink).presented());
+    let stage = if fail_query {
+        SamplingStage::DeadlineDiscovery
+    } else {
+        SamplingStage::GestureDeadline
+    };
     assert_eq!(
         effects.get(),
         1,
@@ -1646,6 +1725,11 @@ fn unknown_deadline_withdraws_the_old_receipt_and_recovers_fresh_geometry() {
             },
             FailureDisposition::FrameDropped,
             1,
+            Some((
+                (stage, SamplingFailureOrigin::Unknown),
+                Some((stage, SamplingFailureOrigin::Unknown)),
+                true,
+            )),
         )],
         "one unresolved operation rejects the retained attempt only once"
     );
@@ -2174,6 +2258,176 @@ fn a_sibling_animation_admission_replaces_ready_text_before_geometry_publication
     );
 }
 
+fn a_sampling_report_replaces_ready_text_before_geometry_publication() {
+    use flui_foundation::Listenable as _;
+    use flui_runtime::frame_failure::{
+        FailureDisposition, FrameFailureHandler, FrameFailureKind, SamplingFailureOrigin,
+        SamplingStage,
+    };
+    use flui_runtime::ui_runtime::TextSizingSettlement;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    let mut clock = flui_foundation::ManualClock::new();
+    let (mut runtime, _) = prepared_runtime(&clock);
+    let size = Arc::new(AtomicU64::new(20.0_f64.to_bits()));
+    let rebuild = Arc::new(parking_lot::Mutex::new(None));
+    let post_frame = Rc::new(RefCell::new(None));
+    runtime
+        .attach_root_widget_with_size(
+            &PreparedTextProbe {
+                child: AuthoredText {
+                    font_size: Arc::clone(&size),
+                    rebuild: Arc::clone(&rebuild),
+                }
+                .boxed(),
+                rebuild: Rc::new(RefCell::new(None)),
+                post_frame: Rc::clone(&post_frame),
+            },
+            400.0,
+            400.0,
+        )
+        .expect("mount target text with its ordinary cross-thread rebuild handle");
+    let mut sink = PreparedTextSink::default();
+    assert!(runtime.pump(&mut clock, &mut sink).presented());
+    let sibling = runtime.assemble_presentation(crate::owner_publication::window());
+    let sibling_id = runtime.install_presentation(sibling);
+    let animation_slot = Rc::new(RefCell::new(None));
+    runtime
+        .attach_root_widget_with_size_to(
+            sibling_id,
+            &PreparedSibling {
+                animation: Rc::clone(&animation_slot),
+                post_frame: Rc::new(RefCell::new(None)),
+                focus: flui_interaction::routing::FocusNode::new(),
+            },
+            400.0,
+            400.0,
+        )
+        .expect("mount actual sibling animation");
+    assert!(runtime.pump(&mut clock, &mut sink).presented());
+    let animation = animation_slot
+        .borrow()
+        .as_ref()
+        .expect("sibling lifecycle owns animation")
+        .clone();
+    let _run = animation.forward().expect("start sibling animation");
+    let _ = runtime.pump(&mut clock, &mut sink);
+    let (_, mut writer) = flui_painting::TextSizing::captured();
+    let completed = Rc::new(Cell::new(0));
+    let completion = Rc::clone(&completed);
+    post_frame
+        .borrow()
+        .as_ref()
+        .expect("target completion handle")
+        .schedule(move |_| completion.set(completion.get() + 1))
+        .expect("completion admitted before retained preparation");
+    assert!(runtime.install_captured_text_sizing_for(runtime.presentation_id(), writer.source()));
+    let _ = runtime.pump(&mut clock, &mut sink);
+    let mut frontiers = runtime.take_text_sizing_frontiers();
+    assert_eq!(frontiers.len(), 1);
+    let ready = frontiers.pop().expect("original target frontier");
+    assert!(
+        ready
+            .requests()
+            .iter()
+            .all(|request| request.size.value() == 20.0)
+    );
+    answer_prepared_frontier(&ready, &mut writer);
+    assert!(runtime.settle_text_sizing(ready, TextSizingSettlement::Ready));
+    let handle = rebuild
+        .lock()
+        .as_ref()
+        .expect("target lifecycle rebuild handle")
+        .clone();
+    let reports = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let reported = Arc::clone(&reports);
+    runtime.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
+        let sampling = match &report.kind {
+            FrameFailureKind::SamplingPanic {
+                first, blocking, ..
+            } => Some((
+                (first.stage, first.origin),
+                blocking.map(|blocker| (blocker.stage, blocker.origin)),
+            )),
+            _ => None,
+        };
+        reported
+            .lock()
+            .push((report.address, report.disposition, sampling));
+        size.store(22.75_f64.to_bits(), Ordering::SeqCst);
+        handle.schedule(flui_foundation::RebuildReason::StateChange);
+    })));
+    let armed = Rc::new(Cell::new(true));
+    let failing = Rc::clone(&armed);
+    let listener = animation.add_listener(Rc::new(move || {
+        if failing.replace(false) {
+            std::panic::panic_any("sibling delivery before ready text");
+        }
+    }));
+    clock.advance(Duration::from_millis(20));
+    let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        runtime.pump(&mut clock, &mut sink)
+    }));
+    let _ = attempt.expect("sampling report delivery cannot escape the pump");
+    assert!(!armed.get(), "the actual animation listener failed");
+    assert_eq!(
+        reports.lock().as_slice(),
+        &[(
+            flui_foundation::PresentationAddress {
+                ui_runtime_id: runtime.id(),
+                presentation_id: sibling_id,
+            },
+            FailureDisposition::Contained,
+            Some((
+                (SamplingStage::Animation, SamplingFailureOrigin::Delivery),
+                None,
+            )),
+        )]
+    );
+    assert_eq!(
+        completed.get(),
+        0,
+        "diagnostic-side admission cannot complete obsolete ready geometry"
+    );
+    let mut replacement = runtime.take_text_sizing_frontiers();
+    if replacement.is_empty() {
+        let _ = runtime.pump(&mut clock, &mut sink);
+        replacement = runtime.take_text_sizing_frontiers();
+    }
+    assert_eq!(
+        replacement.len(),
+        1,
+        "target requires an exact fresh frontier"
+    );
+    let work = replacement.pop().expect("replacement target frontier");
+    assert_eq!(work.presentation(), runtime.presentation_id());
+    assert!(
+        work.requests()
+            .iter()
+            .all(|request| request.size.value() == 22.75)
+    );
+    animation.remove_listener(listener);
+    animation.stop().expect("stop observed sibling");
+    assert!(
+        runtime.close_presentation_entered(sibling_id),
+        "one sink can now observe the target's actual scene"
+    );
+    answer_prepared_frontier(&work, &mut writer);
+    assert!(runtime.settle_text_sizing(work, TextSizingSettlement::Ready));
+    finish_prepared_text(
+        "diagnostic-side replacement",
+        &mut runtime,
+        &mut clock,
+        &mut sink,
+        &mut writer,
+    );
+    sink.assert_text_size("measured", 34.125);
+    assert_eq!(completed.get(), 1, "replacement completes once");
+    assert_eq!(reports.lock().len(), 1);
+}
+
 fn a_waiting_presentation_does_not_suspend_sibling_animation_completion_or_ime() {
     use flui_animation::Animation as _;
     use flui_platform_api::text_store::{
@@ -2300,6 +2554,16 @@ fn registered_text_preparation_preserves_the_actual_presentation_attempt() {
                 unknown_deadline_withdraws_the_old_receipt_and_recovers_fresh_geometry as fn(),
             ),
             (
+                "a_background_deadline_withdraws_the_old_receipt_without_opening_the_barrier",
+                a_background_deadline_withdraws_the_old_receipt_without_opening_the_barrier
+                    as fn(),
+            ),
+            (
+                "a_background_query_failure_withdraws_the_old_receipt_without_opening_the_barrier",
+                a_background_query_failure_withdraws_the_old_receipt_without_opening_the_barrier
+                    as fn(),
+            ),
+            (
                 "a_same_queued_rebuild_admission_cancels_the_old_preparation_premise",
                 a_same_queued_rebuild_admission_cancels_the_old_preparation_premise as fn(),
             ),
@@ -2307,6 +2571,10 @@ fn registered_text_preparation_preserves_the_actual_presentation_attempt() {
                 "a_sibling_animation_admission_replaces_ready_text_before_geometry_publication",
                 a_sibling_animation_admission_replaces_ready_text_before_geometry_publication
                     as fn(),
+            ),
+            (
+                "a_sampling_report_replaces_ready_text_before_geometry_publication",
+                a_sampling_report_replaces_ready_text_before_geometry_publication as fn(),
             ),
             (
                 "a_dropped_receipt_retries_only_after_its_deadline_and_completes",
