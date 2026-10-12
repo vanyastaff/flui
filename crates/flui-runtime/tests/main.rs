@@ -15,6 +15,8 @@ mod owner_metrics;
 mod owner_publication;
 #[path = "contracts/owner_registry.rs"]
 mod owner_registry;
+#[path = "contracts/owner_sampling.rs"]
+mod owner_sampling;
 #[path = "../src/table_test.rs"]
 mod table_test;
 #[path = "contracts/text_frame.rs"]
