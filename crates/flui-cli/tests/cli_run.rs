@@ -61,7 +61,7 @@ fn main() {
     match name.as_ref() {
         "adb" if args.first().is_some_and(|arg| arg == "devices") => println!("List of devices attached\nemulator-5554 device product:sdk model:Fixture device:sdk"),
         "adb" => println!("x86_64,arm64-v8a"),
-        "rustup" => println!("aarch64-linux-android\nx86_64-linux-android"),
+        "rustup" => println!("{}", env::var("FLUI_FIXTURE_INSTALLED_TARGETS").expect("installed targets")),
         "java" => println!("openjdk version 21"),
         "cargo" if args.first().is_some_and(|arg| arg == "ndk") => {
             if args.iter().any(|arg| arg == "--version") { println!("cargo-ndk 4.1.2"); }
@@ -103,8 +103,8 @@ fn main() {
         &std::env::var_os("PATH").expect("PATH"),
     )))
     .expect("fixture PATH");
-    let output = cargo_bin_cmd!("flui")
-        .current_dir(&app)
+    let mut cli = cargo_bin_cmd!("flui");
+    cli.current_dir(&app)
         .env("PATH", path)
         // Metadata uses only local path dependencies. Keep its Cargo locks and
         // outputs independent of concurrent CLI fixtures on the CI runner.
@@ -114,14 +114,14 @@ fn main() {
         .env("ANDROID_HOME", sdk)
         .env("ANDROID_NDK_HOME", ndk)
         .env_remove("JAVA_HOME")
+        .env("FLUI_FIXTURE_INSTALLED_TARGETS", "aarch64-linux-android\nx86_64-linux-android")
         .env(
             "FLUI_FIXTURE_REAL_CARGO",
             std::env::var_os("CARGO").expect("real Cargo"),
         )
         .args(["run", "--device", "emulator-5554", "--no-hot-reload"])
-        .timeout(std::time::Duration::from_secs(30))
-        .output()
-        .expect("Android run");
+        .timeout(std::time::Duration::from_secs(30));
+    let output = cli.output().expect("Android run");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(
         output.status.code(),
@@ -135,6 +135,25 @@ fn main() {
     assert!(
         command.contains("\"-t\", \"x86_64\""),
         "the emulator's first native ABI must win over its ARM translation compatibility: {command}"
+    );
+
+    let output = cli
+        .env("FLUI_FIXTURE_INSTALLED_TARGETS", "aarch64-linux-android")
+        .output()
+        .expect("Android run without the selected compiler target");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "missing compiler target: {stderr}"
+    );
+    assert!(
+        stderr.contains("rustup target add x86_64-linux-android"),
+        "installation hint: {stderr}"
+    );
+    assert!(
+        !stderr.contains("ANDROID_NATIVE_BUILD_ARGS="),
+        "must reject before cargo-ndk builds: {stderr}"
     );
 }
 

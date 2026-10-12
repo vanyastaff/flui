@@ -1,6 +1,6 @@
 ### Fixed
 
-- Build Android examples for the selected device's native ABI and report failed non-reloading builds promptly.
+- Build Android examples for the selected device's native ABI, validate its exact Rust compiler target with an installation hint, and report failed non-reloading builds promptly.
 - Deliver Android system bar and cutout insets to SafeArea when native window geometry matches the captured insets.
 - Avoid redundant clip masks and supersampled attachments for eligible rounded rectangle fills while preserving clipping.
 - Clear supersampled path and coverage textures in their geometry pass without a separate render pass.

@@ -1331,7 +1331,9 @@ impl AndroidSession {
             self.device.serial
         ));
         let builder = AndroidBuilder::new(&self.root).map_err(environment_error)?;
-        builder.validate_environment().map_err(environment_error)?;
+        builder
+            .validate_environment(abi)
+            .map_err(environment_error)?;
         let ctx = BuilderContextBuilder::new(self.root.clone())
             .with_platform(Platform::Android {
                 targets: vec![abi.to_owned()],
