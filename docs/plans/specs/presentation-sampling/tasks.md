@@ -56,7 +56,7 @@ reporting or wake debt. Restoring the old pending predicate reproduced the same
 zero-poll failure, and exact source bytes were restored afterwards. This is
 synthetic owner-dispatch acceptance, not a live native event-loop run.
 
-Final local verification used source commit
+Complete local scoped verification used source commit
 `8e446cb612e5b5c5608f9bd1bd24550697d96883` and completed
 `cargo xtask check-changed --base e419a04d36bb821be796d763150da500d72c33f5`:
 
@@ -69,6 +69,14 @@ Final local verification used source commit
 - both 78-case feature clippy passes completed, covering production and
   tests/benches/examples;
 - the platform compiler-guard family passed.
+
+The subsequent merge of animation API changes from
+`f8759e33d6729434d0b2b8ffac21411c0679cc59` required no sampling consumer
+migration. On integration commit `57176cc4716d6693627e6585ac7642e46f223460`,
+all 23 selected animation sampling/easing and runtime integration tests passed.
+Independent overlap review found no changed sampling/recovery boundary or
+unresolved integration defect. Publication and CI still require the combined
+head, rather than treating either predecessor's green run as integration proof.
 
 MacOS/iOS and Android source checks require SDK/toolchains unavailable on this
 host; the Linux native platform suite requires `xvfb-run`. CI owns those paths.
