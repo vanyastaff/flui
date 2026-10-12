@@ -69,6 +69,8 @@ impl OwnerEffects for Effects {
     }
 
     fn frame(&self, _: PresentationAddress, runtime: &mut UiRuntime) {
+        // The native host services geometry before consulting its wake gate.
+        runtime.enter(UiRuntime::drain_owner_inbox);
         if !self.probe_runtime.get() {
             return;
         }
@@ -144,14 +146,13 @@ fn scheduling_observation_case(scope: ObservationScope) {
     match scope {
         ObservationScope::Owner => {
             let queries_before = query_calls.get();
-            for _ in 0..3 {
-                assert_eq!(owner.next_wake(), Ok(Some(due)));
-            }
+            let wakes: Vec<_> = (0..3).map(|_| owner.next_wake()).collect();
             assert_eq!(
                 query_calls.get(),
                 queries_before,
                 "owner wake observation executed the external deadline query"
             );
+            assert_eq!(wakes, [Ok(Some(due)); 3]);
         }
         ObservationScope::Runtime => {
             effects.probe_runtime.set(true);
@@ -160,12 +161,12 @@ fn scheduling_observation_case(scope: ObservationScope) {
                 .runtime_observation
                 .take()
                 .expect("runtime getters observed during owner execution");
-            assert_eq!(observed.wakes, [Some(due); 3]);
-            assert_eq!(observed.pending, [true; 3]);
             assert_eq!(
                 observed.queries_after, observed.queries_before,
                 "runtime wake or pending observation executed the external deadline query"
             );
+            assert_eq!(observed.wakes, [Some(due); 3]);
+            assert_eq!(observed.pending, [true; 3]);
         }
     }
 }
