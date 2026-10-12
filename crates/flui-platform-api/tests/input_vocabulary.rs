@@ -297,7 +297,11 @@ fn character_keys_preserve_nonempty_native_text_and_refuse_empty_text() {
         let Key::Character(character) = Key::character(text) else {
             panic!("nonempty native text must remain a character: {text:?}");
         };
-        assert_eq!(character.as_str(), text, "native text must remain unchanged");
+        assert_eq!(
+            character.as_str(),
+            text,
+            "native text must remain unchanged"
+        );
     }
     assert_eq!(Key::character(""), Key::Named(NamedKey::Unidentified));
     assert_eq!(Key::from(NamedKey::Tab), Key::Named(NamedKey::Tab));

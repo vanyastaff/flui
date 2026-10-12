@@ -87,9 +87,11 @@ pub(crate) mod intent_tests {
                     Actions::new(
                         Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&field)),
                     )
-                    .action(CallbackAction::new(move |_cx, _intent: &SaveIntent| {
-                        saves_for_action.set(saves_for_action.get() + 1);
-                    })),
+                    .action(CallbackAction::new(
+                        move |_cx, _intent: &SaveIntent| {
+                            saves_for_action.set(saves_for_action.get() + 1);
+                        },
+                    )),
                 )
                 .shortcut(
                     SingleActivator::character(character)
