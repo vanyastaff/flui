@@ -91,6 +91,7 @@ struct VerdictMember {
     notifications: Rc<Cell<usize>>,
     drops: Rc<Cell<usize>>,
     panic_on_drop: bool,
+    panic_on_notify: bool,
     _drop_capture: Option<VerdictDropFailure>,
 }
 
@@ -107,6 +108,7 @@ impl VerdictMember {
         self.notifications.set(self.notifications.get() + 1);
         let owner = self.owner.upgrade().expect("live external owner slot");
         drop(owner.borrow_mut().take());
+        assert!(!self.panic_on_notify, "arena verdict callback failure");
     }
 }
 
@@ -843,7 +845,14 @@ fn cancel_all_withdraws_every_batch_before_first_rejection() {
     abandoned_generations_are_withdrawn_before_rejection(true);
 }
 
-fn builtin_deadline_verdict_retirement(kind: &str, incoming_failure: bool, panic_on_drop: bool) {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum VerdictFault {
+    None,
+    Retirement,
+    NotificationAndRetirement,
+}
+
+fn builtin_deadline_verdict_retirement(kind: &str, incoming_failure: bool, fault: VerdictFault) {
     use flui_interaction::events::{PointerKind, make_down_event_for_id, make_up_event_for_id};
     use flui_interaction::routing::PointerDispatch;
     use flui_interaction::{
@@ -875,7 +884,8 @@ fn builtin_deadline_verdict_retirement(kind: &str, incoming_failure: bool, panic
         owner: Rc::downgrade(&owner),
         notifications: Rc::clone(&notifications),
         drops: Rc::clone(&drops),
-        panic_on_drop,
+        panic_on_drop: fault != VerdictFault::None,
+        panic_on_notify: fault == VerdictFault::NotificationAndRetirement,
         _drop_capture: std::env::var_os("FLUI_DEADLINE_VERDICT_CHILD")
             .map(|_| VerdictDropFailure),
     });
@@ -933,7 +943,16 @@ fn builtin_deadline_verdict_retirement(kind: &str, incoming_failure: bool, panic
             flui_foundation::panic::payload_text(failure.payload()),
             Some("earlier animation computation")
         );
-    } else if panic_on_drop {
+    } else if fault == VerdictFault::NotificationAndRetirement {
+        assert_eq!(drops.get(), 0, "{kind} callback failure protects final ownership");
+        assert_eq!(recovery.first_failure_class(), Some(FailureClass::Delivery));
+        assert_eq!(recovery.blocking_failure_class(), None);
+        let failure = recovery.into_failure().expect("verdict callback failure");
+        assert_eq!(
+            flui_foundation::panic::payload_text(failure.payload()),
+            Some("arena verdict callback failure")
+        );
+    } else if fault == VerdictFault::Retirement {
         assert_eq!(drops.get(), 1, "{kind} ordinary retirement runs");
         assert_eq!(recovery.first_failure_class(), Some(FailureClass::Unknown));
         assert_eq!(
@@ -947,39 +966,45 @@ fn builtin_deadline_verdict_retirement(kind: &str, incoming_failure: bool, panic
 }
 
 fn long_press_verdict_inherits_incoming_retirement_custody() {
-    builtin_deadline_verdict_retirement("long press", true, false);
+    builtin_deadline_verdict_retirement("long press", true, VerdictFault::None);
 }
 
 fn double_tap_verdict_inherits_incoming_retirement_custody() {
-    builtin_deadline_verdict_retirement("double tap", true, false);
+    builtin_deadline_verdict_retirement("double tap", true, VerdictFault::None);
 }
 
 fn multi_tap_verdict_inherits_incoming_retirement_custody() {
-    builtin_deadline_verdict_retirement("multi tap", true, false);
+    builtin_deadline_verdict_retirement("multi tap", true, VerdictFault::None);
 }
 
 fn long_press_opaque_retirement_is_unknown() {
-    builtin_deadline_verdict_retirement("long press", false, true);
+    builtin_deadline_verdict_retirement("long press", false, VerdictFault::Retirement);
 }
 
 fn double_tap_opaque_retirement_is_unknown() {
-    builtin_deadline_verdict_retirement("double tap", false, true);
+    builtin_deadline_verdict_retirement("double tap", false, VerdictFault::Retirement);
 }
 
 fn multi_tap_opaque_retirement_is_unknown() {
-    builtin_deadline_verdict_retirement("multi tap", false, true);
+    builtin_deadline_verdict_retirement("multi tap", false, VerdictFault::Retirement);
 }
 
 fn builtin_verdict_healthy_destruction_remains() {
     for kind in ["long press", "double tap", "multi tap"] {
-        builtin_deadline_verdict_retirement(kind, false, false);
+        builtin_deadline_verdict_retirement(kind, false, VerdictFault::None);
+    }
+}
+
+fn builtin_verdict_callback_failure_protects_competing_retirement() {
+    for kind in ["long press", "double tap", "multi tap"] {
+        builtin_deadline_verdict_retirement(kind, false, VerdictFault::NotificationAndRetirement);
     }
 }
 
 fn builtin_incoming_verdict_retains_double_panicking_aggregate() {
     const CHILD: &str = "FLUI_DEADLINE_VERDICT_CHILD";
     if std::env::var_os(CHILD).is_some() {
-        builtin_deadline_verdict_retirement("long press", true, true);
+        builtin_deadline_verdict_retirement("long press", true, VerdictFault::Retirement);
         return;
     }
     let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
@@ -1105,6 +1130,10 @@ fn owner_deadline_recovery_matrix() {
         (
             "builtin_verdict_healthy_destruction_remains",
             builtin_verdict_healthy_destruction_remains as fn(),
+        ),
+        (
+            "builtin_verdict_callback_failure_protects_competing_retirement",
+            builtin_verdict_callback_failure_protects_competing_retirement as fn(),
         ),
         (
             "builtin_incoming_verdict_retains_double_panicking_aggregate",
