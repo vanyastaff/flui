@@ -1759,6 +1759,18 @@ fn the_record_stays_bounded_without_a_font_change() {
 }
 
 fn font_change_diagnostic_failure_preserves_every_measured_paragraph() {
+    font_change_failure_case(true, false);
+}
+
+fn font_change_wake_failure_preserves_every_measured_paragraph() {
+    font_change_failure_case(false, true);
+}
+
+fn competing_font_change_failures_preserve_the_diagnostic_and_measured_tail() {
+    font_change_failure_case(true, true);
+}
+
+fn font_change_failure_case(fail_diagnostic: bool, fail_wake: bool) {
     use flui_painting::typography::{FontWeight, TextStyle};
     use std::sync::{
         Arc,
@@ -1863,21 +1875,43 @@ fn font_change_diagnostic_failure_preserves_every_measured_paragraph() {
         );
     }
 
+    let wake_calls = Arc::new(AtomicUsize::new(0));
+    let wake_faults = Arc::clone(&wake_calls);
+    let wake_armed = AtomicBool::new(fail_wake);
+    owner.set_on_need_visual_update(move || {
+        if wake_armed.swap(false, Ordering::Relaxed) {
+            wake_faults.fetch_add(1, Ordering::Relaxed);
+            std::panic::panic_any("font-generation wake failure");
+        }
+    });
     register_probe(&text);
     let calls = Arc::new(AtomicUsize::new(0));
-    let diagnostics = tracing::subscriber::set_default(FailingFontDiagnostic {
-        armed: AtomicBool::new(true),
-        calls: Arc::clone(&calls),
+    let diagnostics = fail_diagnostic.then(|| {
+        tracing::subscriber::set_default(FailingFontDiagnostic {
+            armed: AtomicBool::new(true),
+            calls: Arc::clone(&calls),
+        })
     });
     let failure =
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| owner.drain_pending_dirty()));
     drop(diagnostics);
-    let failure = failure.expect_err("the exact font-generation diagnostic panics once");
+    let failure = failure.expect_err("the admitted font update reaches its failing callout");
+    let expected_failure = if fail_diagnostic {
+        "font-generation diagnostic failure"
+    } else {
+        "font-generation wake failure"
+    };
     assert_eq!(
         failure.downcast_ref::<&str>(),
-        Some(&"font-generation diagnostic failure")
+        Some(&expected_failure),
+        "a later wake failure cannot replace the first diagnostic failure"
     );
-    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert_eq!(calls.load(Ordering::Relaxed), usize::from(fail_diagnostic));
+    assert_eq!(
+        wake_calls.load(Ordering::Relaxed),
+        usize::from(fail_wake),
+        "a diagnostic failure cannot suppress the accepted wake tail"
+    );
 
     // Recovery receives no new registration, manual dirty mark or widget edit.
     // The accepted font change must still reach both real paragraphs.
@@ -1928,6 +1962,14 @@ fn font_change_contract() {
         (
             "font_change_diagnostic_failure_preserves_every_measured_paragraph",
             font_change_diagnostic_failure_preserves_every_measured_paragraph,
+        ),
+        (
+            "font_change_wake_failure_preserves_every_measured_paragraph",
+            font_change_wake_failure_preserves_every_measured_paragraph,
+        ),
+        (
+            "competing_font_change_failures_preserve_the_diagnostic_and_measured_tail",
+            competing_font_change_failures_preserve_the_diagnostic_and_measured_tail,
         ),
     ];
     let failed: Vec<&str> = cases
