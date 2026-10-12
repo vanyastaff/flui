@@ -258,7 +258,7 @@ impl<'runtime> PresentationSampling<'runtime> {
         recovery.run_with(|scope| {
             changed = text_preparation::reconcile_with_recovery(presentation, constraints, scope);
         });
-        if recovery.has_failure() && recovery.first_failure_class().is_some() {
+        if recovery.blocking_failure_class().is_some() {
             recovery.run_with(|scope| {
                 text_preparation::withdraw_for_retry(presentation, scope);
                 if admitted {
@@ -266,7 +266,7 @@ impl<'runtime> PresentationSampling<'runtime> {
                 }
             });
         }
-        if changed || recovery.first_failure_class().is_some() {
+        if changed || recovery.blocking_failure_class().is_some() {
             recovery.run_with(|_| {
                 if self.completion_entered {
                     presentation.suspend_completion_segment();
@@ -275,6 +275,7 @@ impl<'runtime> PresentationSampling<'runtime> {
             presentation.clock().mark_demand(DemandKind::Dirty);
             self.admission = Admission::None;
             self.completion_entered = false;
+            changed = true;
         }
         if let Some(failure) = recovery.into_failure() {
             let first = SamplingFailure {
@@ -299,7 +300,6 @@ impl<'runtime> PresentationSampling<'runtime> {
                     internal_invariant,
                 },
             );
-            changed = true;
         }
         if changed {
             self.admission = Admission::None;
