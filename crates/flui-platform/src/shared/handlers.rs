@@ -259,6 +259,8 @@ pub struct WindowCallbacks {
     /// its own signal from `WM_SIZE` minimize/restore plus `WM_SHOWWINDOW`
     /// hide/show, and the native AppKit backend from
     /// `windowDidChangeOcclusionState:` — rules in `shared::visibility`.
+    /// The native Web backend samples the canvas document's `hidden` value
+    /// and observes Document `visibilitychange`, separately from canvas focus.
     /// Where no signal is ever delivered, this callback simply never fires
     /// — the window is treated as always visible (the same behavior as
     /// before this callback existed).
@@ -315,6 +317,8 @@ pub struct WindowCallbacks {
 /// [`WindowCallbacks::clear_then`].
 type RetirementNotice = Box<dyn FnOnce() + Send>;
 
+type StatusCallback = Box<dyn FnMut(bool) + Send>;
+
 enum WindowCallbackEvent {
     Input(PlatformInput),
     RequestFrame,
@@ -323,7 +327,7 @@ enum WindowCallbackEvent {
     Close,
     Active(bool, Option<Box<dyn FnOnce() + Send>>),
     Execution(WindowExecutionState),
-    Visibility(bool),
+    Visibility(bool, Option<Box<dyn FnOnce() + Send>>),
     Hover(bool),
     AppearanceChanged,
     SurfaceStatus(bool),
@@ -682,7 +686,20 @@ impl WindowCallbacks {
                             // Dropping it would lose both its getter commit and
                             // notification, even after a duplicate native signal.
                             super::panic_boundary::contain_owner_callback(|| {
-                                self.deliver_focus_observation(focused, Some(commit));
+                                self.deliver_status_observation(
+                                    &self.on_active_status_change,
+                                    focused,
+                                    Some(commit),
+                                );
+                            });
+                        }
+                        WindowCallbackEvent::Visibility(visible, Some(commit)) => {
+                            super::panic_boundary::contain_owner_callback(|| {
+                                self.deliver_status_observation(
+                                    &self.on_visibility_status_change,
+                                    visible,
+                                    Some(commit),
+                                );
                             });
                         }
                         WindowCallbackEvent::Close
@@ -769,14 +786,18 @@ impl WindowCallbacks {
                     }
                 }
                 WindowCallbackEvent::Active(is_active, commit) => {
-                    self.deliver_focus_observation(is_active, commit);
+                    self.deliver_status_observation(
+                        &self.on_active_status_change,
+                        is_active,
+                        commit,
+                    );
                 }
-                WindowCallbackEvent::Visibility(is_visible) => {
-                    let mut lease =
-                        CallbackLease::take(&self.on_visibility_status_change, &self.cleared);
-                    if let Some(callback) = lease.callback_mut() {
-                        callback(is_visible);
-                    }
+                WindowCallbackEvent::Visibility(is_visible, commit) => {
+                    self.deliver_status_observation(
+                        &self.on_visibility_status_change,
+                        is_visible,
+                        commit,
+                    );
                 }
                 WindowCallbackEvent::Hover(is_hovered) => {
                     let mut lease =
@@ -809,13 +830,18 @@ impl WindowCallbacks {
         input_result
     }
 
-    fn deliver_focus_observation(&self, focused: bool, commit: Option<Box<dyn FnOnce() + Send>>) {
+    fn deliver_status_observation(
+        &self,
+        slot: &Mutex<Option<StatusCallback>>,
+        value: bool,
+        commit: Option<Box<dyn FnOnce() + Send>>,
+    ) {
         if let Some(commit) = commit {
             commit();
         }
-        let mut lease = CallbackLease::take(&self.on_active_status_change, &self.cleared);
+        let mut lease = CallbackLease::take(slot, &self.cleared);
         if let Some(callback) = lease.callback_mut() {
-            callback(focused);
+            callback(value);
         }
     }
 
@@ -960,7 +986,23 @@ impl WindowCallbacks {
     pub fn dispatch_visibility_status_change(&self, is_visible: bool) {
         let Some(drain) = DispatchDrain::begin(
             &self.event_dispatch,
-            WindowCallbackEvent::Visibility(is_visible),
+            WindowCallbackEvent::Visibility(is_visible, None),
+        ) else {
+            return;
+        };
+        self.drain_events(drain);
+    }
+
+    /// Commit an accepted visibility observation immediately before its callback.
+    #[cfg(any(test, target_arch = "wasm32"))]
+    pub(crate) fn dispatch_visibility_observation(
+        &self,
+        visible: bool,
+        commit: impl FnOnce() + Send + 'static,
+    ) {
+        let Some(drain) = DispatchDrain::begin(
+            &self.event_dispatch,
+            WindowCallbackEvent::Visibility(visible, Some(Box::new(commit))),
         ) else {
             return;
         };
@@ -1225,8 +1267,21 @@ mod tests {
     use super::*;
 
     fn accepted_focus_observations_survive_dispatch_unwind() {
+        accepted_status_observations_survive_dispatch_unwind(false);
+    }
+
+    fn accepted_visibility_observations_survive_dispatch_unwind() {
+        accepted_status_observations_survive_dispatch_unwind(true);
+    }
+
+    fn accepted_status_observations_survive_dispatch_unwind(visibility: bool) {
         use std::sync::atomic::AtomicBool;
 
+        let dispatch: fn(&WindowCallbacks, bool, Box<dyn FnOnce() + Send>) = if visibility {
+            WindowCallbacks::dispatch_visibility_observation
+        } else {
+            WindowCallbacks::dispatch_focus_observation
+        };
         for (opposing, reenter, fail_notification, expected) in [
             (false, false, false, &[false][..]),
             (true, false, false, &[false, true][..]),
@@ -1240,20 +1295,26 @@ mod tests {
             let state = Arc::clone(&focused);
             let delivered = Arc::clone(&notifications);
             let first = AtomicBool::new(true);
-            *callbacks.on_active_status_change.lock() = Some(Box::new(move |value| {
-                assert_eq!(state.load(Ordering::SeqCst), value, "causal focus getter");
+            let slot = if visibility {
+                &callbacks.on_visibility_status_change
+            } else {
+                &callbacks.on_active_status_change
+            };
+            *slot.lock() = Some(Box::new(move |value| {
+                assert_eq!(state.load(Ordering::SeqCst), value, "causal status getter");
                 delivered.lock().push(value);
                 if first.swap(false, Ordering::SeqCst) {
                     if reenter {
                         let state = Arc::clone(&state);
-                        nested
-                            .upgrade()
-                            .expect("live owner")
-                            .dispatch_focus_observation(false, move || {
+                        dispatch(
+                            &nested.upgrade().expect("live owner"),
+                            false,
+                            Box::new(move || {
                                 state.store(false, Ordering::SeqCst);
-                            });
+                            }),
+                        );
                     }
-                    assert!(!fail_notification, "competing focus failure");
+                    assert!(!fail_notification, "competing status failure");
                 }
             }));
             let moved = Arc::new(AtomicBool::new(false));
@@ -1266,14 +1327,22 @@ mod tests {
             *callbacks.on_input.lock() = Some(Box::new(move |_| {
                 let owner = nested.upgrade().expect("live owner");
                 let state_lost = Arc::clone(&state);
-                owner.dispatch_focus_observation(false, move || {
-                    state_lost.store(false, Ordering::SeqCst);
-                });
+                dispatch(
+                    &owner,
+                    false,
+                    Box::new(move || {
+                        state_lost.store(false, Ordering::SeqCst);
+                    }),
+                );
                 if opposing {
                     let state_restored = Arc::clone(&state);
-                    owner.dispatch_focus_observation(true, move || {
-                        state_restored.store(true, Ordering::SeqCst);
-                    });
+                    dispatch(
+                        &owner,
+                        true,
+                        Box::new(move || {
+                            state_restored.store(true, Ordering::SeqCst);
+                        }),
+                    );
                 }
                 owner.dispatch_moved();
                 panic!("original dispatch failure");
@@ -1286,10 +1355,10 @@ mod tests {
                 flui_foundation::panic::payload_text(failure.as_ref()),
                 Some("original dispatch failure")
             );
-            assert_eq!(&*notifications.lock(), expected, "accepted focus delivery");
+            assert_eq!(&*notifications.lock(), expected, "accepted status delivery");
             assert_eq!(
                 focused.load(Ordering::SeqCst),
-                *expected.last().expect("focus")
+                *expected.last().expect("status")
             );
             assert!(
                 !moved.load(Ordering::SeqCst),
@@ -1297,7 +1366,11 @@ mod tests {
             );
             let state = Arc::clone(&focused);
             let delivered = notifications.lock().len();
-            callbacks.dispatch_focus_observation(true, move || state.store(true, Ordering::SeqCst));
+            dispatch(
+                &callbacks,
+                true,
+                Box::new(move || state.store(true, Ordering::SeqCst)),
+            );
             assert_eq!(notifications.lock().len(), delivered + 1, "next delivery");
             assert_eq!(
                 notifications.lock().last(),
@@ -1601,6 +1674,10 @@ mod tests {
             (
                 "accepted focus observations survive dispatch unwind",
                 accepted_focus_observations_survive_dispatch_unwind,
+            ),
+            (
+                "accepted visibility observations survive dispatch unwind",
+                accepted_visibility_observations_survive_dispatch_unwind,
             ),
             (
                 "focus recovery finishes a reentrant close",

@@ -38,6 +38,15 @@ admitting the same pointer must keep its capture until it closes. Synthetic
 Down inside that already-active native pointer checks reentrant ownership;
 a synthetic packet alone cannot establish capture admission.
 
+The document-visibility control supplies a controlled `Document.hidden` getter
+and dispatches `visibilitychange` at the real Document. It checks the retained
+public window's initial observation, hide/show and duplicate suppression,
+callback-entry getters during queued opposing transitions, close/reopen silence,
+reconciliation after listener installation, and mandatory-source rollback with a
+healthy replacement. Source overrides are restored after the check. This proves
+DOM producer behavior, not an actual browser background-tab transition. The
+source contract follows [HTML Page Visibility](https://html.spec.whatwg.org/multipage/interaction.html#page-visibility).
+
 Run each callback check in a fresh page with an external deadline. A backend
 that calls a handler while holding its mutex can block or abort the wasm
 instance before the page can report a result. The fixture exercises reentrant

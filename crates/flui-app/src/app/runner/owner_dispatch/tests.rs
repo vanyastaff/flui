@@ -255,6 +255,43 @@ fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
                         observe_runtime(dispatcher, |runtime| runtime.scheduler().frames_enabled()),
                         "an unfocused visible running canvas remains eligible for rendering"
                     );
+                }
+                native.simulate_visibility(false);
+                assert_eq!(
+                    observe_runtime(dispatcher, |runtime| runtime.scheduler().lifecycle_state()),
+                    if matches!(change, NativeChange::Suspended) {
+                        AppLifecycleState::Paused
+                    } else {
+                        AppLifecycleState::Hidden
+                    },
+                    "{case}: later native visibility reaches the installed owner"
+                );
+                assert!(
+                    !observe_runtime(dispatcher, |runtime| runtime.scheduler().frames_enabled()),
+                    "a hidden window stops rendering"
+                );
+                native.simulate_visibility(true);
+                assert_eq!(
+                    observe_runtime(dispatcher, |runtime| runtime.scheduler().lifecycle_state()),
+                    match change {
+                        NativeChange::Suspended => AppLifecycleState::Paused,
+                        NativeChange::InitiallyUnfocused | NativeChange::FocusLost => {
+                            AppLifecycleState::Inactive
+                        }
+                        NativeChange::Hidden | NativeChange::Unchanged =>
+                            AppLifecycleState::Resumed,
+                    },
+                    "{case}: visibility restoration preserves execution and focus"
+                );
+                assert_eq!(
+                    observe_runtime(dispatcher, |runtime| runtime.scheduler().frames_enabled()),
+                    !matches!(change, NativeChange::Suspended),
+                    "show restores frames only when execution permits"
+                );
+                if matches!(
+                    change,
+                    NativeChange::InitiallyUnfocused | NativeChange::FocusLost
+                ) {
                     native.simulate_focus(true);
                     assert_eq!(
                         observe_runtime(dispatcher, |runtime| runtime

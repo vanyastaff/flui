@@ -5,3 +5,4 @@
 - Web windows own and retire their DOM listeners, resize observer, callbacks and frame registration. Failed installation rolls back, close/reopen cannot retain stale delivery, and a second live owner of the same canvas is refused.
 - Terminal callback retirement finishes after a callback unwind; a replaced capture's destructor cannot replace the original invocation failure.
 - Accepted native focus observations remain ordered and deliverable after a callback unwind, including reentrant recovery and a competing notification failure.
+- Web visibility samples the canvas document before startup and follows its visibility changes through the installed runtime owner. Accepted observations preserve callback/getter ordering and recovery; hiding stops frames and showing respects execution permission.

@@ -74,18 +74,21 @@ the explicit window-resize fallback; failure of that mandatory fallback refuses
 opening. The platform frame slot retires by callback-set identity, so stale
 owners cannot erase replacements or publish redraws.
 
-Native focus observations carry their cache commit in the existing FIFO. A
+Web visibility follows the canvas document's `hidden` value, independently of
+focus and CSS layout visibility. Construction samples it; an owned mandatory
+Document `visibilitychange` listener updates it. Successful registration
+reconciles both focus and visibility before Created, including source changes
+during earlier listener installation.
+
+Native focus and visibility observations carry their cache commit in the existing FIFO. A
 queued callback therefore observes its own delivered value through getters,
 even when input or focus callbacks synchronously trigger opposing transitions.
-Accepted native focus observations also finish their commits and notifications
+Accepted native focus and visibility observations also finish their commits and notifications
 after a dispatch unwind. Recovery retains the same FIFO so a reentrant
 observation follows the already accepted tail; ordinary aborted events are
 discarded. `the_owner_thread_machinery_honours_its_contracts` pins single,
 opposing and reentrant observations, a competing notification panic and the
 next healthy observation through the private backend commit seam.
-Successful listener installation reconciles the same focus authority once
-before Created, since a host registration call can focus the canvas before
-the focus listeners exist.
 
 Native pointer capture custody is published on the exact canvas claim, apart
 from its Rust buttons cache. A live body rechecks its admission after DOM
@@ -108,8 +111,10 @@ The `browser_input_probe` canvas-ownership control and existing vocabulary,
 pointer/wheel and getter-reentry controls exercise real registered DOM delivery
 through retained public handles. Their README gives execution instructions;
 browser compilation alone does not prove these manual contracts. Headless
-source-focus controls are distinct from real system/page focus transitions,
-and constructor events do not establish physical keyboard layouts or OS IME.
+source-focus controls are distinct from real system/page focus transitions.
+The document-visibility control supplies a controlled `Document.hidden`
+source rather than claiming a real background-tab transition. Constructor
+events do not establish physical keyboard layouts or OS IME.
 
 ### Native text sizing captures conversion inputs on the owner lane
 

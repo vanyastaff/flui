@@ -82,7 +82,7 @@ mod browser {
     #[wasm_bindgen]
     pub struct BrowserWindowProbe {
         window: Arc<dyn HostWindow>,
-        _platform: Arc<WebPlatform>,
+        platform: Arc<WebPlatform>,
         capture: Weak<()>,
     }
 
@@ -98,11 +98,12 @@ mod browser {
     impl BrowserWindowProbe {
         pub fn snapshot(&self) -> String {
             format!(
-                r#"{{"focused":{},"active":{},"capture_alive":{},"platform_active":{},"surface_available":{}}}"#,
+                r#"{{"focused":{},"active":{},"visible":{},"capture_alive":{},"platform_active":{},"surface_available":{}}}"#,
                 self.window.is_focused(),
                 self.window.is_active(),
+                self.window.is_visible(),
                 self.capture.upgrade().is_some(),
-                self._platform.active_window().is_some(),
+                self.platform.active_window().is_some(),
                 self.window.window_handle().is_ok(),
             )
         }
@@ -118,7 +119,7 @@ mod browser {
             prevent_default: bool,
         ) -> Result<BrowserWindowProbe, JsValue> {
             make_keyboard_probe(
-                Arc::clone(&self._platform),
+                Arc::clone(&self.platform),
                 label,
                 propagate,
                 prevent_default,
@@ -162,6 +163,13 @@ mod browser {
                     }
                     append_result("close-prefix", "returned");
                 })),
+                "visibility" => self.window.on_visibility_status_change(Box::new(move |_| {
+                    append_result("close-prefix", "visibility");
+                    if let Some(window) = window.upgrade() {
+                        window.close();
+                    }
+                    append_result("close-prefix", "returned");
+                })),
                 _ => panic!("unknown close probe source"),
             }
             self.window
@@ -199,7 +207,7 @@ mod browser {
         let witness = Arc::downgrade(&capture);
         let key_output = format!("focus-keys-{label}");
         window.on_input(Box::new(move |input| {
-            let _keep_capture_live = &capture;
+            let _ = &capture;
             if let PlatformInput::Keyboard(event) = input {
                 let key = match &event.key {
                     flui_platform_api::keyboard::Key::Named(key) => key.as_str(),
@@ -220,9 +228,19 @@ mod browser {
                 );
             }
         }));
+        let observation = Arc::downgrade(&window);
+        let visibility_output = format!("visibility-state-{label}");
+        window.on_visibility_status_change(Box::new(move |visible| {
+            if let Some(window) = observation.upgrade() {
+                append_result(
+                    &visibility_output,
+                    &format!("{visible}:{}", window.is_visible()),
+                );
+            }
+        }));
         Ok(BrowserWindowProbe {
             window,
-            _platform: platform,
+            platform,
             capture: witness,
         })
     }
@@ -409,7 +427,7 @@ mod browser {
         publish("ready", "input");
         Ok(BrowserWindowProbe {
             window,
-            _platform: platform,
+            platform,
             capture: witness,
         })
     }

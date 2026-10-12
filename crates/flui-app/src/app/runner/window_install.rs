@@ -265,6 +265,12 @@ impl WindowInstall {
                 RuntimeTask::Event(RuntimeEvent::WindowFocus(focused)),
             );
         }));
+        window.on_visibility_status_change(Box::new(move |visible| {
+            let _ = dispatch_platform_ui_runtime(
+                dispatcher,
+                RuntimeTask::Event(RuntimeEvent::WindowVisibility(visible)),
+            );
+        }));
         window.on_hover_status_change(Box::new(move |is_hovered| {
             let _ = dispatch_platform_ui_runtime(
                 dispatcher,

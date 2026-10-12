@@ -44,12 +44,22 @@ pub(super) fn register_event_listeners(
     register_pointer_events(canvas, &callbacks, registration)?;
     register_keyboard_events(canvas, &callbacks, registration)?;
     let focus = register_focus_events(window, registration)?;
+    let visibility = Rc::new(window.visibility_sync(Rc::clone(&registration.accepting)));
+    let observer = Rc::clone(&visibility);
+    registration.listen(
+        visibility.document.as_ref(),
+        "visibilitychange",
+        move |_| {
+            observer.sync();
+        },
+    )?;
     register_wheel_events(canvas, &callbacks, registration)?;
     register_context_menu_block(canvas, registration)?;
     register_layout_events(window, registration)?;
-    // Required host registration calls can change focus before its listeners
-    // exist. Reconcile once after successful installation, before Created.
+    // Host registration calls can change native state before its listeners
+    // exist. Reconcile after successful installation, before Created.
     focus.sync();
+    visibility.sync();
     Ok(())
 }
 

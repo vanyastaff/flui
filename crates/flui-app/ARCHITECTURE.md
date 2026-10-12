@@ -303,7 +303,9 @@ sampling and addressed publication share that phase; the test installs neither
 focus callbacks nor observations itself. Native focus, visibility or execution changed during mounting reaches
 the addressed owner instead of retaining its constructor observation. An
 unfocused, visible running window remains eligible for rendering, and focus
-restoration reaches the same owner. This headless test does not execute GPU
+restoration reaches the same owner. Later native visibility changes use the same
+installed observer: hide disables frames and show restores the lifecycle without
+overriding suspended execution. This headless test does not execute GPU
 construction or browser document/system focus transitions. Omitting the
 production phase's snapshot makes the mount-time focus-loss row fail.
 

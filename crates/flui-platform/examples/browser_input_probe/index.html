@@ -18,6 +18,7 @@ pre { position: relative; z-index: 9999; background: white; width: max-content; 
   <button id="keyboard-dispatch">Check independent keyboard dispatch bits (fresh page)</button>
   <button id="registration-rollback">Check registration rollback (fresh page)</button>
   <button id="registration-focus">Check focus during registration (fresh page)</button>
+  <button id="document-visibility">Check document visibility source and retirement (fresh page)</button>
   <button id="pointer-retirement">Arm trusted pointer retirement matrix (fresh page)</button>
   <button id="frame-retirement">Check frame retirement and replacement (fresh page)</button>
   <button id="keyboard-getter-reentry">Check keyboard getter reentry (fresh page)</button>
@@ -206,6 +207,78 @@ document.getElementById('registration-focus').onclick = () => check('registratio
     owner?.close(); owner?.free(); host.remove();
   }
 });
+document.getElementById('document-visibility').onclick = () => check('document-visibility-check', () => {
+  if (inputOwner) throw new Error('Run on a fresh page');
+  // Controlled document source, real registration and public window handles.
+  // This does not claim an OS/browser tab switch occurred.
+  const descriptor = Object.getOwnPropertyDescriptor(document, 'hidden');
+  const text = Object.getOwnPropertyDescriptor(Node.prototype, 'textContent');
+  const add = EventTarget.prototype.addEventListener;
+  const owners = [];
+  let hidden = true;
+  Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden });
+  const emit = value => { hidden = value; document.dispatchEvent(new Event('visibilitychange')); };
+  const output = label => document.getElementById(`visibility-state-${label}`)?.textContent || '';
+  try {
+    const owner = keyboard_window_probe('visibility', true, false); owners.push(owner);
+    equal(JSON.parse(owner.snapshot()), { visible: false });
+    report('visibility-initial', 'PASS');
+    emit(false); emit(false); emit(true);
+    equal({ trace: output('visibility'), ...JSON.parse(owner.snapshot()) }, { trace: 'true:true,false:false,', visible: false });
+    emit(false);
+    report('visibility-transitions', 'PASS');
+    let fired = false;
+    Object.defineProperty(Node.prototype, 'textContent', { ...text, set(value) {
+      text.set.call(this, value);
+      if (this.id === 'focus-keys-visibility' && !fired) { fired = true; emit(true); emit(false); }
+    }});
+    const canvas = document.querySelector('canvas'); canvas.focus();
+    canvas.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', bubbles: true }));
+    Object.defineProperty(Node.prototype, 'textContent', text);
+    equal({ fired, trace: output('visibility') }, { fired: true, trace: 'true:true,false:false,true:true,false:false,true:true,' });
+    report('visibility-causal', 'PASS');
+    owner.close_on('visibility'); emit(true);
+    equal({ trace: document.getElementById('close-prefix')?.textContent, ...JSON.parse(owner.snapshot()) }, { trace: 'visibility,returned,closed,', surface_available: false });
+    emit(false);
+    const next = owner.reopen('visibility-next', true, false); owners.push(next);
+    emit(true);
+    equal({ trace: output('visibility-next'), old: output('visibility') }, { trace: 'false:false,', old: 'true:true,false:false,true:true,false:false,true:true,' });
+    next.close(); emit(false);
+    equal({ trace: output('visibility-next') }, { trace: 'false:false,' });
+    report('visibility-retirement', 'PASS');
+    let changed = false;
+    EventTarget.prototype.addEventListener = function(kind, listener, options) {
+      const result = add.call(this, kind, listener, options);
+      if (this instanceof HTMLCanvasElement && !changed) { changed = true; hidden = true; }
+      return result;
+    };
+    const installed = keyboard_window_probe('visibility-installed', true, false); owners.push(installed);
+    EventTarget.prototype.addEventListener = add;
+    equal({ changed, ...JSON.parse(installed.snapshot()) }, { changed: true, visible: false });
+    installed.close();
+    report('visibility-installation', 'PASS');
+    EventTarget.prototype.addEventListener = function(kind, listener, options) {
+      add.call(this, kind, listener, options);
+      if (this === document && kind === 'visibilitychange') throw new Error('visibility source admission refused');
+    };
+    let refused = false;
+    try { const partial = keyboard_window_probe('visibility-refused', true, false); owners.push(partial); } catch { refused = true; }
+    EventTarget.prototype.addEventListener = add;
+    equal({ refused, created: document.getElementById('created-visibility-refused')?.textContent || '' }, { refused: true, created: '' });
+    const repaired = keyboard_window_probe('visibility-repaired', true, false); owners.push(repaired);
+    equal(JSON.parse(repaired.snapshot()), { visible: false });
+    emit(false);
+    equal({ trace: output('visibility-repaired') }, { trace: 'true:true,' });
+    report('visibility-rollback', 'PASS');
+  } finally {
+    EventTarget.prototype.addEventListener = add;
+    Object.defineProperty(Node.prototype, 'textContent', text);
+    for (const owner of owners) { owner.close(); owner.free(); }
+    if (descriptor) Object.defineProperty(document, 'hidden', descriptor);
+    else delete document.hidden;
+  }
+});
+
 document.getElementById('pointer-retirement').onclick = () => check('pointer-retirement-armed', () => {
   if (inputOwner) throw new Error('Run on a fresh page');
   const cases = ['pointerId', 'buttons', 'capture-close', 'getter-reopen', 'capture-reopen-admitted'];

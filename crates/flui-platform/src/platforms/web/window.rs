@@ -2,6 +2,7 @@
 
 use std::{
     cell::{Cell, RefCell},
+    rc::Rc,
     sync::Arc,
 };
 
@@ -172,7 +173,7 @@ impl WebWindow {
             height,
             scale_factor,
             focused: effective_focus(&canvas),
-            visible: true,
+            visible: !document.hidden(),
             fullscreen: false,
         };
 
@@ -234,6 +235,19 @@ impl WebWindow {
         }
     }
 
+    pub(super) fn visibility_sync(&self, accepting: Rc<Cell<bool>>) -> VisibilitySync {
+        VisibilitySync {
+            document: self
+                .canvas
+                .owner_document()
+                .expect("BUG: window construction verified the canvas document"),
+            state: Arc::clone(&self.state),
+            callbacks: Arc::clone(&self.callbacks),
+            observed: Cell::new(self.state.lock().visible),
+            accepting,
+        }
+    }
+
     fn retire(&self, notify_close: bool) {
         let registration = self.registration.borrow_mut().take();
         let Some(registration) = registration else {
@@ -290,6 +304,27 @@ impl FocusSync {
         let state = Arc::clone(&self.state);
         self.callbacks
             .dispatch_focus_observation(focused, move || state.lock().focused = focused);
+    }
+}
+
+pub(super) struct VisibilitySync {
+    pub(super) document: web_sys::Document,
+    state: Arc<Mutex<WebWindowState>>,
+    callbacks: Arc<WindowCallbacks>,
+    observed: Cell<bool>,
+    accepting: Rc<Cell<bool>>,
+}
+
+impl VisibilitySync {
+    pub(super) fn sync(&self) {
+        let visible = !self.document.hidden();
+        // A host getter can synchronously retire this registration.
+        if !self.accepting.get() || self.observed.replace(visible) == visible {
+            return;
+        }
+        let state = Arc::clone(&self.state);
+        self.callbacks
+            .dispatch_visibility_observation(visible, move || state.lock().visible = visible);
     }
 }
 
