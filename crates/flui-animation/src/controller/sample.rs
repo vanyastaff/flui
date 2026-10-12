@@ -74,7 +74,7 @@ impl AnimationController {
             TickSource::Repeat(run) => {
                 let profile = crate::observability::ProfileSpan::sampling();
                 let sample = run.sample(cycle);
-                profile.close(retirement.has_failure());
+                profile.close(retirement);
                 let mut inner = self.inner.borrow_mut();
                 if !inner.matches_sample(&identity) {
                     return;
@@ -87,6 +87,10 @@ impl AnimationController {
                 let mut prepared = None;
                 let profile = crate::observability::ProfileSpan::sampling();
                 retirement.run_classified(FailureClass::Computation, |_| {
+                    // Creating/entering the span can withdraw this captured source.
+                    if !self.inner.borrow().matches_sample(&identity) {
+                        return;
+                    }
                     if let SimulationRun::Value(source) = simulation
                         && !source
                             .stage_sample(cycle, &|| self.inner.borrow().matches_sample(&identity))
@@ -102,7 +106,7 @@ impl AnimationController {
                         && (simulation.reached_bound(sampled) || simulation.is_done(cycle));
                     prepared = Some((sampled, done));
                 });
-                profile.close(retirement.has_failure());
+                profile.close(retirement);
                 let Some((sampled, done)) = prepared else {
                     return;
                 };
@@ -133,6 +137,9 @@ impl AnimationController {
                 };
                 let mut prepared = None;
                 retirement.run_classified(FailureClass::Computation, |_| {
+                    if !self.inner.borrow().matches_sample(&identity) {
+                        return;
+                    }
                     let value = if t <= 0.0 {
                         *start
                     } else if t >= 1.0 {
@@ -143,7 +150,7 @@ impl AnimationController {
                     };
                     prepared = Some(value);
                 });
-                profile.close(retirement.has_failure());
+                profile.close(retirement);
                 let Some(value) = prepared else {
                     return;
                 };

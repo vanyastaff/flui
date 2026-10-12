@@ -2,6 +2,7 @@
 
 #[cfg(feature = "diagnostics")]
 use flui_foundation::panic::PanicRecovery;
+use flui_foundation::panic::RecoveryScope;
 
 /// Run only a subscriber callout, never the animation operation itself.
 #[cfg(feature = "diagnostics")]
@@ -54,15 +55,15 @@ impl ProfileSpan {
 
     /// Caught animation failures remain authoritative during observer cleanup.
     #[inline]
-    pub(crate) fn close(self, failed: bool) {
+    pub(crate) fn close(self, recovery: &RecoveryScope<'_>) {
         #[cfg(feature = "diagnostics")]
         {
             let mut profile = self;
-            profile.finish(failed);
+            profile.finish(recovery.has_failure());
         }
         #[cfg(not(feature = "diagnostics"))]
         {
-            let _ = (self, failed);
+            let _ = (self, recovery);
         }
     }
 

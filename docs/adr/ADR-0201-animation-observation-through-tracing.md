@@ -69,6 +69,10 @@ retains that opaque dispatcher rather than invoking its arbitrary destructor.
 The controller passes caught failure custody explicitly; `thread::panicking()`
 alone cannot describe an error already caught by a listener round.
 The animation operation itself never runs inside a suppression boundary.
+Sampling revalidates its run and sample identity after span creation/entry,
+before invoking a user curve or simulation, and again before publication after
+span closure. A subscriber that cancels or replaces the captured run cannot
+leave its old source callable by the displaced sample.
 Subscriber-internal partial registration or an aggregate destructor that
 double-panics remains outside this guarantee; failed observation may lose data.
 
@@ -84,6 +88,9 @@ controller and a profile containing only build/layout/paint.
 The optional observation contract also covers lifecycle correlation, filtered
 and feature-disabled capture, subscriber reentry, isolated/competing subscriber
 failures and progress after containment through public controller handles.
+`animation_observation_contract` also cancels real curve and simulation runs
+from sampling-span creation: the displaced sources stay silent, their original
+futures are canceled, healthy peers advance and a fresh run completes.
 `diagnostic_subscriber_retirement_contract` reproduces competing listener,
 span-exit, span-close and last-subscriber destructor failures in a child process.
 `developer_history_respects_capacity_and_clear` also covers a runtime-driven

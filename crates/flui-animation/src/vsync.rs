@@ -662,7 +662,7 @@ impl Vsync {
             let authority = self.frame_authority();
             self.tick_all_with_retirement(*tick, &authority, None, retirement);
         });
-        profile.close(retirement.has_failure());
+        profile.close(retirement);
     }
 
     /// A directly ticked subtree retains the clock authority of its live parent

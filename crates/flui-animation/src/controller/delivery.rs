@@ -90,7 +90,7 @@ impl AnimationController {
                 retirement.run_with(|retirement| {
                     self.notifier.notify_listeners_with_recovery(retirement);
                 });
-                profile.close(retirement.has_failure());
+                profile.close(retirement);
             }
             if drain {
                 self.drain_delivery(retirement);
@@ -165,7 +165,7 @@ impl AnimationController {
                         retirement.retire_classified(FailureClass::Delivery, callback);
                     }
                     if let Some(profile) = profile {
-                        profile.close(retirement.has_failure());
+                        profile.close(retirement);
                     }
                 }
                 ControllerDelivery::Run(delivery) => {
@@ -179,7 +179,7 @@ impl AnimationController {
                             delivery.deliver();
                         }
                     });
-                    profile.close(retirement.has_failure());
+                    profile.close(retirement);
                 }
                 ControllerDelivery::Retire(retired) => {
                     retirement.retire_classified(FailureClass::Delivery, retired);

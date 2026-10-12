@@ -638,6 +638,10 @@ fn animation_observation_contract() {
             transitions_follow_real_run_outcomes,
         ),
         ("filtered_diagnostics", filtered_diagnostics_do_not_emit),
+        (
+            "rate_command_during_sampling",
+            a_rate_command_during_sampling_remains_pending,
+        ),
         #[cfg(feature = "diagnostics")]
         (
             "subscriber_failure_matrix",
@@ -658,5 +662,150 @@ fn animation_observation_contract() {
             "source_failure_and_observer_close",
             source_failure_survives_failed_observation_and_keeps_peers_deliverable,
         ),
+        #[cfg(feature = "diagnostics")]
+        (
+            "subscriber_cancels_before_curve_sampling",
+            subscriber_cancellation_silences_the_displaced_curve,
+        ),
+        #[cfg(feature = "diagnostics")]
+        (
+            "subscriber_cancels_before_simulation_sampling",
+            subscriber_cancellation_silences_the_displaced_simulation,
+        ),
     ]);
+}
+
+fn a_rate_command_during_sampling_remains_pending() {
+    struct RateOnce(std::cell::Cell<bool>);
+    impl flui_animation::Curve for RateOnce {
+        fn transform(&self, t: f64) -> f64 {
+            if self.0.replace(false) {
+                let controller = OBSERVED.with(|observed| observed.borrow().clone());
+                controller
+                    .expect("sampling controller")
+                    .set_playback_rate(flui_animation::PlaybackRate::new(3.0).expect("newer rate"));
+            }
+            t.clamp(0.0, 1.0)
+        }
+    }
+    let controller = AnimationController::builder(Duration::from_secs(1)).build();
+    OBSERVED.with(|observed| *observed.borrow_mut() = Some(controller.clone()));
+    let original = controller
+        .animate_to_curved(1.0, None, RateOnce(std::cell::Cell::new(true)))
+        .expect("curved run");
+    controller.set_playback_rate(flui_animation::PlaybackRate::new(2.0).expect("captured rate"));
+    controller.tick_at(Duration::from_millis(100));
+    assert!((controller.value() - 0.1).abs() < 1e-9);
+    controller.tick_at(Duration::from_millis(200));
+    let applied = controller.playback_rate();
+    OBSERVED.with(|observed| *observed.borrow_mut() = None);
+    assert_eq!(
+        applied,
+        flui_animation::PlaybackRate::new(3.0).expect("newer rate"),
+        "a captured rate must not erase a later command from the curve"
+    );
+    controller.tick_at(Duration::from_millis(300));
+    assert!((controller.value() - 0.6).abs() < 1e-9);
+    controller.tick_at(Duration::from_secs(1));
+    assert!(original.is_complete());
+}
+
+#[cfg(feature = "diagnostics")]
+fn subscriber_cancellation_silences_the_displaced_curve() {
+    subscriber_cancellation_silences_the_displaced_source(false);
+}
+
+#[cfg(feature = "diagnostics")]
+fn subscriber_cancellation_silences_the_displaced_simulation() {
+    subscriber_cancellation_silences_the_displaced_source(true);
+}
+
+#[cfg(feature = "diagnostics")]
+fn subscriber_cancellation_silences_the_displaced_source(use_simulation: bool) {
+    struct CancelSampling(Arc<AtomicBool>);
+    impl<S: Subscriber> Layer<S> for CancelSampling {
+        fn on_new_span(
+            &self,
+            attrs: &tracing::span::Attributes<'_>,
+            _: &tracing::span::Id,
+            _: Context<'_, S>,
+        ) {
+            if attrs.metadata().name() == "animation_sampling"
+                && self.0.swap(false, Ordering::Relaxed)
+            {
+                let controller = OBSERVED.with(|observed| observed.borrow().clone());
+                controller
+                    .expect("observed controller")
+                    .stop()
+                    .expect("cancel before sampling");
+            }
+        }
+    }
+    struct DisplacedCurve(Arc<AtomicUsize>);
+    impl flui_animation::Curve for DisplacedCurve {
+        fn transform(&self, _: f64) -> f64 {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            std::panic::panic_any("displaced curve sampled");
+        }
+    }
+    struct DisplacedSimulation(Arc<AtomicUsize>);
+    impl flui_animation::Simulation for DisplacedSimulation {
+        fn x(&self, time: f64) -> f64 {
+            if time == 0.0 {
+                return 0.0;
+            }
+            self.0.fetch_add(1, Ordering::Relaxed);
+            std::panic::panic_any("displaced simulation sampled");
+        }
+        fn dx(&self, _: f64) -> f64 {
+            0.0
+        }
+        fn is_done(&self, _: f64) -> bool {
+            false
+        }
+    }
+    flui_testing::log_capture::disarm_interest_cache();
+    let armed = Arc::new(AtomicBool::new(false));
+    let calls = Arc::new(AtomicUsize::new(0));
+    tracing::subscriber::with_default(
+        tracing_subscriber::registry().with(CancelSampling(Arc::clone(&armed))),
+        || {
+            let registry = Vsync::new();
+            let owner =
+                AnimationController::builder(Duration::from_millis(100)).build_on(Some(&registry));
+            let controller = owner.controller();
+            OBSERVED.with(|observed| *observed.borrow_mut() = Some(controller.clone()));
+            let original = if use_simulation {
+                controller.animate_with(DisplacedSimulation(Arc::clone(&calls)))
+            } else {
+                controller.animate_to_curved(1.0, None, DisplacedCurve(Arc::clone(&calls)))
+            }
+            .expect("source run");
+            let peer =
+                AnimationController::builder(Duration::from_millis(100)).build_on(Some(&registry));
+            let peer_run = peer.controller().forward().expect("peer run");
+            let mut clock = flui_animation::MotionClock::new();
+            registry.tick_all(&clock.frame(Duration::ZERO));
+            armed.store(true, Ordering::Relaxed);
+            let sampled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                registry.tick_all(&clock.frame(Duration::from_millis(50)));
+            }));
+            OBSERVED.with(|observed| *observed.borrow_mut() = None);
+            assert!(
+                sampled.is_ok(),
+                "a subscriber-canceled source must not be invoked"
+            );
+            assert!(!armed.load(Ordering::Relaxed));
+            assert_eq!(calls.load(Ordering::Relaxed), 0);
+            assert!(original.is_canceled());
+            assert_eq!(controller.value(), 0.0);
+            assert!((peer.controller().value() - 0.5).abs() < 1e-9);
+            let next = controller
+                .forward()
+                .expect("fresh run without the displaced curve");
+            registry.tick_all(&clock.frame(Duration::from_millis(50)));
+            registry.tick_all(&clock.frame(Duration::from_millis(150)));
+            assert!(next.is_complete() && peer_run.is_complete());
+        },
+    );
 }

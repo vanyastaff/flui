@@ -125,7 +125,12 @@ impl Transition {
                 .span()
                 .and_then(tracing::Span::id)
                 .map(|id| id.into_u64());
-            let context = tracing::Span::current().id().map(|id| id.into_u64());
+            let context = tracing::dispatcher::get_default(|dispatch| {
+                dispatch
+                    .current_span()
+                    .id()
+                    .map(tracing::span::Id::into_u64)
+            });
             tracing::debug!(
                 target: "flui_animation::diagnostics", parent: self.trace.span().and_then(tracing::Span::id),
                 controller = controller, context_span = context,
