@@ -45,7 +45,12 @@ impl DeferredVisualUpdate {
     pub fn notify_with(mut self, recovery: &mut flui_foundation::panic::RecoveryScope<'_>) {
         let callback = self.0.take();
         if let Some(callback) = callback.as_ref() {
-            recovery.run(|| callback());
+            // Every snapshot producer has already admitted its dirty work or
+            // capability update. Callback delivery cannot undo that admission;
+            // arbitrary capture retirement below has separate Unknown custody.
+            recovery.run_classified(flui_foundation::panic::FailureClass::Delivery, |_| {
+                callback();
+            });
         }
         recovery.retire(callback);
     }
