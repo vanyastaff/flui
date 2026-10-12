@@ -1,6 +1,6 @@
 //! A controlled horizontal numeric slider with pointer, keyboard and assistive input.
 
-use crate::support::{ValueCallback, retirement::Terminal, value_callback};
+use crate::support::{ValueCallback, command_modifiers, retirement::Terminal, value_callback};
 use crate::{CustomPaint, Directionality, Focus, GestureDetector, LayoutBuilder, Semantics};
 use flui_foundation::geometry::{Point, Rect, Size};
 use flui_interaction::{
@@ -8,6 +8,7 @@ use flui_interaction::{
     routing::{FocusNode, KeyEventResult},
 };
 use flui_painting::{Canvas, Paint, styling::Color, typography::TextDirection};
+use flui_platform_api::keyboard::ImeComposition;
 use flui_rendering::{
     delegates::CustomPainter, hit_testing::HitTestBehavior, semantics::NumericRange,
 };
@@ -334,7 +335,11 @@ impl ViewState<Slider> for SliderState {
                 }
             })
             .on_key_event(move |cx, event| {
-                if event.state() != KeyState::Down || !key.usable() || !key.admits_context(cx) {
+                if event.state() != KeyState::Down
+                    || event.composition == ImeComposition::Active
+                    || !key.usable()
+                    || !key.admits_context(cx)
+                {
                     return KeyEventResult::Ignored;
                 }
                 if crate::SingleActivator::character_ignoring_shift("+").matches(event) {
@@ -345,7 +350,7 @@ impl ViewState<Slider> for SliderState {
                     key.stepped(cx, false);
                     return KeyEventResult::Handled;
                 }
-                if !event.modifiers.is_empty() {
+                if !command_modifiers(event.modifiers).is_empty() {
                     return KeyEventResult::Ignored;
                 }
                 match event.key {

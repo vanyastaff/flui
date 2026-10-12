@@ -25,7 +25,7 @@ use flui_painting::{
     typography::{TextDirection, TextSpan, TextStyle},
 };
 use flui_platform_api::TargetPlatform;
-use flui_platform_api::keyboard::{Key, KeyRepeat, KeyState, Modifiers, NamedKey};
+use flui_platform_api::keyboard::{ImeComposition, Key, KeyRepeat, KeyState, Modifiers, NamedKey};
 use flui_platform_api::text_store::OwnerCalls;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::pipeline::PipelineCell;
@@ -39,7 +39,7 @@ use crate::interaction::actions::{
     PasteTextIntent, SelectAllTextIntent, as_node_context, erased_action, layered_chain,
 };
 use crate::semantics::Semantics;
-use crate::support::ref_callback;
+use crate::support::{command_modifiers, ref_callback};
 use crate::text::controller::TextEditingController;
 use crate::text::text_store::{EditableTextStore, FieldParts, with_editable_global};
 
@@ -2167,14 +2167,15 @@ pub(super) fn bounds_from_rect(rect: Rect) -> Bounds<f64> {
 /// Whether these modifiers make a key a *command* rather than *text*.
 ///
 /// Meta (Cmd) always is. Control is, except in combination with Alt: Win32
-/// reports AltGr as Control+Alt, and since no FLUI backend sets
-/// `Modifiers::ALT_GRAPH`, that combination is the only signal an AltGr layout
-/// gives us — treating it as a command would make `@`, `€` and the rest
-/// untypeable on most non-US keyboards.
+/// can report AltGr as Control+Alt without explicit AltGraph. Retain that
+/// conservative text fallback when the source cannot distinguish the chord.
+/// Explicit AltGraph has already excluded Control/Alt from these command
+/// dimensions; Meta still has priority.
 ///
 /// The cost of that carve-out, stated rather than discovered: a genuine
-/// Ctrl+Alt+X shortcut is delivered as text. Browsers make the same trade for
-/// the same reason.
+/// Ctrl+Alt+X shortcut is delivered as text in a focused field. An additional
+/// genuine Control alongside explicit AltGraph also keeps glyph interpretation;
+/// the raw event remains available to authored handlers.
 #[inline]
 fn is_command_chord(modifiers: Modifiers) -> bool {
     modifiers.contains(Modifiers::META)
@@ -2231,8 +2232,8 @@ fn word_jump_modifier(platform: TargetPlatform) -> Modifiers {
 /// so a later line-boundary implementation is not fighting an existing,
 /// wrong meaning for the chord.
 ///
-/// Arrow and Backspace/Delete keys never produce a character, so this has
-/// no AltGr carve-out to make (contrast [`is_command_chord`], which does).
+/// This receives the same command projection as character handling, so explicit
+/// AltGraph's Control/Alt aliases cannot request word movement or deletion.
 ///
 /// # Exact chord, not just "the modifier is held"
 ///
@@ -2245,11 +2246,8 @@ fn word_jump_modifier(platform: TargetPlatform) -> Modifiers {
 /// is not meant to be word-jump at all — Ctrl+Alt+Right on Linux,
 /// Option+Command+Right on macOS — would wrongly take the word-jump path
 /// just because it happens to also hold the required key. Lock-state
-/// flags (`CAPS_LOCK`/`NUM_LOCK`/`SCROLL_LOCK`/`FN_LOCK`) and
-/// `ALT_GRAPH`/`FN`/`SYMBOL` are deliberately excluded from the mask —
-/// they are not "another command modifier" in the sense this guards
-/// against, and treating an incidental Caps Lock as disqualifying would
-/// be its own new bug.
+/// flags, Fn and Symbol were excluded by the command projection; an incidental
+/// Caps Lock does not disqualify word movement.
 #[inline]
 fn is_word_jump_modifier(modifiers: Modifiers, platform: TargetPlatform) -> bool {
     let required = word_jump_modifier(platform);
@@ -2289,9 +2287,10 @@ fn build_key_handler(
         if !focus_node.can_request_focus() {
             return KeyEventResult::Ignored;
         }
-        if event.state() != KeyState::Down {
+        if event.state() != KeyState::Down || event.composition == ImeComposition::Active {
             return KeyEventResult::Ignored;
         }
+        let modifiers = command_modifiers(event.modifiers);
         match &event.key {
             // A command chord is not text. Leave it unconsumed so
             // `FocusManager::dispatch_key_event`'s leaf->root walk reaches the
@@ -2307,7 +2306,7 @@ fn build_key_handler(
             // cover no caret-movement intent, so guarding them would not route
             // Ctrl+Home somewhere better — it would make it a no-op. Widen
             // this together with the binding that would answer them.
-            Key::Character(_) if is_command_chord(event.modifiers) => KeyEventResult::Ignored,
+            Key::Character(_) if is_command_chord(modifiers) => KeyEventResult::Ignored,
             Key::Character(character_string) => {
                 // Suppression contract (`ImeEvent`'s doc): suppress
                 // `Key::Character` insertion ONLY while a composition is
@@ -2328,7 +2327,7 @@ fn build_key_handler(
             // `is_word_jump_modifier`'s doc for which modifier that is on
             // this platform.
             Key::Named(NamedKey::Backspace) => {
-                if is_word_jump_modifier(event.modifiers, platform) {
+                if is_word_jump_modifier(modifiers, platform) {
                     controller.delete_word_backward();
                 } else {
                     controller.backspace();
@@ -2338,7 +2337,7 @@ fn build_key_handler(
             // Ctrl/Alt+Delete is the forward mirror of the Backspace arm
             // above.
             Key::Named(NamedKey::Delete) => {
-                if is_word_jump_modifier(event.modifiers, platform) {
+                if is_word_jump_modifier(modifiers, platform) {
                     controller.delete_word_forward();
                 } else {
                     controller.delete_forward();
@@ -2353,8 +2352,8 @@ fn build_key_handler(
             // the granularity from character to WORD without changing that
             // axis — the two modifiers compose independently.
             Key::Named(NamedKey::ArrowLeft) => {
-                let extend = event.modifiers.contains(Modifiers::SHIFT);
-                let by_word = is_word_jump_modifier(event.modifiers, platform);
+                let extend = modifiers.contains(Modifiers::SHIFT);
+                let by_word = is_word_jump_modifier(modifiers, platform);
                 match (by_word, extend) {
                     (true, true) => controller.extend_selection_word_left(),
                     (true, false) => controller.move_caret_word_left(),
@@ -2364,8 +2363,8 @@ fn build_key_handler(
                 KeyEventResult::Handled
             }
             Key::Named(NamedKey::ArrowRight) => {
-                let extend = event.modifiers.contains(Modifiers::SHIFT);
-                let by_word = is_word_jump_modifier(event.modifiers, platform);
+                let extend = modifiers.contains(Modifiers::SHIFT);
+                let by_word = is_word_jump_modifier(modifiers, platform);
                 match (by_word, extend) {
                     (true, true) => controller.extend_selection_word_right(),
                     (true, false) => controller.move_caret_word_right(),
@@ -2375,7 +2374,7 @@ fn build_key_handler(
                 KeyEventResult::Handled
             }
             Key::Named(NamedKey::Home) => {
-                if event.modifiers.contains(Modifiers::SHIFT) {
+                if modifiers.contains(Modifiers::SHIFT) {
                     controller.extend_selection_home();
                 } else {
                     controller.move_caret_home();
@@ -2383,7 +2382,7 @@ fn build_key_handler(
                 KeyEventResult::Handled
             }
             Key::Named(NamedKey::End) => {
-                if event.modifiers.contains(Modifiers::SHIFT) {
+                if modifiers.contains(Modifiers::SHIFT) {
                     controller.extend_selection_end();
                 } else {
                     controller.move_caret_end();
@@ -2407,7 +2406,7 @@ fn build_key_handler(
                 // `Key::Character` arm's own command-chord guard — without
                 // this, Ctrl+Enter/Cmd+Enter would be swallowed here
                 // instead of reaching an ancestor `Shortcuts`.
-                if is_command_chord(event.modifiers) {
+                if is_command_chord(modifiers) {
                     return KeyEventResult::Ignored;
                 }
                 // Shift+Enter is reserved for a future multiline newline,
@@ -2416,7 +2415,7 @@ fn build_key_handler(
                 // this is simply `Ignored`, but the reservation is
                 // deliberate: a later multiline field must not find
                 // Shift+Enter's meaning already claimed by submit.
-                if event.modifiers.contains(Modifiers::SHIFT) {
+                if modifiers.contains(Modifiers::SHIFT) {
                     return KeyEventResult::Ignored;
                 }
                 // Clone the callback and drop the borrow before calling
