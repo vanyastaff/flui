@@ -187,6 +187,7 @@ pub struct SemanticsNodeSnapshot {
     decreased_value: Option<AttributedString>,
     hint: Option<AttributedString>,
     tooltip: Option<SmolStr>,
+    placeholder: Option<SmolStr>,
     text_direction: Option<TextDirection>,
     custom_actions: Box<[CustomSemanticsAction]>,
     tags: Box<[SemanticsTag]>,
@@ -229,6 +230,7 @@ impl SemanticsNodeSnapshot {
             decreased_value: config.decreased_value().cloned(),
             hint: config.hint().cloned(),
             tooltip: config.tooltip().map(SmolStr::new),
+            placeholder: config.placeholder().map(SmolStr::new),
             text_direction: config.text_direction(),
             custom_actions: config
                 .effective_custom_actions()
@@ -341,6 +343,13 @@ impl SemanticsNodeSnapshot {
     #[must_use]
     pub fn tooltip(&self) -> Option<&str> {
         self.tooltip.as_deref()
+    }
+
+    /// Returns what an empty text field shows in place of a value.
+    #[inline]
+    #[must_use]
+    pub fn placeholder(&self) -> Option<&str> {
+        self.placeholder.as_deref()
     }
 
     /// Returns the text direction.

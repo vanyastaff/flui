@@ -177,9 +177,11 @@ impl ViewState<RawTextFormField> for RawTextFormFieldState {
 
     fn build(&self, view: &RawTextFormField, _ctx: &dyn BuildContext) -> impl IntoView {
         self.core.build(&view.config, |input| {
+            let error = input.field.error_text();
             let mut field = RawTextField::new(input.controller.clone())
                 .obscure_text(input.obscure_text)
                 .enabled(input.enabled)
+                .invalid(error.is_some())
                 .on_changed(input.on_changed());
             if let Some(node) = &input.focus_node {
                 field = field.focus_node(Rc::clone(node));
@@ -187,7 +189,7 @@ impl ViewState<RawTextFormField> for RawTextFormFieldState {
             if let Some(on_submitted) = input.on_submitted.clone() {
                 field = field.on_submitted(move |cx, text| on_submitted(cx, text));
             }
-            with_error_line(field.boxed(), input.field.error_text())
+            with_error_line(field.boxed(), error)
         })
     }
 }

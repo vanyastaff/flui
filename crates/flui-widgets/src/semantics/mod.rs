@@ -447,6 +447,27 @@ impl Semantics {
         self
     }
 
+    /// Set whether this form control must be filled before submitting.
+    #[must_use]
+    pub fn required(mut self, required: bool) -> Self {
+        self.configuration.set_required(required);
+        self
+    }
+
+    /// Set whether this form control's value failed validation.
+    #[must_use]
+    pub fn invalid(mut self, invalid: bool) -> Self {
+        self.configuration.set_invalid(invalid);
+        self
+    }
+
+    /// Set what an empty text field shows in place of a value.
+    #[must_use]
+    pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
+        self.configuration.set_placeholder(placeholder.into());
+        self
+    }
+
     /// Set whether this node is modal, as a dialog is: while it is shown,
     /// assistive technology reaches only it and its descendants.
     #[must_use]

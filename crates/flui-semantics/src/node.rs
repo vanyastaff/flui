@@ -307,6 +307,7 @@ impl SemanticsNode {
             decreased_value: self.config.decreased_value().map(|v| v.string.clone()),
             hint: self.config.hint().map(|h| h.string.clone()),
             tooltip: self.config.tooltip().map(Into::into),
+            placeholder: self.config.placeholder().map(Into::into),
             text_direction: self.config.text_direction(),
             role: self.config.role(),
             rect: self.rect,

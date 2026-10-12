@@ -435,10 +435,21 @@ impl ViewState<TextField> for MaterialTextFieldState {
         let mut decoration = view.decoration.clone();
         decoration.enabled = effective_enabled;
 
+        // The field's own node carries what the decoration shows around it: the
+        // label names it, the hint is its placeholder and an error marks it
+        // invalid. `InputDecorator` keeps the label and hint text out of the
+        // tree so they are not announced twice.
         let mut editable = EditableText::new(self.controller.clone(), Rc::clone(&self.focus_node))
             .enabled(effective_enabled)
             .caret_color(caret_color)
-            .obscure_text(view.obscure_text);
+            .obscure_text(view.obscure_text)
+            .invalid(has_error);
+        if let Some(label) = &view.decoration.label_text {
+            editable = editable.semantic_label(label.clone());
+        }
+        if let Some(hint) = &view.decoration.hint_text {
+            editable = editable.placeholder(hint.clone());
+        }
         if let Some(text_style) = theme.text_theme.body_large {
             editable = editable.text_style(text_style);
         }

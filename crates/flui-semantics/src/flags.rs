@@ -103,6 +103,10 @@ pub enum SemanticsFlag {
     /// A live region whose changes interrupt the user (`aria-live`
     /// `assertive`); set only together with [`Self::IsLiveRegion`].
     IsLiveRegionAssertive = 1 << 29,
+    /// A form control that must be filled before submitting (`aria-required`).
+    IsRequired = 1 << 30,
+    /// A form control whose value failed validation (`aria-invalid`).
+    IsInvalid = 1 << 31,
 }
 
 impl SemanticsFlag {
@@ -145,6 +149,8 @@ impl SemanticsFlag {
             Self::HasExpandedState => "hasExpandedState",
             Self::IsModal => "isModal",
             Self::IsLiveRegionAssertive => "isLiveRegionAssertive",
+            Self::IsRequired => "isRequired",
+            Self::IsInvalid => "isInvalid",
         }
     }
 }

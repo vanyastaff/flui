@@ -245,6 +245,12 @@ fn apply_state(node: &mut Node, flags: u64, role: SemanticsRole) {
     if has_flag(flags, SemanticsFlag::IsModal) {
         node.set_modal();
     }
+    if has_flag(flags, SemanticsFlag::IsRequired) {
+        node.set_required();
+    }
+    if has_flag(flags, SemanticsFlag::IsInvalid) {
+        node.set_invalid(accesskit::Invalid::True);
+    }
 }
 
 /// Whether some platform value write reaches a handler on this node, which is
@@ -553,6 +559,9 @@ pub(crate) fn to_node(data: &SemanticsNodeData) -> Node {
     }
     if let Some(tooltip) = &data.tooltip {
         node.set_tooltip(tooltip.as_str());
+    }
+    if let Some(placeholder) = &data.placeholder {
+        node.set_placeholder(placeholder.as_str());
     }
     // AccessKit's level is zero-based where `aria-level` is one-based.
     if role == Role::Heading
@@ -1005,6 +1014,32 @@ mod tests {
             Some(Toggled::Mixed),
             "tristate must not collapse to checked/unchecked"
         );
+    }
+
+    /// A form control's required and invalid states and its placeholder reach
+    /// AccessKit, and a control without them publishes none.
+    #[test]
+    fn form_states_reach_accesskit() {
+        let plain = translate(&SemanticsNodeData {
+            flags: flags(&[SemanticsFlag::IsTextField]),
+            ..Default::default()
+        });
+        assert!(!plain.is_required());
+        assert_eq!(plain.invalid(), None);
+        assert_eq!(plain.placeholder(), None);
+
+        let node = translate(&SemanticsNodeData {
+            flags: flags(&[
+                SemanticsFlag::IsTextField,
+                SemanticsFlag::IsRequired,
+                SemanticsFlag::IsInvalid,
+            ]),
+            placeholder: Some("name@example.com".into()),
+            ..Default::default()
+        });
+        assert!(node.is_required());
+        assert_eq!(node.invalid(), Some(accesskit::Invalid::True));
+        assert_eq!(node.placeholder(), Some("name@example.com"));
     }
 
     /// A live region announces at the politeness it was given; without one,

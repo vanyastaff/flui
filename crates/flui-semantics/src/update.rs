@@ -78,6 +78,8 @@ pub struct SemanticsNodeData {
     pub hint: Option<SmolStr>,
     /// Tooltip text.
     pub tooltip: Option<SmolStr>,
+    /// What an empty text field shows in place of a value.
+    pub placeholder: Option<SmolStr>,
     /// Text direction.
     pub text_direction: Option<TextDirection>,
     /// Bounding rectangle.
@@ -148,6 +150,7 @@ impl Default for SemanticsNodeData {
             decreased_value: None,
             hint: None,
             tooltip: None,
+            placeholder: None,
             text_direction: None,
             rect: Rect::ZERO,
             transform: Matrix4::IDENTITY,

@@ -120,6 +120,9 @@ pub struct SemanticsConfiguration {
     /// The tooltip for this node.
     tooltip: Option<SmolStr>,
 
+    /// What an empty text field shows in place of a value.
+    placeholder: Option<SmolStr>,
+
     /// The text direction.
     text_direction: Option<TextDirection>,
 
@@ -202,6 +205,7 @@ impl PartialEq for SemanticsConfiguration {
             && self.decreased_value == other.decreased_value
             && self.hint == other.hint
             && self.tooltip == other.tooltip
+            && self.placeholder == other.placeholder
             && self.text_direction == other.text_direction
             && self.custom_actions == other.custom_actions
             && self.tags == other.tags
@@ -567,6 +571,28 @@ impl SemanticsConfiguration {
         self.has_flag(SemanticsFlag::IsModal)
     }
 
+    /// Sets whether this form control must be filled before submitting.
+    pub fn set_required(&mut self, value: bool) {
+        self.set_flag(SemanticsFlag::IsRequired, value);
+    }
+
+    /// Returns whether this form control must be filled.
+    #[inline]
+    pub fn is_required(&self) -> bool {
+        self.has_flag(SemanticsFlag::IsRequired)
+    }
+
+    /// Sets whether this form control's value failed validation.
+    pub fn set_invalid(&mut self, value: bool) {
+        self.set_flag(SemanticsFlag::IsInvalid, value);
+    }
+
+    /// Returns whether this form control's value failed validation.
+    #[inline]
+    pub fn is_invalid(&self) -> bool {
+        self.has_flag(SemanticsFlag::IsInvalid)
+    }
+
     /// Makes this node a live region, whose changes assistive technology
     /// announces without the user moving to it: politely, after what is being
     /// read, or assertively, interrupting it. `None` makes it an ordinary node.
@@ -791,6 +817,19 @@ impl SemanticsConfiguration {
     #[inline]
     pub fn tooltip(&self) -> Option<&str> {
         self.tooltip.as_deref()
+    }
+
+    /// Sets what an empty text field shows in place of a value, which
+    /// assistive technology reads while the field is empty.
+    pub fn set_placeholder(&mut self, placeholder: impl Into<SmolStr>) {
+        self.placeholder = Some(placeholder.into());
+        self.mark_annotated();
+    }
+
+    /// Returns the placeholder.
+    #[inline]
+    pub fn placeholder(&self) -> Option<&str> {
+        self.placeholder.as_deref()
     }
 
     // ========================================================================
@@ -1199,7 +1238,7 @@ impl SemanticsConfiguration {
     ///   semantics produced "Submit" + "loading state" → "Submit",
     ///   losing the child's hint. They now join into "Submit
     ///   loading state."
-    /// - **Value / increased_value / decreased_value / tooltip / sort_key /
+    /// - **Value / increased_value / decreased_value / tooltip / placeholder / sort_key /
     ///   text_direction / hint overrides / scroll metadata / list index /
     ///   platform view / text lengths / heading level** — first-wins (parent keeps its value
     ///   if set).
@@ -1282,6 +1321,9 @@ impl SemanticsConfiguration {
         }
         if self.tooltip.is_none() {
             self.tooltip.clone_from(&other.tooltip);
+        }
+        if self.placeholder.is_none() {
+            self.placeholder.clone_from(&other.placeholder);
         }
         if self.sort_key.is_none() {
             self.sort_key.clone_from(&other.sort_key);

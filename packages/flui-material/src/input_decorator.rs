@@ -66,8 +66,9 @@ use flui_sdk::painting::{Border, BorderRadius, BorderSide, BorderStyle, BoxDecor
 use flui_sdk::platform::Brightness;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    Column, CrossAxisAlignment, DecoratedBox, IgnorePointer, MainAxisSize, MouseRegion, Padding,
-    Text, WidgetState, WidgetStates, WidgetStatesController,
+    Assertiveness, Column, CrossAxisAlignment, DecoratedBox, ExcludeSemantics, IgnorePointer,
+    MainAxisSize, MouseRegion, Padding, Semantics, Text, WidgetState, WidgetStates,
+    WidgetStatesController,
 };
 
 use crate::color_scheme::ColorScheme;
@@ -345,6 +346,13 @@ fn helper_or_error_line(decoration: &InputDecoration) -> Option<(&str, bool)> {
 /// underline decoration: fill, underline, floating label, hint, and
 /// helper/error line.
 ///
+/// # Semantics
+///
+/// The label and hint publish no nodes: the decorated field announces them as
+/// its name and placeholder (`TextField` passes them to its `EditableText`). A
+/// custom `child` names itself. The error line is a polite live region, read
+/// when it appears; helper text is plain text.
+///
 /// # State inputs
 ///
 /// [`focused`](Self::focused) and [`is_empty`](Self::is_empty) are explicit
@@ -538,7 +546,12 @@ impl ViewState<InputDecorator> for InputDecoratorState {
                     label_style = label_style.with_font_size(font_size * 0.75);
                 }
             }
-            rows.push(Text::new(label_text).style(label_style).boxed());
+            // The decorated field announces the label as its own name.
+            rows.push(
+                ExcludeSemantics::new()
+                    .child(Text::new(label_text).style(label_style))
+                    .boxed(),
+            );
         }
         if show_hint && let Some(hint_text) = decoration.hint_text.clone() {
             let hint_style = decoration_theme
@@ -549,7 +562,12 @@ impl ViewState<InputDecorator> for InputDecoratorState {
                     |p| p.resolve(&states),
                 )
                 .unwrap_or_default();
-            rows.push(Text::new(hint_text).style(hint_style).boxed());
+            // The decorated field announces the hint as its placeholder.
+            rows.push(
+                ExcludeSemantics::new()
+                    .child(Text::new(hint_text).style(hint_style))
+                    .boxed(),
+            );
         }
         if let Some(child) = view.child.clone().into_inner() {
             rows.push(child);
@@ -587,14 +605,20 @@ impl ViewState<InputDecorator> for InputDecoratorState {
                 )
             }
             .unwrap_or_default();
-            column.push(
-                IgnorePointer::new()
-                    .child(
-                        Padding::new(supporting_line_padding(content_padding))
-                            .child(Text::new(line_text.to_string()).style(style)),
-                    )
-                    .boxed(),
-            );
+            let line = Padding::new(supporting_line_padding(content_padding))
+                .child(Text::new(line_text.to_string()).style(style));
+            // An error is announced when it appears, without the user moving
+            // to it; helper text is read in place.
+            let line = if is_error {
+                Semantics::new()
+                    .container(true)
+                    .live_region(Assertiveness::Polite)
+                    .child(line)
+                    .boxed()
+            } else {
+                line.boxed()
+            };
+            column.push(IgnorePointer::new().child(line).boxed());
         }
 
         Column::new(column)

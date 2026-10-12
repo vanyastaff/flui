@@ -222,6 +222,10 @@ fn text_input_contracts() {
             text_field::tapping_the_decorated_area_focuses_the_field_and_reaches_the_decorator,
         ),
         (
+            "text_field::the field carries its label hint and error for assistive technology",
+            text_field::the_field_carries_its_label_hint_and_error_for_assistive_technology,
+        ),
+        (
             "text_field::error line sits below the indicator outside the tap target",
             text_field::error_line_sits_below_the_indicator_outside_the_tap_target,
         ),
