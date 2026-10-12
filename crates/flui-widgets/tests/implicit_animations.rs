@@ -851,6 +851,79 @@ pub(crate) fn changing_only_the_curve_keeps_the_existing_deadline() {
     );
 }
 
+pub(crate) fn changing_only_the_duration_preserves_motion_and_sets_a_new_deadline() {
+    for duration in [Duration::from_millis(400), Duration::from_secs(2)] {
+        let registry = Vsync::new();
+        let tree = |target, duration| {
+            VsyncScope::new(
+                registry.clone(),
+                AnimatedOpacity::new(target, SizedBox::new(100.0, 50.0))
+                    .duration(duration)
+                    .curve(curves::LINEAR),
+            )
+        };
+        let mut laid = lay_out_animated(
+            tree(0.0, Duration::from_secs(1)),
+            tight(100.0, 50.0),
+            registry.clone(),
+        );
+        laid.pump_widget(tree(1.0, Duration::from_secs(1)));
+        laid.pump_for(Duration::from_millis(1));
+        laid.pump_for(Duration::from_millis(250));
+        let h = Duration::from_micros(10);
+        let earlier = laid.opacity(laid.current_root());
+        laid.pump_for(h);
+        let previous = laid.opacity(laid.current_root());
+        laid.pump_for(h);
+        let seam = laid.opacity(laid.current_root());
+        let arriving = (3.0 * seam - 4.0 * previous + earlier) / (2.0 * h.as_secs_f64());
+        assert!(seam > 0.0 && seam < 1.0 && arriving > 0.1);
+
+        laid.pump_widget(tree(1.0, duration));
+        assert_eq!(
+            laid.opacity(laid.current_root()),
+            seam,
+            "duration update holds the painted position"
+        );
+        laid.pump_for(h);
+        let departing = (laid.opacity(laid.current_root()) - seam) / h.as_secs_f64();
+        assert!(
+            (departing - arriving).abs() < 0.001,
+            "{duration:?}: painted velocity {arriving} became {departing}"
+        );
+
+        // The unique cubic matching position and velocity at both ends has
+        // midpoint (start + target)/2 + duration * start_velocity/8.
+        // This oracle observes paint only, never the motion kernel's samples.
+        laid.pump_for(
+            (duration / 2)
+                .checked_sub(h)
+                .expect("half duration exceeds the probe"),
+        );
+        let expected = seam.midpoint(1.0) + duration.as_secs_f64() * arriving / 8.0;
+        assert!(
+            (laid.opacity(laid.current_root()) - expected).abs() < 1e-6,
+            "{duration:?}: the configured duration must shape the painted trajectory"
+        );
+        assert!(registry.has_running(), "the new deadline has not arrived");
+        laid.pump_for(duration / 2);
+        assert_eq!(laid.opacity(laid.current_root()), 1.0);
+        assert!(
+            !registry.has_running(),
+            "the run ends at the configured deadline"
+        );
+        let painted = laid.painted_frame_count();
+        laid.pump_for(Duration::from_millis(100));
+        assert_eq!(
+            laid.painted_frame_count(),
+            painted,
+            "the settled owner requests no paint"
+        );
+        laid.pump_widget(SizedBox::shrink());
+        assert!(registry.is_empty(), "unmount releases the owner");
+    }
+}
+
 pub(crate) fn swapping_the_scope_registry_preserves_an_implicit_run() {
     let old = Vsync::new();
     let new = Vsync::new();
