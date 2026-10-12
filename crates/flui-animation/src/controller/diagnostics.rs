@@ -43,6 +43,11 @@ impl ControllerDiagnostics {
             previous: None,
         }
     }
+
+    /// Seed the actual constructed state before any public command can change it.
+    pub(super) fn initialize(inner: &mut AnimationControllerInner) {
+        inner.diagnostics.previous = Some(State::capture(inner));
+    }
 }
 
 pub(super) struct Transition {
@@ -63,12 +68,11 @@ impl Transition {
         delivery: Option<&RunDelivery>,
     ) -> Option<Self> {
         let state = State::capture(inner);
-        let previous = inner.diagnostics.previous.replace(state).unwrap_or(State {
-            generation: 0,
-            active: false,
-            disposed: false,
-            ..state
-        });
+        let previous = inner
+            .diagnostics
+            .previous
+            .replace(state)
+            .expect("BUG: diagnostics is seeded before a controller is published");
         let outcome = delivery.map_or("none", RunDelivery::diagnostic_outcome);
         let kind = if state.disposed != previous.disposed {
             "dispose"

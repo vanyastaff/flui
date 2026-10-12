@@ -663,6 +663,8 @@ impl AnimationController {
         let initial_status = inner.settled_status_keep_direction();
         inner.status = initial_status;
         inner.last_committed_status = initial_status;
+        #[cfg(feature = "diagnostics")]
+        diagnostics::ControllerDiagnostics::initialize(&mut inner);
 
         Self {
             inner: Rc::new(RefCell::new(inner)),

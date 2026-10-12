@@ -197,8 +197,15 @@ fn transitions_follow_real_run_outcomes() {
             .map(|record| record.get("transition").expect("transition field"))
             .collect();
         assert_eq!(
-            &kinds[..5],
-            &["start", "replace", "cancel", "start", "complete"]
+            &kinds[..6],
+            &["clock", "start", "replace", "cancel", "start", "complete"]
+        );
+        assert_eq!(transitions[0].get("clock"), Some("bound"));
+        assert_eq!(transitions[0].get("run_generation"), Some("0"));
+        assert_eq!(transitions[0].get("active"), Some("false"));
+        assert_eq!(
+            transitions[0].get("controller"),
+            transitions[1].get("controller")
         );
         assert!(kinds.contains(&"dispose"));
         let replacement = transitions
@@ -333,9 +340,10 @@ fn subscriber_failures_preserve_delivery_and_recovery() {
                                 .expect("observed controller")
                                 .value()
                         });
-                        if value == 1.0 && throws.replace(false) {
-                            panic!("real listener failure");
-                        }
+                        assert!(
+                            value != 1.0 || !throws.replace(false),
+                            "real listener failure"
+                        );
                     }));
                     let healthy = Rc::new(std::cell::Cell::new(0));
                     let tail = Rc::clone(&healthy);
@@ -464,6 +472,20 @@ fn playback_and_motion_policy_changes_are_observable() {
         fault: None,
     };
     tracing::subscriber::with_default(tracing_subscriber::registry().with(observer), || {
+        let configured = AnimationController::builder(Duration::from_millis(100)).build();
+        configured.set_playback_rate(flui_animation::PlaybackRate::new(2.0).expect("initial rate"));
+        assert!(
+            records.lock().expect("receipts").iter().any(|record| {
+                record.get("transition") == Some("playback")
+                    && record.get("run_generation") == Some("0")
+                    && record.get("active") == Some("false")
+                    && record
+                        .get("playback_rate")
+                        .and_then(|value| value.parse::<f64>().ok())
+                        == Some(2.0)
+            }),
+            "the first playback change before a run must be observable"
+        );
         let registry = Vsync::new();
         let owner =
             AnimationController::builder(Duration::from_millis(100)).build_on(Some(&registry));

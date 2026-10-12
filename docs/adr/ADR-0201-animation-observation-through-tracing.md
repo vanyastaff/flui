@@ -32,6 +32,9 @@ Without an interested subscriber, that span is disabled and no external identity
 is promised. Reused subscriber IDs are interpreted with their span lifetimes.
 
 Committed transition snapshots join the controller's existing delivery FIFO.
+Their baseline is the actual constructed state, so the first playback or clock
+change is observable before a run starts. Seeding the baseline emits no transition;
+binding the controller to its owner is a clock transition.
 They contain owned scalar state, never borrowed user values or user formatting.
 The controller borrow is released before emitting a receipt. A reentrant
 subscriber may query committed state or issue a normal controller command; the
