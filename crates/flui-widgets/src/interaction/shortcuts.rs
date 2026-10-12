@@ -26,7 +26,7 @@ use std::rc::Rc;
 
 use flui_interaction::routing::{FocusNode, KeyEventResult};
 use flui_platform_api::TargetPlatform;
-use flui_platform_api::keyboard::{Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey};
+use flui_platform_api::keyboard::{ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey};
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{EventCx, EventOutcome};
@@ -37,7 +37,7 @@ use super::actions::{
     PreviousFocusAction, PreviousFocusIntent, SelectAllTextIntent, chain_at, resolve,
 };
 use super::focus::Focus;
-use crate::support::event_callback;
+use crate::support::{command_modifiers, event_callback};
 
 /// A callback bound to a [`SingleActivator`] in [`CallbackShortcuts`]: it
 /// receives the key event's [`EventCx`] (ADR-0086).
@@ -54,6 +54,11 @@ pub type ShortcutCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
 /// modifier must be equal. Key-repeat events match by default; opt out with
 /// [`allow_repeats(false)`](Self::allow_repeats). Only key-down
 /// events ever match.
+///
+/// Matching uses ordinary Control/Alt/Meta/Shift dimensions. Explicit AltGraph
+/// excludes Control/Alt aliases while preserving Meta/Shift; incidental locks,
+/// Fn and Symbol do not affect matching. Produced-character triggers remain
+/// usable with AltGraph. A source-composing key never matches.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SingleActivator {
     trigger: Key,
@@ -145,15 +150,17 @@ impl SingleActivator {
     /// Lock or Shift. The exact Shift check still tells Ctrl+Shift+C apart.
     #[must_use]
     pub fn matches(&self, event: &KeyEvent) -> bool {
+        let modifiers = command_modifiers(event.modifiers);
         event.state() == KeyState::Down
+            && event.composition != ImeComposition::Active
             && (self.include_repeats || event.repeat() == KeyRepeat::First)
             && trigger_matches(&self.trigger, &event.key)
-            && event.modifiers.contains(Modifiers::CONTROL) == self.control
+            && modifiers.contains(Modifiers::CONTROL) == self.control
             && self
                 .shift
-                .is_none_or(|required| event.modifiers.contains(Modifiers::SHIFT) == required)
-            && event.modifiers.contains(Modifiers::ALT) == self.alt
-            && event.modifiers.contains(Modifiers::META) == self.meta
+                .is_none_or(|required| modifiers.contains(Modifiers::SHIFT) == required)
+            && modifiers.contains(Modifiers::ALT) == self.alt
+            && modifiers.contains(Modifiers::META) == self.meta
     }
 }
 
