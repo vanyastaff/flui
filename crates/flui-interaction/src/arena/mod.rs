@@ -1652,9 +1652,11 @@ impl GestureArena {
 
     /// Reject every member of an already detached batch without a winner.
     pub(crate) fn abandon_detached(batch: DetachedArenaBatch) {
+        for slot in &batch.slots {
+            batch.deadlines.withdraw_generation(slot.generation);
+        }
         let mut first_panic = None;
         for slot in batch.slots {
-            batch.deadlines.withdraw_generation(slot.generation);
             let pending = slot.data.borrow_mut().resolve(None);
             Self::dispatch_pending_into(pending, batch.pointer, &mut first_panic);
         }
@@ -1714,10 +1716,14 @@ impl GestureArena {
             .map(|pointer| self.detach(pointer))
             .collect();
 
+        for batch in &batches {
+            for slot in &batch.slots {
+                batch.deadlines.withdraw_generation(slot.generation);
+            }
+        }
         let mut first_panic = None;
         for batch in batches {
             for slot in batch.slots {
-                batch.deadlines.withdraw_generation(slot.generation);
                 let pending = slot.data.borrow_mut().resolve(None);
                 Self::dispatch_pending_into(pending, batch.pointer, &mut first_panic);
             }

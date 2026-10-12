@@ -114,6 +114,56 @@ fn unproved_retirement_does_not_inherit_a_delivery_claim() {
     assert_eq!(drops.load(Ordering::Relaxed), 1);
 }
 
+fn notification_capture_retirement(class: FailureClass) {
+    let notifier = Rc::new(Notifier::<()>::new());
+    let identity = Rc::new(Cell::new(None));
+    let callback_identity = Rc::clone(&identity);
+    let callback_owner = Rc::downgrade(&notifier);
+    let drops = Arc::new(AtomicUsize::new(0));
+    let capture = HostileDrop(Arc::clone(&drops));
+    identity.set(Some(notifier.add(Rc::new(move |_| {
+        let _capture = &capture;
+        callback_owner
+            .upgrade()
+            .expect("the notification owner remains live")
+            .remove(callback_identity.take().expect("live callback identity"));
+    }))));
+    let delivered = Rc::new(Cell::new(0));
+    let tail = Rc::clone(&delivered);
+    notifier.add(Rc::new(move |_| tail.set(tail.get() + 1)));
+    let mut recovery = PanicRecovery::new();
+    assert!(recovery.scope().run_classified(class, |scope| {
+        notifier.notify_with_recovery(&(), scope);
+    }));
+    assert_eq!(delivered.get(), 1, "the live notification tail delivers");
+    assert_eq!(drops.load(Ordering::Relaxed), 1);
+    let receipt = recovery.into_failure().expect("capture retirement failure");
+    assert_eq!(receipt.class(), class);
+    assert_eq!(
+        receipt.blocking_class(),
+        (class != FailureClass::Delivery).then_some(class)
+    );
+    assert_eq!(
+        receipt.payload().downcast_ref::<&str>(),
+        Some(&"opaque ownership retirement")
+    );
+    drop(receipt);
+    notifier.notify(&());
+    assert_eq!(delivered.get(), 2, "the next notification remains usable");
+}
+
+fn committed_notification_retirement_preserves_delivery_proof() {
+    notification_capture_retirement(FailureClass::Delivery);
+}
+
+fn computation_notification_retirement_preserves_computation_proof() {
+    notification_capture_retirement(FailureClass::Computation);
+}
+
+fn unclassified_notification_retirement_stays_unknown() {
+    notification_capture_retirement(FailureClass::Unknown);
+}
+
 fn an_inherited_failure_keeps_local_annotation_without_rethrowing_it() {
     let mut recovery = PanicRecovery::new();
     recovery.inherit_failure();
@@ -198,6 +248,18 @@ fn recovery_preserves_provenance_and_owned_failure() {
         (
             "unproved retirement",
             unproved_retirement_does_not_inherit_a_delivery_claim,
+        ),
+        (
+            "committed notification retirement",
+            committed_notification_retirement_preserves_delivery_proof,
+        ),
+        (
+            "computation notification retirement",
+            computation_notification_retirement_preserves_computation_proof,
+        ),
+        (
+            "unclassified notification retirement",
+            unclassified_notification_retirement_stays_unknown,
         ),
         (
             "inherited local annotation",

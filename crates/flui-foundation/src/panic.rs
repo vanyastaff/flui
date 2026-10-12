@@ -337,6 +337,12 @@ impl RecoveryScope<'_> {
         }
     }
 
+    /// A channel's outgoing snapshot belongs to the callout already classified
+    /// by its producer. This proof does not apply to arbitrary caller ownership.
+    pub(crate) fn retire_callout_capture<T>(&mut self, value: T) {
+        self.retire_classified(self.class, value);
+    }
+
     pub(crate) fn inherit_failure(&mut self) {
         self.owner.inherit_failure();
         self.mark_active_channels();
