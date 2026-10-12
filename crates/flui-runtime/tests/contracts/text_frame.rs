@@ -1061,6 +1061,7 @@ fn animated_preparation_retains_its_tick(failing_deadline: bool) {
     use flui_platform_api::text_store::{
         LockGrant, LockOutcome, LockTiming, Utf16Offset, Utf16Range,
     };
+    use flui_runtime::frame_failure::{FrameFailureKind, SamplingFailureOrigin, SamplingStage};
     use flui_runtime::ui_runtime::TextSizingSettlement;
 
     let mut clock = flui_foundation::ManualClock::new();
@@ -1202,10 +1203,24 @@ fn animated_preparation_retains_its_tick(failing_deadline: bool) {
     let reported = Arc::clone(&reports);
     runtime.set_frame_failure_handler(Some(flui_runtime::frame_failure::FrameFailureHandler::new(
         move |report| {
+            let sampling = match &report.kind {
+                FrameFailureKind::SamplingPanic {
+                    first,
+                    blocking,
+                    admitted_attempt,
+                    ..
+                } => Some((
+                    (first.stage, first.origin),
+                    blocking.map(|blocker| (blocker.stage, blocker.origin)),
+                    *admitted_attempt,
+                )),
+                _ => None,
+            };
             reported.lock().push((
                 report.address,
                 report.disposition,
                 report.consecutive_failures,
+                sampling,
             ));
         },
     )));
@@ -1268,6 +1283,14 @@ fn animated_preparation_retains_its_tick(failing_deadline: bool) {
                 },
                 flui_runtime::frame_failure::FailureDisposition::Contained,
                 0,
+                Some((
+                    (
+                        SamplingStage::GestureDeadline,
+                        SamplingFailureOrigin::Delivery
+                    ),
+                    None,
+                    true,
+                )),
             )],
             "delivery cannot reject the compatible frozen text attempt"
         );
@@ -1522,7 +1545,10 @@ fn unknown_deadline_withdraws_the_old_receipt_and_recovers_fresh_geometry() {
     use flui_platform_api::text_store::{
         LockGrant, LockOutcome, LockTiming, TextStoreError, Utf16Offset, Utf16Range,
     };
-    use flui_runtime::frame_failure::{FailureDisposition, FrameFailureHandler};
+    use flui_runtime::frame_failure::{
+        FailureDisposition, FrameFailureHandler, FrameFailureKind, SamplingFailureOrigin,
+        SamplingStage,
+    };
     use flui_runtime::ui_runtime::TextSizingSettlement;
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
@@ -1540,10 +1566,24 @@ fn unknown_deadline_withdraws_the_old_receipt_and_recovers_fresh_geometry() {
     let reports = Arc::new(parking_lot::Mutex::new(Vec::new()));
     let reported = Arc::clone(&reports);
     runtime.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
+        let sampling = match &report.kind {
+            FrameFailureKind::SamplingPanic {
+                first,
+                blocking,
+                admitted_attempt,
+                ..
+            } => Some((
+                (first.stage, first.origin),
+                blocking.map(|blocker| (blocker.stage, blocker.origin)),
+                *admitted_attempt,
+            )),
+            _ => None,
+        };
         reported.lock().push((
             report.address,
             report.disposition,
             report.consecutive_failures,
+            sampling,
         ));
     })));
     let effects = Rc::new(Cell::new(0));
@@ -1646,6 +1686,17 @@ fn unknown_deadline_withdraws_the_old_receipt_and_recovers_fresh_geometry() {
             },
             FailureDisposition::FrameDropped,
             1,
+            Some((
+                (
+                    SamplingStage::GestureDeadline,
+                    SamplingFailureOrigin::Unknown
+                ),
+                Some((
+                    SamplingStage::GestureDeadline,
+                    SamplingFailureOrigin::Unknown
+                )),
+                true,
+            )),
         )],
         "one unresolved operation rejects the retained attempt only once"
     );
@@ -2176,7 +2227,10 @@ fn a_sibling_animation_admission_replaces_ready_text_before_geometry_publication
 
 fn a_sampling_report_replaces_ready_text_before_geometry_publication() {
     use flui_foundation::Listenable as _;
-    use flui_runtime::frame_failure::{FailureDisposition, FrameFailureHandler};
+    use flui_runtime::frame_failure::{
+        FailureDisposition, FrameFailureHandler, FrameFailureKind, SamplingFailureOrigin,
+        SamplingStage,
+    };
     use flui_runtime::ui_runtime::TextSizingSettlement;
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
@@ -2257,7 +2311,18 @@ fn a_sampling_report_replaces_ready_text_before_geometry_publication() {
     let reports = Arc::new(parking_lot::Mutex::new(Vec::new()));
     let reported = Arc::clone(&reports);
     runtime.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
-        reported.lock().push((report.address, report.disposition));
+        let sampling = match &report.kind {
+            FrameFailureKind::SamplingPanic {
+                first, blocking, ..
+            } => Some((
+                (first.stage, first.origin),
+                blocking.map(|blocker| (blocker.stage, blocker.origin)),
+            )),
+            _ => None,
+        };
+        reported
+            .lock()
+            .push((report.address, report.disposition, sampling));
         size.store(22.75_f64.to_bits(), Ordering::SeqCst);
         handle.schedule(flui_foundation::RebuildReason::StateChange);
     })));
@@ -2282,6 +2347,10 @@ fn a_sampling_report_replaces_ready_text_before_geometry_publication() {
                 presentation_id: sibling_id,
             },
             FailureDisposition::Contained,
+            Some((
+                (SamplingStage::Animation, SamplingFailureOrigin::Delivery),
+                None,
+            )),
         )]
     );
     assert_eq!(
