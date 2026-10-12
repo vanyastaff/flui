@@ -1,6 +1,6 @@
 # Web canvas input ownership
 
-Status: Approved, 2026-10-12; implementation in progress.
+Status: Approved, 2026-10-12; implemented, release checks pending.
 Specification: [#1560](https://github.com/vanyastaff/flui/issues/1560).
 The approved requirements are authoritative; this document records the design.
 

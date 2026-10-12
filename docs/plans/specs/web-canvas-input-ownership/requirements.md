@@ -1,6 +1,6 @@
 # Web canvas input ownership and registration lifetime
 
-Status: Approved, 2026-10-12; implementation in progress. Baseline is merged
+Status: Approved, 2026-10-12; implemented, release checks pending. Baseline is merged
 `ba1044c664c56b4df5682b09ac6634a6ffe1d01f`. This feature addresses #1049 and
 #1050 together; unrelated input follow-ups remain outside this scope.
 

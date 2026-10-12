@@ -249,7 +249,9 @@ document.getElementById('pointer-retirement').onclick = () => check('pointer-ret
           originalCapture.call(this, pointer);
         };
       }
-      queueMicrotask(() => {
+      // A trusted event can checkpoint microtasks between capture and bubble
+      // listener invocations. Observe in a later task, after delivery finishes.
+      setTimeout(() => {
         try {
           canvas.setPointerCapture = originalCapture;
           equal({ entered, captured: canvas.hasPointerCapture(id), ...JSON.parse(owner.snapshot()) }, {
@@ -265,7 +267,7 @@ document.getElementById('pointer-retirement').onclick = () => check('pointer-ret
           else document.getElementById('pointer-retirement').onclick = () => arm();
         } catch (error) { report('pointer-retirement-check', `FAIL: ${error}`); }
         finally { owner.close(); owner.free(); next?.close(); next?.free(); }
-      });
+      }, 0);
     }, { once: true, capture: true });
   };
   arm();
