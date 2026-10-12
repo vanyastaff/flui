@@ -86,6 +86,9 @@ impl ViewState<Counter> for CounterState {
             ThemeData::light(),
             Center::new().child(
                 Column::new(column![
+                    Semantics::new()
+                        .heading_level(HeadingLevel::H2)
+                        .child(Text::new("Probe heading")),
                     Text::new("You have pushed the button this many times:"),
                     SizedBox::height(16.0),
                     Text::new(self.count.get().to_string()),

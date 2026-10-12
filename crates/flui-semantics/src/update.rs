@@ -35,7 +35,7 @@ use smallvec::SmallVec;
 use smol_str::SmolStr;
 
 use crate::identity::AccessibilityNodeId;
-use crate::properties::TextDirection;
+use crate::properties::{HeadingLevel, TextDirection};
 use crate::role::SemanticsRole;
 
 // ============================================================================
@@ -100,6 +100,8 @@ pub struct SemanticsNodeData {
     pub max_value_length: Option<i32>,
     /// Current value length for text fields.
     pub current_value_length: Option<i32>,
+    /// The outline level of a header node.
+    pub heading_level: Option<HeadingLevel>,
     /// Scroll position.
     pub scroll_position: Option<f64>,
     /// Axis of the scroll position and extents; absent metadata means vertical.
@@ -154,6 +156,7 @@ impl Default for SemanticsNodeData {
             platform_view_id: None,
             max_value_length: None,
             current_value_length: None,
+            heading_level: None,
             scroll_position: None,
             scroll_axis: None,
             scroll_extent_max: None,

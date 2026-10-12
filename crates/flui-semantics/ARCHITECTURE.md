@@ -364,6 +364,30 @@ without an arm would silently fall back to the flag cascade.
 asserts that exactly `DragHandle` and `HotKey` map to `GenericContainer`; deleting the
 `Form` arm makes it fail with `form maps to no AccessKit role`.
 
+### A header publishes AccessKit's `Heading` at its level
+
+**Rule.** `IsHeader` resolves to `Role::Heading`, and a header's `HeadingLevel` (`H1`–`H6`,
+one-based as `aria-level` is) is published as AccessKit's zero-based `level`. A header with no
+level publishes none. An explicit role outranks the header flag and drops the level with it.
+
+**Why.** AccessKit's `Header` is HTML's `<header>` landmark: `accesskit_windows` 0.35 reports it
+as a UIA `Group` with the `banner` landmark type (`node.rs`), so a title published as one never
+reached a screen reader's heading navigation. `Heading` is UIA's `Text` with the `heading` ARIA
+role, VoiceOver's `AXHeading` and AT-SPI's `Heading`. The level is an enum rather than an
+integer because the six levels are the ones every platform names and a zero or out-of-range
+level is not a state to validate at run time.
+
+**Limit.** Measured through `cargo xtask device windows-a11y` on an `H2`: `accesskit_windows`
+0.35 reports `AriaRole` `heading` and UIA `Level` 2, but `AriaProperties` `level=1` (AccessKit's
+zero-based value written raw) and `HeadingLevel` `HeadingLevel_None`. FLUI publishes AccessKit's
+documented zero-based level rather than compensating for one adapter; a client reading
+`AriaProperties` sees the level one lower until the adapter is fixed.
+
+**Test.** `a_header_publishes_a_heading_at_its_level` in `accesskit_translation.rs`;
+`the_title_announces_as_a_level_one_heading` in `packages/flui-material/tests/app_bar.rs` for
+the mounted path; `every_role_bearing_flag_reads_as_the_role_uia_reports` for the wire fold;
+the probe's `Probe heading` in `cargo xtask device windows-a11y` for UI Automation.
+
 ### 7. The in-process wire read projects the published AccessKit node; roles fold to what UIA reports
 
 **Rule.** `SemanticsOwner::read_wire` (`src/agent.rs`) answers an agent with ADR-0080 wire

@@ -314,6 +314,10 @@ fn navigation_and_layout_contracts() {
             app_bar::tapping_the_implied_back_button_pops_the_route,
         ),
         (
+            "app_bar::the title announces as a level one heading",
+            app_bar::the_title_announces_as_a_level_one_heading,
+        ),
+        (
             "sliver_app_bar::a pinned bar holds its collapsed height at deep scroll",
             sliver_app_bar::a_pinned_bar_holds_its_collapsed_height_at_deep_scroll,
         ),

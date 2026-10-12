@@ -126,7 +126,11 @@ pub(crate) fn resolve_role(data: &SemanticsNodeData) -> Role {
     } else if has_flag(flags, SemanticsFlag::IsImage) {
         Role::Image
     } else if has_flag(flags, SemanticsFlag::IsHeader) {
-        Role::Header
+        // A heading, not AccessKit's `Header`: that is HTML's `<header>`
+        // landmark, which `accesskit_windows` 0.35 reports as a `Group` with
+        // the `banner` landmark type, so a title published as one never
+        // reached heading navigation.
+        Role::Heading
     } else if data.label.as_ref().is_some_and(|label| !label.is_empty()) {
         Role::Label
     } else {
@@ -529,6 +533,12 @@ pub(crate) fn to_node(data: &SemanticsNodeData) -> Node {
     if let Some(tooltip) = &data.tooltip {
         node.set_tooltip(tooltip.as_str());
     }
+    // AccessKit's level is zero-based where `aria-level` is one-based.
+    if role == Role::Heading
+        && let Some(level) = data.heading_level
+    {
+        node.set_level(usize::from(level.get() - 1));
+    }
     if let Some(direction) = data.text_direction {
         node.set_text_direction(match direction {
             crate::properties::TextDirection::Ltr => TextDirection::LeftToRight,
@@ -782,6 +792,7 @@ mod tests {
 
     use super::*;
     use crate::identity::AccessibilityNodeId;
+    use crate::properties::HeadingLevel;
     use crate::tree::SemanticsTree;
 
     /// Childless translation; child wiring is covered by the tree-level tests.
@@ -973,6 +984,39 @@ mod tests {
             Some(Toggled::Mixed),
             "tristate must not collapse to checked/unchecked"
         );
+    }
+
+    /// A header is AccessKit's `Heading`, never its `Header` landmark, and its
+    /// one-based level reaches AccessKit's zero-based one.
+    #[test]
+    fn a_header_publishes_a_heading_at_its_level() {
+        let header = flags(&[SemanticsFlag::IsHeader]);
+        let unleveled = translate(&SemanticsNodeData {
+            flags: header,
+            ..Default::default()
+        });
+        assert_eq!(unleveled.role(), Role::Heading);
+        assert_eq!(unleveled.level(), None);
+
+        for (level, zero_based) in [(HeadingLevel::H1, 0), (HeadingLevel::H6, 5)] {
+            let node = translate(&SemanticsNodeData {
+                flags: header,
+                heading_level: Some(level),
+                ..Default::default()
+            });
+            assert_eq!(node.role(), Role::Heading, "{level:?}");
+            assert_eq!(node.level(), Some(zero_based), "{level:?}");
+        }
+
+        // An explicit role outranks the header flag, and its level goes with it.
+        let tab = translate(&SemanticsNodeData {
+            flags: header,
+            heading_level: Some(HeadingLevel::H2),
+            role: SemanticsRole::Tab,
+            ..Default::default()
+        });
+        assert_eq!(tab.role(), Role::Tab);
+        assert_eq!(tab.level(), None);
     }
 
     /// **The identity contract.** AccessKit ids must be the stable

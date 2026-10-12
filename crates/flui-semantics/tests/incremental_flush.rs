@@ -501,6 +501,14 @@ fn explicit_header_is_a_present_property() {
     assert!(!properties.is_empty());
 }
 
+fn heading_level_is_a_present_property() {
+    let properties = flui_semantics::SemanticsProperties {
+        heading_level: Some(flui_semantics::HeadingLevel::H3),
+        ..flui_semantics::SemanticsProperties::default()
+    };
+    assert!(!properties.is_empty());
+}
+
 fn explicit_image_is_a_present_property() {
     let properties = flui_semantics::SemanticsProperties {
         image: Some(false),
@@ -723,6 +731,10 @@ fn semantics_property_presence_includes_every_public_annotation() {
         (
             "explicit_header_is_a_present_property",
             explicit_header_is_a_present_property,
+        ),
+        (
+            "heading_level_is_a_present_property",
+            heading_level_is_a_present_property,
         ),
         (
             "explicit_image_is_a_present_property",

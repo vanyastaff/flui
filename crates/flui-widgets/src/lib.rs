@@ -320,8 +320,8 @@ pub use flui_interaction::{
     PanZoomEvent,
 };
 pub use flui_rendering::semantics::{
-    NumericRange, NumericRangeError, SemanticsConfiguration, SemanticsProperties, SemanticsRole,
-    TextDirection as SemanticsTextDirection,
+    HeadingLevel, NumericRange, NumericRangeError, SemanticsConfiguration, SemanticsProperties,
+    SemanticsRole, TextDirection as SemanticsTextDirection,
 };
 
 // ============================================================================
@@ -383,9 +383,9 @@ pub mod prelude {
     pub use crate::{
         AspectRatioDelegate, BoxedLocalizationsDelegate, BoxedWidgetsLocalizations,
         CenterLayoutDelegate, CustomPainter, DefaultWidgetsLocalizationsDelegate, FlowDelegate,
-        FlowPaintingContext, MultiChildLayoutContext, MultiChildLayoutDelegate, NumericRange,
-        NumericRangeError, SemanticsConfiguration, SemanticsProperties, SemanticsRole,
-        SemanticsTextDirection, SingleChildLayoutDelegate, SliverGridDelegate,
+        FlowPaintingContext, HeadingLevel, MultiChildLayoutContext, MultiChildLayoutDelegate,
+        NumericRange, NumericRangeError, SemanticsConfiguration, SemanticsProperties,
+        SemanticsRole, SemanticsTextDirection, SingleChildLayoutDelegate, SliverGridDelegate,
         SliverGridDelegateWithFixedCrossAxisCount, SliverGridDelegateWithMaxCrossAxisExtent,
         SliverGridLayout, TableBorder, TableCellVerticalAlignment, TableColumnWidth,
     };

@@ -120,7 +120,7 @@ fn every_role_but_the_documented_ones_reads_as_a_wire_role() {
 
 /// The controls a flag identifies read as the role UI Automation reports for
 /// them: a multiline field is an `Edit` like any other, a keyboard key a
-/// `Pane`, a header a `Group`.
+/// `Pane`, a heading `Text` like static text.
 #[test]
 fn every_role_bearing_flag_reads_as_the_role_uia_reports() {
     use SemanticsFlag as F;
@@ -133,7 +133,7 @@ fn every_role_bearing_flag_reads_as_the_role_uia_reports() {
         (&[F::IsSlider], false, Role::Slider),
         (&[F::IsKeyboardKey], false, Role::Pane),
         (&[F::IsImage], false, Role::Image),
-        (&[F::IsHeader], false, Role::Group),
+        (&[F::IsHeader], false, Role::Label),
         (&[F::HasCheckedState], false, Role::CheckBox),
         (
             &[F::HasCheckedState, F::IsInMutuallyExclusiveGroup],
@@ -217,7 +217,7 @@ fn wire_role_matches_the_windows_adapter_for_every_role_flui_publishes() {
         (A::Navigation, "Group", Role::Group),
         (A::Region, "Group", Role::Group),
         (A::Form, "Group", Role::Group),
-        (A::Header, "Group", Role::Group),
+        (A::Heading, "Text, aria heading", Role::Label),
         (A::GenericContainer, "Group", Role::Group),
         (A::Menu, "Menu", Role::Menu),
         (A::MenuBar, "MenuBar", Role::MenuBar),

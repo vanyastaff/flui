@@ -15,9 +15,9 @@ use crate::{
     action::{SemanticsAction, SemanticsActionHandler},
     flags::{SemanticsFlag, SemanticsFlags},
     properties::{
-        AttributedString, CustomSemanticsAction, SemanticsHintOverrides, SemanticsProperties,
-        SemanticsSortKey, SemanticsTag, TextDirection, UNBLOCKED_USER_ACTIONS_MASK,
-        concat_attributed_string,
+        AttributedString, CustomSemanticsAction, HeadingLevel, SemanticsHintOverrides,
+        SemanticsProperties, SemanticsSortKey, SemanticsTag, TextDirection,
+        UNBLOCKED_USER_ACTIONS_MASK, concat_attributed_string,
     },
     role::SemanticsRole,
 };
@@ -164,6 +164,9 @@ pub struct SemanticsConfiguration {
     /// Current character count for text field.
     current_value_length: Option<i32>,
 
+    /// The outline level of a header node.
+    heading_level: Option<HeadingLevel>,
+
     /// Semantic role for this node.
     ///
     /// Defaults to [`SemanticsRole::None`]. Consumed by the platform
@@ -214,6 +217,7 @@ impl PartialEq for SemanticsConfiguration {
             && self.platform_view_id == other.platform_view_id
             && self.max_value_length == other.max_value_length
             && self.current_value_length == other.current_value_length
+            && self.heading_level == other.heading_level
             && self.role == other.role
     }
 }
@@ -412,14 +416,33 @@ impl SemanticsConfiguration {
     }
 
     /// Sets whether this is a header.
+    ///
+    /// A header without a [level](Self::set_heading_level) is announced as a
+    /// heading of no particular level. Clearing it clears the level too.
     pub fn set_header(&mut self, value: bool) {
         self.set_flag(SemanticsFlag::IsHeader, value);
+        if !value {
+            self.heading_level = None;
+        }
     }
 
     /// Returns whether this is a header.
     #[inline]
     pub fn is_header(&self) -> bool {
         self.has_flag(SemanticsFlag::IsHeader)
+    }
+
+    /// Makes this node a header at `level` of the outline.
+    pub fn set_heading_level(&mut self, level: HeadingLevel) {
+        self.set_flag(SemanticsFlag::IsHeader, true);
+        self.heading_level = Some(level);
+    }
+
+    /// Returns the outline level of this header, when one was given.
+    #[inline]
+    #[must_use]
+    pub fn heading_level(&self) -> Option<HeadingLevel> {
+        self.heading_level
     }
 
     /// Sets whether this is an image.
@@ -1153,7 +1176,7 @@ impl SemanticsConfiguration {
     ///   loading state."
     /// - **Value / increased_value / decreased_value / tooltip / sort_key /
     ///   text_direction / hint overrides / scroll metadata / list index /
-    ///   platform view / text lengths** — first-wins (parent keeps its value
+    ///   platform view / text lengths / heading level** — first-wins (parent keeps its value
     ///   if set).
     /// - **Role** — merge: parent keeps its role if not `None`;
     ///   otherwise inherits the child's role.
@@ -1278,6 +1301,9 @@ impl SemanticsConfiguration {
         if self.current_value_length.is_none() {
             self.current_value_length = other.current_value_length;
         }
+        if self.heading_level.is_none() {
+            self.heading_level = other.heading_level;
+        }
 
         // ----- role (parent keeps if non-None, else inherit) -----
         if self.role == SemanticsRole::None {
@@ -1317,6 +1343,9 @@ impl SemanticsConfiguration {
         }
         if let Some(header) = properties.header {
             config.set_header(header);
+        }
+        if let Some(level) = properties.heading_level {
+            config.set_heading_level(level);
         }
         if let Some(image) = properties.image {
             config.set_image(image);

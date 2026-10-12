@@ -41,7 +41,7 @@ use flui_objects::{
 use flui_rendering::{
     protocol::BoxProtocol,
     semantics::{
-        ActionArgs, SemanticsAction, SemanticsActionHandler, SemanticsConfiguration,
+        ActionArgs, HeadingLevel, SemanticsAction, SemanticsActionHandler, SemanticsConfiguration,
         SemanticsProperties, SemanticsRole, TextDirection,
     },
 };
@@ -366,6 +366,14 @@ impl Semantics {
     #[must_use]
     pub fn header(mut self, header: bool) -> Self {
         self.configuration.set_header(header);
+        self
+    }
+
+    /// Make this node a header at `level` of the outline, which screen
+    /// readers announce and navigate by.
+    #[must_use]
+    pub fn heading_level(mut self, level: HeadingLevel) -> Self {
+        self.configuration.set_heading_level(level);
         self
     }
 

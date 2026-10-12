@@ -139,8 +139,9 @@ pub use owner::{
 // RE-EXPORTS - Property Types
 // ============================================================================
 pub use properties::{
-    AttributedString, CustomSemanticsAction, SemanticsHintOverrides, SemanticsProperties,
-    SemanticsSortKey, SemanticsTag, StringAttribute, StringAttributeType, TextDirection,
+    AttributedString, CustomSemanticsAction, HeadingLevel, SemanticsHintOverrides,
+    SemanticsProperties, SemanticsSortKey, SemanticsTag, StringAttribute, StringAttributeType,
+    TextDirection,
 };
 // ============================================================================
 // RE-EXPORTS - Role Types
@@ -178,7 +179,7 @@ pub mod prelude {
 
     pub use crate::{
         AccessibilityFocusBlockType, AccessibilityNodeId, ActionArgs, Assertiveness,
-        AttributedString, DebugSemanticsDumpOrder, NumericRange, NumericRangeError,
+        AttributedString, DebugSemanticsDumpOrder, HeadingLevel, NumericRange, NumericRangeError,
         SemanticsAction, SemanticsActionError, SemanticsActionHandler, SemanticsActionInvocation,
         SemanticsActionRequest, SemanticsConfiguration, SemanticsEvent, SemanticsEventType,
         SemanticsFlag, SemanticsFlags, SemanticsId, SemanticsNode, SemanticsNodeData,

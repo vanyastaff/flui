@@ -136,8 +136,8 @@ use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     Align, Center, Column, ConstrainedBox, CrossAxisAlignment, DefaultTextStyle, Expanded,
-    Flexible, IconTheme, IconThemeData, MainAxisAlignment, NavigatorHandle, Positioned,
-    PreferredSizeView, Row, SafeArea, SizedBox, Stack,
+    Flexible, HeadingLevel, IconTheme, IconThemeData, MainAxisAlignment, NavigatorHandle,
+    Positioned, PreferredSizeView, Row, SafeArea, Semantics, SizedBox, Stack,
 };
 use flui_sdk::{geometry::Size, painting::Alignment};
 
@@ -495,11 +495,15 @@ impl StatelessView for AppBar {
             // below (which carries `toolbar_text_style` instead), or a
             // themed `title_text_style` would restyle bare `Text` in
             // `leading`/`actions` too. See `ResolvedAppBarStyle`'s doc
-            // comment.
+            // comment. The title is the screen's top-level heading, so a
+            // screen reader can jump to it.
             toolbar_children.push(
                 Expanded::new(
-                    Align::new(Alignment::CENTER_LEFT)
-                        .child(DefaultTextStyle::new(title_style, title.clone())),
+                    Align::new(Alignment::CENTER_LEFT).child(
+                        Semantics::new()
+                            .heading_level(HeadingLevel::H1)
+                            .child(DefaultTextStyle::new(title_style, title.clone())),
+                    ),
                 )
                 .boxed(),
             );

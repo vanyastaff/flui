@@ -29,8 +29,8 @@ use windows::Win32::UI::Accessibility::{
     ExpandCollapseState, ExpandCollapseState_Collapsed, ExpandCollapseState_Expanded,
     IUIAutomationElement, IUIAutomationExpandCollapsePattern, IUIAutomationInvokePattern,
     IUIAutomationRangeValuePattern, UIA_CONTROLTYPE_ID, UIA_E_INVALIDOPERATION,
-    UIA_ExpandCollapsePatternId, UIA_InvokePatternId, UIA_RangeValuePatternId,
-    UIA_SliderControlTypeId,
+    UIA_ExpandCollapsePatternId, UIA_HeadingLevelPropertyId, UIA_InvokePatternId,
+    UIA_LevelPropertyId, UIA_RangeValuePatternId, UIA_SliderControlTypeId,
 };
 use windows::core::HRESULT;
 
@@ -63,6 +63,7 @@ const CHECK_DEADLINE: Duration = Duration::from_secs(
 /// never read as a FAIL during the last wait. The session kills the probe
 /// when the check ends, so the margin costs nothing.
 const PROBE_RUN_FOR: Duration = Duration::from_secs(CHECK_DEADLINE.as_secs() * 2);
+const HEADING: &str = "Probe heading";
 const DISCLOSURE: &str = "Probe disclosure";
 const RANGE: &str = "Probe numeric range";
 
@@ -97,6 +98,9 @@ fn drive(session: &mut Session) -> anyhow::Result<bool> {
         .collect();
     if !missing.is_empty() {
         println!("FAIL: no text named {missing:?}: a screen reader would not speak it");
+        return Ok(false);
+    }
+    if !heading_is_announced(&before)? {
         return Ok(false);
     }
 
@@ -312,6 +316,42 @@ fn drive_patterns(session: &Session, window: &IUIAutomationElement) -> anyhow::R
         }
     }
     println!("UIA scroll: offset 160 then 0");
+    Ok(true)
+}
+
+/// The probe's level-two heading reads as one: a `Text` with the `heading`
+/// ARIA role, which is what Narrator's heading navigation walks.
+fn heading_is_announced(nodes: &[uia::Node]) -> anyhow::Result<bool> {
+    let Some(heading) = unique_element(nodes, TEXT, HEADING)? else {
+        println!("FAIL: no text named {HEADING:?}");
+        return Ok(false);
+    };
+    // SAFETY: live element on the session's COM thread; a property the
+    // provider does not answer reads as its empty default.
+    let (aria_role, aria_properties, level, heading_level) = unsafe {
+        (
+            heading.CurrentAriaRole()?.to_string(),
+            heading.CurrentAriaProperties()?.to_string(),
+            i32::try_from(&heading.GetCurrentPropertyValue(UIA_LevelPropertyId)?).ok(),
+            i32::try_from(&heading.GetCurrentPropertyValue(UIA_HeadingLevelPropertyId)?).ok(),
+        )
+    };
+    println!(
+        "UIA heading {HEADING:?}: AriaRole={aria_role:?} AriaProperties={aria_properties:?} \
+         Level={level:?} HeadingLevel={heading_level:?}"
+    );
+    if aria_role != "heading" {
+        println!("FAIL: {HEADING:?} is not a heading to UI Automation");
+        return Ok(false);
+    }
+    // The probe's heading is at level two. accesskit_windows 0.35 reports AccessKit's
+    // zero-based level one-based through UIA's `Level`; its `AriaProperties`
+    // carry the zero-based value and it sets no `HeadingLevel`, which is why
+    // only `Level` is held to the authored level.
+    if level != Some(2) {
+        println!("FAIL: {HEADING:?} is not reported at level 2");
+        return Ok(false);
+    }
     Ok(true)
 }
 
