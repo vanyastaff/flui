@@ -230,6 +230,138 @@ fn a_nested_channel_latch_does_not_demote_its_owners_original_failure() {
     );
 }
 
+fn forwarded_receipt_authority(source_inherited: bool, receiver_inherited: bool) {
+    let mut source = PanicRecovery::new();
+    if source_inherited {
+        source.inherit_failure();
+    }
+    source.scope().run_classified(FailureClass::Unknown, |_| {
+        panic!("relayed captured failure");
+    });
+    let receipt = source.into_failure().expect("captured relay receipt");
+    let mut receiver = PanicRecovery::new();
+    if receiver_inherited {
+        receiver.inherit_failure();
+    }
+    receiver.scope().capture_failure(receipt);
+    assert_eq!(receiver.first_failure_class(), Some(FailureClass::Unknown));
+    assert_eq!(
+        receiver.blocking_failure_class(),
+        Some(FailureClass::Unknown)
+    );
+    // A subsequent channel's failure signal cannot change earlier authority.
+    receiver.inherit_failure();
+    receiver
+        .scope()
+        .run_classified(FailureClass::Delivery, |_| {
+            panic!("later callback delivery");
+        });
+    let finished = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| receiver.finish()));
+    if source_inherited || receiver_inherited {
+        assert!(
+            finished.is_ok(),
+            "an enclosing earlier failure stays authoritative"
+        );
+    } else {
+        let original = finished.expect_err("the relayed original remains authoritative");
+        assert_eq!(
+            original.downcast_ref::<&str>(),
+            Some(&"relayed captured failure")
+        );
+    }
+}
+
+fn an_authoritative_receipt_precedes_a_later_callback_failure() {
+    forwarded_receipt_authority(false, false);
+}
+
+fn an_inherited_receipt_never_acquires_standalone_authority() {
+    forwarded_receipt_authority(true, false);
+}
+
+fn a_receiver_with_an_earlier_inherited_failure_keeps_outer_authority() {
+    forwarded_receipt_authority(false, true);
+}
+
+fn a_receipt_keeps_blocking_evidence_separate_from_its_first_payload() {
+    let mut source = PanicRecovery::new();
+    source
+        .scope()
+        .run_classified(FailureClass::Delivery, |_| panic!("relayed first notice"));
+    source.scope().run_classified(FailureClass::Unknown, |_| {
+        panic!("relayed later retirement")
+    });
+    let receipt = source.into_failure().expect("mixed relay receipt");
+    let mut receiver = PanicRecovery::new();
+    receiver.scope().capture_failure(receipt);
+    receiver
+        .scope()
+        .run_classified(FailureClass::Computation, |_| {
+            panic!("receiver later computation");
+        });
+    assert_eq!(receiver.first_failure_class(), Some(FailureClass::Delivery));
+    assert_eq!(
+        receiver.blocking_failure_class(),
+        Some(FailureClass::Unknown)
+    );
+    let original = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| receiver.finish()))
+        .expect_err("the first notice retains its original payload");
+    assert_eq!(
+        original.downcast_ref::<&str>(),
+        Some(&"relayed first notice")
+    );
+}
+
+fn a_later_opaque_receipt_keeps_the_first_cause_and_adds_its_blocker() {
+    let drops = Arc::new(AtomicUsize::new(0));
+    let captured = Arc::clone(&drops);
+    let mut source = PanicRecovery::new();
+    source.scope().run_classified(FailureClass::Unknown, |_| {
+        std::panic::panic_any(HostileDrop(captured));
+    });
+    let receipt = source.into_failure().expect("opaque relay receipt");
+    let mut receiver = PanicRecovery::new();
+    receiver
+        .scope()
+        .run_classified(FailureClass::Delivery, |_| panic!("earlier owner notice"));
+    receiver.scope().capture_failure(receipt);
+    let original = receiver.into_failure().expect("the earlier owner failure");
+    assert_eq!(original.class(), FailureClass::Delivery);
+    assert_eq!(original.blocking_class(), Some(FailureClass::Unknown));
+    assert_eq!(
+        original.payload().downcast_ref::<&str>(),
+        Some(&"earlier owner notice")
+    );
+    drop(original);
+    assert_eq!(
+        drops.load(Ordering::Relaxed),
+        0,
+        "opaque ownership is retained"
+    );
+}
+
+fn an_inherited_opaque_receipt_finishes_without_user_destruction() {
+    let drops = Arc::new(AtomicUsize::new(0));
+    let captured = Arc::clone(&drops);
+    let mut source = PanicRecovery::new();
+    source.inherit_failure();
+    source.scope().run_classified(FailureClass::Unknown, |_| {
+        std::panic::panic_any(HostileDrop(captured));
+    });
+    let receipt = source.into_failure().expect("inherited opaque receipt");
+    let mut receiver = PanicRecovery::new();
+    receiver.scope().capture_failure(receipt);
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| receiver.finish())).is_ok(),
+        "inherited ownership cannot become a new unwind"
+    );
+    assert_eq!(
+        drops.load(Ordering::Relaxed),
+        0,
+        "opaque ownership is retained"
+    );
+}
+
 #[test]
 fn recovery_preserves_provenance_and_owned_failure() {
     crate::run_table(&[
@@ -268,6 +400,30 @@ fn recovery_preserves_provenance_and_owned_failure() {
         (
             "nested channel authority",
             a_nested_channel_latch_does_not_demote_its_owners_original_failure,
+        ),
+        (
+            "authoritative receipt chronology",
+            an_authoritative_receipt_precedes_a_later_callback_failure,
+        ),
+        (
+            "inherited receipt authority",
+            an_inherited_receipt_never_acquires_standalone_authority,
+        ),
+        (
+            "receiving inherited authority",
+            a_receiver_with_an_earlier_inherited_failure_keeps_outer_authority,
+        ),
+        (
+            "receipt blocking evidence",
+            a_receipt_keeps_blocking_evidence_separate_from_its_first_payload,
+        ),
+        (
+            "later opaque receipt",
+            a_later_opaque_receipt_keeps_the_first_cause_and_adds_its_blocker,
+        ),
+        (
+            "inherited opaque receipt",
+            an_inherited_opaque_receipt_finishes_without_user_destruction,
         ),
     ]);
 }
