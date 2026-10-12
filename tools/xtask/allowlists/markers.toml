@@ -155,11 +155,6 @@ class = "tracker-h"
 count = 2
 
 [[allow]]
-path = "crates/flui-platform/examples/event_handling.rs"
-class = "spec-task"
-count = 1
-
-[[allow]]
 path = "crates/flui-platform/src/lib.rs"
 class = "wave"
 count = 1
