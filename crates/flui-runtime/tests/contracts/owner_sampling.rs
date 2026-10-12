@@ -3,18 +3,23 @@
 use std::cell::{Cell, RefCell};
 use std::num::NonZeroU64;
 use std::rc::Rc;
-use std::sync::{Arc, atomic::{AtomicBool, AtomicUsize, Ordering}};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+};
 use std::time::Duration;
 
 use flui_foundation::{ManualClock, MonotonicClock, PresentationAddress, UiRuntimeId};
-use flui_interaction::{arena::GestureArenaMember, ids::PointerId};
+use flui_interaction::{
+    GestureDeadlineError, GestureDeadlineUpdate, arena::GestureArenaMember, ids::PointerId,
+};
 use flui_runtime::frame_failure::{
     FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind,
     FrameFailureReport, PanicText, SamplingFailure, SamplingFailureOrigin, SamplingStage,
 };
 use flui_runtime::owner::{
-    Delivery, DispatchError, FrameDispatcher, InstallInitialization, InstallToken,
-    InitializationOutcome, OwnerEffects, OwnerHost, RecoveryState,
+    Delivery, DispatchError, FrameDispatcher, InitializationOutcome, InstallInitialization,
+    InstallToken, OwnerEffects, OwnerHost, RecoveryState,
 };
 use flui_runtime::ui_runtime::{RuntimeHostServices, UiRuntime};
 
@@ -41,6 +46,7 @@ impl GestureArenaMember for DeadlineQuery {
 struct Effects {
     query_calls: Rc<Cell<usize>>,
     frames: Cell<usize>,
+    fail_operation: Cell<bool>,
     probe_runtime: Cell<bool>,
     runtime_observation: RefCell<Option<RuntimeObservation>>,
 }
@@ -79,6 +85,9 @@ impl OwnerEffects for Effects {
 
     fn frame(&self, _: PresentationAddress, runtime: &mut UiRuntime) {
         self.frames.set(self.frames.get() + 1);
+        if self.fail_operation.replace(false) {
+            std::panic::panic_any("primary owner operation");
+        }
         // The native host services geometry before consulting its wake gate.
         runtime.enter(UiRuntime::drain_owner_inbox);
         if !self.probe_runtime.get() {
@@ -117,7 +126,7 @@ enum ObservationScope {
 fn scheduling_observation_case(scope: ObservationScope) {
     let clock = ManualClock::new();
     let due = clock.now() + Duration::from_secs(1);
-    let runtime = manual_runtime(clock);
+    let (runtime, _window) = manual_runtime(clock);
     let query_calls = Rc::new(Cell::new(0));
     let member = Rc::new(DeadlineQuery {
         calls: Rc::clone(&query_calls),
@@ -137,6 +146,7 @@ fn scheduling_observation_case(scope: ObservationScope) {
     let effects = Effects {
         query_calls: Rc::clone(&query_calls),
         frames: Cell::new(0),
+        fail_operation: Cell::new(false),
         probe_runtime: Cell::new(false),
         runtime_observation: RefCell::new(None),
     };
@@ -172,9 +182,12 @@ fn scheduling_observation_case(scope: ObservationScope) {
     }
 }
 
-fn manual_runtime(clock: ManualClock) -> UiRuntime {
-    UiRuntime::new(
-        crate::owner_publication::window(),
+fn manual_runtime(clock: ManualClock) -> (UiRuntime, Arc<dyn flui_platform_api::PlatformWindow>) {
+    let window = crate::owner_publication::window();
+    // A native host owns the window; the runtime intentionally holds it weakly.
+    let native_window = Arc::clone(window.window());
+    let runtime = UiRuntime::new(
+        window,
         1.0,
         RuntimeHostServices::new(
             Arc::new(|| {}),
@@ -184,7 +197,8 @@ fn manual_runtime(clock: ManualClock) -> UiRuntime {
             flui_scheduler::ClockSource::Manual(clock),
         ),
     )
-    .expect("manual-clock runtime")
+    .expect("manual-clock runtime");
+    (runtime, native_window)
 }
 
 fn owner_wake_uses_the_committed_scheduling_observation() {
@@ -201,6 +215,7 @@ struct ReportProbe {
     effects: Rc<Effects>,
     fail_handler: bool,
     observations: RefCell<Vec<ReportObservation>>,
+    callback_observations: RefCell<Vec<(PresentationAddress, PanicText)>>,
 }
 
 #[derive(Debug)]
@@ -247,6 +262,21 @@ impl Drop for ScopedReportProbe {
 }
 
 fn observe_sampling_report(report: &FrameFailureReport) {
+    let probe = REPORT_PROBE
+        .with(|slot| slot.borrow().clone())
+        .expect("report has a scoped owner probe");
+    if let FrameFailureKind::CallbackPanic { message, .. } = &report.kind {
+        // Existing callback reports keep their original delivery boundary.
+        // Only sampling observation reports promise delivery after lease return.
+        probe
+            .callback_observations
+            .borrow_mut()
+            .push((report.address, message.clone()));
+        if probe.fail_handler {
+            std::panic::panic_any("owner callback report handler");
+        }
+        return;
+    }
     let FrameFailureKind::SamplingPanic {
         first,
         blocking,
@@ -257,9 +287,6 @@ fn observe_sampling_report(report: &FrameFailureReport) {
     else {
         return;
     };
-    let probe = REPORT_PROBE
-        .with(|slot| slot.borrow().clone())
-        .expect("report has a scoped owner probe");
     let queries_before = probe.effects.query_calls.get();
     let executing = probe.owner.is_executing();
     let runtimes = probe.owner.runtime_ids();
@@ -315,11 +342,11 @@ impl tracing::Subscriber for FailingDiagnostics {
     fn exit(&self, _: &tracing::span::Id) {}
 }
 
-fn query_report_case(fail_handler: bool, fail_diagnostics: bool) {
+fn query_report_case(fail_handler: bool, fail_diagnostics: bool, fail_operation: bool) {
     let clock = ManualClock::new();
     let now = clock.now();
     let due = now + Duration::from_secs(1);
-    let runtime = manual_runtime(clock.clone());
+    let (runtime, _window) = manual_runtime(clock.clone());
     runtime.set_frame_failure_detail(FrameFailureDetail::Verbatim);
     runtime.set_frame_failure_handler(Some(FrameFailureHandler::new(observe_sampling_report)));
     let query_calls = Rc::new(Cell::new(0));
@@ -341,6 +368,7 @@ fn query_report_case(fail_handler: bool, fail_diagnostics: bool) {
     let effects = Rc::new(Effects {
         query_calls: Rc::clone(&query_calls),
         frames: Cell::new(0),
+        fail_operation: Cell::new(false),
         probe_runtime: Cell::new(false),
         runtime_observation: RefCell::new(None),
     });
@@ -353,35 +381,71 @@ fn query_report_case(fail_handler: bool, fail_diagnostics: bool) {
         effects: Rc::clone(&effects),
         fail_handler,
         observations: RefCell::new(Vec::new()),
+        callback_observations: RefCell::new(Vec::new()),
     });
     let _probe_scope = ScopedReportProbe::install(Rc::clone(&probe));
     let diagnostic_calls = Arc::new(AtomicUsize::new(0));
-    let diagnostics = fail_diagnostics
-        .then(|| tracing::subscriber::set_default(FailingDiagnostics(Arc::clone(&diagnostic_calls))));
+    let diagnostics = fail_diagnostics.then(|| {
+        tracing::subscriber::set_default(FailingDiagnostics(Arc::clone(&diagnostic_calls)))
+    });
     member.fail.set(true);
-    assert_eq!(
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            frame.deliver(effects.as_ref())
-        }))
-        .expect("deadline discovery and its diagnostics are contained"),
-        Ok(Delivery::Driven)
-    );
+    effects.fail_operation.set(fail_operation);
+    let delivered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        frame.deliver(effects.as_ref())
+    }));
     drop(diagnostics);
+    if fail_operation {
+        let payload = delivered.expect_err("the original owner operation still propagates");
+        assert_eq!(
+            payload.downcast_ref::<&str>(),
+            Some(&"primary owner operation"),
+            "query, tracing and handler failures cannot replace the owner cause"
+        );
+        assert_eq!(
+            *probe.callback_observations.borrow(),
+            [(
+                address,
+                PanicText::Verbatim("primary owner operation".into())
+            )]
+        );
+        // The failed callback owes the work admitted by its sampling report.
+        // A real next native opportunity supplies the normal FIFO budget.
+        let callback = owner
+            .begin_callback(effects.as_ref())
+            .expect("next callback");
+        owner.continue_work(effects.as_ref());
+        drop(callback);
+    } else {
+        assert_eq!(
+            delivered.expect("deadline discovery and its diagnostics are contained"),
+            Ok(Delivery::Driven)
+        );
+        assert!(probe.callback_observations.borrow().is_empty());
+    }
 
     {
         let observed = probe.observations.borrow();
-        assert_eq!(observed.len(), 1, "one query operation report: {observed:?}");
+        assert_eq!(
+            observed.len(),
+            1,
+            "one query operation report: {observed:?}"
+        );
         let observed = &observed[0];
         assert_eq!(observed.address, address);
         assert_eq!(observed.first.stage, SamplingStage::DeadlineDiscovery);
         assert_eq!(observed.first.origin, SamplingFailureOrigin::Unknown);
-        let blocking = observed.blocking.expect("unknown query restricts publication");
+        let blocking = observed
+            .blocking
+            .expect("unknown query restricts publication");
         assert_eq!(blocking.stage, SamplingStage::DeadlineDiscovery);
         assert_eq!(blocking.origin, SamplingFailureOrigin::Unknown);
         assert!(!observed.admitted_attempt);
         assert_eq!(observed.disposition, FailureDisposition::Contained);
         assert_eq!(observed.consecutive_failures, 0);
-        assert_eq!(observed.message, PanicText::Verbatim("external deadline query".into()));
+        assert_eq!(
+            observed.message,
+            PanicText::Verbatim("external deadline query".into())
+        );
         assert_eq!(observed.executing, Ok(false), "report follows lease return");
         assert_eq!(observed.runtimes, Ok(vec![address.ui_runtime_id]));
         assert_eq!(observed.wake, Ok(Some(now + Duration::from_millis(100))));
@@ -392,36 +456,428 @@ fn query_report_case(fail_handler: bool, fail_diagnostics: bool) {
     }
     assert_eq!(query_calls.get(), queries_before_fault + 1);
     assert_eq!(effects.frames.get(), frames_before_fault + 2);
-    assert_eq!(diagnostic_calls.load(Ordering::Relaxed) > 0, fail_diagnostics);
+    assert_eq!(
+        diagnostic_calls.load(Ordering::Relaxed) > 0,
+        fail_diagnostics
+    );
 
     clock.advance(Duration::from_millis(99));
     assert_eq!(frame.deliver(effects.as_ref()), Ok(Delivery::Driven));
-    assert_eq!(query_calls.get(), queries_before_fault + 1, "early owner turn does not re-probe");
+    assert_eq!(
+        query_calls.get(),
+        queries_before_fault + 1,
+        "early owner turn does not re-probe"
+    );
     assert_eq!(probe.observations.borrow().len(), 1);
-    assert_eq!(owner.next_wake(), Ok(Some(now + Duration::from_millis(100))));
+    assert_eq!(
+        owner.next_wake(),
+        Ok(Some(now + Duration::from_millis(100)))
+    );
 
     member.fail.set(false);
     clock.advance(Duration::from_millis(1));
     assert_eq!(frame.deliver(effects.as_ref()), Ok(Delivery::Driven));
-    assert!(query_calls.get() > queries_before_fault + 1, "the due retry observes the repaired source");
+    assert!(
+        query_calls.get() > queries_before_fault + 1,
+        "the due retry observes the repaired source"
+    );
     assert_eq!(owner.next_wake(), Ok(Some(due)));
-    assert_eq!(probe.observations.borrow().len(), 1, "successful retry emits no duplicate report");
+    assert_eq!(
+        probe.observations.borrow().len(),
+        1,
+        "successful retry emits no duplicate report"
+    );
 }
 
 fn query_failure_reports_after_lease_return_and_recovers() {
-    query_report_case(false, false);
+    query_report_case(false, false, false);
 }
 
 fn failing_query_report_handler_preserves_recovery() {
-    query_report_case(true, false);
+    query_report_case(true, false, false);
 }
 
 fn failing_query_diagnostics_preserve_report_and_recovery() {
-    query_report_case(false, true);
+    query_report_case(false, true, false);
 }
 
 fn competing_query_diagnostics_and_handler_preserve_recovery() {
-    query_report_case(true, true);
+    query_report_case(true, true, false);
+}
+
+fn original_owner_failure_survives_query_report_competition() {
+    query_report_case(true, true, true);
+}
+
+struct PublishedDeadline {
+    due: Cell<Option<web_time::Instant>>,
+    queries: Rc<Cell<usize>>,
+}
+
+impl GestureArenaMember for PublishedDeadline {
+    fn accept_gesture(&self, _: PointerId) {}
+
+    fn reject_gesture(&self, _: PointerId) {}
+
+    fn deadline(&self) -> Option<web_time::Instant> {
+        self.queries.set(self.queries.get() + 1);
+        self.due.get()
+    }
+}
+
+fn observe_owner_deadline(
+    owner: &OwnerHost,
+    queries: &Cell<usize>,
+    expected: Option<web_time::Instant>,
+) {
+    let before = queries.get();
+    let wakes: Vec<_> = (0..3).map(|_| owner.next_wake()).collect();
+    assert_eq!(
+        queries.get(),
+        before,
+        "wake getters are not discovery opportunities"
+    );
+    assert_eq!(wakes, [Ok(expected); 3]);
+}
+
+fn retained_deadline_publisher_updates_cancels_and_refuses_stale_authority() {
+    let clock = ManualClock::new();
+    let now = clock.now();
+    let initial = now + Duration::from_secs(1);
+    let earlier = now + Duration::from_millis(250);
+    let successor_due = now + Duration::from_millis(500);
+    let (runtime, window) = manual_runtime(clock);
+    let wakes = Arc::new(AtomicUsize::new(0));
+    let wake_count = Arc::clone(&wakes);
+    window.on_request_frame(Box::new(move || {
+        wake_count.fetch_add(1, Ordering::Relaxed);
+    }));
+    let queries = Rc::new(Cell::new(0));
+    let member = Rc::new(PublishedDeadline {
+        due: Cell::new(Some(initial)),
+        queries: Rc::clone(&queries),
+    });
+    let erased: Rc<dyn GestureArenaMember> = member.clone();
+    let pointer = PointerId::new(NonZeroU64::MIN);
+    let arena = runtime.gestures().arena().clone();
+    let registration = arena
+        .register_deadline_member(pointer, &erased)
+        .expect("admit external deadline source");
+    let publisher = registration.update_handle();
+    let before = wakes.load(Ordering::Relaxed);
+    publisher
+        .publish(Some(initial))
+        .expect("publish initial timing");
+    assert!(
+        wakes.load(Ordering::Relaxed) > before,
+        "publication wakes its native owner"
+    );
+    assert_eq!(
+        queries.get(),
+        0,
+        "publishing committed timing is not a query"
+    );
+
+    let owner = OwnerHost::new();
+    let address = owner
+        .publication(owner.prepare_runtime(runtime))
+        .expect("publish runtime")
+        .commit();
+    let frame = owner.frame_dispatcher(address).expect("frame authority");
+    let effects = Effects {
+        query_calls: Rc::clone(&queries),
+        frames: Cell::new(0),
+        fail_operation: Cell::new(false),
+        probe_runtime: Cell::new(true),
+        runtime_observation: RefCell::new(None),
+    };
+    assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+    observe_owner_deadline(&owner, &queries, Some(initial));
+
+    let before = wakes.load(Ordering::Relaxed);
+    member.due.set(Some(earlier));
+    publisher
+        .publish(Some(earlier))
+        .expect("retained authority publishes earlier timing");
+    assert!(
+        wakes.load(Ordering::Relaxed) > before,
+        "earlier timing wakes without a manual poke"
+    );
+    observe_owner_deadline(&owner, &queries, Some(earlier));
+    assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+    let observed = effects
+        .runtime_observation
+        .take()
+        .expect("runtime wake gate");
+    assert_eq!(observed.queries_after, observed.queries_before);
+    assert_eq!(observed.wakes, [Some(earlier); 3]);
+    assert_eq!(observed.pending, [true; 3]);
+    assert_eq!(
+        queries.get(),
+        0,
+        "explicit publishers need no foreign discovery"
+    );
+
+    let before = wakes.load(Ordering::Relaxed);
+    member.due.set(None);
+    publisher.publish(None).expect("cancel timing");
+    assert!(wakes.load(Ordering::Relaxed) > before);
+    observe_owner_deadline(&owner, &queries, None);
+    drop(registration);
+
+    // Reuse the same pointer and member under a new registration. Old weak
+    // authority must neither cancel nor rearm this successor.
+    let before = wakes.load(Ordering::Relaxed);
+    assert_eq!(
+        publisher.publish(Some(earlier)),
+        Err(GestureDeadlineError::Retired)
+    );
+    assert_eq!(publisher.refresh(), Err(GestureDeadlineError::Retired));
+    assert_eq!(wakes.load(Ordering::Relaxed), before);
+    observe_owner_deadline(&owner, &queries, None);
+
+    let successor_registration = arena
+        .register_deadline_member(pointer, &erased)
+        .expect("register successor under the reused pointer");
+    let successor = successor_registration.update_handle();
+    member.due.set(Some(successor_due));
+    successor
+        .publish(Some(successor_due))
+        .expect("successor timing");
+    observe_owner_deadline(&owner, &queries, Some(successor_due));
+    let before = wakes.load(Ordering::Relaxed);
+    assert_eq!(publisher.publish(None), Err(GestureDeadlineError::Retired));
+    assert_eq!(
+        publisher.publish(Some(earlier)),
+        Err(GestureDeadlineError::Retired)
+    );
+    assert_eq!(publisher.refresh(), Err(GestureDeadlineError::Retired));
+    assert_eq!(wakes.load(Ordering::Relaxed), before);
+    observe_owner_deadline(&owner, &queries, Some(successor_due));
+    member.due.set(None);
+    successor.publish(None).expect("cancel successor timing");
+    observe_owner_deadline(&owner, &queries, None);
+}
+
+struct CompletionRefresh {
+    member: Rc<PublishedDeadline>,
+    publisher: GestureDeadlineUpdate,
+    due: web_time::Instant,
+}
+
+struct CompletionEffects {
+    frame_effects: Effects,
+    owner: OwnerHost,
+    refresh: RefCell<Option<CompletionRefresh>>,
+    observation: RefCell<Option<CompletionObservation>>,
+}
+
+struct CompletionObservation {
+    executing: Result<bool, DispatchError>,
+    previous_wake: Result<Option<web_time::Instant>, DispatchError>,
+    queries_before: usize,
+    queries_after: usize,
+    accepted: Result<(), GestureDeadlineError>,
+}
+
+impl OwnerEffects for CompletionEffects {
+    fn runtime_lifecycle(&self, _: UiRuntimeId, _: flui_scheduler::AppLifecycleState) {}
+    fn runtimes_stopped(&self, _: RecoveryState) {}
+    fn retire_host(&self, _: &[PresentationAddress], _: RecoveryState) {}
+    fn commit_install(&self, _: InstallToken, _: RecoveryState) -> Option<InstallInitialization> {
+        panic!("no pending installation");
+    }
+    fn finish_install(&self, _: PresentationAddress, _: InitializationOutcome, _: RecoveryState) {}
+    fn cancel_install(&self, _: InstallToken, _: RecoveryState) {
+        panic!("no pending installation");
+    }
+    fn resize_surface(
+        &self,
+        _: PresentationAddress,
+        _: flui_foundation::geometry::Size<f64>,
+        _: f64,
+    ) {
+    }
+    fn frame(&self, address: PresentationAddress, runtime: &mut UiRuntime) {
+        self.frame_effects.frame(address, runtime);
+    }
+    fn retire_presentation(&self, _: PresentationAddress, _: Option<PresentationAddress>) {}
+    fn after_turn(&self, _: RecoveryState) {
+        let Some(refresh) = self.refresh.take() else {
+            return;
+        };
+        let executing = self.owner.is_executing();
+        let previous_wake = self.owner.next_wake();
+        let queries_before = refresh.member.queries.get();
+        refresh.member.due.set(Some(refresh.due));
+        let accepted = refresh.publisher.refresh();
+        self.observation.replace(Some(CompletionObservation {
+            executing,
+            previous_wake,
+            queries_before,
+            queries_after: refresh.member.queries.get(),
+            accepted,
+        }));
+    }
+    fn request_continuation(&self) -> bool {
+        true
+    }
+}
+
+fn completion_refresh_observes_timing_after_the_runtime_lease_returns() {
+    let clock = ManualClock::new();
+    let now = clock.now();
+    let initial = now + Duration::from_secs(1);
+    let completed = now + Duration::from_millis(150);
+    let (runtime, _window) = manual_runtime(clock);
+    let queries = Rc::new(Cell::new(0));
+    let member = Rc::new(PublishedDeadline {
+        due: Cell::new(Some(initial)),
+        queries: Rc::clone(&queries),
+    });
+    let erased: Rc<dyn GestureArenaMember> = member.clone();
+    let registration = runtime
+        .gestures()
+        .arena()
+        .register_deadline_member(PointerId::new(NonZeroU64::MIN), &erased)
+        .expect("register source");
+    let publisher = registration.update_handle();
+    publisher.publish(Some(initial)).expect("initial timing");
+    let owner = OwnerHost::new();
+    let address = owner
+        .publication(owner.prepare_runtime(runtime))
+        .expect("publish runtime")
+        .commit();
+    let effects = CompletionEffects {
+        frame_effects: Effects {
+            query_calls: Rc::clone(&queries),
+            frames: Cell::new(0),
+            fail_operation: Cell::new(false),
+            probe_runtime: Cell::new(true),
+            runtime_observation: RefCell::new(None),
+        },
+        owner: owner.clone(),
+        refresh: RefCell::new(Some(CompletionRefresh {
+            member,
+            publisher,
+            due: completed,
+        })),
+        observation: RefCell::new(None),
+    };
+    assert_eq!(
+        owner
+            .frame_dispatcher(address)
+            .expect("frame authority")
+            .deliver(&effects),
+        Ok(Delivery::Driven)
+    );
+    let before_completion = effects
+        .frame_effects
+        .runtime_observation
+        .take()
+        .expect("frame wake gate");
+    assert_eq!(
+        before_completion.wakes,
+        [Some(initial); 3],
+        "frame body still observes the old timing"
+    );
+    assert_eq!(
+        before_completion.queries_before,
+        before_completion.queries_after
+    );
+    let completion = effects.observation.take().expect("completion callback");
+    assert_eq!(completion.executing, Ok(false));
+    assert_eq!(completion.previous_wake, Ok(Some(initial)));
+    assert_eq!(completion.accepted, Ok(()));
+    assert_eq!(
+        completion.queries_after, completion.queries_before,
+        "refresh admission never executes the source"
+    );
+    assert!(
+        queries.get() > completion.queries_after,
+        "completion frontier performs the requested query"
+    );
+    observe_owner_deadline(&owner, &queries, Some(completed));
+}
+
+#[derive(Debug)]
+struct StandaloneReport {
+    address: PresentationAddress,
+    first: SamplingFailure,
+    admitted_attempt: bool,
+    disposition: FailureDisposition,
+    consecutive_failures: u32,
+}
+
+fn standalone_owner_drain_delivers_its_query_report_and_progresses() {
+    let clock = ManualClock::new();
+    let now = clock.now();
+    let due = now + Duration::from_secs(1);
+    let (runtime, _window) = manual_runtime(clock.clone());
+    let reports = Arc::new(Mutex::new(Vec::new()));
+    let collected = Arc::clone(&reports);
+    runtime.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
+        if let FrameFailureKind::SamplingPanic {
+            first,
+            admitted_attempt,
+            ..
+        } = &report.kind
+        {
+            collected.lock().expect("reports").push(StandaloneReport {
+                address: report.address,
+                first: *first,
+                admitted_attempt: *admitted_attempt,
+                disposition: report.disposition,
+                consecutive_failures: report.consecutive_failures,
+            });
+        }
+    })));
+    let queries = Rc::new(Cell::new(0));
+    let member = Rc::new(DeadlineQuery {
+        calls: Rc::clone(&queries),
+        due,
+        fail: Cell::new(false),
+    });
+    let _entry = runtime
+        .gestures()
+        .arena()
+        .add(PointerId::new(NonZeroU64::MIN), &member);
+    runtime.enter(UiRuntime::drain_owner_inbox);
+    let before = queries.get();
+    member.fail.set(true);
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        runtime.enter(UiRuntime::drain_owner_inbox)
+    }))
+    .expect("standalone owner drain contains discovery failure");
+    {
+        let observed = reports.lock().expect("reports");
+        assert_eq!(
+            observed.len(),
+            1,
+            "the completed drain delivers its report: {observed:?}"
+        );
+        let observed = &observed[0];
+        assert_eq!(
+            observed.address,
+            PresentationAddress {
+                ui_runtime_id: runtime.id(),
+                presentation_id: runtime.presentation_id()
+            }
+        );
+        assert_eq!(observed.first.stage, SamplingStage::DeadlineDiscovery);
+        assert_eq!(observed.first.origin, SamplingFailureOrigin::Unknown);
+        assert!(!observed.admitted_attempt);
+        assert_eq!(observed.disposition, FailureDisposition::Contained);
+        assert_eq!(observed.consecutive_failures, 0);
+    }
+    assert_eq!(queries.get(), before + 1);
+    assert_eq!(runtime.next_wake(), Some(now + Duration::from_millis(100)));
+    member.fail.set(false);
+    clock.advance(Duration::from_millis(100));
+    runtime.enter(UiRuntime::drain_owner_inbox);
+    assert!(queries.get() > before + 1);
+    assert_eq!(runtime.next_wake(), Some(due));
+    assert_eq!(reports.lock().expect("reports").len(), 1);
 }
 
 #[test]
@@ -452,6 +908,22 @@ fn owner_sampling_contract() {
             (
                 "query diagnostics and handler competition keeps recovery",
                 competing_query_diagnostics_and_handler_preserve_recovery,
+            ),
+            (
+                "original owner failure survives query report competition",
+                original_owner_failure_survives_query_report_competition,
+            ),
+            (
+                "retained deadline publisher changes timing and refuses stale authority",
+                retained_deadline_publisher_updates_cancels_and_refuses_stale_authority,
+            ),
+            (
+                "completion refresh observes timing after runtime lease return",
+                completion_refresh_observes_timing_after_the_runtime_lease_returns,
+            ),
+            (
+                "standalone owner drain delivers query report and recovery",
+                standalone_owner_drain_delivers_its_query_report_and_progresses,
             ),
         ],
     );
