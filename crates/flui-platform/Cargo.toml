@@ -74,9 +74,6 @@ crossbeam-channel = { workspace = true, optional = true }
 # Window handle abstraction
 raw-window-handle = "0.6"
 
-# Bitflags for platform-specific flags
-bitflags = "2.6"
-
 # Compile-time auto-trait fences for `OwnerPlatform`/`PlatformProxy`/
 # `PendingWindow` (ADR-0039 §6-8): item-position `assert_not_impl_any!`/
 # `assert_impl_all!` in `traits/owner.rs`, expanded unconditionally by every
@@ -255,6 +252,7 @@ console_error_panic_hook = "0.1"
 # brings the AT-SPI bridge and its async stack. Linux winit preferences also
 # use D-Bus, independently of whether the screen-reader bridge is enabled.
 [target.'cfg(target_os = "linux")'.dependencies]
+bitflags = { workspace = true }
 accesskit_unix = { version = "0.24", optional = true }
 zbus = { workspace = true, optional = true }
 futures-util = { workspace = true, optional = true }
@@ -348,8 +346,9 @@ optional = true
 [features]
 default = ["desktop"]
 
-# Platform features
-desktop = ["dep:winit"]
+# Compatibility selector for the native desktop backends, selected by target OS.
+# The optional winit fallback belongs to `winit-backend` alone.
+desktop = []
 
 # Per-OS accessibility bridges (AT-SPI on Linux, UIA on Windows,
 # NSAccessibility on macOS) -- one feature, target-gated dependencies, so a
@@ -375,8 +374,7 @@ winit-backend = [
 # gated by `#[cfg(target_arch = "wasm32")]` on the actual compile target
 # (`src/platforms/mod.rs`), not by this flag; enabling or disabling it
 # changes nothing observable. Kept as a forward-compatible name for
-# downstream `Cargo.toml`s, mirroring `desktop` (which — unlike this one —
-# really does gate `dep:winit`).
+# downstream `Cargo.toml`s, mirroring `desktop`.
 web = []
 
 # Linux display server protocols

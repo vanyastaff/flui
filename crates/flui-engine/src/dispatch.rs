@@ -1,7 +1,7 @@
 //! `DrawCommand` dispatch.
 //!
 //! The match that routes each `flui_painting::DrawOp` variant to its
-//! [`CommandRenderer`](crate::command_renderer::CommandRenderer) method — the
+//! [`crate::command_renderer::CommandRenderer`] method — the
 //! two are read together, since the enum and the trait are the two halves of
 //! one contract.
 //!

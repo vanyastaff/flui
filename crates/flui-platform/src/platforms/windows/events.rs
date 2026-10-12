@@ -624,14 +624,11 @@ impl NativePointerRegistry {
         reason: flui_platform_api::pointer::CancelReason,
     ) -> Vec<PlatformInput> {
         use flui_platform_api::pointer::{PointerCancel, PointerEvent};
-        self.contacts
-            .remove(&raw)
-            .map(|contact| {
-                vec![PlatformInput::Pointer(PointerEvent::Cancel(
-                    PointerCancel::new(contact.info, time, reason),
-                ))]
-            })
-            .unwrap_or_default()
+        self.contacts.remove(&raw).map_or_default(|contact| {
+            vec![PlatformInput::Pointer(PointerEvent::Cancel(
+                PointerCancel::new(contact.info, time, reason),
+            ))]
+        })
     }
 
     pub(super) fn remove_device(

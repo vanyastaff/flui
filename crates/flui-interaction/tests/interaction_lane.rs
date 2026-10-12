@@ -3862,7 +3862,7 @@ fn native_staged_generation_survives_geometry_and_reentry() {
                 (selected_starts.clone(), selected_ends.clone());
             let weak = Rc::downgrade(&binding);
             let fresh_path = replacement_path.clone();
-            let first = first_start.clone();
+            let first = first_start;
             let selected = ScaleGestureRecognizer::builder(binding.arena().clone())
                 .on_start(move |_| {
                     selected_started.set(selected_started.get() + 1);

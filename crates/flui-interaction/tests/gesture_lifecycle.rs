@@ -2274,8 +2274,7 @@ fn dispose_retires_two_panicking_captures_one_at_a_time() {
         .expect_err("the first capture's panic surfaces from final owner drop");
     let message = failure
         .downcast_ref::<String>()
-        .map(String::as_str)
-        .unwrap_or_default();
+        .map_or_default(String::as_str);
     assert!(
         message.contains("capture failed to release"),
         "the first failure is the one reported, got {message:?}"

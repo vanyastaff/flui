@@ -265,13 +265,12 @@ fn output_lines(program: &str, args: &[&str]) -> Vec<String> {
         .output()
         .ok()
         .filter(|out| out.status.success())
-        .map(|out| {
+        .map_or_default(|out| {
             String::from_utf8_lossy(&out.stdout)
                 .lines()
                 .map(|line| line.trim().to_owned())
                 .collect()
         })
-        .unwrap_or_default()
 }
 
 /// The cargo subcommands only `cargo xtask ci-full` runs, each with its

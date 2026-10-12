@@ -1,7 +1,5 @@
 use std::path::PathBuf;
 
-use crate::build::error::BuildError;
-
 /// Build context containing configuration and paths.
 ///
 /// Use [`BuilderContextBuilder`](crate::build::BuilderContextBuilder) to construct instances.
@@ -176,28 +174,6 @@ impl From<&str> for Profile {
         match s {
             "release" => Profile::Release,
             _ => Profile::Debug,
-        }
-    }
-}
-
-impl TryFrom<&str> for Platform {
-    type Error = BuildError;
-
-    fn try_from(s: &str) -> Result<Self, Self::Error> {
-        match s {
-            "android" => Ok(Platform::Android {
-                targets: vec!["aarch64-linux-android".to_string()],
-            }),
-            "ios" => Ok(Platform::Ios {
-                targets: vec!["aarch64-apple-ios".to_string()],
-            }),
-            "web" => Ok(Platform::Web {
-                target: "web".to_string(),
-            }),
-            "desktop" => Ok(Platform::Desktop { target: None }),
-            other => Err(BuildError::InvalidPlatform {
-                reason: format!("unknown platform '{other}', expected: android, ios, web, desktop"),
-            }),
         }
     }
 }

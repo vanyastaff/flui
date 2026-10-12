@@ -81,8 +81,7 @@ pub enum PlatformError {
         "embedder bootstrap (on_ready) failed{}",
         .loop_error
             .as_deref()
-            .map(|error| format!(" (the event loop also failed while unwinding: {error})"))
-            .unwrap_or_default()
+            .map_or_default(|error| format!(" (the event loop also failed while unwinding: {error})"))
     )]
     Bootstrap {
         /// The embedder's own bootstrap error, reachable via
