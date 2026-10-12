@@ -46,9 +46,19 @@ bytes were restored before verification. Ordinary withdrawal and fresh-attempt
 controls remained valid; compile-only fixture corrections are not counted as
 behavioral RED evidence.
 
+The public owner-dispatch row
+`query_retry_participates_in_the_pending_gate_and_then_settles` also reproduced
+an overdue recovered deadline receiving zero polls instead of one in its due
+owner opportunity. Armed query retries now contribute to both cached wake timing
+and pending admission through the same observation mapping. The 99 ms control
+does not query early; a second query failure parks without repeated delivery,
+reporting or wake debt. Restoring the old pending predicate reproduced the same
+zero-poll failure, and exact source bytes were restored afterwards. This is
+synthetic owner-dispatch acceptance, not a live native event-loop run.
+
 Final local verification used source commit
-`23005febe9dedc947096e56a2fad1547e1436f5c` and completed
-`cargo xtask check-changed --base 6af2cf426809dbf8a33bbb415e904f0bfdc847c4`:
+`8e446cb612e5b5c5608f9bd1bd24550697d96883` and completed
+`cargo xtask check-changed --base e419a04d36bb821be796d763150da500d72c33f5`:
 
 - scoped and engine/testing strict clippy passed;
 - 853 nextest tests passed, with 19 configured skips;
