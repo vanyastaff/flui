@@ -1897,6 +1897,23 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         self.scheduler.has_dirty_nodes() || self.local_dirty.has_pending()
     }
 
+    /// Whether accepted invalidation still awaits owner-thread application.
+    ///
+    /// This observation never drains requests, marks nodes, wakes observers or
+    /// retires ownership. Queued stale requests can conservatively contribute
+    /// until the next [`Self::drain_pending_dirty`]. Font changes are observed
+    /// after the text context's current measurement loan returns, as in
+    /// [`Self::apply_font_change`]; a busy context alone invents no work.
+    #[must_use]
+    pub fn has_pending_invalidations(&self) -> bool {
+        !self.dirty_rx.is_empty()
+            || self.local_dirty.has_pending()
+            || self
+                .text
+                .fonts_generation()
+                .is_some_and(|generation| generation != self.fonts_seen)
+    }
+
     /// Whether retained layout work needs a fresh layout invalidation before
     /// an automatic frame retry can make progress. Explicit `run_frame` calls
     /// may still inspect the rejection; a changed input resumes ordinary scheduling.
