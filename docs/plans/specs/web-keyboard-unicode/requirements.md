@@ -1,6 +1,6 @@
 # Web keyboard Unicode values
 
-Status: Approved, 2026-10-12. Implementation in progress.
+Status: Approved, 2026-10-12. Implemented; awaiting merge.
 
 ## Problem
 

@@ -1,6 +1,6 @@
 # Web keyboard Unicode implementation
 
-Status: Approved, implementation in progress.
+Status: Implemented; awaiting merge.
 
 ## Task graph
 
@@ -9,9 +9,9 @@ Status: Approved, implementation in progress.
   Depends on T1; covers R1-R4 and R7-R8. Preserve a source-reverted producer RED.
 - [x] T3: Extend mounted shortcut and common owned-key acceptance tables.
   Depends on T1; covers R5-R6. Assert observable action and event-policy effects.
-- [ ] T4: Integrate T2 and T3, document the mapping, record browser and wasm
+- [x] T4: Integrate T2 and T3, document the mapping, record browser and wasm
   evidence, and run the changed-scope gate. Depends on T2 and T3; covers R9.
-- [ ] T5: Review standards and spec independently, address findings and publish
+- [x] T5: Review standards and spec independently, address findings and publish
   the single feature PR. Depends on T4. Merge requires separate authorization.
 
 ## Baseline evidence
@@ -61,4 +61,17 @@ release profile and wasm-bindgen 0.2.127, the net probe artifact sizes are:
 This includes probe changes and coherent Unicode data; it is not isolated
 library size or a latency benchmark. The data facilities are wasm-only.
 Standards and spec reviews have no remaining findings after the UTF-16 repair.
-Final changed-scope verification and PR publication remain pending.
+
+`cargo xtask check-changed --base
+61ea713380a449777ffa791b61a3a01e3fd81c5a` passed at
+`fda909c25d9ce7e89b5e0c667d16572df6fa5cc1`: whole-workspace clippy,
+911 workspace tests (29 configured skips), 46 tooling tests, one platform
+compiler-guard test, rustdoc/doctests, expanded Windows features, wasm clippy
+and the minimal wasm hot-reload facade. `cargo xtask checks` also passed.
+Apple/Android SDK checks and the native Linux platform suite remain CI-owned.
+Subsequent edits record completion in these three spec files only.
+
+The feature is published as [PR #1558](https://github.com/vanyastaff/flui/pull/1558),
+closing [the approved issue](https://github.com/vanyastaff/flui/issues/1557) on
+merge. Merge requires separate authorization; CI and merge are not local
+acceptance evidence.

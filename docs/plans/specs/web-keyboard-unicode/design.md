@@ -1,8 +1,10 @@
 # Web logical-key admission
 
-Status: Approved behavior; implementation in progress.
+Status: Approved behavior; implemented, awaiting merge.
 
-The DOM producer resolves named values first, using the existing generated
+The DOM producer refuses malformed UTF-16 before converting it into Rust text,
+so conversion cannot silently replace an unpaired surrogate with U+FFFD.
+It then resolves named values first, using the existing generated
 vocabulary and accepted aliases. It then admits a nonempty character only if
 the string is NFC and follows the W3C key-string grammar. A refused logical
 value becomes Unidentified while the event retains its other observations.
