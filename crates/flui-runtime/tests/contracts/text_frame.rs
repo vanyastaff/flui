@@ -1523,6 +1523,7 @@ fn pending_editable() -> PendingEditable {
 struct UnknownRetainedDeadline {
     due: web_time::Instant,
     effects: std::rc::Rc<std::cell::Cell<usize>>,
+    fail_query: bool,
 }
 
 impl flui_interaction::arena::GestureArenaMember for UnknownRetainedDeadline {
@@ -1531,6 +1532,10 @@ impl flui_interaction::arena::GestureArenaMember for UnknownRetainedDeadline {
     fn reject_gesture(&self, _: flui_platform_api::PointerId) {}
 
     fn deadline(&self) -> Option<web_time::Instant> {
+        if self.fail_query {
+            self.effects.set(self.effects.get() + 1);
+            std::panic::panic_any("unknown retained deadline discovery");
+        }
         Some(self.due)
     }
 
@@ -1541,6 +1546,18 @@ impl flui_interaction::arena::GestureArenaMember for UnknownRetainedDeadline {
 }
 
 fn unknown_deadline_withdraws_the_old_receipt_and_recovers_fresh_geometry() {
+    retained_deadline_failure_case(false, false);
+}
+
+fn a_background_deadline_withdraws_the_old_receipt_without_opening_the_barrier() {
+    retained_deadline_failure_case(true, false);
+}
+
+fn a_background_query_failure_withdraws_the_old_receipt_without_opening_the_barrier() {
+    retained_deadline_failure_case(true, true);
+}
+
+fn retained_deadline_failure_case(background: bool, fail_query: bool) {
     use flui_foundation::MonotonicClock as _;
     use flui_platform_api::text_store::{
         LockGrant, LockOutcome, LockTiming, TextStoreError, Utf16Offset, Utf16Range,
@@ -1563,6 +1580,10 @@ fn unknown_deadline_withdraws_the_old_receipt_and_recovers_fresh_geometry() {
         work,
     } = pending_editable();
     let before = sink.submitted;
+    if background {
+        runtime.update_host_lifecycle(flui_scheduler::AppLifecycleState::Paused);
+        assert!(!runtime.scheduler().frames_enabled());
+    }
     let reports = Arc::new(parking_lot::Mutex::new(Vec::new()));
     let reported = Arc::clone(&reports);
     runtime.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
@@ -1590,18 +1611,23 @@ fn unknown_deadline_withdraws_the_old_receipt_and_recovers_fresh_geometry() {
     let member = Rc::new(UnknownRetainedDeadline {
         due: clock.now(),
         effects: Rc::clone(&effects),
+        fail_query,
     });
     let _entry = runtime.gestures().arena().add(
         flui_platform_api::PointerId::new(std::num::NonZeroU64::new(99).expect("contact")),
         &member,
     );
     let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        runtime.pump(&mut clock, &mut sink)
+        if background {
+            runtime.pump_background();
+        } else {
+            let _ = runtime.pump(&mut clock, &mut sink);
+        }
     }));
     assert_eq!(
         effects.get(),
         1,
-        "the open extension performed its side effect"
+        "the open extension was evaluated through the runtime owner turn"
     );
     let _ = attempt.expect("unknown deadline failure is presentation-local");
     assert_eq!(
@@ -1636,7 +1662,20 @@ fn unknown_deadline_withdraws_the_old_receipt_and_recovers_fresh_geometry() {
         ),
         Ok(LockOutcome::Deferred)
     );
+    if background {
+        runtime.pump_background();
+        assert_eq!(effects.get(), 1, "the same failing revision stays parked");
+        assert_eq!(sink.submitted, before);
+        assert_eq!(completed.get(), 0);
+        assert!(geometry.borrow().is_none());
+        runtime.update_host_lifecycle(flui_scheduler::AppLifecycleState::Resumed);
+    }
     assert!(!runtime.pump(&mut clock, &mut sink).presented());
+    let stage = if fail_query {
+        SamplingStage::DeadlineDiscovery
+    } else {
+        SamplingStage::GestureDeadline
+    };
     assert_eq!(
         effects.get(),
         1,
@@ -1687,14 +1726,8 @@ fn unknown_deadline_withdraws_the_old_receipt_and_recovers_fresh_geometry() {
             FailureDisposition::FrameDropped,
             1,
             Some((
-                (
-                    SamplingStage::GestureDeadline,
-                    SamplingFailureOrigin::Unknown
-                ),
-                Some((
-                    SamplingStage::GestureDeadline,
-                    SamplingFailureOrigin::Unknown
-                )),
+                (stage, SamplingFailureOrigin::Unknown),
+                Some((stage, SamplingFailureOrigin::Unknown)),
                 true,
             )),
         )],
@@ -2519,6 +2552,16 @@ fn registered_text_preparation_preserves_the_actual_presentation_attempt() {
             (
                 "unknown_deadline_withdraws_the_old_receipt_and_recovers_fresh_geometry",
                 unknown_deadline_withdraws_the_old_receipt_and_recovers_fresh_geometry as fn(),
+            ),
+            (
+                "a_background_deadline_withdraws_the_old_receipt_without_opening_the_barrier",
+                a_background_deadline_withdraws_the_old_receipt_without_opening_the_barrier
+                    as fn(),
+            ),
+            (
+                "a_background_query_failure_withdraws_the_old_receipt_without_opening_the_barrier",
+                a_background_query_failure_withdraws_the_old_receipt_without_opening_the_barrier
+                    as fn(),
             ),
             (
                 "a_same_queued_rebuild_admission_cancels_the_old_preparation_premise",

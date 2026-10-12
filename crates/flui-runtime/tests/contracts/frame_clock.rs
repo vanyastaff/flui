@@ -84,6 +84,7 @@ struct MountedAnimation {
     controller: AnimationController,
     peer: AnimationController,
     completion: flui_scheduler::PostFrameHandle,
+    arena: flui_interaction::arena::GestureArena,
 }
 
 struct SamplingState {
@@ -115,6 +116,7 @@ impl ViewState<SamplingView> for SamplingState {
             controller: driven.controller().clone(),
             peer: peer.controller().clone(),
             completion,
+            arena: flui_widgets::GestureArenaScope::of(ctx),
         });
         self.driven = Some([driven, peer]);
     }
@@ -185,6 +187,242 @@ fn final_status_delivery_failure_preserves_completion() {
 
 fn run_completion_delivery_failure_preserves_completion() {
     delivery_case(Delivery::Completion);
+}
+
+struct BackgroundDeadline {
+    due: Cell<Option<web_time::Instant>>,
+    effects: Rc<Cell<usize>>,
+    panic_after_effect: bool,
+}
+
+impl flui_interaction::arena::GestureArenaMember for BackgroundDeadline {
+    fn accept_gesture(&self, _: flui_platform_api::PointerId) {}
+
+    fn reject_gesture(&self, _: flui_platform_api::PointerId) {}
+
+    fn deadline(&self) -> Option<web_time::Instant> {
+        self.due.get()
+    }
+
+    fn poll_deadline(&self, _: web_time::Instant) {
+        self.effects.set(self.effects.get() + 1);
+        if self.panic_after_effect {
+            std::panic::panic_any("unknown background deadline progress");
+        }
+        self.due.set(None);
+    }
+}
+
+#[test]
+fn background_deadlines_progress_without_visual_frames_or_unknown_replay() {
+    crate::table_test::run_table(
+        "background presentation sampling",
+        &[
+            (
+                "healthy timers while frames are disabled",
+                healthy_background_deadlines_do_not_build_or_complete,
+            ),
+            (
+                "unknown timer preserves healthy progress without replay",
+                unknown_background_deadline_keeps_healthy_progress_once,
+            ),
+        ],
+    );
+}
+
+fn healthy_background_deadlines_do_not_build_or_complete() {
+    background_deadline_case(false);
+}
+
+fn unknown_background_deadline_keeps_healthy_progress_once() {
+    background_deadline_case(true);
+}
+
+fn background_deadline_case(unknown: bool) {
+    let mut clock = ManualClock::new();
+    let mut runtime = UiRuntime::new(
+        crate::owner_publication::window(),
+        1.0,
+        RuntimeHostServices::new(
+            Arc::new(|| {}),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            &flui_painting::FontCollection::new(),
+            flui_scheduler::ClockSource::Manual(clock.clone()),
+        ),
+    )
+    .expect("background runtime");
+    runtime.set_frame_failure_detail(FrameFailureDetail::Verbatim);
+    let reports = Arc::new(Mutex::new(Vec::new()));
+    let reported = Arc::clone(&reports);
+    runtime.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
+        reported
+            .lock()
+            .expect("background failure observations")
+            .push(record_failure(report));
+    })));
+    let primary_mounted = Rc::new(RefCell::new(None));
+    let primary_builds = Rc::new(RefCell::new(Vec::new()));
+    runtime
+        .attach_root_widget_with_size(
+            &SamplingView {
+                mounted: Rc::clone(&primary_mounted),
+                built_samples: Rc::clone(&primary_builds),
+            },
+            800.0,
+            600.0,
+        )
+        .expect("primary background root");
+    let sibling_id = runtime
+        .install_presentation(runtime.assemble_presentation(crate::owner_publication::window()));
+    let sibling_mounted = Rc::new(RefCell::new(None));
+    let sibling_builds = Rc::new(RefCell::new(Vec::new()));
+    runtime
+        .attach_root_widget_with_size_to(
+            sibling_id,
+            &SamplingView {
+                mounted: Rc::clone(&sibling_mounted),
+                built_samples: Rc::clone(&sibling_builds),
+            },
+            800.0,
+            600.0,
+        )
+        .expect("sibling background root");
+    let _ = runtime.pump(&mut clock, &mut Sink);
+    let primary = primary_mounted.take().expect("primary animation mounted");
+    let sibling = sibling_mounted.take().expect("sibling animation mounted");
+    let _primary_run = primary.controller.forward().expect("primary animation");
+    let _sibling_run = sibling.controller.forward().expect("sibling animation");
+    let _ = runtime.pump(&mut clock, &mut Sink);
+    let primary_before = primary_builds.borrow().len();
+    let sibling_before = sibling_builds.borrow().len();
+    let primary_sample = primary.controller.value();
+    let sibling_sample = sibling.controller.value();
+    let primary_completed = Rc::new(Cell::new(0));
+    let sibling_completed = Rc::new(Cell::new(0));
+    for (handle, completed) in [
+        (&primary.completion, &primary_completed),
+        (&sibling.completion, &sibling_completed),
+    ] {
+        let observed = Rc::clone(completed);
+        handle
+            .schedule(move |_| observed.set(observed.get() + 1))
+            .expect("completion awaiting a visual frame");
+    }
+    runtime.update_host_lifecycle(flui_scheduler::AppLifecycleState::Paused);
+    assert!(!runtime.scheduler().frames_enabled());
+
+    // Pausing retires old native contacts. An owner-side producer admits
+    // these new deadlines afterwards, while visual frames remain disabled.
+    let due = clock.now() + Duration::from_millis(50);
+    let primary_effects = Rc::new(Cell::new(0));
+    let sibling_effects = Rc::new(Cell::new(0));
+    let unknown_effects = Rc::new(Cell::new(0));
+    let primary_timer = Rc::new(BackgroundDeadline {
+        due: Cell::new(Some(due)),
+        effects: Rc::clone(&primary_effects),
+        panic_after_effect: false,
+    });
+    let sibling_timer = Rc::new(BackgroundDeadline {
+        due: Cell::new(Some(due)),
+        effects: Rc::clone(&sibling_effects),
+        panic_after_effect: false,
+    });
+    let unknown_timer = Rc::new(BackgroundDeadline {
+        due: Cell::new(Some(due)),
+        effects: Rc::clone(&unknown_effects),
+        panic_after_effect: true,
+    });
+    let contact = |value| {
+        flui_platform_api::PointerId::new(std::num::NonZeroU64::new(value).expect("contact"))
+    };
+    if unknown {
+        let _ = primary.arena.add(contact(71), &unknown_timer);
+    }
+    let _ = primary.arena.add(contact(72), &primary_timer);
+    let _ = sibling.arena.add(contact(73), &sibling_timer);
+    clock.advance(Duration::from_millis(50));
+    let background = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        runtime.pump_background();
+    }));
+    assert_eq!(
+        primary_effects.get(),
+        1,
+        "a background turn polls a healthy due deadline in the faulty presentation"
+    );
+    assert_eq!(
+        sibling_effects.get(),
+        1,
+        "a healthy presentation does not need a visual frame to service its timer"
+    );
+    background.expect("background deadline failures are presentation-local");
+    assert_eq!(unknown_effects.get(), usize::from(unknown));
+    for delay in [0, 49, 1, 100, 100] {
+        clock.advance(Duration::from_millis(delay));
+        runtime.pump_background();
+    }
+    assert_eq!(primary_effects.get(), 1, "completed timer remains retired");
+    assert_eq!(sibling_effects.get(), 1);
+    assert_eq!(
+        unknown_effects.get(),
+        usize::from(unknown),
+        "an unknown partial effect is never automatically polled again"
+    );
+    assert_eq!(primary.controller.value(), primary_sample);
+    assert_eq!(sibling.controller.value(), sibling_sample);
+    assert_eq!(primary_builds.borrow().len(), primary_before);
+    assert_eq!(sibling_builds.borrow().len(), sibling_before);
+    assert_eq!(primary_completed.get(), 0);
+    assert_eq!(sibling_completed.get(), 0);
+    let expected = if unknown {
+        vec![RecordedFailure {
+            address: flui_foundation::PresentationAddress {
+                ui_runtime_id: runtime.id(),
+                presentation_id: runtime.presentation_id(),
+            },
+            disposition: FailureDisposition::Contained,
+            consecutive_failures: 0,
+            sampling: Some(RecordedSampling {
+                first: (
+                    SamplingStage::GestureDeadline,
+                    SamplingFailureOrigin::Unknown,
+                ),
+                blocking: Some((
+                    SamplingStage::GestureDeadline,
+                    SamplingFailureOrigin::Unknown,
+                )),
+                admitted_attempt: false,
+                message: PanicText::Verbatim("unknown background deadline progress".into()),
+                internal_invariant: false,
+            }),
+        }]
+    } else {
+        Vec::new()
+    };
+    assert_eq!(
+        reports
+            .lock()
+            .expect("background failure observations")
+            .as_slice(),
+        expected
+    );
+
+    runtime.update_host_lifecycle(flui_scheduler::AppLifecycleState::Resumed);
+    let _ = runtime.pump(&mut clock, &mut Sink);
+    clock.advance(Duration::from_millis(250));
+    let _ = runtime.pump(&mut clock, &mut Sink);
+    assert!(primary_builds.borrow().len() > primary_before);
+    assert!(sibling_builds.borrow().len() > sibling_before);
+    assert_eq!(primary_completed.get(), 1);
+    assert_eq!(sibling_completed.get(), 1);
+    assert_eq!(unknown_effects.get(), usize::from(unknown));
+    assert_eq!(
+        reports
+            .lock()
+            .expect("background failure observations")
+            .as_slice(),
+        expected
+    );
 }
 
 fn delivery_case(delivery: Delivery) {
