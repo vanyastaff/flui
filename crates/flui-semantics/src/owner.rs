@@ -15,7 +15,6 @@ use crate::{
     identity::AccessibilityNodeId,
     node::SemanticsNode,
     relation::SemanticsAnchor,
-    snapshot::{SemanticsSnapshot, SemanticsSnapshotError},
     tree::SemanticsTree,
 };
 
@@ -233,30 +232,28 @@ impl SemanticsActionInvocation {
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// use flui_semantics::{SemanticsOwner, SemanticsNode, SemanticsProperties, SemanticsRole};
+/// ```rust
 /// use std::sync::Arc;
 ///
-/// // Create owner with platform callback
-/// let callback = Arc::new(|update: &flui_semantics::TreeUpdate| {
-///     for (id, _node) in &update.nodes {
-///         tracing::debug!(?id, "semantics update");
-///     }
-/// });
-/// let mut owner = SemanticsOwner::new(callback);
+/// use flui_foundation::RenderId;
+/// use flui_semantics::{SemanticsConfiguration, SemanticsNode, SemanticsOwner, TreeUpdate};
 ///
-/// // Build semantics tree
-/// let node = SemanticsNode::new()
-///     .with_properties(
-///         SemanticsProperties::new()
-///             .with_role(SemanticsRole::Button)
-///             .with_label("Submit")
-///     );
-/// let id = owner.insert(node);
+/// // The platform callback receives each translated update.
+/// let mut owner = SemanticsOwner::new(Arc::new(|update: &TreeUpdate| {
+///     assert!(!update.nodes.is_empty());
+/// }));
+///
+/// let mut button = SemanticsConfiguration::new();
+/// button.set_label("Submit");
+/// button.set_button(true);
+/// let id = owner.insert(
+///     SemanticsNode::new()
+///         .with_source_render_id(RenderId::new(1))
+///         .with_config(button),
+/// );
 /// owner.set_root(Some(id));
 ///
-/// // Flush updates to platform
-/// owner.flush();
+/// assert_eq!(owner.flush(), 1);
 /// ```
 pub struct SemanticsOwner {
     /// The semantics tree.
@@ -597,16 +594,6 @@ impl SemanticsOwner {
     #[inline]
     pub fn tree_mut(&mut self) -> &mut SemanticsTree {
         &mut self.tree
-    }
-
-    /// Builds an owned, callback-free snapshot of the complete rooted tree.
-    ///
-    /// Unlike the legacy dirty-node callback, this path never derives an
-    /// external identifier from the rebuild-local [`SemanticsId`]. Every node
-    /// must carry the generational render identity of the boundary that formed
-    /// it, otherwise a typed [`SemanticsSnapshotError`] is returned.
-    pub fn snapshot(&self) -> Result<SemanticsSnapshot, SemanticsSnapshotError> {
-        SemanticsSnapshot::from_tree(&self.tree)
     }
 
     /// Resolves a platform request against the current rooted semantics tree.
@@ -1106,7 +1093,7 @@ impl SemanticsOwner {
                 continue;
             };
             let id = accesskit::NodeId(identity.as_u64());
-            let Some(data) = self.tree.node_data_of(node) else {
+            let Some(data) = self.tree.publish_view(node) else {
                 continue;
             };
             let translated = crate::accesskit_translation::to_published_node(
@@ -1126,13 +1113,10 @@ impl SemanticsOwner {
             let Some(node) = self.tree.get(sid).filter(|node| !node.is_dirty()) else {
                 continue;
             };
-            let Some(data) = self.tree.node_data_of(node) else {
+            let Some(data) = self.tree.publish_view(node) else {
                 continue;
             };
-            let Some(identity) = data.id else {
-                continue;
-            };
-            let id = accesskit::NodeId(identity.as_u64());
+            let id = accesskit::NodeId(data.id.as_u64());
             let translated = crate::accesskit_translation::to_published_node(
                 &data,
                 id == state.root,
@@ -1297,43 +1281,7 @@ mod tests {
     use crate::{AccessibilityNodeId, SemanticsActionRequest};
 
     #[test]
-    fn snapshot_rejects_malformed_trees_and_action_resolution_rejects_stale_nodes() {
-        // Case: one stable identity naming two live nodes.
-        let render_id = RenderId::new(7);
-        let mut owner = SemanticsOwner::new_without_callback();
-        let root = owner.insert(SemanticsNode::new().with_source_render_id(render_id));
-        let duplicate = owner.insert(SemanticsNode::new().with_source_render_id(render_id));
-        owner.add_child(root, duplicate);
-        owner.set_root(Some(root));
-        assert_eq!(
-            owner
-                .snapshot()
-                .expect_err("duplicate identity: one stable identity cannot name two live nodes"),
-            SemanticsSnapshotError::DuplicateAccessibilityIdentity {
-                id: render_id.into(),
-                first_node: root,
-                duplicate_node: duplicate,
-            },
-        );
-
-        // Case: a cycle.
-        let mut owner = SemanticsOwner::new_without_callback();
-        let root = owner.insert(SemanticsNode::new().with_source_render_id(RenderId::new(1)));
-        let child = owner.insert(SemanticsNode::new().with_source_render_id(RenderId::new(2)));
-        owner.add_child(root, child);
-        owner
-            .get_mut(child)
-            .expect("child must remain live")
-            .add_child(root);
-        owner.set_root(Some(root));
-        assert_eq!(
-            owner
-                .snapshot()
-                .expect_err("cycle: cycles cannot be snapshotted"),
-            SemanticsSnapshotError::RepeatedNode { node: root },
-        );
-
-        // Case: action resolution ignores orphaned and stale nodes.
+    fn action_resolution_rejects_orphaned_and_stale_nodes() {
         let root_render_id = RenderId::new(1);
         let orphan_render_id = RenderId::new(2);
         let stale_render_id = RenderId::new(99);

@@ -2,6 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-07
+- **Superseded-by:** [ADR-0202](ADR-0202-typed-semantics-attributes.md), in part: the
+  cross-thread handoff is the published AccessKit `TreeUpdate`; `SemanticsSnapshot` is removed.
 - **Related:** [ADR-0043](ADR-0043-presentation-bundled-trees-and-realm-globalkey-scope.md),
   [ADR-0054](ADR-0054-the-viewport-commits-one-result.md),
   [ADR-0127](ADR-0127-exceptional-path-retention.md)

@@ -21,7 +21,7 @@ use flui_rendering::{
     parent_data::BoxParentData,
     semantics::{
         AccessibilityNodeId, AttributedString, SemanticsAction, SemanticsConfiguration,
-        SemanticsNodeSnapshot, SemanticsRole, SemanticsSnapshot,
+        SemanticsNode, SemanticsRole,
     },
     testing::{FrameRun, Probe, RenderTester, box_node},
     traits::RenderBox,
@@ -253,12 +253,103 @@ fn constraints() -> BoxConstraints {
     BoxConstraints::new(0.0, 200.0, 0.0, 200.0)
 }
 
-fn snapshot(run: &FrameRun) -> SemanticsSnapshot {
-    run.owner()
+/// The assembled tree as the owner holds it, in render preorder, keyed by the
+/// stable identities it publishes under.
+struct Published {
+    root: AccessibilityNodeId,
+    nodes: Vec<PublishedNode>,
+}
+
+impl Published {
+    fn root(&self) -> AccessibilityNodeId {
+        self.root
+    }
+
+    fn nodes(&self) -> &[PublishedNode] {
+        &self.nodes
+    }
+
+    fn node(&self, id: AccessibilityNodeId) -> Option<&PublishedNode> {
+        self.nodes.iter().find(|node| node.id == id)
+    }
+}
+
+/// One assembled node: its identity, its edges and the payload a test pins.
+struct PublishedNode {
+    id: AccessibilityNodeId,
+    parent: Option<AccessibilityNodeId>,
+    children: Vec<AccessibilityNodeId>,
+    label: Option<AttributedString>,
+    role: SemanticsRole,
+    flags: u64,
+    actions: u64,
+    rect: Rect<f64>,
+}
+
+impl PublishedNode {
+    fn id(&self) -> AccessibilityNodeId {
+        self.id
+    }
+    fn parent(&self) -> Option<AccessibilityNodeId> {
+        self.parent
+    }
+    fn children(&self) -> &[AccessibilityNodeId] {
+        &self.children
+    }
+    fn label(&self) -> Option<&AttributedString> {
+        self.label.as_ref()
+    }
+    fn role(&self) -> SemanticsRole {
+        self.role
+    }
+    fn flags(&self) -> u64 {
+        self.flags
+    }
+    fn actions(&self) -> u64 {
+        self.actions
+    }
+    fn rect(&self) -> Rect<f64> {
+        self.rect
+    }
+}
+
+fn snapshot(run: &FrameRun) -> Published {
+    let owner = run
+        .owner()
         .semantics_owner()
-        .expect("semantics must remain enabled")
-        .snapshot()
-        .expect("rendering assembly must assign every semantics boundary a stable identity")
+        .expect("semantics must remain enabled");
+    let tree = owner.tree();
+    let identity = |sid| {
+        tree.get(sid)
+            .and_then(SemanticsNode::accessibility_id)
+            .expect("rendering assembly must assign every semantics boundary a stable identity")
+    };
+    let root_sid = tree.root().expect("an assembled tree is rooted");
+    let mut nodes = Vec::new();
+    let mut pending = vec![(root_sid, None)];
+    while let Some((sid, parent)) = pending.pop() {
+        let node = tree.get(sid).expect("a child of a live node is live");
+        let id = identity(sid);
+        pending.extend(node.children().iter().rev().map(|&child| (child, Some(id))));
+        nodes.push(PublishedNode {
+            id,
+            parent,
+            children: node
+                .children()
+                .iter()
+                .map(|&child| identity(child))
+                .collect(),
+            label: node.config().label().cloned(),
+            role: node.config().role(),
+            flags: node.config().flags().bits(),
+            actions: node.config().effective_actions_as_bits(),
+            rect: node.rect(),
+        });
+    }
+    Published {
+        root: identity(root_sid),
+        nodes,
+    }
 }
 
 fn accessibility_id(render_id: RenderId) -> AccessibilityNodeId {
@@ -269,7 +360,7 @@ fn semantics_rect(x: f64, y: f64, width: f64, height: f64) -> Rect<f64> {
     Rect::from_origin_size(Point::new(x, y), Size::new(width, height))
 }
 
-fn assert_snapshot_preorder(snapshot: &SemanticsSnapshot, expected: &[AccessibilityNodeId]) {
+fn assert_snapshot_preorder(snapshot: &Published, expected: &[AccessibilityNodeId]) {
     let (&expected_root, _) = expected
         .split_first()
         .expect("a complete semantics snapshot always has a root");
@@ -287,7 +378,7 @@ fn assert_snapshot_preorder(snapshot: &SemanticsSnapshot, expected: &[Accessibil
         snapshot
             .nodes()
             .iter()
-            .map(SemanticsNodeSnapshot::id)
+            .map(PublishedNode::id)
             .collect::<Vec<_>>(),
         expected,
         "snapshot nodes must remain in deterministic render preorder",
@@ -297,7 +388,7 @@ fn assert_snapshot_preorder(snapshot: &SemanticsSnapshot, expected: &[Accessibil
 // The test oracle names each independently observable node field explicitly.
 #[expect(clippy::too_many_arguments)]
 fn assert_snapshot_node(
-    snapshot: &SemanticsSnapshot,
+    snapshot: &Published,
     id: AccessibilityNodeId,
     parent: Option<AccessibilityNodeId>,
     children: &[AccessibilityNodeId],
@@ -540,7 +631,7 @@ pub(crate) fn sibling_insert_and_reorder_preserve_existing_accessibility_ids() {
         reordered
             .nodes()
             .iter()
-            .map(SemanticsNodeSnapshot::id)
+            .map(PublishedNode::id)
             .collect::<Vec<_>>(),
         vec![
             root_accessibility_id,

@@ -24,8 +24,8 @@
 //! calling thread — has no owner to run in and is dropped with a warning. A
 //! [`Semantics`] mounted without an owner lane (a detached render-object
 //! context) advertises none of these actions, so no platform sees a control
-//! that nothing can run. [`Semantics::from_configuration`] and
-//! [`Semantics::from_properties`] still take raw `Send + Sync` handlers; that
+//! that nothing can run. [`Semantics::from_configuration`] still takes raw
+//! `Send + Sync` handlers; that
 //! is the `flui-semantics` surface, below this widget. `ARCHITECTURE.md` §17
 //! records the design.
 
@@ -42,8 +42,7 @@ use flui_rendering::{
     protocol::BoxProtocol,
     semantics::{
         ActionArgs, Assertiveness, HeadingLevel, SemanticsAction, SemanticsActionHandler,
-        SemanticsAnchor, SemanticsConfiguration, SemanticsProperties, SemanticsRelation,
-        SemanticsRole, TextDirection,
+        SemanticsAnchor, SemanticsConfiguration, SemanticsRelation, SemanticsRole, TextDirection,
     },
 };
 use flui_view::{
@@ -207,14 +206,6 @@ impl Semantics {
     /// Creates an empty semantics annotation.
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Creates a semantics annotation from the shared properties bag.
-    pub fn from_properties(properties: &SemanticsProperties) -> Self {
-        Self {
-            configuration: SemanticsConfiguration::from_properties(properties),
-            ..Self::default()
-        }
     }
 
     /// Creates a semantics annotation from a ready configuration.

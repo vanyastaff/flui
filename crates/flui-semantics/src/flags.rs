@@ -160,7 +160,7 @@ impl SemanticsFlag {
 // ============================================================================
 
 /// A set of semantics flags.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SemanticsFlags {
     /// The bitmask of flags.
     flags: u64,

@@ -15,8 +15,7 @@ shape.
 ### Scroll ranges retain their actual axis
 
 [ADR-0157](../../docs/adr/ADR-0157-native-scroll-range-actions.md) carries the
-foundation `Axis` beside offset and bounds through configuration, snapshots and
-export. AccessKit emits X for horizontal sources and Y for vertical sources.
+foundation `Axis` beside offset and bounds through configuration and export. AccessKit emits X for horizontal sources and Y for vertical sources.
 Axis-neutral authored scalar metadata retains the vertical fallback; merging a
 child's range takes its axis together with the values. The mounted widget row
 `scrollable_accessibility_ranges_follow_the_actual_axis` checks both axes,
@@ -483,17 +482,15 @@ adapter and desktop sources, and checked to cover every role FLUI publishes),
 `semantics_action_for_wire` to the Windows adapter's route row by row.
 
 
-### Property presence includes every supplied annotation
+### Publication reads attributes in place
 
-`SemanticsProperties::is_empty` means that no optional field is supplied and both
-the tag and custom-action collections are empty. `Some(false)`, a supplied empty
-string and supplied empty hint overrides remain present; this query concerns
-whether an annotation was supplied, not its truth or text content. The exhaustive
-field destructure makes a newly added property require a presence decision at
-compile time. Public family
-`semantics_property_presence_includes_every_public_annotation` covers each field
-and a selection-only annotation published through a consumer's empty-annotation
-filter and `SemanticsOwner`.
+[ADR-0202](../../docs/adr/ADR-0202-typed-semantics-attributes.md): a configuration's
+payload is one `SemanticsAttributes`, and publication reads it through a borrowed
+`PublishView` (identity, effective actions, bounds, addressable children) rather than a
+copied payload. There is no second shape to keep in step: the flat property bag, the
+copied node data and the owned snapshot are gone, and the platform's cross-thread
+handoff is the AccessKit `TreeUpdate`. A selection-only annotation still reaches the
+platform (`a_selection_only_annotation_reaches_the_platform`).
 
 ## Numeric and directional input
 

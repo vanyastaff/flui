@@ -8,9 +8,7 @@ use flui_foundation::geometry::{Matrix4, Rect};
 use flui_foundation::{ElementId, RenderId, SemanticsId};
 
 // Use our optimized types from flui-semantics
-use crate::{
-    configuration::SemanticsConfiguration, identity::AccessibilityNodeId, update::SemanticsNodeData,
-};
+use crate::{configuration::SemanticsConfiguration, identity::AccessibilityNodeId};
 
 // ============================================================================
 // SEMANTICS NODE
@@ -283,49 +281,6 @@ impl SemanticsNode {
     /// Returns whether semantic payload was assigned to this node.
     pub fn has_been_annotated(&self) -> bool {
         self.config.has_been_annotated()
-    }
-
-    // ========== Data Export ==========
-
-    /// Converts this node's content to [`SemanticsNodeData`], keyed by its
-    /// stable [`accessibility_id`](Self::accessibility_id) (`None` for a node
-    /// never bound to a render boundary — such a node is not publishable).
-    ///
-    /// `children` is left **empty**: a node stores its children as arena
-    /// [`SemanticsId`]s and cannot resolve their stable identities alone. The
-    /// payload constructor that fills `children` is
-    /// [`SemanticsTree::node_data`](crate::tree::SemanticsTree::node_data).
-    pub fn to_node_data(&self) -> SemanticsNodeData {
-        SemanticsNodeData {
-            id: self.accessibility_id(),
-            flags: self.config.flags().bits(),
-            actions: self.config.effective_actions_as_bits(),
-            label: self.config.label().map(|l| l.string.clone()),
-            value: self.config.value().map(|v| v.string.clone()),
-            numeric_range: self.config.numeric_range(),
-            increased_value: self.config.increased_value().map(|v| v.string.clone()),
-            decreased_value: self.config.decreased_value().map(|v| v.string.clone()),
-            hint: self.config.hint().map(|h| h.string.clone()),
-            tooltip: self.config.tooltip().map(Into::into),
-            placeholder: self.config.placeholder().map(Into::into),
-            text_direction: self.config.text_direction(),
-            role: self.config.role(),
-            rect: self.rect,
-            transform: self.transform.unwrap_or(Matrix4::IDENTITY),
-            children: smallvec::SmallVec::new(),
-            platform_view_id: self.config.platform_view_id(),
-            max_value_length: self.config.max_value_length(),
-            current_value_length: self.config.current_value_length(),
-            heading_level: self.config.heading_level(),
-            relations: self.config.relations().iter().cloned().collect(),
-            scroll_position: self.config.scroll_position(),
-            scroll_axis: self.config.scroll_axis(),
-            scroll_extent_max: self.config.scroll_extent_max(),
-            scroll_extent_min: self.config.scroll_extent_min(),
-            scroll_index: self.config.scroll_index(),
-            scroll_child_count: self.config.scroll_child_count(),
-            index_in_parent: self.config.index_in_parent(),
-        }
     }
 
     // ========== Merging ==========

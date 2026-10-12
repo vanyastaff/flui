@@ -10,7 +10,7 @@
 | Работа | Содержание | Требования | Зависит от | Статус |
 |---|---|---|---|---|
 | W1 | ADR-0202, ADR-0203, ADR-0204 | — | — | готово (приняты 2026-10-12) |
-| W2 | `SemanticsAttributes` за существующими сеттерами; публикация через `PublishView`; удаление `SemanticsNodeData`, `SemanticsSnapshot`, `SemanticsProperties`; поведение не меняется | R19, R22 | W1 | в работе |
+| W2 | `SemanticsAttributes` за существующими сеттерами; публикация через `PublishView`; удаление `SemanticsNodeData`, `SemanticsSnapshot`, `SemanticsProperties`; поведение не меняется | R19, R22 | W1 | готово (ветка `semantics/attributes`) |
 | W3 | Типизированные состояния вместо флагов (`StateMerge`); таблица слияния; порядок специфичности ролей; вложенный merger остаётся узлом | R2, R20 | W2 | — |
 | W4 | Словарь протокола (роли, действия, типизированные слоты обработчиков); миграция агента, `tools/desktop-mcp`, `flui-devtools`, `flui-testing`, вызовов в виджетах | R1, R4, R23 | W3 | — |
 | W5 | Матрица покрытия через `accesskit_consumer`; `validate` по применимости ARIA; сверка версий AccessKit; фикстуры UIA по семействам ролей | R3, R5, R21, R26 | W4 | — |

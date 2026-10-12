@@ -321,8 +321,7 @@ pub use flui_interaction::{
 };
 pub use flui_rendering::semantics::{
     Assertiveness, HeadingLevel, NumericRange, NumericRangeError, SemanticsAnchor,
-    SemanticsConfiguration, SemanticsProperties, SemanticsRole,
-    TextDirection as SemanticsTextDirection,
+    SemanticsConfiguration, SemanticsRole, TextDirection as SemanticsTextDirection,
 };
 
 // ============================================================================
@@ -385,11 +384,10 @@ pub mod prelude {
         AspectRatioDelegate, Assertiveness, BoxedLocalizationsDelegate, BoxedWidgetsLocalizations,
         CenterLayoutDelegate, CustomPainter, DefaultWidgetsLocalizationsDelegate, FlowDelegate,
         FlowPaintingContext, HeadingLevel, MultiChildLayoutContext, MultiChildLayoutDelegate,
-        NumericRange, NumericRangeError, SemanticsAnchor, SemanticsConfiguration,
-        SemanticsProperties, SemanticsRole, SemanticsTextDirection, SingleChildLayoutDelegate,
-        SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount,
-        SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout, TableBorder,
-        TableCellVerticalAlignment, TableColumnWidth,
+        NumericRange, NumericRangeError, SemanticsAnchor, SemanticsConfiguration, SemanticsRole,
+        SemanticsTextDirection, SingleChildLayoutDelegate, SliverGridDelegate,
+        SliverGridDelegateWithFixedCrossAxisCount, SliverGridDelegateWithMaxCrossAxisExtent,
+        SliverGridLayout, TableBorder, TableCellVerticalAlignment, TableColumnWidth,
     };
     pub use flui_foundation::geometry::Axis;
     pub use flui_foundation::geometry::{EdgeInsets, Matrix4};
