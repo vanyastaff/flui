@@ -1,10 +1,11 @@
 # flui-animation — дефекты и план волн
 
 > Исторический реестр на базе 2026-10-06. Текущий порядок работ и проверенные остатки:
-> [readiness-plan.md](readiness-plan.md), [readiness-audit.md](readiness-audit.md).
+> [readiness-plan.md](readiness-plan.md), [readiness-status.md](readiness-status.md),
+> [release-evidence.md](release-evidence.md).
 > Старые D-ID сохранены для трассировки; их наличие в таблице не означает текущий дефект.
 
-- **Статус:** черновик
+- **Статус:** исторический реестр; текущие статусы назначены в readiness-status.
 - **Дата:** 2026-10-06
 - **Оркестрация:** [orchestration.md](orchestration.md); матрица эталона — [market.md](market.md).
 - **База:** `main` 9a4daa3ed. `file:line` ниже — на этот коммит.

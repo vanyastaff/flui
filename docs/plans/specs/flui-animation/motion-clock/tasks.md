@@ -1,6 +1,9 @@
 # motion-clock — задачи
 
-- **Статус:** черновик
+- **Статус:** исторический план; текущие контракты —
+  [readiness-status](../readiness-status.md), выпускная приёмка —
+  [release-evidence](../release-evidence.md). Строки ниже сохраняют исходный маршрут,
+  а не список незавершённой реализации.
 - **Дата:** 2026-10-06
 - **Требования / design:** [requirements.md](requirements.md), [design.md](design.md).
 - **Порядок тем:** listener-delivery и controller-robustness → physics и curves → **motion-clock**

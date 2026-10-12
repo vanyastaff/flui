@@ -174,6 +174,10 @@ fn bench_live_tick(
     variant: &str,
     controller: &AnimationController,
 ) {
+    assert!(
+        controller.is_animating(),
+        "the {variant} run must be installed"
+    );
     let mut t = 0.0_f64;
     group.bench_function(BenchmarkId::new("tick_at", variant), |b| {
         b.iter(|| {
@@ -182,8 +186,15 @@ fn bench_live_tick(
         });
     });
     assert!(
-        controller.status().is_directional(),
+        controller.is_animating(),
         "the {variant} run must still be live after the benchmark, or it priced a finished run"
+    );
+    let previous = controller.value();
+    controller.tick_at(Duration::from_secs_f64(t + FRAME));
+    let next = controller.value();
+    assert!(
+        previous.is_finite() && next.is_finite() && next != previous,
+        "the {variant} run must advance with finite values on the next frame"
     );
 }
 
@@ -253,12 +264,13 @@ fn controller_tick(c: &mut Criterion) {
     let parent_controller = AnimationController::builder(Duration::from_secs(1)).build();
     parent_controller.forward().unwrap();
     parent_controller.tick_at(std::time::Duration::from_secs_f64(0.37));
+    assert!(parent_controller.value() > 0.0 && parent_controller.value() < 1.0);
     let parent: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(parent_controller.clone());
     let curved = CurvedAnimation::new(parent, curves::EASE_IN_OUT);
     group.bench_function("curved_value", |b| {
         b.iter(|| black_box(curved.value()));
     });
-    assert!(parent_controller.status().is_directional());
+    assert!(parent_controller.is_animating());
     drop(curved);
     drop(parent_controller);
 

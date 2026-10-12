@@ -1,23 +1,25 @@
 //! A UI Automation client over one launched probe, shared by the Windows
 //! checks: what Narrator sees of a window, read through the same API.
 
+use std::os::windows::io::AsRawHandle;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::{HANDLE, RECT};
+use windows::Win32::Foundation::{HANDLE, HWND, RECT, WAIT_TIMEOUT};
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize,
 };
 use windows::Win32::System::StationsAndDesktops::{
     GetThreadDesktop, GetUserObjectInformationW, UOI_IO,
 };
-use windows::Win32::System::Threading::GetCurrentThreadId;
+use windows::Win32::System::Threading::{GetCurrentThreadId, WaitForSingleObject};
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Accessibility::{
     CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationTreeWalker,
     TreeScope_Children, UIA_CONTROLTYPE_ID, UIA_ProcessIdPropertyId,
 };
+use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
 use windows::core::BOOL;
 
 pub(super) use windows::Win32::UI::Accessibility::{
@@ -67,6 +69,21 @@ impl Session {
     /// up for `run_for`.
     pub(super) fn start_for(probe: &Path, run_for: Duration) -> Result<Self, Start> {
         Self::launch(probe, Some(run_for))
+    }
+
+    /// A native window belongs to this still-running child, rather than a
+    /// recycled window handle or a process that reused its PID after exit.
+    pub(super) fn owns_window(&self, hwnd: HWND) -> bool {
+        let mut pid = 0;
+        // SAFETY: `pid` is a valid out-parameter; this only queries window ownership.
+        let thread = unsafe { GetWindowThreadProcessId(hwnd, Some(&raw mut pid)) };
+        // SAFETY: the borrowed Child keeps its process handle valid throughout
+        // this nonblocking query. An exited process remains signalled even if
+        // another process has since acquired the same numeric PID.
+        thread != 0
+            && pid == self.probe.0.id()
+            && unsafe { WaitForSingleObject(HANDLE(self.probe.0.as_raw_handle()), 0) }
+                == WAIT_TIMEOUT
     }
 
     /// A locked, disconnected or service desktop is `CannotVerify`, found
