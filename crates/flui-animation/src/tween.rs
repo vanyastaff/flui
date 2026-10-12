@@ -7,10 +7,12 @@ use flui_foundation::{Listenable, ListenerCallback, ListenerId};
 use std::fmt;
 use std::rc::Rc;
 
-/// An animation that applies a Tween to a parent animation.
+/// An animation that maps its parent's progress through an [`Animatable`].
 ///
-/// Takes an `Animation<f64>` (0.0 to 1.0) and applies a Tween to transform
-/// it into an `Animation<T>` for any type T that implements `Animatable`.
+/// The result is `Animation<A::Value>`; the output needs `Clone` as required by
+/// [`Animation`], and need not implement `Animatable` or `Debug`. A parent is
+/// typically normalized to 0..1; the mapping receives its progress unchanged.
+/// The mapping is moved into the observer and needs `Clone` only to clone it.
 ///
 /// # Type Parameters
 ///
@@ -20,13 +22,13 @@ use std::rc::Rc;
 ///
 /// ```
 /// use flui_animation::{AnimationController, TweenAnimation, Animation};
-/// use flui_animation::FloatTween;
+/// use flui_animation::Tween;
 /// use std::rc::Rc;
 /// use std::time::Duration;
 ///
 /// let controller = Rc::new(AnimationController::builder(Duration::from_millis(300)).build());
 ///
-/// let tween = FloatTween::new(0.0, 100.0);
+/// let tween = Tween::new(0.0, 100.0);
 /// let float_animation = TweenAnimation::new(
 ///     tween,
 ///     controller as Rc<dyn Animation<f64>>,
@@ -35,7 +37,7 @@ use std::rc::Rc;
 #[derive(Clone)]
 pub struct TweenAnimation<A>
 where
-    A: Animatable + Clone + 'static,
+    A: Animatable + 'static,
     A::Value: Clone + 'static,
 {
     tween: Terminal<A>,
@@ -44,7 +46,7 @@ where
 
 impl<A> Drop for TweenAnimation<A>
 where
-    A: Animatable + Clone + 'static,
+    A: Animatable + 'static,
     A::Value: Clone + 'static,
 {
     fn drop(&mut self) {
@@ -60,7 +62,7 @@ where
 
 impl<A> TweenAnimation<A>
 where
-    A: Animatable + Clone + 'static,
+    A: Animatable + 'static,
     A::Value: Clone + 'static,
 {
     /// Create a new tween animation.
@@ -94,8 +96,8 @@ where
 
 impl<A> Animation<A::Value> for TweenAnimation<A>
 where
-    A: Animatable + Clone + fmt::Debug + 'static,
-    A::Value: Clone + fmt::Debug + 'static,
+    A: Animatable + 'static,
+    A::Value: Clone + 'static,
 {
     #[inline]
     fn value(&self) -> A::Value {
@@ -118,7 +120,7 @@ where
 
     fn subscribe_status_observer(
         &self,
-        observer: crate::animation::StatusObserver,
+        observer: crate::StatusObserver,
     ) -> crate::StatusSubscription {
         self.links.subscribe_status_observer(observer)
     }
@@ -126,7 +128,7 @@ where
 
 impl<A> Listenable for TweenAnimation<A>
 where
-    A: Animatable + Clone + 'static,
+    A: Animatable + 'static,
     A::Value: Clone + 'static,
 {
     fn add_observer(&self, observer: flui_foundation::notifier::ListenerObserver) -> ListenerId {
@@ -147,25 +149,12 @@ where
 
 impl<A> fmt::Debug for TweenAnimation<A>
 where
-    A: Animatable + Clone + fmt::Debug + 'static,
-    A::Value: Clone + fmt::Debug + 'static,
+    A: Animatable + 'static,
+    A::Value: Clone + 'static,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TweenAnimation")
-            .field("value", &self.value())
-            .field("status", &self.status())
-            .field("tween", &self.tween)
+            .field("parent", &self.links.parent)
             .finish_non_exhaustive()
     }
-}
-
-/// Helper function to create a `TweenAnimation` from a Tween and parent animation.
-///
-/// This is a convenience function for the common case.
-pub fn animate<A>(tween: A, parent: Rc<dyn Animation<f64>>) -> TweenAnimation<A>
-where
-    A: Animatable + Clone + 'static,
-    A::Value: Clone + 'static,
-{
-    TweenAnimation::new(tween, parent)
 }

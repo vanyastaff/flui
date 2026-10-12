@@ -61,3 +61,71 @@ fn integer_tweens_interpolate_across_the_full_range() {
         ),
     ]);
 }
+
+#[test]
+fn mapped_animation_accepts_values_without_debug() {
+    use flui_animation::{
+        Animation, AnimationController, AnimationStatus, ConstantAnimation, Curve, CurvedAnimation,
+        ProxyAnimation, TweenAnimation,
+    };
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    #[derive(Clone)]
+    struct Value(f64);
+    struct Mapping;
+    struct Easing {
+        reverse: bool,
+    }
+    impl Curve for Easing {
+        fn transform(&self, progress: f64) -> f64 {
+            let progress = progress.clamp(0.0, 1.0);
+            if self.reverse {
+                1.0 - (1.0 - progress).powi(2)
+            } else {
+                progress.powi(2)
+            }
+        }
+    }
+    impl Animatable for Mapping {
+        type Value = Value;
+        fn transform(&self, progress: f64) -> Value {
+            Value(10.0 + 20.0 * progress)
+        }
+    }
+    let controller = AnimationController::builder(Duration::from_secs(1)).build();
+    let curved = Rc::new(
+        CurvedAnimation::new(Rc::new(controller.clone()), Easing { reverse: false })
+            .with_reverse_curve(Easing { reverse: true }),
+    );
+    let mapped = TweenAnimation::new(Mapping, curved.clone());
+    let composed = Mapping.animate(curved);
+    let proxy = ProxyAnimation::new(Rc::new(composed));
+    let run = controller.forward().unwrap();
+    controller.tick_at(Duration::from_millis(250));
+    assert_eq!(mapped.value().0, 11.25);
+    assert_eq!(proxy.value().0, 11.25);
+    assert!(mapped.is_animating() && proxy.is_animating() && run.is_pending());
+    controller.tick_at(Duration::from_secs(1));
+    assert_eq!(mapped.value().0, 30.0);
+    assert_eq!(proxy.value().0, 30.0);
+    assert!(!mapped.is_animating() && !proxy.is_animating() && run.is_complete());
+
+    let reverse = controller.reverse().unwrap();
+    controller.tick_at(Duration::from_millis(500));
+    assert_eq!(mapped.value().0, 25.0);
+    assert_eq!(proxy.value().0, 25.0);
+    assert_eq!(proxy.status(), AnimationStatus::Reverse);
+    assert!(reverse.is_pending());
+    proxy.set_parent(Rc::new(ConstantAnimation::with_status(
+        Value(42.0),
+        AnimationStatus::ReverseSettled,
+    )));
+    assert_eq!(proxy.value().0, 42.0);
+    assert_eq!(proxy.status(), AnimationStatus::ReverseSettled);
+    assert!(!proxy.is_animating());
+    controller.tick_at(Duration::from_secs(1));
+    assert!(reverse.is_complete());
+    assert_eq!(mapped.value().0, 10.0);
+    assert_eq!(proxy.value().0, 42.0);
+}

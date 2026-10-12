@@ -548,6 +548,53 @@ fn retargeting_to_the_same_target_is_invisible() {
     );
 }
 
+fn a_time_defined_spring_inherits_velocity() {
+    use flui_animation::{AnimatedValue as Owner, MotionClock};
+    use std::f64::consts::TAU;
+
+    let description =
+        SpringDescription::with_duration_and_bounce(Duration::from_millis(500), 0.3).unwrap();
+    let registry = Vsync::new();
+    let mut clock = MotionClock::new();
+    let mut owner = Owner::new(0.0, MotionSpec::Spring(description), Some(&registry)).unwrap();
+    let original = owner.animate_to(100.0).unwrap();
+    registry.tick_all(&clock.frame(Duration::ZERO));
+    registry.tick_all(&clock.frame(Duration::from_millis(50)));
+    let (origin, [velocity]) = (owner.value(), owner.velocity());
+    assert!(
+        velocity > 100.0,
+        "the interrupted run supplies substantial momentum"
+    );
+    let target = origin + 0.1;
+    let next = owner.animate_to(target).unwrap();
+    assert!(original.is_canceled() && next.is_pending());
+    assert_eq!((owner.value(), owner.velocity()), (origin, [velocity]));
+
+    // Independent underdamped ODE, omega=2pi/0.5 and zeta=1-0.3.
+    // A narrow target with large incoming velocity must visibly overshoot.
+    let omega = TAU / 0.5;
+    let decay = 0.7 * omega;
+    let damped = omega * (1.0 - 0.7_f64.powi(2)).sqrt();
+    for millis in [1_u32, 10, 40, 100] {
+        let time = f64::from(millis) / 1000.0;
+        let a = origin - target;
+        let b = (velocity + decay * a) / damped;
+        let phase = damped * time;
+        let envelope = (-decay * time).exp();
+        let expected = target + envelope * (a * phase.cos() + b * phase.sin());
+        let expected_velocity = envelope
+            * ((-decay * a + damped * b) * phase.cos() + (-decay * b - damped * a) * phase.sin());
+        registry.tick_all(&clock.frame(Duration::from_millis(50 + u64::from(millis))));
+        assert!(close(owner.value(), expected, 1e-12));
+        assert!(close(owner.velocity()[0], expected_velocity, 1e-12));
+        assert!(owner.value() > target && next.is_pending());
+    }
+    registry.tick_all(&clock.frame(Duration::from_secs(10)));
+    assert_eq!((owner.value(), owner.velocity()), (target, [0.0]));
+    assert!(next.is_complete());
+    assert!(!registry.has_running());
+}
+
 /// CSS Transitions reversal: `S' = |c(τ)·S + (1 − S)|`, `D' = D·S'`.
 fn reversal_shortens_by_the_eased_fraction() {
     let linear = MotionSpec::Curve {
@@ -971,6 +1018,10 @@ fn retarget_seams() {
         (
             "retargeting_to_the_same_target_is_invisible",
             retargeting_to_the_same_target_is_invisible,
+        ),
+        (
+            "a_time_defined_spring_inherits_velocity",
+            a_time_defined_spring_inherits_velocity,
         ),
         (
             "reversal_shortens_by_the_eased_fraction",

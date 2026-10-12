@@ -52,7 +52,7 @@ src/
 │
 ├── keyframes.rs      # Keyframes, KeyframesBuilder, KeyframesError
 ├── stagger.rs        # Stagger, StaggerOrigin
-├── ext.rs            # AnimatableExt (`animate`)
+├── prelude.rs        # common motion and observation imports
 ├── error.rs          # AnimationError
 └── test_cases.rs     # table-test runner (cfg(test))
 ```
@@ -362,7 +362,7 @@ the immediate-adoption case.
 
 ### Curve Trait
 
-Maps unit interval to unit interval:
+Maps normalized progress to a finite eased value; selected curves may overshoot:
 
 ```rust
 pub trait Curve {
@@ -409,8 +409,6 @@ pub trait Simulation {
     /// Has simulation settled? Monotonic in `time`.
     fn is_done(&self, time: f64) -> bool;
 
-    /// Not read by any driver; defaults to `Tolerance::DEFAULT`.
-    fn tolerance(&self) -> Tolerance { Tolerance::DEFAULT }
 }
 ```
 
@@ -451,6 +449,78 @@ first-failure custody. Playback-rate changes apply after the old rate has
 sampled the current frame, preserving local-time continuity.
 
 ## Mapping decisions
+
+### Public imports preserve ownership and type identity
+
+The root is the canonical type interface. Implementation files are private;
+`curve`, `curves` and `simulation` remain explicit domain namespaces. The
+focused `prelude` contains common owners, observers and mapping traits, while
+frame stamps, registry publication and recovery relays require explicit imports.
+The SDK's whole-crate alias exposes these identical items; it adds no adapter.
+`the_re_exports_are_the_facades_types` pins owner/view/run/track identity, and
+the SDK's `nested_motion` compiler fixture resolves the derive through its prelude.
+
+`Animatable::animate` supplies method composition directly. `Tween<T>` replaces
+per-value aliases without changing geometry, color or matrix interpolation.
+`TweenAnimation`'s diagnostic describes its parent, so an animatable value need
+not implement `Debug` to be observed. `mapped_animation_accepts_values_without_debug`
+reads actual running/final values through both composition constructors with a
+mapping that is neither `Debug` nor `Clone`. Only the observer's `Clone` impl
+requires cloning its mapping; creating and sampling it move and borrow instead.
+The same scenario carries a non-Clone/non-Debug curve through forward and reverse,
+then swaps the non-Debug output's proxy to a chosen-phase constant and advances
+the original source. Curved, constant and proxy observations therefore preserve
+the base traits' admitted types instead of imposing diagnostic bounds downstream.
+`CurveParameter` identifies rejected constructor coordinates; only diagnostic
+formatting selects their range prose. Three-point normalization beyond the solver's range
+has its own `RescalingOutOfRange` cause. `curve_parameters_reject_invalid_input`
+checks construction and numeric serde refusal without relying on parser failure.
+
+The retained surface has these responsibilities:
+
+| Interface | Consumer or extension contract |
+|---|---|
+| `Animation`, `Animatable`, `Tween`, integer mappings, curve trait/catalog and live wrappers | Transitions, Hero flights, Cupertino route/button, Material drawer and render-object size/header motion; custom mappings use the same observation trait |
+| `AnimationController`, builder/range, driven owner, status/run/error types | Widget and package lifecycle owners; builder configuration is separate from the registered owner's disposal authority |
+| `AnimatedValue`, its view, `TwoWayConverter`/derive and `AnimationVector` | Implicit properties and nested application values; fixed vectors keep component admission and sampling atomic |
+| `MotionUpdate`, `VsyncUpdate`, `VsyncPublication` | Multi-property retargeting, ambient migration and Dismissible publication after restoring widget state |
+| Clock, preference, playback, frame and registry types | Runtime frame selection, TickerMode, DevTools playback and actual timer/scroll consumers |
+| Simulation, checked descriptions, bounds, tolerances and errors | Scroll/page physics and controller fling; physical parameterizations form the documented custom-motion constructor contract |
+| `Keyframes`/builder/errors and `Stagger`/origin | Three indicator implementations and authored Hero tracks |
+| `ConstantAnimation`, unit endpoints, subscriptions, callback/recovery relay types | Navigator idle endpoints and source-bound removal across higher-layer cleanup; hidden relays remain an intentional cross-crate seam |
+
+`finish`, chosen-phase constants, cubic keyframes and immutable authored easing
+retain their explicitly accepted application-author contracts. Pure
+`ConstantTween`, `ReverseTween` and `CurveTween` had no production caller and are
+removed rather than given another adapter layer. Fixed observations, reversed
+linear endpoints and live curve observations already have direct interfaces;
+these choices do not claim equivalence for arbitrary parent-dependent mappings.
+The public API change is intentional before 1.0; its migration is recorded in
+the changelog fragment rather than preserving parallel legacy spellings.
+
+### Fixed values admit no listener identity
+
+`ConstantAnimation` drops value callbacks and recovery relays at admission.
+It returns the inert `ListenerId` at `usize::MAX`, which core notifier allocation
+cannot issue because it checks a representable successor before admission.
+No process counter, callback storage or wrap/reissue path is needed for a source
+that cannot notify. Value IDs otherwise remain source-scoped; status removal
+authority is bound to its source by `StatusSubscription`.
+`constant_listener_tokens_never_withdraw_live_callbacks` observes callback
+retirement and later notifications from a real `ChangeNotifier`; the previous
+counter token collided with its first live listener and fails that assertion.
+
+### Perceptual spring parameters retain physical retargeting
+
+Duration/bounce describes a physical `SpringDescription`; it does not impose a
+fixed completion deadline. `a_time_defined_spring_inherits_velocity` interrupts
+that actual owning motion with a narrow target and substantial incoming momentum,
+checks subsequent position and velocity against an independent underdamped ODE,
+then observes exact rest, original-run cancellation and new-run completion.
+Discarding only that parameterization's incoming velocity fails its position oracle.
+An immutable `SpringCurve` instead describes normalized easing; when admitted as
+`MotionSpec::Curve`, it uses the generic Hermite velocity correction and assigned
+deadline. Direct keyframe sampling retains the curve's authored time scale.
 
 ### Immutable authored easing retains the existing Curve domain
 
@@ -846,8 +916,8 @@ One direct, load-bearing consequence: **the first `stop()` on a fresh
 unbounded controller emits `Forward → ForwardSettled`.**
 `settled_status_directed`'s bound checks are both false on an infinite
 range, so it falls to `match direction { Forward => ForwardSettled }`. Every
-`jump_to` on a fresh `Scrollable`/`RefreshIndicator` (both migrated to
-`unbounded_without_ticker` below) triggers exactly this event through the
+`jump_to` on a fresh `Scrollable`/`RefreshIndicator` (both own an unbounded
+controller built with `AnimationController::builder(..).unbounded()`) triggers this event through the
 fling controller's `stop_hook`.
 
 **Refusals carry typed input, range or arithmetic causes (ADR-0198).**
@@ -941,12 +1011,10 @@ Reading the field directly at the boundary removes the multiplication from
 that path entirely, so no path through `tick_at` can ever compute or store
 a NaN value: the issue's own stated criterion.
 
-**Consumer migration.** `scrollable.rs`'s ballistic fling controller and
-`refresh_indicator.rs`'s both migrate from
-`without_ticker_bounds(1ms, NEG_INFINITY, INFINITY).expect(..)` to
-`unbounded_without_ticker(1ms)`: the `.expect` (previously provably
-infallible only because the literal pair was hardcoded) is gone with the
-fallible constructor it guarded.
+**Consumer construction.** `Scrollable` and `RefreshIndicator` own their ballistic
+controllers through `AnimationController::builder(..).unbounded().build_on(..)`.
+Unbounded configuration is explicit; no literal infinite endpoint pair or
+fallible range construction is needed.
 
 `scroll_controller.rs`'s `service_pending_command` raises
 `ScrollPosition::set_is_scrolling(true)` only AFTER
@@ -1054,7 +1122,7 @@ AnimationController (produces 0.0 → 1.0)
 CurvedAnimation (applies easing curve)
         │
         ▼ Rc<dyn Animation<f64>>
-TweenAnimation<ColorTween> (maps to Color)
+TweenAnimation<Tween> (maps to Color)
         │
         ▼ Animation<Color>
 ```

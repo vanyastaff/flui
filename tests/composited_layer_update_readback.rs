@@ -488,8 +488,7 @@ fn a_slide_tick_moves_pixels_without_rebuilding() {
     use std::rc::Rc;
     use std::time::Duration;
 
-    use flui_animation::ext::AnimatableExt;
-    use flui_animation::{Animation, AnimationController, Tween};
+    use flui_animation::{Animatable, Animation, AnimationController, Tween};
     use flui_objects::TranslationFraction;
     use flui_painting::{Alignment, styling::Color};
     use flui_testing::{HeadlessBinding, MountOptions, MountOwners};
@@ -579,8 +578,7 @@ fn a_color_tween_preserves_sub_byte_alpha_until_rasterization() {
     use std::time::Duration;
 
     use flui::painting::{Canvas, CustomPainter, Paint, SemanticsBuilder};
-    use flui_animation::ext::AnimatableExt;
-    use flui_animation::{Animation, AnimationController, ColorTween};
+    use flui_animation::{Animatable, Animation, AnimationController, Tween};
     use flui_foundation::{Listenable, geometry::Rect};
     use flui_painting::styling::Color;
     use flui_testing::{HeadlessBinding, MountOptions, MountOwners};
@@ -624,7 +622,7 @@ fn a_color_tween_preserves_sub_byte_alpha_until_rasterization() {
         AnimationController::builder(Duration::from_secs(1)).build_on(Some(binding.vsync()));
     let scalar: Rc<dyn Animation<f64>> = Rc::new(owner.controller().clone());
     let color =
-        Rc::new(ColorTween::new(Color::rgba(255, 255, 255, 0), Color::WHITE).animate(scalar));
+        Rc::new(Tween::new(Color::rgba(255, 255, 255, 0), Color::WHITE).animate(scalar));
     let painted = Rc::new(std::cell::Cell::new(None));
     let root = GestureArenaScope::new(
         binding.arena().clone(),

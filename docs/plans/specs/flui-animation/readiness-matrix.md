@@ -1,6 +1,7 @@
 # Animation: трассировка требований к плану
 
-Дата: 2026-10-08. База и результаты — в [evidence](readiness-evidence.md).
+Исторический маршрут от 2026-10-08. Актуальные решения по всем 110 строкам —
+в [readiness-status.md](readiness-status.md). Исходная база — в [evidence](readiness-evidence.md).
 Пакеты A0–A9 определены в [плане](readiness-plan.md). Источник ID — исторический
 [market.md](market.md); ниже перечислены все 110 требований, без расширения их scope.
 
@@ -23,7 +24,7 @@
 | M-TIME-11 | Частота анимации/троттлинг вынесены владельцем | Вне текущего scope |
 | M-TIME-12 | Спека motion-clock уточняет старую строку: rate ≥ 0, reverse отдельно; синхронизировать формулировки | A3 |
 | M-INT-1, M-INT-2, M-INT-5 | Библиотечные сегменты есть; C0/C1 и reversal должны пройти через реальные implicit/controller consumers | A4 |
-| M-INT-3 | `changing_only_the_duration_preserves_motion_and_sets_a_new_deadline` проверяет mounted AnimatedOpacity: замена только duration на 400 мс или 2 с сохраняет painted C0/C1, даёт середину независимого кубического эталона и завершает run в новый срок, после которого paint прекращается. `changing_only_the_curve_keeps_the_existing_deadline` отдельно проверяет прежний срок при смене только curve. Duration-сценарий проходит на текущей реализации; отрицательный контроль, ошибочно сохраняющий прежний срок при увеличении duration, нарушает новый midpoint assertion. Это усиление приёмки существующего поведения, не исправление baseline-дефекта | A4 |
+| M-INT-3 | Duration/bounce задаёт физическую пружину, наследующую входящую скорость. `a_time_defined_spring_inherits_velocity` сравнивает реальный owning run после прерывания с независимым ОДУ, затем проверяет rest и outcomes; контроль с нулевой скоростью нарушает position assertion. Mounted `changing_only_the_duration_preserves_motion_and_sets_a_new_deadline` и `changing_only_the_curve_keeps_the_existing_deadline` — дополнительное покрытие смены curve-конфигурации, не замена требования о физической пружине | A4 |
 | M-INT-4 | Продолжительность и атомарность отказа входят в красные robustness-контракты | A1 |
 | M-INT-6 | Dismissible использует max constraints, а не фактический размер; Drawer/back gesture проверить вместе | A6 |
 | M-INT-7, M-INT-8, M-INT-9, M-INT-10 | Базовые reverse/seek/cancel/completion тесты проходят; reentrant delivery и lifecycle ещё красные | A1, A4 |

@@ -1,7 +1,7 @@
 //! The flight itself.
 //!
 //! A manifest becomes a shuttle in an overlay entry, two frozen placeholders, and a
-//! driven `RectTween`. These tests pin the observable half of that: what is in the
+//! driven `Tween`. These tests pin the observable half of that: what is in the
 //! overlay, what the heroes look like while it flies, where the shuttle is aimed, and
 //! what is left behind when it lands.
 
@@ -184,7 +184,7 @@ pub(crate) fn a_push_flight_interrupted_by_a_pop_diverts_in_place() {
 }
 
 struct AsymmetricHeroPath {
-    endpoints: flui_animation::RectTween,
+    endpoints: flui_animation::Tween<Rect>,
     bend: f64,
 }
 
@@ -214,7 +214,7 @@ pub(crate) fn a_nonlinear_hero_pop_retraces_the_airborne_push() {
                 let hero = hero.curve(curves::LINEAR);
                 match source_bend {
                     Some(bend) => hero.create_rect_tween(move |begin, end| AsymmetricHeroPath {
-                        endpoints: flui_animation::RectTween { begin, end },
+                        endpoints: flui_animation::Tween { begin, end },
                         bend,
                     }),
                     None => hero,
@@ -223,7 +223,7 @@ pub(crate) fn a_nonlinear_hero_pop_retraces_the_airborne_push() {
             hero_page_with("shared", 60.0, 45.0, |hero| {
                 hero.curve(curves::LINEAR)
                     .create_rect_tween(|begin, end| AsymmetricHeroPath {
-                        endpoints: flui_animation::RectTween { begin, end },
+                        endpoints: flui_animation::Tween { begin, end },
                         bend: 160.0,
                     })
             }),
@@ -248,7 +248,7 @@ pub(crate) fn a_nonlinear_hero_pop_retraces_the_airborne_push() {
             let next_page = hero_page_with("shared", 90.0, 75.0, |hero| {
                 hero.curve(curves::LINEAR)
                     .create_rect_tween(|begin, end| AsymmetricHeroPath {
-                        endpoints: flui_animation::RectTween { begin, end },
+                        endpoints: flui_animation::Tween { begin, end },
                         bend: -240.0,
                     })
             });
@@ -269,7 +269,7 @@ pub(crate) fn a_nonlinear_hero_pop_retraces_the_airborne_push() {
             // The new push covers the unfinished 0.2→1.0 interval; halfway is 0.6.
             let expected = flui_animation::Animatable::transform(
                 &AsymmetricHeroPath {
-                    endpoints: flui_animation::RectTween {
+                    endpoints: flui_animation::Tween {
                         begin: redirected.begin_rect(),
                         end: redirected.target_rect(),
                     },
@@ -374,7 +374,7 @@ pub(crate) fn a_push_eases_on_the_destination_hero_curve() {
 }
 
 struct LocalRectMapping {
-    endpoints: flui_animation::RectTween,
+    endpoints: flui_animation::Tween<Rect>,
     hook: Rc<dyn Fn()>,
     phase: &'static str,
 }
@@ -450,7 +450,7 @@ pub(crate) fn cancelling_a_hero_mapping_does_not_refreeze_the_previous_page() {
                                 hook();
                             }
                             LocalRectMapping {
-                                endpoints: flui_animation::RectTween::new(begin, end),
+                                endpoints: flui_animation::Tween::new(begin, end),
                                 hook: Rc::clone(&hook),
                                 phase,
                             }
@@ -519,7 +519,7 @@ fn rect_mapping_reentry(phase: &'static str) {
                         hook();
                     }
                     LocalRectMapping {
-                        endpoints: flui_animation::RectTween::new(begin, end),
+                        endpoints: flui_animation::Tween::new(begin, end),
                         hook: Rc::clone(&hook),
                         phase,
                     }
@@ -573,7 +573,7 @@ fn hero_rect_mappings_are_owner_local_and_reentrant() {
 }
 
 struct FailingRectMapping {
-    endpoints: flui_animation::RectTween,
+    endpoints: flui_animation::Tween<Rect>,
     armed: Rc<Cell<bool>>,
     drops: Rc<Cell<usize>>,
     phase: &'static str,
@@ -622,7 +622,7 @@ fn rect_mapping_failure(phase: &'static str) {
                 .create_rect_tween(move |begin, end| {
                     assert!(!(armed.get() && phase == "factory"), "factory evaluation");
                     FailingRectMapping {
-                        endpoints: flui_animation::RectTween::new(begin, end),
+                        endpoints: flui_animation::Tween::new(begin, end),
                         armed: Rc::clone(&armed),
                         drops: Rc::clone(&drops),
                         phase,
@@ -722,7 +722,7 @@ pub(crate) fn a_shrinking_flight_with_overshoot_keeps_a_non_negative_size() {
 // ============================================================================
 
 struct SampledHeroPath {
-    endpoints: flui_animation::RectTween,
+    endpoints: flui_animation::Tween<Rect>,
     sample: Rc<Cell<Option<Rect>>>,
 }
 
@@ -751,7 +751,7 @@ fn exercise_hero_geometry_sample(sample: Rect, accepted: Option<Rect>) {
                 let replacement = Rc::clone(&replacement);
                 hero.curve(curves::LINEAR)
                     .create_rect_tween(move |begin, end| SampledHeroPath {
-                        endpoints: flui_animation::RectTween::new(begin, end),
+                        endpoints: flui_animation::Tween::new(begin, end),
                         sample: Rc::clone(&replacement),
                     })
             }
@@ -859,7 +859,7 @@ pub(crate) fn hero_geometry_samples_preserve_the_last_finite_shuttle() {
 }
 
 struct ReentrantHeroPath {
-    endpoints: flui_animation::RectTween,
+    endpoints: flui_animation::Tween<Rect>,
     candidate: Option<Rect>,
     hook: Rc<dyn Fn()>,
     phase: &'static str,
@@ -936,7 +936,7 @@ fn exercise_hero_geometry_authority(phase: &'static str, cancel: bool) {
                             hook();
                         }
                         ReentrantHeroPath {
-                            endpoints: flui_animation::RectTween::new(begin, end),
+                            endpoints: flui_animation::Tween::new(begin, end),
                             candidate,
                             hook: Rc::clone(&hook),
                             phase,

@@ -1,14 +1,14 @@
-//! How `ColorTween` interpolates: Oklab with premultiplied alpha.
+//! How `Tween<Color>` interpolates: Oklab with premultiplied alpha.
 //!
 //! Prints two transitions. Blue → yellow compares a gamma-sRGB channel mix, which dips
-//! through a dark grey midpoint, with `ColorTween`'s Oklab mix, which keeps perceived
+//! through a dark grey midpoint, with `Tween<Color>`'s Oklab mix, which keeps perceived
 //! lightness steady. Red → transparent compares a straight-alpha Oklab mix, which blends
-//! in the transparent end's black and darkens, with `ColorTween`'s premultiplied mix,
+//! in the transparent end's black and darkens, with `Tween<Color>`'s premultiplied mix,
 //! which stays red while it fades.
 //!
 //! Run with: `cargo run -p flui-animation --example oklab_gradient`
 
-use flui_animation::{Animatable, ColorTween};
+use flui_animation::{Animatable, Tween};
 use flui_painting::styling::{Color, Oklab};
 
 /// A gamma-sRGB channel mix, for comparison.
@@ -37,9 +37,9 @@ fn brightness(c: Color) -> u16 {
 
 fn main() {
     let (blue, yellow) = (Color::rgb(0, 0, 255), Color::rgb(255, 255, 0));
-    let across = ColorTween::new(blue, yellow);
+    let across = Tween::new(blue, yellow);
     println!("blue -> yellow:");
-    println!("    t     sRGB (r,g,b)  sum    ColorTween (r,g,b)  sum");
+    println!("    t     sRGB (r,g,b)  sum    Tween (r,g,b)  sum");
     for step in 0u8..=10 {
         let t = f32::from(step) / 10.0;
         let (s, o) = (srgb_mix(blue, yellow, t), across.transform(f64::from(t)));
@@ -58,9 +58,9 @@ fn main() {
     }
 
     let red = Color::rgb(255, 0, 0);
-    let fade = ColorTween::new(red, Color::TRANSPARENT);
+    let fade = Tween::new(red, Color::TRANSPARENT);
     println!("\nred -> transparent:");
-    println!("    t     straight Oklab (r,g,b,a)   ColorTween (r,g,b,a)");
+    println!("    t     straight Oklab (r,g,b,a)   Tween (r,g,b,a)");
     for step in 0u8..=10 {
         let t = f32::from(step) / 10.0;
         let s = straight_oklab_mix(red, Color::TRANSPARENT, t);

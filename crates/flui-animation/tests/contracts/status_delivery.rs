@@ -786,7 +786,7 @@ fn make_wrapper(
             flui_animation::curve::Linear,
         )),
         "tween" => std::rc::Rc::new(flui_animation::TweenAnimation::new(
-            flui_animation::FloatTween::new(0.0, 10.0),
+            flui_animation::Tween::new(0.0, 10.0),
             source,
         )),
         "proxy" => std::rc::Rc::new(flui_animation::ProxyAnimation::new(source)),
@@ -1767,7 +1767,10 @@ fn switch_hop_announces_the_new_train_status() {
     train.set_value(0.2);
     let switch = AnimationSwitch::new(
         std::rc::Rc::new(train.clone()),
-        Some(std::rc::Rc::new(ConstantAnimation::forward_settled(0.5))),
+        Some(std::rc::Rc::new(ConstantAnimation::with_status(
+            0.5,
+            AnimationStatus::ForwardSettled,
+        ))),
     );
     let (log, listener) = recorder();
     switch.subscribe_status(listener).detach();

@@ -8,19 +8,16 @@
 //! # Examples
 //!
 //! ```
-//! use flui_animation::{FloatTween, Animatable, ReverseTween};
+//! use flui_animation::{Tween, Animatable};
 //!
-//! let tween = FloatTween::new(0.0, 100.0);
+//! let tween = Tween::new(0.0, 100.0);
 //! assert_eq!(tween.transform(0.5), 50.0);
 //!
-//! let reversed = ReverseTween::new(tween);
+//! let reversed = Tween::new(tween.end, tween.begin);
 //! assert_eq!(reversed.transform(0.0), 100.0);
 //! ```
 
-use crate::curve::Curve;
-use flui_foundation::geometry::{Edges, Lerp, Matrix4, Offset, Rect, Size};
-use flui_painting::Alignment;
-use flui_painting::styling::{BorderRadius, Color};
+use flui_foundation::geometry::Lerp;
 
 /// A value that can be animated.
 #[diagnostic::on_unimplemented(
@@ -32,11 +29,26 @@ pub trait Animatable {
     type Value;
     /// Returns the value of this object at the given animation value.
     fn transform(&self, t: f64) -> Self::Value;
+
+    /// Observe this mapping at a live parent animation's progress.
+    ///
+    /// The result retains its mapping and the parent's `Rc`; shared subscriptions
+    /// are removed with its last clone. Retaining a built-in observer handle does
+    /// not retain the separate [`crate::DrivenController`] owner of its run/seat.
+    /// Creating an observer moves the mapping; only cloning that observer
+    /// requires the mapping to implement `Clone`.
+    #[must_use]
+    fn animate(self, parent: std::rc::Rc<dyn crate::Animation<f64>>) -> crate::TweenAnimation<Self>
+    where
+        Self: Sized + 'static,
+        Self::Value: Clone + 'static,
+    {
+        crate::TweenAnimation::new(self, parent)
+    }
 }
 
 /// A tween that linearly interpolates between a `begin` and `end` value of any
-/// [`Lerp`] type. One generic struct covers every per-type tween
-/// (`ColorTween`, `SizeTween`, ...), which are aliases of it.
+/// [`Lerp`] type, including logical geometry, color and transform matrices.
 ///
 /// `transform` does **not** clamp `t`: bouncy/elastic/spring curves emit
 /// `t > 1` (or `t < 0`) and the overshoot must reach the value. The exact
@@ -74,21 +86,6 @@ impl<V: Lerp> Animatable for Tween<V> {
 // ============================================================================
 // Concrete Tweens
 // ============================================================================
-
-/// A tween that linearly interpolates between two floats.
-///
-/// # Examples
-///
-/// ```
-/// use flui_animation::{FloatTween, Animatable};
-///
-/// let tween = FloatTween::new(0.0, 100.0);
-/// assert_eq!(tween.transform(0.0), 0.0);
-/// assert_eq!(tween.transform(0.5), 50.0);
-/// assert_eq!(tween.transform(1.0), 100.0);
-/// ```
-/// Tween between two floats. Alias for `Tween<f64>`.
-pub type FloatTween = Tween<f64>;
 
 /// A tween that linearly interpolates between two integers, rounding to the
 /// nearest integer (half away from zero). `t` is clamped to `[0, 1]`; a NaN `t`
@@ -157,134 +154,5 @@ impl Animatable for StepTween {
         }
         let t = t.clamp(0.0, 1.0);
         (f64::from(self.begin) + (f64::from(self.end) - f64::from(self.begin)) * t).floor() as i32
-    }
-}
-
-/// A tween that always returns the same value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct ConstantTween<T: Clone> {
-    /// The constant value.
-    pub value: T,
-}
-
-impl<T: Clone> ConstantTween<T> {
-    /// Creates a new constant tween.
-    #[must_use]
-    pub const fn new(value: T) -> Self {
-        Self { value }
-    }
-}
-
-impl<T: Clone> Animatable for ConstantTween<T> {
-    type Value = T;
-    fn transform(&self, _t: f64) -> T {
-        self.value.clone()
-    }
-}
-
-/// A tween that reverses another tween.
-///
-/// The reversed tween starts at the end value and goes to the begin value.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct ReverseTween<A: Animatable> {
-    /// The tween to reverse.
-    pub tween: A,
-}
-
-impl<A: Animatable> ReverseTween<A> {
-    /// Creates a new reversed tween.
-    #[must_use]
-    pub fn new(tween: A) -> Self {
-        Self { tween }
-    }
-}
-
-impl<A: Animatable> Animatable for ReverseTween<A> {
-    type Value = A::Value;
-    fn transform(&self, t: f64) -> Self::Value {
-        self.tween.transform(1.0 - t)
-    }
-}
-
-// ============================================================================
-// Geometric Tweens
-// ============================================================================
-
-/// Tween between two colors. Alias for `Tween<Color>`: interpolates in Oklab with
-/// premultiplied alpha (`Color`'s `Lerp`, ADR-0149).
-pub type ColorTween = Tween<Color>;
-
-/// A tween that linearly interpolates between two sizes.
-/// Tween between two sizes. Alias for `Tween<Size>`.
-pub type SizeTween = Tween<Size<f64>>;
-
-/// A tween that linearly interpolates between two rectangles.
-/// Tween between two rectangles. Alias for `Tween<Rect>`.
-pub type RectTween = Tween<Rect<f64>>;
-
-/// A tween that linearly interpolates between two offsets.
-/// Tween between two offsets. Alias for `Tween<Offset>`.
-pub type OffsetTween = Tween<Offset<f64>>;
-
-/// A tween that linearly interpolates between two alignments.
-/// Tween between two alignments. Alias for `Tween<Alignment>`.
-pub type AlignmentTween = Tween<Alignment>;
-
-/// A tween that linearly interpolates between two edge insets.
-/// Tween between two edge insets. Alias for `Tween<EdgeInsets>`.
-pub type EdgeInsetsTween = Tween<Edges<f64>>;
-
-/// Tween between two border radii. Alias for `Tween<BorderRadius>` (now that
-/// `Lerp for Corners<T>` lives in `flui_foundation::geometry`).
-pub type BorderRadiusTween = Tween<BorderRadius>;
-
-/// Tween between two affine transforms. Alias for `Tween<Matrix4>`; interpolates
-/// by decompose -> slerp (see `Matrix4::lerp`), so rotation animates correctly.
-pub type Matrix4Tween = Tween<Matrix4>;
-
-// ============================================================================
-// Curve-based Tweens
-// ============================================================================
-
-/// A tween that applies a curve to the animation progress.
-///
-/// Unlike [`CurvedAnimation`] in `flui_animation` which wraps an `Animation`,
-/// `CurveTween` implements [`Animatable`] and can be chained with other tweens.
-///
-/// # Examples
-///
-/// ```
-/// use flui_animation::{CurveTween, Animatable, curves};
-///
-/// // Apply ease-in curve to progress
-/// let curve_tween = CurveTween::new(curves::EASE_IN);
-/// assert!(curve_tween.transform(0.0).abs() < 0.001); // ~0
-/// assert!(curve_tween.transform(0.5) < 0.5); // ease-in is slower at start
-/// assert!((curve_tween.transform(1.0) - 1.0).abs() < 0.001); // ~1
-/// ```
-///
-/// [`CurvedAnimation`]: crate::curved::CurvedAnimation
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CurveTween<C: Curve> {
-    /// The curve to apply.
-    pub curve: C,
-}
-
-impl<C: Curve> CurveTween<C> {
-    /// Creates a new curve tween.
-    #[inline]
-    #[must_use]
-    pub const fn new(curve: C) -> Self {
-        Self { curve }
-    }
-}
-
-impl<C: Curve> Animatable for CurveTween<C> {
-    type Value = f64;
-    #[inline]
-    fn transform(&self, t: f64) -> f64 {
-        self.curve.transform(t.clamp(0.0, 1.0))
     }
 }

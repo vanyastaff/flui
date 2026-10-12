@@ -8,6 +8,41 @@ rendered page leaves out.
 
 ## Core Concepts
 
+### Imports and ownership
+
+Use `flui_animation::prelude::*` for common motion, observation and mapping.
+The SDK exposes exactly the same types at `flui_sdk::animation::prelude`.
+Specialized curves, physical models and frame/registry protocols use explicit
+root imports; the prelude introduces no wrapper or additional owner.
+
+```rust
+use flui_animation::prelude::*;
+use flui_animation::Vsync;
+use std::time::Duration;
+
+let registry = Vsync::new();
+let owner = AnimationController::builder(Duration::from_millis(200))
+    .build_on(Some(&registry));
+let observed = std::rc::Rc::new(owner.controller().clone());
+let mapped = Tween::new(0.0, 100.0).animate(observed);
+assert_eq!(mapped.value(), 0.0);
+```
+
+`Tween<T>` delegates interpolation to `T: Lerp`; integer rounding and flooring
+remain the distinct `IntTween` and `StepTween` mappings. `Animatable::animate`
+and `TweenAnimation::new` produce the same observer. Neither requires `Debug`
+on the mapping or its value, or `Clone` on the mapping until the observer is
+cloned. Curved, proxy and constant observations likewise impose no diagnostic
+bound on their curves or output values; an owned curve is cloned only when
+cloning its observer. `ConstantAnimation::with_status` is the single
+explicit directional-phase constructor for fixed values.
+
+Fallible curve constructors report a `CurveParameter` enum. Match its variant
+to locate a rejected argument; diagnostic range text belongs to `Display`.
+`CurveError::RescalingOutOfRange` distinguishes otherwise admitted points whose
+normalization exceeds the segment solver's safe range. That includes both
+overflowing ratios and finite ratios beyond the solver's admitted magnitude.
+
 ### Presentation motion policy
 
 Application `MotionPreference` is `FollowSystem` (the default), `Reduce` or
@@ -363,29 +398,26 @@ A `Tween<T>` is an `Animatable` with explicit `begin` and `end` values.
 
 ```rust
 use flui_animation::{
-    AlignmentTween, BorderRadiusTween, ColorTween, ConstantTween, EdgeInsetsTween,
-    FloatTween, IntTween, OffsetTween, RectTween, SizeTween, StepTween,
+    Tween, IntTween, StepTween,
 };
 use flui_foundation::geometry::{Edges, Offset, Rect, Size};
 use flui_painting::Alignment;
 use flui_painting::styling::{BorderRadius, BorderRadiusExt, Color};
 
 // Numeric
-let _ = FloatTween::new(0.0, 100.0);
+let _ = Tween::new(0.0, 100.0);
 let _ = IntTween::new(0, 255);  // Rounds to nearest
 let _ = StepTween::new(0, 10);  // Floors to integer
 
 // Geometric
-let _ = ColorTween::new(Color::RED, Color::BLUE);
-let _ = SizeTween::new(Size::new(0.0, 0.0), Size::new(100.0, 100.0));
-let _ = OffsetTween::new(Offset::ZERO, Offset::new(50.0, 50.0));
-let _ = RectTween::new(Rect::new(0.0, 0.0, 10.0, 10.0), Rect::new(0.0, 0.0, 50.0, 50.0));
-let _ = AlignmentTween::new(Alignment::TOP_LEFT, Alignment::BOTTOM_RIGHT);
-let _ = EdgeInsetsTween::new(Edges::ZERO, Edges::all(16.0));
-let _ = BorderRadiusTween::new(BorderRadius::ZERO, BorderRadius::circular(8.0));
+let _ = Tween::new(Color::RED, Color::BLUE);
+let _ = Tween::new(Size::new(0.0, 0.0), Size::new(100.0, 100.0));
+let _ = Tween::new(Offset::ZERO, Offset::new(50.0, 50.0));
+let _ = Tween::new(Rect::new(0.0, 0.0, 10.0, 10.0), Rect::new(0.0, 0.0, 50.0, 50.0));
+let _ = Tween::new(Alignment::TOP_LEFT, Alignment::BOTTOM_RIGHT);
+let _ = Tween::new(Edges::ZERO, Edges::all(16.0));
+let _ = Tween::new(BorderRadius::ZERO, BorderRadius::circular(8.0));
 
-// Constant (always returns same value)
-let _ = ConstantTween::new(42.0);
 ```
 
 ### Using Tweens
@@ -393,10 +425,10 @@ let _ = ConstantTween::new(42.0);
 ```rust
 # use std::time::Duration;
 # use flui_animation::{Animation, AnimationController};
-use flui_animation::{Animatable, FloatTween};
+use flui_animation::{Animatable, Tween};
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 
-let tween = FloatTween::new(0.0, 100.0);
+let tween = Tween::new(0.0, 100.0);
 assert_eq!(tween.transform(0.5), 50.0);
 
 // With animation
@@ -439,26 +471,14 @@ so one controller drives many elements.
 ### Tween Composition
 
 ```rust
-use flui_animation::{Animatable, Curve, curves, FloatTween, ReverseTween};
-let tween = FloatTween::new(0.0, 100.0);
+use flui_animation::{Animatable, Curve, curves, Tween};
+let tween = Tween::new(0.0, 100.0);
 let eased = tween.transform(curves::EASE_IN.transform(0.5));
 assert!(eased < 50.0);
 
 // Reverse direction
-let reversed = ReverseTween::new(tween);
+let reversed = Tween::new(tween.end, tween.begin);
 assert_eq!(reversed.transform(0.25), 75.0);
-```
-
-### CurveTween
-
-Apply a curve as an Animatable:
-
-```rust
-use flui_animation::{Animatable, CurveTween, curves};
-
-let curve_tween = CurveTween::new(curves::EASE_IN);
-let eased = curve_tween.transform(0.5); // EaseIn applied to 0.5
-assert!(eased < 0.5);
 ```
 
 ---
@@ -490,9 +510,9 @@ Map animation output through a tween:
 ```rust
 # use std::rc::Rc;
 # use std::time::Duration;
-# use flui_animation::{Animation, AnimationController, FloatTween, TweenAnimation};
+# use flui_animation::{Animation, AnimationController, Tween, TweenAnimation};
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
-let tween = FloatTween::new(0.0, 300.0);
+let tween = Tween::new(0.0, 300.0);
 let animated = TweenAnimation::new(tween, Rc::new(controller.clone()));
 
 // Value is: tween.transform(controller.value())
@@ -543,8 +563,8 @@ Animation with a fixed value (never changes):
 use flui_animation::{UNIT_END_ANIMATION, UNIT_START_ANIMATION, Animation, AnimationStatus, ConstantAnimation};
 
 let stopped = ConstantAnimation::with_status(0.5, AnimationStatus::ForwardSettled);
-let end = ConstantAnimation::forward_settled(1.0);
-let start = ConstantAnimation::reverse_settled(0.0);
+let end = ConstantAnimation::with_status(1.0, AnimationStatus::ForwardSettled);
+let start = ConstantAnimation::with_status(0.0, AnimationStatus::ReverseSettled);
 
 // Fixed normalized endpoints
 assert_eq!(UNIT_END_ANIMATION.value(), 1.0);
@@ -574,17 +594,17 @@ let switch = AnimationSwitch::new(Rc::new(anim1.clone()), Some(Rc::new(anim2.clo
 
 ## Driving a tween
 
-`AnimatableExt::animate` wraps a tween and a parent animation in a
+`Animatable::animate` wraps a mapping and a parent animation in a
 `TweenAnimation`; a curve over an animation is `CurvedAnimation::new`.
 
 ```rust
 # use std::rc::Rc;
 # use std::time::Duration;
-# use flui_animation::{AnimationController, CurvedAnimation, curves, FloatTween};
-use flui_animation::AnimatableExt;
+# use flui_animation::{AnimationController, CurvedAnimation, curves, Tween};
+use flui_animation::Animatable;
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 let curved = Rc::new(CurvedAnimation::new(Rc::new(controller.clone()), curves::EASE_OUT));
-let animated = FloatTween::new(0.0, 100.0).animate(curved);
+let animated = Tween::new(0.0, 100.0).animate(curved);
 # drop(controller);
 ```
 
@@ -837,7 +857,7 @@ Each implemented from the canonical published source:
 
 | Capability | Source | API |
 |---|---|---|
-| Perceptually uniform color interpolation | Ottosson, Oklab (2020) | `ColorTween`, `Color::lerp` (premultiplied alpha, ADR-0149) |
+| Perceptually uniform color interpolation | Ottosson, Oklab (2020) | `Tween<Color>`, `Color::lerp` (premultiplied alpha, ADR-0149) |
 | Emphasized easing and polynomial-style presets | Bézier approximations; elastic and bounce formulas | `curves`, `ThreePointCubic`, `Split` |
 | Interruptible springs with velocity-preserving retarget | analytic closed forms | `AnimatedValue`, `#[derive(TwoWayConverter)]` |
 

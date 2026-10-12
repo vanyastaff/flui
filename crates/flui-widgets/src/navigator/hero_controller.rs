@@ -8,7 +8,7 @@
 //! This is the observer that decides *when* a flight starts, *where* its destination
 //! will be, and *which heroes* fly. It records [`HeroFlightManifest`] values for
 //! diagnostics/tests and hands valid ones to the private flight manager. The flight
-//! itself — the overlay entry, `RectTween`, shuttle, and driving animation — lives in
+//! itself — the overlay entry, `Tween`, shuttle, and driving animation — lives in
 //! `hero_flight.rs`.
 //!
 //! The pieces it stands on already exist: the private [`Hero`] view, the per-route
@@ -936,7 +936,7 @@ pub(crate) mod terminal_tests {
     pub(crate) fn factory(bomb: Bomb) -> RectTweenFactory {
         Rc::new(move |begin, end| {
             let _keep_capture = &bomb;
-            Box::new(flui_animation::RectTween { begin, end })
+            Box::new(flui_animation::Tween { begin, end })
         })
     }
     pub(crate) fn assert_failure(payload: Box<dyn std::any::Any + Send>, label: &str) {

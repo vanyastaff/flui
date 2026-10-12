@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use crate::common::{LaidOut, lay_out, loose};
-use flui_animation::ext::AnimatableExt;
+use flui_animation::Animatable;
 use flui_animation::{Animation, AnimationController, Tween};
 use flui_foundation::RenderId;
 use flui_foundation::geometry::Matrix4;
