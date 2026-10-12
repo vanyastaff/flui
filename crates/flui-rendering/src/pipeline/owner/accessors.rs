@@ -291,7 +291,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 DirtyKind::Layout => {
                     self.scheduler
                         .commit_needs_layout(&mut self.render_tree, id, &mut |visited| {
-                            self.layout_poison.unpoison(visited)
+                            self.layout_poison.unpoison(visited);
                         })
                 }
                 DirtyKind::Compositing => self
