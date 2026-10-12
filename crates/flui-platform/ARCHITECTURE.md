@@ -77,6 +77,12 @@ owners cannot erase replacements or publish redraws.
 Native focus observations carry their cache commit in the existing FIFO. A
 queued callback therefore observes its own delivered value through getters,
 even when input or focus callbacks synchronously trigger opposing transitions.
+Accepted native focus observations also finish their commits and notifications
+after a dispatch unwind. Recovery retains the same FIFO so a reentrant
+observation follows the already accepted tail; ordinary aborted events are
+discarded. `the_owner_thread_machinery_honours_its_contracts` pins single,
+opposing and reentrant observations, a competing notification panic and the
+next healthy observation through the private backend commit seam.
 Successful listener installation reconciles the same focus authority once
 before Created, since a host registration call can focus the canvas before
 the focus listeners exist.

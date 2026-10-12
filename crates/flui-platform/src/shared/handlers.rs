@@ -380,13 +380,6 @@ impl<'a, E> DispatchDrain<'a, E> {
         self.active = false;
         None
     }
-
-    fn abort(&mut self) -> VecDeque<E> {
-        let mut state = self.state.lock();
-        state.dispatching = false;
-        self.active = false;
-        std::mem::take(&mut state.pending)
-    }
 }
 
 impl<E> Drop for DispatchDrain<'_, E> {
@@ -607,6 +600,7 @@ impl WindowCallbacks {
     /// returns: a backend uses it to order a notice after the release of what
     /// those callbacks own (a renderer and its surface). If the running
     /// callback unwinds, terminal clear and retirement notices still finish;
+    /// accepted native focus commits and notifications also finish, while
     /// ordinary nested events from the aborted transaction are discarded.
     pub fn clear_then(&self, on_retired: impl FnOnce() + Send + 'static) {
         self.clear_with(Some(Box::new(on_retired)));
@@ -679,11 +673,21 @@ impl WindowCallbacks {
         })) {
             Ok(result) => result,
             Err(failure) => {
-                let pending = drain.abort();
-                let terminal = self.lifecycle_closed.load(Ordering::SeqCst);
-                for event in pending {
+                // Keep the FIFO admitted during recovery: reentrant native
+                // observations must follow the already accepted tail.
+                while let Some(event) = drain.next() {
                     match event {
-                        WindowCallbackEvent::Close if terminal => {
+                        WindowCallbackEvent::Active(focused, Some(commit)) => {
+                            // The backend has already accepted this observation.
+                            // Dropping it would lose both its getter commit and
+                            // notification, even after a duplicate native signal.
+                            super::panic_boundary::contain_owner_callback(|| {
+                                self.deliver_focus_observation(focused, Some(commit));
+                            });
+                        }
+                        WindowCallbackEvent::Close
+                            if self.lifecycle_closed.load(Ordering::SeqCst) =>
+                        {
                             // Closing the native registration is irreversible.
                             // Its application cancellation hook survives an
                             // aborted causal callback, before capture retirement.
@@ -701,7 +705,7 @@ impl WindowCallbacks {
                         event => super::panic_boundary::contain_owner_callback(|| drop(event)),
                     }
                 }
-                if terminal {
+                if self.lifecycle_closed.load(Ordering::SeqCst) {
                     self.clear_now();
                 }
                 std::panic::resume_unwind(failure);
@@ -765,14 +769,7 @@ impl WindowCallbacks {
                     }
                 }
                 WindowCallbackEvent::Active(is_active, commit) => {
-                    if let Some(commit) = commit {
-                        commit();
-                    }
-                    let mut lease =
-                        CallbackLease::take(&self.on_active_status_change, &self.cleared);
-                    if let Some(callback) = lease.callback_mut() {
-                        callback(is_active);
-                    }
+                    self.deliver_focus_observation(is_active, commit);
                 }
                 WindowCallbackEvent::Visibility(is_visible) => {
                     let mut lease =
@@ -810,6 +807,16 @@ impl WindowCallbacks {
             }
         }
         input_result
+    }
+
+    fn deliver_focus_observation(&self, focused: bool, commit: Option<Box<dyn FnOnce() + Send>>) {
+        if let Some(commit) = commit {
+            commit();
+        }
+        let mut lease = CallbackLease::take(&self.on_active_status_change, &self.cleared);
+        if let Some(callback) = lease.callback_mut() {
+            callback(focused);
+        }
     }
 
     /// Dispatch an input event.
@@ -934,7 +941,7 @@ impl WindowCallbacks {
 
     /// Publish a backend observation at its causal delivery point, so getters
     /// inside a queued focus callback describe that callback's own observation.
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(test, target_arch = "wasm32"))]
     pub(crate) fn dispatch_focus_observation(
         &self,
         focused: bool,
@@ -1217,6 +1224,128 @@ mod tests {
 
     use super::*;
 
+    fn accepted_focus_observations_survive_dispatch_unwind() {
+        use std::sync::atomic::AtomicBool;
+
+        for (opposing, reenter, fail_notification, expected) in [
+            (false, false, false, &[false][..]),
+            (true, false, false, &[false, true][..]),
+            (true, true, false, &[false, true, false][..]),
+            (true, true, true, &[false, true, false][..]),
+        ] {
+            let callbacks = Arc::new(WindowCallbacks::new());
+            let focused = Arc::new(AtomicBool::new(true));
+            let notifications = Arc::new(Mutex::new(Vec::new()));
+            let nested = Arc::downgrade(&callbacks);
+            let state = Arc::clone(&focused);
+            let delivered = Arc::clone(&notifications);
+            let first = AtomicBool::new(true);
+            *callbacks.on_active_status_change.lock() = Some(Box::new(move |value| {
+                assert_eq!(state.load(Ordering::SeqCst), value, "causal focus getter");
+                delivered.lock().push(value);
+                if first.swap(false, Ordering::SeqCst) {
+                    if reenter {
+                        let state = Arc::clone(&state);
+                        nested
+                            .upgrade()
+                            .expect("live owner")
+                            .dispatch_focus_observation(false, move || {
+                                state.store(false, Ordering::SeqCst)
+                            });
+                    }
+                    assert!(!fail_notification, "competing focus failure");
+                }
+            }));
+            let moved = Arc::new(AtomicBool::new(false));
+            let delivered = Arc::clone(&moved);
+            *callbacks.on_moved.lock() = Some(Box::new(move || {
+                delivered.store(true, Ordering::SeqCst);
+            }));
+            let nested = Arc::downgrade(&callbacks);
+            let state = Arc::clone(&focused);
+            *callbacks.on_input.lock() = Some(Box::new(move |_| {
+                let owner = nested.upgrade().expect("live owner");
+                let state_lost = Arc::clone(&state);
+                owner.dispatch_focus_observation(false, move || {
+                    state_lost.store(false, Ordering::SeqCst);
+                });
+                if opposing {
+                    let state_restored = Arc::clone(&state);
+                    owner.dispatch_focus_observation(true, move || {
+                        state_restored.store(true, Ordering::SeqCst);
+                    });
+                }
+                owner.dispatch_moved();
+                panic!("original dispatch failure");
+            }));
+            let failure = catch_unwind(AssertUnwindSafe(|| {
+                callbacks.dispatch_input(PlatformInput::Ime(flui_platform_api::ImeEvent::Enabled));
+            }))
+            .expect_err("original callback failure");
+            assert_eq!(
+                flui_foundation::panic::payload_text(failure.as_ref()),
+                Some("original dispatch failure")
+            );
+            assert_eq!(&*notifications.lock(), expected, "accepted focus delivery");
+            assert_eq!(
+                focused.load(Ordering::SeqCst),
+                *expected.last().expect("focus")
+            );
+            assert!(
+                !moved.load(Ordering::SeqCst),
+                "aborted ordinary event was replayed"
+            );
+            let state = Arc::clone(&focused);
+            let delivered = notifications.lock().len();
+            callbacks.dispatch_focus_observation(true, move || state.store(true, Ordering::SeqCst));
+            assert_eq!(notifications.lock().len(), delivered + 1, "next delivery");
+            assert_eq!(
+                notifications.lock().last(),
+                Some(&true),
+                "next healthy observation"
+            );
+            callbacks.clear();
+        }
+    }
+
+    fn focus_recovery_finishes_a_reentrant_close() {
+        use std::sync::atomic::AtomicBool;
+
+        let callbacks = Arc::new(WindowCallbacks::new());
+        let closed = Arc::new(AtomicBool::new(false));
+        let notice = Arc::clone(&closed);
+        *callbacks.on_close.lock() = Some(Box::new(move || {
+            notice.store(true, Ordering::SeqCst);
+        }));
+        let nested = Arc::downgrade(&callbacks);
+        *callbacks.on_active_status_change.lock() = Some(Box::new(move |_| {
+            let owner = nested.upgrade().expect("live owner");
+            owner.dispatch_close();
+            owner.clear();
+        }));
+        let nested = Arc::downgrade(&callbacks);
+        *callbacks.on_input.lock() = Some(Box::new(move |_| {
+            nested
+                .upgrade()
+                .expect("live owner")
+                .dispatch_focus_observation(false, || {});
+            panic!("original input failure");
+        }));
+        let failure = catch_unwind(AssertUnwindSafe(|| {
+            callbacks.dispatch_input(PlatformInput::Ime(flui_platform_api::ImeEvent::Enabled));
+        }))
+        .expect_err("original input failure");
+        assert_eq!(
+            flui_foundation::panic::payload_text(failure.as_ref()),
+            Some("original input failure")
+        );
+        assert!(
+            closed.load(Ordering::SeqCst),
+            "required terminal hook was lost"
+        );
+        callbacks.dispatch_active_status_change(true);
+    }
+
     fn clear_multiple_panicking_captures(queued: bool) {
         struct Capture(Arc<AtomicU32>);
         impl Drop for Capture {
@@ -1469,6 +1598,14 @@ mod tests {
     #[test]
     fn the_owner_thread_machinery_honours_its_contracts() {
         let cases: &[(&str, fn())] = &[
+            (
+                "accepted focus observations survive dispatch unwind",
+                accepted_focus_observations_survive_dispatch_unwind,
+            ),
+            (
+                "focus recovery finishes a reentrant close",
+                focus_recovery_finishes_a_reentrant_close,
+            ),
             #[cfg(target_os = "windows")]
             (
                 "window identity exhaustion",
