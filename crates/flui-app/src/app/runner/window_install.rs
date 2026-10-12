@@ -231,10 +231,48 @@ impl WindowInstall {
         self.initial.observations.push(observation);
     }
 
-    /// Sample the Web window after its application observers are installed.
-    #[cfg(any(test, target_arch = "wasm32"))]
-    pub(super) fn observe_initial_web_window(&mut self) {
-        let window = self.window.native();
+    /// Complete Web bootstrap wiring before sampling and publishing native state.
+    #[cfg(any(
+        target_arch = "wasm32",
+        all(test, not(target_os = "android"), not(target_os = "ios"))
+    ))]
+    pub(super) fn submit_web(
+        mut self,
+        driver: FrameDriver,
+        platform: &flui_platform::SharedPlatform,
+    ) -> anyhow::Result<()> {
+        use super::owner_dispatch::{RuntimeEvent, install_input_wiring, with_owner_callback};
+
+        let window = Arc::clone(self.window.native());
+        let dispatcher = self.dispatcher();
+        install_input_wiring(dispatcher, window.as_ref());
+        let binding = self.frame_driver(driver)?.binding;
+        window.on_request_frame(Box::new(move || {
+            with_owner_callback(|_| {
+                let _ = dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(binding));
+            });
+        }));
+        window.on_resize(Box::new(move |size, scale_factor| {
+            let _ = dispatch_platform_ui_runtime(
+                dispatcher,
+                RuntimeTask::Event(RuntimeEvent::Resized { size, scale_factor }),
+            );
+        }));
+        self.terminal_callbacks(platform);
+        window.on_active_status_change(Box::new(move |focused| {
+            let _ = dispatch_platform_ui_runtime(
+                dispatcher,
+                RuntimeTask::Event(RuntimeEvent::WindowFocus(focused)),
+            );
+        }));
+        window.on_hover_status_change(Box::new(move |is_hovered| {
+            let _ = dispatch_platform_ui_runtime(
+                dispatcher,
+                RuntimeTask::Event(RuntimeEvent::WindowHover(is_hovered)),
+            );
+        }));
+        // Observers precede the snapshot. Keep redraw ownership published
+        // before lifecycle reconciliation can synchronously request a frame.
         let metrics = WindowObservation::Metrics {
             size: window.logical_size(),
             scale_factor: window.scale_factor(),
@@ -246,6 +284,11 @@ impl WindowInstall {
         };
         self.observe(snapshot);
         self.observe(metrics);
+        super::host::APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(window));
+        self.submit()
+            .outcome()
+            .expect("BUG: the fresh web host completes its initial installation synchronously")?;
+        Ok(())
     }
 
     #[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]

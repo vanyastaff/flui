@@ -297,12 +297,15 @@ Existing `VecDeque` storage and incarnation/close admission remain sufficient;
 no new channel or scheduling abstraction is needed for these events.
 
 `web_startup_samples_native_changes_after_mount_and_observer_registration`
-exercises the actual Web initialization submission through the owner-install
-harness: native focus, visibility or execution changed during mounting reaches
+exercises `WindowInstall::submit_web`, the complete post-mount bootstrap phase
+used by `bootstrap_web`, through a real headless owner. Callback wiring, native
+sampling and addressed publication share that phase; the test installs neither
+focus callbacks nor observations itself. Native focus, visibility or execution changed during mounting reaches
 the addressed owner instead of retaining its constructor observation. An
 unfocused, visible running window remains eligible for rendering, and focus
 restoration reaches the same owner. This headless test does not execute GPU
-construction or browser document/system focus transitions.
+construction or browser document/system focus transitions. Omitting the
+production phase's snapshot makes the mount-time focus-loss row fail.
 
 The public runtime owner test
 `mounted_shortcut_recovers_after_native_focus_loss_without_replay` retains the

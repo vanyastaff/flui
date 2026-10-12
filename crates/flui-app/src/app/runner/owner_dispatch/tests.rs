@@ -151,8 +151,8 @@ fn native_identity_is_observed_before_registry_publication() {
 }
 
 /// Run the actual Web initialization submission against a real headless window.
-/// GPU/platform-loop construction is excluded: the observation and addressed
-/// publication path is the same one called by `bootstrap_web`.
+/// WebGPU/DOM construction is excluded: callback wiring, sampling and addressed
+/// publication use the complete production phase called by `bootstrap_web`.
 #[cfg(not(target_os = "ios"))]
 fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
     use flui_platform_api::WindowExecutionState;
@@ -195,75 +195,79 @@ fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
         ),
     ] {
         let _clear = OwnerHostClearGuard::arm();
-        let window = crate::app::window_test_support::headless_test_window();
-        let native = window
-            .as_any()
-            .downcast_ref::<flui_platform::MockWindow>()
-            .expect("headless window");
-        if matches!(change, NativeChange::InitiallyUnfocused) {
-            native.simulate_focus(false);
-        }
-        let runtime = crate::app::ui_runtime::UiRuntime::new(
-            Arc::clone(&window),
-            1.0,
-            RuntimeHostServices::new(
-                Arc::new(|| {}),
-                Arc::new(AtomicBool::new(false)),
-                Arc::new(flui_platform_api::InMemoryClipboard::new()),
-                &flui_painting::FontCollection::new(),
-                flui_scheduler::ClockSource::Platform,
-            ),
-        )
-        .expect("runtime over the same native window");
-        runtime
-            .attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0))
-            .expect("mount before startup observers");
-        // Construction sampled the old native state. These observations arrive
-        // before the application's subscriptions and therefore have no callback.
-        match change {
-            NativeChange::FocusLost => native.simulate_focus(false),
-            NativeChange::Hidden => native.simulate_visibility(false),
-            NativeChange::Suspended => {
-                native.simulate_execution_state(WindowExecutionState::Suspended);
-            }
-            NativeChange::InitiallyUnfocused | NativeChange::Unchanged => {}
-        }
-        let mut installation = prepare_replacement_ui_runtime(runtime, Arc::clone(&window));
-        let dispatcher = installation.dispatcher();
-        window.on_active_status_change(Box::new(move |focused| {
-            dispatch_platform_ui_runtime(
-                dispatcher,
-                RuntimeTask::Event(RuntimeEvent::WindowFocus(focused)),
-            )
-            .expect("addressed native focus");
-        }));
-        installation.observe_initial_web_window();
-        installation
-            .submit()
-            .outcome()
-            .expect("synchronous installation")
-            .expect("publish initialization");
-        assert_eq!(
-            observe_runtime(dispatcher, |runtime| runtime.scheduler().lifecycle_state()),
-            expected,
-            "{case}: startup adopts native state after observers are installed"
-        );
-        if matches!(
-            change,
-            NativeChange::InitiallyUnfocused | NativeChange::FocusLost
-        ) {
-            assert!(
-                observe_runtime(dispatcher, |runtime| runtime.scheduler().frames_enabled()),
-                "an unfocused visible running canvas remains eligible for rendering"
-            );
-            native.simulate_focus(true);
-            assert_eq!(
-                observe_runtime(dispatcher, |runtime| runtime.scheduler().lifecycle_state()),
-                AppLifecycleState::Resumed,
-                "restored native focus reaches the installed owner"
-            );
-        }
-        teardown_platform_ui_runtime();
+        flui_platform::headless_platform()
+            .run(Box::new(move |owner| {
+                let shared = owner.shared();
+                install_owner_platform(owner)?;
+                let window: Arc<dyn PlatformWindow> = with_owner_platform(|owner| {
+                    owner.open_window(flui_platform::WindowOptions::default())
+                })
+                .expect("installed owner")
+                .and_then(flui_platform::WindowOpen::try_ready)
+                .expect("headless native window");
+                let native = window
+                    .as_any()
+                    .downcast_ref::<flui_platform::MockWindow>()
+                    .expect("headless window");
+                if matches!(change, NativeChange::InitiallyUnfocused) {
+                    native.simulate_focus(false);
+                }
+                let runtime = crate::app::ui_runtime::UiRuntime::new(
+                    Arc::clone(&window),
+                    1.0,
+                    RuntimeHostServices::new(
+                        Arc::new(|| {}),
+                        Arc::new(AtomicBool::new(false)),
+                        Arc::new(flui_platform_api::InMemoryClipboard::new()),
+                        &flui_painting::FontCollection::new(),
+                        flui_scheduler::ClockSource::Platform,
+                    ),
+                )
+                .expect("runtime over the same native window");
+                runtime
+                    .attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0))
+                    .expect("mount before startup observers");
+                // Construction sampled the old native state. These observations arrive
+                // before the application's subscriptions and therefore have no callback.
+                match change {
+                    NativeChange::FocusLost => native.simulate_focus(false),
+                    NativeChange::Hidden => native.simulate_visibility(false),
+                    NativeChange::Suspended => {
+                        native.simulate_execution_state(WindowExecutionState::Suspended);
+                    }
+                    NativeChange::InitiallyUnfocused | NativeChange::Unchanged => {}
+                }
+                let installation = prepare_platform_ui_runtime(runtime, Arc::clone(&window));
+                let dispatcher = installation.dispatcher();
+                installation
+                    .submit_web(test_resize_driver(|_, _| {}), &shared)
+                    .expect("publish initialization");
+                assert_eq!(
+                    observe_runtime(dispatcher, |runtime| runtime.scheduler().lifecycle_state()),
+                    expected,
+                    "{case}: startup adopts native state after observers are installed"
+                );
+                if matches!(
+                    change,
+                    NativeChange::InitiallyUnfocused | NativeChange::FocusLost
+                ) {
+                    assert!(
+                        observe_runtime(dispatcher, |runtime| runtime.scheduler().frames_enabled()),
+                        "an unfocused visible running canvas remains eligible for rendering"
+                    );
+                    native.simulate_focus(true);
+                    assert_eq!(
+                        observe_runtime(dispatcher, |runtime| runtime
+                            .scheduler()
+                            .lifecycle_state()),
+                        AppLifecycleState::Resumed,
+                        "restored native focus reaches the installed owner"
+                    );
+                }
+                teardown_platform_ui_runtime();
+                Ok(())
+            }))
+            .expect("actual Web installation phase");
     }
 }
 

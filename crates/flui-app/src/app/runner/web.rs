@@ -2,10 +2,7 @@ use flui_view::{StatelessView, View};
 
 use super::frame_pacing::{FallbackGate, WakeAction, wake_action};
 use super::host::{APP_RUNTIME, install_owner_platform, with_owner_platform};
-use super::owner_dispatch::{
-    RuntimeEvent, RuntimeTask, dispatch_platform_ui_runtime, install_input_wiring,
-    prepare_platform_ui_runtime,
-};
+use super::owner_dispatch::prepare_platform_ui_runtime;
 use crate::app::AppConfig;
 
 // ============================================================================
@@ -120,72 +117,13 @@ where
             tracing::error!("Root widget attach failed: {:?}", e);
             return Err(anyhow::anyhow!(e).context("Root widget attach failed"));
         }
-        let mut installation = prepare_platform_ui_runtime(ui_runtime, Arc::clone(&window));
-        let owner_dispatch = installation.dispatcher();
-
-        // 4. Register input callback
-        install_input_wiring(owner_dispatch, window.as_ref());
-
-        let frame =
-            installation.frame_driver(super::frame_driver::FrameDriver::Web(WebFrameDriver {
-                renderer: Arc::clone(&renderer),
-                window: Arc::clone(&window),
-            }))?;
-        let binding = frame.binding;
-        window.on_request_frame(Box::new(move || {
-            super::owner_dispatch::with_owner_callback(|_| {
-                let _ = dispatch_platform_ui_runtime(owner_dispatch, RuntimeTask::Frame(binding));
-            });
-        }));
-
-        window.on_resize(Box::new(move |size, scale_factor| {
-            let _ = dispatch_platform_ui_runtime(
-                owner_dispatch,
-                RuntimeTask::Event(RuntimeEvent::Resized { size, scale_factor }),
-            );
-        }));
-
-        // 6. Terminal callbacks close the binding before lifecycle observers.
+        let installation = prepare_platform_ui_runtime(ui_runtime, Arc::clone(&window));
         owner_platform_installed(|owner| {
-            installation.terminal_callbacks(&owner.shared());
-        });
-
-        // No `on_visibility_status_change` registration on web (yet): there is
-        // no occlusion signal wired for this backend in this PR (winit's
-        // `Occluded` is desktop-only) — a DOM `visibilitychange` listener is a
-        // future follow-up, not this PR's scope.
-        window.on_active_status_change(Box::new(move |focused| {
-            let _ = dispatch_platform_ui_runtime(
-                owner_dispatch,
-                RuntimeTask::Event(RuntimeEvent::WindowFocus(focused)),
-            );
-        }));
-        // The web translation already emits hover-status changes for DOM
-        // pointerenter/pointerleave; route them like the desktop bootstrap
-        // does so a cursor leaving the canvas sweeps hover state.
-        window.on_hover_status_change(Box::new(move |is_hovered| {
-            let _ = dispatch_platform_ui_runtime(
-                owner_dispatch,
-                RuntimeTask::Event(RuntimeEvent::WindowHover(is_hovered)),
-            );
-        }));
-
-        // 7. Sample the native snapshot after wiring observers, then store the
-        // window before submitting initialization: lifecycle reconciliation can
-        // synchronously request the first frame through the owner dispatcher.
-        installation.observe_initial_web_window();
-        APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(window));
-
-        debug_assert_eq!(
-            std::thread::current().id(),
-            owner_dispatch.owner_thread,
-            "web bootstrap must run on the ui_runtime's owner thread"
-        );
-        // The addressed snapshot reaches the owner alongside initial metrics.
-        installation
-            .submit()
-            .outcome()
-            .expect("BUG: the fresh web host completes its initial installation synchronously")?;
+            installation.submit_web(
+                super::frame_driver::FrameDriver::Web(WebFrameDriver { renderer, window }),
+                &owner.shared(),
+            )
+        })?;
 
         tracing::info!("Web platform initialized with callbacks");
         Ok(())
