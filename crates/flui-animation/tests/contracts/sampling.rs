@@ -184,6 +184,59 @@ fn computation_then_delivery() {
     sample(Fault::Curve, Some(Fault::Delivery));
 }
 
+fn reduced_policy_source_failure_preserves_the_run_and_healthy_peer() {
+    let vsync = Vsync::new();
+    let source = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
+    let armed = Rc::new(Cell::new(false));
+    let run = source
+        .controller()
+        .animate_with(FailingSimulation {
+            armed: Rc::clone(&armed),
+            fail_done: false,
+        })
+        .expect("custom source run");
+    let healthy = AnimationController::builder(Duration::from_secs(1))
+        .behavior(flui_animation::AnimationBehavior::Preserve)
+        .build_on(Some(&vsync));
+    healthy.controller().forward().expect("preserved peer");
+    let mut clock = MotionClock::new();
+    vsync.tick_all(&clock.frame(Duration::ZERO));
+    armed.set(true);
+    clock.set_system_motion(flui_platform_api::MotionPreference::Reduce);
+    let mut recovery = PanicRecovery::new();
+    vsync.tick_all_with_recovery(
+        &clock.frame(Duration::from_millis(250)),
+        &mut recovery.scope(),
+    );
+    assert_eq!(
+        source.controller().value(),
+        0.0,
+        "a failed policy probe publishes no position"
+    );
+    assert!(
+        run.is_pending(),
+        "source failure cannot complete the admitted run"
+    );
+    assert_eq!(
+        healthy.controller().value(),
+        0.25,
+        "independent preserved motion advances"
+    );
+    let failure = recovery.into_failure().expect("policy source failure");
+    assert_eq!(failure.class(), FailureClass::Computation);
+    assert_eq!(failure.blocking_class(), Some(FailureClass::Computation));
+    drop(failure);
+    let mut next = PanicRecovery::new();
+    vsync.tick_all_with_recovery(&clock.frame(Duration::from_millis(500)), &mut next.scope());
+    assert!(
+        next.into_failure().is_none(),
+        "the next policy sample may recover"
+    );
+    assert!(run.is_complete());
+    assert_eq!(source.controller().value(), 1.0);
+    assert_eq!(healthy.controller().value(), 0.5);
+}
+
 #[test]
 fn sampling_preserves_failure_origin_and_publication_integrity() {
     crate::run_table(&[
@@ -193,5 +246,9 @@ fn sampling_preserves_failure_origin_and_publication_integrity() {
         ("simulation completion", done_computation),
         ("delivery before computation", delivery_then_computation),
         ("computation before delivery", computation_then_delivery),
+        (
+            "reduced-policy source query",
+            reduced_policy_source_failure_preserves_the_run_and_healthy_peer,
+        ),
     ]);
 }
