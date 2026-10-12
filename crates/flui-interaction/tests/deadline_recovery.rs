@@ -1367,7 +1367,13 @@ fn open_deadline_poll_with_nested_retirement(panic_after_retirement: bool) {
     );
     assert_eq!(polls.get(), 1);
     assert!(!sample(&binding, clock.now()));
-    assert_eq!(polls.get(), 1, "the unknown poll revision is quarantined");
+    if panic_after_retirement {
+        assert_eq!(polls.get(), 1, "the unknown poll revision is quarantined");
+    } else {
+        assert_eq!(polls.get(), 2, "the normally completed outer poll progresses");
+        assert_eq!(child_notices.get(), 1, "the retired child is not notified again");
+        assert_eq!(child_drops.get(), 1, "the failed nested retirement cannot replay");
+    }
 
     let owner = Rc::new(RefCell::new(None));
     let drops = Rc::new(Cell::new(0));
@@ -1393,7 +1399,7 @@ fn an_open_deadline_poll_preserves_nested_retirement_before_its_later_panic() {
     open_deadline_poll_with_nested_retirement(true);
 }
 
-fn a_returning_open_deadline_poll_quarantines_its_nested_unknown_retirement() {
+fn a_returning_open_deadline_poll_contains_its_distinct_nested_failure() {
     open_deadline_poll_with_nested_retirement(false);
 }
 
@@ -1558,8 +1564,8 @@ fn owner_deadline_recovery_matrix() {
             an_open_deadline_poll_preserves_nested_retirement_before_its_later_panic as fn(),
         ),
         (
-            "a_returning_open_deadline_poll_quarantines_its_nested_unknown_retirement",
-            a_returning_open_deadline_poll_quarantines_its_nested_unknown_retirement as fn(),
+            "a_returning_open_deadline_poll_contains_its_distinct_nested_failure",
+            a_returning_open_deadline_poll_contains_its_distinct_nested_failure as fn(),
         ),
     ] {
         if let Err(payload) = std::panic::catch_unwind(case) {
