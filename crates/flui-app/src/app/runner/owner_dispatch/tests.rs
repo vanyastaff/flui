@@ -224,7 +224,7 @@ fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
             NativeChange::FocusLost => native.simulate_focus(false),
             NativeChange::Hidden => native.simulate_visibility(false),
             NativeChange::Suspended => {
-                native.simulate_execution_state(WindowExecutionState::Suspended)
+                native.simulate_execution_state(WindowExecutionState::Suspended);
             }
             NativeChange::InitiallyUnfocused | NativeChange::Unchanged => {}
         }
