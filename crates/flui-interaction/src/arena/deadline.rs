@@ -38,6 +38,7 @@ pub enum GestureDeadlineError {
 /// withdraws its cached contribution without executing the member or a wake.
 /// Use [`Self::update_handle`] to publish changes after committing recognizer
 /// state and releasing its borrows.
+#[must_use = "keep this registration alive while its deadline source is attached"]
 pub struct GestureDeadlineRegistration {
     registry: Weak<DeadlineRegistry>,
     source: Rc<DeadlineSource>,

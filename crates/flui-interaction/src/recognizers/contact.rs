@@ -6,7 +6,10 @@ use std::{
     rc::Weak,
 };
 
-use flui_foundation::geometry::Offset;
+use flui_foundation::{
+    geometry::Offset,
+    panic::{FailureClass, PanicRecovery, RecoveryScope},
+};
 use web_time::{Duration, Instant};
 
 use crate::{
@@ -241,20 +244,38 @@ impl PrimaryContact {
 
     /// Claim this contact's exact arena entry.
     pub fn accept(&self) {
+        let mut recovery = PanicRecovery::new();
+        self.accept_with_recovery(&mut recovery.scope());
+        recovery.finish();
+    }
+
+    pub(crate) fn accept_with_recovery(&self, recovery: &mut RecoveryScope<'_>) {
         let entry = self.entry();
         if let Some(entry) = entry {
-            entry.resolve(GestureDisposition::Accepted);
+            entry.resolve_with_recovery(GestureDisposition::Accepted, recovery);
         }
     }
 
     /// Bow out without cancelling the remaining competition.
     pub fn withdraw(&self) -> Option<ContactSnapshot> {
+        let mut recovery = PanicRecovery::new();
+        let outgoing = self.withdraw_with_recovery(&mut recovery.scope());
+        recovery.finish();
+        outgoing
+    }
+
+    pub(crate) fn withdraw_with_recovery(
+        &self,
+        recovery: &mut RecoveryScope<'_>,
+    ) -> Option<ContactSnapshot> {
         let outgoing = self.current.borrow_mut().take()?;
         outgoing._deadline_registration.withdraw();
-        outgoing.entry.reject_without_self();
-        tracing::debug!(name: "recognizer.reject", pointer = ?outgoing.snapshot.pointer,
-            event = %crate::observability::GestureEvent::ArenaRejected,
-            "recognizer rejected gesture");
+        outgoing.entry.reject_without_self_with_recovery(recovery);
+        recovery.run_classified(FailureClass::Delivery, |_| {
+            tracing::debug!(name: "recognizer.reject", pointer = ?outgoing.snapshot.pointer,
+                event = %crate::observability::GestureEvent::ArenaRejected,
+                "recognizer rejected gesture");
+        });
         Some(outgoing.snapshot)
     }
 
