@@ -2420,8 +2420,7 @@ fn authority_report_case(late: bool, replace: bool, retained: bool) {
     use std::time::Duration;
 
     let clock = flui_foundation::ManualClock::new();
-    let (runtime, _) = prepared_runtime(&clock);
-    let runtime = Rc::new(runtime);
+    let (mut runtime, _) = prepared_runtime(&clock);
     let primary_animation = Rc::new(RefCell::new(None));
     runtime
         .attach_root_widget_with_size(
@@ -2449,6 +2448,7 @@ fn authority_report_case(late: bool, replace: bool, retained: bool) {
             400.0,
         )
         .expect("mount actual authority target");
+    let runtime = Rc::new(runtime);
     let mut sink = PreparedTextSink::default();
     assert!(drive_shared_prepared_frame(&runtime, &clock, &mut sink));
     let primary = primary_animation
