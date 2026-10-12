@@ -35,6 +35,7 @@ fn retire_delivery_snapshot<T: ?Sized>(
 pub(crate) struct CallbackSequence {
     first: Option<RoutePanic>,
     incoming_failure: bool,
+    preserving: bool,
 }
 
 impl CallbackSequence {
@@ -42,6 +43,13 @@ impl CallbackSequence {
         Self {
             first: None,
             incoming_failure: std::thread::panicking(),
+            preserving: false,
+        }
+    }
+    pub(crate) fn preserving_failure(preserving: bool) -> Self {
+        Self {
+            preserving,
+            ..Self::new()
         }
     }
     pub(crate) fn call<T: ?Sized>(&mut self, callback: Option<Rc<T>>, invoke: impl FnOnce(&T)) {
@@ -53,10 +61,14 @@ impl CallbackSequence {
             let candidate = RoutePanic::capture(|| invoke(callback.as_ref()));
             RoutePanic::preserve_first(&mut self.first, candidate, "recognizer callback");
         }
-        retire_delivery_snapshot(callback, &mut self.first, self.incoming_failure);
+        retire_delivery_snapshot(
+            callback,
+            &mut self.first,
+            self.incoming_failure || self.preserving,
+        );
     }
     pub(crate) fn retire<T: ?Sized>(&mut self, callback: Option<Rc<T>>) {
-        if self.incoming_failure {
+        if self.incoming_failure || self.preserving {
             callback.retain();
         } else {
             retire_callback(callback, &mut self.first);
