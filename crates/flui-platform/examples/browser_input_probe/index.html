@@ -14,6 +14,9 @@ pre { position: relative; z-index: 9999; background: white; width: max-content; 
   <button id="fractional">Check fractional positions</button>
   <button id="owned-wheel">Check wheel units and precision</button>
   <button id="owned-keyboard">Check Web key vocabulary and Unicode</button>
+  <button id="observed-modifiers">Check keyboard, pointer and wheel modifiers</button>
+  <button id="modifier-getter-reentry">Check modifier getter reentry</button>
+  <button id="modifier-getter-retirement">Check modifier getter retirement (fresh page)</button>
   <button id="canvas-ownership">Check canvas ownership and recovery (fresh page)</button>
   <button id="keyboard-dispatch">Check independent keyboard dispatch bits (fresh page)</button>
   <button id="registration-rollback">Check registration rollback (fresh page)</button>
@@ -460,6 +463,136 @@ document.getElementById('owned-wheel').onclick = () => check('owned-wheel-check'
       unit, x: 1.000000000123, y: -2.000000000456, precision: 'Unknown', shift: true,
     });
   }
+});
+const modifierNames = [
+  ['Shift', 'shift', 'shiftKey'], ['Control', 'control', 'ctrlKey'],
+  ['Alt', 'alt', 'altKey'], ['Meta', 'meta', 'metaKey'],
+  ['AltGraph', 'alt_graph', 'modifierAltGraph'], ['CapsLock', 'caps_lock', 'modifierCapsLock'],
+  ['NumLock', 'num_lock', 'modifierNumLock'], ['ScrollLock', 'scroll_lock', 'modifierScrollLock'],
+  ['Fn', 'fn', 'modifierFn'], ['FnLock', 'fn_lock', 'modifierFnLock'],
+  ['Symbol', 'symbol', 'modifierSymbol'], ['SymbolLock', 'symbol_lock', 'modifierSymbolLock'],
+];
+const modifierRecords = (label = 'input') => {
+  const text = document.getElementById(`modifier-records-${label}`)?.textContent || '';
+  return JSON.parse(`[${text.slice(0, -1)}]`);
+};
+const sourceModifiers = source => Object.fromEntries(modifierNames.map(([name, field, option]) => [
+  field, source.getModifierState(name) || (['shiftKey', 'ctrlKey', 'altKey', 'metaKey'].includes(option) && source[option]),
+]));
+document.getElementById('observed-modifiers').onclick = () => check('observed-modifiers-check', () => {
+  const canvas = document.querySelector('canvas');
+  if (!canvas) throw new Error('Install input first');
+  canvas.focus();
+  const rect = canvas.getBoundingClientRect();
+  const common = { bubbles: true, cancelable: true, clientX: rect.left + 80, clientY: rect.top + 40 };
+  const cases = modifierNames.map(([name,, option]) => ({ name, init: { [option]: true } }));
+  cases.push(
+    { name: 'FnLock controlled source', init: {}, controlled: 'FnLock' },
+    { name: 'SymbolLock controlled source', init: {}, controlled: 'SymbolLock' },
+    { name: 'Hyper legacy source', init: {}, controlled: 'Hyper', meta: true },
+    { name: 'Super legacy source', init: {}, controlled: 'Super', meta: true },
+    { name: 'all constructor observations', init: Object.fromEntries(modifierNames.map(([, , option]) => [option, true])) },
+    { name: 'AltGraph aliases', init: { ctrlKey: true, altKey: true, modifierAltGraph: true } },
+    { name: 'Ctrl Alt without AltGraph', init: { ctrlKey: true, altKey: true } },
+    { name: 'named key without observation', init: { key: 'AltGraph', code: 'AltRight', location: 2 } },
+    { name: 'canonical observations without convenience flags', init: {}, controlled: 'Control' },
+    { name: 'convenience flags without canonical observations', init: { shiftKey: true, ctrlKey: true, altKey: true, metaKey: true }, convenienceOnly: true },
+    { name: 'healthy next', init: {} },
+  );
+  let checked = 0;
+  let pointerId = 30;
+  for (const row of cases) {
+    const id = pointerId++;
+    for (const [type, Constructor, extra, kind] of [
+      ['keydown', KeyboardEvent, { key: '@', code: 'KeyQ', location: 2, repeat: true, isComposing: true }, 'keyboard'],
+      ['keyup', KeyboardEvent, { key: '@', code: 'KeyQ', location: 2, repeat: true, isComposing: true }, 'keyboard'],
+      ['pointerdown', PointerEvent, { pointerId: id, pointerType: 'mouse', button: 0, buttons: 1 }, 'down'],
+      ['pointermove', PointerEvent, { pointerId: id, pointerType: 'mouse', button: -1, buttons: 1 }, 'move'],
+      ['pointerup', PointerEvent, { pointerId: id, pointerType: 'mouse', button: 0, buttons: 0 }, 'up'],
+      ['wheel', WheelEvent, { deltaX: 1.000000000123, deltaY: -2.000000000456, deltaMode: 0 }, 'scroll'],
+    ]) {
+      const source = new Constructor(type, { ...common, ...extra, ...row.init });
+      const original = source.getModifierState.bind(source);
+      if (row.controlled || row.convenienceOnly) Object.defineProperty(source, 'getModifierState', { value: name => !row.convenienceOnly && (name === row.controlled || original(name)) });
+      const expected = sourceModifiers(source);
+      if (row.meta) expected.meta = true;
+      if (row.controlled && !row.meta && !expected[modifierNames.find(([name]) => name === row.controlled)[1]]) throw new Error('Controlled source was not installed');
+      report('modifier-records-input', '');
+      canvas.dispatchEvent(source);
+      const records = modifierRecords();
+      if (records.length !== 1) throw new Error(`${row.name}/${type}: expected one public delivery, got ${records.length}`);
+      equal(records[0], { kind });
+      equal(records[0].modifiers, expected);
+      if (kind === 'keyboard') equal(JSON.parse(document.getElementById('keyboard').textContent), {
+        key: source.key, code: source.code, location: 'Right', state: type === 'keydown' ? 'Down' : 'Up',
+        time: Math.trunc(source.timeStamp * 1_000_000), composition: 'Active', repeat: type === 'keydown' ? 'AutoRepeat' : 'First',
+        ...expected,
+      });
+      if (kind === 'scroll') equal(JSON.parse(document.getElementById('scroll-data').textContent), { unit: 'Pixels', x: 1.000000000123, y: -2.000000000456 });
+      if (['down', 'move', 'up'].includes(kind)) equal(JSON.parse(document.getElementById(kind).textContent), { x: 80, y: 40, primary: kind !== 'up' });
+      checked += 1;
+    }
+  }
+  report('observed-modifier-cases', String(checked));
+});
+document.getElementById('modifier-getter-reentry').onclick = () => check('modifier-getter-reentry-check', () => {
+  const canvas = document.querySelector('canvas');
+  if (!canvas) throw new Error('Install input first');
+  canvas.focus();
+  for (const [Constructor, type, outerInit, innerInit, kind] of [
+    [KeyboardEvent, 'keydown', { key: 'q', code: 'KeyQ', modifierAltGraph: true }, { key: 'r', code: 'KeyR', modifierCapsLock: true }, 'keyboard'],
+    [PointerEvent, 'pointermove', { pointerId: 200, pointerType: 'mouse', buttons: 0, modifierAltGraph: true }, { pointerId: 201, pointerType: 'mouse', buttons: 0, modifierCapsLock: true }, 'move'],
+    [WheelEvent, 'wheel', { deltaX: 2, modifierAltGraph: true }, { deltaX: 1, modifierCapsLock: true }, 'scroll'],
+  ]) {
+    report('modifier-records-input', '');
+    const outer = new Constructor(type, outerInit);
+    const original = outer.getModifierState.bind(outer);
+    let fired = false;
+    Object.defineProperty(outer, 'getModifierState', { value: name => {
+      if (!fired) { fired = true; canvas.dispatchEvent(new Constructor(type, innerInit)); }
+      return original(name);
+    }});
+    canvas.dispatchEvent(outer);
+    const records = modifierRecords();
+    if (!fired || records.length !== 2) throw new Error(`${type}: modifier getter did not deliver inner and outer`);
+    equal(records[0], { kind }); equal(records[1], { kind });
+    equal(records[0].modifiers, { caps_lock: true, alt_graph: false });
+    equal(records[1].modifiers, { caps_lock: false, alt_graph: true });
+    if (kind === 'keyboard') { equal(records[0], { key: 'r' }); equal(records[1], { key: 'q' }); }
+    canvas.dispatchEvent(new Constructor(type, { ...innerInit, modifierCapsLock: false }));
+    equal(modifierRecords().at(-1).modifiers, { caps_lock: false, alt_graph: false });
+  }
+});
+document.getElementById('modifier-getter-retirement').onclick = () => check('modifier-getter-retirement-check', () => {
+  if (inputOwner) throw new Error('Run on a fresh page');
+  let owner = keyboard_window_probe('modifier-retired-0', true, false);
+  const canvas = document.querySelector('canvas'); canvas.focus();
+  let row = 0;
+  try {
+    for (const [Constructor, type, init] of [
+      [KeyboardEvent, 'keydown', { key: 'q', code: 'KeyQ' }],
+      [PointerEvent, 'pointermove', { pointerId: 250, pointerType: 'mouse', buttons: 0 }],
+      [WheelEvent, 'wheel', { deltaX: 1 }],
+    ]) {
+      const old = owner;
+      const label = `modifier-retired-${row}`;
+      const before = modifierRecords(label).length;
+      const event = new Constructor(type, init);
+      const original = event.getModifierState.bind(event);
+      let fired = false;
+      Object.defineProperty(event, 'getModifierState', { value: name => {
+        if (!fired) { fired = true; old.close(); owner = old.reopen(`modifier-retired-${++row}`, true, false); }
+        return original(name);
+      }});
+      canvas.dispatchEvent(event);
+      if (!fired || modifierRecords(label).length !== before || modifierRecords(`modifier-retired-${row}`).length !== 0) throw new Error(`${type}: obsolete or new owner received old observation`);
+      canvas.dispatchEvent(new Constructor(type, { ...init, modifierCapsLock: true }));
+      const healthy = modifierRecords(`modifier-retired-${row}`);
+      if (healthy.length !== 1) throw new Error(`${type}: replacement lost healthy delivery`);
+      equal(healthy[0].modifiers, { caps_lock: true });
+      old.free();
+    }
+  } finally { owner.close(); owner.free(); }
 });
 document.getElementById('owned-keyboard').onclick = () => check('owned-keyboard-check', () => {
   const canvas = document.querySelector('canvas');
