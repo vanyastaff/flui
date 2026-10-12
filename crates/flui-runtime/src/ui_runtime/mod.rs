@@ -34,7 +34,6 @@ use std::cell::{Cell, RefCell};
 use std::marker::PhantomData;
 #[cfg(test)]
 use std::panic::{AssertUnwindSafe, catch_unwind};
-#[cfg(test)]
 use std::rc::Rc;
 use std::sync::Arc;
 #[cfg(any(test, feature = "test-support"))]
@@ -257,7 +256,13 @@ pub struct UiRuntime {
     /// bootstrap via [`Self::set_frame_failure_handler`]). Runtime-scoped,
     /// never process-global; cloned out of the cell before every delivery
     /// so the callback runs with no UI runtime borrow held.
-    frame_failure_handler: RefCell<Option<FrameFailureHandler>>,
+    frame_failure_handler: Rc<RefCell<Option<FrameFailureHandler>>>,
+    /// Addressed scheduling reports accepted while the runtime is checked out.
+    /// They leave with an owned delivery batch before its owner lease returns.
+    pending_sampling_reports: RefCell<Vec<crate::frame_failure::FrameFailureReport>>,
+    /// An owner lease defers operation diagnostics until its registry residence
+    /// is restored. Direct runtime transactions deliver at their own boundary.
+    pub(crate) owner_checkout_active: Cell<bool>,
     /// Runtime-scoped policy for retaining unstructured frame-failure text.
     /// Set once by the runner from `AppConfig`; a shared-UI runtime secondary
     /// presentation inherits this existing UI runtime policy.
