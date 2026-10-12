@@ -447,8 +447,9 @@ impl GestureArenaMember for MultiTapGestureRecognizer {
         recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
     ) -> bool {
         use flui_foundation::panic::FailureClass;
+        let arena = self.membership.arena();
         let mut prepared = None;
-        let completed = recovery.run_classified(FailureClass::Unknown, |_| {
+        let completed = arena.invoke_with_recovery(FailureClass::Unknown, recovery, |_| {
             let mut state = self.sequence.borrow_mut();
             if state
                 .as_ref()
@@ -467,15 +468,15 @@ impl GestureArenaMember for MultiTapGestureRecognizer {
                 registration.withdraw();
             }
             for contact in sequence.contacts.values() {
-                recovery.run_classified(FailureClass::Unknown, |scope| {
-                    withdraw_cancelled_with_recovery(&contact.entry, self.membership.arena(), scope)
+                arena.invoke_with_recovery(FailureClass::Unknown, recovery, |scope| {
+                    withdraw_cancelled_with_recovery(&contact.entry, arena, scope)
                 });
-                recovery.run_classified(FailureClass::Unknown, |scope| {
+                arena.invoke_with_recovery(FailureClass::Unknown, recovery, |scope| {
                     contact.entry.release_with_recovery(scope)
                 });
             }
             let preserving = recovery.has_failure();
-            recovery.run_classified(FailureClass::Delivery, |_| {
+            arena.invoke_with_recovery(FailureClass::Delivery, recovery, |_| {
                 let mut notices = CallbackSequence::preserving_failure(preserving);
                 notices.call(self.callbacks.on_multi_tap_cancel.clone(), |callback| {
                     callback(details)

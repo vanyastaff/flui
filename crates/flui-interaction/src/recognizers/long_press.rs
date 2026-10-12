@@ -238,9 +238,9 @@ impl LongPressGestureRecognizer {
         }
     }
     fn fire_deadline(&self, now: Instant) {
-        let mut recovery = flui_foundation::panic::PanicRecovery::new();
-        self.fire_deadline_with_recovery(now, &mut recovery.scope());
-        recovery.finish();
+        self.contact.arena().run_owned_recovery(|recovery| {
+            self.fire_deadline_with_recovery(now, recovery);
+        });
     }
 
     fn fire_deadline_with_recovery(
@@ -249,8 +249,9 @@ impl LongPressGestureRecognizer {
         recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
     ) -> bool {
         use flui_foundation::panic::FailureClass;
+        let arena = self.contact.arena();
         let mut prepared = None;
-        let completed = recovery.run_classified(FailureClass::Unknown, |_| {
+        let completed = arena.invoke_with_recovery(FailureClass::Unknown, recovery, |_| {
             let Some(deadline) = self.contact.deadline() else {
                 return;
             };
@@ -274,14 +275,16 @@ impl LongPressGestureRecognizer {
         let Some((contact, details)) = prepared else {
             return true;
         };
-        recovery.run_classified(FailureClass::Delivery, |_| self.contact.disarm_deadline());
+        arena.invoke_with_recovery(FailureClass::Delivery, recovery, |_| {
+            self.contact.disarm_deadline();
+        });
         if self.contact.is_current(contact.id) {
-            recovery.run_classified(FailureClass::Unknown, |scope| {
+            arena.invoke_with_recovery(FailureClass::Unknown, recovery, |scope| {
                 self.contact.accept_with_recovery(scope)
             });
         }
         let preserving = recovery.has_failure();
-        recovery.run_classified(FailureClass::Delivery, |_| {
+        arena.invoke_with_recovery(FailureClass::Delivery, recovery, |_| {
             let mut notices = CallbackSequence::preserving_failure(preserving);
             if self.contact.is_current(contact.id) {
                 notices.call(self.callbacks.on_long_press.clone(), |callback| callback());

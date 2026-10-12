@@ -418,8 +418,9 @@ impl GestureArenaMember for DoubleTapGestureRecognizer {
         recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
     ) -> bool {
         use flui_foundation::panic::FailureClass;
+        let arena = self.contact.arena();
         let mut prepared = None;
-        let completed = recovery.run_classified(FailureClass::Unknown, |_| {
+        let completed = arena.invoke_with_recovery(FailureClass::Unknown, recovery, |_| {
             let waiting = self.gesture.borrow().clone();
             if let DoubleTapState::Waiting {
                 details,
@@ -437,19 +438,19 @@ impl GestureArenaMember for DoubleTapGestureRecognizer {
             return false;
         }
         if let Some((details, first_entry)) = prepared {
-            recovery.run_classified(FailureClass::Unknown, |scope| {
+            arena.invoke_with_recovery(FailureClass::Unknown, recovery, |scope| {
                 self.contact.withdraw_with_recovery(scope);
             });
             if let Some(entry) = first_entry {
-                recovery.run_classified(FailureClass::Unknown, |scope| {
+                arena.invoke_with_recovery(FailureClass::Unknown, recovery, |scope| {
                     entry.resolve_with_recovery(GestureDisposition::Rejected, scope)
                 });
-                recovery.run_classified(FailureClass::Unknown, |scope| {
+                arena.invoke_with_recovery(FailureClass::Unknown, recovery, |scope| {
                     entry.release_with_recovery(scope)
                 });
             }
             let preserving = recovery.has_failure();
-            recovery.run_classified(FailureClass::Delivery, |_| {
+            arena.invoke_with_recovery(FailureClass::Delivery, recovery, |_| {
                 let mut notices =
                     super::callback_containment::CallbackSequence::preserving_failure(preserving);
                 notices.call(self.callbacks.on_double_tap_cancel.clone(), |callback| {
