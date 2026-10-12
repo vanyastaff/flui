@@ -6,7 +6,8 @@
   swallowed listener failure and snapshot disposal behavior.
 - **Related:** [ADR-0119](ADR-0119-inert-panic-payload-retirement.md),
   [ADR-0127](ADR-0127-exceptional-path-retention.md),
-  [ADR-0177](ADR-0177-controller-ordered-delivery.md)
+  [ADR-0177](ADR-0177-controller-ordered-delivery.md),
+  [ADR-0199](ADR-0199-presentation-sampling-recovery.md)
 
 ## Context
 
@@ -61,7 +62,10 @@ provide containment must override the seam to propagate their context.
 
 Reentrant owner cleanup can inherit an active channel's failure latch without
 borrowing its storage across user code. No payload is copied: the original
-enclosing context remains responsible for resuming the first failure. Proxy
+enclosing context remains responsible for completing its failure boundary.
+Standalone notification resumes the first failure; runtime sampling consumes
+the enclosing owned failure as a typed report under ADR-0199. Neither path
+changes delivery membership, first-cause authority or retirement policy. Proxy
 swaps admit queued value and status notifications with committed status
 membership; reentrant swaps append so the last committed parent's status is
 the last announced status.
