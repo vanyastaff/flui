@@ -1595,14 +1595,23 @@ impl ElementTree {
     /// index, the walk cannot. Ordering is load-bearing: the ancestry walk
     /// derives each child's `sliver_slot` from its parent's slot, so the
     /// slot must be written first.
-    pub(crate) fn relocate_sparse_child(&mut self, id: ElementId, new_slot: usize) {
+    pub(crate) fn relocate_sparse_child(
+        &mut self,
+        id: ElementId,
+        new_slot: usize,
+        owner: &crate::ElementOwner<'_>,
+    ) {
         if let Some(node) = self.get_mut(id) {
             node.slot = new_slot;
         }
-        self.recompute_subtree_ancestry(id);
+        self.recompute_subtree_ancestry(id, owner.child_manager_registry);
     }
 
-    fn recompute_subtree_ancestry(&mut self, root_id: ElementId) {
+    fn recompute_subtree_ancestry(
+        &mut self,
+        root_id: ElementId,
+        registry: &crate::element::child_manager::ChildManagerRegistry,
+    ) {
         // A `visited` set bounds the walk to each node once. The element tree
         // is acyclic by construction (`child_ids` come from the reconciler),
         // so this never trips in practice — but it converts a malformed
@@ -1640,7 +1649,7 @@ impl ElementTree {
             node.set_depth(depth);
             node.element_mut().set_parent_render_id(parent_render_id);
             node.element_mut().set_sliver_slot(sliver_slot);
-            stack.extend_from_slice(&node.child_ids);
+            stack.extend(self.owned_children(id, registry));
         }
     }
 
@@ -1743,6 +1752,55 @@ impl ElementTree {
         owner.keep_alive.forget_holder(dependent);
     }
 
+    /// Snapshot the complete owned child graph without exposing sparse rows to
+    /// dense reconciliation. Internal manager guards end before lifecycle work.
+    pub(crate) fn owned_children(
+        &self,
+        id: ElementId,
+        registry: &crate::element::child_manager::ChildManagerRegistry,
+    ) -> Vec<ElementId> {
+        let Some(node) = self.get(id) else {
+            return Vec::new();
+        };
+        let mut children = node.child_ids().to_vec();
+        let manager = node
+            .element()
+            .render_id()
+            .and_then(|render_id| registry.lock().get(&render_id).cloned());
+        if let Some(manager) = manager {
+            let sparse = manager.lock().snapshot_children();
+            children.extend(sparse.into_iter().filter(|child| {
+                self.get(*child)
+                    .is_some_and(|node| node.parent() == Some(id))
+            }));
+        }
+        children
+    }
+
+    pub(crate) fn preflight_unmount(&self, ids: &[ElementId]) {
+        for &id in ids {
+            if let Some(index) = self.resolve_index(id) {
+                self.next_generation(index);
+            }
+        }
+    }
+
+    pub(crate) fn retire_sparse_children(
+        &self,
+        ids: &[ElementId],
+        registry: &crate::element::child_manager::ChildManagerRegistry,
+    ) {
+        for &id in ids {
+            let manager = self
+                .get(id)
+                .and_then(|node| node.element().render_id())
+                .and_then(|render_id| registry.lock().get(&render_id).cloned());
+            if let Some(manager) = manager {
+                manager.lock().retire_children();
+            }
+        }
+    }
+
     /// Reactivate a subtree and schedule dependency lifecycle work for every
     /// node with an inherited read, including a lookup that found no provider.
     fn activate_subtree(&mut self, root: ElementId, owner: &mut crate::ElementOwner<'_>) {
@@ -1752,7 +1810,7 @@ impl ElementTree {
                 continue;
             };
             let depth = node.depth();
-            let children = node.child_ids().to_vec();
+            let children = self.owned_children(id, owner.child_manager_registry);
 
             if let Some(node) = self.get_mut(id) {
                 node.element_mut().activate(owner);
@@ -1773,9 +1831,7 @@ impl ElementTree {
     fn deactivate_subtree(&mut self, root: ElementId, owner: &mut crate::ElementOwner<'_>) {
         let mut stack = vec![root];
         while let Some(id) = stack.pop() {
-            let children = self
-                .get(id)
-                .map_or_default(|node| node.child_ids().to_vec());
+            let children = self.owned_children(id, owner.child_manager_registry);
             self.deactivate_inherited_dependencies(id, owner);
             if let Some(node) = self.get_mut(id) {
                 node.element_mut().deactivate(owner);
@@ -1984,11 +2040,11 @@ impl ElementTree {
                     continue;
                 }
                 subtree.push(node_id);
-                if let Some(node) = self.get(node_id) {
-                    // Push children in reverse slot order so the leftmost child
-                    // is popped next — preserves pre-order on a LIFO stack.
-                    work_stack.extend(node.child_ids().iter().rev().copied());
-                }
+                work_stack.extend(
+                    self.owned_children(node_id, owner.child_manager_registry)
+                        .into_iter()
+                        .rev(),
+                );
             }
         }
 
@@ -1997,11 +2053,7 @@ impl ElementTree {
         // walk: an exhausted ancestor would refuse after its children were freed.
         // Keyed boundaries excluded above survive DeactivateKeyed and need no
         // generation advance, including every node under those boundaries.
-        for &node_id in &subtree {
-            if let Some(index) = self.resolve_index(node_id) {
-                self.next_generation(index);
-            }
-        }
+        self.preflight_unmount(&subtree);
 
         // Soft-remove the keyed descendants BEFORE their ancestors are freed,
         // so `remove`'s unlink-from-parent and render detach run against a
@@ -2011,6 +2063,7 @@ impl ElementTree {
         for &keyed in &keyed_descendants {
             self.remove(keyed, owner);
         }
+        self.retire_sparse_children(&subtree, owner.child_manager_registry);
 
         // Free descendants deepest-first -- `subtree[0]` is the root itself
         // (removed below, last); iterating the rest in reverse visits each
@@ -2627,7 +2680,7 @@ fn retake_inactive_global_key(
     // subtree moved under a new parent, so its inherited scopes (built
     // against the OLD ancestor chain) and descendant depths are stale.
     // Recompute both top-down against `new_parent`.
-    tree.recompute_subtree_ancestry(candidate_id);
+    tree.recompute_subtree_ancestry(candidate_id, owner.child_manager_registry);
     tree.synchronize_destination_render_children_for_relocation(new_parent, &provisional);
     for &(element_id, _) in &relocation.frontier {
         tree.reset_ancestor_parent_data(element_id);
@@ -2832,7 +2885,7 @@ fn retake_active_global_key(
     // Deactivation above synchronously released dependency edges for the
     // entire subtree. Repair both inherited scopes and recursive depths
     // before the next dirty-heap drain.
-    tree.recompute_subtree_ancestry(candidate_id);
+    tree.recompute_subtree_ancestry(candidate_id, owner.child_manager_registry);
     tree.synchronize_destination_render_children_for_relocation(new_parent, &provisional);
     for &(element_id, _) in &relocation.frontier {
         tree.reset_ancestor_parent_data(element_id);

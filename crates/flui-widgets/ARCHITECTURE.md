@@ -1,5 +1,14 @@
 # flui-widgets architecture
 
+## Activity indicator paint isolation
+
+ActivityIndicator owns a repaint boundary around its animated CustomPaint.
+Its geometry and semantics stay unchanged while each tick updates only its
+boundary's content certificate. `indicator_ticks_preserve_surrounding_paint_content`
+observes a moving arc alongside an unchanged surrounding certificate through
+the mounted widget's submitted layer tree. The keyed permission-migration
+cases also exercise nested isolation across pause, relocation and resumption.
+
 ## Route animation crossing
 
 Route replacement preserves the displayed secondary animation until its current

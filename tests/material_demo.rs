@@ -30,6 +30,80 @@
 )]
 mod tree;
 
+#[path = "../examples/two_screens/tree.rs"]
+mod notes;
+
+#[test]
+fn replacing_material_demo_with_notes_keeps_retained_render_nodes_live() {
+    use flui::prelude::*;
+    use flui::widgets::column;
+    use flui_testing::widgets::{lay_out, tight};
+
+    #[derive(Clone, StatefulView)]
+    struct Switcher;
+    struct SwitcherState {
+        notes: Signal<bool>,
+    }
+    impl StatefulView for Switcher {
+        type State = SwitcherState;
+        fn create_state(&self) -> Self::State {
+            SwitcherState {
+                notes: Signal::default(),
+            }
+        }
+    }
+    impl ViewState<Switcher> for SwitcherState {
+        fn init_state(&mut self, cx: &dyn LifecycleContext) {
+            self.notes = cx.signal(false);
+        }
+        fn build(&self, _: &Switcher, cx: &dyn BuildContext) -> impl IntoView {
+            let notes = self.notes;
+            let content = if notes.get(cx) {
+                notes::NotesApp::default().boxed()
+            } else {
+                tree::MaterialDemoApp.boxed()
+            };
+            Column::new(column![
+                SizedBox::height(48.0).child(
+                    RawButton::new(Text::new("Switch scene"))
+                        .on_press(move |cx| notes.set(cx, true))
+                ),
+                Expanded::new(content),
+            ])
+        }
+    }
+    let ((), log) = flui_testing::log_capture::capture(|| {
+        let mut laid = lay_out(Switcher, tight(400.0, 800.0));
+        let id = laid
+            .find_text("Switch scene")
+            .expect("public switch button");
+        let origin = laid.absolute_offset(id);
+        let size = laid.size(id);
+        let (x, y) = (origin.dx + size.width / 2.0, origin.dy + size.height / 2.0);
+        laid.dispatch_pointer_down(x, y);
+        laid.dispatch_pointer_up(x, y);
+        laid.pump();
+        assert!(
+            laid.find_text("FLUI Notes").is_some(),
+            "the replacement scene is laid out"
+        );
+    });
+    assert!(
+        !log.is_empty(),
+        "capture must observe the real mounted path"
+    );
+    let errors: Vec<_> = log
+        .records()
+        .iter()
+        .filter(|record| record.message.contains("lifecycle hook panicked"))
+        .collect();
+    assert_eq!(
+        errors.len(),
+        0,
+        "scene replacement must not invalidate surviving elements: {errors:?}"
+    );
+}
+
 use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;

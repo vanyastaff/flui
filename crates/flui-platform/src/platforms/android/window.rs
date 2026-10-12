@@ -11,7 +11,8 @@ use std::sync::{
 
 use android_activity::AndroidApp;
 use cursor_icon::CursorIcon;
-use flui_foundation::geometry::{Point, Size};
+use flui_foundation::geometry::{EdgeInsets, Point, Size};
+use parking_lot::Mutex;
 
 use crate::{
     shared::WindowCallbacks,
@@ -37,6 +38,7 @@ pub struct AndroidWindow {
     owner_signal: Weak<crate::shared::owner_signal::OwnerSignal>,
     geometry_live: Arc<AtomicBool>,
     text_sizing: Arc<super::text_sizing::Acquisition>,
+    safe_area: Arc<Mutex<super::safe_area::Capture>>,
 }
 
 impl std::fmt::Debug for AndroidWindow {
@@ -63,6 +65,7 @@ impl AndroidWindow {
             owner_signal,
             geometry_live: Arc::new(AtomicBool::new(true)),
             text_sizing: super::text_sizing::Acquisition::new(),
+            safe_area: Arc::new(Mutex::new(super::safe_area::Capture::default())),
         }
     }
 
@@ -88,6 +91,63 @@ impl AndroidWindow {
 
     pub(crate) fn fence_text_sizing(&self) {
         self.text_sizing.fence();
+    }
+
+    pub(crate) fn settle_safe_area(&self) {
+        let sample = {
+            let mut capture = self.safe_area.lock();
+            let super::safe_area::Query::Ready(sample) = capture.query else {
+                return;
+            };
+            capture.query = super::safe_area::Query::Idle;
+            sample
+        };
+        let size = self.physical_size();
+        let scale = self.scale_factor();
+        let changed = {
+            let mut capture = self.safe_area.lock();
+            let Some(insets) = sample.and_then(|sample| sample.logical(size, scale)) else {
+                return;
+            };
+            if !self.geometry_live.load(Ordering::Acquire) || insets == capture.accepted {
+                return;
+            }
+            capture.accepted = insets;
+            insets
+        };
+        self.callbacks.dispatch_safe_area_change(changed);
+        self.request_redraw();
+    }
+
+    pub(crate) fn request_safe_area(&self) {
+        {
+            let mut capture = self.safe_area.lock();
+            if !matches!(capture.query, super::safe_area::Query::Idle)
+                || !self.geometry_live.load(Ordering::Acquire)
+            {
+                return;
+            }
+            capture.query = super::safe_area::Query::Waiting;
+        }
+        let app = self.app.clone();
+        let capture = Arc::downgrade(&self.safe_area);
+        let live = Arc::downgrade(&self.geometry_live);
+        let signal = self.owner_signal.clone();
+        self.app.run_on_java_main_thread(Box::new(move || {
+            let sample = super::safe_area::sample(&app);
+            if !live
+                .upgrade()
+                .is_some_and(|live| live.load(Ordering::Acquire))
+            {
+                return;
+            }
+            if let Some(capture) = capture.upgrade() {
+                capture.lock().query = super::safe_area::Query::Ready(sample);
+            }
+            if let Some(signal) = signal.upgrade() {
+                let _ = signal.wake();
+            }
+        }));
     }
 
     /// Read whether a redraw is pending without consuming it. The event loop
@@ -202,6 +262,10 @@ impl PlatformWindow for AndroidWindow {
         } else {
             WindowExecutionState::Suspended
         }
+    }
+
+    fn safe_area_insets(&self) -> EdgeInsets {
+        self.safe_area.lock().accepted
     }
 
     fn request_redraw(&self) {

@@ -436,6 +436,7 @@ fn lazy_slivers() {
             ("lazy_list::lazy_list_view_builder_keyed_row_moving_with_the_viewport_keeps_state", crate::lazy_list::lazy_list_view_builder_keyed_row_moving_with_the_viewport_keeps_state),
             ("lazy_list::lazy_list_view_builder_pathological_extents_defer_instead_of_panicking", crate::lazy_list::lazy_list_view_builder_pathological_extents_defer_instead_of_panicking),
             ("lazy_list::lazy_list_view_builder_stateful_items_init_and_dispose_with_the_band", crate::lazy_list::lazy_list_view_builder_stateful_items_init_and_dispose_with_the_band),
+            ("lazy_list::replacing_nested_lazy_hosts_disposes_every_resident_once", crate::lazy_list::replacing_nested_lazy_hosts_disposes_every_resident_once),
             ("lazy_grid::lazy_grid_view_builder_places_tiles_at_oracle_positions", crate::lazy_grid::lazy_grid_view_builder_places_tiles_at_oracle_positions),
             ("sliver_persistent_header::a_floating_snap_header_snaps_fully_open_when_a_startward_scroll_ends", crate::sliver_persistent_header::a_floating_snap_header_snaps_fully_open_when_a_startward_scroll_ends),
             ("sliver_persistent_header::an_active_floating_snap_migrates_and_unmounts", crate::sliver_persistent_header::an_active_floating_snap_migrates_and_unmounts),
