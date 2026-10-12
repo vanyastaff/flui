@@ -98,11 +98,12 @@ mod browser {
     impl BrowserWindowProbe {
         pub fn snapshot(&self) -> String {
             format!(
-                r#"{{"focused":{},"active":{},"capture_alive":{},"platform_active":{}}}"#,
+                r#"{{"focused":{},"active":{},"capture_alive":{},"platform_active":{},"surface_available":{}}}"#,
                 self.window.is_focused(),
                 self.window.is_active(),
                 self.capture.upgrade().is_some(),
                 self._platform.active_window().is_some(),
+                self.window.window_handle().is_ok(),
             )
         }
 

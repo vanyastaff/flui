@@ -76,7 +76,7 @@ document.getElementById('canvas-ownership').onclick = () => check('canvas-owners
   host.focus();
   const owner = keyboard_window_probe('contract', false, true);
   const canvas = document.querySelector('canvas');
-  equal(JSON.parse(owner.snapshot()), { focused: false, active: false, capture_alive: true });
+  equal(JSON.parse(owner.snapshot()), { focused: false, active: false, capture_alive: true, surface_available: true });
   const key = (target, value) => {
     const event = new KeyboardEvent('keydown', { key: value, bubbles: true, cancelable: true });
     target.dispatchEvent(event);
@@ -101,15 +101,21 @@ document.getElementById('canvas-ownership').onclick = () => check('canvas-owners
     equal({ focus: document.getElementById('focus-state-contract')?.textContent }, { focus: 'true:true:true,false:false:false,' });
     owner.close();
     owner.close();
-    equal(JSON.parse(owner.snapshot()), { capture_alive: false });
+    equal(JSON.parse(owner.snapshot()), { capture_alive: false, surface_available: false });
     equal({ capture: owner.install_late_input() }, { capture: false });
     canvas.focus();
     equal({ prevented: key(canvas, 'r').defaultPrevented }, { prevented: false });
     const next = owner.reopen('reopened', true, false);
     try {
+      equal(JSON.parse(next.snapshot()), { surface_available: true });
+      equal(JSON.parse(owner.snapshot()), { surface_available: false });
       key(canvas, 's');
       equal({ old: document.getElementById('focus-keys-contract')?.textContent, next: document.getElementById('focus-keys-reopened')?.textContent }, { old: 'q,', next: 's,' });
-    } finally { next.close(); next.free(); }
+    } finally {
+      next.close();
+      equal(JSON.parse(next.snapshot()), { surface_available: false });
+      next.free();
+    }
   } finally {
     document.body.removeEventListener('keydown', ancestor);
     canvas.removeEventListener('keydown', peer);
