@@ -22,11 +22,16 @@
 //! Runtime deadline decisions borrow the presentation's recovery custody through
 //! verdict delivery and snapshot retirement. Committed member notifications are
 //! delivery; destruction of an opaque member establishes no valid postcondition.
-//! Standalone entrypoints own local recovery and propagate its first failure.
-//! During synchronous reentry, nested public operations relay their typed failure
-//! to the active operation before its enclosing callback is classified. A passive
-//! arena-local stack carries custody without borrowing arena state across callouts.
-//! The stack ends with the operation; later independent calls retire normally.
+//! The outermost standalone operation owns recovery and resumes its first
+//! authoritative unwind after accepted notifications and safe retirement finish.
+//! During synchronous reentry, public calls through the same arena join that
+//! active operation: they relay typed failure receipts instead of unwinding
+//! through the enclosing callback's unrelated delivery classification. The outer
+//! standalone call finishes recovery; runtime sampling consumes its owned receipt.
+//! Nested receipts are imported before an escaping enclosing callback is
+//! classified. A passive arena-local stack carries custody without borrowing arena
+//! state across callouts. It ends with the operation; later independent calls
+//! retire normally.
 //!
 //! # GestureArenaEntry Handle Pattern
 //!
@@ -241,6 +246,9 @@ pub trait GestureArenaMember {
 /// The handle is owner-affine because gesture callbacks are owner-local.
 /// Multiple calls to `resolve` are safe; stale or already-resolved entries are
 /// no-ops.
+/// Reentrant calls join the arena's surrounding recovery operation. An outermost
+/// standalone operation propagates its first authoritative unwind; runtime
+/// sampling contains it as an owned failure receipt (see the module contract).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct ArenaGeneration(u64);
 
@@ -1004,6 +1012,8 @@ pub(crate) struct DetachedArenaBatch {
 }
 
 impl GestureArena {
+    /// Own recovery outside sampling, or join an enclosing arena operation.
+    /// Nested calls relay receipts; only the outermost standalone owner resumes.
     pub(crate) fn run_owned_recovery(&self, action: impl FnOnce(&mut RecoveryScope<'_>)) {
         self.recovery.standalone(action);
     }
