@@ -191,10 +191,10 @@ fn bench_live_tick(
     );
     let previous = controller.value();
     controller.tick_at(Duration::from_secs_f64(t + FRAME));
-    assert_ne!(
-        controller.value(),
-        previous,
-        "the {variant} run must advance on the next frame"
+    let next = controller.value();
+    assert!(
+        previous.is_finite() && next.is_finite() && next != previous,
+        "the {variant} run must advance with finite values on the next frame"
     );
 }
 

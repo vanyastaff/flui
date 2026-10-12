@@ -6,9 +6,9 @@ Native assertion revision: `a73d351ce3ae9a6a0df3119d95304b0b80f09426`.
 Validation code revision: `e0961a73f8650e6e5e497a23336c3cefbf6df509`.
 Framework production-код относительно указанной базы не менялся; изменены
 assertions, benchmark validation и foreground helper инструмента проверки.
-A8–A9 завершены в указанных границах Windows/native/GPU и измеренных workloads.
-CI production-базы и локальный gate изменений — отдельные receipts;
-CI нового validation PR ожидает его публикации.
+A8 завершён в указанных границах Windows/native/GPU и измеренных workloads.
+A9 остаётся открыт до зелёного CI финальной validation revision.
+CI production-базы, локальный gate и CI каждой validation revision — отдельные receipts.
 
 ## Среда и метод
 
@@ -143,6 +143,14 @@ progress на следующем frame и interior value у curved getter. Timed
 Negative control через public `set_value(0.5)` останавливает linear run,
 сохраняя directional phase. Старый oracle завершился успешно; новый завершился
 ошибкой `the linear run must be installed`. Fault удалён перед positive controls.
+
+Дополнительный negative control подставляет `NaN` вместо результата следующего
+кадра в untimed assertion действительного linear benchmark. Старое `assert_ne!`
+принимает его (exit 0); проверка конечности обоих значений и их различия отвергает
+`NaN` и `INFINITY` (exit 101, `must advance with finite values on the next frame`).
+Это проверка benchmark oracle, не заявление о дефекте controller producer.
+Подстановки удалены; все 21 штатные smoke rows проходят с новым oracle (exit 0).
+Timed loops не менялись; этот smoke run не выдаётся за новые paired timings.
 
 Повторный полный timed run использовал усиленный fixture `771980A9…` на обеих
 сторонах: те же 30 samples / 2 s / 0.5 s, exit 0. Median ns:
@@ -297,7 +305,7 @@ Copy-Item -LiteralPath target/debug/xtask.exe -Destination target/xtask-check.ex
 ./target/xtask-check.exe check-changed --base 61ea713380a449777ffa791b61a3a01e3fd81c5a
 ```
 
-Финальный форматированный micro fixture побайтово совпадает на обеих сторонах:
+Форматированный micro fixture gate revision `e0961a73` побайтово совпадает на обеих сторонах:
 SHA-256 `3FFEE32A8EB756E372C6349D6E1BD97413AA433929AFE55598E1A90EDA6311B9`.
 От timed fixture `771980A9…` отличается только переносом одного assertion;
 timed loops и controls не менялись, timings повторно не объявляются новым прогоном.
@@ -307,6 +315,12 @@ timed loops и controls не менялись, timings повторно не о�
 [Main CI](https://github.com/vanyastaff/flui/actions/runs/38255767900) на production
 revision завершён успешно. Это receipt исходной реализации, а не будущего SHA
 изменённых тестов и документации.
+[Validation CI](https://github.com/vanyastaff/flui/actions/runs/38282787508) на
+`e7dadda5c40283e40450e7d576730c670e58f8f2` завершён успешно: checks, clippy,
+test, test-nested, test-trybuild, test-features, live-smoke, doc, deps, wasm-check,
+Windows/macOS/Android/iOS cross-typecheck и агрегатор CI. Configured skipped jobs
+не объявляются выполненными. Этот receipt не покрывает последующие изменения
+benchmark oracle; A9 ожидает CI их финальной revision.
 [Weekly](https://github.com/vanyastaff/flui/actions/runs/38253895275) на
 `f8759e33d6729434d0b2b8ffac21411c0679cc59` имеет failures в latest-deps,
 release-clippy и CLI live-web; он не объявляется зелёным по результату main CI.
