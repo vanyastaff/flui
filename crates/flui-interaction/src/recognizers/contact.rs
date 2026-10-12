@@ -64,7 +64,7 @@ impl ArenaMembership {
         pointer: PointerId,
     ) -> Option<GestureDeadlineRegistration> {
         let member = self.this.upgrade()?;
-        Some(self.arena.register_deadline_member(pointer, &member))
+        self.arena.register_deadline_member(pointer, &member).ok()
     }
 }
 
@@ -250,6 +250,7 @@ impl PrimaryContact {
     /// Bow out without cancelling the remaining competition.
     pub fn withdraw(&self) -> Option<ContactSnapshot> {
         let outgoing = self.current.borrow_mut().take()?;
+        outgoing._deadline_registration.withdraw();
         outgoing.entry.reject_without_self();
         tracing::debug!(name: "recognizer.reject", pointer = ?outgoing.snapshot.pointer,
             event = %crate::observability::GestureEvent::ArenaRejected,
@@ -260,6 +261,9 @@ impl PrimaryContact {
     /// Complete pointer-up tracking, sweeping only in a self-driven arena.
     pub fn finish(&self) -> Option<ContactSnapshot> {
         let snapshot = self.current()?;
+        if let Some(contact) = self.current.borrow().as_ref() {
+            contact._deadline_registration.withdraw();
+        }
         let entry = self.entry();
         let failure = RoutePanic::capture(|| {
             if self.membership.arena.sweep_model() == SweepModel::SelfDriven
@@ -292,6 +296,17 @@ impl PrimaryContact {
     /// Arm from the owner clock, refusing overflow or a reentrant contact change.
     pub fn arm_deadline(&self, after: Duration) -> Option<Instant> {
         let id = self.current()?.id;
+        let deadline = self.arm_deadline_unpublished(after);
+        if self.publish_deadline(id) {
+            deadline
+        } else {
+            None
+        }
+    }
+
+    /// Used when a recognizer must commit its matching phase before publication.
+    pub(crate) fn arm_deadline_unpublished(&self, after: Duration) -> Option<Instant> {
+        let id = self.current()?.id;
         let deadline = self.membership.now().checked_add(after);
         let mut current = self.current.borrow_mut();
         let contact = current
@@ -301,10 +316,46 @@ impl PrimaryContact {
         deadline
     }
 
+    pub(crate) fn publish_deadline(&self, id: ContactId) -> bool {
+        let publication = self
+            .current
+            .borrow()
+            .as_ref()
+            .filter(|contact| contact.snapshot.id == id)
+            .map(|contact| {
+                (
+                    contact._deadline_registration.update_handle(),
+                    contact.deadline,
+                )
+            });
+        if let Some((update, deadline)) = publication {
+            if update.publish(deadline).is_ok() {
+                return self.is_current(id);
+            }
+            let mut current = self.current.borrow_mut();
+            if let Some(contact) = current.as_mut().filter(|contact| contact.snapshot.id == id) {
+                contact.deadline = None;
+                contact._deadline_registration.withdraw();
+            }
+        }
+        false
+    }
+
     /// Disarm this contact's deadline.
     pub fn disarm_deadline(&self) {
-        if let Some(contact) = self.current.borrow_mut().as_mut() {
-            contact.deadline = None;
+        let publication = {
+            let mut current = self.current.borrow_mut();
+            current.as_mut().map(|contact| {
+                contact.deadline = None;
+                contact._deadline_registration.update_handle()
+            })
+        };
+        if let Some(update) = publication {
+            if update.publish(None).is_err() {
+                if let Some(contact) = self.current.borrow().as_ref() {
+                    contact._deadline_registration.withdraw();
+                }
+            }
         }
     }
 
@@ -342,6 +393,7 @@ impl PrimaryContact {
 
     pub(crate) fn cancel(&self) -> Option<ContactSnapshot> {
         let outgoing = self.current.borrow_mut().take()?;
+        outgoing._deadline_registration.withdraw();
         withdraw_cancelled(&outgoing.entry, &self.membership.arena);
         Some(outgoing.snapshot)
     }
