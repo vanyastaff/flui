@@ -136,6 +136,26 @@ fn accepts(presentation: &PresentationState, saved: &SavedTextSegment) -> bool {
             .with_build_owner(|owner| owner.accepts_build_premise(&saved.build))
 }
 
+/// A late observer can admit new input after retained compatibility was checked.
+/// Observe it without draining queues or invoking another observer in this turn.
+pub(crate) fn retained_needs_reconciliation(
+    presentation: &PresentationState,
+    constraints: BoxConstraints,
+) -> bool {
+    presentation
+        .text_preparation
+        .borrow()
+        .segment
+        .as_ref()
+        .is_some_and(|saved| {
+            saved.constraints != constraints
+                || !accepts(presentation, saved)
+                || presentation
+                    .pipeline()
+                    .with(PipelineOwner::has_pending_invalidations)
+        })
+}
+
 /// Withdraw an obsolete retained attempt and report that its sampled premises
 /// can no longer be used. A caller after the pre-phase defers to a fresh sample.
 pub(crate) fn reconcile_with_recovery(

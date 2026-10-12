@@ -300,6 +300,30 @@ impl<'runtime> PresentationSampling<'runtime> {
                     internal_invariant,
                 },
             );
+            if !changed
+                && text_preparation::retained_needs_reconciliation(presentation, constraints)
+            {
+                // This observer admitted new retained inputs. Withdraw before
+                // publication, without recursively preparing or reporting.
+                let mut after_report = PresentationSampling::new(presentation);
+                after_report.recovery.inherit_failure();
+                after_report.run(SamplingStage::Preparation, |scope| {
+                    text_preparation::withdraw_for_retry(presentation, scope);
+                });
+                after_report.run(SamplingStage::Preparation, |_| {
+                    presentation.advance_tree_revision();
+                    presentation.clock().mark_demand(DemandKind::Dirty);
+                    if self.completion_entered {
+                        presentation.suspend_completion_segment();
+                    }
+                });
+                self.admission = Admission::None;
+                self.completion_entered = false;
+                changed = true;
+                if let Some(kind) = after_report.take_failure_kind(runtime) {
+                    runtime.queue_sampling_failure(presentation, kind);
+                }
+            }
         }
         if changed {
             self.admission = Admission::None;
