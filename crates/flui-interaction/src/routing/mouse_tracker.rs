@@ -661,7 +661,8 @@ impl MouseTracker {
             // sweep just exited. Its next real motion re-primes it.
             .filter(|(_, state)| state.inside_window)
             .map(|(id, state)| {
-                (*id, state.pointer, state.last_position, Rc::clone(&state.observation))
+                let observation = Rc::clone(&state.observation);
+                (*id, state.pointer, state.last_position, observation)
             })
             .collect();
 
@@ -815,8 +816,7 @@ impl MouseTracker {
             .borrow()
             .devices
             .get(&SourceKey::KnownDevice(device_id))
-            .map(|state| state.active_regions.clone())
-            .unwrap_or_default()
+            .map_or_default(|state| state.active_regions.clone())
     }
 
     /// Gets the current cursor for a device.

@@ -413,8 +413,7 @@ fn resolve_logical_render_root(host: &WidgetHost, logical_root_type: TypeId) -> 
         // deeper leaf.
         let mut queue: Vec<_> = tree
             .get(logical_root_id)
-            .map(|node| node.child_ids().to_vec())
-            .unwrap_or_default();
+            .map_or_default(|node| node.child_ids().to_vec());
         let mut index = 0;
         while index < queue.len() {
             let id = queue[index];
@@ -1378,9 +1377,7 @@ impl LaidOut {
     /// layers are there from [`lay_out`] on; a later frame over a tree with
     /// nothing dirty composites nothing new, and the last scene stands.
     pub fn layer_kinds(&self) -> Vec<&'static str> {
-        self.layer_tree()
-            .map(inspect::layer_structure)
-            .unwrap_or_default()
+        self.layer_tree().map_or_default(inspect::layer_structure)
     }
 
     /// The transform matrix of every `Layer::Transform` in the most recent
@@ -1388,17 +1385,14 @@ impl LaidOut {
     /// [`layer_kinds`](Self::layer_kinds).
     pub fn transform_layer_matrices(&self) -> Vec<Matrix4> {
         self.layer_tree()
-            .map(inspect::transform_matrices)
-            .unwrap_or_default()
+            .map_or_default(inspect::transform_matrices)
     }
 
     /// The rounded rectangle of every `Layer::ClipRRect` in the most recent
     /// pumped frame's layer tree, in the same depth-first pre-order as
     /// [`layer_kinds`](Self::layer_kinds).
     pub fn clip_rrect_layers(&self) -> Vec<RRect> {
-        self.layer_tree()
-            .map(inspect::clip_rrects)
-            .unwrap_or_default()
+        self.layer_tree().map_or_default(inspect::clip_rrects)
     }
 
     /// The unique render node whose short type name equals `render_type_name`.

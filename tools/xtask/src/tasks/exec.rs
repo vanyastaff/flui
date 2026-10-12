@@ -318,7 +318,7 @@ pub(super) fn installed_targets() -> BTreeSet<String> {
         .output()
         .ok()
         .filter(|out| out.status.success())
-        .map(|out| {
+        .map_or_default(|out| {
             String::from_utf8_lossy(&out.stdout)
                 .lines()
                 .map(str::trim)
@@ -326,7 +326,6 @@ pub(super) fn installed_targets() -> BTreeSet<String> {
                 .map(str::to_owned)
                 .collect()
         })
-        .unwrap_or_default()
 }
 
 /// The workspace's target directory as cargo resolves it: `CARGO_TARGET_DIR`

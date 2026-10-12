@@ -229,8 +229,7 @@ pub(crate) fn list() -> CliResult<()> {
     // Try to load project config for status indicators.
     let configured = FluiConfig::load()
         .ok()
-        .map(|c| c.build.target_platforms)
-        .unwrap_or_default();
+        .map_or_default(|c| c.build.target_platforms);
 
     let platform_info: &[(&str, &str)] = &[
         ("android", "Mobile"),

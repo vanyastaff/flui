@@ -363,7 +363,7 @@ fn async_section_builder(attempt: StateCell<u32>) -> SnapshotBuilder<String, Str
                     ])
                     .boxed()
                 }
-                None => Text::new(snapshot.data().map(String::as_str).unwrap_or_default()).boxed(),
+                None => Text::new(snapshot.data().map_or_default(String::as_str)).boxed(),
             },
         }
     })

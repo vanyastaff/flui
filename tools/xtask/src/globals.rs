@@ -398,13 +398,12 @@ fn check(source: &dyn Source, crates: &[Krate], adrs: &BTreeSet<String>) -> anyh
             let moved = stale
                 .iter()
                 .find(|entry| entry.item.rsplit("::").next() == Some(name))
-                .map(|entry| {
+                .map_or_default(|entry| {
                     format!(
                         " (the stale entry `{}` is probably its old key)",
                         entry.item
                     )
-                })
-                .unwrap_or_default();
+                });
             report.problems.push(problem(
                 file,
                 item,

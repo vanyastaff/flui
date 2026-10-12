@@ -309,9 +309,8 @@ pub(crate) fn layered_chain(
     enclosing: Option<ActionChain>,
     own: &[(TypeId, ErasedAction)],
 ) -> ActionChain {
-    let mut chain: HashMap<TypeId, ErasedAction> = enclosing
-        .map(|enclosing| (*enclosing).clone())
-        .unwrap_or_default();
+    let mut chain: HashMap<TypeId, ErasedAction> =
+        enclosing.map_or_default(|enclosing| (*enclosing).clone());
     for (type_id, action) in own {
         chain.insert(*type_id, action.clone());
     }

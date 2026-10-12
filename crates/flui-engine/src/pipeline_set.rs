@@ -1,12 +1,12 @@
 //! Device-scoped pipeline collection for `WgpuPainter`.
 //!
-//! [`PipelineSet`](crate::pipeline_set::PipelineSet) is the single owner
+//! [`crate::pipeline_set::PipelineSet`] is the single owner
 //! of the named instanced/shadow `wgpu::RenderPipeline`s that were previously
 //! held as separate fields on `WgpuPainter`, plus the two on-demand caches
 //! composed as sub-fields: the shape-pipeline cache
-//! ([`PipelineCache`](crate::pipeline_cache::PipelineCache)) and the
+//! ([`crate::pipeline_cache::PipelineCache`]) and the
 //! gradient cache
-//! ([`GradientPipelines`](crate::effects_pipeline::GradientPipelines)).
+//! ([`crate::effects_pipeline::GradientPipelines`]).
 //!
 //! | Previous painter field                   | Location in `PipelineSet`               |
 //! |------------------------------------------|-----------------------------------------|
@@ -29,7 +29,7 @@
 //! colliding `PipelineCache` + `PipelineBuilder` pair with zero
 //! non-self consumers. **This file is not a resurrection of that module.** It
 //! introduces a distinct type (`PipelineSet`) that *composes* the live
-//! [`PipelineCache`](crate::pipeline_cache::PipelineCache) from
+//! [`crate::pipeline_cache::PipelineCache`] from
 //! `pipeline_cache.rs` and adds the named
 //! pipelines previously scattered across painter fields.
 //!
@@ -38,7 +38,7 @@
 //! wgpu requires that a `BindGroup` and every `RenderPipeline` it is bound to
 //! share the **exact same** `BindGroupLayout` object (identity, not structural
 //! equality). The layout is owned by
-//! [`PipelineCache`](crate::pipeline_cache::PipelineCache) and exposed via
+//! [`crate::pipeline_cache::PipelineCache`] and exposed via
 //! [`PipelineSet::viewport_bind_group_layout`](crate::pipeline_set::PipelineSet::viewport_bind_group_layout),
 //! which delegates to
 //! [`PipelineCache::viewport_bind_group_layout`](crate::pipeline_cache::PipelineCache::viewport_bind_group_layout).

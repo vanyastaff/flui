@@ -969,14 +969,11 @@ impl Renderer {
     /// renders directly into the swapchain surface — no allocation, no blit.
     #[must_use]
     fn uses_intermediate_texture(&self) -> bool {
-        if !self.supports_copy_src {
-            return true;
-        }
         #[cfg(test)]
         if self.force_intermediate {
             return true;
         }
-        false
+        !self.supports_copy_src
     }
 
     /// Force the intermediate-texture present path on for this renderer

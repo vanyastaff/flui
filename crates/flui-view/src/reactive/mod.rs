@@ -501,8 +501,7 @@ impl Reactive {
         inner.previous_reads = inner
             .element_reads
             .get(&element)
-            .map(Membership::snapshot)
-            .unwrap_or_default();
+            .map_or_default(Membership::snapshot);
         Self::forget_element_reads(&mut inner, element);
         inner.building = Some(element);
     }
