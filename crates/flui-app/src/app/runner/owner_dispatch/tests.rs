@@ -153,19 +153,36 @@ fn native_identity_is_observed_before_registry_publication() {
 /// Run the actual Web initialization submission against a real headless window.
 /// GPU/platform-loop construction is excluded: the observation and addressed
 /// publication path is the same one called by `bootstrap_web`.
+#[cfg(not(target_os = "ios"))]
 fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
     use flui_platform_api::WindowExecutionState;
     use flui_runtime::ui_runtime::RuntimeHostServices;
     use std::sync::atomic::AtomicBool;
 
+    #[derive(Clone, Copy, Debug)]
+    enum NativeChange {
+        InitiallyUnfocused,
+        FocusLost,
+        Hidden,
+        Suspended,
+        Unchanged,
+    }
     for (case, change, expected) in [
-        ("focus lost during mount", 0, AppLifecycleState::Inactive),
-        ("visibility lost during mount", 1, AppLifecycleState::Hidden),
-        ("execution suspended during mount", 2, AppLifecycleState::Paused),
-        ("unchanged focused window", 3, AppLifecycleState::Resumed),
+        ("initially unfocused window", NativeChange::InitiallyUnfocused, AppLifecycleState::Inactive),
+        ("focus lost during mount", NativeChange::FocusLost, AppLifecycleState::Inactive),
+        ("visibility lost during mount", NativeChange::Hidden, AppLifecycleState::Hidden),
+        ("execution suspended during mount", NativeChange::Suspended, AppLifecycleState::Paused),
+        ("unchanged focused window", NativeChange::Unchanged, AppLifecycleState::Resumed),
     ] {
         let _clear = OwnerHostClearGuard::arm();
         let window = crate::app::window_test_support::headless_test_window();
+        let native = window
+            .as_any()
+            .downcast_ref::<flui_platform::MockWindow>()
+            .expect("headless window");
+        if matches!(change, NativeChange::InitiallyUnfocused) {
+            native.simulate_focus(false);
+        }
         let runtime = crate::app::ui_runtime::UiRuntime::new(
             Arc::clone(&window),
             1.0,
@@ -181,17 +198,13 @@ fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
         runtime
             .attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0))
             .expect("mount before startup observers");
-        let native = window
-            .as_any()
-            .downcast_ref::<flui_platform::MockWindow>()
-            .expect("headless window");
         // Construction sampled the old native state. These observations arrive
         // before the application's subscriptions and therefore have no callback.
         match change {
-            0 => native.simulate_focus(false),
-            1 => native.simulate_visibility(false),
-            2 => native.simulate_execution_state(WindowExecutionState::Suspended),
-            _ => {}
+            NativeChange::FocusLost => native.simulate_focus(false),
+            NativeChange::Hidden => native.simulate_visibility(false),
+            NativeChange::Suspended => native.simulate_execution_state(WindowExecutionState::Suspended),
+            NativeChange::InitiallyUnfocused | NativeChange::Unchanged => {}
         }
         let mut installation = prepare_replacement_ui_runtime(runtime, Arc::clone(&window));
         let dispatcher = installation.dispatcher();
@@ -213,7 +226,7 @@ fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
             expected,
             "{case}: startup adopts native state after observers are installed"
         );
-        if change == 0 {
+        if matches!(change, NativeChange::InitiallyUnfocused | NativeChange::FocusLost) {
             assert!(observe_runtime(dispatcher, |runtime| runtime.scheduler().frames_enabled()),
                 "an unfocused visible running canvas remains eligible for rendering");
             native.simulate_focus(true);
@@ -2321,6 +2334,7 @@ fn owner_dispatch_matrix() {
     crate::table_test::run_table(
         "owner_dispatch_matrix",
         &[
+            #[cfg(not(target_os = "ios"))]
             (
                 "web_startup_samples_native_changes_after_mount_and_observer_registration",
                 web_startup_samples_native_changes_after_mount_and_observer_registration as fn(),

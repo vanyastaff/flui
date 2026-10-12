@@ -281,8 +281,9 @@ the dispatch layer moves there too.
 
 ### Lifecycle observations are typed and lossless
 
-Desktop primary and secondary windows and UIKit submit their initial execution,
-focus and visibility as one `WindowSnapshot` event after registering callbacks.
+Desktop primary and secondary windows, UIKit and Web submit their initial
+execution, focus and visibility as one `WindowObservation::Snapshot` after
+registering callbacks.
 The queue entry supplies its exact presentation incarnation; the payload cannot
 capture a different target. Android host lifecycle callbacks use runtime-scoped
 `RuntimeDispatcher::lifecycle`. These paths carry closed operations.
@@ -295,8 +296,20 @@ only the latest value, is not a replacement for this part of the queue.
 Existing `VecDeque` storage and incarnation/close admission remain sufficient;
 no new channel or scheduling abstraction is needed for these events.
 
-**Unasserted:** no test pins this. This preserves the existing lifecycle
-behavior.
+`web_startup_samples_native_changes_after_mount_and_observer_registration`
+exercises the actual Web initialization submission through the owner-install
+harness: native focus, visibility or execution changed during mounting reaches
+the addressed owner instead of retaining its constructor observation. An
+unfocused, visible running window remains eligible for rendering, and focus
+restoration reaches the same owner. This headless test does not execute GPU
+construction or browser document/system focus transitions.
+
+The public runtime owner test
+`mounted_shortcut_recovers_after_native_focus_loss_without_replay` retains the
+mounted `Focus` target through native loss and restoration. A missing foreign
+release creates no synthetic key or replay: the next owned press runs the
+`Shortcuts` action once. DOM admission remains the Web producer's responsibility,
+independent of the runtime's retained logical primary focus.
 
 This narrows the arbitrary-operation surface but does not complete ADR-0083's
 closed owner vocabulary or bound lossless queue memory. Backend frame pumps still

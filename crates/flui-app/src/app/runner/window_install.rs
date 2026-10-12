@@ -239,11 +239,16 @@ impl WindowInstall {
             size: window.logical_size(),
             scale_factor: window.scale_factor(),
         };
+        let snapshot = WindowObservation::Snapshot {
+            execution: window.execution_state(),
+            focused: window.is_focused(),
+            visible: window.is_visible(),
+        };
+        self.observe(snapshot);
         self.observe(metrics);
-        self.initial.lifecycle = Some(flui_scheduler::AppLifecycleState::Resumed);
     }
 
-    #[cfg(not(target_os = "ios"))]
+    #[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
     pub(super) fn lifecycle(&mut self, lifecycle: flui_scheduler::AppLifecycleState) {
         self.initial.lifecycle = Some(lifecycle);
     }

@@ -170,10 +170,9 @@ where
             );
         }));
 
-        // 7. Store the window in AppRuntime's redraw-poke slot — BEFORE
-        // marking the lifecycle Resumed, which can synchronously run the
-        // first frame through `dispatch_platform_ui_runtime`; anything resolving
-        // the slot during that frame must not see it empty.
+        // 7. Sample the native snapshot after wiring observers, then store the
+        // window before submitting initialization: lifecycle reconciliation can
+        // synchronously request the first frame through the owner dispatcher.
         installation.observe_initial_web_window();
         APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(window));
 
@@ -182,7 +181,7 @@ where
             owner_dispatch.owner_thread,
             "web bootstrap must run on the ui_runtime's owner thread"
         );
-        // Routed through dispatch -- see `run_desktop`'s matching comment.
+        // The addressed snapshot reaches the owner alongside initial metrics.
         installation
             .submit()
             .outcome()
