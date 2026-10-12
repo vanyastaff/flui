@@ -155,15 +155,22 @@ impl WebPlatform {
             // Dispatch frame request to window callbacks
             if let Some(ref cbs) = callbacks {
                 cbs.dispatch_request_frame();
+                // The frame callback can close and reopen the canvas. An old
+                // frame receipt cannot produce a redraw for the newer slot.
+                let current = state
+                    .lock()
+                    .window_callbacks
+                    .as_ref()
+                    .is_some_and(|current| Arc::ptr_eq(current, cbs));
+                if current {
+                    Self::dispatch_window_event(
+                        &state,
+                        WindowEvent::RedrawRequested {
+                            window_id: WindowId(0),
+                        },
+                    );
+                }
             }
-
-            // Also fire RedrawRequested through platform handlers
-            Self::dispatch_window_event(
-                &state,
-                WindowEvent::RedrawRequested {
-                    window_id: WindowId(0),
-                },
-            );
 
             // Request next frame after work (ensures smooth loop)
             if let Some(w) = web_sys::window() {
@@ -296,11 +303,25 @@ impl Platform for WebPlatform {
             options.size.height,
         )?;
 
-        // Register DOM event listeners on the canvas
-        super::events::register_event_listeners(&window);
-
         // Store window callbacks in state so the RAF loop can dispatch frames
         let callbacks = window.callbacks().clone();
+        let retiring = Arc::clone(&callbacks);
+        let state = Arc::downgrade(&self.state);
+        window.install(move || {
+            let removed = state.upgrade().and_then(|state| {
+                let mut state = state.lock();
+                if state
+                    .window_callbacks
+                    .as_ref()
+                    .is_some_and(|current| Arc::ptr_eq(current, &retiring))
+                {
+                    state.window_callbacks.take()
+                } else {
+                    None
+                }
+            });
+            drop(removed);
+        })?;
         self.with_state(|s| {
             s.window_callbacks = Some(callbacks);
         });
@@ -312,7 +333,11 @@ impl Platform for WebPlatform {
     }
 
     fn active_window(&self) -> Option<WindowId> {
-        Some(WindowId(0))
+        self.state
+            .lock()
+            .window_callbacks
+            .as_ref()
+            .map(|_| WindowId(0))
     }
 
     fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>> {

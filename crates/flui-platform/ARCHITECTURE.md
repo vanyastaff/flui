@@ -52,6 +52,70 @@ trait depends on `flui-platform-api` instead.
 
 ## Mapping decisions
 
+### Web subscriptions belong to one actual canvas registration
+
+The canvas owns an exact DOM-object registration claim. Another live owner of
+that same node is refused before modifying its layout or title; identifiers
+and labels are not ownership. Keyboard listeners on the canvas require both
+that source target and effective document/root focus before reading key data.
+The existing dispatch result independently controls ancestor propagation and
+cancelable defaults. A moved canvas retains ownership inside open or closed
+shadow DOM; unrelated host inputs remain outside it.
+
+Each private immutable Fn token owns its body and exact removal identity. JS
+wrappers hold weak body references. Close fences delivery before detaching all
+subscriptions and disconnecting the resize observer, and preserves admitted
+callback/close order through the existing window FIFO. Final owner Drop uses
+the same idempotent retirement. A refused detach transfers only its inert
+weak wrapper to wasm-bindgen's managed JS lifetime; application captures still
+retire. Normal removal drops the token without page-lifetime retention.
+Installation rolls back its prefix before Created. ResizeObserver absence uses
+the explicit window-resize fallback; failure of that mandatory fallback refuses
+opening. The platform frame slot retires by callback-set identity, so stale
+owners cannot erase replacements or publish redraws.
+
+Web visibility follows the canvas document's `hidden` value, independently of
+focus and CSS layout visibility. Construction samples it; an owned mandatory
+Document `visibilitychange` listener updates it. Successful registration
+reconciles both focus and visibility before Created, including source changes
+during earlier listener installation.
+
+Native focus and visibility observations carry their cache commit in the existing FIFO. A
+queued callback therefore observes its own delivered value through getters,
+even when input or focus callbacks synchronously trigger opposing transitions.
+Accepted native focus and visibility observations also finish their commits and notifications
+after a dispatch unwind. Recovery retains the same FIFO so a reentrant
+observation follows the already accepted tail; ordinary aborted events are
+discarded. `the_owner_thread_machinery_honours_its_contracts` pins single,
+opposing and reentrant observations, a competing notification panic and the
+next healthy observation through the private backend commit seam.
+
+Native pointer capture custody is published on the exact canvas claim, apart
+from its Rust buttons cache. A live body rechecks its admission after DOM
+getters, translation and native capture calls. A host call that closes before
+actually capturing cannot leave an outgoing capture behind. Outgoing release
+checks whether a different current claim admitted that same pointer and does
+not release the newer owner's capture. Retirement removes all of its native
+admissions before the first release, which itself may reenter the host.
+Terminal close, clear and retirement notices finish after an admitted callback unwinds;
+ordinary nested events from the aborted transaction remain discarded. The
+portable `panics_in_callbacks_and_tasks_leave_the_dispatcher_usable` family
+pins capture release, the original failure, a competing retirement failure and
+a subsequent healthy owner. Terminal close preserves the application's actual
+cancellation hook before clearing captures; ordinary aborted events are not
+replayed. An opaque FnOnce environment that double-panics during invocation
+before reaching the containment boundary cannot be rescued. These checks do
+not establish wasm panic-abort recovery.
+
+The `browser_input_probe` canvas-ownership control and existing vocabulary,
+pointer/wheel and getter-reentry controls exercise real registered DOM delivery
+through retained public handles. Their README gives execution instructions;
+browser compilation alone does not prove these manual contracts. Headless
+source-focus controls are distinct from real system/page focus transitions.
+The document-visibility control supplies a controlled `Document.hidden`
+source rather than claiming a real background-tab transition. Constructor
+events do not establish physical keyboard layouts or OS IME.
+
 ### Native text sizing captures conversion inputs on the owner lane
 
 `HostWindow` and `OwnerPlatform` acquire an owner-local `CapturedTextSizing`;
