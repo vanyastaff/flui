@@ -243,19 +243,21 @@ for text and numeric `set_value`; `set_value_follows_the_value_pattern_precedenc
 `a_numeric_range_is_writable_only_through_the_handler_a_write_reaches`
 in `accesskit_translation.rs` for range writability.
 
-### 6. Every explicit role maps to an AccessKit role; `DragHandle` and `HotKey` stay generic
+### 6. Every role maps to its own AccessKit role
 
-**Rule.** `explicit_role` gives every `SemanticsRole` except `None` an AccessKit role.
-`DragHandle` and `HotKey`, which AccessKit has no counterpart for, become
-`GenericContainer` rather than a role that would mislead a screen reader.
+**Rule.** [ADR-0203](../../docs/adr/ADR-0203-semantics-vocabulary.md): `SemanticsRole` holds
+every non-abstract WAI-ARIA 1.2 role with an AccessKit counterpart, the editable-text kinds
+and the desktop roles, and admits nothing else; `explicit_role` gives each, except `None`, an
+AccessKit role of its own. ARIA's `separator` is AccessKit's `Splitter`, as in Chromium; an
+indeterminate progress bar is a `ProgressBar` without a value.
 
 **Why.** `SemanticsRole` lives in `flui-protocol` and is `#[non_exhaustive]`, so the match in
 this crate ends in a wildcard and the compiler no longer catches a forgotten arm. A role
-without an arm would silently publish as a label or a generic container.
+without an arm would silently publish as a label or a generic container, and two roles
+sharing one AccessKit role would be indistinguishable to every assistive technology.
 
-**Test.** `roles_and_checkbox_states_translate_to_accesskit` walks `SemanticsRole::ALL`, and
-asserts that exactly `DragHandle` and `HotKey` map to `GenericContainer`; deleting the
-`Form` arm makes it fail with `form maps to no AccessKit role`.
+**Test.** `every_role_maps_to_accesskit` walks `SemanticsRole::ALL`: deleting the `Form` arm
+makes it fail with `form maps to no AccessKit role`.
 
 ### Relations resolve through anchors at publication
 
@@ -326,12 +328,12 @@ static text is named by its value, and the actions follow UI Automation's patter
 password field's value is never read. `wire_role` folds each AccessKit role to the wire role
 the desktop server reads for it on Windows: the control type `accesskit_windows` 0.35 gives it,
 through the desktop server's control-type table, with its ARIA restorations (cells, rows,
-headers, a switch) and its `IsPassword`/`IsDialog` refinements. `native_role` keeps the AccessKit
+headers, a switch, a heading) and its `IsPassword`/`IsDialog` refinements. `native_role` keeps the AccessKit
 name. `resolve_wire_action` refuses an action the node does not advertise *now*, so `expand` on
 an expanded node is `action_unsupported`.
 
 **Why.** One derivation for both backends: the desktop server reads the same AccessKit node
-through UI Automation, so a second cascade over FLUI's flags would drift from what the OS
+through UI Automation, so a second derivation from FLUI's roles would drift from what the OS
 reports. The fold targets UIA rather than AccessKit's full role set because the wire
 vocabulary is the desktop server's, and ADR-0095 §4 compares the two backends after
 normalization. The direction check reads the last committed tree, which lags the request as
@@ -344,8 +346,8 @@ knows no window position, and a client that reads `rect` as screen pixels must f
 than a misplaced one. `AlertDialog` and `Dialog` read as `dialog` (UIA's `Window` with `IsDialog`),
 and a `Keyboard` key or `TabPanel` as `pane`, as the desktop server would report them.
 
-**Test.** `src/agent/tests.rs`: `every_role_but_the_documented_ones_reads_as_a_wire_role`
-(ADR-0095 "Mapping pinned"; `none`, `drag_handle` and `hot_key` are the documented exceptions),
+**Test.** `src/agent/tests.rs`: `every_role_but_none_reads_as_a_wire_role`
+(ADR-0095 "Mapping pinned"; `none` is the documented exception),
 `every_interactive_role_reads_as_the_role_uia_reports`,
 `wire_role_matches_the_windows_adapter_for_every_role_flui_publishes` (transcribed from the
 adapter and desktop sources, and checked to cover every role FLUI publishes),

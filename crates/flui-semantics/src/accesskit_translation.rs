@@ -91,54 +91,95 @@ fn explicit_role(role: SemanticsRole) -> Option<Role> {
         SemanticsRole::Switch => Role::Switch,
         SemanticsRole::Link => Role::Link,
         SemanticsRole::Slider => Role::Slider,
-        SemanticsRole::Image => Role::Image,
-        // A heading, not AccessKit's `Header`: that is HTML's `<header>`
-        // landmark, which `accesskit_windows` 0.35 reports as a `Group` with
-        // the `banner` landmark type, so a title published as one never
-        // reached heading navigation.
-        SemanticsRole::Heading => Role::Heading,
+        SemanticsRole::SpinButton => Role::SpinButton,
+        SemanticsRole::ComboBox => Role::ComboBox,
+        SemanticsRole::ScrollBar => Role::ScrollBar,
+        // ARIA's separator is AccessKit's splitter, as in Chromium.
+        SemanticsRole::Separator => Role::Splitter,
         SemanticsRole::TextInput => Role::TextInput,
         SemanticsRole::MultilineTextInput => Role::MultilineTextInput,
         SemanticsRole::PasswordInput => Role::PasswordInput,
-        SemanticsRole::ScrollView => Role::ScrollView,
-        SemanticsRole::AlertDialog => Role::AlertDialog,
-        SemanticsRole::Dialog => Role::Dialog,
-        SemanticsRole::Tab => Role::Tab,
-        SemanticsRole::TabBar => Role::TabList,
-        SemanticsRole::TabPanel => Role::TabPanel,
-        SemanticsRole::Table => Role::Table,
-        SemanticsRole::Cell => Role::Cell,
-        SemanticsRole::Row => Role::Row,
-        SemanticsRole::ColumnHeader => Role::ColumnHeader,
+        SemanticsRole::SearchInput => Role::SearchInput,
+        SemanticsRole::EmailInput => Role::EmailInput,
+        SemanticsRole::NumberInput => Role::NumberInput,
+        SemanticsRole::PhoneNumberInput => Role::PhoneNumberInput,
+        SemanticsRole::UrlInput => Role::UrlInput,
+        SemanticsRole::DateInput => Role::DateInput,
+        SemanticsRole::TimeInput => Role::TimeInput,
+        SemanticsRole::ListBox => Role::ListBox,
+        SemanticsRole::ListBoxOption => Role::ListBoxOption,
         SemanticsRole::RadioGroup => Role::RadioGroup,
         SemanticsRole::Menu => Role::Menu,
         SemanticsRole::MenuBar => Role::MenuBar,
         SemanticsRole::MenuItem => Role::MenuItem,
         SemanticsRole::MenuItemCheckbox => Role::MenuItemCheckBox,
         SemanticsRole::MenuItemRadio => Role::MenuItemRadio,
-        SemanticsRole::Alert => Role::Alert,
-        SemanticsRole::Status => Role::Status,
+        SemanticsRole::Tab => Role::Tab,
+        SemanticsRole::TabList => Role::TabList,
+        SemanticsRole::TabPanel => Role::TabPanel,
+        SemanticsRole::Tree => Role::Tree,
+        SemanticsRole::TreeItem => Role::TreeItem,
+        SemanticsRole::TreeGrid => Role::TreeGrid,
+        SemanticsRole::Grid => Role::Grid,
+        SemanticsRole::GridCell => Role::GridCell,
+        SemanticsRole::Toolbar => Role::Toolbar,
+        SemanticsRole::Table => Role::Table,
+        SemanticsRole::Row => Role::Row,
+        SemanticsRole::RowGroup => Role::RowGroup,
+        SemanticsRole::Cell => Role::Cell,
+        SemanticsRole::ColumnHeader => Role::ColumnHeader,
+        SemanticsRole::RowHeader => Role::RowHeader,
         SemanticsRole::List => Role::List,
         SemanticsRole::ListItem => Role::ListItem,
-        SemanticsRole::Complementary => Role::Complementary,
-        SemanticsRole::ContentInfo => Role::ContentInfo,
+        // A heading, not AccessKit's `Header`: that is HTML's `<header>`
+        // landmark, which `accesskit_windows` 0.35 reports as a `Group` with
+        // the `banner` landmark type, so a title published as one never
+        // reached heading navigation.
+        SemanticsRole::Heading => Role::Heading,
+        SemanticsRole::Paragraph => Role::Paragraph,
+        SemanticsRole::Image => Role::Image,
+        SemanticsRole::Figure => Role::Figure,
+        SemanticsRole::Caption => Role::Caption,
+        SemanticsRole::Article => Role::Article,
+        SemanticsRole::Feed => Role::Feed,
+        SemanticsRole::Group => Role::Group,
+        SemanticsRole::Note => Role::Note,
+        SemanticsRole::Blockquote => Role::Blockquote,
+        SemanticsRole::Code => Role::Code,
+        SemanticsRole::Emphasis => Role::Emphasis,
+        SemanticsRole::Strong => Role::Strong,
+        SemanticsRole::Insertion => Role::ContentInsertion,
+        SemanticsRole::Deletion => Role::ContentDeletion,
+        SemanticsRole::Term => Role::Term,
+        SemanticsRole::Definition => Role::Definition,
+        SemanticsRole::Time => Role::Time,
+        SemanticsRole::Math => Role::Math,
+        SemanticsRole::Meter => Role::Meter,
+        SemanticsRole::ProgressBar => Role::ProgressIndicator,
+        SemanticsRole::Tooltip => Role::Tooltip,
+        SemanticsRole::Document => Role::Document,
+        SemanticsRole::Application => Role::Application,
+        SemanticsRole::Banner => Role::Banner,
         SemanticsRole::Main => Role::Main,
         SemanticsRole::Navigation => Role::Navigation,
-        SemanticsRole::Region => Role::Region,
+        SemanticsRole::Complementary => Role::Complementary,
+        SemanticsRole::ContentInfo => Role::ContentInfo,
+        SemanticsRole::Search => Role::Search,
         SemanticsRole::Form => Role::Form,
-        SemanticsRole::SpinButton => Role::SpinButton,
-        SemanticsRole::ComboBox => Role::ComboBox,
-        SemanticsRole::Tooltip => Role::Tooltip,
-        // AccessKit models both as a progress indicator; it draws no
-        // determinate/indeterminate distinction at the role level.
-        SemanticsRole::LoadingSpinner | SemanticsRole::ProgressBar => Role::ProgressIndicator,
-        // No AccessKit counterpart. Deliberately generic rather than
-        // approximated into a role that would mislead a screen reader about
-        // what the control does.
-        SemanticsRole::DragHandle | SemanticsRole::HotKey => Role::GenericContainer,
+        SemanticsRole::Region => Role::Region,
+        SemanticsRole::Alert => Role::Alert,
+        SemanticsRole::Status => Role::Status,
+        SemanticsRole::Log => Role::Log,
+        SemanticsRole::Marquee => Role::Marquee,
+        SemanticsRole::Timer => Role::Timer,
+        SemanticsRole::Dialog => Role::Dialog,
+        SemanticsRole::AlertDialog => Role::AlertDialog,
+        SemanticsRole::Window => Role::Window,
+        SemanticsRole::Pane => Role::Pane,
+        SemanticsRole::ScrollView => Role::ScrollView,
         // `SemanticsRole::None`, which declares no role. SemanticsRole is
         // non_exhaustive, so this arm would also take a role added later; the
-        // pin is `roles_and_checkbox_states_translate_to_accesskit`, not this match.
+        // pin is `every_role_maps_to_accesskit`, not this match.
         _ => return None,
     })
 }
@@ -612,8 +653,7 @@ pub(crate) fn to_published_node(
     if is_root && device_pixel_ratio != 1.0 {
         node.set_transform(Affine::scale(device_pixel_ratio));
     }
-    // Only a root no role reached: an explicit role AccessKit can only
-    // express as a container (`DragHandle`, `HotKey`) keeps that container.
+    // Only a root that declares no role and has no name becomes the window.
     if is_root && data.attrs.role == SemanticsRole::None && node.role() == Role::GenericContainer {
         node.set_role(Role::Window);
     }
@@ -1108,10 +1148,11 @@ mod tests {
     /// The role mapping's only pin. `SemanticsRole` is `#[non_exhaustive]` and
     /// lives in flui-protocol, so `explicit_role` ends in a wildcard: deleting
     /// any arm there sends that role to `None` (static text or a container)
-    /// and nothing but this test notices.
+    /// and nothing but this test notices. Two roles publishing one AccessKit
+    /// role would also be indistinguishable to every assistive technology.
     #[test]
-    fn roles_and_checkbox_states_translate_to_accesskit() {
-        let mut generic = Vec::new();
+    fn every_role_maps_to_accesskit() {
+        let mut published = Vec::new();
         for &role in SemanticsRole::ALL {
             let mapped = explicit_role(role);
             if role == SemanticsRole::None {
@@ -1119,18 +1160,22 @@ mod tests {
                 continue;
             }
             let mapped = mapped.unwrap_or_else(|| panic!("{role} maps to no AccessKit role"));
-            if mapped == Role::GenericContainer {
-                generic.push(role);
-            }
+            assert_ne!(
+                mapped,
+                Role::GenericContainer,
+                "{role} is a role ADR-0203 admits only with an AccessKit counterpart"
+            );
+            assert!(
+                !published.contains(&mapped),
+                "{role} publishes {mapped:?}, which another role already does"
+            );
+            published.push(mapped);
         }
-        // The documented no-counterpart roles, and only those.
-        assert_eq!(
-            generic,
-            [SemanticsRole::DragHandle, SemanticsRole::HotKey],
-            "only the roles AccessKit has no counterpart for may be generic",
-        );
+    }
 
-        // Checkbox states: unchecked, checked and mixed stay three distinct values.
+    /// A checkable node's three states stay three distinct AccessKit values.
+    #[test]
+    fn toggled_states_stay_distinct_in_accesskit() {
         for (toggled, expected) in [
             (Toggled::Off, accesskit::Toggled::False),
             (Toggled::On, accesskit::Toggled::True),

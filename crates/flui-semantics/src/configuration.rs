@@ -1300,9 +1300,10 @@ impl SemanticsConfiguration {
 /// A structural role (tab, list item, dialog, …) is authored structure and
 /// outranks every interactive kind, as an explicit role always did. Among
 /// interactive kinds the more specific wins: a checkable role, then a button,
-/// then a link, text field or slider, then an image or heading. On a tie the
-/// receiver keeps its role. The order is what makes a merged list tile with a
-/// radio a radio button rather than a button
+/// then a link, text field or slider, then content (an image, a heading or a
+/// text-level role such as a paragraph). On a tie the receiver keeps its role.
+/// The order is what makes a merged list tile with a radio a radio button
+/// rather than a button
 /// (`merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button`).
 pub(crate) fn more_specific_role(
     receiver: SemanticsRole,
@@ -1311,12 +1312,21 @@ pub(crate) fn more_specific_role(
     fn rank(role: SemanticsRole) -> u8 {
         match role {
             SemanticsRole::None => 0,
-            SemanticsRole::Image | SemanticsRole::Heading => 1,
-            SemanticsRole::Link
-            | SemanticsRole::Slider
-            | SemanticsRole::TextInput
-            | SemanticsRole::MultilineTextInput
-            | SemanticsRole::PasswordInput => 2,
+            SemanticsRole::Image
+            | SemanticsRole::Heading
+            | SemanticsRole::Paragraph
+            | SemanticsRole::Caption
+            | SemanticsRole::Code
+            | SemanticsRole::Emphasis
+            | SemanticsRole::Strong
+            | SemanticsRole::Insertion
+            | SemanticsRole::Deletion
+            | SemanticsRole::Term
+            | SemanticsRole::Definition
+            | SemanticsRole::Time
+            | SemanticsRole::Math => 1,
+            SemanticsRole::Link | SemanticsRole::Slider => 2,
+            role if role.is_text_input() => 2,
             SemanticsRole::Button => 3,
             SemanticsRole::CheckBox | SemanticsRole::RadioButton | SemanticsRole::Switch => 4,
             _ => 5,

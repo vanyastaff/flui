@@ -92,20 +92,13 @@ fn published_role(role: SemanticsRole, label: bool) -> accesskit::Role {
 }
 
 /// ADR-0095's "Mapping pinned": every semantics role reads as a wire role
-/// other than `unknown`, except the documented ones. `none` declares no role,
-/// and `drag_handle` and `hot_key` have no AccessKit counterpart; all three
-/// publish a `GenericContainer`, which the wire lifts into its parent rather
-/// than naming.
+/// other than `unknown`, except `none`, which declares no role and publishes
+/// a `GenericContainer` the wire lifts into its parent rather than naming.
 #[test]
-fn every_role_but_the_documented_ones_reads_as_a_wire_role() {
-    let documented = [
-        SemanticsRole::None,
-        SemanticsRole::DragHandle,
-        SemanticsRole::HotKey,
-    ];
+fn every_role_but_none_reads_as_a_wire_role() {
     for &role in SemanticsRole::ALL {
         let published = published_role(role, false);
-        if documented.contains(&role) {
+        if role == SemanticsRole::None {
             assert_eq!(
                 published,
                 accesskit::Role::GenericContainer,
@@ -123,8 +116,8 @@ fn every_role_but_the_documented_ones_reads_as_a_wire_role() {
 }
 
 /// The interactive roles read as the role UI Automation reports for them: a
-/// multi-line field is an `Edit` like any other, a heading `Text` like static
-/// text, and a named node without a role is static text.
+/// multi-line field is an `Edit` like any other, a heading `Text` restored by
+/// its ARIA role, and a named node without a role is static text.
 #[test]
 fn every_interactive_role_reads_as_the_role_uia_reports() {
     use SemanticsRole as S;
@@ -136,7 +129,7 @@ fn every_interactive_role_reads_as_the_role_uia_reports() {
         (S::PasswordInput, false, Role::PasswordInput),
         (S::Slider, false, Role::Slider),
         (S::Image, false, Role::Image),
-        (S::Heading, false, Role::Label),
+        (S::Heading, false, Role::Heading),
         (S::CheckBox, false, Role::CheckBox),
         (S::RadioButton, false, Role::RadioButton),
         (S::Switch, false, Role::Switch),
@@ -215,7 +208,7 @@ fn wire_role_matches_the_windows_adapter_for_every_role_flui_publishes() {
         (A::Navigation, "Group", Role::Group),
         (A::Region, "Group", Role::Group),
         (A::Form, "Group", Role::Group),
-        (A::Heading, "Text, aria heading", Role::Label),
+        (A::Heading, "Text, aria heading", Role::Heading),
         (A::GenericContainer, "Group", Role::Group),
         (A::Menu, "Menu", Role::Menu),
         (A::MenuBar, "MenuBar", Role::MenuBar),
@@ -241,6 +234,51 @@ fn wire_role_matches_the_windows_adapter_for_every_role_flui_publishes() {
         (A::PasswordInput, "Edit, IsPassword", Role::PasswordInput),
         (A::Slider, "Slider", Role::Slider),
         (A::Image, "Image", Role::Image),
+        (A::ScrollBar, "ScrollBar", Role::ScrollBar),
+        (A::Splitter, "Separator", Role::Splitter),
+        (A::SearchInput, "Edit", Role::TextInput),
+        (A::EmailInput, "Edit", Role::TextInput),
+        (A::NumberInput, "Edit", Role::TextInput),
+        (A::PhoneNumberInput, "Edit", Role::TextInput),
+        (A::UrlInput, "Edit", Role::TextInput),
+        (A::DateInput, "Edit", Role::TextInput),
+        (A::TimeInput, "Edit", Role::TextInput),
+        (A::ListBox, "List", Role::List),
+        (A::ListBoxOption, "ListItem", Role::ListItem),
+        (A::Tree, "Tree", Role::Tree),
+        (A::TreeItem, "TreeItem", Role::TreeItem),
+        (A::TreeGrid, "DataGrid", Role::Grid),
+        (A::Grid, "DataGrid", Role::Grid),
+        (A::GridCell, "DataItem, aria gridcell", Role::GridCell),
+        (A::Toolbar, "ToolBar", Role::Toolbar),
+        (A::RowGroup, "Group", Role::Group),
+        (A::RowHeader, "DataItem, aria rowheader", Role::RowHeader),
+        (A::Paragraph, "Group", Role::Group),
+        (A::Figure, "Group", Role::Group),
+        (A::Caption, "Text", Role::Label),
+        (A::Article, "Group", Role::Group),
+        (A::Feed, "Group", Role::Group),
+        (A::Group, "Group", Role::Group),
+        (A::Note, "Group", Role::Group),
+        (A::Blockquote, "Group", Role::Group),
+        (A::Code, "Text", Role::Label),
+        (A::Emphasis, "Text", Role::Label),
+        (A::Strong, "Text", Role::Label),
+        (A::ContentInsertion, "Group", Role::Group),
+        (A::ContentDeletion, "Group", Role::Group),
+        (A::Term, "ListItem", Role::ListItem),
+        (A::Definition, "Group", Role::Group),
+        (A::Time, "Text", Role::Label),
+        (A::Math, "Group", Role::Group),
+        (A::Meter, "ProgressBar", Role::ProgressIndicator),
+        (A::Document, "Document", Role::Document),
+        (A::Application, "Pane", Role::Pane),
+        (A::Banner, "Group", Role::Group),
+        (A::Search, "Group", Role::Group),
+        (A::Log, "Group", Role::Group),
+        (A::Marquee, "Text", Role::Label),
+        (A::Timer, "Pane", Role::Pane),
+        (A::Pane, "Pane", Role::Pane),
     ];
 
     // What FLUI publishes: every role, static text, a bare container, and
@@ -952,7 +990,7 @@ fn a_read_tree_round_trips_through_json() {
 
     let tree = f.read(&ReadQuery::new());
     let json = serde_json::to_value(&tree).expect("a tree serializes");
-    assert_eq!(json["protocol"], "0.2");
+    assert_eq!(json["protocol"], "0.3");
     assert_eq!(
         json["roots"][0]["children"][0],
         serde_json::json!({

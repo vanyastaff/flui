@@ -190,7 +190,6 @@ pub(crate) fn wire_role(role: accesskit::Role) -> Role {
         | A::Code
         | A::Emphasis
         | A::FigureCaption
-        | A::Heading
         | A::Legend
         | A::LineBreak
         | A::Mark
@@ -198,6 +197,8 @@ pub(crate) fn wire_role(role: accesskit::Role) -> Role {
         | A::RubyAnnotation
         | A::Strong
         | A::Time => Role::Label,
+        // Text, restored by its ARIA role.
+        A::Heading => Role::Heading,
         // Image.
         A::Image | A::Canvas | A::SvgRoot | A::GraphicsSymbol | A::DocCover => Role::Image,
         // Hyperlink.

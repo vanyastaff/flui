@@ -183,7 +183,7 @@ recorded by one is a valid golden file for the other.
 
 ### Versioning
 
-The schema carries its own version, `flui_protocol::PROTOCOL_VERSION` (`0.2`), serialized
+The schema carries its own version, `flui_protocol::PROTOCOL_VERSION` (`0.3`), serialized
 as the `protocol` field of a `Tree`. Each version's JSON schema is a golden file
 (`crates/flui-protocol/tests/schema/protocol-<version>.json`), and a test refuses a schema that
 differs from its version's file. Any change to the schema bumps `minor` and adds a golden
@@ -238,7 +238,7 @@ For the accepted part:
   `the_advertised_action_names_are_adr_0080s`,
   `every_wire_name_serializes_to_its_vocabulary_string` (which also checks the schemars
   schemas when that feature is on). The serde test compiles only with its feature.
-- `cargo nextest run -p flui-semantics`: `roles_and_checkbox_states_translate_to_accesskit` (the
+- `cargo nextest run -p flui-semantics`: `every_role_maps_to_accesskit` (the
   pin for the mapping now that `explicit_role` ends in a wildcard) and
   `every_wire_action_routes_to_a_semantics_action` (every `ActionName` reaches a FLUI action
   through AccessKit's Windows adapter).
@@ -256,8 +256,8 @@ For the accepted part:
   `surface_bounds_are_not_spelled_rect` and
   `a_tree_says_its_version_and_a_reply_without_one_reads_as_unversioned`.
 - **Mapping pinned.** `cargo nextest run -p flui-semantics agent`:
-  `every_role_but_the_documented_ones_reads_as_a_wire_role` walks every semantics role (`none`,
-  `drag_handle` and `hot_key` are the documented exceptions, published as a container the wire
+  `every_role_but_none_reads_as_a_wire_role` walks every semantics role (`none` is the one
+  exception, published as a container the wire
   lifts), with `every_interactive_role_reads_as_the_role_uia_reports`,
   `wire_role_matches_the_windows_adapter_for_every_role_flui_publishes`,
   `the_role_fold_was_transcribed_from_the_locked_windows_adapter`,

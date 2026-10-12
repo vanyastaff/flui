@@ -12,110 +12,215 @@
 vocabulary! {
     /// The role of a semantics node.
     ///
-    /// Roles provide additional context about the structural type of UI
-    /// element to assistive technologies. This helps screen readers and other
-    /// accessibility tools present the correct interaction model.
+    /// Every non-abstract WAI-ARIA 1.2 role with an AccessKit counterpart, the
+    /// editable-text kinds AccessKit distinguishes, and the desktop roles a
+    /// window needs (ADR-0203). DPUB-ARIA and Graphics-ARIA roles are out of
+    /// scope. The enum is flat: data ARIA ties to a role (a heading's level, a
+    /// cell's position) is an attribute.
     ///
     /// # Values
     ///
-    /// The numeric [`value`](Self::value) is FLUI's own and is stable.
-    /// `None` declares no role: a named node publishes as static text, an
-    /// unnamed one as a plain container.
+    /// The numeric [`value`](Self::value) is dense from zero in declaration
+    /// order. `None` declares no role: a named node publishes as static text,
+    /// an unnamed one as a plain container.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     #[repr(u32)]
     pub enum SemanticsRole {
         /// No specific role assigned.
         #[default]
-        None = 0 => "none",
-        /// A dialog that alerts the user.
-        AlertDialog = 1 => "alertDialog",
-        /// A dialog window.
-        Dialog = 2 => "dialog",
-        /// A tab in a tab bar.
-        Tab = 3 => "tab",
-        /// A container for tabs.
-        TabBar = 4 => "tabBar",
-        /// The content panel for a tab.
-        TabPanel = 5 => "tabPanel",
-        /// A table structure.
-        Table = 6 => "table",
-        /// A cell in a table.
-        Cell = 7 => "cell",
-        /// A row in a table.
-        Row = 8 => "row",
-        /// A column header in a table.
-        ColumnHeader = 9 => "columnHeader",
-        /// A group of mutually exclusive radio buttons.
-        RadioGroup = 10 => "radioGroup",
-        /// A menu container.
-        Menu = 11 => "menu",
-        /// A horizontal menu bar.
-        MenuBar = 12 => "menuBar",
-        /// An item in a menu.
-        MenuItem = 13 => "menuItem",
-        /// A checkbox item in a menu.
-        MenuItemCheckbox = 14 => "menuItemCheckbox",
-        /// A radio item in a menu.
-        MenuItemRadio = 15 => "menuItemRadio",
-        /// An alert message (live region).
-        Alert = 16 => "alert",
-        /// A status message (live region).
-        Status = 17 => "status",
-        /// A list container.
-        List = 18 => "list",
-        /// An item in a list.
-        ListItem = 19 => "listItem",
-        /// Complementary content (sidebar, etc.).
-        Complementary = 20 => "complementary",
-        /// Footer/content info region.
-        ContentInfo = 21 => "contentInfo",
-        /// Main content region.
-        Main = 22 => "main",
-        /// Navigation region.
-        Navigation = 23 => "navigation",
-        /// A generic region with a label.
-        Region = 24 => "region",
-        /// A form container.
-        Form = 25 => "form",
-        /// A handle for drag and drop.
-        DragHandle = 26 => "dragHandle",
-        /// A spin button (numeric stepper).
-        SpinButton = 27 => "spinButton",
-        /// A combo box (dropdown with text input).
-        ComboBox = 28 => "comboBox",
-        /// A tooltip popup.
-        Tooltip = 29 => "tooltip",
-        /// A loading spinner/indicator.
-        LoadingSpinner = 30 => "loadingSpinner",
-        /// A progress bar.
-        ProgressBar = 31 => "progressBar",
-        /// A keyboard shortcut indicator.
-        HotKey = 32 => "hotKey",
-        /// A viewport whose content can be scrolled.
-        ScrollView = 33 => "scrollView",
+        None => "none",
+
+        // ----- Controls -----
         /// A push button; with a toggled state, a toggle button whose state is
         /// its pressed state.
-        Button = 34 => "button",
+        Button => "button",
         /// A two- or three-state check box.
-        CheckBox = 35 => "checkBox",
+        CheckBox => "checkBox",
         /// One option of a mutually exclusive set.
-        RadioButton = 36 => "radioButton",
+        RadioButton => "radioButton",
         /// An on/off switch.
-        Switch = 37 => "switch",
+        Switch => "switch",
         /// A hyperlink.
-        Link = 38 => "link",
+        Link => "link",
         /// A slider over a range of values.
-        Slider = 39 => "slider",
-        /// A picture.
-        Image = 40 => "image",
-        /// A heading; its outline level is an attribute.
-        Heading = 41 => "heading",
+        Slider => "slider",
+        /// A numeric stepper.
+        SpinButton => "spinButton",
+        /// A text field with a popup of suggestions.
+        ComboBox => "comboBox",
+        /// A scroll bar.
+        ScrollBar => "scrollBar",
+        /// A separator the user can move to resize what it divides.
+        Separator => "separator",
+
+        // ----- Editable text -----
         /// A single-line editable text field.
-        TextInput = 42 => "textInput",
+        TextInput => "textInput",
         /// A multi-line editable text field.
-        MultilineTextInput = 43 => "multilineTextInput",
+        MultilineTextInput => "multilineTextInput",
         /// A text field whose characters are obscured.
-        PasswordInput = 44 => "passwordInput",
+        PasswordInput => "passwordInput",
+        /// A text field for a search query.
+        SearchInput => "searchInput",
+        /// A text field for an email address.
+        EmailInput => "emailInput",
+        /// A text field for a number.
+        NumberInput => "numberInput",
+        /// A text field for a telephone number.
+        PhoneNumberInput => "phoneNumberInput",
+        /// A text field for a URL.
+        UrlInput => "urlInput",
+        /// A field for a date.
+        DateInput => "dateInput",
+        /// A field for a time of day.
+        TimeInput => "timeInput",
+
+        // ----- Composite widgets -----
+        /// A list of options to pick from.
+        ListBox => "listBox",
+        /// One option of a list box.
+        ListBoxOption => "listBoxOption",
+        /// A group of mutually exclusive radio buttons.
+        RadioGroup => "radioGroup",
+        /// A menu container.
+        Menu => "menu",
+        /// A horizontal menu bar.
+        MenuBar => "menuBar",
+        /// An item in a menu.
+        MenuItem => "menuItem",
+        /// A checkable item in a menu.
+        MenuItemCheckbox => "menuItemCheckbox",
+        /// One of a mutually exclusive set of items in a menu.
+        MenuItemRadio => "menuItemRadio",
+        /// A tab in a tab list.
+        Tab => "tab",
+        /// A list of tabs.
+        TabList => "tabList",
+        /// The content panel for a tab.
+        TabPanel => "tabPanel",
+        /// A hierarchical list whose items expand and collapse.
+        Tree => "tree",
+        /// An item in a tree.
+        TreeItem => "treeItem",
+        /// A grid whose rows expand and collapse like a tree's items.
+        TreeGrid => "treeGrid",
+        /// An interactive grid of cells.
+        Grid => "grid",
+        /// A cell in a grid.
+        GridCell => "gridCell",
+        /// A row of controls.
+        Toolbar => "toolbar",
+
+        // ----- Tables and lists -----
+        /// A static table.
+        Table => "table",
+        /// A row in a table or grid.
+        Row => "row",
+        /// A group of rows: a table's header, body or footer.
+        RowGroup => "rowGroup",
+        /// A cell in a table.
+        Cell => "cell",
+        /// A column's header cell.
+        ColumnHeader => "columnHeader",
+        /// A row's header cell.
+        RowHeader => "rowHeader",
+        /// A list container.
+        List => "list",
+        /// An item in a list.
+        ListItem => "listItem",
+
+        // ----- Document structure -----
+        /// A heading; its outline level is an attribute.
+        Heading => "heading",
+        /// A paragraph of text.
+        Paragraph => "paragraph",
+        /// A picture.
+        Image => "image",
+        /// A figure: content with its caption.
+        Figure => "figure",
+        /// The caption of a figure or table.
+        Caption => "caption",
+        /// A self-contained composition, such as a post or a card.
+        Article => "article",
+        /// A scrolling list of articles that loads more as it is read.
+        Feed => "feed",
+        /// A set of related elements not otherwise grouped.
+        Group => "group",
+        /// A note set aside from the main content.
+        Note => "note",
+        /// A quotation from another source.
+        Blockquote => "blockquote",
+        /// A fragment of computer code.
+        Code => "code",
+        /// Emphasized text.
+        Emphasis => "emphasis",
+        /// Text of strong importance.
+        Strong => "strong",
+        /// Text added to a document.
+        Insertion => "insertion",
+        /// Text removed from a document.
+        Deletion => "deletion",
+        /// A term being defined.
+        Term => "term",
+        /// The definition of a term.
+        Definition => "definition",
+        /// A date or time.
+        Time => "time",
+        /// A mathematical expression.
+        Math => "math",
+        /// A scalar measurement within a known range.
+        Meter => "meter",
+        /// The progress of a task; without a value, an indeterminate one.
+        ProgressBar => "progressBar",
+        /// A popup describing an element.
+        Tooltip => "tooltip",
+        /// A document to read rather than operate.
+        Document => "document",
+        /// A region the application operates itself, bypassing the screen
+        /// reader's document navigation.
+        Application => "application",
+
+        // ----- Landmarks -----
+        /// The site- or app-wide header.
+        Banner => "banner",
+        /// The main content.
+        Main => "main",
+        /// Navigation links.
+        Navigation => "navigation",
+        /// Content complementary to the main content.
+        Complementary => "complementary",
+        /// Information about the page: the footer.
+        ContentInfo => "contentInfo",
+        /// A search facility.
+        Search => "search",
+        /// A form.
+        Form => "form",
+        /// A generic region with a label.
+        Region => "region",
+
+        // ----- Live regions -----
+        /// An important, time-sensitive message.
+        Alert => "alert",
+        /// Advisory information that is not urgent.
+        Status => "status",
+        /// A log whose new entries are announced.
+        Log => "log",
+        /// Information that changes and is not essential, such as a ticker.
+        Marquee => "marquee",
+        /// A counter of elapsed or remaining time.
+        Timer => "timer",
+
+        // ----- Windows -----
+        /// A dialog window.
+        Dialog => "dialog",
+        /// A dialog that alerts the user.
+        AlertDialog => "alertDialog",
+        /// A top-level window.
+        Window => "window",
+        /// A region of a window, such as a split view's side.
+        Pane => "pane",
+        /// A viewport whose content can be scrolled.
+        ScrollView => "scrollView",
     }
 }
 
@@ -127,23 +232,31 @@ impl SemanticsRole {
         self as u32
     }
 
-    /// Returns whether this is a landmark role.
+    /// Returns whether this is an ARIA landmark role.
     ///
     /// Landmark roles help users navigate the page structure.
     #[must_use]
     pub const fn is_landmark(self) -> bool {
         matches!(
             self,
-            Self::Complementary | Self::ContentInfo | Self::Main | Self::Navigation | Self::Region
+            Self::Banner
+                | Self::Main
+                | Self::Navigation
+                | Self::Complementary
+                | Self::ContentInfo
+                | Self::Search
+                | Self::Form
+                | Self::Region
         )
     }
 
-    /// Returns whether this is a live region role.
-    ///
-    /// Live region roles announce changes automatically.
+    /// Returns whether this role is a live region whose changes are announced.
     #[must_use]
     pub const fn is_live_region(self) -> bool {
-        matches!(self, Self::Alert | Self::Status)
+        matches!(
+            self,
+            Self::Alert | Self::Status | Self::Log | Self::Marquee | Self::Timer
+        )
     }
 
     /// Returns whether this is a menu-related role.
@@ -159,12 +272,20 @@ impl SemanticsRole {
         )
     }
 
-    /// Returns whether this is a table-related role.
+    /// Returns whether this is a role of a table or grid.
     #[must_use]
     pub const fn is_table_related(self) -> bool {
         matches!(
             self,
-            Self::Table | Self::Cell | Self::Row | Self::ColumnHeader
+            Self::Table
+                | Self::Grid
+                | Self::TreeGrid
+                | Self::Row
+                | Self::RowGroup
+                | Self::Cell
+                | Self::GridCell
+                | Self::ColumnHeader
+                | Self::RowHeader
         )
     }
 
@@ -177,13 +298,16 @@ impl SemanticsRole {
     /// Returns whether this is a list-related role.
     #[must_use]
     pub const fn is_list_related(self) -> bool {
-        matches!(self, Self::List | Self::ListItem)
+        matches!(
+            self,
+            Self::List | Self::ListItem | Self::ListBox | Self::ListBoxOption
+        )
     }
 
     /// Returns whether this is a tab-related role.
     #[must_use]
     pub const fn is_tab_related(self) -> bool {
-        matches!(self, Self::Tab | Self::TabBar | Self::TabPanel)
+        matches!(self, Self::Tab | Self::TabList | Self::TabPanel)
     }
 
     /// Returns whether this is an editable text field of any kind.
@@ -191,7 +315,16 @@ impl SemanticsRole {
     pub const fn is_text_input(self) -> bool {
         matches!(
             self,
-            Self::TextInput | Self::MultilineTextInput | Self::PasswordInput
+            Self::TextInput
+                | Self::MultilineTextInput
+                | Self::PasswordInput
+                | Self::SearchInput
+                | Self::EmailInput
+                | Self::NumberInput
+                | Self::PhoneNumberInput
+                | Self::UrlInput
+                | Self::DateInput
+                | Self::TimeInput
         )
     }
 }
@@ -310,5 +443,144 @@ impl SemanticsAction {
 impl std::fmt::Display for SemanticsAction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.name())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// ADR-0203's vocabulary, in declaration order: a role or action renamed,
+    /// dropped, added or reordered fails here, and with it the numeric values,
+    /// which are positions in this order.
+    #[test]
+    fn vocabulary_names_are_pinned() {
+        let roles: Vec<&str> = SemanticsRole::ALL.iter().map(|r| r.name()).collect();
+        assert_eq!(
+            roles,
+            [
+                "none",
+                "button",
+                "checkBox",
+                "radioButton",
+                "switch",
+                "link",
+                "slider",
+                "spinButton",
+                "comboBox",
+                "scrollBar",
+                "separator",
+                "textInput",
+                "multilineTextInput",
+                "passwordInput",
+                "searchInput",
+                "emailInput",
+                "numberInput",
+                "phoneNumberInput",
+                "urlInput",
+                "dateInput",
+                "timeInput",
+                "listBox",
+                "listBoxOption",
+                "radioGroup",
+                "menu",
+                "menuBar",
+                "menuItem",
+                "menuItemCheckbox",
+                "menuItemRadio",
+                "tab",
+                "tabList",
+                "tabPanel",
+                "tree",
+                "treeItem",
+                "treeGrid",
+                "grid",
+                "gridCell",
+                "toolbar",
+                "table",
+                "row",
+                "rowGroup",
+                "cell",
+                "columnHeader",
+                "rowHeader",
+                "list",
+                "listItem",
+                "heading",
+                "paragraph",
+                "image",
+                "figure",
+                "caption",
+                "article",
+                "feed",
+                "group",
+                "note",
+                "blockquote",
+                "code",
+                "emphasis",
+                "strong",
+                "insertion",
+                "deletion",
+                "term",
+                "definition",
+                "time",
+                "math",
+                "meter",
+                "progressBar",
+                "tooltip",
+                "document",
+                "application",
+                "banner",
+                "main",
+                "navigation",
+                "complementary",
+                "contentInfo",
+                "search",
+                "form",
+                "region",
+                "alert",
+                "status",
+                "log",
+                "marquee",
+                "timer",
+                "dialog",
+                "alertDialog",
+                "window",
+                "pane",
+                "scrollView",
+            ],
+        );
+        let actions: Vec<&str> = SemanticsAction::ALL.iter().map(|a| a.name()).collect();
+        assert_eq!(
+            actions,
+            [
+                "click",
+                "focus",
+                "blur",
+                "expand",
+                "collapse",
+                "increment",
+                "decrement",
+                "scrollUp",
+                "scrollDown",
+                "scrollLeft",
+                "scrollRight",
+                "scrollIntoView",
+                "setScrollOffset",
+                "setTextSelection",
+                "replaceSelectedText",
+                "setValue",
+                "setNumericValue",
+                "showContextMenu",
+                "showTooltip",
+                "hideTooltip",
+                "customAction",
+            ],
+        );
+        for (position, role) in SemanticsRole::ALL.iter().enumerate() {
+            assert_eq!(role.value() as usize, position, "{role}");
+        }
+        for (position, action) in SemanticsAction::ALL.iter().enumerate() {
+            assert_eq!(action.value(), 1 << position, "{action}");
+        }
     }
 }

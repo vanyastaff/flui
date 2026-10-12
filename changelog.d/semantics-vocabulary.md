@@ -9,6 +9,14 @@
   from and to AccessKit.
 - **`Semantics::on_set_scroll_offset`, `on_scroll_into_view`** (`flui-widgets`), with typed
   payloads.
+- **The ARIA role vocabulary** (`flui-protocol`, ADR-0203): `SemanticsRole` gains every
+  non-abstract WAI-ARIA 1.2 role with an AccessKit counterpart (`Paragraph`, `Group`, `Grid`,
+  `Tree`, `ListBox`, `Toolbar`, `Banner`, `Log`, `Meter`, …), the text-field kinds AccessKit
+  distinguishes (`SearchInput`, `EmailInput`, `NumberInput`, `PhoneNumberInput`, `UrlInput`,
+  `DateInput`, `TimeInput`) and the desktop roles `Window` and `Pane`. Each publishes an
+  AccessKit role of its own.
+- **The `heading` wire role** (`flui-protocol`, agent protocol 0.3): an agent reads a heading as
+  `heading` from both backends; the desktop server restores it from UI Automation's ARIA role.
 
 ### Changed
 
@@ -27,11 +35,16 @@
 - **`flui_testing::a11y::InvokeActionError`**: `Decode` replaces `UnroutablePlatformAction`
   and `MalformedNodeIdentity`.
 - A node with blocked user actions keeps only `Blur`.
+- **`SemanticsRole` values are dense in declaration order**, which groups the roles by kind;
+  `TabBar` is `TabList`, ARIA's name.
 
 ### Removed
 
 - **Actions with no platform path** (`flui-protocol`): the four cursor moves, `Copy`, `Cut`,
   `Paste`, `Dismiss`, `DidGainAccessibilityFocus`, and `SemanticsAction::RESERVED_BITS`.
+- **Roles with no AccessKit counterpart** (`flui-protocol`): `DragHandle` and `HotKey`, which
+  published as a plain container, and `LoadingSpinner`; an indeterminate progress indicator is
+  a `ProgressBar` without a value.
 - **`ActionArgs` and `semantics_action_args_for`** (`flui-semantics`); `ActionCall` carries the
   payload. `Semantics::on_show_on_screen`, `on_set_text` and `on_scroll_to_offset` are
   `on_scroll_into_view`, `on_set_value` and `on_set_scroll_offset`.

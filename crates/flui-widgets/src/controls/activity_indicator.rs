@@ -53,7 +53,7 @@ const DEFAULT_COLOR: Color = Color::rgb(38, 102, 192);
 /// paints a visible static arc. Reduced motion also selects this representation
 /// and parks the repeating run without requesting continuation frames. It is
 /// exposed to assistive technology as a
-/// [`SemanticsRole::LoadingSpinner`] with its [`label`](Self::label).
+/// [`SemanticsRole::ProgressBar`] with its [`label`](Self::label).
 ///
 /// # Examples
 ///
@@ -184,7 +184,7 @@ impl ViewState<ActivityIndicator> for ActivityIndicatorState {
             color: view.color,
         };
         Semantics::new()
-            .role(SemanticsRole::LoadingSpinner)
+            .role(SemanticsRole::ProgressBar)
             .label(view.label.clone())
             .child(
                 CustomPaint::new()
