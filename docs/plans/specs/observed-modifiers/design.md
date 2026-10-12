@@ -1,6 +1,6 @@
 # Source facts and portable keyboard interpretation
 
-Status: Implemented; local validation and CI acceptance in progress. [Specification #1565](https://github.com/vanyastaff/flui/issues/1565).
+Status: Implemented; final acceptance is tracked by the integration PR. [Specification #1565](https://github.com/vanyastaff/flui/issues/1565).
 
 ## Existing seams
 

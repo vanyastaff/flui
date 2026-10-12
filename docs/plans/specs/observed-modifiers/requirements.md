@@ -1,6 +1,6 @@
 # Observed modifiers and composition-safe keyboard consumers
 
-Status: Implemented; local validation and CI acceptance in progress.
+Status: Implemented; final acceptance is tracked by the integration PR.
 Specification: [#1565](https://github.com/vanyastaff/flui/issues/1565).
 Owner approval: 2026-10-12.
 
