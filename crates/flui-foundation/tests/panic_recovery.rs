@@ -43,9 +43,7 @@ fn a_nested_delivery_keeps_the_first_failure_and_later_computation() {
     );
     assert_eq!(failure.class(), FailureClass::Delivery);
     assert_eq!(failure.blocking_class(), Some(FailureClass::Computation));
-    let original = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| failure.resume()))
-        .expect_err("standalone propagation resumes the original payload");
-    assert_eq!(original.downcast_ref::<&str>(), Some(&"first delivery"));
+    drop(failure);
 }
 
 fn computation_remains_authoritative_before_delivery() {
@@ -116,6 +114,72 @@ fn unproved_retirement_does_not_inherit_a_delivery_claim() {
     assert_eq!(drops.load(Ordering::Relaxed), 1);
 }
 
+fn an_inherited_failure_keeps_local_annotation_without_rethrowing_it() {
+    let mut recovery = PanicRecovery::new();
+    recovery.inherit_failure();
+    assert!(
+        !recovery.scope().run_classified(FailureClass::Unknown, |_| {
+            panic!("local query failure");
+        })
+    );
+    let receipt = recovery
+        .into_failure()
+        .expect("local query remains diagnosable");
+    assert_eq!(receipt.class(), FailureClass::Unknown);
+    assert_eq!(
+        receipt.payload().downcast_ref::<&str>(),
+        Some(&"local query failure")
+    );
+    drop(receipt);
+
+    let mut inherited = PanicRecovery::new();
+    inherited.inherit_failure();
+    inherited
+        .scope()
+        .run_classified(FailureClass::Unknown, |_| {
+            panic!("secondary annotation");
+        });
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| inherited.finish())).is_ok(),
+        "finishing must preserve the enclosing failure's authority"
+    );
+}
+
+fn a_nested_channel_latch_does_not_demote_its_owners_original_failure() {
+    let notifier = Rc::new(Notifier::<()>::new());
+    notifier.add(Rc::new(|_| panic!("first channel failure")));
+    let reenter = Rc::new(Cell::new(true));
+    let nested = Rc::downgrade(&notifier);
+    notifier.add_with_recovery(Rc::new(move |_, scope| {
+        if reenter.replace(false) {
+            nested
+                .upgrade()
+                .expect("notification owner")
+                .notify_with_recovery(&(), scope);
+        }
+    }));
+    let delivered = Rc::new(Cell::new(0));
+    let tail = Rc::clone(&delivered);
+    notifier.add(Rc::new(move |_| tail.set(tail.get() + 1)));
+    let mut recovery = PanicRecovery::new();
+    recovery
+        .scope()
+        .run_classified(FailureClass::Delivery, |scope| {
+            notifier.notify_with_recovery(&(), scope);
+        });
+    assert_eq!(
+        delivered.get(),
+        2,
+        "the nested and outer live tails deliver"
+    );
+    let original = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| recovery.finish()))
+        .expect_err("the owner's original failure remains authoritative");
+    assert_eq!(
+        original.downcast_ref::<&str>(),
+        Some(&"first channel failure")
+    );
+}
+
 #[test]
 fn recovery_preserves_provenance_and_owned_failure() {
     crate::run_table(&[
@@ -134,6 +198,14 @@ fn recovery_preserves_provenance_and_owned_failure() {
         (
             "unproved retirement",
             unproved_retirement_does_not_inherit_a_delivery_claim,
+        ),
+        (
+            "inherited local annotation",
+            an_inherited_failure_keeps_local_annotation_without_rethrowing_it,
+        ),
+        (
+            "nested channel authority",
+            a_nested_channel_latch_does_not_demote_its_owners_original_failure,
         ),
     ]);
 }

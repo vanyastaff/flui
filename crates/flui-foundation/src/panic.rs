@@ -74,9 +74,36 @@ pub fn retain_opaque_payload(payload: Box<dyn Any + Send>) {
 #[doc(hidden)]
 pub struct PanicRecovery {
     incoming: bool,
-    first: Option<Box<dyn Any + Send>>,
-    first_class: Option<FailureClass>,
+    first: Option<CapturedFailure>,
     blocking_class: Option<FailureClass>,
+}
+
+/// Authority is fixed when the local payload is captured. A later channel
+/// inheritance cannot demote an already authoritative failure.
+enum CapturedFailure {
+    Authoritative {
+        payload: Box<dyn Any + Send>,
+        class: FailureClass,
+    },
+    InheritedAnnotation {
+        payload: Box<dyn Any + Send>,
+        class: FailureClass,
+    },
+}
+
+impl CapturedFailure {
+    fn class(&self) -> FailureClass {
+        match self {
+            Self::Authoritative { class, .. } | Self::InheritedAnnotation { class, .. } => *class,
+        }
+    }
+
+    fn into_parts(self) -> (Box<dyn Any + Send>, FailureClass) {
+        match self {
+            Self::Authoritative { payload, class }
+            | Self::InheritedAnnotation { payload, class } => (payload, class),
+        }
+    }
 }
 
 /// Postcondition proven at a framework callout's actual capture seam.
@@ -91,8 +118,9 @@ pub enum FailureClass {
     Unknown,
 }
 
-/// The first payload and the independently accumulated publication restriction.
+/// The first local annotation and independently accumulated publication restriction.
 /// Dropping this receipt retains opaque payload ownership without user destruction.
+/// It cannot resume a payload held under an enclosing owner's earlier failure.
 #[doc(hidden)]
 pub struct RecoveryFailure {
     payload: Option<Box<dyn Any + Send>>,
@@ -119,15 +147,6 @@ impl RecoveryFailure {
     #[must_use]
     pub fn blocking_class(&self) -> Option<FailureClass> {
         self.blocking_class
-    }
-
-    /// Resume exactly the original payload for an independent propagating caller.
-    pub fn resume(mut self) -> ! {
-        std::panic::resume_unwind(
-            self.payload
-                .take()
-                .expect("BUG: failure receipt owns its payload"),
-        )
     }
 }
 
@@ -192,7 +211,6 @@ impl PanicRecovery {
         Self {
             incoming: std::thread::panicking(),
             first: None,
-            first_class: None,
             blocking_class: None,
         }
     }
@@ -226,11 +244,11 @@ impl PanicRecovery {
         self.incoming || self.first.is_some()
     }
 
-    /// The class of this owner's first captured payload. An inherited failure
-    /// remains owned by the enclosing caller and is not synthesized here.
+    /// The class of this operation's first locally captured payload. An earlier
+    /// inherited failure remains authoritative at its enclosing owner.
     #[must_use]
     pub fn first_failure_class(&self) -> Option<FailureClass> {
-        self.first_class
+        self.first.as_ref().map(CapturedFailure::class)
     }
 
     /// The first capture that failed to prove publication safe. This includes
@@ -240,15 +258,17 @@ impl PanicRecovery {
         self.blocking_class
     }
 
-    /// Transfer final failure custody after accepted delivery has finished.
+    /// Transfer the first local annotation after accepted delivery has finished.
+    /// Standalone propagation uses [`Self::finish`] instead.
     #[must_use]
     pub fn into_failure(mut self) -> Option<RecoveryFailure> {
-        self.first.take().map(|payload| RecoveryFailure {
-            payload: Some(payload),
-            class: self
-                .first_class
-                .expect("BUG: owned failure has a capture class"),
-            blocking_class: self.blocking_class,
+        self.first.take().map(|captured| {
+            let (payload, class) = captured.into_parts();
+            RecoveryFailure {
+                payload: Some(payload),
+                class,
+                blocking_class: self.blocking_class,
+            }
         })
     }
 
@@ -257,8 +277,14 @@ impl PanicRecovery {
     }
 
     pub fn finish(mut self) {
-        if let Some(payload) = self.first.take() {
-            std::panic::resume_unwind(payload);
+        match self.first.take() {
+            Some(CapturedFailure::Authoritative { payload, .. }) => {
+                std::panic::resume_unwind(payload);
+            }
+            Some(CapturedFailure::InheritedAnnotation { payload, .. }) => {
+                retain_opaque_payload(payload);
+            }
+            None => {}
         }
     }
 }
@@ -290,11 +316,14 @@ impl RecoveryScope<'_> {
         if class != FailureClass::Delivery && self.owner.blocking_class.is_none() {
             self.owner.blocking_class = Some(class);
         }
-        if self.has_failure() {
+        if self.owner.first.is_some() {
             retain_opaque_payload(payload);
         } else {
-            self.owner.first_class = Some(class);
-            self.owner.first = Some(payload);
+            self.owner.first = Some(if self.owner.incoming {
+                CapturedFailure::InheritedAnnotation { payload, class }
+            } else {
+                CapturedFailure::Authoritative { payload, class }
+            });
         }
         self.mark_active_channels();
     }
@@ -378,8 +407,8 @@ impl RecoveryScope<'_> {
 
 impl Drop for PanicRecovery {
     fn drop(&mut self) {
-        if let Some(payload) = self.first.take() {
-            retain_opaque_payload(payload);
+        if let Some(captured) = self.first.take() {
+            retain_opaque_payload(captured.into_parts().0);
         }
     }
 }
