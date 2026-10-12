@@ -1364,9 +1364,10 @@ impl GestureArena {
     ///
     /// Called after the framework finishes dispatching the pointer down event.
     ///
-    /// If there's an eager winner, they win immediately.
-    /// If there's only one member, it wins automatically.
-    /// Otherwise, waits for members to accept/reject.
+    /// A lone eligible member is queued for [`Self::drain_deferred_resolutions`].
+    /// An explicit acceptance through its entry after closure can settle it
+    /// immediately. With competing members, an eligible eager winner resolves
+    /// at closure; otherwise the arena waits for a member's decision.
     #[instrument(
         name = "arena.close",
         level = "debug",

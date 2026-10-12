@@ -87,8 +87,9 @@
 //! update.publish(Some(arena.now() + Duration::from_millis(300)))
 //!     .expect("committed timing publication");
 //! let entry = arena.add(pointer, &member);
-//! entry.resolve(GestureDisposition::Accepted);
+//! // Finish pointer-down membership before explicitly claiming the gesture.
 //! arena.close(pointer);
+//! entry.resolve(GestureDisposition::Accepted);
 //! assert!(!member.armed.get());
 //!
 //! let retired = member.registration.borrow_mut().take();
