@@ -1759,18 +1759,30 @@ fn the_record_stays_bounded_without_a_font_change() {
 }
 
 fn font_change_diagnostic_failure_preserves_every_measured_paragraph() {
-    font_change_failure_case(true, false);
+    font_change_failure_case(true, false, None);
 }
 
 fn font_change_wake_failure_preserves_every_measured_paragraph() {
-    font_change_failure_case(false, true);
+    font_change_failure_case(false, true, None);
 }
 
 fn competing_font_change_failures_preserve_the_diagnostic_and_measured_tail() {
-    font_change_failure_case(true, true);
+    font_change_failure_case(true, true, None);
 }
 
-fn font_change_failure_case(fail_diagnostic: bool, fail_wake: bool) {
+fn font_change_wake_failure_has_delivery_provenance() {
+    font_change_failure_case(
+        false,
+        true,
+        Some(flui_foundation::panic::FailureClass::Delivery),
+    );
+}
+
+fn font_change_failure_case(
+    fail_diagnostic: bool,
+    fail_wake: bool,
+    expected_failure_class: Option<flui_foundation::panic::FailureClass>,
+) {
     use flui_painting::typography::{FontWeight, TextStyle};
     use std::sync::{
         Arc,
@@ -1892,8 +1904,25 @@ fn font_change_failure_case(fail_diagnostic: bool, fail_wake: bool) {
             calls: Arc::clone(&calls),
         })
     });
-    let failure =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| owner.drain_pending_dirty()));
+    let failure = if let Some(expected_class) = expected_failure_class {
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        owner.drain_pending_dirty_with_recovery(&mut recovery.scope());
+        assert_eq!(
+            recovery.first_failure_class(),
+            Some(expected_class),
+            "the font wake runs after its complete invalidation batch commits"
+        );
+        assert_eq!(
+            recovery.blocking_failure_class(),
+            None,
+            "failed wake delivery does not invalidate the committed font update"
+        );
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| recovery.finish()))
+    } else {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            owner.drain_pending_dirty();
+        }))
+    };
     drop(diagnostics);
     let failure = failure.expect_err("the admitted font update reaches its failing callout");
     let expected_failure = if fail_diagnostic {
@@ -1970,6 +1999,10 @@ fn font_change_contract() {
         (
             "competing_font_change_failures_preserve_the_diagnostic_and_measured_tail",
             competing_font_change_failures_preserve_the_diagnostic_and_measured_tail,
+        ),
+        (
+            "font_change_wake_failure_has_delivery_provenance",
+            font_change_wake_failure_has_delivery_provenance,
         ),
     ];
     let failed: Vec<&str> = cases
