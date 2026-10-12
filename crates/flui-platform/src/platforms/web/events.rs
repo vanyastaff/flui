@@ -657,19 +657,10 @@ fn convert_wheel_event(
 }
 
 fn convert_keyboard_event(ke: &web_sys::KeyboardEvent, state: KeyState) -> PlatformInput {
-    let mut modifiers = Modifiers::NONE;
-    if ke.shift_key() {
-        modifiers |= Modifiers::SHIFT;
-    }
-    if ke.ctrl_key() {
-        modifiers |= Modifiers::CONTROL;
-    }
-    if ke.alt_key() {
-        modifiers |= Modifiers::ALT;
-    }
-    if ke.meta_key() {
-        modifiers |= Modifiers::META;
-    }
+    let modifiers = observed_modifiers(
+        [ke.shift_key(), ke.ctrl_key(), ke.alt_key(), ke.meta_key()],
+        |name| ke.get_modifier_state(name),
+    );
 
     let source: &Utf16KeyboardEvent = ke.unchecked_ref();
     let key = map_key_value(source.key_utf16());
@@ -708,18 +699,45 @@ fn convert_keyboard_event(ke: &web_sys::KeyboardEvent, state: KeyState) -> Platf
 // ==================== Helpers ====================
 
 fn extract_modifiers_from_mouse(e: &web_sys::MouseEvent) -> Modifiers {
+    observed_modifiers(
+        [e.shift_key(), e.ctrl_key(), e.alt_key(), e.meta_key()],
+        |name| e.get_modifier_state(name),
+    )
+}
+
+/// Preserve positive source observations; interpretation belongs to consumers.
+/// DOM getters can reenter, so this collects local values without borrowing state.
+fn observed_modifiers(convenience: [bool; 4], state: impl Fn(&str) -> bool) -> Modifiers {
     let mut modifiers = Modifiers::NONE;
-    if e.shift_key() {
-        modifiers |= Modifiers::SHIFT;
+    for (active, flag) in convenience.into_iter().zip([
+        Modifiers::SHIFT,
+        Modifiers::CONTROL,
+        Modifiers::ALT,
+        Modifiers::META,
+    ]) {
+        if active {
+            modifiers |= flag;
+        }
     }
-    if e.ctrl_key() {
-        modifiers |= Modifiers::CONTROL;
-    }
-    if e.alt_key() {
-        modifiers |= Modifiers::ALT;
-    }
-    if e.meta_key() {
-        modifiers |= Modifiers::META;
+    for (name, flag) in [
+        ("Shift", Modifiers::SHIFT),
+        ("Control", Modifiers::CONTROL),
+        ("Alt", Modifiers::ALT),
+        ("Meta", Modifiers::META),
+        ("AltGraph", Modifiers::ALT_GRAPH),
+        ("CapsLock", Modifiers::CAPS_LOCK),
+        ("NumLock", Modifiers::NUM_LOCK),
+        ("ScrollLock", Modifiers::SCROLL_LOCK),
+        ("Fn", Modifiers::FN),
+        ("FnLock", Modifiers::FN_LOCK),
+        ("Symbol", Modifiers::SYMBOL),
+        ("SymbolLock", Modifiers::SYMBOL_LOCK),
+        ("Hyper", Modifiers::META),
+        ("Super", Modifiers::META),
+    ] {
+        if state(name) {
+            modifiers |= flag;
+        }
     }
     modifiers
 }
