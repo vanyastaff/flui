@@ -3,20 +3,25 @@
 use std::cell::{Cell, RefCell};
 use std::num::NonZeroU64;
 use std::rc::Rc;
-use std::sync::{Arc, atomic::AtomicBool};
+use std::sync::{Arc, atomic::{AtomicBool, AtomicUsize, Ordering}};
 use std::time::Duration;
 
 use flui_foundation::{ManualClock, MonotonicClock, PresentationAddress, UiRuntimeId};
 use flui_interaction::{arena::GestureArenaMember, ids::PointerId};
+use flui_runtime::frame_failure::{
+    FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind,
+    FrameFailureReport, PanicText, SamplingFailure, SamplingFailureOrigin, SamplingStage,
+};
 use flui_runtime::owner::{
-    Delivery, InstallInitialization, InstallToken, InitializationOutcome, OwnerEffects, OwnerHost,
-    RecoveryState,
+    Delivery, DispatchError, FrameDispatcher, InstallInitialization, InstallToken,
+    InitializationOutcome, OwnerEffects, OwnerHost, RecoveryState,
 };
 use flui_runtime::ui_runtime::{RuntimeHostServices, UiRuntime};
 
 struct DeadlineQuery {
     calls: Rc<Cell<usize>>,
     due: web_time::Instant,
+    fail: Cell<bool>,
 }
 
 impl GestureArenaMember for DeadlineQuery {
@@ -26,12 +31,16 @@ impl GestureArenaMember for DeadlineQuery {
 
     fn deadline(&self) -> Option<web_time::Instant> {
         self.calls.set(self.calls.get() + 1);
+        if self.fail.get() {
+            std::panic::panic_any("external deadline query");
+        }
         Some(self.due)
     }
 }
 
 struct Effects {
     query_calls: Rc<Cell<usize>>,
+    frames: Cell<usize>,
     probe_runtime: Cell<bool>,
     runtime_observation: RefCell<Option<RuntimeObservation>>,
 }
@@ -69,6 +78,7 @@ impl OwnerEffects for Effects {
     }
 
     fn frame(&self, _: PresentationAddress, runtime: &mut UiRuntime) {
+        self.frames.set(self.frames.get() + 1);
         // The native host services geometry before consulting its wake gate.
         runtime.enter(UiRuntime::drain_owner_inbox);
         if !self.probe_runtime.get() {
@@ -107,22 +117,12 @@ enum ObservationScope {
 fn scheduling_observation_case(scope: ObservationScope) {
     let clock = ManualClock::new();
     let due = clock.now() + Duration::from_secs(1);
-    let runtime = UiRuntime::new(
-        crate::owner_publication::window(),
-        1.0,
-        RuntimeHostServices::new(
-            Arc::new(|| {}),
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(flui_platform_api::InMemoryClipboard::new()),
-            &flui_painting::FontCollection::new(),
-            flui_scheduler::ClockSource::Manual(clock),
-        ),
-    )
-    .expect("manual-clock runtime");
+    let runtime = manual_runtime(clock);
     let query_calls = Rc::new(Cell::new(0));
     let member = Rc::new(DeadlineQuery {
         calls: Rc::clone(&query_calls),
         due,
+        fail: Cell::new(false),
     });
     let _entry = runtime
         .gestures()
@@ -136,6 +136,7 @@ fn scheduling_observation_case(scope: ObservationScope) {
     let frame = owner.frame_dispatcher(address).expect("frame authority");
     let effects = Effects {
         query_calls: Rc::clone(&query_calls),
+        frames: Cell::new(0),
         probe_runtime: Cell::new(false),
         runtime_observation: RefCell::new(None),
     };
@@ -171,12 +172,256 @@ fn scheduling_observation_case(scope: ObservationScope) {
     }
 }
 
+fn manual_runtime(clock: ManualClock) -> UiRuntime {
+    UiRuntime::new(
+        crate::owner_publication::window(),
+        1.0,
+        RuntimeHostServices::new(
+            Arc::new(|| {}),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            &flui_painting::FontCollection::new(),
+            flui_scheduler::ClockSource::Manual(clock),
+        ),
+    )
+    .expect("manual-clock runtime")
+}
+
 fn owner_wake_uses_the_committed_scheduling_observation() {
     scheduling_observation_case(ObservationScope::Owner);
 }
 
 fn runtime_wake_and_pending_use_the_committed_scheduling_observation() {
     scheduling_observation_case(ObservationScope::Runtime);
+}
+
+struct ReportProbe {
+    owner: OwnerHost,
+    frame: FrameDispatcher,
+    effects: Rc<Effects>,
+    fail_handler: bool,
+    observations: RefCell<Vec<ReportObservation>>,
+}
+
+#[derive(Debug)]
+struct ReportObservation {
+    address: PresentationAddress,
+    first: SamplingFailure,
+    blocking: Option<SamplingFailure>,
+    admitted_attempt: bool,
+    message: PanicText,
+    disposition: FailureDisposition,
+    consecutive_failures: u32,
+    executing: Result<bool, DispatchError>,
+    runtimes: Result<Vec<UiRuntimeId>, DispatchError>,
+    wake: Result<Option<web_time::Instant>, DispatchError>,
+    queued: Result<Delivery, DispatchError>,
+    queries_before: usize,
+    queries_after: usize,
+    frames_before: usize,
+    frames_after: usize,
+}
+
+thread_local! {
+    // The report API is Send + Sync, while its owner is thread-affine.
+    // Only this table installs a context, and every callback releases its
+    // TLS borrow before invoking the public owner interface.
+    static REPORT_PROBE: RefCell<Option<Rc<ReportProbe>>> = const { RefCell::new(None) };
+}
+
+struct ScopedReportProbe;
+
+impl ScopedReportProbe {
+    fn install(probe: Rc<ReportProbe>) -> Self {
+        let previous = REPORT_PROBE.with(|slot| slot.replace(Some(probe)));
+        assert!(previous.is_none(), "report probe is not nested");
+        Self
+    }
+}
+
+impl Drop for ScopedReportProbe {
+    fn drop(&mut self) {
+        let retired = REPORT_PROBE.with(RefCell::take);
+        drop(retired);
+    }
+}
+
+fn observe_sampling_report(report: &FrameFailureReport) {
+    let FrameFailureKind::SamplingPanic {
+        first,
+        blocking,
+        admitted_attempt,
+        message,
+        ..
+    } = &report.kind
+    else {
+        return;
+    };
+    let probe = REPORT_PROBE
+        .with(|slot| slot.borrow().clone())
+        .expect("report has a scoped owner probe");
+    let queries_before = probe.effects.query_calls.get();
+    let executing = probe.owner.is_executing();
+    let runtimes = probe.owner.runtime_ids();
+    let wake = probe.owner.next_wake();
+    let frames_before = probe.effects.frames.get();
+    let queued = probe.frame.deliver(probe.effects.as_ref());
+    probe.observations.borrow_mut().push(ReportObservation {
+        address: report.address,
+        first: *first,
+        blocking: *blocking,
+        admitted_attempt: *admitted_attempt,
+        message: message.clone(),
+        disposition: report.disposition,
+        consecutive_failures: report.consecutive_failures,
+        executing,
+        runtimes,
+        wake,
+        queued,
+        queries_before,
+        queries_after: probe.effects.query_calls.get(),
+        frames_before,
+        frames_after: probe.effects.frames.get(),
+    });
+    if probe.fail_handler {
+        std::panic::panic_any("sampling report handler");
+    }
+}
+
+struct FailingDiagnostics(Arc<AtomicUsize>);
+
+impl tracing::Subscriber for FailingDiagnostics {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        if *event.metadata().level() == tracing::Level::ERROR {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            std::panic::panic_any("sampling diagnostics");
+        }
+    }
+
+    fn enter(&self, _: &tracing::span::Id) {}
+
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+fn query_report_case(fail_handler: bool, fail_diagnostics: bool) {
+    let clock = ManualClock::new();
+    let now = clock.now();
+    let due = now + Duration::from_secs(1);
+    let runtime = manual_runtime(clock.clone());
+    runtime.set_frame_failure_detail(FrameFailureDetail::Verbatim);
+    runtime.set_frame_failure_handler(Some(FrameFailureHandler::new(observe_sampling_report)));
+    let query_calls = Rc::new(Cell::new(0));
+    let member = Rc::new(DeadlineQuery {
+        calls: Rc::clone(&query_calls),
+        due,
+        fail: Cell::new(false),
+    });
+    let _entry = runtime
+        .gestures()
+        .arena()
+        .add(PointerId::new(NonZeroU64::MIN), &member);
+    let owner = OwnerHost::new();
+    let address = owner
+        .publication(owner.prepare_runtime(runtime))
+        .expect("publish runtime")
+        .commit();
+    let frame = owner.frame_dispatcher(address).expect("frame authority");
+    let effects = Rc::new(Effects {
+        query_calls: Rc::clone(&query_calls),
+        frames: Cell::new(0),
+        probe_runtime: Cell::new(false),
+        runtime_observation: RefCell::new(None),
+    });
+    assert_eq!(frame.deliver(effects.as_ref()), Ok(Delivery::Driven));
+    let queries_before_fault = query_calls.get();
+    let frames_before_fault = effects.frames.get();
+    let probe = Rc::new(ReportProbe {
+        owner: owner.clone(),
+        frame: frame.clone(),
+        effects: Rc::clone(&effects),
+        fail_handler,
+        observations: RefCell::new(Vec::new()),
+    });
+    let _probe_scope = ScopedReportProbe::install(Rc::clone(&probe));
+    let diagnostic_calls = Arc::new(AtomicUsize::new(0));
+    let diagnostics = fail_diagnostics
+        .then(|| tracing::subscriber::set_default(FailingDiagnostics(Arc::clone(&diagnostic_calls))));
+    member.fail.set(true);
+    assert_eq!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            frame.deliver(effects.as_ref())
+        }))
+        .expect("deadline discovery and its diagnostics are contained"),
+        Ok(Delivery::Driven)
+    );
+    drop(diagnostics);
+
+    {
+        let observed = probe.observations.borrow();
+        assert_eq!(observed.len(), 1, "one query operation report: {observed:?}");
+        let observed = &observed[0];
+        assert_eq!(observed.address, address);
+        assert_eq!(observed.first.stage, SamplingStage::DeadlineDiscovery);
+        assert_eq!(observed.first.origin, SamplingFailureOrigin::Unknown);
+        let blocking = observed.blocking.expect("unknown query restricts publication");
+        assert_eq!(blocking.stage, SamplingStage::DeadlineDiscovery);
+        assert_eq!(blocking.origin, SamplingFailureOrigin::Unknown);
+        assert!(!observed.admitted_attempt);
+        assert_eq!(observed.disposition, FailureDisposition::Contained);
+        assert_eq!(observed.consecutive_failures, 0);
+        assert_eq!(observed.message, PanicText::Verbatim("external deadline query".into()));
+        assert_eq!(observed.executing, Ok(false), "report follows lease return");
+        assert_eq!(observed.runtimes, Ok(vec![address.ui_runtime_id]));
+        assert_eq!(observed.wake, Ok(Some(now + Duration::from_millis(100))));
+        assert_eq!(observed.queued, Ok(Delivery::Queued));
+        assert_eq!(observed.queries_before, queries_before_fault + 1);
+        assert_eq!(observed.queries_after, observed.queries_before);
+        assert_eq!(observed.frames_after, observed.frames_before);
+    }
+    assert_eq!(query_calls.get(), queries_before_fault + 1);
+    assert_eq!(effects.frames.get(), frames_before_fault + 2);
+    assert_eq!(diagnostic_calls.load(Ordering::Relaxed) > 0, fail_diagnostics);
+
+    clock.advance(Duration::from_millis(99));
+    assert_eq!(frame.deliver(effects.as_ref()), Ok(Delivery::Driven));
+    assert_eq!(query_calls.get(), queries_before_fault + 1, "early owner turn does not re-probe");
+    assert_eq!(probe.observations.borrow().len(), 1);
+    assert_eq!(owner.next_wake(), Ok(Some(now + Duration::from_millis(100))));
+
+    member.fail.set(false);
+    clock.advance(Duration::from_millis(1));
+    assert_eq!(frame.deliver(effects.as_ref()), Ok(Delivery::Driven));
+    assert!(query_calls.get() > queries_before_fault + 1, "the due retry observes the repaired source");
+    assert_eq!(owner.next_wake(), Ok(Some(due)));
+    assert_eq!(probe.observations.borrow().len(), 1, "successful retry emits no duplicate report");
+}
+
+fn query_failure_reports_after_lease_return_and_recovers() {
+    query_report_case(false, false);
+}
+
+fn failing_query_report_handler_preserves_recovery() {
+    query_report_case(true, false);
+}
+
+fn failing_query_diagnostics_preserve_report_and_recovery() {
+    query_report_case(false, true);
+}
+
+fn competing_query_diagnostics_and_handler_preserve_recovery() {
+    query_report_case(true, true);
 }
 
 #[test]
@@ -191,6 +436,22 @@ fn owner_sampling_contract() {
             (
                 "runtime scheduling observations are inert",
                 runtime_wake_and_pending_use_the_committed_scheduling_observation,
+            ),
+            (
+                "query report follows lease return and recovery",
+                query_failure_reports_after_lease_return_and_recovers,
+            ),
+            (
+                "query report handler failure keeps recovery",
+                failing_query_report_handler_preserves_recovery,
+            ),
+            (
+                "query diagnostics failure keeps report and recovery",
+                failing_query_diagnostics_preserve_report_and_recovery,
+            ),
+            (
+                "query diagnostics and handler competition keeps recovery",
+                competing_query_diagnostics_and_handler_preserve_recovery,
             ),
         ],
     );
