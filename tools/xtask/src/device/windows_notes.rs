@@ -133,7 +133,7 @@ struct Driver<'a> {
 impl Driver<'_> {
     fn flow(&mut self) -> anyhow::Result<()> {
         self.owned()?;
-        if input::foreground(self.hwnd).is_none() {
+        if input::foreground(self.session, self.hwnd).is_none() {
             return Err(host_error("Windows refused Notes foreground ownership"));
         }
         self.resize(640, 720)?;
@@ -246,7 +246,7 @@ impl Driver<'_> {
 
     fn before_input(&self) -> anyhow::Result<()> {
         self.owned()?;
-        if !input::still_foreground(self.hwnd) {
+        if !input::still_foreground(self.session, self.hwnd) {
             return Err(host_error(
                 "Notes lost the foreground; no further input sent",
             ));
@@ -408,7 +408,7 @@ impl Driver<'_> {
     fn click(&self, point: POINT) -> anyhow::Result<()> {
         self.before_input()?;
         let guard = Release::new(vec![input::mouse(MOUSEEVENTF_LEFTUP)]);
-        let sent = input::click(self.hwnd, point)
+        let sent = input::click(self.session, self.hwnd, point)
             .map_err(|error| host_error(format!("native click refused: {error:#}")))?;
         if !sent {
             return Err(host_error(
@@ -768,7 +768,7 @@ impl Driver<'_> {
             .map_err(|error| host_error(format!("cursor move refused: {error}")))?;
         std::thread::sleep(HOLD);
         self.before_input()?;
-        if !input::hits(self.hwnd, point) {
+        if !input::hits(self.session, self.hwnd, point) {
             return Err(host_error("drag/wheel point does not hit Notes"));
         }
         Ok(())

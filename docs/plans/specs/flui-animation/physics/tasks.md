@@ -1,6 +1,9 @@
 # flui-animation / physics — задачи
 
-- **Статус:** черновик
+- **Статус:** исторический план; текущие контракты —
+  [readiness-status](../readiness-status.md), выпускная приёмка —
+  [release-evidence](../release-evidence.md). Строки ниже сохраняют исходный маршрут,
+  а не список незавершённой реализации.
 - **Дата:** 2026-10-06
 - **Design:** [design.md](design.md); требования — [requirements.md](requirements.md)
 - **Порядок:** ветка и worktree на задачу от `Q0` (`cargo xtask worktree new animation/<slug>`), один
