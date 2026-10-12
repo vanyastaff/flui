@@ -383,6 +383,12 @@ pub fn the_field_carries_its_label_hint_and_error_for_assistive_technology() {
     );
     assert!(field.raw().invalid().is_some(), "{}", tree.describe());
     assert_eq!(
+        field.raw().description(),
+        Some("Enter an email"),
+        "the error describes the field\n{}",
+        tree.describe()
+    );
+    assert_eq!(
         tree.find_all_by_label("Email").len(),
         1,
         "the label is announced once, as the field's name\n{}",

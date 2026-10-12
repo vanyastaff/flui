@@ -371,6 +371,22 @@ without an arm would silently fall back to the flag cascade.
 asserts that exactly `DragHandle` and `HotKey` map to `GenericContainer`; deleting the
 `Form` arm makes it fail with `form maps to no AccessKit role`.
 
+### Relations resolve through anchors at publication
+
+**Rule.** [ADR-0201](../../docs/adr/ADR-0201-semantics-relations-by-anchor.md): a target declares
+a `SemanticsAnchor`, a source holds `(SemanticsRelation, anchor)`, and both merge as unions. The
+full path indexes the whole tree; the owner's `RelationIndex` keeps anchored nodes and relation
+sources from dirty nodes, like the focus claimants, and an incremental flush re-translates every
+clean relation source against the fresh index. Targets are published sorted, so an unchanged
+relation diffs as unchanged.
+
+**Why the clean sources are re-translated.** A mark-scoped graft can remount a target under a new
+identity and leave its source's subtree untouched; diffing only dirty nodes would keep the old id.
+Sources are few, and the mirror diff discards the ones that did not change.
+
+**Test.** `relations_resolve_through_anchors_across_publication` in `tests/incremental_flush.rs`,
+red with the clean-source loop removed.
+
 ### A live region's politeness is explicit, else implied by its role
 
 **Rule.** `set_live_region(Some(politeness))` sets `IsLiveRegion`, plus

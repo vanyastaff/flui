@@ -42,7 +42,8 @@ use flui_rendering::{
     protocol::BoxProtocol,
     semantics::{
         ActionArgs, Assertiveness, HeadingLevel, SemanticsAction, SemanticsActionHandler,
-        SemanticsConfiguration, SemanticsProperties, SemanticsRole, TextDirection,
+        SemanticsAnchor, SemanticsConfiguration, SemanticsProperties, SemanticsRelation,
+        SemanticsRole, TextDirection,
     },
 };
 use flui_view::{
@@ -444,6 +445,32 @@ impl Semantics {
     #[must_use]
     pub fn names_route(mut self, names_route: bool) -> Self {
         self.configuration.set_names_route(names_route);
+        self
+    }
+
+    /// Name this node by `anchor`, so other nodes' relations to the anchor
+    /// resolve here (ADR-0201).
+    #[must_use]
+    pub fn anchor(mut self, anchor: SemanticsAnchor) -> Self {
+        self.configuration.add_anchor(anchor);
+        self
+    }
+
+    /// Name this node by the nodes `anchor` names, when it has no label of
+    /// its own: a dialog by its title.
+    #[must_use]
+    pub fn labelled_by(mut self, anchor: SemanticsAnchor) -> Self {
+        self.configuration
+            .add_relation(SemanticsRelation::LabelledBy, anchor);
+        self
+    }
+
+    /// Record that this node controls the nodes `anchor` names: a button and
+    /// the panel it opens.
+    #[must_use]
+    pub fn controls(mut self, anchor: SemanticsAnchor) -> Self {
+        self.configuration
+            .add_relation(SemanticsRelation::Controls, anchor);
         self
     }
 

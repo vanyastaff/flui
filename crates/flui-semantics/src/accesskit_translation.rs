@@ -32,8 +32,11 @@ use accesskit::{
 use crate::action::SemanticsAction;
 use crate::flags::SemanticsFlag;
 use crate::node::SemanticsNode;
+use crate::relation::{SemanticsAnchor, SemanticsRelation};
 use crate::role::SemanticsRole;
 use crate::update::SemanticsNodeData;
+use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 
 /// Whether `bits` carries `flag`.
 #[inline]
@@ -675,8 +678,10 @@ pub(crate) fn to_published_node(
     data: &SemanticsNodeData,
     is_root: bool,
     device_pixel_ratio: f64,
+    anchors: &AnchorIndex,
 ) -> Node {
     let mut node = to_node(data);
+    apply_relations(&mut node, data, anchors);
     #[expect(
         clippy::float_cmp,
         reason = "exactly 1.0 is the identity AccessKit asks to leave unset"
@@ -690,6 +695,55 @@ pub(crate) fn to_published_node(
         node.set_role(Role::Window);
     }
     node
+}
+
+/// The published ids of the nodes declaring each anchor (ADR-0201).
+pub(crate) type AnchorIndex = FxHashMap<SemanticsAnchor, SmallVec<[NodeId; 1]>>;
+
+/// Indexes every addressable node's anchors in `nodes`.
+pub(crate) fn anchor_index<'a>(nodes: impl IntoIterator<Item = &'a SemanticsNode>) -> AnchorIndex {
+    let mut index = AnchorIndex::default();
+    for node in nodes {
+        let Some(identity) = node.accessibility_id() else {
+            continue;
+        };
+        for anchor in node.config().anchors() {
+            index
+                .entry(anchor.clone())
+                .or_default()
+                .push(NodeId(identity.as_u64()));
+        }
+    }
+    index
+}
+
+/// Publishes each relation to the nodes its anchor names. A relation whose
+/// anchor no published node declares is omitted rather than pointed at a node
+/// the adapter does not have.
+fn apply_relations(node: &mut Node, data: &SemanticsNodeData, anchors: &AnchorIndex) {
+    // Sorted, so the published list does not depend on index iteration order
+    // and an unchanged relation diffs as unchanged.
+    let targets = |kind: SemanticsRelation| -> Vec<NodeId> {
+        let mut ids: Vec<NodeId> = data
+            .relations
+            .iter()
+            .filter(|(relation, _)| *relation == kind)
+            .filter_map(|(_, anchor)| anchors.get(anchor))
+            .flatten()
+            .copied()
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        ids
+    };
+    let labelled_by = targets(SemanticsRelation::LabelledBy);
+    if !labelled_by.is_empty() {
+        node.set_labelled_by(labelled_by);
+    }
+    let controls = targets(SemanticsRelation::Controls);
+    if !controls.is_empty() {
+        node.set_controls(controls);
+    }
 }
 
 /// The node claiming [`SemanticsFlag::IsFocused`], if exactly one does.
@@ -786,6 +840,7 @@ pub(crate) fn tree_to_scaled_update(
     };
 
     let root_node_id = stable_id(tree.root()?)?;
+    let anchors = anchor_index(tree.iter().map(|(_, node)| node));
 
     let nodes: Vec<(NodeId, Node)> = tree
         .iter()
@@ -798,7 +853,7 @@ pub(crate) fn tree_to_scaled_update(
             let node_id = NodeId(data.id?.as_u64());
             Some((
                 node_id,
-                to_published_node(&data, node_id == root_node_id, device_pixel_ratio),
+                to_published_node(&data, node_id == root_node_id, device_pixel_ratio, &anchors),
             ))
         })
         .collect();

@@ -36,6 +36,7 @@ use smol_str::SmolStr;
 
 use crate::identity::AccessibilityNodeId;
 use crate::properties::{HeadingLevel, TextDirection};
+use crate::relation::{SemanticsAnchor, SemanticsRelation};
 use crate::role::SemanticsRole;
 
 // ============================================================================
@@ -104,6 +105,9 @@ pub struct SemanticsNodeData {
     pub current_value_length: Option<i32>,
     /// The outline level of a header node.
     pub heading_level: Option<HeadingLevel>,
+    /// Relations to the nodes their anchors name, resolved at publication
+    /// (ADR-0201).
+    pub relations: SmallVec<[(SemanticsRelation, SemanticsAnchor); 1]>,
     /// Scroll position.
     pub scroll_position: Option<f64>,
     /// Axis of the scroll position and extents; absent metadata means vertical.
@@ -160,6 +164,7 @@ impl Default for SemanticsNodeData {
             max_value_length: None,
             current_value_length: None,
             heading_level: None,
+            relations: SmallVec::new(),
             scroll_position: None,
             scroll_axis: None,
             scroll_extent_max: None,

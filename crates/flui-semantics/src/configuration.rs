@@ -19,6 +19,7 @@ use crate::{
         SemanticsProperties, SemanticsSortKey, SemanticsTag, TextDirection,
         UNBLOCKED_USER_ACTIONS_MASK, concat_attributed_string,
     },
+    relation::{SemanticsAnchor, SemanticsRelation},
     role::{Assertiveness, SemanticsRole},
 };
 
@@ -170,6 +171,12 @@ pub struct SemanticsConfiguration {
     /// The outline level of a header node.
     heading_level: Option<HeadingLevel>,
 
+    /// Anchors naming this node as a relation target (ADR-0201).
+    anchors: SmallVec<[SemanticsAnchor; 1]>,
+
+    /// This node's relations to the nodes other anchors name.
+    relations: SmallVec<[(SemanticsRelation, SemanticsAnchor); 1]>,
+
     /// Semantic role for this node.
     ///
     /// Defaults to [`SemanticsRole::None`]. Consumed by the platform
@@ -222,6 +229,8 @@ impl PartialEq for SemanticsConfiguration {
             && self.max_value_length == other.max_value_length
             && self.current_value_length == other.current_value_length
             && self.heading_level == other.heading_level
+            && self.anchors == other.anchors
+            && self.relations == other.relations
             && self.role == other.role
     }
 }
@@ -1134,6 +1143,40 @@ impl SemanticsConfiguration {
     }
 
     // ========================================================================
+    // Relations
+    // ========================================================================
+
+    /// Declares that the node this configuration forms or merges into is
+    /// named by `anchor`, so other nodes' relations to it resolve here.
+    pub fn add_anchor(&mut self, anchor: SemanticsAnchor) {
+        if !self.anchors.contains(&anchor) {
+            self.anchors.push(anchor);
+        }
+        self.mark_annotated();
+    }
+
+    /// The anchors naming this node.
+    #[inline]
+    pub fn anchors(&self) -> &[SemanticsAnchor] {
+        &self.anchors
+    }
+
+    /// Relates this node to every node `anchor` names.
+    pub fn add_relation(&mut self, relation: SemanticsRelation, anchor: SemanticsAnchor) {
+        let entry = (relation, anchor);
+        if !self.relations.contains(&entry) {
+            self.relations.push(entry);
+        }
+        self.mark_annotated();
+    }
+
+    /// This node's relations, each to the nodes its anchor names.
+    #[inline]
+    pub fn relations(&self) -> &[(SemanticsRelation, SemanticsAnchor)] {
+        &self.relations
+    }
+
+    // ========================================================================
     // Role
     // ========================================================================
 
@@ -1242,6 +1285,7 @@ impl SemanticsConfiguration {
     ///   text_direction / hint overrides / scroll metadata / list index /
     ///   platform view / text lengths / heading level** — first-wins (parent keeps its value
     ///   if set).
+    /// - **Anchors / relations** — union.
     /// - **Role** — merge: parent keeps its role if not `None`;
     ///   otherwise inherits the child's role.
     ///
@@ -1370,6 +1414,18 @@ impl SemanticsConfiguration {
         }
         if self.heading_level.is_none() {
             self.heading_level = other.heading_level;
+        }
+
+        // ----- anchors and relations (union) -----
+        for anchor in &other.anchors {
+            if !self.anchors.contains(anchor) {
+                self.anchors.push(anchor.clone());
+            }
+        }
+        for entry in &other.relations {
+            if !self.relations.contains(entry) {
+                self.relations.push(entry.clone());
+            }
         }
 
         // ----- role (parent keeps if non-None, else inherit) -----

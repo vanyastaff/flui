@@ -420,6 +420,7 @@ pub struct EditableText {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct FieldSemantics {
     label: Option<String>,
+    hint: Option<String>,
     placeholder: Option<String>,
     invalid: bool,
 }
@@ -455,6 +456,14 @@ impl EditableText {
     #[must_use]
     pub fn semantic_label(mut self, label: impl Into<String>) -> Self {
         self.field_semantics.label = Some(label.into());
+        self
+    }
+
+    /// Supplementary text a screen reader reads after the field's name and
+    /// value: what its helper or error line says.
+    #[must_use]
+    pub fn semantic_hint(mut self, hint: impl Into<String>) -> Self {
+        self.field_semantics.hint = Some(hint.into());
         self
     }
 
@@ -2648,6 +2657,9 @@ fn build_field_view(
     }
     if let Some(placeholder) = &appearance.semantics.placeholder {
         semantics = semantics.placeholder(placeholder.as_str());
+    }
+    if let Some(hint) = &appearance.semantics.hint {
+        semantics = semantics.hint(hint.as_str());
     }
     if enabled {
         let edit = actions.clone();

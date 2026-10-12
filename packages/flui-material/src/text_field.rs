@@ -450,6 +450,16 @@ impl ViewState<TextField> for MaterialTextFieldState {
         if let Some(hint) = &view.decoration.hint_text {
             editable = editable.placeholder(hint.clone());
         }
+        // The supporting line describes the field wherever the reader is: an
+        // error replaces the helper text, as it does on screen.
+        if let Some(line) = view
+            .decoration
+            .error_text
+            .as_ref()
+            .or(view.decoration.helper_text.as_ref())
+        {
+            editable = editable.semantic_hint(line.clone());
+        }
         if let Some(text_style) = theme.text_theme.body_large {
             editable = editable.text_style(text_style);
         }

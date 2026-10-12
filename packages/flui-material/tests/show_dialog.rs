@@ -227,9 +227,12 @@ pub fn a_shown_dialog_hides_the_page_beneath_from_assistive_technology() {
         .find(Role::AlertDialog)
         .unwrap_or_else(|error| panic!("{error}\n{}", tree.describe()));
     assert!(dialog.raw().is_modal(), "{}", tree.describe());
-    assert!(
-        !tree.find_all_by_label("Discard changes?").is_empty(),
-        "the dialog's title is announced\n{}",
+    let titles = tree.find_all_by_label("Discard changes?");
+    assert_eq!(titles.len(), 1, "{}", tree.describe());
+    assert_eq!(
+        dialog.raw().labelled_by(),
+        &[titles[0].id()],
+        "the dialog is named by its title\n{}",
         tree.describe()
     );
     assert!(

@@ -317,6 +317,7 @@ impl SemanticsNode {
             max_value_length: self.config.max_value_length(),
             current_value_length: self.config.current_value_length(),
             heading_level: self.config.heading_level(),
+            relations: self.config.relations().iter().cloned().collect(),
             scroll_position: self.config.scroll_position(),
             scroll_axis: self.config.scroll_axis(),
             scroll_extent_max: self.config.scroll_extent_max(),

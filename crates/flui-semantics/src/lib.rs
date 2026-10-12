@@ -77,6 +77,7 @@ mod numeric_range;
 pub mod owner;
 pub mod platform;
 pub mod properties;
+pub mod relation;
 pub mod role;
 pub mod snapshot;
 pub mod tree;
@@ -146,6 +147,7 @@ pub use properties::{
 // ============================================================================
 // RE-EXPORTS - Role Types
 // ============================================================================
+pub use relation::{SemanticsAnchor, SemanticsRelation};
 pub use role::{
     AccessibilityFocusBlockType, Assertiveness, DebugSemanticsDumpOrder, SemanticsRole,
 };
@@ -181,11 +183,11 @@ pub mod prelude {
         AccessibilityFocusBlockType, AccessibilityNodeId, ActionArgs, Assertiveness,
         AttributedString, DebugSemanticsDumpOrder, HeadingLevel, NumericRange, NumericRangeError,
         SemanticsAction, SemanticsActionError, SemanticsActionHandler, SemanticsActionInvocation,
-        SemanticsActionRequest, SemanticsConfiguration, SemanticsEvent, SemanticsEventType,
-        SemanticsFlag, SemanticsFlags, SemanticsId, SemanticsNode, SemanticsNodeData,
-        SemanticsNodeSnapshot, SemanticsOwner, SemanticsProperties, SemanticsRole,
-        SemanticsSnapshot, SemanticsSnapshotError, SemanticsTag, SemanticsTree,
-        SemanticsTreeUpdate, SemanticsTreeUpdateBuilder, TextDirection,
+        SemanticsActionRequest, SemanticsAnchor, SemanticsConfiguration, SemanticsEvent,
+        SemanticsEventType, SemanticsFlag, SemanticsFlags, SemanticsId, SemanticsNode,
+        SemanticsNodeData, SemanticsNodeSnapshot, SemanticsOwner, SemanticsProperties,
+        SemanticsRelation, SemanticsRole, SemanticsSnapshot, SemanticsSnapshotError, SemanticsTag,
+        SemanticsTree, SemanticsTreeUpdate, SemanticsTreeUpdateBuilder, TextDirection,
     };
 }
 
