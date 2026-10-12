@@ -185,8 +185,10 @@ fn apply_state(node: &mut Node, attrs: &SemanticsAttributes) {
             Toggled::Mixed => accesskit::Toggled::Mixed,
         });
     }
-    if selected == Some(true) {
-        node.set_selected(true);
+    // A declared `false` is published too: AccessKit tells an unselected
+    // item from one selection does not apply to.
+    if let Some(selected) = selected {
+        node.set_selected(selected);
     }
     if let Some(expanded) = expanded {
         node.set_expanded(expanded);

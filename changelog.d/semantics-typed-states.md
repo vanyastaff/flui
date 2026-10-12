@@ -28,3 +28,14 @@
   `is_toggled`, and `Semantics::checked`, `mixed` and `in_mutually_exclusive_group`. Use the
   role setters, `set_toggled(Option<Toggled>)` and `Semantics::checkbox`/`radio`/`switch`;
   `Semantics::toggled` now takes a `Toggled`.
+
+### Fixed
+
+- **NavigationBar destinations publish as tabs** (`flui-material`) again: the destination no
+  longer declares a button role that replaced its tab role.
+- **An explicitly unselected node publishes `selected: false`** (`flui-semantics`), so tabs and
+  list items keep their selection behavior while not selected.
+- **Two scroll groups conflict** (`flui-semantics`): two scrollables never merge into one node
+  outside a forced merge.
+- **A change inside a nested merger stays incremental** (`flui-rendering`): the pass re-assembles
+  the nested merger's subtree instead of the whole tree.

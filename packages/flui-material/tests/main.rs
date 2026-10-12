@@ -354,6 +354,10 @@ fn navigation_and_layout_contracts() {
             navigation_bar::a_single_destination_is_rejected,
         ),
         (
+            "navigation_bar::destinations announce as tabs with their selection",
+            navigation_bar::destinations_announce_as_tabs_with_their_selection,
+        ),
+        (
             "navigation_bar::an index at the destination count is rejected",
             navigation_bar::an_index_at_the_destination_count_is_rejected,
         ),

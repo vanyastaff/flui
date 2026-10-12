@@ -866,7 +866,8 @@ fn anchor_for(
 ///
 /// `None` when the chain is not rooted at the pipeline root (a detached
 /// subtree), an ancestor excludes its semantics subtree, or the fold says
-/// `target` assembles merged into an ancestor — each contradicts the
+/// `target` assembles merged into an ancestor without being a nested merger
+/// (which forms its own node there) — each contradicts the
 /// anchor's arena presence, so the caller falls back to the full rebuild.
 fn assembly_inputs_for(
     tree: &RenderTree,
@@ -897,7 +898,11 @@ fn assembly_inputs_for(
     for (index, &id) in chain.iter().enumerate() {
         let node = tree.get(id)?;
         if id == target {
-            if context.merge_into_ancestor {
+            // Inside a merge only a nested merger forms its own node; any
+            // other target there contradicts its arena presence.
+            if context.merge_into_ancestor
+                && !assembly_decisions(&describe_semantics_configuration(node), context).forms_node
+            {
                 return None;
             }
             return Some((context, transform, clips, blocks_user_actions));
