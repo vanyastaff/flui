@@ -164,13 +164,13 @@ impl Drop for Listener {
     }
 }
 
-struct Observer {
+struct ResizeSubscription {
     observer: web_sys::ResizeObserver,
     closure: Option<Closure<dyn Fn()>>,
     _body: Rc<dyn Fn()>,
 }
 
-impl Drop for Observer {
+impl Drop for ResizeSubscription {
     fn drop(&mut self) {
         if let Err(error) = disconnect_observer(&self.observer) {
             if let Some(closure) = self.closure.take() {
@@ -186,7 +186,7 @@ pub(super) struct Registration {
     pub(super) pointers: Rc<RefCell<HashMap<i32, u16>>>,
     canvas: web_sys::HtmlCanvasElement,
     listeners: Vec<Listener>,
-    observer: Option<Observer>,
+    observer: Option<ResizeSubscription>,
     claim: CanvasClaim,
 }
 
@@ -264,12 +264,12 @@ impl Registration {
                     tracing::warn!(
                         ?error,
                         "ResizeObserver unavailable; using window resize subscription"
-                    )
+                    );
                 });
                 return Ok(());
             }
         };
-        self.observer = Some(Observer {
+        self.observer = Some(ResizeSubscription {
             observer: observer.clone(),
             closure: Some(closure),
             _body: body,

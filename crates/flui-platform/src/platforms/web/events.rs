@@ -303,7 +303,7 @@ fn register_focus_events(
     for (kind, hovered) in [("pointerenter", true), ("pointerleave", false)] {
         let callbacks = Arc::clone(window.callbacks());
         registration.listen(window.canvas().as_ref(), kind, move |_| {
-            callbacks.dispatch_hover_status_change(hovered)
+            callbacks.dispatch_hover_status_change(hovered);
         })?;
     }
     Ok(focus)
