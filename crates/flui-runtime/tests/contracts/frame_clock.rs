@@ -2,7 +2,10 @@
 
 use flui_animation::{Animation, AnimationController, Vsync};
 use flui_foundation::{Listenable, ManualClock, MonotonicClock};
-use flui_runtime::frame_failure::{FailureDisposition, FrameFailureHandler};
+use flui_runtime::frame_failure::{
+    FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind,
+    FrameFailureReport, PanicText, SamplingFailureOrigin, SamplingStage,
+};
 use flui_runtime::pump::{FrameClockSource, SampledClock};
 use flui_runtime::sink::{FrameSink, SubmitVerdict};
 use flui_runtime::ui_runtime::{RuntimeHostServices, UiRuntime};
@@ -27,6 +30,49 @@ impl FrameClockSource for AdvancingHostClock {
 }
 
 struct Sink;
+
+#[derive(Debug, PartialEq)]
+struct RecordedSampling {
+    first: (SamplingStage, SamplingFailureOrigin),
+    blocking: Option<(SamplingStage, SamplingFailureOrigin)>,
+    admitted_attempt: bool,
+    message: PanicText,
+    internal_invariant: bool,
+}
+
+#[derive(Debug, PartialEq)]
+struct RecordedFailure {
+    address: flui_foundation::PresentationAddress,
+    disposition: FailureDisposition,
+    consecutive_failures: u32,
+    sampling: Option<RecordedSampling>,
+}
+
+fn record_failure(report: &FrameFailureReport) -> RecordedFailure {
+    let sampling = match &report.kind {
+        FrameFailureKind::SamplingPanic {
+            first,
+            blocking,
+            admitted_attempt,
+            message,
+            internal_invariant,
+            ..
+        } => Some(RecordedSampling {
+            first: (first.stage, first.origin),
+            blocking: blocking.map(|blocker| (blocker.stage, blocker.origin)),
+            admitted_attempt: *admitted_attempt,
+            message: message.clone(),
+            internal_invariant: *internal_invariant,
+        }),
+        _ => None,
+    };
+    RecordedFailure {
+        address: report.address,
+        disposition: report.disposition,
+        consecutive_failures: report.consecutive_failures,
+        sampling,
+    }
+}
 
 #[derive(Clone, StatefulView)]
 struct SamplingView {
@@ -155,14 +201,14 @@ fn delivery_case(delivery: Delivery) {
         ),
     )
     .expect("runtime");
+    runtime.set_frame_failure_detail(FrameFailureDetail::Verbatim);
     let reports = Arc::new(Mutex::new(Vec::new()));
     let reported = Arc::clone(&reports);
     runtime.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
-        reported.lock().expect("failure observations").push((
-            report.address,
-            report.disposition,
-            report.consecutive_failures,
-        ));
+        reported
+            .lock()
+            .expect("failure observations")
+            .push(record_failure(report));
     })));
     let armed = Rc::new(Cell::new(true));
     let deadline_armed = Rc::clone(&armed);
@@ -313,14 +359,37 @@ fn delivery_case(delivery: Delivery) {
             assert!(!armed.get(), "the real failing callback ran");
             assert_eq!(
                 reports.as_slice(),
-                &[(
-                    flui_foundation::PresentationAddress {
+                &[RecordedFailure {
+                    address: flui_foundation::PresentationAddress {
                         ui_runtime_id: runtime.id(),
                         presentation_id: runtime.presentation_id(),
                     },
-                    FailureDisposition::Contained,
-                    0,
-                )],
+                    disposition: FailureDisposition::Contained,
+                    consecutive_failures: 0,
+                    sampling: Some(RecordedSampling {
+                        first: (
+                            if delivery == Delivery::Deadline {
+                                SamplingStage::GestureDeadline
+                            } else {
+                                SamplingStage::Animation
+                            },
+                            SamplingFailureOrigin::Delivery,
+                        ),
+                        blocking: None,
+                        admitted_attempt: true,
+                        message: PanicText::Verbatim(
+                            match delivery {
+                                Delivery::Animation => "primary value delivery",
+                                Delivery::FinalStatus => "primary final status delivery",
+                                Delivery::Completion => "primary run completion delivery",
+                                Delivery::Deadline => "primary deadline delivery",
+                                Delivery::Healthy => unreachable!("healthy delivery has no report"),
+                            }
+                            .into(),
+                        ),
+                        internal_invariant: false,
+                    }),
+                }],
                 "one addressed delivery report does not increment the dropped-frame streak"
             );
         }
@@ -476,14 +545,14 @@ fn source_failure_case(failure: SourceFailure) {
         ),
     )
     .expect("runtime");
+    runtime.set_frame_failure_detail(FrameFailureDetail::Verbatim);
     let reports = Arc::new(Mutex::new(Vec::new()));
     let reported = Arc::clone(&reports);
     runtime.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
-        reported.lock().expect("failure observations").push((
-            report.address,
-            report.disposition,
-            report.consecutive_failures,
-        ));
+        reported
+            .lock()
+            .expect("failure observations")
+            .push(record_failure(report));
     })));
     let primary_mounted = Rc::new(RefCell::new(None));
     let primary_builds = Rc::new(RefCell::new(Vec::new()));
@@ -588,14 +657,39 @@ fn source_failure_case(failure: SourceFailure) {
         let reports = reports.lock().expect("failure observations");
         assert_eq!(
             reports.as_slice(),
-            &[(
-                flui_foundation::PresentationAddress {
+            &[RecordedFailure {
+                address: flui_foundation::PresentationAddress {
                     ui_runtime_id: runtime.id(),
                     presentation_id: runtime.presentation_id(),
                 },
-                FailureDisposition::FrameDropped,
-                1,
-            )],
+                disposition: FailureDisposition::FrameDropped,
+                consecutive_failures: 1,
+                sampling: Some(RecordedSampling {
+                    first: (
+                        SamplingStage::Animation,
+                        if failure == SourceFailure::DeliveryThenComputation {
+                            SamplingFailureOrigin::Delivery
+                        } else {
+                            SamplingFailureOrigin::Computation
+                        },
+                    ),
+                    blocking: Some((SamplingStage::Animation, SamplingFailureOrigin::Computation)),
+                    admitted_attempt: true,
+                    message: PanicText::Verbatim(
+                        match failure {
+                            SourceFailure::DeliveryThenComputation => "value delivery",
+                            SourceFailure::Curve | SourceFailure::ComputationThenDelivery => {
+                                "curve computation"
+                            }
+                            SourceFailure::SimulationPosition => "simulation position computation",
+                            SourceFailure::SimulationCompletion =>
+                                "simulation completion computation",
+                        }
+                        .into(),
+                    ),
+                    internal_invariant: false,
+                }),
+            }],
             "a competing failure still drops the admitted attempt only once"
         );
     }
@@ -615,6 +709,18 @@ fn source_failure_case(failure: SourceFailure) {
     );
     assert_eq!(sibling_completed.get(), 1, "old completion is not replayed");
     assert_eq!(reports.lock().expect("failure observations").len(), 1);
+    if failure == SourceFailure::Curve {
+        let _next_run = run_source(source, SourceFailure::Curve);
+        let _ = runtime.pump(&mut clock, &mut Sink);
+        clock.advance(Duration::from_millis(250));
+        let _ = runtime.pump(&mut clock, &mut Sink);
+        let reports = reports.lock().expect("failure observations");
+        assert_eq!(reports.len(), 2, "a new rejected attempt has a new report");
+        assert_eq!(
+            reports[1].consecutive_failures, 1,
+            "the intervening terminal clean frame reset only this presentation's streak"
+        );
+    }
     healthy.remove_listener(listener);
     healthy.remove_listener(later_listener);
 }
