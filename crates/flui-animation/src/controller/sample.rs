@@ -5,8 +5,8 @@ use std::time::Duration;
 use flui_foundation::panic::{FailureClass, RecoveryScope};
 
 use super::{
-    AnimationController, AnimationControllerInner, Opaque, RetiredSources, Retirement,
-    Simulation, SimulationRun, TickSource, ValueChange,
+    AnimationController, AnimationControllerInner, Opaque, RetiredSources, Retirement, Simulation,
+    SimulationRun, TickSource, ValueChange,
 };
 use crate::PlaybackRate;
 

@@ -6,7 +6,11 @@ use flui_animation::{Animation, AnimationController, DrivenController, MotionClo
 use flui_foundation::Listenable;
 use flui_foundation::panic::{FailureClass, PanicRecovery};
 use std::cell::Cell;
+use std::future::Future;
+use std::pin::Pin;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::task::{Context, Poll, Wake, Waker};
 use std::time::Duration;
 
 struct FailingCurve(Rc<Cell<bool>>);
@@ -237,6 +241,96 @@ fn reduced_policy_source_failure_preserves_the_run_and_healthy_peer() {
     assert_eq!(healthy.controller().value(), 0.5);
 }
 
+struct FailingWake;
+
+impl Wake for FailingWake {
+    fn wake(self: Arc<Self>) {
+        panic!("terminal delivery");
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        panic!("terminal delivery");
+    }
+}
+
+#[derive(Clone, Copy)]
+enum TerminalDelivery {
+    Status,
+    Continuation,
+    Waiter,
+}
+
+fn terminal_delivery(stage: TerminalDelivery) {
+    let vsync = Vsync::new();
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
+    let controller = owner.controller();
+    let mut run = controller.forward().expect("terminal run");
+    let status_failure = matches!(stage, TerminalDelivery::Status).then(|| {
+        controller.subscribe_status(Rc::new(|status| {
+            if status == flui_animation::AnimationStatus::ForwardSettled {
+                panic!("terminal delivery");
+            }
+        }))
+    });
+    match stage {
+        TerminalDelivery::Status => {}
+        TerminalDelivery::Continuation => run.then(|outcome| {
+            assert!(
+                outcome.is_ok(),
+                "completion committed before its continuation"
+            );
+            panic!("terminal delivery");
+        }),
+        TerminalDelivery::Waiter => {
+            let waker = Waker::from(Arc::new(FailingWake));
+            assert_eq!(
+                Pin::new(&mut run).poll(&mut Context::from_waker(&waker)),
+                Poll::Pending
+            );
+        }
+    }
+    let tail_delivered = Rc::new(Cell::new(false));
+    let tail = Rc::clone(&tail_delivered);
+    let tail_subscription = controller.subscribe_status(Rc::new(move |status| {
+        if status == flui_animation::AnimationStatus::ForwardSettled {
+            tail.set(true);
+        }
+    }));
+    let mut clock = MotionClock::new();
+    vsync.tick_all(&clock.frame(Duration::ZERO));
+    let mut recovery = PanicRecovery::new();
+    vsync.tick_all_with_recovery(&clock.frame(Duration::from_secs(1)), &mut recovery.scope());
+    assert_eq!(controller.value(), 1.0, "terminal value remains published");
+    assert!(
+        run.is_complete(),
+        "observer failure does not cancel accepted completion"
+    );
+    assert!(tail_delivered.get(), "live status tail is delivered");
+    let receipt = recovery.into_failure().expect("terminal delivery failure");
+    assert_eq!(receipt.class(), FailureClass::Delivery);
+    assert_eq!(receipt.blocking_class(), None);
+    assert_eq!(
+        receipt.payload().downcast_ref::<&str>(),
+        Some(&"terminal delivery")
+    );
+    drop(receipt);
+    drop((status_failure, tail_subscription));
+    controller
+        .set_value(0.5)
+        .expect("next operation remains usable");
+    assert_eq!(controller.value(), 0.5);
+}
+
+fn status_delivery() {
+    terminal_delivery(TerminalDelivery::Status);
+}
+fn continuation_delivery() {
+    terminal_delivery(TerminalDelivery::Continuation);
+}
+fn waiter_delivery() {
+    terminal_delivery(TerminalDelivery::Waiter);
+}
+
 #[test]
 fn sampling_preserves_failure_origin_and_publication_integrity() {
     crate::run_table(&[
@@ -250,5 +344,8 @@ fn sampling_preserves_failure_origin_and_publication_integrity() {
             "reduced-policy source query",
             reduced_policy_source_failure_preserves_the_run_and_healthy_peer,
         ),
+        ("committed status delivery", status_delivery),
+        ("committed continuation delivery", continuation_delivery),
+        ("committed waiter delivery", waiter_delivery),
     ]);
 }
