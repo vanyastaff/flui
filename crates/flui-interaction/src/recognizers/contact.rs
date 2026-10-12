@@ -130,7 +130,7 @@ pub enum BeginContactError {
 struct Contact {
     snapshot: ContactSnapshot,
     entry: GestureArenaEntry,
-    _deadline_registration: GestureDeadlineRegistration,
+    deadline_registration: GestureDeadlineRegistration,
     deadline: Option<Instant>,
 }
 
@@ -205,7 +205,7 @@ impl PrimaryContact {
                 settings: settings.clone(),
             },
             entry,
-            _deadline_registration: registration,
+            deadline_registration: registration,
             deadline: None,
         };
         *self.current.borrow_mut() = Some(contact);
@@ -270,7 +270,7 @@ impl PrimaryContact {
         recovery: &mut RecoveryScope<'_>,
     ) -> Option<ContactSnapshot> {
         let outgoing = self.current.borrow_mut().take()?;
-        outgoing._deadline_registration.withdraw();
+        outgoing.deadline_registration.withdraw();
         outgoing.entry.reject_without_self_with_recovery(recovery);
         self.arena()
             .invoke_with_recovery(FailureClass::Delivery, recovery, |_| {
@@ -285,7 +285,7 @@ impl PrimaryContact {
     pub fn finish(&self) -> Option<ContactSnapshot> {
         let snapshot = self.current()?;
         if let Some(contact) = self.current.borrow().as_ref() {
-            contact._deadline_registration.withdraw();
+            contact.deadline_registration.withdraw();
         }
         let entry = self.entry();
         let failure = RoutePanic::capture(|| {
@@ -347,7 +347,7 @@ impl PrimaryContact {
             .filter(|contact| contact.snapshot.id == id)
             .map(|contact| {
                 (
-                    contact._deadline_registration.update_handle(),
+                    contact.deadline_registration.update_handle(),
                     contact.deadline,
                 )
             });
@@ -358,7 +358,7 @@ impl PrimaryContact {
             let mut current = self.current.borrow_mut();
             if let Some(contact) = current.as_mut().filter(|contact| contact.snapshot.id == id) {
                 contact.deadline = None;
-                contact._deadline_registration.withdraw();
+                contact.deadline_registration.withdraw();
             }
         }
         false
@@ -370,13 +370,13 @@ impl PrimaryContact {
             let mut current = self.current.borrow_mut();
             current.as_mut().map(|contact| {
                 contact.deadline = None;
-                contact._deadline_registration.update_handle()
+                contact.deadline_registration.update_handle()
             })
         };
         if let Some(update) = publication {
             if update.publish(None).is_err() {
                 if let Some(contact) = self.current.borrow().as_ref() {
-                    contact._deadline_registration.withdraw();
+                    contact.deadline_registration.withdraw();
                 }
             }
         }
@@ -420,7 +420,7 @@ impl PrimaryContact {
 
     pub(crate) fn cancel(&self) -> Option<ContactSnapshot> {
         let outgoing = self.current.borrow_mut().take()?;
-        outgoing._deadline_registration.withdraw();
+        outgoing.deadline_registration.withdraw();
         withdraw_cancelled(&outgoing.entry, &self.membership.arena);
         Some(outgoing.snapshot)
     }

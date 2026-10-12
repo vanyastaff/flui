@@ -79,7 +79,7 @@ impl AnimationController {
         retirement.run_classified(FailureClass::Delivery, |retirement| {
             if value_change == ValueChange::Notify {
                 retirement.run_with(|retirement| {
-                    self.notifier.notify_listeners_with_recovery(retirement)
+                    self.notifier.notify_listeners_with_recovery(retirement);
                 });
             }
             if drain {

@@ -280,7 +280,7 @@ impl LongPressGestureRecognizer {
         });
         if self.contact.is_current(contact.id) {
             arena.invoke_with_recovery(FailureClass::Unknown, recovery, |scope| {
-                self.contact.accept_with_recovery(scope)
+                self.contact.accept_with_recovery(scope);
             });
         }
         let preserving = recovery.has_failure();

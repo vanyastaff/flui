@@ -443,10 +443,10 @@ impl GestureArenaMember for DoubleTapGestureRecognizer {
             });
             if let Some(entry) = first_entry {
                 arena.invoke_with_recovery(FailureClass::Unknown, recovery, |scope| {
-                    entry.resolve_with_recovery(GestureDisposition::Rejected, scope)
+                    entry.resolve_with_recovery(GestureDisposition::Rejected, scope);
                 });
                 arena.invoke_with_recovery(FailureClass::Unknown, recovery, |scope| {
-                    entry.release_with_recovery(scope)
+                    entry.release_with_recovery(scope);
                 });
             }
             let preserving = recovery.has_failure();
@@ -454,7 +454,7 @@ impl GestureArenaMember for DoubleTapGestureRecognizer {
                 let mut notices =
                     super::callback_containment::CallbackSequence::preserving_failure(preserving);
                 notices.call(self.callbacks.on_double_tap_cancel.clone(), |callback| {
-                    callback(details)
+                    callback(details);
                 });
                 notices.finish();
             });

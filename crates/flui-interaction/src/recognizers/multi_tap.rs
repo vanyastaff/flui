@@ -219,7 +219,7 @@ impl MultiTapGestureRecognizer {
         self.retire_entries(&sequence, GestureDisposition::Rejected, &mut first);
         let mut notices = CallbackSequence::new();
         notices.call(self.callbacks.on_multi_tap_cancel.clone(), |callback| {
-            callback(details)
+            callback(details);
         });
         RoutePanic::preserve_first(
             &mut first,
@@ -469,17 +469,17 @@ impl GestureArenaMember for MultiTapGestureRecognizer {
             }
             for contact in sequence.contacts.values() {
                 arena.invoke_with_recovery(FailureClass::Unknown, recovery, |scope| {
-                    withdraw_cancelled_with_recovery(&contact.entry, arena, scope)
+                    withdraw_cancelled_with_recovery(&contact.entry, arena, scope);
                 });
                 arena.invoke_with_recovery(FailureClass::Unknown, recovery, |scope| {
-                    contact.entry.release_with_recovery(scope)
+                    contact.entry.release_with_recovery(scope);
                 });
             }
             let preserving = recovery.has_failure();
             arena.invoke_with_recovery(FailureClass::Delivery, recovery, |_| {
                 let mut notices = CallbackSequence::preserving_failure(preserving);
                 notices.call(self.callbacks.on_multi_tap_cancel.clone(), |callback| {
-                    callback(details)
+                    callback(details);
                 });
                 notices.finish();
             });
