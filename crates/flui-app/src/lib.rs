@@ -86,7 +86,8 @@ pub use app::{
 // contained while the frame continues. These types report both outcomes.
 pub use app::{
     FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind,
-    FrameFailureReport, LifecycleHook, PanicText, RecoveredAt, SegmentPhase,
+    FrameFailureReport, LifecycleHook, PanicText, RecoveredAt, SamplingFailure,
+    SamplingFailureOrigin, SamplingStage, SegmentPhase,
 };
 // Multi-window policy knobs (issue #555's embedder-facing seam) — not
 // available on iOS, where `AppRuntime`/`UiRuntime`'s ui_runtime-hosting machinery

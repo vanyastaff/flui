@@ -10,7 +10,7 @@ mod sample;
 pub(crate) use motion::{ValuePublication, ValueSeam};
 use policy::MotionRunState;
 pub(crate) use policy::SettleReason;
-use sample::{SampleIdentity, SampleTime};
+use sample::SampleIdentity;
 
 use crate::AnimationRunFuture;
 use crate::PlaybackRate;
@@ -22,7 +22,7 @@ use crate::retarget::Segment;
 use crate::run_future::{RunCompleter, RunDelivery};
 use crate::simulation::{Simulation, SpringDescription, SpringSimulation, SpringType, Tolerance};
 use crate::status::AnimationStatus;
-use flui_foundation::panic::RecoveryScope;
+use flui_foundation::panic::{FailureClass, RecoveryScope};
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
 use smallvec::SmallVec;
 use std::cell::RefCell;
@@ -1880,134 +1880,6 @@ impl AnimationController {
         }
     }
 
-    /// Sample the run at `elapsed`, measured from its own time origin.
-    /// Registry-driven calls use the presentation clock's projected timeline;
-    /// explicit callers supply their own run timeline. The controller applies
-    /// its local playback rate to this elapsed time.
-    ///
-    /// This is the single time-driven entry point: time-based runs interpolate
-    /// `start_value -> target_value`, simulations sample `x(t)`, and a repeat
-    /// samples its leg/phase/exhaustion as a pure function of `cycle` (see
-    /// the private `tick_repeat`). Value and status listeners are fired
-    /// only after the state borrow is released.
-    pub fn tick_at(&self, elapsed: Duration) {
-        let mut retirement = Retirement::new();
-        retirement.run_with(|retirement| self.tick_at_with_retirement(elapsed, retirement));
-        retirement.finish();
-    }
-
-    pub(crate) fn tick_at_with_retirement(
-        &self,
-        elapsed: Duration,
-        retirement: &mut RecoveryScope<'_>,
-    ) {
-        let source;
-        let identity;
-        let cycle;
-        let time;
-        {
-            let mut inner = self.inner.borrow_mut();
-            if inner.disposed || inner.active_run.is_none() || elapsed < inner.last_elapsed {
-                return;
-            }
-            let Some(epoch) = inner.sample_epoch.checked_add(1) else {
-                let mut retired = RetiredSources::new();
-                let delivery = inner.stop_running(&mut retired);
-                let status = inner.settled_status_directed();
-                inner.status = status;
-                self.deliver_transition_with_recovery(
-                    status,
-                    ValueChange::Unchanged,
-                    delivery,
-                    retired,
-                    inner,
-                    retirement,
-                );
-                retirement.run(|| {
-                    tracing::warn!(
-                        "animation sample identities exhausted; the accepted run was cancelled"
-                    );
-                });
-                return;
-            };
-            time = SampleTime::capture(&inner, elapsed);
-            cycle = time.local_elapsed.as_secs_f64();
-            inner.sample_epoch = epoch;
-            identity = SampleIdentity {
-                generation: inner.run_generation,
-                epoch: inner.sample_epoch,
-            };
-            source = Opaque::new(inner.tick_source());
-        }
-        retirement.run_with(|retirement| match source.get() {
-            TickSource::Repeat(run) => {
-                let mut inner = self.inner.borrow_mut();
-                if !inner.matches_sample(&identity) {
-                    return;
-                }
-                time.commit(&mut inner);
-                self.tick_repeat(inner, *run, cycle, retirement);
-            }
-            TickSource::Simulation(simulation) => {
-                if let SimulationRun::Value(source) = simulation
-                    && !source
-                        .stage_sample(cycle, &|| self.inner.borrow().matches_sample(&identity))
-                {
-                    return;
-                }
-                let sampled = simulation.x(cycle);
-                // A position callback may stop or replace the run. Do not call
-                // another method on its stale source after that decision.
-                let current = { self.inner.borrow_mut().matches_sample(&identity) };
-                if !current {
-                    return;
-                }
-                let is_done = sampled.is_finite()
-                    && (simulation.reached_bound(sampled) || simulation.is_done(cycle));
-                let mut inner = self.inner.borrow_mut();
-                if !inner.matches_sample(&identity) {
-                    return;
-                }
-                if sampled.is_finite() {
-                    time.commit(&mut inner);
-                    if let SimulationRun::Value(source) = simulation {
-                        source.commit_sample(inner.local_elapsed);
-                    }
-                }
-                self.tick_simulation(inner, sampled, is_done, retirement);
-            }
-            TickSource::Time {
-                curve,
-                duration,
-                start,
-                target,
-            } => {
-                let t = if duration.is_zero() {
-                    1.0
-                } else {
-                    (cycle / duration.as_secs_f64()).clamp(0.0, 1.0)
-                };
-                let value = if t <= 0.0 {
-                    *start
-                } else if t >= 1.0 {
-                    *target
-                } else {
-                    let eased = curve.as_ref().map_or(t, |curve| curve.transform(t));
-                    start + (target - start) * eased
-                };
-                let mut inner = self.inner.borrow_mut();
-                if !inner.matches_sample(&identity) {
-                    return;
-                }
-                if value.is_finite() {
-                    time.commit(&mut inner);
-                }
-                self.tick_time_based(inner, t, value, retirement);
-            }
-        });
-        retirement.retire(source);
-    }
-
     /// Settle an admitted run without reading a wall clock or invoking its curve.
     /// Reentrant replacement invalidates the source before the next callout.
     pub(crate) fn settle_run(
@@ -2131,7 +2003,9 @@ impl AnimationController {
             let should_warn = !inner.non_finite_warned;
             inner.non_finite_warned = true;
             self.end_simulation_run(inner, ValueChange::Unchanged, retirement);
-            Self::warn_non_finite_value(should_warn, sampled, NonFiniteOutcome::EndedRun);
+            retirement.run_classified(FailureClass::Delivery, |_| {
+                Self::warn_non_finite_value(should_warn, sampled, NonFiniteOutcome::EndedRun);
+            });
             return;
         }
         inner.value = sampled.clamp(inner.lower_bound, inner.upper_bound);
