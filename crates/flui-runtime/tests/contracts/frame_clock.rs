@@ -90,6 +90,8 @@ impl ViewState<SamplingView> for SamplingState {
 enum Delivery {
     Healthy,
     Animation,
+    FinalStatus,
+    Completion,
     Deadline,
 }
 
@@ -107,6 +109,14 @@ fn presentation_delivery_failure_keeps_healthy_sampling_build_and_completion() {
                 "deadline delivery failure",
                 deadline_delivery_failure_keeps_healthy_frame_work,
             ),
+            (
+                "final status delivery failure",
+                final_status_delivery_failure_preserves_completion,
+            ),
+            (
+                "run completion delivery failure",
+                run_completion_delivery_failure_preserves_completion,
+            ),
         ],
     );
 }
@@ -121,6 +131,14 @@ fn value_delivery_failure_keeps_healthy_frame_work() {
 
 fn deadline_delivery_failure_keeps_healthy_frame_work() {
     delivery_case(Delivery::Deadline);
+}
+
+fn final_status_delivery_failure_preserves_completion() {
+    delivery_case(Delivery::FinalStatus);
+}
+
+fn run_completion_delivery_failure_preserves_completion() {
+    delivery_case(Delivery::Completion);
 }
 
 fn delivery_case(delivery: Delivery) {
@@ -183,7 +201,7 @@ fn delivery_case(delivery: Delivery) {
     let _ = runtime.pump(&mut clock, &mut Sink);
     let primary = primary_mounted.take().expect("primary animation mounted");
     let sibling = sibling_mounted.take().expect("sibling animation mounted");
-    let _primary_run = primary.controller.forward().expect("primary run");
+    let primary_run = primary.controller.forward().expect("primary run");
     let _sibling_run = sibling.controller.forward().expect("sibling run");
     let _ = runtime.pump(&mut clock, &mut Sink);
     let primary_before = primary_builds.borrow().len();
@@ -194,6 +212,21 @@ fn delivery_case(delivery: Delivery) {
             std::panic::panic_any("primary value delivery");
         }
     }));
+    let fail_once = Rc::clone(&armed);
+    let status_listener = primary.controller.subscribe_status(Rc::new(move |status| {
+        if delivery == Delivery::FinalStatus
+            && status == flui_animation::AnimationStatus::ForwardSettled
+            && fail_once.replace(false)
+        {
+            std::panic::panic_any("primary final status delivery");
+        }
+    }));
+    let fail_once = Rc::clone(&armed);
+    primary_run.when_complete_or_cancel(move |_| {
+        if delivery == Delivery::Completion && fail_once.replace(false) {
+            std::panic::panic_any("primary run completion delivery");
+        }
+    });
     let later_samples = Rc::new(RefCell::new(Vec::new()));
     let recorded = Rc::clone(&later_samples);
     let read = primary.controller.clone();
@@ -225,10 +258,10 @@ fn delivery_case(delivery: Delivery) {
             );
         });
     }
-    let (elapsed, sample, recovered) = if delivery == Delivery::Deadline {
-        (Duration::from_millis(600), 0.6, 0.85)
-    } else {
-        (Duration::from_millis(250), 0.25, 0.5)
+    let (elapsed, sample, recovered) = match delivery {
+        Delivery::Deadline => (Duration::from_millis(600), 0.6, 0.85),
+        Delivery::FinalStatus | Delivery::Completion => (Duration::from_secs(1), 1.0, 1.0),
+        Delivery::Healthy | Delivery::Animation => (Duration::from_millis(250), 0.25, 0.5),
     };
     clock.advance(elapsed);
     let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -255,6 +288,23 @@ fn delivery_case(delivery: Delivery) {
         1,
         "healthy sibling frame completes"
     );
+    if matches!(delivery, Delivery::FinalStatus | Delivery::Completion) {
+        use std::future::Future as _;
+        use std::pin::Pin;
+        use std::task::{Context, Poll, Waker};
+        let mut outcome = primary_run.clone();
+        assert!(
+            matches!(
+                Pin::new(&mut outcome).poll(&mut Context::from_waker(Waker::noop())),
+                Poll::Ready(Ok(()))
+            ),
+            "the successful run outcome was published before delivery"
+        );
+        assert_eq!(
+            primary.controller.status(),
+            flui_animation::AnimationStatus::ForwardSettled
+        );
+    }
     {
         let reports = reports.lock().expect("failure observations");
         if delivery == Delivery::Healthy {
@@ -287,6 +337,7 @@ fn delivery_case(delivery: Delivery) {
     );
     primary.controller.remove_listener(listener);
     primary.controller.remove_listener(later_listener);
+    drop(status_listener);
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
