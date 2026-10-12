@@ -2,14 +2,13 @@
 //! `flui-hot-reload`'s own tests leave untested, because building a plugin
 //! from inside a test is environment-fragile.
 //!
-//! That fragility is about *nested `cargo build` from inside a test* — spawning a
-//! second cargo process, racing target-dir locks, non-deterministic compile
-//! times. This test avoids all of that by living where its plugin already
-//! is: `flui-hot-reload-lifecycle-fixture` is `crate-type = ["rlib",
-//! "cdylib"]` (see `Cargo.toml`), so building THIS test target — an ordinary
-//! integration test of the crate it ships in — necessarily also produces the
-//! crate's own `cdylib` artifact in the same rustc invocation, no separate
-//! dependency edge or nested cargo required.
+//! Build the plugin before running these tests:
+//! `cargo build -p flui-hot-reload-lifecycle-fixture --lib --locked`.
+//! The repository's `test` and `check-changed` tasks do this automatically.
+//! Cargo publishes that directly built library to its artifact directory, and
+//! Cargo and nextest pass that directory in the dynamic-library search path.
+//! The tests consume that path rather than infer Cargo's private build layout
+//! from their executable. No test starts a nested Cargo build.
 //!
 //! (An earlier version of this test lived in `flui-hot-reload`'s own
 //! `tests/` directory, with the fixture wired in as a `[dev-dependencies]`
@@ -118,94 +117,29 @@ impl Drop for TempPath {
     }
 }
 
-/// This crate's own `cdylib` build artifact, somewhere under
-/// `target/<profile>/` — [`std::env::current_exe`]'s directory is
-/// `target/<profile>/deps/`, right next to this test binary itself.
-/// Building this integration test target compiles the crate under test
-/// (`flui-hot-reload-lifecycle-fixture`) with all of its declared
-/// crate-types in one rustc invocation, so the `cdylib` output always
-/// exists by the time this function runs — no separate dependency edge, no
-/// nested cargo.
-///
-/// Resolution order (first hit wins), confirmed by direct probe under both
-/// `cargo nextest run -p flui-hot-reload-lifecycle-fixture` on its own and
-/// `cargo xtask ci`'s workspace-wide build:
-///
-/// 1. `target/<profile>/<lib_prefix>flui_hot_reload_lifecycle_fixture<lib_suffix>`
-///    — cargo uplifts a package's `cdylib` here for a plain `cargo
-///    build`/`check` that treats the crate as a directly-built unit. Neither
-///    invocation above is that shape (both are `--tests`-driven, which only
-///    needs the `cdylib` as a link artifact, not a directly-built one), so
-///    this tier costs one extra `is_file` check and doesn't resolve for this
-///    test's own invocations today — kept for a build shape that IS a plain
-///    `cargo build`.
-/// 2. The same unhashed filename inside `target/<profile>/deps/` — the tier
-///    that actually resolves for this test's own invocations, confirmed by
-///    direct probe under both of the above.
-/// 3. The hash-suffixed candidates cargo always writes to `deps/`
-///    (`<stem>-<hash>.<ext>`), newest by mtime — a defensive fallback for a
-///    hypothetical cargo/platform combination where neither unhashed copy
-///    exists.
+/// The directly built plugin on Cargo's dynamic-library search path.
+/// Preserve the runner's lookup order, including Cargo's artifact directory
+/// before dependency directories. No private hash directory or mtime is used.
 fn fixture_artifact_path() -> PathBuf {
-    let exe = std::env::current_exe().expect("BUG: a running test binary must have a path");
-    let deps_dir = exe
-        .parent()
-        .expect("BUG: a test binary always has a containing directory");
-    let profile_dir = deps_dir
-        .parent()
-        .expect("BUG: target/<profile>/deps/ always has a target/<profile>/ parent");
-
-    #[cfg(target_os = "windows")]
-    let (lib_prefix, lib_ext) = ("", "dll");
-    #[cfg(target_os = "macos")]
-    let (lib_prefix, lib_ext) = ("lib", "dylib");
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let (lib_prefix, lib_ext) = ("lib", "so");
-
-    let stem = format!("{lib_prefix}flui_hot_reload_lifecycle_fixture");
-    let unhashed_name = format!("{stem}.{lib_ext}");
-
-    // 1. Preferred: unhashed, uplifted to the profile root.
-    let top_level = profile_dir.join(&unhashed_name);
-    if top_level.is_file() {
-        return top_level;
+    let search_path = if cfg!(windows) {
+        std::env::var_os("PATH")
+    } else if cfg!(target_os = "macos") {
+        // nextest preserves this value when macOS SIP sanitizes DYLD variables.
+        std::env::var_os("NEXTEST_DYLD_FALLBACK_LIBRARY_PATH")
+            .or_else(|| std::env::var_os("DYLD_FALLBACK_LIBRARY_PATH"))
+    } else {
+        std::env::var_os("LD_LIBRARY_PATH")
     }
-
-    // 2. Fallback: unhashed, still inside `deps/`.
-    let in_deps = deps_dir.join(&unhashed_name);
-    if in_deps.is_file() {
-        return in_deps;
-    }
-
-    // 3. Last resort: newest hash-suffixed candidate in `deps/`.
-    let hashed_prefix = format!("{stem}-");
-    let hashed_suffix = format!(".{lib_ext}");
-    let newest_hashed = std::fs::read_dir(deps_dir)
-        .expect("BUG: a test binary's own deps/ directory must be readable")
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| {
-                    name.starts_with(&hashed_prefix) && name.ends_with(&hashed_suffix)
-                })
-        })
-        .max_by_key(|path| {
-            path.metadata()
-                .and_then(|meta| meta.modified())
-                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
-        });
-
-    newest_hashed.unwrap_or_else(|| {
-        panic!(
-            "fixture artifact not found under {} (checked the unhashed name at the profile \
-             root, the unhashed name in deps/, and hash-suffixed candidates in deps/) — \
-             expected building this test target to have produced this crate's own cdylib \
-             before this test ran (see this file's module doc)",
-            profile_dir.display()
-        )
-    })
+    .expect("Cargo or nextest must provide a dynamic-library search path");
+    let filename = format!(
+        "{}flui_hot_reload_lifecycle_fixture{}",
+        std::env::consts::DLL_PREFIX,
+        std::env::consts::DLL_SUFFIX,
+    );
+    std::env::split_paths(&search_path)
+        .map(|directory| directory.join(&filename))
+        .find(|path| path.is_file())
+        .expect("fixture missing from the runner search path; run `cargo build -p flui-hot-reload-lifecycle-fixture --lib --locked` first")
 }
 
 /// Resolve and call the fixture's `fixture_tick` symbol through an already

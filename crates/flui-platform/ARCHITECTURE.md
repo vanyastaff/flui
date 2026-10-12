@@ -21,7 +21,8 @@ trait depends on `flui-platform-api` instead.
 
 - **The winit fallback is a desktop backend.** Its module, public re-exports
   and `arboard` clipboard dependency are available only on Windows, macOS and
-  Linux. Enabling every feature on Android or iOS keeps the native backend;
+  Linux under `winit-backend`. The `desktop` compatibility selector enables no
+  dependency; native desktop backends are selected by target OS. Enabling every feature on Android or iOS keeps the native backend;
   it does not enable desktop clipboard code. The required-target and
   all-features `cargo xtask cross-typecheck` configurations compile this
   boundary, including the selected packages' tests, examples and benches.

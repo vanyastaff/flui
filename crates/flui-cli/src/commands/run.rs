@@ -1699,8 +1699,7 @@ fn stage_worker_artifact_before_publish(
 
     let ext = canonical
         .extension()
-        .map(|e| format!(".{}", e.to_string_lossy()))
-        .unwrap_or_default();
+        .map_or_default(|e| format!(".{}", e.to_string_lossy()));
     let stem = canonical
         .file_stem()
         .and_then(|s| s.to_str())

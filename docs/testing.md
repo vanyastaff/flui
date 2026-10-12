@@ -132,6 +132,13 @@ cargo xtask test                          # nextest over the local scope, flui-p
 cargo test --workspace --locked --doc     # doc-tests (flui-platform included — its doctests need no display server)
 ```
 
+The reload-lifecycle fixture is a real plugin image. `test` and `check-changed`
+build its library before selecting its tests, so Cargo publishes the cdylib to
+the artifact directory on the runner's dynamic-library search path. For a direct
+run, use `cargo build -p flui-hot-reload-lifecycle-fixture --lib --locked` before
+`cargo nextest run -p flui-hot-reload-lifecycle-fixture --locked`. The tests do not
+infer private Cargo build directories or choose a cached DLL by modification time.
+
 The workspace test-reachability check takes test target source paths from Cargo
 metadata, including targets with an implicit path. It parses direct external
 module declarations with `syn`; a commented declaration or an example inside

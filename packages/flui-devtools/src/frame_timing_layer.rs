@@ -70,7 +70,7 @@
 //!
 //! # Timing comes from the span, not the callback
 //!
-//! Duration is measured by a [`PhaseGuard`](crate::profiler::PhaseGuard) parked
+//! Duration is measured by a [phase guard](crate::profiler::PhaseGuard) parked
 //! in the span's own extensions: created when the span is *entered*, dropped
 //! when it closes. That measures the span's real extent even when a subscriber
 //! callback runs late, and it means a span entered and exited repeatedly (as
@@ -132,7 +132,7 @@ pub type FrameSpanFilter = FilterFn<fn(&Metadata<'_>) -> bool>;
 struct ActivePhase(PhaseGuard);
 
 /// Subscriber layer that turns the framework's frame spans into
-/// [`FrameStats`](crate::profiler::FrameStats).
+/// [frame statistics](crate::profiler::FrameStats).
 ///
 /// Install it on any `tracing_subscriber` registry:
 ///

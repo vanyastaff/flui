@@ -1219,7 +1219,7 @@ pub(crate) fn a_failed_refresh_notification_releases_activity_and_recovers() {
         let fail = Arc::new(AtomicBool::new(phase_fault));
         let failed = Arc::new(AtomicBool::new(false));
         let watched = refresh.clone();
-        let fail_callback = fail.clone();
+        let fail_callback = fail;
         let failed_callback = failed.clone();
         let listenable = refresh.listenable();
         let listener = listenable.add_listener(std::rc::Rc::new(move || {
@@ -1891,7 +1891,7 @@ pub(crate) fn replacing_vsync_releases_old_seats_and_drives_fresh_contacts() {
             "{family}: initial owner drives real inertia"
         );
         let before_same = pixels();
-        laid.pump_widget(VsyncScope::new(first.clone(), child.clone()));
+        laid.pump_widget(VsyncScope::new(first, child.clone()));
         laid.pump_for(Duration::from_millis(16));
         if pixels() <= before_same {
             failures.push(format!("{family}: same owner rebuild stopped real inertia"));
@@ -1903,7 +1903,7 @@ pub(crate) fn replacing_vsync_releases_old_seats_and_drives_fresh_contacts() {
         let armed = Rc::new(Cell::new(fail_stop));
         let attempted = Rc::new(Cell::new(0_usize));
         let position = scroll.position();
-        let (watched, fail, seen) = (position.clone(), armed.clone(), attempted.clone());
+        let (watched, fail, seen) = (position.clone(), armed, attempted.clone());
         let activity_listener = position.add_activity_listener(Rc::new(move || {
             if !watched.is_scrolling() && fail.replace(false) {
                 seen.set(seen.get() + 1);

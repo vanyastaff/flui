@@ -296,6 +296,18 @@ fn driver_tests() -> Cmd {
     ])
 }
 
+/// Publish the reload fixture to Cargo's artifact directory before its tests.
+/// A test dependency alone may leave the cdylib in a private build directory.
+fn reload_fixture_build() -> Cmd {
+    Cmd::cargo([
+        "build",
+        "-p",
+        "flui-hot-reload-lifecycle-fixture",
+        "--lib",
+        "--locked",
+    ])
+}
+
 /// Which part of the suite `cargo xtask test` runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Stages {
@@ -353,6 +365,9 @@ fn test_plan(host: Host, stages: Stages) -> Vec<Step> {
             ),
         ],
     };
+    if matches!(stages, Stages::All | Stages::Fast | Stages::NoTrybuild) {
+        steps.insert(0, reload_fixture_build().into());
+    }
     if host == Host::Windows {
         let filter = match stages {
             Stages::All => None,
@@ -1225,6 +1240,7 @@ mod tests {
         assert_eq!(
             lines(&test_plan(Host::Linux, Stages::All)),
             [
+                "$ cargo build -p flui-hot-reload-lifecycle-fixture --lib --locked".to_owned(),
                 format!("$ cargo nextest run {SCOPE} -E 'not (group(nested-cargo) | group(trybuild))'"),
                 "$ FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast -E 'not (group(trybuild))'".to_owned(),
                 format!("$ cargo nextest run {SCOPE} -E 'group(nested-cargo) | group(trybuild)'"),
@@ -1232,20 +1248,20 @@ mod tests {
             ]
         );
         assert_eq!(
-            lines(&test_plan(Host::Windows, Stages::All))[2],
+            lines(&test_plan(Host::Windows, Stages::All))[3],
             "$ cargo nextest run -p flui-platform --locked --all-features --no-fail-fast -E 'not (group(trybuild))'"
         );
         assert!(
-            lines(&test_plan(Host::MacOs, Stages::All))[1]
+            lines(&test_plan(Host::MacOs, Stages::All))[2]
                 .starts_with("Skipping native flui-platform")
         );
         let fast = lines(&test_plan(Host::Linux, Stages::Fast));
-        assert_eq!(fast.len(), 3);
-        assert!(fast[2].starts_with("test --fast: SKIPPED the nested tests"));
+        assert_eq!(fast.len(), 4);
+        assert!(fast[3].starts_with("test --fast: SKIPPED the nested tests"));
         assert!(
-            fast[2].ends_with("cargo xtask test --nested"),
+            fast[3].ends_with("cargo xtask test --nested"),
             "{}",
-            fast[2]
+            fast[3]
         );
         // Nested stages include the portable platform compiler leg.
         assert_eq!(
@@ -1270,16 +1286,16 @@ mod tests {
         }
         // CI's Windows job: the host-specific nested group, not trybuild
         let windows = lines(&test_plan(Host::Windows, Stages::NoTrybuild));
-        assert_eq!(windows.len(), 5);
+        assert_eq!(windows.len(), 6);
         assert_eq!(
-            windows[3],
+            windows[4],
             format!("$ cargo nextest run {SCOPE} -E 'group(nested-cargo)' --exclude xtask")
         );
         assert!(
-            windows[4].starts_with("test --no-trybuild: SKIPPED the trybuild suites")
-                && windows[4].ends_with("cargo xtask test --nested --nested-group trybuild"),
+            windows[5].starts_with("test --no-trybuild: SKIPPED the trybuild suites")
+                && windows[5].ends_with("cargo xtask test --nested --nested-group trybuild"),
             "{}",
-            windows[4]
+            windows[5]
         );
         // the example link reuses the test build: the same features
         assert_eq!(

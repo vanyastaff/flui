@@ -340,7 +340,7 @@ pub(crate) fn gradient_geometry_checks_intermediate_and_output_overflow() {
             "finite components must not publish an infinite direction or span: {b:?}"
         );
         let mixed = BoxDecoration::<f64>::lerp(
-            &BoxDecoration::with_gradient(a.clone()),
+            &BoxDecoration::with_gradient(a),
             &BoxDecoration::with_gradient(b.clone()),
             f64::MAX,
         );

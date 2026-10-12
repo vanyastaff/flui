@@ -1,7 +1,7 @@
 //! Damage accumulation for incremental rendering, and the plan a frame is
 //! rendered by.
 //!
-//! [`DamageTracker`](crate::damage::DamageTracker) is the renderer's per-frame accumulator of dirty area:
+//! [`crate::damage::DamageTracker`] is the renderer's per-frame accumulator of dirty area:
 //! the consuming half of ADR-0061 (the scissor + self-heal in
 //! `Renderer::render_scene`). The producer is `flui_layer::LayerDiffer`
 //! (ADR-0087 §3); its `flui_layer::DamageRegion` reaches the tracker through
@@ -13,7 +13,7 @@
 //! (Slint keeps up to three) is a change to the consumer, and the tracker
 //! grows with it.
 //!
-//! [`plan_frame`](crate::damage::plan_frame) turns the tracker's answer into where a frame renders.
+//! [`crate::damage::plan_frame`] turns the tracker's answer into where a frame renders.
 //! wgpu does not expose a swapchain image's age, so the pixels outside a
 //! scissor on a freshly acquired swapchain image are whatever an older frame
 //! left there; a partial frame therefore renders into a

@@ -735,10 +735,9 @@ impl TextContext {
         // borrows it (`resolve_family_name`).
         let collection = &mut self.font_cx.collection;
         let (default_family, default_family_name) = family(collection, None);
-        let default_properties = paragraph
-            .default_style
-            .map(|style| properties(collection, style, None, paragraph.font_weight_adjustment))
-            .unwrap_or_default();
+        let default_properties = paragraph.default_style.map_or_default(|style| {
+            properties(collection, style, None, paragraph.font_weight_adjustment)
+        });
         let default_info = span_info(
             0,
             default_family_name,
@@ -753,17 +752,14 @@ impl TextContext {
             .map(|(span, style)| {
                 let range = start..start + span.len();
                 start = range.end;
-                let properties = style
-                    .as_ref()
-                    .map(|style| {
-                        properties(
-                            collection,
-                            style,
-                            paragraph.default_style,
-                            paragraph.font_weight_adjustment,
-                        )
-                    })
-                    .unwrap_or_default();
+                let properties = style.as_ref().map_or_default(|style| {
+                    properties(
+                        collection,
+                        style,
+                        paragraph.default_style,
+                        paragraph.font_weight_adjustment,
+                    )
+                });
                 infos.push(match style {
                     Some(style) => {
                         let (_, name) = family(collection, Some(style));
