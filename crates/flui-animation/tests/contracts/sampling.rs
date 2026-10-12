@@ -18,7 +18,7 @@ struct FailingCurve(Rc<Cell<bool>>);
 impl Curve for FailingCurve {
     fn transform(&self, t: f64) -> f64 {
         if self.0.replace(false) {
-            panic!("source computation");
+            std::panic::panic_any("source computation");
         }
         t
     }
@@ -32,7 +32,7 @@ struct FailingSimulation {
 impl Simulation for FailingSimulation {
     fn x(&self, time: f64) -> f64 {
         if !self.fail_done && self.armed.replace(false) {
-            panic!("source computation");
+            std::panic::panic_any("source computation");
         }
         time
     }
@@ -43,7 +43,7 @@ impl Simulation for FailingSimulation {
 
     fn is_done(&self, time: f64) -> bool {
         if self.fail_done && self.armed.replace(false) {
-            panic!("source computation");
+            std::panic::panic_any("source computation");
         }
         time >= 1.0
     }
@@ -64,7 +64,7 @@ fn admit(vsync: &Vsync, fault: Fault, armed: Rc<Cell<bool>>) -> DrivenController
         Fault::Delivery => {
             controller.add_listener(Rc::new(move || {
                 if armed.replace(false) {
-                    panic!("first delivery");
+                    std::panic::panic_any("first delivery");
                 }
             }));
             controller.forward().expect("delivery run");
@@ -268,7 +268,7 @@ fn terminal_delivery(stage: TerminalDelivery) {
     let status_failure = matches!(stage, TerminalDelivery::Status).then(|| {
         controller.subscribe_status(Rc::new(|status| {
             if status == flui_animation::AnimationStatus::ForwardSettled {
-                panic!("terminal delivery");
+                std::panic::panic_any("terminal delivery");
             }
         }))
     });
