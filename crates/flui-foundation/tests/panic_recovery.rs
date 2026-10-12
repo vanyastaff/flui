@@ -9,10 +9,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn a_nested_delivery_keeps_the_first_failure_and_later_computation() {
     let notifier = Notifier::<()>::new();
-    notifier.add(Rc::new(|_| panic!("first delivery")));
+    notifier.add(Rc::new(|()| panic!("first delivery")));
     let tail = Rc::new(Cell::new(false));
     let delivered = Rc::clone(&tail);
-    notifier.add(Rc::new(move |_| delivered.set(true)));
+    notifier.add(Rc::new(move |()| delivered.set(true)));
     let mut recovery = PanicRecovery::new();
     assert!(
         recovery
@@ -121,7 +121,7 @@ fn notification_capture_retirement(class: FailureClass) {
     let callback_owner = Rc::downgrade(&notifier);
     let drops = Arc::new(AtomicUsize::new(0));
     let capture = HostileDrop(Arc::clone(&drops));
-    identity.set(Some(notifier.add(Rc::new(move |_| {
+    identity.set(Some(notifier.add(Rc::new(move |()| {
         let _capture = &capture;
         callback_owner
             .upgrade()
@@ -130,7 +130,7 @@ fn notification_capture_retirement(class: FailureClass) {
     }))));
     let delivered = Rc::new(Cell::new(0));
     let tail = Rc::clone(&delivered);
-    notifier.add(Rc::new(move |_| tail.set(tail.get() + 1)));
+    notifier.add(Rc::new(move |()| tail.set(tail.get() + 1)));
     let mut recovery = PanicRecovery::new();
     assert!(recovery.scope().run_classified(class, |scope| {
         notifier.notify_with_recovery(&(), scope);
@@ -197,10 +197,10 @@ fn an_inherited_failure_keeps_local_annotation_without_rethrowing_it() {
 
 fn a_nested_channel_latch_does_not_demote_its_owners_original_failure() {
     let notifier = Rc::new(Notifier::<()>::new());
-    notifier.add(Rc::new(|_| panic!("first channel failure")));
+    notifier.add(Rc::new(|()| panic!("first channel failure")));
     let reenter = Rc::new(Cell::new(true));
     let nested = Rc::downgrade(&notifier);
-    notifier.add_with_recovery(Rc::new(move |_, scope| {
+    notifier.add_with_recovery(Rc::new(move |(), scope| {
         if reenter.replace(false) {
             nested
                 .upgrade()
@@ -210,7 +210,7 @@ fn a_nested_channel_latch_does_not_demote_its_owners_original_failure() {
     }));
     let delivered = Rc::new(Cell::new(0));
     let tail = Rc::clone(&delivered);
-    notifier.add(Rc::new(move |_| tail.set(tail.get() + 1)));
+    notifier.add(Rc::new(move |()| tail.set(tail.get() + 1)));
     let mut recovery = PanicRecovery::new();
     recovery
         .scope()
