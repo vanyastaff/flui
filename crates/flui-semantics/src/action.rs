@@ -78,14 +78,14 @@ pub enum ActionCall {
     Increment,
     /// See [`SemanticsAction::Decrement`].
     Decrement,
-    /// See [`SemanticsAction::ScrollUp`].
-    ScrollUp,
-    /// See [`SemanticsAction::ScrollDown`].
-    ScrollDown,
-    /// See [`SemanticsAction::ScrollLeft`].
-    ScrollLeft,
-    /// See [`SemanticsAction::ScrollRight`].
-    ScrollRight,
+    /// Scroll the content up by this unit.
+    ScrollUp(ScrollUnit),
+    /// Scroll the content down by this unit.
+    ScrollDown(ScrollUnit),
+    /// Scroll the content left by this unit.
+    ScrollLeft(ScrollUnit),
+    /// Scroll the content right by this unit.
+    ScrollRight(ScrollUnit),
     /// Bring a node into view. `None` asks the receiving node to show itself;
     /// `Some` asks a scrollable ancestor to reveal a descendant, with the
     /// geometry the owner resolved for it.
@@ -123,10 +123,10 @@ impl ActionCall {
             SemanticsAction::Collapse => Self::Collapse,
             SemanticsAction::Increment => Self::Increment,
             SemanticsAction::Decrement => Self::Decrement,
-            SemanticsAction::ScrollUp => Self::ScrollUp,
-            SemanticsAction::ScrollDown => Self::ScrollDown,
-            SemanticsAction::ScrollLeft => Self::ScrollLeft,
-            SemanticsAction::ScrollRight => Self::ScrollRight,
+            SemanticsAction::ScrollUp => Self::ScrollUp(ScrollUnit::Page),
+            SemanticsAction::ScrollDown => Self::ScrollDown(ScrollUnit::Page),
+            SemanticsAction::ScrollLeft => Self::ScrollLeft(ScrollUnit::Page),
+            SemanticsAction::ScrollRight => Self::ScrollRight(ScrollUnit::Page),
             SemanticsAction::ScrollIntoView => Self::ScrollIntoView(None),
             SemanticsAction::ShowContextMenu => Self::ShowContextMenu,
             SemanticsAction::ShowTooltip => Self::ShowTooltip,
@@ -146,10 +146,10 @@ impl ActionCall {
             Self::Collapse => SemanticsAction::Collapse,
             Self::Increment => SemanticsAction::Increment,
             Self::Decrement => SemanticsAction::Decrement,
-            Self::ScrollUp => SemanticsAction::ScrollUp,
-            Self::ScrollDown => SemanticsAction::ScrollDown,
-            Self::ScrollLeft => SemanticsAction::ScrollLeft,
-            Self::ScrollRight => SemanticsAction::ScrollRight,
+            Self::ScrollUp(_) => SemanticsAction::ScrollUp,
+            Self::ScrollDown(_) => SemanticsAction::ScrollDown,
+            Self::ScrollLeft(_) => SemanticsAction::ScrollLeft,
+            Self::ScrollRight(_) => SemanticsAction::ScrollRight,
             Self::ScrollIntoView(_) => SemanticsAction::ScrollIntoView,
             Self::SetScrollOffset(_) => SemanticsAction::SetScrollOffset,
             Self::SetTextSelection(_) => SemanticsAction::SetTextSelection,
@@ -162,6 +162,18 @@ impl ActionCall {
             Self::CustomAction(_) => SemanticsAction::CustomAction,
         }
     }
+}
+
+/// How far one directional scroll moves: AccessKit's `ScrollUnit`, which a
+/// request without one leaves at `Page`, as the adapters that send none mean.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum ScrollUnit {
+    /// One item, line or character, or the closest the content has to one.
+    Item,
+    /// About a viewport's worth.
+    #[default]
+    Page,
 }
 
 /// What a scrollable ancestor needs to reveal a descendant: current,

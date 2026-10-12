@@ -1770,10 +1770,11 @@ ADR.
 
 **Choice:** the builders are named after the actions they register
 (ADR-0203). The payload-free ones — `on_click`, `on_show_context_menu`,
-`on_scroll_{left,right,up,down}`, `on_increment`, `on_decrement`, `on_focus`,
+`on_increment`, `on_decrement`, `on_focus`,
 `on_blur`, and `expandable`'s pair — take `Fn(&mut EventCx<'_>) -> R`; the
 others take their payload typed: `on_set_value` a `&str`,
 `on_set_numeric_value` an `f64`, `on_set_scroll_offset` an `Offset<f64>`,
+`on_scroll_{left,right,up,down}` the request's `ScrollUnit`,
 `on_scroll_into_view` an `Option<Reveal>`. `on_action` takes any
 `SemanticsAction` with `Fn(&mut EventCx<'_>, ActionCall)` for what the typed
 set does not cover. None needs `Send + Sync`: the closures never reach the

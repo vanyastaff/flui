@@ -22,7 +22,7 @@
 
 use accesskit::{Affine, Node, NodeId, Rect, Role, TextDirection, TreeId, TreeInfo, TreeUpdate};
 
-use crate::action::{ActionCall, ActionDecodeError, SemanticsAction, TextSelection};
+use crate::action::{ActionCall, ActionDecodeError, ScrollUnit, SemanticsAction, TextSelection};
 use crate::attributes::SemanticsAttributes;
 use crate::identity::AccessibilityNodeId;
 use crate::node::SemanticsNode;
@@ -418,8 +418,8 @@ pub fn semantics_action_for(action: accesskit::Action) -> Option<SemanticsAction
 /// `SetScrollOffset`, a selection within the target node for
 /// `SetTextSelection` (FLUI publishes no text runs yet, so a selection whose
 /// ends lie on another node has no meaning here), an id for `CustomAction`.
-/// The scroll hints AccessKit attaches to scrolling (`ScrollUnit`,
-/// `ScrollHint`) are optional and ignored; any other payload on an action
+/// A directional scroll carries its `ScrollUnit` (`Page` when the request has none);
+/// a reveal's `ScrollHint` is a preference and is not passed on. Any other payload on an action
 /// that takes none is refused. Validity against the current node (a number
 /// inside the range) is the owner's check at dispatch.
 ///
@@ -463,7 +463,27 @@ pub fn semantics_action_request_for(
         (SemanticsAction::CustomAction, Some(ActionData::CustomAction(id))) => {
             ActionCall::CustomAction(*id)
         }
-        (_, None | Some(ActionData::ScrollUnit(_) | ActionData::ScrollHint(_))) => {
+        (
+            SemanticsAction::ScrollUp
+            | SemanticsAction::ScrollDown
+            | SemanticsAction::ScrollLeft
+            | SemanticsAction::ScrollRight,
+            Some(ActionData::ScrollUnit(unit)),
+        ) => {
+            let unit = match unit {
+                accesskit::ScrollUnit::Item => ScrollUnit::Item,
+                accesskit::ScrollUnit::Page => ScrollUnit::Page,
+            };
+            match action {
+                SemanticsAction::ScrollUp => ActionCall::ScrollUp(unit),
+                SemanticsAction::ScrollDown => ActionCall::ScrollDown(unit),
+                SemanticsAction::ScrollLeft => ActionCall::ScrollLeft(unit),
+                _ => ActionCall::ScrollRight(unit),
+            }
+        }
+        // A reveal's position hint is a preference FLUI does not pass on: it
+        // reveals with the least movement.
+        (SemanticsAction::ScrollIntoView, Some(ActionData::ScrollHint(_))) | (_, None) => {
             ActionCall::without_payload(action)
                 .ok_or(ActionDecodeError::MissingPayload { action })?
         }
@@ -997,7 +1017,17 @@ mod tests {
             (
                 Ak::ScrollDown,
                 Some(Data::ScrollUnit(accesskit::ScrollUnit::Item)),
-                Ok(ActionCall::ScrollDown),
+                Ok(ActionCall::ScrollDown(ScrollUnit::Item)),
+            ),
+            (
+                Ak::ScrollUp,
+                None,
+                Ok(ActionCall::ScrollUp(ScrollUnit::Page)),
+            ),
+            (
+                Ak::ScrollIntoView,
+                Some(Data::ScrollHint(accesskit::ScrollHint::TopEdge)),
+                Ok(ActionCall::ScrollIntoView(None)),
             ),
             (
                 Ak::ScrollIntoView,

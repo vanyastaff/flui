@@ -86,7 +86,7 @@ pub mod tree;
 // ============================================================================
 
 pub use action::{
-    ActionCall, ActionDecodeError, Reveal, SemanticsAction, SemanticsActionHandler,
+    ActionCall, ActionDecodeError, Reveal, ScrollUnit, SemanticsAction, SemanticsActionHandler,
     SemanticsActionRequest, TextSelection,
 };
 // ============================================================================

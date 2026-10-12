@@ -42,9 +42,9 @@ use flui_objects::{
 use flui_rendering::{
     protocol::BoxProtocol,
     semantics::{
-        ActionCall, Assertiveness, HeadingLevel, Reveal, SemanticsAction, SemanticsActionHandler,
-        SemanticsAnchor, SemanticsConfiguration, SemanticsRelation, SemanticsRole, TextDirection,
-        Toggled,
+        ActionCall, Assertiveness, HeadingLevel, Reveal, ScrollUnit, SemanticsAction,
+        SemanticsActionHandler, SemanticsAnchor, SemanticsConfiguration, SemanticsRelation,
+        SemanticsRole, TextDirection, Toggled,
     },
 };
 use flui_view::{
@@ -547,44 +547,68 @@ impl Semantics {
         self.on_plain_action(SemanticsAction::ShowContextMenu, handler)
     }
 
-    /// Invoke `handler` when assistive technology scrolls this node left.
+    /// Invoke `handler` when assistive technology scrolls this node left, by
+    /// the [`ScrollUnit`] it asked for.
     #[must_use]
     pub fn on_scroll_left<F, R>(self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        F: Fn(&mut EventCx<'_>, ScrollUnit) -> R + 'static,
         R: EventOutcome,
     {
-        self.on_plain_action(SemanticsAction::ScrollLeft, handler)
+        self.on_scroll_action(SemanticsAction::ScrollLeft, handler)
     }
 
-    /// Invoke `handler` when assistive technology scrolls this node right.
+    /// Invoke `handler` when assistive technology scrolls this node right, by
+    /// the [`ScrollUnit`] it asked for.
     #[must_use]
     pub fn on_scroll_right<F, R>(self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        F: Fn(&mut EventCx<'_>, ScrollUnit) -> R + 'static,
         R: EventOutcome,
     {
-        self.on_plain_action(SemanticsAction::ScrollRight, handler)
+        self.on_scroll_action(SemanticsAction::ScrollRight, handler)
     }
 
-    /// Invoke `handler` when assistive technology scrolls this node up.
+    /// Invoke `handler` when assistive technology scrolls this node up, by the
+    /// [`ScrollUnit`] it asked for.
     #[must_use]
     pub fn on_scroll_up<F, R>(self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        F: Fn(&mut EventCx<'_>, ScrollUnit) -> R + 'static,
         R: EventOutcome,
     {
-        self.on_plain_action(SemanticsAction::ScrollUp, handler)
+        self.on_scroll_action(SemanticsAction::ScrollUp, handler)
     }
 
-    /// Invoke `handler` when assistive technology scrolls this node down.
+    /// Invoke `handler` when assistive technology scrolls this node down, by
+    /// the [`ScrollUnit`] it asked for.
     #[must_use]
     pub fn on_scroll_down<F, R>(self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        F: Fn(&mut EventCx<'_>, ScrollUnit) -> R + 'static,
         R: EventOutcome,
     {
-        self.on_plain_action(SemanticsAction::ScrollDown, handler)
+        self.on_scroll_action(SemanticsAction::ScrollDown, handler)
+    }
+
+    /// Registers a directional scroll handler, which receives the call's unit.
+    fn on_scroll_action<F, R>(mut self, action: SemanticsAction, handler: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, ScrollUnit) -> R + 'static,
+        R: EventOutcome,
+    {
+        let handler = value_callback(handler);
+        self.event_actions.insert(
+            action,
+            Rc::new(move |cx, call| match call {
+                ActionCall::ScrollUp(unit)
+                | ActionCall::ScrollDown(unit)
+                | ActionCall::ScrollLeft(unit)
+                | ActionCall::ScrollRight(unit) => handler(cx, unit),
+                _ => {}
+            }),
+        );
+        self
     }
 
     /// Publishes a validated numeric range for native range-value controls.

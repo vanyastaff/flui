@@ -33,7 +33,7 @@ use flui_semantics::{ActionDecodeError, SemanticsActionError, semantics_action_r
 // the platform sends.
 pub use accesskit::{
     Action, ActionData, ActionRequest, Live, NodeId, Point as A11yPoint, Rect as A11yRect, Role,
-    Toggled, TreeId,
+    ScrollUnit, Toggled, TreeId,
 };
 
 /// The binding drives no tree, so there is no pipeline to assemble semantics

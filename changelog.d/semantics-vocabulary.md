@@ -7,6 +7,9 @@
   FLUI never publishes, an unrouted action, or a missing or mismatched payload.
 - **`ReplaceSelectedText`, `ShowTooltip` and `HideTooltip` actions** (`flui-protocol`), routed
   from and to AccessKit.
+- **`ScrollUnit`** (`flui-semantics`): a directional scroll carries the unit a platform asked
+  for (`Item` or `Page`); `Scrollable` moves one wheel line for an item and most of a viewport
+  for a page, and `Semantics::on_scroll_{up,down,left,right}` hand it to their handler.
 - **`Semantics::on_set_scroll_offset`, `on_scroll_into_view`** (`flui-widgets`), with typed
   payloads.
 - **The ARIA role vocabulary** (`flui-protocol`, ADR-0203): `SemanticsRole` gains every

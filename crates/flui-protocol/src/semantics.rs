@@ -583,4 +583,141 @@ mod tests {
             assert_eq!(action.value(), 1 << position, "{action}");
         }
     }
+
+    /// Every non-abstract WAI-ARIA 1.2 role, transcribed from the
+    /// specification's role list, with the role FLUI publishes it as, or why
+    /// it has none. Independent of `SemanticsRole::ALL`, so dropping a role
+    /// from the enum cannot also drop it from the check.
+    const ARIA_1_2_ROLES: &[(&str, Result<SemanticsRole, &str>)] = &[
+        ("alert", Ok(SemanticsRole::Alert)),
+        ("alertdialog", Ok(SemanticsRole::AlertDialog)),
+        ("application", Ok(SemanticsRole::Application)),
+        ("article", Ok(SemanticsRole::Article)),
+        ("banner", Ok(SemanticsRole::Banner)),
+        ("blockquote", Ok(SemanticsRole::Blockquote)),
+        ("button", Ok(SemanticsRole::Button)),
+        ("caption", Ok(SemanticsRole::Caption)),
+        ("cell", Ok(SemanticsRole::Cell)),
+        ("checkbox", Ok(SemanticsRole::CheckBox)),
+        ("code", Ok(SemanticsRole::Code)),
+        ("columnheader", Ok(SemanticsRole::ColumnHeader)),
+        ("combobox", Ok(SemanticsRole::ComboBox)),
+        ("complementary", Ok(SemanticsRole::Complementary)),
+        ("contentinfo", Ok(SemanticsRole::ContentInfo)),
+        ("definition", Ok(SemanticsRole::Definition)),
+        ("deletion", Ok(SemanticsRole::Deletion)),
+        ("dialog", Ok(SemanticsRole::Dialog)),
+        ("directory", Err("deprecated in ARIA 1.2; a list")),
+        ("document", Ok(SemanticsRole::Document)),
+        ("emphasis", Ok(SemanticsRole::Emphasis)),
+        ("feed", Ok(SemanticsRole::Feed)),
+        ("figure", Ok(SemanticsRole::Figure)),
+        ("form", Ok(SemanticsRole::Form)),
+        ("generic", Ok(SemanticsRole::None)),
+        ("grid", Ok(SemanticsRole::Grid)),
+        ("gridcell", Ok(SemanticsRole::GridCell)),
+        ("group", Ok(SemanticsRole::Group)),
+        ("heading", Ok(SemanticsRole::Heading)),
+        ("img", Ok(SemanticsRole::Image)),
+        ("insertion", Ok(SemanticsRole::Insertion)),
+        ("link", Ok(SemanticsRole::Link)),
+        ("list", Ok(SemanticsRole::List)),
+        ("listbox", Ok(SemanticsRole::ListBox)),
+        ("listitem", Ok(SemanticsRole::ListItem)),
+        ("log", Ok(SemanticsRole::Log)),
+        ("main", Ok(SemanticsRole::Main)),
+        ("marquee", Ok(SemanticsRole::Marquee)),
+        ("math", Ok(SemanticsRole::Math)),
+        ("menu", Ok(SemanticsRole::Menu)),
+        ("menubar", Ok(SemanticsRole::MenuBar)),
+        ("menuitem", Ok(SemanticsRole::MenuItem)),
+        ("menuitemcheckbox", Ok(SemanticsRole::MenuItemCheckbox)),
+        ("menuitemradio", Ok(SemanticsRole::MenuItemRadio)),
+        ("meter", Ok(SemanticsRole::Meter)),
+        ("navigation", Ok(SemanticsRole::Navigation)),
+        ("none", Ok(SemanticsRole::None)),
+        ("note", Ok(SemanticsRole::Note)),
+        ("option", Ok(SemanticsRole::ListBoxOption)),
+        ("paragraph", Ok(SemanticsRole::Paragraph)),
+        ("presentation", Ok(SemanticsRole::None)),
+        ("progressbar", Ok(SemanticsRole::ProgressBar)),
+        ("radio", Ok(SemanticsRole::RadioButton)),
+        ("radiogroup", Ok(SemanticsRole::RadioGroup)),
+        ("region", Ok(SemanticsRole::Region)),
+        ("row", Ok(SemanticsRole::Row)),
+        ("rowgroup", Ok(SemanticsRole::RowGroup)),
+        ("rowheader", Ok(SemanticsRole::RowHeader)),
+        ("scrollbar", Ok(SemanticsRole::ScrollBar)),
+        ("search", Ok(SemanticsRole::Search)),
+        ("searchbox", Ok(SemanticsRole::SearchInput)),
+        ("separator", Ok(SemanticsRole::Separator)),
+        ("slider", Ok(SemanticsRole::Slider)),
+        ("spinbutton", Ok(SemanticsRole::SpinButton)),
+        ("status", Ok(SemanticsRole::Status)),
+        ("strong", Ok(SemanticsRole::Strong)),
+        ("subscript", Err("no AccessKit counterpart")),
+        ("superscript", Err("no AccessKit counterpart")),
+        ("switch", Ok(SemanticsRole::Switch)),
+        ("tab", Ok(SemanticsRole::Tab)),
+        ("table", Ok(SemanticsRole::Table)),
+        ("tablist", Ok(SemanticsRole::TabList)),
+        ("tabpanel", Ok(SemanticsRole::TabPanel)),
+        ("term", Ok(SemanticsRole::Term)),
+        ("textbox", Ok(SemanticsRole::TextInput)),
+        ("time", Ok(SemanticsRole::Time)),
+        ("timer", Ok(SemanticsRole::Timer)),
+        ("toolbar", Ok(SemanticsRole::Toolbar)),
+        ("tooltip", Ok(SemanticsRole::Tooltip)),
+        ("tree", Ok(SemanticsRole::Tree)),
+        ("treegrid", Ok(SemanticsRole::TreeGrid)),
+        ("treeitem", Ok(SemanticsRole::TreeItem)),
+    ];
+
+    /// The roles FLUI has beyond ARIA's: the editable-text kinds AccessKit
+    /// distinguishes (ARIA's `textbox` with `aria-multiline`, HTML input
+    /// types) and the desktop window roles.
+    const BEYOND_ARIA: &[SemanticsRole] = &[
+        SemanticsRole::MultilineTextInput,
+        SemanticsRole::PasswordInput,
+        SemanticsRole::EmailInput,
+        SemanticsRole::NumberInput,
+        SemanticsRole::PhoneNumberInput,
+        SemanticsRole::UrlInput,
+        SemanticsRole::DateInput,
+        SemanticsRole::TimeInput,
+        SemanticsRole::Window,
+        SemanticsRole::Pane,
+        SemanticsRole::ScrollView,
+    ];
+
+    /// The vocabulary covers ARIA 1.2 (ADR-0203): every ARIA role has a FLUI
+    /// role or a recorded reason, and every FLUI role is an ARIA role's or
+    /// one of the documented additions.
+    #[test]
+    fn every_aria_role_is_covered() {
+        let covered: Vec<SemanticsRole> = ARIA_1_2_ROLES
+            .iter()
+            .filter_map(|(_, role)| role.ok())
+            .chain(BEYOND_ARIA.iter().copied())
+            .collect();
+        for role in SemanticsRole::ALL {
+            assert!(
+                covered.contains(role),
+                "{role} is neither an ARIA 1.2 role's nor a documented addition"
+            );
+        }
+        let names: Vec<&str> = ARIA_1_2_ROLES.iter().map(|(name, _)| *name).collect();
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            names, sorted,
+            "the ARIA list is sorted and has no duplicates"
+        );
+        assert_eq!(
+            names.len(),
+            82,
+            "a role added to or dropped from the transcription is deliberate"
+        );
+    }
 }

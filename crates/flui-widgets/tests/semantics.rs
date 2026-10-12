@@ -845,8 +845,9 @@ pub(crate) fn numeric_range_admission_and_owner_payload_validation() {
 }
 
 /// A screen reader scrolls a list through the same position a drag drives:
-/// the scrollable advertises scroll-down/up, and each request moves the
-/// offset by most of a viewport, clamped to the extents.
+/// the scrollable advertises scroll-down/up, and each page request moves the
+/// offset by most of a viewport and each item request by one line, clamped to
+/// the extents.
 pub(crate) fn assistive_scroll_actions_move_a_scrollable() {
     use flui_widgets::{ScrollController, Scrollable};
 
@@ -889,6 +890,25 @@ pub(crate) fn assistive_scroll_actions_move_a_scrollable() {
         .expect("scroll-up resolves");
     laid.tick();
     assert_eq!(scroll.pixels(), 0.0, "scroll-up returns to the start");
+
+    // An item step moves one wheel line (53 by default), not a page.
+    laid.invoke_semantics_action(request(
+        Action::ScrollDown,
+        scroller,
+        Some(flui_testing::a11y::ActionData::ScrollUnit(
+            flui_testing::a11y::ScrollUnit::Item,
+        )),
+    ))
+    .expect("an item scroll-down resolves");
+    laid.tick();
+    assert!(
+        after_down > 53.0,
+        "the page step exceeds a line: {after_down}"
+    );
+    assert_eq!(scroll.pixels(), 53.0, "an item step moves one line");
+    laid.invoke_semantics_action(request(Action::ScrollUp, scroller, None))
+        .expect("scroll-up resolves");
+    laid.tick();
     let adjustment = laid
         .a11y_tree()
         .expect("tree")

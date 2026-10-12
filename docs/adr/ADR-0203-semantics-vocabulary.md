@@ -50,8 +50,9 @@ Pre-1.0, the owner chose to break this vocabulary now (spec D3).
 3. **Typed calls.** A handler receives an `ActionCall`: the action fused with exactly the
    payload it takes (`SetValue(String)`, `SetNumericValue(f64)`,
    `SetTextSelection(TextSelection)`, `ReplaceSelectedText(String)`,
-   `SetScrollOffset(Offset)`, `ScrollIntoView(Option<Reveal>)`, `CustomAction(i32)`, the rest
-   bare), so a payload that does not fit its action cannot be expressed.
+   `SetScrollOffset(Offset)`, `ScrollIntoView(Option<Reveal>)`, `CustomAction(i32)`, the
+   directional scrolls with their `ScrollUnit` (`Item` or `Page`, `Page` when the request has
+   none), the rest bare), so a payload that does not fit its action cannot be expressed.
    `semantics_action_request_for` decodes a platform request into one and refuses a missing or
    mismatched payload with `ActionDecodeError` before any handler runs. One handler type per
    configuration, rather than one slot type per action, keeps the per-node ticket the widget
@@ -78,6 +79,7 @@ Pre-1.0, the owner chose to break this vocabulary now (spec D3).
 ## Verification
 
 `every_role_maps_to_accesskit` and `every_action_round_trips_through_accesskit` walk `ALL`;
+`every_aria_role_is_covered` checks the vocabulary against an independent ARIA 1.2 list;
 `vocabulary_names_are_pinned`; `every_wire_action_routes_to_a_semantics_action` and
 `wire_role_matches_the_windows_adapter_for_every_role_flui_publishes` recomputed for the new
 roles; `platform_requests_decode_to_their_typed_call` for the refused missing and mismatched
