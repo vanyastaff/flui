@@ -64,9 +64,10 @@ committed that loop's result were inconsistent with each other and with Flutter
 
 ## Recorded divergences and gaps
 
-- The wgpu backend originally ignored a clip layer's `Clip` mode; since #848 only `AntiAlias` on a
-  rect still renders as `HardEdge` (see "Implementation notes"). Pixel evidence stays per
-  primitive in the engine's readback suite.
+- The wgpu backend originally ignored a clip layer's `Clip` mode. The rect-AA gap that
+  remained after #848 is also closed by geometric membership and fractional coverage
+  (see "Implementation notes"). Pixel evidence stays per primitive in the engine's
+  readback suite.
 - `center` is an index, not a key; a key-based center is a follow-up.
 - Every setter added here returns no impact on equality. The per-pixel rebuild of the viewport
   subtree on scroll (#833) and the slivers' hit-test child-count snapshot (replaced by #834's
@@ -140,10 +141,12 @@ are conservative culling bounds, not a replacement for the admitted AA geometry.
 The public clip readback family requires actual path/rect membership and fractional
 coverage; its retained historical test names no longer authorize wrong-pixel equality.
 
-Two narrower facts about that mode are recorded in `crates/flui-engine/ARCHITECTURE.md`: the
-offscreen is declined where no clip was actually installed (a **path** clip installs none) and
-inside a bounds-growing image-filter layer (which discards nested layers), and its compositing
-bounds are the clip's own scissor rather than the whole viewport.
+`Clip::AntiAliasWithSaveLayer` opens an offscreen bounded by the clip's own scissor,
+including for path clips and inside image filters. Path clips preserve geometric
+membership, and filter layers retain ordered draw items from nested groups and the
+final segment. Coverage applies once at the finished group composite; the scissor
+bounds its work rather than replacing its clip expression. These contracts are
+recorded in `crates/flui-engine/ARCHITECTURE.md`.
 
 The second part is the clips a child sees. Two hooks join the render-object trait family beside `excludes_semantics_subtree`:
 `describe_approximate_paint_clip(child_slot)` and `describe_semantics_clip(child_slot)`, both
