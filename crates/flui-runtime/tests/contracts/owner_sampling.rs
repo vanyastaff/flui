@@ -242,6 +242,198 @@ fn nested_owner_drain_defers_discovery_until_lease_return() {
     scheduling_observation_case(ObservationScope::NestedDrain);
 }
 
+struct RetryDeadline {
+    due: Cell<Option<web_time::Instant>>,
+    queries: Cell<usize>,
+    polls: Cell<usize>,
+    fail_query: Cell<bool>,
+}
+
+impl GestureArenaMember for RetryDeadline {
+    fn accept_gesture(&self, _: PointerId) {}
+    fn reject_gesture(&self, _: PointerId) {}
+
+    fn deadline(&self) -> Option<web_time::Instant> {
+        self.queries.set(self.queries.get() + 1);
+        assert!(!self.fail_query.get(), "native gate deadline query");
+        self.due.get()
+    }
+
+    fn poll_deadline(&self, _: web_time::Instant) {
+        self.polls.set(self.polls.get() + 1);
+        self.due.set(None);
+    }
+}
+
+struct PendingDeadlineEffects {
+    clock: ManualClock,
+    pending: Cell<bool>,
+    pumps: Cell<usize>,
+}
+
+impl OwnerEffects for PendingDeadlineEffects {
+    fn runtime_lifecycle(&self, _: UiRuntimeId, _: flui_scheduler::AppLifecycleState) {}
+    fn runtimes_stopped(&self, _: RecoveryState) {}
+    fn retire_host(&self, _: &[PresentationAddress], _: RecoveryState) {}
+    fn commit_install(&self, _: InstallToken, _: RecoveryState) -> Option<InstallInitialization> {
+        panic!("no pending installation");
+    }
+    fn finish_install(&self, _: PresentationAddress, _: InitializationOutcome, _: RecoveryState) {}
+    fn cancel_install(&self, _: InstallToken, _: RecoveryState) {
+        panic!("no pending installation");
+    }
+    fn resize_surface(
+        &self,
+        _: PresentationAddress,
+        _: flui_foundation::geometry::Size<f64>,
+        _: f64,
+    ) {
+    }
+    fn frame(&self, _: PresentationAddress, runtime: &mut UiRuntime) {
+        // Like the native driver, drain inside the owner lease before reading
+        // the public pending gate. No other dirty or scheduled work opens it.
+        let pending = runtime.enter(|runtime| {
+            assert!(!runtime.drain_owner_inbox(), "no unrelated inbox redraw");
+            assert!(!runtime.needs_redraw(), "no unrelated redraw demand");
+            assert!(
+                !runtime.scheduler().is_frame_scheduled(),
+                "no scheduled ticker"
+            );
+            runtime.has_pending_work()
+        });
+        self.pending.set(pending);
+        if pending {
+            self.pumps.set(self.pumps.get() + 1);
+            let mut clock = self.clock.clone();
+            let _ = runtime.pump(&mut clock, &mut SamplingSink);
+        }
+    }
+    fn retire_presentation(&self, _: PresentationAddress, _: Option<PresentationAddress>) {}
+    fn after_turn(&self, _: RecoveryState) {}
+    fn request_continuation(&self) -> bool {
+        true
+    }
+}
+
+fn query_retry_participates_in_the_pending_gate_and_then_settles() {
+    for repaired in [true, false] {
+        let clock = ManualClock::new();
+        let now = clock.now();
+        let retry_due = now + Duration::from_millis(100);
+        let (runtime, _window) = manual_runtime(clock.clone());
+        let reports = Arc::new(AtomicUsize::new(0));
+        let observed_reports = Arc::clone(&reports);
+        runtime.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
+            let FrameFailureKind::SamplingPanic { first, .. } = &report.kind else {
+                panic!("expected a deadline discovery report");
+            };
+            assert_eq!(first.stage, SamplingStage::DeadlineDiscovery);
+            assert_eq!(first.origin, SamplingFailureOrigin::Unknown);
+            assert_eq!(report.disposition, FailureDisposition::Contained);
+            observed_reports.fetch_add(1, Ordering::Relaxed);
+        })));
+        let member = Rc::new(RetryDeadline {
+            due: Cell::new(Some(now + Duration::from_millis(50))),
+            queries: Cell::new(0),
+            polls: Cell::new(0),
+            fail_query: Cell::new(true),
+        });
+        let _entry = runtime
+            .gestures()
+            .arena()
+            .add(PointerId::new(NonZeroU64::MIN), &member);
+        runtime.enter(UiRuntime::drain_owner_inbox);
+        assert_eq!(member.queries.get(), 1, "one original query failure");
+        assert_eq!(reports.load(Ordering::Relaxed), 1);
+        assert_eq!(runtime.next_wake(), Some(retry_due));
+
+        let owner = OwnerHost::new();
+        let address = owner
+            .publication(owner.prepare_runtime(runtime))
+            .expect("publish runtime")
+            .commit();
+        let frame = owner.frame_dispatcher(address).expect("frame authority");
+        let effects = PendingDeadlineEffects {
+            clock: clock.clone(),
+            pending: Cell::new(false),
+            pumps: Cell::new(0),
+        };
+        clock.advance(Duration::from_millis(99));
+        assert_eq!(
+            owner
+                .runtime_dispatcher(address.ui_runtime_id)
+                .expect("background authority")
+                .deliver(flui_runtime::owner::RuntimeOperation::Background, &effects),
+            Ok(Delivery::Driven)
+        );
+        assert_eq!(
+            member.queries.get(),
+            1,
+            "an early owner turn cannot re-probe"
+        );
+        assert_eq!(
+            member.polls.get(),
+            0,
+            "the stale deadline cannot poll early"
+        );
+        assert_eq!(owner.next_wake(), Ok(Some(retry_due)));
+        assert_eq!(reports.load(Ordering::Relaxed), 1);
+
+        clock.advance(Duration::from_millis(1));
+        member.fail_query.set(!repaired);
+        assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+        assert_eq!(
+            member.polls.get(),
+            usize::from(repaired),
+            "the due owner opportunity delivers an already-due recovered deadline"
+        );
+        assert!(
+            effects.pending.get(),
+            "the due recovery wake must participate in the native pending gate"
+        );
+        assert_eq!(effects.pumps.get(), 1, "the gate admits its due owner pump");
+        assert_eq!(
+            owner.next_wake(),
+            Ok(None),
+            "settled or parked debt cannot spin"
+        );
+        assert_eq!(
+            reports.load(Ordering::Relaxed),
+            1,
+            "retry never repeats its report"
+        );
+        if !repaired {
+            assert_eq!(member.queries.get(), 2, "one failed automatic re-probe");
+        }
+
+        let after_retry = member.queries.get();
+        for _ in 0..3 {
+            clock.advance(Duration::from_millis(100));
+            assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+            assert!(!effects.pending.get(), "completed recovery closes the gate");
+            assert_eq!(owner.next_wake(), Ok(None));
+        }
+        assert_eq!(
+            effects.pumps.get(),
+            1,
+            "later idle opportunities do not pump"
+        );
+        assert_eq!(
+            member.polls.get(),
+            usize::from(repaired),
+            "settled work is not replayed"
+        );
+        if !repaired {
+            assert_eq!(
+                member.queries.get(),
+                after_retry,
+                "parked query awaits changed input"
+            );
+        }
+        assert_eq!(reports.load(Ordering::Relaxed), 1);
+    }
+}
+
 struct ReportProbe {
     owner: OwnerHost,
     frame: FrameDispatcher,
@@ -1369,6 +1561,10 @@ fn owner_sampling_contract() {
             (
                 "nested owner drain defers discovery until lease return",
                 nested_owner_drain_defers_discovery_until_lease_return,
+            ),
+            (
+                "query retry opens the pending gate and then settles",
+                query_retry_participates_in_the_pending_gate_and_then_settles,
             ),
             (
                 "query report follows lease return and recovery",

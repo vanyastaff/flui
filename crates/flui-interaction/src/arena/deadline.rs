@@ -150,6 +150,17 @@ enum Observation {
     Parked,
 }
 
+impl Observation {
+    /// Both native wake timing and pump admission observe the same armed debt.
+    fn wake_deadline(self) -> Option<Instant> {
+        match self {
+            Self::Observed(deadline) => deadline,
+            Self::Retry(due) => Some(due),
+            Self::Unobserved | Self::Parked => None,
+        }
+    }
+}
+
 fn query_retry(now: Instant) -> Observation {
     now.checked_add(Duration::from_millis(100))
         .filter(|due| *due > now)
@@ -551,11 +562,7 @@ impl DeadlineRegistry {
             .borrow()
             .iter()
             .filter(|source| source.active.get() && source.member.strong_count() != 0)
-            .filter_map(|source| match source.observation.get() {
-                Observation::Observed(deadline) => deadline,
-                Observation::Retry(due) => Some(due),
-                Observation::Unobserved | Observation::Parked => None,
-            })
+            .filter_map(|source| source.observation.get().wake_deadline())
             .min()
     }
 
@@ -564,7 +571,7 @@ impl DeadlineRegistry {
             && self.sources.borrow().iter().any(|source| {
                 source.active.get()
                     && source.member.strong_count() != 0
-                    && matches!(source.observation.get(), Observation::Observed(Some(_)))
+                    && source.observation.get().wake_deadline().is_some()
             })
     }
 }

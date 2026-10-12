@@ -56,6 +56,13 @@ host.
   `deadline_query_reentry_does_not_rediscover_its_active_source` row distinguishes
   one admitted observation from a second nested query and checks inert wake
   reads afterwards.
+  Armed query retries contribute to both the cached wake deadline and pending
+  work: a native frame gate must admit their owner pump. The same mapping of
+  observation state supplies both facts; parked/retired sources contribute
+  neither. `query_retry_participates_in_the_pending_gate_and_then_settles`
+  drives the public owner frame/drain/pending-gate path, distinguishes delivery
+  on the due owner opportunity from discovery on lease return, and verifies
+  that repeated failure parks without another wake or report.
 
 - **Completion belongs to a presentation.** Assembly installs that
   presentation's weak post-frame handle before mounting elements. An incomplete

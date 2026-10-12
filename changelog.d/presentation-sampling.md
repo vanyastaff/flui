@@ -7,6 +7,9 @@
 
 ### Fixed
 
+- Armed deadline-query retries now participate in the native pending-work gate,
+  allowing recovered overdue input to run in its due owner opportunity.
+
 - Animation and input deadline failures preserve independent healthy sampling,
   build and completion. A committed delivery failure keeps valid state; a
   computation or unknown failure rejects only its admitted presentation attempt.
