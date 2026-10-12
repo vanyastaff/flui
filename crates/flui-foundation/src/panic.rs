@@ -92,6 +92,14 @@ enum CapturedFailure {
 }
 
 impl CapturedFailure {
+    fn payload(&self) -> &(dyn Any + Send) {
+        match self {
+            Self::Authoritative { payload, .. } | Self::InheritedAnnotation { payload, .. } => {
+                payload.as_ref()
+            }
+        }
+    }
+
     fn class(&self) -> FailureClass {
         match self {
             Self::Authoritative { class, .. } | Self::InheritedAnnotation { class, .. } => *class,
@@ -123,8 +131,7 @@ pub enum FailureClass {
 /// It cannot resume a payload held under an enclosing owner's earlier failure.
 #[doc(hidden)]
 pub struct RecoveryFailure {
-    payload: Option<Box<dyn Any + Send>>,
-    class: FailureClass,
+    captured: Option<CapturedFailure>,
     blocking_class: Option<FailureClass>,
 }
 
@@ -132,15 +139,19 @@ impl RecoveryFailure {
     /// Borrow the original payload while this receipt retains its ownership.
     #[must_use]
     pub fn payload(&self) -> &(dyn Any + Send) {
-        self.payload
-            .as_deref()
+        self.captured
+            .as_ref()
             .expect("BUG: live failure receipt owns its payload")
+            .payload()
     }
 
     /// The class stamped at the first failure's actual capture seam.
     #[must_use]
     pub fn class(&self) -> FailureClass {
-        self.class
+        self.captured
+            .as_ref()
+            .expect("BUG: live failure receipt owns its provenance")
+            .class()
     }
 
     /// The first blocking failure, independently of the first payload's class.
@@ -153,7 +164,7 @@ impl RecoveryFailure {
 impl std::fmt::Debug for RecoveryFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RecoveryFailure")
-            .field("class", &self.class)
+            .field("class", &self.class())
             .field("blocking_class", &self.blocking_class)
             .finish_non_exhaustive()
     }
@@ -161,8 +172,8 @@ impl std::fmt::Debug for RecoveryFailure {
 
 impl Drop for RecoveryFailure {
     fn drop(&mut self) {
-        if let Some(payload) = self.payload.take() {
-            retain_opaque_payload(payload);
+        if let Some(captured) = self.captured.take() {
+            retain_opaque_payload(captured.into_parts().0);
         }
     }
 }
@@ -262,13 +273,9 @@ impl PanicRecovery {
     /// Standalone propagation uses [`Self::finish`] instead.
     #[must_use]
     pub fn into_failure(mut self) -> Option<RecoveryFailure> {
-        self.first.take().map(|captured| {
-            let (payload, class) = captured.into_parts();
-            RecoveryFailure {
-                payload: Some(payload),
-                class,
-                blocking_class: self.blocking_class,
-            }
+        self.first.take().map(|captured| RecoveryFailure {
+            captured: Some(captured),
+            blocking_class: self.blocking_class,
         })
     }
 
@@ -313,16 +320,37 @@ impl RecoveryScope<'_> {
 
     /// Stamp a payload captured at another framework producer without resuming it.
     pub fn capture_classified(&mut self, class: FailureClass, payload: Box<dyn Any + Send>) {
+        self.capture_owned(CapturedFailure::Authoritative { payload, class });
+    }
+
+    /// Adopt a relay's receipt in capture order, before a later escaped payload.
+    /// Inherited annotations never acquire standalone propagation authority.
+    /// Earlier blocking evidence remains independent of the first payload.
+    #[doc(hidden)]
+    pub fn capture_failure(&mut self, mut failure: RecoveryFailure) {
+        if self.owner.blocking_class.is_none() {
+            self.owner.blocking_class = failure.blocking_class;
+        }
+        let captured = failure
+            .captured
+            .take()
+            .expect("BUG: live failure receipt owns its captured failure");
+        self.capture_owned(captured);
+    }
+
+    fn capture_owned(&mut self, captured: CapturedFailure) {
+        let class = captured.class();
         if class != FailureClass::Delivery && self.owner.blocking_class.is_none() {
             self.owner.blocking_class = Some(class);
         }
         if self.owner.first.is_some() {
-            retain_opaque_payload(payload);
+            retain_opaque_payload(captured.into_parts().0);
         } else {
-            self.owner.first = Some(if self.owner.incoming {
-                CapturedFailure::InheritedAnnotation { payload, class }
-            } else {
-                CapturedFailure::Authoritative { payload, class }
+            self.owner.first = Some(match captured {
+                CapturedFailure::Authoritative { payload, class } if self.owner.incoming => {
+                    CapturedFailure::InheritedAnnotation { payload, class }
+                }
+                first => first,
             });
         }
         self.mark_active_channels();

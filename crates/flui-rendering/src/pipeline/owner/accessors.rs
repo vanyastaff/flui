@@ -283,15 +283,37 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         kind: DirtyKind,
         recovery: &mut RecoveryScope<'_>,
     ) {
-        // A generic mark includes the canonical walk and arbitrary callouts;
-        // only its specific producer can prove a committed-delivery boundary.
-        recovery.run_classified(FailureClass::Unknown, |_| match kind {
-            DirtyKind::Layout => self.mark_needs_layout(id),
-            DirtyKind::Compositing => self.mark_needs_compositing_bits_update(id),
-            DirtyKind::Paint => self.mark_needs_paint(id),
-            DirtyKind::Semantics => self.mark_needs_semantics(id),
-            DirtyKind::CompositedLayerUpdate => self.mark_needs_composited_layer_update(id),
+        let mut needs_wake = false;
+        // A failed numeric walk has not proved publication. The canonical
+        // commit helpers enter no user code and return only after admission.
+        recovery.run_classified(FailureClass::Unknown, |_| {
+            needs_wake = match kind {
+                DirtyKind::Layout => {
+                    self.scheduler
+                        .commit_needs_layout(&mut self.render_tree, id, &mut |visited| {
+                            self.layout_poison.unpoison(visited)
+                        })
+                }
+                DirtyKind::Compositing => self
+                    .scheduler
+                    .commit_needs_compositing_bits_update(&self.render_tree, id),
+                DirtyKind::Paint => self.scheduler.commit_needs_paint(&self.render_tree, id),
+                DirtyKind::Semantics => {
+                    self.semantics_enabled()
+                        && self.render_tree.get(id).is_some_and(|node| {
+                            self.scheduler
+                                .commit_node_needing_semantics(id, node.depth() as usize)
+                        })
+                }
+                DirtyKind::CompositedLayerUpdate => self
+                    .scheduler
+                    .commit_needs_composited_layer_update(&self.render_tree, id),
+            };
         });
+        if needs_wake {
+            let wake = { self.notifier.read().deferred_visual_update() };
+            wake.notify_with(recovery);
+        }
     }
 
     /// Lays out again, and repaints, every node that measured text since
