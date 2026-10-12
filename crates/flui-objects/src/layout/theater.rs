@@ -40,6 +40,11 @@
 //!   subtree), so a child skipped from pass one was never stamped and read as
 //!   placed. An app starting with an opaque entry above another announced a
 //!   route the user could neither see nor touch.
+//! * **A modal entry hides the onstage entries below it from semantics.**
+//!   `semantics_blocked_count` leading children stay laid out, painted and
+//!   hit-testable (the barrier above them takes the pointer) but are not
+//!   visited for semantics, so a screen reader reaches only the dialog and
+//!   what is above it.
 
 use flui_foundation::Variable;
 use flui_foundation::geometry::{Offset, Size};
@@ -56,6 +61,9 @@ use flui_rendering::{
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RenderTheater {
     skip_count: usize,
+    /// How many leading children are hidden from semantics while staying
+    /// onstage: the entries under a modal one.
+    blocked_from_semantics: usize,
     /// Cached at layout so `hit_test` — which has no `child_count()` — can bound
     /// its reverse walk. Same trick as [`RenderStack`](super::RenderStack).
     child_count: usize,
@@ -66,7 +74,35 @@ impl RenderTheater {
     pub const fn new() -> Self {
         Self {
             skip_count: 0,
+            blocked_from_semantics: 0,
             child_count: 0,
+        }
+    }
+
+    /// Builder form of [`set_semantics_blocked_count`](Self::set_semantics_blocked_count).
+    pub const fn with_semantics_blocked_count(mut self, count: usize) -> Self {
+        self.blocked_from_semantics = count;
+        self
+    }
+
+    /// How many leading children are painted but hidden from semantics.
+    pub const fn semantics_blocked_count(&self) -> usize {
+        self.blocked_from_semantics
+    }
+
+    /// Hides the first `count` children from semantics without taking them
+    /// offstage, as a modal entry does to the entries it covers: they stay
+    /// visible behind it, and a screen reader must not reach them.
+    pub const fn set_semantics_blocked_count(
+        &mut self,
+        count: usize,
+    ) -> flui_rendering::RenderUpdateImpact {
+        let changed = self.blocked_from_semantics != count;
+        self.blocked_from_semantics = count;
+        if changed {
+            flui_rendering::RenderUpdateImpact::SEMANTICS
+        } else {
+            flui_rendering::RenderUpdateImpact::NONE
         }
     }
 
@@ -142,6 +178,10 @@ impl RenderTheater {
 impl flui_foundation::Diagnosticable for RenderTheater {
     fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
         builder.add("skip_count", self.skip_count.to_string());
+        builder.add(
+            "semantics_blocked_count",
+            self.blocked_from_semantics.to_string(),
+        );
     }
 }
 
@@ -160,9 +200,10 @@ impl RenderBox for RenderTheater {
     /// nothing ever stamps it and it reads as placed. Answering here is
     /// history-independent.
     ///
-    /// The visited children are exactly the entries from `skip_count` onward.
+    /// The visited children are exactly the entries from `skip_count` onward,
+    /// less the ones a modal entry blocks.
     fn visits_child_for_semantics(&self, child_slot: usize) -> bool {
-        child_slot >= self.skip_count
+        child_slot >= self.skip_count.max(self.blocked_from_semantics)
     }
 
     fn perform_layout(

@@ -224,6 +224,9 @@ fn apply_state(node: &mut Node, flags: u64) {
     if has_flag(flags, SemanticsFlag::IsLiveRegion) {
         node.set_live(accesskit::Live::Polite);
     }
+    if has_flag(flags, SemanticsFlag::IsModal) {
+        node.set_modal();
+    }
 }
 
 /// Whether some platform value write reaches a handler on this node, which is

@@ -374,6 +374,12 @@ impl<T> TransitionRoute<T> {
         self
     }
 
+    /// Whether the route covers the routes beneath it once its entrance
+    /// completes.
+    pub(crate) fn is_opaque(&self) -> bool {
+        self.inner.opaque.load(Ordering::Relaxed)
+    }
+
     /// A cloneable view of the route's animation state, obtainable **before** the
     /// route is moved into `NavigatorHandle::push`.
     ///

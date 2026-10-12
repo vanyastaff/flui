@@ -255,8 +255,15 @@ anchor-scoped re-assembly over the classic merge model, not a per-node fragment 
 Freshness is mark-driven: geometry outside re-assembled subtrees keeps its last published
 value.
 
-**Not implemented.** `RenderBlockSemantics` / blocking of previously painted siblings; sibling
-merge groups beyond configuration-conflict marking.
+**Modal blocking is structural, not paint-ordered.** No render object blocks "previously
+painted siblings". A modal route's overlay entry tells `RenderTheater` how many entries below it
+to skip for semantics (`flui-widgets` overlay, "Modal entries"), and the dialog's own node carries
+`IsModal`, published as AccessKit's `modal`. Test:
+`a_shown_dialog_hides_the_page_beneath_from_assistive_technology` in
+`packages/flui-material/tests/show_dialog.rs`;
+`harness_theater_semantics_blocked_entries_stay_laid_out_but_unannounced` in `flui-objects`.
+
+**Not implemented.** Sibling merge groups beyond configuration-conflict marking.
 
 ### 4. Static text carries its text as its AccessKit value, and a value it also has joins it
 

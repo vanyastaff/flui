@@ -275,6 +275,10 @@ fn overlay_contracts() {
             show_dialog::dialog_covers_the_page_and_a_barrier_tap_dismisses_it_leaving_page_state_intact,
         ),
         (
+            "show_dialog::a shown dialog hides the page beneath from assistive technology",
+            show_dialog::a_shown_dialog_hides_the_page_beneath_from_assistive_technology,
+        ),
+        (
             "snack_bar::a snack bar completion cannot write another presentations signal",
             snack_bar::a_snack_bar_completion_cannot_write_another_presentations_signal,
         ),

@@ -40,9 +40,14 @@
 //!   through the enclosing scope's first-focus history chain. Still absent:
 //!   `traversalEdgeBehavior` (no node-layer flag) and a `requestFocus = false`
 //!   opt-out.
-//! * **No `BlockSemantics`, no barrier semantics.** No `semanticsDismissible`, no
-//!   `barrierLabel`, no semantics sort key. A covered route's semantics are still
-//!   announced. The barrier absorbs *pointers* only.
+//! * **Routes beneath are hidden from semantics, the barrier has none of its
+//!   own.** A non-opaque modal route (a popup) is [`NavigatorRoute::is_modal`], so
+//!   its overlay entry hides every entry below it from assistive technology while
+//!   it is onstage (`OnstagePlan::semantics_blocked`). An opaque one leaves both
+//!   pages reachable through its transition and then covers the one beneath.
+//!   The barrier publishes no dismiss action
+//!   and no label, and there is no semantics sort key; it absorbs *pointers*
+//!   only.
 //! * **No animated modal barrier.** `barrier_color` is a flat colour, not driven
 //!   through a barrier curve by the route's animation.
 //! * **The barrier is not pointer-ignoring while the route pops.** It absorbs
@@ -1003,5 +1008,13 @@ impl<T: Send + Clone + 'static> NavigatorRoute for ModalRoute<T> {
 
     fn binding_slot(&self) -> Option<&RouteBindingSlot> {
         self.transition.binding_slot()
+    }
+
+    /// A route that leaves the routes beneath it visible — a popup — hides
+    /// them from semantics. An opaque one covers them once its entrance
+    /// completes, and until then both pages stay reachable, as they stay
+    /// visible, through the transition.
+    fn is_modal(&self) -> bool {
+        !self.transition.is_opaque()
     }
 }

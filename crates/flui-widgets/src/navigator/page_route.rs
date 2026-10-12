@@ -141,6 +141,10 @@ macro_rules! delegate_modal_route {
             fn binding_slot(&self) -> Option<&RouteBindingSlot> {
                 self.modal.binding_slot()
             }
+
+            fn is_modal(&self) -> bool {
+                self.modal.is_modal()
+            }
         }
 
         impl<T: Send + Clone + 'static> fmt::Debug for $ty<T> {

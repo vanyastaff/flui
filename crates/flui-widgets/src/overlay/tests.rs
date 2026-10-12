@@ -63,54 +63,65 @@ fn covered_maintained_entry_build_plan() {
     let maintained = || plain().with_maintain_state(true);
     let maintained_opaque = || plain().with_opaque(true).with_maintain_state(true);
 
-    let plan = |entries: &[OverlayEntry]| onstage_plan(entries);
+    let modal = || plain().with_modal(true);
+    let maintained_modal = || plain().with_maintain_state(true).with_modal(true);
+
+    // (build, skip_count, semantics_blocked)
+    let plan = |entries: &[OverlayEntry]| {
+        let OnstagePlan {
+            build,
+            skip_count,
+            semantics_blocked,
+        } = onstage_plan(entries);
+        (build, skip_count, semantics_blocked)
+    };
 
     assert_eq!(
         plan(&[plain(), plain()]),
-        OnstagePlan {
-            build: vec![0, 1],
-            skip_count: 0
-        },
+        (vec![0, 1], 0, 0),
         "nothing opaque: every entry onstage, a plain expanding stack"
     );
     assert_eq!(
         plan(&[plain(), opaque()]),
-        OnstagePlan {
-            build: vec![1],
-            skip_count: 0
-        },
+        (vec![1], 0, 0),
         "the covered entry is dropped, not skipped — it never enters the tree"
     );
     assert_eq!(
         plan(&[maintained(), opaque()]),
-        OnstagePlan {
-            build: vec![0, 1],
-            skip_count: 1
-        },
+        (vec![0, 1], 1, 0),
         "a maintained covered entry is built and then skipped by the theater"
     );
     assert_eq!(
         plan(&[maintained(), plain(), opaque(), plain()]),
-        OnstagePlan {
-            build: vec![0, 2, 3],
-            skip_count: 1
-        },
+        (vec![0, 2, 3], 1, 0),
         "only entries below the topmost opaque one are covered; the \
          non-maintained one among them is dropped"
     );
     assert_eq!(
         plan(&[maintained(), maintained_opaque(), opaque()]),
-        OnstagePlan {
-            build: vec![0, 1, 2],
-            skip_count: 2
-        },
+        (vec![0, 1, 2], 2, 0),
         "an opaque entry that is itself covered is still skipped, not dropped"
     );
+    assert_eq!(plan(&[]), (vec![], 0, 0));
+
     assert_eq!(
-        plan(&[]),
-        OnstagePlan {
-            build: vec![],
-            skip_count: 0
-        },
+        plan(&[plain(), plain(), modal()]),
+        (vec![0, 1, 2], 0, 2),
+        "a modal entry hides every onstage entry below it from semantics"
+    );
+    assert_eq!(
+        plan(&[plain(), modal(), plain()]),
+        (vec![0, 1, 2], 0, 1),
+        "an entry above the modal one stays reachable"
+    );
+    assert_eq!(
+        plan(&[plain(), modal(), modal()]),
+        (vec![0, 1, 2], 0, 2),
+        "the topmost modal entry decides; a dialog over a dialog hides both below"
+    );
+    assert_eq!(
+        plan(&[maintained_modal(), opaque(), plain()]),
+        (vec![0, 1, 2], 1, 1),
+        "a covered modal entry hides nothing beyond what is already offstage"
     );
 }

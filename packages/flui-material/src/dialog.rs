@@ -89,9 +89,10 @@
 //!   `constraints` through to the underlying [`Dialog`] — construct a
 //!   [`Dialog`] directly when any of those need to vary; `AlertDialog` is a
 //!   fixed M3 composition for now.
-//! - **Semantics** — `namesRoute`, `semanticLabel`,
-//!   `MaterialLocalizations.alertDialogLabel`, the per-slot `Semantics`
-//!   wrapper nodes.
+//! - **Accessible name** — `semanticLabel` and
+//!   `MaterialLocalizations.alertDialogLabel`: the dialog node is announced
+//!   by role (`Dialog`, `AlertDialog`) and is modal, but carries no name of its
+//!   own yet.
 //! - **`AlertDialog.adaptive`** — the Cupertino/Material platform switch.
 //!
 //! ## `show_dialog`
@@ -150,7 +151,7 @@ use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     Align, Column, ConstrainedBox, CrossAxisAlignment, DefaultTextStyle, Flexible, IntrinsicWidth,
     MainAxisAlignment, MainAxisSize, NavigatorHandle, Padding, PopupRoute, RouteResult, Row,
-    SizedBox,
+    Semantics, SemanticsRole, SizedBox,
 };
 use flui_sdk::{
     geometry::EdgeInsets,
@@ -193,6 +194,8 @@ pub struct Dialog {
     alignment: Option<Alignment>,
     inset_padding: Option<EdgeInsets>,
     constraints: Option<BoxConstraints>,
+    /// `Dialog`, or `AlertDialog` when [`AlertDialog`] builds it.
+    role: SemanticsRole,
     child: BoxedView,
 }
 
@@ -221,6 +224,7 @@ impl Dialog {
             alignment: None,
             inset_padding: None,
             constraints: None,
+            role: SemanticsRole::Dialog,
             child: BoxedView(Box::new(child.into_view())),
         }
     }
@@ -337,11 +341,19 @@ impl StatelessView for Dialog {
         Padding::new(inset_padding).child(
             Align::new(self.alignment.unwrap_or(Alignment::CENTER)).child(
                 ConstrainedBox::new(constraints).child(
-                    Material::new(color)
-                        .elevation(elevation)
-                        .shape(shape)
-                        .clip_behavior(self.clip_behavior.unwrap_or(Clip::None))
-                        .child(self.child.clone()),
+                    // One modal node for the whole surface: assistive
+                    // technology announces a dialog and stays inside it.
+                    Semantics::new()
+                        .container(true)
+                        .role(self.role)
+                        .modal(true)
+                        .child(
+                            Material::new(color)
+                                .elevation(elevation)
+                                .shape(shape)
+                                .clip_behavior(self.clip_behavior.unwrap_or(Clip::None))
+                                .child(self.child.clone()),
+                        ),
                 ),
             ),
         )
@@ -486,13 +498,16 @@ impl StatelessView for AlertDialog {
             );
         }
 
-        Dialog::new(
-            IntrinsicWidth::new().child(
-                Column::new(children)
-                    .main_axis_size(MainAxisSize::Min)
-                    .cross_axis_alignment(CrossAxisAlignment::Stretch),
-            ),
-        )
+        Dialog {
+            role: SemanticsRole::AlertDialog,
+            ..Dialog::new(
+                IntrinsicWidth::new().child(
+                    Column::new(children)
+                        .main_axis_size(MainAxisSize::Min)
+                        .cross_axis_alignment(CrossAxisAlignment::Stretch),
+                ),
+            )
+        }
     }
 }
 

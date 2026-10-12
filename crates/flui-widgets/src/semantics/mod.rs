@@ -447,6 +447,14 @@ impl Semantics {
         self
     }
 
+    /// Set whether this node is modal, as a dialog is: while it is shown,
+    /// assistive technology reaches only it and its descendants.
+    #[must_use]
+    pub fn modal(mut self, modal: bool) -> Self {
+        self.configuration.set_modal(modal);
+        self
+    }
+
     /// Set whether this node is a live region.
     #[must_use]
     pub fn live_region(mut self, live_region: bool) -> Self {

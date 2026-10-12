@@ -555,6 +555,18 @@ impl SemanticsConfiguration {
         self.has_flag(SemanticsFlag::NamesRoute)
     }
 
+    /// Sets whether this node is modal: while it is shown, assistive
+    /// technology reaches only it and its descendants. A dialog is.
+    pub fn set_modal(&mut self, value: bool) {
+        self.set_flag(SemanticsFlag::IsModal, value);
+    }
+
+    /// Returns whether this node is modal.
+    #[inline]
+    pub fn is_modal(&self) -> bool {
+        self.has_flag(SemanticsFlag::IsModal)
+    }
+
     /// Sets whether this is a live region.
     pub fn set_live_region(&mut self, value: bool) {
         self.set_flag(SemanticsFlag::IsLiveRegion, value);
