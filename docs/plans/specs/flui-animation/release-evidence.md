@@ -310,6 +310,16 @@ SHA-256 `3FFEE32A8EB756E372C6349D6E1BD97413AA433929AFE55598E1A90EDA6311B9`.
 От timed fixture `771980A9…` отличается только переносом одного assertion;
 timed loops и controls не менялись, timings повторно не объявляются новым прогоном.
 
+Finite-oracle follow-up code revision `b1c8c2fea59814fc70295403d80e4e4fce29df16`
+прошла `check-changed --base e7dadda5c40283e40450e7d576730c670e58f8f2`
+тем же copied runner с обычным host lock, exit 0. Изменён flui-animation и
+23 dependents: fmt, strict all-target clippy, engine/testing, 687/687 nextest
+за 169.046 s (19 configured skips, один slow завершён), strict private rustdoc,
+457 doctests passed / 159 ignored, Windows optional source checks, wasm и
+34 library + 34 tests/benches/examples feature cases. Apple/Android checks
+локально пропущены с теми же SDK/tool limits. Финальная receipt-документация
+не меняет этот code revision; её static checks и PR CI — отдельные проверки.
+
 ### CI
 
 [Main CI](https://github.com/vanyastaff/flui/actions/runs/38255767900) на production

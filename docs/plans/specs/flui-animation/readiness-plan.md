@@ -228,8 +228,9 @@ CompoundAnimation предписано удалить, а не оставить 
       условные исключения имеют доказательство выполнения условия.
 - [x] A1–A7 проверены через пользовательские швы; future/cancellation, reentry, competing failures,
       unmount, mutation during build и следующий кадр учтены.
-- [x] Scope gate зелёный на code head `e0961a73` с base `61ea71338`;
-      package/facade, serde, doctests и SDK surface проверены. Windows self-rebuild
+- [x] Полный scope gate зелёный на code head `e0961a73` с base `61ea71338`;
+      follow-up gate на code head `b1c8c2fea` с base `e7dadda5c` тоже успешен.
+      Package/facade, serde, doctests и SDK surface проверены. Windows self-rebuild
       обойдён byte-identical runner copy с обычным host lock, см. release-evidence.
 - [ ] Финальная validation revision прошла workspace/wasm/cross-typecheck CI.
       Production-база `61ea71338` и предыдущая validation revision `e7dadda5c`
