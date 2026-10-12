@@ -32,8 +32,8 @@ use flui_semantics::{AccessibilityNodeId, SemanticsActionError, semantics_action
 // caller constructing a scroll-offset request needs `Point` to name the offset
 // the platform sends.
 pub use accesskit::{
-    Action, ActionData, ActionRequest, NodeId, Point as A11yPoint, Rect as A11yRect, Role, Toggled,
-    TreeId,
+    Action, ActionData, ActionRequest, Live, NodeId, Point as A11yPoint, Rect as A11yRect, Role,
+    Toggled, TreeId,
 };
 
 /// The binding drives no tree, so there is no pipeline to assemble semantics
@@ -316,6 +316,12 @@ impl<'a> A11yNode<'a> {
     #[must_use]
     pub fn size_of_set(&self) -> Option<usize> {
         self.node.size_of_set()
+    }
+
+    /// How the node's changes are announced, when it is a live region.
+    #[must_use]
+    pub fn live(&self) -> Option<Live> {
+        self.node.live()
     }
 
     /// A heading's one-based outline level, the "2" in "heading level 2".

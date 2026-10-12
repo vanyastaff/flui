@@ -185,8 +185,26 @@ fn explicit_role(role: SemanticsRole) -> Option<Role> {
     })
 }
 
+/// How a node's changes are announced: what its live-region flags say, else
+/// what its role implies (`aria-live` is `assertive` for an alert and `polite`
+/// for a status), else not at all.
+fn live_politeness(flags: u64, role: SemanticsRole) -> Option<accesskit::Live> {
+    if has_flag(flags, SemanticsFlag::IsLiveRegion) {
+        return Some(if has_flag(flags, SemanticsFlag::IsLiveRegionAssertive) {
+            accesskit::Live::Assertive
+        } else {
+            accesskit::Live::Polite
+        });
+    }
+    match role {
+        SemanticsRole::Alert => Some(accesskit::Live::Assertive),
+        SemanticsRole::Status => Some(accesskit::Live::Polite),
+        _ => None,
+    }
+}
+
 /// Translate one node's boolean state onto the AccessKit node.
-fn apply_state(node: &mut Node, flags: u64) {
+fn apply_state(node: &mut Node, flags: u64, role: SemanticsRole) {
     if has_flag(flags, SemanticsFlag::HasCheckedState) {
         node.set_toggled(if has_flag(flags, SemanticsFlag::IsCheckStateMixed) {
             Toggled::Mixed
@@ -221,8 +239,8 @@ fn apply_state(node: &mut Node, flags: u64) {
     if has_flag(flags, SemanticsFlag::IsHidden) {
         node.set_hidden();
     }
-    if has_flag(flags, SemanticsFlag::IsLiveRegion) {
-        node.set_live(accesskit::Live::Polite);
+    if let Some(live) = live_politeness(flags, role) {
+        node.set_live(live);
     }
     if has_flag(flags, SemanticsFlag::IsModal) {
         node.set_modal();
@@ -605,7 +623,7 @@ pub(crate) fn to_node(data: &SemanticsNodeData) -> Node {
         node.set_size_of_set(count as usize);
     }
 
-    apply_state(&mut node, data.flags);
+    apply_state(&mut node, data.flags, data.role);
     apply_actions(
         &mut node,
         data.actions,
@@ -987,6 +1005,41 @@ mod tests {
             Some(Toggled::Mixed),
             "tristate must not collapse to checked/unchecked"
         );
+    }
+
+    /// A live region announces at the politeness it was given; without one,
+    /// an alert is assertive and a status polite, as their ARIA roles imply.
+    #[test]
+    fn live_regions_announce_at_their_politeness() {
+        use SemanticsFlag::{IsLiveRegion, IsLiveRegionAssertive};
+        use accesskit::Live;
+        let table: &[(&[SemanticsFlag], SemanticsRole, Option<Live>)] = &[
+            (&[], SemanticsRole::None, None),
+            (&[IsLiveRegion], SemanticsRole::None, Some(Live::Polite)),
+            (
+                &[IsLiveRegion, IsLiveRegionAssertive],
+                SemanticsRole::None,
+                Some(Live::Assertive),
+            ),
+            (&[], SemanticsRole::Alert, Some(Live::Assertive)),
+            (&[], SemanticsRole::Status, Some(Live::Polite)),
+            (&[IsLiveRegion], SemanticsRole::Alert, Some(Live::Polite)),
+        ];
+        for &(bits, role, expected) in table {
+            let node = translate(&SemanticsNodeData {
+                flags: flags(bits),
+                role,
+                ..Default::default()
+            });
+            assert_eq!(node.live(), expected, "{bits:?} {role}");
+        }
+
+        let mut config = crate::SemanticsConfiguration::new();
+        config.set_live_region(Some(crate::Assertiveness::Assertive));
+        config.set_live_region(Some(crate::Assertiveness::Polite));
+        assert_eq!(config.live_region(), Some(crate::Assertiveness::Polite));
+        config.set_live_region(None);
+        assert_eq!(config.flags().bits(), 0, "clearing leaves no live bits");
     }
 
     /// A header is AccessKit's `Heading`, never its `Header` landmark, and its

@@ -283,6 +283,10 @@ fn overlay_contracts() {
             snack_bar::a_snack_bar_completion_cannot_write_another_presentations_signal,
         ),
         (
+            "snack_bar::a shown snack bar is announced as a polite status",
+            snack_bar::a_shown_snack_bar_is_announced_as_a_polite_status,
+        ),
+        (
             "snack_bar::action press closes the snack bar and is single fire",
             snack_bar::action_press_closes_the_snack_bar_and_is_single_fire,
         ),

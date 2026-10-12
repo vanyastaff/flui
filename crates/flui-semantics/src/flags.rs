@@ -100,6 +100,9 @@ pub enum SemanticsFlag {
     /// Is modal: while this node is shown, assistive technology reaches only
     /// it and its descendants (`aria-modal`).
     IsModal = 1 << 28,
+    /// A live region whose changes interrupt the user (`aria-live`
+    /// `assertive`); set only together with [`Self::IsLiveRegion`].
+    IsLiveRegionAssertive = 1 << 29,
 }
 
 impl SemanticsFlag {
@@ -141,6 +144,7 @@ impl SemanticsFlag {
             Self::IsCheckStateMixed => "isCheckStateMixed",
             Self::HasExpandedState => "hasExpandedState",
             Self::IsModal => "isModal",
+            Self::IsLiveRegionAssertive => "isLiveRegionAssertive",
         }
     }
 }

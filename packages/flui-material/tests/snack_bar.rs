@@ -559,3 +559,31 @@ pub fn a_completion_panic_still_advances_the_accepted_snack_bar_queue() {
     assert_eq!(snack_bar_material_count(&laid), 0);
     assert_eq!(first_calls.get(), 1);
 }
+
+/// A shown snack bar is a status message: one `Status` node a screen reader
+/// announces politely when it appears, carrying the bar's text.
+pub fn a_shown_snack_bar_is_announced_as_a_polite_status() {
+    let vsync = Vsync::new();
+    let (mut laid, handle) =
+        mount_with_scaffolds(&vsync, vec![Scaffold::new().body(body_marker())]);
+    laid.enable_semantics();
+    laid.pump_for(FRAME);
+    let _controller = handle.show_snack_bar(SnackBar::new(Text::new("Saved")));
+    pump_ms(&mut laid, 300);
+
+    let tree = laid.a11y_tree().expect("semantics enabled");
+    let status = tree
+        .find(flui_testing::a11y::Role::Status)
+        .unwrap_or_else(|error| panic!("{error}\n{}", tree.describe()));
+    assert_eq!(
+        status.live(),
+        Some(flui_testing::a11y::Live::Polite),
+        "{}",
+        tree.describe()
+    );
+    assert!(
+        !tree.find_all_by_label("Saved").is_empty(),
+        "the bar's text is announced\n{}",
+        tree.describe()
+    );
+}

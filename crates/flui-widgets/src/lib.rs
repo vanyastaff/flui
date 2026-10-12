@@ -320,8 +320,8 @@ pub use flui_interaction::{
     PanZoomEvent,
 };
 pub use flui_rendering::semantics::{
-    HeadingLevel, NumericRange, NumericRangeError, SemanticsConfiguration, SemanticsProperties,
-    SemanticsRole, TextDirection as SemanticsTextDirection,
+    Assertiveness, HeadingLevel, NumericRange, NumericRangeError, SemanticsConfiguration,
+    SemanticsProperties, SemanticsRole, TextDirection as SemanticsTextDirection,
 };
 
 // ============================================================================
@@ -381,7 +381,7 @@ pub mod prelude {
     // Common configuration value types, so an app author needs only this import.
     pub use crate::basic_locale_list_resolution;
     pub use crate::{
-        AspectRatioDelegate, BoxedLocalizationsDelegate, BoxedWidgetsLocalizations,
+        AspectRatioDelegate, Assertiveness, BoxedLocalizationsDelegate, BoxedWidgetsLocalizations,
         CenterLayoutDelegate, CustomPainter, DefaultWidgetsLocalizationsDelegate, FlowDelegate,
         FlowPaintingContext, HeadingLevel, MultiChildLayoutContext, MultiChildLayoutDelegate,
         NumericRange, NumericRangeError, SemanticsConfiguration, SemanticsProperties,

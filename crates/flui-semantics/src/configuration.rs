@@ -19,7 +19,7 @@ use crate::{
         SemanticsProperties, SemanticsSortKey, SemanticsTag, TextDirection,
         UNBLOCKED_USER_ACTIONS_MASK, concat_attributed_string,
     },
-    role::SemanticsRole,
+    role::{Assertiveness, SemanticsRole},
 };
 
 // ============================================================================
@@ -567,15 +567,28 @@ impl SemanticsConfiguration {
         self.has_flag(SemanticsFlag::IsModal)
     }
 
-    /// Sets whether this is a live region.
-    pub fn set_live_region(&mut self, value: bool) {
-        self.set_flag(SemanticsFlag::IsLiveRegion, value);
+    /// Makes this node a live region, whose changes assistive technology
+    /// announces without the user moving to it: politely, after what is being
+    /// read, or assertively, interrupting it. `None` makes it an ordinary node.
+    pub fn set_live_region(&mut self, politeness: Option<Assertiveness>) {
+        self.set_flag(SemanticsFlag::IsLiveRegion, politeness.is_some());
+        self.set_flag(
+            SemanticsFlag::IsLiveRegionAssertive,
+            politeness == Some(Assertiveness::Assertive),
+        );
     }
 
-    /// Returns whether this is a live region.
-    #[inline]
-    pub fn is_live_region(&self) -> bool {
-        self.has_flag(SemanticsFlag::IsLiveRegion)
+    /// How this live region's changes are announced, or `None` when it is
+    /// not one.
+    #[must_use]
+    pub fn live_region(&self) -> Option<Assertiveness> {
+        self.has_flag(SemanticsFlag::IsLiveRegion).then(|| {
+            if self.has_flag(SemanticsFlag::IsLiveRegionAssertive) {
+                Assertiveness::Assertive
+            } else {
+                Assertiveness::Polite
+            }
+        })
     }
 
     // ========================================================================
@@ -1396,7 +1409,7 @@ impl SemanticsConfiguration {
             config.set_names_route(names_route);
         }
         if let Some(live_region) = properties.live_region {
-            config.set_live_region(live_region);
+            config.set_live_region(live_region.then_some(Assertiveness::Polite));
         }
 
         if let Some(ref label) = properties.label {

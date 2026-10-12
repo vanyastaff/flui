@@ -371,6 +371,23 @@ without an arm would silently fall back to the flag cascade.
 asserts that exactly `DragHandle` and `HotKey` map to `GenericContainer`; deleting the
 `Form` arm makes it fail with `form maps to no AccessKit role`.
 
+### A live region's politeness is explicit, else implied by its role
+
+**Rule.** `set_live_region(Some(politeness))` sets `IsLiveRegion`, plus
+`IsLiveRegionAssertive` for `Assertiveness::Assertive`; AccessKit's `live` follows them. A node
+with neither flag takes the politeness its ARIA role implies: `Alert` assertive, `Status`
+polite. An explicit politeness wins over the role's.
+
+**Why.** Live regions are how a change reaches a screen reader without the user moving to it:
+AccessKit has no imperative announcement, so `SemanticsHost::announce` has no platform path and
+a widget that must speak (a snack bar, a validation error) does it by being a live region.
+`IsLiveRegion` alone could only say polite, and an `Alert` that stayed silent until visited is
+not an alert.
+
+**Test.** `live_regions_announce_at_their_politeness` in `accesskit_translation.rs`;
+`a_shown_snack_bar_is_announced_as_a_polite_status` in
+`packages/flui-material/tests/snack_bar.rs`.
+
 ### A header publishes AccessKit's `Heading` at its level
 
 **Rule.** `IsHeader` resolves to `Role::Heading`, and a header's `HeadingLevel` (`H1`–`H6`,

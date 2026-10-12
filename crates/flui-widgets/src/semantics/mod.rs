@@ -41,8 +41,8 @@ use flui_objects::{
 use flui_rendering::{
     protocol::BoxProtocol,
     semantics::{
-        ActionArgs, HeadingLevel, SemanticsAction, SemanticsActionHandler, SemanticsConfiguration,
-        SemanticsProperties, SemanticsRole, TextDirection,
+        ActionArgs, Assertiveness, HeadingLevel, SemanticsAction, SemanticsActionHandler,
+        SemanticsConfiguration, SemanticsProperties, SemanticsRole, TextDirection,
     },
 };
 use flui_view::{
@@ -455,10 +455,11 @@ impl Semantics {
         self
     }
 
-    /// Set whether this node is a live region.
+    /// Make this node a live region: assistive technology announces its
+    /// changes without the user moving to it, politely or interrupting.
     #[must_use]
-    pub fn live_region(mut self, live_region: bool) -> Self {
-        self.configuration.set_live_region(live_region);
+    pub fn live_region(mut self, politeness: Assertiveness) -> Self {
+        self.configuration.set_live_region(Some(politeness));
         self
     }
 
