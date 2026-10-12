@@ -10,7 +10,8 @@
   [ADR-0127](ADR-0127-exceptional-path-retention.md),
   [ADR-0177](ADR-0177-controller-ordered-delivery.md),
   [ADR-0179](ADR-0179-controller-registration-ownership.md),
-  [ADR-0181](ADR-0181-fallible-text-and-layout-measurement.md).
+  [ADR-0181](ADR-0181-fallible-text-and-layout-measurement.md),
+  [ADR-0190](ADR-0190-owner-local-render-invalidation.md).
 
 ## Context
 
@@ -89,6 +90,15 @@ and report. It neither repeats the earlier sampling payload nor replaces that
 operation's sealed provenance. Ordinary callback-driven invalidation withdraws
 obsolete work without manufacturing a panic report.
 
+A late preparation report can itself admit new input. The runtime performs a
+bounded passive check afterwards, without draining another callout round or
+recursively reporting the same operation. A frozen tick belongs to the exact
+retained attempt sampled earlier: replacing or removing that attempt requires
+a fresh next-pump sample, even when no saved segment remains to inspect. A
+fresh sample with no former retained identity can still use valid newly admitted
+input in the same pump. Ordinary fresh input does not create a fictitious
+retained attempt or force another frame-clock poll.
+
 ### Rejection preserves ownership and makes replacement runnable
 
 The runtime submits no candidate scene or completion for a rejected attempt.
@@ -113,6 +123,14 @@ owns the replacement barrier and drives the coherent successor. Deterministic
 authored text rejection retains ADR-0181's changed-input policy; this seam does
 not turn unchanged invalid text into an automatic retry loop.
 
+Withdrawal releases the closed numeric cohort and its answer pins outside
+preparation borrows, including when another failure is already held. Keeping
+the original opaque panic under custody does not require permanently retaining
+the withdrawn segment's sealed numeric resources. This retirement owns numeric
+values and identity seals, without extensible callbacks or captures; arbitrary
+source and member ownership retains its separate opaque policy. Old receipts remain revoked;
+normal cohort retirement grants no authority to publish their answers.
+
 The first failure remains authoritative through recovery, secondary callouts
 and opaque retirement. A local failure discovered while preserving an earlier
 owner failure can still supply its addressed report without replacing the
@@ -120,6 +138,47 @@ earlier failure's propagation. Healthy destruction remains ordinary.
 [Rust's unwind boundary](https://doc.rust-lang.org/std/panic/fn.catch_unwind.html)
 does not catch aborts or protect an aggregate whose destructors double-panic
 before the boundary regains control; ADR-0127's retention limits still apply.
+
+### Nested arena operations preserve capture chronology
+
+A committed arena verdict callback is `Delivery`; an open deadline poll or
+unproved final member destruction is `Unknown`. These are separate seams. The
+callback's classification cannot classify a nested public arena operation's
+retirement, nor prove that an arbitrary extension committed its own work.
+
+Public arena calls made synchronously inside another arena call enlist in its
+outer boundary. The arena carries passive preservation signals and owned
+failure receipts, without storing callbacks, members or a borrowed recovery.
+Nested failure immediately closes healthy retirement eligibility. Its receipt
+is imported in capture order before classifying a later panic escaping the
+enclosing callback. Import preserves the receipt's original authority before
+applying preservation signals, so the earliest authoritative cause cannot be
+demoted into an inherited annotation. Later blocking evidence still accumulates
+independently.
+
+The outermost standalone call resumes its authoritative first failure after
+accepted notifications and retirement finish. Runtime sampling consumes the
+same owned receipt into its typed report. An inherited annotation remains
+diagnosable without acquiring standalone propagation authority. Non-last
+traversal references release normally; opaque final ownership follows
+ADR-0127's preserving policy after failure. Nested public calls do not unwind
+their receipt through an unrelated enclosing `Delivery` callback.
+
+### Rendering preparation borrows the same custody
+
+Runtime premise reconciliation calls
+`PipelineOwner::drain_pending_dirty_with_recovery` with its existing scope.
+Accepted invalidation marks, stale-request diagnostics and a changed font
+generation remain in that scope; the producer does not resume and recatch them
+under a blanket outer origin. Standalone draining retains its original
+first-failure propagation after the accepted tail.
+
+Canonical dirty-state admission completes before its visual-update callout.
+That committed wake is `Delivery`; an unproved numeric walk or stale-request
+diagnostic remains `Unknown`. A font generation and its complete measured-node
+batch commit before generation diagnostics. Diagnostic or wake failure cannot
+erase another node or its independent layout/paint marks. A subsequent ordinary
+frame consumes the already accepted font work without another registration.
 
 ### Scheduling reads use committed observations
 
@@ -213,7 +272,12 @@ IME, mobile lifecycle or compositor execution.
   selected timestamp from later host readings.
 - `registered_text_preparation_preserves_the_actual_presentation_attempt`
   covers frozen ticks, rejected old receipts, fresh geometry and report-driven
-  premise invalidation through actual sizing work and completion.
+  premise invalidation through actual sizing work and completion, including
+  `a_late_preparation_report_replaces_its_own_ready_text_before_geometry_publication`.
+- `cancelled_text_attempt_releases_numeric_answers` distinguishes normal
+  cancellation and sampling rejection by admitting a changed answer after
+  geometry and runtime ownership are gone; withdrawn numeric cohort pins must
+  not keep those answers permanently retained.
 - `owner_sampling_contract` covers inert observations, restored-lease report
   delivery, competing diagnostics, publisher updates, completion refresh and
   `deadline_query_reentry_does_not_rediscover_its_active_source`.
@@ -221,3 +285,9 @@ IME, mobile lifecycle or compositor execution.
   `owner_deadline_recovery_matrix` and
   `recovery_preserves_provenance_and_owned_failure` pin the producer,
   scheduling-authority and custody contracts below the runtime.
+- Nested public abandon, resolve and held-release rows in
+  `owner_deadline_recovery_matrix` distinguish incoming custody, unknown final
+  retirement and a nested receipt preceding a later callback panic. Open-poll
+  rows distinguish a returning extension from one that also panics later.
+- `font_change_contract` observes accepted invalidation of both real paragraphs
+  after diagnostic, wake and competing failures.
