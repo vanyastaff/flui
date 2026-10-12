@@ -259,3 +259,176 @@ pub(crate) fn authored_cubic_hero_geometry_is_painted_and_retraced() {
         );
     }
 }
+
+fn authored_eased_hero_page(
+    width: f64,
+    height: f64,
+    color: Color,
+    duration: Duration,
+    curve: flui_animation::ArcCurve,
+    samples: &Rc<Cell<usize>>,
+) -> PageRoute<i32> {
+    let samples = Rc::clone(samples);
+    PageRoute::<i32>::new(move |_ctx, _primary, _secondary| {
+        let samples = Rc::clone(&samples);
+        let curve = curve.clone();
+        Center::new()
+            .child(
+                Hero::new(
+                    ValueKey::new("authored"),
+                    ColoredBox::new(color).child(SizedBox::new(width, height)),
+                )
+                .curve(flui_animation::curves::LINEAR)
+                .create_rect_tween(move |begin, end| SampledHeroTrack {
+                    track: flui_animation::Keyframes::builder(begin, duration)
+                        .to(end, duration, curve.clone())
+                        .build()
+                        .expect("valid authored eased rectangle track"),
+                    samples: Rc::clone(&samples),
+                })
+                .flight_shuttle_builder(|_, _, _, _| ColoredBox::new(Color::BLUE)),
+            )
+            .into_view()
+            .boxed()
+    })
+    .transitions(|_, _, _, page| page)
+    .transition_duration(duration)
+    .reverse_transition_duration(duration)
+}
+
+fn independent_eased_rect(begin: Rect, end: Rect, progress: f64) -> Rect {
+    Rect::from_ltwh(
+        begin.min_x() + (end.min_x() - begin.min_x()) * progress,
+        begin.min_y() + (end.min_y() - begin.min_y()) * progress,
+        begin.width() + (end.width() - begin.width()) * progress,
+        begin.height() + (end.height() - begin.height()) * progress,
+    )
+}
+
+fn authored_easing_flight(spring: bool) {
+    use flui_animation::{
+        ArcCurve, LinearStop, PiecewiseLinear, SpringCurve, SpringDescription, Tolerance,
+    };
+    let source = Rect::from_ltwh(385.0, 290.0, 30.0, 20.0);
+    let destination = Rect::from_ltwh(370.0, 277.5, 60.0, 45.0);
+    let (curve, duration, checkpoints) = if spring {
+        let curve = SpringCurve::new(
+            SpringDescription::new(1.0, 100.0, 6.0).unwrap(),
+            Tolerance::DEFAULT,
+        )
+        .unwrap();
+        let duration = curve.duration();
+        (ArcCurve::new(curve), duration, [50, 100, 330])
+    } else {
+        let curve = PiecewiseLinear::new(&[
+            LinearStop::new(0.0),
+            LinearStop::new(0.5).at(0.25),
+            LinearStop::new(0.5).at(0.75),
+            LinearStop::new(1.0),
+        ])
+        .unwrap();
+        (
+            ArcCurve::new(curve),
+            Duration::from_secs(1),
+            [125, 375, 875],
+        )
+    };
+    let expected_progress = |elapsed: Duration| {
+        let time = elapsed.as_secs_f64();
+        if spring {
+            // Independent zero-velocity unit spring, omega=10, zeta=0.3.
+            let damped = 10.0 * 0.91_f64.sqrt();
+            1.0 - (-3.0 * time).exp()
+                * ((damped * time).cos() + 3.0 / damped * (damped * time).sin())
+        } else if time < 0.25 {
+            2.0 * time
+        } else if time <= 0.75 {
+            0.5
+        } else {
+            0.5 + 2.0 * (time - 0.75)
+        }
+    };
+    let source_samples = Rc::new(Cell::new(0));
+    let destination_samples = Rc::new(Cell::new(0));
+    let vsync = Vsync::new();
+    let navigator = NavigatorHandle::new();
+    navigator.seed_initial(authored_eased_hero_page(
+        30.0,
+        20.0,
+        Color::RED,
+        duration,
+        ArcCurve::new(flui_animation::curves::LINEAR),
+        &source_samples,
+    ));
+    let mut laid = lay_out_animated(
+        VsyncScope::new(vsync.clone(), Navigator::new(navigator.clone())),
+        tight(800.0, 600.0),
+        vsync.clone(),
+    );
+    assert_hero_paint(&laid, Color::RED, source);
+    let _push = laid.enter_owner_scope(|| {
+        navigator.push(authored_eased_hero_page(
+            60.0,
+            45.0,
+            Color::GREEN,
+            duration,
+            curve,
+            &destination_samples,
+        ))
+    });
+    laid.tick();
+    let mut elapsed = Duration::ZERO;
+    for millis in checkpoints {
+        let at = Duration::from_millis(millis);
+        laid.pump_for(at.checked_sub(elapsed).expect("increasing checkpoints"));
+        elapsed = at;
+        assert_hero_paint(
+            &laid,
+            Color::BLUE,
+            independent_eased_rect(source, destination, expected_progress(elapsed)),
+        );
+    }
+    assert!(destination_samples.get() > 0);
+    assert_eq!(source_samples.get(), 0);
+    if spring {
+        assert!(
+            expected_progress(elapsed) > 1.0,
+            "the painted spring actually overshot"
+        );
+    }
+    assert!(laid.enter_owner_scope(|| navigator.pop()));
+    laid.tick();
+    for millis in checkpoints[..2].iter().rev() {
+        let at = Duration::from_millis(*millis);
+        laid.pump_for(elapsed.checked_sub(at).expect("decreasing checkpoints"));
+        elapsed = at;
+        assert_hero_paint(
+            &laid,
+            Color::BLUE,
+            independent_eased_rect(source, destination, expected_progress(elapsed)),
+        );
+    }
+    assert_eq!(
+        source_samples.get(),
+        0,
+        "airborne reversal keeps the selected easing"
+    );
+    laid.pump_for(elapsed);
+    assert_eq!(painted_hero_bounds(&laid, Color::BLUE), []);
+    assert_hero_paint(&laid, Color::RED, source);
+    assert_eq!(navigator.route_ids().len(), 1);
+    laid.pump_widget(SizedBox::shrink());
+    assert!(vsync.is_empty(), "unmount withdraws the route's owners");
+    let samples = (source_samples.get(), destination_samples.get());
+    laid.pump_for(Duration::from_millis(100));
+    assert_eq!((source_samples.get(), destination_samples.get()), samples);
+    assert_eq!(painted_hero_bounds(&laid, Color::BLUE), []);
+}
+
+pub(crate) fn authored_piecewise_hero_geometry_is_painted_and_retraced() {
+    authored_easing_flight(false);
+}
+
+pub(crate) fn authored_spring_hero_geometry_is_painted_and_retraced() {
+    authored_easing_flight(true);
+}

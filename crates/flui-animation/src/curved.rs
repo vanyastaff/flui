@@ -47,14 +47,14 @@ fn update_curve_direction(direction: &Cell<Option<AnimationStatus>>, status: Ani
 /// let curved = CurvedAnimation::new(controller, curves::EASE_IN_OUT);
 /// ```
 #[derive(Clone)]
-pub struct CurvedAnimation<C: Curve + Clone> {
+pub struct CurvedAnimation<C: Curve> {
     curve: Terminal<C>,
     reverse_curve: Option<Terminal<C>>,
     links: Terminal<Rc<ParentLinks>>,
     curve_direction: Rc<Cell<Option<AnimationStatus>>>,
 }
 
-impl<C: Curve + Clone> Drop for CurvedAnimation<C> {
+impl<C: Curve> Drop for CurvedAnimation<C> {
     fn drop(&mut self) {
         let mut retirement = Retirement::new();
         self.links.inherit_failure(&mut retirement.scope());
@@ -70,7 +70,7 @@ impl<C: Curve + Clone> Drop for CurvedAnimation<C> {
     }
 }
 
-impl<C: Curve + Clone> CurvedAnimation<C> {
+impl<C: Curve> CurvedAnimation<C> {
     /// Create a new curved animation.
     ///
     /// # Arguments
@@ -125,7 +125,7 @@ impl<C: Curve + Clone> CurvedAnimation<C> {
     }
 }
 
-impl<C: Curve + Clone + fmt::Debug + 'static> Animation<f64> for CurvedAnimation<C> {
+impl<C: Curve + 'static> Animation<f64> for CurvedAnimation<C> {
     #[inline]
     fn value(&self) -> f64 {
         let t = self.links.parent.value();
@@ -148,13 +148,13 @@ impl<C: Curve + Clone + fmt::Debug + 'static> Animation<f64> for CurvedAnimation
 
     fn subscribe_status_observer(
         &self,
-        observer: crate::animation::StatusObserver,
+        observer: crate::StatusObserver,
     ) -> crate::StatusSubscription {
         self.links.subscribe_status_observer(observer)
     }
 }
 
-impl<C: Curve + Clone> Listenable for CurvedAnimation<C> {
+impl<C: Curve> Listenable for CurvedAnimation<C> {
     fn add_observer(&self, observer: flui_foundation::notifier::ListenerObserver) -> ListenerId {
         self.links.notifier.add_observer(observer)
     }
@@ -171,13 +171,10 @@ impl<C: Curve + Clone> Listenable for CurvedAnimation<C> {
     }
 }
 
-impl<C: Curve + Clone + fmt::Debug + 'static> fmt::Debug for CurvedAnimation<C> {
+impl<C: Curve> fmt::Debug for CurvedAnimation<C> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let value_str = format!("{:.3}", self.value());
         f.debug_struct("CurvedAnimation")
-            .field("value", &value_str)
-            .field("status", &self.status())
-            .field("curve", &self.curve)
+            .field("parent", &self.links.parent)
             .field("has_reverse_curve", &self.reverse_curve.is_some())
             .finish_non_exhaustive()
     }

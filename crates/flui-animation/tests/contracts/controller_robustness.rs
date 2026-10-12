@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use flui_animation::{
     Animation, AnimationController, AnimationStatus, AnimationSwitch, CurvedAnimation,
-    DrivenController, FloatTween, ProxyAnimation, ReverseAnimation, TweenAnimation, Vsync,
+    DrivenController, ProxyAnimation, ReverseAnimation, Tween, TweenAnimation, Vsync,
     curve::{Curve, Linear},
 };
 use flui_foundation::Listenable;
@@ -40,8 +40,7 @@ fn is_animating_everywhere(controller: &AnimationController) -> Vec<(&'static st
         ),
         (
             "tween",
-            TweenAnimation::new(FloatTween::new(10.0, 20.0), std::rc::Rc::clone(&source))
-                .is_animating(),
+            TweenAnimation::new(Tween::new(10.0, 20.0), std::rc::Rc::clone(&source)).is_animating(),
         ),
         ("switch", AnimationSwitch::new(source, None).is_animating()),
     ]
@@ -80,7 +79,7 @@ fn is_animating_after_the_run_completes() {
 }
 
 fn a_constant_phase_does_not_install_a_run() {
-    use flui_animation::{AnimationSwitch, ConstantAnimation, FloatTween, TweenAnimation};
+    use flui_animation::{AnimationSwitch, ConstantAnimation, Tween, TweenAnimation};
     use std::rc::Rc;
     for status in [
         AnimationStatus::Forward,
@@ -108,7 +107,7 @@ fn a_constant_phase_does_not_install_a_run() {
             (
                 "tween",
                 Rc::new(TweenAnimation::new(
-                    FloatTween::new(10.0, 20.0),
+                    Tween::new(10.0, 20.0),
                     Rc::clone(&source),
                 )),
             ),
@@ -138,7 +137,7 @@ fn a_switch_tracks_activity_after_hopping_to_a_live_source() {
     let current_source: Rc<dyn Animation<f64>> = Rc::new(current.controller().clone());
     let next_source: Rc<dyn Animation<f64>> = Rc::new(next.controller().clone());
     let switch = AnimationSwitch::new(Rc::clone(&current_source), Some(Rc::clone(&next_source)));
-    let tween = TweenAnimation::new(FloatTween::new(10.0, 20.0), Rc::new(switch.clone()));
+    let tween = TweenAnimation::new(Tween::new(10.0, 20.0), Rc::new(switch.clone()));
     let run = next.controller().forward().unwrap();
     assert!(
         !switch.is_animating(),

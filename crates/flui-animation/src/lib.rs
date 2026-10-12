@@ -7,14 +7,14 @@
 //!
 //! ## Key Components
 //!
-//! - [`Animation<T>`] - Base trait for all animations (extends [`Listenable`])
-//! - [`AnimationController`] - Primary animation driver (generates 0.0..1.0)
+//! - [`Animation<T>`] - Base trait for all animations (extends [`flui_foundation::Listenable`])
+//! - [`AnimationController`] - Explicit progress driver with checked custom or unbounded ranges
 //! - [`CurvedAnimation`] - Applies easing curves to animations
 //! - [`Curve`] - Easing curve trait with predefined curves in [`curves`]
 //!   (CSS easing presets, polynomial-style approximations, elastic and bounce
 //!   formulas, [`ThreePointCubic`] emphasized easing and [`Split`])
-//! - [`Tween`] - Maps animation values to any type T; [`ColorTween`]
-//!   interpolates colors in Oklab with premultiplied alpha
+//! - [`Tween`] - Maps progress to any `Lerp` value, including color in Oklab
+//!   with premultiplied alpha
 //! - [`Keyframes`] - A value as a pure function of time: segments timed by
 //!   `Duration`, eased, cubic, held or jumping; [`Stagger`] offsets one
 //!   track per index
@@ -35,8 +35,8 @@
 //! ```
 //! # use std::rc::Rc;
 //! # use std::time::Duration;
-//! # use flui_animation::{AnimationController, FloatTween, TweenAnimation};
-//! # let tween = FloatTween::new(0.0, 100.0);
+//! # use flui_animation::{AnimationController, Tween, TweenAnimation};
+//! # let tween = Tween::new(0.0, 100.0);
 //! // Create once (outside widget build)
 //! let controller = AnimationController::builder(Duration::from_millis(300)).build();
 //!
@@ -110,48 +110,49 @@ extern crate self as flui_animation;
 #[cfg(test)]
 mod test_cases;
 
-pub mod animated_value;
-pub mod animation;
-pub mod builder;
-pub mod constant;
-pub mod controller;
-pub mod curved;
+mod animated_value;
+mod animation;
+mod builder;
+mod constant;
+mod controller;
+mod curved;
 mod driven;
-pub mod error;
-pub mod ext;
-pub mod keyframes;
-pub mod motion;
-pub mod proxy;
-pub mod retarget;
-pub mod reverse;
+mod error;
+mod keyframes;
+mod motion;
+mod proxy;
+mod retarget;
+mod reverse;
 mod run_future;
 pub mod simulation;
-pub mod stagger;
-pub mod switch;
-pub mod tween;
-pub mod value_conversion;
-pub mod vsync;
+mod stagger;
+mod switch;
+mod tween;
+mod value_conversion;
+mod vsync;
 
 // Data types
 pub mod curve;
 #[doc(alias = "Curves")]
 pub mod curves;
-pub mod status;
+pub mod prelude;
+mod status;
 mod status_subscription;
-pub mod tween_types;
+mod tween_types;
 
 // Re-exports from animation modules
 pub use animated_value::{
     AnimatedValue, AnimatedValueView, MotionUpdate, VsyncPublication, VsyncUpdate,
 };
-pub use animation::{Animation, AnimationDirection, StatusCallback};
+#[doc(hidden)]
+pub use animation::StatusObserver;
+pub use animation::{Animation, StatusCallback};
 pub use builder::{AnimationControllerBuilder, ValueRange};
 pub use constant::{ConstantAnimation, UNIT_END_ANIMATION, UNIT_START_ANIMATION};
 pub use controller::AnimationController;
 pub use curved::CurvedAnimation;
 pub use driven::DrivenController;
 pub use error::{AnimationError, AnimationInput, RangeDefect};
-pub use ext::AnimatableExt;
 pub use keyframes::{Keyframes, KeyframesBuilder, KeyframesError};
 pub use motion::{
     AnimationTime, FrameTick, InvalidPlaybackRate, MotionClock, MotionPolicy, MotionPreference,
@@ -176,21 +177,18 @@ pub use value_conversion::{AnimationVector, TwoWayConverter};
 pub use flui_foundation::geometry::Lerp;
 pub use flui_macros::TwoWayConverter;
 pub use switch::AnimationSwitch;
-pub use tween::{TweenAnimation, animate};
+pub use tween::TweenAnimation;
 pub use vsync::{Vsync, VsyncRegistration, VsyncRegistrationError, VsyncRetirement};
 
 // Re-exports from data type modules
 pub use curve::{
     ArcCurve, BounceInCurve, BounceInOutCurve, BounceOutCurve, Cubic, Curve, CurveError,
-    DecelerateCurve, ElasticInCurve, ElasticInOutCurve, ElasticOutCurve, FlippedCurve, Interval,
-    JumpAt, Linear, Split, Steps, ThreePointCubic,
+    CurveParameter, DecelerateCurve, ElasticInCurve, ElasticInOutCurve, ElasticOutCurve,
+    FlippedCurve, Interval, JumpAt, Linear, LinearEasingError, LinearStop, PiecewiseLinear, Split,
+    SpringCurve, Steps, ThreePointCubic,
 };
 pub use status::{AnimationBehavior, AnimationStatus};
-pub use tween_types::{
-    AlignmentTween, Animatable, BorderRadiusTween, ColorTween, ConstantTween, CurveTween,
-    EdgeInsetsTween, FloatTween, IntTween, Matrix4Tween, OffsetTween, RectTween, ReverseTween,
-    SizeTween, StepTween, Tween,
-};
+pub use tween_types::{Animatable, IntTween, StepTween, Tween};
 
 // Every `rust` block in the crate's prose docs compiles as a doctest.
 #[cfg(doctest)]

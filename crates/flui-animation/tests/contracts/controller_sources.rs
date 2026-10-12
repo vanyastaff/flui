@@ -754,8 +754,10 @@ fn terminal_fixture(
             Box::new(controller)
         }
         TerminalOwner::Proxy => {
-            let proxy =
-                ProxyAnimation::new(std::rc::Rc::new(ConstantAnimation::forward_settled(0.5)));
+            let proxy = ProxyAnimation::new(std::rc::Rc::new(ConstantAnimation::with_status(
+                0.5,
+                AnimationStatus::ForwardSettled,
+            )));
             proxy
                 .subscribe_status(std::rc::Rc::new(move |_| {
                     let _capture = &first;
@@ -770,15 +772,24 @@ fn terminal_fixture(
         }
         TerminalOwner::Curved => Box::new(
             CurvedAnimation::new(
-                std::rc::Rc::new(ConstantAnimation::forward_settled(0.5)),
+                std::rc::Rc::new(ConstantAnimation::with_status(
+                    0.5,
+                    AnimationStatus::ForwardSettled,
+                )),
                 TerminalCurve(first),
             )
             .with_reverse_curve(TerminalCurve(second)),
         ),
         TerminalOwner::Switch => {
             let switch = AnimationSwitch::new(
-                std::rc::Rc::new(ConstantAnimation::forward_settled(0.75)),
-                Some(std::rc::Rc::new(ConstantAnimation::forward_settled(0.25))),
+                std::rc::Rc::new(ConstantAnimation::with_status(
+                    0.75,
+                    AnimationStatus::ForwardSettled,
+                )),
+                Some(std::rc::Rc::new(ConstantAnimation::with_status(
+                    0.25,
+                    AnimationStatus::ForwardSettled,
+                ))),
             );
             switch
                 .subscribe_status(std::rc::Rc::new(move |_| {

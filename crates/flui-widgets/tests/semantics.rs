@@ -1082,7 +1082,7 @@ pub(crate) fn assistive_scroll_actions_move_a_scrollable() {
 /// Running slides publish their current bounds, including unchanged
 /// transformed ancestors reconstructed for a partial semantics pass.
 pub(crate) fn animated_slide_publishes_bounds_at_its_current_sample() {
-    use flui_animation::ext::AnimatableExt;
+    use flui_animation::Animatable;
     use flui_animation::{Animation, AnimationController, Tween, Vsync};
     use flui_foundation::geometry::Matrix4;
     use flui_objects::TranslationFraction;
@@ -1182,7 +1182,7 @@ pub(crate) fn animated_slide_publishes_bounds_at_its_current_sample() {
 }
 
 pub(crate) fn animated_scale_and_rotation_publish_clipped_bounds() {
-    use flui_animation::ext::AnimatableExt;
+    use flui_animation::Animatable;
     use flui_animation::{Animation, AnimationController, Tween, Vsync};
     use flui_painting::Alignment;
     use flui_view::ViewExt;

@@ -57,6 +57,9 @@ mod curved;
 #[path = "contracts/curves.rs"]
 mod curves;
 
+#[path = "contracts/easing.rs"]
+mod easing;
+
 #[path = "contracts/keyframes.rs"]
 mod keyframes;
 

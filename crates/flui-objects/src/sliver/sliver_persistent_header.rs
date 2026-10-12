@@ -100,7 +100,7 @@ use std::{
 };
 
 use flui_animation::{
-    Animatable, Animation, AnimationController, ArcCurve, CurvedAnimation, FloatTween, curves,
+    Animatable, Animation, AnimationController, ArcCurve, CurvedAnimation, Tween, curves,
 };
 use flui_foundation::Single;
 use flui_foundation::geometry::Axis;
@@ -958,7 +958,7 @@ pub struct RenderSliverFloatingHeaderBase<M: FloatingHeaderMode> {
     animation: Option<CurvedAnimation<ArcCurve>>,
     /// The begin/end span the animation interpolates over. Rebuilt alongside
     /// `animation` in [`Self::update_animation`].
-    float_tween: FloatTween,
+    float_tween: Tween<f64>,
     /// The animation-driven value already folded into `effective_scroll_offset`
     /// as of the last `perform_layout` — a listener guard that needs no
     /// `&mut self` access from inside the `Arc<dyn Fn>` `attach` callback.
@@ -1001,7 +1001,7 @@ impl<M: FloatingHeaderMode> RenderSliverFloatingHeaderBase<M> {
             core: PersistentHeaderCore::new(min_extent, max_extent, None),
             controller,
             animation: None,
-            float_tween: FloatTween::new(0.0, 0.0),
+            float_tween: Tween::new(0.0, 0.0),
             last_synced_animation_value: None,
             snap_configuration: None,
             last_actual_scroll_offset: None,
@@ -1153,7 +1153,7 @@ impl<M: FloatingHeaderMode> RenderSliverFloatingHeaderBase<M> {
         };
         controller.set_duration(duration);
         let begin = self.effective_scroll_offset.unwrap_or(0.0);
-        self.float_tween = FloatTween::new(begin, end_value);
+        self.float_tween = Tween::new(begin, end_value);
         let parent: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(controller.clone());
         self.animation = Some(CurvedAnimation::new(parent, curve));
         // The freshly-built tween's value AT the controller's pre-reset

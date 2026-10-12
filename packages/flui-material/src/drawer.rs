@@ -57,7 +57,7 @@ use std::rc::Rc;
 
 use std::time::Duration;
 
-use flui_sdk::animation::ext::AnimatableExt;
+use flui_sdk::animation::Animatable;
 use flui_sdk::animation::{Animation, AnimationController, DrivenController, Tween};
 use flui_sdk::geometry::Radius;
 use flui_sdk::interaction::GestureEndReason;

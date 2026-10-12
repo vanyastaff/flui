@@ -146,7 +146,7 @@ if the destination is gone, the shuttle fades out while the flight keeps flying.
 `placeholder`, `curve`, `reverse_curve`), `HeroController`, `HeroControllerScope`, `HeroMode`,
 `FlightDirection`. Registry, handles, manifests, flights and `HeroTag` stay private.
 
-- `create_rect_tween`: per-hero, else controller-level, else linear `RectTween`; re-invoked on
+- `create_rect_tween`: per-hero, else controller-level, else linear `Tween<Rect>`; re-invoked on
   re-aim, as Flutter recreates the tween.
 - `flight_shuttle_builder` receives the animation, direction and both hero child views, not
   the two foreign `BuildContext`s Flutter passes; that is what those contexts are used for, and

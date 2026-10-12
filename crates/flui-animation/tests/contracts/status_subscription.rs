@@ -3,9 +3,9 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_animation::{
-    Animation, AnimationController, AnimationStatus, AnimationSwitch, CurvedAnimation, FloatTween,
-    MotionClock, ProxyAnimation, ReverseAnimation, StatusCallback, StatusSubscription,
-    TweenAnimation, Vsync, curves,
+    Animation, AnimationController, AnimationStatus, AnimationSwitch, CurvedAnimation, MotionClock,
+    ProxyAnimation, ReverseAnimation, StatusCallback, StatusSubscription, Tween, TweenAnimation,
+    Vsync, curves,
 };
 use flui_foundation::{Listenable, ListenerId, Notifier};
 
@@ -347,7 +347,7 @@ fn capture_retirement_releasing_the_last_wrapper_silences_reentry() {
             Rc::new(CurvedAnimation::new(parent, curves::LINEAR))
         }),
         ("tween", |parent| {
-            Rc::new(TweenAnimation::new(FloatTween::new(0.0, 1.0), parent))
+            Rc::new(TweenAnimation::new(Tween::new(0.0, 1.0), parent))
         }),
         ("proxy", |parent| Rc::new(ProxyAnimation::new(parent))),
         ("switch", |parent| {
@@ -517,7 +517,7 @@ fn adapter_subscriptions_follow_the_shared_owner() {
         CurvedAnimation::subscribe_status,
     );
     check(
-        |parent| TweenAnimation::new(FloatTween::new(0.0, 1.0), parent),
+        |parent| TweenAnimation::new(Tween::new(0.0, 1.0), parent),
         TweenAnimation::subscribe_status,
     );
     check(ProxyAnimation::new, ProxyAnimation::subscribe_status);

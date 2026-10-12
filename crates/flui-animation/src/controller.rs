@@ -14,7 +14,7 @@ use sample::SampleIdentity;
 
 use crate::AnimationRunFuture;
 use crate::PlaybackRate;
-use crate::animation::StatusObserver;
+use crate::StatusObserver;
 use crate::animation::{Animation, AnimationDirection, Retirement, StatusCallback, Terminal};
 use crate::curve::Curve;
 use crate::error::{AnimationError, AnimationInput, RangeDefect};
@@ -925,9 +925,9 @@ impl AnimationController {
     ///
     /// The status transitions to a **non-running** settled status:
     /// - [`AnimationStatus::ForwardSettled`] at (or above) the upper bound, or when
-    ///   the active run direction was [`Forward`](AnimationDirection::Forward)
+    ///   the active run direction was forward
     /// - [`AnimationStatus::ReverseSettled`] at (or below) the lower bound, or when
-    ///   the active run direction was [`Reverse`](AnimationDirection::Reverse)
+    ///   the active run direction was reverse
     ///
     /// This phase does not prove endpoint arrival or successful completion.
     /// Frame drivers query [`Animation::is_animating`] for run ownership.

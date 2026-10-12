@@ -1,6 +1,6 @@
 ### Changed
 
-- **`Color::lerp`** (`flui-painting`), and so `Tween<Color>`/`ColorTween` and every colour lerp in
+- **`Color::lerp`** (`flui-painting`), and so `Tween<Color>` and every colour lerp in
   borders, shadows, decorations and gradients, interpolates in Oklab with premultiplied alpha
   ([ADR-0149](/docs/adr/ADR-0149-interpolation-contracts.md)). Endpoints are unchanged; frames
   in between differ: a black-to-white fade is `rgb(99, 99, 99)` half way instead of
@@ -26,7 +26,7 @@
 ### Removed
 
 - **`Color::lerp_oklab`** (`flui-painting`) and **`OklabColorTween`** (`flui-animation`):
-  `Color::lerp` and `ColorTween` interpolate in Oklab, premultiplied.
+  `Color::lerp` and `Tween<Color>` interpolate in Oklab, premultiplied.
 
 ### Fixed
 

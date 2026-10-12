@@ -3,8 +3,9 @@
 //! reference values, and parameter validation however a curve is made.
 
 use flui_animation::{
-    ArcCurve, BounceInCurve, Cubic, Curve, CurveError, ElasticInCurve, ElasticInOutCurve,
-    ElasticOutCurve, Interval, JumpAt, Linear, Split, Steps, ThreePointCubic, curves,
+    ArcCurve, BounceInCurve, Cubic, Curve, CurveError, CurveParameter, ElasticInCurve,
+    ElasticInOutCurve, ElasticOutCurve, Interval, JumpAt, Linear, Split, Steps, ThreePointCubic,
+    curves,
 };
 use proptest::prelude::*;
 
@@ -15,8 +16,8 @@ enum Shape {
     Overshoots,
 }
 
-/// Every curve the crate ships, plus one constructed instance of each
-/// parameterized curve and combinator.
+/// Predefined curves, plus constructed instances of the parameterized curves
+/// and combinators. Authored piecewise/spring curves have their own contract table.
 fn catalog() -> Vec<(&'static str, ArcCurve, Shape)> {
     use Shape::{Monotone, Overshoots};
     vec![
@@ -989,14 +990,14 @@ fn assert_panics<T>(what: &str, make: impl FnOnce() -> T + std::panic::UnwindSaf
     assert!(outcome.is_err(), "{what}: `new` accepted invalid input");
 }
 
-fn out_of_range(error: Result<impl Sized, CurveError>, name: &str) {
+fn out_of_range(error: Result<impl Sized, CurveError>, name: CurveParameter) {
     assert!(
         matches!(error, Err(CurveError::OutOfRange { parameter, .. }) if parameter == name),
         "expected `{name}` out of range"
     );
 }
 
-fn non_finite(error: Result<impl Sized, CurveError>, name: &str) {
+fn non_finite(error: Result<impl Sized, CurveError>, name: CurveParameter) {
     assert!(
         matches!(error, Err(CurveError::NonFinite { parameter }) if parameter == name),
         "expected `{name}` not finite"
@@ -1004,16 +1005,22 @@ fn non_finite(error: Result<impl Sized, CurveError>, name: &str) {
 }
 
 fn cubic_x_outside_the_unit_interval() {
-    out_of_range(Cubic::try_new(1.5, 0.0, 0.5, 1.0), "x1");
-    out_of_range(Cubic::try_new(0.5, 0.0, -0.1, 1.0), "x2");
+    out_of_range(Cubic::try_new(1.5, 0.0, 0.5, 1.0), CurveParameter::X1);
+    out_of_range(Cubic::try_new(0.5, 0.0, -0.1, 1.0), CurveParameter::X2);
     assert_panics("Cubic x1", || Cubic::new(1.5, 0.0, 0.5, 1.0));
     assert_panics("Cubic x2", || Cubic::new(0.5, 0.0, -0.1, 1.0));
 }
 
 fn cubic_non_finite_control_point() {
-    non_finite(Cubic::try_new(f64::NAN, 0.0, 0.5, 1.0), "x1");
-    non_finite(Cubic::try_new(0.5, f64::INFINITY, 0.5, 1.0), "y1");
-    non_finite(Cubic::try_new(0.5, 0.0, 0.5, f64::NEG_INFINITY), "y2");
+    non_finite(Cubic::try_new(f64::NAN, 0.0, 0.5, 1.0), CurveParameter::X1);
+    non_finite(
+        Cubic::try_new(0.5, f64::INFINITY, 0.5, 1.0),
+        CurveParameter::Y1,
+    );
+    non_finite(
+        Cubic::try_new(0.5, 0.0, 0.5, f64::NEG_INFINITY),
+        CurveParameter::Y2,
+    );
     assert_panics("Cubic y1", || Cubic::new(0.5, f64::NAN, 0.5, 1.0));
 }
 
@@ -1035,8 +1042,11 @@ fn finite_everywhere(what: &str, curve: &dyn Curve) {
 /// Past `1e6` the solver's coefficients overflow: `f64::MAX` evaluated to
 /// NaN. The admitted extremes evaluate finitely.
 fn cubic_y_beyond_the_admitted_range() {
-    out_of_range(Cubic::try_new(0.25, f64::MAX, 0.75, f64::MAX), "y1");
-    out_of_range(Cubic::try_new(0.25, 0.0, 0.75, -1.5e6), "y2");
+    out_of_range(
+        Cubic::try_new(0.25, f64::MAX, 0.75, f64::MAX),
+        CurveParameter::Y1,
+    );
+    out_of_range(Cubic::try_new(0.25, 0.0, 0.75, -1.5e6), CurveParameter::Y2);
     assert_panics("Cubic y1", || Cubic::new(0.25, f64::MAX, 0.75, 1.0));
     finite_everywhere("Cubic(y = ±1e6)", &Cubic::new(0.25, 1e6, 0.75, -1e6));
 }
@@ -1044,8 +1054,8 @@ fn cubic_y_beyond_the_admitted_range() {
 /// A huge period overflowed the phase product and a tiny one its quotient,
 /// both to NaN. The admitted extremes evaluate finitely.
 fn elastic_period_beyond_the_admitted_range() {
-    out_of_range(ElasticOutCurve::try_new(f64::MAX), "period");
-    out_of_range(ElasticInCurve::try_new(1e-300), "period");
+    out_of_range(ElasticOutCurve::try_new(f64::MAX), CurveParameter::Period);
+    out_of_range(ElasticInCurve::try_new(1e-300), CurveParameter::Period);
     for period in [1e-6, 1e6] {
         finite_everywhere("ElasticOut", &ElasticOutCurve::new(period));
         finite_everywhere("ElasticInOut", &ElasticInOutCurve::new(period));
@@ -1062,7 +1072,7 @@ fn three_point_control_y_beyond_the_admitted_range() {
         (0.6, 1.0),
         (0.7, 1.0),
     );
-    out_of_range(huge, "a1.y");
+    out_of_range(huge, CurveParameter::A1Y);
     let extreme =
         ThreePointCubic::new((0.1, 1e6), (0.2, -1e6), (0.5, 0.5), (0.6, 1e6), (0.7, -1e6));
     finite_everywhere("ThreePointCubic(y = ±1e6)", &extreme);
@@ -1071,9 +1081,9 @@ fn three_point_control_y_beyond_the_admitted_range() {
 fn three_point_midpoint_on_the_boundary() {
     let midpoint =
         ThreePointCubic::try_new((0.0, 0.0), (0.0, 0.0), (1.0, 0.5), (1.0, 1.0), (1.0, 1.0));
-    out_of_range(midpoint, "midpoint.x");
+    out_of_range(midpoint, CurveParameter::MidpointX);
     let flat = ThreePointCubic::try_new((0.1, 0.0), (0.2, 0.0), (0.5, 0.0), (0.6, 1.0), (0.7, 1.0));
-    out_of_range(flat, "midpoint.y");
+    out_of_range(flat, CurveParameter::MidpointY);
     assert_panics("ThreePointCubic midpoint", || {
         ThreePointCubic::new((0.0, 0.0), (0.0, 0.0), (1.0, 0.5), (1.0, 1.0), (1.0, 1.0))
     });
@@ -1082,10 +1092,10 @@ fn three_point_midpoint_on_the_boundary() {
 fn three_point_control_outside_its_segment() {
     let first =
         ThreePointCubic::try_new((0.6, 0.0), (0.2, 0.0), (0.5, 0.5), (0.6, 1.0), (0.7, 1.0));
-    out_of_range(first, "a1.x");
+    out_of_range(first, CurveParameter::A1X);
     let second =
         ThreePointCubic::try_new((0.1, 0.0), (0.2, 0.0), (0.5, 0.5), (0.4, 1.0), (0.7, 1.0));
-    out_of_range(second, "a2.x");
+    out_of_range(second, CurveParameter::A2X);
     non_finite(
         ThreePointCubic::try_new(
             (0.1, 0.0),
@@ -1094,7 +1104,7 @@ fn three_point_control_outside_its_segment() {
             (0.6, 1.0),
             (0.7, 1.0),
         ),
-        "b1.y",
+        CurveParameter::B1Y,
     );
     assert_panics("ThreePointCubic a2.x", || {
         ThreePointCubic::new((0.1, 0.0), (0.2, 0.0), (0.5, 0.5), (0.4, 1.0), (0.7, 1.0))
@@ -1102,9 +1112,12 @@ fn three_point_control_outside_its_segment() {
 }
 
 fn interval_bounds() {
-    out_of_range(Interval::try_new(-0.1, 0.5, Linear), "begin");
-    out_of_range(Interval::try_new(0.2, 1.5, Linear), "end");
-    non_finite(Interval::try_new(f64::NAN, 0.5, Linear), "begin");
+    out_of_range(Interval::try_new(-0.1, 0.5, Linear), CurveParameter::Begin);
+    out_of_range(Interval::try_new(0.2, 1.5, Linear), CurveParameter::End);
+    non_finite(
+        Interval::try_new(f64::NAN, 0.5, Linear),
+        CurveParameter::Begin,
+    );
     assert!(matches!(
         Interval::try_new(0.6, 0.4, Linear),
         Err(CurveError::IntervalReversed { .. })
@@ -1113,9 +1126,12 @@ fn interval_bounds() {
 }
 
 fn elastic_period() {
-    out_of_range(ElasticInCurve::try_new(0.0), "period");
-    out_of_range(ElasticOutCurve::try_new(-0.4), "period");
-    non_finite(ElasticInOutCurve::try_new(f64::INFINITY), "period");
+    out_of_range(ElasticInCurve::try_new(0.0), CurveParameter::Period);
+    out_of_range(ElasticOutCurve::try_new(-0.4), CurveParameter::Period);
+    non_finite(
+        ElasticInOutCurve::try_new(f64::INFINITY),
+        CurveParameter::Period,
+    );
     assert_panics("ElasticIn period", || ElasticInCurve::new(0.0));
     assert_panics("ElasticOut period", || ElasticOutCurve::new(f64::NAN));
     assert_panics("ElasticInOut period", || ElasticInOutCurve::new(-1.0));
@@ -1142,12 +1158,8 @@ fn error_messages_name_the_parameter() {
     );
 }
 
-fn range_error(parameter: &'static str, value: f64, allowed: &'static str) -> CurveError {
-    CurveError::OutOfRange {
-        parameter,
-        value,
-        allowed,
-    }
+fn range_error(parameter: CurveParameter, value: f64) -> CurveError {
+    CurveError::OutOfRange { parameter, value }
 }
 
 // These numeric fields exercise serde admission itself, including IEEE values
@@ -1204,16 +1216,30 @@ fn rejects_numeric_fields<T: serde::de::DeserializeOwned + std::fmt::Debug, cons
 
 fn cubic_validation_is_shared_by_construction_paths() {
     for (index, value, expected) in [
-        (0, -0.1, range_error("x1", -0.1, "[0, 1]")),
-        (2, 1.1, range_error("x2", 1.1, "[0, 1]")),
-        (1, -1.5e6, range_error("y1", -1.5e6, "[-1e6, 1e6]")),
-        (3, 1.5e6, range_error("y2", 1.5e6, "[-1e6, 1e6]")),
-        (0, f64::NAN, CurveError::NonFinite { parameter: "x1" }),
-        (1, f64::INFINITY, CurveError::NonFinite { parameter: "y1" }),
+        (0, -0.1, range_error(CurveParameter::X1, -0.1)),
+        (2, 1.1, range_error(CurveParameter::X2, 1.1)),
+        (1, -1.5e6, range_error(CurveParameter::Y1, -1.5e6)),
+        (3, 1.5e6, range_error(CurveParameter::Y2, 1.5e6)),
+        (
+            0,
+            f64::NAN,
+            CurveError::NonFinite {
+                parameter: CurveParameter::X1,
+            },
+        ),
+        (
+            1,
+            f64::INFINITY,
+            CurveError::NonFinite {
+                parameter: CurveParameter::Y1,
+            },
+        ),
         (
             3,
             f64::NEG_INFINITY,
-            CurveError::NonFinite { parameter: "y2" },
+            CurveError::NonFinite {
+                parameter: CurveParameter::Y2,
+            },
         ),
     ] {
         let mut values = [0.25, 0.1, 0.75, 1.0];
@@ -1236,28 +1262,39 @@ fn cubic_validation_is_shared_by_construction_paths() {
 
 fn three_point_validation_is_shared_by_construction_paths() {
     for (point, axis, value, expected) in [
-        (2, 0, 1.0, range_error("midpoint.x", 1.0, "(0, 1)")),
-        (2, 1, 0.0, range_error("midpoint.y", 0.0, "(0, 1)")),
-        (0, 0, 0.6, range_error("a1.x", 0.6, "[0, midpoint.x]")),
-        (1, 0, -0.1, range_error("b1.x", -0.1, "[0, midpoint.x]")),
-        (3, 0, 0.4, range_error("a2.x", 0.4, "[midpoint.x, 1]")),
-        (4, 0, 1.1, range_error("b2.x", 1.1, "[midpoint.x, 1]")),
-        (0, 1, 1.5e6, range_error("a1.y", 1.5e6, "[-1e6, 1e6]")),
-        (1, 1, -1.5e6, range_error("b1.y", -1.5e6, "[-1e6, 1e6]")),
-        (3, 1, 1.5e6, range_error("a2.y", 1.5e6, "[-1e6, 1e6]")),
-        (4, 1, -1.5e6, range_error("b2.y", -1.5e6, "[-1e6, 1e6]")),
-        (1, 1, f64::NAN, CurveError::NonFinite { parameter: "b1.y" }),
+        (2, 0, 1.0, range_error(CurveParameter::MidpointX, 1.0)),
+        (2, 1, 0.0, range_error(CurveParameter::MidpointY, 0.0)),
+        (0, 0, 0.6, range_error(CurveParameter::A1X, 0.6)),
+        (1, 0, -0.1, range_error(CurveParameter::B1X, -0.1)),
+        (3, 0, 0.4, range_error(CurveParameter::A2X, 0.4)),
+        (4, 0, 1.1, range_error(CurveParameter::B2X, 1.1)),
+        (0, 1, 1.5e6, range_error(CurveParameter::A1Y, 1.5e6)),
+        (1, 1, -1.5e6, range_error(CurveParameter::B1Y, -1.5e6)),
+        (3, 1, 1.5e6, range_error(CurveParameter::A2Y, 1.5e6)),
+        (4, 1, -1.5e6, range_error(CurveParameter::B2Y, -1.5e6)),
+        (
+            1,
+            1,
+            f64::NAN,
+            CurveError::NonFinite {
+                parameter: CurveParameter::B1Y,
+            },
+        ),
         (
             3,
             1,
             f64::INFINITY,
-            CurveError::NonFinite { parameter: "a2.y" },
+            CurveError::NonFinite {
+                parameter: CurveParameter::A2Y,
+            },
         ),
         (
             4,
             0,
             f64::NEG_INFINITY,
-            CurveError::NonFinite { parameter: "b2.x" },
+            CurveError::NonFinite {
+                parameter: CurveParameter::B2X,
+            },
         ),
     ] {
         let mut points = [[0.1, 0.0], [0.2, 0.1], [0.5, 0.5], [0.6, 0.9], [0.7, 1.0]];
@@ -1282,12 +1319,38 @@ fn three_point_validation_is_shared_by_construction_paths() {
             &expected,
         );
     }
+    for midpoint_y in [f64::from_bits(1), 1e-310, 1e-301] {
+        let points = [
+            [0.1, 1.0],
+            [0.2, 1.0],
+            [0.5, midpoint_y],
+            [0.6, 0.9],
+            [0.7, 1.0],
+        ];
+        let [a1, b1, midpoint, a2, b2] = points.map(|[x, y]| (x, y));
+        let expected = CurveError::RescalingOutOfRange { midpoint_y };
+        assert_eq!(
+            ThreePointCubic::try_new(a1, b1, midpoint, a2, b2).err(),
+            Some(expected)
+        );
+        #[cfg(feature = "serde")]
+        rejects_numeric_fields::<ThreePointCubic, 5>(
+            [
+                ("a1", CurveField::Point(points[0])),
+                ("b1", CurveField::Point(points[1])),
+                ("midpoint", CurveField::Point(points[2])),
+                ("a2", CurveField::Point(points[3])),
+                ("b2", CurveField::Point(points[4])),
+            ],
+            &expected,
+        );
+    }
 }
 
 fn interval_validation_is_shared_by_construction_paths() {
     for (begin, end, expected) in [
-        (-0.1, 0.5, range_error("begin", -0.1, "[0, 1]")),
-        (0.2, 1.5, range_error("end", 1.5, "[0, 1]")),
+        (-0.1, 0.5, range_error(CurveParameter::Begin, -0.1)),
+        (0.2, 1.5, range_error(CurveParameter::End, 1.5)),
         (
             0.6,
             0.4,
@@ -1296,16 +1359,26 @@ fn interval_validation_is_shared_by_construction_paths() {
                 end: 0.4,
             },
         ),
-        (f64::NAN, 0.5, CurveError::NonFinite { parameter: "begin" }),
+        (
+            f64::NAN,
+            0.5,
+            CurveError::NonFinite {
+                parameter: CurveParameter::Begin,
+            },
+        ),
         (
             0.2,
             f64::INFINITY,
-            CurveError::NonFinite { parameter: "end" },
+            CurveError::NonFinite {
+                parameter: CurveParameter::End,
+            },
         ),
         (
             f64::NEG_INFINITY,
             0.5,
-            CurveError::NonFinite { parameter: "begin" },
+            CurveError::NonFinite {
+                parameter: CurveParameter::Begin,
+            },
         ),
     ] {
         assert_eq!(Interval::try_new(begin, end, Linear).err(), Some(expected));
@@ -1333,10 +1406,10 @@ fn elastic_validation_is_shared_by_construction_paths() {
         f64::NEG_INFINITY,
     ] {
         let expected = if period.is_finite() {
-            range_error("period", period, "[1e-6, 1e6]")
+            range_error(CurveParameter::Period, period)
         } else {
             CurveError::NonFinite {
-                parameter: "period",
+                parameter: CurveParameter::Period,
             }
         };
         assert_eq!(ElasticInCurve::try_new(period).err(), Some(expected));
@@ -1555,7 +1628,7 @@ fn steps_reject_invalid_counts() {
     assert!(matches!(
         Steps::try_new(0, JumpAt::End),
         Err(CurveError::OutOfRange {
-            parameter: "count",
+            parameter: CurveParameter::StepCount,
             ..
         })
     ));

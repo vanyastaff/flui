@@ -65,8 +65,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Duration;
 
+use flui_animation::Animatable;
 use flui_animation::curve::{Curve, Interval};
-use flui_animation::ext::AnimatableExt;
 use flui_animation::{
     Animation, AnimationController, AnimationStatus, DrivenController, Tween, Vsync, VsyncUpdate,
     curves,

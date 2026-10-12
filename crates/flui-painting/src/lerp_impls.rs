@@ -6,8 +6,7 @@
 //!
 //! `BorderRadius` is **not** here: it is `flui_foundation::geometry::Corners<Radius>`,
 //! a `flui_foundation::geometry` type, so its `Lerp` lives there — the `Lerp for Corners<T>`
-//! blanket added alongside the matrix `Lerp` work — and `BorderRadiusTween` is
-//! now simply an alias for `Tween<BorderRadius>`.
+//! blanket also makes `Tween<BorderRadius>` work without another tween type.
 
 use flui_foundation::geometry::Lerp;
 

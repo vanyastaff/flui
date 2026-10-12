@@ -2911,15 +2911,13 @@ fn harness_animated_transform_tick_dirty_marking() {
 
     // The same rule for a pure translation: it is layered too.
     let slide = ticking_controller(100, 0.0);
-    let offset = ProxyAnimation::new(
-        std::rc::Rc::new(flui_animation::ext::AnimatableExt::animate(
-            flui_animation::Tween::new(
-                TranslationFraction::ZERO,
-                TranslationFraction::new(1.0, 0.0),
-            ),
-            std::rc::Rc::new(slide.clone()) as std::rc::Rc<dyn Animation<f64>>,
-        )) as std::rc::Rc<dyn Animation<TranslationFraction>>,
-    );
+    let offset = ProxyAnimation::new(std::rc::Rc::new(flui_animation::Animatable::animate(
+        flui_animation::Tween::new(
+            TranslationFraction::ZERO,
+            TranslationFraction::new(1.0, 0.0),
+        ),
+        std::rc::Rc::new(slide.clone()) as std::rc::Rc<dyn Animation<f64>>,
+    )) as std::rc::Rc<dyn Animation<TranslationFraction>>);
     let mut run = RenderTester::mount(
         box_node(RenderFlex::row()).child(
             box_node(RenderRepaintBoundary::new()).child(
@@ -3159,15 +3157,13 @@ fn harness_animated_transform_non_finite_sample_keeps_the_last_matrix() {
     // coordinate conversion falls back to the untransformed position instead
     // of publishing infinities.
     let slide = ticking_controller(100, 1.0);
-    let offset = ProxyAnimation::new(
-        std::rc::Rc::new(flui_animation::ext::AnimatableExt::animate(
-            flui_animation::Tween::new(
-                TranslationFraction::ZERO,
-                TranslationFraction::new(f64::MAX, 0.0),
-            ),
-            std::rc::Rc::new(slide) as std::rc::Rc<dyn Animation<f64>>,
-        )) as std::rc::Rc<dyn Animation<TranslationFraction>>,
-    );
+    let offset = ProxyAnimation::new(std::rc::Rc::new(flui_animation::Animatable::animate(
+        flui_animation::Tween::new(
+            TranslationFraction::ZERO,
+            TranslationFraction::new(f64::MAX, 0.0),
+        ),
+        std::rc::Rc::new(slide) as std::rc::Rc<dyn Animation<f64>>,
+    )) as std::rc::Rc<dyn Animation<TranslationFraction>>);
     let run = RenderTester::mount(
         box_node(RenderAnimatedTransform::new(TransformMotion::Slide {
             offset,

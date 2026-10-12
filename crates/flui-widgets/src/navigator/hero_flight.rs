@@ -17,7 +17,7 @@
 //! 3. **A driven `ProxyAnimation`**, whose parent is the destination route's animation
 //!    for a push and its *reverse* for a pop.
 //!
-//! Each tick re-measures the destination and re-aims the [`RectTween`]; when the
+//! Each tick re-measures the destination and re-aims the [`Tween`]; when the
 //! animation stops, the entry is removed and both heroes are released.
 //!
 //! # Scope, and what is deliberately different
@@ -46,8 +46,8 @@ use std::rc::Weak;
 use std::sync::atomic::Ordering;
 
 use flui_animation::{
-    Animatable, Animation, AnimationStatus, Curve, Interval, ProxyAnimation, RectTween,
-    ReverseAnimation, Tween, animate,
+    Animatable, Animation, AnimationStatus, Curve, Interval, ProxyAnimation, ReverseAnimation,
+    Tween,
 };
 use flui_foundation::geometry::Rect;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerId, RenderId};
@@ -106,7 +106,7 @@ struct FlightInner {
     proxy: Terminal<Rc<ProxyAnimation<f64>>>,
     /// The shuttle's rect-tween endpoints. Re-aimed by
     /// [`FlightInner::on_tick`]; interpolated through [`rect_factory`](Self::rect_factory).
-    rect: Cell<RectTween>,
+    rect: Cell<Tween<Rect>>,
     /// Last accepted geometry, shared by the shuttle and retained flight readers.
     geometry: Cell<Rect>,
     /// Each read owns one publication right. None permanently refuses further
@@ -665,10 +665,9 @@ impl HeroFlight {
                 // proxy's own value here reads mirrored progress and teleports the
                 // shuttle unless the divert happens at exactly the halfway point.
                 let begin = 1.0 - self.inner.proxy.value();
-                new_parent = Terminal::new(Rc::new(animate(
-                    Tween { begin, end: 1.0 },
-                    new_anim.take_value(),
-                )));
+                new_parent = Terminal::new(Rc::new(
+                    Tween { begin, end: 1.0 }.animate(new_anim.take_value()),
+                ));
 
                 if old_from.is_same(&new_to) {
                     retain_path = true;
@@ -761,7 +760,7 @@ impl HeroFlight {
         }
 
         // Commit the samples and slots before repointing the proxy below.
-        self.inner.rect.set(RectTween {
+        self.inner.rect.set(Tween {
             begin: new_begin,
             end: new_end,
         });
@@ -1106,7 +1105,7 @@ impl FlightManager {
                 is_user_gesture_transition,
             })),
             proxy: Terminal::new(Rc::new(ProxyAnimation::new(parent.take_value()))),
-            rect: Cell::new(RectTween {
+            rect: Cell::new(Tween {
                 begin: manifest.from_rect,
                 end: manifest.to_rect,
             }),
@@ -1502,7 +1501,7 @@ mod terminal_tests {
                 is_user_gesture_transition: false,
             })),
             proxy: Terminal::new(proxy),
-            rect: Cell::new(RectTween {
+            rect: Cell::new(Tween {
                 begin: Rect::ZERO,
                 end: Rect::ZERO,
             }),
@@ -1619,7 +1618,7 @@ mod terminal_tests {
                         Rect::ZERO
                     );
                 }
-                Box::new(RectTween::new(candidate, candidate))
+                Box::new(Tween::new(candidate, candidate))
             })
         };
         let previous = flight.inner.rect_factory.borrow_mut().replace(factory);

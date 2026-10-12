@@ -1,34 +1,4 @@
-//! Keyframe tracks: a value as a pure function of elapsed time.
-//!
-//! A [`Keyframes<T>`] track starts at a value and moves through segments laid
-//! end to end from time zero, each with a [`Duration`]:
-//!
-//! - [`to`](KeyframesBuilder::to) eases toward a value along a [`Curve`] that
-//!   belongs to that segment;
-//! - [`cubic`](KeyframesBuilder::cubic) passes through the value on a
-//!   Catmull-Rom spline whose knots are the keyframe *times*;
-//! - [`hold`](KeyframesBuilder::hold) keeps the current value;
-//! - [`jump`](KeyframesBuilder::jump) changes the value instantly.
-//!
-//! After the last segment the track holds its final value until
-//! [`total`](Keyframes::total). A delay is a leading `hold`; tracks that share
-//! one `total` and one controller form a group that reads one clock; a loop
-//! is a repeating controller, or [`value_at_looped`](Keyframes::value_at_looped).
-//! [`Stagger`](crate::Stagger) shifts the read time per index.
-//!
-//! # Evaluation
-//!
-//! - **Right-continuous.** At a segment boundary the track returns the
-//!   keyframe value exactly (a clone, not an interpolation); at a `jump` it
-//!   returns the value *after* the jump (WAAPI §5.3.4).
-//! - **Pure.** No state: any order of queries, a repeated query and a query
-//!   back in time give the same answer.
-//! - **Finite.** Keyframe values are checked when the track is built. A
-//!   curve that returns NaN or infinity, or interpolation that overflows,
-//!   publishes the segment's start value instead of a non-finite sample.
-//!
-//! `Matrix4` is not a keyframe type: animate rotation, scale and translation
-//! as separate tracks.
+//! Pure timed keyframe tracks and their builder.
 
 use std::fmt;
 use std::time::Duration;
@@ -39,8 +9,23 @@ use crate::curve::{ArcCurve, Curve};
 use crate::tween_types::Animatable;
 use crate::value_conversion::TwoWayConverter;
 
-/// A track of keyframes timed by [`Duration`]; see the
-/// [module documentation](self) for the evaluation rules.
+/// An immutable track of keyframes timed by [`Duration`].
+///
+/// Segments run end to end from time zero: [`to`](KeyframesBuilder::to) eases
+/// along its curve, [`cubic`](KeyframesBuilder::cubic) follows a Catmull-Rom spline
+/// whose knots are keyframe times, [`hold`](KeyframesBuilder::hold) retains a value and
+/// [`jump`](KeyframesBuilder::jump) changes it immediately. A leading/trailing
+/// hold represents delay; tracks that share a parent progress share one clock.
+/// [`Stagger`](crate::Stagger) offsets the read time per index.
+///
+/// Samples are right-continuous: at a key the exact value is cloned rather than
+/// interpolated, and at a jump the result is the value after it. Query order,
+/// repeated queries and queries back in time do not affect results.
+/// Values are checked at construction; a non-finite curve or overflowing
+/// interpolation falls back to the segment's start. After its final segment,
+/// the track holds its final value until [`total`](Self::total).
+/// [`value_at_looped`](Self::value_at_looped) samples cyclically.
+/// `Matrix4` is not a keyframe type: use separate rotation/scale/translation tracks.
 ///
 /// Build one with [`Keyframes::builder`]. The track is an immutable value:
 /// clone it freely, sample it from any thread when `T` is `Send + Sync`.

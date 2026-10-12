@@ -106,7 +106,7 @@ impl<T: Clone + 'static> Drop for ProxyOwner<T> {
 
 impl<T> ProxyAnimation<T>
 where
-    T: Clone + fmt::Debug + 'static,
+    T: Clone + 'static,
 {
     /// Create a new proxy animation.
     ///
@@ -249,7 +249,7 @@ impl<T: Clone + 'static> ProxyAnimation<T> {
 
 impl<T> Animation<T> for ProxyAnimation<T>
 where
-    T: Clone + fmt::Debug + 'static,
+    T: Clone + 'static,
 {
     #[inline]
     fn value(&self) -> T {
@@ -275,7 +275,7 @@ where
 
     fn subscribe_status_observer(
         &self,
-        observer: crate::animation::StatusObserver,
+        observer: crate::StatusObserver,
     ) -> crate::StatusSubscription {
         let id = self
             .inner
@@ -339,12 +339,11 @@ where
 
 impl<T> fmt::Debug for ProxyAnimation<T>
 where
-    T: Clone + fmt::Debug + 'static,
+    T: Clone + 'static,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ProxyAnimation")
-            .field("value", &self.value())
-            .field("status", &self.status())
-            .finish()
+            .field("parent", &self.parent())
+            .finish_non_exhaustive()
     }
 }
