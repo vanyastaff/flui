@@ -231,6 +231,18 @@ impl WindowInstall {
         self.initial.observations.push(observation);
     }
 
+    /// Sample the Web window after its application observers are installed.
+    #[cfg(any(test, target_arch = "wasm32"))]
+    pub(super) fn observe_initial_web_window(&mut self) {
+        let window = self.window.native();
+        let metrics = WindowObservation::Metrics {
+            size: window.logical_size(),
+            scale_factor: window.scale_factor(),
+        };
+        self.observe(metrics);
+        self.initial.lifecycle = Some(flui_scheduler::AppLifecycleState::Resumed);
+    }
+
     #[cfg(not(target_os = "ios"))]
     pub(super) fn lifecycle(&mut self, lifecycle: flui_scheduler::AppLifecycleState) {
         self.initial.lifecycle = Some(lifecycle);

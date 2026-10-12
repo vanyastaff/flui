@@ -150,6 +150,80 @@ fn native_identity_is_observed_before_registry_publication() {
     }
 }
 
+/// Run the actual Web initialization submission against a real headless window.
+/// GPU/platform-loop construction is excluded: the observation and addressed
+/// publication path is the same one called by `bootstrap_web`.
+fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
+    use flui_platform_api::WindowExecutionState;
+    use flui_runtime::ui_runtime::RuntimeHostServices;
+    use std::sync::atomic::AtomicBool;
+
+    for (case, change, expected) in [
+        ("focus lost during mount", 0, AppLifecycleState::Inactive),
+        ("visibility lost during mount", 1, AppLifecycleState::Hidden),
+        ("execution suspended during mount", 2, AppLifecycleState::Paused),
+        ("unchanged focused window", 3, AppLifecycleState::Resumed),
+    ] {
+        let _clear = OwnerHostClearGuard::arm();
+        let window = crate::app::window_test_support::headless_test_window();
+        let runtime = crate::app::ui_runtime::UiRuntime::new(
+            Arc::clone(&window),
+            1.0,
+            RuntimeHostServices::new(
+                Arc::new(|| {}),
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(flui_platform_api::InMemoryClipboard::new()),
+                &flui_painting::FontCollection::new(),
+                flui_scheduler::ClockSource::Platform,
+            ),
+        )
+        .expect("runtime over the same native window");
+        runtime
+            .attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0))
+            .expect("mount before startup observers");
+        let native = window
+            .as_any()
+            .downcast_ref::<flui_platform::MockWindow>()
+            .expect("headless window");
+        // Construction sampled the old native state. These observations arrive
+        // before the application's subscriptions and therefore have no callback.
+        match change {
+            0 => native.simulate_focus(false),
+            1 => native.simulate_visibility(false),
+            2 => native.simulate_execution_state(WindowExecutionState::Suspended),
+            _ => {}
+        }
+        let mut installation = prepare_replacement_ui_runtime(runtime, Arc::clone(&window));
+        let dispatcher = installation.dispatcher();
+        window.on_active_status_change(Box::new(move |focused| {
+            dispatch_platform_ui_runtime(
+                dispatcher,
+                RuntimeTask::Event(RuntimeEvent::WindowFocus(focused)),
+            )
+            .expect("addressed native focus");
+        }));
+        installation.observe_initial_web_window();
+        installation
+            .submit()
+            .outcome()
+            .expect("synchronous installation")
+            .expect("publish initialization");
+        assert_eq!(
+            observe_runtime(dispatcher, |runtime| runtime.scheduler().lifecycle_state()),
+            expected,
+            "{case}: startup adopts native state after observers are installed"
+        );
+        if change == 0 {
+            assert!(observe_runtime(dispatcher, |runtime| runtime.scheduler().frames_enabled()),
+                "an unfocused visible running canvas remains eligible for rendering");
+            native.simulate_focus(true);
+            assert_eq!(observe_runtime(dispatcher, |runtime| runtime.scheduler().lifecycle_state()),
+                AppLifecycleState::Resumed, "restored native focus reaches the installed owner");
+        }
+        teardown_platform_ui_runtime();
+    }
+}
+
 fn presentation_assembly_reentry_revalidates_its_authorizer() {
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -2247,6 +2321,10 @@ fn owner_dispatch_matrix() {
     crate::table_test::run_table(
         "owner_dispatch_matrix",
         &[
+            (
+                "web_startup_samples_native_changes_after_mount_and_observer_registration",
+                web_startup_samples_native_changes_after_mount_and_observer_registration as fn(),
+            ),
             (
                 "deferred_native_reads_preserve_accepted_preferences",
                 deferred_native_reads_preserve_accepted_preferences as fn(),

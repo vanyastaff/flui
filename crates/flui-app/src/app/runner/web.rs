@@ -1,4 +1,3 @@
-use flui_scheduler::AppLifecycleState;
 use flui_view::{StatelessView, View};
 
 use super::frame_pacing::{FallbackGate, WakeAction, wake_action};
@@ -175,10 +174,7 @@ where
         // marking the lifecycle Resumed, which can synchronously run the
         // first frame through `dispatch_platform_ui_runtime`; anything resolving
         // the slot during that frame must not see it empty.
-        installation.observe(flui_runtime::owner::WindowObservation::Metrics {
-            size: window.logical_size(),
-            scale_factor: window.scale_factor(),
-        });
+        installation.observe_initial_web_window();
         APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(window));
 
         debug_assert_eq!(
@@ -187,7 +183,6 @@ where
             "web bootstrap must run on the ui_runtime's owner thread"
         );
         // Routed through dispatch -- see `run_desktop`'s matching comment.
-        installation.lifecycle(AppLifecycleState::Resumed);
         installation
             .submit()
             .outcome()
