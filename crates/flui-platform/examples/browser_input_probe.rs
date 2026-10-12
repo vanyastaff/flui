@@ -4,10 +4,10 @@
 
 #[cfg(target_arch = "wasm32")]
 mod browser {
-    use std::sync::Arc;
+    use std::sync::{Arc, Weak};
 
     use flui_platform::platforms::web::WebPlatform;
-    use flui_platform::{DispatchEventResult, Platform, WindowOptions};
+    use flui_platform::{DispatchEventResult, HostWindow, Platform, WindowOptions};
     use flui_platform_api::PlatformInput;
     use flui_platform_api::pointer::{
         ButtonChange, PenOrientation, PointerButton, PointerButtons, PointerEvent, PointerSample,
@@ -72,6 +72,80 @@ mod browser {
             .expect("JSON string serialization")
             .as_string()
             .expect("serialized JSON string")
+    }
+
+    /// Keeps the actual platform and public window handle alive between DOM steps.
+    #[wasm_bindgen]
+    pub struct KeyboardWindowProbe {
+        window: Arc<dyn HostWindow>,
+        _platform: WebPlatform,
+        capture: Weak<()>,
+    }
+
+    impl std::fmt::Debug for KeyboardWindowProbe {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter
+                .debug_struct("KeyboardWindowProbe")
+                .finish_non_exhaustive()
+        }
+    }
+
+    #[wasm_bindgen]
+    impl KeyboardWindowProbe {
+        pub fn snapshot(&self) -> String {
+            format!(
+                r#"{{"focused":{},"active":{},"capture_alive":{}}}"#,
+                self.window.is_focused(),
+                self.window.is_active(),
+                self.capture.upgrade().is_some(),
+            )
+        }
+
+        pub fn close(&self) {
+            self.window.close();
+        }
+    }
+
+    #[wasm_bindgen]
+    pub fn keyboard_window_probe(
+        label: String,
+        propagate: bool,
+        prevent_default: bool,
+    ) -> Result<KeyboardWindowProbe, JsValue> {
+        let platform = WebPlatform::new().map_err(|error| JsValue::from_str(&error.to_string()))?;
+        let window = platform
+            .open_window(WindowOptions::default())
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        let capture = Arc::new(());
+        let witness = Arc::downgrade(&capture);
+        let key_output = format!("focus-keys-{label}");
+        window.on_input(Box::new(move |input| {
+            let _keep_capture_live = &capture;
+            if let PlatformInput::Keyboard(event) = input {
+                let key = match &event.key {
+                    flui_platform_api::keyboard::Key::Named(key) => key.as_str(),
+                    flui_platform_api::keyboard::Key::Character(text) => text.as_str(),
+                    _ => "unknown",
+                };
+                append_result(&key_output, key);
+            }
+            DispatchEventResult::resolved(propagate, prevent_default)
+        }));
+        let observation = Arc::downgrade(&window);
+        let focus_output = format!("focus-state-{label}");
+        window.on_active_status_change(Box::new(move |active| {
+            if let Some(window) = observation.upgrade() {
+                append_result(
+                    &focus_output,
+                    &format!("{active}:{}:{}", window.is_focused(), window.is_active()),
+                );
+            }
+        }));
+        Ok(KeyboardWindowProbe {
+            window,
+            _platform: platform,
+            capture: witness,
+        })
     }
 
     #[wasm_bindgen]
