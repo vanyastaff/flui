@@ -19,6 +19,71 @@ use flui_interaction::{
 };
 use web_time::Instant;
 
+thread_local! {
+    static WAKE_ACTION: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
+}
+
+struct WakeWindow {
+    drops: Arc<std::sync::atomic::AtomicUsize>,
+    panic_on_drop: bool,
+}
+
+impl flui_platform_api::PlatformWindow for WakeWindow {
+    fn id(&self) -> flui_platform_api::WindowId {
+        flui_platform_api::WindowId(1)
+    }
+    fn physical_size(&self) -> flui_foundation::geometry::Size<i32> {
+        flui_foundation::geometry::Size::new(1, 1)
+    }
+    fn logical_size(&self) -> flui_foundation::geometry::Size<f64> {
+        flui_foundation::geometry::Size::new(1.0, 1.0)
+    }
+    fn scale_factor(&self) -> f64 {
+        1.0
+    }
+    fn request_redraw(&self) {
+        let action = WAKE_ACTION.with(|action| action.borrow_mut().take());
+        if let Some(action) = action {
+            action();
+        }
+    }
+    fn is_focused(&self) -> bool {
+        true
+    }
+    fn is_visible(&self) -> bool {
+        true
+    }
+    fn set_cursor(
+        &self,
+        _: flui_platform_api::CursorIcon,
+    ) -> Result<(), flui_platform_api::CursorError> {
+        Ok(())
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+impl Drop for WakeWindow {
+    fn drop(&mut self) {
+        self.drops
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        assert!(!self.panic_on_drop, "wake backend capture Drop failure");
+    }
+}
+
+struct CallbackCapture(Rc<Cell<usize>>);
+impl CallbackCapture {
+    fn observe(&self) -> usize {
+        self.0.get()
+    }
+}
+impl Drop for CallbackCapture {
+    fn drop(&mut self) {
+        self.0.set(self.0.get() + 1);
+    }
+}
+
 struct DeadlineMember {
     due: Cell<Option<Instant>>,
     fail_query: Cell<bool>,
@@ -29,6 +94,8 @@ struct DeadlineMember {
     poll_publication: RefCell<Option<(GestureDeadlineUpdate, Option<Instant>)>>,
     release_owner: RefCell<Option<Rc<RefCell<Option<Rc<Self>>>>>>,
     drops: Rc<Cell<usize>>,
+    rejection_binding: RefCell<Option<Rc<GestureBinding>>>,
+    rejection_deadline: Cell<Option<Option<Instant>>>,
 }
 
 impl DeadlineMember {
@@ -43,13 +110,23 @@ impl DeadlineMember {
             poll_publication: RefCell::new(None),
             release_owner: RefCell::new(None),
             drops: Rc::new(Cell::new(0)),
+            rejection_binding: RefCell::new(None),
+            rejection_deadline: Cell::new(None),
         })
     }
 }
 
 impl GestureArenaMember for DeadlineMember {
     fn accept_gesture(&self, _: PointerId) {}
-    fn reject_gesture(&self, _: PointerId) {}
+    fn reject_gesture(&self, _: PointerId) {
+        let binding = self.rejection_binding.borrow().clone();
+        if let Some(binding) = binding {
+            self.rejection_deadline
+                .set(Some(flui_interaction::__runtime::next_deadline_snapshot(
+                    &binding,
+                )));
+        }
+    }
     fn deadline(&self) -> Option<Instant> {
         self.queries.set(self.queries.get() + 1);
         let publication = self.query_publication.borrow_mut().take();
@@ -521,8 +598,174 @@ fn retry_failure_preserves_retirement_even_when_reentry_supersedes_observation()
     assert_eq!(update.refresh(), Err(GestureDeadlineError::Retired));
 }
 
+fn disarm_wake_cannot_make_an_old_up_retire_a_replacement_contact() {
+    use flui_interaction::events::{PointerKind, make_down_event_for_id, make_up_event_for_id};
+    use flui_interaction::routing::PointerDispatch;
+    use flui_interaction::{GestureRecognizer as _, LongPressGestureRecognizer};
+    let clock = ManualClock::new();
+    let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
+    let window: Arc<dyn flui_platform_api::PlatformWindow> = Arc::new(WakeWindow {
+        drops: Arc::default(),
+        panic_on_drop: false,
+    });
+    flui_interaction::__runtime::set_pointer_capture_wake(&binding, Arc::downgrade(&window));
+    let notices = Rc::new(Cell::new(0));
+    let captured = Rc::clone(&notices);
+    let recognizer = LongPressGestureRecognizer::builder(binding.arena().clone())
+        .on_long_press(move || captured.set(captured.get() + 1))
+        .build();
+    let down =
+        make_down_event_for_id(pointer(1), Offset::ZERO, PointerKind::Touch).expect("old down");
+    recognizer.add_pointer(PointerDispatch::at_root(&down));
+    let replacement = Rc::clone(&recognizer);
+    WAKE_ACTION.with(|action| {
+        *action.borrow_mut() = Some(Box::new(move || {
+            replacement.cancel();
+            let down = make_down_event_for_id(pointer(2), Offset::ZERO, PointerKind::Touch)
+                .expect("replacement down");
+            replacement.add_pointer(PointerDispatch::at_root(&down));
+        }))
+    });
+    let up = make_up_event_for_id(pointer(1), Offset::ZERO, PointerKind::Touch).expect("old up");
+    recognizer.handle_event(PointerDispatch::at_root(&up));
+    clock.advance(Duration::from_secs(1));
+    assert!(!sample(&binding, clock.now()));
+    assert_eq!(
+        notices.get(),
+        1,
+        "the replacement contact keeps its Possible phase and timer"
+    );
+}
+
+fn a_wake_failure_retains_the_last_backend_owner_before_unwind() {
+    const CHILD: &str = "FLUI_DEADLINE_WAKE_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        let clock = ManualClock::new();
+        let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
+        let drops = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let window: Arc<dyn flui_platform_api::PlatformWindow> = Arc::new(WakeWindow {
+            drops: Arc::clone(&drops),
+            panic_on_drop: true,
+        });
+        flui_interaction::__runtime::set_pointer_capture_wake(&binding, Arc::downgrade(&window));
+        let owner = Arc::new(std::sync::Mutex::new(Some(window)));
+        let released = Arc::clone(&owner);
+        WAKE_ACTION.with(|action| {
+            *action.borrow_mut() = Some(Box::new(move || {
+                drop(released.lock().expect("backend owner fixture").take());
+                panic!("wake delivery first failure");
+            }))
+        });
+        let member = DeadlineMember::new(clock.now());
+        let erased: Rc<dyn GestureArenaMember> = member.clone();
+        let registration = binding
+            .arena()
+            .register_deadline_member(pointer(1), &erased)
+            .expect("source");
+        let caught = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            registration.update_handle().publish(Some(clock.now()))
+        }));
+        let payload = caught.expect_err("wake delivery fails after deadline commit");
+        assert_eq!(
+            flui_foundation::panic::payload_text(payload.as_ref()),
+            Some("wake delivery first failure")
+        );
+        assert_eq!(
+            drops.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "last backend ownership retained before propagation"
+        );
+        assert!(owner.lock().expect("fixture owner").is_none());
+        assert_eq!(
+            flui_interaction::__runtime::next_deadline_snapshot(&binding),
+            Some(clock.now()),
+            "failed wake cannot erase accepted timing"
+        );
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        .args([
+            "--exact",
+            "deadline_recovery::owner_deadline_recovery_matrix",
+            "--nocapture",
+        ])
+        .env(CHILD, "1")
+        .output()
+        .expect("isolated wake failure process");
+    assert!(
+        output.status.success(),
+        "wake failure child failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn an_earlier_producer_failure_does_not_leak_a_healthy_callback_owner() {
+    use flui_interaction::events::{PointerKind, make_down_event_for_id};
+    use flui_interaction::routing::PointerDispatch;
+    use flui_interaction::{GestureRecognizer as _, LongPressGestureRecognizer};
+    let clock = ManualClock::new();
+    let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
+    let drops = Rc::new(Cell::new(0));
+    let capture = CallbackCapture(Rc::clone(&drops));
+    let recognizer = LongPressGestureRecognizer::builder(binding.arena().clone())
+        .on_long_press(move || {
+            let _ = capture.observe();
+        })
+        .build();
+    let down =
+        make_down_event_for_id(pointer(1), Offset::ZERO, PointerKind::Touch).expect("contact down");
+    recognizer.add_pointer(PointerDispatch::at_root(&down));
+    clock.advance(Duration::from_secs(1));
+    let mut recovery = PanicRecovery::new();
+    recovery.run(|| panic!("earlier independent producer failure"));
+    flui_interaction::__runtime::tick_deadlines_with_recovery(
+        &binding,
+        clock.now(),
+        &mut recovery.scope(),
+    );
+    assert_eq!(drops.get(), 0, "the live recognizer owns callback captures");
+    drop(recognizer);
+    assert_eq!(
+        drops.get(),
+        1,
+        "healthy shared snapshot releases its capture ownership"
+    );
+}
+
+fn a_member_withdrawal_removes_its_snapshot_before_rejection_delivery() {
+    let clock = ManualClock::new();
+    let binding = Rc::new(GestureBinding::with_clock(Arc::new(clock.clone())));
+    let member = DeadlineMember::new(clock.now());
+    let healthy_due = clock.now() + Duration::from_secs(5);
+    let healthy = DeadlineMember::new(healthy_due);
+    let entry = binding.arena().add(pointer(1), &member);
+    let _healthy_entry = binding.arena().add(pointer(1), &healthy);
+    *member.rejection_binding.borrow_mut() = Some(Rc::clone(&binding));
+    let mut recovery = PanicRecovery::new();
+    flui_interaction::__runtime::refresh_deadlines_with_recovery(
+        &binding,
+        clock.now(),
+        &mut recovery.scope(),
+    );
+    assert_eq!(
+        flui_interaction::__runtime::next_deadline_snapshot(&binding),
+        Some(clock.now())
+    );
+    entry.resolve(flui_interaction::GestureDisposition::Rejected);
+    assert_eq!(
+        member.rejection_deadline.get(),
+        Some(Some(healthy_due)),
+        "rejection observes only the still-admitted member's timing"
+    );
+}
+
 #[test]
 fn owner_deadline_recovery_matrix() {
+    if std::env::var_os("FLUI_DEADLINE_WAKE_CHILD").is_some() {
+        a_wake_failure_retains_the_last_backend_owner_before_unwind();
+        return;
+    }
+    let mut first_failure = None;
     for (name, case) in [
         (
             "query_failure_has_one_bounded_probe_and_inert_reads",
@@ -568,10 +811,33 @@ fn owner_deadline_recovery_matrix() {
             "retry_failure_preserves_retirement_even_when_reentry_supersedes_observation",
             retry_failure_preserves_retirement_even_when_reentry_supersedes_observation as fn(),
         ),
+        (
+            "disarm_wake_cannot_make_an_old_up_retire_a_replacement_contact",
+            disarm_wake_cannot_make_an_old_up_retire_a_replacement_contact as fn(),
+        ),
+        (
+            "a_wake_failure_retains_the_last_backend_owner_before_unwind",
+            a_wake_failure_retains_the_last_backend_owner_before_unwind as fn(),
+        ),
+        (
+            "an_earlier_producer_failure_does_not_leak_a_healthy_callback_owner",
+            an_earlier_producer_failure_does_not_leak_a_healthy_callback_owner as fn(),
+        ),
+        (
+            "a_member_withdrawal_removes_its_snapshot_before_rejection_delivery",
+            a_member_withdrawal_removes_its_snapshot_before_rejection_delivery as fn(),
+        ),
     ] {
         if let Err(payload) = std::panic::catch_unwind(case) {
             eprintln!("deadline recovery case `{name}` failed");
-            std::panic::resume_unwind(payload);
+            if first_failure.is_none() {
+                first_failure = Some(payload);
+            } else {
+                flui_foundation::panic::retain_opaque_payload(payload);
+            }
         }
+    }
+    if let Some(payload) = first_failure {
+        std::panic::resume_unwind(payload);
     }
 }

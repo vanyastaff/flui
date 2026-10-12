@@ -149,6 +149,12 @@ enum Observation {
     Parked,
 }
 
+fn query_retry(now: Instant) -> Observation {
+    now.checked_add(Duration::from_millis(100))
+        .filter(|due| *due > now)
+        .map_or(Observation::Parked, Observation::Retry)
+}
+
 struct DeadlineSource {
     id: u64,
     pointer: PointerId,
@@ -348,6 +354,25 @@ impl DeadlineRegistry {
         }
     }
 
+    pub(super) fn withdraw_member_generation(
+        &self,
+        member: &Weak<dyn GestureArenaMember>,
+        generation: ArenaGeneration,
+    ) {
+        for source in self
+            .sources
+            .borrow()
+            .iter()
+            .filter(|source| Weak::ptr_eq(&source.member, member))
+        {
+            let mut generations = source.generations.borrow_mut();
+            generations.retain(|current| *current != generation);
+            if generations.is_empty() && !source.registration {
+                source.active.set(false);
+            }
+        }
+    }
+
     fn sources(&self, polls: SmallVec<[DeadlinePoll; 8]>) -> SmallVec<[Rc<DeadlineSource>; 8]> {
         let mut stored = self.sources.borrow_mut();
         Vec::retain(&mut *stored, |source| {
@@ -455,8 +480,7 @@ impl DeadlineRegistry {
                     } else if retry {
                         Observation::Parked
                     } else {
-                        now.checked_add(Duration::from_millis(100))
-                            .map_or(Observation::Parked, Observation::Retry)
+                        query_retry(now)
                     });
                 }
             }
@@ -483,8 +507,7 @@ impl DeadlineRegistry {
                                     result.expect("BUG: completed deadline query has a result"),
                                 )
                             } else {
-                                now.checked_add(Duration::from_millis(100))
-                                    .map_or(Observation::Parked, Observation::Retry)
+                                query_retry(now)
                             });
                         }
                     }
