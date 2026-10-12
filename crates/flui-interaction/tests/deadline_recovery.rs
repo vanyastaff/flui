@@ -92,6 +92,7 @@ struct VerdictMember {
     drops: Rc<Cell<usize>>,
     panic_on_drop: bool,
     panic_on_notify: bool,
+    reenter: RefCell<Option<Box<dyn FnOnce()>>>,
     _drop_capture: Option<VerdictDropFailure>,
 }
 
@@ -108,6 +109,10 @@ impl VerdictMember {
         self.notifications.set(self.notifications.get() + 1);
         let owner = self.owner.upgrade().expect("live external owner slot");
         drop(owner.borrow_mut().take());
+        let reenter = self.reenter.borrow_mut().take();
+        if let Some(reenter) = reenter {
+            reenter();
+        }
         assert!(!self.panic_on_notify, "arena verdict callback failure");
     }
 }
@@ -885,6 +890,7 @@ fn builtin_deadline_verdict_retirement(kind: &str, incoming_failure: bool, fault
         drops: Rc::clone(&drops),
         panic_on_drop: fault != VerdictFault::None,
         panic_on_notify: fault == VerdictFault::NotificationAndRetirement,
+        reenter: RefCell::new(None),
         _drop_capture: std::env::var_os("FLUI_DEADLINE_VERDICT_CHILD").map(|_| VerdictDropFailure),
     });
     let _entry = binding.arena().add(pointer(1), &member);
@@ -1025,6 +1031,139 @@ fn builtin_incoming_verdict_retains_double_panicking_aggregate() {
     );
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NestedVerdictFault {
+    None,
+    Retirement,
+    RetirementThenCallback,
+}
+
+fn nested_public_verdict_operation(incoming: bool, fault: NestedVerdictFault) {
+    use flui_interaction::events::{PointerKind, make_down_event_for_id};
+    use flui_interaction::routing::PointerDispatch;
+    use flui_interaction::{GestureRecognizer as _, LongPressGestureRecognizer};
+    let clock = ManualClock::new();
+    let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
+    let notices = Rc::new(Cell::new(0));
+    let captured = Rc::clone(&notices);
+    let recognizer = LongPressGestureRecognizer::builder(binding.arena().clone())
+        .on_long_press(move || captured.set(captured.get() + 1))
+        .build();
+    let down = make_down_event_for_id(pointer(1), Offset::ZERO, PointerKind::Touch)
+        .expect("nested verdict down");
+    recognizer.add_pointer(PointerDispatch::at_root(&down));
+    let child_owner = Rc::new(RefCell::new(None));
+    let child_drops = Rc::new(Cell::new(0));
+    let child_notices = Rc::new(Cell::new(0));
+    let child = Rc::new(VerdictMember {
+        owner: Rc::downgrade(&child_owner),
+        notifications: Rc::clone(&child_notices),
+        drops: Rc::clone(&child_drops),
+        panic_on_drop: fault != NestedVerdictFault::None,
+        panic_on_notify: false,
+        reenter: RefCell::new(None),
+        _drop_capture: None,
+    });
+    let _child_entry = binding.arena().add(pointer(2), &child);
+    *child_owner.borrow_mut() = Some(child);
+    let outer_owner = Rc::new(RefCell::new(None));
+    let outer_drops = Rc::new(Cell::new(0));
+    let arena = binding.arena().clone();
+    let outer = Rc::new(VerdictMember {
+        owner: Rc::downgrade(&outer_owner),
+        notifications: Rc::new(Cell::new(0)),
+        drops: Rc::clone(&outer_drops),
+        panic_on_drop: false,
+        panic_on_notify: fault == NestedVerdictFault::RetirementThenCallback,
+        reenter: RefCell::new(Some(Box::new(move || arena.abandon(pointer(2))))),
+        _drop_capture: None,
+    });
+    let _outer_entry = binding.arena().add(pointer(1), &outer);
+    *outer_owner.borrow_mut() = Some(outer);
+    binding.arena().close(pointer(1));
+    clock.advance(Duration::from_secs(1));
+    let mut recovery = PanicRecovery::new();
+    if incoming {
+        recovery
+            .scope()
+            .run_classified(FailureClass::Computation, |_| {
+                panic!("earlier nested animation computation");
+            });
+    }
+    flui_interaction::__runtime::tick_deadlines_with_recovery(
+        &binding,
+        clock.now(),
+        &mut recovery.scope(),
+    );
+    assert_eq!(child_notices.get(), 1);
+    assert!(child_owner.borrow().is_none());
+    assert_eq!(notices.get(), 1, "healthy deadline tail still progresses");
+    if incoming {
+        assert_eq!(
+            child_drops.get(),
+            0,
+            "nested public operation inherits custody"
+        );
+        assert_eq!(outer_drops.get(), 0);
+        let failure = recovery.into_failure().expect("original incoming failure");
+        assert_eq!(
+            flui_foundation::panic::payload_text(failure.payload()),
+            Some("earlier nested animation computation")
+        );
+    } else if fault != NestedVerdictFault::None {
+        assert_eq!(child_drops.get(), 1);
+        assert_eq!(recovery.first_failure_class(), Some(FailureClass::Unknown));
+        assert_eq!(
+            recovery.blocking_failure_class(),
+            Some(FailureClass::Unknown)
+        );
+        let failure = recovery.into_failure().expect("nested retirement failure");
+        assert_eq!(
+            flui_foundation::panic::payload_text(failure.payload()),
+            Some("opaque arena member retirement")
+        );
+    } else {
+        assert_eq!(child_drops.get(), 1);
+        assert_eq!(outer_drops.get(), 1);
+        assert!(!recovery.has_failure());
+    }
+    let owner = Rc::new(RefCell::new(None));
+    let drops = Rc::new(Cell::new(0));
+    let fresh = Rc::new(VerdictMember {
+        owner: Rc::downgrade(&owner),
+        notifications: Rc::new(Cell::new(0)),
+        drops: Rc::clone(&drops),
+        panic_on_drop: false,
+        panic_on_notify: false,
+        reenter: RefCell::new(None),
+        _drop_capture: None,
+    });
+    let _fresh_entry = binding.arena().add(pointer(3), &fresh);
+    *owner.borrow_mut() = Some(fresh);
+    binding.arena().abandon(pointer(3));
+    assert_eq!(
+        drops.get(),
+        1,
+        "custody belongs to one operation, not the arena lifetime"
+    );
+}
+
+fn nested_public_abandon_inherits_custody_then_retires_normally_next_operation() {
+    nested_public_verdict_operation(true, NestedVerdictFault::None);
+}
+
+fn nested_public_retirement_keeps_unknown_provenance() {
+    nested_public_verdict_operation(false, NestedVerdictFault::Retirement);
+}
+
+fn nested_public_retirement_precedes_later_callback_failure() {
+    nested_public_verdict_operation(false, NestedVerdictFault::RetirementThenCallback);
+}
+
+fn nested_public_verdict_healthy_retirement_remains() {
+    nested_public_verdict_operation(false, NestedVerdictFault::None);
+}
+
 #[test]
 fn owner_deadline_recovery_matrix() {
     if std::env::var_os("FLUI_DEADLINE_WAKE_CHILD").is_some() {
@@ -1140,6 +1279,22 @@ fn owner_deadline_recovery_matrix() {
         (
             "builtin_incoming_verdict_retains_double_panicking_aggregate",
             builtin_incoming_verdict_retains_double_panicking_aggregate as fn(),
+        ),
+        (
+            "nested_public_abandon_inherits_custody_then_retires_normally_next_operation",
+            nested_public_abandon_inherits_custody_then_retires_normally_next_operation as fn(),
+        ),
+        (
+            "nested_public_retirement_keeps_unknown_provenance",
+            nested_public_retirement_keeps_unknown_provenance as fn(),
+        ),
+        (
+            "nested_public_retirement_precedes_later_callback_failure",
+            nested_public_retirement_precedes_later_callback_failure as fn(),
+        ),
+        (
+            "nested_public_verdict_healthy_retirement_remains",
+            nested_public_verdict_healthy_retirement_remains as fn(),
         ),
     ] {
         if let Err(payload) = std::panic::catch_unwind(case) {
