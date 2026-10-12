@@ -47,6 +47,19 @@ const UNCHANGED_FOR: Duration = Duration::from_secs(1);
 /// Between a key's press and release, and between events, so the backend
 /// sees a key held for a frame rather than a zero-length tap.
 const HOLD: Duration = Duration::from_millis(40);
+/// Bounded recovery when Windows refuses a foreground request.
+const FOREGROUND_WITHIN: Duration = Duration::from_secs(30);
+/// Discovery, operator recovery, the control and result waits, plus two
+/// seconds for focus polling and the press/release intervals.
+const CHECK_DEADLINE: Duration = Duration::from_secs(
+    uia::APPEAR_WITHIN.as_secs()
+        + FOREGROUND_WITHIN.as_secs()
+        + UNCHANGED_FOR.as_secs()
+        + 2 * ADVANCE_WITHIN.as_secs()
+        + 2,
+);
+/// Leave the same margin for scheduling and UIA queries as the accessibility check.
+const PROBE_RUN_FOR: Duration = Duration::from_secs(2 * CHECK_DEADLINE.as_secs());
 
 /// Runs the check against the built probe and returns its exit code.
 pub(super) fn run(probe: &Path) -> anyhow::Result<u8> {
@@ -60,7 +73,7 @@ pub(super) fn run(probe: &Path) -> anyhow::Result<u8> {
         println!("CANNOT_VERIFY: per-monitor DPI awareness was refused: {error}");
         return Ok(2);
     }
-    let mut session = match Session::start(probe) {
+    let mut session = match Session::start_for(probe, PROBE_RUN_FOR) {
         Ok(session) => session,
         Err(Start::CannotVerify(why)) => {
             println!("CANNOT_VERIFY: {why}");
@@ -111,7 +124,7 @@ fn drive(session: &mut Session) -> anyhow::Result<Verdict> {
     // SAFETY: a plain client call on the session's COM thread.
     let hwnd = unsafe { window.CurrentNativeWindowHandle() }?;
 
-    let Some(()) = foreground(hwnd) else {
+    let Some(()) = foreground(session, hwnd) else {
         return Ok(Verdict::CannotVerify);
     };
 
@@ -121,7 +134,7 @@ fn drive(session: &mut Session) -> anyhow::Result<Verdict> {
         y: button.bottom + (frame.bottom - button.bottom) / 2,
     };
     println!("click outside the button at ({}, {})", miss.x, miss.y);
-    if !click(hwnd, miss)? {
+    if !click(session, hwnd, miss)? {
         return Ok(Verdict::CannotVerify);
     }
     std::thread::sleep(UNCHANGED_FOR);
@@ -134,7 +147,7 @@ fn drive(session: &mut Session) -> anyhow::Result<Verdict> {
     // 2. The hit.
     let hit = centre(button);
     println!("click the button at ({}, {})", hit.x, hit.y);
-    if !click(hwnd, hit)? {
+    if !click(session, hwnd, hit)? {
         return Ok(Verdict::CannotVerify);
     }
     if session
@@ -149,7 +162,7 @@ fn drive(session: &mut Session) -> anyhow::Result<Verdict> {
     // 3. The keyboard: Tab must bring the focus to the button, as a screen
     // reader sees it, and Enter must then activate it.
     println!("press Tab");
-    if !press(hwnd, VK_TAB)? {
+    if !press(session, hwnd, VK_TAB)? {
         return Ok(Verdict::CannotVerify);
     }
     let focused = std::iter::repeat_with(|| {
@@ -169,7 +182,7 @@ fn drive(session: &mut Session) -> anyhow::Result<Verdict> {
         return Ok(Verdict::Fail);
     }
     println!("Tab focused the button; press Enter");
-    if !press(hwnd, VK_RETURN)? {
+    if !press(session, hwnd, VK_RETURN)? {
         return Ok(Verdict::CannotVerify);
     }
     if session
@@ -191,42 +204,74 @@ pub(super) fn centre(rect: RECT) -> POINT {
 }
 
 /// Brings `hwnd` forward, allowing bounded time for the operator to focus it.
-pub(super) fn foreground(hwnd: HWND) -> Option<()> {
-    // SAFETY: `hwnd` is the probe's live top-level window; both calls only
-    // read or request foreground state.
+pub(super) fn foreground(session: &Session, hwnd: HWND) -> Option<()> {
+    if !session.owns_window(hwnd) {
+        println!("CANNOT_VERIFY: the probe no longer owns a live window; no input was sent");
+        return None;
+    }
+    // SAFETY: ownership was checked above; both calls only read or request
+    // foreground state, and ownership is rechecked before accepting focus.
     unsafe {
         let _ = SetForegroundWindow(hwnd);
         std::thread::sleep(HOLD);
-        if GetForegroundWindow() == hwnd {
+        if GetForegroundWindow() == hwnd && session.owns_window(hwnd) {
             return Some(());
         }
-    }
-    println!("Click the probe's title bar to focus it (waiting up to 30 seconds).");
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while Instant::now() < deadline {
-        // SAFETY: reads foreground state only. No input is sent until the
-        // probe's own live window has acquired the foreground.
-        if unsafe { GetForegroundWindow() } == hwnd {
-            return Some(());
-        }
-        std::thread::sleep(HOLD);
     }
     println!(
-        "CANNOT_VERIFY: Windows would not bring the probe's window to the foreground (the foreground lock), so input sent now could reach another application"
+        "Click the probe's title bar to focus it (waiting up to {} seconds).",
+        FOREGROUND_WITHIN.as_secs()
+    );
+    if wait_foreground(
+        FOREGROUND_WITHIN,
+        || session.owns_window(hwnd),
+        // SAFETY: reads foreground state only.
+        || unsafe { GetForegroundWindow() } == hwnd,
+        || std::thread::sleep(HOLD),
+    )
+    .is_some()
+    {
+        return Some(());
+    }
+    println!(
+        "CANNOT_VERIFY: the probe lost its live window or did not acquire the foreground; no input was sent"
     );
     None
 }
 
+/// The polling seam permits deterministic owner-loss checks without injecting
+/// real input or requiring the operator to relinquish another application's focus.
+fn wait_foreground(
+    within: Duration,
+    mut owned: impl FnMut() -> bool,
+    mut focused: impl FnMut() -> bool,
+    mut poll: impl FnMut(),
+) -> Option<()> {
+    let deadline = Instant::now() + within;
+    while Instant::now() < deadline {
+        let has_focus = focused();
+        if !owned() {
+            return None;
+        }
+        if has_focus {
+            return Some(());
+        }
+        poll();
+    }
+    None
+}
+
 /// Whether `hwnd` is still the foreground window; printed when not.
-pub(super) fn still_foreground(hwnd: HWND) -> bool {
+pub(super) fn still_foreground(session: &Session, hwnd: HWND) -> bool {
     // SAFETY: reads foreground state only.
     let current = unsafe { GetForegroundWindow() };
-    if current != hwnd {
+    let ready = current == hwnd && session.owns_window(hwnd);
+    if !ready {
         println!(
-            "CANNOT_VERIFY: another window took the foreground during the check; no further input was sent"
+            "CANNOT_VERIFY: the probe lost its live window or the foreground; no further input was sent"
         );
     }
-    current == hwnd
+    ready
 }
 
 /// A left click at `point`, in physical screen pixels. `false` when the
@@ -238,14 +283,14 @@ pub(super) fn still_foreground(hwnd: HWND) -> bool {
 /// front does not make the probe the window under the point — a
 /// non-activating overlay, or the probe having moved, would take the press.
 /// A press that went out is always released ([`release`]).
-pub(super) fn click(hwnd: HWND, point: POINT) -> anyhow::Result<bool> {
-    if !still_foreground(hwnd) {
+pub(super) fn click(session: &Session, hwnd: HWND, point: POINT) -> anyhow::Result<bool> {
+    if !still_foreground(session, hwnd) {
         return Ok(false);
     }
     // SAFETY: moves the cursor only; no window receives input from it.
     unsafe { SetCursorPos(point.x, point.y) }?;
     std::thread::sleep(HOLD);
-    if !still_foreground(hwnd) || !hits(hwnd, point) {
+    if !still_foreground(session, hwnd) || !hits(session, hwnd, point) {
         return Ok(false);
     }
     send(&[mouse(MOUSEEVENTF_LEFTDOWN)])?;
@@ -258,8 +303,8 @@ pub(super) fn click(hwnd: HWND, point: POINT) -> anyhow::Result<bool> {
 /// A press and release of `key`. `false` when the probe lost the foreground
 /// and no press was sent; a press that went out is always released
 /// ([`release`]).
-fn press(hwnd: HWND, key: VIRTUAL_KEY) -> anyhow::Result<bool> {
-    if !still_foreground(hwnd) {
+fn press(session: &Session, hwnd: HWND, key: VIRTUAL_KEY) -> anyhow::Result<bool> {
+    if !still_foreground(session, hwnd) {
         return Ok(false);
     }
     send(&[keyboard(key, KEYBD_EVENT_FLAGS(0))])?;
@@ -271,17 +316,18 @@ fn press(hwnd: HWND, key: VIRTUAL_KEY) -> anyhow::Result<bool> {
 
 /// Whether `point` hits `hwnd` itself: the top-level window under it, as the
 /// OS hit-tests, is the probe's. Printed when not.
-pub(super) fn hits(hwnd: HWND, point: POINT) -> bool {
+pub(super) fn hits(session: &Session, hwnd: HWND, point: POINT) -> bool {
     // SAFETY: both calls only read window-manager state for a screen point
     // and a window handle.
     let root = unsafe { GetAncestor(WindowFromPoint(point), GA_ROOT) };
-    if root != hwnd {
+    let ready = root == hwnd && session.owns_window(hwnd);
+    if !ready {
         println!(
             "CANNOT_VERIFY: ({}, {}) does not hit the probe's window (another window is there); no press was sent",
             point.x, point.y
         );
     }
-    root == hwnd
+    ready
 }
 
 /// Sends the release of a press that already went out, retrying once: the
@@ -360,5 +406,55 @@ impl Drop for Cursor {
             // SAFETY: moves the cursor back to where the user left it.
             let _ = unsafe { SetCursorPos(point.x, point.y) };
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn foreground_recovery_requires_the_live_probe_owner() {
+        type Case = (&'static str, &'static [(bool, bool)], Duration, bool);
+        let cases: &[Case] = &[
+            (
+                "late_focus",
+                &[(true, false), (true, true)],
+                Duration::from_secs(1),
+                true,
+            ),
+            (
+                "owner_lost_during_wait",
+                &[(true, false), (false, true)],
+                Duration::from_secs(1),
+                false,
+            ),
+            (
+                "foreign_foreground_handle",
+                &[(false, true)],
+                Duration::from_secs(1),
+                false,
+            ),
+            ("focus_timeout", &[(true, false)], Duration::ZERO, false),
+        ];
+        let mut failed = Vec::new();
+        for &(name, states, within, expected) in cases {
+            let index = Cell::new(0);
+            let actual = wait_foreground(
+                within,
+                || states[index.get()].0,
+                || states[index.get()].1,
+                || index.set((index.get() + 1).min(states.len() - 1)),
+            )
+            .is_some();
+            if actual != expected {
+                failed.push(name);
+            }
+        }
+        assert!(
+            failed.is_empty(),
+            "foreground recovery rows failed: {failed:?}"
+        );
     }
 }

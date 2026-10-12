@@ -225,6 +225,19 @@ layer/filter/damage и fractional-alpha readbacks; type-check не заменя�
 `CANNOT_VERIFY` при отказе foreground. Tooling теперь допускает bounded 30 s
 для ручного фокуса; повторный запуск действительно исполнил input, без обхода
 foreground/hit checks. В успешном запуске дополнительный wait не понадобился.
+Driver запускает counter через `Session::start_for`: полный nominal budget
+discovery, 30 s foreground grace, control, focus polling и result waits составляет
+58 s; self-termination guard установлен на 116 s с запасом для scheduling/UIA.
+Перед принятием foreground и перед press проверяются PID текущего HWND и
+несигнальное состояние process handle запущенного child. Общие input helpers
+Notes используют ту же проверку; release уже отправленного press сохраняется.
+`foreground_recovery_requires_the_live_probe_owner` исполнил late focus,
+owner loss during wait, foreign foreground handle и timeout. На прежнем polling
+поведении case упал именно на owner loss и foreign handle; после исправления
+43/43 xtask unit tests прошли. Повторный native input run дал `INPUT=PASS`
+(miss 0, hit 1, Tab/Enter 2), снова без дополнительного wait. Предыдущий attempt
+увидел count 2 после control и завершился `INPUT=FAIL`; его результат не считается
+acceptance evidence. Live recovery после позднего ручного фокуса не подтверждён.
 Native окно использовало NVIDIA GeForce RTX 3070 Ti / DX12 по app log.
 Input miss сохранил count 0, hit дал 1, Tab/Enter дал 2. UIA проверила Invoke,
 expand/collapse с отказом повторного перехода, точные range values 2.375, 10,
