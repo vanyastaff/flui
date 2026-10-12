@@ -21,10 +21,13 @@ modifier and text-store authority contracts stay in force.
 - A private standards-aware Web parser with mature Unicode facilities preserves
   admitted meaning and refuses malformed values. This is the selected shape.
 
-Use coherent Unicode category, combining-class and normalization data; record
-the selected facilities and version during implementation. Do not maintain
-private character ranges or add an unwired public parser. Record generated wasm
-artifact cost instead of claiming a performance advantage without measurement.
+The implementation uses ICU4X 2.3 normalizer and properties compiled data on the
+wasm target. Canonical combining classes come from the normalizer's borrowed
+map, which shares its decomposition data, and general categories come from
+the properties map. NFC is checked without rewriting. These facilities use the
+same locked data cohort; there are no private character ranges or new public
+parser. Record generated wasm artifact cost instead of claiming a performance
+advantage without measurement.
 
 ## Acceptance seams
 
