@@ -349,13 +349,21 @@ mod browser {
                 };
                 append_result("keyboard-sequence", key);
                 publish("keyboard", &format!(
-                    r#"{{"key":{},"key_kind":"{}","code":{},"time":{},"state":"{:?}","location":"{:?}","repeat":"{:?}","composition":"{:?}","shift":{},"control":{},"alt":{},"meta":{}}}"#,
+                    r#"{{"key":{},"key_kind":"{}","code":{},"time":{},"state":"{:?}","location":"{:?}","repeat":"{:?}","composition":"{:?}","shift":{},"control":{},"alt":{},"meta":{},"alt_graph":{},"caps_lock":{},"num_lock":{},"scroll_lock":{},"fn":{},"fn_lock":{},"symbol":{},"symbol_lock":{}}}"#,
                     json_string(key), key_kind, json_string(event.code.as_str()), event.time.as_nanos(), event.state(), event.location,
                     event.repeat(), event.composition,
                     event.modifiers.contains(flui_platform_api::keyboard::Modifiers::SHIFT),
                     event.modifiers.contains(flui_platform_api::keyboard::Modifiers::CONTROL),
                     event.modifiers.contains(flui_platform_api::keyboard::Modifiers::ALT),
                     event.modifiers.contains(flui_platform_api::keyboard::Modifiers::META),
+                    event.modifiers.contains(flui_platform_api::keyboard::Modifiers::ALT_GRAPH),
+                    event.modifiers.contains(flui_platform_api::keyboard::Modifiers::CAPS_LOCK),
+                    event.modifiers.contains(flui_platform_api::keyboard::Modifiers::NUM_LOCK),
+                    event.modifiers.contains(flui_platform_api::keyboard::Modifiers::SCROLL_LOCK),
+                    event.modifiers.contains(flui_platform_api::keyboard::Modifiers::FN),
+                    event.modifiers.contains(flui_platform_api::keyboard::Modifiers::FN_LOCK),
+                    event.modifiers.contains(flui_platform_api::keyboard::Modifiers::SYMBOL),
+                    event.modifiers.contains(flui_platform_api::keyboard::Modifiers::SYMBOL_LOCK),
                 ));
             }
             if let PlatformInput::Pointer(event) = input {

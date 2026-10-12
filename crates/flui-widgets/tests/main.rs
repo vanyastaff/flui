@@ -13,6 +13,7 @@ mod common;
 mod contracts;
 mod frame_partitions;
 mod gesture_settings;
+mod keyboard_modifiers;
 mod pointer_vocabulary;
 
 #[path = "absorb_pointer.rs"]
