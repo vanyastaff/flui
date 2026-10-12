@@ -19,10 +19,17 @@ pub(crate) mod test_cases;
 /// The source flags are unchanged and remain available to raw input handlers.
 #[inline]
 pub(crate) fn command_modifiers(observed: Modifiers) -> Modifiers {
-    let mut commands =
-        observed & (Modifiers::SHIFT | Modifiers::CONTROL | Modifiers::ALT | Modifiers::META);
-    if observed.contains(Modifiers::ALT_GRAPH) {
-        commands.remove(Modifiers::CONTROL | Modifiers::ALT);
+    let alt_graph = observed.contains(Modifiers::ALT_GRAPH);
+    let mut commands = Modifiers::NONE;
+    for (modifier, admitted) in [
+        (Modifiers::CONTROL, !alt_graph),
+        (Modifiers::ALT, !alt_graph),
+        (Modifiers::META, true),
+        (Modifiers::SHIFT, true),
+    ] {
+        if admitted && observed.contains(modifier) {
+            commands |= modifier;
+        }
     }
     commands
 }
