@@ -2327,6 +2327,7 @@ impl ViewState<AuthorityAnimatedText> for AuthorityAnimatedTextState {
 thread_local! {
     // The report is Send + Sync; its UI runtime remains owner-thread local.
     // Release this borrow before invoking the real authority operation.
+    #[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static AUTHORITY_REPORT_CONTEXT: std::cell::RefCell<Option<std::rc::Rc<AuthorityReportContext>>> = const { std::cell::RefCell::new(None) };
 }
 

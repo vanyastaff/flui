@@ -480,6 +480,7 @@ thread_local! {
     // The report API is Send + Sync, while its owner is thread-affine.
     // Only this table installs a context, and every callback releases its
     // TLS borrow before invoking the public owner interface.
+    #[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static REPORT_PROBE: RefCell<Option<Rc<ReportProbe>>> = const { RefCell::new(None) };
 }
 
@@ -1275,6 +1276,7 @@ impl flui_runtime::sink::FrameSink for SamplingSink {
 }
 
 thread_local! {
+    #[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static PENDING_RUNTIME: RefCell<Option<Weak<UiRuntime>>> = const { RefCell::new(None) };
 }
 
