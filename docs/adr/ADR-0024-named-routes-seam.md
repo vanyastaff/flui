@@ -5,6 +5,7 @@
   as source of truth). `RouteKey<T>` (§3) is the part to carry over into it. The shipped surface
   below stays until the Router supersedes it.
 - **Date:** 2026-07-10
+- **Amended:** 2026-10-11 — refusal vocabulary includes the implemented Router admission boundary; named-route retirement remains conditional on ADR-0093.
 - **Superseded by (on acceptance):** [ADR-0093](ADR-0093-router-is-the-primary-navigation-api.md)
   (string-named routes; `RouteKey<T>` of §3 carries over)
 
@@ -42,8 +43,10 @@ captured handle.
 
 The ordinary operations (`push_named`, `push_replacement_named[_with]`,
 `pop_and_push_named[_with]`, `push_named_and_remove_until`) return
-`Result<RouteId, NamedRouteError>` whose only error is `Unresolved { name }`; they never check
-the result type, so reaching a screen does not require knowing its `Output`.
+`Result<RouteId, NamedRouteError>`. An unanswered factory returns `Unresolved { name }`;
+a Router-driven navigator returns `NotAddressable { name }` when the requested door cannot
+place that route, before pushing or dismissing anything. These operations never check the
+result type, so reaching a screen does not require knowing its `Output`.
 `push_named_typed::<T>` compares `TypeId`s before pushing, so a mismatch is
 `NamedRouteError::ResultType` with the stack unmutated. Flutter re-types through an unchecked
 `as Route<T?>?` cast; a panic was rejected because a route name is caller input

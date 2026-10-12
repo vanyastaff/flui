@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-07-08
+- **Amended:** 2026-10-11 — the implemented between-pass boundary uses `PipelineCell` checkout, not the former shared pipeline lock; fixpoint semantics remain unchanged.
 - **Revised:** 2026-09-26 (a LayoutCallbackScope spike; the decision stands)
 - **Amended:** 2026-09-30 — the R1/R2 landing conditions no longer ask for `## Mapping decisions` entries; FLUI records no divergence from Flutter as such ([`AGENTS.md`](../../AGENTS.md) Design stance). The decision is unchanged.
 - **Related:** ADR-0003 (lazy slivers use the same fixpoint)
@@ -27,10 +28,10 @@ mutation is safe only by convention: a debug flag and an assert, no aliasing gua
    `pipeline/owner/layout.rs`). Structural mutation mid-walk is an aliasing violation, which is why
    the arena exposes sinks (`take_pending_child_requests`, `take_pending_retain_bands`) drained
    after the walk.
-2. **The `PipelineOwner` is not reachable through its lock during a frame.** The binding takes the
-   owner out of its `Arc<RwLock<…>>` under the write guard for the frame. Mounting render objects
-   needs the owner; a build re-entered from inside `run_layout` would deadlock on the guard or
-   mutate an empty defaulted owner.
+2. **The `PipelineOwner` is checked out during a layout pass.** Mounting render objects
+   needs the same owner through its `PipelineCell`. A build re-entered from inside
+   `run_layout` would violate that checkout boundary. The cell must be free before
+   builder servicing can mount or reconcile children.
 
 `BuildOwner::build_scope` also asserts `!self.building`, so a mid-pass build would trip an existing
 reentrancy guard.
@@ -44,7 +45,7 @@ when it ran.
 **Move the reentrancy boundary out of the layout walk and into the gap between layout passes, and
 let the binding drive a bounded layout↔build fixpoint.** `PipelineOwner<Layout>::run_layout` can be
 re-driven while the owner stays in the `Layout` phase, so the binding — the one place holding
-`&mut ElementTree`, `&mut BuildOwner` and the shared pipeline lock — interleaves layout passes with
+`&mut ElementTree`, `&mut BuildOwner` and the owner-local pipeline cell — interleaves layout passes with
 builder servicing, then runs the rest of the frame on a settled tree.
 
 Observable semantics are Flutter's: the builder receives the real incoming constraints, and its
@@ -61,35 +62,33 @@ differ from the last committed ones — the analogue of Flutter's
 `_previousConstraints == constraints && !_needsBuild` skip. Because the cell is shared with the
 element, no `flui-rendering` change is needed.
 
-### 2. The boundary: between `run_layout` calls, with the owner threaded by lock
+### 2. The boundary: between `run_layout` calls, with the pipeline checkout closed
 
 `BuildOwner::service_layout_builders` runs between passes, where the arena is dropped, the pipeline
-write lock is **released**, and `building == false` — the only point where all three hazards are
-structurally absent.
+checkout is **closed**, and no enclosing build is active. Each service pass can then
+reconcile the prepared build targets through the ordinary owner path.
 
-The owner is threaded **by lock, not by value**. `build_scope` mounts render objects, and an element
-reaches the `PipelineOwner` through the `Arc<RwLock<…>>` it carries, not through any value the
-binding holds. Building while the frame still holds the write guard would self-deadlock
-(`parking_lot`'s `RwLock` is not reentrant) the moment a builder mounts a child. So each pass, in
-`run_frame_with_layout_builders`:
+The owner is threaded **through `PipelineCell`**. An element reaches the same cell when
+mounting render objects. Building inside a `with_mut` checkout would reenter that cell
+the moment a builder mounts a child. Each pass in `run_frame_with_layout_builders`
+therefore restores the idle pipeline before servicing builders:
 
 ```rust
 drive_fixpoint(|| {
-    {   // layout under the write lock…
-        let mut guard = pipeline.write();
-        let mut layout = std::mem::take(&mut *guard).into_layout();
+    pipeline.with_mut(|pipeline_owner| {
+        pipeline_owner.drain_pending_dirty();
+        let mut layout = pipeline_owner.take_idle().into_layout();
         let result = layout.run_layout();
-        *guard = layout.into_idle();   // restored on the error path too
-        result?;
-    }   // …guard dropped here
-    Ok(owner.service_layout_builders(tree, pipeline))  // builds with the lock free
+        *pipeline_owner = layout.into_idle(); // restored on the error path too
+        result
+    })?;
+    Ok(owner.service_layout_builders(tree, pipeline)) // builds with the cell free
 })
 ```
 
-`service_layout_builders` takes `&Arc<RwLock<PipelineOwner>>`, read-locks briefly for the liveness
-scan and write-locks briefly for the `mark_needs_layout` batch. A
-`debug_assert!(pipeline.try_read().is_some())` at its head turns a regression into a loud failure
-instead of a hang.
+`service_layout_builders` takes `&PipelineCell`, borrows briefly for the liveness
+scan and borrows mutably for pipeline marks, releasing those borrows before builds.
+Its `debug_assert!(pipeline.is_free())` rejects servicing with an active checkout.
 
 ### 3. Build never runs during layout
 
@@ -114,7 +113,7 @@ before the render object is disposed.
 ### 5. How constraints reach the builder
 
 Through the shared `LayoutConstraintsCell`. The builder is
-`Arc<dyn Fn(&dyn BuildContext, BoxConstraints) -> BoxedView + Send + Sync>`. The cell's `Mutex` is
+`Rc<dyn Fn(&dyn BuildContext, BoxConstraints) -> BoxedView>`. The constraints cell's `Mutex` is
 private; no lock appears in the public API.
 
 ### 6. Same-frame child replacement
@@ -294,8 +293,9 @@ Until then R1 and R2 are candidates only.
   capability, no arena surgery, layout hot path untouched. The unsafe mid-pass mutation is never
   introduced.
 - Up to a bounded number of layout passes per frame when constraints change; steady state is one.
-- `HeadlessBinding::pump_frame` and `AppBinding::draw_frame` must run the loop identically, so it
-  lives in one shared helper.
+- The runtime product frame and raw-owner headless frame use the same
+  `BuildOwner::run_frame_with_layout_builders` fixpoint helper. Their surrounding
+  owner-execution boundaries remain distinct (ADR-0083/0182).
 - `BuildOwner` carries a second registry.
 
 ## Rejected alternatives

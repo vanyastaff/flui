@@ -718,7 +718,7 @@ naturally use anyway (flui-widgets never touches cosmic-text/parley
 directly; only `flui-painting`'s `text_layout` module would). **This is
 not yet a green light to start the migration.** This spike measured
 shaping and layout only; it did not test glyph rasterization, and a
-prior, unrelated ADR ([ADR-0059](../adr/ADR-0059-flui-stays-on-cosmic-text.md),
+prior, unrelated ADR ([ADR-0059](https://github.com/vanyastaff/flui/blob/6af2cf426809dbf8a33bbb415e904f0bfdc847c4/docs/adr/ADR-0059-flui-stays-on-cosmic-text.md),
 Accepted) rejected exactly this migration once already, primarily on a
 rasterization/glyph-atlas cost that this spike's numbers do not, by
 themselves, resolve -- see "Reconciling with ADR-0059" in the attached
@@ -822,7 +822,7 @@ Decision section for pass/fail criteria on each of these):
    small init-RSS gap does not by itself rule out.
 
 A draft ADR is attached:
-[`docs/adr/ADR-0077-migrate-to-parley.md`](../adr/ADR-0077-migrate-to-parley.md)
+[the retired ADR-0077](https://github.com/vanyastaff/flui/blob/6af2cf426809dbf8a33bbb415e904f0bfdc847c4/docs/adr/ADR-0077-migrate-to-parley.md)
 (status: Proposed -- and, per the ADR itself, does not yet supersede
 ADR-0059 until the rasterization precondition above is met).
 

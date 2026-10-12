@@ -1,7 +1,8 @@
-# ADR-0069: A `keyDown:` produces one semantic event, and the input method is a route not a second producer
+# ADR-0069: Native text input has one editing route
 
 - **Status:** Accepted
 - **Date:** 2026-09-17
+- **Amended:** 2026-10-11 — the original one-event wording is scoped to text-editing authority, not a universal count of keyboard/composition observations. Native command delivery obligations remain.
 
 ## Context
 
@@ -10,9 +11,10 @@ implements. It builds on [ADR-0030](ADR-0030-platform-text-input-ime-capability.
 the text-input capability, the single-rect cursor area, and the caret hidden
 while `Preedit.cursor` is `None`.
 
-A key press on the macOS native backend reaches `FLUIContentView`'s `keyDown:`
-and is converted there, by `extract_key`, into exactly one `Key::Character`.
-That is the whole input path: one physical key, one semantic event.
+The original macOS native path converted `FLUIContentView`'s `keyDown:` directly
+through `extract_key`. Adding input-method interpretation to that existing text
+producer raised the duplicate-insertion problem below. This is not a claim that
+a physical key can generate only one keyboard/composition observation.
 
 Composition cannot be built on that path. AppKit's input method is a *protocol
 the view must implement*, and it is entered from only one place —
@@ -43,8 +45,7 @@ and the selector is attachment state.**
 
 `keyDown:` consults the view's text-input state:
 
-- **`ime_allowed == false`** — the default, and the state of every window in this
-  tree today — the existing conversion runs unchanged. Behaviour is byte-identical
+- **`ime_allowed == false`** — the unattached default — the existing conversion runs unchanged. Behaviour is byte-identical
   to the pre-ADR path; the conformance adds no regression surface.
 - **`ime_allowed == true`** — the event is handed to `interpretKeyEvents:` and
   `keyDown:` emits nothing itself. Characters arrive as `Preedit` / `Commit`;
@@ -54,14 +55,16 @@ and the selector is attachment state.**
 
 The invariant this buys, at protocol level:
 
-> **Per `keyDown:`, exactly one of a `Key`-family event or an `ImeEvent` is
-> produced — and which one depends only on whether a text input is attached, not
-> on which key was pressed.**
+> **Text insertion has one authority: the direct-conversion route or the attached
+> input-method route, selected by attachment. Native command keys still have
+> their explicit decline path; keyboard and composition observations do not
+> authorize a second text insertion.**
 
 It is stated at protocol level rather than only in a crate's mapping decisions
 because it is an input contract every backend owes, not a macOS implementation
-detail: the Windows backend's eventual `WM_IME_*` / `WM_CHAR` split faces the
-identical question and must record its own gate.
+detail: each native backend must record its own direct/text-method gate. The
+Win32 pull host now uses TSF under ADR-0135, while push backends use the ADR-0090
+projection. Neither mapping establishes universal DOM event cardinality.
 
 **The contract is not invented here — the reference implementation agrees, and
 states it in these terms.** `winit`'s `Window::set_ime_allowed` documentation
@@ -73,8 +76,9 @@ states it in these terms.** `winit`'s `Window::set_ime_allowed` documentation
 > `KeyboardInput` events for every keypress instead." … "IME is **not** allowed
 > by default."
 
-That is the mutual exclusion, gated on attachment, with the same default — the
-market's shape. FLUI's winit backend already inherits it by delegation
+That documents winit's attachment/preedit behavior; it does not specify a
+universal one-event count across native keyboard and composition protocols.
+FLUI's winit backend inherits its behavior by delegation
 (`WinitTextInput`); this ADR is what makes the *native* AppKit backend, which
 owns the pipeline instead of delegating it, obey the same rule rather than
 inventing a second one.
@@ -110,7 +114,7 @@ path.
 - **`ime_allowed` becomes load-bearing.** Enabling it changes what a character
   key produces. A widget that attaches a text input and still expects raw
   `Key::Character` events for the same press gets one or the other, never both —
-  which is the intended contract, and the reason attachment is owned by the
+  for text insertion, which is the intended routing contract and the reason attachment is owned by the
   framework-side capability rather than by a widget-local flag.
 - **Disabling mid-composition drops the composition; it does not commit it.**
   `set_ime_allowed(false)` while marked text is live clears the view's marked

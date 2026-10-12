@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-23
+- **Amended:** 2026-10-11 — the lifecycle example uses the single owner-local post-frame handle; geometry checks name the current trybuild suite.
 - **Amended:** 2026-09-26 — scanners over structured data return under four conditions; see
   §4 ([ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md)); an allowlist entry may also
   name the ADR that grants it for good ([ADR-0097](ADR-0097-no-process-global-state-gate.md)).
@@ -50,7 +51,6 @@ pub trait LifecycleContext: BuildContext {
     fn writer_source(&self) -> WriterSource;
     fn async_driver(&self) -> Option<AsyncDriver>;
     fn post_frame_handle(&self) -> Option<PostFrameHandle>;
-    fn local_post_frame_handle(&self) -> Option<LocalPostFrameHandle>;
     fn text_input_handle(&self) -> Option<TextInputHandle>;
     fn hit_test_handle(&self) -> Option<HitTestHandle>;
     fn keep_alive_lease(&self) -> KeepAliveLease;
@@ -86,7 +86,7 @@ method on `LifecycleContext`, never on `BuildContext`.
 | A lock guard alive through an `if let`/`match` arm | `clippy::significant_drop_in_scrutinee`, workspace-wide; the 33 existing sites bind the value with `let` first |
 | `todo!`/`unimplemented!`/`dbg!` in production | clippy `todo`/`unimplemented`/`dbg_macro` (already on) |
 | Printing from the foundation crates | clippy `print_stdout`/`print_stderr` in `flui-foundation`, `flui-macros` |
-| `From<f32>` on a unit wrapper | `compile_fail` doctests in `flui-geometry` (already present) |
+| Logical and device geometry cannot mix | trybuild fixtures in `crates/flui-painting/tests/compile_fail/`; the former `flui-geometry` unit-wrapper doctests are retired |
 | `async fn` on the frame path | the trait signatures are synchronous; an `async` impl does not match them |
 | Two ADRs sharing a number; a normal or build edge against the tier order (ADR-0081) | `cargo xtask workspace` |
 

@@ -54,8 +54,9 @@ These are done and verified; recorded here so the design below builds on them.
   cosmic-text's `no default font found` on iOS, where no system face is
   discoverable — is closed structurally: `flui-painting` now installs the
   embedded `Roboto-Regular` when host discovery finds no Latin-capable face
-  (ADR-0016's "lowest owner loads the baseline", completed; see that ADR's
-  2026-09-18 amendment). Verified end-to-end on an iOS-Simulator: the counter
+  (the historical ADR-0016 "lowest owner loads the baseline" rule, now retained by
+  [ADR-0092](../adr/ADR-0092-per-realm-text-over-parley.md) §2; its metadata links the
+  retired record). Verified end-to-end on an iOS-Simulator: the counter
   renders its first frame, and two consecutive worker edits each re-staged the
   dylib and reassembled the UI runtime with zero panics. Still Simulator-only: a
   production App Store build has no mutable dylib to load, so the worker field

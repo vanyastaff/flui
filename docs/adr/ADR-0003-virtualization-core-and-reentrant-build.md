@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-06-12
+- **Amended:** 2026-10-11 — implementation vocabulary uses the current `f64` extents; virtualization ownership and behavior are unchanged.
 - **Related:** ADR-0017 (the layout↔build fixpoint), ADR-0051 (anchor-stationary scroll correction)
 
 ## Context
@@ -36,7 +37,7 @@ Market survey:
 
 `flui_rendering::virtualization` owns windowing math only. Its public surface names no render,
 sliver or protocol type — `ScrollWindow`, `VisibleRange`, `AnchorCorrection`, `Extent`,
-`ItemExtent`, `Virtualizer` and plain `f32` extents — so it stays a general-purpose abstraction.
+`ItemExtent`, `Virtualizer` and plain `f64` extents — so it stays a general-purpose abstraction.
 The `SliverConstraints → ScrollWindow` adaptation lives in the consumer (`RenderSliverList` and
 `virtualized_band` in `flui-objects`), never inside the module; that also keeps the dependency
 acyclic should the module ever become its own crate.

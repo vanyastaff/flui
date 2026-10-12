@@ -2,6 +2,9 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-06
+- **Superseded-by:** [ADR-0200](ADR-0200-dynamics-derived-rest-velocity.md), decision 1's
+  no-speed interpretation and its corresponding consequence only; DPR ownership and release-time acquisition remain in force.
+- **Amended:** 2026-10-11 — the existing approved physics contract derives the speed criterion from dynamics.
 - **Related:** [ADR-0098](ADR-0098-owned-f64-geometry-values.md)
 
 ## Context
@@ -17,8 +20,10 @@ the tolerance type to `flui-animation`, and the consumer to `flui-widgets`.
 ## Decision
 
 1. `flui-animation` owns the conversion: `Tolerance::for_device_pixel_ratio(r)`
-   is a distance of half a device pixel (`0.5 / r` logical pixels) with no
-   velocity limit, and refuses a ratio that is not finite and positive.
+   is a distance of half a device pixel (`0.5 / r` logical pixels) with a
+   dynamics-derived speed criterion under ADR-0200, and refuses a ratio or
+   resulting distance that is not finite and positive. The original no-speed
+   interpretation is superseded.
 2. `flui-widgets` reads the ratio of the presentation the scrollable belongs to
    at release time (not at build time, so a window moved to another monitor is
    honoured), carries it in `ScrollMetrics::device_pixel_ratio`, and every
@@ -35,5 +40,5 @@ the tolerance type to `flui-animation`, and the consumer to `flui-widgets`.
   grows with density (pinned by `scroll_fling_rest_scales_with_device_pixel_ratio`).
 - Third-party physics receive the ratio in `ScrollMetrics` and should build
   their tolerance through the same conversion.
-- No other presentation value reaches the simulations: a velocity limit or a
-  frame-rate-dependent rest would need a new decision.
+- No other presentation value reaches the simulations. The dynamics-derived
+  speed criterion follows ADR-0200; a frame-rate-dependent rest would need a new decision.

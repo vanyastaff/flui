@@ -24,6 +24,7 @@
   `unicode-segmentation` in any FLUI crate. The supersessions below have taken effect and their
   back-links are written.
 - **Date:** 2026-09-25
+- **Amended:** 2026-10-11 — retired font-stack records retain immutable history links; their surviving clauses are owned here. Current per-painter atlas ownership is distinguished from proposed threaded raster placement.
 - **Superseded-by:** ADR-0114 for §10 step 4b's direction-only line alignment; other decisions remain in force.
 - **Superseded-by:** [ADR-0122](ADR-0122-validated-glyph-image.md) for §5's
   `GlyphImage` representation and admission only; the raster trait, font identity,
@@ -45,10 +46,10 @@
   host feed runs off the owner thread and registers one file at a time; §3, §7, gate 6 and
   Context rewritten for it); 2026-09-30 (§10 step 6c: the editor's boundaries are ICU4X's, §6
   accepted, and the record Accepted)
-- **Supersedes:** [ADR-0077](ADR-0077-migrate-to-parley.md) (absorbed: its direction, its
+- **Supersedes:** [ADR-0077](https://github.com/vanyastaff/flui/blob/6af2cf426809dbf8a33bbb415e904f0bfdc847c4/docs/adr/ADR-0077-migrate-to-parley.md) (absorbed: its direction, its
   preconditions and its "If later Rejected" branch are carried here)
-- **Supersedes:** [ADR-0016](ADR-0016-unified-font-system-registration.md),
-  [ADR-0059](ADR-0059-flui-stays-on-cosmic-text.md)
+- **Supersedes:** [ADR-0016](https://github.com/vanyastaff/flui/blob/6af2cf426809dbf8a33bbb415e904f0bfdc847c4/docs/adr/ADR-0016-unified-font-system-registration.md),
+  [ADR-0059](https://github.com/vanyastaff/flui/blob/6af2cf426809dbf8a33bbb415e904f0bfdc847c4/docs/adr/ADR-0059-flui-stays-on-cosmic-text.md)
 - **Amends:** [ADR-0065](ADR-0065-painting-owns-shaping-text-crosses-the-display-list-shaped.md)
   (Part 1: the process-wide font doors become a per-UI runtime context; Part 2: the `Paragraph`
   payload), [ADR-0066](ADR-0066-display-list-command-representation.md) (`DrawOp::Paragraph`),
@@ -98,7 +99,7 @@ numbers below are of that tree; §10 step 6a removed `text_layout/layout.rs`).
   `unicode-script` (`crates/flui-painting/Cargo.toml:40`). Editor boundaries and shaper
   boundaries can disagree.
 
-[ADR-0077](ADR-0077-migrate-to-parley.md) proposed moving to Parley on the strength of a spike
+[ADR-0077](https://github.com/vanyastaff/flui/blob/6af2cf426809dbf8a33bbb415e904f0bfdc847c4/docs/adr/ADR-0077-migrate-to-parley.md) proposed moving to Parley on the strength of a spike
 (`tools/text-spike`, `parley = "=0.11.1"` at
 [`tools/text-spike/Cargo.toml:23`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/tools/text-spike/Cargo.toml#L23))
 that measured
@@ -272,10 +273,19 @@ devanagari 10,000-line case.
 
 `flui-painting` moves from cosmic-text to Parley. Each `RenderParagraph` shapes its own `Layout`;
 a multi-paragraph buffer is never one `Layout` (ADR-0077's quadratic `Item`-boundary finding).
-FLUI's own family resolution ([ADR-0059](ADR-0059-flui-stays-on-cosmic-text.md)) carries over:
-a style's family is resolved by FLUI's policy before shaping, whatever the shaper's fallback does.
+FLUI owns family resolution under §7: a style's family is resolved by FLUI's
+policy before shaping, whatever the shaper's fallback does. The former cosmic-text
+dependency choice is retired; the family rule remains a current requirement here.
 
 ### 2. One shared font collection, handed down explicitly
+
+Measurement, painting and caret geometry use one registered font source. The
+collection owns face admission; shaped runs carry the exact faces used for
+measurement to rasterization. Keeping separate measure/paint databases synchronized
+is not an alternative implementation of this ownership contract. Baseline bundled
+faces and optional host discovery feed that same collection, not a second ambient
+font system. This preserves the registration and face-agreement rules of retired
+ADR-0016 while replacing its process-wide `SharedFontSystem`.
 
 The application owns one fontique `Collection` with `shared: true`, wrapped as
 `flui_painting::FontCollection`. Faces are only ever added, never removed or changed: the handle
@@ -374,9 +384,11 @@ and would rebuild hinting state per glyph. The atlas feeds each run's face to th
 it owns before placing the run's glyphs (`GlyphAtlas::rasterizer_mut`,
 `FontRegistry::prepare_run`), from §4's blob handle.
 
-The rasterizer is owned by the raster side and runs outside shaping; the atlas belongs to the
-`GpuContext` and is single-owned on the raster thread
-([ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md)). One shaper everywhere;
+The rasterizer is owned by the raster side and runs outside shaping. The current
+`WgpuPainter` owns its own atlas and rasterizer. Moving atlas ownership to a shared
+`GpuContext` on a raster thread remains the separate proposal
+[ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md); it is not
+proof of current threaded production execution. One shaper everywhere;
 only the rasterizer and hinting may differ per platform.
 
 glifo is not adopted for now: it is slower (Context), marked experimental, hints vertically only,
@@ -407,7 +419,7 @@ host's shared engine services; UI runtimes only clone it.
 
 Measurement and paint read one layout, so one set of rules picks a face:
 
-- **one family rule**: `resolve_family_name` (ADR-0059's rule) resolves a style against the
+- **one family rule**: `resolve_family_name` (the rule retained from retired ADR-0059) resolves a style against the
   families the collection holds, and Parley is handed that one family, with nothing after it. A
   family is held only when spelled exactly as the fonts name it, as fontdb matches names, so the
   rule narrows fontique's case-insensitive lookup to that question;
@@ -872,16 +884,20 @@ that wires what it adds.
 - `pub use cosmic_text::fontdb::Family` left at §10 step 5, when no public signature named it
   any more: one fewer upstream type on a public path
   ([ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md)).
-- The engine names no shaper crate; its glyph atlas moves from each painter to the `GpuContext`.
+- The engine names no shaper crate. Its current glyph atlas is painter-owned;
+  shared `GpuContext`/threaded placement remains ADR-0091's separate proposal.
 - The editor's segmentation changed data source at §10 step 6c: its grapheme steps and word
   jumps walk ICU4X's boundaries, the ones hit-testing snaps to. No editor test moved; where
   `unicode-segmentation` and ICU4X would disagree, the editor now follows the painter.
 - **Every gate is met (§8), so the fallback this record kept no longer applies:** cosmic-text
   staying the shaper, with ADR-0016 and ADR-0059 in force and §§2–5 re-scoped over it. cosmic-text
   is gone (§10 step 6a).
-- **Back-links, written at §10 step 6a.** ADR-0077, ADR-0016 and ADR-0059 name this record as
-  superseding them, in their Status lines and a `Superseded by` line; ADR-0065, ADR-0066 and
-  ADR-0067 carry an `Amended by` line naming it.
+- **Retired predecessors.** ADR-0077, ADR-0016 and ADR-0059 were fully superseded at
+  §10 step 6a and are now available through the immutable links in this record's metadata.
+  Their live authorities are §1's shaping choice, §2's registration/face agreement,
+  §7's family resolution and §8's carried acceptance gates. The independent historical
+  spike methods/results remain in [the text-stack research](../research/text-stack-2026.md).
+  ADR-0065, ADR-0066 and ADR-0067 retain their scoped `Amended by` links to this record.
 
 ## Verification
 

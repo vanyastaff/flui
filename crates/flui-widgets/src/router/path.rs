@@ -5,7 +5,7 @@ use std::fmt;
 
 use percent_encoding::{AsciiSet, CONTROLS, percent_decode_str, utf8_percent_encode};
 
-/// Bytes a route segment percent-encodes: the WHATWG URL path set
+/// Bytes a route segment percent-encodes: FLUI's route-path escaping set,
 /// (C0 controls, space, `"`, `#`, `<`, `>`, `?`, `` ` ``, `{`, `}`), plus
 /// `/` and `%` to preserve segment boundaries and escapes, and `\`, which
 /// special URL schemes read as a separator. Non-ASCII bytes are encoded too.

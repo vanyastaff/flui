@@ -392,8 +392,10 @@ impl Vsync {
     /// Nest `child` under this registry: [`tick_all`](Self::tick_all) forwards
     /// to it — unless this registry is [`muted`](Self::set_muted).
     ///
-    /// A registry has at most one live parent. Failure changes neither edge nor
-    /// registration identity; detach the existing seat before moving a child.
+    /// A registry has at most one live parent. A returned admission refusal
+    /// changes neither edge nor registration identity; detach the existing
+    /// seat before moving a child. A wake panic after admission withdraws the
+    /// new edge under recovery, rather than undoing every callout effect.
     /// A released parent does not prevent a surviving child from attaching again.
     ///
     /// # Errors

@@ -20,9 +20,9 @@ type CounterBuildFn = fn(WorkerBuildEnv<'_>, &CounterAppState, &CounterApp) -> B
 #[expect(unsafe_code)]
 fn get_counter_build() -> CounterBuildFn {
     // `None` is now a clean "worker unavailable" signal (the registry is
-    // pruned before an image unmaps, and a layout-fingerprint change after a
+    // withdrawn while admitted images remain mapped, and a layout-fingerprint change after a
     // reload registers under a different key), so this panic is a loud but
-    // safe failure — never a jump into unmapped code.
+    // safe failure. Admitted image lifetime is independent of registration (ADR-0111).
     let ptr = flui_hot_reload::get_worker_build_ptr(TYPE_FINGERPRINT).expect(
         "counter worker unavailable — build the logic crate, set \
          FLUI_WORKER_PLUGIN, and restart the host if the shared types layout \

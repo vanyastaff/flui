@@ -1,6 +1,6 @@
-//! Event Handling Demo Example (Phase 5: T062)
+//! Event Handling Demo Example
 //!
-//! Demonstrates W3C-standard event handling across platforms:
+//! Demonstrates FLUI's owned native event vocabulary and platform dispatch:
 //! - Mouse/pointer events (click, move, drag)
 //! - Keyboard events with modifiers
 //! - Window events (resize, focus, close)

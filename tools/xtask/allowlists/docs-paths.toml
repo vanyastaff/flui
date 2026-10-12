@@ -82,18 +82,6 @@ count = 1
 reason = "the decision's context names the layout the decision changed"
 
 [[allow]]
-path = "docs/adr/ADR-0044-driver-loop-hybrid.md"
-kind = "path"
-count = 2
-reason = "the decision's context names the layout the decision changed"
-
-[[allow]]
-path = "docs/adr/ADR-0077-migrate-to-parley.md"
-kind = "path"
-count = 2
-reason = "the decision's context names the layout the decision changed"
-
-[[allow]]
 path = "docs/adr/ADR-0078-rules-live-in-types-and-lints.md"
 kind = "path"
 count = 3
