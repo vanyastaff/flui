@@ -254,7 +254,7 @@ classification, with the command above as its census:
 | widgets `navigator/pop_scope.rs` | `on_pop_invoked` | event | no | not yet audited |
 | widgets `scroll/page_view.rs` | `on_page_changed` | event | no (was yes) | the controller listener records the page; delivered on the local post-frame lane |
 | widgets `scroll/refresh_indicator.rs` | `on_refresh` | event | no | not yet audited |
-| widgets `semantics/mod.rs` | 14: `on_tap`, `on_long_press`, `on_scroll_{left,right,up,down}`, `on_increase`, `on_decrease`, `on_show_on_screen`, `on_focus`, `on_blur`, `on_set_text`, `on_scroll_to_offset`, `on_action` | event | no (was yes) | the UI runtime's semantics-action drain, synchronously, through the node's `WriterSource` |
+| widgets `semantics/mod.rs` | 15: `on_click`, `on_show_context_menu`, `on_scroll_{left,right,up,down}`, `on_increment`, `on_decrement`, `on_scroll_into_view`, `on_focus`, `on_blur`, `on_set_value`, `on_set_numeric_value`, `on_set_scroll_offset`, `on_action` | event | no (was yes) | the UI runtime's semantics-action drain, synchronously, through the node's `WriterSource` |
 | widgets `text/editable_text.rs`, `text/text_field.rs` | `on_submitted` ×2 | event | no | not yet audited |
 | widgets `text/editable_text.rs`, `text/text_field.rs` | `on_changed` ×2 | event | no | the field's key handler, IME commit and clipboard actions, after a user edit |
 | widgets `navigator/local_history.rs` | `on_remove` | event | no | not yet audited |

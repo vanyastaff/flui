@@ -203,96 +203,78 @@ impl std::fmt::Display for SemanticsRole {
 }
 
 vocabulary! {
-    /// Actions that can be performed on a semantics node.
+    /// What assistive technology can ask of a semantics node.
     ///
-    /// These correspond to actions that assistive technologies can request,
-    /// such as screen readers activating a button. Each action is one bit, so a
-    /// node's supported actions travel as a `u64` mask.
+    /// The list follows `accesskit::Action` (ADR-0203), so every request a
+    /// platform adapter can deliver has a name here and every name has a
+    /// platform path. Each action is one bit, so a node's supported actions
+    /// travel as a `u64` mask.
+    ///
+    /// AccessKit's one `SetValue` carries a text or a number; FLUI keeps the
+    /// two as [`SetValue`](Self::SetValue) and
+    /// [`SetNumericValue`](Self::SetNumericValue), because which of them a
+    /// node accepts decides what it publishes (the value pattern it offers and
+    /// whether a range is writable).
     ///
     /// # Bit layout
     ///
-    /// `Tap` through `Focus` take `1 << 0` to `1 << 22`. Bits `1 << 23` to
-    /// `1 << 25` are kept as [`RESERVED_BITS`](Self::RESERVED_BITS) and no
-    /// action uses them. [`ScrollToOffset`](Self::ScrollToOffset) takes
-    /// `1 << 26`, and [`Expand`](Self::Expand), [`Collapse`](Self::Collapse)
-    /// and [`SetNumericValue`](Self::SetNumericValue) take `1 << 27` through
-    /// `1 << 29`.
+    /// Bits are dense from zero in declaration order: [`value`](Self::value)
+    /// is `1 << position`. No bit is reserved.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-    #[repr(u64)]
+    #[repr(u8)]
     pub enum SemanticsAction {
-        /// Tap action (like clicking a button).
-        Tap = 1 << 0 => "tap",
-        /// Long press action.
-        LongPress = 1 << 1 => "longPress",
-        /// Scroll left action.
-        ScrollLeft = 1 << 2 => "scrollLeft",
-        /// Scroll right action.
-        ScrollRight = 1 << 3 => "scrollRight",
-        /// Scroll up action.
-        ScrollUp = 1 << 4 => "scrollUp",
-        /// Scroll down action.
-        ScrollDown = 1 << 5 => "scrollDown",
-        /// Increase action (for sliders, steppers).
-        Increase = 1 << 6 => "increase",
-        /// Decrease action (for sliders, steppers).
-        Decrease = 1 << 7 => "decrease",
-        /// Show on-screen keyboard.
-        ShowOnScreen = 1 << 8 => "showOnScreen",
-        /// Move cursor forward by character.
-        MoveCursorForwardByCharacter = 1 << 9 => "moveCursorForwardByCharacter",
-        /// Move cursor backward by character.
-        MoveCursorBackwardByCharacter = 1 << 10 => "moveCursorBackwardByCharacter",
-        /// Set selection in text field.
-        SetSelection = 1 << 11 => "setSelection",
-        /// Copy text.
-        Copy = 1 << 12 => "copy",
-        /// Cut text.
-        Cut = 1 << 13 => "cut",
-        /// Paste text.
-        Paste = 1 << 14 => "paste",
-        /// Did gain accessibility focus.
-        DidGainAccessibilityFocus = 1 << 15 => "didGainAccessibilityFocus",
-        /// Did lose accessibility focus.
-        DidLoseAccessibilityFocus = 1 << 16 => "didLoseAccessibilityFocus",
-        /// Custom action.
-        CustomAction = 1 << 17 => "customAction",
-        /// Dismiss action (for dialogs, drawers).
-        Dismiss = 1 << 18 => "dismiss",
-        /// Move cursor forward by word.
-        MoveCursorForwardByWord = 1 << 19 => "moveCursorForwardByWord",
-        /// Move cursor backward by word.
-        MoveCursorBackwardByWord = 1 << 20 => "moveCursorBackwardByWord",
-        /// Set text content.
-        SetText = 1 << 21 => "setText",
-        /// Focus action.
-        Focus = 1 << 22 => "focus",
-        /// Scroll to a specific offset.
-        ScrollToOffset = 1 << 26 => "scrollToOffset",
+        /// Activate the node: press a button, toggle a check box, follow a link.
+        Click => "click",
+        /// Give the node keyboard focus.
+        Focus => "focus",
+        /// Take keyboard focus away from the node.
+        Blur => "blur",
         /// Set an expandable control to its expanded state.
-        Expand = 1 << 27 => "expand",
+        Expand => "expand",
         /// Set an expandable control to its collapsed state.
-        Collapse = 1 << 28 => "collapse",
-        /// Set an exact numeric value within the control's admitted range.
-        SetNumericValue = 1 << 29 => "setNumericValue",
+        Collapse => "collapse",
+        /// Raise the value one step.
+        Increment => "increment",
+        /// Lower the value one step.
+        Decrement => "decrement",
+        /// Scroll the content up.
+        ScrollUp => "scrollUp",
+        /// Scroll the content down.
+        ScrollDown => "scrollDown",
+        /// Scroll the content left.
+        ScrollLeft => "scrollLeft",
+        /// Scroll the content right.
+        ScrollRight => "scrollRight",
+        /// Bring the node into view, scrolling whatever contains it.
+        ScrollIntoView => "scrollIntoView",
+        /// Scroll the node's content to an offset in its own coordinates.
+        SetScrollOffset => "setScrollOffset",
+        /// Select a range of the node's text.
+        SetTextSelection => "setTextSelection",
+        /// Replace the selected text.
+        ReplaceSelectedText => "replaceSelectedText",
+        /// Set the node's value to a text.
+        SetValue => "setValue",
+        /// Set an exact numeric value within the node's range.
+        SetNumericValue => "setNumericValue",
+        /// Open the node's context menu.
+        ShowContextMenu => "showContextMenu",
+        /// Show the node's tooltip.
+        ShowTooltip => "showTooltip",
+        /// Hide the node's tooltip.
+        HideTooltip => "hideTooltip",
+        /// Run one of the node's custom actions.
+        CustomAction => "customAction",
     }
 }
 
 impl SemanticsAction {
-    /// Bits no action may take: `1 << 23`, `1 << 24` and `1 << 25`, the slots
-    /// of FLUI's former `Unfocus`, `Expand` and `Collapse` actions.
-    ///
-    /// Platform accessibility bit layouts (`dart:ui`'s among them) assign
-    /// these three bits to other actions, so an action placed here would
-    /// collide with them. Discrete expand and collapse use distinct FLUI-owned
-    /// slots; un-focus belongs to the platform's focus management.
-    pub const RESERVED_BITS: u64 = (1 << 23) | (1 << 24) | (1 << 25);
-
-    /// Returns the bitmask value for this action (see the enum doc for the
-    /// bit layout).
+    /// Returns the bitmask value for this action: `1 << position`, its
+    /// position in [`Self::ALL`].
     #[inline]
     #[must_use]
     pub const fn value(self) -> u64 {
-        self as u64
+        1 << self as u8
     }
 
     /// Returns whether this action is a scroll action.
@@ -304,37 +286,29 @@ impl SemanticsAction {
                 | Self::ScrollRight
                 | Self::ScrollUp
                 | Self::ScrollDown
-                | Self::ScrollToOffset
+                | Self::ScrollIntoView
+                | Self::SetScrollOffset
         )
     }
 
-    /// Returns whether this action is a cursor movement action.
-    #[must_use]
-    pub const fn is_cursor_action(self) -> bool {
-        matches!(
-            self,
-            Self::MoveCursorForwardByCharacter
-                | Self::MoveCursorBackwardByCharacter
-                | Self::MoveCursorForwardByWord
-                | Self::MoveCursorBackwardByWord
-        )
-    }
-
-    /// Returns whether this action is a text editing action.
+    /// Returns whether this action edits or selects text.
     #[must_use]
     pub const fn is_text_action(self) -> bool {
         matches!(
             self,
-            Self::SetSelection | Self::SetText | Self::Copy | Self::Cut | Self::Paste
+            Self::SetTextSelection | Self::ReplaceSelectedText | Self::SetValue
         )
     }
 
-    /// Returns whether this action is a focus-related action.
+    /// Returns whether this action moves keyboard focus.
     #[must_use]
     pub const fn is_focus_action(self) -> bool {
-        matches!(
-            self,
-            Self::Focus | Self::DidGainAccessibilityFocus | Self::DidLoseAccessibilityFocus
-        )
+        matches!(self, Self::Focus | Self::Blur)
+    }
+}
+
+impl std::fmt::Display for SemanticsAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
     }
 }

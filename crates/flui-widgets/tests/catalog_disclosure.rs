@@ -12,7 +12,7 @@ use flui_painting::styling::Color;
 use flui_painting::typography::TextDirection;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::layer::Layer;
-use flui_rendering::semantics::{AccessibilityNodeId, SemanticsAction, SemanticsActionRequest};
+use flui_rendering::semantics::{AccessibilityNodeId, ActionCall, SemanticsActionRequest};
 use flui_testing::{Action, ActionRequest, NodeId, TreeId};
 use flui_view::{BuildContext, IntoView, StatelessView, View};
 use flui_widgets::{
@@ -234,8 +234,7 @@ pub(crate) fn disclosure_proposes_controlled_changes_and_retains_real_header_foc
         .with(|owner| {
             owner.resolve_semantics_action(SemanticsActionRequest {
                 node_id: AccessibilityNodeId::from_u64(id.0).expect("exported identity"),
-                action: SemanticsAction::Expand,
-                arguments: None,
+                call: ActionCall::Expand,
             })
         })
         .expect("collapsed header advertises Expand");
@@ -290,8 +289,7 @@ pub(crate) fn disclosure_proposes_controlled_changes_and_retains_real_header_foc
         .with(|owner| {
             owner.resolve_semantics_action(SemanticsActionRequest {
                 node_id: AccessibilityNodeId::from_u64(expanded_id.0).expect("exported identity"),
-                action: SemanticsAction::Collapse,
-                arguments: None,
+                call: ActionCall::Collapse,
             })
         })
         .expect("expanded header advertises Collapse");
@@ -461,8 +459,7 @@ pub(crate) fn disclosure_retained_expand_after_unmount_cannot_reach_a_new_contro
         .with(|owner| {
             owner.resolve_semantics_action(SemanticsActionRequest {
                 node_id: AccessibilityNodeId::from_u64(id.0).expect("exported identity"),
-                action: SemanticsAction::Expand,
-                arguments: None,
+                call: ActionCall::Expand,
             })
         })
         .expect("mounted header advertises Expand");

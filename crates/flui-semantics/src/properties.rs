@@ -266,12 +266,9 @@ pub fn concat_attributed_string(
 /// configuration into its parent **even when** the child has set
 /// `blocks_user_actions = true`.
 ///
-/// Accessibility-focus lifecycle notifications remain available because they
-/// are emitted by the accessibility system rather than pointer interaction.
-/// Pointer, scroll, text-editing, and custom actions are blocked.
-pub(crate) const UNBLOCKED_USER_ACTIONS_MASK: u64 = (SemanticsAction::DidGainAccessibilityFocus
-    as u64)
-    | (SemanticsAction::DidLoseAccessibilityFocus as u64);
+/// Giving up keyboard focus remains available: a blocked node can always be
+/// left. Activation, scrolling, text editing and custom actions are blocked.
+pub(crate) const UNBLOCKED_USER_ACTIONS_MASK: u64 = SemanticsAction::Blur.value();
 
 // ============================================================================
 // StringAttribute

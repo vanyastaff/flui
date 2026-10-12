@@ -263,7 +263,7 @@ For the accepted part:
   `the_role_fold_was_transcribed_from_the_locked_windows_adapter`,
   `generic_containers_are_lifted_and_hidden_subtrees_dropped`,
   `advertised_actions_follow_the_uia_patterns`, `disclosure_requests_follow_the_expanded_state`,
-  `set_value_reaches_set_text_with_its_text`, `a_disabled_node_refuses_with_disabled`,
+  `set_value_reaches_the_handler_with_its_payload`, `a_disabled_node_refuses_with_disabled`,
   `read_honours_max_depth_and_max_nodes_and_says_truncated` and
   `a_read_tree_round_trips_through_json`.
 - **The UI runtime half of §3.** `cargo nextest run -p flui-runtime agent_semantics`: a counter's

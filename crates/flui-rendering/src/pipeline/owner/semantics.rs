@@ -546,10 +546,10 @@ fn assembly_decisions(
             merge_into_ancestor: children_merge_into_ancestor,
             has_reveal_ancestor: context.has_reveal_ancestor
                 || (config.effective_actions_as_bits()
-                    & flui_semantics::SemanticsAction::ShowOnScreen.value()
+                    & flui_semantics::SemanticsAction::ScrollIntoView.value()
                     != 0
                     && config
-                        .action_handler(flui_semantics::SemanticsAction::ShowOnScreen)
+                        .action_handler(flui_semantics::SemanticsAction::ScrollIntoView)
                         .is_some()),
         },
     }

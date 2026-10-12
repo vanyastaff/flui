@@ -85,7 +85,7 @@ use flui_platform_api::{
     keyboard::Modifiers,
     pointer::{ScrollEvent, ScrollPrecision, ScrollUnit},
 };
-use flui_rendering::semantics::{ActionArgs, SemanticsAction};
+use flui_rendering::semantics::Reveal;
 use flui_scheduler::PostFrameHandle;
 
 use super::scroll_position_scope::ScrollPositionScope;
@@ -1319,12 +1319,12 @@ fn scroll_semantics(
         })
     };
     let reveal = Rc::clone(&move_to);
-    let semantics = semantics.on_action(SemanticsAction::ShowOnScreen, move |_cx, args| {
-        let Some(ActionArgs::ShowOnScreen {
+    let semantics = semantics.on_scroll_into_view(move |_cx, request| {
+        let Some(Reveal {
             target_rect,
             viewport_rect,
             scroll_position: Some(sampled_pixels),
-        }) = args
+        }) = request
         else {
             return;
         };
@@ -1374,8 +1374,8 @@ fn scroll_semantics(
     let decrease = Rc::clone(&step);
     let adjustment = adjustment
         .on_set_numeric_value(move |_cx, value| set(value))
-        .on_increase(move |_cx| increase(true))
-        .on_decrease(move |_cx| decrease(false));
+        .on_increment(move |_cx| increase(true))
+        .on_decrement(move |_cx| decrease(false));
     let forward = Rc::clone(&step);
     let semantics = match axis {
         Axis::Vertical => semantics

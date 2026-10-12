@@ -1122,7 +1122,7 @@ struct Badge { color: Color, #[view(child)] child: BoxedView }
 fn signup_rejects_bad_email(t: &mut WidgetTester) {
     t.mount(Signup);
     t.find(Query::text_field().label("Email")).type_text("nope");
-    t.find(Query::button().label("Sign up")).act(SemanticsAction::Tap);
+    t.find(Query::button().label("Sign up")).act(SemanticsAction::Click);
     t.expect(Query::text().label_contains("invalid email"));
     t.golden_semantics("signup_error");   // the outline format is the agent's reply format
 }

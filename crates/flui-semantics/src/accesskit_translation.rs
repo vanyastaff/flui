@@ -22,7 +22,7 @@
 
 use accesskit::{Affine, Node, NodeId, Rect, Role, TextDirection, TreeId, TreeInfo, TreeUpdate};
 
-use crate::action::SemanticsAction;
+use crate::action::{ActionCall, ActionDecodeError, SemanticsAction, TextSelection};
 use crate::attributes::SemanticsAttributes;
 use crate::identity::AccessibilityNodeId;
 use crate::node::SemanticsNode;
@@ -48,7 +48,7 @@ pub(crate) struct PublishView<'a> {
 /// Whether `bits` carries `action`.
 #[inline]
 fn has_action(bits: u64, action: SemanticsAction) -> bool {
-    bits & (action as u64) != 0
+    bits & action.value() != 0
 }
 
 /// The AccessKit role for one node.
@@ -247,93 +247,79 @@ fn apply_state(node: &mut Node, attrs: &SemanticsAttributes) {
 fn value_writable(data: &PublishView<'_>, role: Role) -> bool {
     let has_text_value = data.attrs.value.is_some() && role != Role::Label;
     let text_reaches = data.attrs.numeric_range.is_none() || has_text_value;
-    (text_reaches && has_action(data.actions, SemanticsAction::SetText))
+    (text_reaches && has_action(data.actions, SemanticsAction::SetValue))
         || (data.attrs.numeric_range.is_some()
             && has_action(data.actions, SemanticsAction::SetNumericValue))
 }
 
+/// The AccessKit action a FLUI action is advertised as, for the actions that
+/// publish one-to-one. The value writes and the disclosure transitions depend
+/// on the node's state and are decided in [`apply_actions`].
+const fn advertised_action(action: SemanticsAction) -> Option<accesskit::Action> {
+    Some(match action {
+        SemanticsAction::Click => accesskit::Action::Click,
+        SemanticsAction::Focus => accesskit::Action::Focus,
+        SemanticsAction::Blur => accesskit::Action::Blur,
+        SemanticsAction::Increment => accesskit::Action::Increment,
+        SemanticsAction::Decrement => accesskit::Action::Decrement,
+        SemanticsAction::ScrollUp => accesskit::Action::ScrollUp,
+        SemanticsAction::ScrollDown => accesskit::Action::ScrollDown,
+        SemanticsAction::ScrollLeft => accesskit::Action::ScrollLeft,
+        SemanticsAction::ScrollRight => accesskit::Action::ScrollRight,
+        SemanticsAction::ScrollIntoView => accesskit::Action::ScrollIntoView,
+        SemanticsAction::SetScrollOffset => accesskit::Action::SetScrollOffset,
+        SemanticsAction::SetTextSelection => accesskit::Action::SetTextSelection,
+        SemanticsAction::ReplaceSelectedText => accesskit::Action::ReplaceSelectedText,
+        SemanticsAction::ShowContextMenu => accesskit::Action::ShowContextMenu,
+        SemanticsAction::ShowTooltip => accesskit::Action::ShowTooltip,
+        SemanticsAction::HideTooltip => accesskit::Action::HideTooltip,
+        SemanticsAction::CustomAction => accesskit::Action::CustomAction,
+        _ => return None,
+    })
+}
+
 /// Translate the supported actions onto the AccessKit node.
 ///
-/// Several FLUI actions have no AccessKit counterpart and are intentionally not
-/// emitted: the character- and word-wise cursor moves, and `Copy`/`Cut`/`Paste`
-/// (AccessKit expects those to reach the app through the platform's own text
-/// interface, not as tree actions). `Dismiss` likewise has no equivalent. They
-/// are dropped rather than approximated, so nothing claims support it lacks.
+/// Every FLUI action has an AccessKit counterpart (ADR-0203). Most publish
+/// one-to-one ([`advertised_action`]); two depend on the node's state:
 ///
-/// A node with an expanded state advertises only the one transition its state
-/// allows: `Expand` while collapsed, `Collapse` while expanded. It advertises
-/// that transition when it registers the matching discrete action, or, when it
-/// registers neither discrete action, when it has a tap handler; the owner
-/// then routes the request to that handler
-/// ([`tap_disclosure_transition`](crate::action::tap_disclosure_transition)).
-/// AccessKit does not count a node with an expanded state as invocable
-/// (`accesskit_consumer` 0.39, `Node::is_invocable`), so without this a
-/// tap-only expandable node could be neither invoked nor expanded.
+/// - `SetValue` is advertised when some write the platform can send has a
+///   handler ([`value_writable`]): a string reaches the text handler and a
+///   number the numeric one.
+/// - A node with an expanded state advertises only the one transition its
+///   state allows: `Expand` while collapsed, `Collapse` while expanded. It
+///   advertises that transition when it registers the matching discrete
+///   action, or, when it registers neither discrete action, when it has a
+///   click handler; the owner then routes the request to that handler
+///   ([`tap_disclosure_transition`](crate::action::tap_disclosure_transition)).
+///   AccessKit does not count a node with an expanded state as invocable
+///   (`accesskit_consumer` 0.39, `Node::is_invocable`), so without this a
+///   click-only expandable node could be neither invoked nor expanded.
 fn apply_actions(node: &mut Node, actions: u64, expanded: Option<bool>, value_writable: bool) {
-    if has_action(actions, SemanticsAction::Tap) {
-        node.add_action(accesskit::Action::Click);
+    for &action in SemanticsAction::ALL {
+        if has_action(actions, action)
+            && let Some(advertised) = advertised_action(action)
+        {
+            node.add_action(advertised);
+        }
     }
     if let Some(expanded) = expanded {
+        let transition = if expanded {
+            SemanticsAction::Collapse
+        } else {
+            SemanticsAction::Expand
+        };
         let fallback = crate::action::tap_disclosure_transition(actions, Some(expanded));
-        if !expanded
-            && (has_action(actions, SemanticsAction::Expand)
-                || fallback == Some(SemanticsAction::Expand))
-        {
-            node.add_action(accesskit::Action::Expand);
-        }
-        if expanded
-            && (has_action(actions, SemanticsAction::Collapse)
-                || fallback == Some(SemanticsAction::Collapse))
-        {
-            node.add_action(accesskit::Action::Collapse);
+        if has_action(actions, transition) || fallback == Some(transition) {
+            node.add_action(if expanded {
+                accesskit::Action::Collapse
+            } else {
+                accesskit::Action::Expand
+            });
         }
     }
-    if has_action(actions, SemanticsAction::LongPress) {
-        node.add_action(accesskit::Action::ShowContextMenu);
-    }
-    if has_action(actions, SemanticsAction::ScrollLeft) {
-        node.add_action(accesskit::Action::ScrollLeft);
-    }
-    if has_action(actions, SemanticsAction::ScrollRight) {
-        node.add_action(accesskit::Action::ScrollRight);
-    }
-    if has_action(actions, SemanticsAction::ScrollUp) {
-        node.add_action(accesskit::Action::ScrollUp);
-    }
-    if has_action(actions, SemanticsAction::ScrollDown) {
-        node.add_action(accesskit::Action::ScrollDown);
-    }
-    if has_action(actions, SemanticsAction::Increase) {
-        node.add_action(accesskit::Action::Increment);
-    }
-    if has_action(actions, SemanticsAction::Decrease) {
-        node.add_action(accesskit::Action::Decrement);
-    }
-    if has_action(actions, SemanticsAction::ShowOnScreen) {
-        node.add_action(accesskit::Action::ScrollIntoView);
-    }
-    if has_action(actions, SemanticsAction::SetSelection) {
-        node.add_action(accesskit::Action::SetTextSelection);
-    }
-    // A string write reaches the text handler and a number the numeric one;
-    // `value_writable` decides whether any write the platform can send here
-    // has a handler (the owner refuses a number without a range to check it).
     if value_writable {
         node.add_action(accesskit::Action::SetValue);
-    }
-    if has_action(actions, SemanticsAction::ScrollToOffset) {
-        node.add_action(accesskit::Action::SetScrollOffset);
-    }
-    if has_action(actions, SemanticsAction::Focus)
-        || has_action(actions, SemanticsAction::DidGainAccessibilityFocus)
-    {
-        node.add_action(accesskit::Action::Focus);
-    }
-    if has_action(actions, SemanticsAction::DidLoseAccessibilityFocus) {
-        node.add_action(accesskit::Action::Blur);
-    }
-    if has_action(actions, SemanticsAction::CustomAction) {
-        node.add_action(accesskit::Action::CustomAction);
     }
 }
 
@@ -343,24 +329,12 @@ fn apply_actions(node: &mut Node, actions: u64, expanded: Option<bool>, value_wr
 /// agreement, because an action advertised outbound but unroutable inbound is
 /// a control assistive technology can see and press but that does nothing.
 ///
-/// `None` for actions FLUI has no counterpart for (never emitted outbound, so
-/// nothing advertised them); the caller drops the request with a trace.
-///
-/// Two deliberate focus asymmetries against the outbound table:
-///
-/// - `Focus` maps to [`SemanticsAction::Focus`] only. Outbound, a node
-///   registering only the legacy `DidGainAccessibilityFocus` *notification*
-///   also advertises `Focus`, but the platform's focus request is dispatched
-///   as the `focus` action itself — the legacy handler is a notification
-///   hook, not the action's implementation.
-/// - `Blur` maps to `DidLoseAccessibilityFocus`, which IS the notification,
-///   because that is the only vocabulary FLUI has for it.
-///
-/// `Expand` and `Collapse` map to the discrete actions. A tap-only expandable
-/// node still receives the transition its state allows through its tap
-/// handler, which the owner resolves at dispatch. `SetValue` defaults to text
-/// when only its action is known; [`semantics_action_request_for`] also
-/// examines its payload to route numeric values distinctly.
+/// `SetValue` maps to the text write when only the action is known;
+/// [`semantics_action_request_for`] reads the payload and routes a number to
+/// `SetNumericValue`. `None` for the two AccessKit actions FLUI does not route:
+/// `ScrollToPoint`, whose point is in window pixels the semantics layer
+/// cannot convert, and `SetSequentialFocusNavigationStartingPoint`, which
+/// belongs to focus management rather than to a node.
 ///
 /// The match names every AccessKit action, with no wildcard arm:
 /// `accesskit::Action` is not `#[non_exhaustive]`, so an upstream release that
@@ -368,105 +342,91 @@ fn apply_actions(node: &mut Node, actions: u64, expanded: Option<bool>, value_wr
 /// (ADR-0089 §3).
 #[must_use]
 pub fn semantics_action_for(action: accesskit::Action) -> Option<SemanticsAction> {
-    match action {
-        accesskit::Action::Click => Some(SemanticsAction::Tap),
-        accesskit::Action::Expand => Some(SemanticsAction::Expand),
-        accesskit::Action::Collapse => Some(SemanticsAction::Collapse),
-        accesskit::Action::ShowContextMenu => Some(SemanticsAction::LongPress),
-        accesskit::Action::ScrollLeft => Some(SemanticsAction::ScrollLeft),
-        accesskit::Action::ScrollRight => Some(SemanticsAction::ScrollRight),
-        accesskit::Action::ScrollUp => Some(SemanticsAction::ScrollUp),
-        accesskit::Action::ScrollDown => Some(SemanticsAction::ScrollDown),
-        accesskit::Action::Increment => Some(SemanticsAction::Increase),
-        accesskit::Action::Decrement => Some(SemanticsAction::Decrease),
-        accesskit::Action::ScrollIntoView => Some(SemanticsAction::ShowOnScreen),
-        accesskit::Action::SetTextSelection => Some(SemanticsAction::SetSelection),
-        accesskit::Action::SetValue => Some(SemanticsAction::SetText),
-        accesskit::Action::SetScrollOffset => Some(SemanticsAction::ScrollToOffset),
-        accesskit::Action::Focus => Some(SemanticsAction::Focus),
-        accesskit::Action::Blur => Some(SemanticsAction::DidLoseAccessibilityFocus),
-        accesskit::Action::CustomAction => Some(SemanticsAction::CustomAction),
-        accesskit::Action::HideTooltip
-        | accesskit::Action::ShowTooltip
-        | accesskit::Action::ReplaceSelectedText
-        | accesskit::Action::ScrollToPoint
-        | accesskit::Action::SetSequentialFocusNavigationStartingPoint => None,
-    }
+    Some(match action {
+        accesskit::Action::Click => SemanticsAction::Click,
+        accesskit::Action::Focus => SemanticsAction::Focus,
+        accesskit::Action::Blur => SemanticsAction::Blur,
+        accesskit::Action::Expand => SemanticsAction::Expand,
+        accesskit::Action::Collapse => SemanticsAction::Collapse,
+        accesskit::Action::Increment => SemanticsAction::Increment,
+        accesskit::Action::Decrement => SemanticsAction::Decrement,
+        accesskit::Action::ScrollUp => SemanticsAction::ScrollUp,
+        accesskit::Action::ScrollDown => SemanticsAction::ScrollDown,
+        accesskit::Action::ScrollLeft => SemanticsAction::ScrollLeft,
+        accesskit::Action::ScrollRight => SemanticsAction::ScrollRight,
+        accesskit::Action::ScrollIntoView => SemanticsAction::ScrollIntoView,
+        accesskit::Action::SetScrollOffset => SemanticsAction::SetScrollOffset,
+        accesskit::Action::SetTextSelection => SemanticsAction::SetTextSelection,
+        accesskit::Action::ReplaceSelectedText => SemanticsAction::ReplaceSelectedText,
+        accesskit::Action::SetValue => SemanticsAction::SetValue,
+        accesskit::Action::ShowContextMenu => SemanticsAction::ShowContextMenu,
+        accesskit::Action::ShowTooltip => SemanticsAction::ShowTooltip,
+        accesskit::Action::HideTooltip => SemanticsAction::HideTooltip,
+        accesskit::Action::CustomAction => SemanticsAction::CustomAction,
+        accesskit::Action::ScrollToPoint
+        | accesskit::Action::SetSequentialFocusNavigationStartingPoint => return None,
+    })
 }
 
-/// Translate an inbound AccessKit action payload into the FLUI argument space.
+/// Decode a platform request into the call its handler receives.
 ///
-/// The payload companion to [`semantics_action_for`] — keep the two adjacent,
-/// because a payload that silently fails to cross this seam turns a
-/// screen-reader edit into a no-op with no diagnostic.
+/// The payload must fit the action: a text for `SetValue` and
+/// `ReplaceSelectedText`, a number for a numeric `SetValue`, a point for
+/// `SetScrollOffset`, a selection within the target node for
+/// `SetTextSelection` (FLUI publishes no text runs yet, so a selection whose
+/// ends lie on another node has no meaning here), an id for `CustomAction`.
+/// The scroll hints AccessKit attaches to scrolling (`ScrollUnit`,
+/// `ScrollHint`) are optional and ignored; any other payload on an action
+/// that takes none is refused. Validity against the current node (a number
+/// inside the range) is the owner's check at dispatch.
 ///
-/// `target` is the node the enclosing request addresses: a text selection
-/// whose positions live on a *different* node (AccessKit expresses
-/// cross-run selections; FLUI's `SetSelection` is offsets within one node)
-/// is unroutable and returns `None`, as does any payload kind FLUI has no
-/// argument shape for (`ScrollUnit`, `ScrollHint`,
-/// `ScrollToPoint`). The caller routes the action WITHOUT arguments and
-/// traces the drop — the action itself is still meaningful argument-free
-/// for some handlers, and swallowing the whole request would turn a lossy
-/// payload into a dead control.
-#[must_use]
-pub fn semantics_action_args_for(
-    data: &accesskit::ActionData,
-    target: NodeId,
-) -> Option<crate::ActionArgs> {
-    match data {
-        accesskit::ActionData::Value(text) => Some(crate::ActionArgs::SetText {
-            text: text.to_string(),
-        }),
-        accesskit::ActionData::CustomAction(action_id) => Some(crate::ActionArgs::CustomAction {
-            action_id: *action_id,
-        }),
-        accesskit::ActionData::SetScrollOffset(point) => Some(crate::ActionArgs::ScrollToOffset {
-            x: point.x,
-            y: point.y,
-        }),
-        accesskit::ActionData::SetTextSelection(selection) => {
-            if selection.anchor.node != target || selection.focus.node != target {
-                return None;
-            }
-            let base = i32::try_from(selection.anchor.character_index).ok()?;
-            let extent = i32::try_from(selection.focus.character_index).ok()?;
-            Some(crate::ActionArgs::SetSelection { base, extent })
-        }
-        accesskit::ActionData::NumericValue(value) => {
-            Some(crate::ActionArgs::SetNumericValue { value: *value })
-        }
-        accesskit::ActionData::ScrollUnit(_)
-        | accesskit::ActionData::ScrollHint(_)
-        | accesskit::ActionData::ScrollToPoint(_) => None,
-    }
-}
-
-/// Translates an entire platform request without discarding numeric payloads.
+/// # Errors
 ///
-/// Payload validity is checked by the owner against the current node before
-/// invoking its handler. Unroutable platform actions return `None`.
-#[must_use]
+/// [`ActionDecodeError`] names the target, action or payload that did not fit.
 pub fn semantics_action_request_for(
     request: &accesskit::ActionRequest,
-) -> Option<crate::SemanticsActionRequest> {
-    let node_id = crate::AccessibilityNodeId::from_u64(request.target_node.0)?;
-    let action = if request.action == accesskit::Action::SetValue
-        && matches!(request.data, Some(accesskit::ActionData::NumericValue(_)))
-    {
-        SemanticsAction::SetNumericValue
-    } else {
-        semantics_action_for(request.action)?
+) -> Result<crate::SemanticsActionRequest, ActionDecodeError> {
+    use accesskit::ActionData;
+
+    let node_id = crate::AccessibilityNodeId::from_u64(request.target_node.0)
+        .ok_or(ActionDecodeError::UnknownTarget(request.target_node))?;
+    let action =
+        semantics_action_for(request.action).ok_or(ActionDecodeError::Unrouted(request.action))?;
+    let mismatched = ActionDecodeError::MismatchedPayload { action };
+    let call = match (action, &request.data) {
+        (SemanticsAction::SetValue, Some(ActionData::Value(text))) => {
+            ActionCall::SetValue(text.to_string())
+        }
+        (SemanticsAction::SetValue, Some(ActionData::NumericValue(value))) => {
+            ActionCall::SetNumericValue(*value)
+        }
+        (SemanticsAction::ReplaceSelectedText, Some(ActionData::Value(text))) => {
+            ActionCall::ReplaceSelectedText(text.to_string())
+        }
+        (SemanticsAction::SetScrollOffset, Some(ActionData::SetScrollOffset(point))) => {
+            ActionCall::SetScrollOffset(flui_foundation::geometry::Offset::new(point.x, point.y))
+        }
+        (SemanticsAction::SetTextSelection, Some(ActionData::SetTextSelection(selection))) => {
+            if selection.anchor.node != request.target_node
+                || selection.focus.node != request.target_node
+            {
+                return Err(mismatched);
+            }
+            ActionCall::SetTextSelection(TextSelection {
+                anchor: selection.anchor.character_index,
+                focus: selection.focus.character_index,
+            })
+        }
+        (SemanticsAction::CustomAction, Some(ActionData::CustomAction(id))) => {
+            ActionCall::CustomAction(*id)
+        }
+        (_, None | Some(ActionData::ScrollUnit(_) | ActionData::ScrollHint(_))) => {
+            ActionCall::without_payload(action)
+                .ok_or(ActionDecodeError::MissingPayload { action })?
+        }
+        (_, Some(_)) => return Err(mismatched),
     };
-    let arguments = request
-        .data
-        .as_ref()
-        .and_then(|data| semantics_action_args_for(data, request.target_node));
-    Some(crate::SemanticsActionRequest {
-        node_id,
-        action,
-        arguments,
-    })
+    Ok(crate::SemanticsActionRequest::new(node_id, call))
 }
 
 /// Translate one FLUI semantics node into an AccessKit node.
@@ -870,56 +830,213 @@ mod tests {
         )
     }
 
-    /// The two action tables' agreement, checked as a composition: every
-    /// AccessKit action in [`semantics_action_for`]'s domain, when granted
-    /// to a node as the FLUI action it maps to, must be advertised outbound
-    /// again by [`apply_actions`]. A drifted pair makes a control assistive
-    /// technology can see and press but that does nothing. (The reverse
-    /// drift — advertised outbound but not yet routable — is a review
-    /// obligation stated on both tables' docs; nothing here enumerates
-    /// AccessKit's action space to catch it mechanically.)
+    /// Every FLUI action publishes as an AccessKit action that routes back to
+    /// it (ADR-0203), so a control assistive technology can see and press
+    /// always reaches a handler. A node needs the state an action depends on
+    /// to advertise it: an expanded state for the transitions, a writable
+    /// value for the value writes. `SetNumericValue` publishes as `SetValue`
+    /// and comes back through its numeric payload.
     #[test]
-    fn every_inbound_routable_action_is_advertised_outbound_again() {
-        const INBOUND_DOMAIN: &[accesskit::Action] = &[
-            accesskit::Action::Click,
-            accesskit::Action::ShowContextMenu,
-            accesskit::Action::ScrollLeft,
-            accesskit::Action::ScrollRight,
-            accesskit::Action::ScrollUp,
-            accesskit::Action::ScrollDown,
-            accesskit::Action::Increment,
-            accesskit::Action::Decrement,
-            accesskit::Action::ScrollIntoView,
-            accesskit::Action::SetTextSelection,
-            accesskit::Action::SetValue,
-            accesskit::Action::SetScrollOffset,
-            accesskit::Action::Focus,
-            accesskit::Action::Blur,
-            accesskit::Action::CustomAction,
-            accesskit::Action::Expand,
-            accesskit::Action::Collapse,
-        ];
-        for &inbound in INBOUND_DOMAIN {
-            let routed = semantics_action_for(inbound)
-                .expect("every action in the declared inbound domain is routable");
-            // Expand and collapse are advertised only by a node with an
-            // expanded state, and only the transition that state allows.
-            let expanded = match inbound {
-                accesskit::Action::Expand => Some(false),
-                accesskit::Action::Collapse => Some(true),
-                _ => None,
+    fn every_action_round_trips_through_accesskit() {
+        for &action in SemanticsAction::ALL {
+            let mut attrs = SemanticsAttributes::default();
+            match action {
+                SemanticsAction::Expand => attrs.states.expanded = Some(false),
+                SemanticsAction::Collapse => attrs.states.expanded = Some(true),
+                SemanticsAction::SetNumericValue => {
+                    attrs.numeric_range =
+                        Some(crate::NumericRange::new(0.0, 0.0, 1.0, 0.1).expect("finite fixture"));
+                }
+                _ => {}
+            }
+            let node = translate_with(&attrs, action.value());
+            let published: Vec<accesskit::Action> = AK_ACTIONS
+                .iter()
+                .copied()
+                .filter(|&candidate| node.supports_action(candidate))
+                .collect();
+            let [published] = published[..] else {
+                panic!("{action} publishes {published:?}, not exactly one AccessKit action");
             };
-            let attrs = SemanticsAttributes {
-                states: States {
-                    expanded,
-                    ..States::default()
+            let data = match action {
+                SemanticsAction::SetNumericValue => Some(accesskit::ActionData::NumericValue(0.5)),
+                _ => sample_payload(action),
+            };
+            let request = accesskit::ActionRequest {
+                action: published,
+                target_tree: TreeId::ROOT,
+                target_node: NodeId(AccessibilityNodeId::from(render_id(1)).as_u64()),
+                data,
+            };
+            assert_eq!(
+                semantics_action_request_for(&request).map(|request| request.action()),
+                Ok(action),
+                "{action} publishes {published:?}, which does not route back to it"
+            );
+        }
+    }
+
+    /// Every AccessKit action, for [`every_action_round_trips_through_accesskit`]
+    /// to find what a node publishes.
+    const AK_ACTIONS: &[accesskit::Action] = &[
+        accesskit::Action::Click,
+        accesskit::Action::Focus,
+        accesskit::Action::Blur,
+        accesskit::Action::Collapse,
+        accesskit::Action::Expand,
+        accesskit::Action::CustomAction,
+        accesskit::Action::Decrement,
+        accesskit::Action::Increment,
+        accesskit::Action::HideTooltip,
+        accesskit::Action::ShowTooltip,
+        accesskit::Action::ReplaceSelectedText,
+        accesskit::Action::ScrollDown,
+        accesskit::Action::ScrollLeft,
+        accesskit::Action::ScrollRight,
+        accesskit::Action::ScrollUp,
+        accesskit::Action::ScrollIntoView,
+        accesskit::Action::ScrollToPoint,
+        accesskit::Action::SetScrollOffset,
+        accesskit::Action::SetTextSelection,
+        accesskit::Action::SetSequentialFocusNavigationStartingPoint,
+        accesskit::Action::SetValue,
+        accesskit::Action::ShowContextMenu,
+    ];
+
+    /// The payload a platform sends with `action`, for the actions that need one.
+    fn sample_payload(action: SemanticsAction) -> Option<accesskit::ActionData> {
+        let here = NodeId(AccessibilityNodeId::from(render_id(1)).as_u64());
+        match action {
+            SemanticsAction::SetValue | SemanticsAction::ReplaceSelectedText => {
+                Some(accesskit::ActionData::Value("text".into()))
+            }
+            SemanticsAction::SetScrollOffset => Some(accesskit::ActionData::SetScrollOffset(
+                accesskit::Point::new(1.0, 2.0),
+            )),
+            SemanticsAction::SetTextSelection => Some(accesskit::ActionData::SetTextSelection(
+                accesskit::TextSelection {
+                    anchor: accesskit::TextPosition {
+                        node: here,
+                        character_index: 1,
+                    },
+                    focus: accesskit::TextPosition {
+                        node: here,
+                        character_index: 3,
+                    },
                 },
-                ..Default::default()
-            };
-            assert!(
-                translate_with(&attrs, routed.value()).supports_action(inbound),
-                "{inbound:?} routes inbound to {routed:?}, whose outbound translation no \
-                 longer advertises {inbound:?} — the two tables have drifted",
+            )),
+            SemanticsAction::CustomAction => Some(accesskit::ActionData::CustomAction(7)),
+            _ => None,
+        }
+    }
+
+    /// A platform request decodes into the call its handler receives, or is
+    /// refused before any handler runs when its payload does not fit.
+    #[test]
+    fn platform_requests_decode_to_their_typed_call() {
+        use accesskit::{Action as Ak, ActionData as Data};
+        let here = NodeId(AccessibilityNodeId::from(render_id(1)).as_u64());
+        let elsewhere = NodeId(AccessibilityNodeId::from(render_id(2)).as_u64());
+        let decode = |action, data| {
+            semantics_action_request_for(&accesskit::ActionRequest {
+                action,
+                target_tree: TreeId::ROOT,
+                target_node: here,
+                data,
+            })
+            .map(|request| request.call)
+        };
+        let position = |node, character_index| accesskit::TextPosition {
+            node,
+            character_index,
+        };
+        let cases: Vec<(Ak, Option<Data>, Result<ActionCall, ActionDecodeError>)> = vec![
+            (Ak::Click, None, Ok(ActionCall::Click)),
+            (
+                Ak::ScrollDown,
+                Some(Data::ScrollUnit(accesskit::ScrollUnit::Item)),
+                Ok(ActionCall::ScrollDown),
+            ),
+            (
+                Ak::ScrollIntoView,
+                None,
+                Ok(ActionCall::ScrollIntoView(None)),
+            ),
+            (
+                Ak::SetValue,
+                Some(Data::Value("abc".into())),
+                Ok(ActionCall::SetValue("abc".into())),
+            ),
+            (
+                Ak::SetValue,
+                Some(Data::NumericValue(2.5)),
+                Ok(ActionCall::SetNumericValue(2.5)),
+            ),
+            (
+                Ak::SetScrollOffset,
+                Some(Data::SetScrollOffset(accesskit::Point::new(3.0, 4.0))),
+                Ok(ActionCall::SetScrollOffset(
+                    flui_foundation::geometry::Offset::new(3.0, 4.0),
+                )),
+            ),
+            (
+                Ak::SetTextSelection,
+                Some(Data::SetTextSelection(accesskit::TextSelection {
+                    anchor: position(here, 2),
+                    focus: position(here, 5),
+                })),
+                Ok(ActionCall::SetTextSelection(crate::TextSelection {
+                    anchor: 2,
+                    focus: 5,
+                })),
+            ),
+            (
+                Ak::CustomAction,
+                Some(Data::CustomAction(9)),
+                Ok(ActionCall::CustomAction(9)),
+            ),
+            (
+                Ak::SetValue,
+                None,
+                Err(ActionDecodeError::MissingPayload {
+                    action: SemanticsAction::SetValue,
+                }),
+            ),
+            (
+                Ak::CustomAction,
+                None,
+                Err(ActionDecodeError::MissingPayload {
+                    action: SemanticsAction::CustomAction,
+                }),
+            ),
+            (
+                Ak::Click,
+                Some(Data::Value("x".into())),
+                Err(ActionDecodeError::MismatchedPayload {
+                    action: SemanticsAction::Click,
+                }),
+            ),
+            (
+                Ak::SetTextSelection,
+                Some(Data::SetTextSelection(accesskit::TextSelection {
+                    anchor: position(here, 0),
+                    focus: position(elsewhere, 1),
+                })),
+                Err(ActionDecodeError::MismatchedPayload {
+                    action: SemanticsAction::SetTextSelection,
+                }),
+            ),
+            (
+                Ak::ScrollToPoint,
+                Some(Data::ScrollToPoint(accesskit::Point::new(0.0, 0.0))),
+                Err(ActionDecodeError::Unrouted(Ak::ScrollToPoint)),
+            ),
+        ];
+        for (action, data, expected) in cases {
+            assert_eq!(
+                decode(action, data.clone()),
+                expected,
+                "{action:?} with {data:?}"
             );
         }
     }
@@ -933,7 +1050,7 @@ mod tests {
     #[test]
     fn a_numeric_range_is_writable_only_through_the_handler_a_write_reaches() {
         let range = crate::NumericRange::new(5.0, 0.0, 10.0, 1.0).expect("finite fixture");
-        let set_text = SemanticsAction::SetText.value();
+        let set_text = SemanticsAction::SetValue.value();
         let set_number = SemanticsAction::SetNumericValue.value();
         // (row, text value, actions, writable)
         let rows: &[(&str, Option<&str>, u64, bool)] = &[
@@ -944,7 +1061,7 @@ mod tests {
             (
                 "increase_only",
                 None,
-                SemanticsAction::Increase.value(),
+                SemanticsAction::Increment.value(),
                 false,
             ),
             ("text_value_and_text_handler", Some("50%"), set_text, true),

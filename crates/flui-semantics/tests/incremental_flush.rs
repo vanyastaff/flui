@@ -396,7 +396,7 @@ struct NumericControl {
 
 impl NumericControl {
     fn new() -> Self {
-        use flui_semantics::{ActionArgs, NumericRange, SemanticsAction};
+        use flui_semantics::{ActionCall, NumericRange, SemanticsAction};
         let (mut owner, _) = recording_owner();
         let mut control = node(1, "numeric control");
         let target = control.accessibility_id().expect("render-backed identity");
@@ -407,9 +407,9 @@ impl NumericControl {
             .set_numeric_range(NumericRange::new(0.0, 0.0, 10.0, 1.0).expect("finite fixture"));
         control.config_mut().add_action(
             SemanticsAction::SetNumericValue,
-            Arc::new(move |_, args| {
-                let Some(ActionArgs::SetNumericValue { value }) = args else {
-                    panic!("numeric callback lost its payload");
+            Arc::new(move |call| {
+                let ActionCall::SetNumericValue(value) = call else {
+                    panic!("the numeric handler received {call:?}");
                 };
                 numeric.lock().push(value);
             }),
@@ -427,15 +427,14 @@ impl NumericControl {
 
     fn resolve(
         &self,
-        arguments: Option<flui_semantics::ActionArgs>,
+        call: flui_semantics::ActionCall,
     ) -> Result<flui_semantics::SemanticsActionInvocation, flui_semantics::SemanticsActionError>
     {
-        use flui_semantics::{SemanticsAction, SemanticsActionRequest};
-        self.owner.resolve_action(SemanticsActionRequest {
-            node_id: self.target,
-            action: SemanticsAction::SetNumericValue,
-            arguments,
-        })
+        self.owner
+            .resolve_action(flui_semantics::SemanticsActionRequest::new(
+                self.target,
+                call,
+            ))
     }
 
     fn set(
@@ -443,7 +442,7 @@ impl NumericControl {
         value: f64,
     ) -> Result<flui_semantics::SemanticsActionInvocation, flui_semantics::SemanticsActionError>
     {
-        self.resolve(Some(flui_semantics::ActionArgs::SetNumericValue { value }))
+        self.resolve(flui_semantics::ActionCall::SetNumericValue(value))
     }
 
     fn narrow_and_publish(&mut self) {
@@ -491,8 +490,8 @@ fn a_value_outside_the_current_range_is_refused() {
     assert_eq!(*control.received.lock(), [9.0]);
 }
 
-fn non_finite_or_missing_values_are_refused() {
-    use flui_semantics::{ActionArgs, SemanticsActionError};
+fn non_finite_or_out_of_range_values_are_refused() {
+    use flui_semantics::{ActionCall, SemanticsActionError};
     let control = NumericControl::new();
     let refused = Some(SemanticsActionError::InvalidNumericValue {
         node_id: control.target,
@@ -500,11 +499,14 @@ fn non_finite_or_missing_values_are_refused() {
     for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0, 10.5] {
         assert_eq!(control.set(value).err(), refused, "{value} was admitted");
     }
-    assert_eq!(control.resolve(None).err(), refused);
+    // A text that is no number has no handler to reach on a numeric-only
+    // control; one that is a number outside the range is refused as one.
+    assert!(matches!(
+        control.resolve(ActionCall::SetValue("five".into())),
+        Err(SemanticsActionError::UnsupportedAction { .. })
+    ));
     assert_eq!(
-        control
-            .resolve(Some(ActionArgs::SetText { text: "5".into() }))
-            .err(),
+        control.resolve(ActionCall::SetValue("11".into())).err(),
         refused
     );
     assert!(control.received.lock().is_empty());
@@ -524,8 +526,8 @@ fn numeric_setters_are_checked_against_the_current_range() {
             a_value_outside_the_current_range_is_refused,
         ),
         (
-            "non_finite_or_missing",
-            non_finite_or_missing_values_are_refused,
+            "non_finite_or_out_of_range",
+            non_finite_or_out_of_range_values_are_refused,
         ),
     ];
     let mut failures = Vec::new();
@@ -574,7 +576,7 @@ impl RevealFixture {
 
     fn with_retirement_failures(retirement_failures: [bool; 2]) -> Self {
         use flui_foundation::geometry::Rect;
-        use flui_semantics::{ActionArgs, SemanticsAction};
+        use flui_semantics::{ActionCall, SemanticsAction};
         let (mut owner, _) = recording_owner();
         let calls = Arc::new(Mutex::new(Vec::new()));
         let failures = [
@@ -597,10 +599,10 @@ impl RevealFixture {
                 },
             };
             ancestor.config_mut().add_action(
-                SemanticsAction::ShowOnScreen,
-                Arc::new(move |_, args| {
+                SemanticsAction::ScrollIntoView,
+                Arc::new(move |call| {
                     let _capture = &capture;
-                    assert!(matches!(args, Some(ActionArgs::ShowOnScreen { .. })));
+                    assert!(matches!(call, ActionCall::ScrollIntoView(Some(_))));
                     sink.lock().push(name);
                     assert!(!failure.load(Ordering::SeqCst), "{name} reveal failure");
                 }),
@@ -635,7 +637,7 @@ impl RevealFixture {
         self.owner
             .resolve_action(flui_semantics::SemanticsActionRequest::new(
                 self.identity,
-                flui_semantics::SemanticsAction::ShowOnScreen,
+                flui_semantics::ActionCall::ScrollIntoView(None),
             ))
             .expect("rooted descendant reveal")
     }

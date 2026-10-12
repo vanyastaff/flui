@@ -18,7 +18,7 @@ use std::fmt::{self, Write as _};
 
 use accesskit::{Node, TreeUpdate};
 use flui_rendering::PipelineCell;
-use flui_semantics::{AccessibilityNodeId, SemanticsActionError, semantics_action_request_for};
+use flui_semantics::{ActionDecodeError, SemanticsActionError, semantics_action_request_for};
 
 // AccessKit's vocabulary is this module's vocabulary, so a consumer writes
 // `use flui_testing::a11y::Role` and never has to add accesskit itself at a
@@ -427,28 +427,16 @@ pub enum A11yQueryError {
 /// is the failure mode this module exists to catch.
 #[derive(Debug, thiserror::Error)]
 pub enum InvokeActionError {
-    /// The platform's action has no FLUI counterpart, so nothing routes it.
-    ///
-    /// The translation table's inbound half drops these deliberately; see
-    /// `flui_semantics::semantics_action_for` for which and why. A test that
-    /// reaches this is asserting the drop, not failing to arrange one.
-    #[error("accesskit action {0:?} has no FLUI counterpart and cannot be delivered")]
-    UnroutablePlatformAction(accesskit::Action),
+    /// The platform request did not decode: an id FLUI never exports, an
+    /// action with no FLUI counterpart, or a payload that does not fit the
+    /// action. Refused before the request touches the tree, so a malformed
+    /// request never reads as "the tree changed".
+    #[error(transparent)]
+    Decode(#[from] ActionDecodeError),
 
     /// Resolution against the presentation's current semantics tree failed.
     #[error(transparent)]
     Resolution(#[from] SemanticsActionError),
-
-    /// The platform addressed a node identity FLUI never exports.
-    ///
-    /// [`AccessibilityNodeId`] is non-zero, so a request carrying zero is out of
-    /// contract: no exported identity is ever zero, which makes it a value the
-    /// framework cannot have published. Dropped rather than resolved, and
-    /// dropped *here* rather than fabricated into a node id the tree is then
-    /// searched for — that search would fail with "node not found", which reads
-    /// as "the tree changed" instead of "the request was malformed".
-    #[error("platform addressed node 0, which is outside the exported identity space")]
-    MalformedNodeIdentity,
 }
 
 /// Deliver an accessibility action to the node it addresses, as a platform
@@ -467,9 +455,8 @@ pub enum InvokeActionError {
 /// a control a screen reader can see and press to no effect — so a round trip
 /// has to start from the platform's own request type rather than from FLUI's
 /// action enum. Taking [`accesskit::ActionRequest`] whole is what makes the
-/// test cross both adapter hops (`semantics_action_for` and
-/// `semantics_action_args_for`) instead of starting one step past them, where a
-/// routing gap is invisible.
+/// test cross the production decoder (`semantics_action_request_for`) instead
+/// of starting one step past it, where a routing gap is invisible.
 ///
 /// Resolve-then-invoke is spelled out here rather than left to each caller
 /// because the order is load-bearing: the invocation clones the handler so that
@@ -486,11 +473,10 @@ pub enum InvokeActionError {
 /// moment one presentation can host more than one tree, which is why it is
 /// named here rather than silently ignored.
 ///
-/// The whole platform request crosses the production translator. Numeric
-/// values stay typed and are checked against the current node's range by the
-/// owner; a malformed or out-of-range value never invokes its callback.
-/// Text requests without a payload remain non-destructive, as pinned by
-/// `a_set_text_request_without_a_payload_is_dropped_rather_than_emptied`.
+/// The whole platform request crosses the production translator. A payload
+/// that does not fit its action is refused while it is decoded; numeric values
+/// are checked against the current node's range by the owner. Neither invokes
+/// a callback.
 ///
 /// Expand and collapse retain their explicit direction. The helper resolves
 /// the current node's supported action; the consumer sets the requested state
@@ -498,22 +484,17 @@ pub enum InvokeActionError {
 ///
 /// # Errors
 ///
-/// [`InvokeActionError::MalformedNodeIdentity`] when `request.target_node` is
-/// zero, which is outside the exported identity space and is checked before the
-/// request is allowed to touch the tree at all.
-/// [`InvokeActionError::UnroutablePlatformAction`] when the platform's action
-/// has no FLUI counterpart. [`InvokeActionError::Resolution`] when the
-/// presentation has no semantics owner, when the node id is unknown, or when the
-/// node does not effectively support the action — the last of which is how
+/// [`InvokeActionError::Decode`] when the request does not decode: a node id
+/// FLUI never exports, an action with no FLUI counterpart, or a payload that
+/// does not fit. [`InvokeActionError::Resolution`] when the presentation has no
+/// semantics owner, when the node id is unknown, or when the node does not
+/// effectively support the action — the last of which is how
 /// `block_user_actions` becomes observable.
 pub(crate) fn invoke_semantics_action(
     cell: &PipelineCell,
     request: accesskit::ActionRequest,
 ) -> Result<(), InvokeActionError> {
-    let _node_id = AccessibilityNodeId::from_u64(request.target_node.0)
-        .ok_or(InvokeActionError::MalformedNodeIdentity)?;
-    let translated = semantics_action_request_for(&request)
-        .ok_or(InvokeActionError::UnroutablePlatformAction(request.action))?;
+    let translated = semantics_action_request_for(&request)?;
     let invocation = cell.with(|owner| owner.resolve_semantics_action(translated))?;
 
     invocation.invoke();

@@ -169,41 +169,45 @@ text's name through `accesskit_consumer` the way the adapters do; `cargo xtask d
 windows-a11y` is the live check that found the defect. For the joined label and value:
 **Unasserted:** no test pins this.
 
-### 5. The ADR-0080 tools reach FLUI through AccessKit's Windows adapter: `expand`/`collapse` are discrete, with a tap fallback
+### 5. The ADR-0080 tools reach FLUI through AccessKit's Windows adapter: `expand`/`collapse` are discrete, with a click fallback
 
-**Rule.** `semantics_action_for` names every `accesskit::Action`. The tools an agent calls
-(ADR-0080, `flui_protocol::ActionName`) arrive through accesskit_windows 0.35.0 as:
-`invoke`, `toggle` and `select` → `Click` → `Tap`; `set_value` → `SetValue` → `SetText`, or
-`SetNumericValue` with its number when the request carries `ActionData::NumericValue` (a
-slider through UI Automation's `RangeValue`; `semantics_action_request_for`) or, on the wire,
+**Rule.** [ADR-0203](../../docs/adr/ADR-0203-semantics-vocabulary.md): `SemanticsAction` follows
+`accesskit::Action`, and `semantics_action_for` names every AccessKit action. A handler receives
+an `ActionCall`, the action fused with exactly its payload; `semantics_action_request_for`
+decodes a platform request into one or refuses it with `ActionDecodeError` (a missing or
+mismatched payload, an unrouted action, an id FLUI never publishes) before any handler runs.
+The tools an agent calls (ADR-0080, `flui_protocol::ActionName`) arrive through
+accesskit_windows 0.35.0 as: `invoke`, `toggle` and `select` → `Click`; `set_value` →
+`SetValue` with its text, or `SetNumericValue` with its number when the request carries
+`ActionData::NumericValue` (a slider through UI Automation's `RangeValue`) or, on the wire,
 when the node publishes a numeric value; `focus` → `Focus`; `scroll_into_view` →
-`ScrollIntoView` → `ShowOnScreen`; `expand` and `collapse` → `Expand`/`Collapse` →
-`SemanticsAction::Expand`/`Collapse` (ADR-0124).
+`ScrollIntoView`; `expand` and `collapse` → `Expand`/`Collapse` (ADR-0124).
 
-A node with `HasExpandedState` advertises `Expand` while collapsed and `Collapse` while
+A node with an expanded state advertises `Expand` while collapsed and `Collapse` while
 expanded, never both. It advertises the transition when it registers the matching discrete
-action; when it registers neither discrete action but has a tap handler (the shape
-`Semantics::new().expanded(false).on_tap(..)` builds), it advertises the transition too, and
-`SemanticsOwner::resolve_action` routes that request to the tap handler as `Tap`. The owner
-admits an `Expand` or `Collapse` request, to a discrete handler or the tap fallback alike, only
-in the direction the node's current state allows (`disclosure_transition` in `src/action.rs`);
-`tap_disclosure_transition` there is the one fallback predicate both directions use.
+action; when it registers neither discrete action but has a click handler (the shape
+`Semantics::new().expanded(false).on_click(..)` builds), it advertises the transition too, and
+`SemanticsOwner::resolve_action` routes that request to the click handler as `Click`. The owner
+admits an `Expand` or `Collapse` request, to a discrete handler or the click fallback alike,
+only in the direction the node's current state allows (`disclosure_transition` in
+`src/action.rs`); `tap_disclosure_transition` there is the one fallback predicate both
+directions use.
 
 **Why.** AccessKit does not count a node with an expanded state as invocable
 (`accesskit_consumer` 0.39, `Node::is_invocable`), so the Windows adapter offers only the
-`ExpandCollapse` pattern for it: without the fallback a tap-only expandable node could be
+`ExpandCollapse` pattern for it: without the fallback a click-only expandable node could be
 neither invoked nor expanded by an agent or a screen reader. A discrete handler receives the
 requested direction and sets that state, so repeated requests are idempotent. No other shipped
 adapter (`accesskit_macos` 0.27, `accesskit_atspi_common` 0.20) emits `Expand`/`Collapse`.
 
-**Limit.** The tap fallback carries no direction to the handler. The adapter checks the
+**Limit.** The click fallback carries no direction to the handler. The adapter checks the
 expanded state in its own copy of the tree and the owner checks the committed tree, and both
 change only when the next frame publishes. Two `Expand` requests before then, or an `Expand`
-right after an unpublished pointer tap, each run the tap handler, so a tap-only node can end
+right after an unpublished pointer tap, each run the click handler, so a click-only node can end
 collapsed after an expand. A node that needs the direction registers its state and both handlers together with
 `Semantics::expandable`.
 
-**Value writes.** A value write's payload picks its handler: a string reaches `SetText`, a
+**Value writes.** A value write's payload picks its handler: a string reaches `SetValue`, a
 number `SetNumericValue`. A node advertises `SetValue`, and a numeric range is published
 writable, when some write a platform can send it has a handler (`value_writable` in
 `accesskit_translation.rs`): the numeric handler on a range, whatever text the range also
@@ -230,10 +234,10 @@ after the adapter reported the write accepted. Marking the node read-only would 
 that works, which is the worse failure.
 
 **Test.** `every_wire_action_routes_to_a_semantics_action` (one row per `ActionName::ALL`) in
-`src/agent/tests.rs`; `every_inbound_routable_action_is_advertised_outbound_again` in
+`src/agent/tests.rs`; `every_action_round_trips_through_accesskit` and `platform_requests_decode_to_their_typed_call` in
 `accesskit_translation.rs`; `disclosure_requests_follow_the_expanded_state` in
-`src/agent/tests.rs`, whose rows drive explicit and tap-only nodes in both states through the
-wire and platform paths to the handler that runs; `set_value_reaches_set_text_with_its_text`
+`src/agent/tests.rs`, whose rows drive explicit and click-only nodes in both states through the
+wire and platform paths to the handler that runs; `set_value_reaches_the_handler_with_its_payload`
 for text and numeric `set_value`; `set_value_follows_the_value_pattern_precedence` in
 `src/agent/tests.rs` for the handler each value shape runs;
 `a_numeric_range_is_writable_only_through_the_handler_a_write_reaches`
@@ -331,7 +335,7 @@ through UI Automation, so a second cascade over FLUI's flags would drift from wh
 reports. The fold targets UIA rather than AccessKit's full role set because the wire
 vocabulary is the desktop server's, and ADR-0095 §4 compares the two backends after
 normalization. The direction check reads the last committed tree, which lags the request as
-the adapter's copy does; that lag matters only for a tap-only expandable node (mapping
+the adapter's copy does; that lag matters only for a click-only expandable node (mapping
 decision 5, Limit).
 
 **Geometry and dialog roles.** The rectangles are
@@ -349,7 +353,7 @@ adapter and desktop sources, and checked to cover every role FLUI publishes),
 `accesskit_windows` off the release the fold was transcribed from),
 `generic_containers_are_lifted_and_hidden_subtrees_dropped`,
 `advertised_actions_follow_the_uia_patterns`, `disclosure_requests_follow_the_expanded_state`,
-`set_value_reaches_set_text_with_its_text`, `a_disabled_node_refuses_with_disabled`,
+`set_value_reaches_the_handler_with_its_payload`, `a_disabled_node_refuses_with_disabled`,
 `read_honours_max_depth_and_max_nodes_and_says_truncated` and
 `a_read_tree_round_trips_through_json`. `every_wire_action_routes_to_a_semantics_action` pins
 `semantics_action_for_wire` to the Windows adapter's route row by row.

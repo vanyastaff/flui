@@ -46,7 +46,7 @@ enum DescendantSemanticsMerge {
 /// let mut config = SemanticsConfiguration::new();
 /// config.set_label("Submit button");
 /// config.set_button(true);
-/// config.add_action(SemanticsAction::Tap, Arc::new(|_, _| {
+/// config.add_action(SemanticsAction::Click, Arc::new(|_| {
 ///     println!("Button tapped!");
 /// }));
 /// ```
@@ -751,14 +751,13 @@ impl SemanticsConfiguration {
 
     /// Returns the action bits that may be exposed to assistive technology.
     ///
-    /// When user actions are blocked, pointer and editing actions are removed;
-    /// only accessibility-focus lifecycle actions remain. Platform snapshots,
-    /// legacy node exports, and future action routing must all use this policy
-    /// rather than [`Self::actions_as_bits`].
+    /// When user actions are blocked, every action but `Blur` is removed.
+    /// Publication and action routing both use this policy rather than
+    /// [`Self::actions_as_bits`].
     pub fn effective_actions_as_bits(&self) -> u64 {
         let actions = self.actions_as_bits()
             | if self.has_reveal_ancestor {
-                SemanticsAction::ShowOnScreen.value()
+                SemanticsAction::ScrollIntoView.value()
             } else {
                 0
             };
@@ -1372,11 +1371,11 @@ mod tests {
         assert_compatibility_is_symmetric(&label_a, &label_b, true);
 
         let mut tap = SemanticsConfiguration::new();
-        tap.add_action(SemanticsAction::Tap, Arc::new(|_, _| {}));
+        tap.add_action(SemanticsAction::Click, Arc::new(|_| {}));
         let mut long_press = SemanticsConfiguration::new();
-        long_press.add_action(SemanticsAction::LongPress, Arc::new(|_, _| {}));
+        long_press.add_action(SemanticsAction::ShowContextMenu, Arc::new(|_| {}));
         let mut another_tap = SemanticsConfiguration::new();
-        another_tap.add_action(SemanticsAction::Tap, Arc::new(|_, _| {}));
+        another_tap.add_action(SemanticsAction::Click, Arc::new(|_| {}));
         assert_compatibility_is_symmetric(&tap, &long_press, true);
         assert_compatibility_is_symmetric(&tap, &another_tap, false);
 
@@ -1518,17 +1517,13 @@ mod tests {
     }
 
     #[test]
-    fn blocked_effective_action_mask_keeps_only_accessibility_focus_lifecycle() {
+    fn a_blocked_node_keeps_only_blur() {
         for &action in SemanticsAction::ALL {
             let mut config = SemanticsConfiguration::new();
-            config.add_action(action, Arc::new(|_, _| {}));
+            config.add_action(action, Arc::new(|_| {}));
             config.set_blocks_user_actions(true);
 
-            let expected = if matches!(
-                action,
-                SemanticsAction::DidGainAccessibilityFocus
-                    | SemanticsAction::DidLoseAccessibilityFocus
-            ) {
+            let expected = if action == SemanticsAction::Blur {
                 action.value()
             } else {
                 0

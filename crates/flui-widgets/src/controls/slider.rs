@@ -311,8 +311,8 @@ impl ViewState<Slider> for SliderState {
                 let decrease = Terminal::new(Rc::clone(&live));
                 let set = Terminal::new(Rc::clone(&live));
                 semantics = semantics
-                    .on_increase(move |cx| increase.stepped(cx, true))
-                    .on_decrease(move |cx| decrease.stepped(cx, false))
+                    .on_increment(move |cx| increase.stepped(cx, true))
+                    .on_decrement(move |cx| decrease.stepped(cx, false))
                     .on_set_numeric_value(move |cx, value| set.propose(cx, value));
             }
             semantics.child(child)

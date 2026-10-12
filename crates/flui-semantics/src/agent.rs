@@ -43,7 +43,7 @@ use flui_protocol::{
     ActionName, ActionRequest, Checked, ElementId, Node, ReadQuery, Rect, Role, Tree, WindowId,
 };
 
-use crate::action::{ActionArgs, SemanticsAction, SemanticsActionRequest};
+use crate::action::{ActionCall, SemanticsAction, SemanticsActionRequest};
 use crate::identity::AccessibilityNodeId;
 use crate::owner::SemanticsOwner;
 
@@ -129,23 +129,23 @@ pub enum WireActionError {
 
 /// The FLUI action a wire action reaches, as AccessKit's Windows adapter
 /// routes the UI Automation call behind it: `invoke`, `toggle` and `select`
-/// click, which is FLUI's tap; `expand` and `collapse` are the discrete
-/// actions, which the owner routes to a tap-only node's tap handler (mapping
-/// decision 5); `set_value` sets text, or the number on a numeric node
-/// without a text value ([`SemanticsOwner::resolve_wire_action`]); `scroll_into_view` is
-/// `ShowOnScreen`.
+/// click; `expand` and `collapse` are the discrete actions, which the owner
+/// routes to a click-only node's click handler (mapping decision 5);
+/// `set_value` sets text, or the number on a numeric node without a text value
+/// ([`SemanticsOwner::resolve_wire_action`]); `scroll_into_view` is
+/// `ScrollIntoView`.
 ///
 /// `None` for a wire action FLUI has no route for; `ActionName` is
 /// `#[non_exhaustive]`, so a tool added to the vocabulary lands here.
 #[must_use]
 pub(crate) fn semantics_action_for_wire(action: ActionName) -> Option<SemanticsAction> {
     Some(match action {
-        ActionName::Invoke | ActionName::Toggle | ActionName::Select => SemanticsAction::Tap,
+        ActionName::Invoke | ActionName::Toggle | ActionName::Select => SemanticsAction::Click,
         ActionName::Expand => SemanticsAction::Expand,
         ActionName::Collapse => SemanticsAction::Collapse,
-        ActionName::SetValue => SemanticsAction::SetText,
+        ActionName::SetValue => SemanticsAction::SetValue,
         ActionName::Focus => SemanticsAction::Focus,
-        ActionName::ScrollIntoView => SemanticsAction::ShowOnScreen,
+        ActionName::ScrollIntoView => SemanticsAction::ScrollIntoView,
         _ => return None,
     })
 }
@@ -655,7 +655,7 @@ impl SemanticsOwner {
             Err(Published::Malformed) => return Err(WireActionError::Malformed),
         };
 
-        let arguments = match (request.action, &request.value) {
+        let call = match (request.action, &request.value) {
             (ActionName::SetValue, Some(text)) if numeric.is_some() => {
                 let value = text
                     .parse::<f64>()
@@ -671,9 +671,9 @@ impl SemanticsOwner {
                         reason: "numeric set_value lies outside the published range",
                     });
                 }
-                Some(ActionArgs::SetNumericValue { value })
+                ActionCall::SetNumericValue(value)
             }
-            (ActionName::SetValue, Some(text)) => Some(ActionArgs::SetText { text: text.clone() }),
+            (ActionName::SetValue, Some(text)) => ActionCall::SetValue(text.clone()),
             (ActionName::SetValue, None) => {
                 return Err(WireActionError::InvalidArgument {
                     reason: "set_value needs a value",
@@ -684,24 +684,13 @@ impl SemanticsOwner {
                     reason: "only set_value takes a value",
                 });
             }
-            (_, None) => None,
+            (action, None) => semantics_action_for_wire(action)
+                .and_then(ActionCall::without_payload)
+                .ok_or(WireActionError::ActionUnsupported { element, action })?,
         };
-        let action = if request.action == ActionName::SetValue && numeric.is_some() {
-            Some(SemanticsAction::SetNumericValue)
-        } else {
-            semantics_action_for_wire(request.action)
-        }
-        .ok_or(WireActionError::ActionUnsupported {
-            element,
-            action: request.action,
-        })?;
         let node_id = AccessibilityNodeId::from_u64(element.get())
             .ok_or(WireActionError::NotFound { element })?;
-        Ok(SemanticsActionRequest {
-            node_id,
-            action,
-            arguments,
-        })
+        Ok(SemanticsActionRequest::new(node_id, call))
     }
 }
 

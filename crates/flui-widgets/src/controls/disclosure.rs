@@ -363,7 +363,7 @@ impl ViewState<Disclosure> for DisclosureState {
                 let expand = Rc::clone(&live);
                 let collapse = Rc::clone(&live);
                 semantics = semantics
-                    .on_tap(move |cx| {
+                    .on_click(move |cx| {
                         let _ = propose(&activate, cx, None);
                     })
                     .expandable(
