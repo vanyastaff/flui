@@ -33,9 +33,14 @@ impl Fixture {
         let observed = Rc::clone(&commands);
         let mut host = HeadlessHost::new(HeadlessWindow::new(400, 100));
         let child = if text_field {
-            EditableText::new(controller.clone(), Rc::clone(&node)).into_view().boxed()
+            EditableText::new(controller.clone(), Rc::clone(&node))
+                .into_view()
+                .boxed()
         } else {
-            Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&node)).into_view().boxed()
+            Focus::new(SizedBox::new(10.0, 10.0))
+                .focus_node(Rc::clone(&node))
+                .into_view()
+                .boxed()
         };
         if callback {
             let view = CallbackShortcuts::new(child).binding(activator, move |_| {
@@ -43,11 +48,9 @@ impl Fixture {
             });
             host.attach(&view).expect("fresh host");
         } else {
-            let view = Shortcuts::new(
-                Actions::new(child).action(
-                    CallbackAction::new(move |_, _: &Command| observed.set(observed.get() + 1)),
-                ),
-            )
+            let view = Shortcuts::new(Actions::new(child).action(CallbackAction::new(
+                move |_, _: &Command| observed.set(observed.get() + 1),
+            )))
             .shortcut(activator, Command);
             host.attach(&view).expect("fresh host");
         }
@@ -389,108 +392,330 @@ pub(crate) fn both_shortcut_boundaries_preserve_meta_shift_and_full_glyphs() {
     let aliases = Modifiers::ALT_GRAPH | Modifiers::CONTROL | Modifiers::ALT;
     for callback in [false, true] {
         for (name, activator, modifiers, field, commands, text) in [
-            ("glyph", SingleActivator::character("का"), aliases, false, 1, ""),
-            ("alias command", SingleActivator::character("का").control(), aliases, false, 0, ""),
-            ("field full glyph", SingleActivator::character("का").control(), aliases, true, 0, "का"),
-            ("Meta priority", SingleActivator::character("का").meta(), aliases | Modifiers::META, true, 1, ""),
-            ("exact Shift", SingleActivator::character("का"), aliases | Modifiers::SHIFT, false, 0, ""),
-            ("required Shift", SingleActivator::character("का").shift(), aliases | Modifiers::SHIFT, false, 1, ""),
-            ("glyph ignores Shift", SingleActivator::character_ignoring_shift("का"), aliases | Modifiers::SHIFT, false, 1, ""),
+            (
+                "glyph",
+                SingleActivator::character("का"),
+                aliases,
+                false,
+                1,
+                "",
+            ),
+            (
+                "alias command",
+                SingleActivator::character("का").control(),
+                aliases,
+                false,
+                0,
+                "",
+            ),
+            (
+                "field full glyph",
+                SingleActivator::character("का").control(),
+                aliases,
+                true,
+                0,
+                "का",
+            ),
+            (
+                "Meta priority",
+                SingleActivator::character("का").meta(),
+                aliases | Modifiers::META,
+                true,
+                1,
+                "",
+            ),
+            (
+                "exact Shift",
+                SingleActivator::character("का"),
+                aliases | Modifiers::SHIFT,
+                false,
+                0,
+                "",
+            ),
+            (
+                "required Shift",
+                SingleActivator::character("का").shift(),
+                aliases | Modifiers::SHIFT,
+                false,
+                1,
+                "",
+            ),
+            (
+                "glyph ignores Shift",
+                SingleActivator::character_ignoring_shift("का"),
+                aliases | Modifiers::SHIFT,
+                false,
+                1,
+                "",
+            ),
         ] {
             let fixture = Fixture::with_boundary(field, activator, callback);
             fixture.dispatch("का", modifiers, KeyState::Down, KeyRepeat::First);
-            assert_eq!(fixture.commands.get(), commands, "{name}, callback={callback}");
-            assert_eq!(fixture.controller.text(), text, "{name}, callback={callback}");
+            assert_eq!(
+                fixture.commands.get(),
+                commands,
+                "{name}, callback={callback}"
+            );
+            assert_eq!(
+                fixture.controller.text(),
+                text,
+                "{name}, callback={callback}"
+            );
         }
-        let fixture = Fixture::with_boundary(false, SingleActivator::character("s").control(), callback);
-        let composing = KeyEvent::new(KeyState::Down, Key::character("s"), Code::KeyS, EventTime::from_nanos(1))
-            .with_modifiers(Modifiers::CONTROL | Modifiers::CAPS_LOCK)
-            .with_composition(ImeComposition::Active);
+        let fixture =
+            Fixture::with_boundary(false, SingleActivator::character("s").control(), callback);
+        let composing = KeyEvent::new(
+            KeyState::Down,
+            Key::character("s"),
+            Code::KeyS,
+            EventTime::from_nanos(1),
+        )
+        .with_modifiers(Modifiers::CONTROL | Modifiers::CAPS_LOCK)
+        .with_composition(ImeComposition::Active);
         fixture.host.dispatch(PlatformInput::Keyboard(composing));
-        assert_eq!(fixture.commands.get(), 0, "source owns composing shortcut, callback={callback}");
-        fixture.dispatch("S", Modifiers::CONTROL | Modifiers::CAPS_LOCK, KeyState::Down, KeyRepeat::First);
-        assert_eq!(fixture.commands.get(), 1, "next command, callback={callback}");
-        let fixture = Fixture::with_boundary(false, SingleActivator::character("का").allow_repeats(false), callback);
+        assert_eq!(
+            fixture.commands.get(),
+            0,
+            "source owns composing shortcut, callback={callback}"
+        );
+        fixture.dispatch(
+            "S",
+            Modifiers::CONTROL | Modifiers::CAPS_LOCK,
+            KeyState::Down,
+            KeyRepeat::First,
+        );
+        assert_eq!(
+            fixture.commands.get(),
+            1,
+            "next command, callback={callback}"
+        );
+        let fixture = Fixture::with_boundary(
+            false,
+            SingleActivator::character("का").allow_repeats(false),
+            callback,
+        );
         fixture.dispatch("का", aliases, KeyState::Down, KeyRepeat::First);
         fixture.dispatch("का", aliases, KeyState::Down, KeyRepeat::AutoRepeat);
         fixture.dispatch("का", aliases, KeyState::Up, KeyRepeat::First);
-        assert_eq!(fixture.commands.get(), 1, "excluded repeat and Up, callback={callback}");
+        assert_eq!(
+            fixture.commands.get(),
+            1,
+            "excluded repeat and Up, callback={callback}"
+        );
         fixture.dispatch("का", aliases, KeyState::Down, KeyRepeat::First);
-        assert_eq!(fixture.commands.get(), 2, "next first Down, callback={callback}");
+        assert_eq!(
+            fixture.commands.get(),
+            2,
+            "next first Down, callback={callback}"
+        );
     }
 }
 
 pub(crate) fn altgraph_word_aliases_preserve_character_movement() {
     for (key, modifiers, selection, text) in [
-        (NamedKey::ArrowLeft, Modifiers::ALT_GRAPH | Modifiers::CONTROL, 5..5, "one two"),
-        (NamedKey::ArrowLeft, Modifiers::ALT_GRAPH | Modifiers::ALT, 5..5, "one two"),
-        (NamedKey::ArrowLeft, Modifiers::ALT_GRAPH | Modifiers::CONTROL | Modifiers::SHIFT, 5..6, "one two"),
-        (NamedKey::ArrowRight, Modifiers::ALT_GRAPH | Modifiers::CONTROL, 7..7, "one two"),
-        (NamedKey::Backspace, Modifiers::ALT_GRAPH | Modifiers::CONTROL, 5..5, "one to"),
-        (NamedKey::Delete, Modifiers::ALT_GRAPH | Modifiers::CONTROL, 6..6, "one tw"),
+        (
+            NamedKey::ArrowLeft,
+            Modifiers::ALT_GRAPH | Modifiers::CONTROL,
+            5..5,
+            "one two",
+        ),
+        (
+            NamedKey::ArrowLeft,
+            Modifiers::ALT_GRAPH | Modifiers::ALT,
+            5..5,
+            "one two",
+        ),
+        (
+            NamedKey::ArrowLeft,
+            Modifiers::ALT_GRAPH | Modifiers::CONTROL | Modifiers::SHIFT,
+            5..6,
+            "one two",
+        ),
+        (
+            NamedKey::ArrowRight,
+            Modifiers::ALT_GRAPH | Modifiers::CONTROL,
+            7..7,
+            "one two",
+        ),
+        (
+            NamedKey::Backspace,
+            Modifiers::ALT_GRAPH | Modifiers::CONTROL,
+            5..5,
+            "one to",
+        ),
+        (
+            NamedKey::Delete,
+            Modifiers::ALT_GRAPH | Modifiers::CONTROL,
+            6..6,
+            "one tw",
+        ),
     ] {
         let fixture = Fixture::new(true, SingleActivator::character("s").control());
         fixture.controller.insert_str("one two");
         fixture.controller.set_caret_byte_offset(6);
-        fixture.host.dispatch(PlatformInput::Keyboard(KeyEvent::new(KeyState::Down, Key::Named(key), Code::Unidentified, EventTime::from_nanos(1)).with_modifiers(modifiers | Modifiers::NUM_LOCK)));
-        assert_eq!(fixture.controller.text(), text, "{key:?} with {modifiers:?}");
-        assert_eq!(fixture.controller.selection(), selection, "{key:?} with {modifiers:?}");
+        fixture.host.dispatch(PlatformInput::Keyboard(
+            KeyEvent::new(
+                KeyState::Down,
+                Key::Named(key),
+                Code::Unidentified,
+                EventTime::from_nanos(1),
+            )
+            .with_modifiers(modifiers | Modifiers::NUM_LOCK),
+        ));
+        assert_eq!(
+            fixture.controller.text(),
+            text,
+            "{key:?} with {modifiers:?}"
+        );
+        assert_eq!(
+            fixture.controller.selection(),
+            selection,
+            "{key:?} with {modifiers:?}"
+        );
     }
 }
 
 pub(crate) fn source_composition_preserves_editing_and_submit() {
     use crate::common::harness::mount;
-    for key in [Key::character("का"), Key::Named(NamedKey::Backspace), Key::Named(NamedKey::Delete), Key::Named(NamedKey::ArrowLeft), Key::Named(NamedKey::ArrowRight), Key::Named(NamedKey::Home), Key::Named(NamedKey::End), Key::Named(NamedKey::Enter)] {
+    for key in [
+        Key::character("का"),
+        Key::Named(NamedKey::Backspace),
+        Key::Named(NamedKey::Delete),
+        Key::Named(NamedKey::ArrowLeft),
+        Key::Named(NamedKey::ArrowRight),
+        Key::Named(NamedKey::Home),
+        Key::Named(NamedKey::End),
+        Key::Named(NamedKey::Enter),
+    ] {
         let controller = TextEditingController::with_text("seed");
         controller.set_caret_byte_offset(2);
         let node = FocusNode::with_debug_label("source composition field");
         let submitted = Rc::new(Cell::new(0));
         let observed = Rc::clone(&submitted);
-        let harness = mount(EditableText::new(controller.clone(), Rc::clone(&node)).on_submitted(move |_, _| observed.set(observed.get() + 1)));
+        let harness = mount(
+            EditableText::new(controller.clone(), Rc::clone(&node))
+                .on_submitted(move |_, _| observed.set(observed.get() + 1)),
+        );
         let _ = node.request_focus();
         let manager = harness.focus_manager();
-        let event = KeyEvent::new(KeyState::Down, key.clone(), Code::Unidentified, EventTime::from_nanos(1)).with_composition(ImeComposition::Active);
-        assert!(!manager.dispatch_key_event(&event).is_handled(), "native composition default for {key:?}");
+        let event = KeyEvent::new(
+            KeyState::Down,
+            key.clone(),
+            Code::Unidentified,
+            EventTime::from_nanos(1),
+        )
+        .with_composition(ImeComposition::Active);
+        assert!(
+            !manager.dispatch_key_event(&event).is_handled(),
+            "native composition default for {key:?}"
+        );
         assert_eq!(controller.text(), "seed", "{key:?}");
         assert_eq!(controller.selection(), 2..2, "{key:?}");
         assert_eq!(submitted.get(), 0, "{key:?}");
-        assert!(manager.dispatch_key_event(&KeyEvent::new(KeyState::Down, Key::character("z"), Code::KeyZ, EventTime::from_nanos(2))).is_handled());
+        assert!(
+            manager
+                .dispatch_key_event(&KeyEvent::new(
+                    KeyState::Down,
+                    Key::character("z"),
+                    Code::KeyZ,
+                    EventTime::from_nanos(2)
+                ))
+                .is_handled()
+        );
         assert_eq!(controller.text(), "sezed", "healthy next input for {key:?}");
     }
     // A source flag does not replace the field's independently owned IME range.
     let controller = TextEditingController::new();
     let node = FocusNode::with_debug_label("controller-owned composition");
-    let harness = crate::common::harness::mount_with_ime(EditableText::new(controller.clone(), Rc::clone(&node)));
+    let harness = crate::common::harness::mount_with_ime(EditableText::new(
+        controller.clone(),
+        Rc::clone(&node),
+    ));
     let _ = node.request_focus();
-    harness.dispatch_ime(&flui_platform_api::ImeEvent::Preedit { text: "ni".into(), cursor: Some((0, 2)) });
+    harness.dispatch_ime(&flui_platform_api::ImeEvent::Preedit {
+        text: "ni".into(),
+        cursor: Some((0, 2)),
+    });
     assert_eq!(controller.composing_range(), Some(0..2));
-    let event = KeyEvent::new(KeyState::Down, Key::character("x"), Code::KeyX, EventTime::from_nanos(1)).with_composition(ImeComposition::Inactive);
-    assert!(harness.focus_manager().dispatch_key_event(&event).is_handled());
+    let event = KeyEvent::new(
+        KeyState::Down,
+        Key::character("x"),
+        Code::KeyX,
+        EventTime::from_nanos(1),
+    )
+    .with_composition(ImeComposition::Inactive);
+    assert!(
+        harness
+            .focus_manager()
+            .dispatch_key_event(&event)
+            .is_handled()
+    );
     assert_eq!(controller.text(), "ni");
-    assert_eq!(controller.composing_range(), Some(0..2), "Inactive source cannot cancel controller composition");
+    assert_eq!(
+        controller.composing_range(),
+        Some(0..2),
+        "Inactive source cannot cancel controller composition"
+    );
     harness.dispatch_ime(&flui_platform_api::ImeEvent::Commit("你".into()));
     assert_eq!(controller.text(), "你");
     assert!(!controller.is_composing());
-    assert!(harness.focus_manager().dispatch_key_event(&event).is_handled());
-    assert_eq!(controller.text(), "你x", "normal typing resumes after real commit");
+    assert!(
+        harness
+            .focus_manager()
+            .dispatch_key_event(&event)
+            .is_handled()
+    );
+    assert_eq!(
+        controller.text(),
+        "你x",
+        "normal typing resumes after real commit"
+    );
 }
 
 pub(crate) fn source_composition_leaves_traversal_and_activation_unclaimed() {
     use crate::common::harness::mount;
     use flui_widgets::{ActivateIntent, Row};
-    for key in [Key::Named(NamedKey::Tab), Key::Named(NamedKey::Enter), Key::character(" ")] {
+    for key in [
+        Key::Named(NamedKey::Tab),
+        Key::Named(NamedKey::Enter),
+        Key::character(" "),
+    ] {
         let left = FocusNode::with_debug_label("source composition left");
         let right = FocusNode::with_debug_label("source composition right");
         let activations = Rc::new(Cell::new(0));
         let observed = Rc::clone(&activations);
-        let harness = mount(Actions::new(Row::new((Focus::new(SizedBox::new(20.0, 20.0)).focus_node(Rc::clone(&left)), Focus::new(SizedBox::new(20.0, 20.0)).focus_node(Rc::clone(&right))))).action(CallbackAction::new(move |_, _: &ActivateIntent| observed.set(observed.get() + 1))));
+        let harness = mount(
+            Actions::new(Row::new((
+                Focus::new(SizedBox::new(20.0, 20.0)).focus_node(Rc::clone(&left)),
+                Focus::new(SizedBox::new(20.0, 20.0)).focus_node(Rc::clone(&right)),
+            )))
+            .action(CallbackAction::new(move |_, _: &ActivateIntent| {
+                observed.set(observed.get() + 1)
+            })),
+        );
         let _ = left.request_focus();
         let manager = harness.focus_manager();
-        let event = KeyEvent::new(KeyState::Down, key.clone(), Code::Unidentified, EventTime::from_nanos(1));
-        assert!(!manager.dispatch_key_event(&event.clone().with_composition(ImeComposition::Active)).is_handled(), "native default for {key:?}");
-        assert!(left.has_primary_focus(), "composition cannot traverse: {key:?}");
+        let event = KeyEvent::new(
+            KeyState::Down,
+            key.clone(),
+            Code::Unidentified,
+            EventTime::from_nanos(1),
+        );
+        assert!(
+            !manager
+                .dispatch_key_event(&event.clone().with_composition(ImeComposition::Active))
+                .is_handled(),
+            "native default for {key:?}"
+        );
+        assert!(
+            left.has_primary_focus(),
+            "composition cannot traverse: {key:?}"
+        );
         assert_eq!(activations.get(), 0, "composition cannot activate: {key:?}");
-        assert!(manager.dispatch_key_event(&event).is_handled(), "healthy next key: {key:?}");
+        assert!(
+            manager.dispatch_key_event(&event).is_handled(),
+            "healthy next key: {key:?}"
+        );
         if key == Key::Named(NamedKey::Tab) {
             assert!(right.has_primary_focus());
         } else {
@@ -506,27 +731,107 @@ pub(crate) fn slider_glyph_and_composition_policy() {
     use std::cell::RefCell;
     let aliases = Modifiers::ALT_GRAPH | Modifiers::CONTROL | Modifiers::ALT;
     for (key, modifiers, composition, expected) in [
-        (Key::character("+"), aliases | Modifiers::SHIFT | Modifiers::SYMBOL_LOCK, ImeComposition::Inactive, Some(35.0)),
-        (Key::character("-"), aliases | Modifiers::FN, ImeComposition::Inactive, Some(15.0)),
-        (Key::Named(NamedKey::ArrowRight), aliases | Modifiers::CAPS_LOCK, ImeComposition::Inactive, Some(35.0)),
-        (Key::Named(NamedKey::ArrowRight), Modifiers::CONTROL, ImeComposition::Inactive, None),
-        (Key::Named(NamedKey::ArrowRight), Modifiers::SHIFT, ImeComposition::Inactive, None),
-        (Key::character("+"), Modifiers::NONE, ImeComposition::Active, None),
-        (Key::Named(NamedKey::ArrowRight), Modifiers::NONE, ImeComposition::Active, None),
-        (Key::Named(NamedKey::Home), Modifiers::CAPS_LOCK, ImeComposition::Active, None),
+        (
+            Key::character("+"),
+            aliases | Modifiers::SHIFT | Modifiers::SYMBOL_LOCK,
+            ImeComposition::Inactive,
+            Some(35.0),
+        ),
+        (
+            Key::character("-"),
+            aliases | Modifiers::FN,
+            ImeComposition::Inactive,
+            Some(15.0),
+        ),
+        (
+            Key::Named(NamedKey::ArrowRight),
+            aliases | Modifiers::CAPS_LOCK,
+            ImeComposition::Inactive,
+            Some(35.0),
+        ),
+        (
+            Key::Named(NamedKey::ArrowRight),
+            Modifiers::CONTROL,
+            ImeComposition::Inactive,
+            None,
+        ),
+        (
+            Key::Named(NamedKey::ArrowRight),
+            Modifiers::SHIFT,
+            ImeComposition::Inactive,
+            None,
+        ),
+        (
+            Key::character("+"),
+            Modifiers::NONE,
+            ImeComposition::Active,
+            None,
+        ),
+        (
+            Key::Named(NamedKey::ArrowRight),
+            Modifiers::NONE,
+            ImeComposition::Active,
+            None,
+        ),
+        (
+            Key::Named(NamedKey::Home),
+            Modifiers::CAPS_LOCK,
+            ImeComposition::Active,
+            None,
+        ),
     ] {
         let proposals = Rc::new(RefCell::new(Vec::new()));
         let observed = Rc::clone(&proposals);
-        let laid = lay_out(Slider::new(NumericRange::new(25.0, 0.0, 100.0, 10.0).expect("valid range")).on_changed(move |_, value| observed.borrow_mut().push(value)), tight(100.0, 32.0));
+        let laid = lay_out(
+            Slider::new(NumericRange::new(25.0, 0.0, 100.0, 10.0).expect("valid range"))
+                .on_changed(move |_, value| observed.borrow_mut().push(value)),
+            tight(100.0, 32.0),
+        );
         laid.dispatch_pointer_down(25.0, 16.0);
         laid.dispatch_pointer_up(25.0, 16.0);
         proposals.borrow_mut().clear();
         let manager = laid.focus_manager();
-        let event = KeyEvent::new(KeyState::Down, key.clone(), Code::Unidentified, EventTime::from_nanos(1)).with_modifiers(modifiers).with_composition(composition);
-        assert_eq!(manager.dispatch_key_event(&event).is_handled(), expected.is_some(), "{key:?}, {modifiers:?}, {composition:?}");
-        assert_eq!(&*proposals.borrow(), &expected.into_iter().collect::<Vec<_>>());
-        assert!(!manager.dispatch_key_event(&KeyEvent::new(KeyState::Up, Key::Named(NamedKey::ArrowRight), Code::ArrowRight, EventTime::from_nanos(2))).is_handled());
-        assert!(manager.dispatch_key_event(&KeyEvent::new(KeyState::Down, Key::Named(NamedKey::ArrowRight), Code::ArrowRight, EventTime::from_nanos(3))).is_handled());
-        assert_eq!(proposals.borrow().last(), Some(&35.0), "healthy next slider key");
+        let event = KeyEvent::new(
+            KeyState::Down,
+            key.clone(),
+            Code::Unidentified,
+            EventTime::from_nanos(1),
+        )
+        .with_modifiers(modifiers)
+        .with_composition(composition);
+        assert_eq!(
+            manager.dispatch_key_event(&event).is_handled(),
+            expected.is_some(),
+            "{key:?}, {modifiers:?}, {composition:?}"
+        );
+        assert_eq!(
+            &*proposals.borrow(),
+            &expected.into_iter().collect::<Vec<_>>()
+        );
+        assert!(
+            !manager
+                .dispatch_key_event(&KeyEvent::new(
+                    KeyState::Up,
+                    Key::Named(NamedKey::ArrowRight),
+                    Code::ArrowRight,
+                    EventTime::from_nanos(2)
+                ))
+                .is_handled()
+        );
+        assert!(
+            manager
+                .dispatch_key_event(&KeyEvent::new(
+                    KeyState::Down,
+                    Key::Named(NamedKey::ArrowRight),
+                    Code::ArrowRight,
+                    EventTime::from_nanos(3)
+                ))
+                .is_handled()
+        );
+        assert_eq!(
+            proposals.borrow().last(),
+            Some(&35.0),
+            "healthy next slider key"
+        );
     }
 }

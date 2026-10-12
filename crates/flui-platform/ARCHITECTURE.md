@@ -1481,6 +1481,20 @@ or arbitrary aggregate destructor containment.
 
 ### Web logical keys validate their source grammar
 
+Web keyboard and MouseEvent-based pointer/wheel input preserve positive
+canonical getModifierState observations, including AltGraph and toggle states,
+alongside the four convenience booleans. Supported legacy Hyper/Super modifiers
+normalize to Meta. No source inference from Ctrl+Alt, AltRight or a named-key
+sequence is made; raw facts remain distinct from widget command interpretation
+(ADR-0201). Native observation completeness is not implied by the owned DTO.
+
+The browser probe's `observed-modifiers`, `modifier-getter-reentry` and
+`modifier-getter-retirement` controls test registered DOM delivery through public
+input, source metadata, same-family reentry and retired-owner silence followed
+by healthy replacement delivery. FnLock/SymbolLock and legacy source overrides
+are explicitly controlled-getter cases. Constructor delivery is not a physical
+keyboard/layout or native-IME witness.
+
 The private DOM getter retains the original UTF-16 string until admission.
 `JsString::is_valid_utf16` refuses an unpaired surrogate before conversion can
 replace it with U+FFFD. The literal replacement character and valid surrogate

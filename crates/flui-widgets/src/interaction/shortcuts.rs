@@ -26,7 +26,9 @@ use std::rc::Rc;
 
 use flui_interaction::routing::{FocusNode, KeyEventResult};
 use flui_platform_api::TargetPlatform;
-use flui_platform_api::keyboard::{ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey};
+use flui_platform_api::keyboard::{
+    ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey,
+};
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{EventCx, EventOutcome};

@@ -1,7 +1,8 @@
 # ADR-0023: `Shortcuts` / `Actions`, and bubbling key dispatch
 
 - **Status:** Accepted
-- **Superseded-by:** ADR-0156 (character-only Shift policy in decision 2)
+- **Superseded-by:** ADR-0156 (character-only Shift policy in decision 2);
+  ADR-0201 (source composition and ordinary command interpretation in decision 2)
 - **Date:** 2026-07-10
 - **Amended:** 2026-10-11 — shortcut resolution describes the implemented primary-focus chain and its own-chain fallback.
 - **Related:** ADR-0026 (focus widgets and traversal; Tab is an intent built on this)
@@ -34,7 +35,9 @@ above a field is its ancestor and sees what the field ignores.
 **2. `SingleActivator` and `CallbackShortcuts`.** `SingleActivator::new(key)` with
 `.control()`/`.shift()`/`.alt()`/`.meta()`/`.allow_repeats(bool)`; `matches` is Flutter's
 `accepts`: key-down or an allowed repeat, trigger equality, and an **exact** match on all four
-modifiers. `CallbackShortcuts` binds activators straight to callbacks inside a
+ordinary command dimensions. ADR-0201 projects these dimensions from raw source
+observations: explicit AltGraph excludes Control/Alt aliases, retains Meta/Shift,
+and source composition prevents ordinary matching. `CallbackShortcuts` binds activators straight to callbacks inside a
 `Focus::new(child).can_request_focus(false).on_key_event(…)` wrapper, as Flutter builds it: the
 first matching binding fires, and the key is handled iff one fired.
 

@@ -120,7 +120,10 @@ mod browser {
         .join(",");
         append_result(
             &format!("modifier-records-{label}"),
-            &format!(r#"{{"kind":"{kind}","key":{},"modifiers":{{{flags}}}}}"#, json_string(key)),
+            &format!(
+                r#"{{"kind":"{kind}","key":{},"modifiers":{{{flags}}}}}"#,
+                json_string(key)
+            ),
         );
     }
 
