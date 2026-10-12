@@ -23,10 +23,18 @@ claimed as an automatically executed CI lane.
 
 The wheel-unit button sends DOM Pixels, Lines and Pages deltas with fractional
 double precision and checks the public event's exact units, values and modifiers.
-The keyboard button checks actual DOM delivery of named keys, Cyrillic text,
-physical codes, locations, repeat/composition and normalized releases. These
-constructor-driven probes establish translation behavior, not physical keyboard
-layout or wheel hardware fidelity.
+The keyboard button checks actual registered DOM delivery to the public input
+callback. Its Down/Up table preserves supported names, Hyper/Super aliases and
+complete NFC character values, including base-plus-mark, combining-only and
+spacing-mark strings. Empty values, unknown names, multiple bases, non-NFC text,
+raw Cc controls and a non-combining suffix are Unidentified; the last healthy
+pair verifies delivery continues. Quote and backslash cases exercise JSON
+escaping in the probe's output. Every row compares logical kind/value, physical
+code, location, source timestamp, all four modifiers, composition and the
+release-not-repeat contract. These constructor-driven probes establish
+translation behavior, not physical keyboard layout, browser IME text commits
+or wheel hardware fidelity. The grammar follows
+[W3C Unicode key values](https://www.w3.org/TR/2025/REC-uievents-key-20250422/#key-string).
 
 The cancellation and capture-loss buttons check one terminal cancellation and
 the next healthy sequence. The fractional-position button checks genuine DOM

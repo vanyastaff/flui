@@ -18,6 +18,8 @@ use flui_platform_api::{
         Pressure, ScrollEvent, TangentialPressure, Twist,
     },
 };
+use icu_normalizer::{ComposingNormalizerBorrowed, properties::CanonicalCombiningClassMapBorrowed};
+use icu_properties::{CodePointMapData, props::GeneralCategory};
 
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
@@ -698,15 +700,35 @@ fn extract_modifiers_from_mouse(e: &web_sys::MouseEvent) -> Modifiers {
     modifiers
 }
 
-/// DOM named keys use the same W3C spellings as the generated owned table.
+/// Named values precede source-specific Unicode admission; refusal preserves the event.
 fn map_key_value(key: &str) -> Key {
     if matches!(key, "Hyper" | "Super") {
         Key::Named(NamedKey::Meta)
     } else if let Some(named) = NamedKey::from_w3c(key) {
         Key::Named(named)
-    } else if key.chars().count() == 1 {
+    } else if is_web_key_string(key) {
         Key::character(key)
     } else {
         Key::Named(NamedKey::Unidentified)
     }
+}
+
+/// W3C key strings are nonempty NFC text: an optional non-Cc base, then
+/// combining characters (Mc or a nonzero canonical combining class).
+fn is_web_key_string(key: &str) -> bool {
+    let mut characters = key.chars();
+    let Some(first) = characters.next() else {
+        return false;
+    };
+    let categories = CodePointMapData::<GeneralCategory>::new();
+    if categories.get(first) == GeneralCategory::Control {
+        return false;
+    }
+    let combining_classes = CanonicalCombiningClassMapBorrowed::new();
+    characters.all(|character| {
+        let category = categories.get(character);
+        category != GeneralCategory::Control
+            && (category == GeneralCategory::SpacingMark
+                || combining_classes.get_u8(character) != 0)
+    }) && ComposingNormalizerBorrowed::new_nfc().is_normalized(key)
 }

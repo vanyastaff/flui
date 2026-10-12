@@ -67,6 +67,13 @@ mod browser {
         publish(name, &format!("{previous}{value},"));
     }
 
+    fn json_string(value: &str) -> String {
+        js_sys::JSON::stringify(&JsValue::from_str(value))
+            .expect("JSON string serialization")
+            .as_string()
+            .expect("serialized JSON string")
+    }
+
     #[wasm_bindgen]
     pub fn input_probe() -> Result<(), JsValue> {
         let platform = WebPlatform::new().map_err(|error| JsValue::from_str(&error.to_string()))?;
@@ -75,17 +82,20 @@ mod browser {
             .map_err(|error| JsValue::from_str(&error.to_string()))?;
         window.on_input(Box::new(|input| {
             if let PlatformInput::Keyboard(event) = &input {
-                let key = match &event.key {
-                    flui_platform_api::keyboard::Key::Named(key) => key.as_str(),
-                    flui_platform_api::keyboard::Key::Character(text) => text.as_str(),
-                    _ => "unknown",
+                let (key, key_kind) = match &event.key {
+                    flui_platform_api::keyboard::Key::Named(key) => (key.as_str(), "Named"),
+                    flui_platform_api::keyboard::Key::Character(text) => (text.as_str(), "Character"),
+                    _ => ("unknown", "Unknown"),
                 };
                 append_result("keyboard-sequence", key);
                 publish("keyboard", &format!(
-                    r#"{{"key":"{}","code":"{}","state":"{:?}","location":"{:?}","repeat":"{:?}","composition":"{:?}","shift":{}}}"#,
-                    key, event.code.as_str(), event.state(), event.location,
+                    r#"{{"key":{},"key_kind":"{}","code":{},"time":{},"state":"{:?}","location":"{:?}","repeat":"{:?}","composition":"{:?}","shift":{},"control":{},"alt":{},"meta":{}}}"#,
+                    json_string(key), key_kind, json_string(event.code.as_str()), event.time.as_nanos(), event.state(), event.location,
                     event.repeat(), event.composition,
                     event.modifiers.contains(flui_platform_api::keyboard::Modifiers::SHIFT),
+                    event.modifiers.contains(flui_platform_api::keyboard::Modifiers::CONTROL),
+                    event.modifiers.contains(flui_platform_api::keyboard::Modifiers::ALT),
+                    event.modifiers.contains(flui_platform_api::keyboard::Modifiers::META),
                 ));
             }
             if let PlatformInput::Pointer(event) = input {
