@@ -621,8 +621,7 @@ fn a_color_tween_preserves_sub_byte_alpha_until_rasterization() {
     let owner =
         AnimationController::builder(Duration::from_secs(1)).build_on(Some(binding.vsync()));
     let scalar: Rc<dyn Animation<f64>> = Rc::new(owner.controller().clone());
-    let color =
-        Rc::new(Tween::new(Color::rgba(255, 255, 255, 0), Color::WHITE).animate(scalar));
+    let color = Rc::new(Tween::new(Color::rgba(255, 255, 255, 0), Color::WHITE).animate(scalar));
     let painted = Rc::new(std::cell::Cell::new(None));
     let root = GestureArenaScope::new(
         binding.arena().clone(),
