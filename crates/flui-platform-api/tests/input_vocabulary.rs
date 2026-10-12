@@ -290,7 +290,15 @@ fn a_key_event_is_a_repeat_only_while_down() {
     assert_eq!(down.repeat(), KeyRepeat::AutoRepeat);
 }
 
-fn an_empty_character_is_an_unidentified_key() {
+fn character_keys_preserve_nonempty_native_text_and_refuse_empty_text() {
+    // The common vocabulary admits native/authored text without applying the
+    // Web producer's NFC or single-base grammar, or resolving named spellings.
+    for text in ["ḍ̇", "का", "e\u{301}", "ab", "\r", "Enter", "👩\u{200d}💻"] {
+        let Key::Character(character) = Key::character(text) else {
+            panic!("nonempty native text must remain a character: {text:?}");
+        };
+        assert_eq!(character.as_str(), text, "native text must remain unchanged");
+    }
     assert_eq!(Key::character(""), Key::Named(NamedKey::Unidentified));
     assert_eq!(Key::from(NamedKey::Tab), Key::Named(NamedKey::Tab));
 }
@@ -608,8 +616,8 @@ fn input_vocabulary_contract() {
                 a_key_event_is_a_repeat_only_while_down,
             ),
             (
-                "an_empty_character_is_an_unidentified_key",
-                an_empty_character_is_an_unidentified_key,
+                "character_keys_preserve_nonempty_native_text_and_refuse_empty_text",
+                character_keys_preserve_nonempty_native_text_and_refuse_empty_text,
             ),
             (
                 "every_generated_key_is_found_by_its_w3c_spelling",
