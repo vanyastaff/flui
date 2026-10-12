@@ -373,12 +373,11 @@ impl PrimaryContact {
                 contact.deadline_registration.update_handle()
             })
         };
-        if let Some(update) = publication {
-            if update.publish(None).is_err() {
-                if let Some(contact) = self.current.borrow().as_ref() {
-                    contact.deadline_registration.withdraw();
-                }
-            }
+        if let Some(update) = publication
+            && update.publish(None).is_err()
+            && let Some(contact) = self.current.borrow().as_ref()
+        {
+            contact.deadline_registration.withdraw();
         }
     }
 
