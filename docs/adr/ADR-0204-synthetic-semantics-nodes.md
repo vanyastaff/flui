@@ -33,9 +33,11 @@ an index that is never reused).
 ## Decision
 
 1. **Id range.** Synthetic nodes take ids in `1..2^32`, allocated by the `SemanticsOwner` that
-   publishes them. A key `(owner node AccessibilityNodeId, ordinal)` keeps its id while the key
-   lives, so unchanged runs keep their ids across publications. A new key takes the next value;
-   a released value is never reissued during the owner's life. When the range is exhausted, the
+   publishes them. A run keeps its id while it is the same run: same owner node, same
+   ordinal, same starting character in the field and same text. Any other run takes the next
+   value, so an edit re-mints the edited run and every later run whose start moved, and an
+   outstanding `TextPosition` into a changed run is refused as stale rather than resolving to
+   other text. A released value is never reissued during the owner's life. When the range is exhausted, the
    owner refuses permanently: no further synthetic node is published, and it reports
    `tracing::error!` once. An inbound action addressed to a synthetic id resolves to its owner
    node through the reverse map; an unknown synthetic id is refused like a stale identity.
@@ -43,7 +45,10 @@ an index that is never reused).
    split at line ends, direction changes and every 256 characters; characters are grapheme
    clusters from `flui-painting::text_boundaries`, the same segmentation the editor's caret
    and word navigation use; positions and widths come from the laid-out text; a hard line break
-   is the last character of its line's run. An obscured field publishes the mask, so its runs
+   is the last character of its line's run. AccessKit's per-character length is a `u8`: a
+   cluster longer than 255 UTF-8 bytes is published as several characters split at `char`
+   boundaries (each at most 255 bytes), so the lengths still sum to the run's byte length and
+   only the published positions inside that cluster are coarser than the editor's. An obscured field publishes the mask, so its runs
    reveal only the number of characters. Runs are published as children of the field node, in
    the same tree, and only for text inputs; static text keeps its value until its cost is
    measured.
@@ -54,12 +59,14 @@ an index that is never reused).
    and IME rules (ADR-0090).
 4. **Announcer.** The owner keeps two synthetic nodes, polite and assertive live regions of role
    `Label`, as the last children of the window root. `SemanticsOwner::announce(message,
-   politeness)` writes the message to the matching node's value, which is what every adapter
+   urgency)` writes the message to the matching node's value, which is what every adapter
    reacts to; messages within one frame are coalesced, and a repeated message alternates an
    invisible separator so the adapter sees a change. Declarative live regions remain the primary
    mechanism. UI Automation notifications (`UiaRaiseNotificationEvent`, what Chromium maps
    `ariaNotify` to) are not reachable through AccessKit 0.25; that is a recorded limit, not a
-   bridge FLUI builds.
+   bridge FLUI builds. An announcement's urgency (`Polite`, `Assertive`) is its own type, apart
+   from a node's live setting, which also has `Off`: an absent live setting inherits the
+   parent's, so a `Timer` inside a polite region publishes `Off` explicitly.
 
 ## Consequences
 
@@ -69,14 +76,17 @@ an index that is never reused).
   measured in the semantics assembly benchmark.
 - The id range is a fixed 4 294 967 295 synthetic nodes per owner lifetime; exhaustion is
   terminal and observable rather than a silent collision.
-- Two word-boundary implementations exist today (`flui-painting::text_boundaries` and
-  `crates/flui-widgets/src/text/controller.rs`); the second moves to the first so published word
-  starts match Ctrl+Arrow stops.
+- Published word starts reuse the editor's word policy: the segmentation in
+  `flui-painting::text_boundaries` (`word_segments_from`) as `crates/flui-widgets/src/text/controller.rs`
+  applies it for Ctrl+Arrow (`next_word_boundary`, `prev_word_boundary`), so a screen reader's
+  word stops match the editor's. The controller's helpers stay; the run builder calls the same
+  policy rather than a copy.
 
 ## Verification
 
 `synthetic_ids_are_stable_never_reissued_and_refuse_at_exhaustion` (owner unit tests, including
-the terminal boundary); `text_runs_follow_edits_incrementally` and
+the terminal boundary); `text_runs_follow_edits_incrementally` (including an insertion before
+existing runs and an overlong grapheme cluster) and
 `obscured_fields_publish_only_the_mask` through the owner's public API;
 `published_word_starts_match_editor_word_stops`; `assistive_edits_use_the_keyboard_path` in the
 widget suite; a `TextPattern` fixture in `cargo xtask device windows-a11y` reading a field by

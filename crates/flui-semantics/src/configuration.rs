@@ -1094,10 +1094,10 @@ impl SemanticsConfiguration {
             tags: _,
             sort_key: _,
             hint_overrides: _,
-            scroll_position: _,
-            scroll_axis: _,
-            scroll_extent_max: _,
-            scroll_extent_min: _,
+            scroll_position,
+            scroll_axis,
+            scroll_extent_max,
+            scroll_extent_min,
             index_in_parent: _,
             scroll_index: _,
             scroll_child_count: _,
@@ -1115,7 +1115,18 @@ impl SemanticsConfiguration {
             value.as_ref().is_some_and(|v| !v.as_str().is_empty())
         };
 
+        // A scroll group is one scrollable's metrics: two of them never combine.
+        let scrolls = scroll_position.is_some()
+            || scroll_axis.is_some()
+            || scroll_extent_max.is_some()
+            || scroll_extent_min.is_some();
+        let their_scrolls = theirs.scroll_position.is_some()
+            || theirs.scroll_axis.is_some()
+            || theirs.scroll_extent_max.is_some()
+            || theirs.scroll_extent_min.is_some();
+
         !(states.conflicts(&theirs.states)
+            || both(scrolls, their_scrolls)
             || both(live.is_some(), theirs.live.is_some())
             || both(non_empty(value), non_empty(&theirs.value))
             || both(numeric_range.is_some(), theirs.numeric_range.is_some())
@@ -1394,6 +1405,14 @@ mod tests {
         let mut selected_b = SemanticsConfiguration::new();
         selected_b.set_selected(true);
         assert_compatibility_is_symmetric(&selected_a, &selected_b, false);
+
+        // Two scrollables never share one node, whichever metrics each declares.
+        let mut scroll_a = SemanticsConfiguration::new();
+        scroll_a.set_scroll_position(10.0);
+        let mut scroll_b = SemanticsConfiguration::new();
+        scroll_b.set_scroll_extent_max(100.0);
+        assert_compatibility_is_symmetric(&scroll_a, &scroll_b, false);
+        assert_compatibility_is_symmetric(&scroll_a, &label_a, true);
 
         let mut value_a = SemanticsConfiguration::new();
         value_a.set_value("first");
