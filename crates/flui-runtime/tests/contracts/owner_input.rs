@@ -13,6 +13,152 @@ fn key(code: Code) -> PlatformInput {
     PlatformInput::Keyboard(KeyEventBuilder::new(code).build())
 }
 
+/// Native focus loss retains the mounted target; an absent release in host
+/// HTML creates no replay obligation when the canvas owns the next press.
+fn mounted_shortcut_recovers_after_native_focus_loss_without_replay() {
+    use flui_interaction::FocusNode;
+    use flui_platform_api::keyboard::{Key, KeyEvent, KeyRepeat, KeyState, Modifiers};
+    use flui_runtime::owner::WindowObservation;
+    use flui_widgets::{
+        Actions, CallbackAction, Focus, Intent, Shortcuts, SingleActivator, SizedBox,
+    };
+
+    struct SaveIntent;
+    impl Intent for SaveIntent {}
+
+    let owner = OwnerHost::new();
+    let mut runtime = crate::owner_publication::runtime();
+    let field = FocusNode::with_debug_label("restored shortcut field");
+    let saves = Rc::new(Cell::new(0));
+    let action_saves = Rc::clone(&saves);
+    runtime
+        .attach_root_widget_with_size(
+            &Actions::new(
+                Shortcuts::new(Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&field)))
+                    .shortcut(
+                        SingleActivator::character("s")
+                            .control()
+                            .allow_repeats(false),
+                        SaveIntent,
+                    ),
+            )
+            .action(CallbackAction::new(move |_cx, _intent: &SaveIntent| {
+                action_saves.set(action_saves.get() + 1);
+            })),
+            160.0,
+            80.0,
+        )
+        .expect("mount real Focus and Shortcuts consumers");
+    runtime.synchronize_window_snapshot(
+        runtime.presentation_id(),
+        WindowExecutionState::Running,
+        true,
+        true,
+    );
+    struct Sink;
+    impl flui_runtime::sink::FrameSink for Sink {
+        fn surface_size(&mut self) -> (u32, u32) {
+            (160, 80)
+        }
+        fn submit(&mut self, _: flui_layer::Scene) -> flui_runtime::sink::SubmitVerdict {
+            flui_runtime::sink::SubmitVerdict::Presented
+        }
+    }
+    let _ = runtime.pump(
+        &mut flui_runtime::pump::SampledClock(web_time::Instant::now()),
+        &mut Sink,
+    );
+    let _ = field.request_focus();
+    assert!(
+        field.has_primary_focus(),
+        "the mounted field owns logical focus"
+    );
+    let address = owner
+        .publication(owner.prepare_runtime(runtime))
+        .expect("publish")
+        .commit();
+    let effects = Effects {
+        input: owner
+            .presentation_dispatcher(address)
+            .expect("input authority"),
+        trace: Rc::new(RefCell::new(Vec::new())),
+        nested_input: Cell::new(false),
+        wakes: Cell::new(0),
+    };
+    let event = |state, repeat| {
+        PlatformInput::Keyboard(
+            KeyEvent::new(
+                state,
+                Key::character("s"),
+                Code::KeyS,
+                flui_platform_api::EventTime::from_nanos(0),
+            )
+            .with_modifiers(Modifiers::CONTROL)
+            .with_repeat(repeat),
+        )
+    };
+    assert_eq!(
+        effects
+            .input
+            .input(event(KeyState::Down, KeyRepeat::First), &effects),
+        Ok(InputOutcome::Handled)
+    );
+    assert_eq!(
+        saves.get(),
+        1,
+        "the initial press reached the mounted action"
+    );
+    effects
+        .input
+        .observe(WindowObservation::Focus(false), &effects)
+        .expect("native focus loss");
+    assert!(
+        field.has_primary_focus(),
+        "native loss retains logical primary focus"
+    );
+    assert_eq!(saves.get(), 1, "focus loss did not replay activation");
+    // The producer rejects releases belonging to foreign DOM nodes. Deliver
+    // only the return observation and subsequently owned key packets here.
+    effects
+        .input
+        .observe(WindowObservation::Focus(true), &effects)
+        .expect("native focus return");
+    assert!(
+        field.has_primary_focus(),
+        "restoration resumes the same target"
+    );
+    assert_eq!(
+        saves.get(),
+        1,
+        "restoration did not replay the missing release or press"
+    );
+    for (state, repeat) in [
+        (KeyState::Up, KeyRepeat::First),
+        (KeyState::Down, KeyRepeat::AutoRepeat),
+    ] {
+        assert_eq!(
+            effects.input.input(event(state, repeat), &effects),
+            Ok(InputOutcome::Unhandled)
+        );
+        assert_eq!(
+            saves.get(),
+            1,
+            "release and excluded repeat do not activate"
+        );
+    }
+    assert_eq!(
+        effects
+            .input
+            .input(event(KeyState::Down, KeyRepeat::First), &effects),
+        Ok(InputOutcome::Handled)
+    );
+    assert_eq!(
+        saves.get(),
+        2,
+        "a fresh owned press activates once after recovery"
+    );
+}
+
 struct Effects {
     input: PresentationDispatcher,
     trace: Rc<RefCell<Vec<&'static str>>>,
@@ -446,6 +592,10 @@ fn owner_input_contract() {
     crate::table_test::run_table(
         "owner_input_contract",
         &[
+            (
+                "mounted_shortcut_recovers_after_native_focus_loss_without_replay",
+                mounted_shortcut_recovers_after_native_focus_loss_without_replay as fn(),
+            ),
             (
                 "pending_metrics_do_not_cross_ordered_operations",
                 pending_metrics_do_not_cross_ordered_operations as fn(),

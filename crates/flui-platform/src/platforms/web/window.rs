@@ -1,6 +1,10 @@
 //! Web window implementation wrapping a Canvas element
 
-use std::sync::Arc;
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    sync::Arc,
+};
 
 use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{Bounds, Point, Size};
@@ -15,7 +19,10 @@ use crate::{
     },
 };
 
-use super::display::WebDisplay;
+use super::{
+    display::WebDisplay,
+    registration::{CanvasClaim, Registration, effective_focus},
+};
 
 /// Web window wrapping a `<canvas>` element
 pub struct WebWindow {
@@ -23,6 +30,8 @@ pub struct WebWindow {
     canvas: web_sys::HtmlCanvasElement,
     state: Arc<Mutex<WebWindowState>>,
     callbacks: Arc<WindowCallbacks>,
+    registration: RefCell<Option<Registration>>,
+    retire_frame_slot: RefCell<Option<Box<dyn FnOnce()>>>,
 }
 
 struct WebWindowState {
@@ -134,6 +143,10 @@ impl WebWindow {
             canvas
         };
 
+        // Refuse an existing live owner before changing its sizing, focusability
+        // or title. The claim compares the actual DOM object, never its label.
+        let claim = CanvasClaim::acquire(&canvas)?;
+
         // The layout's box is the size; the requested size is the fallback
         // for a canvas that has none yet, and becomes its CSS size then —
         // including for a canvas this constructor created, whose viewport
@@ -159,13 +172,15 @@ impl WebWindow {
             width,
             height,
             scale_factor,
-            focused: true,
-            visible: true,
+            focused: effective_focus(&canvas),
+            visible: !document.hidden(),
             fullscreen: false,
         };
 
         Ok(Self {
             id,
+            registration: RefCell::new(Some(Registration::new(&canvas, claim))),
+            retire_frame_slot: RefCell::new(None),
             canvas,
             state: Arc::new(Mutex::new(state)),
             callbacks: Arc::new(WindowCallbacks::new()),
@@ -194,6 +209,122 @@ impl WebWindow {
     /// Get window callbacks for event dispatch
     pub fn callbacks(&self) -> &Arc<WindowCallbacks> {
         &self.callbacks
+    }
+
+    pub(super) fn install(
+        &self,
+        retire_frame_slot: impl FnOnce() + 'static,
+    ) -> Result<(), OpenWindowError> {
+        let mut registration = self
+            .registration
+            .borrow_mut()
+            .take()
+            .expect("BUG: newly opened window owns its registration");
+        super::events::register_event_listeners(self, &mut registration)?;
+        *self.registration.borrow_mut() = Some(registration);
+        *self.retire_frame_slot.borrow_mut() = Some(Box::new(retire_frame_slot));
+        Ok(())
+    }
+
+    pub(super) fn focus_sync(&self) -> FocusSync {
+        FocusSync {
+            canvas: self.canvas.clone(),
+            state: Arc::clone(&self.state),
+            callbacks: Arc::clone(&self.callbacks),
+            observed: Cell::new(self.state.lock().focused),
+        }
+    }
+
+    pub(super) fn visibility_sync(&self, accepting: Rc<Cell<bool>>) -> VisibilitySync {
+        VisibilitySync {
+            document: self
+                .canvas
+                .owner_document()
+                .expect("BUG: window construction verified the canvas document"),
+            state: Arc::clone(&self.state),
+            callbacks: Arc::clone(&self.callbacks),
+            observed: Cell::new(self.state.lock().visible),
+            accepting,
+        }
+    }
+
+    fn retire(&self, notify_close: bool) {
+        let registration = self.registration.borrow_mut().take();
+        let Some(registration) = registration else {
+            return;
+        };
+        registration.fence();
+        let retire_frame_slot = self.retire_frame_slot.borrow_mut().take();
+        if let Some(retire) = retire_frame_slot {
+            retire();
+        }
+        drop(registration);
+        struct Clear<'a>(&'a WindowCallbacks);
+        impl Drop for Clear<'_> {
+            fn drop(&mut self) {
+                self.0.clear();
+            }
+        }
+        let _clear = Clear(&self.callbacks);
+        if notify_close {
+            self.callbacks.dispatch_close();
+        }
+    }
+
+    fn install_callback<T>(&self, slot: &Mutex<Option<T>>, callback: T) {
+        let accepting = self.registration.borrow().is_some();
+        let old = if accepting {
+            slot.lock().replace(callback)
+        } else {
+            Some(callback)
+        };
+        crate::shared::panic_boundary::contain_owner_callback(|| drop(old));
+    }
+}
+
+impl Drop for WebWindow {
+    fn drop(&mut self) {
+        self.retire(false);
+    }
+}
+
+pub(super) struct FocusSync {
+    canvas: web_sys::HtmlCanvasElement,
+    state: Arc<Mutex<WebWindowState>>,
+    callbacks: Arc<WindowCallbacks>,
+    observed: Cell<bool>,
+}
+
+impl FocusSync {
+    pub(super) fn sync(&self) {
+        let focused = effective_focus(&self.canvas);
+        if self.observed.replace(focused) == focused {
+            return;
+        }
+        let state = Arc::clone(&self.state);
+        self.callbacks
+            .dispatch_focus_observation(focused, move || state.lock().focused = focused);
+    }
+}
+
+pub(super) struct VisibilitySync {
+    pub(super) document: web_sys::Document,
+    state: Arc<Mutex<WebWindowState>>,
+    callbacks: Arc<WindowCallbacks>,
+    observed: Cell<bool>,
+    accepting: Rc<Cell<bool>>,
+}
+
+impl VisibilitySync {
+    pub(super) fn sync(&self) {
+        let visible = !self.document.hidden();
+        // A host getter can synchronously retire this registration.
+        if !self.accepting.get() || self.observed.replace(visible) == visible {
+            return;
+        }
+        let state = Arc::clone(&self.state);
+        self.callbacks
+            .dispatch_visibility_observation(visible, move || state.lock().visible = visible);
     }
 }
 
@@ -232,15 +363,6 @@ impl LayoutSync {
     }
 }
 
-impl WebWindow {
-    /// Update focus state (called from focus/blur events)
-    // Unused until the web backend subscribes to focus/blur on the canvas.
-    #[expect(dead_code)]
-    pub fn update_focus(&self, focused: bool) {
-        self.state.lock().focused = focused;
-    }
-}
-
 impl crate::traits::HostWindow for WebWindow {}
 
 impl PlatformWindow for WebWindow {
@@ -270,7 +392,10 @@ impl PlatformWindow for WebWindow {
     }
 
     fn request_redraw(&self) {
-        self.callbacks.dispatch_request_frame();
+        let accepting = self.registration.borrow().is_some();
+        if accepting {
+            self.callbacks.dispatch_request_frame();
+        }
     }
 
     fn is_focused(&self) -> bool {
@@ -347,7 +472,7 @@ impl PlatformWindow for WebWindow {
     }
 
     fn close(&self) {
-        self.callbacks.dispatch_close();
+        self.retire(true);
     }
 
     fn set_background_appearance(&self, _appearance: WindowBackgroundAppearance) {
@@ -363,13 +488,78 @@ impl PlatformWindow for WebWindow {
 
     // ==================== Callback Registration ====================
 
-    crate::shared::impl_window_callback_setters!(callbacks);
+    fn on_input(
+        &self,
+        callback: Box<dyn FnMut(crate::traits::PlatformInput) -> crate::DispatchEventResult + Send>,
+    ) {
+        self.install_callback(&self.callbacks.on_input, callback);
+    }
+    fn on_request_frame(&self, callback: Box<dyn FnMut() + Send>) {
+        self.install_callback(&self.callbacks.on_request_frame, callback);
+    }
+    fn on_resize(&self, callback: Box<dyn FnMut(Size<f64>, f64) + Send>) {
+        self.install_callback(&self.callbacks.on_resize, callback);
+    }
+    fn on_moved(&self, callback: Box<dyn FnMut() + Send>) {
+        self.install_callback(&self.callbacks.on_moved, callback);
+    }
+    fn on_close(&self, callback: Box<dyn FnOnce() + Send>) {
+        self.install_callback(&self.callbacks.on_close, callback);
+    }
+    fn on_should_close(&self, callback: Box<dyn FnMut() -> bool + Send>) {
+        self.install_callback(&self.callbacks.on_should_close, callback);
+    }
+    fn on_safe_area_change(
+        &self,
+        callback: Box<dyn FnMut(flui_foundation::geometry::EdgeInsets) + Send>,
+    ) {
+        let accepting = self.registration.borrow().is_some();
+        crate::shared::panic_boundary::contain_owner_callback(|| {
+            if accepting {
+                self.callbacks.set_safe_area_callback(callback);
+            } else {
+                drop(callback);
+            }
+        });
+    }
+    fn on_execution_state_change(
+        &self,
+        callback: Box<dyn FnMut(crate::WindowExecutionState) + Send>,
+    ) {
+        let accepting = self.registration.borrow().is_some();
+        crate::shared::panic_boundary::contain_owner_callback(|| {
+            if accepting {
+                self.callbacks.set_execution_state_callback(callback);
+            } else {
+                drop(callback);
+            }
+        });
+    }
+    fn on_active_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+        self.install_callback(&self.callbacks.on_active_status_change, callback);
+    }
+    fn on_visibility_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+        self.install_callback(&self.callbacks.on_visibility_status_change, callback);
+    }
+    fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+        self.install_callback(&self.callbacks.on_hover_status_change, callback);
+    }
+    fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
+        self.install_callback(&self.callbacks.on_appearance_changed, callback);
+    }
+    fn on_surface_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+        self.install_callback(&self.callbacks.on_surface_status_change, callback);
+    }
 
     // ==================== GPU Surface Handles ====================
 
     fn window_handle(
         &self,
     ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        let accepting = self.registration.borrow().is_some();
+        if !accepting {
+            return Err(raw_window_handle::HandleError::Unavailable);
+        }
         use raw_window_handle::{RawWindowHandle, WebCanvasWindowHandle, WindowHandle};
 
         // WebCanvasWindowHandle expects a NonNull<c_void> pointer to the canvas object
