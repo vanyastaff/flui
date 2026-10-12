@@ -334,6 +334,10 @@ impl UiRuntime {
         state: crate::owner::RecoveryState,
         deadlines: DeadlineOperation,
     ) {
+        // A source can reenter an inbox drain while it is being observed. Share
+        // the enclosing owner budget without holding a borrow across that call:
+        // nested drains still apply commands, but defer their metadata refresh.
+        let _turn = self.begin_geometry_turn();
         let now = flui_foundation::MonotonicClock::now(&self.clock);
         let mut sampling: Vec<_> = self
             .presentations
