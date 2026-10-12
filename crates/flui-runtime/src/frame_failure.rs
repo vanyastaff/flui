@@ -1,11 +1,16 @@
 //! Typed frame-failure reporting — the embedder-visible half of the
-//! presentation-frame transaction boundary (ADR-0048).
+//! presentation-frame and sampling boundaries (ADR-0048, ADR-0199).
 //!
 //! A frame attempt can fail terminally when the pipeline returns a structured
 //! [`flui_rendering::RenderError`] or a panic escapes its outer segment. A
 //! narrower lifecycle boundary can instead recover and let the attempt
-//! continue. Both outcomes surface as a [`FrameFailureReport`] instead of a
-//! silent skip: `tracing` carries the structured diagnostics, and an embedder
+//! continue. Sampling distinguishes a source that failed before commit from
+//! delivery that failed after valid state committed. Its typed
+//! [`FrameFailureKind::SamplingPanic`] preserves the first cause separately
+//! from any later publication blocker. A blocker drops only an admitted fresh
+//! or retained attempt; delivery-only and outside-frame operations without an
+//! attempt remain contained. These outcomes surface as a [`FrameFailureReport`]
+//! instead of a silent skip: `tracing` carries the structured diagnostics, and an embedder
 //! that registered a [`FrameFailureHandler`] via
 //! `flui_app::AppConfig::with_frame_failure_handler` receives the typed
 //! report synchronously on the UI thread. The types here are re-exported at
@@ -227,6 +232,52 @@ pub enum SegmentPhase {
     Scene,
 }
 
+/// The owner operation in which a presentation's sampling failure originated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SamplingStage {
+    /// Selecting or reconciling the presentation's required frame premises.
+    Preparation,
+    /// Computing and delivering controller samples at the selected motion tick.
+    Animation,
+    /// Resolving an input deadline and delivering its committed transition.
+    GestureDeadline,
+    /// Observing deadline sources before publishing the host scheduling snapshot.
+    DeadlineDiscovery,
+}
+
+/// The postcondition proved at the failing callout, independently of its text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SamplingFailureOrigin {
+    /// A required proposal failed before its valid state commit.
+    Computation,
+    /// Valid state and delivery debt were committed before the callback failed.
+    Delivery,
+    /// The operation establishes no reliable postcondition for its partial work.
+    Unknown,
+}
+
+impl SamplingFailureOrigin {
+    pub(crate) fn from_class(class: flui_foundation::panic::FailureClass) -> Self {
+        match class {
+            flui_foundation::panic::FailureClass::Computation => Self::Computation,
+            flui_foundation::panic::FailureClass::Delivery => Self::Delivery,
+            flui_foundation::panic::FailureClass::Unknown => Self::Unknown,
+        }
+    }
+}
+
+/// Provenance of one actual sampling failure, recorded before recovery callouts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct SamplingFailure {
+    /// The affected owner operation.
+    pub stage: SamplingStage,
+    /// The operation's proved computation or delivery postcondition.
+    pub origin: SamplingFailureOrigin,
+}
+
 /// What happened during one presentation's frame attempt.
 ///
 /// Terminal structured pipeline errors (caller validation, recoverable
@@ -234,10 +285,32 @@ pub enum SegmentPhase {
 /// panics that escape every inner recovery layer surface as
 /// [`Self::SegmentPanic`]. Lifecycle panics recovered by a narrower boundary
 /// surface as [`Self::RecoveredPanic`] while the surrounding attempt may
-/// continue.
+/// continue. Sampling and scheduling observations use [`Self::SamplingPanic`]
+/// to preserve both the first cause and independent publication eligibility.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum FrameFailureKind {
+    /// A presentation-owned sampling or scheduling-observation operation failed.
+    ///
+    /// The first cause remains authoritative even when a later computation or
+    /// unknown failure makes this cohort unsuitable for a new frame. A failure
+    /// without an admitted frame attempt is a contained operation report and
+    /// does not invent a dropped-frame streak.
+    #[non_exhaustive]
+    SamplingPanic {
+        /// Provenance of the first captured panic, whose text is retained below.
+        first: SamplingFailure,
+        /// The first computation or unknown failure that restricts publication.
+        /// This can describe a later callout than `first`.
+        blocking: Option<SamplingFailure>,
+        /// Whether the operation rejected or continued an admitted frame attempt.
+        admitted_attempt: bool,
+        /// The original panic text after applying the selected detail policy.
+        message: PanicText,
+        /// Whether the raw first payload asserts the framework `BUG:` convention.
+        /// This is diagnostic metadata and does not select a recovery policy.
+        internal_invariant: bool,
+    },
     /// A panic escaped the presentation's complete
     /// Build/Finalize/Pipeline/Tail/Scene segment and was caught at the
     /// UI runtime's frame-transaction boundary — the last-resort seam, reached
@@ -316,6 +389,17 @@ impl FrameFailureKind {
     /// The only valid disposition for this kind of report.
     pub(crate) fn disposition(&self) -> FailureDisposition {
         match self {
+            Self::SamplingPanic {
+                blocking,
+                admitted_attempt,
+                ..
+            } => {
+                if *admitted_attempt && blocking.is_some() {
+                    FailureDisposition::FrameDropped
+                } else {
+                    FailureDisposition::Contained
+                }
+            }
             Self::SegmentPanic { .. } | Self::Pipeline { .. } => FailureDisposition::FrameDropped,
             Self::RecoveredPanic { .. } | Self::CallbackPanic { .. } => {
                 FailureDisposition::Contained
@@ -352,13 +436,18 @@ pub struct FrameFailureReport {
 /// An embedder-registered callback receiving every [`FrameFailureReport`].
 ///
 /// Register via `flui_app::AppConfig::with_frame_failure_handler`.
-/// Invoked synchronously on the UI thread, from inside the frame pump,
-/// after the presentation's complete frame attempt finishes and its recovery
-/// queue is drained. A frame with multiple recovered occurrences delivers
-/// one contained report for each, in recovery order. Keep it lightweight and
-/// re-entrancy-free: record/forward the report and return — do not call
-/// back into FLUI APIs (opening windows, attaching widgets) from inside
-/// the handler; the UI runtime that produced the report is mid-frame.
+/// Invoked synchronously on the UI thread. Sampling reports arrive after every
+/// presentation has sampled and established recovery, before the build walk;
+/// retained premises are reconciled again after their diagnostics. Other frame
+/// reports arrive after the complete attempt and its recovery queue are drained.
+/// Scheduling-observation reports outside a frame wait until the owner runtime
+/// lease and storage guards have returned. A frame with multiple recovered
+/// occurrences delivers one contained report for each, in recovery order.
+/// Keep the callback lightweight. Frame reports still run inside their frame
+/// transaction: mutations admitted through existing handles are reconciled
+/// before a retained segment publishes. Outside-frame scheduling reports can
+/// observe the restored owner's cached scheduling state; ordinary owner FIFO
+/// admission still applies to further work.
 /// Embedders that forward repeated deterministic recoveries own any desired
 /// deduplication or throttling.
 ///

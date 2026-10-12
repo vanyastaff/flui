@@ -22,7 +22,7 @@
 //! controller run twice (forward to completion, then reverse) is ticked from the
 //! second run's own start instead of snapping to its target on the first frame.
 
-use flui_foundation::panic::RecoveryScope;
+use flui_foundation::panic::{FailureClass, RecoveryScope};
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 use std::rc::{Rc, Weak};
@@ -324,8 +324,8 @@ impl Vsync {
             (inner.request_frame.clone(), inner.parent.clone())
         };
         if let Some(request) = request {
-            retirement.run(|| request());
-            retirement.retire(request);
+            retirement.run_classified(FailureClass::Delivery, |_| request());
+            retirement.retire_classified(FailureClass::Delivery, request);
         }
         if let Some(parent) = parent {
             parent.request_frame(retirement);
@@ -645,11 +645,22 @@ impl Vsync {
     /// preserving that failure through callback and capture retirement.
     pub fn tick_all(&self, tick: &FrameTick) {
         let mut retirement = Retirement::new();
-        let authority = self.frame_authority();
+        self.tick_all_with_recovery(tick, &mut retirement.scope());
+        retirement.finish();
+    }
+
+    /// Run the registry under its presentation's existing failure custody.
+    ///
+    /// The runtime supplies one owner for independent sampling stages, then
+    /// chooses publication and report disposition from the captured provenance.
+    /// Standalone [`Self::tick_all`] resumes the same first payload after this
+    /// walk. Neither path loses live peers or admitted delivery on failure.
+    #[doc(hidden)]
+    pub fn tick_all_with_recovery(&self, tick: &FrameTick, retirement: &mut RecoveryScope<'_>) {
         retirement.run_with(|retirement| {
+            let authority = self.frame_authority();
             self.tick_all_with_retirement(*tick, &authority, None, retirement);
         });
-        retirement.finish();
     }
 
     /// A directly ticked subtree retains the clock authority of its live parent

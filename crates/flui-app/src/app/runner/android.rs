@@ -619,13 +619,10 @@ impl AndroidFrameDriver {
 
         match action {
             WakeAction::Skip => return,
-            WakeAction::PumpAsync => {
-                // Frames disabled: pump only the async driver — no
-                // frame, no tickers, no pipeline, no present. See
-                // `wake_action`'s doc for why this is the only thing
-                // keeping a spawned future progressing while
-                // backgrounded, and `UiRuntime::pump_background` for
-                // the latch-first order it keeps.
+            WakeAction::PumpBackground => {
+                // Frames disabled: service owner commands, async tasks, and
+                // input deadlines without animation or a visual frame. See
+                // `UiRuntime::pump_background` for the latch-first order.
                 ui_runtime.pump_background();
                 // Unconditional throttle: a self-re-arming task has
                 // no vsync/present call to bound it here either, and

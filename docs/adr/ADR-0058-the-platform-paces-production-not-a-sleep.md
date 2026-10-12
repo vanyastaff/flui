@@ -81,8 +81,12 @@ are. A deadline source must be in the dirty predicate **and** self-clearing, or 
 arrives and is skipped.
 
 **5. Android keeps its sleep, renamed.** `BACKGROUNDED_PUMP_PACE` bounds the backgrounded
-(`PumpAsync`) arm, which has no wake-deadline hook to arm instead. `DeviceRecoveryBackoff::BASE`
+(`PumpBackground`) arm, which has no wake-deadline hook to arm instead. `DeviceRecoveryBackoff::BASE`
 no longer aliases a pacing constant.
+
+[ADR-0199](ADR-0199-presentation-sampling-recovery.md) adds due input-deadline
+service to that background operation; it does not change Android's pacing or
+enable frame production while frames are disabled.
 
 ## Per-backend facts
 

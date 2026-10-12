@@ -98,6 +98,34 @@ pub(crate) struct SavedTextSegment {
     service_attempts: u8,
 }
 
+/// The exact retained attempt that supplied a sampling operation's frozen tick.
+pub(crate) struct RetainedSample {
+    seal: Weak<()>,
+    tick: FrameTick,
+}
+
+impl RetainedSample {
+    pub(crate) fn tick(&self) -> FrameTick {
+        self.tick
+    }
+
+    fn matches(&self, current: Option<&SavedTextSegment>) -> bool {
+        current.is_some_and(|saved| Weak::ptr_eq(&self.seal, &Rc::downgrade(&saved.seal)))
+    }
+}
+
+pub(crate) fn retained_sample(presentation: &PresentationState) -> Option<RetainedSample> {
+    presentation
+        .text_preparation
+        .borrow()
+        .segment
+        .as_ref()
+        .map(|saved| RetainedSample {
+            seal: Rc::downgrade(&saved.seal),
+            tick: saved.tick,
+        })
+}
+
 #[derive(Default)]
 pub(crate) struct TextPreparation {
     installed: Option<TextSizingSource>,
@@ -136,22 +164,44 @@ fn accepts(presentation: &PresentationState, saved: &SavedTextSegment) -> bool {
             .with_build_owner(|owner| owner.accepts_build_premise(&saved.build))
 }
 
+/// A late observer can admit new input after retained compatibility was checked.
+/// Observe it without draining queues or invoking another observer in this turn.
+pub(crate) fn retained_needs_reconciliation(
+    presentation: &PresentationState,
+    constraints: BoxConstraints,
+    expected: Option<&RetainedSample>,
+) -> bool {
+    let state = presentation.text_preparation.borrow();
+    expected.is_some_and(|sample| !sample.matches(state.segment.as_ref()))
+        || state.segment.as_ref().is_some_and(|saved| {
+            saved.constraints != constraints
+                || !accepts(presentation, saved)
+                || presentation
+                    .pipeline()
+                    .with(PipelineOwner::has_pending_invalidations)
+        })
+}
+
 /// Withdraw an obsolete retained attempt and report that its sampled premises
 /// can no longer be used. A caller after the pre-phase defers to a fresh sample.
-pub(crate) fn reconcile(presentation: &PresentationState, constraints: BoxConstraints) -> bool {
+pub(crate) fn reconcile_with_recovery(
+    presentation: &PresentationState,
+    constraints: BoxConstraints,
+    expected: Option<&RetainedSample>,
+    recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
+) -> bool {
     presentation.pipeline().with_mut(|owner| {
-        owner.drain_pending_dirty();
+        owner.drain_pending_dirty_with_recovery(recovery);
     });
-    let compatible = presentation
-        .text_preparation
-        .borrow()
-        .segment
-        .as_ref()
-        .is_none_or(|saved| saved.constraints == constraints && accepts(presentation, saved));
+    let compatible = {
+        let state = presentation.text_preparation.borrow();
+        expected.is_none_or(|sample| sample.matches(state.segment.as_ref()))
+            && state.segment.as_ref().is_none_or(|saved| {
+                saved.constraints == constraints && accepts(presentation, saved)
+            })
+    };
     if !compatible {
-        let retired = presentation.text_preparation.borrow_mut().segment.take();
-        presentation.pipeline().withdraw_layout();
-        drop(retired);
+        withdraw_for_retry(presentation, recovery);
     }
     !compatible
 }
@@ -163,6 +213,29 @@ pub(crate) fn can_run(presentation: &PresentationState) -> bool {
         .segment
         .as_ref()
         .is_none_or(|saved| matches!(saved.wait, Wait::Resume))
+}
+
+/// Reject the old receipt and reopen layout without acknowledging its geometry.
+/// Establish replacement custody before retiring the abandoned cohort.
+pub(crate) fn withdraw_for_retry(
+    presentation: &PresentationState,
+    recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
+) {
+    let retired = {
+        let mut state = presentation.text_preparation.borrow_mut();
+        state.replacement_barrier = true;
+        state.segment.take()
+    };
+    presentation.pipeline().withdraw_layout();
+    presentation
+        .pipeline()
+        .with_mut(PipelineOwner::resume_retained_layout);
+    presentation.text_input().set_transaction_open(true);
+    // The saved segment owns closed framework values. Cancellation must release
+    // its numeric answer pins even while preserving an earlier opaque failure.
+    recovery.run_classified(flui_foundation::panic::FailureClass::Unknown, |_| {
+        drop(retired);
+    });
 }
 
 pub(crate) fn admit(

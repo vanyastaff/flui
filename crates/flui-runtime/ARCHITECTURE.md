@@ -27,6 +27,50 @@ host.
   `system_motion_change_reaches_media_query_and_the_clock` exercises actual
   frame sampling, inherited publication and late presentation seeds.
 
+- **Sampling failure preserves independent progress.** Each presentation owns
+  its sampling provenance, first failure and independent publication blocker
+  ([ADR-0199](../../docs/adr/ADR-0199-presentation-sampling-recovery.md)). All
+  presentations sample before any builds. Fresh admission polls the frame clock
+  once before diagnostics. Delivery-only failure preserves committed samples
+  and can continue; computation or unknown failure rejects an admitted fresh
+  or retained attempt. Independent controllers, input deadlines and sibling
+  presentations still progress. The public pump tables
+  `presentation_delivery_failure_keeps_healthy_sampling_build_and_completion`
+  and `presentation_computation_failure_rejects_its_frame_and_preserves_healthy_work`
+  distinguish displayed values, build, completion, addressed reports and the
+  next healthy operation.
+
+- **Scheduling reads invoke no foreign code.** Host wake and pending
+  getters read committed deadline snapshots. Guard-free owner execution refreshes
+  changed observations; scheduling reports wait until runtime checkout returns.
+  Explicit deadline update authority commits each revision before waking.
+  A failed pure query receives one automatic probe after 100 ms, then parks;
+  an unknown poll cannot automatically replay the same revision. Healthy earlier
+  deadlines remain eligible. `owner_sampling_contract` exercises the restored
+  owner boundary, inert reads, competing diagnostics and live publisher updates;
+  interaction's `owner_deadline_recovery_matrix` pins quarantine and revision
+  identity. The interval is FLUI recovery policy, not an OS execution guarantee.
+  Deadline-query reentry shares the enclosing owner opportunity; nested inbox
+  work does not recursively rediscover its active source or restart a poll
+  budget. The table's
+  `deadline_query_reentry_does_not_rediscover_its_active_source` row distinguishes
+  one admitted observation from a second nested query and checks inert wake
+  reads afterwards.
+  Armed query retries contribute to both the cached wake deadline and pending
+  work: a native frame gate must admit their owner pump. The same mapping of
+  observation state supplies both facts; parked/retired sources contribute
+  neither. `query_retry_participates_in_the_pending_gate_and_then_settles`
+  drives the public owner frame/drain/pending-gate path, distinguishes delivery
+  on the due owner opportunity from discovery on lease return, and verifies
+  that repeated failure parks without another wake or report.
+  Successful explicit query observations remain cached through unrelated owner
+  work, including after recovery. `registered_query_revision_is_observed_once`
+  and `registered_query_reprobe_success_stays_cached` pin new refresh admission,
+  unchanged numerical timing and cancellation. Query-derived due polls still
+  resample changed timing; legacy arena sources keep owner-driven discovery.
+  The pending-gate family also covers registered post-poll resampling and silence
+  after the member clears its timing.
+
 - **Completion belongs to a presentation.** Assembly installs that
   presentation's weak post-frame handle before mounting elements. An incomplete
   segment retains its callbacks; only a completed segment makes them eligible.
@@ -58,12 +102,17 @@ host.
 
 - **Registered text preparation resumes the same presentation segment.** The
   saved segment owns its original tick, host instant, constraints, accepted DPR,
-  numeric policy, multi-source cohort and opaque layout/build premises. Actual
+  numeric policy, multi-source cohort and sealed layout/build identity premises. Actual
   admission advances premises before deduplication; retained transport does not.
   Dirty-channel requests are applied before compatibility is checked. Premises
-  are checked again immediately before a segment, after pre-phase and earlier
-  sibling callbacks. An obsolete retained sample is withdrawn and retried with
+  are checked again immediately before a segment, after sampling and its
+  diagnostics. An obsolete retained sample is withdrawn and retried with
   a fresh next-pump tick; it cannot discharge completion debt.
+  The sampled retained identity remains authoritative even if diagnostics
+  remove the saved segment or replace it. A later preparation report gets one
+  passive validation of its own admissions, without recursively draining
+  callbacks or reporting. Fresh input remains same-pump eligible when the
+  sampled operation had no former retained attempt.
   `a_sibling_animation_admission_replaces_ready_text_before_geometry_publication`
   pins accepted sibling input, withheld completion and the repaired glyph size.
   Native service receives an owned frontier after Runtime checkout returns and settles
@@ -74,6 +123,15 @@ host.
   and scene submission. `registered_text_preparation_preserves_the_actual_presentation_attempt`
   pins fractional continuation and repeated already-pending rebuild admission;
   `owner_delivery_contract` pins released-checkout service and close fencing.
+  Delivery-only sampling preserves a compatible frozen frontier. A publication
+  blocker invalidates old receipt authority, withdraws geometry and restores
+  runnable layout while the replacement barrier stays uncommitted. The retained
+  table's `unknown_deadline_withdraws_the_old_receipt_and_recovers_fresh_geometry`
+  and `a_sampling_report_replaces_ready_text_before_geometry_publication` rows
+  distinguish rejected late settlement from valid replacement geometry.
+  Withdrawn closed numeric cohorts release their answer pins outside borrows;
+  preserving an incoming opaque failure does not keep obsolete numeric answers
+  pinned indefinitely.
 
 - **Inherited DPR agrees with the render pipeline.** Initial media data uses
   the pipeline's accepted ratio. Direct updates reject non-positive and
@@ -219,7 +277,8 @@ host.
   Scheduler execution runs through `OwnerFrame::drive_frame`. A wake with
   frames disabled runs `OwnerFrame::pump_background` instead: consume old
   demand, drain commands and service runtime gesture geometry, acknowledge the
-  drained redraw request, then poll ready tasks once, no frame. Preparation runs
+  drained redraw request, then poll ready tasks once and advance due input
+  deadlines without animation sampling or a presentation segment. Preparation runs
   inside owner admission; the host background dispatcher does no prior drain.
   Whether a wake
   becomes a pump is the host's per-backend wake gate (ADR-0058), not the
@@ -545,7 +604,9 @@ frame's duration, relative to the UI runtime's start), so a controller advances 
 frame time, not by whenever the tick happened to read the wall clock. A frame
 driven outside a pump (a bare `draw_frame`/`render_frame` in a test) falls
 back to the wall clock, and a test can still override it with
-`set_now_secs_for_test`. **Unasserted:** no test pins the pump timestamp.
+`set_now_secs_for_test`. The public
+`one_pump_shares_its_selected_time_across_parent_and_child` row distinguishes
+this selected timestamp from a host clock moved by an earlier callback.
 
 Each presentation maps that one raw time through its own
 `flui_animation::MotionClock` before ticking its registry, so the time a
@@ -800,6 +861,14 @@ privately because the public boundary requires billions of calls to reach.
 
 ### Frame failure delivery isolates diagnostics and opaque ownership
 
+A sampling operation records the first cause and any independent publication
+blocker before recovery or diagnostics. Its one aggregate `SamplingPanic`
+report is dropped only for an admitted attempt with a blocker. An outside-frame
+query or deadline fault without retained work remains contained and does not
+invent a frame-failure streak. A later preparation failure after diagnostics is
+a separate operation and reports its own cause; it never repeats the earlier
+sampling payload or changes that sealed disposition.
+
 A segment failure is classified by borrowing its payload, then the opaque payload
 is retained before recovery or diagnostics can run. The typed report owns only
 framework values and strings. Diagnostics and the registered handler run under
@@ -816,6 +885,15 @@ one segment report, no partial submission and the next automatic retry presentin
 The existing private segment probe injects a failure that consumers cannot place
 at this exact outer boundary; the registered report handler and real frame driver
 are the production paths.
+
+Sampling diagnostics run after every presentation has sampled and established
+recovery, before the build walk. Their mutations are reconciled before any
+retained geometry can publish. Outside-frame scheduling reports use an owned
+batch taken before checkout returns and delivered afterwards, without a runtime
+storage guard. Each report uses the current handler, so replacement can affect
+later reports without reentering the original checkout. `owner_sampling_contract`
+pins this public owner path with query, tracing, handler and earlier-operation
+failures in competition.
 
 ## Exceptional terminal presentation ownership
 

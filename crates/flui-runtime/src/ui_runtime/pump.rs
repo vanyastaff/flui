@@ -4,6 +4,12 @@
 use super::{DrainReport, UiRuntime};
 use crate::pump::{FrameClockSource, FrameOutcome};
 use crate::sink::FrameSink;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+
+enum DeadlineWork {
+    Observe,
+    Poll,
+}
 
 /// Publishes a pump's frame timestamp for the frame's duration and restores it
 /// on the way out, the unwinding way included. Rejected nested execution
@@ -223,40 +229,47 @@ impl UiRuntime {
         let deadline = clock.idle_deadline(now);
         let mut frame_time = None;
         let mut geometry_turn = None;
-        let outcome = self.enter(|ui_runtime| {
-            // Begin, draw and end frame run as the ui_runtime's text-store
-            // transaction, with the commit anchor after it (ADR-0027 §3).
-            let presented = ui_runtime.drive_frame(
-                now,
-                deadline,
-                || {
-                    frame_time = Some(FrameTimeGuard::publish(self, now));
-                    geometry_turn = Some(ui_runtime.begin_geometry_turn());
-                    let report = ui_runtime.drain_commands();
-                    if report != DrainReport::default() {
-                        tracing::trace!(?report, "owner inbox drained at pump start");
-                    }
-                    ui_runtime.service_gesture_geometry(
-                        geometry_turn
-                            .as_ref()
-                            .expect("BUG: admitted preparation installed its turn"),
-                    );
-                },
-                || ui_runtime.render_frame(sink),
-            );
-            FrameOutcome::new(presented)
-        });
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            self.enter(|ui_runtime| {
+                // Begin, draw and end frame run as the ui_runtime's text-store
+                // transaction, with the commit anchor after it (ADR-0027 §3).
+                let presented = ui_runtime.drive_frame(
+                    now,
+                    deadline,
+                    || {
+                        frame_time = Some(FrameTimeGuard::publish(self, now));
+                        geometry_turn = Some(ui_runtime.begin_geometry_turn());
+                        let report = ui_runtime.drain_commands();
+                        if report != DrainReport::default() {
+                            tracing::trace!(?report, "owner inbox drained at pump start");
+                        }
+                        ui_runtime.service_gesture_geometry(
+                            geometry_turn
+                                .as_ref()
+                                .expect("BUG: admitted preparation installed its turn"),
+                        );
+                    },
+                    || ui_runtime.render_frame(sink),
+                );
+                FrameOutcome::new(presented)
+            })
+        }));
+        let admitted = frame_time.is_some();
         drop(geometry_turn);
         drop(frame_time);
-        outcome
+        if !admitted {
+            return outcome.unwrap_or_else(|failure| resume_unwind(failure));
+        }
+        self.finish_owner_activity(outcome, DeadlineWork::Observe)
     }
 
     /// A wake that runs no frame: clear the scheduler's frame latch, drain
     /// commands and service geometry, then poll ready async tasks once.
-    /// No begin frame, no tickers, no pipeline,
-    /// no present. Hosts call it for a wake whose gate found frames disabled
+    /// Due input deadlines run after that transaction even while visual frame
+    /// gates are closed. No begin frame, animation, build, layout, paint or
+    /// present. Hosts call it for a wake whose gate found frames disabled
     /// (the app is hidden, paused or detached), and iOS for every owner turn,
-    /// which only commits commands and polls, frames enabled or not.
+    /// which commits commands and polls, frames enabled or not.
     ///
     /// The order is load-bearing. No begin frame consumes the old demand
     /// here, so the background operation must do it before preparation and
@@ -268,16 +281,23 @@ impl UiRuntime {
     /// failure preserves ready tasks and retries their wake delivery.
     pub fn pump_background(&mut self) {
         let mut turn = None;
-        self.enter(|ui_runtime| {
-            ui_runtime
-                .owner_frame
-                .pump_background(|| {
-                    turn = Some(ui_runtime.begin_geometry_turn());
-                    ui_runtime.drain_owner_inbox();
-                })
-                .expect("BUG: the runtime's live frame owner must admit its background turn");
-        });
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            self.enter(|ui_runtime| {
+                ui_runtime
+                    .owner_frame
+                    .pump_background(|| {
+                        turn = Some(ui_runtime.begin_geometry_turn());
+                        ui_runtime.drain_owner_inbox();
+                    })
+                    .expect("BUG: the runtime's live frame owner must admit its background turn");
+            });
+        }));
+        let admitted = turn.is_some();
         drop(turn);
+        if !admitted {
+            return outcome.unwrap_or_else(|failure| resume_unwind(failure));
+        }
+        self.finish_owner_activity(outcome, DeadlineWork::Poll);
     }
 
     /// Commit the owner inbox at the Idle boundary and report whether the
@@ -290,11 +310,71 @@ impl UiRuntime {
     /// from filling; the coalesced redraw request is consumed here.
     pub fn drain_owner_inbox(&self) -> bool {
         let turn = self.begin_geometry_turn();
-        let report = self.drain_commands();
-        if report != DrainReport::default() {
-            tracing::trace!(?report, "owner inbox drained");
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            let report = self.drain_commands();
+            if report != DrainReport::default() {
+                tracing::trace!(?report, "owner inbox drained");
+            }
+            self.service_gesture_geometry(&turn);
+            self.take_redraw_request()
+        }));
+        drop(turn);
+        self.finish_owner_activity(outcome, DeadlineWork::Observe)
+    }
+
+    /// Commands, deferred grants and async callbacks may replace a deadline
+    /// source. Refresh after their operation, preserving its original unwind.
+    fn finish_owner_activity<T>(
+        &self,
+        outcome: std::thread::Result<T>,
+        deadlines: DeadlineWork,
+    ) -> T {
+        let (value, mut first) = match outcome {
+            Ok(value) => (Some(value), None),
+            Err(failure) => (None, Some(failure)),
+        };
+        let state = if first.is_some() {
+            crate::owner::RecoveryState::PreservingFailure
+        } else {
+            crate::owner::RecoveryState::Healthy
+        };
+        let outer_turn_finished = self.geometry_turn.borrow().is_none();
+        let refresh = catch_unwind(AssertUnwindSafe(|| {
+            match deadlines {
+                // An inbox drain can precede its enclosing frame's sampling.
+                // Discovery waits for the completed owner transaction, so a
+                // failed retained attempt cannot be replaced in that same pump.
+                DeadlineWork::Observe if outer_turn_finished => {
+                    self.refresh_deadline_observations(state);
+                }
+                DeadlineWork::Observe => {}
+                // A native background wake runs no visual sampling. Its input
+                // deadlines must still progress while frame gates are closed.
+                DeadlineWork::Poll => self.sample_background_deadlines(state),
+            }
+        }))
+        .err();
+        crate::lifecycle_state::preserve_first_lifecycle_panic(
+            &mut first,
+            refresh,
+            "owner scheduling observation",
+        );
+        // An inbox drain can run inside a larger pump/background transaction.
+        // Its reports wait for that enclosing turn as well as any owner lease.
+        if outer_turn_finished {
+            let delivery = catch_unwind(AssertUnwindSafe(|| {
+                self.deliver_sampling_reports_if_unleased();
+            }))
+            .err();
+            crate::lifecycle_state::preserve_first_lifecycle_panic(
+                &mut first,
+                delivery,
+                "owner scheduling reports",
+            );
         }
-        self.service_gesture_geometry(&turn);
-        self.take_redraw_request()
+        if let Some(failure) = first {
+            resume_unwind(failure);
+        }
+        value.expect("BUG: a successful owner operation retains its result")
     }
 }

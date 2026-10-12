@@ -3,6 +3,8 @@
 #[path = "contracts/frame_clock.rs"]
 mod frame_clock;
 
+#[path = "contracts/numeric_text_answers.rs"]
+mod numeric_text_answers;
 #[path = "contracts/owner_close.rs"]
 mod owner_close;
 #[path = "contracts/owner_delivery.rs"]
@@ -15,6 +17,8 @@ mod owner_metrics;
 mod owner_publication;
 #[path = "contracts/owner_registry.rs"]
 mod owner_registry;
+#[path = "contracts/owner_sampling.rs"]
+mod owner_sampling;
 #[path = "../src/table_test.rs"]
 mod table_test;
 #[path = "contracts/text_frame.rs"]

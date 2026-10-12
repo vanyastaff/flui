@@ -356,8 +356,8 @@ required. Scene migration and background owner waking remain explicit follow-ups
 ### UIKit process and session ownership
 
 The owner-only background turn drains the addressed UI runtime's owner inbox,
-then polls its async driver
-without a frame. Poll-generated commands remain for the next owner opportunity.
+polls its async driver, and services input deadlines without animation or a
+visual frame (ADR-0199). Poll-generated commands remain for the next owner opportunity.
 It uses runtime incarnation authority and the shared finite FIFO budget; nested
 wakes enqueue rather than recursively poll. Background operations remain lossless
 and are not coalesced across other operations. Closing one presentation preserves

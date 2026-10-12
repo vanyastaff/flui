@@ -37,18 +37,19 @@ pub(super) fn install_pre_present_hook(
     backend.set_pre_present_hook(Some(Box::new(move || window.pre_present_notify())));
 }
 
-/// What a platform wake should do: run the full frame pipeline, pump only
-/// the async driver, or nothing.
+/// What a platform wake should do: run the full frame pipeline, service
+/// background owner work, or nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum WakeAction {
     /// Run the full frame pipeline — the pre-existing path, unchanged:
     /// frames are enabled and there is real work or a scheduled ticker.
     Render,
     /// Frames are disabled (`AppLifecycleState::Hidden`/`Paused`/
-    /// `Detached`): poll only the UI runtime's ready async tasks (`UiRuntime::pump_background`) — never
-    /// begin/draw a frame, tick, run the pipeline, or present. Dirty work
-    /// is left untouched; it accumulates until frames re-enable.
-    PumpAsync,
+    /// `Detached`): drain owner commands, poll ready async tasks, and service
+    /// input deadlines through `UiRuntime::pump_background`. Visual work stays
+    /// pending until frames re-enable; animation, build, layout, paint, and
+    /// presentation do not run.
+    PumpBackground,
     /// A spurious wake while frames are enabled: nothing dirty, no
     /// scheduled ticker. No render, no pump, no sleep.
     Skip,
@@ -59,13 +60,11 @@ pub(super) enum WakeAction {
 /// dirty/scheduled-ticker signals.
 ///
 /// `frames_enabled == false` takes priority over everything else — even
-/// with `dirty` work pending, a backgrounded app pumps only the async
-/// driver; the dirty work is left alone (it accumulates untouched) rather
-/// than running a full frame nobody can see. This is the ONLY thing that
-/// keeps a spawned future progressing while the app is backgrounded: the
-/// mid-frame owner-task poll inside `handle_begin_frame` never
-/// runs in `PumpAsync` mode (no frame runs at all), so this explicit call
-/// is the only pump.
+/// with visual `dirty` work pending, a backgrounded app services owner commands,
+/// async tasks, and input deadlines without running a visual frame. The
+/// mid-frame owner-task poll inside `handle_begin_frame` does not run in
+/// `PumpBackground` mode, so these wakes keep background futures and due input
+/// work progressing.
 ///
 /// `dirty` is true when there is real work (an inbox redraw request,
 /// `needs_redraw`, or dirty pipeline nodes); `frame_scheduled` is true when
@@ -85,7 +84,7 @@ pub(super) fn wake_action(
     // period after the last present, and real dirty work (`dirty`) is
     // never held behind it.
     let action = if !frames_enabled {
-        WakeAction::PumpAsync
+        WakeAction::PumpBackground
     } else if dirty || (frame_scheduled && !fallback.pending) {
         WakeAction::Render
     } else {
@@ -186,7 +185,7 @@ pub(super) fn keeps_frame_gate_open(
 
 /// The pace a BACKGROUNDED pump (frames disabled) is bounded to on the mobile
 /// backends, whose frame sources have no wake-deadline hook to arm instead —
-/// see `bootstrap_android`'s and `bootstrap_ios`'s `PumpAsync` arms. Desktop
+/// see `bootstrap_android`'s and `bootstrap_ios`'s `PumpBackground` arms. Desktop
 /// no longer sleeps on the loop thread at all (ADR-0058, [`FallbackWake`]).
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub(super) const BACKGROUNDED_PUMP_PACE: std::time::Duration = std::time::Duration::from_millis(16);

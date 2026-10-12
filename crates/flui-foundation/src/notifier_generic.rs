@@ -516,7 +516,7 @@ impl<Arg> Notifier<Arg> {
             // the remaining snapshot must not add another failure during unwind.
             snapshot.reverse();
             while let Some((_, callback)) = snapshot.pop() {
-                recovery.retire(callback);
+                recovery.retire_callout_capture(callback);
             }
             drop(std::mem::ManuallyDrop::into_inner(snapshot));
             if self.listeners.delivery_depth.get() == 1 {
@@ -527,7 +527,7 @@ impl<Arg> Notifier<Arg> {
                     }
                     retired.sort_unstable_by_key(|(id, _)| *id);
                     for (_, callback) in retired {
-                        recovery.retire(callback);
+                        recovery.retire_callout_capture(callback);
                     }
                 }
                 self.listeners.failed.store(false, Ordering::Relaxed);

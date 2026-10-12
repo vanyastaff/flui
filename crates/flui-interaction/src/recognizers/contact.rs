@@ -6,7 +6,10 @@ use std::{
     rc::Weak,
 };
 
-use flui_foundation::geometry::Offset;
+use flui_foundation::{
+    geometry::Offset,
+    panic::{FailureClass, RecoveryScope},
+};
 use web_time::{Duration, Instant};
 
 use crate::{
@@ -64,7 +67,7 @@ impl ArenaMembership {
         pointer: PointerId,
     ) -> Option<GestureDeadlineRegistration> {
         let member = self.this.upgrade()?;
-        Some(self.arena.register_deadline_member(pointer, &member))
+        self.arena.register_deadline_member(pointer, &member).ok()
     }
 }
 
@@ -127,7 +130,7 @@ pub enum BeginContactError {
 struct Contact {
     snapshot: ContactSnapshot,
     entry: GestureArenaEntry,
-    _deadline_registration: GestureDeadlineRegistration,
+    deadline_registration: GestureDeadlineRegistration,
     deadline: Option<Instant>,
 }
 
@@ -202,7 +205,7 @@ impl PrimaryContact {
                 settings: settings.clone(),
             },
             entry,
-            _deadline_registration: registration,
+            deadline_registration: registration,
             deadline: None,
         };
         *self.current.borrow_mut() = Some(contact);
@@ -241,25 +244,49 @@ impl PrimaryContact {
 
     /// Claim this contact's exact arena entry.
     pub fn accept(&self) {
+        self.arena().run_owned_recovery(|recovery| {
+            self.accept_with_recovery(recovery);
+        });
+    }
+
+    pub(crate) fn accept_with_recovery(&self, recovery: &mut RecoveryScope<'_>) {
         let entry = self.entry();
         if let Some(entry) = entry {
-            entry.resolve(GestureDisposition::Accepted);
+            entry.resolve_with_recovery(GestureDisposition::Accepted, recovery);
         }
     }
 
     /// Bow out without cancelling the remaining competition.
     pub fn withdraw(&self) -> Option<ContactSnapshot> {
+        let mut outgoing = None;
+        self.arena().run_owned_recovery(|recovery| {
+            outgoing = self.withdraw_with_recovery(recovery);
+        });
+        outgoing
+    }
+
+    pub(crate) fn withdraw_with_recovery(
+        &self,
+        recovery: &mut RecoveryScope<'_>,
+    ) -> Option<ContactSnapshot> {
         let outgoing = self.current.borrow_mut().take()?;
-        outgoing.entry.reject_without_self();
-        tracing::debug!(name: "recognizer.reject", pointer = ?outgoing.snapshot.pointer,
-            event = %crate::observability::GestureEvent::ArenaRejected,
-            "recognizer rejected gesture");
+        outgoing.deadline_registration.withdraw();
+        outgoing.entry.reject_without_self_with_recovery(recovery);
+        self.arena()
+            .invoke_with_recovery(FailureClass::Delivery, recovery, |_| {
+                tracing::debug!(name: "recognizer.reject", pointer = ?outgoing.snapshot.pointer,
+                    event = %crate::observability::GestureEvent::ArenaRejected,
+                    "recognizer rejected gesture");
+            });
         Some(outgoing.snapshot)
     }
 
     /// Complete pointer-up tracking, sweeping only in a self-driven arena.
     pub fn finish(&self) -> Option<ContactSnapshot> {
         let snapshot = self.current()?;
+        if let Some(contact) = self.current.borrow().as_ref() {
+            contact.deadline_registration.withdraw();
+        }
         let entry = self.entry();
         let failure = RoutePanic::capture(|| {
             if self.membership.arena.sweep_model() == SweepModel::SelfDriven
@@ -292,6 +319,17 @@ impl PrimaryContact {
     /// Arm from the owner clock, refusing overflow or a reentrant contact change.
     pub fn arm_deadline(&self, after: Duration) -> Option<Instant> {
         let id = self.current()?.id;
+        let deadline = self.arm_deadline_unpublished(after);
+        if self.publish_deadline(id) {
+            deadline
+        } else {
+            None
+        }
+    }
+
+    /// Used when a recognizer must commit its matching phase before publication.
+    pub(crate) fn arm_deadline_unpublished(&self, after: Duration) -> Option<Instant> {
+        let id = self.current()?.id;
         let deadline = self.membership.now().checked_add(after);
         let mut current = self.current.borrow_mut();
         let contact = current
@@ -301,10 +339,45 @@ impl PrimaryContact {
         deadline
     }
 
+    pub(crate) fn publish_deadline(&self, id: ContactId) -> bool {
+        let publication = self
+            .current
+            .borrow()
+            .as_ref()
+            .filter(|contact| contact.snapshot.id == id)
+            .map(|contact| {
+                (
+                    contact.deadline_registration.update_handle(),
+                    contact.deadline,
+                )
+            });
+        if let Some((update, deadline)) = publication {
+            if update.publish(deadline).is_ok() {
+                return self.is_current(id);
+            }
+            let mut current = self.current.borrow_mut();
+            if let Some(contact) = current.as_mut().filter(|contact| contact.snapshot.id == id) {
+                contact.deadline = None;
+                contact.deadline_registration.withdraw();
+            }
+        }
+        false
+    }
+
     /// Disarm this contact's deadline.
     pub fn disarm_deadline(&self) {
-        if let Some(contact) = self.current.borrow_mut().as_mut() {
-            contact.deadline = None;
+        let publication = {
+            let mut current = self.current.borrow_mut();
+            current.as_mut().map(|contact| {
+                contact.deadline = None;
+                contact.deadline_registration.update_handle()
+            })
+        };
+        if let Some(update) = publication
+            && update.publish(None).is_err()
+            && let Some(contact) = self.current.borrow().as_ref()
+        {
+            contact.deadline_registration.withdraw();
         }
     }
 
@@ -333,6 +406,10 @@ impl PrimaryContact {
         self.membership.now()
     }
 
+    pub(crate) fn arena(&self) -> &GestureArena {
+        self.membership.arena()
+    }
+
     pub(crate) fn entry(&self) -> Option<GestureArenaEntry> {
         self.current
             .borrow()
@@ -342,6 +419,7 @@ impl PrimaryContact {
 
     pub(crate) fn cancel(&self) -> Option<ContactSnapshot> {
         let outgoing = self.current.borrow_mut().take()?;
+        outgoing.deadline_registration.withdraw();
         withdraw_cancelled(&outgoing.entry, &self.membership.arena);
         Some(outgoing.snapshot)
     }

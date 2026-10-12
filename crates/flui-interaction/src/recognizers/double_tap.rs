@@ -155,6 +155,15 @@ impl DoubleTapGestureRecognizer {
     fn retire_attempt(&self, details: DoubleTapDetails, cancelled: bool) {
         *self.gesture.borrow_mut() = DoubleTapState::Ready;
         let first_entry = self.first_entry.borrow_mut().take();
+        self.deliver_retirement(details, cancelled, first_entry);
+    }
+
+    fn deliver_retirement(
+        &self,
+        details: DoubleTapDetails,
+        cancelled: bool,
+        first_entry: Option<crate::arena::GestureArenaEntry>,
+    ) {
         let incoming = std::thread::panicking();
         let mut first = RoutePanic::capture(|| {
             if cancelled {
@@ -361,7 +370,7 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
                         .double_tap_timeout_for(contact.kind)
                         .checked_sub(elapsed)
                         .unwrap_or(Duration::ZERO);
-                    let deadline = self.contact.arm_deadline(remaining);
+                    let deadline = self.contact.arm_deadline_unpublished(remaining);
                     if self.contact.is_current(contact.id) {
                         *self.gesture.borrow_mut() = DoubleTapState::Waiting {
                             details,
@@ -370,6 +379,7 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
                             settings: Box::new(contact.settings),
                             device,
                         };
+                        self.contact.publish_deadline(contact.id);
                     }
                 }
                 DoubleTapState::SecondDown => self.complete(details),
@@ -401,6 +411,55 @@ impl GestureArenaMember for DoubleTapGestureRecognizer {
     }
     fn poll_deadline(&self, now: Instant) {
         self.expire(now);
+    }
+    fn poll_deadline_with_recovery(
+        &self,
+        now: Instant,
+        recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
+    ) -> bool {
+        use flui_foundation::panic::FailureClass;
+        let arena = self.contact.arena();
+        let mut prepared = None;
+        let completed = arena.invoke_with_recovery(FailureClass::Unknown, recovery, |_| {
+            let waiting = self.gesture.borrow().clone();
+            if let DoubleTapState::Waiting {
+                details,
+                deadline: Some(deadline),
+                ..
+            } = waiting
+                && now >= deadline
+            {
+                *self.gesture.borrow_mut() = DoubleTapState::Ready;
+                let first_entry = self.first_entry.borrow_mut().take();
+                prepared = Some((details, first_entry));
+            }
+        });
+        if !completed {
+            return false;
+        }
+        if let Some((details, first_entry)) = prepared {
+            arena.invoke_with_recovery(FailureClass::Unknown, recovery, |scope| {
+                self.contact.withdraw_with_recovery(scope);
+            });
+            if let Some(entry) = first_entry {
+                arena.invoke_with_recovery(FailureClass::Unknown, recovery, |scope| {
+                    entry.resolve_with_recovery(GestureDisposition::Rejected, scope);
+                });
+                arena.invoke_with_recovery(FailureClass::Unknown, recovery, |scope| {
+                    entry.release_with_recovery(scope);
+                });
+            }
+            let preserving = recovery.has_failure();
+            arena.invoke_with_recovery(FailureClass::Delivery, recovery, |_| {
+                let mut notices =
+                    super::callback_containment::CallbackSequence::preserving_failure(preserving);
+                notices.call(self.callbacks.on_double_tap_cancel.clone(), |callback| {
+                    callback(details);
+                });
+                notices.finish();
+            });
+        }
+        true
     }
 }
 impl Drop for DoubleTapGestureRecognizer {

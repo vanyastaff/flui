@@ -2,8 +2,165 @@
 
 use std::time::Duration;
 
-use super::AnimationControllerInner;
+use flui_foundation::panic::{FailureClass, RecoveryScope};
+
+use super::{
+    AnimationController, AnimationControllerInner, Opaque, RetiredSources, Retirement, Simulation,
+    SimulationRun, TickSource, ValueChange,
+};
 use crate::PlaybackRate;
+
+impl AnimationController {
+    /// Sample the run at `elapsed`, measured from its own time origin.
+    /// Registry-driven calls use the presentation clock's projected timeline;
+    /// explicit callers supply their own run timeline. The controller applies
+    /// its local playback rate to this elapsed time.
+    ///
+    /// This is the single time-driven entry point: time-based runs interpolate
+    /// `start_value -> target_value`, simulations sample `x(t)`, and a repeat
+    /// samples its leg/phase/exhaustion as a pure function of `cycle`.
+    /// Value and status listeners fire only after the state borrow is released.
+    pub fn tick_at(&self, elapsed: Duration) {
+        let mut retirement = Retirement::new();
+        retirement.run_with(|retirement| self.tick_at_with_retirement(elapsed, retirement));
+        retirement.finish();
+    }
+
+    pub(crate) fn tick_at_with_retirement(
+        &self,
+        elapsed: Duration,
+        retirement: &mut RecoveryScope<'_>,
+    ) {
+        let source;
+        let identity;
+        let cycle;
+        let time;
+        {
+            let mut inner = self.inner.borrow_mut();
+            if inner.disposed || inner.active_run.is_none() || elapsed < inner.last_elapsed {
+                return;
+            }
+            let Some(epoch) = inner.sample_epoch.checked_add(1) else {
+                let mut retired = RetiredSources::new();
+                let delivery = inner.stop_running(&mut retired);
+                let status = inner.settled_status_directed();
+                inner.status = status;
+                self.deliver_transition_with_recovery(
+                    status,
+                    ValueChange::Unchanged,
+                    delivery,
+                    retired,
+                    inner,
+                    retirement,
+                );
+                retirement.run_classified(FailureClass::Delivery, |_| {
+                    tracing::warn!(
+                        "animation sample identities exhausted; the accepted run was cancelled"
+                    );
+                });
+                return;
+            };
+            time = SampleTime::capture(&inner, elapsed);
+            cycle = time.local_elapsed.as_secs_f64();
+            inner.sample_epoch = epoch;
+            identity = SampleIdentity {
+                generation: inner.run_generation,
+                epoch: inner.sample_epoch,
+            };
+            source = Opaque::new(inner.tick_source());
+        }
+        let mut committed = false;
+        retirement.run_with(|retirement| match source.get() {
+            TickSource::Repeat(run) => {
+                let mut inner = self.inner.borrow_mut();
+                if !inner.matches_sample(&identity) {
+                    return;
+                }
+                time.commit(&mut inner);
+                self.tick_repeat(inner, *run, cycle, retirement);
+                committed = true;
+            }
+            TickSource::Simulation(simulation) => {
+                let mut prepared = None;
+                retirement.run_classified(FailureClass::Computation, |_| {
+                    if let SimulationRun::Value(source) = simulation
+                        && !source
+                            .stage_sample(cycle, &|| self.inner.borrow().matches_sample(&identity))
+                    {
+                        return;
+                    }
+                    let sampled = simulation.x(cycle);
+                    // A reentrant position call may replace the source.
+                    if !self.inner.borrow().matches_sample(&identity) {
+                        return;
+                    }
+                    let done = sampled.is_finite()
+                        && (simulation.reached_bound(sampled) || simulation.is_done(cycle));
+                    prepared = Some((sampled, done));
+                });
+                let Some((sampled, done)) = prepared else {
+                    return;
+                };
+                let mut inner = self.inner.borrow_mut();
+                if !inner.matches_sample(&identity) {
+                    return;
+                }
+                if sampled.is_finite() {
+                    time.commit(&mut inner);
+                    if let SimulationRun::Value(source) = simulation {
+                        source.commit_sample(inner.local_elapsed);
+                    }
+                }
+                self.tick_simulation(inner, sampled, done, retirement);
+                committed = true;
+            }
+            TickSource::Time {
+                curve,
+                duration,
+                start,
+                target,
+            } => {
+                let t = if duration.is_zero() {
+                    1.0
+                } else {
+                    (cycle / duration.as_secs_f64()).clamp(0.0, 1.0)
+                };
+                let mut prepared = None;
+                retirement.run_classified(FailureClass::Computation, |_| {
+                    let value = if t <= 0.0 {
+                        *start
+                    } else if t >= 1.0 {
+                        *target
+                    } else {
+                        let eased = curve.as_ref().map_or(t, |curve| curve.transform(t));
+                        start + (target - start) * eased
+                    };
+                    prepared = Some(value);
+                });
+                let Some(value) = prepared else {
+                    return;
+                };
+                let mut inner = self.inner.borrow_mut();
+                if !inner.matches_sample(&identity) {
+                    return;
+                }
+                if value.is_finite() {
+                    time.commit(&mut inner);
+                }
+                self.tick_time_based(inner, t, value, retirement);
+                committed = value.is_finite();
+            }
+        });
+        retirement.retire_classified(
+            if committed {
+                FailureClass::Delivery
+            } else {
+                FailureClass::Unknown
+            },
+            source,
+        );
+    }
+}
 
 pub(super) struct SampleIdentity {
     pub(super) generation: u64,
