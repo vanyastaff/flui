@@ -3,7 +3,10 @@
 use std::cell::{Cell, RefCell};
 use std::num::NonZeroU64;
 use std::rc::Rc;
-use std::sync::{Arc, atomic::{AtomicBool, AtomicUsize, Ordering}};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+};
 use std::time::Duration;
 
 use flui_foundation::{ManualClock, MonotonicClock, PresentationAddress, UiRuntimeId};
@@ -13,8 +16,8 @@ use flui_runtime::frame_failure::{
     FrameFailureReport, PanicText, SamplingFailure, SamplingFailureOrigin, SamplingStage,
 };
 use flui_runtime::owner::{
-    Delivery, DispatchError, FrameDispatcher, InstallInitialization, InstallToken,
-    InitializationOutcome, OwnerEffects, OwnerHost, RecoveryState,
+    Delivery, DispatchError, FrameDispatcher, InitializationOutcome, InstallInitialization,
+    InstallToken, OwnerEffects, OwnerHost, RecoveryState,
 };
 use flui_runtime::ui_runtime::{RuntimeHostServices, UiRuntime};
 
@@ -380,8 +383,9 @@ fn query_report_case(fail_handler: bool, fail_diagnostics: bool, fail_operation:
     });
     let _probe_scope = ScopedReportProbe::install(Rc::clone(&probe));
     let diagnostic_calls = Arc::new(AtomicUsize::new(0));
-    let diagnostics = fail_diagnostics
-        .then(|| tracing::subscriber::set_default(FailingDiagnostics(Arc::clone(&diagnostic_calls))));
+    let diagnostics = fail_diagnostics.then(|| {
+        tracing::subscriber::set_default(FailingDiagnostics(Arc::clone(&diagnostic_calls)))
+    });
     member.fail.set(true);
     effects.fail_operation.set(fail_operation);
     let delivered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -397,11 +401,16 @@ fn query_report_case(fail_handler: bool, fail_diagnostics: bool, fail_operation:
         );
         assert_eq!(
             *probe.callback_observations.borrow(),
-            [(address, PanicText::Verbatim("primary owner operation".into()))]
+            [(
+                address,
+                PanicText::Verbatim("primary owner operation".into())
+            )]
         );
         // The failed callback owes the work admitted by its sampling report.
         // A real next native opportunity supplies the normal FIFO budget.
-        let callback = owner.begin_callback(effects.as_ref()).expect("next callback");
+        let callback = owner
+            .begin_callback(effects.as_ref())
+            .expect("next callback");
         owner.continue_work(effects.as_ref());
         drop(callback);
     } else {
@@ -414,18 +423,27 @@ fn query_report_case(fail_handler: bool, fail_diagnostics: bool, fail_operation:
 
     {
         let observed = probe.observations.borrow();
-        assert_eq!(observed.len(), 1, "one query operation report: {observed:?}");
+        assert_eq!(
+            observed.len(),
+            1,
+            "one query operation report: {observed:?}"
+        );
         let observed = &observed[0];
         assert_eq!(observed.address, address);
         assert_eq!(observed.first.stage, SamplingStage::DeadlineDiscovery);
         assert_eq!(observed.first.origin, SamplingFailureOrigin::Unknown);
-        let blocking = observed.blocking.expect("unknown query restricts publication");
+        let blocking = observed
+            .blocking
+            .expect("unknown query restricts publication");
         assert_eq!(blocking.stage, SamplingStage::DeadlineDiscovery);
         assert_eq!(blocking.origin, SamplingFailureOrigin::Unknown);
         assert!(!observed.admitted_attempt);
         assert_eq!(observed.disposition, FailureDisposition::Contained);
         assert_eq!(observed.consecutive_failures, 0);
-        assert_eq!(observed.message, PanicText::Verbatim("external deadline query".into()));
+        assert_eq!(
+            observed.message,
+            PanicText::Verbatim("external deadline query".into())
+        );
         assert_eq!(observed.executing, Ok(false), "report follows lease return");
         assert_eq!(observed.runtimes, Ok(vec![address.ui_runtime_id]));
         assert_eq!(observed.wake, Ok(Some(now + Duration::from_millis(100))));
@@ -436,20 +454,37 @@ fn query_report_case(fail_handler: bool, fail_diagnostics: bool, fail_operation:
     }
     assert_eq!(query_calls.get(), queries_before_fault + 1);
     assert_eq!(effects.frames.get(), frames_before_fault + 2);
-    assert_eq!(diagnostic_calls.load(Ordering::Relaxed) > 0, fail_diagnostics);
+    assert_eq!(
+        diagnostic_calls.load(Ordering::Relaxed) > 0,
+        fail_diagnostics
+    );
 
     clock.advance(Duration::from_millis(99));
     assert_eq!(frame.deliver(effects.as_ref()), Ok(Delivery::Driven));
-    assert_eq!(query_calls.get(), queries_before_fault + 1, "early owner turn does not re-probe");
+    assert_eq!(
+        query_calls.get(),
+        queries_before_fault + 1,
+        "early owner turn does not re-probe"
+    );
     assert_eq!(probe.observations.borrow().len(), 1);
-    assert_eq!(owner.next_wake(), Ok(Some(now + Duration::from_millis(100))));
+    assert_eq!(
+        owner.next_wake(),
+        Ok(Some(now + Duration::from_millis(100)))
+    );
 
     member.fail.set(false);
     clock.advance(Duration::from_millis(1));
     assert_eq!(frame.deliver(effects.as_ref()), Ok(Delivery::Driven));
-    assert!(query_calls.get() > queries_before_fault + 1, "the due retry observes the repaired source");
+    assert!(
+        query_calls.get() > queries_before_fault + 1,
+        "the due retry observes the repaired source"
+    );
     assert_eq!(owner.next_wake(), Ok(Some(due)));
-    assert_eq!(probe.observations.borrow().len(), 1, "successful retry emits no duplicate report");
+    assert_eq!(
+        probe.observations.borrow().len(),
+        1,
+        "successful retry emits no duplicate report"
+    );
 }
 
 fn query_failure_reports_after_lease_return_and_recovers() {
