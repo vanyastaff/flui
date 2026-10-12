@@ -74,11 +74,13 @@
 //!
 //! Duration is measured by a [phase guard](crate::profiler::PhaseGuard) parked
 //! in the span's own extensions. Animation phases record each outermost
-//! entered visit at exit, including reentry depth. Retaining a span clone
+//! entered producer visit at exit, including reentry depth. Retaining a span clone
 //! cannot postpone its measurement into another frame. Scheduler frames also
 //! end at their outermost exit: a retained child keeps its parent's identity
 //! alive, but cannot extend the frame's measurement. Other rendering phases
 //! retain their existing close-based contiguous extent across repeated visits.
+//! A completed animation span keeps a closed marker until final destruction;
+//! entering its clone again cannot restart sampling inside listener work.
 
 use std::sync::Arc;
 
@@ -150,6 +152,9 @@ struct ActivePhase {
     _guard: PhaseGuard,
     entries: usize,
 }
+
+/// A producer owns one entered visit; retained clones cannot restart it.
+struct ClosedAnimationPhase;
 
 struct ActiveFrame {
     id: Id,
@@ -248,6 +253,9 @@ where
         let Some(phase) = phase_for(span.name()) else {
             return;
         };
+        if span.extensions().get::<ClosedAnimationPhase>().is_some() {
+            return;
+        }
 
         // Only phases inside the owning frame span count. A phase from a
         // concurrently rendering ui_runtime — or outside any frame — must not be
@@ -313,11 +321,15 @@ where
         let finished = {
             let mut extensions = span.extensions_mut();
             let Some(active) = extensions.get_mut::<ActivePhase>() else {
+                // Covered or unowned visits must not become new work later.
+                let _ = extensions.replace(ClosedAnimationPhase);
                 return;
             };
             active.entries -= 1;
             if active.entries == 0 {
-                extensions.remove::<ActivePhase>()
+                let finished = extensions.remove::<ActivePhase>();
+                let _ = extensions.replace(ClosedAnimationPhase);
+                finished
             } else {
                 None
             }

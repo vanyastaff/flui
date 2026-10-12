@@ -22,6 +22,10 @@ frame identity, but neither lifetime can delay timing into a later frame.
 The application-frame and retained-sampling rows in
 `developer_history_respects_capacity_and_clear` pin both boundaries through real
 controller work, including late entry and release in the next idle frame.
+Completed animation spans retain a closed marker until final destruction.
+The same-frame closed-sampling row independently measures the producer's first
+visit and reenters its span inside a real listener: that listener remains listener
+work and cannot restart the earlier sampling phase.
 
 The layer owns one scheduler frame by span identity. A nested foreign frame
 and its phases are dropped whole; merely finding the owning frame somewhere

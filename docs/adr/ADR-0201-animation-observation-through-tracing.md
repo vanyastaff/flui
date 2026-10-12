@@ -66,6 +66,9 @@ animation phases and scheduler frames at their outermost entered exit, accountin
 for same-span reentry. Retained current-span clones also retain parent identities;
 they cannot extend either timing into another frame. Rendering phases preserve
 their existing close-based extent.
+A completed animation span remains marked closed until its final retirement.
+Reentering a retained clone inside the same frame cannot restart its phase or
+attribute listener work to the earlier sampling operation.
 
 Each subscriber callout is independently contained through foundation panic
 custody. Observation failures retire exact text and retain opaque payloads under
@@ -114,3 +117,7 @@ run despite current-span retention/reentry and release in the next idle frame.
 `animation_observation_contract` disposes an owning controller from both listener
 span creation and entry, then checks cancellation, silent listeners, healthy peers
 and a fresh owner's completion.
+The same-frame closed-sampling row bounds the original sampling operation with
+an independent subscriber and reenters its retained span during a real value
+listener. Listener work exceeds the measured original operation, but cannot
+increase that operation's sampling duration.

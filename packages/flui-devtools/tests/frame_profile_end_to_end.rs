@@ -439,6 +439,136 @@ fn retained_sampling_spans_end_at_exit_and_do_not_charge_a_later_frame() {
     });
 }
 
+fn a_closed_sampling_span_cannot_charge_listener_work_in_the_same_frame() {
+    use flui_sdk::animation::{Animation, AnimationController, Curve};
+    use flui_sdk::foundation::Listenable;
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+        sync::{
+            Mutex,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::Instant,
+    };
+    use tracing::Subscriber;
+    use tracing_subscriber::{Layer, layer::Context, registry::LookupSpan};
+
+    #[derive(Clone)]
+    struct Boundary {
+        before: bool,
+        armed: Arc<AtomicBool>,
+        started: Arc<Mutex<Option<(tracing::span::Id, Instant)>>>,
+        elapsed: Arc<Mutex<Duration>>,
+    }
+    impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for Boundary {
+        fn on_enter(&self, id: &tracing::span::Id, ctx: Context<'_, S>) {
+            if self.before
+                && ctx.span(id).is_some_and(|span| {
+                    span.name() == "animation_sampling"
+                        && span.metadata().target() == "flui_animation"
+                })
+                && self.armed.swap(false, Ordering::Relaxed)
+            {
+                *self.started.lock().expect("sampling boundary") =
+                    Some((id.clone(), Instant::now()));
+            }
+        }
+        fn on_exit(&self, id: &tracing::span::Id, _: Context<'_, S>) {
+            if !self.before {
+                let start = {
+                    let mut started = self.started.lock().expect("sampling boundary");
+                    if started
+                        .as_ref()
+                        .is_some_and(|(candidate, _)| candidate == id)
+                    {
+                        started.take()
+                    } else {
+                        None
+                    }
+                };
+                if let Some((_, started)) = start {
+                    *self.elapsed.lock().expect("sampling extent") = started.elapsed();
+                }
+            }
+        }
+    }
+    struct RetainingCurve(Rc<RefCell<Option<tracing::Span>>>);
+    impl Curve for RetainingCurve {
+        fn transform(&self, t: f64) -> f64 {
+            *self.0.borrow_mut() = Some(tracing::Span::current());
+            t.clamp(0.0, 1.0)
+        }
+    }
+
+    flui_testing::log_capture::disarm_interest_cache();
+    let profiler = Arc::new(Profiler::new());
+    let boundary = Boundary {
+        before: true,
+        armed: Arc::new(AtomicBool::new(false)),
+        started: Arc::new(Mutex::new(None)),
+        elapsed: Arc::new(Mutex::new(Duration::ZERO)),
+    };
+    // Layer callbacks run from inner to outer. These independent clocks
+    // enclose the producer's first enter/exit, including profiler callbacks.
+    let subscriber = tracing_subscriber::registry()
+        .with(boundary.clone())
+        .with(FrameTimingLayer::new(Arc::clone(&profiler)))
+        .with(Boundary {
+            before: false,
+            ..boundary.clone()
+        });
+    tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+        let mut binding = HeadlessBinding::new();
+        binding.mount_root(&Leaf, MountOwners::fresh(), MountOptions::tight(64.0, 64.0));
+        let retained = Rc::new(RefCell::new(None));
+        let owner = AnimationController::builder(Duration::from_millis(100))
+            .build_on(Some(binding.vsync()));
+        let controller = owner.controller();
+        let run = controller
+            .animate_to_curved(1.0, None, RetainingCurve(Rc::clone(&retained)))
+            .expect("curved run");
+        let visit = Rc::clone(&retained);
+        let elapsed = Arc::clone(&boundary.elapsed);
+        let calls = Rc::new(Cell::new(0));
+        let delivered = Rc::clone(&calls);
+        controller.add_listener(Rc::new(move || {
+            let span = visit.borrow().clone();
+            if let Some(span) = span {
+                let envelope = *elapsed.lock().expect("completed producer extent");
+                assert!(!envelope.is_zero());
+                let _entered = span.enter();
+                // The later visit exceeds the measured first visit on any host;
+                // counting it as sampling must exceed that original envelope.
+                std::thread::sleep(envelope + Duration::from_millis(20));
+                delivered.set(delivered.get() + 1);
+            }
+        }));
+        binding.pump_frame(Duration::ZERO);
+        boundary.armed.store(true, Ordering::Relaxed);
+        binding.pump_frame(Duration::from_millis(50));
+        assert!((controller.value() - 0.5).abs() < 1e-9);
+        assert!(!run.is_complete());
+        assert_eq!(calls.get(), 1);
+        let frame = profiler.frame_stats().expect("same scheduler frame");
+        let sampling = frame
+            .phase(FramePhase::Custom("Animation sampling"))
+            .expect("real sampling");
+        let envelope = *boundary.elapsed.lock().expect("producer extent");
+        assert!(
+            sampling.duration <= envelope,
+            "sampling includes a closed span's listener visit: {sampling:?}; producer: {envelope:?}"
+        );
+        assert!(
+            frame
+                .phase(FramePhase::Custom("Animation listeners"))
+                .expect("real listener work")
+                .duration
+                > envelope
+        );
+    });
+}
+
 fn animation_phase_names_and_inclusive_extents_are_respected() {
     fn phase_span(name: &str) -> tracing::Span {
         match name {
@@ -637,6 +767,10 @@ fn developer_history_respects_capacity_and_clear() {
         return;
     }
     let cases: &[(&str, fn())] = &[
+        (
+            "closed_sampling_span_in_same_frame",
+            a_closed_sampling_span_cannot_charge_listener_work_in_the_same_frame,
+        ),
         (
             "zero_capacity",
             zero_history_capacity_keeps_counters_without_frames,
