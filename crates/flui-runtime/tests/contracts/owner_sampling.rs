@@ -52,6 +52,8 @@ struct Effects {
 }
 
 struct RuntimeObservation {
+    queries_before_drain: usize,
+    queries_after_drain: usize,
     queries_before: usize,
     queries_after_wake: usize,
     queries_after: usize,
@@ -90,7 +92,9 @@ impl OwnerEffects for Effects {
             std::panic::panic_any("primary owner operation");
         }
         // The native host services geometry before consulting its wake gate.
+        let queries_before_drain = self.query_calls.get();
         runtime.enter(UiRuntime::drain_owner_inbox);
+        let queries_after_drain = self.query_calls.get();
         if !self.probe_runtime.get() {
             return;
         }
@@ -99,6 +103,8 @@ impl OwnerEffects for Effects {
         let queries_after_wake = self.query_calls.get();
         let pending = (0..3).map(|_| runtime.has_pending_work()).collect();
         self.runtime_observation.replace(Some(RuntimeObservation {
+            queries_before_drain,
+            queries_after_drain,
             queries_before,
             queries_after_wake,
             queries_after: self.query_calls.get(),
@@ -120,6 +126,7 @@ impl OwnerEffects for Effects {
 enum ObservationScope {
     Owner,
     Runtime,
+    NestedDrain,
 }
 
 fn scheduling_observation_case(scope: ObservationScope) {
@@ -150,7 +157,7 @@ fn scheduling_observation_case(scope: ObservationScope) {
         query_calls: Rc::clone(&query_calls),
         frames: Cell::new(0),
         fail_operation: Cell::new(false),
-        probe_runtime: Cell::new(false),
+        probe_runtime: Cell::new(matches!(scope, ObservationScope::NestedDrain)),
         runtime_observation: RefCell::new(None),
     };
 
@@ -186,6 +193,21 @@ fn scheduling_observation_case(scope: ObservationScope) {
             assert_eq!(observed.wakes, [Some(due); 3]);
             assert_eq!(observed.pending, [true; 3]);
         }
+        ObservationScope::NestedDrain => {
+            let observed = effects
+                .runtime_observation
+                .take()
+                .expect("nested owner drain observation");
+            assert_eq!(
+                observed.queries_after_drain, observed.queries_before_drain,
+                "a nested native gate drain must wait for the admitted owner transaction"
+            );
+            assert!(
+                query_calls.get() > observed.queries_after_drain,
+                "lease return performs the deferred discovery"
+            );
+            observe_owner_deadline(&owner, &query_calls, Some(due));
+        }
     }
 }
 
@@ -214,6 +236,10 @@ fn owner_wake_uses_the_committed_scheduling_observation() {
 
 fn runtime_wake_and_pending_use_the_committed_scheduling_observation() {
     scheduling_observation_case(ObservationScope::Runtime);
+}
+
+fn nested_owner_drain_defers_discovery_until_lease_return() {
+    scheduling_observation_case(ObservationScope::NestedDrain);
 }
 
 struct ReportProbe {
@@ -1067,6 +1093,184 @@ fn queued_render_invalidation_is_observed_without_foreign_work() {
     );
 }
 
+struct HostedDeadline {
+    due: Cell<Option<web_time::Instant>>,
+    polls: Rc<Cell<usize>>,
+    queries: Rc<Cell<usize>>,
+    fail_after_effect: bool,
+}
+
+impl GestureArenaMember for HostedDeadline {
+    fn accept_gesture(&self, _: PointerId) {}
+    fn reject_gesture(&self, _: PointerId) {}
+
+    fn deadline(&self) -> Option<web_time::Instant> {
+        self.queries.set(self.queries.get() + 1);
+        self.due.get()
+    }
+
+    fn poll_deadline(&self, _: web_time::Instant) {
+        self.polls.set(self.polls.get() + 1);
+        if self.fail_after_effect {
+            std::panic::panic_any("hosted unknown deadline progress");
+        }
+        self.due.set(None);
+    }
+}
+
+fn hosted_background_services_deadlines_after_its_admitted_transaction() {
+    let clock = ManualClock::new();
+    let (runtime, _window) = manual_runtime(clock.clone());
+    runtime.update_host_lifecycle(flui_scheduler::AppLifecycleState::Paused);
+    runtime.set_frame_failure_detail(FrameFailureDetail::Verbatim);
+    runtime.set_frame_failure_handler(Some(FrameFailureHandler::new(observe_sampling_report)));
+    let arena = runtime.gestures().arena().clone();
+    let due = clock.now() + Duration::from_millis(50);
+    let queries = Rc::new(Cell::new(0));
+    let unknown_polls = Rc::new(Cell::new(0));
+    let healthy_polls = Rc::new(Cell::new(0));
+    let unknown = Rc::new(HostedDeadline {
+        due: Cell::new(Some(due)),
+        polls: Rc::clone(&unknown_polls),
+        queries: Rc::clone(&queries),
+        fail_after_effect: true,
+    });
+    let healthy = Rc::new(HostedDeadline {
+        due: Cell::new(Some(due)),
+        polls: Rc::clone(&healthy_polls),
+        queries: Rc::clone(&queries),
+        fail_after_effect: false,
+    });
+    // The paused lifecycle has already cancelled preceding contacts. Admit
+    // these owner-side timers afterwards, while visual frames stay disabled.
+    let _unknown_entry = arena.add(PointerId::new(NonZeroU64::MIN), &unknown);
+    let _healthy_entry = arena.add(
+        PointerId::new(NonZeroU64::new(2).expect("contact")),
+        &healthy,
+    );
+    let owner = OwnerHost::new();
+    let address = owner
+        .publication(owner.prepare_runtime(runtime))
+        .expect("publish runtime")
+        .commit();
+    assert!(
+        !owner
+            .runtime_status(address.ui_runtime_id)
+            .expect("runtime status")
+            .frames_enabled
+    );
+    let effects = Rc::new(Effects {
+        query_calls: Rc::clone(&queries),
+        frames: Cell::new(0),
+        fail_operation: Cell::new(false),
+        probe_runtime: Cell::new(false),
+        runtime_observation: RefCell::new(None),
+    });
+    let probe = Rc::new(ReportProbe {
+        owner: owner.clone(),
+        frame: owner.frame_dispatcher(address).expect("frame authority"),
+        effects: Rc::clone(&effects),
+        fail_handler: false,
+        observations: RefCell::new(Vec::new()),
+        callback_observations: RefCell::new(Vec::new()),
+    });
+    let _scope = ScopedReportProbe::install(Rc::clone(&probe));
+    let background = owner
+        .runtime_dispatcher(address.ui_runtime_id)
+        .expect("runtime authority");
+    clock.advance(Duration::from_millis(50));
+    assert_eq!(
+        background.deliver(
+            flui_runtime::owner::RuntimeOperation::Background,
+            effects.as_ref()
+        ),
+        Ok(Delivery::Driven)
+    );
+    assert_eq!(
+        unknown_polls.get(),
+        1,
+        "the hosted background operation services its due source"
+    );
+    assert_eq!(
+        healthy_polls.get(),
+        1,
+        "a healthy deadline progresses after the unknown poll fails"
+    );
+    {
+        let observations = probe.observations.borrow();
+        assert_eq!(observations.len(), 1, "one contained unknown poll report");
+        let report = &observations[0];
+        assert_eq!(report.address, address);
+        assert_eq!(report.first.stage, SamplingStage::GestureDeadline);
+        assert_eq!(report.first.origin, SamplingFailureOrigin::Unknown);
+        assert!(!report.admitted_attempt);
+        assert_eq!(report.disposition, FailureDisposition::Contained);
+        assert_eq!(report.consecutive_failures, 0);
+        assert_eq!(
+            report.message,
+            PanicText::Verbatim("hosted unknown deadline progress".into())
+        );
+        assert_eq!(report.executing, Ok(false));
+        assert_eq!(report.runtimes, Ok(vec![address.ui_runtime_id]));
+        assert_eq!(
+            report.wake,
+            Ok(None),
+            "unknown side effects have no automatic replay wake"
+        );
+        assert_eq!(report.queued, Ok(Delivery::Queued));
+        assert_eq!(report.frames_before, report.frames_after);
+        assert_eq!(report.queries_before, report.queries_after);
+    }
+    assert_eq!(
+        effects.frames.get(),
+        1,
+        "the report's accepted reentry reaches the owner FIFO"
+    );
+    assert!(probe.callback_observations.borrow().is_empty());
+
+    let next_polls = Rc::new(Cell::new(0));
+    let next = Rc::new(HostedDeadline {
+        due: Cell::new(Some(clock.now() + Duration::from_millis(20))),
+        polls: Rc::clone(&next_polls),
+        queries: Rc::clone(&queries),
+        fail_after_effect: false,
+    });
+    let _next_entry = arena.add(
+        PointerId::new(NonZeroU64::new(3).expect("next contact")),
+        &next,
+    );
+    clock.advance(Duration::from_millis(20));
+    assert_eq!(
+        background.deliver(
+            flui_runtime::owner::RuntimeOperation::Background,
+            effects.as_ref()
+        ),
+        Ok(Delivery::Driven)
+    );
+    assert_eq!(
+        next_polls.get(),
+        1,
+        "the next hosted background turn services new accepted work"
+    );
+    clock.advance(Duration::from_millis(100));
+    assert_eq!(
+        background.deliver(
+            flui_runtime::owner::RuntimeOperation::Background,
+            effects.as_ref()
+        ),
+        Ok(Delivery::Driven)
+    );
+    assert_eq!(
+        unknown_polls.get(),
+        1,
+        "an unknown poll cannot replay the same revision"
+    );
+    assert_eq!(healthy_polls.get(), 1);
+    assert_eq!(next_polls.get(), 1);
+    assert_eq!(probe.observations.borrow().len(), 1);
+    observe_owner_deadline(&owner, &queries, None);
+}
+
 #[test]
 fn owner_sampling_contract() {
     crate::table_test::run_table(
@@ -1079,6 +1283,10 @@ fn owner_sampling_contract() {
             (
                 "runtime scheduling observations are inert",
                 runtime_wake_and_pending_use_the_committed_scheduling_observation,
+            ),
+            (
+                "nested owner drain defers discovery until lease return",
+                nested_owner_drain_defers_discovery_until_lease_return,
             ),
             (
                 "query report follows lease return and recovery",
@@ -1115,6 +1323,10 @@ fn owner_sampling_contract() {
             (
                 "queued render invalidation observation executes no foreign work",
                 queued_render_invalidation_is_observed_without_foreign_work,
+            ),
+            (
+                "hosted background services deadlines after its admitted transaction",
+                hosted_background_services_deadlines_after_its_admitted_transaction,
             ),
         ],
     );
