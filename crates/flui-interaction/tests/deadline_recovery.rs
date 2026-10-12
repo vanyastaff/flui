@@ -84,6 +84,8 @@ impl Drop for CallbackCapture {
     }
 }
 
+type MemberOwner = Rc<RefCell<Option<Rc<DeadlineMember>>>>;
+
 struct DeadlineMember {
     due: Cell<Option<Instant>>,
     fail_query: Cell<bool>,
@@ -92,7 +94,7 @@ struct DeadlineMember {
     effects: Cell<usize>,
     query_publication: RefCell<Option<(GestureDeadlineUpdate, Option<Instant>)>>,
     poll_publication: RefCell<Option<(GestureDeadlineUpdate, Option<Instant>)>>,
-    release_owner: RefCell<Option<Rc<RefCell<Option<Rc<Self>>>>>>,
+    release_owner: RefCell<Option<MemberOwner>>,
     drops: Rc<Cell<usize>>,
     rejection_binding: RefCell<Option<Rc<GestureBinding>>>,
     rejection_deadline: Cell<Option<Option<Instant>>>,
@@ -120,7 +122,9 @@ impl GestureArenaMember for DeadlineMember {
     fn accept_gesture(&self, _: PointerId) {}
     fn reject_gesture(&self, _: PointerId) {
         let binding = self.rejection_binding.borrow().clone();
-        if let Some(binding) = binding {
+        if let Some(binding) = binding
+            && self.rejection_deadline.get().is_none()
+        {
             self.rejection_deadline
                 .set(Some(flui_interaction::__runtime::next_deadline_snapshot(
                     &binding,
@@ -759,6 +763,46 @@ fn a_member_withdrawal_removes_its_snapshot_before_rejection_delivery() {
     );
 }
 
+fn abandoned_generations_are_withdrawn_before_rejection(all_pointers: bool) {
+    let clock = ManualClock::new();
+    let binding = Rc::new(GestureBinding::with_clock(Arc::new(clock.clone())));
+    let member = DeadlineMember::new(clock.now());
+    let held = binding.arena().add(pointer(1), &member);
+    held.hold();
+    binding.arena().sweep(pointer(1));
+    let _fresh = binding.arena().add(pointer(1), &member);
+    let _other = all_pointers.then(|| binding.arena().add(pointer(2), &member));
+    *member.rejection_binding.borrow_mut() = Some(Rc::clone(&binding));
+    let mut recovery = PanicRecovery::new();
+    flui_interaction::__runtime::refresh_deadlines_with_recovery(
+        &binding,
+        clock.now(),
+        &mut recovery.scope(),
+    );
+    assert_eq!(
+        flui_interaction::__runtime::next_deadline_snapshot(&binding),
+        Some(clock.now())
+    );
+    if all_pointers {
+        binding.cancel_all_pointer_sequences();
+    } else {
+        binding.arena().abandon(pointer(1));
+    }
+    assert_eq!(
+        member.rejection_deadline.get(),
+        Some(None),
+        "all detached generations lose timing before the first rejection"
+    );
+}
+
+fn an_abandoned_batch_withdraws_every_generation_before_first_rejection() {
+    abandoned_generations_are_withdrawn_before_rejection(false);
+}
+
+fn cancel_all_withdraws_every_batch_before_first_rejection() {
+    abandoned_generations_are_withdrawn_before_rejection(true);
+}
+
 #[test]
 fn owner_deadline_recovery_matrix() {
     if std::env::var_os("FLUI_DEADLINE_WAKE_CHILD").is_some() {
@@ -826,6 +870,14 @@ fn owner_deadline_recovery_matrix() {
         (
             "a_member_withdrawal_removes_its_snapshot_before_rejection_delivery",
             a_member_withdrawal_removes_its_snapshot_before_rejection_delivery as fn(),
+        ),
+        (
+            "an_abandoned_batch_withdraws_every_generation_before_first_rejection",
+            an_abandoned_batch_withdraws_every_generation_before_first_rejection as fn(),
+        ),
+        (
+            "cancel_all_withdraws_every_batch_before_first_rejection",
+            cancel_all_withdraws_every_batch_before_first_rejection as fn(),
         ),
     ] {
         if let Err(payload) = std::panic::catch_unwind(case) {
