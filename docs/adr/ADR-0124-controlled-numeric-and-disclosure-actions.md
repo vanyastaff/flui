@@ -2,6 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-05
+- **Superseded-by:** [ADR-0203](ADR-0203-semantics-vocabulary.md), in part: the action bit
+  assignments (bits 27–29 and the reserved bits 23–25). The meaning of the actions stands.
 - **Supersedes:** [ADR-0095](ADR-0095-agent-protocol-schema-crate.md), in part: its
   in-process route of `expand` and `collapse` to the tap handler, with the double-toggle race
   it leaves open, and a numeric `set_value` that arrives without its number.

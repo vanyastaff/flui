@@ -73,6 +73,12 @@ and a successful detach followed by reattachment.
 
 ### 1. Role resolution is a single-valued specificity cascade, and checkable state outranks the broad `IsButton`
 
+**Superseded by [ADR-0202](../../docs/adr/ADR-0202-typed-semantics-attributes.md)** (one role
+per node, role precedence for forced merges). The cascade below stays in force until the
+semantics-model merge table replaces it (work W3 of
+[the spec](../../docs/plans/specs/semantics-model/design.md)); the role precedence keeps its
+outcome for the fixtures named here.
+
 **Rule:** a semantics node carries a *set* of flags, and a radio tile, for example,
 carries `IsButton`, `HasCheckedState`, `HasEnabledState`, `IsInMutuallyExclusiveGroup`,
 `IsFocusable` and `HasSelectedState` together. The shape FLUI exports into is
@@ -200,6 +206,9 @@ recorded gaps.
   state alone.
 
 ### 2. `IsButton` outranks `IsLink` and `IsTextField`
+
+**Superseded by [ADR-0202](../../docs/adr/ADR-0202-typed-semantics-attributes.md)**, as decision 1;
+in force until W3.
 
 **Rule:** the cascade in mapping decision 1 leaves `IsLink`, `IsTextField`, `IsSlider`,
 `IsImage` and `IsHeader` *below* `IsButton`, so a node carrying `IsButton` beside one of them
