@@ -368,6 +368,9 @@ pub struct InputDecorator {
     focused: bool,
     is_empty: bool,
     child: Child,
+    /// Whether the child publishes the label and hint as its own name and
+    /// placeholder, so the decorator keeps their text out of the tree.
+    child_names_itself: bool,
 }
 
 impl InputDecorator {
@@ -380,6 +383,7 @@ impl InputDecorator {
             focused: false,
             is_empty: false,
             child: Child::empty(),
+            child_names_itself: false,
         }
     }
 
@@ -401,6 +405,16 @@ impl InputDecorator {
     #[must_use]
     pub fn child(mut self, child: impl IntoView) -> Self {
         self.child = Child::some(child.into_view());
+        self
+    }
+
+    /// Mark the child as publishing the label and hint itself, as
+    /// [`TextField`](crate::TextField)'s field does; without this the
+    /// decorator keeps their text in the accessibility tree, so a standalone
+    /// decorator's field is never left unnamed.
+    #[must_use]
+    pub(crate) fn child_names_itself(mut self) -> Self {
+        self.child_names_itself = true;
         self
     }
 }
@@ -546,9 +560,11 @@ impl ViewState<InputDecorator> for InputDecoratorState {
                     label_style = label_style.with_font_size(font_size * 0.75);
                 }
             }
-            // The decorated field announces the label as its own name.
+            // A field that names itself announces the label; otherwise the
+            // label stays readable here.
             rows.push(
                 ExcludeSemantics::new()
+                    .excluding(view.child_names_itself)
                     .child(Text::new(label_text).style(label_style))
                     .boxed(),
             );
@@ -562,9 +578,11 @@ impl ViewState<InputDecorator> for InputDecoratorState {
                     |p| p.resolve(&states),
                 )
                 .unwrap_or_default();
-            // The decorated field announces the hint as its placeholder.
+            // A field that names itself announces the hint as its
+            // placeholder; otherwise the hint stays readable here.
             rows.push(
                 ExcludeSemantics::new()
+                    .excluding(view.child_names_itself)
                     .child(Text::new(hint_text).style(hint_style))
                     .boxed(),
             );
