@@ -363,8 +363,7 @@ impl FrameRun {
     pub fn structure(&self) -> Vec<&'static str> {
         self.layer_tree
             .as_ref()
-            .map(inspect::layer_structure)
-            .unwrap_or_default()
+            .map_or_default(inspect::layer_structure)
     }
 
     /// The bounds of the first picture layer, if any.
@@ -383,8 +382,7 @@ impl FrameRun {
             structure: self
                 .layer_tree
                 .as_ref()
-                .map(inspect::layer_structure_with_depth)
-                .unwrap_or_default(),
+                .map_or_default(inspect::layer_structure_with_depth),
             picture_bounds: self.picture_bounds(),
             dirty: self.owner.has_dirty_nodes(),
         }

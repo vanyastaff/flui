@@ -65,8 +65,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Duration;
 
+use flui_animation::Animatable;
 use flui_animation::curve::{Curve, Interval};
-use flui_animation::ext::AnimatableExt;
 use flui_animation::{
     Animation, AnimationController, AnimationStatus, DrivenController, Tween, Vsync, VsyncUpdate,
     curves,
@@ -1448,7 +1448,7 @@ mod tests {
             old.tick_all(&clock.frame(Duration::from_millis(100)));
             let called = Rc::new(Cell::new(false));
             next.set_frame_requester(Some(Rc::new({
-                let (slot, called, old) = (Rc::downgrade(&slot), called.clone(), old.clone());
+                let (slot, called, old) = (Rc::downgrade(&slot), called.clone(), old);
                 move || {
                     assert!(old.is_empty(), "every owner moved before wake");
                     let slot = slot.upgrade().expect("collapse owner still mounted");

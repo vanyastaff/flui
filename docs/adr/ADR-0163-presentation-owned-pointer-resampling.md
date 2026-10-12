@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-07
+- **Amended:** 2026-10-11 — current clock ownership uses the UI runtime vocabulary of ADR-0171.
 - **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md),
   [ADR-0037](ADR-0037-presentation-ownership-domains.md),
   [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md),
@@ -35,14 +36,14 @@ A contact keeps the policy under which its Down was admitted. Changing policy
 while contact sequences are active returns the binding's mode-change error;
 setting the same policy remains idempotent. A missing presentation returns a
 typed unavailable error. A sibling presentation has its own binding, queues
-and policy even when both presentations share a realm clock.
+and policy even when both presentations share a UI runtime clock.
 
 This is an application choice, not an inferred system preference. It does not
 introduce process-wide configuration or fabricate display-refresh metadata.
 
 ### Clock authority and measured samples
 
-The binding supplies arrival from the realm's `ClockSource`. The resampler
+The binding supplies arrival from the UI runtime's `ClockSource`. The resampler
 maps owned `EventTime` onto that Instant timeline using the earliest consistent
 clock base observed, preserving measured spacing when packets arrive together.
 Clock-base installation and enqueue share one guarded operation; diagnostics

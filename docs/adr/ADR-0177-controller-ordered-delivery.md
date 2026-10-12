@@ -4,9 +4,11 @@
 - **Superseded-by:** [ADR-0178](ADR-0178-notification-first-failure-custody.md) for the shared notification failure policy and owner-local callback integration.
 - **Superseded-by:** [ADR-0193](ADR-0193-directional-phase-names.md) for settled-phase vocabulary only.
 - **Date:** 2026-10-08
+- **Amended:** 2026-10-11 — the delivery type is `RunDelivery`; ordering and first-failure custody are unchanged.
 - **Related:** [ADR-0064](ADR-0064-animation-completion-is-one-controller-resolved-future.md),
   [ADR-0106](ADR-0106-ticker-continuation-ownership-and-terminal-waiters.md),
-  [ADR-0127](ADR-0127-exceptional-path-retention.md)
+  [ADR-0127](ADR-0127-exceptional-path-retention.md),
+  [ADR-0199](ADR-0199-presentation-sampling-recovery.md)
 
 ## Context
 
@@ -45,7 +47,7 @@ Snapshots and displaced resources follow ADR-0127's exceptional retention policy
 Reentrant removals join outgoing custody, including subscriptions added after
 the current snapshot. Frame walks and controller ticks borrow the same existing
 retirement context, so an earlier peer's failure remains authoritative. A run
-delivery after a contained failure uses `TickerDelivery::deliver_after_failure`:
+delivery after a contained failure uses `RunDelivery::deliver_after_failure`:
 accepted continuations and waiters still run, but their opaque captures and
 owning wakers remain retained even on successful invocation. Normal delivery
 keeps ordinary destruction.
@@ -54,8 +56,11 @@ another run. This is ordering of pre-existing continuations in controller run
 deliveries: ADR-0064's immediate continuation call when subscribing to an already
 resolved future remains unchanged.
 
-Vsync similarly contains each child-registry and controller failure, continues
-its existing registration walk, then resumes the first failure. Removed, newly
+Standalone Vsync ticking similarly contains each child-registry and controller
+failure, continues its existing registration walk, then resumes the first
+failure. Runtime sampling instead lends its enclosing custody and consumes the
+failure as an addressed typed report under ADR-0199; this does not change the
+controller FIFO or registry admission rules. Removed, newly
 registered and muted peers retain the existing walk rules. A non-finite frame
 instant is ignored before any registry changes its run anchors.
 

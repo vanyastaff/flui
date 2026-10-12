@@ -287,6 +287,48 @@ let value = curves::ELASTIC_OUT.transform(t);
 | Bounce | `BOUNCE_IN`, `BOUNCE_OUT`, `BOUNCE_IN_OUT` |
 | Other | `DECELERATE` |
 
+### Authored piecewise and spring easing
+
+```rust
+use flui_animation::{ArcCurve, Curve, LinearStop, PiecewiseLinear, SpringCurve,
+    SpringDescription, Tolerance};
+
+let piecewise = PiecewiseLinear::new(&[
+    LinearStop::new(0.0), LinearStop::new(0.25), LinearStop::new(1.0),
+])?;
+assert_eq!(piecewise.transform(0.5), 0.25);
+let spring = SpringCurve::new(
+    SpringDescription::new(1.0, 100.0, 20.0)?, Tolerance::DEFAULT,
+)?;
+assert!(!spring.duration().is_zero());
+let shared = ArcCurve::new(spring);
+assert_eq!(shared.transform(1.0), 1.0);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+`LinearStop::at` supplies normalized input progress. Missing first/last inputs
+become 0/1; missing interior inputs are spaced between their explicit neighbours,
+after decreasing explicit inputs have been raised. The first and last outputs
+must be 0 and 1. Interior outputs can overshoot, and interior equal inputs jump
+to the last output at that input. At a regular knot `slope` selects the outgoing
+segment; at a jump it returns zero. Unrepresentable rates saturate finitely.
+Optional serde stores canonical stops, including their assigned inputs.
+
+This borrows the stop-placement rules of
+[CSS Easing Level 2](https://drafts.csswg.org/css-easing-2/#linear-easing-function)
+while retaining FLUI's exact endpoints, NaN preservation and exterior clamp.
+It does not promise CSS parsing, source-text serialization or extrapolation.
+
+`SpringCurve` maps progress to physical time without accumulating frame state.
+Its tolerance is in unit-output distance and output units per physical second;
+distance must be less than 1. `duration()` rounds the conservative rest upward
+to nanoseconds. A too-slow spring whose rest exceeds `Duration` is refused.
+No sample table, frame clock or controller is retained. Use `MotionSpec::Spring`
+for a physical retarget that carries the interrupted velocity into the solver,
+including descriptions authored with duration and bounce. A `SpringCurve` inside
+`MotionSpec::Curve` follows that variant's Hermite seam correction and assigned
+deadline; stretching its keyframe duration changes its playback time scale.
+
 ### Custom curves
 
 ```rust
@@ -334,9 +376,9 @@ let flipped = curve.flipped();   // 180° rotation: 1.0 - curve(1.0 - t)
 ### Basic Usage
 
 ```rust
-use flui_animation::{Animatable, FloatTween};
+use flui_animation::{Animatable, Tween};
 
-let tween = FloatTween::new(0.0, 100.0);
+let tween = Tween::new(0.0, 100.0);
 let value = tween.transform(0.5); // 50.0
 assert_eq!(value, 50.0);
 ```
@@ -345,8 +387,7 @@ assert_eq!(value, 50.0);
 
 ```rust
 use flui_animation::{
-    AlignmentTween, BorderRadiusTween, ColorTween, ConstantTween, EdgeInsetsTween,
-    FloatTween, IntTween, OffsetTween, RectTween, SizeTween, StepTween,
+    Tween, IntTween, StepTween,
 };
 use flui_foundation::geometry::{Edges, Offset, Rect, Size};
 use flui_painting::Alignment;
@@ -355,25 +396,23 @@ use flui_painting::styling::{BorderRadius, BorderRadiusExt, Color};
 # let rect2 = Rect::new(0.0, 0.0, 50.0, 50.0);
 
 // Numeric
-let _ = FloatTween::new(0.0, 100.0);
+let _ = Tween::new(0.0, 100.0);
 let _ = IntTween::new(0, 255);
 let _ = StepTween::new(0, 10); // floors
 
 // Color
-let _ = ColorTween::new(Color::RED, Color::BLUE);
+let _ = Tween::new(Color::RED, Color::BLUE);
 
 // Geometry
-let _ = SizeTween::new(Size::ZERO, Size::new(100.0, 100.0));
-let _ = OffsetTween::new(Offset::ZERO, Offset::new(50.0, 50.0));
-let _ = RectTween::new(rect1, rect2);
+let _ = Tween::new(Size::ZERO, Size::new(100.0, 100.0));
+let _ = Tween::new(Offset::ZERO, Offset::new(50.0, 50.0));
+let _ = Tween::new(rect1, rect2);
 
 // Layout
-let _ = AlignmentTween::new(Alignment::TOP_LEFT, Alignment::BOTTOM_RIGHT);
-let _ = EdgeInsetsTween::new(Edges::ZERO, Edges::all(16.0));
-let _ = BorderRadiusTween::new(BorderRadius::ZERO, BorderRadius::circular(8.0));
+let _ = Tween::new(Alignment::TOP_LEFT, Alignment::BOTTOM_RIGHT);
+let _ = Tween::new(Edges::ZERO, Edges::all(16.0));
+let _ = Tween::new(BorderRadius::ZERO, BorderRadius::circular(8.0));
 
-// Constant
-let _ = ConstantTween::new(42.0);
 ```
 
 ### Keyframes
@@ -430,14 +469,14 @@ Direct `Duration` addition or subtraction can overflow when elapsed is near
 ### Chaining and Composition
 
 ```rust
-use flui_animation::{Animatable, Curve, curves, FloatTween, ReverseTween};
-let tween = FloatTween::new(0.0, 100.0);
+use flui_animation::{Animatable, Curve, curves, Tween};
+let tween = Tween::new(0.0, 100.0);
 // A curve, then a value tween
 let eased = tween.transform(curves::EASE_IN.transform(0.5));
 assert!(eased < 50.0);
 
 // Reverse
-let reversed = ReverseTween::new(tween);
+let reversed = Tween::new(tween.end, tween.begin);
 assert_eq!(reversed.transform(0.25), 75.0);
 ```
 
@@ -475,12 +514,12 @@ Map 0–1 to any type:
 ```rust
 # use std::rc::Rc;
 # use std::time::Duration;
-# use flui_animation::{Animation, AnimationController, FloatTween};
+# use flui_animation::{Animation, AnimationController, Tween};
 use flui_animation::TweenAnimation;
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 
 let animated = TweenAnimation::new(
-    FloatTween::new(0.0, 300.0),
+    Tween::new(0.0, 300.0),
     Rc::new(controller.clone()),
 );
 
@@ -531,7 +570,7 @@ Fixed value:
 use flui_animation::{UNIT_END_ANIMATION, UNIT_START_ANIMATION, Animation, AnimationStatus, ConstantAnimation};
 
 let stopped = ConstantAnimation::with_status(0.5, AnimationStatus::ForwardSettled);
-let end = ConstantAnimation::forward_settled(1.0);
+let end = ConstantAnimation::with_status(1.0, AnimationStatus::ForwardSettled);
 
 // Fixed normalized endpoints
 assert_eq!(UNIT_END_ANIMATION.value(), 1.0);

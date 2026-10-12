@@ -38,7 +38,8 @@ pub use dev_agent::DevAgent;
 pub use direct::run_direct;
 pub use flui_runtime::frame_failure::{
     FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind,
-    FrameFailureReport, PanicText, SegmentPhase,
+    FrameFailureReport, PanicText, SamplingFailure, SamplingFailureOrigin, SamplingStage,
+    SegmentPhase,
 };
 pub use hot_reload::DevReload;
 #[cfg(not(target_arch = "wasm32"))]

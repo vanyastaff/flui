@@ -1,6 +1,7 @@
 # Animation: трассировка требований к плану
 
-Дата: 2026-10-08. База и результаты — в [evidence](readiness-evidence.md).
+Исторический маршрут от 2026-10-08. Актуальные решения по всем 110 строкам —
+в [readiness-status.md](readiness-status.md). Исходная база — в [evidence](readiness-evidence.md).
 Пакеты A0–A9 определены в [плане](readiness-plan.md). Источник ID — исторический
 [market.md](market.md); ниже перечислены все 110 требований, без расширения их scope.
 
@@ -22,7 +23,8 @@
 | M-TIME-10 | Controller velocity игнорирует кривую; математический retarget не подключён к implicit | A4 |
 | M-TIME-11 | Частота анимации/троттлинг вынесены владельцем | Вне текущего scope |
 | M-TIME-12 | Спека motion-clock уточняет старую строку: rate ≥ 0, reverse отдельно; синхронизировать формулировки | A3 |
-| M-INT-1, M-INT-2, M-INT-3, M-INT-5 | Библиотечные сегменты есть; C0/C1 и reversal должны пройти через реальные implicit/controller consumers | A4 |
+| M-INT-1, M-INT-2, M-INT-5 | Библиотечные сегменты есть; C0/C1 и reversal должны пройти через реальные implicit/controller consumers | A4 |
+| M-INT-3 | Duration/bounce задаёт физическую пружину, наследующую входящую скорость. `a_time_defined_spring_inherits_velocity` сравнивает реальный owning run после прерывания с независимым ОДУ, затем проверяет rest и outcomes; контроль с нулевой скоростью нарушает position assertion. Mounted `changing_only_the_duration_preserves_motion_and_sets_a_new_deadline` и `changing_only_the_curve_keeps_the_existing_deadline` — дополнительное покрытие смены curve-конфигурации, не замена требования о физической пружине | A4 |
 | M-INT-4 | Продолжительность и атомарность отказа входят в красные robustness-контракты | A1 |
 | M-INT-6 | Dismissible использует max constraints, а не фактический размер; Drawer/back gesture проверить вместе | A6 |
 | M-INT-7, M-INT-8, M-INT-9, M-INT-10 | Базовые reverse/seek/cancel/completion тесты проходят; reentrant delivery и lifecycle ещё красные | A1, A4 |
@@ -42,11 +44,11 @@
 | M-PHY-16 | Проверить отказ или явное ограничение незавершающихся симуляций на окончательном production-пути | A1, A9 |
 | M-CRV-1, M-CRV-2, M-CRV-3, M-CRV-4, M-CRV-5 | Валидация, концы и численные контракты проходят в all-features suite | A8, A9 |
 | M-CRV-6 | Steps есть; before-flag исключён уточнённой спецификацией | A7 |
-| M-CRV-7 | Piecewise linear не найден как завершённый production-сценарий; нужна явная disposition строки | A7 |
+| M-CRV-7 | `PiecewiseLinear` канонизирует `LinearStop`: пропущенные inputs, повышение убывающих inputs, плато и правосторонний внутренний jump. Владелец разрешил сохранить authoring API до появления реальной потребности в штатном consumer. `authored_easing_contract` проверяет численные значения, finite extremes, slope, serde admission и сохранение исходного run при эквивалентном пересоздании; mounted `authored_piecewise_hero_geometry_is_painted_and_retraced` проверяет painted bounds и обратный путь. Эталон stop placement — CSS Easing 2; exterior clamp и точные endpoints следуют принятому FLUI Curve-контракту, raw CSS parsing/extrapolation не заявлены | A7, согласованный authoring scope |
 | M-CRV-8 | Экстраполяция кривой вынесена; не смешивать с экстраполяцией интерполируемого значения | Вне текущего scope |
 | M-CRV-9 | Владелец согласовал `KeyframesBuilder::cubic()` для авторских траекторий. `authored_cubic_hero_geometry_is_painted_and_retraced` передаёт Keyframes через production-контракт `Hero::create_rect_tween`, сравнивает нарисованную геометрию с независимым эталоном и проверяет обратный переход. Основание сохранения API записано в composition/design | A7, согласованный authoring API |
-| M-CRV-10 | Sampled spring curve не подтверждена; не помечать закрытой по наличию SpringSimulation | A7 |
-| M-CRV-11, M-CRV-12 | Input policy проверяется отдельно от параметров. `curve_parameters_reject_invalid_input` сопоставляет независимый ожидаемый CurveError с try_new, panic new и численным serde decode для Cubic, ThreePointCubic, Interval и всех Elastic; включает NaN/±∞ и границы допустимых параметров. Steps проверяет отказ try_new/new и JSON decode в существующих таблицах. Обход проверки x2 или NaN только при decode воспроизводимо нарушает новые случаи. Это не закрывает неподтверждённые authoring-возможности M-CRV-7/M-CRV-10 | A7, A8 |
+| M-CRV-10 | `SpringCurve` сэмплирует валидированную аналитическую пружину по progress × conservative rest duration, с overshoot и точными endpoints. Владелец разрешил сохранить authoring API до штатного consumer. `authored_easing_contract` проверяет три режима по независимому ОДУ, duration/refusal, исходный future и value equality; mounted `authored_spring_hero_geometry_is_painted_and_retraced` проверяет реальный overshoot, painted bounds, reversal и unmount. Это duration-based easing, а не velocity-inheriting retarget и не аппроксимационная таблица | A7, согласованный authoring scope |
+| M-CRV-11, M-CRV-12 | Input policy проверяется отдельно от параметров. `curve_parameters_reject_invalid_input` сопоставляет независимый ожидаемый CurveError с try_new, panic new и численным serde decode для Cubic, ThreePointCubic, Interval и всех Elastic; включает NaN/±∞ и границы допустимых параметров. Steps проверяет отказ try_new/new и JSON decode в существующих таблицах. Обход проверки x2 или NaN только при decode воспроизводимо нарушает новые случаи. Новые авторские кривые M-CRV-7/M-CRV-10 имеют отдельную приёмку выше | A7, A8 |
 
 ## Интерполяция и композиция
 

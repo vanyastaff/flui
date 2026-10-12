@@ -4,7 +4,7 @@
 //!
 //! The only public entry point is `apply_mode`, called by
 //! `fold_layer_filter_chain` in `opacity_layer.rs` when a
-//! [`command_ir::LayerFilter::Mode`] is present on a pending layer.
+//! [`crate::command_ir::LayerFilter::Mode`] is present on a pending layer.
 //!
 //! ## Correctness contract
 //!

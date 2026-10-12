@@ -1,10 +1,9 @@
 //! Dev-only fixture for `flui-hot-reload`'s reload-lifecycle integration test
-//! (`crates/flui-hot-reload/tests/reload_lifecycle.rs`).
+//! (`tests/reload_lifecycle.rs`).
 //!
-//! Never shipped: consumed exclusively as a `[dev-dependencies]` path entry
-//! of `flui-hot-reload`, so cargo's own build graph produces this crate's
-//! cdylib artifact automatically as a side effect of building
-//! `flui-hot-reload`'s tests — no nested `cargo build` from inside a test.
+//! Never shipped. The repository test tasks build this plugin's library before
+//! running its integration tests. Cargo publishes the directly built cdylib to
+//! its artifact directory; no test starts a nested Cargo build.
 //! See `reload_lifecycle.rs`'s module doc for why this one test earns the
 //! "build + dlopen a real plugin" cost that the rest of `flui-hot-reload`'s
 //! tests avoid.

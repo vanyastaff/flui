@@ -190,8 +190,15 @@ impl FrameTick {
     }
 }
 
-/// A presentation's animation clock. See the [module docs](self) for the time
-/// model.
+/// A presentation's animation clock.
+///
+/// Raw monotonic `Duration` advances its local timeline at the selected
+/// [`PlaybackRate`]. Rate and system-policy changes rebase at the last selected
+/// frame, preserving continuity. Stale raw stamps hold time rather than rewind
+/// it, and time saturates at `Duration::MAX` instead of overflowing.
+/// Normal runs use the resolved system duration scale; Preserve runs use
+/// the authored timeline. [`step`](Self::step) advances an exact duration even
+/// while playback is paused.
 ///
 /// # Examples
 ///

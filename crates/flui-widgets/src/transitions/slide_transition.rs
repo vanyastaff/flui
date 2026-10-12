@@ -37,7 +37,7 @@ use super::transform_view::AnimatedTransformView;
 /// ```rust,ignore
 /// let controller = AnimationController::builder(Duration::from_millis(300)).build();
 /// let tween = Tween::new(TranslationFraction::new(-1.0, 0.0), TranslationFraction::ZERO);
-/// let position = Arc::new(tween.animate(Arc::new(controller.clone()) as Arc<dyn Animation<f64>>));
+/// let position = Rc::new(tween.animate(Rc::new(controller.clone())));
 /// let slide = SlideTransition::new(position, Text::new("hi"));
 /// controller.forward(); // each frame moves the child's transform layer
 /// ```

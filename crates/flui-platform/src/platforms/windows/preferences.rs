@@ -401,7 +401,9 @@ fn sample(
                 // This window-independent reading detects changes. Exact
                 // presentation metrics are queried separately at its actual DPI.
                 .with_native_mouse_geometry(mouse_geometry(96).map_err(|error| {
-                    PlatformError::Preferences { message: error.to_string() }
+                    PlatformError::Preferences {
+                        message: error.to_string(),
+                    }
                 })?),
         )
         .with_wheel(

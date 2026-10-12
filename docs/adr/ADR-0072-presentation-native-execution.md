@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-19
+- **Amended:** 2026-10-11 — implemented UIKit scene/close/addressed geometry paths are separated from retained native execution limits.
 
 ## Context
 
@@ -69,17 +70,14 @@ callbacks may safely unwind across their Objective-C ABI. Headless callback
 and app dispatch tests verify FIFO replacement, close fencing, restrictive host
 precedence, public lifecycle snapshots and shared-UI runtime sibling eligibility.
 
-Verified native SDK: Xcode 26.2. This is the foundation for UIScene migration, not
-scene support. Scene ownership/disconnect/reattach, safe-area geometry, windowless
-owner waking and complete mobile quit/background behavior remain separate work.
-OS termination does not guarantee a callback. No plist scene declaration is added
-without a scene implementation.
-
-Native iOS `PlatformWindow::close` still inherits the unsupported no-op default,
-and the runner has no native close teardown. Terminal fencing is verified through
-headless close and app stop, not native UIKit closure. The existing iOS quit flag
-is not an admission fence. Those ownership gaps belong to the scene/close work,
-and this increment must not be described as complete mobile lifecycle support.
+The original native execution evidence used Xcode 26.2. The current UIKit backend
+implements scene ownership and native `request_close`, and the runtime seeds
+addressed root geometry/MediaQuery per presentation. These implementation facts
+replace the old statements that scenes and native close were absent.
+OS reclaim/background grants and unrestricted simultaneous scene operation remain
+separate acceptance limits; OS termination does not guarantee a callback. Current
+source and headless fencing do not establish a fresh UIKit device/simulator run
+or complete mobile quit/background support.
 
 
 ## Sources
@@ -101,17 +99,16 @@ pixel ratio, brightness and padding are now written through the addressed
 presentation, so a shared UI runtime with several live presentations no longer
 misroutes them onto the primary.
 
-The addressing stops at the write side: the root `MediaQueryRoot` is installed
-from the `primary()` attach path, the only path that carries content today, so a
-non-primary presentation's source is written but not yet read. Consuming each
-presentation's own source is part of secondary-window content and remains
-separate work; `docs/BETA.md` records the split as a stated limit. Nothing here
-is visible to a single-window application, which is every iOS build today, since
-the scene policy admits one logical session at a time.
+Addressed sized root attachment also installs that presentation's own
+`MediaQueryRoot`; the test-support/headless path can consume a non-primary source.
+This replaces the earlier write-only limitation. It does not provide rendered
+Shared native-window support or unrestricted UIKit scenes: the managed rendered
+path still has its primary-only raster boundary, and the current UIKit scene
+policy admits one logical session at a time.
 
 Verified on the iPhone 16e simulator in portrait against the view's own
 `safeAreaInsets`; the acceptance record and its stated limits are in
 [docs/BETA.md](../BETA.md) § "iOS safe-area layout". Scene
-ownership/disconnect/reattach, windowless owner waking, and complete mobile
-quit/background behavior remain separate work, and OS termination still does not
-guarantee a callback.
+implementation now exists. Native scene-disconnect/reattach and windowless-owner
+execution acceptance, complete mobile quit/background behavior and OS termination
+notification limits remain separate evidence; termination still guarantees no callback.

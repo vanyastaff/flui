@@ -35,6 +35,7 @@ fn retire_delivery_snapshot<T: ?Sized>(
 pub(crate) struct CallbackSequence {
     first: Option<RoutePanic>,
     incoming_failure: bool,
+    preserving: bool,
 }
 
 impl CallbackSequence {
@@ -42,6 +43,13 @@ impl CallbackSequence {
         Self {
             first: None,
             incoming_failure: std::thread::panicking(),
+            preserving: false,
+        }
+    }
+    pub(crate) fn preserving_failure(preserving: bool) -> Self {
+        Self {
+            preserving,
+            ..Self::new()
         }
     }
     pub(crate) fn call<T: ?Sized>(&mut self, callback: Option<Rc<T>>, invoke: impl FnOnce(&T)) {
@@ -53,10 +61,16 @@ impl CallbackSequence {
             let candidate = RoutePanic::capture(|| invoke(callback.as_ref()));
             RoutePanic::preserve_first(&mut self.first, candidate, "recognizer callback");
         }
-        retire_delivery_snapshot(callback, &mut self.first, self.incoming_failure);
+        if self.preserving && self.first.is_none() {
+            // An earlier producer failure changes retirement policy, but a
+            // healthy callback's immutable owner still has sole capture custody.
+            callback.retain();
+        } else {
+            retire_delivery_snapshot(callback, &mut self.first, self.incoming_failure);
+        }
     }
     pub(crate) fn retire<T: ?Sized>(&mut self, callback: Option<Rc<T>>) {
-        if self.incoming_failure {
+        if self.incoming_failure || self.preserving {
             callback.retain();
         } else {
             retire_callback(callback, &mut self.first);
@@ -78,10 +92,20 @@ pub(crate) fn finish_containment(first: Option<RoutePanic>, incoming_failure: bo
 }
 
 pub(crate) fn withdraw_cancelled(entry: &GestureArenaEntry, arena: &GestureArena) {
+    arena.run_owned_recovery(|recovery| {
+        withdraw_cancelled_with_recovery(entry, arena, recovery);
+    });
+}
+
+pub(crate) fn withdraw_cancelled_with_recovery(
+    entry: &GestureArenaEntry,
+    arena: &GestureArena,
+    recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
+) {
     if arena.sweep_model() == SweepModel::SelfDriven {
-        entry.abandon_without_self();
+        entry.abandon_without_self_with_recovery(recovery);
     } else {
-        entry.reject_without_self();
+        entry.reject_without_self_with_recovery(recovery);
     }
 }
 

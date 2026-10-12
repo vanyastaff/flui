@@ -26,13 +26,11 @@ path = "src/main.rs"
 [lints]
 workspace = true
 
-[dependencies]
-anyhow = { workspace = true }
-
 # X11-only by scope (the harness drives an X server); target-gated so a
 # Windows/macOS workspace build — should either rejoin CI's test matrix —
 # never compiles rustix/x11 code it cannot use.
 [target.'cfg(target_os = "linux")'.dependencies]
+anyhow = { workspace = true }
 # `shape` powers the occlusion check's cover window: an override-redirect
 # window with an EMPTY input region obscures the app visually (the X server
 # computes visibility from output geometry, so the app receives

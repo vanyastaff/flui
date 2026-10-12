@@ -4,7 +4,8 @@
 - **Superseded-by:** ADR-0171 for terminology only; the ownership and threading
   decisions below remain in force.
 - **Date:** 2026-07-11
-- **Absorbs:** ADR-0027 (engine-wide threading architecture)
+- **Amended:** 2026-10-11 — factual runtime location and attachment capability names follow ADR-0083/0190; the former self-absorption label is removed.
+- **Absorbs:** [retired ADR-0002](https://github.com/vanyastaff/flui/blob/aaecd27847a6338538f70e230a1aa01a018b0fd6/docs/adr/ADR-0002-engine-wide-threading-architecture.md), the original engine-wide threading constraints.
 - **Refined by:** ADR-0037 (presentation ownership domains), ADR-0043 (per-presentation trees,
   UI runtime `GlobalKeyScope`), ADR-0045 (the raster lane)
 - **Amended by:** [ADR-0097](ADR-0097-no-process-global-state-gate.md) (the runner's
@@ -29,6 +30,11 @@ UI tree, real parallelism between UI runtimes, workers, the compositor and the G
 single-writer transaction is not a language limitation: lifecycle, reconciliation,
 parent-driven layout and paint order are causally ordered, and per-node parallelism buys
 scheduler overhead and races, not throughput.
+
+The ownership model permits separately scheduled UI runtimes; the current managed
+host executes its UI runtimes serially on one owner thread. State isolation does
+not promise that a slow synchronous callback cannot delay another managed window.
+Threaded raster production remains a separate Proposed decision.
 
 ```text
 Platform/Event-loop thread
@@ -122,7 +128,7 @@ A UI tree cannot be handed to a worker, workers receive owned inputs and return 
 instead of writing into the tree, and cross-thread interaction exists only through sanctioned
 capabilities. Negative bounds are pinned by `assert_not_impl_any!` or `compile_fail` tests;
 positive ones by `assert_impl_all!` assertions. A render object reaches its owner only
-through an attachment-scoped `RenderInvalidationHandle`, never a stored `PipelineCell`, which
+through an attachment-scoped `LocalRenderInvalidationHandle`, never a stored `PipelineCell`, which
 would close an `Rc` cycle.
 
 Within one UI runtime the transaction is serial: lifecycle, state mutation, reconciliation, build,
@@ -245,13 +251,13 @@ These are deliberate divergences from Flutter's process-global shape.
   handle verbs. The run-a-closure primitive is crate-private; a public arbitrary-closure
   executor is rejected as a standing constraint. Raw channels never appear in public
   signatures.
-- `UiRuntime`, its dispatcher and command protocol are `pub(crate)` in `flui-app`, not an
-  embedder API. A public UI runtime/runtime surface is designed separately; it is not obtained by
-  making these types public.
+- `UiRuntime` now lives in the internal `flui-runtime` crate (ADR-0083); `flui-app` owns its
+  native host assembly and dispatch. Crate visibility is distinct from a stable embedder API:
+  public internal-crate items do not by themselves establish that stability contract.
 - Every public type documents its thread affinity and where its callbacks run. Nothing goes
   `pub` for tests. Capability acquisition follows ADR-0078.
 
-### 10. Parallel layout and repaint (absorbed from ADR-0027)
+### 10. Parallel layout and repaint
 
 Parallel layout and parallel repaint are not part of this design. They become worth
 revisiting only when all of the following hold, and then as their own ADR: a render object can

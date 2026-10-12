@@ -960,8 +960,7 @@ fn graft_anchor(
     let old_children: Vec<flui_foundation::SemanticsId> = owner
         .tree()
         .children(anchor_sid)
-        .map(<[flui_foundation::SemanticsId]>::to_vec)
-        .unwrap_or_default();
+        .map_or_default(<[flui_foundation::SemanticsId]>::to_vec);
     for child in old_children {
         let _ = owner.tree_mut().remove(child);
     }

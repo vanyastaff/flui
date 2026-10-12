@@ -392,8 +392,7 @@ impl EditableTextStore {
                 origin: inner
                     .composing
                     .as_ref()
-                    .map(|state| state.origin.clone())
-                    .unwrap_or_default(),
+                    .map_or_default(|state| state.origin.clone()),
             };
             (doc, inner.generation)
         });

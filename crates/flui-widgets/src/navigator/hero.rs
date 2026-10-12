@@ -85,8 +85,8 @@ use super::hero_controller::FlightDirection;
 use crate::__private::AnchoredBox;
 use crate::{Offstage, SizedBox, Stack, TickerMode};
 
-/// Builds the [`RectTween`](flui_animation::RectTween)-like path a hero's shuttle
-/// follows. The default is a linear `RectTween`. Erased and `Rc`-shared because hero customization is UI-owner
+/// Builds the [`Tween`](flui_animation::Tween)-like path a hero's shuttle
+/// follows. The default is a linear `Tween`. Erased and `Rc`-shared because hero customization is UI-owner
 /// local, including the returned mapping and its captures.
 pub(crate) type RectTweenFactory = Rc<dyn Fn(Rect, Rect) -> Box<dyn Animatable<Value = Rect>>>;
 
@@ -1204,7 +1204,7 @@ impl Hero {
 
     /// Shape the path the hero's shuttle flies along: `factory(begin, end)` returns
     /// the tween the flight interpolates as its animation runs 0→1. The default is
-    /// a linear [`RectTween`](flui_animation::RectTween). When both this and the
+    /// a linear [`Tween`](flui_animation::Tween). When both this and the
     /// [`HeroController`](super::hero_controller::HeroController)'s default are set,
     /// this one wins.
     /// Reversing an airborne flight between the same heroes retraces the selected

@@ -44,6 +44,14 @@ producers retain the bounded `RenderInvalidationHandle`. Local marks coalesce
 by attachment and phase before waking and replay through canonical dirty walks.
 Detach withdraws pending metadata before user cleanup. See
 [ADR-0190](../../docs/adr/ADR-0190-owner-local-render-invalidation.md).
+Runtime preparation drains accepted local, external and font invalidations
+through `drain_pending_dirty_with_recovery`, borrowing the presentation's
+existing custody rather than resuming a payload into a blanket preparation
+catch. Canonical dirty admission has no user callout; an unproved walk is
+`Unknown`. A visual-update callout after that admission is `Delivery` and a
+failed wake leaves the accepted mark live. Stale-request diagnostics have no
+such commit proof and remain `Unknown`. The standalone drain finishes its own
+first-failure boundary after attempting the accepted tail.
 The public `lifecycle_matrix` rows
 `local_marks_survive_a_failed_wake_and_coalesce` and
 `local_marks_wait_for_a_hook_and_end_with_the_attachment` pin wake recovery,
@@ -1195,11 +1203,25 @@ the pipeline's `TextMeasurers`, a set of `RenderId`s), and `lend` inserts the no
 borrows. `PipelineOwner::apply_font_change` reads the collection's generation through a
 `try_borrow` of the context: while the context is lent (a drain run from inside a
 measurement) it does nothing and the change waits for the next drain, rather than panic. When
-the generation differs from the one the pipeline last applied, it takes the set and marks each node still in the tree for layout and paint, through the ordinary
-`mark_needs_layout` (which clears cached intrinsics up the ancestor walk and requests a visual
-update) and `mark_needs_paint`. `drain_pending_dirty` calls it last, and both frame entries
-drain before their first phase: `run_frame` and the runtime's pending-work gate. A test's
+the generation differs from the one the pipeline last applied, it admits that
+generation and takes the complete measured set before diagnostics. Each live
+node receives independent layout and paint marks through the canonical dirty
+commits; the layout walk clears cached intrinsics and unpoisons affected nodes.
+Visual-update delivery follows each admitted mark outside notifier storage
+guards and borrows the same recovery scope. `drain_pending_dirty` applies the
+font change last. `run_frame`
+drains before its first phase; runtime owner activity applies queued admissions
+outside caller-held storage guards. Host-facing pending-work reads inspect
+accepted metadata and do not drain callbacks or diagnostics. A test's
 `TextContextHandle::source` records nothing.
+
+The accepted generation owns the complete measured-node invalidation tail.
+Diagnostics and visual-update callbacks cannot erase later nodes or independent
+layout/paint marks after an earlier failure. Recovery preserves the first cause
+and a subsequent ordinary frame consumes the already accepted work without a
+new font registration. `font_change_contract` includes diagnostic-only,
+wake-only and competing failures and observes both actual paragraphs after
+recovery.
 
 **Why.** A face registered after text was laid out can change what that text measures to, and
 the node that measured it cannot notice: the painter's cache heals only when asked to lay out
@@ -1232,6 +1254,23 @@ live tree: an app that never registers a font keeps a set bounded by its live no
 text node it ever built. Locked by `font_change_contract` (`tests/text_context.rs`), whose
 `the_record_stays_bounded_without_a_font_change` row rebuilds a paragraph 500 times.
 
+### Withdrawn native sizing restores layout eligibility without publishing geometry
+
+When a presentation withdraws its suspended sizing attempt, the runtime uses
+`PipelineOwner<Idle>::resume_retained_layout` to release the blocked layout queue.
+This changes scheduling eligibility only: it admits no new sizing input, runs no
+callback, requests no wake and accepts no geometry. Receipt authority,
+uncommitted replacement readiness and presentation completion remain with the
+runtime's sampling operation
+([ADR-0199](../../docs/adr/ADR-0199-presentation-sampling-recovery.md)).
+
+`registered_text_preparation_preserves_the_actual_presentation_attempt` exercises
+the real runtime owner, obsolete receipt refusal, fresh geometry and delayed
+completion. Its unknown-deadline and diagnostic-invalidation rows distinguish
+withdrawal from successful completion. Authored invalid-text parking retains
+[ADR-0181](../../docs/adr/ADR-0181-fallible-text-and-layout-measurement.md)'s
+changed-input contract.
+
 
 ### Hundredth quantization preserves large finite constraints
 
@@ -1248,8 +1287,12 @@ panic. The leaf, nonleaf Box, and nonleaf Sliver boundaries retain that payload
 before borrowing its text or invoking tracing subscribers. A reporting panic
 is secondary: its payload is retained without another diagnostic, preserving
 the original layout `Poisoned` error. Exceptional retention does not execute
-user `Drop`; it follows ADR-0104. Ordinary render-object destruction remains
-unchanged, including ordinary destructor failures outside these boundaries.
+user `Drop`; payload custody follows ADR-0104/0119. Outgoing user-owned render
+objects and callback envelopes separately follow
+[ADR-0127](../../docs/adr/ADR-0127-exceptional-path-retention.md): authority is
+withdrawn before callouts, healthy destruction remains ordinary, and an operation
+holding a failure retains its remaining opaque owners. These are scoped retirement
+rules, not a process-global failure boundary.
 After reporting has finished borrowing the payload, the shared foundation
 operation releases exact static-string and owned-string payloads under
 [ADR-0119](../../docs/adr/ADR-0119-inert-panic-payload-retirement.md). Arbitrary

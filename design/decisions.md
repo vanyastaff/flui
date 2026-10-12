@@ -327,11 +327,19 @@ did not challenge this decision; ADR-0081 §4 owns it. The facade and `flui-sdk`
 
 ### D12. Text shapes per UI runtime over Parley
 
+**Current authority (2026-10-11).** Accepted
+[ADR-0092](../docs/adr/ADR-0092-per-realm-text-over-parley.md) owns shaping,
+registration, family resolution and the carried gates of retired ADR-0016/0059/0077.
+The prototype narrative below is historical: neutral runs and the rasterization
+door are implemented, while a shared `GpuContext`/raster-thread atlas remains the
+independent Proposed ADR-0091 target. The retired records retain immutable history
+links through ADR-0092; they no longer provide a second current authority.
+
 **Context.** Text layout goes through one process-global `static FONT_SYSTEM`
 (flui-painting's `text_layout/layout.rs:124`), and glyph keys are cosmic-text's
 process-global keys (flui-painting's `text_layout/glyphs.rs:23`, until ADR-0092 §10 step 4
 removed them).
-[ADR-0077](../docs/adr/ADR-0077-migrate-to-parley.md) proposed Parley on shaping evidence alone.
+[ADR-0077](https://github.com/vanyastaff/flui/blob/6af2cf426809dbf8a33bbb415e904f0bfdc847c4/docs/adr/ADR-0077-migrate-to-parley.md) proposed Parley on shaping evidence alone.
 
 **Decision.** One ADR joins the Parley migration and per-UI runtime fonts: a shared, immutable-after-load
 font collection; per-UI runtime contexts without a lock; atlas on the `GpuContext`; rasterization on the
@@ -861,7 +869,9 @@ PR #1260; `depend_on_field`; ADR-0074 §8.1) (#14). Confirmed.
 
 Back-links on the older ADRs are added only in the PR that accepts each new ADR, and no gate checks
 their symmetry (#13). The already-missing lines on ADR-0065 and ADR-0016 may be fixed at acceptance
-time too; no older ADR is edited now. **Changed**: the default added the missing lines at once.
+time too; no older ADR was edited by that original decision. **Current authority:**
+ADR-0065 carries its implemented font/paragraph amendment; ADR-0016 is retired under
+Accepted ADR-0092 with immutable history. **Changed**: the default added the missing lines at once.
 
 #### A14. Dynamic linking deferred, build-footprint study
 

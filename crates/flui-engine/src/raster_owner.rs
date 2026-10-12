@@ -1556,9 +1556,9 @@ impl<B: RasterBackend> RasterOwner<B> {
 
     /// Classifies a [`RasterBackend::render_scene`] failure into its ack and
     /// [`PumpOutcome`]: device loss and surface-outdated
-    /// conditions each get their own dedicated ack; everything else is a
-    /// generic [`FrameDropReason::RenderFailed`], logged at `error` level
-    /// since it is the catch-all bucket an operator needs to see.
+    /// conditions each get their own dedicated ack. Recoverable errors retain
+    /// demand as [`FrameDropReason::RetryableRenderError`] and log at `debug`;
+    /// other failures use [`FrameDropReason::RenderFailed`] at `error` level.
     fn handle_render_failure(
         &mut self,
         epoch: FrameEpoch,

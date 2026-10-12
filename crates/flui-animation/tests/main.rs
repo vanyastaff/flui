@@ -30,6 +30,9 @@ mod controller_commands;
 #[path = "contracts/vsync.rs"]
 mod vsync;
 
+#[path = "contracts/sampling.rs"]
+mod sampling;
+
 #[path = "contracts/controller_robustness.rs"]
 mod controller_robustness;
 
@@ -53,6 +56,9 @@ mod curved;
 
 #[path = "contracts/curves.rs"]
 mod curves;
+
+#[path = "contracts/easing.rs"]
+mod easing;
 
 #[path = "contracts/keyframes.rs"]
 mod keyframes;

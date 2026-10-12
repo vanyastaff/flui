@@ -284,10 +284,10 @@ pub type CounterBuildFn = fn(WorkerBuildEnv<'_>, &CounterState, &CounterApp) -> 
 
 /// Resolve the worker's build function for `TYPE_FINGERPRINT`.
 ///
-/// `None` is a clean "worker unavailable" signal — the registry is pruned
-/// before an image unmaps, and a fingerprint change after a reload registers
-/// under a different key — so this panics loudly rather than jumping into
-/// unmapped code.
+/// `None` is a clean "worker unavailable" signal — retired registrations are
+/// withdrawn while admitted images remain mapped, and a fingerprint change registers
+/// under a different key. This rejects an unavailable build registration explicitly;
+/// admitted image lifetime remains the independent ADR-0111 contract.
 #[expect(unsafe_code)]
 pub fn counter_build_fn() -> CounterBuildFn {
     let ptr = get_worker_build_ptr(TYPE_FINGERPRINT).expect(

@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Superseded-by:** ADR-0156 (character-only Shift policy in decision 2)
 - **Date:** 2026-07-10
+- **Amended:** 2026-10-11 — shortcut resolution describes the implemented primary-focus chain and its own-chain fallback.
 - **Related:** ADR-0026 (focus widgets and traversal; Tab is an intent built on this)
 - **Superseded in part by:** ADR-0079 (intents resolve at the primary focus)
 - **Amended by:** ADR-0086 (event context on `Action::invoke` and on `CallbackShortcuts`
@@ -56,18 +57,17 @@ nearer action stops resolution at its own scope; it does not fall through to an 
 mapping (`actions_test.dart`, "Disabled actions stop propagation to an ancestor").
 
 **4. `Shortcuts`.** A `Focus(can_request_focus: false)` wrapper whose handler finds the first
-matching activator, resolves its intent through the captured action chain (with a real
-dependency, so chain changes re-capture), and returns the action's key result: `Handled` for a
+matching activator, resolves its intent through the primary focus's action chain
+(falling back to its own dependency-tracked captured chain), and returns the action's key result: `Handled` for a
 consuming action, `SkipRemainingHandlers` for a `consumes_key = false` one, `Ignored` when
 nothing matched.
 
 ## Flutter divergences
 
-- **Actions resolve from the `Shortcuts` widget's own position**, not from the primary focus
-  context: a `FocusNode` does not record its element, so there is no node→element lookup.
-  Visible only when an `Actions` map sits between the focused leaf and the `Shortcuts` widget.
-  It forces the nesting rule `Actions(Shortcuts(child))` (ADR-0026 §4), and it must be fixed
-  before text-editing intents that depend on `Actions` near the focused field.
+- **Primary-focus resolution is implemented.** `Shortcuts` resolves the action chain at the
+  primary focus, falling back to its own captured chain when no focused chain is available.
+  The former own-position-only lookup is historical; it no longer forces an outer
+  `Actions(Shortcuts(child))` nesting rule. Text-editing actions can live near the focused field.
 - **One global-handler tier** before the walk, instead of Flutter's early and late tiers.
 
 ## Text-editing intents

@@ -10,8 +10,10 @@
 //!   allocation).
 //!
 //! **Correctness contract (the wake-on-mark invariant):**
-//! Every *new* queue entry fires exactly one `fire_need_visual_update` so a
-//! quiescent platform event loop wakes to produce the frame. A duplicate mark
+//! Every *new* queue entry admits one visual wake so a quiescent platform event
+//! loop can produce the frame. Canonical `commit_*` helpers complete numeric
+//! admission first; mark wrappers or the scoped owner then deliver an owned
+//! snapshot outside the notifier lock. A duplicate mark
 //! (the frame is already scheduled) fires *no* second wake. Mid-phase marks
 //! (when a `debug_doing_*` flag is true) route into the matching
 //! `mid_layout_marks` side queue and are drained back into `dirty` at phase
@@ -217,8 +219,7 @@ impl DirtyTracker {
     /// short-circuits when the flag check repeats. Missing `RenderId`s
     /// (post-removal stale references) are silent no-ops.
     ///
-    /// Fires `fire_need_visual_update` on the notifier **only when a new
-    /// boundary entry is added** (the Phase-1 wake-on-mark fix).
+    /// Delivers a visual wake only after a new boundary entry is committed.
     pub(super) fn mark_needs_layout(
         &mut self,
         tree: &mut RenderTree,
@@ -226,7 +227,7 @@ impl DirtyTracker {
         on_invalidated: &mut dyn FnMut(RenderId),
     ) {
         if self.commit_needs_layout(tree, id, on_invalidated) {
-            self.notifier.read().fire_need_visual_update();
+            self.notify_visual_update();
         }
     }
 
@@ -310,10 +311,17 @@ impl DirtyTracker {
     /// an arbitrary dirty render object: doing so loses the isolation contract
     /// that retained layer reuse depends on.
     pub(super) fn mark_needs_paint(&mut self, tree: &RenderTree, id: RenderId) {
+        if self.commit_needs_paint(tree, id) {
+            self.notify_visual_update();
+        }
+    }
+
+    /// Complete the canonical paint walk and queue admission without callouts.
+    pub(super) fn commit_needs_paint(&mut self, tree: &RenderTree, id: RenderId) -> bool {
         let mut current = id;
         loop {
             let Some(node) = tree.get(current) else {
-                return;
+                return false;
             };
 
             // Idempotence rule: an already-dirty node proves that
@@ -321,7 +329,7 @@ impl DirtyTracker {
             // Initial attachment uses `schedule_initial_paint` because fresh
             // RenderState deliberately starts dirty.
             if node.needs_paint() {
-                return;
+                return false;
             }
             node.mark_paint_flag();
             let parent = node.links().parent();
@@ -335,8 +343,7 @@ impl DirtyTracker {
                 // update, and expressing that as a join on one entry is what
                 // makes it hold no matter which mark arrived first or whether a
                 // pass failed in between.
-                self.schedule_paint_boundary(current, node.depth() as usize);
-                return;
+                return self.enqueue_paint(current, node.depth() as usize, PaintKind::Repaint);
             }
 
             current = parent
@@ -364,7 +371,7 @@ impl DirtyTracker {
         if !target.push(DirtyNode::new(node_id, depth)) && !resumed {
             return; // already in set — frame already scheduled
         }
-        self.notifier.read().fire_need_visual_update();
+        self.notify_visual_update();
     }
 
     /// Schedules a render object that is already known to own the paint output
@@ -379,7 +386,9 @@ impl DirtyTracker {
     /// retained layer, and by scheduler-level tests. Runtime invalidation goes
     /// through [`Self::mark_needs_paint`].
     pub(super) fn schedule_paint_boundary(&mut self, node_id: RenderId, depth: usize) {
-        self.enqueue_paint(node_id, depth, PaintKind::Repaint);
+        if self.enqueue_paint(node_id, depth, PaintKind::Repaint) {
+            self.notify_visual_update();
+        }
     }
 
     /// The ONE place a paint-queue entry is written.
@@ -400,7 +409,7 @@ impl DirtyTracker {
     /// what is already there — a repaint wins whatever order the marks arrive
     /// in, which is what makes the whole ordering family a non-issue rather
     /// than a set of guards.
-    fn enqueue_paint(&mut self, node_id: RenderId, depth: usize, kind: PaintKind) {
+    fn enqueue_paint(&mut self, node_id: RenderId, depth: usize, kind: PaintKind) -> bool {
         if self.debug_doing_paint {
             // ALWAYS the side queue while a pass is running, even when the id
             // is already in the main one. The running pass snapshotted its
@@ -414,31 +423,24 @@ impl DirtyTracker {
             // Routing here defers the join to `PaintQueue::append`, which
             // upgrades on collision precisely so a repaint raised mid-paint
             // survives being merged into whatever the main queue holds.
-            if self
+            return self
                 .mid_layout_marks
                 .needs_paint
-                .enqueue(node_id, depth, kind)
-            {
-                self.notifier.read().fire_need_visual_update();
-            }
-            return;
+                .enqueue(node_id, depth, kind);
         }
         // Outside a pass, raise the kind wherever the id already lives — the
         // side queue can still hold entries a previous pass left for the drain.
         if self.dirty.needs_paint.contains(&node_id) {
             self.dirty.needs_paint.enqueue(node_id, depth, kind);
-            return;
+            return false;
         }
         if self.mid_layout_marks.needs_paint.contains(&node_id) {
             self.mid_layout_marks
                 .needs_paint
                 .enqueue(node_id, depth, kind);
-            return;
+            return false;
         }
-        if !self.dirty.needs_paint.enqueue(node_id, depth, kind) {
-            return; // already queued — frame already scheduled
-        }
-        self.notifier.read().fire_need_visual_update();
+        self.dirty.needs_paint.enqueue(node_id, depth, kind)
     }
 
     /// Marks a node's own composited-layer properties dirty without dirtying
@@ -471,11 +473,22 @@ impl DirtyTracker {
     /// `run_paint` reaches it and can tell an update-only entry from a repaint
     /// by asking each queued node whether it needs paint.
     pub(super) fn mark_needs_composited_layer_update(&mut self, tree: &RenderTree, id: RenderId) {
+        if self.commit_needs_composited_layer_update(tree, id) {
+            self.notify_visual_update();
+        }
+    }
+
+    /// Admit a layer update or its paint fallback without entering user code.
+    pub(super) fn commit_needs_composited_layer_update(
+        &mut self,
+        tree: &RenderTree,
+        id: RenderId,
+    ) -> bool {
         let Some(node) = tree.get(id) else {
-            return;
+            return false;
         };
         if node.needs_paint() || node.needs_composited_layer_update() {
-            return;
+            return false;
         }
         node.mark_composited_layer_update_flag();
 
@@ -493,7 +506,7 @@ impl DirtyTracker {
         let mut current = id;
         loop {
             let Some(node) = tree.get(current) else {
-                return;
+                return false;
             };
             // `parent.is_some()` is part of the predicate, not an accident: the
             // paint root is never grafted. `run_paint` enters through
@@ -521,14 +534,12 @@ impl DirtyTracker {
                 // that arrives AFTER a pass failed partway, which is where
                 // every flag-based version of this guard went blind.
                 let depth = node.depth() as usize;
-                self.enqueue_paint(current, depth, PaintKind::LayerUpdate(smallvec![id]));
-                return;
+                return self.enqueue_paint(current, depth, PaintKind::LayerUpdate(smallvec![id]));
             }
             let Some(parent) = node.links().parent() else {
                 // The paint root itself. There is no enclosing boundary to
                 // patch, so this can only be served by repainting.
-                self.mark_needs_paint(tree, id);
-                return;
+                return self.commit_needs_paint(tree, id);
             };
             current = parent;
         }
@@ -545,26 +556,35 @@ impl DirtyTracker {
         tree: &RenderTree,
         node_id: RenderId,
     ) {
+        if self.commit_needs_compositing_bits_update(tree, node_id) {
+            self.notify_visual_update();
+        }
+    }
+
+    /// Commit the compositing walk and its responsible queue root before waking.
+    pub(super) fn commit_needs_compositing_bits_update(
+        &mut self,
+        tree: &RenderTree,
+        node_id: RenderId,
+    ) -> bool {
         let mut current = node_id;
         loop {
             let Some(node) = tree.get(current) else {
-                return;
+                return false;
             };
             if node.needs_compositing_bits_update() {
-                return;
+                return false;
             }
             node.mark_needs_compositing_bits_update();
 
             let Some(parent_id) = node.links().parent() else {
-                self.schedule_compositing_root(current, node.depth() as usize);
-                return;
+                return self.schedule_compositing_root(current, node.depth() as usize);
             };
             let Some(parent) = tree.get(parent_id) else {
-                self.schedule_compositing_root(current, node.depth() as usize);
-                return;
+                return self.schedule_compositing_root(current, node.depth() as usize);
             };
             if parent.needs_compositing_bits_update() {
-                return;
+                return false;
             }
             if (!node.was_repaint_boundary() || !node.is_repaint_boundary_flag())
                 && !parent.is_repaint_boundary_flag()
@@ -573,34 +593,45 @@ impl DirtyTracker {
                 continue;
             }
 
-            self.schedule_compositing_root(current, node.depth() as usize);
-            return;
+            return self.schedule_compositing_root(current, node.depth() as usize);
         }
     }
 
-    fn schedule_compositing_root(&mut self, node_id: RenderId, depth: usize) {
+    fn schedule_compositing_root(&mut self, node_id: RenderId, depth: usize) -> bool {
         let target = if self.debug_doing_layout {
             &mut self.mid_layout_marks.needs_compositing
         } else {
             &mut self.dirty.needs_compositing
         };
-        if target.push(DirtyNode::new(node_id, depth)) {
-            self.notifier.read().fire_need_visual_update();
-        }
+        target.push(DirtyNode::new(node_id, depth))
     }
 
     /// Adds a node to the semantics dirty list.
     ///
     /// Routes via `debug_doing_semantics`. Fires the wake on a new entry only.
     pub(super) fn add_node_needing_semantics(&mut self, node_id: RenderId, depth: usize) {
+        if self.commit_node_needing_semantics(node_id, depth) {
+            self.notify_visual_update();
+        }
+    }
+
+    /// Admit semantics work without invoking the presentation wake.
+    pub(super) fn commit_node_needing_semantics(
+        &mut self,
+        node_id: RenderId,
+        depth: usize,
+    ) -> bool {
         let target = if self.debug_doing_semantics {
             &mut self.mid_layout_marks.needs_semantics
         } else {
             &mut self.dirty.needs_semantics
         };
-        if target.push(DirtyNode::new(node_id, depth)) {
-            self.notifier.read().fire_need_visual_update();
-        }
+        target.push(DirtyNode::new(node_id, depth))
+    }
+
+    fn notify_visual_update(&self) {
+        let wake = { self.notifier.read().deferred_visual_update() };
+        wake.notify();
     }
 
     // =========================================================================

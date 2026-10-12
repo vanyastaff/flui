@@ -466,20 +466,26 @@ impl UiRuntime {
     /// although secondary windows are contentless today, so the union must
     /// remain presentation-wide rather than assuming the primary is the
     /// UI runtime's only source of pending work.
+    /// This observation applies no invalidation, queries no deadline extension
+    /// and invokes no observer or diagnostics. Queued requests, including ones
+    /// whose attachment later retired, contribute until the next owner turn.
     pub fn has_pending_work(&self) -> bool {
         self.presentations.iter().any(|presentation| {
-            presentation.has_pending_work()
+            presentation.has_pending_work_snapshot()
                 || presentation.has_eligible_completion()
                 || presentation.gestures().has_pending_motion()
-                || presentation.gestures().has_pending_deadlines()
+                || flui_interaction::__runtime::has_pending_deadlines_snapshot(
+                    presentation.gestures(),
+                )
         })
     }
 
     /// The earliest wall-clock instant ANY presentation this UI runtime hosts
     /// needs the platform loop to wake at, if any — the min over every
     /// presentation's own armed gesture-arena
-    /// deadline (`GestureBinding::next_deadline`, e.g. a long-press hold or
-    /// a double-tap give-up). This is genuinely INDEPENDENT of every
+    /// deadline observation (e.g. a long-press hold or a double-tap give-up).
+    /// This getter runs no extension query or diagnostics and is safe while
+    /// the host holds its registry borrow. It is INDEPENDENT of every
     /// presentation's `FrameClock` state: a gated presentation's pending
     /// input-correctness deadline (per this issue's own rule — arena
     /// deadlines are input correctness, not frame production) still needs
@@ -493,7 +499,7 @@ impl UiRuntime {
             .filter(|presentation| !presentation.closing_requested.get())
             .flat_map(|presentation| {
                 [
-                    presentation.gestures().next_deadline(),
+                    flui_interaction::__runtime::next_deadline_snapshot(presentation.gestures()),
                     presentation.gesture_geometry.borrow().next_wake(),
                     presentation.text_preparation.borrow().next_wake(),
                 ]

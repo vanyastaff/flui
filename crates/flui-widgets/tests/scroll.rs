@@ -1219,7 +1219,7 @@ pub(crate) fn a_failed_refresh_notification_releases_activity_and_recovers() {
         let fail = Arc::new(AtomicBool::new(phase_fault));
         let failed = Arc::new(AtomicBool::new(false));
         let watched = refresh.clone();
-        let fail_callback = fail.clone();
+        let fail_callback = fail;
         let failed_callback = failed.clone();
         let listenable = refresh.listenable();
         let listener = listenable.add_listener(std::rc::Rc::new(move || {
@@ -1891,7 +1891,7 @@ pub(crate) fn replacing_vsync_releases_old_seats_and_drives_fresh_contacts() {
             "{family}: initial owner drives real inertia"
         );
         let before_same = pixels();
-        laid.pump_widget(VsyncScope::new(first.clone(), child.clone()));
+        laid.pump_widget(VsyncScope::new(first, child.clone()));
         laid.pump_for(Duration::from_millis(16));
         if pixels() <= before_same {
             failures.push(format!("{family}: same owner rebuild stopped real inertia"));
@@ -1903,7 +1903,7 @@ pub(crate) fn replacing_vsync_releases_old_seats_and_drives_fresh_contacts() {
         let armed = Rc::new(Cell::new(fail_stop));
         let attempted = Rc::new(Cell::new(0_usize));
         let position = scroll.position();
-        let (watched, fail, seen) = (position.clone(), armed.clone(), attempted.clone());
+        let (watched, fail, seen) = (position.clone(), armed, attempted.clone());
         let activity_listener = position.add_activity_listener(Rc::new(move || {
             if !watched.is_scrolling() && fail.replace(false) {
                 seen.set(seen.get() + 1);
@@ -3845,22 +3845,12 @@ pub(crate) fn nested_fling_failure_keeps_first_panic_and_a_new_gesture_makes_pro
             );
         }));
         release_inner_fling(&laid, Vertical, false);
-        let (failure, log) = flui_testing::log_capture::capture(|| {
-            let mut first_failure = None;
+        let ((), log) = flui_testing::log_capture::capture(|| {
             for _ in 0..15 {
-                if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    laid.pump_for(Duration::from_millis(16));
-                })) {
-                    assert!(
-                        first_failure.is_none(),
-                        "one accepted handoff reports one failure"
-                    );
-                    first_failure = Some(payload);
-                }
+                laid.pump_for(Duration::from_millis(16));
             }
-            first_failure.expect("the parent notification failure propagates after frame recovery")
         });
-        assert_scroll_failure(&failure, "first parent handoff notification");
+        assert_contained_sampling_failure(&log, "first parent handoff notification");
         let expected = if competing {
             vec![
                 "first parent handoff notification",
@@ -3893,6 +3883,34 @@ pub(crate) fn nested_fling_failure_keeps_first_panic_and_a_new_gesture_makes_pro
             "after containment a fresh gesture still hands off"
         );
     }
+}
+
+fn assert_contained_sampling_failure(log: &flui_testing::log_capture::CapturedLog, expected: &str) {
+    let reports: Vec<_> = log
+        .records()
+        .iter()
+        .filter(|record| record.message == "presentation sampling failure contained")
+        .collect();
+    assert_eq!(
+        reports.len(),
+        1,
+        "one accepted operation reports once: {log}"
+    );
+    let report = reports[0];
+    assert_eq!(
+        report.field("first"),
+        Some("SamplingFailure { stage: Animation, origin: Delivery }"),
+        "the committed animation's delivery preserves provenance: {log}"
+    );
+    assert_eq!(report.field("blocking"), Some("None"), "{log}");
+    assert_eq!(report.field("disposition"), Some("Contained"), "{log}");
+    assert_eq!(report.field("admitted_attempt"), Some("true"), "{log}");
+    assert!(
+        report
+            .field("panic_message")
+            .is_some_and(|text| text.contains(expected)),
+        "the first actual callback failure remains authoritative: {log}"
+    );
 }
 
 fn assert_notification_failures(log: &flui_testing::log_capture::CapturedLog, expected: &[&str]) {
@@ -4768,41 +4786,46 @@ pub(crate) fn nested_fling_custom_physics_failure_and_retirement_preserve_first_
         laid.tick();
         release_inner_fling(&laid, Vertical, false);
         assert_eq!(inner.pixels(), 670.0);
-        let mut failure = None;
-        for _ in 0..500 {
-            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let ((), log) = flui_testing::log_capture::capture(|| {
+            for _ in 0..500 {
                 laid.pump_for(Duration::from_millis(16));
-            })) {
-                failure = Some(payload);
-                break;
+                let fault_pending = if boundary_fault {
+                    fail_boundary.load(Ordering::SeqCst)
+                } else {
+                    fail_drop.load(Ordering::SeqCst)
+                };
+                if (boundary_fault || retirement_fault) && !fault_pending {
+                    break;
+                }
             }
-        }
+        });
         if boundary_fault || retirement_fault {
-            let payload = failure.expect("the actual parent physics/retirement callback must run");
-            let text = payload
-                .downcast_ref::<&str>()
-                .copied()
-                .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
-                .expect("the frame reports its first failure text");
             let expected = if boundary_fault {
                 "custom parent boundary failure"
             } else {
                 "custom parent simulation retirement failure"
             };
-            assert!(
-                text.contains(expected),
-                "the first failure remains authoritative: {text}"
+            assert_contained_sampling_failure(&log, expected);
+            assert_eq!(
+                fail_drop.load(Ordering::SeqCst),
+                boundary_fault && retirement_fault,
+                "a failed boundary prevents creation of the parent simulation"
             );
         } else {
-            assert!(failure.is_none(), "healthy custom physics completes");
+            assert!(
+                log.records()
+                    .iter()
+                    .all(|record| record.message != "presentation sampling failure contained"),
+                "healthy custom physics completes without a failure report: {log}"
+            );
             assert!(
                 outer.pixels() > 600.0,
                 "actual custom parent receives the impulse"
             );
         }
         assert!(!fail_boundary.load(Ordering::SeqCst));
-        // Faulted ownership may be retained instead of invoking another
-        // destructor during unwind. Disable that fault for the fresh operation.
+        // A failed boundary can leave the uncreated simulation's fault armed.
+        // Disable it before checking the next gesture.
         fail_drop.store(false, Ordering::SeqCst);
         inner.jump_to(650.0);
         outer.jump_to(600.0);

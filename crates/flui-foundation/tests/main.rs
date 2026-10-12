@@ -6,6 +6,9 @@ mod notifier;
 #[path = "claim_slot.rs"]
 mod claim_slot;
 
+#[path = "panic_recovery.rs"]
+mod panic_recovery;
+
 #[path = "geometry/transform.rs"]
 mod transform;
 

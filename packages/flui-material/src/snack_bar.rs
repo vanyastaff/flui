@@ -49,8 +49,7 @@ use std::rc::Rc;
 
 use std::time::Duration;
 
-use flui_sdk::animation::{Animation, AnimationController, Curve, curves};
-use flui_sdk::foundation::Listenable;
+use flui_sdk::animation::prelude::*;
 use flui_sdk::painting::Clip;
 use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::prelude::*;

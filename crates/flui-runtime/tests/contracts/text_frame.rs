@@ -1044,6 +1044,14 @@ fn finish_prepared_text(
 }
 
 fn an_animated_size_resumes_its_original_tick_after_host_service_yields() {
+    animated_preparation_retains_its_tick(false);
+}
+
+fn deadline_delivery_does_not_discard_the_retained_animation_tick() {
+    animated_preparation_retains_its_tick(true);
+}
+
+fn animated_preparation_retains_its_tick(failing_deadline: bool) {
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
     use std::time::Duration;
@@ -1053,6 +1061,7 @@ fn an_animated_size_resumes_its_original_tick_after_host_service_yields() {
     use flui_platform_api::text_store::{
         LockGrant, LockOutcome, LockTiming, Utf16Offset, Utf16Range,
     };
+    use flui_runtime::frame_failure::{FrameFailureKind, SamplingFailureOrigin, SamplingStage};
     use flui_runtime::ui_runtime::TextSizingSettlement;
 
     let mut clock = flui_foundation::ManualClock::new();
@@ -1189,6 +1198,56 @@ fn an_animated_size_resumes_its_original_tick_after_host_service_yields() {
             |request| request.size.value() == 18.5 && request.profile == TextScaleProfile::Body
         )
     );
+    let deadline_calls = Rc::new(Cell::new(0));
+    let reports = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let reported = Arc::clone(&reports);
+    runtime.set_frame_failure_handler(Some(flui_runtime::frame_failure::FrameFailureHandler::new(
+        move |report| {
+            let sampling = match &report.kind {
+                FrameFailureKind::SamplingPanic {
+                    first,
+                    blocking,
+                    admitted_attempt,
+                    ..
+                } => Some((
+                    (first.stage, first.origin),
+                    blocking.map(|blocker| (blocker.stage, blocker.origin)),
+                    *admitted_attempt,
+                )),
+                _ => None,
+            };
+            reported.lock().push((
+                report.address,
+                report.disposition,
+                report.consecutive_failures,
+                sampling,
+            ));
+        },
+    )));
+    let _deadline = failing_deadline.then(|| {
+        use flui_interaction::GestureRecognizer as _;
+        let calls = Rc::clone(&deadline_calls);
+        let recognizer = flui_interaction::LongPressGestureRecognizer::builder(
+            runtime.gestures().arena().clone(),
+        )
+        .settings(
+            flui_interaction::settings::GestureSettings::touch_defaults()
+                .with_long_press_timeout(Duration::from_millis(10)),
+        )
+        .on_long_press_start(move |_| {
+            calls.set(calls.get() + 1);
+            std::panic::panic_any("retained deadline delivery");
+        })
+        .build();
+        let down = flui_interaction::events::make_down_event_for_id(
+            flui_platform_api::PointerId::new(std::num::NonZeroU64::MIN),
+            flui_foundation::geometry::Offset::new(10.0, 10.0),
+            flui_platform_api::PointerKind::Touch,
+        )
+        .expect("finite retained contact");
+        recognizer.add_pointer(flui_interaction::PointerDispatch::at_root(&down));
+        recognizer
+    });
     for _ in 0..2 {
         assert!(runtime.settle_text_sizing(work, TextSizingSettlement::Waiting));
         clock.advance(Duration::from_millis(20));
@@ -1208,6 +1267,35 @@ fn an_animated_size_resumes_its_original_tick_after_host_service_yields() {
         work = frontier
             .pop()
             .expect("explicitly serviced fractional frontier");
+    }
+    if failing_deadline {
+        assert_eq!(
+            deadline_calls.get(),
+            1,
+            "committed activation is not replayed"
+        );
+        assert_eq!(
+            reports.lock().as_slice(),
+            &[(
+                flui_foundation::PresentationAddress {
+                    ui_runtime_id: runtime.id(),
+                    presentation_id: runtime.presentation_id(),
+                },
+                flui_runtime::frame_failure::FailureDisposition::Contained,
+                0,
+                Some((
+                    (
+                        SamplingStage::GestureDeadline,
+                        SamplingFailureOrigin::Delivery
+                    ),
+                    None,
+                    true,
+                )),
+            )],
+            "delivery cannot reject the compatible frozen text attempt"
+        );
+    } else {
+        assert!(reports.lock().is_empty());
     }
     answer_prepared_frontier(&work, &mut writer);
     assert!(runtime.settle_text_sizing(work, TextSizingSettlement::Ready));
@@ -1430,6 +1518,221 @@ fn pending_editable() -> PendingEditable {
         completed,
         work: frontiers.pop().expect("actual receipt frontier"),
     }
+}
+
+struct UnknownRetainedDeadline {
+    due: web_time::Instant,
+    effects: std::rc::Rc<std::cell::Cell<usize>>,
+    fail_query: bool,
+}
+
+impl flui_interaction::arena::GestureArenaMember for UnknownRetainedDeadline {
+    fn accept_gesture(&self, _: flui_platform_api::PointerId) {}
+
+    fn reject_gesture(&self, _: flui_platform_api::PointerId) {}
+
+    fn deadline(&self) -> Option<web_time::Instant> {
+        if self.fail_query {
+            self.effects.set(self.effects.get() + 1);
+            std::panic::panic_any("unknown retained deadline discovery");
+        }
+        Some(self.due)
+    }
+
+    fn poll_deadline(&self, _: web_time::Instant) {
+        self.effects.set(self.effects.get() + 1);
+        std::panic::panic_any("unknown retained deadline progress");
+    }
+}
+
+fn unknown_deadline_withdraws_the_old_receipt_and_recovers_fresh_geometry() {
+    retained_deadline_failure_case(false, false);
+}
+
+fn a_background_deadline_withdraws_the_old_receipt_without_opening_the_barrier() {
+    retained_deadline_failure_case(true, false);
+}
+
+fn a_background_query_failure_withdraws_the_old_receipt_without_opening_the_barrier() {
+    retained_deadline_failure_case(true, true);
+}
+
+fn retained_deadline_failure_case(background: bool, fail_query: bool) {
+    use flui_foundation::MonotonicClock as _;
+    use flui_platform_api::text_store::{
+        LockGrant, LockOutcome, LockTiming, TextStoreError, Utf16Offset, Utf16Range,
+    };
+    use flui_runtime::frame_failure::{
+        FailureDisposition, FrameFailureHandler, FrameFailureKind, SamplingFailureOrigin,
+        SamplingStage,
+    };
+    use flui_runtime::ui_runtime::TextSizingSettlement;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    let PendingEditable {
+        mut clock,
+        mut runtime,
+        mut sink,
+        mut writer,
+        store,
+        completed,
+        work,
+    } = pending_editable();
+    let before = sink.submitted;
+    if background {
+        runtime.update_host_lifecycle(flui_scheduler::AppLifecycleState::Paused);
+        assert!(!runtime.scheduler().frames_enabled());
+    }
+    let reports = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let reported = Arc::clone(&reports);
+    runtime.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
+        let sampling = match &report.kind {
+            FrameFailureKind::SamplingPanic {
+                first,
+                blocking,
+                admitted_attempt,
+                ..
+            } => Some((
+                (first.stage, first.origin),
+                blocking.map(|blocker| (blocker.stage, blocker.origin)),
+                *admitted_attempt,
+            )),
+            _ => None,
+        };
+        reported.lock().push((
+            report.address,
+            report.disposition,
+            report.consecutive_failures,
+            sampling,
+        ));
+    })));
+    let effects = Rc::new(Cell::new(0));
+    let member = Rc::new(UnknownRetainedDeadline {
+        due: clock.now(),
+        effects: Rc::clone(&effects),
+        fail_query,
+    });
+    let _entry = runtime.gestures().arena().add(
+        flui_platform_api::PointerId::new(std::num::NonZeroU64::new(99).expect("contact")),
+        &member,
+    );
+    let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if background {
+            runtime.pump_background();
+        } else {
+            let _ = runtime.pump(&mut clock, &mut sink);
+        }
+    }));
+    assert_eq!(
+        effects.get(),
+        1,
+        "the open extension was evaluated through the runtime owner turn"
+    );
+    attempt.expect("unknown deadline failure is presentation-local");
+    assert_eq!(
+        sink.submitted, before,
+        "withdrawal cannot publish old geometry"
+    );
+    assert_eq!(completed.get(), 0);
+    assert!(
+        !runtime.settle_text_sizing(work, TextSizingSettlement::Ready),
+        "late receipt cannot authorize the withdrawn attempt"
+    );
+    let premature = Rc::new(Cell::new(false));
+    let prematurely_granted = Rc::clone(&premature);
+    assert_eq!(
+        store.request_lock(
+            LockGrant::read(move |_| prematurely_granted.set(true)),
+            LockTiming::Sync,
+        ),
+        Err(TextStoreError::SyncLockUnavailable),
+        "withdrawal cannot open the document barrier before replacement"
+    );
+    assert!(!premature.get());
+    let geometry = Rc::new(RefCell::new(None));
+    let observed = Rc::clone(&geometry);
+    assert_eq!(
+        store.request_lock(
+            LockGrant::read(move |session| {
+                *observed.borrow_mut() =
+                    Some(session.rect_for_range(Utf16Range::collapsed(Utf16Offset::new(7))));
+            }),
+            LockTiming::Async,
+        ),
+        Ok(LockOutcome::Deferred)
+    );
+    if background {
+        runtime.pump_background();
+        assert_eq!(effects.get(), 1, "the same failing revision stays parked");
+        assert_eq!(sink.submitted, before);
+        assert_eq!(completed.get(), 0);
+        assert!(geometry.borrow().is_none());
+        runtime.update_host_lifecycle(flui_scheduler::AppLifecycleState::Resumed);
+    }
+    assert!(!runtime.pump(&mut clock, &mut sink).presented());
+    let stage = if fail_query {
+        SamplingStage::DeadlineDiscovery
+    } else {
+        SamplingStage::GestureDeadline
+    };
+    assert_eq!(
+        effects.get(),
+        1,
+        "unknown side effects cannot automatically replay"
+    );
+    assert!(
+        geometry.borrow().is_none(),
+        "replacement is still uncommitted"
+    );
+    let mut replacement = runtime.take_text_sizing_frontiers();
+    assert_eq!(
+        replacement.len(),
+        1,
+        "fresh layout is runnable without another input or synthetic root redraw"
+    );
+    let work = replacement.pop().expect("actual replacement frontier");
+    answer_prepared_frontier(&work, &mut writer);
+    assert!(runtime.settle_text_sizing(work, TextSizingSettlement::Ready));
+    finish_prepared_text(
+        "unknown deadline replacement",
+        &mut runtime,
+        &mut clock,
+        &mut sink,
+        &mut writer,
+    );
+    assert_eq!(effects.get(), 1, "same deadline revision stays quarantined");
+    assert_eq!(sink.submitted, before + 1);
+    sink.assert_text_size("receipt", 24.0);
+    assert_eq!(
+        completed.get(),
+        1,
+        "accepted completion survives withdrawal"
+    );
+    assert!(
+        geometry
+            .borrow()
+            .as_ref()
+            .expect("replacement grant")
+            .is_ok()
+    );
+    assert_eq!(
+        reports.lock().as_slice(),
+        &[(
+            flui_foundation::PresentationAddress {
+                ui_runtime_id: runtime.id(),
+                presentation_id: runtime.presentation_id(),
+            },
+            FailureDisposition::FrameDropped,
+            1,
+            Some((
+                (stage, SamplingFailureOrigin::Unknown),
+                Some((stage, SamplingFailureOrigin::Unknown)),
+                true,
+            )),
+        )],
+        "one unresolved operation rejects the retained attempt only once"
+    );
 }
 
 fn a_dropped_receipt_retries_only_after_its_deadline_and_completes() {
@@ -1955,6 +2258,652 @@ fn a_sibling_animation_admission_replaces_ready_text_before_geometry_publication
     );
 }
 
+fn a_sampling_report_replaces_ready_text_before_geometry_publication() {
+    sampling_report_replacement_case(false);
+}
+
+#[derive(Clone, StatefulView)]
+struct AuthorityAnimatedText {
+    mounted: std::rc::Rc<std::cell::RefCell<Option<AuthorityAnimation>>>,
+    samples: std::rc::Rc<std::cell::RefCell<Vec<f64>>>,
+}
+
+struct AuthorityAnimation {
+    controller: flui_animation::AnimationController,
+    completion: flui_scheduler::PostFrameHandle,
+    pipeline: flui_rendering::pipeline::PipelineCell,
+}
+
+struct AuthorityAnimatedTextState {
+    owner: Option<flui_animation::DrivenController>,
+    mounted: std::rc::Rc<std::cell::RefCell<Option<AuthorityAnimation>>>,
+}
+
+impl StatefulView for AuthorityAnimatedText {
+    type State = AuthorityAnimatedTextState;
+
+    fn create_state(&self) -> Self::State {
+        AuthorityAnimatedTextState {
+            owner: None,
+            mounted: std::rc::Rc::clone(&self.mounted),
+        }
+    }
+}
+
+impl ViewState<AuthorityAnimatedText> for AuthorityAnimatedTextState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        let registry = flui_widgets::VsyncScope::maybe_of(ctx)
+            .expect("actual authority presentation animation registry");
+        let owner =
+            flui_animation::AnimationController::builder(std::time::Duration::from_millis(100))
+                .build_on(Some(&registry));
+        *self.mounted.borrow_mut() = Some(AuthorityAnimation {
+            controller: owner.controller().clone(),
+            completion: ctx.post_frame_handle().expect("authority completion lane"),
+            pipeline: ctx.pipeline_owner().expect("authority pipeline capability"),
+        });
+        self.owner = Some(owner);
+    }
+
+    fn build(&self, view: &AuthorityAnimatedText, _: &dyn BuildContext) -> impl IntoView {
+        use flui_animation::Animation as _;
+        let controller = self
+            .owner
+            .as_ref()
+            .expect("mounted authority animation")
+            .controller();
+        let sampled = controller.clone();
+        let samples = std::rc::Rc::clone(&view.samples);
+        flui_widgets::AnimatedBuilder::new(std::rc::Rc::new(controller.clone()), move || {
+            let value = sampled.value();
+            samples.borrow_mut().push(value);
+            flui_widgets::Text::new("authority").style(
+                flui_painting::typography::TextStyle::default().with_font_size(20.0 + 10.0 * value),
+            )
+        })
+    }
+}
+
+thread_local! {
+    // The report is Send + Sync; its UI runtime remains owner-thread local.
+    // Release this borrow before invoking the real authority operation.
+    static AUTHORITY_REPORT_CONTEXT: std::cell::RefCell<Option<std::rc::Rc<AuthorityReportContext>>> = const { std::cell::RefCell::new(None) };
+}
+
+struct AuthorityReportContext {
+    runtime: std::rc::Rc<flui_runtime::ui_runtime::UiRuntime>,
+    source: flui_painting::TextSizingSource,
+    replacement: flui_painting::TextSizingSource,
+}
+
+struct AuthorityReportScope;
+
+impl AuthorityReportScope {
+    fn install(
+        runtime: &std::rc::Rc<flui_runtime::ui_runtime::UiRuntime>,
+        source: &flui_painting::TextSizingSource,
+        replacement: &flui_painting::TextSizingSource,
+    ) -> Self {
+        let context = std::rc::Rc::new(AuthorityReportContext {
+            runtime: std::rc::Rc::clone(runtime),
+            source: source.clone(),
+            replacement: replacement.clone(),
+        });
+        let previous = AUTHORITY_REPORT_CONTEXT.with(|slot| slot.replace(Some(context)));
+        assert!(previous.is_none(), "authority report scope is not nested");
+        Self
+    }
+}
+
+impl Drop for AuthorityReportScope {
+    fn drop(&mut self) {
+        let retired = AUTHORITY_REPORT_CONTEXT.with(std::cell::RefCell::take);
+        drop(retired);
+    }
+}
+
+/// The established test-support full-frame drive admits safe shared-owner
+/// callback reentry; ordinary mutable host pumps cannot share an Rc runtime.
+fn drive_shared_prepared_frame(
+    runtime: &flui_runtime::ui_runtime::UiRuntime,
+    clock: &flui_foundation::ManualClock,
+    sink: &mut PreparedTextSink,
+) -> bool {
+    use flui_foundation::MonotonicClock as _;
+    let now = clock.now();
+    runtime.enter(|runtime| {
+        runtime
+            .owner_frame()
+            .drive_frame(
+                now,
+                flui_scheduler::IdleDeadline::far_future(now),
+                || {
+                    runtime.drain_owner_inbox();
+                },
+                || runtime.render_frame_for_test(sink),
+            )
+            .expect("public shared owner admits the complete frame")
+    })
+}
+
+fn an_initial_report_withdraws_retained_authority_before_publication() {
+    authority_report_case(false, false, true);
+}
+
+fn an_initial_report_replaces_retained_authority_before_publication() {
+    authority_report_case(false, true, true);
+}
+
+fn a_late_report_withdraws_its_own_retained_authority_before_publication() {
+    authority_report_case(true, false, true);
+}
+
+fn a_late_report_replaces_its_own_retained_authority_before_publication() {
+    authority_report_case(true, true, true);
+}
+
+fn fresh_authority_withdrawal_keeps_the_chosen_frame() {
+    authority_report_case(false, false, false);
+}
+
+fn authority_report_case(late: bool, replace: bool, retained: bool) {
+    use flui_animation::Animation as _;
+    use flui_foundation::Listenable as _;
+    use flui_runtime::frame_failure::{
+        FailureDisposition, FrameFailureHandler, FrameFailureKind, SamplingFailureOrigin,
+        SamplingStage,
+    };
+    use flui_runtime::ui_runtime::TextSizingSettlement;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+    use std::sync::atomic::AtomicBool;
+    use std::time::Duration;
+
+    let clock = flui_foundation::ManualClock::new();
+    let (mut runtime, _) = prepared_runtime(&clock);
+    let primary_animation = Rc::new(RefCell::new(None));
+    runtime
+        .attach_root_widget_with_size(
+            &PreparedSibling {
+                animation: Rc::clone(&primary_animation),
+                post_frame: Rc::new(RefCell::new(None)),
+                focus: flui_interaction::routing::FocusNode::new(),
+            },
+            400.0,
+            400.0,
+        )
+        .expect("mount actual reporting presentation");
+    let target = runtime.assemble_presentation(crate::owner_publication::window());
+    let target_id = runtime.install_presentation(target);
+    let mounted = Rc::new(RefCell::new(None));
+    let samples = Rc::new(RefCell::new(Vec::new()));
+    runtime
+        .attach_root_widget_with_size_to(
+            target_id,
+            &AuthorityAnimatedText {
+                mounted: Rc::clone(&mounted),
+                samples: Rc::clone(&samples),
+            },
+            400.0,
+            400.0,
+        )
+        .expect("mount actual authority target");
+    let runtime = Rc::new(runtime);
+    let mut sink = PreparedTextSink::default();
+    assert!(drive_shared_prepared_frame(&runtime, &clock, &mut sink));
+    let primary = primary_animation
+        .borrow()
+        .as_ref()
+        .expect("primary controller")
+        .clone();
+    let target = mounted.take().expect("target lifecycle capabilities");
+    let (_, mut writer) = flui_painting::TextSizing::captured();
+    let source = writer.source();
+    assert!(runtime.install_captured_text_sizing_for(target_id, source.clone()));
+    let _ = drive_shared_prepared_frame(&runtime, &clock, &mut sink);
+    let mut work = runtime.take_text_sizing_frontiers();
+    assert_eq!(work.len(), 1);
+    let original = work.pop().expect("initial authority frontier");
+    answer_prepared_frontier(&original, &mut writer);
+    assert!(runtime.settle_text_sizing(original, TextSizingSettlement::Ready));
+    let _ = drive_shared_prepared_frame(&runtime, &clock, &mut sink);
+    let _primary_run = primary.forward().expect("primary run");
+    let _target_run = target.controller.forward().expect("target run");
+    let _ = drive_shared_prepared_frame(&runtime, &clock, &mut sink);
+    let completed = Rc::new(Cell::new(0));
+    if retained {
+        let completion = Rc::clone(&completed);
+        target
+            .completion
+            .schedule(move |_| completion.set(completion.get() + 1))
+            .expect("retained completion");
+    }
+    clock.advance(Duration::from_millis(25));
+    let _ = drive_shared_prepared_frame(&runtime, &clock, &mut sink);
+    assert_eq!(target.controller.value(), 0.25);
+    let mut work = runtime.take_text_sizing_frontiers();
+    assert_eq!(work.len(), 1);
+    let ready = work.pop().expect("fractional retained authority frontier");
+    assert!(
+        ready
+            .requests()
+            .iter()
+            .all(|request| request.size.value() == 22.5)
+    );
+    answer_prepared_frontier(&ready, &mut writer);
+    assert!(runtime.settle_text_sizing(ready, TextSizingSettlement::Ready));
+    if !retained {
+        let _ = drive_shared_prepared_frame(&runtime, &clock, &mut sink);
+        let completion = Rc::clone(&completed);
+        target
+            .completion
+            .schedule(move |_| completion.set(completion.get() + 1))
+            .expect("fresh completion");
+    }
+    let (_, mut replacement_writer) = flui_painting::TextSizing::captured();
+    let replacement = replacement_writer.source();
+    let wake_armed = Arc::new(AtomicBool::new(false));
+    let wake_failures = Arc::new(AtomicUsize::new(0));
+    let paint = late.then(|| {
+        let pipeline = &target.pipeline;
+        let paint = pipeline.with(|owner| {
+            owner
+                .render_invalidation_handle(owner.root_id().expect("target render root"))
+                .expect("target paint capability")
+        });
+        let armed = Arc::clone(&wake_armed);
+        let failures = Arc::clone(&wake_failures);
+        pipeline.with_mut(|owner| {
+            owner.set_on_need_visual_update(move || {
+                if armed.swap(false, Ordering::SeqCst) {
+                    failures.fetch_add(1, Ordering::SeqCst);
+                    std::panic::panic_any("authority late paint wake");
+                }
+            });
+        });
+        paint
+    });
+    let reports = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let observed = Arc::clone(&reports);
+    let changes = Arc::new(AtomicUsize::new(0));
+    let accepted_changes = Arc::clone(&changes);
+    let primary_id = runtime.presentation_id();
+    runtime.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
+        let sampling = match &report.kind {
+            FrameFailureKind::SamplingPanic {
+                first,
+                blocking,
+                admitted_attempt,
+                ..
+            } => Some((
+                (first.stage, first.origin),
+                blocking.map(|blocker| (blocker.stage, blocker.origin)),
+                *admitted_attempt,
+            )),
+            _ => None,
+        };
+        observed
+            .lock()
+            .push((report.address, report.disposition, sampling));
+        if late && report.address.presentation_id == primary_id {
+            paint
+                .as_ref()
+                .expect("late paint capability")
+                .mark_needs_paint()
+                .expect("enqueue before arming wake failure");
+            wake_armed.store(true, Ordering::SeqCst);
+            return;
+        }
+        if report.address.presentation_id == if late { target_id } else { primary_id } {
+            let context = AUTHORITY_REPORT_CONTEXT
+                .with(|slot| slot.borrow().clone())
+                .expect("scoped shared runtime");
+            let changed = if replace {
+                context
+                    .runtime
+                    .install_captured_text_sizing_for(target_id, context.replacement.clone())
+            } else {
+                context
+                    .runtime
+                    .withdraw_captured_text_sizing_for(target_id, &context.source)
+            };
+            if changed {
+                accepted_changes.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+    })));
+    let scope = AuthorityReportScope::install(&runtime, &source, &replacement);
+    let armed = Rc::new(Cell::new(true));
+    let failure = Rc::clone(&armed);
+    let listener = primary.add_listener(Rc::new(move || {
+        if failure.replace(false) {
+            std::panic::panic_any("authority sampling delivery");
+        }
+    }));
+    let samples_before = samples.borrow().len();
+    clock.advance(Duration::from_millis(25));
+    let _ = drive_shared_prepared_frame(&runtime, &clock, &mut sink);
+    assert!(
+        !armed.get(),
+        "actual primary animation delivered the failing callback"
+    );
+    assert_eq!(
+        changes.load(Ordering::SeqCst),
+        1,
+        "real authority operation committed once"
+    );
+    assert_eq!(wake_failures.load(Ordering::SeqCst), usize::from(late));
+    assert_eq!(reports.lock().len(), 1 + usize::from(late));
+    if retained {
+        assert_eq!(
+            completed.get(),
+            0,
+            "authority replacement must not complete the withdrawn frozen attempt"
+        );
+        assert_eq!(
+            samples.borrow().len(),
+            samples_before,
+            "the report frame cannot rebuild using its obsolete retained tick"
+        );
+        assert!(
+            !sink.glyph_sizes.iter().any(|(text, _)| text == "authority"),
+            "the report frame cannot publish withdrawn target geometry"
+        );
+        assert!(
+            runtime.take_text_sizing_frontiers().is_empty(),
+            "a replacement authority cannot receive a frontier from the obsolete tick"
+        );
+        assert_eq!(target.controller.value(), 0.25);
+        let _ = drive_shared_prepared_frame(&runtime, &clock, &mut sink);
+        assert_eq!(
+            target.controller.value(),
+            0.5,
+            "the next owner frame selects fresh motion time"
+        );
+        assert_eq!(samples.borrow().last().copied(), Some(0.5));
+        if replace {
+            let mut replacement_work = runtime.take_text_sizing_frontiers();
+            assert_eq!(replacement_work.len(), 1);
+            let work = replacement_work.pop().expect("fresh replacement frontier");
+            assert_eq!(work.source(), &replacement_writer.source());
+            assert!(
+                work.requests()
+                    .iter()
+                    .all(|request| request.size.value() == 25.0)
+            );
+            answer_prepared_frontier(&work, &mut replacement_writer);
+            assert!(runtime.settle_text_sizing(work, TextSizingSettlement::Ready));
+            let _ = drive_shared_prepared_frame(&runtime, &clock, &mut sink);
+            sink.assert_text_size("authority", 37.5);
+        } else {
+            sink.assert_text_size("authority", 25.0);
+        }
+    } else {
+        assert_eq!(target.controller.value(), 0.5);
+        assert_eq!(samples.borrow().last().copied(), Some(0.5));
+        sink.assert_text_size("authority", 25.0);
+    }
+    assert_eq!(
+        completed.get(),
+        1,
+        "one coherent replacement discharges completion once"
+    );
+    assert_eq!(reports.lock().len(), 1 + usize::from(late));
+    let reports = reports.lock();
+    assert_eq!(reports[0].1, FailureDisposition::Contained);
+    assert_eq!(
+        reports[0].2,
+        Some((
+            (SamplingStage::Animation, SamplingFailureOrigin::Delivery),
+            None,
+            true
+        ))
+    );
+    if late {
+        assert_eq!(reports[1].1, FailureDisposition::Contained);
+        assert_eq!(
+            reports[1].2,
+            Some((
+                (SamplingStage::Preparation, SamplingFailureOrigin::Delivery),
+                None,
+                true
+            ))
+        );
+    }
+    drop(reports);
+    primary.remove_listener(listener);
+    drop(scope);
+}
+
+fn a_late_preparation_report_replaces_its_own_ready_text_before_geometry_publication() {
+    sampling_report_replacement_case(true);
+}
+
+fn sampling_report_replacement_case(late_preparation: bool) {
+    use flui_foundation::Listenable as _;
+    use flui_runtime::frame_failure::{
+        FailureDisposition, FrameFailureHandler, FrameFailureKind, SamplingFailureOrigin,
+        SamplingStage,
+    };
+    use flui_runtime::ui_runtime::TextSizingSettlement;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    let mut clock = flui_foundation::ManualClock::new();
+    let (mut runtime, _) = prepared_runtime(&clock);
+    let size = Arc::new(AtomicU64::new(20.0_f64.to_bits()));
+    let rebuild = Arc::new(parking_lot::Mutex::new(None));
+    let post_frame = Rc::new(RefCell::new(None));
+    runtime
+        .attach_root_widget_with_size(
+            &PreparedTextProbe {
+                child: AuthoredText {
+                    font_size: Arc::clone(&size),
+                    rebuild: Arc::clone(&rebuild),
+                }
+                .boxed(),
+                rebuild: Rc::new(RefCell::new(None)),
+                post_frame: Rc::clone(&post_frame),
+            },
+            400.0,
+            400.0,
+        )
+        .expect("mount target text with its ordinary cross-thread rebuild handle");
+    let mut sink = PreparedTextSink::default();
+    assert!(runtime.pump(&mut clock, &mut sink).presented());
+    let sibling = runtime.assemble_presentation(crate::owner_publication::window());
+    let sibling_id = runtime.install_presentation(sibling);
+    let animation_slot = Rc::new(RefCell::new(None));
+    runtime
+        .attach_root_widget_with_size_to(
+            sibling_id,
+            &PreparedSibling {
+                animation: Rc::clone(&animation_slot),
+                post_frame: Rc::new(RefCell::new(None)),
+                focus: flui_interaction::routing::FocusNode::new(),
+            },
+            400.0,
+            400.0,
+        )
+        .expect("mount actual sibling animation");
+    assert!(runtime.pump(&mut clock, &mut sink).presented());
+    let animation = animation_slot
+        .borrow()
+        .as_ref()
+        .expect("sibling lifecycle owns animation")
+        .clone();
+    let _run = animation.forward().expect("start sibling animation");
+    let _ = runtime.pump(&mut clock, &mut sink);
+    let (_, mut writer) = flui_painting::TextSizing::captured();
+    let completed = Rc::new(Cell::new(0));
+    let completion = Rc::clone(&completed);
+    post_frame
+        .borrow()
+        .as_ref()
+        .expect("target completion handle")
+        .schedule(move |_| completion.set(completion.get() + 1))
+        .expect("completion admitted before retained preparation");
+    assert!(runtime.install_captured_text_sizing_for(runtime.presentation_id(), writer.source()));
+    let _ = runtime.pump(&mut clock, &mut sink);
+    let mut frontiers = runtime.take_text_sizing_frontiers();
+    assert_eq!(frontiers.len(), 1);
+    let ready = frontiers.pop().expect("original target frontier");
+    assert!(
+        ready
+            .requests()
+            .iter()
+            .all(|request| request.size.value() == 20.0)
+    );
+    answer_prepared_frontier(&ready, &mut writer);
+    assert!(runtime.settle_text_sizing(ready, TextSizingSettlement::Ready));
+    let handle = rebuild
+        .lock()
+        .as_ref()
+        .expect("target lifecycle rebuild handle")
+        .clone();
+    let wake_failures = Arc::new(AtomicUsize::new(0));
+    let wake_armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let paint = late_preparation.then(|| {
+        let pipeline = runtime
+            .widgets()
+            .pipeline_owner()
+            .expect("mounted target owns its real pipeline");
+        let paint = pipeline.with(|owner| {
+            owner
+                .render_invalidation_handle(owner.root_id().expect("mounted root render object"))
+                .expect("actual root admits external paint invalidation")
+        });
+        let armed = Arc::clone(&wake_armed);
+        let failures = Arc::clone(&wake_failures);
+        pipeline.with_mut(|owner| {
+            owner.set_on_need_visual_update(move || {
+                if armed.swap(false, Ordering::SeqCst) {
+                    failures.fetch_add(1, Ordering::SeqCst);
+                    std::panic::panic_any("late retained paint wake");
+                }
+            });
+        });
+        paint
+    });
+    let target_id = runtime.presentation_id();
+    let reports = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let reported = Arc::clone(&reports);
+    runtime.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
+        let sampling = match &report.kind {
+            FrameFailureKind::SamplingPanic {
+                first, blocking, ..
+            } => Some((
+                (first.stage, first.origin),
+                blocking.map(|blocker| (blocker.stage, blocker.origin)),
+            )),
+            _ => None,
+        };
+        reported
+            .lock()
+            .push((report.address, report.disposition, sampling));
+        if let Some(paint) = &paint {
+            if report.address.presentation_id == sibling_id {
+                paint
+                    .mark_needs_paint()
+                    .expect("accepted paint-only input preserves the saved layout premise");
+                // The enqueue's wake succeeded. Fail only the canonical
+                // mark's later delivery during this target's reconciliation.
+                wake_armed.store(true, Ordering::SeqCst);
+            } else if report.address.presentation_id == target_id {
+                size.store(22.75_f64.to_bits(), Ordering::SeqCst);
+                handle.schedule(flui_foundation::RebuildReason::StateChange);
+            }
+        } else {
+            size.store(22.75_f64.to_bits(), Ordering::SeqCst);
+            handle.schedule(flui_foundation::RebuildReason::StateChange);
+        }
+    })));
+    let armed = Rc::new(Cell::new(true));
+    let failing = Rc::clone(&armed);
+    let listener = animation.add_listener(Rc::new(move || {
+        if failing.replace(false) {
+            std::panic::panic_any("sibling delivery before ready text");
+        }
+    }));
+    clock.advance(Duration::from_millis(20));
+    let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        runtime.pump(&mut clock, &mut sink)
+    }));
+    let _ = attempt.expect("sampling report delivery cannot escape the pump");
+    assert!(!armed.get(), "the actual animation listener failed");
+    assert_eq!(
+        wake_failures.load(Ordering::SeqCst),
+        usize::from(late_preparation),
+        "the late case failed only after the actual paint mark committed"
+    );
+    let mut expected = vec![(
+        flui_foundation::PresentationAddress {
+            ui_runtime_id: runtime.id(),
+            presentation_id: sibling_id,
+        },
+        FailureDisposition::Contained,
+        Some((
+            (SamplingStage::Animation, SamplingFailureOrigin::Delivery),
+            None,
+        )),
+    )];
+    if late_preparation {
+        expected.push((
+            flui_foundation::PresentationAddress {
+                ui_runtime_id: runtime.id(),
+                presentation_id: target_id,
+            },
+            FailureDisposition::Contained,
+            Some((
+                (SamplingStage::Preparation, SamplingFailureOrigin::Delivery),
+                None,
+            )),
+        ));
+    }
+    assert_eq!(reports.lock().as_slice(), expected);
+    assert_eq!(
+        completed.get(),
+        0,
+        "diagnostic-side admission cannot complete obsolete ready geometry"
+    );
+    let mut replacement = runtime.take_text_sizing_frontiers();
+    if replacement.is_empty() {
+        let _ = runtime.pump(&mut clock, &mut sink);
+        replacement = runtime.take_text_sizing_frontiers();
+    }
+    assert_eq!(
+        replacement.len(),
+        1,
+        "target requires an exact fresh frontier"
+    );
+    let work = replacement.pop().expect("replacement target frontier");
+    assert_eq!(work.presentation(), runtime.presentation_id());
+    assert!(
+        work.requests()
+            .iter()
+            .all(|request| request.size.value() == 22.75)
+    );
+    animation.remove_listener(listener);
+    animation.stop().expect("stop observed sibling");
+    assert!(
+        runtime.close_presentation_entered(sibling_id),
+        "one sink can now observe the target's actual scene"
+    );
+    answer_prepared_frontier(&work, &mut writer);
+    assert!(runtime.settle_text_sizing(work, TextSizingSettlement::Ready));
+    finish_prepared_text(
+        "diagnostic-side replacement",
+        &mut runtime,
+        &mut clock,
+        &mut sink,
+        &mut writer,
+    );
+    sink.assert_text_size("measured", 34.125);
+    assert_eq!(completed.get(), 1, "replacement completes once");
+    assert_eq!(reports.lock().len(), expected.len());
+}
+
 fn a_waiting_presentation_does_not_suspend_sibling_animation_completion_or_ime() {
     use flui_animation::Animation as _;
     use flui_platform_api::text_store::{
@@ -2073,6 +3022,24 @@ fn registered_text_preparation_preserves_the_actual_presentation_attempt() {
                 an_animated_size_resumes_its_original_tick_after_host_service_yields as fn(),
             ),
             (
+                "deadline_delivery_does_not_discard_the_retained_animation_tick",
+                deadline_delivery_does_not_discard_the_retained_animation_tick as fn(),
+            ),
+            (
+                "unknown_deadline_withdraws_the_old_receipt_and_recovers_fresh_geometry",
+                unknown_deadline_withdraws_the_old_receipt_and_recovers_fresh_geometry as fn(),
+            ),
+            (
+                "a_background_deadline_withdraws_the_old_receipt_without_opening_the_barrier",
+                a_background_deadline_withdraws_the_old_receipt_without_opening_the_barrier
+                    as fn(),
+            ),
+            (
+                "a_background_query_failure_withdraws_the_old_receipt_without_opening_the_barrier",
+                a_background_query_failure_withdraws_the_old_receipt_without_opening_the_barrier
+                    as fn(),
+            ),
+            (
                 "a_same_queued_rebuild_admission_cancels_the_old_preparation_premise",
                 a_same_queued_rebuild_admission_cancels_the_old_preparation_premise as fn(),
             ),
@@ -2080,6 +3047,35 @@ fn registered_text_preparation_preserves_the_actual_presentation_attempt() {
                 "a_sibling_animation_admission_replaces_ready_text_before_geometry_publication",
                 a_sibling_animation_admission_replaces_ready_text_before_geometry_publication
                     as fn(),
+            ),
+            (
+                "a_sampling_report_replaces_ready_text_before_geometry_publication",
+                a_sampling_report_replaces_ready_text_before_geometry_publication as fn(),
+            ),
+            (
+                "a_late_preparation_report_replaces_its_own_ready_text_before_geometry_publication",
+                a_late_preparation_report_replaces_its_own_ready_text_before_geometry_publication
+                    as fn(),
+            ),
+            (
+                "an_initial_report_withdraws_retained_authority_before_publication",
+                an_initial_report_withdraws_retained_authority_before_publication as fn(),
+            ),
+            (
+                "an_initial_report_replaces_retained_authority_before_publication",
+                an_initial_report_replaces_retained_authority_before_publication as fn(),
+            ),
+            (
+                "a_late_report_withdraws_its_own_retained_authority_before_publication",
+                a_late_report_withdraws_its_own_retained_authority_before_publication as fn(),
+            ),
+            (
+                "a_late_report_replaces_its_own_retained_authority_before_publication",
+                a_late_report_replaces_its_own_retained_authority_before_publication as fn(),
+            ),
+            (
+                "fresh_authority_withdrawal_keeps_the_chosen_frame",
+                fresh_authority_withdrawal_keeps_the_chosen_frame as fn(),
             ),
             (
                 "a_dropped_receipt_retries_only_after_its_deadline_and_completes",

@@ -2,7 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-07-11
-- **Absorbs:** ADR-0026
+- **Amended:** 2026-10-11 — removed the self-referential absorption label; Focus widget and traversal rules remain in this record.
+- **Absorbs:** [retired ADR-0022](https://github.com/vanyastaff/flui/blob/aaecd27847a6338538f70e230a1aa01a018b0fd6/docs/adr/ADR-0022-focus-widget-seam.md), the Focus widget seam consolidated here.
 - **Superseded in part by:** ADR-0079 (§4's `Actions(Shortcuts(child))` nesting rule)
 - **Superseded-by:** [ADR-0160](ADR-0160-focus-reading-order.md) (§2's required
   traversal-policy signature only; its sorted-list resolver remains in force)

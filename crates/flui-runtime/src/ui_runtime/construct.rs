@@ -27,6 +27,7 @@ use flui_view::GlobalKeyScope;
 use std::cell::{Cell, RefCell};
 use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 #[cfg(any(test, feature = "test-support"))]
@@ -213,7 +214,9 @@ impl UiRuntime {
             },
             redraw_pending,
             scheduler,
-            frame_failure_handler: RefCell::new(None),
+            frame_failure_handler: Rc::new(RefCell::new(None)),
+            pending_sampling_reports: RefCell::new(Vec::new()),
+            owner_checkout_active: Cell::new(false),
             frame_failure_detail: Cell::new(FrameFailureDetail::default()),
             _owner_affine: PhantomData,
         })
@@ -362,12 +365,20 @@ impl UiRuntime {
         presentation: &PresentationState,
         kind: FrameFailureKind,
     ) {
+        self.deliver_failure_report(self.frame_failure_report(presentation, kind));
+    }
+
+    fn frame_failure_report(
+        &self,
+        presentation: &PresentationState,
+        kind: FrameFailureKind,
+    ) -> FrameFailureReport {
         let disposition = kind.disposition();
         let consecutive_failures = match disposition {
             FailureDisposition::FrameDropped => presentation.note_frame_failure(),
             FailureDisposition::Contained => presentation.frame_failure_streak(),
         };
-        let report = FrameFailureReport {
+        FrameFailureReport {
             address: flui_foundation::PresentationAddress {
                 ui_runtime_id: self.id,
                 presentation_id: presentation.id(),
@@ -375,15 +386,69 @@ impl UiRuntime {
             kind,
             disposition,
             consecutive_failures,
-        };
-        self.deliver_failure_report(report);
+        }
+    }
+
+    pub(super) fn queue_sampling_failure(
+        &self,
+        presentation: &PresentationState,
+        kind: FrameFailureKind,
+    ) {
+        let report = self.frame_failure_report(presentation, kind);
+        self.pending_sampling_reports.borrow_mut().push(report);
+    }
+
+    pub(crate) fn take_pending_sampling_reports(&self) -> PendingSamplingReports {
+        PendingSamplingReports {
+            reports: std::mem::take(&mut *self.pending_sampling_reports.borrow_mut()),
+            handler: Rc::clone(&self.frame_failure_handler),
+            detail: self.frame_failure_detail.get(),
+        }
+    }
+
+    pub(super) fn deliver_sampling_reports_if_unleased(&self) {
+        if !self.owner_checkout_active.get() {
+            self.take_pending_sampling_reports().deliver();
+        }
     }
 
     fn deliver_failure_report(&self, report: FrameFailureReport) {
+        Self::deliver_failure_report_to(
+            &self.frame_failure_handler,
+            self.frame_failure_detail.get(),
+            report,
+        );
+    }
+
+    fn deliver_failure_report_to(
+        handler: &RefCell<Option<FrameFailureHandler>>,
+        detail: FrameFailureDetail,
+        report: FrameFailureReport,
+    ) {
         let consecutive_failures = report.consecutive_failures;
         // Diagnostics are foreign code through tracing subscribers. A failed
         // diagnostic must not prevent the report's callback or sibling frames.
         if let Err(payload) = catch_unwind(AssertUnwindSafe(|| match &report.kind {
+            FrameFailureKind::SamplingPanic {
+                first,
+                blocking,
+                admitted_attempt,
+                message,
+                internal_invariant,
+            } => {
+                tracing::error!(
+                    { flui_foundation::diagnostics::PRESENTATION_ID } = report.address.presentation_id.as_u64(),
+                    ui_runtime_id = report.address.ui_runtime_id.as_u64(),
+                    consecutive_failures,
+                    ?first,
+                    ?blocking,
+                    admitted_attempt,
+                    disposition = ?report.disposition,
+                    internal_invariant,
+                    panic_message = %message,
+                    "presentation sampling failure contained"
+                );
+            }
             FrameFailureKind::SegmentPanic {
                 message,
                 phase,
@@ -402,7 +467,7 @@ impl UiRuntime {
                 );
             }
             FrameFailureKind::Pipeline { error } => {
-                let error_text = self.frame_failure_detail.get().pipeline_text(error);
+                let error_text = detail.pipeline_text(error);
                 tracing::error!(
                     { flui_foundation::diagnostics::PRESENTATION_ID } =
                         report.address.presentation_id.as_u64(),
@@ -450,7 +515,7 @@ impl UiRuntime {
         })) {
             flui_foundation::panic::retain_opaque_payload(payload);
         }
-        let handler = self.frame_failure_handler.borrow().clone();
+        let handler = handler.borrow().clone();
         if let Some(handler) = handler {
             // Keep the owning envelope outside the callback's unwind boundary.
             // It may be the final owner after callback-driven unregistration.
@@ -482,6 +547,23 @@ impl UiRuntime {
             {
                 flui_foundation::panic::retain_opaque_payload(payload);
             }
+        }
+    }
+}
+
+/// An owned report handoff with no runtime reference or outstanding tree loan.
+/// The shared handler slot observes replacement between reports without making
+/// an embedder participate in the owner runtime's checkout protocol.
+pub(crate) struct PendingSamplingReports {
+    reports: Vec<FrameFailureReport>,
+    handler: Rc<RefCell<Option<FrameFailureHandler>>>,
+    detail: FrameFailureDetail,
+}
+
+impl PendingSamplingReports {
+    pub(crate) fn deliver(self) {
+        for report in self.reports {
+            UiRuntime::deliver_failure_report_to(&self.handler, self.detail, report);
         }
     }
 }

@@ -596,7 +596,30 @@ impl GestureBinding {
         &self,
         window: std::sync::Weak<dyn flui_platform_api::PlatformWindow>,
     ) {
+        self.arena.set_deadline_wake(window.clone());
         *self.capture_wake.borrow_mut() = Some(window);
+    }
+
+    pub(crate) fn deadlines_with_recovery(
+        &self,
+        now: web_time::Instant,
+        poll_due: bool,
+        recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
+    ) {
+        self.arena.with_recovery_context(recovery, |scope| {
+            if poll_due {
+                self.arena.invoke_with_recovery(
+                    flui_foundation::panic::FailureClass::Delivery,
+                    scope,
+                    |_| {
+                        if let Some(failure) = self.drain_capture_losses(None) {
+                            failure.resume();
+                        }
+                    },
+                );
+            }
+            self.arena.deadlines_with_recovery(now, poll_due, scope);
+        });
     }
 
     /// Enable per-pointer event resampling on [`Self::flush_pending_moves`].

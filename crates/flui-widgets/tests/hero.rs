@@ -542,7 +542,7 @@ pub(crate) fn unmount_releases_hero_configuration_despite_a_retained_handle() {
             Hero::new(ValueKey::new("retained"), SizedBox::new(30.0, 20.0)).create_rect_tween(
                 move |begin, end| {
                     let _capture = &capture;
-                    flui_animation::RectTween::new(begin, end)
+                    flui_animation::Tween::new(begin, end)
                 },
             ),
         ),

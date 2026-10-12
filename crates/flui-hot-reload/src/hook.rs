@@ -123,8 +123,9 @@ impl Drop for WorkerReloadHook {
 
 /// The event a worker poll reports, logging the outcomes that need the
 /// developer's attention. A rebuild request is honoured whatever the
-/// artifact did: a degraded or failed reload keeps the last good worker (or
-/// none), which a reassemble calls safely.
+/// artifact did. Replacement may withdraw the old worker registration before
+/// a new image is admitted; previously admitted images and retained tree values
+/// keep ADR-0111's lifetime, which is distinct from a live build registration.
 fn event_for(outcome: WorkerPollOutcome, rebuild_requested: bool) -> ReloadEvent {
     match outcome {
         WorkerPollOutcome::Reloaded { reload_count } => {

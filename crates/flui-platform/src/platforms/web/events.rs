@@ -18,6 +18,8 @@ use flui_platform_api::{
         Pressure, ScrollEvent, TangentialPressure, Twist,
     },
 };
+use icu_normalizer::{ComposingNormalizerBorrowed, properties::CanonicalCombiningClassMapBorrowed};
+use icu_properties::{CodePointMapData, props::GeneralCategory};
 
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
@@ -337,6 +339,12 @@ fn register_context_menu_block(canvas: &web_sys::HtmlCanvasElement) {
 // them. Bind the actual DOM getters with their floating-point result type.
 #[wasm_bindgen]
 extern "C" {
+    // DOMString can contain unpaired surrogates. A Rust String getter would
+    // replace them before the source-specific admission check can refuse them.
+    type Utf16KeyboardEvent;
+    #[wasm_bindgen(method, getter, js_name = key)]
+    fn key_utf16(this: &Utf16KeyboardEvent) -> js_sys::JsString;
+
     type PreciseMouseEvent;
     #[wasm_bindgen(method, getter, js_name = offsetX)]
     fn offset_x_f64(this: &PreciseMouseEvent) -> f64;
@@ -646,7 +654,8 @@ fn convert_keyboard_event(ke: &web_sys::KeyboardEvent, state: KeyState) -> Platf
         modifiers |= Modifiers::META;
     }
 
-    let key = map_key_value(&ke.key());
+    let source: &Utf16KeyboardEvent = ke.unchecked_ref();
+    let key = map_key_value(source.key_utf16());
 
     let location = match ke.location() {
         1 => Location::Left,
@@ -698,15 +707,39 @@ fn extract_modifiers_from_mouse(e: &web_sys::MouseEvent) -> Modifiers {
     modifiers
 }
 
-/// DOM named keys use the same W3C spellings as the generated owned table.
-fn map_key_value(key: &str) -> Key {
-    if matches!(key, "Hyper" | "Super") {
+/// Named values precede source-specific Unicode admission; refusal preserves the event.
+fn map_key_value(key: js_sys::JsString) -> Key {
+    if !key.is_valid_utf16() {
+        return Key::Named(NamedKey::Unidentified);
+    }
+    let key = String::from(key);
+    if matches!(key.as_str(), "Hyper" | "Super") {
         Key::Named(NamedKey::Meta)
-    } else if let Some(named) = NamedKey::from_w3c(key) {
+    } else if let Some(named) = NamedKey::from_w3c(&key) {
         Key::Named(named)
-    } else if key.chars().count() == 1 {
+    } else if is_web_key_string(&key) {
         Key::character(key)
     } else {
         Key::Named(NamedKey::Unidentified)
     }
+}
+
+/// W3C key strings are nonempty NFC text: an optional non-Cc base, then
+/// combining characters (Mc or a nonzero canonical combining class).
+fn is_web_key_string(key: &str) -> bool {
+    let mut characters = key.chars();
+    let Some(first) = characters.next() else {
+        return false;
+    };
+    let categories = CodePointMapData::<GeneralCategory>::new();
+    if categories.get(first) == GeneralCategory::Control {
+        return false;
+    }
+    let combining_classes = CanonicalCombiningClassMapBorrowed::new();
+    characters.all(|character| {
+        let category = categories.get(character);
+        category != GeneralCategory::Control
+            && (category == GeneralCategory::SpacingMark
+                || combining_classes.get_u8(character) != 0)
+    }) && ComposingNormalizerBorrowed::new_nfc().is_normalized(key)
 }

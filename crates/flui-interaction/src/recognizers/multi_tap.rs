@@ -4,6 +4,7 @@ use super::{
     ArenaMembership, CancelOutcome, ContactId,
     callback_containment::{
         CallbackSequence, finish_containment, retire_callbacks, withdraw_cancelled,
+        withdraw_cancelled_with_recovery,
     },
     recognizer::{GestureRecognizer, measured_positions},
 };
@@ -209,6 +210,24 @@ impl MultiTapGestureRecognizer {
         );
         finish_containment(first, std::thread::panicking());
     }
+
+    fn deliver_cancellation(&self, sequence: MultiTapSequence, details: MultiTapDetails) {
+        if let Some(registration) = &sequence.deadline_registration {
+            registration.withdraw();
+        }
+        let mut first = None;
+        self.retire_entries(&sequence, GestureDisposition::Rejected, &mut first);
+        let mut notices = CallbackSequence::new();
+        notices.call(self.callbacks.on_multi_tap_cancel.clone(), |callback| {
+            callback(details);
+        });
+        RoutePanic::preserve_first(
+            &mut first,
+            RoutePanic::capture(|| notices.finish()),
+            "multi tap cancellation callback",
+        );
+        finish_containment(first, std::thread::panicking());
+    }
 }
 impl GestureRecognizer for MultiTapGestureRecognizer {
     fn add_pointer(&self, down: PointerDispatch<'_>) {
@@ -317,6 +336,15 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
             }
         };
         drop(outgoing_registration);
+        let publication = self.sequence.borrow().as_ref().and_then(|sequence| {
+            sequence
+                .deadline_registration
+                .as_ref()
+                .map(|registration| (registration.update_handle(), sequence.deadline))
+        });
+        if let Some((update, deadline)) = publication {
+            let _ = update.publish(deadline);
+        }
     }
     fn handle_event(&self, dispatch: PointerDispatch<'_>) {
         let Some(pointer) = dispatch.local.pointer_id() else {
@@ -386,18 +414,7 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
             return CancelOutcome::Idle;
         };
         let details = Self::details(&sequence);
-        let mut first = None;
-        self.retire_entries(&sequence, GestureDisposition::Rejected, &mut first);
-        let mut notices = CallbackSequence::new();
-        notices.call(self.callbacks.on_multi_tap_cancel.clone(), |callback| {
-            callback(details);
-        });
-        RoutePanic::preserve_first(
-            &mut first,
-            RoutePanic::capture(|| notices.finish()),
-            "multi tap cancellation callback",
-        );
-        finish_containment(first, std::thread::panicking());
+        self.deliver_cancellation(sequence, details);
         CancelOutcome::Cancelled
     }
 }
@@ -423,6 +440,51 @@ impl GestureArenaMember for MultiTapGestureRecognizer {
         if self.deadline().is_some_and(|deadline| now >= deadline) {
             self.cancel();
         }
+    }
+    fn poll_deadline_with_recovery(
+        &self,
+        now: Instant,
+        recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
+    ) -> bool {
+        use flui_foundation::panic::FailureClass;
+        let arena = self.membership.arena();
+        let mut prepared = None;
+        let completed = arena.invoke_with_recovery(FailureClass::Unknown, recovery, |_| {
+            let mut state = self.sequence.borrow_mut();
+            if state
+                .as_ref()
+                .is_some_and(|sequence| sequence.deadline.is_some_and(|due| due <= now))
+            {
+                let sequence = state.take().expect("BUG: due multi-tap sequence exists");
+                let details = Self::details(&sequence);
+                prepared = Some((sequence, details));
+            }
+        });
+        if !completed {
+            return false;
+        }
+        if let Some((sequence, details)) = prepared {
+            if let Some(registration) = &sequence.deadline_registration {
+                registration.withdraw();
+            }
+            for contact in sequence.contacts.values() {
+                arena.invoke_with_recovery(FailureClass::Unknown, recovery, |scope| {
+                    withdraw_cancelled_with_recovery(&contact.entry, arena, scope);
+                });
+                arena.invoke_with_recovery(FailureClass::Unknown, recovery, |scope| {
+                    contact.entry.release_with_recovery(scope);
+                });
+            }
+            let preserving = recovery.has_failure();
+            arena.invoke_with_recovery(FailureClass::Delivery, recovery, |_| {
+                let mut notices = CallbackSequence::preserving_failure(preserving);
+                notices.call(self.callbacks.on_multi_tap_cancel.clone(), |callback| {
+                    callback(details);
+                });
+                notices.finish();
+            });
+        }
+        true
     }
 }
 impl Drop for MultiTapGestureRecognizer {

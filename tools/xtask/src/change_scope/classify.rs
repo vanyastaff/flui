@@ -195,14 +195,12 @@ pub(super) fn heavy_job_inputs(ci_yml: &str, xtask_main: Option<&str>) -> BTreeS
     let runs_xtask = Regex::new(r"cargo xtask ([a-z0-9][a-z0-9-]*)").expect("BUG: valid regex");
     let dispatch = Regex::new(r"Command::([A-Za-z0-9]+)\(\w+\)\s*=>\s*([a-z_][a-z0-9_]*)::")
         .expect("BUG: valid regex");
-    let modules: BTreeMap<String, String> = xtask_main
-        .map(|text| {
-            dispatch
-                .captures_iter(text)
-                .map(|c| (kebab_case(&c[1]), c[2].to_owned()))
-                .collect()
-        })
-        .unwrap_or_default();
+    let modules: BTreeMap<String, String> = xtask_main.map_or_default(|text| {
+        dispatch
+            .captures_iter(text)
+            .map(|c| (kebab_case(&c[1]), c[2].to_owned()))
+            .collect()
+    });
 
     let gate = format!("\n    if: {WIDE_CONDITION}\n");
     let mut found = BTreeSet::new();
@@ -652,15 +650,11 @@ pub(super) fn classify(repo: &Repo, files: &[String]) -> anyhow::Result<Scope> {
         };
         return Ok(Scope::new(Mode::Docs, reason.to_owned()));
     }
-    let heavy_inputs: Vec<String> = repo
-        .ci_yml
-        .as_deref()
-        .map(|ci| {
-            heavy_job_inputs(ci, repo.xtask_main.as_deref())
-                .into_iter()
-                .collect()
-        })
-        .unwrap_or_default();
+    let heavy_inputs: Vec<String> = repo.ci_yml.as_deref().map_or_default(|ci| {
+        heavy_job_inputs(ci, repo.xtask_main.as_deref())
+            .into_iter()
+            .collect()
+    });
     let heavy: BTreeSet<&str> = code
         .iter()
         .copied()

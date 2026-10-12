@@ -302,12 +302,10 @@ impl WebFrameDriver {
         });
         match action {
             WakeAction::Skip => return,
-            WakeAction::PumpAsync => {
-                // Frames disabled: pump only the async driver — see
-                // `wake_action`'s doc for why this is the only thing
-                // keeping a spawned future progressing while
-                // backgrounded, and `UiRuntime::pump_background` for
-                // the latch-first order it keeps.
+            WakeAction::PumpBackground => {
+                // Frames disabled: service owner commands, async tasks, and
+                // input deadlines without a visual frame. See
+                // `UiRuntime::pump_background` for the latch-first order.
                 //
                 // No `NO_PRESENT_FALLBACK_PACE` sleep here, unlike
                 // desktop/Android: this callback is driven by the
@@ -422,7 +420,7 @@ impl WebFrameDriver {
                             // cadence bounds how often a new one
                             // can start (~16ms, the same order
                             // as desktop/Android's base backoff
-                            // interval) — see the `PumpAsync`
+                            // interval) — see the `PumpBackground`
                             // arm's own comment above for why
                             // RAF is a sufficient pacer here.
                             tracing::error!(

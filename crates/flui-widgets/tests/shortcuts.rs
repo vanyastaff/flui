@@ -4,6 +4,7 @@
 
 pub(crate) mod intent_tests {
 
+    use std::cell::Cell;
     use std::rc::Rc;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -11,7 +12,7 @@ pub(crate) mod intent_tests {
     use flui_interaction::routing::FocusNode;
     use flui_platform_api::{
         EventTime,
-        keyboard::{Code, Key, KeyEvent, KeyState, Modifiers},
+        keyboard::{Code, Key, KeyEvent, KeyRepeat, KeyState, Modifiers},
     };
     use flui_widgets::SizedBox;
     use flui_widgets::interaction::{
@@ -69,6 +70,92 @@ pub(crate) mod intent_tests {
                 .is_handled()
         );
         assert_eq!(saves.load(Ordering::SeqCst), 1);
+    }
+
+    /// Complete character strings resolve through the primary focus's action
+    /// chain. This consumer contract already holds independently of how a
+    /// backend admits its logical key value.
+    pub(crate) fn a_multiscalar_character_shortcut_reaches_the_focused_action() {
+        for (character, truncated) in [("ḍ̇", "ḍ"), ("का", "क")] {
+            let saves = Rc::new(Cell::new(0));
+            let field = FocusNode::with_debug_label("multiscalar-shortcut-field");
+            let saves_for_action = Rc::clone(&saves);
+            // The action is below Shortcuts: only the focused field sees its
+            // chain, so resolving at the shortcut node cannot run it.
+            let harness = mount(
+                Shortcuts::new(
+                    Actions::new(
+                        Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&field)),
+                    )
+                    .action(CallbackAction::new(
+                        move |_cx, _intent: &SaveIntent| {
+                            saves_for_action.set(saves_for_action.get() + 1);
+                        },
+                    )),
+                )
+                .shortcut(
+                    SingleActivator::character(character)
+                        .control()
+                        .allow_repeats(false),
+                    SaveIntent,
+                ),
+            );
+            let manager = harness.focus_manager();
+            let _ = field.request_focus();
+            assert!(
+                field.has_primary_focus(),
+                "{character:?}: mounted primary focus"
+            );
+
+            let event = |state: KeyState, text: &str| {
+                KeyEvent::new(
+                    state,
+                    Key::character(text),
+                    Code::Unidentified,
+                    EventTime::from_nanos(0),
+                )
+                .with_modifiers(Modifiers::CONTROL)
+            };
+            assert!(
+                manager
+                    .dispatch_key_event(&event(KeyState::Down, character))
+                    .is_handled(),
+                "{character:?}: the complete character invokes its action"
+            );
+            assert_eq!(saves.get(), 1, "{character:?}: the focused action ran");
+
+            for (case, rejected) in [
+                ("truncated character", event(KeyState::Down, truncated)),
+                ("release", event(KeyState::Up, character)),
+                (
+                    "disallowed repeat",
+                    event(KeyState::Down, character).with_repeat(KeyRepeat::AutoRepeat),
+                ),
+                (
+                    "extra modifier",
+                    event(KeyState::Down, character)
+                        .with_modifiers(Modifiers::CONTROL | Modifiers::SHIFT),
+                ),
+            ] {
+                assert!(
+                    !manager.dispatch_key_event(&rejected).is_handled(),
+                    "{character:?}: {case} is not consumed"
+                );
+                assert_eq!(
+                    saves.get(),
+                    1,
+                    "{character:?}: {case} does not run the action"
+                );
+            }
+
+            assert!(
+                manager
+                    .dispatch_key_event(&event(KeyState::Down, character))
+                    .is_handled(),
+                "{character:?}: the next matching press still reaches the action"
+            );
+            assert_eq!(saves.get(), 2, "{character:?}: the next action ran");
+        }
     }
 }
 

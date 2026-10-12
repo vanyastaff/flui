@@ -774,7 +774,7 @@ fn authored_drag_owner_replacement(horizontal: bool) {
             starts.clone(),
             cancelled.clone(),
             completed.clone(),
-            fail_once.clone(),
+            fail_once,
             signal.clone(),
         );
         let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {

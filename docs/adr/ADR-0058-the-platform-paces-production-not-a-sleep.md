@@ -2,7 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-05
-- **Absorbs:** ADR-0058
+- **Amended:** 2026-10-11 — removed the self-referential absorption label; platform pacing and fallback-deadline decisions are unchanged.
+- **Absorbs:** [retired ADR-0029](https://github.com/vanyastaff/flui/blob/aaecd27847a6338538f70e230a1aa01a018b0fd6/docs/adr/ADR-0029-frame-pacing-swapchain-block-with-fallback-throttle.md), the original FIFO pacing and fallback context.
 - **Amends:** [ADR-0044](ADR-0044-driver-loop-hybrid.md) §4 (the Wayland row),
   [ADR-0045](ADR-0045-raster-lane.md) decision 3 (what paces production once the produce loop
   stops blocking)
@@ -80,8 +81,12 @@ are. A deadline source must be in the dirty predicate **and** self-clearing, or 
 arrives and is skipped.
 
 **5. Android keeps its sleep, renamed.** `BACKGROUNDED_PUMP_PACE` bounds the backgrounded
-(`PumpAsync`) arm, which has no wake-deadline hook to arm instead. `DeviceRecoveryBackoff::BASE`
+(`PumpBackground`) arm, which has no wake-deadline hook to arm instead. `DeviceRecoveryBackoff::BASE`
 no longer aliases a pacing constant.
+
+[ADR-0199](ADR-0199-presentation-sampling-recovery.md) adds due input-deadline
+service to that background operation; it does not change Android's pacing or
+enable frame production while frames are disabled.
 
 ## Per-backend facts
 

@@ -21,7 +21,8 @@ trait depends on `flui-platform-api` instead.
 
 - **The winit fallback is a desktop backend.** Its module, public re-exports
   and `arboard` clipboard dependency are available only on Windows, macOS and
-  Linux. Enabling every feature on Android or iOS keeps the native backend;
+  Linux under `winit-backend`. The `desktop` compatibility selector enables no
+  dependency; native desktop backends are selected by target OS. Enabling every feature on Android or iOS keeps the native backend;
   it does not enable desktop clipboard code. The required-target and
   all-features `cargo xtask cross-typecheck` configurations compile this
   boundary, including the selected packages' tests, examples and benches.
@@ -1429,6 +1430,35 @@ reentrant clipboard access. Each probe requires a fresh page and an external
 deadline: the previous implementation blocks or aborts the browser thread under the
 state mutex. Source inspection and type checking do not prove browser execution
 or arbitrary aggregate destructor containment.
+
+### Web logical keys validate their source grammar
+
+The private DOM getter retains the original UTF-16 string until admission.
+`JsString::is_valid_utf16` refuses an unpaired surrogate before conversion can
+replace it with U+FFFD. The literal replacement character and valid surrogate
+pairs remain valid inputs. The getter runs once, including during reentry.
+
+Both DOM keyboard states resolve the owned named-key vocabulary and accepted
+Hyper/Super aliases before admitting a character value. A Web character is a
+nonempty NFC string with zero or one non-control base followed by combining
+characters, as defined by
+[W3C key strings](https://www.w3.org/TR/2025/REC-uievents-key-20250422/#key-string).
+Control means Unicode category Cc; combining means Mc or a nonzero canonical
+combining class. A scalar or grapheme count does not establish that grammar.
+Refused values become Unidentified without discarding physical code, location,
+timestamp, modifiers, composition or the Down/Up observation. No normalization
+rewrites source meaning. Common KeyText and native producers keep their
+nonempty-text contract (ADR-0143).
+
+The private Web conversion uses ICU4X `icu_properties` and `icu_normalizer`
+2.3 compiled data. General categories, canonical combining classes and NFC
+therefore come from one library cohort; combining classes reuse normalization
+data. Dependencies are wasm-target-only, and admission adds no owning service,
+mutable cache or public parser. The `browser_input_probe` example's
+`owned-keyboard-check` exercises registered DOM events through public on_input,
+including multi-scalar text, refused-value recovery, complete event metadata
+and JSON-sensitive values. Browser execution establishes constructor-driven
+translation; it does not establish physical layouts or IME text commits.
 
 ### Off-owner accessibility adapter retention precedes diagnostics
 

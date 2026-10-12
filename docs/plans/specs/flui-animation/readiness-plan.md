@@ -181,8 +181,11 @@ CompoundAnimation предписано удалить, а не оставить 
   их отвергает. План следует конечному rate ≥ 0 и явному reverse; обновление матрицы требует
   зафиксировать происхождение уточнения. Не добавлять отрицательный rate по старой строке.
 - M-CRV-6: Steps без before flag соответствует принятому отказу от полной WAAPI timing model.
-- M-CRV-7/10: piecewise linear и sampled spring curve не найдено; найти позднейшее scope-решение
-  либо вынести отдельное решение с потребителем и альтернативами. Самостоятельно закрывать нельзя.
+- M-CRV-7/10: владелец разрешил сохранить API до появления реальной потребности в штатном
+  consumer. `PiecewiseLinear` и `SpringCurve` реализованы как immutable authoring values,
+  с публичной математической и mounted Hero paint-приёмкой (readiness-matrix).
+  Они сохраняют принятый Curve-контракт: normalized endpoints, NaN и exterior clamp;
+  raw CSS parsing/extrapolation и velocity-inheriting spring retarget здесь не заявлены.
 - M-INTP-3: «без 8-битной ступени» не совпадает с текущим u8 Color. Предложение: отдельно оценить
   float paint interpolation и consumer path; не расширять public Color автоматически.
 - M-INTP-9: порог покоя на тип проверить отдельно от существующего DPR tolerance скролла.

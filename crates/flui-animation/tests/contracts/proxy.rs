@@ -33,9 +33,9 @@ impl ReentrantParent {
         let proxy = self.proxy.lock().expect("parent hook lock").take();
         if let Some(proxy) = proxy.and_then(|proxy| proxy.upgrade()) {
             let replacement = if matches!(self.reentry, Reentry::Removal) {
-                ConstantAnimation::reverse_settled(0.75)
+                ConstantAnimation::with_status(0.75, AnimationStatus::ReverseSettled)
             } else {
-                ConstantAnimation::forward_settled(0.75)
+                ConstantAnimation::with_status(0.75, AnimationStatus::ForwardSettled)
             };
             proxy.set_parent(std::rc::Rc::new(replacement));
         }
@@ -105,7 +105,10 @@ fn fixture(reentry: Reentry) -> (Rc<ProxyAnimation<f64>>, Rc<AtomicUsize>) {
 
 fn next_swap_still_notifies(proxy: &ProxyAnimation<f64>, changes: &AtomicUsize) {
     let before = changes.load(Ordering::Relaxed);
-    proxy.set_parent(std::rc::Rc::new(ConstantAnimation::reverse_settled(0.5)));
+    proxy.set_parent(std::rc::Rc::new(ConstantAnimation::with_status(
+        0.5,
+        AnimationStatus::ReverseSettled,
+    )));
     assert_eq!(proxy.value(), 0.5);
     assert_eq!(proxy.status(), AnimationStatus::ReverseSettled);
     assert_eq!(changes.load(Ordering::Relaxed), before + 1);
@@ -144,7 +147,10 @@ fn parent_status_may_replace_the_proxy_parent() {
 
 fn old_parent_status_may_reenter_during_a_swap() {
     let (proxy, changes) = fixture(Reentry::Status);
-    proxy.set_parent(std::rc::Rc::new(ConstantAnimation::forward_settled(1.0)));
+    proxy.set_parent(std::rc::Rc::new(ConstantAnimation::with_status(
+        1.0,
+        AnimationStatus::ForwardSettled,
+    )));
     assert_eq!(
         proxy.value(),
         1.0,
@@ -197,7 +203,10 @@ fn old_parent_removal_keeps_committed_notification_order() {
             observed.borrow_mut().push(status);
         }))
         .detach();
-    proxy.set_parent(std::rc::Rc::new(ConstantAnimation::forward_settled(1.0)));
+    proxy.set_parent(std::rc::Rc::new(ConstantAnimation::with_status(
+        1.0,
+        AnimationStatus::ForwardSettled,
+    )));
     assert_eq!(
         proxy.value(),
         0.75,

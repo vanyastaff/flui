@@ -2,6 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-10
+- **Superseded-by:** [ADR-0198](ADR-0198-typed-animation-admission-errors.md), the threshold-error variant only; converter ownership and rest distances remain in force.
+- **Amended:** 2026-10-11 — threshold refusal names the existing component-indexed simulation cause.
 - **Related:** [ADR-0176](ADR-0176-presentation-animation-playback.md),
   [ADR-0189](ADR-0189-coordinated-property-motion-admission.md).
 
@@ -39,7 +41,8 @@ converter from which to infer value units.
 
 Threshold calls run during preparation outside state guards. Spring admission
 validates every distance before replacing the previous run. An invalid distance
-returns `AnimationError::InvalidSpring`; neither cancellation nor a prefix of a
+returns `AnimationError::ComponentSimulation { component, source }` with the
+invalid threshold's component index and typed `SimulationError`; neither cancellation nor a prefix of a
 coordinated update is admitted. The existing seam validation rejects or retries
 preparation invalidated by converter reentry. Fixed arrays require no heap
 storage for thresholds, and sampling invokes no threshold conversion.

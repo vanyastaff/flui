@@ -1338,7 +1338,7 @@ fn finite_tap_drag_inputs_cannot_publish_overflowing_motion() {
         let cancelled = Rc::new(Cell::new(0));
         let cancellation = cancelled.clone();
         let fail = Rc::new(Cell::new(fail_cancel));
-        let cancel_failure = fail.clone();
+        let cancel_failure = fail;
         let recognizer = TapAndDragGestureRecognizer::builder(arena.clone())
             .on_drag_start(move |_| started.set(started.get() + 1))
             .on_drag_update(move |details| observed.borrow_mut().push(details.delta))

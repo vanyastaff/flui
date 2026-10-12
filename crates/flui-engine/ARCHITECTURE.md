@@ -657,8 +657,8 @@ caller set was accepted and discarded. Consequence: the gradient fragment
 emits premultiplied colour and `SrcOver` moved to
 `PREMULTIPLIED_ALPHA_BLENDING`, which is not byte-identical to the old
 straight-alpha path (below one part in 255; the readback tolerances absorb
-it). A gradient with more than eight stops is truncated and warned about
-once per process, not silently.
+it). Current admission accepts at most 256 stops per draw; excess stops produce
+`PreparedResourceLimit` instead of truncation, as described in bounded gradient work.
 
 ### 6. Path clips use bounded geometric membership
 
@@ -1075,11 +1075,6 @@ opaque layer among them, its full frame against its partial one),
   not yet drive; whether the lane ships or the direct path is the only path
   decides whether this family stays. Until decided, it is tested but not
   wired.
-- **An axis-aligned opaque `SrcOver` save layer is spliced, not composited
-  (decision 19).** With nothing to apply at the composite, its content goes
-  straight into the parent's draw order, so content drawn past its bounds is
-  cut only by the clip. Cutting it means compositing such a layer whenever its
-  content may overrun its bounds, which the splice exists to avoid.
 - **`catch_unwind` around `render_scene`.** A panic inside a layer's paint
   poisons the frame rather than isolating the layer; changing that is a
   contract change that needs its own ADR.

@@ -316,7 +316,7 @@ Criterion time estimates in nanoseconds (95% intervals in parentheses):
 
 | Operation | Byte color | Continuous color |
 |---|---:|---:|
-| Mixed-alpha `ColorTween::transform` | 39.441 (39.223–39.642) | 118.62 (118.10–119.11) |
+| Mixed-alpha `Tween::transform` | 39.441 (39.223–39.642) | 118.62 (118.10–119.11) |
 | First advancing `AnimatedValue<Color>` frame after retarget | 288.90 (281.03–298.26) | 288.70 (281.73–296.36) |
 
 Continuous conversion makes the isolated tween approximately three times

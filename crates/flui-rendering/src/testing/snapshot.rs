@@ -795,7 +795,7 @@ pub fn snapshot_subtree(tree: Option<&LayerTree>, node: RenderId) -> String {
 /// Delegates to [`collect_commands`].
 #[must_use]
 pub fn commands_of(tree: Option<&LayerTree>) -> Vec<DrawCommandSummary> {
-    tree.map(collect_commands).unwrap_or_default()
+    tree.map_or_default(collect_commands)
 }
 
 /// Panics unless at least one command in `tree` satisfies `pred`.

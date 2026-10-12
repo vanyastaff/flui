@@ -23,6 +23,7 @@ struct ObservedFailure {
 
 #[derive(Debug, Clone, PartialEq)]
 enum ObservedKind {
+    Sampling,
     Recovered {
         at: RecoveredAt,
         view_type_id: TypeId,
@@ -42,6 +43,7 @@ fn install_collecting_handler(ui_runtime: &UiRuntime) -> Arc<Mutex<Vec<ObservedF
     let handler_observed = Arc::clone(&observed);
     ui_runtime.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
         let kind = match &report.kind {
+            FrameFailureKind::SamplingPanic { .. } => ObservedKind::Sampling,
             FrameFailureKind::RecoveredPanic {
                 at,
                 view_type_id,

@@ -41,7 +41,7 @@ use flui_painting::paint::Clip;
 
 use flui_animation::curve::ArcCurve;
 use flui_animation::{
-    Animatable, Animation, AnimationController, AnimationStatus, CurvedAnimation, SizeTween,
+    Animatable, Animation, AnimationController, AnimationStatus, CurvedAnimation, Tween,
 };
 use flui_foundation::{Listenable, ListenerId};
 
@@ -84,7 +84,7 @@ pub struct RenderAnimatedSize {
     controller: AnimationController,
     animation: CurvedAnimation<ArcCurve>,
     curve: ArcCurve,
-    size_tween: SizeTween,
+    size_tween: Tween<Size>,
     state: AnimatedSizeState,
     /// Last frame's already-`constrain()`-ed committed size. Read only by
     /// [`layout_stable`](Self::layout_stable)'s retarget branch and by
@@ -114,7 +114,7 @@ impl RenderAnimatedSize {
             controller,
             animation,
             curve,
-            size_tween: SizeTween::new(Size::ZERO, Size::ZERO),
+            size_tween: Tween::new(Size::ZERO, Size::ZERO),
             state: AnimatedSizeState::Start,
             current_size: Size::ZERO,
             has_visual_overflow: false,
@@ -196,7 +196,7 @@ impl RenderAnimatedSize {
     /// `start -> stable`: both tween ends collapse to the child's size — no
     /// animation on the very first layout.
     fn layout_start(&mut self, child_size: Size) {
-        self.size_tween = SizeTween::new(child_size, child_size);
+        self.size_tween = Tween::new(child_size, child_size);
         self.state = AnimatedSizeState::Stable;
     }
 
@@ -206,14 +206,14 @@ impl RenderAnimatedSize {
     /// target, animated over the full duration from `t = 0`.
     fn layout_stable(&mut self, child_size: Size) {
         if self.size_tween.end != child_size {
-            self.size_tween = SizeTween::new(self.current_size, child_size);
+            self.size_tween = Tween::new(self.current_size, child_size);
             self.restart_animation();
             self.state = AnimatedSizeState::Changed;
         } else if self.controller.status() == AnimationStatus::ForwardSettled {
             // Both ends already equal `child_size`; a no-op snap that just
             // clears any float drift (detected via `status()` rather than by
             // comparing the controller value with its upper bound).
-            self.size_tween = SizeTween::new(child_size, child_size);
+            self.size_tween = Tween::new(child_size, child_size);
         } else if !self.controller.is_animating() {
             // Resume after a detach, from the CURRENT value — not `forward_from(0)`.
             let _ = self.controller.forward();
@@ -235,7 +235,7 @@ impl RenderAnimatedSize {
                 let _ = self.controller.forward();
             }
         } else {
-            self.size_tween = SizeTween::new(child_size, child_size);
+            self.size_tween = Tween::new(child_size, child_size);
             self.restart_animation();
             self.state = AnimatedSizeState::Unstable;
         }
@@ -251,7 +251,7 @@ impl RenderAnimatedSize {
             let _ = self.controller.stop();
             self.state = AnimatedSizeState::Stable;
         } else {
-            self.size_tween = SizeTween::new(child_size, child_size);
+            self.size_tween = Tween::new(child_size, child_size);
             self.restart_animation();
         }
     }
@@ -331,7 +331,7 @@ impl RenderBox for RenderAnimatedSize {
             }
             let _ = self.controller.stop();
             let snapped = constraints.smallest();
-            self.size_tween = SizeTween::new(snapped, snapped);
+            self.size_tween = Tween::new(snapped, snapped);
             self.state = AnimatedSizeState::Start;
             self.current_size = snapped;
             return Ok(snapped);

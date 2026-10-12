@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-04
+- **Amended:** 2026-10-11 — implemented geometric clip coverage closes the former rectangular-AA limitation; viewport commitment/degradation rules are unchanged.
 - **Related:** [ADR-0017](ADR-0017-build-during-layout-callback-seam.md) (+ amendment), [ADR-0053](ADR-0053-one-lazy-child-lifecycle-for-multi-box-slivers.md); issue #537; #833 (the per-pixel rebuild) and #834 (the pipeline's positioned-this-pass stamp)
 
 ## Context
@@ -63,9 +64,10 @@ committed that loop's result were inconsistent with each other and with Flutter
 
 ## Recorded divergences and gaps
 
-- The wgpu backend originally ignored a clip layer's `Clip` mode; since #848 only `AntiAlias` on a
-  rect still renders as `HardEdge` (see "Implementation notes"). Pixel evidence stays per
-  primitive in the engine's readback suite.
+- The wgpu backend originally ignored a clip layer's `Clip` mode. The rect-AA gap that
+  remained after #848 is also closed by geometric membership and fractional coverage
+  (see "Implementation notes"). Pixel evidence stays per primitive in the engine's
+  readback suite.
 - `center` is an index, not a key; a key-based center is a follow-up.
 - Every setter added here returns no impact on equality. The per-pixel rebuild of the viewport
   subtree on scroll (#833) and the slivers' hit-test child-count snapshot (replaced by #834's
@@ -76,8 +78,8 @@ committed that loop's result were inconsistent with each other and with Flutter
 All five decisions are implemented (`commit_positions`, the degradation count with
 `RenderFlags::GEOMETRY_DEGRADED`, `center`/`anchor`, `clip_behavior` and the two clip hooks on both
 viewports); decision 5 needed no code. The follow-ups this record named are closed: #833, #834,
-and #850 (layout now marks semantics dirty, see below). One clip-mode gap remains (rect
-`AntiAlias`, below).
+and #850 (layout now marks semantics dirty, see below). The former rect-AA clip gap
+is closed by the implemented geometric expression/coverage paths described below.
 
 ## Implementation notes
 
@@ -131,22 +133,20 @@ pass, at any depth below the viewport.
 `Clip::None`, which produces no clip layer at all. `Viewport`, `ShrinkWrappingViewport` and
 `CustomScrollView` all expose the knob.
 
-The gap this recorded — the wgpu backend discarding a clip layer's `Clip` mode, leaving all three
-clipped modes pixel-identical — is **mostly closed** (issue #848). A **rounded** clip honours
-`HardEdge` against `AntiAlias`, and **`AntiAliasWithSaveLayer`** renders the clipped subtree into
-an offscreen so the clip's coverage multiplies the finished group once. One case remains deferred,
-with a test asserting the known-wrong equality so the divergence cannot go quiet:
+The former gap was the wgpu backend discarding `Clip` mode, leaving the clipped
+modes pixel-identical. Current immutable geometric expressions distinguish hard
+and antialiased rectangular and rounded clips, and effect-prefix ownership applies
+inherited coverage once at the group composite (ADR-0102/0103). Hardware scissors
+are conservative culling bounds, not a replacement for the admitted AA geometry.
+The public clip readback family requires actual path/rect membership and fractional
+coverage; its retained historical test names no longer authorize wrong-pixel equality.
 
-- **`AntiAlias` on a rect** renders as `HardEdge`. A rect clip is the hardware scissor, and
-  routing it to the SDF to feather it was tried and reverted: the SDF is a per-instance uniform,
-  so the swap stopped clipping text (handed to glyphon with the scissor alone), stopped
-  intersecting under nesting (one SDF slot, inner clears outer), and stopped being exact. Fixing
-  it means a clip *stack* in the shader plus routing text through the same mask.
-
-Two narrower facts about that mode are recorded in `crates/flui-engine/ARCHITECTURE.md`: the
-offscreen is declined where no clip was actually installed (a **path** clip installs none) and
-inside a bounds-growing image-filter layer (which discards nested layers), and its compositing
-bounds are the clip's own scissor rather than the whole viewport.
+`Clip::AntiAliasWithSaveLayer` opens an offscreen bounded by the clip's own scissor,
+including for path clips and inside image filters. Path clips preserve geometric
+membership, and filter layers retain ordered draw items from nested groups and the
+final segment. Coverage applies once at the finished group composite; the scissor
+bounds its work rather than replacing its clip expression. These contracts are
+recorded in `crates/flui-engine/ARCHITECTURE.md`.
 
 The second part is the clips a child sees. Two hooks join the render-object trait family beside `excludes_semantics_subtree`:
 `describe_approximate_paint_clip(child_slot)` and `describe_semantics_clip(child_slot)`, both

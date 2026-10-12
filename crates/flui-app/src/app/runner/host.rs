@@ -529,7 +529,7 @@ pub(super) fn merge_wake_deadlines(
 /// `frames_enabled == false` suppresses the deadline unconditionally,
 /// regardless of how soon it is due: while frames are disabled
 /// (`AppLifecycleState::Hidden`/`Paused`/`Detached`), the frame closure's
-/// `WakeAction::PumpAsync` arm returns before `render_frame_with_device_
+/// `WakeAction::PumpBackground` arm returns before `render_frame_with_device_
 /// recovery` ever runs, so nothing on that path would consume a reported
 /// deadline — reporting it anyway hands `about_to_wait` the SAME past
 /// instant on every idle iteration once it comes due, which is

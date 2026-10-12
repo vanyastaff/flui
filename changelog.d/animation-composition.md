@@ -24,6 +24,5 @@
 - **`flui-animation`**: `TweenSequence` and `TweenSequenceItem`: build a `Keyframes` track.
   `CatmullRomCurve`, `CatmullRomSpline`, `Curve2D`, `Curve2DSample` and `ParametricCurve`
   (the spline ignored its points' x): use `cubic` keyframe segments.
-- **`flui-animation`**: `AnimationExt` and `CurveExt`; `AnimatableExt` keeps `animate` only. Use
-  `CurvedAnimation::new`, `ReverseAnimation::new`, `CurveTween` and
-  `ReverseTween::new`.
+- **`flui-animation`**: `AnimationExt` and `CurveExt`; use `Animatable::animate`,
+  `CurvedAnimation::new` and `ReverseAnimation::new`.

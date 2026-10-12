@@ -155,7 +155,7 @@ fn a_verdict_callback_can_drop_a_later_notification_owner() {
             // caller owner keeps the later recipient alive across delivery.
             later_entry.resolve(flui_interaction::GestureDisposition::Accepted);
         } else {
-            let winner: Rc<dyn GestureArenaMember> = survivor.clone();
+            let winner: Rc<dyn GestureArenaMember> = survivor;
             arena.resolve(pointer, Some(&winner));
         }
         assert!(

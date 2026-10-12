@@ -234,7 +234,7 @@ const PANEL_ROWS: usize = 30;
 /// element and does not repaint the panel — only the layer moves.
 #[test]
 fn perf_a_slide_transition_tick_moves_a_layer_without_rebuilding() {
-    use flui_animation::ext::AnimatableExt;
+    use flui_animation::Animatable;
     use flui_animation::{Animation, AnimationController, Tween};
     use flui_objects::TranslationFraction;
     use flui_widgets::{Align, RepaintBoundary, SlideTransition};

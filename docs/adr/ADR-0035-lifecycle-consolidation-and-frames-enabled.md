@@ -36,18 +36,23 @@ enabled → disabled edge schedule nothing. FLUI keeps no retained scene to re-p
 so the re-enable edge also re-dirties the presentation's root; the first frame after a long hide
 paints fresh content instead of running idle.
 
-### 3. Frames disabled still pump async work
+### 3. Frames disabled still run background work
 
 **Superseded-by:** [ADR-0136 §2](ADR-0136-owner-local-ui-surfaces.md) for the async pump
 API; the ordering and lifecycle decision remain unchanged.
 
-The per-wake gate is `wake_action(frames_enabled, dirty, frame_scheduled) -> Render | PumpAsync
-| Skip`. `PumpAsync` (frames disabled) clears the frame-scheduled latch with
+The per-wake gate is `wake_action(frames_enabled, dirty, frame_scheduled) -> Render | PumpBackground
+| Skip`. `PumpBackground` (frames disabled) clears the frame-scheduled latch with
 `UpdateScheduler::finish_async_pump()` and then runs `OwnerFrame::poll_ready()` — no begin/draw frame, no
 tickers, no pipeline, no present. The clear comes **first**, mirroring `handle_begin_frame`:
 without it a later independent `Waker::wake()` finds the latch already set and never wakes the
 loop; clearing *after* instead would erase a task's synchronous self-wake during the pump. How
 the backgrounded pump is paced is ADR-0058's decision.
+
+[ADR-0199](ADR-0199-presentation-sampling-recovery.md) adds due input-deadline
+service after the admitted background transaction. It preserves this demand
+consumption order and does not enable animation, build, layout, paint or present.
+The private action name describes that complete background owner operation.
 
 ### 4. Lifecycle facts are per presentation; the UI runtime aggregates
 
@@ -97,7 +102,7 @@ subscriptions rather than Flutter's `AppLifecycleListener.dispose`.
 ## Flutter divergences
 
 - **Async work is polled by the frame loop**, not by an always-running event loop; the
-  `PumpAsync` arm is what keeps futures advancing while frames are off.
+  `PumpBackground` arm is what keeps futures advancing while frames are off.
 - **No retained scene**: resume re-dirties the root instead of re-presenting the last frame.
 - **Lifecycle is per presentation with a UI runtime aggregate**, not one process-wide stream;
   scheduler listeners see the aggregate.

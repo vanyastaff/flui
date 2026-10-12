@@ -22,23 +22,12 @@ pub type StatusObserver = Rc<dyn Fn(AnimationStatus, &mut RecoveryScope<'_>)>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
-pub enum AnimationDirection {
+pub(crate) enum AnimationDirection {
     /// Animation is running forward (from begin to end).
     #[default]
     Forward,
     /// Animation is running in reverse (from end to begin).
     Reverse,
-}
-
-impl AnimationDirection {
-    /// Returns the opposite direction.
-    #[must_use]
-    pub const fn flip(self) -> Self {
-        match self {
-            AnimationDirection::Forward => AnimationDirection::Reverse,
-            AnimationDirection::Reverse => AnimationDirection::Forward,
-        }
-    }
 }
 
 /// An observable value with a directional phase and explicit run activity.

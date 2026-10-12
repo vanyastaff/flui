@@ -6,6 +6,11 @@ use crate::curves;
 use std::fmt;
 use std::sync::Arc;
 
+mod piecewise;
+mod spring;
+pub use piecewise::{LinearEasingError, LinearStop, PiecewiseLinear};
+pub use spring::SpringCurve;
+
 /// An easing function: maps animation progress `t` to eased progress.
 ///
 /// # Contract
@@ -179,6 +184,8 @@ mod builtin {
                 Builtin::ElasticOut(curve) => curve.transform(t),
                 Builtin::ElasticInOut(curve) => curve.transform(t),
                 Builtin::Steps(curve) => curve.transform(t),
+                Builtin::PiecewiseLinear(curve) => curve.transform(t),
+                Builtin::Spring(curve) => curve.transform(t),
                 Builtin::Interval { begin, end, curve } => {
                     interval_transform(*begin, *end, t, |local| curve.transform(local))
                 }
@@ -199,6 +206,8 @@ mod builtin {
                 Builtin::ElasticOut(curve) => curve.slope(t),
                 Builtin::ElasticInOut(curve) => curve.slope(t),
                 Builtin::Steps(curve) => curve.slope(t),
+                Builtin::PiecewiseLinear(curve) => curve.slope(t),
+                Builtin::Spring(curve) => curve.slope(t),
                 Builtin::Interval { begin, end, curve } => interval_slope(
                     *begin,
                     *end,
@@ -230,6 +239,8 @@ mod builtin {
         ElasticOut(ElasticOutCurve),
         ElasticInOut(ElasticInOutCurve),
         Steps(Steps),
+        PiecewiseLinear(super::PiecewiseLinear),
+        Spring(super::SpringCurve),
         Interval {
             begin: f64,
             end: f64,
@@ -256,6 +267,90 @@ macro_rules! builtin_value {
     };
 }
 
+/// A checked curve's constructor argument.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum CurveParameter {
+    /// First cubic control point's input.
+    X1,
+    /// First cubic control point's output.
+    Y1,
+    /// Second cubic control point's input.
+    X2,
+    /// Second cubic control point's output.
+    Y2,
+    /// Three-point curve midpoint's input.
+    MidpointX,
+    /// Three-point curve midpoint's output.
+    MidpointY,
+    /// First segment's first control input.
+    A1X,
+    /// First segment's first control output.
+    A1Y,
+    /// First segment's second control input.
+    B1X,
+    /// First segment's second control output.
+    B1Y,
+    /// Second segment's first control input.
+    A2X,
+    /// Second segment's first control output.
+    A2Y,
+    /// Second segment's second control input.
+    B2X,
+    /// Second segment's second control output.
+    B2Y,
+    /// Interval start.
+    Begin,
+    /// Interval end.
+    End,
+    /// Elastic period.
+    Period,
+    /// Number of step intervals.
+    StepCount,
+    /// Progress separating two curves.
+    Split,
+}
+
+impl CurveParameter {
+    const fn allowed(self) -> &'static str {
+        match self {
+            Self::X1 | Self::X2 | Self::Begin | Self::End | Self::Split => "[0, 1]",
+            Self::MidpointX | Self::MidpointY => "(0, 1)",
+            Self::Y1 | Self::Y2 | Self::A1Y | Self::B1Y | Self::A2Y | Self::B2Y => "[-1e6, 1e6]",
+            Self::A1X | Self::B1X => "[0, midpoint.x]",
+            Self::A2X | Self::B2X => "[midpoint.x, 1]",
+            Self::Period => "[1e-6, 1e6]",
+            Self::StepCount => "[1, 4294967295]",
+        }
+    }
+}
+
+impl fmt::Display for CurveParameter {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::X1 => "x1",
+            Self::Y1 => "y1",
+            Self::X2 => "x2",
+            Self::Y2 => "y2",
+            Self::MidpointX => "midpoint.x",
+            Self::MidpointY => "midpoint.y",
+            Self::A1X => "a1.x",
+            Self::A1Y => "a1.y",
+            Self::B1X => "b1.x",
+            Self::B1Y => "b1.y",
+            Self::A2X => "a2.x",
+            Self::A2Y => "a2.y",
+            Self::B2X => "b2.x",
+            Self::B2Y => "b2.y",
+            Self::Begin => "begin",
+            Self::End => "end",
+            Self::Period => "period",
+            Self::StepCount => "count",
+            Self::Split => "split",
+        })
+    }
+}
+
 /// Why a curve parameter was rejected.
 ///
 /// Returned by the `try_new` constructors and, as the error message, by
@@ -270,17 +365,15 @@ pub enum CurveError {
     #[error("curve parameter `{parameter}` is not finite")]
     NonFinite {
         /// The constructor argument that was rejected.
-        parameter: &'static str,
+        parameter: CurveParameter,
     },
     /// The parameter is finite but outside the range the curve admits.
-    #[error("curve parameter `{parameter}` = {value} is outside {allowed}")]
+    #[error("curve parameter `{parameter}` = {value} is outside {}", parameter.allowed())]
     OutOfRange {
         /// The constructor argument that was rejected.
-        parameter: &'static str,
+        parameter: CurveParameter,
         /// The rejected value.
         value: f64,
-        /// The admitted range, in interval notation.
-        allowed: &'static str,
     },
     /// An [`Interval`] whose `begin` lies after its `end`.
     #[error("interval begin {begin} is after end {end}")]
@@ -294,6 +387,14 @@ pub enum CurveError {
     /// would have no jump between its start and end values.
     #[error("steps with `JumpAt::None` need at least two steps")]
     TooFewSteps,
+    /// Finite controls rescale beyond the segment solver's arithmetic range.
+    #[error(
+        "midpoint.y {midpoint_y} rescales control points beyond the segment solver's finite arithmetic range"
+    )]
+    RescalingOutOfRange {
+        /// The admitted midpoint output whose rescaling exceeds that range.
+        midpoint_y: f64,
+    },
 }
 
 /// Propagates a validation error out of a `const fn` (`?` is not const).
@@ -306,7 +407,7 @@ macro_rules! check {
 }
 
 /// `value` is finite.
-const fn finite(value: f64, parameter: &'static str) -> Result<(), CurveError> {
+const fn finite(value: f64, parameter: CurveParameter) -> Result<(), CurveError> {
     if value.is_finite() {
         Ok(())
     } else {
@@ -319,29 +420,20 @@ const fn within(
     value: f64,
     low: f64,
     high: f64,
-    parameter: &'static str,
-    allowed: &'static str,
+    parameter: CurveParameter,
 ) -> Result<(), CurveError> {
     check!(finite(value, parameter));
     if value < low || value > high {
-        return Err(CurveError::OutOfRange {
-            parameter,
-            value,
-            allowed,
-        });
+        return Err(CurveError::OutOfRange { parameter, value });
     }
     Ok(())
 }
 
 /// `value` is finite and inside the open interval `(0, 1)`.
-const fn strictly_inside_unit(value: f64, parameter: &'static str) -> Result<(), CurveError> {
+const fn strictly_inside_unit(value: f64, parameter: CurveParameter) -> Result<(), CurveError> {
     check!(finite(value, parameter));
     if value <= 0.0 || value >= 1.0 {
-        return Err(CurveError::OutOfRange {
-            parameter,
-            value,
-            allowed: "(0, 1)",
-        });
+        return Err(CurveError::OutOfRange { parameter, value });
     }
     Ok(())
 }
@@ -423,8 +515,8 @@ pub struct Interval<C: Curve + Copy = Linear> {
 impl<C: Curve + Copy> Interval<C> {
     /// Admits `0 <= begin <= end <= 1`, both finite.
     const fn validate(begin: f64, end: f64) -> Result<(), CurveError> {
-        check!(within(begin, 0.0, 1.0, "begin", "[0, 1]"));
-        check!(within(end, 0.0, 1.0, "end", "[0, 1]"));
+        check!(within(begin, 0.0, 1.0, CurveParameter::Begin));
+        check!(within(end, 0.0, 1.0, CurveParameter::End));
         if begin > end {
             return Err(CurveError::IntervalReversed { begin, end });
         }
@@ -703,10 +795,10 @@ impl Cubic {
     /// Admits finite control points with `x1, x2 ∈ [0, 1]` and
     /// `y1, y2 ∈ [-MAX_CUBIC_Y, MAX_CUBIC_Y]`.
     const fn validate(x1: f64, y1: f64, x2: f64, y2: f64) -> Result<Self, CurveError> {
-        check!(within(x1, 0.0, 1.0, "x1", "[0, 1]"));
-        check!(within(y1, -MAX_CUBIC_Y, MAX_CUBIC_Y, "y1", "[-1e6, 1e6]"));
-        check!(within(x2, 0.0, 1.0, "x2", "[0, 1]"));
-        check!(within(y2, -MAX_CUBIC_Y, MAX_CUBIC_Y, "y2", "[-1e6, 1e6]"));
+        check!(within(x1, 0.0, 1.0, CurveParameter::X1));
+        check!(within(y1, -MAX_CUBIC_Y, MAX_CUBIC_Y, CurveParameter::Y1));
+        check!(within(x2, 0.0, 1.0, CurveParameter::X2));
+        check!(within(y2, -MAX_CUBIC_Y, MAX_CUBIC_Y, CurveParameter::Y2));
         Ok(Self::solved(x1, y1, x2, y2))
     }
 
@@ -764,12 +856,12 @@ impl Cubic {
     /// # Examples
     ///
     /// ```
-    /// use flui_animation::{Cubic, CurveError};
+    /// use flui_animation::{Cubic, CurveError, CurveParameter};
     ///
     /// assert!(Cubic::try_new(0.68, -0.55, 0.265, 1.55).is_ok());
     /// assert!(matches!(
     ///     Cubic::try_new(1.5, 0.0, 0.5, 1.0),
-    ///     Err(CurveError::OutOfRange { parameter: "x1", .. })
+    ///     Err(CurveError::OutOfRange { parameter: CurveParameter::X1, .. })
     /// ));
     /// ```
     pub fn try_new(x1: f64, y1: f64, x2: f64, y2: f64) -> Result<Self, CurveError> {
@@ -1078,40 +1170,16 @@ impl ThreePointCubic {
         b2: (f64, f64),
     ) -> Result<Self, CurveError> {
         let (mx, my) = midpoint;
-        check!(strictly_inside_unit(mx, "midpoint.x"));
-        check!(strictly_inside_unit(my, "midpoint.y"));
-        check!(within(a1.0, 0.0, mx, "a1.x", "[0, midpoint.x]"));
-        check!(within(
-            a1.1,
-            -MAX_CUBIC_Y,
-            MAX_CUBIC_Y,
-            "a1.y",
-            "[-1e6, 1e6]"
-        ));
-        check!(within(b1.0, 0.0, mx, "b1.x", "[0, midpoint.x]"));
-        check!(within(
-            b1.1,
-            -MAX_CUBIC_Y,
-            MAX_CUBIC_Y,
-            "b1.y",
-            "[-1e6, 1e6]"
-        ));
-        check!(within(a2.0, mx, 1.0, "a2.x", "[midpoint.x, 1]"));
-        check!(within(
-            a2.1,
-            -MAX_CUBIC_Y,
-            MAX_CUBIC_Y,
-            "a2.y",
-            "[-1e6, 1e6]"
-        ));
-        check!(within(b2.0, mx, 1.0, "b2.x", "[midpoint.x, 1]"));
-        check!(within(
-            b2.1,
-            -MAX_CUBIC_Y,
-            MAX_CUBIC_Y,
-            "b2.y",
-            "[-1e6, 1e6]"
-        ));
+        check!(strictly_inside_unit(mx, CurveParameter::MidpointX));
+        check!(strictly_inside_unit(my, CurveParameter::MidpointY));
+        check!(within(a1.0, 0.0, mx, CurveParameter::A1X));
+        check!(within(a1.1, -MAX_CUBIC_Y, MAX_CUBIC_Y, CurveParameter::A1Y));
+        check!(within(b1.0, 0.0, mx, CurveParameter::B1X));
+        check!(within(b1.1, -MAX_CUBIC_Y, MAX_CUBIC_Y, CurveParameter::B1Y));
+        check!(within(a2.0, mx, 1.0, CurveParameter::A2X));
+        check!(within(a2.1, -MAX_CUBIC_Y, MAX_CUBIC_Y, CurveParameter::A2Y));
+        check!(within(b2.0, mx, 1.0, CurveParameter::B2X));
+        check!(within(b2.1, -MAX_CUBIC_Y, MAX_CUBIC_Y, CurveParameter::B2Y));
         // Rescaling keeps x inside [0, 1] (IEEE division and subtraction are
         // monotone). With every y within MAX_CUBIC_Y, a rescaled y reaches
         // MAX_SEGMENT_Y only for a midpoint.y within about 1e-294 of 0 or 1.
@@ -1120,11 +1188,7 @@ impl ThreePointCubic {
         let second = ((a2.1 - my) / high, (b2.1 - my) / high);
         if !(segment_y(first.0) && segment_y(first.1) && segment_y(second.0) && segment_y(second.1))
         {
-            return Err(CurveError::OutOfRange {
-                parameter: "midpoint.y",
-                value: my,
-                allowed: "(0, 1), far enough from both to rescale the control points",
-            });
+            return Err(CurveError::RescalingOutOfRange { midpoint_y: my });
         }
         let first = Cubic::solved(a1.0 / mx, first.0, b1.0 / mx, first.1);
         let second = Cubic::solved((a2.0 - mx) / wide, second.0, (b2.0 - mx) / wide, second.1);
@@ -1174,20 +1238,22 @@ impl ThreePointCubic {
     /// - [`CurveError::OutOfRange`] when `midpoint` is not strictly inside
     ///   the unit square, when a first-segment control point's x lies outside
     ///   `[0, midpoint.x]` or a second-segment one's outside
-    ///   `[midpoint.x, 1]`, when a control y lies outside `[-1e6, 1e6]`, or
-    ///   when `midpoint.y` is within about `1e-294` of 0 or 1, so that a
-    ///   rescaled control point overflows.
+    ///   `[midpoint.x, 1]`, or when a control y lies outside `[-1e6, 1e6]`;
+    /// - [`CurveError::RescalingOutOfRange`] when admitted finite controls cannot
+    ///   be normalized inside the segment solver's finite arithmetic range, with
+    ///   normalized control outputs larger than `1e300`, for example with a
+    ///   subnormal `midpoint.y` and a nonzero first-segment control output.
     ///
     /// # Examples
     ///
     /// ```
-    /// use flui_animation::{CurveError, ThreePointCubic};
+    /// use flui_animation::{CurveError, CurveParameter, ThreePointCubic};
     ///
     /// let on_edge =
     ///     ThreePointCubic::try_new((0.0, 0.0), (0.0, 0.0), (1.0, 0.5), (1.0, 1.0), (1.0, 1.0));
     /// assert!(matches!(
     ///     on_edge,
-    ///     Err(CurveError::OutOfRange { parameter: "midpoint.x", .. })
+    ///     Err(CurveError::OutOfRange { parameter: CurveParameter::MidpointX, .. })
     /// ));
     /// ```
     pub fn try_new(
@@ -1346,7 +1412,7 @@ where
 
 /// Admits a finite split point in `[0, 1]`.
 const fn validate_split(split: f64) -> Result<(), CurveError> {
-    within(split, 0.0, 1.0, "split", "[0, 1]")
+    within(split, 0.0, 1.0, CurveParameter::Split)
 }
 
 impl<B: Curve, E: Curve> Drop for Split<B, E> {
@@ -1462,7 +1528,7 @@ fn elastic_wave(u: f64, period: f64) -> f64 {
 /// stays finite (an unbounded period overflows the product, a subnormal one
 /// the quotient).
 const fn validate_period(period: f64) -> Result<(), CurveError> {
-    within(period, 1e-6, 1e6, "period", "[1e-6, 1e6]")
+    within(period, 1e-6, 1e6, CurveParameter::Period)
 }
 
 /// Declares an elastic curve type: the period field, its validated
@@ -1769,9 +1835,8 @@ impl Steps {
     const fn validate(count: u32, jump: JumpAt) -> Result<Self, CurveError> {
         if count == 0 {
             return Err(CurveError::OutOfRange {
-                parameter: "count",
+                parameter: CurveParameter::StepCount,
                 value: 0.0,
-                allowed: "[1, 4294967295]",
             });
         }
         if count < 2 && matches!(jump, JumpAt::None) {
@@ -1924,8 +1989,8 @@ impl<C: Curve> Curve for FlippedCurve<C> {
 /// concrete type can be stored in widgets and animation controllers,
 /// regardless of which specific curve is used.
 ///
-/// `ArcCurve` implements `Curve + Clone + Send + Sync + Debug`, which satisfies
-/// the full bound that [`CurvedAnimation`] places on its `C` type parameter.
+/// `ArcCurve` implements `Curve + Clone + Send + Sync + Debug`, with value
+/// comparison for built-ins and identity comparison for custom curves.
 ///
 /// # Equality
 ///
@@ -2028,11 +2093,8 @@ impl fmt::Debug for ArcCurve {
 }
 
 /// Blanket impl so `Arc<dyn Curve + Send + Sync>` can itself be used as a
-/// `Curve` where object-safety is all that matters.  Note that this type alone
-/// does not satisfy [`CurvedAnimation`]'s `C: Debug` bound; prefer [`ArcCurve`]
-/// for that use-case.
-///
-/// [`CurvedAnimation`]: crate::CurvedAnimation
+/// `Curve` where object-safety is all that matters. Use [`ArcCurve`] when a
+/// stable concrete handle with configuration equality is needed.
 impl<C: Curve + ?Sized> Curve for Arc<C> {
     fn transform(&self, t: f64) -> f64 {
         (**self).transform(t)
