@@ -11,7 +11,7 @@ use flui_platform_api::PlatformWindow;
 use smallvec::SmallVec;
 use web_time::{Duration, Instant};
 
-use super::{ArenaGeneration, GestureArenaMember};
+use super::{ArenaGeneration, GestureArenaMember, recovery::ArenaRecovery};
 use crate::{PointerId, retain::Retain};
 
 /// An explicit deadline authority could not be admitted or updated.
@@ -197,15 +197,17 @@ pub(super) struct DeadlineRegistry {
     closed: Cell<bool>,
     sources: RefCell<Vec<Rc<DeadlineSource>>>,
     wake: RefCell<Option<SyncWeak<dyn PlatformWindow>>>,
+    recovery: Rc<ArenaRecovery>,
 }
 
 impl DeadlineRegistry {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(recovery: Rc<ArenaRecovery>) -> Self {
         Self {
             next_id: Cell::new(1),
             closed: Cell::new(false),
             sources: RefCell::new(Vec::new()),
             wake: RefCell::new(None),
+            recovery,
         }
     }
 
@@ -327,14 +329,17 @@ impl DeadlineRegistry {
             .clone()
             .and_then(|window| window.upgrade());
         if let Some(window) = window {
-            let mut recovery = PanicRecovery::new();
-            recovery.run(|| window.request_redraw());
-            if recovery.has_failure() {
-                std::mem::forget(window);
-            } else {
-                recovery.run(|| drop(window));
-            }
-            recovery.finish();
+            self.recovery.standalone(|scope| {
+                self.recovery.invoke(FailureClass::Delivery, scope, |_| {
+                    window.request_redraw();
+                });
+                if scope.has_failure() || self.recovery.preserving() {
+                    std::mem::forget(window);
+                } else {
+                    self.recovery
+                        .invoke(FailureClass::Unknown, scope, |_| drop(window));
+                }
+            });
         }
     }
 
@@ -464,11 +469,15 @@ impl DeadlineRegistry {
                     // This existing obligation already reported its first fault.
                     // A failed re-probe retains its payload without repeating it.
                     let mut probe = PanicRecovery::new();
-                    probe.scope().run_classified(FailureClass::Unknown, |_| {
-                        result = Some(member.deadline());
-                    })
+                    if self.recovery.preserving() {
+                        probe.inherit_failure();
+                    }
+                    self.recovery
+                        .invoke(FailureClass::Unknown, &mut probe.scope(), |_| {
+                            result = Some(member.deadline());
+                        })
                 } else {
-                    recovery.run_classified(FailureClass::Unknown, |_| {
+                    self.recovery.invoke(FailureClass::Unknown, recovery, |_| {
                         result = Some(member.deadline());
                     })
                 };
@@ -490,16 +499,18 @@ impl DeadlineRegistry {
                 && matches!(source.observation.get(), Observation::Observed(Some(due)) if due <= now)
             {
                 let mut committed = false;
-                let returned = recovery.run_classified(FailureClass::Unknown, |scope| {
-                    committed = member.poll_deadline_with_recovery(now, scope);
-                });
+                let returned = self
+                    .recovery
+                    .invoke(FailureClass::Unknown, recovery, |scope| {
+                        committed = member.poll_deadline_with_recovery(now, scope);
+                    });
                 let completed = returned && committed;
                 if source.is_current(revision) {
                     if !completed {
                         source.observation.set(Observation::Parked);
                     } else if !source.published.get() {
                         let mut result = None;
-                        let success = recovery.run_classified(FailureClass::Unknown, |_| {
+                        let success = self.recovery.invoke(FailureClass::Unknown, recovery, |_| {
                             result = Some(member.deadline());
                         });
                         if source.is_current(revision) {
@@ -515,6 +526,7 @@ impl DeadlineRegistry {
                 }
             }
             if recovery.has_failure()
+                || self.recovery.preserving()
                 || preserving
                 || matches!(source.observation.get(), Observation::Parked)
             {
@@ -525,7 +537,8 @@ impl DeadlineRegistry {
                 }
                 member.retain();
             } else {
-                recovery.run_classified(FailureClass::Unknown, |_| drop(member));
+                self.recovery
+                    .invoke(FailureClass::Unknown, recovery, |_| drop(member));
             }
         }
     }
@@ -569,7 +582,7 @@ mod identity_exhaustion {
     // Public calls cannot reach billions of registrations/revisions in a test.
     #[test]
     fn deadline_identity_exhaustion_refuses_permanently() {
-        let registry = Rc::new(DeadlineRegistry::new());
+        let registry = Rc::new(DeadlineRegistry::new(Rc::new(ArenaRecovery::default())));
         registry.next_id.set(u64::MAX);
         let pointer = PointerId::try_from(1_u64).expect("nonzero fixture pointer");
         let member: Rc<dyn GestureArenaMember> = Rc::new(Member);

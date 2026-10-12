@@ -606,14 +606,18 @@ impl GestureBinding {
         poll_due: bool,
         recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
     ) {
-        if poll_due {
-            recovery.run_classified(flui_foundation::panic::FailureClass::Delivery, |_| {
-                if let Some(failure) = self.drain_capture_losses(None) {
-                    failure.resume();
-                }
-            });
-        }
-        recovery.run_classified(flui_foundation::panic::FailureClass::Unknown, |scope| {
+        self.arena.with_recovery_context(recovery, |scope| {
+            if poll_due {
+                self.arena.invoke_with_recovery(
+                    flui_foundation::panic::FailureClass::Delivery,
+                    scope,
+                    |_| {
+                        if let Some(failure) = self.drain_capture_losses(None) {
+                            failure.resume();
+                        }
+                    },
+                );
+            }
             self.arena.deadlines_with_recovery(now, poll_due, scope);
         });
     }
