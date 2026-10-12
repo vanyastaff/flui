@@ -218,6 +218,10 @@ fn text_input_contracts() {
             input_decorator::error_replaces_helper_at_the_mounted_level,
         ),
         (
+            "input_decorator::a standalone decorator keeps its label and hint readable",
+            input_decorator::a_standalone_decorator_keeps_its_label_and_hint_readable,
+        ),
+        (
             "text_field::tapping the decorated area focuses the field and reaches the decorator",
             text_field::tapping_the_decorated_area_focuses_the_field_and_reaches_the_decorator,
         ),
