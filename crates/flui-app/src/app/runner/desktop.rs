@@ -579,14 +579,11 @@ impl DesktopFrameDriver {
 
         match action {
             WakeAction::Skip => return,
-            WakeAction::PumpAsync => {
-                // Frames disabled (Hidden/Paused/Detached): no frame
-                // runs, so the mid-frame async poll never does either
-                // — this background pump is the ONLY thing keeping a
-                // spawned future progressing while backgrounded. It
-                // clears the frame latch before polling; see
-                // `UiRuntime::pump_background` for why that order is
-                // load-bearing.
+            WakeAction::PumpBackground => {
+                // Frames disabled (Hidden/Paused/Detached): service owner
+                // commands, async tasks, and input deadlines without a visual
+                // frame. `pump_background` clears the frame latch before
+                // polling so accepted work can request another owner wake.
                 ui_runtime.pump_background();
                 // A backgrounded wake with dirty/pending work
                 // re-requesting another wake every loop tick has the

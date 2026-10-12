@@ -1333,8 +1333,11 @@ impl PresentationState {
                 .unwrap_or(true)
     }
 
+    /// Apply queued render invalidations before deciding whether to prepare a
+    /// frame. This may mutate render state and invoke invalidation observers or
+    /// wake callbacks; host scheduling reads use `has_pending_work_snapshot`.
     #[must_use]
-    pub(crate) fn has_pending_work(&self) -> bool {
+    pub(crate) fn prepare_pending_work(&self) -> bool {
         self.widgets.has_pending_builds()
             || self.has_pending_layout_builder_work()
             || self.renderer.root_pipeline_owner().with_mut(|owner| {
@@ -1346,9 +1349,9 @@ impl PresentationState {
                 // it must drain first or it would read a stale
                 // `has_dirty_nodes() == false` for a request that already
                 // landed in the channel and is sitting there un-applied.
-                // Non-blocking, idempotent (`try_recv`-based) — safe to call
-                // here even though `run_frame`'s own segment drains again
-                // immediately after.
+                // `try_recv` does not block, but applying a request can call
+                // user code. The caller supplies the preparation recovery
+                // scope; `run_frame` drains again before its first phase.
                 owner.drain_pending_dirty();
                 owner.has_dirty_nodes() && !owner.layout_waits_for_input()
             })
