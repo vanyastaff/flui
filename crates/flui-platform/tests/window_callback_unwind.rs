@@ -77,17 +77,27 @@ fn terminal_retirement_survives_an_admitted_callback_failure() {
             assert!(!self.panics, "capture retirement failure");
         }
     }
-    for (callback_panics, capture_panics, retirement_panics, reenter) in [
-        (true, false, false, false),
-        (false, true, false, false),
-        (false, false, true, false),
-        (true, true, false, false),
-        (true, false, true, false),
-        (false, true, true, true),
-        (true, true, true, true),
+    for (callback_panics, close_panics, capture_panics, retirement_panics, reenter) in [
+        (true, false, false, false, false),
+        (false, true, false, false, false),
+        (false, false, true, false, false),
+        (false, false, false, true, false),
+        (true, true, false, false, false),
+        (true, false, true, false, false),
+        (true, false, false, true, false),
+        (false, true, true, true, true),
+        (true, true, true, true, true),
     ] {
         let callbacks = Arc::new(WindowCallbacks::new());
         let retired = Arc::new(AtomicBool::new(false));
+        let closed = Arc::new(AtomicBool::new(false));
+        let close_observation = Arc::clone(&closed);
+        *callbacks.on_close.lock() = Some(Box::new(move || {
+            close_observation.store(true, Ordering::SeqCst);
+            assert!(!close_panics, "terminal close failure");
+        }));
+        let moves = Arc::new(AtomicUsize::new(0));
+        let move_observation = Arc::clone(&moves);
         let capture = Arc::new(());
         let witness = Arc::downgrade(&capture);
         let hostile = Capture {
@@ -97,11 +107,13 @@ fn terminal_retirement_survives_an_admitted_callback_failure() {
         };
         *callbacks.on_moved.lock() = Some(Box::new(move || {
             let _ = (&capture, &hostile);
+            move_observation.fetch_add(1, Ordering::SeqCst);
         }));
         let nested = Arc::downgrade(&callbacks);
         let notice = Arc::clone(&retired);
         *callbacks.on_request_frame.lock() = Some(Box::new(move || {
             let callbacks = nested.upgrade().expect("owner");
+            callbacks.dispatch_moved();
             callbacks.dispatch_close();
             let notice = Arc::clone(&notice);
             callbacks.clear_then(move || {
@@ -113,11 +125,15 @@ fn terminal_retirement_survives_an_admitted_callback_failure() {
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             callbacks.dispatch_request_frame();
         }));
-        if callback_panics {
+        if callback_panics || close_panics {
             let failure = failure.expect_err("admitted callback failed");
             assert_eq!(
                 flui_foundation::panic::payload_text(failure.as_ref()),
-                Some("admitted callback failure")
+                Some(if callback_panics {
+                    "admitted callback failure"
+                } else {
+                    "terminal close failure"
+                })
             );
         } else {
             assert!(
@@ -132,6 +148,15 @@ fn terminal_retirement_survives_an_admitted_callback_failure() {
         assert!(
             retired.load(Ordering::SeqCst),
             "retirement notice must complete despite the aborted prefix"
+        );
+        assert!(
+            closed.load(Ordering::SeqCst),
+            "terminal close must reach the application's cancellation hook even when its causal callback aborts"
+        );
+        assert_eq!(
+            moves.load(Ordering::SeqCst),
+            usize::from(!callback_panics),
+            "ordinary queued events from an aborted transaction remain discarded"
         );
         callbacks.dispatch_request_frame();
         callbacks.clear();

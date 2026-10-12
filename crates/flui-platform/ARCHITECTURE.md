@@ -76,11 +76,15 @@ owners cannot erase replacements or publish redraws.
 Native focus observations carry their cache commit in the existing FIFO. A
 queued callback therefore observes its own delivered value through getters,
 even when input or focus callbacks synchronously trigger opposing transitions.
-Terminal clear and retirement notices finish after an admitted callback unwinds;
+Terminal close, clear and retirement notices finish after an admitted callback unwinds;
 ordinary nested events from the aborted transaction remain discarded. The
 portable `panics_in_callbacks_and_tasks_leave_the_dispatcher_usable` family
 pins capture release, the original failure, a competing retirement failure and
-a subsequent healthy owner. It does not establish wasm panic-abort recovery.
+a subsequent healthy owner. Terminal close preserves the application's actual
+cancellation hook before clearing captures; ordinary aborted events are not
+replayed. An opaque FnOnce environment that double-panics during invocation
+before reaching the containment boundary cannot be rescued. These checks do
+not establish wasm panic-abort recovery.
 
 The `browser_input_probe` canvas-ownership control and existing vocabulary,
 pointer/wheel and getter-reentry controls exercise real registered DOM delivery

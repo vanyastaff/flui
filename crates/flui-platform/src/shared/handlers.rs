@@ -680,15 +680,29 @@ impl WindowCallbacks {
             Ok(result) => result,
             Err(failure) => {
                 let pending = drain.abort();
-                if self.lifecycle_closed.load(Ordering::SeqCst) {
-                    self.clear_now();
-                }
+                let terminal = self.lifecycle_closed.load(Ordering::SeqCst);
                 for event in pending {
-                    if let WindowCallbackEvent::Clear(Some(retired)) = event {
-                        super::panic_boundary::contain_owner_callback(retired);
-                    } else {
-                        super::panic_boundary::contain_owner_callback(|| drop(event));
+                    match event {
+                        WindowCallbackEvent::Close if terminal => {
+                            // Closing the native registration is irreversible.
+                            // Its application cancellation hook survives an
+                            // aborted causal callback, before capture retirement.
+                            let callback = self.on_close.lock().take();
+                            if let Some(callback) = callback {
+                                super::panic_boundary::contain_owner_callback(callback);
+                            }
+                        }
+                        WindowCallbackEvent::Clear(retired) => {
+                            self.clear_now();
+                            if let Some(retired) = retired {
+                                super::panic_boundary::contain_owner_callback(retired);
+                            }
+                        }
+                        event => super::panic_boundary::contain_owner_callback(|| drop(event)),
                     }
+                }
+                if terminal {
+                    self.clear_now();
                 }
                 std::panic::resume_unwind(failure);
             }
