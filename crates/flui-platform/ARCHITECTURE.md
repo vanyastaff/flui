@@ -76,6 +76,17 @@ owners cannot erase replacements or publish redraws.
 Native focus observations carry their cache commit in the existing FIFO. A
 queued callback therefore observes its own delivered value through getters,
 even when input or focus callbacks synchronously trigger opposing transitions.
+Successful listener installation reconciles the same focus authority once
+before Created, since a host registration call can focus the canvas before
+the focus listeners exist.
+
+Native pointer capture custody is published on the exact canvas claim, apart
+from its Rust buttons cache. A live body rechecks its admission after DOM
+getters, translation and native capture calls. A host call that closes before
+actually capturing cannot leave an outgoing capture behind. Outgoing release
+checks whether a different current claim admitted that same pointer and does
+not release the newer owner's capture. Retirement removes all of its native
+admissions before the first release, which itself may reenter the host.
 Terminal close, clear and retirement notices finish after an admitted callback unwinds;
 ordinary nested events from the aborted transaction remain discarded. The
 portable `panics_in_callbacks_and_tasks_leave_the_dispatcher_usable` family

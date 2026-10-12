@@ -14,7 +14,7 @@ use crate::traits::OpenWindowError;
 const ownerKey = Symbol.for('flui.canvas.input-owner');
 export function claimCanvas(canvas) {
     if (canvas[ownerKey]) throw new Error('canvas already has a live FLUI input owner');
-    const token = {};
+    const token = { pointerAdmissions: new Set() };
     Object.defineProperty(canvas, ownerKey, { value: token, configurable: true });
     return token;
 }
@@ -26,8 +26,21 @@ export function effectiveCanvasFocus(canvas) {
 }
 export function observeCanvas(observer, canvas) { observer.observe(canvas); }
 export function disconnectObserver(observer) { observer.disconnect(); }
-export function releasePointerCapture(canvas, id) {
-    if (canvas.hasPointerCapture(id)) canvas.releasePointerCapture(id);
+export function admitPointerCapture(canvas, token, id) {
+    if (canvas[ownerKey] !== token) return false;
+    token.pointerAdmissions.add(id);
+    return true;
+}
+export function retirePointerCapture(token, id) { token.pointerAdmissions.delete(id); }
+export function releasePointerCapture(canvas, token, id) {
+    const belongsToNewOwner = () => {
+        const current = canvas[ownerKey];
+        return current && current !== token && current.pointerAdmissions.has(id);
+    };
+    if (belongsToNewOwner()) return;
+    const captured = canvas.hasPointerCapture(id);
+    // The host query itself can synchronously close/reopen the registration.
+    if (captured && !belongsToNewOwner()) canvas.releasePointerCapture(id);
 }
 ")]
 extern "C" {
@@ -45,10 +58,15 @@ extern "C" {
     #[wasm_bindgen(catch, js_name = disconnectObserver)]
     fn disconnect_observer(observer: &web_sys::ResizeObserver) -> Result<(), JsValue>;
     #[wasm_bindgen(catch, js_name = releasePointerCapture)]
-    pub(super) fn release_capture(
+    fn release_capture(
         canvas: &web_sys::HtmlCanvasElement,
+        token: &JsValue,
         id: i32,
     ) -> Result<(), JsValue>;
+    #[wasm_bindgen(js_name = admitPointerCapture)]
+    fn admit_capture(canvas: &web_sys::HtmlCanvasElement, token: &JsValue, id: i32) -> bool;
+    #[wasm_bindgen(js_name = retirePointerCapture)]
+    fn retire_capture(token: &JsValue, id: i32);
 }
 
 fn backend(error: JsValue) -> OpenWindowError {
@@ -77,6 +95,37 @@ impl CanvasClaim {
             canvas: canvas.clone(),
             token: claim_canvas(canvas).map_err(backend)?,
         })
+    }
+
+    fn capture_owner(&self) -> PointerCaptureOwner {
+        PointerCaptureOwner {
+            canvas: self.canvas.clone(),
+            token: self.token.clone(),
+        }
+    }
+}
+
+/// Native capture custody belongs to a registration, not its cached buttons.
+/// A retired body may still be returning from a host call after a new owner
+/// has admitted the same pointer on this canvas.
+#[derive(Clone)]
+pub(super) struct PointerCaptureOwner {
+    canvas: web_sys::HtmlCanvasElement,
+    token: JsValue,
+}
+
+impl PointerCaptureOwner {
+    pub(super) fn admit(&self, id: i32) -> bool {
+        admit_capture(&self.canvas, &self.token, id)
+    }
+    pub(super) fn forget(&self, id: i32) {
+        retire_capture(&self.token, id);
+    }
+    pub(super) fn release(&self, id: i32) {
+        self.forget(id);
+        if let Err(error) = release_capture(&self.canvas, &self.token, id) {
+            report(error);
+        }
     }
 }
 
@@ -138,7 +187,7 @@ pub(super) struct Registration {
     canvas: web_sys::HtmlCanvasElement,
     listeners: Vec<Listener>,
     observer: Option<Observer>,
-    _claim: CanvasClaim,
+    claim: CanvasClaim,
 }
 
 impl Registration {
@@ -149,7 +198,7 @@ impl Registration {
             canvas: canvas.clone(),
             listeners: Vec::new(),
             observer: None,
-            _claim: claim,
+            claim,
         }
     }
 
@@ -231,17 +280,23 @@ impl Registration {
     pub(super) fn fence(&self) {
         self.accepting.set(false);
     }
+
+    pub(super) fn capture_owner(&self) -> PointerCaptureOwner {
+        self.claim.capture_owner()
+    }
 }
 
 impl Drop for Registration {
     fn drop(&mut self) {
         self.fence();
         let pointers = std::mem::take(&mut *self.pointers.borrow_mut());
+        let owner = self.capture_owner();
+        for &id in pointers.keys() {
+            owner.forget(id);
+        }
         // Admission ends before release, which can synchronously dispatch loss.
         for id in pointers.into_keys() {
-            crate::shared::panic_boundary::contain_owner_callback(|| {
-                super::events::release_pointer_capture(&self.canvas, id)
-            });
+            crate::shared::panic_boundary::contain_owner_callback(|| owner.release(id));
         }
         let observer = self.observer.take();
         let listeners = std::mem::take(&mut self.listeners);

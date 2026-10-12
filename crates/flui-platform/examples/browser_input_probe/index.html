@@ -17,6 +17,8 @@ pre { position: relative; z-index: 9999; background: white; width: max-content; 
   <button id="canvas-ownership">Check canvas ownership and recovery (fresh page)</button>
   <button id="keyboard-dispatch">Check independent keyboard dispatch bits (fresh page)</button>
   <button id="registration-rollback">Check registration rollback (fresh page)</button>
+  <button id="registration-focus">Check focus during registration (fresh page)</button>
+  <button id="pointer-retirement">Arm trusted pointer retirement matrix (fresh page)</button>
   <button id="frame-retirement">Check frame retirement and replacement (fresh page)</button>
   <button id="keyboard-getter-reentry">Check keyboard getter reentry (fresh page)</button>
   <button id="wheel-getter-reentry">Check wheel getter reentry (fresh page)</button>
@@ -178,6 +180,95 @@ document.getElementById('registration-rollback').onclick = () => check('registra
     canvas.dispatchEvent(new KeyboardEvent('keydown', { key: 'r' }));
     equal({ keys: document.getElementById('focus-keys-retry')?.textContent }, { keys: 'r,' });
   } finally { next.close(); next.free(); }
+});
+document.getElementById('registration-focus').onclick = () => check('registration-focus-check', () => {
+  if (inputOwner) throw new Error('Run on a fresh page');
+  const host = document.createElement('input');
+  const canvas = document.createElement('canvas');
+  canvas.id = 'flui-canvas';
+  document.body.append(host, canvas);
+  host.focus();
+  const original = canvas.addEventListener;
+  let changed = false;
+  canvas.addEventListener = function(type, listener, options) {
+    original.call(this, type, listener, options);
+    if (!changed) { changed = true; canvas.focus(); }
+  };
+  let owner;
+  try {
+    owner = keyboard_window_probe('installation-focus', true, false);
+    equal({ actual: document.activeElement === canvas, ...JSON.parse(owner.snapshot()) }, { actual: true, focused: true, active: true });
+    host.focus();
+    equal(JSON.parse(owner.snapshot()), { focused: false, active: false });
+    equal({ focus: document.getElementById('focus-state-installation-focus')?.textContent }, { focus: 'false:false:false,' });
+  } finally {
+    canvas.addEventListener = original;
+    owner?.close(); owner?.free(); host.remove();
+  }
+});
+document.getElementById('pointer-retirement').onclick = () => check('pointer-retirement-armed', () => {
+  if (inputOwner) throw new Error('Run on a fresh page');
+  const cases = ['pointerId', 'buttons', 'capture-close', 'getter-reopen', 'capture-reopen-admitted'];
+  let row = 0;
+  const arm = () => {
+    const mode = cases[row];
+    const owner = keyboard_window_probe(`pointer-${mode}`, true, false);
+    const canvas = document.querySelector('canvas');
+    canvas.style.cssText = 'display:block;width:240px;height:140px;background:#ccd';
+    report('pointer-retirement-prompt', `Click the canvas: ${mode} (${row + 1}/${cases.length})`);
+    canvas.addEventListener('pointerdown', event => {
+      if (!event.isTrusted) { owner.close(); owner.free(); throw new Error('Use trusted pointer input'); }
+      const id = event.pointerId;
+      const buttons = event.buttons;
+      const originalCapture = canvas.setPointerCapture;
+      let next;
+      let entered = false;
+      if (mode === 'pointerId' || mode === 'buttons' || mode === 'getter-reopen') {
+        const property = mode === 'buttons' ? 'buttons' : 'pointerId';
+        Object.defineProperty(event, property, { get() {
+          if (!entered) {
+            entered = true;
+            owner.close();
+            if (mode === 'getter-reopen') next = owner.reopen('pointer-new-unadmitted', true, false);
+          }
+          return property === 'buttons' ? buttons : id;
+        } });
+      } else {
+        canvas.setPointerCapture = function(pointer) {
+          if (!entered) {
+            entered = true;
+            owner.close();
+            if (mode === 'capture-reopen-admitted') {
+              next = owner.reopen('pointer-new-admitted', true, false);
+              canvas.dispatchEvent(new PointerEvent('pointerdown', {
+                pointerId: id, pointerType: event.pointerType, button: 0, buttons,
+                clientX: event.clientX, clientY: event.clientY,
+              }));
+            }
+          }
+          originalCapture.call(this, pointer);
+        };
+      }
+      queueMicrotask(() => {
+        try {
+          canvas.setPointerCapture = originalCapture;
+          equal({ entered, captured: canvas.hasPointerCapture(id), ...JSON.parse(owner.snapshot()) }, {
+            entered: true, captured: mode === 'capture-reopen-admitted', capture_alive: false, surface_available: false,
+          });
+          next?.close();
+          equal({ captured: canvas.hasPointerCapture(id) }, { captured: false });
+          report(`pointer-retirement-${mode}`, 'PASS');
+          row += 1;
+          if (row === cases.length) report('pointer-retirement-check', 'PASS');
+          // Arm the next case from a separate button click, after release of
+          // the current physical contact; no synthetic event proves this part.
+          else document.getElementById('pointer-retirement').onclick = () => arm();
+        } catch (error) { report('pointer-retirement-check', `FAIL: ${error}`); }
+        finally { owner.close(); owner.free(); next?.close(); next?.free(); }
+      });
+    }, { once: true, capture: true });
+  };
+  arm();
 });
 document.getElementById('frame-retirement').onclick = async () => {
   let owner;

@@ -43,10 +43,14 @@ pub(super) fn register_event_listeners(
 
     register_pointer_events(canvas, &callbacks, registration)?;
     register_keyboard_events(canvas, &callbacks, registration)?;
-    register_focus_events(window, registration)?;
+    let focus = register_focus_events(window, registration)?;
     register_wheel_events(canvas, &callbacks, registration)?;
     register_context_menu_block(canvas, registration)?;
-    register_layout_events(window, registration)
+    register_layout_events(window, registration)?;
+    // Required host registration calls can change focus before its listeners
+    // exist. Reconcile once after successful installation, before Created.
+    focus.sync();
+    Ok(())
 }
 
 // ==================== Layout (size) ====================
@@ -86,18 +90,39 @@ fn register_pointer_events(
         let callbacks = Arc::clone(callbacks);
         let active = Rc::clone(&active);
         let capture = canvas.clone();
+        let accepting = Rc::clone(&registration.accepting);
+        let custody = registration.capture_owner();
         registration.listen(canvas.as_ref(), "pointerdown", move |e: web_sys::Event| {
             let pe: web_sys::PointerEvent = e.unchecked_into();
             let id = pe.pointer_id();
+            if !accepting.get() {
+                return;
+            }
             let buttons = pe.buttons();
+            if !accepting.get() {
+                return;
+            }
             active.borrow_mut().insert(id, buttons);
+            if !custody.admit(id) {
+                active.borrow_mut().remove(&id);
+                return;
+            }
             // Admission precedes application callbacks, which can remove the
             // canvas or synchronously dispatch another terminal event.
             if let Err(error) = capture.set_pointer_capture(id) {
                 tracing::debug!(?error, "browser pointer capture was not admitted");
             }
+            if !accepting.get() {
+                // The host can close before performing the native operation.
+                // Release that outgoing capture unless a newer owner has
+                // already admitted this pointer on the same actual canvas.
+                custody.release(id);
+                return;
+            }
             let input = convert_pointer_down(&pe);
-            if let Some(input) = input {
+            if accepting.get()
+                && let Some(input) = input
+            {
                 callbacks.dispatch_input(input);
             }
         })?;
@@ -107,16 +132,25 @@ fn register_pointer_events(
     {
         let callbacks = Arc::clone(callbacks);
         let active = Rc::clone(&active);
+        let accepting = Rc::clone(&registration.accepting);
         registration.listen(canvas.as_ref(), "pointermove", move |e: web_sys::Event| {
             let pe: web_sys::PointerEvent = e.unchecked_into();
             let id = pe.pointer_id();
+            if !accepting.get() {
+                return;
+            }
             let buttons = pe.buttons();
+            if !accepting.get() {
+                return;
+            }
             let previous = active
                 .borrow_mut()
                 .get_mut(&id)
                 .map(|held| std::mem::replace(held, buttons));
             let input = convert_pointer_move(&pe, previous);
-            if let Some(input) = input {
+            if accepting.get()
+                && let Some(input) = input
+            {
                 callbacks.dispatch_input(input);
             }
         })?;
@@ -126,17 +160,26 @@ fn register_pointer_events(
     {
         let callbacks = Arc::clone(callbacks);
         let active = Rc::clone(&active);
-        let capture = canvas.clone();
+        let accepting = Rc::clone(&registration.accepting);
+        let custody = registration.capture_owner();
         registration.listen(canvas.as_ref(), "pointerup", move |e: web_sys::Event| {
             let pe: web_sys::PointerEvent = e.unchecked_into();
             let id = pe.pointer_id();
+            if !accepting.get() {
+                return;
+            }
             let was_active = active.borrow_mut().remove(&id).is_some();
             if !was_active {
                 return;
             }
-            release_pointer_capture(&capture, id);
+            custody.release(id);
+            if !accepting.get() {
+                return;
+            }
             let input = convert_pointer_up(&pe);
-            if let Some(input) = input {
+            if accepting.get()
+                && let Some(input) = input
+            {
                 callbacks.dispatch_input(input);
             }
         })?;
@@ -147,19 +190,29 @@ fn register_pointer_events(
     {
         let callbacks = Arc::clone(callbacks);
         let active = Rc::clone(&active);
-        let capture = canvas.clone();
+        let accepting = Rc::clone(&registration.accepting);
+        let custody = registration.capture_owner();
         registration.listen(
             canvas.as_ref(),
             "pointercancel",
             move |e: web_sys::Event| {
                 let pe: web_sys::PointerEvent = e.unchecked_into();
                 let id = pe.pointer_id();
+                if !accepting.get() {
+                    return;
+                }
                 let was_active = active.borrow_mut().remove(&id).is_some();
                 if !was_active {
                     return;
                 }
-                release_pointer_capture(&capture, id);
-                if let Some(input) = convert_pointer_cancel(&pe, CancelReason::Platform) {
+                custody.release(id);
+                if !accepting.get() {
+                    return;
+                }
+                let input = convert_pointer_cancel(&pe, CancelReason::Platform);
+                if accepting.get()
+                    && let Some(input) = input
+                {
                     callbacks.dispatch_input(input);
                 }
             },
@@ -168,17 +221,27 @@ fn register_pointer_events(
 
     {
         let callbacks = Arc::clone(callbacks);
+        let accepting = Rc::clone(&registration.accepting);
+        let custody = registration.capture_owner();
         registration.listen(
             canvas.as_ref(),
             "lostpointercapture",
             move |e: web_sys::Event| {
                 let pe: web_sys::PointerEvent = e.unchecked_into();
                 let id = pe.pointer_id();
+                if !accepting.get() {
+                    return;
+                }
                 // Up/cancel removes admission before releasing capture. The loss
                 // notification following that terminal edge must stay inert.
                 let was_active = active.borrow_mut().remove(&id).is_some();
-                if was_active
-                    && let Some(input) = convert_pointer_cancel(&pe, CancelReason::CaptureLost)
+                if !was_active {
+                    return;
+                }
+                custody.forget(id);
+                let input = convert_pointer_cancel(&pe, CancelReason::CaptureLost);
+                if accepting.get()
+                    && let Some(input) = input
                 {
                     callbacks.dispatch_input(input);
                 }
@@ -186,12 +249,6 @@ fn register_pointer_events(
         )?;
     }
     Ok(())
-}
-
-pub(super) fn release_pointer_capture(canvas: &web_sys::HtmlCanvasElement, pointer: i32) {
-    if let Err(error) = super::registration::release_capture(canvas, pointer) {
-        tracing::debug!(?error, "browser pointer capture release failed");
-    }
 }
 
 // ==================== Keyboard Events ====================
@@ -234,7 +291,7 @@ fn register_keyboard_events(
 fn register_focus_events(
     window: &WebWindow,
     registration: &mut Registration,
-) -> Result<(), crate::OpenWindowError> {
+) -> Result<Rc<super::window::FocusSync>, crate::OpenWindowError> {
     let focus = Rc::new(window.focus_sync());
     let browser = web_sys::window().expect("BUG: construction verified browser");
     for target in [window.canvas().as_ref(), browser.as_ref()] {
@@ -249,7 +306,7 @@ fn register_focus_events(
             callbacks.dispatch_hover_status_change(hovered)
         })?;
     }
-    Ok(())
+    Ok(focus)
 }
 
 // ==================== Wheel Events ====================

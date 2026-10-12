@@ -28,6 +28,16 @@ the same owner, the old receipt cannot publish a redraw for the newer slot,
 and the new frame publishes one healthy redraw before closing. Run each in a
 fresh page. These checks establish DOM/owner behavior, not host idle pacing.
 
+The registration-focus control focuses the canvas during an early mandatory
+listener add, before focus listeners exist, then checks the published snapshot
+and next real focus loss. The trusted pointer-retirement control arms five
+rows. Click the canvas, release, then use the button to arm the next row. DOM
+getters and native capture calls close/reopen the owner during a real active
+pointer. Closed/unadmitted owners must leave no native capture; a newer owner
+admitting the same pointer must keep its capture until it closes. Synthetic
+Down inside that already-active native pointer checks reentrant ownership;
+a synthetic packet alone cannot establish capture admission.
+
 Run each callback check in a fresh page with an external deadline. A backend
 that calls a handler while holding its mutex can block or abort the wasm
 instance before the page can report a result. The fixture exercises reentrant
