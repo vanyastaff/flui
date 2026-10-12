@@ -169,6 +169,10 @@ fn presentation_delivery_failure_keeps_healthy_sampling_build_and_completion() {
                 "late font diagnostic delivery failure",
                 late_font_diagnostic_failure_preserves_fresh_sibling_frame,
             ),
+            (
+                "late report admits new authored input",
+                a_late_report_rebuilds_fresh_text_before_geometry_publication,
+            ),
         ],
     );
 }
@@ -224,6 +228,39 @@ struct LateFontDiagnostic {
     calls: Arc<std::sync::atomic::AtomicUsize>,
 }
 
+#[derive(Clone, StatefulView)]
+struct ChangingProbeText {
+    size: Arc<std::sync::atomic::AtomicU64>,
+    rebuild: Arc<Mutex<Option<flui_view::RebuildHandle>>>,
+}
+
+struct ChangingProbeTextState(Arc<Mutex<Option<flui_view::RebuildHandle>>>);
+
+impl StatefulView for ChangingProbeText {
+    type State = ChangingProbeTextState;
+
+    fn create_state(&self) -> Self::State {
+        ChangingProbeTextState(Arc::clone(&self.rebuild))
+    }
+}
+
+impl ViewState<ChangingProbeText> for ChangingProbeTextState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        *self.0.lock().expect("probe rebuild capability") = Some(ctx.rebuild_handle());
+    }
+
+    fn build(&self, view: &ChangingProbeText, _: &dyn BuildContext) -> impl IntoView {
+        flui_widgets::Text::new("AAAA").style(
+            flui_painting::typography::TextStyle::default()
+                .with_font_family("FLUI Probe Mono")
+                .with_font_weight(flui_painting::typography::FontWeight::W100)
+                .with_font_size(f64::from_bits(
+                    view.size.load(std::sync::atomic::Ordering::SeqCst),
+                )),
+        )
+    }
+}
+
 impl tracing::Subscriber for LateFontDiagnostic {
     fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
         true
@@ -266,8 +303,15 @@ impl tracing::Subscriber for LateFontDiagnostic {
 }
 
 fn late_font_diagnostic_failure_preserves_fresh_sibling_frame() {
-    use flui_painting::typography::{FontWeight, TextStyle};
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    late_font_diagnostic_case(false);
+}
+
+fn a_late_report_rebuilds_fresh_text_before_geometry_publication() {
+    late_font_diagnostic_case(true);
+}
+
+fn late_font_diagnostic_case(change_on_report: bool) {
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
     let mut clock = ManualClock::new();
     let fonts = flui_painting::FontCollection::new();
@@ -301,6 +345,8 @@ fn late_font_diagnostic_failure_preserves_fresh_sibling_frame() {
         .install_presentation(runtime.assemble_presentation(crate::owner_publication::window()));
     let sibling_mounted = Rc::new(RefCell::new(None));
     let sibling_builds = Rc::new(RefCell::new(Vec::new()));
+    let size = Arc::new(AtomicU64::new(20.0_f64.to_bits()));
+    let rebuild = Arc::new(Mutex::new(None));
     runtime
         .attach_root_widget_with_size_to(
             sibling_id,
@@ -311,14 +357,10 @@ fn late_font_diagnostic_failure_preserves_fresh_sibling_frame() {
                 }
                 .boxed(),
                 flui_widgets::Center::new()
-                    .child(
-                        flui_widgets::Text::new("AAAA").style(
-                            TextStyle::default()
-                                .with_font_family("FLUI Probe Mono")
-                                .with_font_weight(FontWeight::W100)
-                                .with_font_size(20.0),
-                        ),
-                    )
+                    .child(ChangingProbeText {
+                        size: Arc::clone(&size),
+                        rebuild: Arc::clone(&rebuild),
+                    })
                     .boxed(),
             ]),
             800.0,
@@ -354,6 +396,13 @@ fn late_font_diagnostic_failure_preserves_fresh_sibling_frame() {
     let reported = Arc::clone(&reports);
     let registered = fonts.clone();
     let register_once = AtomicBool::new(true);
+    let authored_size = Arc::clone(&size);
+    let rebuild = rebuild
+        .lock()
+        .expect("probe rebuild capability")
+        .as_ref()
+        .expect("mounted probe owns rebuild capability")
+        .clone();
     runtime.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
         reported
             .lock()
@@ -368,6 +417,13 @@ fn late_font_diagnostic_failure_preserves_fresh_sibling_frame() {
                     "../../../flui-painting/assets/fonts/probe-mono-100.ttf"
                 ))
                 .expect("actual probe face registration");
+        }
+        if change_on_report
+            && report.address.presentation_id == sibling_id
+            && matches!(report.kind, FrameFailureKind::SamplingPanic { .. })
+        {
+            authored_size.store(22.75_f64.to_bits(), Ordering::SeqCst);
+            rebuild.schedule(flui_foundation::RebuildReason::StateChange);
         }
     })));
     clock.advance(Duration::from_millis(250));
@@ -397,9 +453,10 @@ fn late_font_diagnostic_failure_preserves_fresh_sibling_frame() {
     assert_eq!(primary_builds.borrow().len(), primary_before);
     assert_eq!(primary_completed.get(), 0);
     assert_eq!(sink.0.len(), 1);
+    let expected_width = if change_on_report { 91.0 } else { 80.0 };
     assert!(
-        (sink.0[0] - 80.0).abs() < 0.01,
-        "same-pump paint uses four one-em probe glyphs at 20 px: {:?}",
+        (sink.0[0] - expected_width).abs() < 0.01,
+        "same-pump paint must reflect the latest accepted authored size: {:?}",
         sink.0
     );
     let address = |presentation_id| flui_foundation::PresentationAddress {
