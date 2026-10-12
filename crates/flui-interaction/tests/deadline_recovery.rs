@@ -1209,11 +1209,7 @@ fn nested_public_verdict_operation(
 }
 
 fn nested_public_abandon_inherits_custody_then_retires_normally_next_operation() {
-    nested_public_verdict_operation(
-        NestedVerdictAction::Abandon,
-        true,
-        NestedVerdictFault::None,
-    );
+    nested_public_verdict_operation(NestedVerdictAction::Abandon, true, NestedVerdictFault::None);
 }
 
 fn nested_public_retirement_keeps_unknown_provenance() {
@@ -1370,9 +1366,21 @@ fn open_deadline_poll_with_nested_retirement(panic_after_retirement: bool) {
     if panic_after_retirement {
         assert_eq!(polls.get(), 1, "the unknown poll revision is quarantined");
     } else {
-        assert_eq!(polls.get(), 2, "the normally completed outer poll progresses");
-        assert_eq!(child_notices.get(), 1, "the retired child is not notified again");
-        assert_eq!(child_drops.get(), 1, "the failed nested retirement cannot replay");
+        assert_eq!(
+            polls.get(),
+            2,
+            "the normally completed outer poll progresses"
+        );
+        assert_eq!(
+            child_notices.get(),
+            1,
+            "the retired child is not notified again"
+        );
+        assert_eq!(
+            child_drops.get(),
+            1,
+            "the failed nested retirement cannot replay"
+        );
     }
 
     let owner = Rc::new(RefCell::new(None));
@@ -1390,9 +1398,17 @@ fn open_deadline_poll_with_nested_retirement(panic_after_retirement: bool) {
     let _fresh_entry = binding.arena().add(pointer(3), &fresh);
     *owner.borrow_mut() = Some(fresh);
     binding.arena().abandon(pointer(3));
-    assert_eq!(notices.get(), 1, "the next independent verdict is delivered");
+    assert_eq!(
+        notices.get(),
+        1,
+        "the next independent verdict is delivered"
+    );
     assert!(owner.borrow().is_none());
-    assert_eq!(drops.get(), 1, "the next operation keeps ordinary retirement");
+    assert_eq!(
+        drops.get(),
+        1,
+        "the next operation keeps ordinary retirement"
+    );
 }
 
 fn an_open_deadline_poll_preserves_nested_retirement_before_its_later_panic() {
@@ -1549,7 +1565,8 @@ fn owner_deadline_recovery_matrix() {
         ),
         (
             "nested_public_held_release_inherits_custody_then_retires_normally_next_operation",
-            nested_public_held_release_inherits_custody_then_retires_normally_next_operation as fn(),
+            nested_public_held_release_inherits_custody_then_retires_normally_next_operation
+                as fn(),
         ),
         (
             "nested_public_held_release_retirement_keeps_unknown_provenance",
