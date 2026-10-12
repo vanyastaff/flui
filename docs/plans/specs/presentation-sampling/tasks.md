@@ -56,12 +56,21 @@ reporting or wake debt. Restoring the old pending predicate reproduced the same
 zero-poll failure, and exact source bytes were restored afterwards. This is
 synthetic owner-dispatch acceptance, not a live native event-loop run.
 
+Explicit requested discovery and successful re-probes are cached through
+unrelated owner work. `registered_query_revision_is_observed_once` and
+`registered_query_reprobe_success_stays_cached` reproduced two queries instead
+of one and three instead of two before the correction. The registered/implicit
+pending-gate family also pins one resample after a completed query-derived poll.
+Restoring the old predicate reproduced all three failures; exact source bytes
+were restored. Legacy discovery, new refresh admission, cancellation, reentry
+and revision fences remain covered by the owner and interaction matrices.
+
 Complete local scoped verification used source commit
-`8e446cb612e5b5c5608f9bd1bd24550697d96883` and completed
-`cargo xtask check-changed --base e419a04d36bb821be796d763150da500d72c33f5`:
+`50b202315213de75b3342f8a7b955b7b86032b70` and completed
+`cargo xtask check-changed --base f8759e33d6729434d0b2b8ffac21411c0679cc59`:
 
 - scoped and engine/testing strict clippy passed;
-- 853 nextest tests passed, with 19 configured skips;
+- 856 nextest tests passed, with 19 configured skips;
 - strict rustdoc and doctests passed, including the executable custom timer
   cancellation/retired-authority example;
 - Windows native-feature clippy, wasm32 clippy and the facade without default
@@ -70,13 +79,10 @@ Complete local scoped verification used source commit
   tests/benches/examples;
 - the platform compiler-guard family passed.
 
-The subsequent merge of animation API changes from
-`f8759e33d6729434d0b2b8ffac21411c0679cc59` required no sampling consumer
-migration. On integration commit `57176cc4716d6693627e6585ac7642e46f223460`,
-all 23 selected animation sampling/easing and runtime integration tests passed.
-Independent overlap review found no changed sampling/recovery boundary or
-unresolved integration defect. Publication and CI still require the combined
-head, rather than treating either predecessor's green run as integration proof.
+This verification includes animation API changes from the recorded main base.
+They required no sampling consumer migration; independent overlap review found
+no changed sampling/recovery boundary or unresolved integration defect.
+Publication and CI require the combined head rather than either predecessor.
 
 MacOS/iOS and Android source checks require SDK/toolchains unavailable on this
 host; the Linux native platform suite requires `xvfb-run`. CI owns those paths.
