@@ -1038,7 +1038,18 @@ enum NestedVerdictFault {
     RetirementThenCallback,
 }
 
-fn nested_public_verdict_operation(incoming: bool, fault: NestedVerdictFault) {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NestedVerdictAction {
+    Abandon,
+    Resolve,
+    HeldRelease,
+}
+
+fn nested_public_verdict_operation(
+    action: NestedVerdictAction,
+    incoming: bool,
+    fault: NestedVerdictFault,
+) {
     use flui_interaction::events::{PointerKind, make_down_event_for_id};
     use flui_interaction::routing::PointerDispatch;
     use flui_interaction::{GestureRecognizer as _, LongPressGestureRecognizer};
@@ -1064,8 +1075,12 @@ fn nested_public_verdict_operation(incoming: bool, fault: NestedVerdictFault) {
         reenter: RefCell::new(None),
         _drop_capture: None,
     });
-    let _child_entry = binding.arena().add(pointer(2), &child);
+    let child_entry = binding.arena().add(pointer(2), &child);
     *child_owner.borrow_mut() = Some(child);
+    if action == NestedVerdictAction::HeldRelease {
+        child_entry.hold();
+        child_entry.sweep();
+    }
     let outer_owner = Rc::new(RefCell::new(None));
     let outer_drops = Rc::new(Cell::new(0));
     let arena = binding.arena().clone();
@@ -1075,7 +1090,13 @@ fn nested_public_verdict_operation(incoming: bool, fault: NestedVerdictFault) {
         drops: Rc::clone(&outer_drops),
         panic_on_drop: false,
         panic_on_notify: fault == NestedVerdictFault::RetirementThenCallback,
-        reenter: RefCell::new(Some(Box::new(move || arena.abandon(pointer(2))))),
+        reenter: RefCell::new(Some(Box::new(move || match action {
+            NestedVerdictAction::Abandon => arena.abandon(pointer(2)),
+            NestedVerdictAction::Resolve => {
+                child_entry.resolve(flui_interaction::GestureDisposition::Accepted);
+            }
+            NestedVerdictAction::HeldRelease => child_entry.release(),
+        }))),
         _drop_capture: None,
     });
     let _outer_entry = binding.arena().add(pointer(1), &outer);
@@ -1102,9 +1123,17 @@ fn nested_public_verdict_operation(incoming: bool, fault: NestedVerdictFault) {
         assert_eq!(
             child_drops.get(),
             0,
-            "nested public operation inherits custody"
+            "nested public {action:?} inherits custody"
         );
         assert_eq!(outer_drops.get(), 0);
+        assert_eq!(
+            recovery.first_failure_class(),
+            Some(FailureClass::Computation)
+        );
+        assert_eq!(
+            recovery.blocking_failure_class(),
+            Some(FailureClass::Computation)
+        );
         let failure = recovery.into_failure().expect("original incoming failure");
         assert_eq!(
             flui_foundation::panic::payload_text(failure.payload()),
@@ -1112,6 +1141,11 @@ fn nested_public_verdict_operation(incoming: bool, fault: NestedVerdictFault) {
         );
     } else if fault != NestedVerdictFault::None {
         assert_eq!(child_drops.get(), 1);
+        assert_eq!(
+            outer_drops.get(),
+            0,
+            "nested {action:?} failure protects the outer notification snapshot"
+        );
         assert_eq!(recovery.first_failure_class(), Some(FailureClass::Unknown));
         assert_eq!(
             recovery.blocking_failure_class(),
@@ -1129,18 +1163,35 @@ fn nested_public_verdict_operation(incoming: bool, fault: NestedVerdictFault) {
     }
     let owner = Rc::new(RefCell::new(None));
     let drops = Rc::new(Cell::new(0));
+    let fresh_notices = Rc::new(Cell::new(0));
     let fresh = Rc::new(VerdictMember {
         owner: Rc::downgrade(&owner),
-        notifications: Rc::new(Cell::new(0)),
+        notifications: Rc::clone(&fresh_notices),
         drops: Rc::clone(&drops),
         panic_on_drop: false,
         panic_on_notify: false,
         reenter: RefCell::new(None),
         _drop_capture: None,
     });
-    let _fresh_entry = binding.arena().add(pointer(3), &fresh);
+    let fresh_entry = binding.arena().add(pointer(3), &fresh);
     *owner.borrow_mut() = Some(fresh);
-    binding.arena().abandon(pointer(3));
+    if action == NestedVerdictAction::HeldRelease {
+        fresh_entry.hold();
+        fresh_entry.sweep();
+    }
+    match action {
+        NestedVerdictAction::Abandon => binding.arena().abandon(pointer(3)),
+        NestedVerdictAction::Resolve => {
+            fresh_entry.resolve(flui_interaction::GestureDisposition::Accepted);
+        }
+        NestedVerdictAction::HeldRelease => fresh_entry.release(),
+    }
+    assert_eq!(
+        fresh_notices.get(),
+        1,
+        "the next {action:?} delivers its verdict"
+    );
+    assert!(owner.borrow().is_none());
     assert_eq!(
         drops.get(),
         1,
@@ -1149,19 +1200,87 @@ fn nested_public_verdict_operation(incoming: bool, fault: NestedVerdictFault) {
 }
 
 fn nested_public_abandon_inherits_custody_then_retires_normally_next_operation() {
-    nested_public_verdict_operation(true, NestedVerdictFault::None);
+    nested_public_verdict_operation(
+        NestedVerdictAction::Abandon,
+        true,
+        NestedVerdictFault::None,
+    );
 }
 
 fn nested_public_retirement_keeps_unknown_provenance() {
-    nested_public_verdict_operation(false, NestedVerdictFault::Retirement);
+    nested_public_verdict_operation(
+        NestedVerdictAction::Abandon,
+        false,
+        NestedVerdictFault::Retirement,
+    );
 }
 
 fn nested_public_retirement_precedes_later_callback_failure() {
-    nested_public_verdict_operation(false, NestedVerdictFault::RetirementThenCallback);
+    nested_public_verdict_operation(
+        NestedVerdictAction::Abandon,
+        false,
+        NestedVerdictFault::RetirementThenCallback,
+    );
 }
 
 fn nested_public_verdict_healthy_retirement_remains() {
-    nested_public_verdict_operation(false, NestedVerdictFault::None);
+    for action in [
+        NestedVerdictAction::Abandon,
+        NestedVerdictAction::Resolve,
+        NestedVerdictAction::HeldRelease,
+    ] {
+        nested_public_verdict_operation(action, false, NestedVerdictFault::None);
+    }
+}
+
+fn nested_public_resolve_inherits_custody_then_retires_normally_next_operation() {
+    for fault in [
+        NestedVerdictFault::None,
+        NestedVerdictFault::RetirementThenCallback,
+    ] {
+        nested_public_verdict_operation(NestedVerdictAction::Resolve, true, fault);
+    }
+}
+
+fn nested_public_resolve_retirement_keeps_unknown_provenance() {
+    nested_public_verdict_operation(
+        NestedVerdictAction::Resolve,
+        false,
+        NestedVerdictFault::Retirement,
+    );
+}
+
+fn nested_public_resolve_retirement_precedes_later_callback_failure() {
+    nested_public_verdict_operation(
+        NestedVerdictAction::Resolve,
+        false,
+        NestedVerdictFault::RetirementThenCallback,
+    );
+}
+
+fn nested_public_held_release_inherits_custody_then_retires_normally_next_operation() {
+    for fault in [
+        NestedVerdictFault::None,
+        NestedVerdictFault::RetirementThenCallback,
+    ] {
+        nested_public_verdict_operation(NestedVerdictAction::HeldRelease, true, fault);
+    }
+}
+
+fn nested_public_held_release_retirement_keeps_unknown_provenance() {
+    nested_public_verdict_operation(
+        NestedVerdictAction::HeldRelease,
+        false,
+        NestedVerdictFault::Retirement,
+    );
+}
+
+fn nested_public_held_release_retirement_precedes_later_callback_failure() {
+    nested_public_verdict_operation(
+        NestedVerdictAction::HeldRelease,
+        false,
+        NestedVerdictFault::RetirementThenCallback,
+    );
 }
 
 #[test]
@@ -1295,6 +1414,30 @@ fn owner_deadline_recovery_matrix() {
         (
             "nested_public_verdict_healthy_retirement_remains",
             nested_public_verdict_healthy_retirement_remains as fn(),
+        ),
+        (
+            "nested_public_resolve_inherits_custody_then_retires_normally_next_operation",
+            nested_public_resolve_inherits_custody_then_retires_normally_next_operation as fn(),
+        ),
+        (
+            "nested_public_resolve_retirement_keeps_unknown_provenance",
+            nested_public_resolve_retirement_keeps_unknown_provenance as fn(),
+        ),
+        (
+            "nested_public_resolve_retirement_precedes_later_callback_failure",
+            nested_public_resolve_retirement_precedes_later_callback_failure as fn(),
+        ),
+        (
+            "nested_public_held_release_inherits_custody_then_retires_normally_next_operation",
+            nested_public_held_release_inherits_custody_then_retires_normally_next_operation as fn(),
+        ),
+        (
+            "nested_public_held_release_retirement_keeps_unknown_provenance",
+            nested_public_held_release_retirement_keeps_unknown_provenance as fn(),
+        ),
+        (
+            "nested_public_held_release_retirement_precedes_later_callback_failure",
+            nested_public_held_release_retirement_precedes_later_callback_failure as fn(),
         ),
     ] {
         if let Err(payload) = std::panic::catch_unwind(case) {
