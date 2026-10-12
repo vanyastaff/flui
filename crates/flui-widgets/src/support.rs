@@ -1,10 +1,11 @@
-//! Support macros shared across widget families. The impl macro is also
+//! Support helpers shared across widget families. The impl macro is also
 //! exported, doc-hidden, through [`crate::__private`] for the sibling
 //! `flui-*` widget crates. The event-callback adapters store a user's
 //! `Fn(&mut EventCx<'_>, ..) -> R` so that its outcome is reported.
 
 use std::rc::Rc;
 
+use flui_platform_api::keyboard::Modifiers;
 use flui_view::{EventCx, EventOutcome};
 
 #[cfg(test)]
@@ -12,6 +13,26 @@ pub(crate) mod child_process;
 pub(crate) mod retirement;
 #[cfg(test)]
 pub(crate) mod test_cases;
+
+/// The ordinary command dimensions, independent of incidental source state.
+/// Explicit AltGraph owns Control/Alt aliases; Meta and Shift remain commands.
+/// The source flags are unchanged and remain available to raw input handlers.
+#[inline]
+pub(crate) fn command_modifiers(observed: Modifiers) -> Modifiers {
+    let alt_graph = observed.contains(Modifiers::ALT_GRAPH);
+    let mut commands = Modifiers::NONE;
+    for (modifier, admitted) in [
+        (Modifiers::CONTROL, !alt_graph),
+        (Modifiers::ALT, !alt_graph),
+        (Modifiers::META, true),
+        (Modifiers::SHIFT, true),
+    ] {
+        if admitted && observed.contains(modifier) {
+            commands |= modifier;
+        }
+    }
+    commands
+}
 
 /// Generate the `View` impl for a multi-child render-object widget generic over
 /// a single [`ViewSeq`](flui_view::seq::ViewSeq) type parameter `C`.

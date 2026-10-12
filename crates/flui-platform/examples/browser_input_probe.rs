@@ -78,6 +78,55 @@ mod browser {
             .expect("serialized JSON string")
     }
 
+    fn record_modifiers(label: &str, input: &PlatformInput) {
+        use flui_platform_api::keyboard::Modifiers;
+
+        let (kind, key, modifiers) = match input {
+            PlatformInput::Keyboard(event) => {
+                let key = match &event.key {
+                    flui_platform_api::keyboard::Key::Named(key) => key.as_str(),
+                    flui_platform_api::keyboard::Key::Character(text) => text.as_str(),
+                    _ => "unknown",
+                };
+                ("keyboard", key, event.modifiers)
+            }
+            PlatformInput::Pointer(PointerEvent::Down(event)) => ("down", "", event.modifiers),
+            PlatformInput::Pointer(PointerEvent::Up(event)) => ("up", "", event.modifiers),
+            PlatformInput::Pointer(PointerEvent::Move(event)) => ("move", "", event.modifiers),
+            PlatformInput::Pointer(PointerEvent::Scroll(event)) => ("scroll", "", event.modifiers),
+            PlatformInput::Pointer(PointerEvent::ButtonChange(ButtonChange::Pressed(event))) => {
+                ("button-press", "", event.modifiers)
+            }
+            PlatformInput::Pointer(PointerEvent::ButtonChange(ButtonChange::Released(event))) => {
+                ("button-release", "", event.modifiers)
+            }
+            _ => return,
+        };
+        let flags = [
+            ("shift", Modifiers::SHIFT),
+            ("control", Modifiers::CONTROL),
+            ("alt", Modifiers::ALT),
+            ("meta", Modifiers::META),
+            ("alt_graph", Modifiers::ALT_GRAPH),
+            ("caps_lock", Modifiers::CAPS_LOCK),
+            ("num_lock", Modifiers::NUM_LOCK),
+            ("scroll_lock", Modifiers::SCROLL_LOCK),
+            ("fn", Modifiers::FN),
+            ("fn_lock", Modifiers::FN_LOCK),
+            ("symbol", Modifiers::SYMBOL),
+            ("symbol_lock", Modifiers::SYMBOL_LOCK),
+        ]
+        .map(|(name, flag)| format!(r#""{name}":{}"#, modifiers.contains(flag)))
+        .join(",");
+        append_result(
+            &format!("modifier-records-{label}"),
+            &format!(
+                r#"{{"kind":"{kind}","key":{},"modifiers":{{{flags}}}}}"#,
+                json_string(key)
+            ),
+        );
+    }
+
     /// Keeps the actual platform and public window handle alive between DOM steps.
     #[wasm_bindgen]
     pub struct BrowserWindowProbe {
@@ -206,8 +255,10 @@ mod browser {
         let capture = Arc::new(());
         let witness = Arc::downgrade(&capture);
         let key_output = format!("focus-keys-{label}");
+        let modifier_label = label.clone();
         window.on_input(Box::new(move |input| {
             let _ = &capture;
+            record_modifiers(&modifier_label, &input);
             if let PlatformInput::Keyboard(event) = input {
                 let key = match &event.key {
                     flui_platform_api::keyboard::Key::Named(key) => key.as_str(),
@@ -341,6 +392,7 @@ mod browser {
         let witness = Arc::downgrade(&capture);
         window.on_input(Box::new(move |input| {
             let _ = &capture;
+            record_modifiers("input", &input);
             if let PlatformInput::Keyboard(event) = &input {
                 let (key, key_kind) = match &event.key {
                     flui_platform_api::keyboard::Key::Named(key) => (key.as_str(), "Named"),
@@ -349,13 +401,21 @@ mod browser {
                 };
                 append_result("keyboard-sequence", key);
                 publish("keyboard", &format!(
-                    r#"{{"key":{},"key_kind":"{}","code":{},"time":{},"state":"{:?}","location":"{:?}","repeat":"{:?}","composition":"{:?}","shift":{},"control":{},"alt":{},"meta":{}}}"#,
+                    r#"{{"key":{},"key_kind":"{}","code":{},"time":{},"state":"{:?}","location":"{:?}","repeat":"{:?}","composition":"{:?}","shift":{},"control":{},"alt":{},"meta":{},"alt_graph":{},"caps_lock":{},"num_lock":{},"scroll_lock":{},"fn":{},"fn_lock":{},"symbol":{},"symbol_lock":{}}}"#,
                     json_string(key), key_kind, json_string(event.code.as_str()), event.time.as_nanos(), event.state(), event.location,
                     event.repeat(), event.composition,
                     event.modifiers.contains(flui_platform_api::keyboard::Modifiers::SHIFT),
                     event.modifiers.contains(flui_platform_api::keyboard::Modifiers::CONTROL),
                     event.modifiers.contains(flui_platform_api::keyboard::Modifiers::ALT),
                     event.modifiers.contains(flui_platform_api::keyboard::Modifiers::META),
+                    event.modifiers.contains(flui_platform_api::keyboard::Modifiers::ALT_GRAPH),
+                    event.modifiers.contains(flui_platform_api::keyboard::Modifiers::CAPS_LOCK),
+                    event.modifiers.contains(flui_platform_api::keyboard::Modifiers::NUM_LOCK),
+                    event.modifiers.contains(flui_platform_api::keyboard::Modifiers::SCROLL_LOCK),
+                    event.modifiers.contains(flui_platform_api::keyboard::Modifiers::FN),
+                    event.modifiers.contains(flui_platform_api::keyboard::Modifiers::FN_LOCK),
+                    event.modifiers.contains(flui_platform_api::keyboard::Modifiers::SYMBOL),
+                    event.modifiers.contains(flui_platform_api::keyboard::Modifiers::SYMBOL_LOCK),
                 ));
             }
             if let PlatformInput::Pointer(event) = input {

@@ -2,7 +2,8 @@
 //!
 //! A backend turns each native key message into one [`KeyEvent`]: what the key means under the
 //! current layout ([`Key`]), which physical key it was ([`Code`], [`Location`]), the modifiers
-//! held, whether it is an auto-repeat and whether an input method was composing. [`NamedKey`]
+//! reported active (including toggles), whether it is an auto-repeat and whether an input
+//! method was composing. [`NamedKey`]
 //! and [`Code`] are generated from the W3C value lists by `cargo xtask key-vocabulary`, so a key
 //! the specification adds after the last regeneration arrives as `Unidentified`, a documented
 //! loss rather than a silent one. Text input does not travel here: an input method edits the
@@ -159,7 +160,8 @@ pub struct KeyEvent {
     pub code: Code,
     /// Which of several same-meaning keys was used.
     pub location: Location,
-    /// The modifiers held when the key changed, including a modifier key's own change.
+    /// Modifier/toggle states reported active when the key changed, including
+    /// a modifier key's own change. Source facts are not command interpretation.
     pub modifiers: Modifiers,
     repeat: KeyRepeat,
     /// Whether an input method was composing when the key changed.

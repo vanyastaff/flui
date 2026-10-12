@@ -2395,12 +2395,35 @@ feature never changes what an existing name resolves to.
 Lock turns Ctrl+C into a `"C"` event. A single ASCII letter trigger therefore
 matches either case; the exact Shift comparison still tells Ctrl+Shift+C
 apart. `character_ignoring_shift` is a separate character-only constructor:
-Shift may be held or released, while Control, Alt and Meta remain exact. A
+Shift may be held or released, while interpreted Control, Alt and Meta remain exact. A
 named key cannot acquire that policy. `Slider` consumes logical `+` and `-`
 through this constructor, including characters produced by native Shift key
 translation. ADR-0156 supersedes the old exact-Shift contract for this constructor.
 **Asserted:** `a_shift_produced_character_matches_when_shift_is_ignored` and
 `slider_focus_keys_and_semantic_actions_share_controlled_proposals`.
+
+### Observed modifiers are distinct from keyboard command dimensions
+
+ADR-0201 preserves raw input while one private widget projection supplies the
+command dimensions used by SingleActivator, EditableText and Slider. Explicit
+AltGraph excludes Control/Alt aliases and retains Meta/Shift; toggles, Fn and
+Symbol are not additional command requirements. Produced-character triggers can
+still work on nontext controls, including Slider +/-.
+
+An Active source composition leaves ordinary framework shortcuts and control or
+field keyboard edits/submission unclaimed for native defaults. A controller's
+composition guards remain independently authoritative. Without explicit AltGraph,
+the field's conservative Ctrl+Alt text fallback remains a documented cost; a
+real extra Control+AltGraph is likewise indistinguishable from aliases through
+ordinary activators. Raw observations and authored raw Focus handlers are intact.
+This does not complete native provenance or Web IME transport.
+
+The public rows in `text_editing`, `focus_actions_and_shortcuts` and
+`controlled_slider_input_and_geometry` cover actual field text/selection,
+primary-focus actions, both shortcut forms, source composition, default refusal,
+glyph/Meta/Shift policy, word movement, locks and Slider proposals. The
+`keyboard_modifiers` module supplies these table rows through public runtime and
+mounted-consumer seams.
 
 ### 32. `EditableText::on_changed` reports only the user's edits, and a text form field reads its controller
 
