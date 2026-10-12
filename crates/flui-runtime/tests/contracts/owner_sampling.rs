@@ -316,7 +316,7 @@ impl OwnerEffects for PendingDeadlineEffects {
 }
 
 fn query_retry_participates_in_the_pending_gate_and_then_settles() {
-    for repaired in [true, false] {
+    for (registered, repaired) in [(false, true), (false, false), (true, true), (true, false)] {
         let clock = ManualClock::new();
         let now = clock.now();
         let retry_due = now + Duration::from_millis(100);
@@ -342,6 +342,14 @@ fn query_retry_participates_in_the_pending_gate_and_then_settles() {
             .gestures()
             .arena()
             .add(PointerId::new(NonZeroU64::MIN), &member);
+        let _registration = registered.then(|| {
+            let erased: Rc<dyn GestureArenaMember> = member.clone();
+            runtime
+                .gestures()
+                .arena()
+                .register_deadline_member(PointerId::new(NonZeroU64::MIN), &erased)
+                .expect("register query-derived deadline")
+        });
         runtime.enter(UiRuntime::drain_owner_inbox);
         assert_eq!(member.queries.get(), 1, "one original query failure");
         assert_eq!(reports.load(Ordering::Relaxed), 1);
@@ -404,6 +412,12 @@ fn query_retry_participates_in_the_pending_gate_and_then_settles() {
         );
         if !repaired {
             assert_eq!(member.queries.get(), 2, "one failed automatic re-probe");
+        } else if registered {
+            assert_eq!(
+                member.queries.get(),
+                3,
+                "the registered query-derived poll resamples changed timing once"
+            );
         }
 
         let after_retry = member.queries.get();
@@ -423,11 +437,11 @@ fn query_retry_participates_in_the_pending_gate_and_then_settles() {
             usize::from(repaired),
             "settled work is not replayed"
         );
-        if !repaired {
+        if registered || !repaired {
             assert_eq!(
                 member.queries.get(),
                 after_retry,
-                "parked query awaits changed input"
+                "completed explicit discovery or parked query awaits changed input"
             );
         }
         assert_eq!(reports.load(Ordering::Relaxed), 1);
@@ -882,6 +896,149 @@ fn retained_deadline_publisher_updates_cancels_and_refuses_stale_authority() {
     member.due.set(None);
     successor.publish(None).expect("cancel successor timing");
     observe_owner_deadline(&owner, &queries, None);
+}
+
+fn registered_query_revision_case(fail_first_query: bool) {
+    let clock = ManualClock::new();
+    let now = clock.now();
+    let due = now + Duration::from_secs(1);
+    let (runtime, _window) = manual_runtime(clock.clone());
+    let reports = Arc::new(Mutex::new(Vec::new()));
+    let collected = Arc::clone(&reports);
+    runtime.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
+        if let FrameFailureKind::SamplingPanic {
+            first,
+            admitted_attempt,
+            ..
+        } = &report.kind
+        {
+            collected.lock().expect("reports").push(StandaloneReport {
+                address: report.address,
+                first: *first,
+                admitted_attempt: *admitted_attempt,
+                disposition: report.disposition,
+                consecutive_failures: report.consecutive_failures,
+            });
+        }
+    })));
+    let queries = Rc::new(Cell::new(0));
+    let member = Rc::new(DeadlineQuery {
+        calls: Rc::clone(&queries),
+        due,
+        fail: Cell::new(fail_first_query),
+    });
+    let erased: Rc<dyn GestureArenaMember> = member.clone();
+    let registration = runtime
+        .gestures()
+        .arena()
+        .register_deadline_member(PointerId::new(NonZeroU64::MIN), &erased)
+        .expect("register explicit deadline source");
+    let publisher = registration.update_handle();
+    publisher
+        .publish(Some(due))
+        .expect("publish initial timing");
+    let owner = OwnerHost::new();
+    let address = owner
+        .publication(owner.prepare_runtime(runtime))
+        .expect("publish runtime")
+        .commit();
+    let frame = owner.frame_dispatcher(address).expect("frame authority");
+    let effects = Effects {
+        query_calls: Rc::clone(&queries),
+        frames: Cell::new(0),
+        fail_operation: Cell::new(false),
+        probe_runtime: Cell::new(false),
+        runtime_observation: RefCell::new(None),
+    };
+
+    publisher.refresh().expect("request one query revision");
+    assert_eq!(
+        queries.get(),
+        0,
+        "refresh admission does not call the member"
+    );
+    assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+    assert_eq!(
+        queries.get(),
+        1,
+        "the owner observes the admitted query revision"
+    );
+    if fail_first_query {
+        {
+            let observed = reports.lock().expect("reports");
+            assert_eq!(observed.len(), 1, "one failed revision report");
+            let report = &observed[0];
+            assert_eq!(report.address, address);
+            assert_eq!(report.first.stage, SamplingStage::DeadlineDiscovery);
+            assert_eq!(report.first.origin, SamplingFailureOrigin::Unknown);
+            assert!(!report.admitted_attempt);
+            assert_eq!(report.disposition, FailureDisposition::Contained);
+            assert_eq!(report.consecutive_failures, 0);
+        }
+        let retry_due = now + Duration::from_millis(100);
+        observe_owner_deadline(&owner, &queries, Some(retry_due));
+        clock.advance(Duration::from_millis(99));
+        assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+        assert_eq!(
+            queries.get(),
+            1,
+            "the retry query waits for its due opportunity"
+        );
+        observe_owner_deadline(&owner, &queries, Some(retry_due));
+        member.fail.set(false);
+        clock.advance(Duration::from_millis(1));
+        assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+        assert_eq!(queries.get(), 2, "one successful automatic re-probe");
+    }
+    let observed_queries = queries.get();
+    let expected_reports = usize::from(fail_first_query);
+    observe_owner_deadline(&owner, &queries, Some(due));
+    assert_eq!(reports.lock().expect("reports").len(), expected_reports);
+
+    // An explicit source changes its query revision through its publisher.
+    // Unrelated owner work cannot rediscover or fail the completed revision.
+    member.fail.set(true);
+    for _ in 0..3 {
+        assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+        assert_eq!(
+            queries.get(),
+            observed_queries,
+            "the completed explicit query revision remains cached on the next owner turn"
+        );
+        assert_eq!(reports.lock().expect("reports").len(), expected_reports);
+        observe_owner_deadline(&owner, &queries, Some(due));
+    }
+
+    member.fail.set(false);
+    publisher.refresh().expect("request a new query revision");
+    assert_eq!(queries.get(), observed_queries);
+    assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+    assert_eq!(
+        queries.get(),
+        observed_queries + 1,
+        "a new revision observes even an unchanged numerical deadline"
+    );
+    observe_owner_deadline(&owner, &queries, Some(due));
+    assert_eq!(reports.lock().expect("reports").len(), expected_reports);
+
+    publisher.publish(None).expect("cancel explicit timing");
+    member.fail.set(true);
+    assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+    assert_eq!(
+        queries.get(),
+        observed_queries + 1,
+        "cancellation needs no query"
+    );
+    observe_owner_deadline(&owner, &queries, None);
+    assert_eq!(reports.lock().expect("reports").len(), expected_reports);
+}
+
+fn registered_query_revision_is_observed_once() {
+    registered_query_revision_case(false);
+}
+
+fn registered_query_reprobe_success_stays_cached() {
+    registered_query_revision_case(true);
 }
 
 struct CompletionRefresh {
@@ -1589,6 +1746,14 @@ fn owner_sampling_contract() {
             (
                 "retained deadline publisher changes timing and refuses stale authority",
                 retained_deadline_publisher_updates_cancels_and_refuses_stale_authority,
+            ),
+            (
+                "registered query revision is observed once",
+                registered_query_revision_is_observed_once,
+            ),
+            (
+                "registered query re-probe success stays cached",
+                registered_query_reprobe_success_stays_cached,
             ),
             (
                 "completion refresh observes timing after runtime lease return",

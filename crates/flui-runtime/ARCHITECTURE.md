@@ -63,6 +63,13 @@ host.
   drives the public owner frame/drain/pending-gate path, distinguishes delivery
   on the due owner opportunity from discovery on lease return, and verifies
   that repeated failure parks without another wake or report.
+  Successful explicit query observations remain cached through unrelated owner
+  work, including after recovery. `registered_query_revision_is_observed_once`
+  and `registered_query_reprobe_success_stays_cached` pin new refresh admission,
+  unchanged numerical timing and cancellation. Query-derived due polls still
+  resample changed timing; legacy arena sources keep owner-driven discovery.
+  The pending-gate family also covers registered post-poll resampling and silence
+  after the member clears its timing.
 
 - **Completion belongs to a presentation.** Assembly installs that
   presentation's weak post-frame handle before mounting elements. An incomplete

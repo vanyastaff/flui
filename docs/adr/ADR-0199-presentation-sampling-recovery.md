@@ -233,8 +233,12 @@ Runtime-hosted extensions retain one linear `GestureDeadlineRegistration` for
 their member-wide deadline source and publish timing through its weak
 `GestureDeadlineUpdate`. Publication or cancellation commits a new
 revision, including the same numerical due time, then wakes outside borrows.
-`refresh` requests a guard-free query revision. Silent external mutation has
-no scheduling guarantee. Closed, retired and exhausted authority refuses;
+`refresh` requests a guard-free query revision. Successful requested discovery
+and re-probes retain their observation through unrelated owner operations.
+A completed query-derived poll may resample the member's changed timing;
+explicitly published timing remains authoritative. Legacy arena slots without
+update authority continue discovery after owner activity. Silent external
+mutation has no scheduling guarantee. Closed, retired and exhausted authority refuses;
 withdrawal cannot resurrect an old poll through implicit discovery.
 
 The member's query and poll are aggregate hooks, so two active explicit

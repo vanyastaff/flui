@@ -107,6 +107,8 @@ impl GestureDeadlineUpdate {
     ///
     /// The query runs at a guard-free owner boundary; this call never executes
     /// the member. Use [`Self::publish`] when committed timing is already known.
+    /// Unrelated owner operations reuse a successful observation. A completed
+    /// due poll may query the member's changed timing again.
     ///
     /// # Errors
     /// Refuses a closed owner, retired registration or exhausted revision space.
@@ -471,8 +473,10 @@ impl DeadlineRegistry {
             let revision = source.revision.get();
             let observation = source.observation.get();
             let mut preserving = recovery.has_failure();
+            // Registered sources cache timing across unrelated owner work.
+            // Legacy arena slots have no publisher and follow owner activity.
             let query = matches!(observation, Observation::Unobserved)
-                || matches!(observation, Observation::Observed(_)) && !source.published.get();
+                || matches!(observation, Observation::Observed(_)) && !source.registration;
             let retry = matches!(observation, Observation::Retry(due) if due <= now);
             if query || retry {
                 let mut result = None;
