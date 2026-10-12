@@ -28,7 +28,9 @@ callback. Its Down/Up table preserves supported names, Hyper/Super aliases and
 complete NFC character values, including base-plus-mark, combining-only and
 spacing-mark strings. Empty values, unknown names, multiple bases, non-NFC text,
 raw Cc controls and a non-combining suffix are Unidentified; the last healthy
-pair verifies delivery continues. Quote and backslash cases exercise JSON
+pair verifies delivery continues. Unpaired UTF-16 surrogates are refused before
+Rust string conversion; valid pairs and literal U+FFFD remain observable.
+Quote and backslash cases exercise JSON
 escaping in the probe's output. Every row compares logical kind/value, physical
 code, location, source timestamp, all four modifiers, composition and the
 release-not-repeat contract. These constructor-driven probes establish

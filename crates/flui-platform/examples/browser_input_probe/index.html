@@ -161,6 +161,9 @@ document.getElementById('owned-keyboard').onclick = () => check('owned-keyboard-
     ['\u007f', 'Unidentified', 'Named', 'KeyA', 0, 'Standard'],
     ['\u0085', 'Unidentified', 'Named', 'KeyA', 0, 'Standard'],
     ['a\u0000', 'Unidentified', 'Named', 'KeyA', 0, 'Standard'],
+    ['\ud800', 'Unidentified', 'Named', 'KeyA', 0, 'Standard'],
+    ['\udc00', 'Unidentified', 'Named', 'KeyA', 0, 'Standard'],
+    ['\ufffd', '\ufffd', 'Character', 'KeyA', 0, 'Standard'],
     ['z', 'z', 'Character', 'KeyZ', 0, 'Standard'],
   ]) {
     for (const [type, state, repeat] of [

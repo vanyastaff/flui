@@ -1416,6 +1416,11 @@ or arbitrary aggregate destructor containment.
 
 ### Web logical keys validate their source grammar
 
+The private DOM getter retains the original UTF-16 string until admission.
+`JsString::is_valid_utf16` refuses an unpaired surrogate before conversion can
+replace it with U+FFFD. The literal replacement character and valid surrogate
+pairs remain valid inputs. The getter runs once, including during reentry.
+
 Both DOM keyboard states resolve the owned named-key vocabulary and accepted
 Hyper/Super aliases before admitting a character value. A Web character is a
 nonempty NFC string with zero or one non-control base followed by combining

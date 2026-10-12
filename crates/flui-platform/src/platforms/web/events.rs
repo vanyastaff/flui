@@ -339,6 +339,12 @@ fn register_context_menu_block(canvas: &web_sys::HtmlCanvasElement) {
 // them. Bind the actual DOM getters with their floating-point result type.
 #[wasm_bindgen]
 extern "C" {
+    // DOMString can contain unpaired surrogates. A Rust String getter would
+    // replace them before the source-specific admission check can refuse them.
+    type Utf16KeyboardEvent;
+    #[wasm_bindgen(method, getter, js_name = key)]
+    fn key_utf16(this: &Utf16KeyboardEvent) -> js_sys::JsString;
+
     type PreciseMouseEvent;
     #[wasm_bindgen(method, getter, js_name = offsetX)]
     fn offset_x_f64(this: &PreciseMouseEvent) -> f64;
@@ -648,7 +654,8 @@ fn convert_keyboard_event(ke: &web_sys::KeyboardEvent, state: KeyState) -> Platf
         modifiers |= Modifiers::META;
     }
 
-    let key = map_key_value(ke.key());
+    let source: &Utf16KeyboardEvent = ke.unchecked_ref();
+    let key = map_key_value(source.key_utf16());
 
     let location = match ke.location() {
         1 => Location::Left,
@@ -701,7 +708,11 @@ fn extract_modifiers_from_mouse(e: &web_sys::MouseEvent) -> Modifiers {
 }
 
 /// Named values precede source-specific Unicode admission; refusal preserves the event.
-fn map_key_value(key: String) -> Key {
+fn map_key_value(key: js_sys::JsString) -> Key {
+    if !key.is_valid_utf16() {
+        return Key::Named(NamedKey::Unidentified);
+    }
+    let key = String::from(key);
     if matches!(key.as_str(), "Hyper" | "Super") {
         Key::Named(NamedKey::Meta)
     } else if let Some(named) = NamedKey::from_w3c(&key) {
