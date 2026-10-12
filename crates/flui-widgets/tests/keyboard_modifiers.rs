@@ -265,6 +265,9 @@ pub(crate) fn lock_states_do_not_disable_slider_navigation() {
         Modifiers::CAPS_LOCK,
         Modifiers::NUM_LOCK,
         Modifiers::SCROLL_LOCK,
+        Modifiers::FN_LOCK,
+        Modifiers::SYMBOL_LOCK,
+        Modifiers::FN | Modifiers::SYMBOL,
         Modifiers::CAPS_LOCK | Modifiers::NUM_LOCK,
     ] {
         let proposals = Rc::new(RefCell::new(Vec::new()));
@@ -407,6 +410,13 @@ pub(crate) fn both_shortcut_boundaries_preserve_meta_shift_and_full_glyphs() {
         assert_eq!(fixture.commands.get(), 0, "source owns composing shortcut, callback={callback}");
         fixture.dispatch("S", Modifiers::CONTROL | Modifiers::CAPS_LOCK, KeyState::Down, KeyRepeat::First);
         assert_eq!(fixture.commands.get(), 1, "next command, callback={callback}");
+        let fixture = Fixture::with_boundary(false, SingleActivator::character("का").allow_repeats(false), callback);
+        fixture.dispatch("का", aliases, KeyState::Down, KeyRepeat::First);
+        fixture.dispatch("का", aliases, KeyState::Down, KeyRepeat::AutoRepeat);
+        fixture.dispatch("का", aliases, KeyState::Up, KeyRepeat::First);
+        assert_eq!(fixture.commands.get(), 1, "excluded repeat and Up, callback={callback}");
+        fixture.dispatch("का", aliases, KeyState::Down, KeyRepeat::First);
+        assert_eq!(fixture.commands.get(), 2, "next first Down, callback={callback}");
     }
 }
 
