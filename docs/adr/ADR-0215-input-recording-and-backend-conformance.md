@@ -24,8 +24,11 @@ and put `serde` on the Stable contract crate.
 
 ## Decision
 
-1. **What is recorded.** The stream of `HostInput` a runtime handles. `InputTap` in `flui-app`
-   observes that stream; each row holds the `InputSurface`/`WindowId`, `t` (the `EventTime`),
+1. **What is recorded.** The stream of `HostInput` a runtime handles, with the non-input rows
+   replay needs, in one order. `InputTap` in `flui-app` observes `&InputRecord`, a
+   `#[non_exhaustive]` enum of `Input`, `Decision`, `Preferences` and `Gap` rows, which the
+   runtime emits on its owner thread in the order it applied them; the writer serialises exactly
+   that sequence. An `Input` row holds the `InputSurface`/`WindowId`, `t` (the `EventTime`),
    the arrival time and the dispatch result. The decisions `GestureObserver` reports are recorded
    as `Decision` rows in the same stream, so decisions made later on deadlines, with no input of
    their own, are replayable. The header holds devices, scale factors, the

@@ -79,9 +79,16 @@ No widget can reach haptics today.
    replacement. An entry leaves the mailbox only when an observer call for it returns normally;
    an observer that panics is contained (the first failure authoritative and reported), keeps
    its registration, and the entry it panicked on stays at the head of the mailbox with the
-   tail behind it; that delivery pass ends, and the next pass (after the next dispatch or
-   frame, or at once for a replacement observer) retries from that entry, at most once per pass.
-   Closing the presentation retires the mailbox with it. Every accepted ticket therefore reaches
+   tail behind it; that delivery pass ends, and a failed pass schedules one owner-thread wake
+   through the runtime scheduler for the next pass, so recovery does not wait for unrelated
+   dispatch or frames (a replacement observer also starts a pass at once); each pass retries
+   from that entry, at most once per pass (row `an_observer_panic_on_an_idle_presentation_is_retried_by_a_wake`).
+   Closing the presentation first resolves every queued request (`Suppressed`) and runs one
+   final delivery pass; entries that pass cannot deliver (no observer registered, or the
+   observer panicked) are reported with their tickets to the owner's diagnostics and retired
+   with the presentation. Tickets are scoped to their presentation, and the elements that hold
+   them unmount with it, so no consumer remains to receive them later (row
+   `closing_delivers_pending_outcomes_in_a_final_pass`). Every accepted ticket therefore reaches
    an observer once one accepts it (rows: `queued_outcomes_wait_for_an_observer`,
    `an_observer_replaced_mid_delivery_hands_over_the_rest`,
    `an_observer_panic_keeps_the_outcome_for_the_next_pass`). The request plays when that
