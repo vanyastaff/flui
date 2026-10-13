@@ -359,10 +359,7 @@ impl RunCompleter {
     /// performed the (once-only) transition — `None` means the future was
     /// already resolved by an earlier call, so there is nothing left to
     /// deliver.
-    fn publish(
-        &self,
-        target: Resolved,
-    ) -> Option<(Vec<Continuation>, Slab<std::task::Waker>)> {
+    fn publish(&self, target: Resolved) -> Option<(Vec<Continuation>, Slab<std::task::Waker>)> {
         let mut state = self.inner.state.borrow_mut();
         if state.resolution.is_some() {
             return None;
@@ -377,18 +374,14 @@ impl RunCompleter {
     /// Publish `Ok(())` and hand back the delivery half.
     #[must_use = "a RunDelivery delivers on drop; call deliver() where continuations may run"]
     pub(crate) fn complete(self) -> RunDelivery {
-        let (continuations, waiters) = self
-            .publish(Resolved::Complete)
-            .unwrap_or_default();
+        let (continuations, waiters) = self.publish(Resolved::Complete).unwrap_or_default();
         RunDelivery::new(Ok(()), continuations, waiters)
     }
 
     /// Publish `Err(RunCanceled)` and hand back the delivery half.
     #[must_use = "a RunDelivery delivers on drop; call deliver() where continuations may run"]
     pub(crate) fn cancel(self) -> RunDelivery {
-        let (continuations, waiters) = self
-            .publish(Resolved::Canceled)
-            .unwrap_or_default();
+        let (continuations, waiters) = self.publish(Resolved::Canceled).unwrap_or_default();
         RunDelivery::new(Err(RunCanceled), continuations, waiters)
     }
 }
