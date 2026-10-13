@@ -215,6 +215,7 @@ impl SemanticsConfiguration {
             && states == focus_only
             && self.attributes.live.is_none()
             && self.actions.is_empty()
+            && self.custom_handlers.is_empty()
             && self.attributes.role == SemanticsRole::None
             && self.attributes.label.is_none()
             && self.attributes.value.is_none()
@@ -753,13 +754,19 @@ impl SemanticsConfiguration {
         })
     }
 
-    /// Every custom action the node declares, in id order, whether or not a
-    /// block on user actions hides them.
-    pub(crate) fn declared_custom_actions(&self) -> impl Iterator<Item = DeclaredCustomAction<'_>> {
+    /// The custom actions assistive technology is offered, in id order: none
+    /// while user actions are blocked.
+    pub(crate) fn offered_custom_actions(&self) -> impl Iterator<Item = DeclaredCustomAction<'_>> {
+        let offered = if self.blocks_user_actions {
+            0
+        } else {
+            self.custom_handlers.len()
+        };
         self.attributes
             .custom_actions
             .iter()
             .zip(&self.custom_handlers)
+            .take(offered)
             .map(|(label, (own_id, handler))| DeclaredCustomAction {
                 label: label.as_str(),
                 handler,
@@ -1603,6 +1610,17 @@ mod tests {
         assert!(!config.has_action(SemanticsAction::CustomAction));
         assert_eq!(config.custom_actions().count(), 0);
         assert!(config.custom_action(CustomActionId::at(0)).is_none());
+    }
+
+    /// A focusable node that offers a custom action is a real control, not a
+    /// bare focus annotation, however its handlers are stored.
+    #[test]
+    fn a_custom_action_is_more_than_focus_state() {
+        let mut config = SemanticsConfiguration::new();
+        config.set_focusable(true);
+        assert!(config.is_focus_state_only());
+        config.add_custom_action("Archive", Arc::new(|_| {}));
+        assert!(!config.is_focus_state_only());
     }
 
     /// A forced merge keeps one scrollable's metrics: a receiver with any

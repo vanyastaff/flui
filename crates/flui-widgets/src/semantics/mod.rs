@@ -770,9 +770,10 @@ impl Semantics {
     /// `label` (a screen reader's actions menu) beside the node's own, such as
     /// a swipe action or "Move up" in a reorderable list.
     ///
-    /// Each call adds one action with its own handler, in order. A fresh
-    /// closure on every `build` raises no semantics update; a changed label or
-    /// count does.
+    /// Each call adds one action with its own handler, in order. A label
+    /// names one action: a call with a label already offered replaces that
+    /// action's handler in place. A fresh closure on every `build` raises no
+    /// semantics update; a changed label or count does.
     #[must_use]
     pub fn custom_action<F, R>(mut self, label: impl Into<String>, handler: F) -> Self
     where
@@ -780,9 +781,21 @@ impl Semantics {
         R: EventOutcome,
     {
         let handler = event_callback(handler);
-        self.event_actions
+        let handler: EventActionHandler = Rc::new(move |cx, _call| handler(cx));
+        let label = label.into();
+        // A label names one action of this widget: a second with the same
+        // label replaces the first at its place, as a repeated `on_*` does.
+        // Two same-labelled entries would be indistinguishable to the user,
+        // and their callbacks could trade targets under one published id.
+        match self
+            .event_actions
             .custom
-            .push((label.into(), Rc::new(move |cx, _call| handler(cx))));
+            .iter_mut()
+            .find(|(known, _)| *known == label)
+        {
+            Some((_, slot)) => *slot = handler,
+            None => self.event_actions.custom.push((label, handler)),
+        }
         self
     }
 

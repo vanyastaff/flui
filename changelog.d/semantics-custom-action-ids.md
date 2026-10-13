@@ -12,7 +12,8 @@
   returns its id; `ActionCall::CustomAction` carries a `CustomActionId`. A node's custom actions
   each run their own handler, two sets of them share a node, and a request whose id no longer
   names the action last published there (by handler, own id and label, not label alone) is
-  refused. `remove_action(CustomAction)` removes every custom action.
+  refused. `remove_action(CustomAction)` removes every custom action, and within one `Semantics`
+  a repeated label replaces the earlier action.
 
 ### Removed
 

@@ -1392,3 +1392,31 @@ pub(crate) fn merged_custom_actions_each_reach_their_own_handler() {
         "each ran its own handler"
     );
 }
+
+/// A label names one action of a widget: a second `custom_action` with the
+/// same label replaces the first, so the platform is offered one "Delete"
+/// and a request for it runs the latest handler.
+pub(crate) fn a_repeated_custom_action_label_replaces_the_action() {
+    let ran = Rc::new(RefCell::new(Vec::new()));
+    let (first, second) = (Rc::clone(&ran), Rc::clone(&ran));
+    let (laid, tree, node_id) = pump_labelled(
+        host()
+            .custom_action("Delete", move |_cx| first.borrow_mut().push("first"))
+            .custom_action("Delete", move |_cx| second.borrow_mut().push("second"))
+            .child(SizedBox::new(40.0, 20.0)),
+    );
+    let offered = tree
+        .find_by_label(LABEL)
+        .expect("node was located a moment ago")
+        .raw()
+        .custom_actions()
+        .len();
+    assert_eq!(offered, 1, "one action per label");
+    laid.invoke_semantics_action(request(
+        Action::CustomAction,
+        node_id,
+        Some(ActionData::CustomAction(1)),
+    ))
+    .expect("the offered action resolves");
+    assert_eq!(*ran.borrow(), ["second"]);
+}

@@ -362,10 +362,10 @@ impl PublishedCustomAction {
 /// A node's custom actions as published, in id order.
 type CustomRecord = SmallVec<[PublishedCustomAction; 2]>;
 
-/// The record of what `node` would publish as custom actions.
+/// The record of the custom actions `node` offers, as its update publishes them.
 fn custom_record(node: &SemanticsNode) -> CustomRecord {
     node.config()
-        .declared_custom_actions()
+        .offered_custom_actions()
         .map(|declared| PublishedCustomAction {
             handler: Arc::downgrade(declared.handler),
             own_id: declared.own_id,
@@ -412,12 +412,17 @@ impl PublishedState {
     /// Records the custom actions of every published node in `tree`, after a
     /// full update delivered them.
     fn record_custom_actions(&mut self, tree: &SemanticsTree) {
+        // The same rooted, addressable walk the full update was built from:
+        // an unattached alias of a published identity records nothing.
         self.custom = tree
-            .iter()
-            .filter_map(|(_, node)| {
+            .rooted_nodes()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|sid| {
+                let node = tree.get(sid)?;
                 let id = accesskit::NodeId(node.accessibility_id()?.as_u64());
                 let record = custom_record(node);
-                (!record.is_empty() && self.nodes.contains_key(&id)).then_some((id, record))
+                (!record.is_empty()).then_some((id, record))
             })
             .collect();
     }
@@ -1593,6 +1598,28 @@ mod tests {
             owner.resolve_action(request(archive)).err(),
             refused,
             "a same-labelled action from another handler is not the one published"
+        );
+
+        // A blocked node offers no custom action, so the delivered update
+        // published none: unblocking it before the next flush does not make a
+        // request for an id the platform never showed resolve.
+        let mut blocked = SemanticsNode::new().with_source_render_id(render);
+        blocked
+            .config_mut()
+            .add_custom_action("Archive", handler("archive"));
+        blocked.config_mut().set_blocks_user_actions(true);
+        let unblocked = {
+            let mut node = blocked.clone();
+            node.config_mut().set_blocks_user_actions(false);
+            node
+        };
+        owner.tree_mut().replace_node(root, blocked);
+        owner.flush();
+        owner.tree_mut().replace_node(root, unblocked);
+        assert_eq!(
+            owner.resolve_action(request(archive)).err(),
+            refused,
+            "an action the last update did not offer is not run"
         );
     }
 }

@@ -97,7 +97,11 @@ registered several actions behind one route still knows which ran. A request run
 id still names the action the last delivered update offered there, compared by identity — the
 same handler allocation, held weakly, the same own id and the same label — never by label alone,
 so two same-labelled actions that trade places are told apart; an id whose place now holds
-another action, or none, is refused. Removing `CustomAction` removes every custom action.
+another action, or none, is refused. The record holds what the delivered update offered: a
+blocked node offered none, and a full update records only its rooted, addressable nodes. One
+`Semantics` widget routes all its actions through one handler, so within it a label names one
+action: a repeated label replaces the earlier action in place. Removing `CustomAction` removes
+every custom action.
 
 **Why.** One role per node is AccessKit's, Chromium's and ARIA's model: the role sent to the OS
 is the one the node declares, and a node that is two things at once is not representable. The
