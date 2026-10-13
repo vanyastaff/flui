@@ -38,7 +38,8 @@ and put `serde` on the Stable contract crate.
    row moved out before the tap runs; delivery follows dispatch with no runtime borrow held; each
    call is panic-contained, with the first failure authoritative; a tap replaced or removed from
    inside a callback takes effect from the next row. Registration returns a `#[must_use]` RAII
-   handle whose `Drop` unregisters.
+   handle bound to its own registration (id and generation); its `Drop` unregisters only that
+   registration, so a stale handle dropped after a replacement never removes the new tap.
 2. **DTO, not vocabulary.** The event vocabulary carries no `serde`. `flui-testing` holds private
    mirror enums with pinned `#[serde(rename)]` spellings; unknown fields are skipped within a major format version, an unknown variant is an error;
    `From<&HostInput>` and `TryFrom<Dto>` over `flui-runtime`'s `HostInput`, including its
@@ -94,7 +95,7 @@ vocabulary evolves without a wire freeze, at the cost of a DTO layer kept in ste
 - `recordings_redact_text_titles_and_device_names_by_default`, and
   `an_assistive_set_value_on_a_password_field_records_no_plaintext`.
 - `InputTap` delivery rows: `a_tap_may_dispatch_reentrantly`,
-  `a_tap_replaced_mid_call_takes_effect_from_the_next_row`,
+  `a_tap_replaced_mid_call_takes_effect_from_the_next_row` (including dropping the replaced tap's stale handle, which leaves the new tap registered),
   `a_panicking_tap_is_contained_and_the_first_failure_kept`, and
   `releasing_the_owner_during_a_tap_call_finishes_cleanly`.
 - `a_script_with_an_unpaired_down_fails_to_build`; rows "double click within one frame",

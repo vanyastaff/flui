@@ -26,9 +26,12 @@ each paragraph while one ancestor holds a selection spanning several paragraphs.
 ## Decision
 
 1. **Scope.** Text that a `SelectionArea` registers as selectable publishes runs. Nothing else
-   changes for static text. Such text is a semantics boundary: it is never merged into an
-   ancestor's label, so its runs always have a node of their own, even under a merging
-   ancestor.
+   changes for static text. Such text is registered as a nested merger (it merges its own
+   descendants), which the assembly rule of ADR-0206 decision 4 (`assembly_decisions` in
+   `flui-rendering`'s semantics owner) makes a node of its own even inside an outer merge; a plain
+   semantics boundary would not, because a boundary under a merging ancestor is absorbed. So
+   the paragraph is never merged into an ancestor's label, and its runs (ADR-0204 synthetic
+   children) always have a node of their own, even under a merging ancestor.
 2. **Runs.** Each such paragraph's node publishes runs as its children, built exactly as
    ADR-0204 §2 builds a field's: split at line ends, direction changes and every 256
    characters; grapheme clusters and word starts from `flui-painting::text_boundaries`;

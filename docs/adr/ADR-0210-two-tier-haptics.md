@@ -69,8 +69,10 @@ No widget can reach haptics today.
    capability's observers after dispatch, with panics contained. The request plays when that
    frame is presented. Its deadline is snapshotted at enqueue: enqueue time plus
    `haptic_frame_deadline` from the behavior preset (ADR-0212; a sourced number, such as two
-   refresh intervals of the window's display), on the `EventTime` timeline. At expiry the
-   request resolves to `Suppressed`; it never plays late. Hiding, occluding or closing the
+   refresh intervals of the window's display), on the `EventTime` timeline. Enqueueing also
+   schedules an owner-thread deadline wake through the runtime scheduler, independent of frame
+   presentation and of further input; presentation cancels that wake. At expiry the request
+   resolves to `Suppressed`; it never plays late. Hiding, occluding or closing the
    window resolves it earlier, draining the queue with every entry `Suppressed`. Every accepted
    request therefore reaches exactly one final outcome. Nothing plays while the window is hidden.
 5. **Source.** `source: None`, or a `DeviceId` the backend no longer knows (a pen put away, a

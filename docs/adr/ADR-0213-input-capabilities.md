@@ -62,9 +62,11 @@ returning `None` (and `HapticCapabilities`, ADR-0210), `text_input()` for IME.
    `DeviceRegistry` (`flui-platform/src/shared/`), the same registry that assigns `DeviceId`s,
    so presence and the device ids in events cannot disagree. `Native` with no pen attached is a
    normal state.
-3. **Snapshot, then changes, as events.** Every backend emits an initial
-   `PlatformInput::Capabilities` for a surface when it is created, before any ordinary input on
-   it, reflecting the devices already attached. After that, attaching or removing a device, or
+3. **Snapshot, then changes, as events.** Every backend computes an initial
+   `PlatformInput::Capabilities` for a surface when it is created, reflecting the devices
+   already attached, retains it, and delivers it as the first event when the surface's input
+   callback is installed (`on_input` is registered after `open_window` returns), before
+   draining any ordinary input; a snapshot is never emitted into an absent callback. After that, attaching or removing a device, or
    a session change that alters availability, is carried by the vocabulary variant `PlatformInput::Capabilities(
    InputCapabilities)` through the window's existing input path, so it is part of `HostInput`,
    ordered with the input around it and recorded. There is no polling API and no new callback
