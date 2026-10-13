@@ -191,6 +191,7 @@ fn declared_surface() -> Vec<&'static str> {
 fn the_public_surface_is_the_measured_list() {
     let pinned = [
         "pub mod hooks {",
+        "pub mod input_capabilities {",
         "pub mod interaction {",
         "pub mod painting {",
         "pub mod pipeline {",
@@ -227,6 +228,9 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_platform_api::Brightness;",
         "pub use flui_platform_api::InvalidLocale;",
         "pub use flui_platform_api::Locale;",
+        "pub use flui_platform_api::input_capabilities::Availability;",
+        "pub use flui_platform_api::input_capabilities::InputCapabilities;",
+        "pub use flui_platform_api::input_capabilities::PointerKindSet;",
         "pub use flui_rendering::constraints::BoxConstraints;",
         "pub use flui_rendering::hit_testing::HitTestBehavior;",
         "pub use flui_rendering::protocol::BoxProtocol;",

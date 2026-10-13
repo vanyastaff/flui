@@ -68,9 +68,9 @@ use crate::{
     redraw_poll::RedrawPoll,
     shared::{PlatformHandlers, owner_signal::OwnerSignal},
     traits::{
-        Clipboard, DisplayId, MobileCapabilities, OpenWindowError, OwnerPlatform, Platform,
-        PlatformCapabilities, PlatformDisplay, PlatformExecutor, PlatformReadyCallback,
-        PlatformWindow, WindowEvent, WindowId, WindowOptions,
+        Clipboard, DisplayId, OpenWindowError, OwnerPlatform, Platform, PlatformDisplay,
+        PlatformExecutor, PlatformReadyCallback, PlatformWindow, WindowEvent, WindowId,
+        WindowOptions,
         owner::{DirectOwnerHooks, OwnerHooks},
     },
 };
@@ -130,7 +130,6 @@ pub struct AndroidPlatform {
     window: Arc<Mutex<Option<Arc<AndroidWindow>>>>,
     background_executor: Arc<SimpleExecutor>,
     clipboard: Arc<MockClipboard>,
-    capabilities: MobileCapabilities,
     input_state: Mutex<input::AndroidInputState>,
     owner_signal: Arc<OwnerSignal>,
     scroll_factors: Mutex<crate::shared::android_scroll::FactorCache>,
@@ -166,7 +165,6 @@ impl AndroidPlatform {
             window: Arc::new(Mutex::new(None)),
             background_executor: Arc::new(SimpleExecutor),
             clipboard: Arc::new(MockClipboard::new()),
-            capabilities: MobileCapabilities::android(),
             input_state: Mutex::new(input::AndroidInputState::default()),
             owner_signal,
             scroll_factors: Mutex::new(crate::shared::android_scroll::FactorCache::default()),
@@ -775,10 +773,6 @@ impl Platform for AndroidPlatform {
     fn data_transfer(&self) -> Arc<dyn DataTransferSource> {
         // No Android transport yet (ADR-0038): inert and honest.
         Arc::new(NullDataTransferSource)
-    }
-
-    fn capabilities(&self) -> &dyn PlatformCapabilities {
-        &self.capabilities
     }
 
     fn name(&self) -> &'static str {

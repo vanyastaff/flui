@@ -289,8 +289,7 @@ pub(crate) fn scale_recognizes_native_pan_zoom_source_lifecycle() {
         rig.send(&packet(
             millis,
             PanZoomPhase::Update(
-                PanZoomTransform::try_new(Offset::new(20.0, 10.0), scale, rotation)
-                    .expect("finite native transform"),
+                PanZoomTransform::try_new(scale, rotation).expect("finite native transform"),
             ),
         ));
     }
@@ -310,9 +309,7 @@ pub(crate) fn scale_recognizes_native_pan_zoom_source_lifecycle() {
     rig.send(&packet(40, PanZoomPhase::Start));
     rig.send(&packet(
         50,
-        PanZoomPhase::Update(
-            PanZoomTransform::try_new(Offset::ZERO, 1.1, 0.0).expect("finite native recovery"),
-        ),
+        PanZoomPhase::Update(PanZoomTransform::try_new(1.1, 0.0).expect("finite native recovery")),
     ));
     rig.send(&packet(51, PanZoomPhase::Cancelled));
     assert_eq!(log.starts.get(), 2, "next source session is admitted");

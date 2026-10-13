@@ -1577,6 +1577,52 @@ impl GestureBinding {
                     panic.resume();
                 }
             }
+            PointerEvent::Revise(_) => {
+                // Final sensor values for a reading already delivered: the
+                // contact's listeners redraw with them; recognizers already
+                // decided on the estimate, so the router never sees it.
+                let mut first_panic = None;
+                if let Some((sequence, admitted, token, _)) = self.contacts.route_of(pointer_id) {
+                    // The revised reading may still wait in the coalescer:
+                    // deliver it before its correction.
+                    let pending = self.moves.remove((admitted, pointer_id));
+                    if let Some(PendingMove::Contact {
+                        event: movement,
+                        sequence: queued,
+                    }) = pending.as_ref().and_then(|state| state.pending.as_ref())
+                        && *queued == sequence
+                        && self.contacts.is_current(pointer_id, sequence)
+                    {
+                        let delivered = self.dispatch_event(movement, token);
+                        RoutePanic::preserve_first(
+                            &mut first_panic,
+                            delivered,
+                            "revised pending Move dispatch",
+                        );
+                    }
+                    if self.contacts.is_current(pointer_id, sequence) {
+                        let delivered = self.dispatch_listeners_only(event, token);
+                        RoutePanic::preserve_first(
+                            &mut first_panic,
+                            delivered,
+                            "revision dispatch",
+                        );
+                    }
+                }
+                if let Some(panic) = first_panic {
+                    panic.resume();
+                }
+            }
+            PointerEvent::PenSqueeze(_) => {
+                // A pen action, not a contact: delivered where the pen hovers
+                // (or to global observers alone), never opening a sequence.
+                let result = event
+                    .position()
+                    .map_or_else(HitTestResult::new, hit_test_fn);
+                if let Some(panic) = self.dispatch_ephemeral(event, &result) {
+                    panic.resume();
+                }
+            }
             PointerEvent::ScrollInertiaCancel(_) => {
                 let panic = if self.contacts.contains(pointer_id) {
                     self.dispatch_on_cached_route(pointer_id, event)
@@ -2209,6 +2255,25 @@ impl GestureBinding {
         let router_panic = self.pointer_router.route_capturing_panics(event);
         RoutePanic::preserve_first(&mut first_panic, router_panic, "pointer router");
         first_panic
+    }
+
+    /// Deliver `event` to the hit targets of the cached route `token` and not
+    /// to the pointer router, whose members are gesture recognizers.
+    fn dispatch_listeners_only(
+        &self,
+        event: &PointerEvent,
+        token: Option<ResolvedRouteToken>,
+    ) -> Option<RoutePanic> {
+        let token = token.filter(|_| !self.close.withholds_delivery())?;
+        match active_dispatch_handle()
+            .and_then(|handle| handle.invoke_pointer_route_with_capture(token, event, None))
+        {
+            Ok(panic) => panic,
+            Err(error) => {
+                tracing::error!(?error, "cached pointer route invocation failed");
+                None
+            }
+        }
     }
 
     /// Dispatch on the route cached for `pointer_id`, if any.

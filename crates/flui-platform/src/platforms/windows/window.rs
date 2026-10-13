@@ -1354,8 +1354,7 @@ impl PlatformWindow for WindowsWindow {
 
     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult + Send>) {
         self.register("on_input", move |callbacks| {
-            let previous = callbacks.on_input.lock().replace(callback);
-            drop(previous);
+            callbacks.set_input_callback(callback);
         });
     }
 

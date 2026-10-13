@@ -263,6 +263,8 @@ objc2 = { version = "0.6.4", features = ["std"] }
 objc2-foundation = { version = "0.3.2", default-features = false }
 objc2-app-kit = { version = "0.3.2", default-features = false }
 dispatch2 = "0.3.1"
+# ANDROID - the NativeActivity glue flui-platform and flui-app share.
+android-activity = { version = "0.6", features = ["native-activity"] }
 jni = "0.22.4"
 # Quartz window identities, including windows omitted from capture lists.
 core-foundation = "0.10"
@@ -801,6 +803,14 @@ localizations = []
 # It is not skipped when no adapter is found: a test that quietly passes on a machine
 # that cannot run it inflates the count and proves nothing. CI runs it in `gpu-test`.
 gpu-readback-tests = []
+
+# === Unstable input surface ===
+# Additive. Re-exports the handle-less input capabilities
+# (`flui::platform::input_capabilities`: `InputCapabilities`, `Availability`,
+# `PointerKindSet`), until every backend passes its conformance rows
+# (ADR-0213 §5); `flui-sdk` has the matching feature for packages. The platform
+# crates build the types regardless.
+unstable-input = []
 
 # Development-only reload machinery, off in an ordinary production graph. This
 # re-exports flui-hot-reload as `flui::hot_reload`; the application installs

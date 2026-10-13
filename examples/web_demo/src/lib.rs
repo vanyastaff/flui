@@ -92,6 +92,9 @@ pub fn start() {
                 // (ADR-0038 §8), so this arm can only log.
                 web_sys::console::log_1(&format!("DragDrop: {drag_drop_event:?}").into());
             }
+            PlatformInput::Capabilities(capabilities) => {
+                web_sys::console::log_1(&format!("Input capabilities: {capabilities:?}").into());
+            }
         }
         DispatchEventResult::resolved(false, true)
     }));

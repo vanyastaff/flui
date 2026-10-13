@@ -492,7 +492,11 @@ impl PlatformWindow for WebWindow {
         &self,
         callback: Box<dyn FnMut(crate::traits::PlatformInput) -> crate::DispatchEventResult + Send>,
     ) {
-        self.install_callback(&self.callbacks.on_input, callback);
+        if self.registration.borrow().is_some() {
+            self.callbacks.set_input_callback(callback);
+        } else {
+            crate::shared::panic_boundary::contain_owner_callback(|| drop(callback));
+        }
     }
     fn on_request_frame(&self, callback: Box<dyn FnMut() + Send>) {
         self.install_callback(&self.callbacks.on_request_frame, callback);

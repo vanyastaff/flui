@@ -56,9 +56,16 @@ impl AndroidWindow {
         execution_resumed: Arc<AtomicBool>,
         owner_signal: Weak<crate::shared::owner_signal::OwnerSignal>,
     ) -> Self {
+        let callbacks = Arc::new(WindowCallbacks::new());
+        callbacks.set_input_capabilities(crate::shared::input_availability::android());
+        if let Some(signal) = owner_signal.upgrade() {
+            callbacks.set_input_wake(crate::shared::owner_signal::OwnerSignal::callbacks_wake(
+                &signal, &callbacks,
+            ));
+        }
         Self {
             app,
-            callbacks: Arc::new(WindowCallbacks::new()),
+            callbacks,
             redraw_requested: Arc::new(AtomicBool::new(true)),
             execution_resumed,
             owner: std::thread::current().id(),

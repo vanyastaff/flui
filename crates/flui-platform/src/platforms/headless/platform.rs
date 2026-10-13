@@ -26,11 +26,11 @@ use crate::{
     error::PlatformError,
     shared::{PlatformHandlers, WindowCallbacks},
     traits::{
-        Clipboard, ClipboardItem, CursorError, DesktopCapabilities, DispatchEventResult,
-        HostWindow, OpenWindowError, OwnerPlatform, PendingWindow, Platform, PlatformCapabilities,
-        PlatformDisplay, PlatformExecutor, PlatformHaptics, PlatformInput, PlatformReadyCallback,
-        PlatformTextInput, PlatformWindow, SessionEndAnswer, SessionEndPhase, WindowAppearance,
-        WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId, WindowOpen, WindowOptions,
+        Clipboard, ClipboardItem, CursorError, DispatchEventResult, HostWindow, OpenWindowError,
+        OwnerPlatform, PendingWindow, Platform, PlatformDisplay, PlatformExecutor, PlatformHaptics,
+        PlatformInput, PlatformReadyCallback, PlatformTextInput, PlatformWindow, SessionEndAnswer,
+        SessionEndPhase, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent,
+        WindowId, WindowOpen, WindowOptions,
         owner::{DirectOwnerHooks, OwnerHooks, ProxyTransport},
     },
 };
@@ -73,7 +73,6 @@ fn next_headless_window_id() -> WindowId {
 pub struct HeadlessPlatform {
     signal: Arc<crate::shared::owner_signal::OwnerSignal>,
     wake_failure: Arc<std::sync::atomic::AtomicBool>,
-    capabilities: DesktopCapabilities,
     state: Arc<Mutex<HeadlessState>>,
 }
 
@@ -111,6 +110,16 @@ struct HeadlessState {
     /// What every window opened from now on offers as its text-store host
     /// ([`HeadlessPlatform::with_text_store_host`]); `None`: push-model.
     text_store_host: Option<TextStoreHostFactory>,
+    /// What this backend reports implemented ([`HeadlessPlatform::with_input_availability`]).
+    input_availability: flui_platform_api::input_capabilities::InputCapabilities,
+    /// The attached input devices: presence and device ids from one registry.
+    devices: crate::shared::pointer_assembly::ContactRegistry,
+    /// Simulated devices by the id their events carry.
+    device_labels: Vec<(
+        flui_platform_api::pointer::DeviceId,
+        crate::shared::pointer_assembly::NativeDevice,
+    )>,
+    next_device_label: u64,
 }
 
 impl HeadlessPlatform {
@@ -131,6 +140,12 @@ impl HeadlessPlatform {
             pending_opens: Vec::new(),
             exit_reevaluation_requested: false,
             text_store_host: None,
+            input_availability: default_input_availability(),
+            devices: crate::shared::pointer_assembly::ContactRegistry::new(
+                crate::shared::pointer_assembly::NativeClock::epoch_only(),
+            ),
+            device_labels: Vec::new(),
+            next_device_label: 0,
         };
 
         let wake_failure = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -146,7 +161,6 @@ impl HeadlessPlatform {
                     Ok(())
                 }
             })),
-            capabilities: DesktopCapabilities,
             state: Arc::new(Mutex::new(state)),
         };
         {
@@ -209,6 +223,32 @@ impl HeadlessPlatform {
         self.with_state(|state| state.text_store_host = Some(Arc::new(factory)));
         self
     }
+    /// Report `availability` as what this backend implements (its device
+    /// presence is ignored: attached devices come from
+    /// [`input_devices`](Self::input_devices)). Without it the headless
+    /// backend reports pen, precise scrolling and trackpad gestures `Native`,
+    /// since a test can synthesize all of them, and input regions and outgoing
+    /// drags `Unavailable`.
+    #[must_use]
+    pub fn with_input_availability(
+        self,
+        availability: flui_platform_api::input_capabilities::InputCapabilities,
+    ) -> Self {
+        self.with_state(|state| state.input_availability = availability);
+        self
+    }
+
+    /// A handle that attaches and removes simulated input devices, valid
+    /// across [`Platform::run`]. Each change reaches every open window as a
+    /// device event and a capability change, in order with its other input;
+    /// a window opened later has the devices in its initial snapshot.
+    #[must_use]
+    pub fn input_devices(&self) -> HeadlessInputDevices {
+        HeadlessInputDevices {
+            state: Arc::downgrade(&self.state),
+        }
+    }
+
     /// Simulate one phase of the user's session ending, as the operating
     /// system reports it: the callback registered with
     /// [`Platform::on_session_end`] is asked, on the calling thread, and its
@@ -373,10 +413,6 @@ impl Platform for HeadlessPlatform {
         Arc::new(NullDataTransferSource)
     }
 
-    fn capabilities(&self) -> &dyn PlatformCapabilities {
-        &self.capabilities
-    }
-
     fn name(&self) -> &'static str {
         "Headless"
     }
@@ -436,6 +472,105 @@ impl Platform for HeadlessPlatform {
     }
 }
 
+/// What the headless backend implements unless a test says otherwise.
+const fn default_input_availability() -> flui_platform_api::input_capabilities::InputCapabilities {
+    use flui_platform_api::input_capabilities::Availability::Native;
+    flui_platform_api::input_capabilities::InputCapabilities::builder()
+        .pen(Native)
+        .precise_scroll(Native)
+        .trackpad_gestures(Native)
+        .build()
+}
+
+/// Attaches and removes simulated input devices on a [`HeadlessPlatform`]
+/// ([`HeadlessPlatform::input_devices`]).
+#[derive(Clone)]
+pub struct HeadlessInputDevices {
+    state: Weak<Mutex<HeadlessState>>,
+}
+
+impl std::fmt::Debug for HeadlessInputDevices {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HeadlessInputDevices")
+            .finish_non_exhaustive()
+    }
+}
+
+impl HeadlessInputDevices {
+    /// Attach a device of `kind`: every open window receives
+    /// [`DeviceAdded`](flui_platform_api::pointer::PointerEvent::DeviceAdded),
+    /// then the capability change. The id its events carry; `None` once the
+    /// platform is gone or device ids are exhausted.
+    pub fn attach(
+        &self,
+        kind: flui_platform_api::pointer::PointerKind,
+    ) -> Option<flui_platform_api::pointer::DeviceId> {
+        use flui_platform_api::pointer::PointerEvent;
+        let state = self.state.upgrade()?;
+        let (change, windows, present) = {
+            let mut state = state.lock();
+            state.next_device_label += 1;
+            let native = crate::shared::pointer_assembly::NativeDevice(state.next_device_label);
+            let time = flui_platform_api::EventTime::from_nanos(
+                crate::shared::events::event_timestamp_ns(),
+            );
+            let change = state.devices.add_device(native, kind, time)?;
+            state.device_labels.push((change.device, native));
+            let windows: Vec<_> = state
+                .windows
+                .iter()
+                .map(|w| Arc::clone(&w.callbacks))
+                .collect();
+            (change, windows, state.devices.devices().present())
+        };
+        for callbacks in windows {
+            callbacks.dispatch_input(PlatformInput::Pointer(PointerEvent::DeviceAdded(change)));
+            callbacks.set_input_capabilities(callbacks.input_capabilities().with_present(present));
+        }
+        Some(change.device)
+    }
+
+    /// Remove the device `id` named: every open window receives its
+    /// contacts' cancellations and
+    /// [`DeviceRemoved`](flui_platform_api::pointer::PointerEvent::DeviceRemoved),
+    /// then the capability change. `false` when it was not attached.
+    pub fn remove(&self, id: flui_platform_api::pointer::DeviceId) -> bool {
+        use flui_platform_api::pointer::PointerEvent;
+        let Some(state) = self.state.upgrade() else {
+            return false;
+        };
+        let (removed, windows, present) = {
+            let mut state = state.lock();
+            let Some(index) = state
+                .device_labels
+                .iter()
+                .position(|(device, _)| *device == id)
+            else {
+                return false;
+            };
+            let (_, native) = state.device_labels.remove(index);
+            let time = flui_platform_api::EventTime::from_nanos(
+                crate::shared::events::event_timestamp_ns(),
+            );
+            let (_, removed) = state.devices.remove_device(native, time);
+            let windows: Vec<_> = state
+                .windows
+                .iter()
+                .map(|w| Arc::clone(&w.callbacks))
+                .collect();
+            (removed, windows, state.devices.devices().present())
+        };
+        for callbacks in windows {
+            if let Some(removed) = removed {
+                callbacks
+                    .dispatch_input(PlatformInput::Pointer(PointerEvent::DeviceRemoved(removed)));
+            }
+            callbacks.set_input_capabilities(callbacks.input_capabilities().with_present(present));
+        }
+        true
+    }
+}
+
 /// Builds a fresh mock window under an already-locked `state`, threading it
 /// through the same register/activate/emit-`Created` bookkeeping
 /// `Platform::open_window`'s synchronous path uses — shared so the deferred-
@@ -455,6 +590,20 @@ fn create_mock_window(
         state.text_store_host.clone(),
     );
 
+    // The initial snapshot reflects the devices already attached (ADR-0213 §3).
+    window.callbacks.set_input_capabilities(
+        state
+            .input_availability
+            .with_present(state.devices.devices().present()),
+    );
+    if let Some(signal) = state.owner_signal.upgrade() {
+        window
+            .callbacks
+            .set_input_wake(crate::shared::owner_signal::OwnerSignal::callbacks_wake(
+                &signal,
+                &window.callbacks,
+            ));
+    }
     state.windows.push(window.clone());
     state.active_window = Some(window_id);
 

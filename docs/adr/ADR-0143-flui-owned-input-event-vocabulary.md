@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-06
-- **Amended by:** [ADR-0217](ADR-0217-interaction-module-layers-and-pointer-assembly.md) (`PanZoomTransform` loses its pan component; a two-finger pan is `Scroll` with phases; implementation pending)
+- **Amended by:** [ADR-0217](ADR-0217-interaction-module-layers-and-pointer-assembly.md) (`PanZoomTransform` loses its pan component; a two-finger pan is `Scroll` with phases)
 - **Related:** [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) §4 (this record is
   its input vocabulary, with the generator and the gate §4 asks for),
   [ADR-0082](ADR-0082-platform-api-contract-crate.md) (the contract crate that holds it),
@@ -97,7 +97,7 @@ history, a key event's state and repeat, and a pan/zoom event's pointer, whose k
   represented; a wheel tick outside a gesture has no phase. `ScrollInertiaCancel` is the
   finger that stops the platform's momentum.
 - **A trackpad gesture is one cumulative stream.** `PanZoomPhase` is `Start`, `Update`, `End`
-  or `Cancelled`; an `Update`'s `PanZoomTransform` (pan, scale, clockwise rotation) is
+  or `Cancelled`; an `Update`'s `PanZoomTransform` (scale and clockwise rotation; ADR-0217 §4 removed the pan, which the focal point carries) is
   cumulative since `Start`, not a step. The producer accumulates the platform's steps once,
   in `f64`, so a recognizer joining mid-gesture sees the whole gesture and rounding does not
   compound in every consumer. The scale is always positive.

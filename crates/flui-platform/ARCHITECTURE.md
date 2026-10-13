@@ -1787,5 +1787,28 @@ path with a positive control. The backends' own rows (Win32
 `native_pinch_and_rotation_share_one_cumulative_gesture`, UIKit
 `native_touch_readings_keep_sensor_presence_and_pen_angles`, Android
 `android_native_pointer_readings`) pin only the copy into readings. Scroll phases
-and the trackpad pan (still a `PanZoom` pan component here) are assembled by each
-backend until the vocabulary carries them (ADR-0217 §4).
+go through the shared `ScrollPhases` grammar, and a two-finger pan is a phased
+scroll on every backend, winit's `PanGesture` included; a pinch's translation is
+its focal point, which every `Update` refreshes (ADR-0217 §4;
+`two_finger_pan_is_phased_scroll_on_every_backend`,
+`pan_zoom_carries_only_scale_and_rotation`, `winit_pan_gesture_is_a_phased_scroll`).
+
+### A window's input waits behind its capability snapshot
+
+`WindowCallbacks` owns the ADR-0213 §3 feed: a backend sets the initial
+`InputCapabilities` (its availability table from `shared::input_availability`
+with the presence its device registry reports) when it builds the window, and
+`set_input_callback` commits the registration before delivering that snapshot,
+then the input held while no snapshot had been delivered. Input admitted before
+the first registration is held, not dropped; its native default is not
+suppressed, since nothing claims it yet. A pass delivers only the entries it
+started with and contains a callback panic itself: a failed snapshot stays at
+the head (three failed passes per registration, then held until re-registration
+or close), a failed ordinary entry is not re-delivered, and the tail keeps its
+order. Remaining work is resumed by an owner turn the backend's `OwnerSignal`
+schedules (`OwnerSignal::input_wake`), so an idle application still drains it.
+The rows of `input_capabilities_contracts` in `tests/input_capabilities.rs` pin
+the order, retries, reentrant admission and a replaced callback whose capture
+panics. Presence changes reach a window from the headless device handle and the
+winit backend's registry; the native Win32, AppKit, UIKit, Android and web
+backends report their initial table without presence changes yet.

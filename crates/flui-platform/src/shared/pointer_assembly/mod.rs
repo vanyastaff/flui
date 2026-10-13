@@ -4,8 +4,10 @@
 //! `windows::*`, `objc2`, JNI or DOM type — and [`decode`] turns it into owned
 //! [`PlatformInput`] against a [`ContactRegistry`]. The registry owns contact
 //! identity, device presence ([`DeviceRegistry`]), held buttons
-//! ([`HeldButtons`]), click counting ([`ClickCounter`]), trackpad gesture
-//! accumulation ([`PanZoomAccumulator`]) and per-sequence clock choice;
+//! ([`HeldButtons`]), click counting ([`ClickCounter`]), trackpad pinch and
+//! rotate accumulation ([`PanZoomAccumulator`]) and per-sequence clock choice;
+//! [`ScrollPhases`] gives every backend's scrolling one phase grammar, a
+//! two-finger pan included;
 //! [`MoveBatch`] attaches a native batch's coalesced and predicted readings to
 //! the move it ends. The rules are written once, and Linux CI runs them over
 //! recorded readings of every backend.
@@ -21,6 +23,7 @@ mod buttons;
 mod clock;
 mod pan_zoom;
 mod registry;
+mod scroll;
 
 use std::num::NonZeroU8;
 
@@ -36,6 +39,7 @@ pub use buttons::{ButtonTransition, ClickCounter, ClickSettings, HeldButtons};
 pub use clock::{ClockChoice, CounterAnchor, NativeClock, NativeTime, QpcTicks, ReadingTime};
 pub use pan_zoom::{GestureComponent, GestureDelta, GesturePhase, PanZoomAccumulator};
 pub use registry::{ContactRegistry, DeviceRegistry, decode};
+pub use scroll::{ScrollPhases, ScrollReading};
 
 use crate::traits::PlatformInput;
 

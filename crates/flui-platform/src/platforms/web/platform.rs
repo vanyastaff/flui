@@ -14,9 +14,9 @@ use crate::{
     error::PlatformError,
     shared::{PlatformHandlers, WindowCallbacks, owner_signal::OwnerSignal},
     traits::{
-        Clipboard, HostWindow, OpenWindowError, OwnerPlatform, Platform, PlatformCapabilities,
-        PlatformDisplay, PlatformExecutor, PlatformReadyCallback, WebCapabilities,
-        WindowAppearance, WindowEvent, WindowId, WindowOptions,
+        Clipboard, HostWindow, OpenWindowError, OwnerPlatform, Platform, PlatformDisplay,
+        PlatformExecutor, PlatformReadyCallback, WindowAppearance, WindowEvent, WindowId,
+        WindowOptions,
         owner::{DirectOwnerHooks, OwnerHooks},
     },
 };
@@ -305,6 +305,8 @@ impl Platform for WebPlatform {
 
         // Store window callbacks in state so the RAF loop can dispatch frames
         let callbacks = window.callbacks().clone();
+        callbacks.set_input_capabilities(crate::shared::input_availability::web());
+        callbacks.set_input_wake(OwnerSignal::callbacks_wake(&self.signal, &callbacks));
         let retiring = Arc::clone(&callbacks);
         let state = Arc::downgrade(&self.state);
         window.install(move || {
@@ -357,10 +359,6 @@ impl Platform for WebPlatform {
         // design (ADR-0038 §8) — until then this is inert and honest, not a
         // degraded fake over the write-cache clipboard.
         Arc::new(NullDataTransferSource)
-    }
-
-    fn capabilities(&self) -> &dyn PlatformCapabilities {
-        &WebCapabilities
     }
 
     fn name(&self) -> &'static str {

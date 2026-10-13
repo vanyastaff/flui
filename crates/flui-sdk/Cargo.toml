@@ -49,6 +49,10 @@ flui = { path = "../..", default-features = false }
 
 [features]
 animation-diagnostics = ["flui-animation/diagnostics"]
+# Additive. Re-exports the handle-less input capabilities
+# (`platform::input_capabilities`) until every backend passes its conformance
+# rows (ADR-0213 §5); flui-platform-api builds them regardless.
+unstable-input = []
 
 # Tier K, order 5: above every spine crate it re-exports (`flui-view` 1,
 # `flui-widgets` 3) and below the hosts. Evolving (ADR-0081 §3): its own

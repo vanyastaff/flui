@@ -32,17 +32,23 @@ fn viewer(
 }
 
 fn pan_zoom(phase: PanZoomPhase) -> PointerEvent {
+    pan_zoom_at(phase, 50.0, 50.0)
+}
+
+/// A pan-zoom event about the focal point `(x, y)`: translation during a pinch
+/// is the focal point moving (ADR-0217 §4).
+fn pan_zoom_at(phase: PanZoomPhase, x: f64, y: f64) -> PointerEvent {
     PointerEvent::PanZoom(PanZoomEvent::new(
         mouse(),
         EventTime::from_nanos(70),
-        position(50.0, 50.0),
+        position(x, y),
         phase,
     ))
 }
 
 fn zoom_update(scale: f64) -> PointerEvent {
     pan_zoom(PanZoomPhase::Update(
-        PanZoomTransform::try_new(Offset::ZERO, scale, 0.0).expect("positive finite scale"),
+        PanZoomTransform::try_new(scale, 0.0).expect("positive finite scale"),
     ))
 }
 
@@ -66,9 +72,11 @@ pub(crate) fn viewer_native_pan_moves_the_scene_under_the_focal_point() {
         tight(100.0, 100.0),
     );
     laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
-    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Update(
-        PanZoomTransform::try_new(Offset::new(20.0, 10.0), 1.0, 0.0).expect("finite native pan"),
-    )));
+    laid.dispatch_pointer_event(&pan_zoom_at(
+        PanZoomPhase::Update(PanZoomTransform::IDENTITY),
+        70.0,
+        60.0,
+    ));
     let scene = controller.to_scene(Offset::new(70.0, 60.0));
     assert_scale(scene.dx, 50.0);
     assert_scale(scene.dy, 50.0);
@@ -284,7 +292,7 @@ pub(crate) fn viewer_native_rotation_preserves_the_scene_pivot() {
     );
     laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
     laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Update(
-        PanZoomTransform::try_new(Offset::ZERO, 1.5, std::f64::consts::FRAC_PI_2)
+        PanZoomTransform::try_new(1.5, std::f64::consts::FRAC_PI_2)
             .expect("finite scale and quarter turn"),
     )));
     let pivot = controller.to_scene(Offset::new(50.0, 50.0));
@@ -303,7 +311,7 @@ pub(crate) fn viewer_native_rotation_preserves_the_scene_pivot() {
     );
     laid.pump();
     laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Update(
-        PanZoomTransform::try_new(Offset::ZERO, 1.5, std::f64::consts::FRAC_PI_2)
+        PanZoomTransform::try_new(1.5, std::f64::consts::FRAC_PI_2)
             .expect("repeated cumulative transform"),
     )));
     assert_eq!(
@@ -330,7 +338,7 @@ pub(crate) fn viewer_rotation_refuses_an_unfittable_quad_then_recovers() {
     laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
     let rotated = |scale| {
         pan_zoom(PanZoomPhase::Update(
-            PanZoomTransform::try_new(Offset::ZERO, scale, std::f64::consts::FRAC_PI_4)
+            PanZoomTransform::try_new(scale, std::f64::consts::FRAC_PI_4)
                 .expect("finite requested rotation"),
         ))
     };
@@ -374,13 +382,17 @@ pub(crate) fn viewer_extreme_finite_pan_preserves_the_boundary_result() {
         tight(100.0, 100.0),
     );
     laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
-    let movement = |pan| {
-        pan_zoom(PanZoomPhase::Update(
-            PanZoomTransform::try_new(Offset::new(pan, 0.0), 1.0, 0.0)
-                .expect("finite requested pan"),
-        ))
+    let movement = |pan: f64| {
+        pan_zoom_at(
+            PanZoomPhase::Update(PanZoomTransform::IDENTITY),
+            50.0 + pan,
+            50.0,
+        )
     };
-    laid.dispatch_pointer_event(&movement(f64::MAX));
+    // The focal point itself moves: the session is claimed inside the
+    // viewer, then translates far past the boundary.
+    laid.dispatch_pointer_event(&movement(30.0));
+    laid.dispatch_pointer_event(&movement(1e300));
     let shifted_origin = controller.value().transform_point(0.0, 0.0);
     assert_scale(shifted_origin.0, 1000.0);
     assert_scale(shifted_origin.1, 0.0);
@@ -453,14 +465,15 @@ fn viewer_focal_inertia_uses_profile(native: bool) {
                 position(x, 100.0),
             )
         };
-        let native_packet = |millis, phase| {
+        let native_moved = |millis, phase, distance: f64| {
             PointerEvent::PanZoom(PanZoomEvent::new(
                 info,
                 EventTime::from_nanos((base + millis) * 1_000_000),
-                position(50.0, 100.0),
+                position(50.0 + distance, 100.0),
                 phase,
             ))
         };
+        let native_packet = |millis, phase| native_moved(millis, phase, 0.0);
         let start = if native {
             native_packet(0, PanZoomPhase::Start)
         } else {
@@ -474,12 +487,10 @@ fn viewer_focal_inertia_uses_profile(native: bool) {
         laid.dispatch_pointer_event(&start);
         for (millis, distance) in [(10, 20.0), (20, 40.0), (30, 60.0), (40, 80.0)] {
             let movement = if native {
-                native_packet(
+                native_moved(
                     millis,
-                    PanZoomPhase::Update(
-                        PanZoomTransform::try_new(Offset::new(distance, 0.0), 1.0, 0.0)
-                            .expect("finite focal pan"),
-                    ),
+                    PanZoomPhase::Update(PanZoomTransform::IDENTITY),
+                    distance,
                 )
             } else {
                 PointerEvent::Move(PointerMove::new(
@@ -498,7 +509,7 @@ fn viewer_focal_inertia_uses_profile(native: bool) {
             settings.replace(profile(50.0, 600.0));
         }
         let end = if native {
-            native_packet(41, PanZoomPhase::End)
+            native_moved(41, PanZoomPhase::End, 80.0)
         } else {
             PointerEvent::Up(PointerRelease::new(
                 info,
@@ -660,27 +671,25 @@ fn viewer_focal_fling_without_clock_preserves_the_scene() {
         let mut laid = lay_out(tree(initially_bound), tight(200.0, 200.0));
         laid.adopt_vsync(vsync.clone()).expect("clock admission");
         let post_frame = laid.post_frame_handle();
-        let packet = |millis: u64, phase| {
+        let packet = |millis: u64, phase, pan: f64| {
             PointerEvent::PanZoom(PanZoomEvent::new(
                 mouse(),
                 EventTime::from_nanos(millis * 1_000_000),
-                position(50.0, 100.0),
+                position(50.0 + pan, 100.0),
                 phase,
             ))
         };
         let release = |laid: &mut crate::common::LaidOut, base: u64, bound: bool| {
-            laid.dispatch_pointer_event(&packet(base, PanZoomPhase::Start));
+            laid.dispatch_pointer_event(&packet(base, PanZoomPhase::Start, 0.0));
             for (elapsed, pan) in [(10, 20.0), (20, 40.0), (30, 60.0)] {
                 laid.dispatch_pointer_event(&packet(
                     base + elapsed,
-                    PanZoomPhase::Update(
-                        PanZoomTransform::try_new(Offset::new(pan, 0.0), 1.0, 0.0)
-                            .expect("finite native release"),
-                    ),
+                    PanZoomPhase::Update(PanZoomTransform::IDENTITY),
+                    pan,
                 ));
             }
             let before_end = controller.value();
-            laid.dispatch_pointer_event(&packet(base + 31, PanZoomPhase::End));
+            laid.dispatch_pointer_event(&packet(base + 31, PanZoomPhase::End, 60.0));
             if !bound {
                 for _ in 0..4 {
                     laid.pump_for(Duration::from_millis(16));
@@ -767,25 +776,23 @@ pub(crate) fn viewer_focal_fling_rebuild_preserves_or_retires_geometry() {
         };
         let mut laid = lay_out(tree(200.0, 1000.0), crate::common::loose(300.0));
         laid.adopt_vsync(vsync.clone()).expect("clock admission");
-        let packet = |millis: u64, phase| {
+        let packet = |millis: u64, phase, pan: f64| {
             PointerEvent::PanZoom(PanZoomEvent::new(
                 mouse(),
                 EventTime::from_nanos(millis * 1_000_000),
-                position(50.0, 100.0),
+                position(50.0 + pan, 100.0),
                 phase,
             ))
         };
-        laid.dispatch_pointer_event(&packet(0, PanZoomPhase::Start));
+        laid.dispatch_pointer_event(&packet(0, PanZoomPhase::Start, 0.0));
         for (millis, pan) in [(10, 20.0), (20, 40.0), (30, 60.0)] {
             laid.dispatch_pointer_event(&packet(
                 millis,
-                PanZoomPhase::Update(
-                    PanZoomTransform::try_new(Offset::new(pan, 0.0), 1.0, 0.0)
-                        .expect("finite native pan"),
-                ),
+                PanZoomPhase::Update(PanZoomTransform::IDENTITY),
+                pan,
             ));
         }
-        laid.dispatch_pointer_event(&packet(31, PanZoomPhase::End));
+        laid.dispatch_pointer_event(&packet(31, PanZoomPhase::End, 60.0));
         laid.pump_for(Duration::from_millis(16));
         let before_rebuild = controller.value().transform_point(0.0, 0.0).0;
         laid.pump_widget(tree(200.0, 1000.0));
@@ -825,17 +832,15 @@ pub(crate) fn viewer_focal_fling_rebuild_preserves_or_retires_geometry() {
                 "the boundary"
             }
         );
-        laid.dispatch_pointer_event(&packet(100, PanZoomPhase::Start));
+        laid.dispatch_pointer_event(&packet(100, PanZoomPhase::Start, 0.0));
         for (millis, pan) in [(110, 20.0), (120, 40.0), (130, 60.0)] {
             laid.dispatch_pointer_event(&packet(
                 millis,
-                PanZoomPhase::Update(
-                    PanZoomTransform::try_new(Offset::new(pan, 0.0), 1.0, 0.0)
-                        .expect("finite recovery pan"),
-                ),
+                PanZoomPhase::Update(PanZoomTransform::IDENTITY),
+                pan,
             ));
         }
-        laid.dispatch_pointer_event(&packet(131, PanZoomPhase::End));
+        laid.dispatch_pointer_event(&packet(131, PanZoomPhase::End, 60.0));
         let recovered = controller.value().transform_point(0.0, 0.0).0;
         laid.pump_for(Duration::from_millis(16));
         laid.pump_for(Duration::from_millis(16));
@@ -870,25 +875,25 @@ pub(crate) fn viewer_reports_scale_velocity_separately_from_focal_velocity() {
             .child(SizedBox::new(200.0, 200.0)),
         tight(200.0, 200.0),
     );
-    let packet = |millis: u64, phase| {
+    let packet = |millis: u64, phase, pan: f64| {
         PointerEvent::PanZoom(PanZoomEvent::new(
             mouse(),
             EventTime::from_nanos(millis * 1_000_000),
-            position(50.0, 50.0),
+            position(50.0 + pan, 50.0),
             phase,
         ))
     };
-    laid.dispatch_pointer_event(&packet(0, PanZoomPhase::Start));
+    laid.dispatch_pointer_event(&packet(0, PanZoomPhase::Start, 0.0));
     for (millis, pan, scale) in [(10, 20.0, 1.2), (20, 40.0, 1.5), (30, 60.0, 1.9)] {
         laid.dispatch_pointer_event(&packet(
             millis,
             PanZoomPhase::Update(
-                PanZoomTransform::try_new(Offset::new(pan, 0.0), scale, 0.0)
-                    .expect("finite authored native history"),
+                PanZoomTransform::try_new(scale, 0.0).expect("finite authored native history"),
             ),
+            pan,
         ));
     }
-    laid.dispatch_pointer_event(&packet(31, PanZoomPhase::End));
+    laid.dispatch_pointer_event(&packet(31, PanZoomPhase::End, 60.0));
     let observed = ends.borrow();
     assert_eq!(observed.len(), 1, "one source release");
     assert!(

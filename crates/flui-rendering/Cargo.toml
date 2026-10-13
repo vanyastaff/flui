@@ -53,7 +53,7 @@ bitflags = { workspace = true }
 smallvec = { workspace = true }
 downcast-rs = { workspace = true }
 dyn-clone = { workspace = true }
-slab = "0.4"                             # For RenderTree storage
+slab = { workspace = true }              # For RenderTree storage
 crossbeam-channel = { workspace = true } # Private bounded render-invalidation channel
 rustc-hash = { workspace = true }        # FxHashSet for layout cycle guard
 

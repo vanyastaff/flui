@@ -222,6 +222,7 @@ fn pointer_and_gesture_recognition() {
             ("listener::listener_unmount_preserves_one_captured_contact_terminal", crate::listener::listener_unmount_preserves_one_captured_contact_terminal),
             ("listener::listener_admission_keeps_terminal_delivery_and_weak_ownership", crate::listener::listener_admission_keeps_terminal_delivery_and_weak_ownership),
             ("listener::listener_raw_observer_panic_still_delivers_the_recognizer_event", crate::listener::listener_raw_observer_panic_still_delivers_the_recognizer_event),
+            ("listener::a_revision_reaches_listeners_and_never_recognizers", crate::listener::a_revision_reaches_listeners_and_never_recognizers),
             ("listener::custom_recognizer_competes_through_a_listener", crate::listener::custom_recognizer_competes_through_a_listener),
             ("draggable_events::unmounting_a_target_releases_its_slot", crate::draggable_events::unmounting_a_target_releases_its_slot),
             ("draggable_events::draggable_reads_admission_profiles_and_retires_authored_owners", crate::draggable_events::draggable_reads_admission_profiles_and_retires_authored_owners),

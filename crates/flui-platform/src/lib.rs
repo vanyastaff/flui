@@ -132,24 +132,13 @@
 //! - `default`: Includes winit platform
 //! - `headless`: Includes headless testing platform
 //!
-//! # Platform Capabilities
+//! # Input capabilities
 //!
-//! Query platform capabilities to adapt behavior:
-//!
-//! ```rust,ignore
-//! use flui_platform::current_platform;
-//!
-//! let platform = current_platform();
-//! let caps = platform.capabilities();
-//!
-//! if caps.supports_touch() {
-//!     // Enable touch gestures
-//! }
-//!
-//! if caps.suspend_rendering_in_background() {
-//!     // Implement background suspension
-//! }
-//! ```
+//! There is no per-platform capability constant (ADR-0213). A capability with
+//! a handle answers through it (`PlatformWindow::haptics`, `text_input`); the
+//! rest arrive per window as `PlatformInput::Capabilities`, first as a
+//! snapshot before any other input once the window's input callback is
+//! installed, then as changes in order with the input around them.
 
 // Platform FFI is the sanctioned `unsafe` boundary of the workspace (Win32 /
 // AppKit / Android NDK / wasm-bindgen backends — `headless` has none). The
@@ -223,7 +212,8 @@ pub use platforms::LinuxPlatform;
 pub use platforms::MacOSPlatform;
 pub use platforms::{
     FakeAccessibility, FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens,
-    HeadlessExitReevaluation, HeadlessOwnerTurns, HeadlessPlatform, MockWindow,
+    HeadlessExitReevaluation, HeadlessInputDevices, HeadlessOwnerTurns, HeadlessPlatform,
+    MockWindow,
 };
 // Web platform
 #[cfg(target_arch = "wasm32")]
@@ -245,12 +235,11 @@ pub use task::{Task, TaskLabel};
 // Re-export core traits
 pub use traits::{
     AccessibilityActionListener, AccessibilityActivationListener, Clipboard, ClipboardItem,
-    CursorError, DesktopCapabilities, DispatchEventResult, DisplayId, HostWindow,
-    MobileCapabilities, PathPromptOptions, Platform, PlatformAccessibility, PlatformCapabilities,
-    PlatformDisplay, PlatformExecutor, PlatformHaptics, PlatformReadyCallback, PlatformTextInput,
-    PlatformWindow, SessionEndAnswer, SessionEndPhase, WebCapabilities, WindowAppearance,
-    WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowExecutionState, WindowId,
-    WindowMode, WindowOptions, WindowReveal, WindowShowError,
+    CursorError, DispatchEventResult, DisplayId, HostWindow, PathPromptOptions, Platform,
+    PlatformAccessibility, PlatformDisplay, PlatformExecutor, PlatformHaptics,
+    PlatformReadyCallback, PlatformTextInput, PlatformWindow, SessionEndAnswer, SessionEndPhase,
+    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowExecutionState,
+    WindowId, WindowMode, WindowOptions, WindowReveal, WindowShowError,
 };
 // The owner-thread capability (ADR-0039 §1): minted only by a backend,
 // handed to `on_ready`, never re-exported with a public minting seam.
@@ -343,16 +332,6 @@ pub use traits::{
 ///     println!("Platform ready!");
 ///     Ok(())
 /// }))?;
-/// ```
-///
-/// ```rust,ignore
-/// // Check platform capabilities
-/// let platform = current_platform()?;
-/// let caps = platform.capabilities();
-///
-/// if caps.supports_multiple_windows() {
-///     // Open multiple windows
-/// }
 /// ```
 ///
 /// # Platform-Specific Code

@@ -1638,7 +1638,7 @@ fn pinch_scale_is_finite_and_positive() {
     // cumulative scales. Checked transport refuses them before routing.
     for scale in [f64::NAN, 0.0, -2.0, f64::INFINITY] {
         assert!(
-            PanZoomTransform::try_new(Offset::ZERO, scale, 0.0).is_err(),
+            PanZoomTransform::try_new(scale, 0.0).is_err(),
             "invalid cumulative scale {scale}"
         );
     }
@@ -1664,9 +1664,7 @@ fn pinch_scale_is_finite_and_positive() {
             flui_platform_api::EventTime::from_nanos(1_000),
             PointerPosition::try_new(flui_foundation::geometry::Point::ZERO)
                 .expect("finite focal position"),
-            PanZoomPhase::Update(
-                PanZoomTransform::try_new(Offset::ZERO, 1.25, 0.0).expect("valid zoom"),
-            ),
+            PanZoomPhase::Update(PanZoomTransform::try_new(1.25, 0.0).expect("valid zoom")),
         ));
         GestureBinding::new().handle_pointer_event_with_result(&event, &path);
     });

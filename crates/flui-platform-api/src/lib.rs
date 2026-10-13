@@ -11,7 +11,8 @@
 //! - the text store an input method pulls from ([`TextStore`] and the rest of
 //!   [`text_store`], ADR-0090);
 //! - the input vocabulary ([`PlatformInput`], [`DispatchEventResult`],
-//!   [`DragDropEvent`] and the conversion helpers);
+//!   [`DragDropEvent`] and the conversion helpers) and the handle-less input capabilities
+//!   ([`input_capabilities`], ADR-0213);
 //! - the per-window contract [`PlatformWindow`] and the window vocabulary
 //!   ([`WindowId`], [`WindowOptions`], [`WindowMode`], [`WindowEvent`],
 //!   [`WindowExecutionState`], [`CursorIcon`] and the errors window
@@ -97,6 +98,7 @@ mod haptic_feedback;
 mod haptics;
 mod ime;
 mod input;
+pub mod input_capabilities;
 pub mod keyboard;
 mod locale;
 mod platform_window;
@@ -127,10 +129,11 @@ pub use keyboard::{Code, Key, KeyEvent, KeyState, Location, Modifiers, NamedKey}
 pub use locale::{InvalidLocale, Locale};
 pub use platform_window::PlatformWindow;
 pub use pointer::{
-    ButtonChange, CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool,
-    PointerButton, PointerButtons, PointerCancel, PointerEvent, PointerId, PointerInfo,
-    PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole,
-    PointerSample, ScrollDelta, ScrollEvent, ScrollPhase, ScrollPrecision, ScrollUnit,
+    ButtonChange, CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenSqueeze,
+    PenSqueezePhase, PenTool, PointerButton, PointerButtons, PointerCancel, PointerEvent,
+    PointerId, PointerInfo, PointerKind, PointerMove, PointerPosition, PointerPress,
+    PointerRelease, PointerRevision, PointerRole, PointerSample, ScrollDelta, ScrollEvent,
+    ScrollPhase, ScrollPrecision, ScrollUnit,
 };
 pub use preferences::{
     Distance, DurationScale, FlingSpeeds, GestureGeometry, GesturePreferences, InvalidPreference,

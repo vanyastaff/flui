@@ -62,9 +62,9 @@ use crate::{
         hwnd_affinity::{ContextLedger, UserDataRefusal},
     },
     traits::{
-        Clipboard, DesktopCapabilities, HostWindow, OpenWindowError, OwnerPlatform, Platform,
-        PlatformCapabilities, PlatformDisplay, PlatformExecutor, PlatformReadyCallback,
-        WindowAppearance, WindowEvent, WindowId, WindowMode, WindowOptions, owner::OwnerHooks,
+        Clipboard, HostWindow, OpenWindowError, OwnerPlatform, Platform, PlatformDisplay,
+        PlatformExecutor, PlatformReadyCallback, WindowAppearance, WindowEvent, WindowId,
+        WindowMode, WindowOptions, owner::OwnerHooks,
     },
 };
 
@@ -2385,6 +2385,24 @@ impl Platform for WindowsPlatform {
             self.apartment.share(),
         )?;
         let hwnd_value = window.hwnd().0 as isize;
+        let identity = window.identity;
+        let wake = crate::shared::owner_signal::OwnerSignal::input_wake(
+            &self.owner_control.signal,
+            move || {
+                let hwnd = HWND(hwnd_value as *mut core::ffi::c_void);
+                let _ = with_window_context_checked(hwnd, "resume_input_delivery", |context| {
+                    if context.identity == identity {
+                        context.callbacks.resume_input_delivery();
+                    }
+                });
+            },
+        );
+        let _ = with_window_context_checked(window.hwnd(), "input_capabilities", |context| {
+            context
+                .callbacks
+                .set_input_capabilities(crate::shared::input_availability::windows());
+            context.callbacks.set_input_wake(wake);
+        });
 
         // Store window
         let _prev = self.windows.lock().insert(hwnd_value, window.clone());
@@ -2402,13 +2420,6 @@ impl Platform for WindowsPlatform {
         // No Win32 transport yet (IDropTarget/IDataObject land with the
         // native slices of ADR-0038): inert and honest.
         Arc::new(NullDataTransferSource)
-    }
-
-    // ==================== Platform Capabilities ====================
-
-    fn capabilities(&self) -> &dyn PlatformCapabilities {
-        // TODO: Return actual capabilities
-        &WINDOWS_CAPABILITIES
     }
 
     fn name(&self) -> &'static str {
@@ -2951,6 +2962,3 @@ fn restore_translated_sys_chars(hwnd: HWND, held: &[(WPARAM, LPARAM)]) {
         }
     }
 }
-
-// Windows platform capabilities
-static WINDOWS_CAPABILITIES: DesktopCapabilities = DesktopCapabilities;

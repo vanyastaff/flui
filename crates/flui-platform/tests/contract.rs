@@ -1194,6 +1194,9 @@ mod native_windows {
             let callback_replacement = Arc::clone(&replacement);
             let callback_replacement_closes = Arc::clone(&replacement_closes);
             window.on_input(Box::new(move |event| {
+                if matches!(event, flui_platform::traits::PlatformInput::Capabilities(_)) {
+                    return flui_platform::traits::DispatchEventResult::default();
+                }
                 assert_eq!(
                     event.as_keyboard().expect("native key event").key,
                     flui_platform_api::keyboard::Key::Named(
@@ -1332,6 +1335,9 @@ mod native_windows {
         let typed = Arc::new(Mutex::new(Vec::<String>::new()));
         let typed_observations = Arc::clone(&typed);
         window.on_input(Box::new(move |event| {
+            if matches!(event, flui_platform::traits::PlatformInput::Capabilities(_)) {
+                return flui_platform::traits::DispatchEventResult::default();
+            }
             if let Some(keyboard) = event.as_keyboard()
                 && keyboard.state() == flui_platform_api::keyboard::KeyState::Down
                 && let flui_platform_api::keyboard::Key::Character(text) = &keyboard.key
@@ -1473,6 +1479,9 @@ mod native_windows {
         )>::new()));
         let observed = Arc::clone(&keys);
         window.on_input(Box::new(move |event| {
+            if matches!(event, flui_platform::traits::PlatformInput::Capabilities(_)) {
+                return flui_platform::traits::DispatchEventResult::default();
+            }
             // Only the dead key under test; modifier releases the platform
             // synthesizes around a layout switch are not part of this contract.
             if let Some(keyboard) = event.as_keyboard()
@@ -1702,6 +1711,9 @@ mod native_windows {
         let typed = Arc::new(Mutex::new(Vec::<String>::new()));
         let typed_observations = Arc::clone(&typed);
         window.on_input(Box::new(move |event| {
+            if matches!(event, flui_platform::traits::PlatformInput::Capabilities(_)) {
+                return flui_platform::traits::DispatchEventResult::default();
+            }
             if let Some(keyboard) = event.as_keyboard()
                 && keyboard.state() == flui_platform_api::keyboard::KeyState::Down
                 && let flui_platform_api::keyboard::Key::Character(text) = &keyboard.key
@@ -1840,6 +1852,9 @@ mod native_windows {
         // The input callback must be `Send`; carry the handle as an address.
         let pumped_window = hwnd.0 as usize;
         window.on_input(Box::new(move |event| {
+            if matches!(event, flui_platform::traits::PlatformInput::Capabilities(_)) {
+                return flui_platform::traits::DispatchEventResult::default();
+            }
             if event
                 .as_keyboard()
                 .is_some_and(|key| key.state() == flui_platform_api::keyboard::KeyState::Down)
@@ -2057,6 +2072,9 @@ mod native_windows {
         let observed = Arc::new(Mutex::new(Vec::new()));
         let keys = observed.clone();
         window.on_input(Box::new(move |event| {
+            if matches!(event, flui_platform::traits::PlatformInput::Capabilities(_)) {
+                return flui_platform::traits::DispatchEventResult::default();
+            }
             if let Some(event) = event.as_keyboard() {
                 keys.lock().expect("keys").push(event.clone());
             }
@@ -2443,6 +2461,9 @@ mod native_windows {
         let events = Arc::new(Mutex::new(Vec::new()));
         let recorded = Arc::clone(&events);
         window.on_input(Box::new(move |input| {
+            if matches!(input, flui_platform::traits::PlatformInput::Capabilities(_)) {
+                return flui_platform::traits::DispatchEventResult::default();
+            }
             if let Some(event) = input.as_pointer() {
                 recorded.lock().expect("pointer log").push(event.clone());
             }
