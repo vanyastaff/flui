@@ -6,8 +6,9 @@
 - **Interactive semantics roles** (`flui-protocol`, ADR-0203): `Button`, `CheckBox`,
   `RadioButton`, `Switch`, `Link`, `Slider`, `Image`, `Heading`, `TextInput`,
   `MultilineTextInput` and `PasswordInput`. `SemanticsRole::is_text_input` names the last three.
-- **`Semantics::checkbox`, `radio`, `switch` and `toggled`** (`flui-widgets`): each sets the
-  control's role and its state together.
+- **`Semantics::checkbox`, `radio` and `switch`** (`flui-widgets`): each sets the control's role
+  and its state together. `Semantics::toggled(Toggled)` sets the state alone; a switch that
+  used the old boolean `toggled` migrates to `switch`.
 
 ### Changed
 
