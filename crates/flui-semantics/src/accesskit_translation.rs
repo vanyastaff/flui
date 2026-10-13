@@ -630,12 +630,7 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
         .filter(|_| prohibits_name(data.attrs.role));
     match (moved_label, &data.attrs.hint) {
         (Some(label), Some(hint)) => {
-            node.set_description(format!(
-                "{}
-{}",
-                label.as_str(),
-                hint.as_str()
-            ));
+            node.set_description(format!("{}\n{}", label.as_str(), hint.as_str()));
         }
         (Some(text), None) | (None, Some(text)) => node.set_description(text.as_str()),
         (None, None) => {}
