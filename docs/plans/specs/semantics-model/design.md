@@ -567,7 +567,7 @@ impl SemanticsOwner {
 9. **W9.** Оставшиеся свойства (`orientation`, `current`, `has_popup`, `autocomplete`,
    `keyboard_shortcut`, `language`, `url`, `role_description`) и роли из матрицы.
 
-W2–W3 — фундамент. W6–W8 зависят от W4: коллекциям нужны роли деревьев и сеток, live-регионам — `Log`, `Timer`, `Marquee`, тексту — `SetTextSelection`, `ReplaceSelectedText` и типизированные данные действий; W5 и W9 тоже идут после W4. После W4 работы W5–W9 независимы друг от друга.
+W2–W3 — фундамент. W6–W8 зависят от W4: коллекциям нужны роли деревьев и сеток, live-регионам — `Log`, `Timer`, `Marquee`, тексту — `SetTextSelection`, `ReplaceSelectedText` и типизированные данные действий; W5 и W9 тоже идут после W4. После W4 работы независимы друг от друга, кроме W8: синтетические id выдаёт аллокатор W7.
 
 ## Риски
 
