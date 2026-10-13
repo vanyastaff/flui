@@ -83,6 +83,8 @@ mod layout_builder;
 mod lazy_grid;
 #[path = "lazy_list.rs"]
 mod lazy_list;
+#[path = "listenable_relays.rs"]
+mod listenable_relays;
 #[path = "listener.rs"]
 mod listener;
 #[path = "localizations.rs"]

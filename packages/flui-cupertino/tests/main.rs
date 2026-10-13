@@ -110,6 +110,10 @@ fn component_contracts() {
             "page_scaffold::content is padded below the nav bar plus the top inset",
             page_scaffold::content_is_padded_below_the_nav_bar_plus_the_top_inset,
         ),
+        (
+            "tab_scaffold::tab controller relays keep failure custody",
+            tab_scaffold::tab_controller_relays_keep_failure_custody,
+        ),
     ]);
 }
 

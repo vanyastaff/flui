@@ -3082,6 +3082,12 @@ impl ScriptedAnimation {
 }
 
 impl flui_foundation::Listenable for ScriptedAnimation {
+    fn add_observer(
+        &self,
+        observer: flui_foundation::ListenerObserver,
+    ) -> flui_foundation::ListenerId {
+        self.controller.add_observer(observer)
+    }
     fn add_listener(
         &self,
         callback: flui_foundation::ListenerCallback,
@@ -3192,6 +3198,12 @@ struct CountingAnimation {
 }
 
 impl flui_foundation::Listenable for CountingAnimation {
+    fn add_observer(
+        &self,
+        observer: flui_foundation::ListenerObserver,
+    ) -> flui_foundation::ListenerId {
+        self.controller.add_observer(observer)
+    }
     fn add_listener(
         &self,
         callback: flui_foundation::ListenerCallback,

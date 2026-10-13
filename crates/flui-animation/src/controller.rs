@@ -20,7 +20,7 @@ use crate::StatusObserver;
 use crate::animation::{Animation, AnimationDirection, Retirement, StatusCallback, Terminal};
 use crate::curve::Curve;
 use crate::error::{AnimationError, AnimationInput, RangeDefect};
-use crate::retarget::Segment;
+use crate::retarget::{Reversal, Segment};
 use crate::run_future::{RunCompleter, RunDelivery};
 use crate::simulation::{Simulation, SpringDescription, SpringSimulation, SpringType, Tolerance};
 use crate::status::AnimationStatus;
@@ -147,6 +147,8 @@ enum SimulationRun {
         /// before the current run's seam. Future replacement does not restart
         /// an unchanged spring's analytic or exact-rest suffix.
         elapsed_offset: f64,
+        /// What the next retarget needs to reverse this segment faster.
+        reversal: Reversal<f64>,
     },
     Value(Rc<dyn crate::animated_value::ValueMotion>),
     Fling {
