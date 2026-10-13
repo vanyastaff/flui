@@ -329,6 +329,9 @@ script gates already run in CI, so formatting and anything they catch is not wor
   - **Conventions.** The Rust API Guidelines: naming, `as_`/`to_`/`into_`, getters without
     `get_`, `From`/`TryFrom`/`Display`/`Default` where they apply, `#[must_use]`,
     `#[non_exhaustive]` on public enums that will grow.
+  - **Implementable traits.** A trait implemented outside its crate names only documented public
+    types in its required methods, each with a documented way to obtain a value; a
+    `#[doc(hidden)]` type there forces implementors onto hidden API.
   - **Architecture.** One responsibility per module, dependencies down the layers, no
     behavior-free pass-through types.
 - **Tests:** for each behavior change, find the test that covers it and ask whether it would fail
