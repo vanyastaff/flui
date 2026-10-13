@@ -758,6 +758,16 @@ impl SemanticsOwner {
         else {
             return Err(unsupported);
         };
+        // A custom action from an older snapshot may name an id the node no
+        // longer offers; the shared handler must not run it.
+        if let ActionCall::CustomAction(id) = call
+            && !config
+                .effective_custom_actions()
+                .iter()
+                .any(|action| action.id == id)
+        {
+            return Err(unsupported);
+        }
 
         if let ActionCall::SetNumericValue(value) = call
             && !config
@@ -1352,6 +1362,44 @@ mod tests {
             owner.examined_last_flush(),
             1 + 1 + sources.len(),
             "one dirty node, the anchored title and every clean relation source"
+        );
+    }
+
+    /// A custom action request names one of the node's current custom
+    /// actions or is refused: a request from an older snapshot must not reach
+    /// the shared handler with an id the node no longer offers.
+    #[test]
+    fn a_stale_custom_action_id_is_refused() {
+        let mut owner = SemanticsOwner::new(Arc::new(|_: &crate::TreeUpdate| {}));
+        let render = RenderId::new(3);
+        let mut node = SemanticsNode::new().with_source_render_id(render);
+        node.config_mut()
+            .add_custom_action(crate::CustomSemanticsAction::new(7, "Archive"));
+        node.config_mut()
+            .add_action(SemanticsAction::CustomAction, Arc::new(|_| {}));
+        let root = owner.insert(node);
+        owner.set_root(Some(root));
+        let target = AccessibilityNodeId::from(render);
+
+        assert!(
+            owner
+                .resolve_action(SemanticsActionRequest::new(
+                    target,
+                    ActionCall::CustomAction(7)
+                ))
+                .is_ok()
+        );
+        assert_eq!(
+            owner
+                .resolve_action(SemanticsActionRequest::new(
+                    target,
+                    ActionCall::CustomAction(8)
+                ))
+                .err(),
+            Some(SemanticsActionError::UnsupportedAction {
+                node_id: target,
+                action: SemanticsAction::CustomAction,
+            })
         );
     }
 }

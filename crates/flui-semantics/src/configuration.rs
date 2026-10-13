@@ -1196,6 +1196,12 @@ impl SemanticsConfiguration {
             }
         }
         let other_custom_actions = other.effective_custom_actions().to_vec();
+        // Every custom action shares one handler slot; a contributor whose
+        // effective handler took it above leaves the receiver's metadata
+        // naming actions that handler does not run.
+        let replaces_custom_handler =
+            effective_other_actions & SemanticsAction::CustomAction.value() != 0
+                && other.actions.contains_key(&SemanticsAction::CustomAction);
 
         // Exhaustive: a new attribute does not compile until it decides here.
         let SemanticsAttributes {
@@ -1233,10 +1239,7 @@ impl SemanticsConfiguration {
 
         mine.states.merge(states);
         mine.role = more_specific_role(mine.role, *role);
-        // Every custom action shares one handler slot, which the contributor's
-        // handler took above when it brought one: the receiver's metadata
-        // would then name actions that handler does not run.
-        if !other_custom_actions.is_empty() {
+        if replaces_custom_handler {
             mine.custom_actions = other_custom_actions.into_iter().collect();
         }
         for tag in tags {
@@ -1325,8 +1328,9 @@ impl SemanticsConfiguration {
 ///
 /// A structural role (tab, list item, dialog, …) is authored structure and
 /// outranks every interactive kind, as an explicit role always did. Among
-/// interactive kinds the more specific wins: a checkable role, then a button,
-/// then a link, text field or slider, then content (an image, a heading or a
+/// interactive kinds the more specific wins: a checkable role (menu checkable
+/// items included), then a button, then a link, text field, slider or other
+/// value control (spin button, scroll bar, separator, combo box), then content (an image, a heading or a
 /// text-level role such as a paragraph). On a tie the receiver keeps its role.
 /// The order is what makes a merged list tile with a radio a radio button
 /// rather than a button
@@ -1351,10 +1355,19 @@ pub(crate) fn more_specific_role(
             | SemanticsRole::Definition
             | SemanticsRole::Time
             | SemanticsRole::Math => 1,
-            SemanticsRole::Link | SemanticsRole::Slider => 2,
+            SemanticsRole::Link
+            | SemanticsRole::Slider
+            | SemanticsRole::SpinButton
+            | SemanticsRole::ScrollBar
+            | SemanticsRole::Separator
+            | SemanticsRole::ComboBox => 2,
             role if role.is_text_input() => 2,
             SemanticsRole::Button => 3,
-            SemanticsRole::CheckBox | SemanticsRole::RadioButton | SemanticsRole::Switch => 4,
+            SemanticsRole::CheckBox
+            | SemanticsRole::RadioButton
+            | SemanticsRole::Switch
+            | SemanticsRole::MenuItemCheckbox
+            | SemanticsRole::MenuItemRadio => 4,
             _ => 5,
         }
     }
@@ -1559,6 +1572,18 @@ mod tests {
             [2],
             "and it is that action's handler"
         );
+
+        // A contributor that brings a handler but no metadata still takes the
+        // slot, so the receiver's actions are no longer offered.
+        let mut bare = SemanticsConfiguration::new();
+        bare.add_action(SemanticsAction::CustomAction, Arc::new(|_| {}));
+        let mut merged = source(1, "Archive");
+        merged.absorb(&bare);
+        assert_eq!(
+            merged.effective_custom_actions(),
+            &[] as &[crate::CustomSemanticsAction],
+            "the receiver's actions went with its handler"
+        );
     }
 
     /// A forced merge keeps one scrollable's metrics: a receiver with any
@@ -1642,6 +1667,11 @@ mod tests {
             (R::Heading, R::Link, R::Link),
             (R::None, R::Image, R::Image),
             (R::Link, R::Slider, R::Link),
+            (R::ScrollBar, R::CheckBox, R::CheckBox),
+            (R::SpinButton, R::Switch, R::Switch),
+            (R::ComboBox, R::Button, R::Button),
+            (R::Separator, R::Heading, R::Separator),
+            (R::MenuItemCheckbox, R::Button, R::MenuItemCheckbox),
         ];
         for &(receiver, contributor, expected) in rows {
             assert_eq!(
