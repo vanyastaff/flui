@@ -26,6 +26,7 @@ use crate::action::{
     ActionCall, ActionDecodeError, CustomActionId, ScrollUnit, SemanticsAction, TextSelection,
     UnroutedAction,
 };
+
 use crate::attributes::SemanticsAttributes;
 use crate::identity::AccessibilityNodeId;
 use crate::node::SemanticsNode;
@@ -520,6 +521,22 @@ pub fn semantics_action_request_for(
 /// unrepresentable.)
 #[must_use]
 pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
+    // Publication reads the view `applicability` keeps: what the declared role
+    // does not support is left out here, and the owner reports it.
+    let view = crate::applicability::retain_applicable(data.attrs);
+    let filtered;
+    let data = if let std::borrow::Cow::Owned(attrs) = &view {
+        filtered = PublishView {
+            id: data.id,
+            attrs,
+            actions: data.actions,
+            rect: data.rect,
+            children: data.children.clone(),
+        };
+        &filtered
+    } else {
+        data
+    };
     // Exhaustive: an attribute added to `SemanticsAttributes` does not compile
     // until it is published here or its reason for not being published is
     // written down.
@@ -553,8 +570,8 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
         scroll_index: _,
         // Published with the `CustomAction` bit below.
         custom_actions,
-        // Not published yet: AccessKit has no adjacent-value or platform-view
-        // property, and text lengths join with the changes that route them.
+        // Unpublished: AccessKit has no adjacent-value or platform-view
+        // property, and FLUI publishes no text runs that text lengths describe.
         increased_value: _,
         decreased_value: _,
         platform_view_id: _,
@@ -611,9 +628,7 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
         node.set_placeholder(placeholder.as_str());
     }
     // AccessKit's level is zero-based where `aria-level` is one-based.
-    if role == Role::Heading
-        && let Some(level) = data.attrs.heading_level
-    {
+    if let Some(level) = data.attrs.heading_level {
         node.set_level(usize::from(level.get() - 1));
     }
     if let Some(direction) = data.attrs.text_direction {
