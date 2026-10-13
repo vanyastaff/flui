@@ -501,6 +501,14 @@ fn explicit_header_is_a_present_property() {
     assert!(!properties.is_empty());
 }
 
+fn heading_level_is_a_present_property() {
+    let properties = flui_semantics::SemanticsProperties {
+        heading_level: Some(flui_semantics::HeadingLevel::H3),
+        ..flui_semantics::SemanticsProperties::default()
+    };
+    assert!(!properties.is_empty());
+}
+
 fn explicit_image_is_a_present_property() {
     let properties = flui_semantics::SemanticsProperties {
         image: Some(false),
@@ -723,6 +731,10 @@ fn semantics_property_presence_includes_every_public_annotation() {
         (
             "explicit_header_is_a_present_property",
             explicit_header_is_a_present_property,
+        ),
+        (
+            "heading_level_is_a_present_property",
+            heading_level_is_a_present_property,
         ),
         (
             "explicit_image_is_a_present_property",
@@ -1274,4 +1286,82 @@ fn descendant_reveal_snapshots_preserve_identity_failure_and_recovery() {
         failures.is_empty(),
         "descendant reveal rows failed: {failures:?}"
     );
+}
+
+/// A relation resolves to the published node declaring its anchor, on the full
+/// path and incrementally: when the target remounts under a new identity while
+/// its source is unchanged, the source is republished pointing at the new
+/// node; when no node declares the anchor, the relation is dropped (ADR-0205).
+#[test]
+fn relations_resolve_through_anchors_across_publication() {
+    use flui_semantics::{SemanticsAnchor, SemanticsRelation};
+
+    let render = |index: u32| {
+        RenderId::new_gen(
+            index,
+            core::num::NonZeroU32::new(7).expect("fixture generation is non-zero"),
+        )
+    };
+    let published = |index: u32| {
+        accesskit::NodeId(flui_semantics::AccessibilityNodeId::from(render(index)).as_u64())
+    };
+    let title = SemanticsAnchor::new();
+    let unknown = SemanticsAnchor::new();
+
+    let titled = |index: u32, anchored: bool| {
+        let mut title_node = node(index, "Delete file?");
+        if anchored {
+            title_node.config_mut().add_anchor(title.clone());
+        }
+        title_node
+    };
+    let dialog_in = |update: &TreeUpdate| {
+        update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == published(2))
+            .map(|(_, node)| node.clone())
+    };
+
+    let (mut owner, received) = recording_owner();
+    let root = owner.insert(node(0, "root"));
+    let first_title = owner.insert(titled(1, true));
+    let mut dialog = SemanticsNode::new().with_source_render_id(render(2));
+    dialog
+        .config_mut()
+        .add_relation(SemanticsRelation::LabelledBy, title.clone());
+    dialog
+        .config_mut()
+        .add_relation(SemanticsRelation::Controls, unknown);
+    let dialog = owner.insert(dialog);
+    owner.add_child(root, first_title);
+    owner.add_child(root, dialog);
+    owner.set_root(Some(root));
+    owner.flush();
+    let full = dialog_in(&received.lock()[0]).expect("the full update carries the dialog");
+    assert_eq!(full.labelled_by(), &[published(1)]);
+    assert!(
+        full.controls().is_empty(),
+        "a relation to an anchor no node declares is dropped"
+    );
+
+    // Only the title remounts; the dialog's own node stays clean, as it does
+    // under a mark-scoped graft that leaves its subtree alone.
+    owner.remove_child(root, first_title);
+    owner.remove(first_title);
+    let second_title = owner.insert(titled(3, true));
+    owner.add_child(root, second_title);
+    owner.flush();
+    let moved = dialog_in(received.lock().last().expect("an update"))
+        .expect("the unchanged dialog is republished when its target moves");
+    assert_eq!(moved.labelled_by(), &[published(3)]);
+
+    owner.remove_child(root, second_title);
+    owner.remove(second_title);
+    let unanchored = owner.insert(titled(4, false));
+    owner.add_child(root, unanchored);
+    owner.flush();
+    let dropped = dialog_in(received.lock().last().expect("an update"))
+        .expect("the dialog is republished when its target goes away");
+    assert_eq!(dropped.labelled_by(), &[] as &[accesskit::NodeId]);
 }

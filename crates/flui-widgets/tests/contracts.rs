@@ -768,6 +768,7 @@ fn controlled_disclosure_state_and_geometry() {
         ("catalog_disclosure::disclosure_proposes_controlled_changes_and_retains_real_header_focus", crate::catalog_disclosure::disclosure_proposes_controlled_changes_and_retains_real_header_focus as fn()),
         ("catalog_disclosure::disclosure_disabled_and_replaced_handlers_do_not_run_old_proposals", crate::catalog_disclosure::disclosure_disabled_and_replaced_handlers_do_not_run_old_proposals as fn()),
         ("catalog_disclosure::disclosure_indicator_obeys_constraints_and_explicit_reading_direction", crate::catalog_disclosure::disclosure_indicator_obeys_constraints_and_explicit_reading_direction as fn()),
+        ("catalog_disclosure::disclosure_header_controls_its_labelled_panel", crate::catalog_disclosure::disclosure_header_controls_its_labelled_panel as fn()),
         ("catalog_disclosure::disclosure_focus_reentry_cannot_activate_after_focus_manager_close", crate::catalog_disclosure::disclosure_focus_reentry_cannot_activate_after_focus_manager_close as fn()),
         ("catalog_disclosure::disclosure_retained_expand_after_unmount_cannot_reach_a_new_control", crate::catalog_disclosure::disclosure_retained_expand_after_unmount_cannot_reach_a_new_control as fn()),
         ("catalog_disclosure::disclosure_owns_constructor_clone_and_retirement_failure_tails", crate::catalog_disclosure::disclosure_owns_constructor_clone_and_retirement_failure_tails as fn()),

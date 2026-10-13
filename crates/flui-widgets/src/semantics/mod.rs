@@ -41,8 +41,9 @@ use flui_objects::{
 use flui_rendering::{
     protocol::BoxProtocol,
     semantics::{
-        ActionArgs, SemanticsAction, SemanticsActionHandler, SemanticsConfiguration,
-        SemanticsProperties, SemanticsRole, TextDirection,
+        ActionArgs, Assertiveness, HeadingLevel, SemanticsAction, SemanticsActionHandler,
+        SemanticsAnchor, SemanticsConfiguration, SemanticsProperties, SemanticsRelation,
+        SemanticsRole, TextDirection,
     },
 };
 use flui_view::{
@@ -369,6 +370,14 @@ impl Semantics {
         self
     }
 
+    /// Make this node a header at `level` of the outline, which screen
+    /// readers announce and navigate by.
+    #[must_use]
+    pub fn heading_level(mut self, level: HeadingLevel) -> Self {
+        self.configuration.set_heading_level(level);
+        self
+    }
+
     /// Set whether this node is an image.
     #[must_use]
     pub fn image(mut self, image: bool) -> Self {
@@ -439,10 +448,66 @@ impl Semantics {
         self
     }
 
-    /// Set whether this node is a live region.
+    /// Name this node by `anchor`, so other nodes' relations to the anchor
+    /// resolve here (ADR-0205).
     #[must_use]
-    pub fn live_region(mut self, live_region: bool) -> Self {
-        self.configuration.set_live_region(live_region);
+    pub fn anchor(mut self, anchor: SemanticsAnchor) -> Self {
+        self.configuration.add_anchor(anchor);
+        self
+    }
+
+    /// Name this node by the nodes `anchor` names, when it has no label of
+    /// its own: a dialog by its title.
+    #[must_use]
+    pub fn labelled_by(mut self, anchor: SemanticsAnchor) -> Self {
+        self.configuration
+            .add_relation(SemanticsRelation::LabelledBy, anchor);
+        self
+    }
+
+    /// Record that this node controls the nodes `anchor` names: a button and
+    /// the panel it opens.
+    #[must_use]
+    pub fn controls(mut self, anchor: SemanticsAnchor) -> Self {
+        self.configuration
+            .add_relation(SemanticsRelation::Controls, anchor);
+        self
+    }
+
+    /// Set whether this form control must be filled before submitting.
+    #[must_use]
+    pub fn required(mut self, required: bool) -> Self {
+        self.configuration.set_required(required);
+        self
+    }
+
+    /// Set whether this form control's value failed validation.
+    #[must_use]
+    pub fn invalid(mut self, invalid: bool) -> Self {
+        self.configuration.set_invalid(invalid);
+        self
+    }
+
+    /// Set what an empty text field shows in place of a value.
+    #[must_use]
+    pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
+        self.configuration.set_placeholder(placeholder.into());
+        self
+    }
+
+    /// Set whether this node is modal, as a dialog is: while it is shown,
+    /// assistive technology reaches only it and its descendants.
+    #[must_use]
+    pub fn modal(mut self, modal: bool) -> Self {
+        self.configuration.set_modal(modal);
+        self
+    }
+
+    /// Make this node a live region: assistive technology announces its
+    /// changes without the user moving to it, politely or interrupting.
+    #[must_use]
+    pub fn live_region(mut self, politeness: Assertiveness) -> Self {
+        self.configuration.set_live_region(Some(politeness));
         self
     }
 

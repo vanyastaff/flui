@@ -410,6 +410,20 @@ pub struct EditableText {
     /// Called with the new text after each edit the user makes — see
     /// [`Self::on_changed`]'s doc.
     pub(super) on_changed: Option<TextChanged>,
+    /// What assistive technology is told about the field beyond its value.
+    pub(super) field_semantics: FieldSemantics,
+}
+
+/// The field's name, placeholder, validity and whether it is required, as its semantics node
+/// publishes them. A decorated field fills these from its visible label, hint
+/// and error, which then publish no nodes of their own.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct FieldSemantics {
+    label: Option<String>,
+    hint: Option<String>,
+    placeholder: Option<String>,
+    invalid: bool,
+    required: bool,
 }
 
 /// Callback for [`EditableText::on_changed`], with the dispatch's
@@ -434,7 +448,48 @@ impl EditableText {
             obscuring_character: DEFAULT_OBSCURING_CHARACTER,
             on_submitted: None,
             on_changed: None,
+            field_semantics: FieldSemantics::default(),
         }
+    }
+
+    /// The field's accessible name, which a screen reader announces on
+    /// reaching it: what its visible label says.
+    #[must_use]
+    pub fn semantic_label(mut self, label: impl Into<String>) -> Self {
+        self.field_semantics.label = Some(label.into());
+        self
+    }
+
+    /// Supplementary text a screen reader reads after the field's name and
+    /// value: what its helper or error line says.
+    #[must_use]
+    pub fn semantic_hint(mut self, hint: impl Into<String>) -> Self {
+        self.field_semantics.hint = Some(hint.into());
+        self
+    }
+
+    /// What the field shows while empty, which a screen reader reads in
+    /// place of a value.
+    #[must_use]
+    pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
+        self.field_semantics.placeholder = Some(placeholder.into());
+        self
+    }
+
+    /// Whether the field's value failed validation, which a screen reader
+    /// announces with the field.
+    #[must_use]
+    pub fn invalid(mut self, invalid: bool) -> Self {
+        self.field_semantics.invalid = invalid;
+        self
+    }
+
+    /// Whether the form needs this field filled in, which a screen reader
+    /// announces with the field.
+    #[must_use]
+    pub fn required(mut self, required: bool) -> Self {
+        self.field_semantics.required = required;
+        self
     }
 
     /// Override the caret bar height in logical pixels. By default it follows
@@ -591,6 +646,7 @@ impl std::fmt::Debug for EditableText {
             .field("obscuring_character", &self.obscuring_character)
             .field("on_submitted", &self.on_submitted.is_some())
             .field("on_changed", &self.on_changed.is_some())
+            .field("field_semantics", &self.field_semantics)
             .finish()
     }
 }
@@ -1889,6 +1945,7 @@ impl ViewState<EditableText> for EditableTextState {
             text_style: view.text_style.clone(),
             obscure_text: view.obscure_text,
             obscuring_character: view.obscuring_character,
+            semantics: view.field_semantics.clone(),
         };
         let inner_anchor = self.inner_anchor.clone();
 
@@ -2552,6 +2609,7 @@ struct FieldAppearance {
     /// Paint each source character as [`Self::obscuring_character`].
     obscure_text: bool,
     obscuring_character: char,
+    semantics: FieldSemantics,
 }
 
 fn build_field_view(
@@ -2600,7 +2658,18 @@ fn build_field_view(
         .obscured(appearance.obscure_text)
         .enabled(enabled)
         .focused(focused)
+        .invalid(appearance.semantics.invalid)
+        .required(appearance.semantics.required)
         .value(text.clone());
+    if let Some(label) = &appearance.semantics.label {
+        semantics = semantics.label(label.as_str());
+    }
+    if let Some(placeholder) = &appearance.semantics.placeholder {
+        semantics = semantics.placeholder(placeholder.as_str());
+    }
+    if let Some(hint) = &appearance.semantics.hint {
+        semantics = semantics.hint(hint.as_str());
+    }
     if enabled {
         let edit = actions.clone();
         semantics = semantics.on_set_text(move |cx, text| edit.set_text(cx, text));

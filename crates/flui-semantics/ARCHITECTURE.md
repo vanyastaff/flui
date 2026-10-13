@@ -255,8 +255,15 @@ anchor-scoped re-assembly over the classic merge model, not a per-node fragment 
 Freshness is mark-driven: geometry outside re-assembled subtrees keeps its last published
 value.
 
-**Not implemented.** `RenderBlockSemantics` / blocking of previously painted siblings; sibling
-merge groups beyond configuration-conflict marking.
+**Modal blocking is structural, not paint-ordered.** No render object blocks "previously
+painted siblings". A modal route's overlay entry tells `RenderTheater` how many entries below it
+to skip for semantics (`flui-widgets` overlay, "Modal entries"), and the dialog's own node carries
+`IsModal`, published as AccessKit's `modal`. Test:
+`a_shown_dialog_hides_the_page_beneath_from_assistive_technology` in
+`packages/flui-material/tests/show_dialog.rs`;
+`harness_theater_semantics_blocked_entries_stay_laid_out_but_unannounced` in `flui-objects`.
+
+**Not implemented.** Sibling merge groups beyond configuration-conflict marking.
 
 ### 4. Static text carries its text as its AccessKit value, and a value it also has joins it
 
@@ -363,6 +370,65 @@ without an arm would silently fall back to the flag cascade.
 **Test.** `roles_and_checkbox_states_translate_to_accesskit` walks `SemanticsRole::ALL`, and
 asserts that exactly `DragHandle` and `HotKey` map to `GenericContainer`; deleting the
 `Form` arm makes it fail with `form maps to no AccessKit role`.
+
+### Relations resolve through anchors at publication
+
+**Rule.** [ADR-0205](../../docs/adr/ADR-0205-semantics-relations-by-anchor.md): a target declares
+a `SemanticsAnchor`, a source holds `(SemanticsRelation, anchor)`, and both merge as unions. The
+full path indexes the whole tree; the owner's `RelationIndex` keeps anchored nodes and relation
+sources from dirty nodes, like the focus claimants, and an incremental flush re-translates every
+clean relation source against the fresh index. Targets are published sorted, so an unchanged
+relation diffs as unchanged.
+
+**Why the clean sources are re-translated.** A mark-scoped graft can remount a target under a new
+identity and leave its source's subtree untouched; diffing only dirty nodes would keep the old id.
+Sources are few, and the mirror diff discards the ones that did not change; an incremental flush is
+O(dirty + anchors + relation sources), and the scaling oracle counts all three
+(`an_incremental_flush_counts_the_relation_work_it_does`).
+
+**Test.** `relations_resolve_through_anchors_across_publication` in `tests/incremental_flush.rs`,
+red with the clean-source loop removed.
+
+### A live region's politeness is explicit, else implied by its role
+
+**Rule.** `set_live_region(Some(politeness))` sets `IsLiveRegion`, plus
+`IsLiveRegionAssertive` for `Assertiveness::Assertive`; AccessKit's `live` follows them. A node
+with neither flag takes the politeness its ARIA role implies: `Alert` assertive, `Status`
+polite. An explicit politeness wins over the role's.
+
+**Why.** Live regions are how a change reaches a screen reader without the user moving to it:
+AccessKit has no imperative announcement, so `SemanticsHost::announce` has no platform path and
+a widget that must speak (a snack bar, a validation error) does it by being a live region.
+`IsLiveRegion` alone could only say polite, and an `Alert` that stayed silent until visited is
+not an alert.
+
+**Test.** `live_regions_announce_at_their_politeness` in `accesskit_translation.rs`;
+`a_shown_snack_bar_is_announced_as_a_polite_status` in
+`packages/flui-material/tests/snack_bar.rs`.
+
+### A header publishes AccessKit's `Heading` at its level
+
+**Rule.** `IsHeader` resolves to `Role::Heading`, and a header's `HeadingLevel` (`H1`–`H6`,
+one-based as `aria-level` is) is published as AccessKit's zero-based `level`. A header with no
+level publishes none. An explicit role outranks the header flag and drops the level with it.
+
+**Why.** AccessKit's `Header` is HTML's `<header>` landmark: `accesskit_windows` 0.35 reports it
+as a UIA `Group` with the `banner` landmark type (`node.rs`), so a title published as one never
+reached a screen reader's heading navigation. `Heading` is UIA's `Text` with the `heading` ARIA
+role, VoiceOver's `AXHeading` and AT-SPI's `Heading`. The level is an enum rather than an
+integer because the six levels are the ones every platform names and a zero or out-of-range
+level is not a state to validate at run time.
+
+**Limit.** Measured through `cargo xtask device windows-a11y` on an `H2`: `accesskit_windows`
+0.35 reports `AriaRole` `heading` and UIA `Level` 2, but `AriaProperties` `level=1` (AccessKit's
+zero-based value written raw) and `HeadingLevel` `HeadingLevel_None`. FLUI publishes AccessKit's
+documented zero-based level rather than compensating for one adapter; a client reading
+`AriaProperties` sees the level one lower until the adapter is fixed.
+
+**Test.** `a_header_publishes_a_heading_at_its_level` in `accesskit_translation.rs`;
+`the_title_announces_as_a_level_one_heading` in `packages/flui-material/tests/app_bar.rs` for
+the mounted path; `every_role_bearing_flag_reads_as_the_role_uia_reports` for the wire fold;
+the probe's `Probe heading` in `cargo xtask device windows-a11y` for UI Automation.
 
 ### 7. The in-process wire read projects the published AccessKit node; roles fold to what UIA reports
 

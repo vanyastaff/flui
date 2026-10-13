@@ -15,6 +15,7 @@ use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     MediaQuery, MediaQueryData, Navigator, NavigatorHandle, SimpleRoute, Text,
 };
+use flui_testing::a11y::Role;
 
 // ── Implied leading: a BackButton synthesized when the navigator can pop ──
 //
@@ -107,4 +108,27 @@ pub fn tapping_the_implied_back_button_pops_the_route() {
         "tapping the implied back button must pop the pushed route via NavigatorHandle::maybe_pop, \
          leaving only the seeded initial route on the stack",
     );
+}
+
+/// The title is the screen's top-level heading: a screen reader announces it
+/// as "heading level 1" and its heading navigation lands on it.
+pub fn the_title_announces_as_a_level_one_heading() {
+    let mut laid = lay_out(
+        MediaQuery::new(
+            MediaQueryData::default(),
+            Theme::new(ThemeData::light(), AppBar::new().title(Text::new("Inbox"))),
+        ),
+        tight(400.0, 64.0),
+    );
+    laid.enable_semantics();
+    laid.pump();
+    let tree = laid
+        .a11y_tree()
+        .expect("semantics enabled before the frame");
+
+    let heading = tree
+        .find(Role::Heading)
+        .unwrap_or_else(|error| panic!("{error}\n{}", tree.describe()));
+    assert_eq!(heading.label(), Some("Inbox"), "{}", tree.describe());
+    assert_eq!(heading.heading_level(), Some(1), "{}", tree.describe());
 }

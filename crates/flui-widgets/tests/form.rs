@@ -80,6 +80,18 @@ pub(crate) fn validate_shows_the_validator_error_and_revalidating_a_valid_value_
         laid.find_text("Required").is_none(),
         "no error before validate"
     );
+    laid.enable_semantics();
+    // The field's own node, which a screen reader hears as invalid while
+    // the validator's error stands.
+    let invalid = |laid: &LaidOut| {
+        let tree = laid.a11y_tree().expect("semantics enabled");
+        let field = tree
+            .find(flui_testing::a11y::Role::TextInput)
+            .unwrap_or_else(|error| panic!("{error}\n{}", tree.describe()));
+        field.raw().invalid().is_some()
+    };
+    laid.tick();
+    assert!(!invalid(&laid), "valid before validate");
 
     assert!(!form.validate());
     laid.tick();
@@ -87,6 +99,7 @@ pub(crate) fn validate_shows_the_validator_error_and_revalidating_a_valid_value_
         laid.find_text("Required").is_some(),
         "validate shows the error"
     );
+    assert!(invalid(&laid), "a validation error marks the field invalid");
 
     let _ = node.request_focus();
     type_text(&laid, "x");
@@ -95,6 +108,10 @@ pub(crate) fn validate_shows_the_validator_error_and_revalidating_a_valid_value_
     assert!(
         laid.find_text("Required").is_none(),
         "a valid value clears it"
+    );
+    assert!(
+        !invalid(&laid),
+        "clearing the error clears the invalid state"
     );
 }
 

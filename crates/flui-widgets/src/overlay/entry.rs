@@ -128,6 +128,10 @@ struct EntryInner {
     /// [`opaque`]: EntryInner::opaque
     maintain_state: AtomicBool,
 
+    /// Whether this entry is modal: while it is onstage, the entries below it
+    /// stay visible but are hidden from assistive technology.
+    modal: AtomicBool,
+
     /// The overlay currently holding this entry, or `None` when detached.
     ///
     /// `Weak`, so an entry outliving its overlay does not keep the overlay's
@@ -198,6 +202,7 @@ impl OverlayEntry {
                 rebuild: Mutex::new(None),
                 opaque: AtomicBool::new(false),
                 maintain_state: AtomicBool::new(false),
+                modal: AtomicBool::new(false),
                 overlay: Mutex::new(None),
             }),
         }
@@ -216,6 +221,18 @@ impl OverlayEntry {
             .maintain_state
             .store(maintain_state, Ordering::Relaxed);
         self
+    }
+
+    /// Builder form of the modal flag, for an entry not yet attached: while
+    /// it is onstage, the entries below it are hidden from semantics.
+    pub(crate) fn with_modal(self, modal: bool) -> Self {
+        self.inner.modal.store(modal, Ordering::Relaxed);
+        self
+    }
+
+    /// Whether this entry hides the entries below it from semantics.
+    pub(crate) fn modal(&self) -> bool {
+        self.inner.modal.load(Ordering::Relaxed)
     }
 
     /// Whether this entry occludes the entire overlay.

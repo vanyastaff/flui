@@ -320,7 +320,8 @@ pub use flui_interaction::{
     PanZoomEvent,
 };
 pub use flui_rendering::semantics::{
-    NumericRange, NumericRangeError, SemanticsConfiguration, SemanticsProperties, SemanticsRole,
+    Assertiveness, HeadingLevel, NumericRange, NumericRangeError, SemanticsAnchor,
+    SemanticsConfiguration, SemanticsProperties, SemanticsRole,
     TextDirection as SemanticsTextDirection,
 };
 
@@ -381,13 +382,14 @@ pub mod prelude {
     // Common configuration value types, so an app author needs only this import.
     pub use crate::basic_locale_list_resolution;
     pub use crate::{
-        AspectRatioDelegate, BoxedLocalizationsDelegate, BoxedWidgetsLocalizations,
+        AspectRatioDelegate, Assertiveness, BoxedLocalizationsDelegate, BoxedWidgetsLocalizations,
         CenterLayoutDelegate, CustomPainter, DefaultWidgetsLocalizationsDelegate, FlowDelegate,
-        FlowPaintingContext, MultiChildLayoutContext, MultiChildLayoutDelegate, NumericRange,
-        NumericRangeError, SemanticsConfiguration, SemanticsProperties, SemanticsRole,
-        SemanticsTextDirection, SingleChildLayoutDelegate, SliverGridDelegate,
-        SliverGridDelegateWithFixedCrossAxisCount, SliverGridDelegateWithMaxCrossAxisExtent,
-        SliverGridLayout, TableBorder, TableCellVerticalAlignment, TableColumnWidth,
+        FlowPaintingContext, HeadingLevel, MultiChildLayoutContext, MultiChildLayoutDelegate,
+        NumericRange, NumericRangeError, SemanticsAnchor, SemanticsConfiguration,
+        SemanticsProperties, SemanticsRole, SemanticsTextDirection, SingleChildLayoutDelegate,
+        SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount,
+        SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout, TableBorder,
+        TableCellVerticalAlignment, TableColumnWidth,
     };
     pub use flui_foundation::geometry::Axis;
     pub use flui_foundation::geometry::{EdgeInsets, Matrix4};

@@ -1311,7 +1311,8 @@ impl NavigatorHandle {
         let builder = route.content_builder();
         self.shared.registries.entries.lock().insert(
             id,
-            OverlayEntry::with_reserved_id(entry, move |ctx| builder(ctx)),
+            OverlayEntry::with_reserved_id(entry, move |ctx| builder(ctx))
+                .with_modal(route.is_modal()),
         );
         id
     }

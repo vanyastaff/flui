@@ -16,8 +16,10 @@ use flui_sdk::animation::Vsync;
 use flui_sdk::painting::Color;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    ColoredBox, GestureDetector, Navigator, NavigatorHandle, SimpleRoute, Text, VsyncScope,
+    Center, ColoredBox, GestureDetector, Navigator, NavigatorHandle, Semantics, SimpleRoute, Text,
+    VsyncScope,
 };
+use flui_testing::a11y::Role;
 
 /// `PopupRoute`'s framework-default transition (300 ms, the default every
 /// `flui-widgets` route builder picks), since `show_dialog` pushes a
@@ -122,7 +124,12 @@ pub fn dialog_covers_the_page_and_a_barrier_tap_dismisses_it_leaving_page_state_
     );
 
     let _result = show_dialog::<(), _, _>(&navigator, |_ctx| {
-        AlertDialog::new().title(Text::new("Discard changes?"))
+        // A title that forms its own semantics node still names the dialog.
+        AlertDialog::new().title(
+            Semantics::new()
+                .container(true)
+                .child(Text::new("Discard changes?")),
+        )
     });
     for _ in 0..PUMPS {
         laid.pump_for(FRAME);
@@ -187,5 +194,73 @@ pub fn dialog_covers_the_page_and_a_barrier_tap_dismisses_it_leaving_page_state_
         1,
         "the home page's State must survive the dialog's entire push/dismiss lifecycle \
          (PopupRoute.maintainState => true keeps the page mounted throughout)"
+    );
+}
+
+/// While a dialog is up, a screen reader reaches only the dialog: it is one
+/// modal `AlertDialog` node, and the page beneath — still painted behind the
+/// barrier — is absent from the tree. Dismissing the dialog makes the page
+/// reachable again.
+pub fn a_shown_dialog_hides_the_page_beneath_from_assistive_technology() {
+    let vsync = Vsync::new();
+    let navigator = NavigatorHandle::new();
+    navigator.seed_initial(SimpleRoute::<()>::new(|_ctx| {
+        Center::new()
+            .child(Text::new("Page body"))
+            .into_view()
+            .boxed()
+    }));
+    let mut laid = lay_out_animated(app(&vsync, &navigator), tight(800.0, 600.0), vsync);
+    laid.enable_semantics();
+    laid.pump();
+    let page_announced = |laid: &common::LaidOut| {
+        let tree = laid.a11y_tree().expect("semantics enabled");
+        !tree.find_all_by_label("Page body").is_empty()
+    };
+    assert!(
+        page_announced(&laid),
+        "the page is announced before a dialog"
+    );
+
+    let _result = show_dialog::<(), _, _>(&navigator, |_ctx| {
+        // A title that forms its own semantics node still names the dialog.
+        AlertDialog::new().title(
+            Semantics::new()
+                .container(true)
+                .child(Text::new("Discard changes?")),
+        )
+    });
+    for _ in 0..PUMPS {
+        laid.pump_for(FRAME);
+    }
+    let tree = laid.a11y_tree().expect("semantics enabled");
+    let dialog = tree
+        .find(Role::AlertDialog)
+        .unwrap_or_else(|error| panic!("{error}\n{}", tree.describe()));
+    assert!(dialog.raw().is_modal(), "{}", tree.describe());
+    let titles = tree.find_all_by_label("Discard changes?");
+    assert_eq!(titles.len(), 1, "{}", tree.describe());
+    assert_eq!(
+        dialog.raw().labelled_by(),
+        &[titles[0].id()],
+        "the dialog is named by its title\n{}",
+        tree.describe()
+    );
+    assert!(
+        !page_announced(&laid),
+        "the page beneath a dialog must not be reachable\n{}",
+        tree.describe()
+    );
+
+    // A barrier tap away from the dialog's footprint dismisses it.
+    laid.dispatch_pointer_down(5.0, 5.0);
+    laid.dispatch_pointer_up(5.0, 5.0);
+    for _ in 0..PUMPS {
+        laid.pump_for(FRAME);
+    }
+    assert_eq!(navigator.route_ids().len(), 1, "the dialog was dismissed");
+    assert!(
+        page_announced(&laid),
+        "the page is reachable again once the dialog is gone"
     );
 }

@@ -77,8 +77,8 @@ use flui_sdk::painting::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
 use flui_sdk::view::BoxedView;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    Center, DecoratedBox, DefaultTextStyle, MediaQuery, Positioned, PreferredSizeView, SafeArea,
-    Semantics, SizedBox, Stack,
+    Center, DecoratedBox, DefaultTextStyle, HeadingLevel, MediaQuery, Positioned,
+    PreferredSizeView, SafeArea, Semantics, SizedBox, Stack,
 };
 
 use crate::colors::CupertinoColor;
@@ -217,7 +217,9 @@ impl StatelessView for CupertinoNavigationBar {
         if let Some(middle) = &self.middle {
             let styled_middle = DefaultTextStyle::new(
                 theme.text_theme().nav_title_text_style(),
-                Semantics::new().header(true).child(middle.clone()),
+                Semantics::new()
+                    .heading_level(HeadingLevel::H1)
+                    .child(middle.clone()),
             );
             layers.push(
                 Positioned::new(Center::new().child(styled_middle))

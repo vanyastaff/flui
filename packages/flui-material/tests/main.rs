@@ -218,8 +218,16 @@ fn text_input_contracts() {
             input_decorator::error_replaces_helper_at_the_mounted_level,
         ),
         (
+            "input_decorator::a standalone decorator keeps its label and hint readable",
+            input_decorator::a_standalone_decorator_keeps_its_label_and_hint_readable,
+        ),
+        (
             "text_field::tapping the decorated area focuses the field and reaches the decorator",
             text_field::tapping_the_decorated_area_focuses_the_field_and_reaches_the_decorator,
+        ),
+        (
+            "text_field::the field carries its label hint and error for assistive technology",
+            text_field::the_field_carries_its_label_hint_and_error_for_assistive_technology,
         ),
         (
             "text_field::error line sits below the indicator outside the tap target",
@@ -275,8 +283,16 @@ fn overlay_contracts() {
             show_dialog::dialog_covers_the_page_and_a_barrier_tap_dismisses_it_leaving_page_state_intact,
         ),
         (
+            "show_dialog::a shown dialog hides the page beneath from assistive technology",
+            show_dialog::a_shown_dialog_hides_the_page_beneath_from_assistive_technology,
+        ),
+        (
             "snack_bar::a snack bar completion cannot write another presentations signal",
             snack_bar::a_snack_bar_completion_cannot_write_another_presentations_signal,
+        ),
+        (
+            "snack_bar::a shown snack bar is announced as a polite status",
+            snack_bar::a_shown_snack_bar_is_announced_as_a_polite_status,
         ),
         (
             "snack_bar::action press closes the snack bar and is single fire",
@@ -312,6 +328,10 @@ fn navigation_and_layout_contracts() {
         (
             "app_bar::tapping the implied back button pops the route",
             app_bar::tapping_the_implied_back_button_pops_the_route,
+        ),
+        (
+            "app_bar::the title announces as a level one heading",
+            app_bar::the_title_announces_as_a_level_one_heading,
         ),
         (
             "sliver_app_bar::a pinned bar holds its collapsed height at deep scroll",

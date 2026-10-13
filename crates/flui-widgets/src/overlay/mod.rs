@@ -28,6 +28,15 @@
 //! view tree entirely: its state is disposed, and rebuilt fresh when it is
 //! uncovered. Routes depend on this.
 //!
+//! # Modal entries
+//!
+//! A modal entry (a popup route's) hides every onstage entry below it from
+//! semantics while leaving it laid out and painted: the page under a dialog
+//! stays visible, and a screen reader reaches only the dialog. The count is the
+//! plan's `semantics_blocked`, a prefix like `skip_count`, which
+//! [`RenderTheater`] stops visiting for semantics. Toggling it changes no view
+//! shape, so the covered entries keep their state.
+//!
 //! Two gaps, both recorded in the `entry` module: no ticker muting for the
 //! covered entries, and no overlay sizing under unbounded constraints.
 //!
@@ -425,6 +434,9 @@ pub(crate) struct OnstagePlan {
     pub(crate) build: Vec<usize>,
     /// How many leading entries of `build` are covered by an opaque entry.
     pub(crate) skip_count: usize,
+    /// How many leading entries of `build` sit below the topmost onstage modal
+    /// entry, and so are hidden from semantics while still shown.
+    pub(crate) semantics_blocked: usize,
 }
 
 /// The overlay build's onstage loop, as pure data.
@@ -454,7 +466,17 @@ pub(crate) fn onstage_plan(entries: &[OverlayEntry]) -> OnstagePlan {
 
     let skip_count = build.len() - onstage_count;
     build.reverse();
-    OnstagePlan { build, skip_count }
+    // Below the topmost onstage modal entry, everything is hidden from
+    // semantics: a dialog's page stays visible but must not be reachable.
+    let semantics_blocked = build
+        .iter()
+        .rposition(|&index| entries[index].modal())
+        .map_or(0, |position| position.max(skip_count));
+    OnstagePlan {
+        build,
+        skip_count,
+        semantics_blocked,
+    }
 }
 
 // ============================================================================
@@ -654,7 +676,7 @@ impl ViewState<Overlay> for OverlayState {
             .iter()
             .map(|&index| OverlayEntryView::new(entries[index].clone(), handle.clone()).boxed())
             .collect();
-        Theater::new(children, plan.skip_count)
+        Theater::new(children, plan.skip_count).semantics_blocked(plan.semantics_blocked)
     }
 
     /// Drop the rebuild capability, making every surviving [`OverlayHandle`]

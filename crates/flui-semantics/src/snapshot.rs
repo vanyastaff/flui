@@ -24,8 +24,8 @@ use crate::{
     identity::AccessibilityNodeId,
     node::SemanticsNode,
     properties::{
-        AttributedString, CustomSemanticsAction, SemanticsHintOverrides, SemanticsSortKey,
-        SemanticsTag, TextDirection,
+        AttributedString, CustomSemanticsAction, HeadingLevel, SemanticsHintOverrides,
+        SemanticsSortKey, SemanticsTag, TextDirection,
     },
     role::SemanticsRole,
     tree::SemanticsTree,
@@ -187,6 +187,7 @@ pub struct SemanticsNodeSnapshot {
     decreased_value: Option<AttributedString>,
     hint: Option<AttributedString>,
     tooltip: Option<SmolStr>,
+    placeholder: Option<SmolStr>,
     text_direction: Option<TextDirection>,
     custom_actions: Box<[CustomSemanticsAction]>,
     tags: Box<[SemanticsTag]>,
@@ -197,6 +198,7 @@ pub struct SemanticsNodeSnapshot {
     platform_view_id: Option<i32>,
     max_value_length: Option<i32>,
     current_value_length: Option<i32>,
+    heading_level: Option<HeadingLevel>,
     scroll_position: Option<f64>,
     scroll_axis: Option<Axis>,
     scroll_extent_max: Option<f64>,
@@ -228,6 +230,7 @@ impl SemanticsNodeSnapshot {
             decreased_value: config.decreased_value().cloned(),
             hint: config.hint().cloned(),
             tooltip: config.tooltip().map(SmolStr::new),
+            placeholder: config.placeholder().map(SmolStr::new),
             text_direction: config.text_direction(),
             custom_actions: config
                 .effective_custom_actions()
@@ -241,6 +244,7 @@ impl SemanticsNodeSnapshot {
             platform_view_id: config.platform_view_id(),
             max_value_length: config.max_value_length(),
             current_value_length: config.current_value_length(),
+            heading_level: config.heading_level(),
             scroll_position: config.scroll_position(),
             scroll_axis: config.scroll_axis(),
             scroll_extent_max: config.scroll_extent_max(),
@@ -341,6 +345,13 @@ impl SemanticsNodeSnapshot {
         self.tooltip.as_deref()
     }
 
+    /// Returns what an empty text field shows in place of a value.
+    #[inline]
+    #[must_use]
+    pub fn placeholder(&self) -> Option<&str> {
+        self.placeholder.as_deref()
+    }
+
     /// Returns the text direction.
     #[inline]
     #[must_use]
@@ -409,6 +420,13 @@ impl SemanticsNodeSnapshot {
     #[must_use]
     pub const fn current_value_length(&self) -> Option<i32> {
         self.current_value_length
+    }
+
+    /// Returns the outline level of a header node, when one was given.
+    #[inline]
+    #[must_use]
+    pub const fn heading_level(&self) -> Option<HeadingLevel> {
+        self.heading_level
     }
 
     /// Returns the current scroll position.

@@ -346,3 +346,66 @@ pub fn error_line_sits_below_the_indicator_outside_the_tap_target() {
         "a tap on the container must focus the field"
     );
 }
+
+/// A screen reader reaching the field hears its label as the field's name,
+/// its hint as the placeholder, its error as an invalid state and that it is
+/// required; the label
+/// and hint are not announced a second time as loose text, and the error line
+/// is a polite live region, read when it appears.
+pub fn the_field_carries_its_label_hint_and_error_for_assistive_technology() {
+    use flui_testing::a11y::{Live, Role};
+
+    let decoration = InputDecoration {
+        label_text: Some("Email".to_owned()),
+        hint_text: Some("name@example.com".to_owned()),
+        error_text: Some("Enter an email".to_owned()),
+        ..InputDecoration::default()
+    };
+    let mut laid = lay_out(
+        Theme::new(
+            ThemeData::light(),
+            TextField::new(TextEditingController::new())
+                .decoration(decoration)
+                .required(true),
+        ),
+        tight(300.0, 150.0),
+    );
+    laid.enable_semantics();
+    laid.pump();
+    let tree = laid.a11y_tree().expect("semantics enabled");
+
+    let field = tree
+        .find(Role::TextInput)
+        .unwrap_or_else(|error| panic!("{error}\n{}", tree.describe()));
+    assert_eq!(field.label(), Some("Email"), "{}", tree.describe());
+    assert_eq!(
+        field.raw().placeholder(),
+        Some("name@example.com"),
+        "{}",
+        tree.describe()
+    );
+    assert!(field.raw().invalid().is_some(), "{}", tree.describe());
+    assert!(field.raw().is_required(), "{}", tree.describe());
+    assert_eq!(
+        field.raw().description(),
+        Some("Enter an email"),
+        "the error describes the field\n{}",
+        tree.describe()
+    );
+    assert_eq!(
+        tree.find_all_by_label("Email").len(),
+        1,
+        "the label is announced once, as the field's name\n{}",
+        tree.describe()
+    );
+    assert!(
+        tree.find_all_by_label("name@example.com").is_empty(),
+        "the hint is the placeholder, not loose text\n{}",
+        tree.describe()
+    );
+    assert!(
+        tree.nodes().any(|node| node.live() == Some(Live::Polite)),
+        "the error line is a polite live region\n{}",
+        tree.describe()
+    );
+}

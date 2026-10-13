@@ -32,8 +32,11 @@ use accesskit::{
 use crate::action::SemanticsAction;
 use crate::flags::SemanticsFlag;
 use crate::node::SemanticsNode;
+use crate::relation::{SemanticsAnchor, SemanticsRelation};
 use crate::role::SemanticsRole;
 use crate::update::SemanticsNodeData;
+use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 
 /// Whether `bits` carries `flag`.
 #[inline]
@@ -126,7 +129,11 @@ pub(crate) fn resolve_role(data: &SemanticsNodeData) -> Role {
     } else if has_flag(flags, SemanticsFlag::IsImage) {
         Role::Image
     } else if has_flag(flags, SemanticsFlag::IsHeader) {
-        Role::Header
+        // A heading, not AccessKit's `Header`: that is HTML's `<header>`
+        // landmark, which `accesskit_windows` 0.35 reports as a `Group` with
+        // the `banner` landmark type, so a title published as one never
+        // reached heading navigation.
+        Role::Heading
     } else if data.label.as_ref().is_some_and(|label| !label.is_empty()) {
         Role::Label
     } else {
@@ -181,8 +188,26 @@ fn explicit_role(role: SemanticsRole) -> Option<Role> {
     })
 }
 
+/// How a node's changes are announced: what its live-region flags say, else
+/// what its role implies (`aria-live` is `assertive` for an alert and `polite`
+/// for a status), else not at all.
+fn live_politeness(flags: u64, role: SemanticsRole) -> Option<accesskit::Live> {
+    if has_flag(flags, SemanticsFlag::IsLiveRegion) {
+        return Some(if has_flag(flags, SemanticsFlag::IsLiveRegionAssertive) {
+            accesskit::Live::Assertive
+        } else {
+            accesskit::Live::Polite
+        });
+    }
+    match role {
+        SemanticsRole::Alert => Some(accesskit::Live::Assertive),
+        SemanticsRole::Status => Some(accesskit::Live::Polite),
+        _ => None,
+    }
+}
+
 /// Translate one node's boolean state onto the AccessKit node.
-fn apply_state(node: &mut Node, flags: u64) {
+fn apply_state(node: &mut Node, flags: u64, role: SemanticsRole) {
     if has_flag(flags, SemanticsFlag::HasCheckedState) {
         node.set_toggled(if has_flag(flags, SemanticsFlag::IsCheckStateMixed) {
             Toggled::Mixed
@@ -217,8 +242,17 @@ fn apply_state(node: &mut Node, flags: u64) {
     if has_flag(flags, SemanticsFlag::IsHidden) {
         node.set_hidden();
     }
-    if has_flag(flags, SemanticsFlag::IsLiveRegion) {
-        node.set_live(accesskit::Live::Polite);
+    if let Some(live) = live_politeness(flags, role) {
+        node.set_live(live);
+    }
+    if has_flag(flags, SemanticsFlag::IsModal) {
+        node.set_modal();
+    }
+    if has_flag(flags, SemanticsFlag::IsRequired) {
+        node.set_required();
+    }
+    if has_flag(flags, SemanticsFlag::IsInvalid) {
+        node.set_invalid(accesskit::Invalid::True);
     }
 }
 
@@ -529,6 +563,15 @@ pub(crate) fn to_node(data: &SemanticsNodeData) -> Node {
     if let Some(tooltip) = &data.tooltip {
         node.set_tooltip(tooltip.as_str());
     }
+    if let Some(placeholder) = &data.placeholder {
+        node.set_placeholder(placeholder.as_str());
+    }
+    // AccessKit's level is zero-based where `aria-level` is one-based.
+    if role == Role::Heading
+        && let Some(level) = data.heading_level
+    {
+        node.set_level(usize::from(level.get() - 1));
+    }
     if let Some(direction) = data.text_direction {
         node.set_text_direction(match direction {
             crate::properties::TextDirection::Ltr => TextDirection::LeftToRight,
@@ -592,7 +635,7 @@ pub(crate) fn to_node(data: &SemanticsNodeData) -> Node {
         node.set_size_of_set(count as usize);
     }
 
-    apply_state(&mut node, data.flags);
+    apply_state(&mut node, data.flags, data.role);
     apply_actions(
         &mut node,
         data.actions,
@@ -635,8 +678,10 @@ pub(crate) fn to_published_node(
     data: &SemanticsNodeData,
     is_root: bool,
     device_pixel_ratio: f64,
+    anchors: &AnchorIndex,
 ) -> Node {
     let mut node = to_node(data);
+    apply_relations(&mut node, data, anchors);
     #[expect(
         clippy::float_cmp,
         reason = "exactly 1.0 is the identity AccessKit asks to leave unset"
@@ -650,6 +695,55 @@ pub(crate) fn to_published_node(
         node.set_role(Role::Window);
     }
     node
+}
+
+/// The published ids of the nodes declaring each anchor (ADR-0205).
+pub(crate) type AnchorIndex = FxHashMap<SemanticsAnchor, SmallVec<[NodeId; 1]>>;
+
+/// Indexes every addressable node's anchors in `nodes`.
+pub(crate) fn anchor_index<'a>(nodes: impl IntoIterator<Item = &'a SemanticsNode>) -> AnchorIndex {
+    let mut index = AnchorIndex::default();
+    for node in nodes {
+        let Some(identity) = node.accessibility_id() else {
+            continue;
+        };
+        for anchor in node.config().anchors() {
+            index
+                .entry(anchor.clone())
+                .or_default()
+                .push(NodeId(identity.as_u64()));
+        }
+    }
+    index
+}
+
+/// Publishes each relation to the nodes its anchor names. A relation whose
+/// anchor no published node declares is omitted rather than pointed at a node
+/// the adapter does not have.
+fn apply_relations(node: &mut Node, data: &SemanticsNodeData, anchors: &AnchorIndex) {
+    // Sorted, so the published list does not depend on index iteration order
+    // and an unchanged relation diffs as unchanged.
+    let targets = |kind: SemanticsRelation| -> Vec<NodeId> {
+        let mut ids: Vec<NodeId> = data
+            .relations
+            .iter()
+            .filter(|(relation, _)| *relation == kind)
+            .filter_map(|(_, anchor)| anchors.get(anchor))
+            .flatten()
+            .copied()
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        ids
+    };
+    let labelled_by = targets(SemanticsRelation::LabelledBy);
+    if !labelled_by.is_empty() {
+        node.set_labelled_by(labelled_by);
+    }
+    let controls = targets(SemanticsRelation::Controls);
+    if !controls.is_empty() {
+        node.set_controls(controls);
+    }
 }
 
 /// The node claiming [`SemanticsFlag::IsFocused`], if exactly one does.
@@ -746,6 +840,7 @@ pub(crate) fn tree_to_scaled_update(
     };
 
     let root_node_id = stable_id(tree.root()?)?;
+    let anchors = anchor_index(tree.iter().map(|(_, node)| node));
 
     let nodes: Vec<(NodeId, Node)> = tree
         .iter()
@@ -758,7 +853,7 @@ pub(crate) fn tree_to_scaled_update(
             let node_id = NodeId(data.id?.as_u64());
             Some((
                 node_id,
-                to_published_node(&data, node_id == root_node_id, device_pixel_ratio),
+                to_published_node(&data, node_id == root_node_id, device_pixel_ratio, &anchors),
             ))
         })
         .collect();
@@ -782,6 +877,7 @@ mod tests {
 
     use super::*;
     use crate::identity::AccessibilityNodeId;
+    use crate::properties::HeadingLevel;
     use crate::tree::SemanticsTree;
 
     /// Childless translation; child wiring is covered by the tree-level tests.
@@ -973,6 +1069,100 @@ mod tests {
             Some(Toggled::Mixed),
             "tristate must not collapse to checked/unchecked"
         );
+    }
+
+    /// A form control's required and invalid states and its placeholder reach
+    /// AccessKit, and a control without them publishes none.
+    #[test]
+    fn form_states_reach_accesskit() {
+        let plain = translate(&SemanticsNodeData {
+            flags: flags(&[SemanticsFlag::IsTextField]),
+            ..Default::default()
+        });
+        assert!(!plain.is_required());
+        assert_eq!(plain.invalid(), None);
+        assert_eq!(plain.placeholder(), None);
+
+        let node = translate(&SemanticsNodeData {
+            flags: flags(&[
+                SemanticsFlag::IsTextField,
+                SemanticsFlag::IsRequired,
+                SemanticsFlag::IsInvalid,
+            ]),
+            placeholder: Some("name@example.com".into()),
+            ..Default::default()
+        });
+        assert!(node.is_required());
+        assert_eq!(node.invalid(), Some(accesskit::Invalid::True));
+        assert_eq!(node.placeholder(), Some("name@example.com"));
+    }
+
+    /// A live region announces at the politeness it was given; without one,
+    /// an alert is assertive and a status polite, as their ARIA roles imply.
+    #[test]
+    fn live_regions_announce_at_their_politeness() {
+        use SemanticsFlag::{IsLiveRegion, IsLiveRegionAssertive};
+        use accesskit::Live;
+        let table: &[(&[SemanticsFlag], SemanticsRole, Option<Live>)] = &[
+            (&[], SemanticsRole::None, None),
+            (&[IsLiveRegion], SemanticsRole::None, Some(Live::Polite)),
+            (
+                &[IsLiveRegion, IsLiveRegionAssertive],
+                SemanticsRole::None,
+                Some(Live::Assertive),
+            ),
+            (&[], SemanticsRole::Alert, Some(Live::Assertive)),
+            (&[], SemanticsRole::Status, Some(Live::Polite)),
+            (&[IsLiveRegion], SemanticsRole::Alert, Some(Live::Polite)),
+        ];
+        for &(bits, role, expected) in table {
+            let node = translate(&SemanticsNodeData {
+                flags: flags(bits),
+                role,
+                ..Default::default()
+            });
+            assert_eq!(node.live(), expected, "{bits:?} {role}");
+        }
+
+        let mut config = crate::SemanticsConfiguration::new();
+        config.set_live_region(Some(crate::Assertiveness::Assertive));
+        config.set_live_region(Some(crate::Assertiveness::Polite));
+        assert_eq!(config.live_region(), Some(crate::Assertiveness::Polite));
+        config.set_live_region(None);
+        assert_eq!(config.flags().bits(), 0, "clearing leaves no live bits");
+    }
+
+    /// A header is AccessKit's `Heading`, never its `Header` landmark, and its
+    /// one-based level reaches AccessKit's zero-based one.
+    #[test]
+    fn a_header_publishes_a_heading_at_its_level() {
+        let header = flags(&[SemanticsFlag::IsHeader]);
+        let unleveled = translate(&SemanticsNodeData {
+            flags: header,
+            ..Default::default()
+        });
+        assert_eq!(unleveled.role(), Role::Heading);
+        assert_eq!(unleveled.level(), None);
+
+        for (level, zero_based) in [(HeadingLevel::H1, 0), (HeadingLevel::H6, 5)] {
+            let node = translate(&SemanticsNodeData {
+                flags: header,
+                heading_level: Some(level),
+                ..Default::default()
+            });
+            assert_eq!(node.role(), Role::Heading, "{level:?}");
+            assert_eq!(node.level(), Some(zero_based), "{level:?}");
+        }
+
+        // An explicit role outranks the header flag, and its level goes with it.
+        let tab = translate(&SemanticsNodeData {
+            flags: header,
+            heading_level: Some(HeadingLevel::H2),
+            role: SemanticsRole::Tab,
+            ..Default::default()
+        });
+        assert_eq!(tab.role(), Role::Tab);
+        assert_eq!(tab.level(), None);
     }
 
     /// **The identity contract.** AccessKit ids must be the stable

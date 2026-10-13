@@ -21,7 +21,7 @@ use crate::support::{ValueCallback, value_callback};
 use crate::{
     Action, ActionOutcome, Actions, ActivateIntent, ButtonActivateIntent, ClipRect, Column,
     CustomPaint, Directionality, Flexible, Focus, GestureDetector, Intent, LayoutBuilder,
-    MergeSemantics, Row, Semantics,
+    MergeSemantics, Row, Semantics, SemanticsAnchor, SemanticsRole,
 };
 
 /// The application-owned state of a [`Disclosure`].
@@ -174,6 +174,10 @@ pub struct DisclosureState {
     focused: Terminal<Rc<Cell<bool>>>,
     rebuild: Terminal<Option<RebuildHandle>>,
     live: Terminal<Rc<RefCell<LiveDisclosure>>>,
+    /// The header and the panel it controls, kept across rebuilds so the
+    /// relations between them name one target each.
+    header: SemanticsAnchor,
+    panel: SemanticsAnchor,
 }
 
 impl std::fmt::Debug for DisclosureState {
@@ -257,6 +261,8 @@ impl StatefulView for Disclosure {
             node: Terminal::new(FocusNode::with_debug_label("Disclosure")),
             focused: Terminal::new(Rc::new(Cell::new(false))),
             rebuild: Terminal::new(None),
+            header: SemanticsAnchor::new(),
+            panel: SemanticsAnchor::new(),
             live: Terminal::new(Rc::new(RefCell::new(LiveDisclosure {
                 mounted: false,
                 state: self.state,
@@ -306,6 +312,8 @@ impl ViewState<Disclosure> for DisclosureState {
         let node = Terminal::new(Rc::clone(&self.node));
         let focused = Terminal::new(Rc::clone(&self.focused));
         let live = Terminal::new(Rc::clone(&self.live));
+        let header_anchor = self.header.clone();
+        let panel = self.panel.clone();
         let rebuild = Terminal::new(
             self.rebuild
                 .clone()
@@ -354,6 +362,8 @@ impl ViewState<Disclosure> for DisclosureState {
                 .button(true)
                 .enabled(enabled)
                 .expanded(expanded)
+                .anchor(header_anchor.clone())
+                .controls(panel.clone())
                 .child(header);
             if let Some(label) = snapshot.label.as_ref() {
                 semantics = semantics.label(label.clone()).exclude_semantics(true);
@@ -401,7 +411,20 @@ impl ViewState<Disclosure> for DisclosureState {
             );
             if snapshot.state == ExpansionState::Expanded {
                 let mut body = Terminal::new((*snapshot.body).clone());
-                children.push(Flexible::new(body.take_value()).boxed());
+                // The panel the header controls: a region named by its
+                // header, as WAI-ARIA's accordion pattern has it, so the
+                // relation's target is a node assistive technology keeps.
+                children.push(
+                    Flexible::new(
+                        Semantics::new()
+                            .container(true)
+                            .role(SemanticsRole::Region)
+                            .labelled_by(header_anchor.clone())
+                            .anchor(panel.clone())
+                            .child(body.take_value()),
+                    )
+                    .boxed(),
+                );
             }
             Directionality::new(
                 direction,

@@ -35,7 +35,8 @@ use smallvec::SmallVec;
 use smol_str::SmolStr;
 
 use crate::identity::AccessibilityNodeId;
-use crate::properties::TextDirection;
+use crate::properties::{HeadingLevel, TextDirection};
+use crate::relation::{SemanticsAnchor, SemanticsRelation};
 use crate::role::SemanticsRole;
 
 // ============================================================================
@@ -78,6 +79,8 @@ pub struct SemanticsNodeData {
     pub hint: Option<SmolStr>,
     /// Tooltip text.
     pub tooltip: Option<SmolStr>,
+    /// What an empty text field shows in place of a value.
+    pub placeholder: Option<SmolStr>,
     /// Text direction.
     pub text_direction: Option<TextDirection>,
     /// Bounding rectangle.
@@ -100,6 +103,11 @@ pub struct SemanticsNodeData {
     pub max_value_length: Option<i32>,
     /// Current value length for text fields.
     pub current_value_length: Option<i32>,
+    /// The outline level of a header node.
+    pub heading_level: Option<HeadingLevel>,
+    /// Relations to the nodes their anchors name, resolved at publication
+    /// (ADR-0205).
+    pub relations: SmallVec<[(SemanticsRelation, SemanticsAnchor); 1]>,
     /// Scroll position.
     pub scroll_position: Option<f64>,
     /// Axis of the scroll position and extents; absent metadata means vertical.
@@ -146,6 +154,7 @@ impl Default for SemanticsNodeData {
             decreased_value: None,
             hint: None,
             tooltip: None,
+            placeholder: None,
             text_direction: None,
             rect: Rect::ZERO,
             transform: Matrix4::IDENTITY,
@@ -154,6 +163,8 @@ impl Default for SemanticsNodeData {
             platform_view_id: None,
             max_value_length: None,
             current_value_length: None,
+            heading_level: None,
+            relations: SmallVec::new(),
             scroll_position: None,
             scroll_axis: None,
             scroll_extent_max: None,

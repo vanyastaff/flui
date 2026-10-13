@@ -89,9 +89,10 @@
 //!   `constraints` through to the underlying [`Dialog`] — construct a
 //!   [`Dialog`] directly when any of those need to vary; `AlertDialog` is a
 //!   fixed M3 composition for now.
-//! - **Semantics** — `namesRoute`, `semanticLabel`,
-//!   `MaterialLocalizations.alertDialogLabel`, the per-slot `Semantics`
-//!   wrapper nodes.
+//! - **A name for an untitled dialog** — `semanticLabel` and
+//!   `MaterialLocalizations.alertDialogLabel`. The dialog node is modal and
+//!   announced by role (`Dialog`, `AlertDialog`); an `AlertDialog` is named by
+//!   its title (ADR-0205), a bare `Dialog` by nothing.
 //! - **`AlertDialog.adaptive`** — the Cupertino/Material platform switch.
 //!
 //! ## `show_dialog`
@@ -149,8 +150,8 @@ use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     Align, Column, ConstrainedBox, CrossAxisAlignment, DefaultTextStyle, Flexible, IntrinsicWidth,
-    MainAxisAlignment, MainAxisSize, NavigatorHandle, Padding, PopupRoute, RouteResult, Row,
-    SizedBox,
+    MainAxisAlignment, MainAxisSize, MergeSemantics, NavigatorHandle, Padding, PopupRoute,
+    RouteResult, Row, Semantics, SemanticsAnchor, SemanticsRole, SizedBox,
 };
 use flui_sdk::{
     geometry::EdgeInsets,
@@ -193,6 +194,10 @@ pub struct Dialog {
     alignment: Option<Alignment>,
     inset_padding: Option<EdgeInsets>,
     constraints: Option<BoxConstraints>,
+    /// `Dialog`, or `AlertDialog` when [`AlertDialog`] builds it.
+    role: SemanticsRole,
+    /// The title naming the dialog, when [`AlertDialog`] has one.
+    labelled_by: Option<SemanticsAnchor>,
     child: BoxedView,
 }
 
@@ -221,6 +226,8 @@ impl Dialog {
             alignment: None,
             inset_padding: None,
             constraints: None,
+            role: SemanticsRole::Dialog,
+            labelled_by: None,
             child: BoxedView(Box::new(child.into_view())),
         }
     }
@@ -334,14 +341,22 @@ impl StatelessView for Dialog {
             BoxConstraints::new(DEFAULT_MIN_WIDTH, f64::INFINITY, 0.0, f64::INFINITY)
         });
 
+        // One modal node for the whole surface: assistive technology
+        // announces a dialog, named by its title, and stays inside it.
+        let mut semantics = Semantics::new().container(true).role(self.role).modal(true);
+        if let Some(title) = &self.labelled_by {
+            semantics = semantics.labelled_by(title.clone());
+        }
         Padding::new(inset_padding).child(
             Align::new(self.alignment.unwrap_or(Alignment::CENTER)).child(
                 ConstrainedBox::new(constraints).child(
-                    Material::new(color)
-                        .elevation(elevation)
-                        .shape(shape)
-                        .clip_behavior(self.clip_behavior.unwrap_or(Clip::None))
-                        .child(self.child.clone()),
+                    semantics.child(
+                        Material::new(color)
+                            .elevation(elevation)
+                            .shape(shape)
+                            .clip_behavior(self.clip_behavior.unwrap_or(Clip::None))
+                            .child(self.child.clone()),
+                    ),
                 ),
             ),
         )
@@ -447,15 +462,27 @@ impl StatelessView for AlertDialog {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         let theme = Theme::of(ctx);
         let mut children: Vec<BoxedView> = Vec::new();
+        // Created per build, for both ends at once: the title's node and the
+        // dialog naming itself by it (ADR-0205).
+        let title_anchor = self.title.as_ref().map(|_| SemanticsAnchor::new());
 
-        if let Some(title) = &self.title {
+        if let (Some(title), Some(anchor)) = (&self.title, &title_anchor) {
             let title_bottom = if self.content.is_some() { 0.0 } else { 20.0 };
             children.push(
                 Padding::new(EdgeInsets::new(24.0, 24.0, title_bottom, 24.0))
-                    .child(DefaultTextStyle::new(
-                        resolve_title_style(&theme),
-                        title.clone(),
-                    ))
+                    // Merged into one node with the anchor, so the node the
+                    // dialog is named by carries the title's text even when
+                    // the title forms semantics boundaries of its own.
+                    .child(
+                        MergeSemantics::new().child(
+                            Semantics::new()
+                                .anchor(anchor.clone())
+                                .child(DefaultTextStyle::new(
+                                    resolve_title_style(&theme),
+                                    title.clone(),
+                                )),
+                        ),
+                    )
                     .boxed(),
             );
         }
@@ -486,13 +513,17 @@ impl StatelessView for AlertDialog {
             );
         }
 
-        Dialog::new(
-            IntrinsicWidth::new().child(
-                Column::new(children)
-                    .main_axis_size(MainAxisSize::Min)
-                    .cross_axis_alignment(CrossAxisAlignment::Stretch),
-            ),
-        )
+        Dialog {
+            role: SemanticsRole::AlertDialog,
+            labelled_by: title_anchor,
+            ..Dialog::new(
+                IntrinsicWidth::new().child(
+                    Column::new(children)
+                        .main_axis_size(MainAxisSize::Min)
+                        .cross_axis_alignment(CrossAxisAlignment::Stretch),
+                ),
+            )
+        }
     }
 }
 

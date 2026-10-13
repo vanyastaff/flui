@@ -14,6 +14,8 @@ use flui_view::{BoxedView, View};
 #[derive(Clone, Debug)]
 pub(super) struct Theater {
     skip_count: usize,
+    /// Leading children shown but hidden from semantics, under a modal entry.
+    semantics_blocked: usize,
     children: Vec<BoxedView>,
 }
 
@@ -29,8 +31,20 @@ impl Theater {
         );
         Self {
             skip_count,
+            semantics_blocked: 0,
             children,
         }
+    }
+
+    /// Hides the first `count` children from semantics while they stay onstage.
+    pub(super) fn semantics_blocked(mut self, count: usize) -> Self {
+        debug_assert!(
+            count <= self.children.len(),
+            "BUG: Theater semantics_blocked {count} exceeds child count {}",
+            self.children.len()
+        );
+        self.semantics_blocked = count;
+        self
     }
 }
 
@@ -48,7 +62,9 @@ impl flui_view::RenderView for Theater {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
     ) -> Self::RenderObject {
-        RenderTheater::new().with_skip_count(self.skip_count)
+        RenderTheater::new()
+            .with_skip_count(self.skip_count)
+            .with_semantics_blocked_count(self.semantics_blocked)
     }
 
     fn update_render_object(
@@ -58,6 +74,7 @@ impl flui_view::RenderView for Theater {
     ) -> flui_rendering::RenderUpdateImpact {
         let mut impact = flui_rendering::RenderUpdateImpact::NONE;
         impact |= render_object.set_skip_count(self.skip_count);
+        impact |= render_object.set_semantics_blocked_count(self.semantics_blocked);
         impact
     }
 

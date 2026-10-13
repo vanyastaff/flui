@@ -22,6 +22,40 @@ pub enum TextDirection {
 }
 
 // ============================================================================
+// HeadingLevel
+// ============================================================================
+
+/// The outline level of a heading, as `aria-level` numbers it: [`Self::H1`]
+/// is the top of the outline.
+///
+/// Screen readers announce the level and let a user jump between headings of
+/// one level. The six levels are the ones every platform names; a deeper
+/// outline nests its headings at [`Self::H6`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum HeadingLevel {
+    /// The top level, a page or screen title.
+    H1 = 1,
+    /// A section heading.
+    H2 = 2,
+    /// A subsection heading.
+    H3 = 3,
+    /// A fourth-level heading.
+    H4 = 4,
+    /// A fifth-level heading.
+    H5 = 5,
+    /// A sixth-level heading.
+    H6 = 6,
+}
+
+impl HeadingLevel {
+    /// The one-based level, as `aria-level` gives it.
+    #[must_use]
+    pub const fn get(self) -> u8 {
+        self as u8
+    }
+}
+
+// ============================================================================
 // SemanticsTag
 // ============================================================================
 
@@ -327,6 +361,8 @@ pub struct SemanticsProperties {
     pub link: Option<bool>,
     /// Whether this node is a header.
     pub header: Option<bool>,
+    /// The heading level, which also makes the node a header.
+    pub heading_level: Option<HeadingLevel>,
     /// Whether this node is an image.
     pub image: Option<bool>,
     /// Whether this node is a text field.
@@ -435,6 +471,7 @@ impl SemanticsProperties {
             button,
             link,
             header,
+            heading_level,
             image,
             text_field,
             slider,
@@ -468,6 +505,7 @@ impl SemanticsProperties {
             && button.is_none()
             && link.is_none()
             && header.is_none()
+            && heading_level.is_none()
             && image.is_none()
             && text_field.is_none()
             && slider.is_none()
@@ -501,7 +539,7 @@ impl SemanticsProperties {
         if self.link == Some(true) {
             flags |= SemanticsFlag::IsLink.value();
         }
-        if self.header == Some(true) {
+        if self.header == Some(true) || self.heading_level.is_some() {
             flags |= SemanticsFlag::IsHeader.value();
         }
         if self.image == Some(true) {

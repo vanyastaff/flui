@@ -13,6 +13,7 @@ use flui_view::prelude::*;
 use super::AutovalidateMode;
 use super::form_field::FormFieldHandle;
 use super::text_form_field_core::{TextFormFieldConfig, TextFormFieldCore};
+use crate::Assertiveness;
 use crate::flex::Column;
 use crate::semantics::Semantics;
 use crate::support::{event_callback, ref_callback};
@@ -176,9 +177,11 @@ impl ViewState<RawTextFormField> for RawTextFormFieldState {
 
     fn build(&self, view: &RawTextFormField, _ctx: &dyn BuildContext) -> impl IntoView {
         self.core.build(&view.config, |input| {
+            let error = input.field.error_text();
             let mut field = RawTextField::new(input.controller.clone())
                 .obscure_text(input.obscure_text)
                 .enabled(input.enabled)
+                .invalid(error.is_some())
                 .on_changed(input.on_changed());
             if let Some(node) = &input.focus_node {
                 field = field.focus_node(Rc::clone(node));
@@ -186,7 +189,7 @@ impl ViewState<RawTextFormField> for RawTextFormFieldState {
             if let Some(on_submitted) = input.on_submitted.clone() {
                 field = field.on_submitted(move |cx, text| on_submitted(cx, text));
             }
-            with_error_line(field.boxed(), input.field.error_text())
+            with_error_line(field.boxed(), error)
         })
     }
 }
@@ -198,7 +201,7 @@ fn with_error_line(input: BoxedView, error: Option<String>) -> BoxedView {
         children.push(
             Semantics::new()
                 .container(true)
-                .live_region(true)
+                .live_region(Assertiveness::Polite)
                 .child(Text::new(error).style(TextStyle::default().with_color(ERROR_COLOR)))
                 .boxed(),
         );

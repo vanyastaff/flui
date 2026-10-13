@@ -135,6 +135,8 @@ pub struct TextField {
     enabled: Option<bool>,
     /// Forwarded to [`EditableText::obscure_text`] — a password field.
     obscure_text: bool,
+    /// Forwarded to [`EditableText::required`] — see [`Self::required`].
+    required: bool,
     /// Forwarded to [`EditableText::on_submitted`] — see
     /// [`Self::on_submitted`].
     on_submitted: Option<SubmitCallback>,
@@ -165,6 +167,7 @@ impl std::fmt::Debug for TextField {
             .field("decoration", &self.decoration)
             .field("enabled", &self.enabled)
             .field("obscure_text", &self.obscure_text)
+            .field("required", &self.required)
             .field("on_submitted", &self.on_submitted.is_some())
             .field("on_changed", &self.on_changed.is_some())
             .finish()
@@ -191,6 +194,15 @@ impl TextField {
         self
     }
 
+    /// Mark the field as one the form needs filled in, which a screen reader
+    /// announces with it. Whether an empty required field is an error is the
+    /// form's validator's decision, shown through the decoration's error.
+    #[must_use]
+    pub fn required(mut self, required: bool) -> Self {
+        self.required = required;
+        self
+    }
+
     /// Create a `TextField` driven by `controller`, with no decoration
     /// (label/hint/helper/error all unset — see [`InputDecoration::default`])
     /// and no `enabled` override (falls through to
@@ -204,6 +216,7 @@ impl TextField {
             decoration: InputDecoration::default(),
             enabled: None,
             obscure_text: false,
+            required: false,
             on_submitted: None,
             on_changed: None,
         }
@@ -435,10 +448,32 @@ impl ViewState<TextField> for MaterialTextFieldState {
         let mut decoration = view.decoration.clone();
         decoration.enabled = effective_enabled;
 
+        // The field's own node carries what the decoration shows around it: the
+        // label names it, the hint is its placeholder and an error marks it
+        // invalid. `InputDecorator` keeps the label and hint text out of the
+        // tree so they are not announced twice.
         let mut editable = EditableText::new(self.controller.clone(), Rc::clone(&self.focus_node))
             .enabled(effective_enabled)
             .caret_color(caret_color)
-            .obscure_text(view.obscure_text);
+            .obscure_text(view.obscure_text)
+            .invalid(has_error)
+            .required(view.required);
+        if let Some(label) = &view.decoration.label_text {
+            editable = editable.semantic_label(label.clone());
+        }
+        if let Some(hint) = &view.decoration.hint_text {
+            editable = editable.placeholder(hint.clone());
+        }
+        // The supporting line describes the field wherever the reader is: an
+        // error replaces the helper text, as it does on screen.
+        if let Some(line) = view
+            .decoration
+            .error_text
+            .as_ref()
+            .or(view.decoration.helper_text.as_ref())
+        {
+            editable = editable.semantic_hint(line.clone());
+        }
         if let Some(text_style) = theme.text_theme.body_large {
             editable = editable.text_style(text_style);
         }
@@ -458,6 +493,7 @@ impl ViewState<TextField> for MaterialTextFieldState {
             .child(
                 InputDecorator::new(decoration)
                     .focused(focused)
+                    .child_names_itself()
                     .is_empty(is_empty)
                     .child(editable),
             )

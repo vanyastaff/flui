@@ -97,6 +97,16 @@ pub enum SemanticsFlag {
     /// the `Expand` / `Collapse` `SemanticsAction` variants:
     /// collapse-state lives on the flag word, not as a discrete action.
     HasExpandedState = 1 << 27,
+    /// Is modal: while this node is shown, assistive technology reaches only
+    /// it and its descendants (`aria-modal`).
+    IsModal = 1 << 28,
+    /// A live region whose changes interrupt the user (`aria-live`
+    /// `assertive`); set only together with [`Self::IsLiveRegion`].
+    IsLiveRegionAssertive = 1 << 29,
+    /// A form control that must be filled before submitting (`aria-required`).
+    IsRequired = 1 << 30,
+    /// A form control whose value failed validation (`aria-invalid`).
+    IsInvalid = 1 << 31,
 }
 
 impl SemanticsFlag {
@@ -137,6 +147,10 @@ impl SemanticsFlag {
             Self::IsExpanded => "isExpanded",
             Self::IsCheckStateMixed => "isCheckStateMixed",
             Self::HasExpandedState => "hasExpandedState",
+            Self::IsModal => "isModal",
+            Self::IsLiveRegionAssertive => "isLiveRegionAssertive",
+            Self::IsRequired => "isRequired",
+            Self::IsInvalid => "isInvalid",
         }
     }
 }

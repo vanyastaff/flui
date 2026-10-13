@@ -32,8 +32,8 @@ use flui_semantics::{AccessibilityNodeId, SemanticsActionError, semantics_action
 // caller constructing a scroll-offset request needs `Point` to name the offset
 // the platform sends.
 pub use accesskit::{
-    Action, ActionData, ActionRequest, NodeId, Point as A11yPoint, Rect as A11yRect, Role, Toggled,
-    TreeId,
+    Action, ActionData, ActionRequest, Live, NodeId, Point as A11yPoint, Rect as A11yRect, Role,
+    Toggled, TreeId,
 };
 
 /// The binding drives no tree, so there is no pipeline to assemble semantics
@@ -318,6 +318,23 @@ impl<'a> A11yNode<'a> {
         self.node.size_of_set()
     }
 
+    /// How the node's changes are announced, when it is a live region.
+    #[must_use]
+    pub fn live(&self) -> Option<Live> {
+        self.node.live()
+    }
+
+    /// A heading's one-based outline level, the "2" in "heading level 2".
+    ///
+    /// One-based as `aria-level` is; AccessKit stores it zero-based.
+    #[must_use]
+    pub fn heading_level(&self) -> Option<usize> {
+        (self.role() == Role::Heading)
+            .then(|| self.node.level())
+            .flatten()
+            .map(|level| level + 1)
+    }
+
     /// The node's children, in tree order.
     #[must_use]
     pub fn child_ids(&self) -> &'a [NodeId] {
@@ -335,6 +352,9 @@ impl<'a> A11yNode<'a> {
     pub fn describe(&self) -> String {
         // Writing to a String is infallible, so the `fmt::Result`s are dropped.
         let mut out = format!("{:?}", self.role());
+        if let Some(level) = self.heading_level() {
+            let _ = write!(out, " level={level}");
+        }
         if let Some(label) = self.label() {
             let _ = write!(out, " label={label:?}");
         }

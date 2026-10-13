@@ -78,6 +78,8 @@ pub struct RawTextField {
     obscure_text: bool,
     /// Forwarded to [`EditableText::enabled`].
     enabled: bool,
+    /// Forwarded to [`EditableText::invalid`].
+    invalid: bool,
     /// Forwarded to [`EditableText::on_changed`].
     on_changed: Option<TextChanged>,
     /// Forwarded to [`EditableText::on_submitted`] — see
@@ -98,6 +100,7 @@ impl std::fmt::Debug for RawTextField {
             .field("content_padding", &self.content_padding)
             .field("obscure_text", &self.obscure_text)
             .field("enabled", &self.enabled)
+            .field("invalid", &self.invalid)
             .field("on_changed", &self.on_changed.is_some())
             .field("on_submitted", &self.on_submitted.is_some())
             .finish()
@@ -116,9 +119,19 @@ impl RawTextField {
             content_padding: EdgeInsets::symmetric(8.0, 12.0),
             obscure_text: false,
             enabled: true,
+            invalid: false,
             on_changed: None,
             on_submitted: None,
         }
+    }
+
+    /// Whether the field's value failed validation (default `false`), which
+    /// a screen reader announces with the field. Forwards to
+    /// [`EditableText::invalid`].
+    #[must_use]
+    pub fn invalid(mut self, invalid: bool) -> Self {
+        self.invalid = invalid;
+        self
     }
 
     /// Use a caller-owned focus node instead of the field state's internal
@@ -237,7 +250,8 @@ impl ViewState<RawTextField> for RawTextFieldState {
         let mut editable = EditableText::new(view.controller.clone(), Rc::clone(&self.focus_node))
             .caret_color(view.caret_color)
             .obscure_text(view.obscure_text)
-            .enabled(view.enabled);
+            .enabled(view.enabled)
+            .invalid(view.invalid);
         if let Some(height) = view.caret_height {
             editable = editable.caret_height(height);
         }

@@ -54,7 +54,7 @@
 //! | `RenderFlex` | `harness_flex_*` | yes | — | — | yes | queries, baseline |
 //! | `RenderStack` | `harness_stack_*` | yes | yes | — | yes | queries |
 //! | `RenderIndexedStack` | `harness_indexed_stack_*` | yes | yes | yes | yes | baseline |
-//! | `RenderTheater` | `harness_theater_*` | yes | yes | yes | yes | skip_count |
+//! | `RenderTheater` | `harness_theater_*` | yes | yes | yes | yes | skip_count, semantics_blocked_count |
 //! | `RenderListBody` | `harness_list_body_*` | yes | yes | — | yes | dry baseline |
 //! | `RenderFlow` | `harness_flow_*` | yes | yes | yes | yes | order, paint transform |
 //! | `RenderTable` | `harness_table_*` | yes | yes | yes | yes | column widths |
@@ -6669,6 +6669,45 @@ fn harness_theater_offstage_from_the_first_pass_publishes_no_semantics() {
     );
 }
 
+/// Entries under a modal one stay onstage behind the dialog but publish no
+/// semantics, so a screen reader reaches only the
+/// dialog. Red without `semantics_blocked_count` in
+/// `visits_child_for_semantics`: the page under the dialog is announced.
+fn harness_theater_semantics_blocked_entries_stay_laid_out_but_unannounced() {
+    let labelled = |label: &str| {
+        box_node(
+            RenderSemanticsAnnotations::new(SemanticsProperties::new().with_label(label))
+                .with_container(true),
+        )
+        .child(box_node(RenderSizedBox::new(Some(40.0), Some(20.0))))
+    };
+
+    let run = RenderTester::mount(
+        box_node(RenderTheater::new().with_semantics_blocked_count(1))
+            .child(labelled("page"))
+            .child(labelled("dialog")),
+    )
+    .with_constraints(loose(200.0))
+    .with_semantics_enabled()
+    .run_to_semantics();
+
+    let announced: Vec<String> = run
+        .semantics_owner()
+        .expect("semantics enabled")
+        .tree()
+        .iter()
+        .filter_map(|(_, node)| node.label().map(ToString::to_string))
+        .collect();
+    assert!(
+        announced.iter().any(|l| l.contains("dialog")),
+        "the modal entry is announced; got {announced:?}"
+    );
+    assert!(
+        !announced.iter().any(|l| l.contains("page")),
+        "an entry under a modal one must publish no semantics; got {announced:?}"
+    );
+}
+
 /// A right-to-left `Row` lays its children out from the right.
 ///
 /// `RenderFlex::flip_main_axis` is consulted only by a horizontal flex, and
@@ -7212,6 +7251,10 @@ fn family_semantics() {
             (
                 "theater_offstage_from_the_first_pass_publishes_no_semantics",
                 harness_theater_offstage_from_the_first_pass_publishes_no_semantics,
+            ),
+            (
+                "theater_semantics_blocked_entries_stay_laid_out_but_unannounced",
+                harness_theater_semantics_blocked_entries_stay_laid_out_but_unannounced,
             ),
         ],
     );

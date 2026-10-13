@@ -15,11 +15,12 @@ use crate::{
     action::{SemanticsAction, SemanticsActionHandler},
     flags::{SemanticsFlag, SemanticsFlags},
     properties::{
-        AttributedString, CustomSemanticsAction, SemanticsHintOverrides, SemanticsProperties,
-        SemanticsSortKey, SemanticsTag, TextDirection, UNBLOCKED_USER_ACTIONS_MASK,
-        concat_attributed_string,
+        AttributedString, CustomSemanticsAction, HeadingLevel, SemanticsHintOverrides,
+        SemanticsProperties, SemanticsSortKey, SemanticsTag, TextDirection,
+        UNBLOCKED_USER_ACTIONS_MASK, concat_attributed_string,
     },
-    role::SemanticsRole,
+    relation::{SemanticsAnchor, SemanticsRelation},
+    role::{Assertiveness, SemanticsRole},
 };
 
 // ============================================================================
@@ -120,6 +121,9 @@ pub struct SemanticsConfiguration {
     /// The tooltip for this node.
     tooltip: Option<SmolStr>,
 
+    /// What an empty text field shows in place of a value.
+    placeholder: Option<SmolStr>,
+
     /// The text direction.
     text_direction: Option<TextDirection>,
 
@@ -164,6 +168,15 @@ pub struct SemanticsConfiguration {
     /// Current character count for text field.
     current_value_length: Option<i32>,
 
+    /// The outline level of a header node.
+    heading_level: Option<HeadingLevel>,
+
+    /// Anchors naming this node as a relation target (ADR-0205).
+    anchors: SmallVec<[SemanticsAnchor; 1]>,
+
+    /// This node's relations to the nodes other anchors name.
+    relations: SmallVec<[(SemanticsRelation, SemanticsAnchor); 1]>,
+
     /// Semantic role for this node.
     ///
     /// Defaults to [`SemanticsRole::None`]. Consumed by the platform
@@ -199,6 +212,7 @@ impl PartialEq for SemanticsConfiguration {
             && self.decreased_value == other.decreased_value
             && self.hint == other.hint
             && self.tooltip == other.tooltip
+            && self.placeholder == other.placeholder
             && self.text_direction == other.text_direction
             && self.custom_actions == other.custom_actions
             && self.tags == other.tags
@@ -214,6 +228,9 @@ impl PartialEq for SemanticsConfiguration {
             && self.platform_view_id == other.platform_view_id
             && self.max_value_length == other.max_value_length
             && self.current_value_length == other.current_value_length
+            && self.heading_level == other.heading_level
+            && self.anchors == other.anchors
+            && self.relations == other.relations
             && self.role == other.role
     }
 }
@@ -412,14 +429,33 @@ impl SemanticsConfiguration {
     }
 
     /// Sets whether this is a header.
+    ///
+    /// A header without a [level](Self::set_heading_level) is announced as a
+    /// heading of no particular level. Clearing it clears the level too.
     pub fn set_header(&mut self, value: bool) {
         self.set_flag(SemanticsFlag::IsHeader, value);
+        if !value {
+            self.heading_level = None;
+        }
     }
 
     /// Returns whether this is a header.
     #[inline]
     pub fn is_header(&self) -> bool {
         self.has_flag(SemanticsFlag::IsHeader)
+    }
+
+    /// Makes this node a header at `level` of the outline.
+    pub fn set_heading_level(&mut self, level: HeadingLevel) {
+        self.set_flag(SemanticsFlag::IsHeader, true);
+        self.heading_level = Some(level);
+    }
+
+    /// Returns the outline level of this header, when one was given.
+    #[inline]
+    #[must_use]
+    pub fn heading_level(&self) -> Option<HeadingLevel> {
+        self.heading_level
     }
 
     /// Sets whether this is an image.
@@ -532,15 +568,62 @@ impl SemanticsConfiguration {
         self.has_flag(SemanticsFlag::NamesRoute)
     }
 
-    /// Sets whether this is a live region.
-    pub fn set_live_region(&mut self, value: bool) {
-        self.set_flag(SemanticsFlag::IsLiveRegion, value);
+    /// Sets whether this node is modal: while it is shown, assistive
+    /// technology reaches only it and its descendants. A dialog is.
+    pub fn set_modal(&mut self, value: bool) {
+        self.set_flag(SemanticsFlag::IsModal, value);
     }
 
-    /// Returns whether this is a live region.
+    /// Returns whether this node is modal.
     #[inline]
-    pub fn is_live_region(&self) -> bool {
-        self.has_flag(SemanticsFlag::IsLiveRegion)
+    pub fn is_modal(&self) -> bool {
+        self.has_flag(SemanticsFlag::IsModal)
+    }
+
+    /// Sets whether this form control must be filled before submitting.
+    pub fn set_required(&mut self, value: bool) {
+        self.set_flag(SemanticsFlag::IsRequired, value);
+    }
+
+    /// Returns whether this form control must be filled.
+    #[inline]
+    pub fn is_required(&self) -> bool {
+        self.has_flag(SemanticsFlag::IsRequired)
+    }
+
+    /// Sets whether this form control's value failed validation.
+    pub fn set_invalid(&mut self, value: bool) {
+        self.set_flag(SemanticsFlag::IsInvalid, value);
+    }
+
+    /// Returns whether this form control's value failed validation.
+    #[inline]
+    pub fn is_invalid(&self) -> bool {
+        self.has_flag(SemanticsFlag::IsInvalid)
+    }
+
+    /// Makes this node a live region, whose changes assistive technology
+    /// announces without the user moving to it: politely, after what is being
+    /// read, or assertively, interrupting it. `None` makes it an ordinary node.
+    pub fn set_live_region(&mut self, politeness: Option<Assertiveness>) {
+        self.set_flag(SemanticsFlag::IsLiveRegion, politeness.is_some());
+        self.set_flag(
+            SemanticsFlag::IsLiveRegionAssertive,
+            politeness == Some(Assertiveness::Assertive),
+        );
+    }
+
+    /// How this live region's changes are announced, or `None` when it is
+    /// not one.
+    #[must_use]
+    pub fn live_region(&self) -> Option<Assertiveness> {
+        self.has_flag(SemanticsFlag::IsLiveRegion).then(|| {
+            if self.has_flag(SemanticsFlag::IsLiveRegionAssertive) {
+                Assertiveness::Assertive
+            } else {
+                Assertiveness::Polite
+            }
+        })
     }
 
     // ========================================================================
@@ -743,6 +826,19 @@ impl SemanticsConfiguration {
     #[inline]
     pub fn tooltip(&self) -> Option<&str> {
         self.tooltip.as_deref()
+    }
+
+    /// Sets what an empty text field shows in place of a value, which
+    /// assistive technology reads while the field is empty.
+    pub fn set_placeholder(&mut self, placeholder: impl Into<SmolStr>) {
+        self.placeholder = Some(placeholder.into());
+        self.mark_annotated();
+    }
+
+    /// Returns the placeholder.
+    #[inline]
+    pub fn placeholder(&self) -> Option<&str> {
+        self.placeholder.as_deref()
     }
 
     // ========================================================================
@@ -1047,6 +1143,40 @@ impl SemanticsConfiguration {
     }
 
     // ========================================================================
+    // Relations
+    // ========================================================================
+
+    /// Declares that the node this configuration forms or merges into is
+    /// named by `anchor`, so other nodes' relations to it resolve here.
+    pub fn add_anchor(&mut self, anchor: SemanticsAnchor) {
+        if !self.anchors.contains(&anchor) {
+            self.anchors.push(anchor);
+        }
+        self.mark_annotated();
+    }
+
+    /// The anchors naming this node.
+    #[inline]
+    pub fn anchors(&self) -> &[SemanticsAnchor] {
+        &self.anchors
+    }
+
+    /// Relates this node to every node `anchor` names.
+    pub fn add_relation(&mut self, relation: SemanticsRelation, anchor: SemanticsAnchor) {
+        let entry = (relation, anchor);
+        if !self.relations.contains(&entry) {
+            self.relations.push(entry);
+        }
+        self.mark_annotated();
+    }
+
+    /// This node's relations, each to the nodes its anchor names.
+    #[inline]
+    pub fn relations(&self) -> &[(SemanticsRelation, SemanticsAnchor)] {
+        &self.relations
+    }
+
+    // ========================================================================
     // Role
     // ========================================================================
 
@@ -1151,10 +1281,11 @@ impl SemanticsConfiguration {
     ///   semantics produced "Submit" + "loading state" → "Submit",
     ///   losing the child's hint. They now join into "Submit
     ///   loading state."
-    /// - **Value / increased_value / decreased_value / tooltip / sort_key /
+    /// - **Value / increased_value / decreased_value / tooltip / placeholder / sort_key /
     ///   text_direction / hint overrides / scroll metadata / list index /
-    ///   platform view / text lengths** — first-wins (parent keeps its value
+    ///   platform view / text lengths / heading level** — first-wins (parent keeps its value
     ///   if set).
+    /// - **Anchors / relations** — union.
     /// - **Role** — merge: parent keeps its role if not `None`;
     ///   otherwise inherits the child's role.
     ///
@@ -1235,6 +1366,9 @@ impl SemanticsConfiguration {
         if self.tooltip.is_none() {
             self.tooltip.clone_from(&other.tooltip);
         }
+        if self.placeholder.is_none() {
+            self.placeholder.clone_from(&other.placeholder);
+        }
         if self.sort_key.is_none() {
             self.sort_key.clone_from(&other.sort_key);
         }
@@ -1278,6 +1412,21 @@ impl SemanticsConfiguration {
         if self.current_value_length.is_none() {
             self.current_value_length = other.current_value_length;
         }
+        if self.heading_level.is_none() {
+            self.heading_level = other.heading_level;
+        }
+
+        // ----- anchors and relations (union) -----
+        for anchor in &other.anchors {
+            if !self.anchors.contains(anchor) {
+                self.anchors.push(anchor.clone());
+            }
+        }
+        for entry in &other.relations {
+            if !self.relations.contains(entry) {
+                self.relations.push(entry.clone());
+            }
+        }
 
         // ----- role (parent keeps if non-None, else inherit) -----
         if self.role == SemanticsRole::None {
@@ -1318,6 +1467,9 @@ impl SemanticsConfiguration {
         if let Some(header) = properties.header {
             config.set_header(header);
         }
+        if let Some(level) = properties.heading_level {
+            config.set_heading_level(level);
+        }
         if let Some(image) = properties.image {
             config.set_image(image);
         }
@@ -1355,7 +1507,7 @@ impl SemanticsConfiguration {
             config.set_names_route(names_route);
         }
         if let Some(live_region) = properties.live_region {
-            config.set_live_region(live_region);
+            config.set_live_region(live_region.then_some(Assertiveness::Polite));
         }
 
         if let Some(ref label) = properties.label {

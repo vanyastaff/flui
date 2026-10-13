@@ -80,6 +80,17 @@ pub trait NavigatorRoute: Route {
     fn binding_slot(&self) -> Option<&RouteBindingSlot> {
         None
     }
+
+    /// Whether this route is modal: while it is shown, the routes beneath it
+    /// stay visible but assistive technology reaches only this route and
+    /// what is above it.
+    ///
+    /// `PopupRoute` is modal. `PageRoute` is not: it covers the routes beneath
+    /// once its entrance completes, and through the transition both pages
+    /// are visible and reachable. The default is not modal.
+    fn is_modal(&self) -> bool {
+        false
+    }
 }
 
 /// The floor: a route with content, an instant transition, and a typed result.

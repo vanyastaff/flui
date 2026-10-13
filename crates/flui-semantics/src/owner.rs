@@ -14,6 +14,7 @@ use crate::{
     action::{ActionArgs, SemanticsAction, SemanticsActionHandler, SemanticsActionRequest},
     identity::AccessibilityNodeId,
     node::SemanticsNode,
+    relation::SemanticsAnchor,
     snapshot::{SemanticsSnapshot, SemanticsSnapshotError},
     tree::SemanticsTree,
 };
@@ -318,6 +319,11 @@ pub struct SemanticsOwner {
     /// identical staleness contract the payload diff itself has.
     focus_claimants: FxHashSet<SemanticsId>,
 
+    /// The nodes declaring anchors and the nodes holding relations,
+    /// maintained like [`Self::focus_claimants`] so an incremental flush can
+    /// resolve relations without scanning the arena (ADR-0205).
+    relations: RelationIndex,
+
     /// How many arena entries the last flush inspected as publish/diff
     /// candidates — the scaling oracle for the O(dirty) claim: a
     /// single-node change must inspect one entry, not the arena.
@@ -327,7 +333,10 @@ pub struct SemanticsOwner {
     /// node's translation before the addressability check discards an
     /// unpublishable one), so it reports `tree.len()`; an incremental
     /// flush reports the dirty set's live, still-dirty survivors —
-    /// including unpublishable ones, whose focus claims it must examine.
+    /// including unpublishable ones, whose focus claims it must examine —
+    /// plus every anchored node it resolves relations against and every clean
+    /// relation source it re-translates, so an incremental
+    /// flush is O(dirty + anchors + relation sources) and says so.
     #[cfg(any(test, feature = "testing"))]
     examined_last_flush: usize,
 }
@@ -365,6 +374,68 @@ impl PublishedState {
     }
 }
 
+/// Which nodes declare anchors and which hold relations (ADR-0205).
+///
+/// Maintained exactly as the focus claimants are: a dirty node examined by an
+/// incremental flush updates its entries, a full publish rebuilds both from a
+/// whole-tree scan, and dead entries are dropped by a liveness check before
+/// resolution. A target's identity can change without its sources being
+/// dirty, so an incremental flush re-translates every relation source and lets
+/// the mirror diff drop the unchanged ones.
+#[derive(Default)]
+struct RelationIndex {
+    anchored: FxHashMap<SemanticsId, SmallVec<[SemanticsAnchor; 1]>>,
+    sources: FxHashSet<SemanticsId>,
+}
+
+impl RelationIndex {
+    fn scan(tree: &SemanticsTree) -> Self {
+        let mut index = Self::default();
+        for (sid, node) in tree.iter() {
+            index.observe(sid, node);
+        }
+        index
+    }
+
+    /// Records what `node`'s configuration now declares.
+    fn observe(&mut self, sid: SemanticsId, node: &SemanticsNode) {
+        let config = node.config();
+        if config.anchors().is_empty() {
+            self.anchored.remove(&sid);
+        } else {
+            self.anchored
+                .insert(sid, config.anchors().iter().cloned().collect());
+        }
+        if config.relations().is_empty() {
+            self.sources.remove(&sid);
+        } else {
+            self.sources.insert(sid);
+        }
+    }
+
+    fn retain_live(&mut self, tree: &SemanticsTree) {
+        self.anchored.retain(|&sid, _| tree.contains(sid));
+        self.sources.retain(|&sid| tree.contains(sid));
+    }
+
+    /// The published ids each anchor resolves to.
+    fn anchor_index(&self, tree: &SemanticsTree) -> crate::accesskit_translation::AnchorIndex {
+        let mut index = crate::accesskit_translation::AnchorIndex::default();
+        for (&sid, anchors) in &self.anchored {
+            let Some(identity) = tree.get(sid).and_then(SemanticsNode::accessibility_id) else {
+                continue;
+            };
+            for anchor in anchors {
+                index
+                    .entry(anchor.clone())
+                    .or_default()
+                    .push(accesskit::NodeId(identity.as_u64()));
+            }
+        }
+        index
+    }
+}
+
 impl std::fmt::Debug for SemanticsOwner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SemanticsOwner")
@@ -391,6 +462,7 @@ impl SemanticsOwner {
             published: None,
             full_publish_pending: false,
             focus_claimants: FxHashSet::default(),
+            relations: RelationIndex::default(),
             device_pixel_ratio: 1.0,
             #[cfg(any(test, feature = "testing"))]
             examined_last_flush: 0,
@@ -412,6 +484,7 @@ impl SemanticsOwner {
             published: None,
             full_publish_pending: false,
             focus_claimants: FxHashSet::default(),
+            relations: RelationIndex::default(),
             device_pixel_ratio: 1.0,
             #[cfg(any(test, feature = "testing"))]
             examined_last_flush: 0,
@@ -427,6 +500,7 @@ impl SemanticsOwner {
             published: None,
             full_publish_pending: false,
             focus_claimants: FxHashSet::default(),
+            relations: RelationIndex::default(),
             device_pixel_ratio: 1.0,
             #[cfg(any(test, feature = "testing"))]
             examined_last_flush: 0,
@@ -464,6 +538,7 @@ impl SemanticsOwner {
             // Same wholesale reset a full publish performs: claimants
             // re-seeded from the tree, stale removal notices discarded.
             self.focus_claimants = Self::scan_focus_claimants(&self.tree);
+            self.relations = RelationIndex::scan(&self.tree);
             let _ = self.tree.take_removed_accessibility_ids();
         }
         self.callback = Some(callback);
@@ -938,6 +1013,7 @@ impl SemanticsOwner {
         self.published = Some(PublishedState::mirror_of(update));
         self.full_publish_pending = false;
         self.focus_claimants = Self::scan_focus_claimants(&self.tree);
+        self.relations = RelationIndex::scan(&self.tree);
         // The mirror was rebuilt wholesale; pending removal notices predate
         // it and would only prune entries the rebuild already resolved.
         let _ = self.tree.take_removed_accessibility_ids();
@@ -994,6 +1070,22 @@ impl SemanticsOwner {
         let mut examined = 0_usize;
 
         let dirty: SmallVec<[SemanticsId; 16]> = self.tree.dirty_ids().collect();
+        // Relations resolve against what the dirty nodes now declare, so the
+        // index is brought up to date before anything is translated.
+        for &sid in &dirty {
+            if let Some(node) = self.tree.get(sid).filter(|node| node.is_dirty()) {
+                self.relations.observe(sid, node);
+            }
+        }
+        self.relations.retain_live(&self.tree);
+        let anchors = self.relations.anchor_index(&self.tree);
+        // Resolving relations reads every anchored node: counted, so the
+        // oracle reports this pass's real cost.
+        #[cfg(any(test, feature = "testing"))]
+        {
+            examined += self.relations.anchored.len();
+        }
+
         let mut changed: Vec<(accesskit::NodeId, accesskit::Node)> = Vec::new();
         for sid in dirty {
             // The set is a conservative superset: skip members that died
@@ -1030,6 +1122,35 @@ impl SemanticsOwner {
                 &data,
                 id == state.root,
                 self.device_pixel_ratio,
+                &anchors,
+            );
+            if state.nodes.get(&id) != Some(&translated) {
+                changed.push((id, translated));
+            }
+        }
+
+        // A relation's target can change identity while its source stays
+        // clean, so every clean source is re-translated and diffed too.
+        for &sid in &self.relations.sources {
+            let Some(node) = self.tree.get(sid).filter(|node| !node.is_dirty()) else {
+                continue;
+            };
+            #[cfg(any(test, feature = "testing"))]
+            {
+                examined += 1;
+            }
+            let Some(data) = self.tree.node_data_of(node) else {
+                continue;
+            };
+            let Some(identity) = data.id else {
+                continue;
+            };
+            let id = accesskit::NodeId(identity.as_u64());
+            let translated = crate::accesskit_translation::to_published_node(
+                &data,
+                id == state.root,
+                self.device_pixel_ratio,
+                &anchors,
             );
             if state.nodes.get(&id) != Some(&translated) {
                 changed.push((id, translated));
@@ -1249,5 +1370,42 @@ mod tests {
                 SemanticsActionError::NodeNotFound { node_id: target },
             );
         }
+    }
+
+    /// The scaling oracle counts the anchored nodes an incremental flush
+    /// resolves and the clean relation sources it re-translates, so a flush
+    /// doing O(anchors + sources) work cannot report O(dirty).
+    #[test]
+    fn an_incremental_flush_counts_the_relation_work_it_does() {
+        let mut owner = SemanticsOwner::new(Arc::new(|_: &crate::TreeUpdate| {}));
+        let root = owner.insert(SemanticsNode::new().with_source_render_id(RenderId::new(1)));
+        let anchor = crate::SemanticsAnchor::new();
+        let mut title = SemanticsNode::new().with_source_render_id(RenderId::new(2));
+        title.config_mut().set_label("Title");
+        title.config_mut().add_anchor(anchor.clone());
+        let title = owner.insert(title);
+        let mut sources = Vec::new();
+        for index in 3..6 {
+            let mut source = SemanticsNode::new().with_source_render_id(RenderId::new(index));
+            source.config_mut().set_label("Dialog");
+            source
+                .config_mut()
+                .add_relation(crate::SemanticsRelation::LabelledBy, anchor.clone());
+            sources.push(owner.insert(source));
+        }
+        owner.add_child(root, title);
+        for &source in &sources {
+            owner.add_child(root, source);
+        }
+        owner.set_root(Some(root));
+        owner.flush();
+
+        owner.mark_dirty(title);
+        owner.flush();
+        assert_eq!(
+            owner.examined_last_flush(),
+            1 + 1 + sources.len(),
+            "one dirty node, the anchored title and every clean relation source"
+        );
     }
 }

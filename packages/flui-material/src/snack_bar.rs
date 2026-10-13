@@ -55,7 +55,7 @@ use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     Align, AnimatedBuilder, ClipRect, DefaultTextStyle, Expanded, MouseRegion, Padding, Row,
-    SafeArea, WidgetStateProperty,
+    SafeArea, Semantics, SemanticsRole, WidgetStateProperty,
 };
 use flui_sdk::{
     geometry::EdgeInsets,
@@ -316,10 +316,17 @@ fn build_content(snack_bar: &SnackBar, theme: &ThemeData) -> BoxedView {
     let padded = Padding::new(content_padding).child(Row::new(row_children));
     let safe_area = SafeArea::new().top(false).child(padded);
 
-    Material::new(background_color)
-        .elevation(elevation)
-        .clip_behavior(Clip::HardEdge)
-        .child(safe_area)
+    // A status message: announced politely when it appears, without moving
+    // the user to it.
+    Semantics::new()
+        .container(true)
+        .role(SemanticsRole::Status)
+        .child(
+            Material::new(background_color)
+                .elevation(elevation)
+                .clip_behavior(Clip::HardEdge)
+                .child(safe_area),
+        )
         .boxed()
 }
 
