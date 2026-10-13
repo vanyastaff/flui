@@ -12,9 +12,9 @@ use super::{
 use crate::{
     containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
-    gesture::VelocityTracker,
     gesture::arena::{GestureArena, GestureArenaEntry, GestureArenaMember},
     gesture::settings::{GestureSettings, GestureSettingsProvider},
+    gesture::{PublishedPosition, VelocityTracker},
     ids::PointerId,
     pointer::PointerDispatch,
 };
@@ -155,6 +155,9 @@ struct MultiDragPointerState {
     timeline: EventTimeline,
     last_time: Instant,
     arena_entry: GestureArenaEntry,
+    /// Published position, smoothed after acceptance when the contact's
+    /// settings select it.
+    published: PublishedPosition,
 }
 
 /// Recognizes independent drags for all admitted contacts.
@@ -284,7 +287,13 @@ impl MultiDragGestureRecognizer {
                 state.velocity_tracker.add_position(timestamp, position);
             }
             let timestamp = state.timeline.instant(event_time(dispatch.local), clock);
-            let delta = (position - state.last_position).to_delta();
+            let (published, published_global, delta) = if state.client.is_some() {
+                state.published.publish(timestamp, position, global)
+            } else {
+                state.published.follow(position);
+                (position, global, position - state.last_position)
+            };
+            let delta = delta.to_delta();
             let pending = state.pending_delta + delta;
             if !delta.dx.is_finite()
                 || !delta.dy.is_finite()
@@ -308,8 +317,8 @@ impl MultiDragGestureRecognizer {
                     Some(client),
                     Some(MultiDragUpdateDetails {
                         pointer_id: pointer,
-                        global_position: global,
-                        local_position: position,
+                        global_position: published_global,
+                        local_position: published,
                         delta,
                         kind: state.kind,
                         timestamp,
@@ -394,6 +403,11 @@ impl MultiDragGestureRecognizer {
                         timestamp: state.last_time,
                     };
                     state.pending_delta = Offset::ZERO;
+                    state.published.begin(
+                        state.last_time,
+                        state.last_position,
+                        state.last_global_position,
+                    );
                     state.client = Some(client.clone());
                     update
                 })
@@ -467,6 +481,7 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
         let mut velocity_tracker =
             VelocityTracker::for_gesture(kind, settings.velocity_estimator());
         velocity_tracker.add_position(now, position);
+        let published = PublishedPosition::new(settings.position_smoothing(), position);
         self.pointers.borrow_mut().insert(
             pointer,
             MultiDragPointerState {
@@ -483,6 +498,7 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
                 timeline,
                 last_time: now,
                 arena_entry: entry,
+                published,
             },
         );
     }

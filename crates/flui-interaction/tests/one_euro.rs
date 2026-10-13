@@ -3,7 +3,9 @@
 use std::time::Duration;
 
 use flui_foundation::geometry::Offset;
-use flui_interaction::gesture::{OneEuroFilter, OneEuroFilter2D, OneEuroFilterError};
+use flui_interaction::gesture::{
+    OneEuroFilter, OneEuroFilter2D, OneEuroFilterError, OneEuroTuning,
+};
 use web_time::Instant;
 
 fn finite_extreme_samples_do_not_publish_nan() {
@@ -41,38 +43,26 @@ fn regressed_timestamp_preserves_the_last_accepted_anchor() {
     );
 }
 
-fn tuning_admission_is_shared_by_both_dimensions() {
+fn tuning_admission() {
     for invalid in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-        assert!(matches!(
-            OneEuroFilter::new(invalid, 0.0, 1.0),
+        assert_eq!(
+            OneEuroTuning::new(invalid, 0.0, 1.0),
             Err(OneEuroFilterError::InvalidMinCutoff)
-        ));
-        assert!(matches!(
-            OneEuroFilter2D::new(invalid, 0.0, 1.0),
-            Err(OneEuroFilterError::InvalidMinCutoff)
-        ));
-        assert!(matches!(
-            OneEuroFilter::new(1.0, 0.0, invalid),
+        );
+        assert_eq!(
+            OneEuroTuning::new(1.0, 0.0, invalid),
             Err(OneEuroFilterError::InvalidDerivativeCutoff)
-        ));
-        assert!(matches!(
-            OneEuroFilter2D::new(1.0, 0.0, invalid),
-            Err(OneEuroFilterError::InvalidDerivativeCutoff)
-        ));
+        );
     }
     for invalid in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-        assert!(matches!(
-            OneEuroFilter::new(1.0, invalid, 1.0),
+        assert_eq!(
+            OneEuroTuning::new(1.0, invalid, 1.0),
             Err(OneEuroFilterError::InvalidBeta)
-        ));
-        assert!(matches!(
-            OneEuroFilter2D::new(1.0, invalid, 1.0),
-            Err(OneEuroFilterError::InvalidBeta)
-        ));
+        );
     }
     for cutoff in [f64::from_bits(1), f64::MIN_POSITIVE, 1.0, f64::MAX] {
-        assert!(OneEuroFilter::new(cutoff, 0.0, cutoff).is_ok());
-        assert!(OneEuroFilter2D::new(cutoff, f64::MAX, cutoff).is_ok());
+        assert!(OneEuroTuning::new(cutoff, 0.0, cutoff).is_ok());
+        assert!(OneEuroTuning::new(cutoff, f64::MAX, cutoff).is_ok());
     }
 }
 
@@ -124,7 +114,8 @@ fn overflow_refusal_allows_a_healthy_next_sample() {
     );
     assert_eq!(actual.filter(30.0, 1.0), control.filter(30.0, 1.0));
 
-    let mut adaptive = OneEuroFilter::new(1.0, f64::MAX, 1.0).expect("valid tuning");
+    let mut adaptive =
+        OneEuroFilter::new(OneEuroTuning::new(1.0, f64::MAX, 1.0).expect("valid tuning"));
     adaptive.filter(0.0, 0.0).expect("first sample");
     let mut adaptive_control = adaptive;
     assert_eq!(
@@ -139,11 +130,14 @@ fn extreme_cutoff_and_interval_keep_meaningful_smoothing() {
     crossing.filter(f64::MAX, 0.0).expect("finite first sample");
     assert_eq!(crossing.filter(-f64::MAX, f64::MAX), Ok(-f64::MAX));
 
-    let mut high = OneEuroFilter::new(f64::MAX, 0.0, f64::MAX).expect("finite cutoff");
+    let mut high =
+        OneEuroFilter::new(OneEuroTuning::new(f64::MAX, 0.0, f64::MAX).expect("finite cutoff"));
     high.filter(0.0, 0.0).expect("first sample");
     assert_eq!(high.filter(1.0, 1.0), Ok(1.0));
 
-    let mut low = OneEuroFilter::new(f64::from_bits(1), 0.0, 1.0).expect("positive cutoff");
+    let mut low = OneEuroFilter::new(
+        OneEuroTuning::new(f64::from_bits(1), 0.0, 1.0).expect("positive cutoff"),
+    );
     low.filter(0.0, 0.0).expect("first sample");
     let output = low.filter(1.0, f64::MAX).expect("finite long interval");
     assert!(
@@ -157,7 +151,7 @@ fn extreme_cutoff_and_interval_keep_meaningful_smoothing() {
 }
 
 fn fixed_cutoff_matches_a_known_scalar_step() {
-    let mut filter = OneEuroFilter::new(1.0, 0.0, 1.0).expect("fixed cutoff");
+    let mut filter = OneEuroFilter::new(OneEuroTuning::new(1.0, 0.0, 1.0).expect("fixed cutoff"));
     filter.filter(0.0, 0.0).expect("first sample");
     let output = filter.filter(10.0, 1.0).expect("finite step");
     assert!(
@@ -169,7 +163,8 @@ fn fixed_cutoff_matches_a_known_scalar_step() {
 fn constant_extremes_and_opposite_signs_keep_their_meaning() {
     let cutoff = 3.0 / (7.0 * std::f64::consts::TAU);
     for value in [f64::MAX, -f64::MAX] {
-        let mut filter = OneEuroFilter::new(cutoff, 0.0, 1.0).expect("fixed cutoff");
+        let mut filter =
+            OneEuroFilter::new(OneEuroTuning::new(cutoff, 0.0, 1.0).expect("fixed cutoff"));
         assert_eq!(filter.filter(value, 0.0), Ok(value));
         assert_eq!(
             filter.filter(value, 1.0),
@@ -185,17 +180,20 @@ fn constant_extremes_and_opposite_signs_keep_their_meaning() {
 
     // Half smoothing at a two-second interval. Opposite-sign positions have
     // a representable slope and must cancel without overflowing their difference.
-    let mut crossing =
-        OneEuroFilter::new(1.0 / (2.0 * std::f64::consts::TAU), 0.0, 1.0).expect("half smoothing");
+    let mut crossing = OneEuroFilter::new(
+        OneEuroTuning::new(1.0 / (2.0 * std::f64::consts::TAU), 0.0, 1.0).expect("half smoothing"),
+    );
     crossing.filter(f64::MAX, 0.0).expect("first sample");
     assert_eq!(crossing.filter(-f64::MAX, 2.0), Ok(0.0));
 
     // A positive cutoff/interval product below representable alpha holds
     // the previous endpoint, while the overflowing positive limit picks next.
-    let mut held = OneEuroFilter::new(f64::from_bits(1), 0.0, 1.0).expect("tiny cutoff");
+    let mut held =
+        OneEuroFilter::new(OneEuroTuning::new(f64::from_bits(1), 0.0, 1.0).expect("tiny cutoff"));
     held.filter(0.0, 0.0).expect("first sample");
     assert_eq!(held.filter(1.0, 0.0625), Ok(0.0));
-    let mut direct = OneEuroFilter::new(f64::MAX, 0.0, 1.0).expect("large cutoff");
+    let mut direct =
+        OneEuroFilter::new(OneEuroTuning::new(f64::MAX, 0.0, 1.0).expect("large cutoff"));
     direct.filter(0.0, 0.0).expect("first sample");
     assert_eq!(direct.filter(42.0, 1.0), Ok(42.0));
 }
@@ -246,10 +244,7 @@ fn reset_admits_a_new_stroke_and_timeline() {
 #[test]
 fn one_euro_admission_and_recovery() {
     let cases: &[(&str, fn())] = &[
-        (
-            "tuning admission",
-            tuning_admission_is_shared_by_both_dimensions,
-        ),
+        ("tuning admission", tuning_admission),
         ("finite extremes", finite_extreme_samples_do_not_publish_nan),
         (
             "invalid input recovery",

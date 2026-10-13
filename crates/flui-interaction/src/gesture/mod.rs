@@ -7,7 +7,8 @@
 //!   [`DragGestureRecognizer`], [`ScaleGestureRecognizer`] and the rest
 //! - [`GestureSettings`] - Slops, timeouts and fling limits
 //! - [`VelocityTracker`] - Velocity estimation from pointer movement
-//! - [`OneEuroFilter`] - Explicit smoothing of a noisy signal
+//! - [`OneEuroFilter`] - Smoothing of a noisy signal; recognizers apply it to
+//!   reported positions after recognition when settings select a [`OneEuroTuning`]
 //!
 //! # Example
 //!
@@ -43,7 +44,8 @@ pub use details::{
     TapUpDetails,
 };
 pub use observability::{GestureEvent, SPAN_ARENA, SPAN_RECOGNIZER, pointer_event_kind};
-pub use one_euro::{OneEuroFilter, OneEuroFilter2D, OneEuroFilterError};
+pub use one_euro::{OneEuroFilter, OneEuroFilter2D, OneEuroFilterError, OneEuroTuning};
+pub(crate) use one_euro::{PositionSmoother, PublishedPosition};
 pub use recognizers::*;
 pub use settings::*;
 pub use traits::DragAxis;
