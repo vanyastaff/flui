@@ -897,22 +897,21 @@ pub(crate) fn tree_to_scaled_update(
         return None;
     }
 
-    // AccessKit assumes a tree: a cycle or a node under two parents is an
-    // assembly defect, refused here rather than handed to an adapter that
-    // would recurse or keep two parents.
-    if !tree.is_rooted_tree() {
-        tracing::error!(
-            "BUG: the semantics tree has a cycle or a node under two parents; not published"
-        );
+    // AccessKit assumes a tree and rejects a full update with a node no
+    // parent reaches: the update is built from the rooted walk, and a cycle
+    // or a shared child — assembly defects — publish nothing rather than
+    // reach an adapter.
+    let Some(rooted) = tree.rooted_nodes() else {
+        tracing::error!("BUG: the semantics tree has a cycle or a shared child; not published");
         return None;
-    }
-
+    };
     let root_node_id = stable_id(tree.root()?)?;
-    let anchors = anchor_index(tree.iter().map(|(_, node)| node));
+    let rooted: Vec<&SemanticsNode> = rooted.into_iter().filter_map(|id| tree.get(id)).collect();
+    let anchors = anchor_index(rooted.iter().copied());
 
-    let nodes: Vec<(NodeId, Node)> = tree
-        .iter()
-        .filter_map(|(_, node)| {
+    let nodes: Vec<(NodeId, Node)> = rooted
+        .into_iter()
+        .filter_map(|node| {
             // `publish_view` skips an unaddressable node (returns `None`),
             // resolves the children into the same stable space with the
             // identical skip rule, and works from the reference already in

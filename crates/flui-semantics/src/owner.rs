@@ -1048,6 +1048,13 @@ impl SemanticsOwner {
         let mut examined = 0_usize;
 
         let dirty: SmallVec<[SemanticsId; 16]> = self.tree.dirty_ids().collect();
+        // An edge a dirty node lists without its child naming it back (a cycle
+        // or a shared child built through `SemanticsNode::add_child`) cannot
+        // be diffed safely: the full path validates the whole shape and
+        // publishes nothing until it is a tree again.
+        if !dirty.iter().all(|&sid| self.tree.children_link_back(sid)) {
+            return self.publish_full();
+        }
         // Relations resolve against what the dirty nodes now declare, so the
         // index is brought up to date before anything is translated.
         for &sid in &dirty {
