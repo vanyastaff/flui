@@ -203,7 +203,7 @@ run, and an oversubscribed host makes slow tests look hung.
   and nextest, so don't also run them by hand.
 - **Don't re-run a gate that passed** unless the code changed since. Quote the earlier result
   instead. `check-changed` skips by itself a run whose tree (untracked files included), merge
-  base, toolchain, Cargo configuration, result-changing environment and step list already passed
+  base, toolchain, Cargo configuration, environment and step list already passed
   on this machine, naming the earlier run; `--no-cache` runs it anyway.
 - **One heavy run at a time per host.** `check-changed`, `test`, `ci`, `gate` and `gpu-test` take a
   host-wide lock and queue behind each other. Don't start a second one in the background to "save

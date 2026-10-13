@@ -11,11 +11,15 @@
 //!
 //! The compiling steps run once per input set: a run whose tree (untracked
 //! files included), merge base, machine, toolchain, Cargo configuration,
-//! result-changing environment and step list already passed is skipped with
-//! a line naming the earlier run, and a run superseded while it waited for
-//! the host lock, by a newer `check-changed` of the same checkout asking the
-//! same of a newer tree, exits 3 without claiming its tree (`crate::verified`; `--no-cache` runs regardless). While the steps
-//! hold the lock they use the machine (`crate::host_lock::Parallelism`).
+//! environment (all but a few result-neutral variables) and step list already
+//! passed is skipped with a line naming the earlier run, and a run superseded
+//! while it waited for the host lock, by a newer `check-changed` of the same
+//! checkout asking the same of a newer tree, exits 3 without claiming its
+//! tree (`crate::verified`; `--no-cache` runs regardless). The scope computed
+//! before the wait only probes that record: the checkout is scoped again
+//! under the lock, and that scope's steps are the ones run and recorded.
+//! While the steps hold the lock they use the machine
+//! (`crate::host_lock::Parallelism`).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
@@ -105,6 +109,20 @@ impl Lane {
                 .collect();
         }
         self
+    }
+
+    /// Whether the change needs no compiling step (`docs` or `none`).
+    fn compiles_nothing(&self) -> bool {
+        matches!(self.mode.as_str(), "docs" | "none")
+    }
+
+    /// The scope as the run reports it.
+    fn scope(&self) -> &str {
+        if self.packages.is_empty() {
+            "<whole workspace>"
+        } else {
+            &self.packages
+        }
     }
 
     /// Whether flui-engine is in scope (an empty list is the whole workspace).
@@ -328,8 +346,8 @@ pub(super) fn run(runner: Runner, base: &str, use_cache: bool) -> anyhow::Result
             return Ok(ExitCode::from(2));
         }
     }
-    let scoped = change_scope::worktree_lane(base)?;
-    let lane = Lane::from_fields(scoped.fields, &scoped.seeds)?;
+    let scoped = Scoped::now(base)?;
+    let lane = &scoped.lane;
     println!("check-changed: {}", lane.reason);
     if lane.heavy_required {
         println!(
@@ -337,73 +355,111 @@ pub(super) fn run(runner: Runner, base: &str, use_cache: bool) -> anyhow::Result
         );
     }
     runner.run(&Cmd::cargo(["fmt", "--all", "--", "--check"]))?;
-    if matches!(lane.mode.as_str(), "docs" | "none") {
+    if lane.compiles_nothing() {
         println!("check-changed: nothing to compile ({})", lane.mode);
         return Ok(ExitCode::SUCCESS);
     }
-    println!(
-        "check-changed: packages: {}",
-        if lane.packages.is_empty() {
-            "<whole workspace>"
-        } else {
-            &lane.packages
-        }
-    );
-    let have_hack = !lane.hack_args.is_empty() && installed("cargo", &["hack", "--version"]);
-    let targets = installed_targets();
-    let mut native_steps = Vec::new();
-    for (target, step) in native::plans(
-        &repo_root(),
-        &lane.packages,
-        Host::current(),
-        native::FeatureSet::RequiredTargets,
-    )? {
-        native_steps.push(local_native_step(
-            target,
-            step,
-            Host::current(),
-            &targets,
-            |tool| installed(tool, &["--version"]),
-            || {
-                (
-                    crate::doctor::android_compiler_available(&crate::doctor::android_tool(
-                        "CC", "clang",
-                    )),
-                    crate::doctor::android_archiver_available(&crate::doctor::android_tool(
-                        "AR", "llvm-ar",
-                    )),
-                )
-            },
-        ));
-    }
-    let steps = plan(&lane, Host::current(), &targets, have_hack, &native_steps);
+    println!("check-changed: packages: {}", lane.scope());
     if runner.dry_run {
-        runner.steps(&steps)?;
+        runner.steps(&scoped.steps)?;
         return Ok(ExitCode::SUCCESS);
     }
-    verify_once(runner, base, &steps, use_cache)
+    verify_once(runner, base, &scoped, use_cache)
 }
 
-/// Runs `steps` once per verified key (`crate::verified`): skipped when the
-/// tree, base, toolchain, environment and steps already passed. Only the
-/// compiling steps wait for other heavy runs (`main` leaves this command's
-/// lock to here).
+/// The scope of the checkout as it is when computed, and the steps it runs.
+struct Scoped {
+    lane: Lane,
+    /// Empty when the lane compiles nothing.
+    steps: Vec<Step>,
+}
+
+impl Scoped {
+    /// Classifies the checkout's change against `base` and plans its steps
+    /// for this host.
+    fn now(base: &str) -> anyhow::Result<Self> {
+        let scoped = change_scope::worktree_lane(base)?;
+        let lane = Lane::from_fields(scoped.fields, &scoped.seeds)?;
+        if lane.compiles_nothing() {
+            return Ok(Self {
+                lane,
+                steps: Vec::new(),
+            });
+        }
+        let have_hack = !lane.hack_args.is_empty() && installed("cargo", &["hack", "--version"]);
+        let targets = installed_targets();
+        let mut native_steps = Vec::new();
+        for (target, step) in native::plans(
+            &repo_root(),
+            &lane.packages,
+            Host::current(),
+            native::FeatureSet::RequiredTargets,
+        )? {
+            native_steps.push(local_native_step(
+                target,
+                step,
+                Host::current(),
+                &targets,
+                |tool| installed(tool, &["--version"]),
+                || {
+                    (
+                        crate::doctor::android_compiler_available(&crate::doctor::android_tool(
+                            "CC", "clang",
+                        )),
+                        crate::doctor::android_archiver_available(&crate::doctor::android_tool(
+                            "AR", "llvm-ar",
+                        )),
+                    )
+                },
+            ));
+        }
+        let steps = plan(&lane, Host::current(), &targets, have_hack, &native_steps);
+        Ok(Self { lane, steps })
+    }
+
+    /// The steps as the key hashes them, one line each.
+    fn rendered(&self) -> String {
+        self.steps
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+/// Runs the scope's steps once per verified key (`crate::verified`): skipped
+/// when the tree, base, toolchain, environment and steps already passed.
+/// Only the compiling steps wait for other heavy runs (`main` leaves this
+/// command's lock to here). `before` is the scope computed before the wait;
+/// the checkout is scoped again under the lock, and that scope is the one
+/// run and recorded.
 fn verify_once(
     runner: Runner,
     base: &str,
-    steps: &[Step],
+    before: &Scoped,
     use_cache: bool,
 ) -> anyhow::Result<ExitCode> {
     let root = repo_root();
-    let rendered: Vec<String> = steps.iter().map(ToString::to_string).collect();
-    let inputs = crate::verified::RunInputs::of_this_run(&root, base, &rendered.join("\n"));
+    let inputs = crate::verified::RunInputs::of_this_run(&root, base);
     let settings = crate::host_lock::LockSettings::from_env();
     let mut out = std::io::stdout();
     let outcome = crate::verified::Verifier::new(settings.state_dir(), &root, use_cache, &mut out)
         .verify(
-            || inputs.key(),
+            before,
+            || {
+                let now = Scoped::now(base)?;
+                if now.rendered() != before.rendered() {
+                    println!(
+                        "check-changed: the checkout changed while this run waited; rescoped: {}; packages: {}",
+                        now.lane.reason,
+                        now.lane.scope()
+                    );
+                }
+                Ok(now)
+            },
+            |scoped| inputs.key(&scoped.rendered()),
             crate::host_lock::HeavyRunLock::for_this_run,
-            || runner.steps(steps),
+            |scoped| runner.steps(&scoped.steps),
         )?;
     Ok(outcome.exit_code())
 }

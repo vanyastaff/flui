@@ -181,15 +181,17 @@ machine (host name, OS and architecture, since the directory can be a shared
 home), the versions of rustc, cargo, clippy, cargo-nextest and cargo-hack,
 the Cargo configuration files cargo reads (`config.toml`, or the older
 `config`, under `.cargo/` in the checkout and its parents, and in the Cargo
-home), the
-variables that change results (`RUSTFLAGS`, `RUSTDOCFLAGS`, `RUSTC`,
-`RUSTDOC`, the rustc wrappers, the `cc` crate's `CC`/`CXX`/`AR`/`*FLAGS`
-family, the Android NDK's location, `CARGO_*`, `FLUI_*` and `NEXTEST_*`
-other than job and thread counts and locations), and the rendered step list,
-skipped-step notes included. A run with a recorded key is skipped with a line
-naming the earlier run; the key is checked before waiting for the lock and
-again after taking it, and recorded only if the tree did not change during
-the steps. `--no-cache` runs regardless. While it waits, a run registers in
+home), every environment variable except a short list proven not to change
+a result (job and thread counts, the lock's own controls, cargo's terminal
+styling, what cargo sets for xtask itself, `CARGO_HOME`, `CARGO_TARGET_DIR`,
+`RUSTUP_*`, shell bookkeeping and per-session identifiers; `PATH` is keyed
+without the checkout's own directories), so a test control such as
+`PROPTEST_CASES` or any unlisted variable misses the cache, and the rendered
+step list, skipped-step notes included. A run with a recorded key is skipped
+with a line naming the earlier run; the key is checked before waiting for the
+lock and again after taking it, when the checkout is scoped and planned again
+(an edit while it waited can move the scope, and the new plan is the one run
+and recorded), and recorded only if the tree did not change during the steps. `--no-cache` runs regardless. While it waits, a run registers in
 `waiting/` beside a file it holds an advisory lock on, so a crashed waiter is
 ignored. On taking the lock, a run looks at the newest newer waiter from the
 same checkout that asks the same question (the same hash of the rest): if

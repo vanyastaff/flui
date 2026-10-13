@@ -6,8 +6,8 @@
 //! stage it (tracked, modified and untracked files, `.gitignore` honoured),
 //! the merge base with the base revision, the machine ([`host`]), the
 //! toolchain's versions, the Cargo configuration files cargo reads
-//! ([`cargo_config`]), the environment variables that change what cargo
-//! builds or tests ([`changes_results`]), and the rendered step list. A step
+//! ([`cargo_config`]), every environment variable but the few proven not to
+//! change a result ([`result_neutral`]), and the rendered step list. A step
 //! this host skips is a line of that list, so a host that skipped wasm32
 //! never certifies one that runs it. The key keeps the tree apart from a
 //! digest of the rest.
@@ -27,7 +27,8 @@
 //!
 //! [`Verifier::verify`] checks the record before the run takes the lock and
 //! again right after (another run may have verified the same key while this
-//! one waited), then looks for the newest newer waiter from the same checkout
+//! one waited), with the run planned again under the lock (the checkout may
+//! have changed meanwhile, and the scope with it), then looks for the newest newer waiter from the same checkout
 //! with the same inputs other than the tree: if it saw another tree, it will
 //! check the newer one, so this run stops without claiming anything
 //! ([`Outcome::Superseded`]); if it saw the same tree, this run goes ahead
@@ -63,35 +64,34 @@ pub(crate) struct RunInputs {
     /// The Cargo configuration files cargo reads here ([`cargo_config`]).
     cargo_config: String,
     env: Vec<(String, String)>,
-    steps: String,
 }
 
 impl RunInputs {
-    /// This process's inputs for verifying `checkout` against `base` with
-    /// `steps` (the rendered plan): the host, toolchain, Cargo configuration
-    /// and environment are read now, the tree and merge base by each
-    /// [`Self::key`].
-    pub(crate) fn of_this_run(checkout: &Path, base: &str, steps: &str) -> Self {
+    /// This process's inputs for verifying `checkout` against `base`: the
+    /// host, toolchain, Cargo configuration and environment are read now, the
+    /// tree and merge base by each [`Self::key`].
+    pub(crate) fn of_this_run(checkout: &Path, base: &str) -> Self {
         Self {
             checkout: checkout.to_path_buf(),
             base: base.to_owned(),
             host: host(),
             toolchain: toolchain(checkout),
             cargo_config: cargo_config(checkout, cargo_home().as_deref()),
-            env: results_env(std::env::vars_os()),
-            steps: steps.to_owned(),
+            env: results_env(std::env::vars_os(), checkout),
         }
     }
 
-    /// The key of the checkout as it is now.
-    pub(crate) fn key(&self) -> anyhow::Result<Key> {
+    /// The key of running `steps` (the rendered plan) on the checkout as it
+    /// is now.
+    pub(crate) fn key(&self, steps: &str) -> anyhow::Result<Key> {
         let tree = worktree_tree(&self.checkout)?;
         let merge_base = git(&self.checkout, &["merge-base", &self.base, "HEAD"], None)?;
-        Ok(self.key_with(&tree, &merge_base))
+        Ok(self.key_with(&tree, &merge_base, steps))
     }
 
-    /// The key for `tree` on `merge_base`, with this run's other inputs.
-    fn key_with(&self, tree: &str, merge_base: &str) -> Key {
+    /// The key for `steps` on `tree` at `merge_base`, with this run's other
+    /// inputs.
+    fn key_with(&self, tree: &str, merge_base: &str, steps: &str) -> Key {
         let mut fields = vec![
             ("merge-base", merge_base.trim()),
             ("host", &self.host),
@@ -103,7 +103,7 @@ impl RunInputs {
                 .iter()
                 .map(|(name, value)| (name.as_str(), value.as_str())),
         );
-        fields.push(("steps", &self.steps));
+        fields.push(("steps", steps));
         Key {
             tree: tree.trim().to_owned(),
             rest: digest(&fields),
@@ -278,92 +278,143 @@ fn toolchain(checkout: &Path) -> String {
         })
 }
 
-/// The variables of `vars` that [`changes_results`], sorted, with names
-/// upper-cased (Windows' names are case-insensitive).
+/// The variables of `vars` a run's result may depend on: every one but the
+/// [`result_neutral`] ones, sorted, with names upper-cased (Windows' names
+/// are case-insensitive). The search paths ([`SEARCH_PATHS`]) lose their
+/// entries inside `checkout`.
 pub(crate) fn results_env(
     vars: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+    checkout: &Path,
 ) -> Vec<(String, String)> {
     let mut env: Vec<(String, String)> = vars
         .into_iter()
+        .map(|(name, value)| (name.to_string_lossy().to_ascii_uppercase(), value))
+        .filter(|(name, _)| !result_neutral(name))
         .map(|(name, value)| {
-            (
-                name.to_string_lossy().to_ascii_uppercase(),
-                value.to_string_lossy().into_owned(),
-            )
+            let value = if SEARCH_PATHS.contains(&name.as_str()) {
+                outside(&value, checkout)
+            } else {
+                value.to_string_lossy().into_owned()
+            };
+            (name, value)
         })
-        .filter(|(name, _)| changes_results(name))
         .collect();
     env.sort();
     env
 }
 
-/// Whether the variable `name` (upper-case) can change what cargo builds or
-/// tests: `RUSTFLAGS`, `RUSTDOCFLAGS`, the compiler and tool overrides
-/// (`RUSTC`, `RUSTDOC`, the rustc wrappers, the `cc` crate's `CC`, `CXX`,
-/// `AR`, `RANLIB`, their `_<target>`, `TARGET_` and `HOST_` forms and
-/// `*FLAGS`), the Android NDK's location, `CARGO_*`, `FLUI_*` and
-/// `NEXTEST_*`, except job and thread counts, locations, terminal styling,
-/// the variables cargo sets for the program it runs, and the run lock's own
-/// controls.
-pub(crate) fn changes_results(name: &str) -> bool {
-    const TOOLS: [&str; 9] = [
-        "RUSTC",
-        "RUSTDOC",
-        "RUSTC_WRAPPER",
-        "RUSTC_WORKSPACE_WRAPPER",
-        "RUSTC_LINKER",
-        "RUSTC_BOOTSTRAP",
-        "ANDROID_NDK_HOME",
-        "ANDROID_NDK_ROOT",
-        "NDK_HOME",
-    ];
-    /// The `cc` crate's variables, alone or as `<tool>_<target>`.
-    const NATIVE: [&str; 7] = ["CC", "CXX", "AR", "RANLIB", "CFLAGS", "CXXFLAGS", "LDFLAGS"];
-    let native = |name: &str| {
-        NATIVE.iter().any(|tool| {
-            name == *tool
-                || name
-                    .strip_prefix(tool)
-                    .is_some_and(|rest| rest.starts_with('_'))
-        })
+/// The program and library search paths. Cargo prepends the checkout's own
+/// output directories to them for the program it runs (`cargo xtask` is
+/// one), so those entries name the checkout, not a tool; every other entry is
+/// keyed, since it picks the linker, `git`, the cross wrappers and the rest.
+const SEARCH_PATHS: [&str; 4] = [
+    "PATH",
+    "LD_LIBRARY_PATH",
+    "DYLD_LIBRARY_PATH",
+    "DYLD_FALLBACK_LIBRARY_PATH",
+];
+
+/// The entries of the search path `value` that lie outside `checkout`,
+/// newline-separated.
+fn outside(value: &std::ffi::OsStr, checkout: &Path) -> String {
+    let spelled = |path: &Path| {
+        let text = path.to_string_lossy().replace('\\', "/");
+        let text = text.trim_end_matches('/');
+        if cfg!(windows) {
+            text.to_ascii_lowercase()
+        } else {
+            text.to_owned()
+        }
     };
-    if TOOLS.contains(&name)
-        || native(name)
-        || ["TARGET_", "HOST_"]
-            .iter()
-            .any(|scope| name.strip_prefix(scope).is_some_and(native))
-    {
-        return true;
-    }
-    const CARGO_EXCEPT: [&str; 11] = [
-        "CARGO",
+    let checkout = spelled(checkout);
+    std::env::split_paths(value)
+        .map(|entry| spelled(&entry))
+        .filter(|entry| {
+            entry
+                .strip_prefix(&checkout)
+                .is_none_or(|rest| !rest.is_empty() && !rest.starts_with('/'))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Whether the variable `name` (upper-case) is proven not to change what a
+/// run builds, tests or reports. Everything else is keyed, so a variable
+/// nobody has looked at, a test control such as `PROPTEST_CASES` among them,
+/// misses the cache instead of reusing a result it may not share.
+///
+/// Kept out of the key, each for its reason:
+///
+/// - job and thread counts (`CARGO_BUILD_JOBS`, `NEXTEST_TEST_THREADS`,
+///   `NUMBER_OF_PROCESSORS`) and make's jobserver handles (`CARGO_MAKEFLAGS`,
+///   `MAKEFLAGS`, `MFLAGS`, a new pipe per process): the suite must pass at
+///   any parallelism, and the host lock sets the counts itself
+///   ([`crate::host_lock::Parallelism`]);
+/// - the host lock's own controls (`FLUI_XTASK_LOCK_FILE`,
+///   `FLUI_XTASK_NO_LOCK`, `FLUI_XTASK_LOCK_HELD`): they decide whom the run
+///   waits for, not what it runs;
+/// - cargo's own terminal styling (`CARGO_TERM_*`): read by cargo and
+///   nextest for their progress output, by nothing a test runs (the
+///   application-level switches `NO_COLOR`, `CLICOLOR_FORCE` and `TERM` are
+///   read by `flui-log` and `flui-cli`, so they are keyed);
+/// - what cargo sets for xtask itself (`CARGO`, `CARGO_MANIFEST_DIR`,
+///   `CARGO_MANIFEST_PATH`, `CARGO_PKG_*`, `CARGO_CRATE_NAME`,
+///   `CARGO_BIN_NAME`, `CARGO_PRIMARY_PACKAGE`, `CARGO_RUSTC_CURRENT_DIR`):
+///   they describe the xtask package of whichever checkout runs it, and cargo
+///   sets its own for every crate it compiles and every test it runs;
+/// - locations whose content is keyed elsewhere: `CARGO_HOME` (its
+///   configuration is keyed by content, [`cargo_config`]), `CARGO_TARGET_DIR`
+///   (where the outputs go; `check-changed` refuses one outside the
+///   checkout) and rustup's controls (`RUSTUP_*`: the toolchain they select
+///   is keyed by its versions, which [`toolchain`] asks with this
+///   environment);
+/// - the shell's bookkeeping (`PWD`, `OLDPWD`, `SHLVL`, `_`): every step runs
+///   from the repository root;
+/// - per-session and per-process identifiers, new for every terminal, trace
+///   or agent session: `WT_SESSION`, `TERM_SESSION_ID`, `BAGGAGE`,
+///   `SENTRY-TRACE`, `CHROME_CRASHPAD_PIPE_NAME`, and the agent harness's
+///   `CLAUDECODE` and `CLAUDE_*` (its own settings and session identity; no
+///   code in the workspace reads them).
+///
+/// `PATH` and the library search paths are keyed ([`SEARCH_PATHS`]): the
+/// toolchain's versions cover rustc, cargo, clippy, nextest and cargo-hack,
+/// not the linker, `git` or the cross wrappers a step runs.
+fn result_neutral(name: &str) -> bool {
+    const NEUTRAL: [&str; 28] = [
         "CARGO_BUILD_JOBS",
+        "NEXTEST_TEST_THREADS",
+        "NUMBER_OF_PROCESSORS",
         "CARGO_MAKEFLAGS",
-        "CARGO_HOME",
-        "CARGO_TARGET_DIR",
+        "MAKEFLAGS",
+        "MFLAGS",
+        "FLUI_XTASK_LOCK_FILE",
+        "FLUI_XTASK_NO_LOCK",
+        "FLUI_XTASK_LOCK_HELD",
+        "CARGO",
         "CARGO_MANIFEST_DIR",
         "CARGO_MANIFEST_PATH",
         "CARGO_CRATE_NAME",
         "CARGO_BIN_NAME",
         "CARGO_PRIMARY_PACKAGE",
         "CARGO_RUSTC_CURRENT_DIR",
+        "CARGO_HOME",
+        "CARGO_TARGET_DIR",
+        "PWD",
+        "OLDPWD",
+        "SHLVL",
+        "_",
+        "WT_SESSION",
+        "TERM_SESSION_ID",
+        "CLAUDECODE",
+        "BAGGAGE",
+        "SENTRY-TRACE",
+        "CHROME_CRASHPAD_PIPE_NAME",
     ];
-    const FLUI_EXCEPT: [&str; 3] = [
-        "FLUI_XTASK_LOCK_FILE",
-        "FLUI_XTASK_NO_LOCK",
-        "FLUI_XTASK_LOCK_HELD",
-    ];
-    match name {
-        "RUSTFLAGS" | "RUSTDOCFLAGS" => true,
-        _ if name.starts_with("CARGO_") || name == "CARGO" => {
-            !CARGO_EXCEPT.contains(&name)
-                && !name.starts_with("CARGO_PKG_")
-                && !name.starts_with("CARGO_TERM_")
-        }
-        _ if name.starts_with("FLUI_") => !FLUI_EXCEPT.contains(&name),
-        _ if name.starts_with("NEXTEST_") => name != "NEXTEST_TEST_THREADS",
-        _ => false,
-    }
+    const NEUTRAL_PREFIXES: [&str; 4] = ["CARGO_TERM_", "CARGO_PKG_", "RUSTUP_", "CLAUDE_"];
+    NEUTRAL.contains(&name)
+        || NEUTRAL_PREFIXES
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
 }
 
 /// A verified run, as a later run names it.
@@ -684,24 +735,32 @@ impl<'a> Verifier<'a> {
         let _ = writeln!(self.out, "check-changed: {text}");
     }
 
-    /// Computes the key with `key`, takes the lock with `lock` and runs the
-    /// steps with `run`, skipping what a record makes unnecessary. `key` is
-    /// asked before the lock, right after it, and after `run` passed: the
-    /// marker is written only when the last two agree.
-    pub(crate) fn verify<G>(
+    /// Takes the lock with `lock`, plans the run with `plan` and runs the
+    /// planned steps with `run`, skipping what a record makes unnecessary.
+    ///
+    /// `planned` is the plan made before the lock: its key only probes the
+    /// record (and registers the waiter), so it can spare the wait but never
+    /// decides what runs. The checkout may change while the run waits, moving
+    /// the scope, so the run is planned again under the lock, and both the
+    /// steps run and the key recorded come from that plan. `key` is asked of
+    /// it again after `run` passed: the marker is written only when the two
+    /// agree.
+    pub(crate) fn verify<P, G>(
         mut self,
-        mut key: impl FnMut() -> anyhow::Result<Key>,
+        planned: &P,
+        plan: impl FnOnce() -> anyhow::Result<P>,
+        mut key: impl FnMut(&P) -> anyhow::Result<Key>,
         lock: impl FnOnce() -> G,
-        run: impl FnOnce() -> anyhow::Result<()>,
+        run: impl FnOnce(&P) -> anyhow::Result<()>,
     ) -> anyhow::Result<Outcome> {
-        let before = match key() {
+        let before = match key(planned) {
             Ok(before) => before,
             Err(error) => {
                 self.note(format_args!(
                     "cannot compute the run's key ({error:#}); running uncached"
                 ));
                 let _guard = lock();
-                run()?;
+                run(&plan()?)?;
                 return Ok(Outcome::Passed);
             }
         };
@@ -713,14 +772,15 @@ impl<'a> Verifier<'a> {
             .as_ref()
             .and_then(|dir| Ticket::register(&dir.join("waiting"), &self.checkout, &before).ok());
         let _guard = lock();
-        let now = match key() {
+        let plan = plan()?;
+        let now = match key(&plan) {
             Ok(now) => now,
             Err(error) => {
                 drop(ticket);
                 self.note(format_args!(
                     "cannot compute the run's key ({error:#}); running uncached"
                 ));
-                run()?;
+                run(&plan)?;
                 return Ok(Outcome::Passed);
             }
         };
@@ -737,8 +797,8 @@ impl<'a> Verifier<'a> {
             );
             return Ok(Outcome::Superseded);
         }
-        run()?;
-        match key() {
+        run(&plan)?;
+        match key(&plan) {
             Ok(after) if after == now => {
                 if let Some(store) = self.store()
                     && let Err(error) = store.record(&now, &Verified::this_run(&self.checkout))
@@ -784,9 +844,11 @@ mod tests {
             toolchain: "rustc 1.99.0".to_owned(),
             cargo_config: String::new(),
             env: Vec::new(),
-            steps: "$ cargo clippy -p a".to_owned(),
         }
     }
+
+    /// The rendered plan [`inputs`]' keys run.
+    const STEPS: &str = "$ cargo clippy -p a";
 
     /// A fresh record directory and checkout.
     struct Case {
@@ -827,8 +889,23 @@ mod tests {
             during_lock: impl FnOnce(),
             result: anyhow::Result<()>,
         ) -> (anyhow::Result<Outcome>, bool, String) {
+            let (outcome, ran, printed) =
+                self.verify_plans(use_cache, keys, ["inputs"; 2], during_lock, result);
+            (outcome, ran.is_some(), printed)
+        }
+
+        /// [`Self::verify`] with the plan made before the lock and the one
+        /// made under it (a key's other inputs); which plan ran, if any.
+        fn verify_plans(
+            &self,
+            use_cache: bool,
+            keys: &[&str],
+            [before, under_lock]: [&str; 2],
+            during_lock: impl FnOnce(),
+            result: anyhow::Result<()>,
+        ) -> (anyhow::Result<Outcome>, Option<String>, String) {
             let asked = Cell::new(0);
-            let ran = Cell::new(false);
+            let ran = RefCell::new(None);
             let mut out = Vec::new();
             let outcome = Verifier::new(
                 Some(self.dir.path()),
@@ -837,20 +914,22 @@ mod tests {
                 &mut out,
             )
             .verify(
-                || {
+                &before.to_owned(),
+                || Ok(under_lock.to_owned()),
+                |plan| {
                     let index = asked.get().min(keys.len() - 1);
                     asked.set(asked.get() + 1);
-                    Ok(key(keys[index]))
+                    Ok(asking(keys[index], plan))
                 },
                 during_lock,
-                || {
-                    ran.set(true);
+                |plan| {
+                    *ran.borrow_mut() = Some(plan.clone());
                     result
                 },
             );
             (
                 outcome,
-                ran.get(),
+                ran.into_inner(),
                 String::from_utf8_lossy(&out).into_owned(),
             )
         }
@@ -925,6 +1004,38 @@ mod tests {
             assert!(case.store().lookup(&key(recorded)).is_none(), "{recorded}");
         }
         assert!(printed.contains("changed during the run"), "{printed}");
+    }
+
+    /// An edit while the run waited moved the scope to a crate the first
+    /// plan left out: the run checks the new scope, and the marker names
+    /// the new tree with the new steps.
+    fn a_checkout_changed_while_waiting_runs_the_new_plan() {
+        let case = Case::new();
+        let (outcome, ran, _) = case.verify_plans(
+            true,
+            &["old", "edited"],
+            ["$ cargo clippy -p a", "$ cargo clippy -p a -p b"],
+            || (),
+            Ok(()),
+        );
+        assert_eq!(outcome.expect("passes"), Outcome::Passed);
+        assert_eq!(ran.as_deref(), Some("$ cargo clippy -p a -p b"));
+        let store = case.store();
+        assert!(
+            store
+                .lookup(&asking("edited", "$ cargo clippy -p a -p b"))
+                .is_some(),
+            "the new tree is recorded with the steps it ran"
+        );
+        for (tree, steps) in [
+            ("edited", "$ cargo clippy -p a"),
+            ("old", "$ cargo clippy -p a"),
+        ] {
+            assert!(
+                store.lookup(&asking(tree, steps)).is_none(),
+                "{tree}: {steps}"
+            );
+        }
     }
 
     fn a_newer_waiter_with_another_key_supersedes() {
@@ -1019,6 +1130,10 @@ mod tests {
                     a_tree_changed_during_the_run_is_not_recorded,
                 ),
                 (
+                    "a_checkout_changed_while_waiting_runs_the_new_plan",
+                    a_checkout_changed_while_waiting_runs_the_new_plan,
+                ),
+                (
                     "a_newer_waiter_with_another_key_supersedes",
                     a_newer_waiter_with_another_key_supersedes,
                 ),
@@ -1100,45 +1215,45 @@ mod tests {
     /// Every input changes the key.
     #[test]
     fn each_input_changes_the_key() {
-        let base = inputs().key_with("tree", "base");
+        let base = inputs().key_with("tree", "base", STEPS);
         type Row = (&'static str, fn() -> Key);
         let rows: [Row; 7] = [
-            ("tree", || inputs().key_with("other", "base")),
+            ("tree", || inputs().key_with("other", "base", STEPS)),
             ("host", || {
                 RunInputs {
                     host: "other-builder windows x86_64".to_owned(),
                     ..inputs()
                 }
-                .key_with("tree", "base")
+                .key_with("tree", "base", STEPS)
             }),
             ("cargo_config", || {
                 RunInputs {
                     cargo_config: "[build]\nrustc-wrapper = \"sccache\"\n".to_owned(),
                     ..inputs()
                 }
-                .key_with("tree", "base")
+                .key_with("tree", "base", STEPS)
             }),
-            ("merge_base", || inputs().key_with("tree", "other")),
+            ("merge_base", || inputs().key_with("tree", "other", STEPS)),
             ("toolchain", || {
                 RunInputs {
                     toolchain: "rustc 1.100.0".to_owned(),
                     ..inputs()
                 }
-                .key_with("tree", "base")
+                .key_with("tree", "base", STEPS)
             }),
             ("env", || {
                 RunInputs {
                     env: vec![("RUSTFLAGS".to_owned(), "-Dwarnings".to_owned())],
                     ..inputs()
                 }
-                .key_with("tree", "base")
+                .key_with("tree", "base", STEPS)
             }),
             ("steps", || {
-                RunInputs {
-                    steps: "$ cargo clippy -p a\ncheck-changed: skipped wasm32".to_owned(),
-                    ..inputs()
-                }
-                .key_with("tree", "base")
+                inputs().key_with(
+                    "tree",
+                    "base",
+                    "$ cargo clippy -p a\ncheck-changed: skipped wasm32",
+                )
             }),
         ];
         let same: Vec<&str> = rows
@@ -1151,56 +1266,88 @@ mod tests {
             "inputs that leave the key unchanged: {same:?}"
         );
         assert_eq!(
-            inputs().key_with("tree", "base"),
+            inputs().key_with("tree", "base", STEPS),
             base,
             "the key is deterministic"
         );
     }
 
+    /// Every inherited variable is keyed unless it is proven result-neutral:
+    /// a test control or a variable nobody listed misses the cache.
     #[test]
-    fn only_result_changing_variables_are_keyed() {
-        let vars = [
-            ("RUSTFLAGS", true),
-            ("RUSTDOCFLAGS", true),
-            ("CARGO_PROFILE_DEV_DEBUG", true),
-            ("CARGO_ENCODED_RUSTFLAGS", true),
-            ("FLUI_HEADLESS", true),
-            ("NEXTEST_PROFILE", true),
-            ("CARGO_BUILD_JOBS", false),
-            ("NEXTEST_TEST_THREADS", false),
-            ("CARGO_TARGET_DIR", false),
-            ("CARGO_MANIFEST_DIR", false),
-            ("CARGO_PKG_VERSION", false),
-            ("CARGO_TERM_COLOR", false),
-            ("FLUI_XTASK_NO_LOCK", false),
-            ("RUSTC", true),
-            ("RUSTDOC", true),
-            ("RUSTC_WRAPPER", true),
-            ("RUSTC_WORKSPACE_WRAPPER", true),
-            ("CC", true),
-            ("CC_AARCH64_LINUX_ANDROID", true),
-            ("CXX_X86_64_PC_WINDOWS_MSVC", true),
-            ("AR_AARCH64_LINUX_ANDROID", true),
-            ("TARGET_CC", true),
-            ("HOST_CFLAGS", true),
-            ("CFLAGS_WASM32_UNKNOWN_UNKNOWN", true),
-            ("LDFLAGS", true),
-            ("ANDROID_NDK_HOME", true),
-            ("CCACHE_DIR", false),
-            ("ARCH", false),
-            ("PATH", false),
+    fn every_variable_but_the_neutral_ones_is_keyed() {
+        let checkout = Path::new("/work/flui");
+        let key_of = |vars: &[(&str, &OsString)]| {
+            let vars = vars
+                .iter()
+                .map(|(name, value)| (OsString::from(name), (*value).clone()));
+            RunInputs {
+                env: results_env(vars, checkout),
+                ..inputs()
+            }
+            .key_with("tree", "base", STEPS)
+        };
+        let set = OsString::from("1");
+        let unset = key_of(&[]);
+        let keyed = [
+            "PROPTEST_CASES",
+            "XTASK_TEST_UNLISTED_VARIABLE",
+            "RUSTFLAGS",
+            "CARGO_PROFILE_DEV_DEBUG",
+            "FLUI_HEADLESS",
+            "NEXTEST_PROFILE",
+            "CC_AARCH64_LINUX_ANDROID",
+            "RUST_LOG",
+            "NO_COLOR",
+            "CLICOLOR_FORCE",
+            "PATH",
         ];
-        let wrong: Vec<&str> = vars
-            .iter()
-            .filter(|(name, keyed)| changes_results(name) != *keyed)
-            .map(|(name, _)| *name)
+        let neutral = [
+            "CARGO_BUILD_JOBS",
+            "NEXTEST_TEST_THREADS",
+            "CARGO_MAKEFLAGS",
+            "FLUI_XTASK_NO_LOCK",
+            "CARGO_TERM_COLOR",
+            "CARGO_MANIFEST_DIR",
+            "CARGO_PKG_VERSION",
+            "CARGO_TARGET_DIR",
+            "RUSTUP_TOOLCHAIN",
+            "SHLVL",
+            "WT_SESSION",
+            "CLAUDE_CODE_SESSION_ID",
+        ];
+        let unkeyed: Vec<&str> = keyed
+            .into_iter()
+            .filter(|name| key_of(&[(name, &set)]) == unset)
             .collect();
-        assert!(wrong.is_empty(), "misclassified: {wrong:?}");
-        let env = results_env([
-            (OsString::from("rustflags"), OsString::from("-Dwarnings")),
-            (OsString::from("PATH"), OsString::from("/bin")),
-        ]);
-        assert_eq!(env, [("RUSTFLAGS".to_owned(), "-Dwarnings".to_owned())]);
+        assert!(unkeyed.is_empty(), "not keyed: {unkeyed:?}");
+        let misses: Vec<&str> = neutral
+            .into_iter()
+            .filter(|name| key_of(&[(name, &set)]) != unset)
+            .collect();
+        assert!(misses.is_empty(), "neutral but keyed: {misses:?}");
+        assert_eq!(
+            key_of(&[("proptest_cases", &set)]),
+            key_of(&[("PROPTEST_CASES", &set)]),
+            "names are case-insensitive"
+        );
+        // A search path keys every entry but the checkout's own outputs.
+        let path = |entries: &[&str]| std::env::join_paths(entries).expect("joinable");
+        let system = path(&["/usr/bin"]);
+        assert_eq!(
+            key_of(&[("PATH", &path(&["/work/flui/target/debug/deps", "/usr/bin"]))]),
+            key_of(&[("PATH", &system)]),
+        );
+        for other in [
+            path(&["/opt/llvm/bin", "/usr/bin"]),
+            path(&["/work/flui-other/bin", "/usr/bin"]),
+        ] {
+            assert_ne!(
+                key_of(&[("PATH", &other)]),
+                key_of(&[("PATH", &system)]),
+                "{other:?}"
+            );
+        }
     }
 
     /// The configuration cargo reads: the checkout's, every parent's and
