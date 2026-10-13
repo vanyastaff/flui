@@ -496,6 +496,17 @@ pub(crate) struct Verifier<'a> {
     out: &'a mut dyn Write,
 }
 
+/// `checkout` as waiters compare it and markers name it: canonical, without
+/// the verbatim prefix Windows' canonical form carries (the plain path names
+/// the same directory and reads as the user typed it).
+fn checkout_name(checkout: &Path) -> String {
+    let canonical = checkout
+        .canonicalize()
+        .unwrap_or_else(|_| checkout.to_path_buf());
+    let name = canonical.display().to_string();
+    name.strip_prefix(r"\\?\").unwrap_or(&name).to_owned()
+}
+
 impl<'a> Verifier<'a> {
     /// Records under `dir` (beside the host lock) for `checkout`.
     pub(crate) fn new(
@@ -504,12 +515,9 @@ impl<'a> Verifier<'a> {
         use_cache: bool,
         out: &'a mut dyn Write,
     ) -> Self {
-        let checkout = checkout
-            .canonicalize()
-            .unwrap_or_else(|_| checkout.to_path_buf());
         Self {
             dir: dir.map(Path::to_path_buf),
-            checkout: checkout.display().to_string(),
+            checkout: checkout_name(checkout),
             use_cache,
             out,
         }
@@ -646,12 +654,7 @@ mod tests {
         }
 
         fn checkout(&self) -> String {
-            self.checkout
-                .path()
-                .canonicalize()
-                .expect("canonical checkout")
-                .display()
-                .to_string()
+            checkout_name(self.checkout.path())
         }
 
         fn store(&self) -> Store {
