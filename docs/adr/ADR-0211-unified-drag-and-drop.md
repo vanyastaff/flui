@@ -39,7 +39,14 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
    events, so touch, pen and other fingers keep working. It escalates to the OS session when the
    pointer leaves the window **and** either `outside_app` is non-empty or the source runtime has
    another open presentation; an escalation with empty `outside_app` offers only the private
-   identity representation, so only that runtime's targets accept it. Otherwise leaving the
+   identity representation, so only that runtime's targets accept it. Such an identity-only OS
+   session advertises the `within_app` actions to the OS as its allowed operations (an empty
+   OS mask would make native targets refuse it before the sibling presentation can answer); the
+   identity representation, not the advertised mask, limits who can redeem it, and item 5's
+   drop rules apply as for any OS session. The sibling-presentation condition therefore needs
+   non-empty `within_app` actions; a session whose `within_app` and `outside_app` are both
+   empty is refused at start with `DragError::NoAllowedActions`, so no OS session ever
+   advertises an empty mask (row `a_drag_with_no_allowed_actions_is_refused_at_start`). Otherwise leaving the
    window is a move with no target. Exceptions: item 11 (Web, iOS). This narrows ADR-0038 §5:
    `DragDropEvent` is for OS sessions only.
 3. **Identity.** A session is named by `(ProcessNonce, UiRuntimeId, DragSessionId)`, carried in a
@@ -66,7 +73,7 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
    an enum with data advanced by `mem::replace`: `Armed`, `InWindow { target }`,
    `EscalationPending`, `System { offer }`, `Concluded { action }`. No typestate: callbacks move
    sessions between phases, which a type parameter cannot follow. Errors are
-   `DragError::{IdExhausted, NoOutsideActions, SessionClosed}` plus `TransferError`.
+   `DragError::{IdExhausted, NoAllowedActions, NoOutsideActions, NoSerializedRepresentation, SessionClosed, Unavailable}` plus `TransferError`.
 7. **OS modal loop.** An escalation requested during dispatch is recorded, and the runner enters
    the OS session (`DoDragDrop` on Win32) at its outermost quiescent point, with no dispatch, borrow
    or frame in progress. While the loop runs, the runner keeps producing frames for every UI
@@ -78,20 +85,34 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
    (ADR-0209). The dragged item's element is kept alive while its session is live.
 9. **Reorder is a session.** `ReorderableList` and `ReorderableGrid` start a DnD session with
    `outside_app` empty and an `InProcess` item, so within its window the fast path never mints an
-   offer, never serializes and never escalates. `AnchoredDrag` stays a one-dimensional offset
+   offer, never serializes and never escalates. How far a session may reach is typed in its
+   configuration: `DragReach::{Window, Runtime, System}`, set by the source. `Draggable` derives
+   `System` when `outside_app` is non-empty and `Runtime` otherwise; a session with non-empty
+   `outside_app` whose items carry no `Serialized` representation (only `InProcess` values) is
+   refused at start with `DragError::NoSerializedRepresentation`, since no target outside the
+   runtime could redeem it (row `outside_actions_without_a_serialized_representation_are_refused`); `ReorderableList` and
+   `ReorderableGrid` set `Window`. Items 2 and 11 escalate or start an OS session only for
+   `Runtime` (identity-only offer, when a sibling presentation exists) or `System`; a `Window`
+   session never becomes an OS session on any platform, Web and iOS included, so the decision
+   reads the type, never widget provenance. `AnchoredDrag` stays a one-dimensional offset
    widget, not DnD.
 10. **Native originating event.** Pointer assembly in `flui-platform` keeps the native event that
     began each contact, because the OS start calls need it (AppKit's dragging-session event,
     the Wayland grab serial). It is dropped when the contact ends.
-11. **Platform limits are types.** On the Web a session with non-empty `outside_app` becomes an
-    HTML drag at `dragstart` and materializes its representations eagerly, since the browser
-    allows neither a later start nor lazy data; the Web target copies requested representations out
-    of `DataTransfer` during `drop` and serves them through `TransferRequest::ready`. On iOS and
-    iPadOS a session with non-empty `outside_app` starts as a `UIDragSession` at lift through
-    `UIDragInteraction` and never escalates mid-drag; UIKit keeps other touches flowing during
-    it. On X11,
-    outgoing DnD is `Availability::Unavailable` and a session stays in-window; incoming drags work.
-    The drop action is read at the drop, never assumed from hover, so X11's late action fits.
+11. **Platform limits are types.** On the Web and on iOS and iPadOS the OS-session decision is
+    made at the start, by item 2's rule: at `dragstart` (Web) or lift (iOS) the session starts as
+    an OS session when `outside_app` is non-empty **or** the source runtime has another open
+    presentation, and with empty `outside_app` it offers only the private identity
+    representation. On the Web it becomes an HTML drag that materializes its representations
+    eagerly, since the browser allows neither a later start nor lazy data; the Web target copies
+    requested representations out of `DataTransfer` during `drop` and serves them through
+    `TransferRequest::ready`. On iOS it is a `UIDragSession` started through `UIDragInteraction`
+    that never escalates mid-drag; UIKit keeps other touches flowing during it. On X11
+    `InputCapabilities::outgoing_drag()` reports `Unavailable`
+    ([ADR-0213](ADR-0213-input-capabilities.md)), the one authoritative availability path; an
+    escalation that needs the OS fails with `DragError::Unavailable` (winit's `NotSupported` maps
+    to it) and the session stays in-window; incoming drags work. The drop action is read at the
+    drop, never assumed from hover, so X11's late action fits.
 12. **Flag sets.** `TransferActions` becomes a `bitflags` 2 type in `flui-platform-api` with the
     same `COPY`, `MOVE` and `LINK`, replacing the hand-rolled `u8` with its own set algebra.
 
@@ -102,7 +123,9 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
 - The `drag_sessions` table in `crates/flui-interaction/tests/` holds
   `in_window_drag_keeps_second_finger_and_pen` (where escalation is late, not on Web or iOS),
   `escalates_only_outside_window_with_outside_actions_or_sibling_presentation`,
-  `drag_between_presentations_of_one_runtime_redeems_the_value`,
+  `drag_between_presentations_of_one_runtime_redeems_the_value` (the escalated identity-only
+  session advertises the `within_app` actions and the sibling's drop completes with the
+  accepted action),
   `drop_reaches_only_last_accepting_target`, `declined_target_under_pointer_receives_leave`,
   `concurrent_sessions_are_independent`, `session_id_exhaustion_refuses_permanently` and
   `value_is_redeemed_only_in_source_runtime`.
@@ -112,8 +135,10 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
   Linux CI runs these headless.
 - The OLE loop's deferred start, reentrancy and second-window repaint rows, AppKit, UIKit, Android,
   Wayland and Web sessions run only on native hosts or the browser through `cargo xtask device`;
-  CI type-checks them. `assert_backend_conforms` has typed rows for the X11 refusal and for the
-  iOS session that starts at lift and never escalates.
+  CI type-checks them. `assert_backend_conforms` has typed rows for the X11 refusal
+  (`outgoing_drag()` is `Unavailable`, a start fails with `DragError::Unavailable`), for the iOS
+  session that starts at lift and never escalates, and, on Web and iOS,
+  `start_decision_includes_sibling_presentation_with_identity_only_offer`.
 
 ## Alternatives rejected
 

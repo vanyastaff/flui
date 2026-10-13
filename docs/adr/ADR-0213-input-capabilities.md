@@ -28,8 +28,11 @@ returning `None` (and `HapticCapabilities`, ADR-0210), `text_input()` for IME.
 ## Decision
 
 1. **Only handle-less capabilities.** `InputCapabilities` (`flui-platform-api`) describes pen
-   input, precise (phased) scrolling, trackpad gestures (pinch and rotate as `PanZoom`) and input
-   regions. Haptics and IME keep answering through their handles; nothing is reported twice.
+   input, precise (phased) scrolling, trackpad gestures (pinch and rotate as `PanZoom`), input
+   regions and outgoing drags to the OS. Haptics and IME keep answering through their handles;
+   nothing is reported twice. `outgoing_drag()` is the one authoritative answer for starting an
+   OS drag session; [ADR-0211](ADR-0211-unified-drag-and-drop.md)'s `DragError::Unavailable` is
+   the matching error.
 
    ```rust
    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,6 +43,7 @@ returning `None` (and `HapticCapabilities`, ADR-0210), `text_input()` for IME.
        pub fn precise_scroll(&self) -> Availability;
        pub fn trackpad_gestures(&self) -> Availability;
        pub fn input_regions(&self) -> Availability;
+       pub fn outgoing_drag(&self) -> Availability;
        pub fn present(&self) -> PointerKindSet; // devices attached now (item 2)
    }
    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -51,15 +55,19 @@ returning `None` (and `HapticCapabilities`, ADR-0210), `text_input()` for IME.
    value. Getters carry no `get_`.
    `Availability` is a closed enum: `Native` is delivered by the OS path; `Emulated` is
    synthesized by the backend from other input (Web ctrl+wheel decoded as `PanZoom`) and may be
-   ambiguous; `Unavailable` means this backend on this OS session has no path (pen and trackpad
-   gestures on X11).
+   ambiguous; `Unavailable` means this backend on this OS session has no path (pen, trackpad
+   gestures and outgoing drags on X11).
 2. **Implemented is not present.** `Availability` states what the backend implements. Whether a
    matching device is attached is a separate answer, `present()`, taken from the backend's
    `DeviceRegistry` (`flui-platform/src/shared/`), the same registry that assigns `DeviceId`s,
    so presence and the device ids in events cannot disagree. `Native` with no pen attached is a
    normal state.
-3. **Change is an event.** Attaching or removing a device, or a session change that alters
-   availability, is carried by the vocabulary variant `PlatformInput::Capabilities(
+3. **Snapshot, then changes, as events.** Every backend computes an initial
+   `PlatformInput::Capabilities` for a surface when it is created, reflecting the devices
+   already attached, retains it, coalesces capability changes into that pending snapshot only until the first ordinary input is queued; from then on capability transitions are queued in order with that input, so a pen that produced a Down and was then detached reports "present" before the Down and "absent" after it. Delivery is reentrancy-safe: installation commits the callback registration, then takes the pending snapshot and queued entries out of the backend's state one at a time, releasing every borrow and lock before each callback invocation; the not-yet-delivered tail stays in the backend's queue, ahead of input admitted during the callback, so a callback panic contained at the backend's callback boundary leaves the tail queued in its original order; an ordinary input entry that panicked is not re-delivered, but the capability snapshot is idempotent and stays at the head until a callback call for it returns normally, so no input is ever delivered before its baseline; the backend schedules an owner-thread wake that resumes the drain, so the tail does not wait for unrelated input. Each pass drains only the entries present when it started; input admitted reentrantly during a pass waits for the next pass, which the same wake schedules, so a callback that admits input on every call cannot monopolize the owner thread. Retries of the snapshot by one registration are bounded (three failed passes); after that the snapshot and the queued input stay held, with no further wakes, until the callback is re-registered or the surface closes (rows `a_panic_on_the_initial_snapshot_keeps_the_queued_tail_in_order` with an otherwise idle application, `the_snapshot_is_retried_before_any_queued_input`, `reentrantly_admitted_input_waits_for_the_next_pass`); a callback that re-registers, closes the window or releases its owner during that first delivery sees the committed state, and an outgoing callback is retired only after all guards are released, never restored over its replacement, and under containment custody: a panic while destroying its captures is contained separately, never replaces the first failure, and neither the committed replacement, the queued tail nor the scheduled recovery wake is lost to it (rows: replacement and owner release from the first delivery, `a_replaced_input_callback_whose_drop_panics_still_delivers_the_tail`). The snapshot is delivered as the first event when the surface's input
+   callback is installed (`on_input` is registered after `open_window` returns), before
+   draining any ordinary input; a snapshot is never emitted into an absent callback. After that, attaching or removing a device, or
+   a session change that alters availability, is carried by the vocabulary variant `PlatformInput::Capabilities(
    InputCapabilities)` through the window's existing input path, so it is part of `HostInput`,
    ordered with the input around it and recorded. There is no polling API and no new callback
    registration, so no new `+ Send` registration is introduced.
@@ -80,8 +88,9 @@ returning `None` (and `HapticCapabilities`, ADR-0210), `text_input()` for IME.
 - Tests through public API: `input_capabilities_report_implemented_and_present_separately`
   (a backend implementing pen with no pen attached, then attached, then removed, each change
   delivered in order with surrounding input); `capability_change_is_ordered_with_input`;
+  `devices_attached_before_the_window_opens_are_in_the_initial_snapshot`;
   availability rows per backend in `assert_backend_conforms` (pen, precise scroll, trackpad
-  gestures, input regions, each `Native`, `Emulated` or `Unavailable` as that backend claims); a
+  gestures, input regions, outgoing drag, each `Native`, `Emulated` or `Unavailable` as that backend claims); a
   `compile_fail` doctest that builds `InputCapabilities` with a struct literal outside
   `flui-platform-api` (struct literals only; the builder is public); a recording round trip of
   `PlatformInput::Capabilities`.
