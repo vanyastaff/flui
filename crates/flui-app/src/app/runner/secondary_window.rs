@@ -1131,6 +1131,12 @@ fn finish_open_secondary_window(
             RuntimeTask::Event(RuntimeEvent::Resized { size, scale_factor }),
         );
     }));
+    window.on_moved(Box::new(move || {
+        let _ = dispatch_platform_ui_runtime(
+            owner_dispatch,
+            RuntimeTask::Event(RuntimeEvent::WindowMoved),
+        );
+    }));
 
     // Window close -> close THIS window's own presentation, exactly like
     // `run_desktop`'s primary window (see `close_this_window`'s own doc):

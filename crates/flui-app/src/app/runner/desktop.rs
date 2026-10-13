@@ -374,6 +374,12 @@ where
             RuntimeTask::Event(RuntimeEvent::WindowHover(is_hovered)),
         );
     }));
+    window.on_moved(Box::new(move || {
+        let _ = dispatch_platform_ui_runtime(
+            owner_dispatch,
+            RuntimeTask::Event(RuntimeEvent::WindowMoved),
+        );
+    }));
     // The platform callback carries no payload; query the window's
     // current appearance at dispatch time. Weak: the callback lives
     // inside the window's own handler table, and a strong capture
