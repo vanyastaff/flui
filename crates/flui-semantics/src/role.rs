@@ -5,7 +5,7 @@
 //! assistive technologies understand how to interact with elements.
 //!
 //! A node has one role, interactive kinds (button, checkbox, slider)
-//! included (ADR-0202); states are typed separately
+//! included (ADR-0206); states are typed separately
 //! ([`States`](crate::States)).
 //!
 //! [`SemanticsRole`] itself lives in `flui-protocol`, the vocabulary FLUI

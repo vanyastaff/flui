@@ -7,7 +7,7 @@
 //! # One role, typed states
 //!
 //! A node has one [`SemanticsRole`] and typed [`States`]
-//! (ADR-0202). [`resolve_role`] maps the role; a node that declares none is
+//! (ADR-0206). [`resolve_role`] maps the role; a node that declares none is
 //! static text when it is named and a plain container otherwise. Conflicting
 //! roles never reach here: merging settled them
 //! ([`more_specific_role`](crate::configuration::more_specific_role)).

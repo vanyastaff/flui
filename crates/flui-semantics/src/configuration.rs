@@ -97,7 +97,7 @@ pub struct SemanticsConfiguration {
     /// Actions that can be performed on this node.
     actions: FxHashMap<SemanticsAction, SemanticsActionHandler>,
 
-    /// What this node publishes (ADR-0202).
+    /// What this node publishes (ADR-0206).
     attributes: SemanticsAttributes,
 }
 
@@ -128,7 +128,7 @@ impl SemanticsConfiguration {
         Self::default()
     }
 
-    /// What this configuration publishes (ADR-0202).
+    /// What this configuration publishes (ADR-0206).
     #[inline]
     #[must_use]
     pub fn attributes(&self) -> &SemanticsAttributes {
@@ -1059,7 +1059,7 @@ impl SemanticsConfiguration {
     // ========================================================================
 
     /// Returns whether this configuration can share one semantics node with
-    /// `other` without dropping modeled information (ADR-0202, decision 4).
+    /// `other` without dropping modeled information (ADR-0206, decision 4).
     ///
     /// The predicate is symmetric. Labels and hints concatenate, relations and
     /// disjoint actions combine, and first-wins metadata stays compatible. Two
@@ -1157,7 +1157,7 @@ impl SemanticsConfiguration {
 
     /// Absorbs the semantic information from another configuration.
     ///
-    /// The merge rules, per group (ADR-0202, decision 4):
+    /// The merge rules, per group (ADR-0206, decision 4):
     ///
     /// - **States** — each by its own rule ([`States`]); a `true` wins over
     ///   a `false`, and `Mixed` over `On` over `Off`.
@@ -1317,7 +1317,7 @@ impl SemanticsConfiguration {
     }
 }
 
-/// The role one node built from two takes (ADR-0202, decision 4).
+/// The role one node built from two takes (ADR-0206, decision 4).
 ///
 /// A structural role (tab, list item, dialog, …) is authored structure and
 /// outranks every interactive kind, as an explicit role always did. Among

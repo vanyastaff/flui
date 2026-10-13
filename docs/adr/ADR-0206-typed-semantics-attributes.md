@@ -1,4 +1,4 @@
-# ADR-0202: Semantics are one typed attribute model with one AccessKit translation
+# ADR-0206: Semantics are one typed attribute model with one AccessKit translation
 
 - **Status:** Accepted (2026-10-12); implemented by the semantics-model works W2–W3
 - **Date:** 2026-10-12

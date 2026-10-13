@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-07
-- **Superseded-by:** [ADR-0202](ADR-0202-typed-semantics-attributes.md), in part: the
+- **Superseded-by:** [ADR-0206](ADR-0206-typed-semantics-attributes.md), in part: the
   cross-thread handoff is the published AccessKit `TreeUpdate`; `SemanticsSnapshot` is removed.
 - **Related:** [ADR-0043](ADR-0043-presentation-bundled-trees-and-realm-globalkey-scope.md),
   [ADR-0054](ADR-0054-the-viewport-commits-one-result.md),
@@ -88,7 +88,7 @@ reached. Direct single-handler action behavior is unchanged.
 
 The semantics tree and detached reveal invocations belong to the presentation's
 owner thread; the published AccessKit `TreeUpdate` is the cross-thread handoff
-(ADR-0202, which superseded the snapshot).
+(ADR-0206, which superseded the snapshot).
 No per-node lock or asynchronous frame operation is introduced. Reveal reaches
 materialized descendants only: it does not create lazy children merely to find a
 target that was never published.

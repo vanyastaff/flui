@@ -327,6 +327,22 @@ impl ChangeNotifier {
         }
     }
 
+    /// Observe a committed round after capturing membership, before delivery.
+    ///
+    /// Reentrant additions wait for the next round; removals and disposal silence
+    /// the remaining selection. Observer failure shares the round's custody.
+    #[doc(hidden)]
+    pub fn notify_listeners_with_recovery_before(
+        &self,
+        recovery: &mut RecoveryScope<'_>,
+        before: impl FnOnce(),
+    ) {
+        if !self.check_disposed() {
+            self.inner
+                .notify_unchecked_with_recovery_before(&(), recovery, before);
+        }
+    }
+
     /// Whether any listeners are currently registered
     #[must_use]
     #[inline]

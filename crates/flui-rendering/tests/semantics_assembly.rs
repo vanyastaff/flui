@@ -463,7 +463,7 @@ pub(crate) fn merge_semantics_boundary_collapses_plain_children_into_one_node() 
 
 /// A merge inside a merge keeps its own node: a card that merges its content
 /// still lets a screen reader stop on the tile inside it, which merges its own
-/// label and button into one node (ADR-0202, decision 4).
+/// label and button into one node (ADR-0206, decision 4).
 pub(crate) fn nested_merge_semantics_keeps_its_own_node() {
     let run = RenderTester::mount(
         box_node(SemanticsContainer::merge_semantics())

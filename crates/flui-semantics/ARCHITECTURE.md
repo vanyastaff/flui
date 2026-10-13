@@ -72,7 +72,7 @@ and a successful detach followed by reattachment.
 
 ### 1. One role per node; a forced merge keeps the more specific one
 
-**Rule.** [ADR-0202](../../docs/adr/ADR-0202-typed-semantics-attributes.md): a node has one
+**Rule.** [ADR-0206](../../docs/adr/ADR-0206-typed-semantics-attributes.md): a node has one
 `SemanticsRole`, interactive kinds included (`Button`, `CheckBox`, `RadioButton`, `Switch`,
 `Link`, `Slider`, `Image`, `Heading`, the text-input kinds), and typed `States`. Two
 configurations that each declare a role, or each declare the same state, form separate nodes
@@ -83,7 +83,7 @@ interactive kind, then a checkable role, then `Button`, then link, text field or
 image or heading; on a tie the receiver keeps its own. States merge by their type's rule
 (`Mixed` over `On` over `Off`; a declared `true` over a declared `false`).
 
-**Superseded by [ADR-0202](../../docs/adr/ADR-0202-typed-semantics-attributes.md)** (one role
+**Superseded by [ADR-0206](../../docs/adr/ADR-0206-typed-semantics-attributes.md)** (one role
 per node, role precedence for forced merges). The cascade below stays in force until the
 semantics-model merge table replaces it (work W3 of
 [the spec](../../docs/plans/specs/semantics-model/design.md)); the role precedence keeps its
@@ -365,7 +365,7 @@ adapter and desktop sources, and checked to cover every role FLUI publishes),
 
 ### Publication reads attributes in place
 
-[ADR-0202](../../docs/adr/ADR-0202-typed-semantics-attributes.md): a configuration's
+[ADR-0206](../../docs/adr/ADR-0206-typed-semantics-attributes.md): a configuration's
 payload is one `SemanticsAttributes`, and publication reads it through a borrowed
 `PublishView` (identity, effective actions, bounds, addressable children) rather than a
 copied payload. There is no second shape to keep in step: the flat property bag, the

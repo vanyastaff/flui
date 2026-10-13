@@ -71,7 +71,7 @@ default = ["profiling", "timeline", "inspector"]
 # Frame profiler. `tracing-subscriber` is what lets it be *fed*: an official
 # package cannot be called by the framework, so `FrameTimingLayer` subscribes
 # to the frame spans the framework already emits.
-profiling = ["dep:tracing", "dep:tracing-subscriber"]
+profiling = ["dep:tracing", "dep:tracing-subscriber", "flui-sdk/animation-diagnostics"]
 
 # The serialisation half of `timeline`, not a capability of its own. It is
 # a named feature because the `flui` facade has a `serde` feature and cargo
