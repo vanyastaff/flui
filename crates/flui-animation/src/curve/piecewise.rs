@@ -39,7 +39,7 @@ impl LinearStop {
 /// Why [`PiecewiseLinear::new`] refused its stops.
 #[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
 #[non_exhaustive]
-pub enum LinearEasingError {
+pub enum PiecewiseLinearError {
     /// A normalized curve requires at least a start and an end.
     #[error("piecewise linear easing requires at least two stops")]
     TooFewStops,
@@ -102,7 +102,7 @@ struct Knot {
 ///     LinearStop::new(1.0),
 /// ])?;
 /// assert_eq!(curve.transform(0.5), 0.25);
-/// # Ok::<(), flui_animation::LinearEasingError>(())
+/// # Ok::<(), flui_animation::PiecewiseLinearError>(())
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -119,25 +119,25 @@ impl PiecewiseLinear {
     ///
     /// # Errors
     ///
-    /// Returns [`LinearEasingError`] for fewer than two or more than
+    /// Returns [`PiecewiseLinearError`] for fewer than two or more than
     /// `u32::MAX` stops, non-finite outputs, explicit inputs outside `[0, 1]`,
     /// or canonical endpoints other than `(0, 0)` and `(1, 1)`.
-    pub fn new(stops: &[LinearStop]) -> Result<Self, LinearEasingError> {
+    pub fn new(stops: &[LinearStop]) -> Result<Self, PiecewiseLinearError> {
         if stops.len() < 2 {
-            return Err(LinearEasingError::TooFewStops);
+            return Err(PiecewiseLinearError::TooFewStops);
         }
-        let count = u32::try_from(stops.len()).map_err(|_| LinearEasingError::TooManyStops)?;
+        let count = u32::try_from(stops.len()).map_err(|_| PiecewiseLinearError::TooManyStops)?;
         let mut stops = stops.to_vec();
         for (index, stop) in stops.iter().enumerate() {
             if !stop.output.is_finite() {
-                return Err(LinearEasingError::NonFiniteOutput { index });
+                return Err(PiecewiseLinearError::NonFiniteOutput { index });
             }
             if let Some(input) = stop.input {
                 if !input.is_finite() {
-                    return Err(LinearEasingError::NonFiniteInput { index });
+                    return Err(PiecewiseLinearError::NonFiniteInput { index });
                 }
                 if !(0.0..=1.0).contains(&input) {
-                    return Err(LinearEasingError::InputOutOfRange {
+                    return Err(PiecewiseLinearError::InputOutOfRange {
                         index,
                         value: input,
                     });
@@ -181,7 +181,7 @@ impl PiecewiseLinear {
             || last.input != Some(1.0)
             || last.output != 1.0
         {
-            return Err(LinearEasingError::InvalidEndpoints);
+            return Err(PiecewiseLinearError::InvalidEndpoints);
         }
         Ok(Self {
             knots: stops
@@ -238,7 +238,7 @@ impl Curve for PiecewiseLinear {
 
 #[cfg(feature = "serde")]
 impl TryFrom<Vec<LinearStop>> for PiecewiseLinear {
-    type Error = LinearEasingError;
+    type Error = PiecewiseLinearError;
     fn try_from(stops: Vec<LinearStop>) -> Result<Self, Self::Error> {
         Self::new(&stops)
     }

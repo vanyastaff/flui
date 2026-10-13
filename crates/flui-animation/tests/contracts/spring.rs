@@ -68,13 +68,38 @@ fn assert_close(label: &str, actual: f64, expected: f64) {
 
 // --- construction --------------------------------------------------------
 
+/// `parameter` refused as a finite value outside its admitted range.
 fn assert_refused<T: std::fmt::Debug>(
     result: Result<T, SimulationError>,
     parameter: SimulationParameter,
 ) {
     match result {
         Err(SimulationError::OutOfRange { parameter: p, .. }) => assert_eq!(p, parameter),
-        other => panic!("expected {parameter} to be refused, got {other:?}"),
+        other => panic!("expected {parameter} out of range, got {other:?}"),
+    }
+}
+
+/// `parameter` refused as NaN or infinite.
+fn assert_not_finite<T: std::fmt::Debug>(
+    result: Result<T, SimulationError>,
+    parameter: SimulationParameter,
+) {
+    match result {
+        Err(SimulationError::NonFinite { parameter: p }) => assert_eq!(p, parameter),
+        other => panic!("expected non-finite {parameter}, got {other:?}"),
+    }
+}
+
+/// `value` refused for `parameter`: non-finite, or finite and out of range.
+fn assert_refused_value<T: std::fmt::Debug>(
+    result: Result<T, SimulationError>,
+    parameter: SimulationParameter,
+    value: f64,
+) {
+    if value.is_finite() {
+        assert_refused(result, parameter);
+    } else {
+        assert_not_finite(result, parameter);
     }
 }
 
@@ -86,7 +111,7 @@ fn assert_overflow<T: std::fmt::Debug>(result: Result<T, SimulationError>) {
 }
 
 fn mass_nan() {
-    assert_refused(
+    assert_not_finite(
         SpringDescription::new(f64::NAN, 1.0, 1.0),
         SimulationParameter::Mass,
     );
@@ -98,7 +123,7 @@ fn mass_zero() {
     );
 }
 fn stiffness_infinite() {
-    assert_refused(
+    assert_not_finite(
         SpringDescription::new(1.0, f64::INFINITY, 1.0),
         SimulationParameter::Stiffness,
     );
@@ -152,7 +177,7 @@ fn bounce_minus_one() {
     );
 }
 fn bounce_nan() {
-    assert_refused(
+    assert_not_finite(
         SpringDescription::with_duration_and_bounce(Duration::from_millis(500), f64::NAN),
         SimulationParameter::Bounce,
     );
@@ -192,7 +217,7 @@ fn damping_ratio_refusal_does_not_unwind() {
                 SpringDescription::with_damping_ratio(mass, stiffness, ratio)
             })
             .expect("invalid runtime spring parameters must return an error without unwinding");
-            assert_refused(refused, parameter);
+            assert_refused_value(refused, parameter, value);
         }
     }
     for (mass, stiffness, ratio) in [(1e-300, 1e300, 1.0), (1.0, 1.0, 1e300)] {
@@ -215,26 +240,26 @@ fn all_spring_constructors_refuse_nonfinite_parameters() {
             (1.0, value, 20.0, SimulationParameter::Stiffness),
             (1.0, 100.0, value, SimulationParameter::Damping),
         ] {
-            assert_refused(SpringDescription::new(mass, stiffness, damping), parameter);
+            assert_not_finite(SpringDescription::new(mass, stiffness, damping), parameter);
         }
-        assert_refused(
+        assert_not_finite(
             SpringDescription::with_duration_and_bounce(Duration::from_millis(500), value),
             SimulationParameter::Bounce,
         );
-        assert_refused(
+        assert_not_finite(
             SpringDescription::with_response_and_damping(Duration::from_millis(300), value),
             SimulationParameter::DampingFraction,
         );
     }
 }
 fn simulation_start_nan() {
-    assert_refused(
+    assert_not_finite(
         SpringSimulation::new(spring(10.0, 1.0), f64::NAN, 0.0, 0.0, Tolerance::DEFAULT),
         SimulationParameter::Position,
     );
 }
 fn simulation_end_infinite() {
-    assert_refused(
+    assert_not_finite(
         SpringSimulation::new(
             spring(10.0, 1.0),
             0.0,
@@ -246,7 +271,7 @@ fn simulation_end_infinite() {
     );
 }
 fn simulation_velocity_nan() {
-    assert_refused(
+    assert_not_finite(
         SpringSimulation::new(spring(10.0, 1.0), 0.0, 1.0, f64::NAN, Tolerance::DEFAULT),
         SimulationParameter::Velocity,
     );
@@ -296,7 +321,46 @@ fn spring_constructors_refuse_outside_the_admitted_domain() {
             "simulation displacement overflows",
             simulation_displacement_overflows,
         ),
+        (
+            "refusal messages name the admitted range",
+            refusal_messages_name_the_admitted_range,
+        ),
     ]);
+}
+
+/// An out-of-range refusal names the range its parameter admits; a
+/// non-finite one says only that the input is not finite.
+fn refusal_messages_name_the_admitted_range() {
+    let message = |error: SimulationError| error.to_string();
+    let unit = flui_animation::SpringCurve::new(
+        spring(10.0, 1.0),
+        Tolerance::new(1.5, f64::INFINITY).expect("tolerance"),
+    );
+    for (refusal, expected) in [
+        (
+            SpringDescription::new(0.0, 1.0, 1.0).map(drop),
+            "mass = 0 is outside (0, ∞)",
+        ),
+        (
+            SpringDescription::with_duration_and_bounce(Duration::from_millis(500), 2.0).map(drop),
+            "bounce = 2 is outside (-1, 1)",
+        ),
+        (
+            FrictionSimulation::new(1.5, 0.0, 1.0, Tolerance::DEFAULT).map(drop),
+            "drag = 1.5 is outside (0, 1)",
+        ),
+        (
+            Tolerance::new(1.0, -1.0).map(drop),
+            "velocity = -1 is outside (0, ∞]",
+        ),
+        (unit.map(drop), "unit distance = 1.5 is outside (0, 1)"),
+        (
+            SpringDescription::new(f64::NAN, 1.0, 1.0).map(drop),
+            "mass is not finite",
+        ),
+    ] {
+        assert_eq!(message(refusal.expect_err(expected)), expected);
+    }
 }
 
 // --- analytic reference --------------------------------------------------
