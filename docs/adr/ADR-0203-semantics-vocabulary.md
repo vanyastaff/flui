@@ -34,18 +34,30 @@ Pre-1.0, the owner chose to break this vocabulary now (spec D3).
    Discriminants are dense from zero in declaration order.
 2. **Actions.** `SemanticsAction` follows `accesskit::Action`: `Click`, `Focus`, `Blur`,
    `Expand`, `Collapse`, `Increment`, `Decrement`, `ScrollUp`, `ScrollDown`, `ScrollLeft`,
-   `ScrollRight`, `ScrollIntoView`, `ScrollToPoint`, `SetScrollOffset`, `SetTextSelection`,
-   `ReplaceSelectedText`, `SetValue`, `ShowContextMenu`, `ShowTooltip`, `HideTooltip`,
-   `CustomAction`. Bits are dense from zero; no bit is reserved. `LongPress` becomes
-   `ShowContextMenu`; `MoveCursor*` become `SetTextSelection`; the rest without an AccessKit
-   path are removed. `SetSequentialFocusNavigationStartingPoint` is routed to focus management,
-   not to a node handler.
-3. **Typed handlers.** A configuration registers one handler slot per action with that
-   action's argument type: `Fn()` for argument-free actions, `Fn(ValueWrite)` for `SetValue`
-   (text or checked number, per ADR-0124), `Fn(TextSelection)`, `Fn(String)` for
-   `ReplaceSelectedText`, `Fn(Point)` for scroll targets, `Fn(CustomActionId)`. The owner
-   decodes an incoming request into the slot's type; a request whose payload does not fit is
-   refused with a typed error before any handler runs.
+   `ScrollRight`, `ScrollIntoView`, `SetScrollOffset`, `SetTextSelection`,
+   `ReplaceSelectedText`, `SetValue`, `SetNumericValue`, `ShowContextMenu`, `ShowTooltip`,
+   `HideTooltip`, `CustomAction`. Bits are dense from zero; no bit is reserved. `LongPress`
+   becomes `ShowContextMenu`; `MoveCursor*` become `SetTextSelection`; the rest without an
+   AccessKit path are removed.
+   - AccessKit's one `SetValue` carries a text or a number; FLUI keeps `SetValue` (text) and
+     `SetNumericValue` apart, because which of them a node accepts decides what it publishes
+     (the UIA value pattern it offers and whether a range is writable). Both publish as
+     AccessKit's `SetValue`.
+   - `ScrollToPoint` and `SetSequentialFocusNavigationStartingPoint` are not routed yet. The
+     first carries a point in window pixels, which the semantics layer cannot convert without
+     the presentation's scale; the second belongs to focus management rather than to a node.
+     Each joins with its first consumer.
+3. **Typed calls.** A handler receives an `ActionCall`: the action fused with exactly the
+   payload it takes (`SetValue(String)`, `SetNumericValue(f64)`,
+   `SetTextSelection(TextSelection)`, `ReplaceSelectedText(String)`,
+   `SetScrollOffset(Offset)`, `ScrollIntoView(Option<Reveal>)`, `CustomAction(i32)`, the
+   directional scrolls with their `ScrollUnit` (`Item` or `Page`, `Page` when the request has
+   none), the rest bare), so a payload that does not fit its action cannot be expressed.
+   `semantics_action_request_for` decodes a platform request into one and refuses a missing or
+   mismatched payload with `ActionDecodeError` before any handler runs. One handler type per
+   configuration, rather than one slot type per action, keeps the per-node ticket the widget
+   layer advertises every action through (`flui-widgets` ARCHITECTURE §17); the widget
+   builders are where the per-action argument types live.
 4. **Names.** Each role and action keeps a `name()` in this vocabulary; the list of names is
    pinned by a test. The agent's wire `Role` stays a separate vocabulary that folds roles to
    what UI Automation reports, so the in-process and desktop backends stay comparable
@@ -67,6 +79,9 @@ Pre-1.0, the owner chose to break this vocabulary now (spec D3).
 ## Verification
 
 `every_role_maps_to_accesskit` and `every_action_round_trips_through_accesskit` walk `ALL`;
-`vocabulary_names_are_pinned`; `every_wire_action_routes_to_a_semantics_action` and
+`every_aria_role_is_covered` checks the vocabulary against an independent ARIA 1.2 list;
+`vocabulary_names_are_pinned` (every role and action name at its position, and each value is
+its position, so a variant inserted or reordered fails); `every_wire_action_routes_to_a_semantics_action` and
 `wire_role_matches_the_windows_adapter_for_every_role_flui_publishes` recomputed for the new
-roles; a refused mismatched payload in the owner's action tests.
+roles; `platform_requests_decode_to_their_typed_call` for the refused missing and mismatched
+payloads.

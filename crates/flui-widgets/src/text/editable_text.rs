@@ -414,7 +414,7 @@ pub struct EditableText {
     pub(super) field_semantics: FieldSemantics,
 }
 
-/// The field's name, placeholder and validity, as its semantics node
+/// The field's name, placeholder, validity and whether it is required, as its semantics node
 /// publishes them. A decorated field fills these from its visible label, hint
 /// and error, which then publish no nodes of their own.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -423,6 +423,7 @@ pub(super) struct FieldSemantics {
     hint: Option<String>,
     placeholder: Option<String>,
     invalid: bool,
+    required: bool,
 }
 
 /// Callback for [`EditableText::on_changed`], with the dispatch's
@@ -480,6 +481,14 @@ impl EditableText {
     #[must_use]
     pub fn invalid(mut self, invalid: bool) -> Self {
         self.field_semantics.invalid = invalid;
+        self
+    }
+
+    /// Whether the form needs this field filled in, which a screen reader
+    /// announces with the field.
+    #[must_use]
+    pub fn required(mut self, required: bool) -> Self {
+        self.field_semantics.required = required;
         self
     }
 
@@ -2651,6 +2660,7 @@ fn build_field_view(
         .enabled(enabled)
         .focused(focused)
         .invalid(appearance.semantics.invalid)
+        .required(appearance.semantics.required)
         .value(text.clone());
     if let Some(label) = &appearance.semantics.label {
         semantics = semantics.label(label.as_str());
