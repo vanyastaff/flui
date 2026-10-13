@@ -351,20 +351,21 @@ impl ContactRegistry {
         Some(self.contacts[index].info)
     }
 
-    /// The last position of that open contact.
+    /// The last position of that open contact, in logical pixels and as the
+    /// device pixels it was read in.
     #[must_use]
     pub fn position(
         &self,
         surface: NativeSurface,
         device: Option<NativeDevice>,
         contact: NativeContact,
-    ) -> Option<PointerPosition> {
+    ) -> Option<(PointerPosition, RawPoint)> {
         let index = self.find(ContactKey {
             surface,
             device,
             contact,
         })?;
-        Some(self.contacts[index].last_position?.0)
+        self.contacts[index].last_position
     }
 
     /// The reading that started `pointer`'s current press sequence, kept
@@ -491,12 +492,14 @@ impl ContactRegistry {
             .collect()
     }
 
-    /// Validate `reading` against its contact's clock without committing.
+    /// Validate `reading` against its contact's clock without committing. A
+    /// reading without a position is measured at `fallback`, the contact's last.
     fn measure(
         &self,
         reading: &NativeReading,
         choice: ClockChoice,
         floor: Option<EventTime>,
+        fallback: Option<(PointerPosition, RawPoint)>,
     ) -> Result<Measured, DecodeFault> {
         let time = self
             .clock
@@ -513,7 +516,8 @@ impl ContactRegistry {
                 PointerPosition::try_new(Point::new(raw.x / reading.scale, raw.y / reading.scale))
                     .map(|position| (position, raw))
             })
-            .transpose()?;
+            .transpose()?
+            .or(fallback);
         let sample = position
             .map(|(position, _)| sample(time, position, reading))
             .transpose()?;
@@ -655,7 +659,8 @@ impl ContactRegistry {
             },
             None => floor,
         };
-        let measured = match self.measure(reading, choice, coalesced_floor) {
+        let fallback = index.and_then(|index| self.contacts[index].last_position);
+        let measured = match self.measure(reading, choice, coalesced_floor, fallback) {
             Ok(measured) => measured,
             Err(fault) => return Err(self.fail(index, reading, fault)),
         };
@@ -695,11 +700,7 @@ impl ContactRegistry {
         let info = contact.info;
         let time = measured.time;
         let modifiers = reading.modifiers;
-        let current = measured.sample.or_else(|| {
-            contact
-                .last_position
-                .map(|(position, _)| PointerSample::new(time, position))
-        });
+        let current = measured.sample;
         let mut remove = false;
         match reading.action {
             ReadingAction::Enter | ReadingAction::Leave => {

@@ -440,11 +440,34 @@ fn an_undecodable_reading_cancels_its_contact_as_invalid_input() {
     }
     let release_without_position =
         NativeReading::new(NativeContact(1), PointerKind::Touch, RELEASE, at_ms(2));
-    let error = decode(&mut contacts, &release_without_position).expect_err("refused");
-    assert_eq!(error.fault(), DecodeFault::MissingPosition);
+    assert!(
+        matches!(
+            single(&decode(&mut contacts, &release_without_position).expect("valid")),
+            PointerEvent::Up(up) if up.sample.position == down.sample.position
+        ),
+        "an event without a position is read at the contact's last one"
+    );
+}
+
+fn a_press_without_any_position_is_suppressed_with_its_release() {
+    let mut contacts = registry();
+    let unplaced =
+        |action| NativeReading::new(NativeContact(0), PointerKind::Mouse, action, at_ms(1));
+    assert!(
+        decode(&mut contacts, &unplaced(PRESS))
+            .expect("valid")
+            .is_empty()
+    );
+    decode(&mut contacts, &mouse(ReadingAction::Move, 2)).expect("valid");
+    assert!(
+        decode(&mut contacts, &mouse(RELEASE, 3))
+            .expect("valid")
+            .is_empty(),
+        "the release of a suppressed press is dropped too"
+    );
     assert!(matches!(
-        single(&error.into_inputs()),
-        PointerEvent::Cancel(_)
+        single(&decode(&mut contacts, &mouse(PRESS, 4)).expect("valid")),
+        PointerEvent::Down(_)
     ));
 }
 
@@ -667,6 +690,10 @@ fn pointer_assembly_contracts() {
             (
                 "an_orphan_reading_emits_nothing",
                 an_orphan_reading_emits_nothing,
+            ),
+            (
+                "a_press_without_any_position_is_suppressed_with_its_release",
+                a_press_without_any_position_is_suppressed_with_its_release,
             ),
             (
                 "clocks_rebase_wrap_and_stay_monotonic",
